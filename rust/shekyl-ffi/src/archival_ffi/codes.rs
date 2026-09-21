@@ -12,8 +12,8 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 
 use shekyl_archival_retention::{
-    BondPostError, HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError,
-    RebondPopError, ReleaseConnectError, ReleasePopError, WireError,
+    BondPostError, ReinstateConnectError, ReinstatePopError, ReleaseConnectError, ReleasePopError,
+    WireError,
 };
 use shekyl_peer_policy::DropVerdict;
 
@@ -109,7 +109,8 @@ pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS: u8 = 2;
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT: u8 = 3;
 /// Left and right commitment sums differ.
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH: u8 = 4;
-/// Neither `bond_credit` nor `bond_debit` is set (§3.2 term rigidity).
+/// Retired-assigned: zero-money is `BondTerm::Unmoved` (Reinstate), not an
+/// error. Number 5 stays so it cannot be reminted.
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM: u8 = 5;
 
 /// JoinMarket bond-post semantic verify succeeded (gate-4 §3.5).
@@ -167,8 +168,10 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING: u8 = 22;
 /// Returned by the shared vin marshaler, so both entry points can return it —
 /// the marshaler refuses to construct a vin the wire codec could not emit.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING: u8 = 23;
-// ── HoldingsUpdate add + drop verify (gate-4 §4.4) ──────────────────────────
-/// HoldingsUpdate verify: `post_kind` is not HoldingsUpdate.
+// ── HoldingsUpdate verify codes 24–36 RETIRED 2026-09-20 (immutable-bond).
+// Numbers stay assigned so an old log line cannot be misread as a new
+// condition; no mapper arm produces them.
+/// **RETIRED** — `HoldingsUpdate` kind deleted.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE: u8 = 24;
 /// HoldingsUpdate verify: the record is CompleteTree (foundation) — not a shard set.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE: u8 = 25;
@@ -194,40 +197,39 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH: u8 = 34;
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON: u8 = 35;
 /// `HoldingsUpdate` verify: the record is not Bonded — zero collateral / no held
 /// shards (P2B-7 Pin 1: `Bonded → Bonded`; an Exited or slash-emptied record
-/// re-enters via JoinMarket/Rebond, never a voluntary adjustment).
+/// re-enters via JoinMarket/Reinstate, never a voluntary adjustment).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED: u8 = 36;
-/// `Rebond` verify (gate-4 §3.4; P2B-9): the vin's post_kind is not Rebond.
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND: u8 = 37;
-/// Rebond verify: the record is CompleteTree (unrepresentable — demotion flips
+/// `Reinstate` verify (gate-4 §3.4; P2B-9): the vin's post_kind is not Reinstate.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REINSTATE: u8 = 37;
+/// Reinstate verify: the record is CompleteTree (unrepresentable — demotion flips
 /// the kind atomically with the interval append; belt).
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE: u8 = 38;
-/// Rebond verify: the vin's post-holdings are not ShardSetCompact.
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT: u8 = 39;
-/// Rebond verify: no open bad interval — the record is not slashed.
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED: u8 = 40;
-/// Rebond verify: more than one open bad interval (P2B-9 Pin 5 coalescing
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_ON_COMPLETE_TREE: u8 = 38;
+/// Reinstate verify: the vin's post-holdings are not ShardSetCompact.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_POST_NOT_COMPACT: u8 = 39;
+/// Reinstate verify: no open bad interval — the record is not slashed.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_NOT_SLASHED: u8 = 40;
+/// Reinstate verify: more than one open bad interval (P2B-9 Pin 5 coalescing
 /// invariant broken — record corruption).
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN: u8 = 41;
-/// Rebond verify: interval log lacks headroom (> 254 entries; Pin 6 reserves one
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_MULTIPLE_OPEN: u8 = 41;
+/// Reinstate verify: interval log lacks headroom (> 254 entries; Pin 6 reserves one
 /// slot for the next slash + one for the Release clean close).
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM: u8 = 42;
-/// Rebond verify: terms mismatch (debit nonzero, or credit != bond_floor(post) −
-/// record bonded_total, or post bonded_total != bond_floor(post)).
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS: u8 = 43;
-/// Rebond verify: post-holdings are not a duplicate-free superset of the record's
-/// current holdings (Pin 1 — reinstatement, not restructuring).
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET: u8 = 44;
-/// **RETIRED — never returned.** Code 45 was the Rebond verify-level oversize
-/// belt (`REBOND_POST_OVERSIZE`), removed with the `ShardSet` newtype: an
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_LOG_HEADROOM: u8 = 42;
+/// Reinstate verify: terms mismatch (debit or credit nonzero, or bonded_total
+/// moved — a persona's bond is immutable; Reinstate is zero-money).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_TERMS: u8 = 43;
+/// Reinstate verify: post-holdings do not equal the record's current holdings.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_HOLDINGS_CHANGED: u8 = 44;
+/// **RETIRED — never returned.** Code 45 was the Reinstate verify-level oversize
+/// belt (`REINSTATE_POST_OVERSIZE`), removed with the `ShardSet` newtype: an
 /// oversize post is now unrepresentable in the vin's holdings, so no verify
 /// produces it. The symbol stays **defined and reserved** (rather than
 /// renumbering 46/47/48, or leaving a dangling name) so the Rust↔C++ code
 /// contract is explicit and a stray/legacy 45 maps to a meaningful message.
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED: u8 = 45;
-/// Rebond verify: the record's `bonded_total != bond_floor(record holdings)`
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_POST_OVERSIZE_RETIRED: u8 = 45;
+/// Reinstate verify: the record's `bonded_total != bond_floor(record holdings)`
 /// (floor-drifted record) — rejected at verify so the tx can never ride to the
 /// connect fold's FATAL floor belt (tx rejection, not a chain halt).
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR: u8 = 46;
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_RECORD_FLOOR: u8 = 46;
 /// Shared vin marshal: the vin's holdings shard count exceeds the wire codec
 /// bound (`MAX_HOLDINGS_SHARDS`). The FFI marshal is a second decoder for the
 /// same wire object, so it routes through `ShardSet::new` — an oversize set is
@@ -344,32 +346,32 @@ pub const fn bond_post_err_cstr(code: u8) -> &'static CStr {
         SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON => {
             c"HoldingsUpdate-drop before the shard's retention-commitment horizon elapsed"
         }
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND => c"post_kind is not Rebond",
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE => {
-            c"Rebond on a CompleteTree record (demotion flips the kind; unrepresentable)"
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REINSTATE => c"post_kind is not Reinstate",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_ON_COMPLETE_TREE => {
+            c"Reinstate on a CompleteTree record (demotion flips the kind; unrepresentable)"
         }
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT => {
-            c"Rebond post-holdings are not ShardSetCompact"
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_POST_NOT_COMPACT => {
+            c"Reinstate post-holdings are not ShardSetCompact"
         }
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED => {
-            c"Rebond requires an open bad interval (the record is not slashed)"
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_NOT_SLASHED => {
+            c"Reinstate requires an open bad interval (the record is not slashed)"
         }
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN => {
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_MULTIPLE_OPEN => {
             c"record carries multiple open bad intervals (coalescing invariant broken)"
         }
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM => {
-            c"record interval log lacks Rebond headroom (must leave a slot for the next slash and the Release clean close)"
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_LOG_HEADROOM => {
+            c"record interval log lacks Reinstate headroom (must leave a slot for the next slash and the Release clean close)"
         }
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS => {
-            c"Rebond terms mismatch (debit nonzero, or credit != bond_floor(post) - record bonded_total, or post bonded_total != bond_floor(post))"
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_TERMS => {
+            c"Reinstate terms mismatch (debit or credit nonzero, or bonded_total moved)"
         }
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET => {
-            c"Rebond post-holdings are not a duplicate-free superset of the record's current holdings (shedding goes through HoldingsUpdate-drop)"
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_HOLDINGS_CHANGED => {
+            c"Reinstate post-holdings do not equal the record's current holdings (a persona's bond is immutable)"
         }
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED => {
-            c"retired Rebond oversize code (45) — never returned; oversize is now unrepresentable in the vin's ShardSet holdings"
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_POST_OVERSIZE_RETIRED => {
+            c"retired Reinstate oversize code (45) — never returned; oversize is now unrepresentable in the vin's ShardSet holdings"
         }
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR => {
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_RECORD_FLOOR => {
             c"record bonded_total != bond_floor(record holdings) (floor-drifted record)"
         }
         SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED => {
@@ -379,7 +381,7 @@ pub const fn bond_post_err_cstr(code: u8) -> &'static CStr {
             c"vin holdings carry a duplicate shard id (a set on the wire)"
         }
         SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED => {
-            c"HoldingsUpdate requires a Bonded record (an Exited or slash-emptied record re-enters via JoinMarket/Rebond)"
+            c"HoldingsUpdate requires a Bonded record (an Exited or slash-emptied record re-enters via JoinMarket/Reinstate)"
         }
         SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY => {
             c"bond record commits no bond_spend_pk; it authorizes no debit"
@@ -405,7 +407,7 @@ pub extern "C" fn shekyl_archival_bond_post_err_string(code: u8) -> *const c_cha
 /// PWD-B7: map a bond-post FFI verify code onto a drop verdict.
 ///
 /// Named our-state codes (including `HU_ON_COMPLETE_TREE` /
-/// `REBOND_ON_COMPLETE_TREE`) do not sever. There is no range catch-all:
+/// `REINSTATE_ON_COMPLETE_TREE`) do not sever. There is no range catch-all:
 /// an unknown code stays unclassified.
 #[no_mangle]
 pub extern "C" fn shekyl_archival_bond_post_drop_verdict(code: u8) -> u8 {
@@ -427,11 +429,11 @@ fn archival_bond_post_drop_verdict(code: u8) -> DropVerdict {
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED
-        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE
-        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED
-        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN
-        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM
-        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_ON_COMPLETE_TREE
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_NOT_SLASHED
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_MULTIPLE_OPEN
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_LOG_HEADROOM
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_RECORD_FLOOR
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY => DropVerdict::PolicyOrState,
         SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY
@@ -458,10 +460,10 @@ fn archival_bond_post_drop_verdict(code: u8) -> DropVerdict {
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH
-        | SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND
-        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT
-        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS
-        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REINSTATE
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_POST_NOT_COMPACT
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_TERMS
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_HOLDINGS_CHANGED
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH => DropVerdict::AttributableForm,
@@ -521,83 +523,64 @@ pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DELTA: u8 = 8;
 /// bonded collateral / no shards (an Exited record cannot be resurrected).
 pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_NOT_BONDED: u8 = 9;
 
-#[must_use]
-pub(super) fn map_holdings_update_connect_error(e: HoldingsUpdateConnectError) -> u8 {
-    match e {
-        HoldingsUpdateConnectError::NotSingleAdd => SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_ADD,
-        HoldingsUpdateConnectError::NotSingleDrop => SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DROP,
-        HoldingsUpdateConnectError::DropLastShard => SHEKYL_ARCHIVAL_HU_APPLY_ERR_DROP_LAST_SHARD,
-        HoldingsUpdateConnectError::RecordFloorInvariantBroken => {
-            SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_FLOOR_INVARIANT
-        }
-        HoldingsUpdateConnectError::CounterRange => SHEKYL_ARCHIVAL_HU_APPLY_ERR_COUNTER_RANGE,
-        HoldingsUpdateConnectError::RecordNotBonded => {
-            SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_NOT_BONDED
-        }
-    }
-}
-
-#[must_use]
-pub(super) fn map_holdings_update_pop_error(e: HoldingsUpdatePopError) -> u8 {
-    match e {
-        HoldingsUpdatePopError::NotSingleShardDelta => {
-            SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DELTA
-        }
-        HoldingsUpdatePopError::CounterRange => SHEKYL_ARCHIVAL_HU_APPLY_ERR_COUNTER_RANGE,
-    }
-}
-
-/// `Rebond` connect/pop fold succeeded (gate-4 §3.4; P2B-9).
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_OK: u8 = 0;
+/// `Reinstate` connect/pop fold succeeded (gate-4 §3.4; P2B-9).
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_OK: u8 = 0;
 /// A required out-pointer is null.
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NULL_PTR: u8 = 1;
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_NULL_PTR: u8 = 1;
 /// A marshaled array length overflows.
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW: u8 = 2;
-/// Connect: post is not a duplicate-free superset of the record's holdings.
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_SUPERSET: u8 = 3;
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_LEN_OVERFLOW: u8 = 2;
+/// Connect: post-holdings do not equal current (immutable-bond).
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_HOLDINGS_CHANGED: u8 = 3;
 /// Connect: empty post (reinstatement needs a position).
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_EMPTY_POST: u8 = 4;
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_EMPTY_POST: u8 = 4;
 /// Connect: the record's `bonded_total == bond_floor(holdings)` invariant is broken.
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT: u8 = 5;
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_RECORD_FLOOR_INVARIANT: u8 = 5;
 /// Connect: no open bad interval to close (record not slashed).
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NO_OPEN_INTERVAL: u8 = 6;
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_NO_OPEN_INTERVAL: u8 = 6;
 /// Connect: multiple open bad intervals (Pin 5 coalescing invariant broken).
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_MULTIPLE_OPEN_INTERVALS: u8 = 7;
-/// Connect: `E_rebond + 1` is not strictly after the open interval's start.
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_INTERVAL_ORDERING: u8 = 8;
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_MULTIPLE_OPEN_INTERVALS: u8 = 7;
+/// Connect: `E_reinstate + 1` is not strictly after the open interval's start.
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_INTERVAL_ORDERING: u8 = 8;
 /// Connect/pop: counter or epoch arithmetic out of range.
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_COUNTER_RANGE: u8 = 9;
-/// Pop: the per-`P` balance delta is not a non-negative whole number of FLOORs.
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_REBOND_DELTA: u8 = 10;
-/// Connect: the caller's added-shard out buffer is smaller than the added set.
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_ADDED_BUFFER_TOO_SMALL: u8 = 11;
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_COUNTER_RANGE: u8 = 9;
+/// Pop: bonded_total moved (Reinstate is zero-money).
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_NOT_REINSTATE_DELTA: u8 = 10;
+/// **RETIRED** — added-shard out buffer; growth is unrepresentable.
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_ADDED_BUFFER_TOO_SMALL: u8 = 11;
 /// Connect: the post set exceeds the codec shard cap (the record could never
-/// encode) — verify's `REBOND_POST_OVERSIZE` forecloses this at admission.
-pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_POST_OVERSIZE: u8 = 12;
+/// encode) — verify's `REINSTATE_POST_OVERSIZE` forecloses this at admission.
+pub const SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_POST_OVERSIZE: u8 = 12;
 
 #[must_use]
-pub(super) fn map_rebond_connect_error(e: RebondConnectError) -> u8 {
+pub(super) fn map_reinstate_connect_error(e: ReinstateConnectError) -> u8 {
     match e {
-        RebondConnectError::NotSuperset => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_SUPERSET,
-        RebondConnectError::EmptyPost => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_EMPTY_POST,
-        RebondConnectError::PostOversize => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_POST_OVERSIZE,
-        RebondConnectError::RecordFloorInvariantBroken => {
-            SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT
+        ReinstateConnectError::HoldingsChanged => {
+            SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_HOLDINGS_CHANGED
         }
-        RebondConnectError::NoOpenInterval => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NO_OPEN_INTERVAL,
-        RebondConnectError::MultipleOpenIntervals => {
-            SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_MULTIPLE_OPEN_INTERVALS
+        ReinstateConnectError::EmptyPost => SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_EMPTY_POST,
+        ReinstateConnectError::PostOversize => SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_POST_OVERSIZE,
+        ReinstateConnectError::RecordFloorInvariantBroken => {
+            SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_RECORD_FLOOR_INVARIANT
         }
-        RebondConnectError::IntervalOrdering => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_INTERVAL_ORDERING,
-        RebondConnectError::CounterRange => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_COUNTER_RANGE,
+        ReinstateConnectError::NoOpenInterval => {
+            SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_NO_OPEN_INTERVAL
+        }
+        ReinstateConnectError::MultipleOpenIntervals => {
+            SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_MULTIPLE_OPEN_INTERVALS
+        }
+        ReinstateConnectError::IntervalOrdering => {
+            SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_INTERVAL_ORDERING
+        }
+        ReinstateConnectError::CounterRange => SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_COUNTER_RANGE,
     }
 }
 
 #[must_use]
-pub(super) fn map_rebond_pop_error(e: RebondPopError) -> u8 {
+pub(super) fn map_reinstate_pop_error(e: ReinstatePopError) -> u8 {
     match e {
-        RebondPopError::NotRebondDelta => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_REBOND_DELTA,
-        RebondPopError::CounterRange => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_COUNTER_RANGE,
+        ReinstatePopError::NotReinstateDelta => {
+            SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_NOT_REINSTATE_DELTA
+        }
     }
 }
 
@@ -694,58 +677,29 @@ pub(super) fn map_bond_post_error(err: BondPostError) -> u8 {
         BondPostError::SlashSettlementPending => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING
         }
-        BondPostError::PostKindNotHoldingsUpdate => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE
+        BondPostError::PostKindNotReinstate => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REINSTATE
         }
-        BondPostError::HoldingsUpdateOnCompleteTree => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE
+        BondPostError::ReinstateRecordFloorBroken => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_RECORD_FLOOR
         }
-        BondPostError::HoldingsUpdatePostNotCompact => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT
+        BondPostError::ReinstateOnCompleteTree => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_ON_COMPLETE_TREE
         }
-        BondPostError::HoldingsUpdateAddTerms => SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS,
-        BondPostError::HoldingsUpdateNotGoodStanding => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING
+        BondPostError::ReinstatePostNotCompact => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_POST_NOT_COMPACT
         }
-        BondPostError::HoldingsUpdateNotSingleAdd => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD
+        BondPostError::ReinstateNotSlashed => SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_NOT_SLASHED,
+        BondPostError::ReinstateMultipleOpenIntervals => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_MULTIPLE_OPEN
         }
-        BondPostError::HoldingsUpdateAddFloorMismatch => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH
+        BondPostError::ReinstateIntervalLogHeadroom => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_LOG_HEADROOM
         }
-        BondPostError::HoldingsUpdateDropTerms => SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS,
-        BondPostError::HoldingsUpdateNotSingleDrop => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP
+        BondPostError::ReinstateTerms => SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_TERMS,
+        BondPostError::ReinstateHoldingsChanged => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_HOLDINGS_CHANGED
         }
-        BondPostError::HoldingsUpdateDropLastShard => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD
-        }
-        BondPostError::HoldingsUpdateDropFloorMismatch => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH
-        }
-        BondPostError::HoldingsUpdateDropWithinHorizon => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON
-        }
-        BondPostError::HoldingsUpdateRecordNotBonded => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED
-        }
-        BondPostError::PostKindNotRebond => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND,
-        BondPostError::RebondRecordFloorBroken => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR,
-        BondPostError::RebondOnCompleteTree => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE
-        }
-        BondPostError::RebondPostNotCompact => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT
-        }
-        BondPostError::RebondNotSlashed => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED,
-        BondPostError::RebondMultipleOpenIntervals => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN
-        }
-        BondPostError::RebondIntervalLogHeadroom => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM
-        }
-        BondPostError::RebondTerms => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS,
-        BondPostError::RebondNotSuperset => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET,
     }
 }
 

@@ -274,7 +274,7 @@ PendingBondPost {
   `BondPostRecord` discipline.
 - **One live post per persona.** JoinMarket-only at genesis: a second
   assemble for a persona with a live pending post refuses
-  (`PendingPostExists`) — the four-kind future (Rebond etc.) reopens this,
+  (`PendingPostExists`) — the four-kind future (Reinstate etc.) reopens this,
   per CONSTRUCTION §9's provisional table.
 
 #### 3.5.1 At-rest threat model: the record as a linkability artifact

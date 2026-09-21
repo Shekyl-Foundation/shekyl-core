@@ -155,9 +155,9 @@ namespace cryptonote
   enum class archival_bond_post_kind : uint8_t
   {
     JoinMarket = 0,
-    Rebond = 1,
+    Reinstate = 1,
     Release = 2,
-    HoldingsUpdate = 3,
+    // 3 was HoldingsUpdate — REJECTED 2026-09-20 (immutable-bond).
   };
 
   enum class archival_holdings_kind : uint8_t
@@ -228,7 +228,7 @@ namespace cryptonote
         return false;
       FIELD(p_canonical_id)
       FIELD(post_kind)
-      if (post_kind > static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
+      if (post_kind > static_cast<uint8_t>(archival_bond_post_kind::Release))
         return false;
       if (post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {

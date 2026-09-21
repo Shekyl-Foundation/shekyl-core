@@ -1315,12 +1315,12 @@ slashing**, which was correct when false-slash was the only objective and is
 **backwards under attestation-resistance**. A fresh or reinstated pair is
 **unslashable for its first `m − 1 = 10` observations.**
 
-Combined with the ratified clean-window-on-`Rebond`, the free-rider's steady
+Combined with the ratified clean-window-on-`Reinstate`, the free-rider's steady
 state is not §9.6's 3-of-13 friendly draws — it is **zero service, 10 free <!-- doc-literal-gate-allow: archival failure-window m-of-n (slash observations), not multisig operator config -->
-epochs, slash, `Rebond`, 10 more.** The module argues `Rebond` is not a cheap
+epochs, slash, `Reinstate`, 10 more.** The module argues `Reinstate` is not a cheap
 reset because *"the burned collateral is the price,"* but **never states the
 inequality**: `10 × zero_service_reward_per_epoch` versus
-`ARCHIVAL_BOND_FLOOR + rebond friction`. **Not derived anywhere in the tree.**
+`ARCHIVAL_BOND_FLOOR + reinstate friction`. **Not derived anywhere in the tree.**
 If it fails, the window is a **subscription fee**. Deriving it is a Round-2
 obligation, and it **couples the `(m, n)` re-pin to `BOND_FLOOR`**.
 

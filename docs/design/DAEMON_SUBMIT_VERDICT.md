@@ -1384,13 +1384,13 @@ the internal order is otherwise verdict-invisible. Semantic legs are the **same
 `check_archival_bond_post_input` dispatches to over FFI, so the two paths
 share the verifying code.
 
-**Non-JoinMarket kinds — Release is now covered; HoldingsUpdate / Rebond are
+**Non-JoinMarket kinds — Release is now covered; HoldingsUpdate / Reinstate are
 not.** The block path verifies all three today (`archival_bond_post_kind`
 dispatch, all Rust-backed). **Release's reopening criterion (rule 21) fired at
 PR-P4** — `build_release_vin` / `AssembleRelease` are the construction leg — and
 this section's §8.7.1.1 UB rows discharge it: `SubmitFacts` carries the Release
 fact set and the battery dispatches `verify_release_bond_post`, the same
-function the block path calls. **HoldingsUpdate / Rebond have no producer**,
+function the block path calls. **HoldingsUpdate / Reinstate have no producer**,
 so their fact sets are deliberately *not* built: a fact bundle with no
 submitter is pre-provisioned flexibility (rule 21), and its Phase-D race
 classification would be unverifiable guesswork. The battery still refuses them
@@ -1406,7 +1406,7 @@ funding-arm K12/K13 legs and the bond CT balance.
 
 **BP5 does not apply, and that is the row this section exists for.** BP5 pins
 the bond slot's auth key to the vin's *identity* key — correct on the credit
-path (`blockchain.cpp`'s JoinMarket and Rebond arms), where the post proves
+path (`blockchain.cpp`'s JoinMarket and Reinstate arms), where the post proves
 control of `P_canonical_id` and no value leaves. A debit is the opposite case:
 the identity key is held by the serving host, so pinning to it would let a host
 compromise authorize a collateral drain. UB3 replaces BP5 on this arm.
@@ -1558,7 +1558,7 @@ UB2 therefore carries two facts and re-checks the second. At Phase B/C a record
 **never present** is a submitter error (`Malformed` — these bytes can never
 connect). At Phase D the test is the record's balance against the submitted
 vin's own `bond_debit`, which the Phase-C battery required it to equal: gone,
-zeroed by a competing exit, **or raised** by a `Rebond` / `HoldingsUpdate`-add
+zeroed by a competing exit, **or raised** by a `Reinstate` / `HoldingsUpdate`-add
 that connected during Phase C — each leaves the full-exit equality
 unsatisfiable for these bytes, so each classifies `DoubleSpendConflict`. Keying
 on the balance rather than on "exited" catches the credit-side direction for
@@ -1605,7 +1605,7 @@ move during Phase C:
   An earlier revision justified the verdict by asserting no resubmission of
   these bytes could ever succeed. **That was false**, and the correction is
   worth keeping visible: a partial slash lowers the balance by one `FLOOR`, and
-  a later `Rebond` credits the same `FLOOR` back while closing the interval, so
+  a later `Reinstate` credits the same `FLOOR` back while closing the interval, so
   the balance can return to exactly the value these bytes bind. No sub-case is
   provably permanent — a fresh `JoinMarket` can even re-create an exited row at
   a floor equal to the old debit. What bounds the hazard is not impossibility

@@ -246,10 +246,11 @@ TEST(archival_bond_post, vin_serializer_enforces_endpoint_coupling)
     EXPECT_TRUE(std::get<txin_archival_bond_post>(decoded).join_market_coupled_fields_absent());
   }
   {
-    // The kind bound is HoldingsUpdate: the byte one above it does not parse.
+    // The kind table ends at Release. Byte 3 was HoldingsUpdate (REJECTED);
+    // the byte one above Release does not parse.
     std::string wire = join_wire;
     wire[kind_off] = static_cast<char>(
-      static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate) + 1);
+      static_cast<uint8_t>(archival_bond_post_kind::Release) + 1);
     txin_v decoded;
     EXPECT_FALSE(decode(wire, decoded));
   }
@@ -458,7 +459,17 @@ TEST(archival_bond_post, tx_input_mixing_rejects_bond_with_serve_credit)
   EXPECT_FALSE(check_inputs_types_supported(tx));
 }
 
-TEST(archival_bond_post, rct_balance_rejects_zero_bond_terms)
+TEST(archival_bond_post, rct_balance_unmoved_term_closes)
+{
+  ct::CtSig rv{};
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 0;
+  rv.p.fcmp_pp_proof = {0x01};
+
+  EXPECT_TRUE(ct::verCtSemanticsBondPost(rv, 0, 0));
+}
+
+TEST(archival_bond_post, rct_balance_unmoved_rejects_unbalanced_commitment)
 {
   constexpr uint64_t amount = 750'000'000;
 

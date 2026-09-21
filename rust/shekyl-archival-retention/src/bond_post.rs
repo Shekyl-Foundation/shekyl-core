@@ -70,382 +70,88 @@ pub enum BondPostError {
     IntervalLogFull,
     #[error("slash scheduler has not settled every epoch through the last-served anchor")]
     SlashSettlementPending,
-    // ── HoldingsUpdate (add + drop; gate-4 §4.4, P2B-7) ──────────────────────
-    #[error("post_kind is not HoldingsUpdate")]
-    PostKindNotHoldingsUpdate,
-    #[error("HoldingsUpdate is only valid on a ShardSetCompact record (not CompleteTree)")]
-    HoldingsUpdateOnCompleteTree,
-    #[error("HoldingsUpdate post-holdings must be ShardSetCompact")]
-    HoldingsUpdatePostNotCompact,
-    #[error("HoldingsUpdate-add requires bond_credit == FLOOR and bond_debit == 0")]
-    HoldingsUpdateAddTerms,
-    #[error("HoldingsUpdate-add requires the record in good standing (no open bad interval)")]
-    HoldingsUpdateNotGoodStanding,
-    #[error(
-        "HoldingsUpdate-add post-holdings must be current holdings plus exactly one new shard"
-    )]
-    HoldingsUpdateNotSingleAdd,
-    #[error("HoldingsUpdate-add post bonded_total must equal bond_floor(post-holdings)")]
-    HoldingsUpdateAddFloorMismatch,
-    #[error("HoldingsUpdate-drop requires bond_debit == FLOOR and bond_credit == 0")]
-    HoldingsUpdateDropTerms,
-    #[error("HoldingsUpdate-drop post-holdings must be current holdings minus exactly one shard")]
-    HoldingsUpdateNotSingleDrop,
-    #[error("HoldingsUpdate-drop must leave at least one shard (use Release for a full exit)")]
-    HoldingsUpdateDropLastShard,
-    #[error("HoldingsUpdate-drop post bonded_total must equal bond_floor(post-holdings)")]
-    HoldingsUpdateDropFloorMismatch,
-    #[error("HoldingsUpdate-drop shard is within its bond_duration retention horizon")]
-    HoldingsUpdateDropWithinHorizon,
-    #[error(
-        "HoldingsUpdate requires a Bonded record (bonded collateral and at least one \
-         held shard); an Exited or slash-emptied record re-enters via JoinMarket/Rebond"
-    )]
-    HoldingsUpdateRecordNotBonded,
-    #[error("post_kind is not Rebond")]
-    PostKindNotRebond,
-    #[error("Rebond is only valid on a ShardSetCompact record (not CompleteTree)")]
-    RebondOnCompleteTree,
-    #[error("Rebond post-holdings must be ShardSetCompact")]
-    RebondPostNotCompact,
-    #[error("Rebond requires an open bad interval (the record is not slashed)")]
-    RebondNotSlashed,
+    #[error("post_kind is not Reinstate")]
+    PostKindNotReinstate,
+    #[error("Reinstate is only valid on a ShardSetCompact record (not CompleteTree)")]
+    ReinstateOnCompleteTree,
+    #[error("Reinstate post-holdings must be ShardSetCompact")]
+    ReinstatePostNotCompact,
+    #[error("Reinstate requires an open bad interval (the record is not slashed)")]
+    ReinstateNotSlashed,
     #[error(
         "record carries more than one open bad interval — record corruption (the \
          same-epoch slash coalescing invariant, P2B-9 Pin 5, guarantees at most one)"
     )]
-    RebondMultipleOpenIntervals,
+    ReinstateMultipleOpenIntervals,
     #[error(
-        "record interval log lacks Rebond headroom (> 254 entries): re-arming \
+        "record interval log lacks Reinstate headroom (> 254 entries): re-arming \
          slashability must leave one slot for the next slash and one for the Release \
          clean close, so exit stays reachable"
     )]
-    RebondIntervalLogHeadroom,
+    ReinstateIntervalLogHeadroom,
     #[error(
-        "Rebond terms mismatch: bond_debit must be 0 and bond_credit must equal \
-         bond_floor(post) − record bonded_total (zero for standing-only reinstatement)"
+        "Reinstate terms mismatch: bond_debit and bond_credit must both be 0, and \
+         bonded_total_atomic must equal the record's current bonded_total \
+         (a persona's bond is immutable; Reinstate moves no collateral)"
     )]
-    RebondTerms,
+    ReinstateTerms,
     #[error(
-        "Rebond post-holdings must be a duplicate-free superset of the record's \
-         current holdings (reinstatement, not restructuring — shedding is \
-         HoldingsUpdate-drop's gated job)"
+        "Reinstate post-holdings must equal the record's current holdings \
+         (a persona's bond is immutable; holdings change is persona rotation)"
     )]
-    RebondNotSuperset,
+    ReinstateHoldingsChanged,
     #[error(
         "record bonded_total != bond_floor(record holdings) — record corruption; \
          rejected at verify so a verify-valid tx can never meet the connect \
          fold's loud floor belt (tx rejection, not a chain halt)"
     )]
-    RebondRecordFloorBroken,
+    ReinstateRecordFloorBroken,
 }
 
-/// The single-shard set difference `post ∖ current` when `post` grows `current` by
-/// exactly one shard (`HoldingsUpdate`-add), or the reverse for a drop. Both
-/// holdings are treated as **sets** (order-agnostic); the vin's `post` is validated
-/// to carry no duplicate shard ids (the record's `current` is trusted).
-///
-/// Returns the single added/removed shard id, or `None` when the difference is not
-/// exactly one shard in the requested direction (wrong cardinality, a duplicate in
-/// `post`, or a shard changed on both sides).
-pub(crate) enum SingleDiff {
-    /// `post = current ∪ {shard}`, `shard ∉ current`, `|post| = |current| + 1`.
-    Added(u64),
-    /// `post = current ∖ {shard}`, `shard ∈ current`, `|post| = |current| − 1`.
-    Removed(u64),
-    /// Not a single-shard change in either direction.
-    NotSingle,
-}
-
-pub(crate) fn single_shard_diff(current: &[u64], post: &[u64]) -> SingleDiff {
-    // Reject a `post` carrying a duplicate shard id (a set on the wire).
+/// Set equality of two shard lists (order-agnostic). `post` must be duplicate-free;
+/// the record's `current` is trusted. Used by [`verify_reinstate_bond_post`] and the
+/// connect fold: a persona's bond is immutable, so reinstatement cannot change
+/// holdings (2026-09-20 ruling).
+pub(crate) fn holdings_unchanged(current: &[u64], post: &[u64]) -> bool {
     let mut post_sorted = post.to_vec();
     post_sorted.sort_unstable();
     if post_sorted.windows(2).any(|w| w[0] == w[1]) {
-        return SingleDiff::NotSingle;
+        return false;
     }
     let mut cur_sorted = current.to_vec();
     cur_sorted.sort_unstable();
-
-    // Both vectors are sorted, so membership is a `binary_search` — the diff is
-    // O(n log n), not the O(n²) a linear `contains` per element would cost on
-    // holdings that can reach the codec cap.
-    let added: Vec<u64> = post_sorted
-        .iter()
-        .copied()
-        .filter(|s| cur_sorted.binary_search(s).is_err())
-        .collect();
-    let removed: Vec<u64> = cur_sorted
-        .iter()
-        .copied()
-        .filter(|s| post_sorted.binary_search(s).is_err())
-        .collect();
-
-    match (
-        post_sorted.len().cmp(&cur_sorted.len()),
-        added.as_slice(),
-        removed.as_slice(),
-    ) {
-        (std::cmp::Ordering::Greater, [s], []) if post_sorted.len() == cur_sorted.len() + 1 => {
-            SingleDiff::Added(*s)
-        }
-        (std::cmp::Ordering::Less, [], [s]) if post_sorted.len() + 1 == cur_sorted.len() => {
-            SingleDiff::Removed(*s)
-        }
-        _ => SingleDiff::NotSingle,
-    }
+    post_sorted == cur_sorted
 }
 
-/// Shared `HoldingsUpdate` admission prologue, both directions (the add and drop
-/// verifies below): post-kind pin, record existence, the ShardSetCompact pins on
-/// record and post, and the **Bonded-state gate** (P2B-7 Pin 1: `HoldingsUpdate`
-/// is `Bonded → Bonded`). Returns the record's current `bonded_total` for the
-/// direction-specific arithmetic.
+/// Verify `Reinstate` bond-post semantics — post-slash reinstatement of a record with
+/// an open bad interval (gate-4 §3.4; P2B-9, ratified 2026-07-14; holdings pin
+/// restated 2026-09-20). Zero-money path (`bond_credit == bond_debit == 0`), so
+/// the pqc auth is the identity key `P_pubkey` (the GF-1 selector routes
+/// non-debit → identity; enforced C++-side — P2B-9 Pin 4).
 ///
-/// The Bonded gate is load-bearing, not a belt: without it an **Exited** record
-/// (post-`Release`: zero total, empty holdings, zero-length clean close — which
-/// `good_through` excludes nothing for) passes every add gate and becomes a
-/// JoinMarket-bypassing resurrection path whose connect then throws on the
-/// empty-pre-image journal encode — a verify-valid tx no block can connect
-/// (chain-stall vector). Re-entry after an exit or a full slash is
-/// `JoinMarket`/`Rebond`, never a voluntary adjustment.
-fn holdings_update_prologue(
-    vin: &ArchivalBondPostVin,
-    record_bonded_total: Option<u64>,
-    record_holdings_kind: HoldingsKind,
-    record_held_shard_ids: &[u64],
-) -> Result<u64, BondPostError> {
-    if !matches!(vin.kind, BondKind::HoldingsUpdate) {
-        return Err(BondPostError::PostKindNotHoldingsUpdate);
-    }
-    let Some(current_bonded) = record_bonded_total else {
-        return Err(BondPostError::RecordMissing);
-    };
-    // HoldingsUpdate operates on a shard set; a foundation CompleteTree record
-    // has no shard list to adjust.
-    if record_holdings_kind != HoldingsKind::ShardSetCompact {
-        return Err(BondPostError::HoldingsUpdateOnCompleteTree);
-    }
-    if vin.holdings.kind != HoldingsKind::ShardSetCompact {
-        return Err(BondPostError::HoldingsUpdatePostNotCompact);
-    }
-    if current_bonded == 0 || record_held_shard_ids.is_empty() {
-        return Err(BondPostError::HoldingsUpdateRecordNotBonded);
-    }
-    Ok(current_bonded)
-}
-
-/// Verify `HoldingsUpdate`-**add** bond-post semantics — voluntary growth of a
-/// `Bonded` record by exactly one shard (gate-4 §4.4; `PHASE_2B_FSM_RETOOL.md`
-/// P2B-7 Pin 1/5, Q4). Credit path (`bond_debit == 0`), so the pqc auth is the
-/// identity key (the GF-1 selector routes credit → `P_pubkey`).
-///
-/// Marshaled facts (C++ reads, Rust decides): `record_bonded_total` is `None` when
-/// no record exists; `record_held_shard_ids` is the record's **current** holdings
-/// (needed for the single-shard diff — the vin carries the **post**-connect set per
-/// the §3.5 debit-path pin, which applies uniformly to every `post_kind`);
-/// `record_join_settlement_epoch` and `record_bad_intervals` feed the good-standing
-/// gate (Q4: add is voluntary growth requiring `good_standing == true`, i.e.
-/// `good_through` at the current epoch — no open bad interval).
-///
-/// The added shard is **not** required to be a frozen segment here: adding a shard
-/// that never freezes locks `FLOOR` and earns nothing (the reward/challenge channel
-/// is serve-credit-bit-driven, never descriptor-driven), so it is self-harm, not an
-/// attack, and gating it would couple bond-post verify to the segment registry.
-pub fn verify_holdings_update_add(
-    vin: &ArchivalBondPostVin,
-    record_bonded_total: Option<u64>,
-    record_holdings_kind: HoldingsKind,
-    record_held_shard_ids: &[u64],
-    record_join_settlement_epoch: u64,
-    record_bad_intervals: &[crate::consensus_state::BadInterval],
-    current_settlement_epoch: u64,
-) -> Result<(), BondPostError> {
-    let current_bonded = holdings_update_prologue(
-        vin,
-        record_bonded_total,
-        record_holdings_kind,
-        record_held_shard_ids,
-    )?;
-    // Credit direction (§3.2 term table): exactly `+FLOOR`, no debit.
-    if vin.bond_debit != 0 || vin.bond_credit != crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC {
-        return Err(BondPostError::HoldingsUpdateAddTerms);
-    }
-    // Good standing (Q4): voluntary growth requires the record be good_through the
-    // current epoch — an open bad interval (post-slash, pre-Rebond) forecloses add.
-    if !crate::consensus_state::good_through(
-        record_join_settlement_epoch,
-        current_settlement_epoch,
-        record_bad_intervals,
-    ) {
-        return Err(BondPostError::HoldingsUpdateNotGoodStanding);
-    }
-    // Exactly one shard added; the post is `current ∪ {new}` (set semantics).
-    match single_shard_diff(record_held_shard_ids, &vin.holdings.shard_ids) {
-        SingleDiff::Added(_) => {}
-        _ => return Err(BondPostError::HoldingsUpdateNotSingleAdd),
-    }
-    // Floor equality on the post-state: bonded_total == bond_floor(post) ==
-    // (|current| + 1)·FLOOR. `bond_credit == FLOOR` (checked above) is the
-    // single-shard increment; this pins the resulting total.
-    let post_floor = bond_floor(&vin.holdings);
-    if vin.bonded_total_atomic != post_floor
-        || vin.bonded_total_atomic
-            != current_bonded.saturating_add(crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC)
-    {
-        return Err(BondPostError::HoldingsUpdateAddFloorMismatch);
-    }
-    Ok(())
-}
-
-/// Verify `HoldingsUpdate`-**drop** bond-post semantics — voluntary removal of exactly
-/// one shard from a `Bonded` record (gate-4 §4.4 grace-tail; `PHASE_2B_FSM_RETOOL.md`
-/// P2B-7 Pin 1/2/3). Debit path (`bond_debit == FLOOR`), so the pqc auth is the
-/// record's committed `bond_spend_pk` (the GF-1 selector routes debit → the committed
-/// key; enforced C++-side, as for `Release`).
-///
-/// **Grace-tail model (ratified 2026-07-15):** the drop is a precondition-gated shrink,
-/// not a drop-then-cool. The dropped shard's release cooldown must have elapsed
-/// ([`release_cooldown_elapsed`] on its per-shard last-served anchor) and the slash
-/// scheduler must have settled through that anchor ([`slashes_settled_through`]) — the
-/// same two predicates the `Release` release uses, applied to the one dropped shard.
-/// The shard is additionally gated by the retention horizon
-/// ([`bond_duration`](crate::bond_duration::bond_duration) of
-/// [`ShardAgeAtAdd`](crate::bond_duration::ShardAgeAtAdd)): it is ineligible for
-/// voluntary drop until `current_epoch − add_epoch ≥ bond_duration`. At connect the
-/// shard leaves `holdings` and the `FLOOR` returns via the `bond_debit` source term —
-/// no cooldown sub-state, no interval, no clean-close marker (`P` stays `Bonded`).
-///
-/// The per-shard facts (`add_epoch`, `freeze_height`, `last_served`) are for the shard
-/// C++ identified by set-difference; this verify recomputes the diff and cross-checks
-/// that `dropped_shard_id` is exactly the one it removed, so the passed facts cannot be
-/// mis-associated (the exactly-one-dropped **rule** is decided here, not in C++).
-#[allow(clippy::too_many_arguments)]
-pub fn verify_holdings_update_drop(
-    vin: &ArchivalBondPostVin,
-    record_bonded_total: Option<u64>,
-    record_holdings_kind: HoldingsKind,
-    record_held_shard_ids: &[u64],
-    dropped_shard_id: u64,
-    dropped_shard_add_epoch: u64,
-    dropped_shard_freeze_height: u64,
-    dropped_shard_last_served: Option<u64>,
-    last_settled_slash_epoch: Option<u64>,
-    current_settlement_epoch: u64,
-) -> Result<(), BondPostError> {
-    let current_bonded = holdings_update_prologue(
-        vin,
-        record_bonded_total,
-        record_holdings_kind,
-        record_held_shard_ids,
-    )?;
-    // Debit direction (§3.2 term table): exactly `−FLOOR`, no credit.
-    if vin.bond_credit != 0 || vin.bond_debit != crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC {
-        return Err(BondPostError::HoldingsUpdateDropTerms);
-    }
-    // Exactly one shard removed, and it is the shard C++ read facts for.
-    match single_shard_diff(record_held_shard_ids, &vin.holdings.shard_ids) {
-        SingleDiff::Removed(s) if s == dropped_shard_id => {}
-        _ => return Err(BondPostError::HoldingsUpdateNotSingleDrop),
-    }
-    // Drop-last-shard rejected: a full exit is `Release` (→ `Exited`), not a drop
-    // that would leave an empty ShardSetCompact (P2B-7 Pin 1).
-    if vin.holdings.shard_ids.is_empty() {
-        return Err(BondPostError::HoldingsUpdateDropLastShard);
-    }
-    // Floor equality on the post-state: bonded_total == bond_floor(post) ==
-    // (|current| − 1)·FLOOR.
-    let post_floor = bond_floor(&vin.holdings);
-    if vin.bonded_total_atomic != post_floor
-        || vin
-            .bonded_total_atomic
-            .saturating_add(crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC)
-            != current_bonded
-    {
-        return Err(BondPostError::HoldingsUpdateDropFloorMismatch);
-    }
-    // Retention horizon (gate-4 §4.4 / P2B-7 Pin 3): the shard is ineligible for
-    // voluntary drop until `current_epoch − add_epoch ≥ bond_duration(age@add)`.
-    // A `current < add_epoch` is record corruption (add cannot be in the future);
-    // treat it as within-horizon (fail-closed, hardest to drop).
-    let horizon =
-        crate::bond_duration::bond_duration(crate::bond_duration::ShardAgeAtAdd::from_add(
-            dropped_shard_add_epoch,
-            dropped_shard_freeze_height,
-        ));
-    match current_settlement_epoch.checked_sub(dropped_shard_add_epoch) {
-        Some(tenure) if tenure >= horizon => {}
-        _ => return Err(BondPostError::HoldingsUpdateDropWithinHorizon),
-    }
-    // Per-shard release cooldown (grace-tail precondition) on the dropped shard's
-    // last-served anchor, plus slash-settlement through it — the same guarantee as
-    // `Release`, scoped to the one shard: no pending challenge can still slash it.
-    if !release_cooldown_elapsed(dropped_shard_last_served, current_settlement_epoch) {
-        return Err(BondPostError::CooldownNotElapsed);
-    }
-    if !slashes_settled_through(last_settled_slash_epoch, dropped_shard_last_served) {
-        return Err(BondPostError::SlashSettlementPending);
-    }
-    Ok(())
-}
-
-/// The added-set difference for a `Rebond` re-specification: `post ∖ current` when
-/// `post` is a duplicate-free **superset** of `current` (set semantics; the record's
-/// `current` is trusted, the vin's `post` is validated). Returns `None` when `post`
-/// carries a duplicate or misses any current shard — the reinstatement-not-
-/// restructuring shape (P2B-9 Pin 1: the superset closes shedding of the *carried*
-/// shards; the slashed shard is already absent from `current`, its abandonment
-/// priced by the burn, not prevented).
-pub(crate) fn superset_added_diff(current: &[u64], post: &[u64]) -> Option<Vec<u64>> {
-    let mut post_sorted = post.to_vec();
-    post_sorted.sort_unstable();
-    if post_sorted.windows(2).any(|w| w[0] == w[1]) {
-        return None;
-    }
-    if !current.iter().all(|s| post_sorted.binary_search(s).is_ok()) {
-        return None;
-    }
-    let mut cur_sorted = current.to_vec();
-    cur_sorted.sort_unstable();
-    Some(
-        post_sorted
-            .iter()
-            .copied()
-            .filter(|s| cur_sorted.binary_search(s).is_err())
-            .collect(),
-    )
-}
-
-/// Verify `Rebond` bond-post semantics — post-slash reinstatement of a record with
-/// an open bad interval (gate-4 §3.4; P2B-9, ratified 2026-07-14). Credit path
-/// (`bond_debit == 0`), so the pqc auth is the identity key `P_pubkey` (the GF-1
-/// selector routes credit → identity; enforced C++-side — P2B-9 Pin 4).
-///
-/// **Reinstatement, not re-entry:** the record resumes in place — same
-/// `P_canonical_id`, same carried shards and add-epochs, same backlog. The
-/// precondition is *an open bad interval exists* (`good_standing == false`, both
-/// slash severities — partial and terminal); an `Exited` record is excluded
-/// structurally (its clean interval-close is zero-length, never open). The
-/// re-specified holdings must be a non-empty duplicate-free **superset** of the
-/// record's current holdings (Pin 1 — shedding stays `HoldingsUpdate`-drop's gated
-/// job), and the credit is owed only for growth:
-/// `bond_credit == bond_floor(post) − record.bonded_total == |added|·FLOOR`, **zero
-/// for the common standing-only reinstatement** (Pin 2 — the landed slash burns one
-/// `FLOOR` and removes the shard atomically, so no deficit exists). The interval
-/// log must leave headroom (`≤ 254` entries, Pin 6): re-arming slashability must
-/// keep one slot for the next slash and one for the `Release` clean close, so exit
-/// is always reachable. Exactly one open interval may exist (Pin 5's coalescing
-/// invariant); more is record corruption, rejected here so a verify-valid tx can
-/// never meet the connect fold's loud multiplicity belt.
-pub fn verify_rebond_bond_post(
+/// **Reinstatement, not re-entry and not a holdings change:** the record resumes
+/// in place — same `P_canonical_id`, same shards and add-epochs, same backlog.
+/// The precondition is *an open bad interval exists* (`good_standing == false`,
+/// both slash severities); an `Exited` record is excluded structurally (its clean
+/// interval-close is zero-length, never open). Post-holdings must **equal** the
+/// record's current holdings (the 2026-09-20 immutable-bond ruling: a persona
+/// cannot keep `P` and change the bond; rotation is `Release` + `JoinMarket`).
+/// A terminal slash that emptied the record cannot reinstate — empty holdings
+/// have no position, and re-entry is `JoinMarket` under a new persona. The
+/// interval log must leave headroom (`≤ 254` entries, Pin 6): re-arming
+/// slashability must keep one slot for the next slash and one for the `Release`
+/// clean close, so exit is always reachable. Exactly one open interval may exist
+/// (Pin 5's coalescing invariant); more is record corruption, rejected here so a
+/// verify-valid tx can never meet the connect fold's loud multiplicity belt.
+pub fn verify_reinstate_bond_post(
     vin: &ArchivalBondPostVin,
     record_bonded_total: Option<u64>,
     record_holdings_kind: HoldingsKind,
     record_held_shard_ids: &[u64],
     record_bad_intervals: &[crate::consensus_state::BadInterval],
 ) -> Result<(), BondPostError> {
-    if !matches!(vin.kind, BondKind::Rebond) {
-        return Err(BondPostError::PostKindNotRebond);
+    if !matches!(vin.kind, BondKind::Reinstate) {
+        return Err(BondPostError::PostKindNotReinstate);
     }
     let Some(current_bonded) = record_bonded_total else {
         return Err(BondPostError::RecordMissing);
@@ -453,64 +159,55 @@ pub fn verify_rebond_bond_post(
     // A CompleteTree record with an open bad interval is unrepresentable (the
     // demotion flips the kind atomically with the interval append) — belt anyway.
     if record_holdings_kind != HoldingsKind::ShardSetCompact {
-        return Err(BondPostError::RebondOnCompleteTree);
+        return Err(BondPostError::ReinstateOnCompleteTree);
     }
     if vin.holdings.kind != HoldingsKind::ShardSetCompact {
-        return Err(BondPostError::RebondPostNotCompact);
+        return Err(BondPostError::ReinstatePostNotCompact);
     }
-    // Reinstatement needs a position to reinstate into; `∅` is a zombie (good
-    // standing, no shards, no balance — HU-add and Release both reject it).
+    // Reinstatement needs a position: empty holdings have no shards to serve.
+    // A terminal slash that emptied the record re-enters via JoinMarket under a
+    // new persona — there is no in-place path that puts shards back on this P.
     if vin.holdings.shard_ids.is_empty() {
         return Err(BondPostError::ShardSetCompactEmpty);
     }
     // (No oversize guard here: `vin.holdings.shard_ids` is a `ShardSet`, bounded
     // at construction, so an oversize post is unrepresentable by the time verify
-    // runs — the former `RebondPostOversize` belt was retired with the newtype.
-    // The raw-slice connect path re-guards it in `rebond_connect`'s `PostOversize`.)
+    // runs — the former `ReinstatePostOversize` belt was retired with the newtype.
+    // The raw-slice connect path re-guards it in `reinstate_connect`'s `PostOversize`.)
     // Precondition: exactly one open bad interval (Pin 5's coalescing invariant).
     let open_count = record_bad_intervals
         .iter()
         .filter(|iv| iv.end_exclusive == u64::MAX)
         .count();
     if open_count == 0 {
-        return Err(BondPostError::RebondNotSlashed);
+        return Err(BondPostError::ReinstateNotSlashed);
     }
     if open_count > 1 {
-        return Err(BondPostError::RebondMultipleOpenIntervals);
+        return Err(BondPostError::ReinstateMultipleOpenIntervals);
     }
     // Pin 6 headroom: one slot reserved for the next slash + one for the Release
-    // clean close (the close below is in-place, so post-Rebond size == size).
+    // clean close (the close below is in-place, so post-Reinstate size == size).
     if record_bad_intervals.len() > crate::bond_connect::MAX_BOND_BAD_INTERVALS - 2 {
-        return Err(BondPostError::RebondIntervalLogHeadroom);
+        return Err(BondPostError::ReinstateIntervalLogHeadroom);
     }
-    // Pin 1: duplicate-free superset of the current holdings. (The added-set
-    // itself is the CONNECT fold's operand — verify only needs the shape.)
-    if superset_added_diff(record_held_shard_ids, &vin.holdings.shard_ids).is_none() {
-        return Err(BondPostError::RebondNotSuperset);
+    // Immutable-bond: post-holdings equal current. Growth, shed, and swap are
+    // all the same refusal — a persona does not keep P and change the bond.
+    if !holdings_unchanged(record_held_shard_ids, &vin.holdings.shard_ids) {
+        return Err(BondPostError::ReinstateHoldingsChanged);
     }
     // §3.2 record floor invariant, checked HERE against the marshaled record
     // facts — not deferred to the connect fold's RecordFloorInvariantBroken
-    // belt: a floor-drifted record would otherwise let this tx verify (its
-    // terms are computed FROM the drifted total) and then FATAL-abort every
-    // node at block connect. Verify rejects the tx; the fold's belt stays for
-    // verify-bypassing callers (the multiplicity check's posture, one check up).
+    // belt: a floor-drifted record would otherwise let this tx verify and then
+    // FATAL-abort every node at block connect. Verify rejects the tx; the fold's
+    // belt stays for verify-bypassing callers.
     if bond_floor_of(record_holdings_kind, record_held_shard_ids.len()) != current_bonded {
-        return Err(BondPostError::RebondRecordFloorBroken);
+        return Err(BondPostError::ReinstateRecordFloorBroken);
     }
-    // Pin 2 terms (§3.2): no debit; credit == bond_floor(post) − current bonded
-    // (== |added|·FLOOR under the record floor invariant, checked just above;
-    // zero legal); post-state floor equality. `checked_sub` fails closed on
-    // a record whose bonded exceeds the post floor (corruption — the superset
-    // makes an honest shrink unrepresentable).
-    if vin.bond_debit != 0 {
-        return Err(BondPostError::RebondTerms);
-    }
-    let post_floor = bond_floor(&vin.holdings);
-    let Some(expected_credit) = post_floor.checked_sub(current_bonded) else {
-        return Err(BondPostError::RebondTerms);
-    };
-    if vin.bond_credit != expected_credit || vin.bonded_total_atomic != post_floor {
-        return Err(BondPostError::RebondTerms);
+    // Zero-money: no debit, no credit, bonded_total unchanged (equals the
+    // record and equals bond_floor(post) — which is bond_floor(current) under
+    // holdings equality).
+    if vin.bond_debit != 0 || vin.bond_credit != 0 || vin.bonded_total_atomic != current_bonded {
+        return Err(BondPostError::ReinstateTerms);
     }
     Ok(())
 }
@@ -673,8 +370,8 @@ pub fn release_vin_statics(vin: &ArchivalBondPostVin) -> Result<(), BondPostErro
 /// The vin's `holdings` / `bonded_total_atomic` are the **post-connect** state
 /// (gate-4 §3.5 debit-path note, ratified P2B-8): a full `Release` ends at empty
 /// holdings, so `bonded_total_atomic == 0 == bond_floor(∅)`, and the debit removes
-/// the whole current balance. The `bonded_total_atomic != 0` case is a partial
-/// release and belongs on the `HoldingsUpdate`-drop path, not here.
+/// the whole current balance. There is no partial-release kind: a persona who
+/// wants a smaller set rotates (`Release` + `JoinMarket` under a new P).
 ///
 /// `record_bad_interval_count` is the record's interval-log length; verify
 /// rejects a log at [`MAX_BOND_BAD_INTERVALS`](crate::bond_connect::MAX_BOND_BAD_INTERVALS)
@@ -725,8 +422,8 @@ pub fn verify_release_bond_post(
 ///
 /// Per-tx verify runs against pre-block DB state, so every same-`P` same-block
 /// pair — JoinMarket+JoinMarket (double `total_bonded_atomic` credit),
-/// Release+Release (double debit), JoinMarket+Release, and every future
-/// `HoldingsUpdate` combination — passes per-tx verify independently; each
+/// Release+Release (double debit), JoinMarket+Release, Reinstate+Reinstate —
+/// passes per-tx verify independently; each
 /// pair interacts through the per-`P` record and the global counter, and the
 /// §4.5 conservation audit is **not** a backstop (a double-credit doubles both
 /// sides of `total_bonded == Σ bonded_P` consistently, so it passes on corrupt

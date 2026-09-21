@@ -968,21 +968,21 @@ struct ArchivalBondHoldingsUpdateRevertValue {
     }
 };
 
-// ─── ArchivalBondRebondLogKey / ArchivalBondRebondRevertValue ───────────────
+// ─── ArchivalBondReinstateLogKey / ArchivalBondReinstateRevertValue ───────────────
 //
-// Per-block journal for the Rebond connect's record pre-image (gate-4 §3.4;
+// Per-block journal for the Reinstate connect's record pre-image (gate-4 §3.4;
 // P2B-9 reinstatement). Same BE(height)||BE(seq) idiom as the other reorg
-// journals. Rebond is the one bond-post kind that mutates an EXISTING interval
-// in place (end_exclusive: MAX → E_rebond + 1), so alongside the holdings
+// journals. Reinstate is the one bond-post kind that mutates an EXISTING interval
+// in place (end_exclusive: MAX → E_reinstate + 1), so alongside the holdings
 // pre-image the row carries the closed interval's index + start: the pop
 // re-opens exactly that entry to MAX (belt: the start must match and the entry
 // must currently be closed). pre_bonded_total == 0 is LEGAL here — a
 // terminal-slash reinstatement starts from a zero-balance record (unlike the
 // Release/HoldingsUpdate journals, whose zero pre-image is unreachable).
 
-using ArchivalBondRebondLogKey = ArchivalSlashLogKey;
+using ArchivalBondReinstateLogKey = ArchivalSlashLogKey;
 
-struct ArchivalBondRebondRevertValue {
+struct ArchivalBondReinstateRevertValue {
     // Born at v1 (pre-genesis; no migration, reset on any format change).
     static constexpr uint8_t kVersion = 1;
     /// Same holdings bound as `ArchivalBondValue` (static_assert below).
@@ -1002,17 +1002,17 @@ struct ArchivalBondRebondRevertValue {
     std::vector<uint64_t> pre_shard_ids;
     /// The pre-connect add-epochs, index-parallel to `pre_shard_ids` under the
     /// same shard count (single-count coupling; a length desync cannot
-    /// round-trip). Restored alongside the ids on Rebond pop.
+    /// round-trip). Restored alongside the ids on Reinstate pop.
     std::vector<uint64_t> pre_shard_add_epochs;
 
     [[nodiscard]] std::vector<uint8_t> encode() const
     {
         if (pre_shard_ids.size() > kMaxHoldings)
             throw std::runtime_error(
-                "ArchivalBondRebondRevertValue encode: holdings bound exceeded");
+                "ArchivalBondReinstateRevertValue encode: holdings bound exceeded");
         if (pre_shard_ids.size() != pre_shard_add_epochs.size())
             throw std::runtime_error(
-                "ArchivalBondRebondRevertValue encode: shard id / add-epoch length mismatch");
+                "ArchivalBondReinstateRevertValue encode: shard id / add-epoch length mismatch");
         std::vector<uint8_t> out;
         out.reserve(kFixedSize + pre_shard_ids.size() * 16);
         out.push_back(kVersion);
@@ -1028,7 +1028,7 @@ struct ArchivalBondRebondRevertValue {
         return out;
     }
 
-    static bool decode(const void* data, size_t len, ArchivalBondRebondRevertValue& out)
+    static bool decode(const void* data, size_t len, ArchivalBondReinstateRevertValue& out)
     {
         if (!data || len < kFixedSize)
             return false;
@@ -1153,7 +1153,7 @@ struct ArchivalBondValue {
     // Interval-log entry (gate-4 F3). Half-open [start_epoch, end_exclusive).
     // Carries TWO entry kinds — do not assume every entry is a slash:
     //   - bad-standing interval: start < end (a slash opens with
-    //     end_exclusive = UINT64_MAX; Rebond closes it in place), and
+    //     end_exclusive = UINT64_MAX; Reinstate closes it in place), and
     //   - the Release clean interval-close: ZERO-LENGTH start == end — a pure
     //     exit marker recording the release settlement epoch. Its empty range
     //     excludes no epoch from good_through by construction, and the codec
@@ -1466,8 +1466,8 @@ static_assert(ArchivalBondUnbondRevertValue::kMaxBadIntervals
 static_assert(ArchivalBondHoldingsUpdateRevertValue::kMaxHoldings
         == ArchivalBondValue::kMaxHoldings,
     "holdings-update journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
-static_assert(ArchivalBondRebondRevertValue::kMaxHoldings == ArchivalBondValue::kMaxHoldings,
-    "rebond journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
+static_assert(ArchivalBondReinstateRevertValue::kMaxHoldings == ArchivalBondValue::kMaxHoldings,
+    "reinstate journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
 
 // ─── ArchivalShardSegmentValue ─────────────────────────────────────────────
 
