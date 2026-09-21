@@ -41,7 +41,7 @@
 use core::num::NonZeroU128;
 
 use shekyl_address::Network;
-use shekyl_chain_rules::{RuleSchedule, RuleSet};
+use shekyl_chain_rules::{ReleaseAnchors, RuleSchedule, RuleSet, Trust};
 use shekyl_types::BlockHeight;
 
 use crate::corpus::CorpusNet;
@@ -122,6 +122,21 @@ impl ChainRules {
             } => RuleSet::GENESIS,
         }
     }
+
+    /// What this run takes on the release's word — `validate`'s `Trust`
+    /// input (DRS-E6 slice 3; `PDM-Q5`). A public network's release-carried
+    /// anchors, resolved by the same nettype the schedule is; regtest is
+    /// unanchored — no release vouches for a regtest chain. Resolved here
+    /// beside `in_force` because the two are the run's two chain-derived
+    /// inputs to `validate` and the rules crate holds neither a schedule nor
+    /// a `Network` (rule 71).
+    #[must_use]
+    pub const fn trust(&self) -> Trust {
+        match *self {
+            Self::Scheduled(net) => Trust::full(ReleaseAnchors::for_network(net)),
+            Self::Regtest { .. } => Trust::UNANCHORED,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -145,6 +160,11 @@ mod tests {
                 ChainRules::new(Chain::Public(net), Some(nz(7))),
                 Err(FixedDifficultyRefused { net })
             );
+            // The release's anchors for that network — empty today, so
+            // equal to UNANCHORED by value; the *resolution* is what this
+            // pins (the first anchor entry moves the left side, not the
+            // right).
+            assert_eq!(rules.trust(), Trust::full(ReleaseAnchors::for_network(net)));
         }
     }
 
@@ -157,5 +177,8 @@ mod tests {
         assert_eq!(set, RuleSet::fakechain(nz(7)));
         assert_ne!(set, RuleSet::GENESIS, "same id, different set");
         assert_eq!(set.id(), RuleSet::GENESIS.id());
+        // No release vouches for a regtest chain, flag or no flag.
+        assert_eq!(plain.trust(), Trust::UNANCHORED);
+        assert_eq!(fixed.trust(), Trust::UNANCHORED);
     }
 }
