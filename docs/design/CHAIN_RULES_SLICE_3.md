@@ -1,7 +1,9 @@
 # `shekyl-chain-rules` slice 3 — census 4.E (DRS-E6 increment 4)
 
-**Status:** OPEN — Round 0 pre-flight, written 2026-09-20 against `dev` @
-`34d111551` (post-#805). Nothing implemented; §8 is the question set.
+**Status:** OPEN — Round 0 pre-flight written 2026-09-20 against `dev` @
+`34d111551` (post-#805); **Round 0 RULED 2026-09-20** (Q1–Q7, §8; the
+reframing in §0). Implementation begins on the rulings; the signature commit
+lands after #806.
 Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessors
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md),
 [`CHAIN_RULES_SLICE_2.md`](../completed/CHAIN_RULES_SLICE_2.md). Parent plan:
@@ -20,28 +22,62 @@ the census **re-key of E1 and E2** that `PDM-Q11`/`PDM-Q-F30` bind to *"the
 PR that lands `Trust::BelowAnchor`, because that PR moves checkpoint state
 into Rust"*.
 
-**What this pre-flight found, in one paragraph.** Unlike slices 1 and 2,
-nothing here is *adopted*: **no anchor, checkpoint or `Trust` symbol exists
-anywhere in Rust** (§3 F1), and the C++ mechanism the census describes is a
-table that is **empty on every network** (`init_default_checkpoints`,
-`checkpoints.cpp:136`–`:145`, a rule-71 data no-op) — so every 4.E row is
-vacuous on every chain that exists, and parity evidence for this slice is
-fixture-only. What the slice has to build is the **release-carried anchor
-table** as per-network *data* (the `RuleSchedule::for_network` shape), the
-one predicate that reads it per block (E1: hash equality at an anchored
-height), and the one that reads it at writer open (E5's surviving subject:
-the recorded chain agrees with the binary's anchors, else pop or fail-stop).
-E2 has **no Rust site** — the store admits no alternative block, and on the
-main chain the floor is satisfied by construction — and is proposed
-**subsumed pending the alt view** (slice 9), the D5 shape (§2). The
-load-bearing question is the channel the anchors reach `validate` through
-(§8 Q1): every candidate channel touches the E2 driver's call sites, which
-PR #806 is growing *now*, so sequencing against #806 is part of the answer
-(§8 Q2). Two structural consequences are named: B6's block identity must be
-derived **before** the view-bound rules run rather than after the last one
-passes (§4.3, F8), and E5 is the first row enforced at a site other than
-`validate` whose holder is **Rust**, which the registry cannot yet say (§8
-Q4).
+## 0. What this slice is — the anchor model's Rust home, not a port (RULED 2026-09-20)
+
+**This slice is not porting census 4.E. It is building the Rust home for
+the anchor model `PDM-Q5` ratified** ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)
+§`PDM-Q5`, RULED 2026-09-18, `:292`–`:296`): *"a release-carried checkpoint
+`C` on the `assumevalid` argument; three bands (`≤ C` skeleton, trusted with
+the binary; `(C, tip − W]` filled from archivers; above from peers); the
+tip-relative trust horizon and the operator trust-below fallback
+REJECTED."* That ruling is the slice's reason for being: it names a
+consumer (the band-1 sync driver), a semantics (`assumevalid`; below `C`
+proof validity is asserted by the anchor, not checked), and a mode
+(`Trust::Full | BelowAnchor(anchor)`, `PDM-Q-F27`, confirmed in the same
+ruling) — none of which depends on the C++.
+
+The distinction decides every question in §8, so it is stated first. Read
+as a **port**, 4.E is a mechanism with no data, no users and no Rust
+presence — the shape `get_output_histogram`, `get_curve_tree_path` and the
+stripe engine all had, and the honest disposition for that shape is
+deletion, not a port. Read as **PDM's home**, the empty C++ table (F1) is an
+*observation* — the release that ships the first anchor has not happened
+yet, per `PDM-Q5`'s launch-window item — and not the premise. A later reader
+applying the deletion test to a vacuous mechanism gets the wrong answer;
+this section exists so they do not.
+
+Consequences the framing fixes directly: the anchor table is **consts
+shipped with the binary** (Q6 — *"trusted with the binary"* excludes an
+operator-editable carrier; a `config/*.json` is a different mechanism with a
+different trust model, and rule 71's data-not-control-flow is a property the
+shape has, not the reason for it); `Trust` is the pipeline input (Q1), and
+`BelowAnchor`'s meaning when slice 6 lands it is **already written** at
+`:293` — band 1's skeleton, not an ad-hoc skip list; and the rows this slice
+implements are the model's own — E1 is *the anchor's rule* (`PDM-Q11`), E5
+is *the binary's anchors agree with the file it opens*.
+
+**What the sweep found, in one paragraph.** Unlike slices 1 and 2, nothing
+here is *adopted*: **no anchor, checkpoint or `Trust` symbol exists anywhere
+in Rust** (§3 F1), and the C++ table is empty on every network
+(`init_default_checkpoints`, `checkpoints.cpp:136`–`:145`), so every 4.E
+row is vacuous on every chain that exists and parity evidence for this slice
+is fixture-only. What the slice builds is the **release-carried anchor
+table** as per-network data (the `RuleSchedule::for_network` shape), the one
+predicate that reads it per block (E1: hash equality at an anchored height),
+and the one that reads it at writer open (E5's surviving subject: the
+recorded chain agrees with the binary's anchors, else pop or fail-stop). E2
+has **no Rust site** — the store admits no alternative block, and on the
+main chain the floor is satisfied by construction — and is **subsumed behind
+two things** (§2): the alt `ChainView` (slice 9, unscheduled beyond its
+table-3 position) and `D_max`'s numeric (`PDM-Q11`, provisional 720,
+re-pinned at the Round-2 testnet gate). The load-bearing question was the
+channel the anchors reach `validate` through (§8 Q1): every candidate
+channel touches the E2 driver's call sites, which PR #806 is growing *now*,
+so sequencing against #806 is part of the answer (§8 Q2). Two structural
+consequences: B6's block identity must be derived **before** the view-bound
+rules run rather than after the last one passes (§4.3, F8), and E5 is the
+first row enforced at a site other than `validate` whose holder is **Rust**,
+which the registry could not yet say (§8 Q4).
 
 ---
 
@@ -53,7 +89,7 @@ Q4).
 | Slice 2 (`form` → `StructurallyValid` → `validate`; `Substrate`; `Fault`) | the pipeline the anchors enter; a below-anchor *mode* is a pipeline input | **Landed** (#777 …; `validate.rs:106`, `:251`). |
 | S-CHAIN-W / S-CHAIN-R (`BatchView::block_at`, `RecordedBlock.hash`) | E5 reads `block_at(anchor.height).hash` | **Landed.** No `ChainView` growth this slice — E1 compares the candidate's own identity, E5 reads a field the view already projects (`view.rs:132`–`:143`). |
 | C2-R1b §4b (E1/E2 semantics ratified 2026-09-03 *while the mechanism exists*) | the rows' statements | **Landed as text.** Both rows carry *"existence HELD for C2-R0"*; `PDM-Q5` answered existence: a release-carried `assumevalid` anchor, runtime pins rejected (`PDM-Q-F23`, #733). |
-| `PDM-Q5` (RULED 2026-09-18): anchor `C`, three bands, `Trust::BelowAnchor` confirmed; `PDM-Q11`: `D_max` homed at CEN-E2; `PDM-Q-F27`/`F30` | the mode's shape; the re-key obligation | **Landed as rulings** ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §`PDM-Q5`, §`PDM-Q11`). Reversion clause: the `Trust` shape reverts if `connect`'s in-force check admits a second set per height — falsifier `RuleSetNotInForce` removed or widened; it is present at `connect.rs:359` and compares **by value** since RD-Q10. |
+| **`PDM-Q5` (RULED 2026-09-18) — the slice's reason for being (§0):** anchor `C`, three bands, `Trust::BelowAnchor` confirmed; `PDM-Q11`: `D_max` homed at CEN-E2; `PDM-Q-F27`/`F30` | the model this slice houses; the mode's shape; the re-key obligation | **Landed as rulings** ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §`PDM-Q5`, §`PDM-Q11`). Reversion clause: the `Trust` shape reverts if `connect`'s in-force check admits a second set per height — falsifier `RuleSetNotInForce` removed or widened; it is present at `connect.rs:359` and compares **by value** since RD-Q10. |
 | #805 (height-semantics Phase 2b): `BlockHeight` (absolute) vs `BlockCount`/`ChainCount` (spans) in `shekyl-types` | anchor heights are absolute instants | **Landed** (`shekyl-types/src/block_axis.rs`). Both crates check clean at `34d111551`. Anchor heights are `BlockHeight`; the E2 floor comparison in slice 9 is a `BlockHeight` order, not a count. |
 | PR #806 (DRS-E2 inc 2, **in flight**): `shekyl-chain-ingest` `stage.rs:57`/`:75` call `form(...)`, `connector.rs:271` calls `validate(formed, &view, &in_force)`, `schedule.rs:72` `ChainRules` resolves network → rule set | nothing this slice reads — but it is the **only production caller** of the two stage functions | **In flight.** Any new pipeline input lands on its call sites (§8 Q2). |
 
@@ -70,7 +106,7 @@ drifted (F2). The *site* column below is the live one.
 | Row | b | Statement (census `:368`–`:372`) | Body (Rust, landed) | C++ site (live) | Proposed disposition |
 | --- | --- | --- | --- | --- | --- |
 | CEN-E1 | 2 | at a checkpointed height the block id must equal the checkpoint hash (main **and** alt admission; an alt match *forces* the reorg) | **none** — no anchor table, no predicate | main `blockchain.cpp:5545`–`:5552` (`is_in_checkpoint_zone` → `check_block`); alt `:2186`–`:2192` (`check_block(…, is_a_checkpoint)`), the forced switch `:2446` | **Land** — the anchor's own rule (`PDM-Q5`, Q11): `anchors.expected_at(connecting) == candidate.hash` when an anchor sits at `connecting`; vacuous otherwise, **recorded as evaluated** either way (the C++ records nothing; the Rust coverage says the row ran). View-bound: the height is the tip's. Needs B6 **before** the rules (F8). The *forced-reorg* clause is an alt-chain consequence and belongs with E2's alt home (slice 9), not here. |
-| CEN-E2 | 2 | an alternative block at or below the last checkpoint preceding the current height is refused; **home of `D_max`** (Q11: a second band, the rolling cap, when the Rust validator takes it) | **none** | `blockchain.cpp:2105`–`:2110` → `checkpoints.cpp:97`–`:109` (`is_alternative_block_allowed`) | **Subsumed pending the alt view (slice 9)** — the D5 shape. On the main chain the predicate holds by construction: `is_alternative_block_allowed(H, h)` requires `last_anchor_at_or_below(H) < h`, and a main-chain candidate has `h = tip + 1 > H ≥ any anchor ≤ H`. Its only refusing arm is alt admission, which no Rust path has. Stays `pending` with a `subsumed-by` registry comment; lands with the alt `ChainView` together with `D_max`'s band (`PDM-Q11`, numeric provisional 720). **Re-keyed in the census now** (F30 binds the re-key to this PR; §8 Q3). |
+| CEN-E2 | 2 | an alternative block at or below the last checkpoint preceding the current height is refused; **home of `D_max`** (Q11: a second band, the rolling cap, when the Rust validator takes it) | **none** | `blockchain.cpp:2105`–`:2110` → `checkpoints.cpp:97`–`:109` (`is_alternative_block_allowed`) | **Subsumed pending the alt view (slice 9)** — the D5 shape. On the main chain the predicate holds by construction: `is_alternative_block_allowed(H, h)` requires `last_anchor_at_or_below(H) < h`, and a main-chain candidate has `h = tip + 1 > H ≥ any anchor ≤ H`. Its only refusing arm is alt admission, which no Rust path has. Stays `pending` with a `subsumed-by` registry comment. **Subsumed behind two things, and the wait is the longer of them:** the alt `ChainView` (slice 9 — D5 waits on the same view, and slice 9 has a table-3 position but no schedule), and `D_max`'s band (`PDM-Q11`: shape frozen, **numeric provisional** at 720, re-pinned at the Round-2 testnet gate as one of four numerics). *"Pending the alt view"* alone would imply the shorter wait. **Re-keyed in the census now** (F30 binds the re-key to this PR; §8 Q3), with both blockers named in the row. |
 | CEN-E5 | 2 | *(mechanism removed, `PDM-Q-F23`)* **what survives:** at init the recorded chain is checked against the compiled-in set; a conflict below tip rolls back to `max(checkpoint − 2, 1)`; a conflict **at genesis** fail-stops (*"wrong network for the binary"*); a rollback that would cross the prune watermark fail-stops | **none** | `blockchain.cpp:6368`–`:6450` (`check_against_checkpoints`), `:6452` (`enforce_checkpoints`), `cryptonote_core.cpp:660` (fail-stop `core::init`) | **Land the predicate, hand the remedy to the writer.** The *rule* is E1 over the recorded chain instead of the candidate: for every anchor with `height < chain height`, `block_at(height).hash == anchor.hash`, else `AnchorConflict { height, expected, recorded }`. The *remedy* (pop to `max(h − 2, 1)`; refuse at genesis; refuse when the pop would cross the floor — `StoreCannot::PopBelowFloor` already exists, `pop.rs:87`) is the writer's, and the writer is the E2 driver at open. E5 is thus enforced at a site other than `validate` — the registry needs a status for that (§8 Q4). C++ holder today: `tests/core_tests/checkpoint_conflict_rollback.cpp :: gen_checkpoint_conflict_rollback`. |
 
 Row-count check: 3 = the `pending` entries at `census.rs:297`–`:299`.
@@ -133,6 +169,8 @@ impl Trust {
     // slice 6: `pub fn below_anchor(anchors) -> Option<Self>` — `None` on an
     // empty table (F27: mintable only from the release-carried table), and a
     // `posture: Posture::{Verify, AssertedBelow(Anchor)}` field the 4.I rows read.
+    // Its meaning is already ruled, not slice 6's to derive: PDM-Q5 `:293`,
+    // "`≤ C` skeleton, trusted with the binary" — band 1, not a skip list.
 }
 
 pub fn validate<'id, V: ChainView<'id>>(
@@ -196,13 +234,26 @@ Commit plan (rules crate first; the signature commit sequenced per Q2):
 4. E1 rule + fixtures; registry `E1 implemented(crate::rules::anchors::E1)`.
 5. E5 `conflict_with` + `AnchorConflict` + fixtures; registry per Q4.
 6. E2 registry comment (subsumed-by, slice 9); census re-key of E1/E2/E5 (F2, F3, F4, F6); `CHAIN_RULES_CRATE.md` §13 mode item → LANDED-as-parameter with the slice-6 posture owed; `PDM` F27/F30 rows pointed at this PR; index rows; CHANGELOG (the `validate` signature is API).
-7. Writer wiring of E5's remedy: **in this PR** if `shekyl-chain-ingest` is on `dev` with no inc-3 branch open against `main.rs`/`connector.rs` at the time; else a FOLLOWUPS row **Owner: DRS-E2** naming `ReleaseAnchors::conflict_with` as the callee and the open path as the site (Q2).
+7. Writer wiring of E5's remedy: **a FOLLOWUPS row, Owner: DRS-E2** (Q2 as
+   ruled — an "if the ingest crate is quiet" condition would make this PR's
+   scope depend on another lane's timing, which is how a PR grows between
+   plan and push). The row names `ReleaseAnchors::conflict_with` as the
+   callee, the driver's open path as the site, and the remedy verbatim: pop
+   to `max(h − 2, 1)`, refuse at genesis, refuse across the prune floor
+   (`StoreCannot::PopBelowFloor`, already landed).
+
+Commit order on the branch: 1, 2, 5, then 3 and 4 (the signature and the
+rule that reads it) — all on the branch before #806 merges; the PR **lands
+after #806**, and the rebase adds the one-line `connector.rs:271` update
+(commit 3's file set on `dev` by then).
 
 Expected record at close: `implemented 17 / validator-enforced 151` (E1),
-E5 counted per Q4's answer, `ratified 126 / 153` unmoved (E5's `—` stands;
-the survivor was ratified inside a shape that no longer exists — a fresh
-ratification is the census lane's, not this slice's), `4.E 1 (or 2) / 3`.
-No `SCHEMA_VERSION` change; no `ChainView` growth; no `ConnectFacts` change.
+E5 as the first `EnforcedAt` row (Q4 (a): counted as Rust-enforced, printed
+beside the held rows, excluded from per-block completeness), `ratified 126 /
+153` unmoved (E5's `—` stands; the survivor was ratified inside a shape that
+no longer exists — a fresh ratification is the census lane's, not this
+slice's), `4.E 2 / 3`. No `SCHEMA_VERSION` change; no `ChainView` growth;
+no `ConnectFacts` change.
 
 ---
 
@@ -223,10 +274,16 @@ No `SCHEMA_VERSION` change; no `ChainView` growth; no `ConnectFacts` change.
 ## 7. Round log
 
 - **Round 0 (2026-09-20, `34d111551`).** Sweep; §1–§6; §8 questions posed.
+- **Round 0 RULED (2026-09-20).** All seven on the defaults, with the
+  reframing that decides them written into §0: this slice houses `PDM-Q5`'s
+  anchor model; it does not port 4.E. Q6's reason is the ruling's *"trusted
+  with the binary"*, not rule 71. Q1 inherits `BelowAnchor`'s semantics from
+  `PDM-Q5` `:293` (band 1's skeleton). Q2's E5 wiring goes to FOLLOWUPS
+  (owner DRS-E2), not in-PR. E2's subsumption names both blockers.
 
 ---
 
-## 8. Questions for the reviewer — Round 0
+## 8. Questions for the reviewer — Round 0 (RULED 2026-09-20)
 
 - **Q1 — the channel.** `Trust { anchors }` as a fourth `validate` parameter,
   `Trust::full(&ReleaseAnchors)` the only constructor today, the posture
@@ -239,6 +296,11 @@ No `SCHEMA_VERSION` change; no `ChainView` growth; no `ConnectFacts` change.
   the name is right (anchors *are* the node's trust — `assumevalid`) and the
   alternative — a bare `&ReleaseAnchors` today, renamed and re-shaped in
   slice 6 — is exactly the retrofit F10 forbids.
+  **RULED: default.** And the posture arm's semantics are already written:
+  `PDM-Q5` `:293` — *"`≤ C` skeleton, trusted with the binary"* — is what
+  `BelowAnchor` must mean when slice 6 lands it: **band 1's skeleton, not an
+  ad-hoc skip list.** Cited on `Trust`'s doc so slice 6 inherits the
+  definition instead of re-deriving one.
 - **Q2 — sequencing against #806.** Every channel touches the E2 driver's
   call sites (`stage.rs`, `connector.rs`) or its `ProductionSubstrate`. Land
   slice 3 **after #806 merges** and update `connector.rs:271` in this PR (one
@@ -248,6 +310,11 @@ No `SCHEMA_VERSION` change; no `ChainView` growth; no `ConnectFacts` change.
   commits 1, 2, 4, 5 do not wait. Same answer for E5's writer wiring
   (commit 7): in this PR if the ingest crate is quiet when this lands, else
   a FOLLOWUPS row owned by DRS-E2.
+  **RULED: after #806; E5's writer wiring to FOLLOWUPS, owner DRS-E2, not
+  in-PR** — the "if the ingest crate is quiet" condition would make this
+  PR's scope depend on another lane's timing. The remedy is the writer's,
+  `PopBelowFloor` already exists, so the row has a real owner and a real
+  home.
 - **Q3 — the census re-key in this PR.** F30 binds E1/E2's re-key to *"the PR
   that lands `Trust::BelowAnchor`"*. This PR lands `Trust` without the
   `BelowAnchor` arm. Re-key now (the anchor state moves into Rust here, which
@@ -256,6 +323,8 @@ No `SCHEMA_VERSION` change; no `ChainView` growth; no `ConnectFacts` change.
   this PR; F2/F3/F4's line-and-text corrections ride with it. F30's row in
   `ARCHIVAL_PRUNED_DAEMON_MODE.md` is amended to cite the PR that actually
   did it.
+  **RULED: yes** — *"moves checkpoint state into Rust"* is the trigger and
+  this is that; F30 binds it here anyway.
 - **Q4 — E5's registry status.** E5 is enforced at writer open, not in
   `validate`; per-block completeness (`Coverage::is_complete_for`) can never
   contain it. `RowStatus` has `Pending` / `Implemented` (a `Rule` type
@@ -277,10 +346,19 @@ No `SCHEMA_VERSION` change; no `ChainView` growth; no `ConnectFacts` change.
   it is the status A1/A4 will need at cutover when their holder becomes the
   Rust ingest driver; (b) is the fallback if (a) is judged too much registry
   for one row.
+  **RULED: (a), `RowStatus::EnforcedAt { site, test }`.** The registry
+  having no vocabulary for a Rust-enforced row outside `validate` is a gap,
+  not a reason to distort the row. (b) would be **false** — `held_by_cxx`
+  asserts the C++ holder enforces the row, and here the enforcement is Rust.
+  (a) is needed twice already: A1 and A4 need exactly this at cutover when
+  their C++ holders disappear; minting it now with two future consumers named
+  is the cheap moment.
 - **Q5 — provenance cause (F9).** Leave `rule_coverage_gaps` as is, with the
   discriminator decided in slice 6 when the first asserted row exists?
   **Default: yes**; recorded in §6, no FOLLOWUPS row (it is scoped to slice
   6's plan, which this document is not).
+  **RULED: yes** — a "why absent" discriminator has no subject until slice 6
+  gives it one.
 - **Q6 — the anchor table's home.** Rust consts in `shekyl-chain-rules`
   beside `RuleSchedule` (`for_network`, rule-71 data), or `config/*.json`
   through the genesis tool's pin machinery? **Default: consts** — the table
@@ -288,8 +366,20 @@ No `SCHEMA_VERSION` change; no `ChainView` growth; no `ConnectFacts` change.
   gate, like the schedule, and it is empty; a `config/` carrier is a
   release-tooling question for the first checkpoint release
   (`PDM-Q5`'s item), not for the type.
+  **RULED: consts — and `PDM-Q5` is the reason, not rule 71.** *Release-
+  carried* means shipped with the binary. A `config/*.json` an operator can
+  edit is a different mechanism with a different trust model: it would let
+  an operator set their own anchor, which is exactly what *"trusted with the
+  binary"* excludes (the operator trust-below fallback is REJECTED in the
+  same ruling). Consts beside `RuleSchedule` is not a tidiness preference; it
+  is the only shape that implements the ruling.
 - **Q7 — B6 first (F8).** Move the identity derivation to the head of
   `validate` and refute the *"after the last rule"* clause, or let E1
   derive its own hash? **Default: move** — one keccak per refused block, paid
   unconditionally by the C++ today; "derived once" is the property B6 was
   landed for.
+
+  **RULED: move.** Computing identity only after the last rule passes is
+  wrong for a validator whose rules need the identity while running; one
+  keccak per refused block against the C++ paying it unconditionally is not
+  a cost worth an architecture around.
