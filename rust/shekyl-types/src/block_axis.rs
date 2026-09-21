@@ -12,9 +12,10 @@
 //! span. Mixing height and count does not compile.
 //!
 //! [`ChainCount`]'s named bridges to [`BlockHeight`] live here beside that
-//! algebra: [`ChainCount::tip`], [`ChainCount::next_height`], and
-//! [`ChainCount::from_next_height`]. `from_raw` / `to_raw` remain the
-//! decode/encode edge, not a quantity bridge.
+//! algebra: [`ChainCount::tip`], [`ChainCount::next_height`],
+//! [`ChainCount::from_next_height`], and [`ChainCount::has_block`].
+//! `from_raw` / `to_raw` remain the decode/encode edge, not a quantity
+//! bridge.
 
 use core::ops::{Add, Sub};
 
@@ -178,5 +179,20 @@ impl ChainCount {
     #[must_use]
     pub const fn from_next_height(h: BlockHeight) -> ChainCount {
         ChainCount(h.0)
+    }
+
+    /// Whether `h` is a block this chain currently holds (`0 .. count`).
+    ///
+    /// The exclusive end is [`Self::next_height`]: `has_block(h)` is
+    /// `h < next_height()`. An empty chain holds no block.
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: membership is ordinal, not count.
+    /// let _ = shekyl_types::ChainCount::from_raw(10)
+    ///     .has_block(shekyl_types::ChainCount::from_raw(1));
+    /// ```
+    #[must_use]
+    pub const fn has_block(self, h: BlockHeight) -> bool {
+        h.0 < self.0
     }
 }

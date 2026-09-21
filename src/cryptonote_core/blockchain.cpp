@@ -4449,7 +4449,7 @@ uint8_t archival_cold_authority_pin(const shekyl::db::ArchivalBondValue& record,
 }
 
 // Shared record-fact marshal for the record-mutating bond-post verify arms
-// (HoldingsUpdate, Rebond): load the bond record, belt the v6 index-parallel
+// (Reinstate): load the bond record, belt the v6 index-parallel
 // coupling, and flatten the interval log into the FFI's (start, end_exclusive)
 // pair layout. Returns false — rejecting the tx — on the desync belt.
 // Single-sourced so the arms verify against identically-gathered record facts;
@@ -4587,152 +4587,9 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return true;
   }
 
-  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
+  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Reinstate))
   {
-    shekyl::db::ArchivalBondValue record{};
-    bool have_record = false;
-    std::vector<uint64_t> bad_flat;
-    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "HoldingsUpdate",
-        record, have_record, bad_flat))
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
-    const uint64_t current_epoch = shekyl_archival_settlement_epoch_at_height(chain_height);
-    const uint64_t* record_shard_ptr = record.held_shard_ids.empty()
-      ? nullptr : record.held_shard_ids.data();
-
-    // Direction (verify-pinned §3.2): bond_debit == 0 is the add (credit) arm;
-    // a positive debit is the drop (grace-tail) arm. Each arm's own term check
-    // is authoritative — this only selects which fact set to marshal.
-    if (bond.bond_debit == 0)
-    {
-      // ADD (credit path): the record's current holdings + the good_through
-      // inputs (join epoch + the flattened bad intervals). Auth is the
-      // IDENTITY key.
-      const uint8_t hu_rc = shekyl_archival_verify_holdings_update_add(
-        bond.post_kind,
-        static_cast<uint8_t>(bond.holdings.kind),
-        shard_ptr,
-        bond.holdings.shard_ids.size(),
-        nullptr, // bond_spend_pk: empty on HoldingsUpdate (belt above)
-        0,
-        bond.bonded_total_atomic,
-        bond.bond_credit,
-        bond.bond_debit,
-        have_record ? 1 : 0,
-        record.bonded_total_atomic,
-        static_cast<uint8_t>(record.holdings_kind),
-        record_shard_ptr,
-        record.held_shard_ids.size(),
-        record.join_settlement_epoch,
-        bad_flat.empty() ? nullptr : bad_flat.data(),
-        record.bad_intervals.size(),
-        current_epoch);
-      if (hu_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
-      {
-        MERROR_VER("Archival HoldingsUpdate-add verify failed (code "
-          << static_cast<unsigned>(hu_rc) << "): "
-          << shekyl_archival_bond_post_err_string(hu_rc));
-        return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(hu_rc));
-      }
-      if (auth_pubkey != bond.hybrid_public_key)
-      {
-        MERROR_VER("Archival HoldingsUpdate-add rejected: credit-path pqc auth key "
-          "does not match the identity key P_pubkey");
-        return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-      }
-      return true;
-    }
-
-    // DROP. Cold authority — shared Rust gate. HoldingsUpdate selects on
-    // the debit term; we are on bond_debit != 0.
-    if (have_record)
-    {
-      const uint8_t pin_rc = archival_cold_authority_pin(record,
-        bond.post_kind, bond.bond_debit, auth_pubkey, "HoldingsUpdate-drop");
-      if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
-        return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(pin_rc));
-    }
-
-    // Identify the dropped shard by set-difference (record CURRENT \ vin POST)
-    // and read its per-shard facts. The Rust verify recomputes the diff and
-    // cross-checks dropped_shard_id, so a non-single diff is rejected there
-    // regardless of what we pass; we gather real facts only when exactly one
-    // shard was removed (the happy path), else pass zeroed facts.
-    uint64_t dropped_shard_id = 0;
-    uint64_t dropped_add_epoch = 0;
-    uint64_t dropped_freeze_height = 0;
-    uint64_t dropped_last_served = std::numeric_limits<uint64_t>::max();
-    if (have_record)
-    {
-      // Index the POST holdings once (O(1) membership) so identifying the
-      // record-minus-post shard stays O(n) rather than a nested scan at the
-      // 4096 holdings cap.
-      const std::unordered_set<uint64_t> post_shards(
-        bond.holdings.shard_ids.begin(), bond.holdings.shard_ids.end());
-      std::vector<size_t> removed_idx;
-      for (size_t i = 0; i < record.held_shard_ids.size(); ++i)
-      {
-        if (post_shards.find(record.held_shard_ids[i]) == post_shards.end())
-          removed_idx.push_back(i);
-      }
-      if (removed_idx.size() == 1)
-      {
-        const size_t i = removed_idx[0];
-        dropped_shard_id = record.held_shard_ids[i];
-        dropped_add_epoch = record.shard_add_epochs[i];
-        // The ADD verify deliberately does NOT require a frozen segment
-        // (bond_post.rs: adding an unfrozen shard is self-harm, not an
-        // attack), so a held shard may legitimately have no freeze row yet.
-        // Fail closed by leaving the freeze height at 0 — the genesis-band
-        // "oldest" sentinel, i.e. the longest (hardest-to-drop) horizon. The
-        // Rust age computation (ShardAgeAtAdd::from_add) pins the adjacent
-        // corner to the same extreme: a segment that froze AT or AFTER
-        // H_close(add_epoch) also gets the longest horizon, so an
-        // added-before-freeze shard cannot recycle its FLOOR early no matter
-        // when the freeze lands relative to the drop attempt.
-        uint64_t freeze = 0;
-        if (m_db->archival_shard_freeze_height(dropped_shard_id, freeze))
-          dropped_freeze_height = freeze;
-        const std::vector<uint64_t> served =
-          m_db->archival_bond_last_served_epochs(bond.p_canonical_id, {dropped_shard_id});
-        if (!served.empty())
-          dropped_last_served = served.front();
-      }
-    }
-    const uint64_t last_settled_slash_epoch = m_db->get_archival_last_slash_epoch();
-    const uint8_t hu_rc = shekyl_archival_verify_holdings_update_drop(
-      bond.post_kind,
-      static_cast<uint8_t>(bond.holdings.kind),
-      shard_ptr,
-      bond.holdings.shard_ids.size(),
-      nullptr, // bond_spend_pk: empty on HoldingsUpdate (belt above)
-      0,
-      bond.bonded_total_atomic,
-      bond.bond_credit,
-      bond.bond_debit,
-      have_record ? 1 : 0,
-      record.bonded_total_atomic,
-      static_cast<uint8_t>(record.holdings_kind),
-      record_shard_ptr,
-      record.held_shard_ids.size(),
-      dropped_shard_id,
-      dropped_add_epoch,
-      dropped_freeze_height,
-      dropped_last_served,
-      last_settled_slash_epoch,
-      current_epoch);
-    if (hu_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
-    {
-      MERROR_VER("Archival HoldingsUpdate-drop verify failed (code "
-        << static_cast<unsigned>(hu_rc) << "): "
-        << shekyl_archival_bond_post_err_string(hu_rc));
-      return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(hu_rc));
-    }
-    return true;
-  }
-
-  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Rebond))
-  {
-    // Rebond semantic verify (gate-4 §3.4; P2B-9 reinstatement): marshal the
+    // Reinstate semantic verify (gate-4 §3.4; P2B-9 reinstatement): marshal the
     // record's current holdings + the full interval log as flattened
     // (start, end_exclusive) pairs — the open-interval precondition, the Pin-5
     // single-open check, and the Pin-6 headroom bound all read it Rust-side.
@@ -4740,15 +4597,15 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     shekyl::db::ArchivalBondValue record{};
     bool have_record = false;
     std::vector<uint64_t> intervals_flat;
-    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "Rebond",
+    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "Reinstate",
         record, have_record, intervals_flat))
       return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
-    const uint8_t rb_rc = shekyl_archival_verify_rebond_bond_post(
+    const uint8_t rb_rc = shekyl_archival_verify_reinstate_bond_post(
       bond.post_kind,
       static_cast<uint8_t>(bond.holdings.kind),
       shard_ptr,
       bond.holdings.shard_ids.size(),
-      nullptr, // bond_spend_pk: empty on Rebond (belt above)
+      nullptr, // bond_spend_pk: empty on Reinstate (belt above)
       0,
       bond.bonded_total_atomic,
       bond.bond_credit,
@@ -4762,17 +4619,17 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       record.bad_intervals.size());
     if (rb_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
     {
-      MERROR_VER("Archival Rebond verify failed (code "
+      MERROR_VER("Archival Reinstate verify failed (code "
         << static_cast<unsigned>(rb_rc) << "): "
         << shekyl_archival_bond_post_err_string(rb_rc));
       return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(rb_rc));
     }
     // Credit-path authorization (P2B-9 Pin 4, the GF-1 selector): the identity
-    // key — a Rebond proves control of P_canonical_id; the funded value (if
+    // key — a Reinstate proves control of P_canonical_id; the funded value (if
     // any) arrives via self-authorizing txin_to_key inputs.
     if (auth_pubkey != bond.hybrid_public_key)
     {
-      MERROR_VER("Archival Rebond rejected: credit-path pqc auth key does not "
+      MERROR_VER("Archival Reinstate rejected: credit-path pqc auth key does not "
         "match the identity key P_pubkey");
       return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     }
@@ -4801,7 +4658,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(verify_rc));
   }
 
-  // D3/R3 admission viability (JoinMarket only — rebond/HU-add are monotone
+  // D3/R3 admission viability (JoinMarket only — reinstate/HU-add are monotone
   // in credited work; HU-drop is left ungated so we do not trap exit-ward
   // capital). Predicate + epoch key + age live in Rust; C++ only marshals
   // LMDB rows. parent_height = chain_height - 1 (tip would self-score).

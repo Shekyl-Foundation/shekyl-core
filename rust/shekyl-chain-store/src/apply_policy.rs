@@ -114,8 +114,8 @@ archival_families! {
     BondUnbondLog => "archival_bond_unbond_log",
     /// `archival_bond_holdings_update_log`
     BondHoldingsUpdateLog => "archival_bond_holdings_update_log",
-    /// `archival_bond_rebond_log`
-    BondRebondLog => "archival_bond_rebond_log",
+    /// `archival_bond_reinstate_log`
+    BondReinstateLog => "archival_bond_reinstate_log",
     /// `archival_r_market`
     RMarket => "archival_r_market",
     /// `archival_sigma_work`

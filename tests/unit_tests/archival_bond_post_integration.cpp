@@ -288,7 +288,7 @@ TEST(archival_bond_post, gate4_integration_rejects_complete_tree_with_shards)
 TEST(archival_bond_post, gate4_integration_rejects_non_join_post_kind)
 {
   txin_archival_bond_post bond = load_join_bond_vin(load_gate4_kat().join_wire_hex);
-  bond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Rebond);
+  bond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Reinstate);
 
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
@@ -324,7 +324,7 @@ TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)
   };
 
   EXPECT_EQ(verify(0, 0, &shard, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_OK);
-  // A conforming Rebond vin carries NO key (§9.11) — with one it refuses as
+  // A conforming Reinstate vin carries NO key (§9.11) — with one it refuses as
   // coupling at the marshaler (asserted below), so the post-kind verdict is
   // probed with an empty key.
   EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
@@ -361,7 +361,7 @@ TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)
       floor, floor, 0, 0),
     SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
   // A key on a non-JoinMarket kind is pinned through the Release export below
-  // (the JoinMarket entry answers a Rebond kind with POST_KIND before it
+  // (the JoinMarket entry answers a Reinstate kind with POST_KIND before it
   // marshals anything — asserted above).
   EXPECT_EQ(shekyl_archival_verify_release_bond_post(
       static_cast<uint8_t>(archival_bond_post_kind::Release), 0, nullptr, 0,
