@@ -96,6 +96,7 @@
 
 #![deny(unsafe_code)]
 
+mod anchors;
 mod block;
 mod census;
 mod coverage;
@@ -121,6 +122,7 @@ mod view;
 #[cfg(any(test, feature = "harness"))]
 pub mod harness;
 
+pub use anchors::{Anchor, ReleaseAnchors};
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
