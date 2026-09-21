@@ -21,6 +21,7 @@ use shekyl_types::BlockHash;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, RunEnd, RunFault};
 use crate::corpus::CorpusReader;
+use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, PipelineFault};
 use crate::schedule::ChainRules;
 use crate::source::{CorpusBlock, IngestEvent};
@@ -206,6 +207,7 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     let report = run(
         &mut source,
         substrate(),
+        Arc::new(Metrics::new()),
         GENESIS_RULES,
         open_store(&path),
         Arc::clone(&trace),
@@ -315,6 +317,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     let report = run(
         &mut source,
         substrate(),
+        Arc::new(Metrics::new()),
         GENESIS_RULES,
         open_store(&path),
         Arc::clone(&trace),
@@ -357,6 +360,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     let err = run(
         &mut source,
         substrate(),
+        Arc::new(Metrics::new()),
         GENESIS_RULES,
         open_store(&path),
         trace,
@@ -423,6 +427,7 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     let report = run(
         &mut source,
         substrate(),
+        Arc::new(Metrics::new()),
         GENESIS_RULES,
         open_store(&path),
         Arc::clone(&trace),
@@ -481,6 +486,7 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     let report = run(
         &mut source,
         substrate(),
+        Arc::new(Metrics::new()),
         rules,
         open_store(&path),
         trace,
@@ -522,6 +528,7 @@ async fn a_replayed_run_grades_its_exercised_rows_correct_and_its_producers_borr
     let report = run(
         &mut source,
         substrate(),
+        Arc::new(Metrics::new()),
         GENESIS_RULES,
         open_store(&path),
         trace,

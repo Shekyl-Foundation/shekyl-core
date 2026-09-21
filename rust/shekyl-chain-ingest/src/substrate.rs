@@ -46,6 +46,8 @@ use shekyl_chain_rules::Substrate;
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_types::{BlockHash, PowHash, Timestamp};
 
+use crate::metrics::Metrics;
+
 /// Why the clock could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ClockFault {
@@ -89,6 +91,7 @@ pub enum SubstrateFault {
 pub struct ChainSubstrate<C: Clock = SystemClock> {
     caches: Arc<CacheStore>,
     clock: C,
+    metrics: Arc<Metrics>,
 }
 
 // `CacheStore` is not `Debug` (two 256 MiB caches behind locks have no
@@ -102,18 +105,22 @@ impl<C: Clock + fmt::Debug> fmt::Debug for ChainSubstrate<C> {
 }
 
 impl ChainSubstrate<SystemClock> {
-    /// Over `caches`, reading the system clock.
+    /// Over `caches`, reading the system clock, recording into `metrics`.
     #[must_use]
-    pub fn new(caches: Arc<CacheStore>) -> Self {
-        Self::with_clock(caches, SystemClock)
+    pub fn new(caches: Arc<CacheStore>, metrics: Arc<Metrics>) -> Self {
+        Self::with_clock(caches, SystemClock, metrics)
     }
 }
 
 impl<C: Clock> ChainSubstrate<C> {
-    /// Over `caches`, reading `clock`.
+    /// Over `caches`, reading `clock`, recording into `metrics`.
     #[must_use]
-    pub const fn with_clock(caches: Arc<CacheStore>, clock: C) -> Self {
-        Self { caches, clock }
+    pub const fn with_clock(caches: Arc<CacheStore>, clock: C, metrics: Arc<Metrics>) -> Self {
+        Self {
+            caches,
+            clock,
+            metrics,
+        }
     }
 
     /// The shared cache store, for the schedule that pins the canonical
@@ -121,6 +128,12 @@ impl<C: Clock> ChainSubstrate<C> {
     #[must_use]
     pub fn caches(&self) -> &Arc<CacheStore> {
         &self.caches
+    }
+
+    /// The sink this substrate records into (RD-F11).
+    #[must_use]
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
     }
 }
 
@@ -133,8 +146,19 @@ impl<C: Clock> Substrate for ChainSubstrate<C> {
 
     fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Self::Fault> {
         let seedhash = Seedhash::from_bytes(seed.to_bytes());
-        let prepared = self.caches.lookup_or_derive(&seedhash);
-        Ok(PowHash::from_bytes(compute_hash(&prepared, pow_blob)))
+        // A derive is the 256 MiB fill and is timed apart from the hash
+        // (metrics module docs): look first, derive under the derive timer
+        // only when the store has nothing for this seed.
+        let prepared = match self.caches.lookup(&seedhash) {
+            Some(p) => p,
+            None => self
+                .metrics
+                .timed_derive(|| self.caches.lookup_or_derive(&seedhash)),
+        };
+        let hash = self
+            .metrics
+            .timed_hash(|| compute_hash(&prepared, pow_blob));
+        Ok(PowHash::from_bytes(hash))
     }
 }
 
@@ -162,10 +186,13 @@ mod tests {
     #[test]
     fn the_clock_is_the_injected_one_and_its_fault_is_the_substrates() {
         let caches = Arc::new(CacheStore::new());
-        let fixed =
-            ChainSubstrate::with_clock(Arc::clone(&caches), FixedClock(Timestamp::from_raw(7)));
+        let fixed = ChainSubstrate::with_clock(
+            Arc::clone(&caches),
+            FixedClock(Timestamp::from_raw(7)),
+            Arc::new(Metrics::new()),
+        );
         assert_eq!(fixed.local_clock(), Ok(Timestamp::from_raw(7)));
-        let broken = ChainSubstrate::with_clock(caches, BrokenClock);
+        let broken = ChainSubstrate::with_clock(caches, BrokenClock, Arc::new(Metrics::new()));
         assert_eq!(
             broken.local_clock(),
             Err(SubstrateFault::Clock(ClockFault::BeforeEpoch))
@@ -185,8 +212,15 @@ mod tests {
         let caches = Arc::new(CacheStore::new());
         let seed = BlockHash::from_bytes([0x5e; 32]);
         let blob = b"pow preimage under test";
-        let a = ChainSubstrate::new(Arc::clone(&caches));
+        let metrics = Arc::new(Metrics::new());
+        let a = ChainSubstrate::new(Arc::clone(&caches), Arc::clone(&metrics));
         let got = a.longhash(blob, &seed).expect("hasher is total");
+        let after_one = metrics.snapshot();
+        assert_eq!(
+            (after_one.hashes, after_one.cache_derives),
+            (1, 1),
+            "first use derives"
+        );
 
         let expected = compute_hash(
             &PreparedCache::derive(Seedhash::from_bytes(seed.to_bytes())),
@@ -199,7 +233,13 @@ mod tests {
             caches.lookup(&seedhash).is_some(),
             "the derive landed in the shared store"
         );
-        let b = ChainSubstrate::new(caches);
+        let b = ChainSubstrate::new(caches, Arc::clone(&metrics));
         assert_eq!(b.longhash(blob, &seed).expect("total"), got);
+        let after_two = metrics.snapshot();
+        assert_eq!(
+            (after_two.hashes, after_two.cache_derives),
+            (2, 1),
+            "the second hash found the cache"
+        );
     }
 }

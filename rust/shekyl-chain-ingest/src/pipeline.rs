@@ -41,6 +41,7 @@ use tokio::task::JoinSet;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, Rewind, RunFault};
 use crate::grader::Observations;
+use crate::metrics::{Metrics, MetricsArtifact};
 use crate::schedule::ChainRules;
 use crate::seed::{SeedLedger, SeedSchedule};
 use crate::sequencer::{SequenceError, Sequencer};
@@ -84,6 +85,8 @@ pub struct RunReport {
     /// What the grader reads (RD-Q9): exercised rows, the refusal, digest
     /// agreement.
     pub observations: Observations,
+    /// The RandomX measurement (RD-F11), as of the run's end.
+    pub metrics: MetricsArtifact,
 }
 
 /// Why a run ended in an error.
@@ -153,6 +156,7 @@ fn collapse<M, SrcF, SubF>(err: SendError<M, RunFault>) -> PipelineFault<SrcF, S
 pub async fn run<Src, S>(
     source: &mut Src,
     substrate: Arc<S>,
+    metrics: Arc<Metrics>,
     rules: ChainRules,
     store: ChainStore,
     trace: Arc<Trace>,
@@ -199,6 +203,7 @@ where
     let outcome = drive(
         source,
         substrate,
+        &metrics,
         rules,
         &connector,
         &trace,
@@ -227,6 +232,7 @@ where
 async fn drive<Src, S>(
     source: &mut Src,
     substrate: Arc<S>,
+    metrics: &Arc<Metrics>,
     rules: ChainRules,
     connector: &kameo::actor::ActorRef<Connector>,
     trace: &Arc<Trace>,
@@ -240,7 +246,10 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + 'static,
 {
-    let mut report = RunReport::default();
+    let mut report = RunReport {
+        metrics: metrics.snapshot(),
+        ..RunReport::default()
+    };
     let mut sequencer: Sequencer<Result<Staged, S::Fault>> = Sequencer::new(Seq::FIRST);
     let mut in_flight: JoinSet<Formed<S::Fault>> = JoinSet::new();
     let mut pending_rewind: Option<Sequenced<BlockHeight>> = None;
@@ -277,13 +286,15 @@ where
                     };
                     ledger.forget_below(seed_height);
                     let substrate = Arc::clone(&substrate);
+                    let metrics = Arc::clone(metrics);
                     let seq = event.seq;
                     let in_force = rules.in_force(height);
                     in_flight.spawn_blocking(move || {
-                        Sequenced::new(
-                            seq,
-                            form_extend(*block, &in_force, &*substrate, seed, FormAttempt::FIRST),
-                        )
+                        let started = std::time::Instant::now();
+                        let staged =
+                            form_extend(*block, &in_force, &*substrate, seed, FormAttempt::FIRST);
+                        metrics.block_formed(started.elapsed());
+                        Sequenced::new(seq, staged)
                     });
                 }
             }
@@ -362,5 +373,6 @@ where
         }
     }
 
+    report.metrics = metrics.snapshot();
     Ok(report)
 }

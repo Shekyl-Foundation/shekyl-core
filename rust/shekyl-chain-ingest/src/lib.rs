@@ -58,6 +58,7 @@ pub mod connector;
 pub mod corpus;
 pub mod fetch;
 pub mod grader;
+pub mod metrics;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_tests;
@@ -75,6 +76,7 @@ pub use connector::{Applied, Connector, ConnectorArgs, RunEnd, RunFault};
 pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, VerifiedRecord};
 pub use fetch::{fetch_corpus, FetchFault};
 pub use grader::{grade_run, GradedRun, Observations, Register};
+pub use metrics::{Metrics, MetricsArtifact};
 pub use pipeline::{run, PipelineConfig, PipelineFault, RunReport};
 pub use schedule::{Chain, ChainRules, FixedDifficultyRefused};
 pub use seed::{SeedLedger, SeedSchedule};

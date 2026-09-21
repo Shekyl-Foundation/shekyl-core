@@ -35,6 +35,7 @@ use shekyl_address::Network;
 use shekyl_chain_ingest::corpus::{CorpusReader, CorpusWriter};
 use shekyl_chain_ingest::fetch::fetch_corpus;
 use shekyl_chain_ingest::grader::{grade_run, Register};
+use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::{run, PipelineConfig};
 use shekyl_chain_ingest::schedule::{Chain, ChainRules};
 use shekyl_chain_ingest::substrate::ChainSubstrate;
@@ -129,6 +130,9 @@ enum Command {
         /// Where to write the graded-run artifact (JSON). Requires `--register`.
         #[arg(long, requires = "register")]
         grade_out: Option<PathBuf>,
+        /// Where to write the RandomX measurement (JSON; RD-F11).
+        #[arg(long)]
+        metrics_out: Option<PathBuf>,
     },
 }
 
@@ -172,6 +176,7 @@ async fn real_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             window,
             register,
             grade_out,
+            metrics_out,
         } => {
             let rules = ChainRules::new(chain.into(), fixed_difficulty)?;
             let epoch = SettlementEpochBlocks::new(settlement_epoch_blocks)
@@ -179,10 +184,15 @@ async fn real_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let trace = Arc::new(Trace::read(BufReader::new(File::open(&trace)?))?);
             let mut source = CorpusReader::open(BufReader::new(File::open(&corpus)?))?;
             let store = ChainStore::create(&store, epoch)?;
-            let substrate = Arc::new(ChainSubstrate::new(Arc::new(CacheStore::new())));
+            let metrics = Arc::new(Metrics::new());
+            let substrate = Arc::new(ChainSubstrate::new(
+                Arc::new(CacheStore::new()),
+                Arc::clone(&metrics),
+            ));
             let report = run(
                 &mut source,
                 substrate,
+                metrics,
                 rules,
                 store,
                 trace,
@@ -204,6 +214,19 @@ async fn real_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             for (height, ours, theirs) in &report.checkpoints {
                 let verdict = if ours == theirs { "MATCH" } else { "DIVERGE" };
                 eprintln!("checkpoint after height {height}: digest {verdict}");
+            }
+            eprintln!(
+                "randomx light mode: {} hash(es), mean {:?} ns; {} derive(s), mean {:?} ns; {} block(s) formed, mean {:?} ns",
+                report.metrics.hashes,
+                report.metrics.hash_ns_mean,
+                report.metrics.cache_derives,
+                report.metrics.derive_ns_mean,
+                report.metrics.blocks_formed,
+                report.metrics.form_ns_mean,
+            );
+            if let Some(out) = metrics_out {
+                std::fs::write(&out, report.metrics.to_json()?)?;
+                eprintln!("metrics artifact → {}", out.display());
             }
             if let Some(register) = register {
                 let register = Register::from_json(&std::fs::read_to_string(&register)?)?;
