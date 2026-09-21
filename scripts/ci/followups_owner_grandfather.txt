@@ -5,7 +5,6 @@
 # lands a row written before this gate existed.
 Delete `get_version`'s `target_height` zero-sentinel at the wire boundary.
 The claim-source reply should carry the hash of its own gather tip, so a vouched record needs no bracket.
-Count-versus-height: height-semantics Phase 2a walked; Phase 2b next — its blocker, PR #792, is the merge that carries this edit.
 Fourteen crates meet the feature-governance trigger ungoverned
 `PL-D4` — a proper hash-commitment mechanism for the leaf's 4th scalar, succeeding the `PL-D3` Pedersen commitment.
 CEN-A7's per-block transaction-count bound has two undocumented values: `2^28` (`CRYPTONOTE_MAX_TX_PER_BLOCK`, `cryptonote_basic.h:914`, an element count) and `10^6` (`shekyl_wire::READ_LEN_CAP`, `block.rs:163`).

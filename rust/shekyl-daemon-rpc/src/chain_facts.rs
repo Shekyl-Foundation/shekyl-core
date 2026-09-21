@@ -14,12 +14,40 @@
 //! one is deleted; the handlers and their tests do not move.
 //!
 //! The shim holds **no policy**: it converts PODs to typed facts and maps
-//! return codes onto [`FactsFault`]. "Synchronized ⇒ target height is 0" is
-//! the handler's rule, applied in `methods`, not here.
+//! return codes onto [`FactsFault`]. "Synchronized ⇒ target height is 0" on
+//! the **wire** is the handler's rule, applied in `methods`, not here. Inland,
+//! a core-reported `0` is C5's sentinel and decodes as `None` — never
+//! [`ChainCount::from_raw`]`(0)`.
+//!
+//! ```compile_fail
+//! // HEIGHT_SEMANTICS.md C9: `ChainTip.chain_height` is COUNT, not ordinal.
+//! use shekyl_daemon_rpc::chain_facts::ChainTip;
+//! use shekyl_types::{BlockHash, BlockHeight};
+//! let _ = ChainTip {
+//!     chain_height: BlockHeight::from_raw(1),
+//!     top_hash: BlockHash::from_bytes([0u8; 32]),
+//!     target_height: None,
+//!     synchronized: true,
+//!     release_build: false,
+//! };
+//! ```
+//!
+//! ```compile_fail
+//! // HEIGHT_SEMANTICS.md C9: `target_height` is `Option<ChainCount>`, not ordinal.
+//! use shekyl_daemon_rpc::chain_facts::ChainTip;
+//! use shekyl_types::{BlockHash, BlockHeight, ChainCount};
+//! let _ = ChainTip {
+//!     chain_height: ChainCount::from_raw(1),
+//!     top_hash: BlockHash::from_bytes([0u8; 32]),
+//!     target_height: Some(BlockHeight::from_raw(1)),
+//!     synchronized: false,
+//!     release_build: false,
+//! };
+//! ```
 
 use std::sync::Arc;
 
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, TxHash};
+use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash};
 
 use crate::core::{ConnectionsSnapshot, CoreRpc, PeerFacts, SyncSpansSnapshot};
 use crate::ffi;
@@ -45,13 +73,17 @@ pub struct DaemonIdentity {
 /// it and C++'s build system is its only owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainTip {
-    /// Chain height: top block height **plus one**.
-    pub chain_height: BlockHeight,
+    /// Chain **count**: top block height **plus one** (`m_db->height()`).
+    /// COUNT, not ordinal — wrapping this in [`BlockHeight`] is the Phase 1
+    /// defect (`HEIGHT_SEMANTICS.md` C3). Name kept (C7).
+    pub chain_height: ChainCount,
     /// Hash of the top block.
     pub top_hash: BlockHash,
-    /// Height the node is syncing towards, as the core reports it (raw —
-    /// the "0 when synchronized" rule is the handler's).
-    pub target_height: BlockHeight,
+    /// Height the node is syncing towards, as the core reports it.
+    /// `None` iff the POD was `0` (C5: synchronized sentinel, not a
+    /// genesis-only chain). The wire still writes `0` when
+    /// [`Self::synchronized`] — that rule stays in `methods`.
+    pub target_height: Option<ChainCount>,
     /// Whether the protocol layer considers this node synchronized.
     pub synchronized: bool,
     /// `SHEKYL_VERSION_IS_RELEASE`.
@@ -67,7 +99,9 @@ pub struct ChainTip {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockHashAt {
     pub hash: Option<BlockHash>,
-    pub chain_height: BlockHeight,
+    /// Chain **count** as of the same read (C3), so a refusal can name the
+    /// bound without a second call.
+    pub chain_height: ChainCount,
 }
 
 /// One block's header, as the facts layer reads it: raw values, typed —
@@ -111,7 +145,8 @@ pub struct BlockHeaderFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockHeaderAt {
     pub header: Option<BlockHeaderFacts>,
-    pub chain_height: BlockHeight,
+    /// Chain **count** as of the same read (C3).
+    pub chain_height: ChainCount,
 }
 
 /// One row of the hard-fork schedule.
@@ -162,6 +197,12 @@ impl FactsFault {
             other => Self::Unknown(other),
         }
     }
+}
+
+/// C5: a core-reported `0` is the synchronized sentinel, not a genesis-only
+/// chain. Inland never wraps 0 as [`ChainCount`].
+fn decode_target_count(raw: u64) -> Option<ChainCount> {
+    (raw != 0).then(|| ChainCount::from_raw(raw))
 }
 
 /// The facts the chain-tip / version handlers consume.
@@ -235,9 +276,9 @@ pub struct BlockAt {
     /// `None` when there is no such block: past the tip, in range but
     /// unproducible, or a hash the chain does not have.
     pub block: Option<BlockFacts>,
-    /// Chain height as of the same read — reported even when absent, so a
-    /// height refusal can name the top block.
-    pub chain_height: BlockHeight,
+    /// Chain **count** as of the same read — reported even when absent, so a
+    /// height refusal can name the bound without a second call.
+    pub chain_height: ChainCount,
 }
 
 /// The block itself: RK-3's header projection plus what only `get_block`
@@ -437,9 +478,9 @@ impl ChainFacts for FfiChainFacts {
     fn chain_tip(&self) -> Result<ChainTip, FactsFault> {
         let pod = self.core.chain_tip().map_err(FactsFault::from_code)?;
         Ok(ChainTip {
-            chain_height: BlockHeight::from_raw(pod.chain_height),
+            chain_height: ChainCount::from_raw(pod.chain_height),
             top_hash: BlockHash::from_bytes(pod.top_hash),
-            target_height: BlockHeight::from_raw(pod.target_height),
+            target_height: decode_target_count(pod.target_height),
             synchronized: pod.synchronized != 0,
             release_build: pod.release_build != 0,
         })
@@ -485,7 +526,7 @@ impl ChainFacts for FfiChainFacts {
             .map_err(FactsFault::from_code)?;
         Ok(BlockHashAt {
             hash: (pod.found != 0).then(|| BlockHash::from_bytes(pod.hash)),
-            chain_height: BlockHeight::from_raw(pod.chain_height),
+            chain_height: ChainCount::from_raw(pod.chain_height),
         })
     }
 
@@ -499,7 +540,7 @@ impl ChainFacts for FfiChainFacts {
             .core
             .block_header_at(hash.as_ref(), height, fill_pow_hash)
             .map_err(FactsFault::from_code)?;
-        let chain_height = BlockHeight::from_raw(pod.chain_height);
+        let chain_height = ChainCount::from_raw(pod.chain_height);
         if pod.found == 0 {
             return Ok(BlockHeaderAt {
                 header: None,
@@ -518,7 +559,7 @@ impl ChainFacts for FfiChainFacts {
             .core
             .block_at(hash.as_ref(), height, fill_pow_hash)
             .map_err(FactsFault::from_code)?;
-        let chain_height = BlockHeight::from_raw(pod.chain_height);
+        let chain_height = ChainCount::from_raw(pod.chain_height);
         if pod.found == 0 {
             return Ok(BlockAt {
                 block: None,

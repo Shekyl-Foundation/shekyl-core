@@ -26,9 +26,9 @@ use shekyl_rpc_types::{
     GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
 };
 use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation};
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, ChainCount};
 
-use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault, P2pFacts};
+use crate::chain_facts::{BlockLookup, ChainFacts, ChainTip, FactsFault, P2pFacts};
 use shekyl_rpc_types::{
     BlockHeaderSlot, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
@@ -135,11 +135,7 @@ pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFaul
         version: shekyl_rpc_types::CORE_RPC_VERSION,
         release: tip.release_build,
         current_height: tip.chain_height.to_raw(),
-        target_height: if tip.synchronized {
-            0
-        } else {
-            tip.target_height.to_raw()
-        },
+        target_height: wire_target_height(&tip),
         hard_forks,
         // The rules axis is this build's own constant, read here rather than
         // fetched over FFI: it is compiled from `config/` into this image, so
@@ -148,6 +144,16 @@ pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFaul
         nettype: identity.nettype,
         genesis_hash: shekyl_rpc_types::HashHex::from_bytes(identity.genesis_hash.to_bytes()),
     })
+}
+
+/// C5: the wire still carries `0` when synchronized. Inland facts hold
+/// `Option<ChainCount>` (`None` includes a core-reported 0).
+fn wire_target_height(tip: &ChainTip) -> u64 {
+    if tip.synchronized {
+        0
+    } else {
+        tip.target_height.map(ChainCount::to_raw).unwrap_or(0)
+    }
 }
 
 /// `get_block_count` (alias `getblockcount`): the chain height as `count`.
@@ -823,9 +829,11 @@ const TIP_READ_ATTEMPTS: usize = 4;
 ///
 /// Resolved by reading until the projection agrees with its own bound:
 /// `at.chain_height` is authoritative for the read that produced the header,
-/// so `header.height + 1 == at.chain_height` is the tip test, checked against
-/// the same snapshot rather than an earlier one. It converges on the first
-/// retry at any plausible block rate; a chain that outruns
+/// so `at.chain_height.tip() == Some(header.height)` is the tip test, checked
+/// against the same snapshot rather than an earlier one. `from_next_height`
+/// is C6's exclusive-end inverse (the next block's ordinal as a count) and
+/// would name a shorter chain if applied to an existing header. It converges
+/// on the first retry at any plausible block rate; a chain that outruns
 /// [`TIP_READ_ATTEMPTS`] is answering `CORE_BUSY`, which is true of it.
 pub fn get_last_block_header(
     facts: &dyn ChainFacts,
@@ -855,30 +863,32 @@ pub fn get_last_block_header(
                 .to_owned(),
         }));
     }
-    // `chain_height` is the count; the tip's own height is one below it. A
-    // chain with no blocks cannot occur (genesis is block 0), and saturating
-    // rather than asserting keeps the arithmetic total.
-    let mut top = tip.chain_height.to_raw().saturating_sub(1);
+    // `chain_height` is the count; the tip's own height is one below it
+    // (`ChainCount::tip`). A chain with no blocks cannot occur (genesis is
+    // block 0); `unwrap_or(ZERO)` keeps the empty case total.
+    let mut top = tip.chain_height.tip().unwrap_or(BlockHeight::ZERO);
     for _ in 0..TIP_READ_ATTEMPTS {
-        let at = facts.block_header_at(BlockLookup::Height(BlockHeight::from_raw(top)), pow)?;
+        let at = facts.block_header_at(BlockLookup::Height(top), pow)?;
         let Some(header) = at.header else {
             // The height came from a chain height, so it was below the tip
             // when it was chosen. Absent now means either the store cannot
             // produce a block it claims to hold, or the chain shortened under
             // us; both are read as "try the current top", and the loop bound
             // stops that becoming unbounded.
-            top = at.chain_height.to_raw().saturating_sub(1);
+            top = at.chain_height.tip().unwrap_or(BlockHeight::ZERO);
             continue;
         };
         // The tip test, against the snapshot that produced this header rather
-        // than the earlier one that chose its height.
-        if header.height.to_raw().saturating_add(1) == at.chain_height.to_raw() {
+        // than the earlier one that chose its height. C6: the newest existing
+        // block's height, not `from_next_height` of this existing ordinal
+        // (that inverse names a shorter chain).
+        if at.chain_height.tip() == Some(header.height) {
             return Ok(GetLastBlockHeaderResponse {
                 status: RpcStatus::ok(),
                 block_header: block_header(&header),
             });
         }
-        top = at.chain_height.to_raw().saturating_sub(1);
+        top = at.chain_height.tip().unwrap_or(BlockHeight::ZERO);
     }
     Err(RpcFault::Refused(RpcRefusal {
         code: CORE_RPC_ERROR_CODE_CORE_BUSY,
@@ -1313,11 +1323,7 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
         height,
         // The same rule `get_version` applies, from the same uncollapsed
         // facts: the raw target survives the seam and is zeroed here.
-        target_height: if tip.synchronized {
-            0
-        } else {
-            tip.target_height.to_raw()
-        },
+        target_height: wire_target_height(&tip),
         next_needed_pruning_seed: queue.next_needed_pruning_stripe,
         peers: connections
             .connections
@@ -1353,7 +1359,9 @@ pub(crate) mod tests {
     };
     use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
     use serde_json::json;
-    use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, TxHash};
+    use shekyl_types::{
+        AttestationRoot, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
+    };
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     /// In-memory facts: what a store-backed implementation will look like.
@@ -1470,7 +1478,7 @@ pub(crate) mod tests {
             }
             Ok(BlockHashAt {
                 hash: (height.to_raw() < self.hash_chain_height).then(patterned_hash),
-                chain_height: BlockHeight::from_raw(self.hash_chain_height),
+                chain_height: ChainCount::from_raw(self.hash_chain_height),
             })
         }
 
@@ -1479,7 +1487,7 @@ pub(crate) mod tests {
             if let Some(fault) = self.block_fault {
                 return Err(fault);
             }
-            let chain_height = BlockHeight::from_raw(
+            let chain_height = ChainCount::from_raw(
                 self.hash_chain_height
                     .saturating_add(self.tip_grown.load(Ordering::Relaxed)),
             );
@@ -1535,7 +1543,7 @@ pub(crate) mod tests {
             if let Some(fault) = self.hash_fault {
                 return Err(fault);
             }
-            let chain_height = BlockHeight::from_raw(
+            let chain_height = ChainCount::from_raw(
                 self.hash_chain_height
                     .saturating_add(self.tip_grown.load(Ordering::Relaxed)),
             );
@@ -1613,9 +1621,9 @@ pub(crate) mod tests {
     pub(crate) fn facts(synchronized: bool, target: u64) -> FakeFacts {
         FakeFacts {
             tip: Ok(ChainTip {
-                chain_height: BlockHeight::from_raw(1_234_567),
+                chain_height: ChainCount::from_raw(1_234_567),
                 top_hash: patterned_hash(),
-                target_height: BlockHeight::from_raw(target),
+                target_height: (target != 0).then(|| ChainCount::from_raw(target)),
                 synchronized,
                 release_build: false,
             }),

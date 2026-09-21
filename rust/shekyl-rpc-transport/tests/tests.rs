@@ -42,7 +42,7 @@ async fn test_rpc() {
         // returning the parsed oxide `Block`) is retired — the canonical block parse
         // lives in `shekyl-wire`, fetched from raw bytes. `get_block_hash` /
         // `get_hardfork_version` / `get_height` remain and are smoked here.
-        let height = rpc.get_height().await.unwrap();
+        let height = rpc.get_height().await.unwrap().to_raw() as usize;
         let block_number = height - 1;
         // There should be a block just prior; its hash route resolves.
         rpc.get_block_hash(block_number).await.unwrap();
@@ -56,7 +56,7 @@ async fn test_rpc() {
             .generate_blocks(SAMPLE_MAINNET_ADDR.as_str(), amount_of_blocks)
             .await
             .unwrap();
-        let height = rpc.get_height().await.unwrap();
+        let height = rpc.get_height().await.unwrap().to_raw() as usize;
         assert_eq!(number, height - 1);
 
         let mut actual_blocks = Vec::with_capacity(amount_of_blocks);

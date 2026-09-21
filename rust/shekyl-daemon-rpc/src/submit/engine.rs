@@ -10,8 +10,23 @@
 //! (crypto seam), so the full control flow — including every race
 //! classification — is testable with deterministic mocks (§10 item 2)
 //! before the FFI shims exist.
+//!
+//! ```compile_fail
+//! // HEIGHT_SEMANTICS.md C9: ref-age takes COUNT then ORDINAL, not swapped.
+//! fn ref_age_window(
+//!     chain_height: shekyl_types::ChainCount,
+//!     ref_height: shekyl_types::BlockHeight,
+//! ) {
+//!     let _ = (chain_height, ref_height);
+//! }
+//! ref_age_window(
+//!     shekyl_types::BlockHeight::from_raw(10),
+//!     shekyl_types::ChainCount::from_raw(100),
+//! );
+//! ```
 
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_types::{BlockHeight, ChainCount};
 use shekyl_wire::transaction::Ct;
 
 use crate::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
@@ -113,9 +128,14 @@ enum RefAgeWindow {
     TooOld,
 }
 
-/// `chain_height` is a block count; both bounds mirror the consensus check
-/// (blockchain.cpp:3745-3765 / 3658-3671).
-fn ref_age_window(chain_height: u64, ref_height: u64) -> RefAgeWindow {
+/// `chain_height` is a block **count**; `ref_height` is the reference
+/// block's **ordinal**. Both bounds mirror the consensus check
+/// (`blockchain.cpp:3745-3765` / `3658-3671`). The comparison itself is
+/// that inherited mix (COUNT-minus-span against ORDINAL), punched to raw
+/// at this one named site so inland callers cannot swap the operands.
+fn ref_age_window(chain_height: ChainCount, ref_height: BlockHeight) -> RefAgeWindow {
+    let chain_height = chain_height.to_raw();
+    let ref_height = ref_height.to_raw();
     if chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE
         || ref_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE
     {
@@ -353,7 +373,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                     return Ok(Err(RejectCause::ReferenceNotFound));
                 };
                 // Age-window arithmetic over the snapshot height.
-                match ref_age_window(facts.chain_height.to_raw(), reference.height.to_raw()) {
+                match ref_age_window(facts.chain_height, reference.height) {
                     RefAgeWindow::TooRecent => return Ok(Err(RejectCause::ReferenceTooRecent)),
                     RefAgeWindow::TooOld => return Ok(Err(RejectCause::StaleRoot)),
                     RefAgeWindow::InWindow => {}
@@ -566,7 +586,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 Some(reference) => {
                     reference.height != cert.ref_height()
                         || reference.root != *cert.root()
-                        || ref_age_window(fresh.chain_height.to_raw(), reference.height.to_raw())
+                        || ref_age_window(fresh.chain_height, reference.height)
                             != RefAgeWindow::InWindow
                 }
             };
