@@ -59,7 +59,11 @@ pub struct PScanCursor {
     /// version-gated on load.
     version: u32,
     /// The one authoritative durable scan frontier: `P` has exhaustively verified
-    /// every block up to (and including the seal-discipline's) this height.
+    /// every block in `[0, synced_height)` — an **exclusive-end ordinal**
+    /// (C6 `next_height`), not an inclusive tip. Last verified block is
+    /// `block[synced_height − 1]`. Contrast [`crate::LedgerBlock::height`],
+    /// which is the newest ingested block's own height (inclusive). Both
+    /// are [`BlockHeight`]; they are not interchangeable.
     synced_height: BlockHeight,
     /// The recomputed block hash of the last verified block (`block[synced_height −
     /// 1]`), or the genesis `previous` (`[0; 32]`) at `synced_height == 0`.

@@ -65,7 +65,7 @@ use shekyl_engine_state::{
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
-use shekyl_types::TxHash;
+use shekyl_types::{BlockHeight, TxHash};
 
 use crate::engine::key_actor::KeyEngineHandle;
 use crate::engine::local_keys::LocalKeys;
@@ -398,7 +398,7 @@ impl MergeProjectionBenchFixture {
             transfers.push(td);
         }
 
-        let tip = BlockchainTip::new(1_000_000, [0xAA; 32]);
+        let tip = BlockchainTip::new(BlockHeight::from_raw(1_000_000), [0xAA; 32]);
         let reorg_blocks = ReorgBlocks {
             blocks: (999_990..=1_000_000)
                 .map(|h| (h, [(h & 0xff) as u8; 32]))

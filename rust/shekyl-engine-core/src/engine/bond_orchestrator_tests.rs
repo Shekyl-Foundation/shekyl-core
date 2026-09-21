@@ -712,7 +712,11 @@ async fn apply_scan_result_adopts_a_cached_slot_and_advances_the_tip() {
             },
         ]))
         .expect("cached slot is adopted");
-    assert_eq!(engine.synced_height(), 1, "tip advanced");
+    assert_eq!(
+        engine.synced_height(),
+        shekyl_types::BlockHeight::from_raw(1),
+        "tip advanced"
+    );
     assert_eq!(engine.ledger().staking.bonded_slots, vec![0], "adopted");
     assert_eq!(engine.ledger().staking.p_slot, 1, "cursor raised past 0");
     assert!(engine.ledger().staking.staking_enabled);

@@ -519,8 +519,8 @@ where
                 .stake_handle()
                 .ok_or_else(|| BondAssemblyError::build("assemble", "no stake engine"))?;
             let snap = g.ledger.snapshot();
-            let chain_tip = g.ledger.synced_height();
-            let tip_hash_at = move |h: u64| snap.block_hash_at(h);
+            let chain_tip = g.ledger.synced_height().to_raw();
+            let tip_hash_at = move |h: u64| snap.block_hash_at(BlockHeight::from_raw(h));
             (
                 g.daemon().clone(),
                 stake,
@@ -854,8 +854,8 @@ where
                 None => return Err(FirstStakeError::NoStakeEngine),
             };
             let snap = g.ledger.snapshot();
-            let chain_tip = g.ledger.synced_height();
-            let tip_hash_at = move |h: u64| snap.block_hash_at(h);
+            let chain_tip = g.ledger.synced_height().to_raw();
+            let tip_hash_at = move |h: u64| snap.block_hash_at(BlockHeight::from_raw(h));
             // One consistent snapshot of the staking block for every guard
             // below (enabled flag, recorded slots, monotone cursor).
             let staking = g.ledger.read().ledger.staking.clone();

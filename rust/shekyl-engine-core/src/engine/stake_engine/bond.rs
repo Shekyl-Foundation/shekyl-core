@@ -79,8 +79,8 @@ pub(crate) struct AssembledBondPost {
     /// The fully-signed, wire-encoded bond transaction, persona-bound.
     pub bound_tx: PBoundBytes,
     /// Blocks from the private-intent anchor `t0` to the bond-post broadcast —
-    /// the drawn entry-gap spread.
-    pub bond_post_offset_blocks: u64,
+    /// the drawn entry-gap spread (a [`BlockCount`], height-semantics C4).
+    pub bond_post_offset_blocks: BlockCount,
     /// The spent funding records' gindexes — the §3.5 reservation set.
     pub funding_gindexes: Vec<shekyl_types::GlobalOutputIndex>,
 }

@@ -33,6 +33,7 @@ use std::ops::Range;
 use shekyl_engine_state::{
     transfer::eligible_height, LedgerBlock, LedgerIndexes, ReceiveAttribution, TransferDetails,
 };
+use shekyl_types::BlockHeight;
 
 use crate::{balance::BalanceSummary, output::WalletOutput, scan::Timelocked};
 
@@ -178,7 +179,12 @@ impl LedgerIndexesExt for LedgerIndexes {
             batch.push(td);
         }
 
-        self.ingest_block(ledger, block_height, block_hash, batch)
+        self.ingest_block(
+            ledger,
+            BlockHeight::from_raw(block_height),
+            block_hash,
+            batch,
+        )
     }
 }
 
@@ -203,7 +209,7 @@ pub trait WalletLedgerExt {
 
 impl WalletLedgerExt for shekyl_engine_state::WalletLedger {
     fn balance(&self) -> BalanceSummary {
-        self.balance_at(self.ledger.height())
+        self.balance_at(self.ledger.height().to_raw())
     }
 
     fn balance_at(&self, current_height: u64) -> BalanceSummary {

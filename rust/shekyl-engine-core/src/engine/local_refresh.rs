@@ -159,7 +159,7 @@ use std::time::Duration;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use shekyl_rpc_client::RpcError;
 use shekyl_scanner::{ScanError, ScanOutcome, ScannableBlock, Scanner, ViewPair, MAX_OUTPUTS};
-use shekyl_types::{BlockHash, CurveTreeRoot, PCanonicalId};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId};
 use shekyl_wire::Input;
 use std::collections::BTreeMap;
 
@@ -660,7 +660,7 @@ impl RefreshEngine for LocalRefresh {
             // a re-derivation could disagree with the anchored height if the
             // daemon advanced between the anchor's height read and this one,
             // breaking the merge gate.
-            let original_start = snapshot.synced_height.saturating_add(1);
+            let original_start = snapshot.synced_height.to_raw().saturating_add(1);
             let end = tip;
             if original_start >= end {
                 let parent_hash = parent_hash_for_start(&snapshot, original_start);
@@ -805,7 +805,7 @@ impl RefreshEngine for LocalRefresh {
                             let fork_height = find_fork_point(
                                 daemon,
                                 &snapshot,
-                                snapshot.synced_height,
+                                snapshot.synced_height.to_raw(),
                                 &cancel,
                                 &mut emit_state,
                                 diagnostics,
@@ -1082,7 +1082,9 @@ fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: u64) -> Option<BlockH
     if start <= 1 {
         None
     } else {
-        snapshot.block_hash_at(start - 1).map(BlockHash::from_bytes)
+        snapshot
+            .block_hash_at(BlockHeight::from_raw(start - 1))
+            .map(BlockHash::from_bytes)
     }
 }
 
@@ -1208,7 +1210,10 @@ async fn find_fork_point<R: DaemonEngine>(
             return Ok(1);
         }
 
-        let Some(stored_hash) = snapshot.block_hash_at(h).map(BlockHash::from_bytes) else {
+        let Some(stored_hash) = snapshot
+            .block_hash_at(BlockHeight::from_raw(h))
+            .map(BlockHash::from_bytes)
+        else {
             return Ok(h + 1);
         };
 

@@ -2373,14 +2373,14 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         .expect("derive spend secrets for funding output");
 
     // ── Reference selection — mirror the engine `build` path ─────────
-    let synced = ledger.with_ledger_block(LedgerBlock::height);
+    let synced = ledger.with_ledger_block(LedgerBlock::height).to_raw();
     let rh = select_reference_height(synced).expect("reference height resolves");
     let (curve_tree_root, ref_depth) = tree
         .reference_root_and_depth(BlockHeight::from_raw(rh))
         .await
         .expect("reference root+depth");
     let block_hash = ledger
-        .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
+        .with_ledger_block(|ledger| ledger.block_hash_at(BlockHeight::from_raw(rh)).copied())
         .expect("reference block hash present");
     let reference = ReferenceBlock {
         height: BlockHeight::from_raw(rh),

@@ -21,7 +21,7 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_standoff::draw::GapRng;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
-use shekyl_types::PCanonicalId;
+use shekyl_types::{BlockCount, PCanonicalId};
 
 use crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona;
 use crate::engine::pscan::scan_step::{FundingOutputMatch, KeyImageWatchSet};
@@ -118,7 +118,7 @@ impl StakeEngine {
         &mut self,
         handle: &PersonaHandle,
         ticket_slot: PSlot,
-    ) -> Result<(PSlot, u64), StakeEngineError> {
+    ) -> Result<(PSlot, BlockCount), StakeEngineError> {
         // 1. Validate the handle: generation currency + slot membership.
         self.validate_handle(handle)?;
 
@@ -161,7 +161,7 @@ impl StakeEngine {
         //    post is chain-attributable, the funding transfer is the unnamed
         //    CT-hidden FCMP++ input (`ARCHIVAL_FIREWALL_GATE6.md` pass-4 (d) +
         //    note 8), so the order coin was retired and the offset *is* the draw.
-        let bond_post_offset_blocks = spread;
+        let bond_post_offset_blocks = BlockCount::from_raw(spread);
 
         // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
         // the injected observer. Sim-facing only — this block is compiled out
@@ -178,7 +178,7 @@ impl StakeEngine {
             });
             self.observer.record(TimelineEvent::BondPostScheduled {
                 persona,
-                bond_post_offset_blocks,
+                bond_post_offset_blocks: bond_post_offset_blocks.to_raw(),
             });
         }
 

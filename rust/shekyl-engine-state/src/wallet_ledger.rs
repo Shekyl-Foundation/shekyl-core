@@ -115,9 +115,12 @@ use crate::{
 /// wallet2-lineage `attributes` bag (`TX_META_BLOCK_VERSION` 3, P3-5)
 /// and `SyncStateBlock`'s three never-wired fields (`scan_completed`,
 /// `confirmations_required`, `trusted_daemon`; `SYNC_STATE_BLOCK_VERSION` 2).
-/// Version `18` (this version): `TransferDetails::unspendable`, the `PL-D3`
+/// Version `18` adds `TransferDetails::unspendable`, the `PL-D3`
 /// scan-time received-but-unspendable classification
 /// (`LEDGER_BLOCK_VERSION` 11).
+/// Version `19` (this version): height-semantics Phase 2e retypes
+/// `BlockchainTip.synced_height` and `ReorgBlocks` heights to
+/// [`shekyl_types::BlockHeight`] (`LEDGER_BLOCK_VERSION` 12).
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -129,7 +132,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 18;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 19;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
@@ -404,7 +407,7 @@ impl WalletLedger {
     ) {
         let height = self.ledger.height();
         self.send_journal
-            .record_dispatched(txid, height, fee, recipients, inputs);
+            .record_dispatched(txid, height.to_raw(), fee, recipients, inputs);
     }
 
     /// Accepting-verdict write for the journal (`WALLET_SEND_RECORD.md`
@@ -796,7 +799,7 @@ fn refuted_sends(ledger: &LedgerBlock, send_journal: &SendJournalBlock) -> Vec<[
             // does not exist — a replayed input was funded at or above
             // the floor, and its spend is necessarily later still, so
             // the spending block is always inside the scanned range.
-            !any_input_present && ledger.height() >= row.dispatched_at_height
+            !any_input_present && ledger.height().to_raw() >= row.dispatched_at_height
         })
         .map(|(txid, _)| *txid)
         .collect()
@@ -1101,7 +1104,7 @@ mod tests {
         ));
         spent_row.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
         w.ledger.transfers.push(spent_row);
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
 
         let (confirmed, collected) = w.reconcile_tx_key_retention(false);
         assert_eq!(confirmed, 1, "pending record retired at confirmation");
@@ -1163,7 +1166,7 @@ mod tests {
         ));
         spent_row.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
         w.ledger.transfers.push(spent_row);
-        w.ledger.tip.synced_height = 32;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(32);
         let (confirmed, collected) = w.reconcile_tx_key_retention(false);
         assert_eq!(confirmed, 1, "re-pended record retires at re-confirmation");
         assert_eq!(collected, 0);
@@ -1209,7 +1212,7 @@ mod tests {
         let mut w = WalletLedger::empty();
         insert_secret(&mut w, txid);
         w.ledger.transfers.push(mk_transfer(0x11, 10));
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         {
             use crate::send_journal_block::{SendInputRef, SendRecord, SendState};
             w.send_journal.rows.insert(
@@ -1272,7 +1275,7 @@ mod tests {
         let txid = [0x77; 32];
         let mut w = WalletLedger::empty();
         w.ledger.transfers.push(mk_transfer(0x11, 10));
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         dispatched_row(&mut w, txid, 0x11);
 
         assert!(
@@ -1312,7 +1315,7 @@ mod tests {
 
         // Mid-rescan, before the replay reaches the dispatch height:
         // absence is not yet evidence of anything.
-        w.ledger.tip.synced_height = 15;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(15);
         w.reconcile_send_journal(None);
         assert_eq!(
             w.send_journal.rows[&txid].state,
@@ -1324,7 +1327,7 @@ mod tests {
             .contains(shekyl_types::GlobalOutputIndex::from_raw(0x11)));
 
         // Past it, with nothing replayed: the inputs are not coming back.
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         w.reconcile_send_journal(None);
         assert_eq!(w.send_journal.rows[&txid].state, SendState::PresumedDead);
         assert!(w.spend_locks().is_empty());
@@ -1338,7 +1341,7 @@ mod tests {
         let txid = [0x79; 32];
         let mut w = WalletLedger::empty();
         w.ledger.transfers.push(mk_transfer(0x11, 10));
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         dispatched_row(&mut w, txid, 0x11);
 
         w.reconcile_send_journal(None);
@@ -1367,7 +1370,7 @@ mod tests {
         let mut w = WalletLedger::empty();
         // gindex 0x11 replayed after the rescan; 0x12 did not.
         w.ledger.transfers.push(mk_transfer(0x11, 10));
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         {
             use crate::send_journal_block::{SendInputRef, SendRecord};
             w.send_journal.rows.insert(
@@ -1410,7 +1413,7 @@ mod tests {
     fn reconcile_release_preserves_the_user_authored_abandon() {
         let txid = [0x7A; 32];
         let mut w = WalletLedger::empty();
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         dispatched_row(&mut w, txid, 0x11);
         w.send_journal.rows.get_mut(&txid).unwrap().state = SendState::Abandoned;
 
@@ -1434,7 +1437,7 @@ mod tests {
         let mut unlocked = mk_transfer(0x41, 10);
         unlocked.global_output_index = shekyl_types::GlobalOutputIndex::from_raw(300);
         w.ledger.transfers.push(unlocked);
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         w.record_dispatched_send(
             txid,
             5,
@@ -1493,7 +1496,7 @@ mod tests {
         spent.spent_height = Some(shekyl_types::BlockHeight::from_raw(12));
         w.ledger.transfers.push(unlocked);
         w.ledger.transfers.push(spent);
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         w.send_journal.rows.insert(
             txid,
             SendRecord {
@@ -1695,7 +1698,7 @@ mod tests {
         b.global_output_index = shekyl_types::GlobalOutputIndex::from_raw(401);
         w.ledger.transfers.push(a);
         w.ledger.transfers.push(b);
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         for (txid, gindex, baseline) in [(armed, 400, Some(25)), (released, 401, None)] {
             w.send_journal.rows.insert(
                 txid,
@@ -1752,7 +1755,7 @@ mod tests {
         spent.spent_height = Some(shekyl_types::BlockHeight::from_raw(19));
         spent.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
         w.ledger.transfers.push(spent);
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         w.send_journal.rows.insert(
             txid,
             SendRecord {
@@ -1793,7 +1796,7 @@ mod tests {
         spent.spent_height = Some(shekyl_types::BlockHeight::from_raw(18));
         spent.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
         w.ledger.transfers.push(spent);
-        w.ledger.tip.synced_height = 30;
+        w.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(30);
         w.send_journal.rows.insert(
             txid,
             SendRecord {

@@ -370,7 +370,7 @@ pub(crate) mod ledger_ops {
             .check_invariants(&ledger)
             .expect("after reorg at 200");
         assert_eq!(ledger.transfers().len(), 1);
-        assert_eq!(ledger.height(), 100);
+        assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(100));
     }
 }
 
@@ -549,10 +549,10 @@ mod ledger_proptest {
                         }
                     }
                     Op::Reorg { frac } => {
-                        if ledger.height() > 0 {
-                            let fork_at = ((ledger.height() as f64 * frac) as u64).max(1);
+                        if ledger.height().to_raw() > 0 {
+                            let fork_at = ((ledger.height().to_raw() as f64 * frac) as u64).max(1);
                             indexes.handle_reorg(&mut ledger, fork_at);
-                            next_height = ledger.height() + 10;
+                            next_height = ledger.height().to_raw() + 10;
                         }
                     }
                 }
@@ -732,7 +732,7 @@ mod sync_bookkeeping {
                 block_hash(*height),
                 Timelocked(recovered),
             );
-            heights.push(ledger.height());
+            heights.push(ledger.height().to_raw());
         }
 
         for window in heights.windows(2) {
@@ -799,7 +799,7 @@ mod sync_bookkeeping {
         indexes.handle_reorg(&mut ledger, 20);
 
         assert_eq!(ledger.transfers().len(), 1);
-        assert_eq!(ledger.height(), 10);
+        assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(10));
         assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(1000));
         indexes.check_invariants(&ledger).expect("after reorg");
 
@@ -826,7 +826,7 @@ mod sync_bookkeeping {
             indexes.process_scanned_outputs(&mut ledger, h, block_hash(h), Timelocked(vec![]));
         }
 
-        assert_eq!(ledger.height(), 10);
+        assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(10));
         assert_eq!(ledger.transfers().len(), 0);
         indexes
             .check_invariants(&ledger)

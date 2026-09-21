@@ -244,7 +244,7 @@ impl<
                     return Err(RefreshError::RescanPersist(e.to_string()));
                 }
             }
-            engine.ledger.synced_height()
+            engine.ledger.synced_height().to_raw()
         };
 
         Ok(Self::spawn_refresh_producer(
@@ -265,7 +265,7 @@ mod tests {
         PaymentRequestId, PaymentRequestState, ReceiveAttribution, ReorgBlocks, ScannedPoolTx,
         SyncStateBlock, TxSecretKey, TxSecretKeys, WalletLedger,
     };
-    use shekyl_types::TxHash;
+    use shekyl_types::{BlockHeight, TxHash};
     use shekyl_units::AtomicUnits;
     use zeroize::Zeroizing;
 
@@ -317,9 +317,9 @@ mod tests {
         wallet.sync_state.pending_tx_hashes.push([9u8; 32]);
 
         wallet.ledger.transfers.push(sample_transfer(1));
-        wallet.ledger.tip = BlockchainTip::new(50, [1u8; 32]);
+        wallet.ledger.tip = BlockchainTip::new(BlockHeight::from_raw(50), [1u8; 32]);
         wallet.ledger.reorg_blocks = ReorgBlocks {
-            blocks: vec![(40, [2u8; 32])],
+            blocks: vec![(shekyl_types::BlockHeight::from_raw(40), [2u8; 32])],
         };
 
         let txid = [3u8; 32];
@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn reset_expires_payment_request_past_its_expiry() {
         let mut wallet = WalletLedger::empty();
-        wallet.ledger.tip = BlockchainTip::new(500, [8u8; 32]);
+        wallet.ledger.tip = BlockchainTip::new(BlockHeight::from_raw(500), [8u8; 32]);
         wallet.bookkeeping.payment_requests.push(PaymentRequest {
             id: PaymentRequestId(0x00_00_00_00_00_07),
             label: LocalLabel::from_str("stale invoice"),
@@ -552,7 +552,8 @@ mod start_rescan_integration_tests {
     {
         let engine = arc.write().await;
         let mut guard = engine.ledger.write();
-        guard.ledger.ledger.tip = BlockchainTip::new(500, [0xAB; 32]);
+        guard.ledger.ledger.tip =
+            BlockchainTip::new(shekyl_types::BlockHeight::from_raw(500), [0xAB; 32]);
         500
     }
 
@@ -600,7 +601,7 @@ mod start_rescan_integration_tests {
 
         let engine = arc.read().await;
         assert_eq!(
-            engine.ledger.synced_height(),
+            engine.ledger.synced_height().to_raw(),
             seeded,
             "a refused rescan must not reset the ledger"
         );
@@ -641,7 +642,7 @@ mod start_rescan_integration_tests {
 
         let engine = arc.read().await;
         assert_ne!(
-            engine.ledger.synced_height(),
+            engine.ledger.synced_height().to_raw(),
             seeded,
             "the rescan proceeded: scan-derived state was reset"
         );
@@ -676,7 +677,7 @@ mod start_rescan_integration_tests {
 
         let engine = arc.read().await;
         assert_eq!(
-            engine.ledger.synced_height(),
+            engine.ledger.synced_height().to_raw(),
             seeded,
             "a blocked rescan must not reset the ledger"
         );
@@ -728,7 +729,11 @@ mod start_rescan_integration_tests {
             .expect("initial refresh completes over the synthetic chain");
         await_slot_release(&arc).await;
         let synced_before = arc.read().await.ledger.synced_height();
-        assert_eq!(synced_before, 5, "synthetic chain syncs to its tip");
+        assert_eq!(
+            synced_before,
+            shekyl_types::BlockHeight::from_raw(5),
+            "synthetic chain syncs to its tip"
+        );
 
         let phantom_tx = TxHash::from_bytes([0xDD; 32]);
         {

@@ -63,7 +63,7 @@ fn apply_scan_result_accepts_birthday_anchored_start() {
         bond_sightings: Vec::new(),
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("birthday merge");
-    assert_eq!(ledger.height(), 1000);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(1000));
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn apply_empty_at_start_one_succeeds() {
     let (mut ledger, mut indexes) = empty_state();
     let result = ScanResult::empty_at(1, None);
     apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("empty result merges");
-    assert_eq!(ledger.height(), 0);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(0));
 }
 
 /// A `ScanResult` reaching the LedgerBlock-scoped body with sightings
@@ -96,7 +96,11 @@ fn apply_refuses_a_result_with_attached_bond_sightings() {
         matches!(err, RefreshError::MalformedScanResult { .. }),
         "got {err:?}"
     );
-    assert_eq!(ledger.height(), 0, "refusal must not advance the tip");
+    assert_eq!(
+        ledger.height(),
+        shekyl_types::BlockHeight::from_raw(0),
+        "refusal must not advance the tip"
+    );
 }
 
 #[test]
@@ -140,10 +144,19 @@ fn apply_advances_synced_height_for_blocks_without_events() {
         bond_sightings: Vec::new(),
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
-    assert_eq!(ledger.height(), 3);
-    assert_eq!(ledger.block_hash_at(1), Some(&[0x11; 32]));
-    assert_eq!(ledger.block_hash_at(2), Some(&[0x22; 32]));
-    assert_eq!(ledger.block_hash_at(3), Some(&[0x33; 32]));
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(3));
+    assert_eq!(
+        ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(1)),
+        Some(&[0x11; 32])
+    );
+    assert_eq!(
+        ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(2)),
+        Some(&[0x22; 32])
+    );
+    assert_eq!(
+        ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(3)),
+        Some(&[0x33; 32])
+    );
 }
 
 #[test]
@@ -176,7 +189,11 @@ fn apply_detects_parent_hash_mismatch() {
     };
     let err = apply_scan_result_to_state(&mut ledger, &mut indexes, second).unwrap_err();
     assert!(matches!(err, RefreshError::ConcurrentMutation { .. }));
-    assert_eq!(ledger.height(), 1, "ledger unchanged on rejection");
+    assert_eq!(
+        ledger.height(),
+        shekyl_types::BlockHeight::from_raw(1),
+        "ledger unchanged on rejection"
+    );
 }
 
 #[test]
@@ -207,7 +224,7 @@ fn apply_accepts_matching_parent_hash() {
         bond_sightings: Vec::new(),
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("second merge ok");
-    assert_eq!(ledger.height(), 2);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(2));
 }
 
 #[test]
@@ -381,7 +398,7 @@ fn apply_handles_reorg_rewind_before_per_height_events() {
         bond_sightings: Vec::new(),
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first ok");
-    assert_eq!(ledger.height(), 5);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(5));
     assert_eq!(ledger.transfers().len(), 1);
 
     // Reorg rewinds to fork_height = 3 (drops the height-3 output and
@@ -406,14 +423,20 @@ fn apply_handles_reorg_rewind_before_per_height_events() {
         bond_sightings: Vec::new(),
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("reorg ok");
-    assert_eq!(ledger.height(), 5);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(5));
     assert_eq!(ledger.transfers().len(), 1);
     assert_eq!(
         ledger.transfers()[0].block_height,
         shekyl_types::BlockHeight::from_raw(4)
     );
-    assert_eq!(ledger.block_hash_at(3), Some(&[0xA3; 32]));
-    assert_eq!(ledger.block_hash_at(4), Some(&[0xA4; 32]));
+    assert_eq!(
+        ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(3)),
+        Some(&[0xA3; 32])
+    );
+    assert_eq!(
+        ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(4)),
+        Some(&[0xA4; 32])
+    );
 }
 
 #[test]

@@ -91,7 +91,7 @@ fn build_reserves_outputs_and_advances_id_counter() {
         ],
         20,
     );
-    assert_eq!(ledger.height(), 20);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(20));
 
     let mut reservations = std::collections::BTreeMap::new();
     let mut next_id = 0u64;

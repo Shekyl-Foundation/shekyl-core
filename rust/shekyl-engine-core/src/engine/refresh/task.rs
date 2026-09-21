@@ -253,7 +253,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 std::sync::Arc::clone(&g.refresh),
             )
         };
-        let current_synced = snapshot.synced_height;
+        let current_synced = snapshot.synced_height.to_raw();
 
         // Trait dispatch: the producer body lives in the
         // [`RefreshEngine`] implementor (production default

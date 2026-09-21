@@ -77,10 +77,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
-use shekyl_curve_tree::{BlockHeight, ClientError};
+use shekyl_curve_tree::ClientError;
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
-use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 
 use crate::{
     attribution::{
@@ -134,7 +134,15 @@ impl<
     /// Delegates to [`LedgerEngine::synced_height`] on the
     /// implementor field; the implementor manages its own guard
     /// acquisition and projection.
-    pub fn synced_height(&self) -> u64 {
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: wallet-ledger tip is ordinal, not a count.
+    /// fn needs_count(_: shekyl_types::ChainCount) {}
+    /// fn check(engine: &shekyl_engine_core::Engine<shekyl_engine_core::SoloSigner>) {
+    ///     needs_count(engine.synced_height());
+    /// }
+    /// ```
+    pub fn synced_height(&self) -> BlockHeight {
         self.ledger.synced_height()
     }
 
@@ -687,7 +695,7 @@ pub(crate) fn apply_scan_result_to_state(
     indexes: &mut LedgerIndexes,
     result: ScanResult,
 ) -> Result<Vec<usize>, RefreshError> {
-    let synced = ledger.height();
+    let synced = ledger.height().to_raw();
 
     // Bond sightings mutate the STAKING block, which this LedgerBlock-scoped
     // body cannot reach — the caller (`Engine::apply_scan_result`) validates
@@ -731,7 +739,7 @@ pub(crate) fn apply_scan_result_to_state(
     if start > 1 {
         // The persisted reorg rows are still bytes (RAW_TYPE PR C).
         let stored = ledger
-            .block_hash_at(start - 1)
+            .block_hash_at(BlockHeight::from_raw(start - 1))
             .copied()
             .map(BlockHash::from_bytes);
         match (stored, result.parent_hash) {

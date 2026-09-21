@@ -21,7 +21,7 @@ use super::local_ledger::LocalLedger;
 use super::local_refresh::LocalRefresh;
 use super::traits::ledger::LedgerEngine;
 use super::traits::DaemonEngine;
-use shekyl_types::BlockHash;
+use shekyl_types::{BlockHash, BlockHeight};
 
 /// Types that carry the wallet open-time scan floor into refresh.
 pub(crate) trait ScanStartFloorProvider {
@@ -99,9 +99,11 @@ pub(crate) fn anchor_ledger_block(
     anchor_synced: u64,
     tip_hash: BlockHash,
 ) -> Result<(), RefreshError> {
-    // The ledger's tip and reorg rows are persisted as bytes until
-    // RAW_TYPE_NEWTYPE_MIGRATION.md PR C types them (engine-state's rows,
-    // schema-checked); this is the one conversion, at the persisted boundary.
+    // The ledger's tip and reorg rows are inclusive ordinals
+    // (`BlockHeight`); `anchor_synced` stays `u64` because it is
+    // derived from `restore_from_height` (still inland `u64` until
+    // a later `SyncStateBlock` wrap). Conversion is at this
+    // persisted-boundary write.
     let tip_hash = tip_hash.to_bytes();
     // The ledger already being past the anchor height is a satisfied
     // anchor with nothing to do. This must be checked *before* the
@@ -112,7 +114,7 @@ pub(crate) fn anchor_ledger_block(
     // must short-circuit to a no-op rather than reject the non-empty
     // transfer set.
     let current = ledger.height();
-    if current > anchor_synced {
+    if current.to_raw() > anchor_synced {
         return Ok(());
     }
 
@@ -122,10 +124,10 @@ pub(crate) fn anchor_ledger_block(
         });
     }
 
-    if current == anchor_synced {
+    if current.to_raw() == anchor_synced {
         // Fast path: the anchor already matches the daemon.
         if ledger.tip.tip_hash == Some(tip_hash)
-            && ledger.block_hash_at(anchor_synced) == Some(&tip_hash)
+            && ledger.block_hash_at(BlockHeight::from_raw(anchor_synced)) == Some(&tip_hash)
         {
             return Ok(());
         }
@@ -141,17 +143,20 @@ pub(crate) fn anchor_ledger_block(
             .reorg_blocks
             .blocks
             .iter_mut()
-            .find(|(h, _)| *h == anchor_synced)
+            .find(|(h, _)| *h == BlockHeight::from_raw(anchor_synced))
         {
             entry.1 = tip_hash;
         } else {
-            ledger.reorg_blocks.blocks.push((anchor_synced, tip_hash));
+            ledger
+                .reorg_blocks
+                .blocks
+                .push((BlockHeight::from_raw(anchor_synced), tip_hash));
         }
         return Ok(());
     }
 
-    ledger.tip = BlockchainTip::new(anchor_synced, tip_hash);
-    ledger.reorg_blocks.blocks = vec![(anchor_synced, tip_hash)];
+    ledger.tip = BlockchainTip::new(BlockHeight::from_raw(anchor_synced), tip_hash);
+    ledger.reorg_blocks.blocks = vec![(BlockHeight::from_raw(anchor_synced), tip_hash)];
     Ok(())
 }
 
@@ -179,7 +184,7 @@ pub(crate) async fn ensure_birthday_anchor<D: DaemonEngine>(
     scan_start_floor: u64,
 ) -> Result<(), RefreshError> {
     let synced = ledger.synced_height();
-    if !needs_birthday_anchor(synced, scan_start_floor) {
+    if !needs_birthday_anchor(synced.to_raw(), scan_start_floor) {
         return Ok(());
     }
 
@@ -197,7 +202,7 @@ pub(crate) async fn ensure_birthday_anchor<D: DaemonEngine>(
     let Some(anchor_synced) = anchor_target(scan_start_floor, daemon_height) else {
         return Ok(());
     };
-    if synced >= anchor_synced {
+    if synced.to_raw() >= anchor_synced {
         return Ok(());
     }
 
@@ -246,9 +251,12 @@ mod tests {
     fn anchor_ledger_block_sets_tip_and_reorg_window() {
         let mut ledger = LedgerBlock::empty();
         anchor_ledger_block(&mut ledger, 999, BlockHash::from_bytes([0xAB; 32])).expect("anchor");
-        assert_eq!(ledger.height(), 999);
+        assert_eq!(ledger.height(), BlockHeight::from_raw(999));
         assert_eq!(ledger.tip.tip_hash, Some([0xAB; 32]));
-        assert_eq!(ledger.block_hash_at(999), Some(&[0xAB; 32]));
+        assert_eq!(
+            ledger.block_hash_at(BlockHeight::from_raw(999)),
+            Some(&[0xAB; 32])
+        );
     }
 
     #[test]
@@ -261,16 +269,19 @@ mod tests {
             .expect("first anchor");
         anchor_ledger_block(&mut ledger, 999, BlockHash::from_bytes([0xCD; 32]))
             .expect("re-anchor overwrites");
-        assert_eq!(ledger.height(), 999);
+        assert_eq!(ledger.height(), BlockHeight::from_raw(999));
         assert_eq!(ledger.tip.tip_hash, Some([0xCD; 32]));
-        assert_eq!(ledger.block_hash_at(999), Some(&[0xCD; 32]));
+        assert_eq!(
+            ledger.block_hash_at(BlockHeight::from_raw(999)),
+            Some(&[0xCD; 32])
+        );
         // No duplicate reorg-window entry for the anchor height.
         assert_eq!(
             ledger
                 .reorg_blocks
                 .blocks
                 .iter()
-                .filter(|(h, _)| *h == 999)
+                .filter(|(h, _)| *h == BlockHeight::from_raw(999))
                 .count(),
             1
         );

@@ -286,8 +286,9 @@ pub(crate) struct BondPostPlacement {
     pub vin: JoinMarketVin,
     /// Blocks from the private-intent anchor `t0` to the bond-post broadcast —
     /// the drawn entry-gap spread. (No entry offset: only the bond post is
-    /// chain-attributable, so there is no second event to place.)
-    pub bond_post_offset_blocks: u64,
+    /// chain-attributable, so there is no second event to place.) A
+    /// [`BlockCount`] (height-semantics C4), not an instant.
+    pub bond_post_offset_blocks: BlockCount,
 }
 
 impl Message<PlanBondPost> for StakeEngine {

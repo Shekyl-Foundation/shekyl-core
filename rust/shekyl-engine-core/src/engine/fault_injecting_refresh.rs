@@ -343,7 +343,7 @@ mod tests {
             _diagnostics: &dyn DiagnosticSink,
         ) -> impl std::future::Future<Output = Result<ScanResult, Self::Error>> + Send {
             async move {
-                let start = snapshot.synced_height.saturating_add(1);
+                let start = snapshot.synced_height.to_raw().saturating_add(1);
                 Ok(ScanResult::empty_at(start, None))
             }
         }

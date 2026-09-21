@@ -10,6 +10,7 @@ use std::num::NonZeroU32;
 use std::ops::Range;
 
 use shekyl_engine_state::{LedgerBlock, ReorgBlocks};
+use shekyl_types::BlockHeight;
 
 use crate::engine::pending::SnapshotId;
 use crate::scan::ScanResult;
@@ -61,7 +62,7 @@ use crate::scan::ScanResult;
 pub struct LedgerSnapshot {
     /// Highest height the wallet has fully ingested at snapshot time.
     /// Equivalent to `LedgerBlock::height()`.
-    pub(crate) synced_height: u64,
+    pub(crate) synced_height: BlockHeight,
 
     /// The wallet's reorg detection window at snapshot time. The
     /// producer queries this for parent-hash compares and the
@@ -93,7 +94,7 @@ impl LedgerSnapshot {
     /// [`LedgerBlock::block_hash_at`] over the snapshotted window.
     /// Returns `None` if the height is below the window's earliest
     /// retained entry or above the snapshotted tip.
-    pub(crate) fn block_hash_at(&self, height: u64) -> Option<[u8; 32]> {
+    pub(crate) fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
         self.reorg_blocks
             .blocks
             .iter()
@@ -127,10 +128,10 @@ pub(crate) const SNAPSHOT_ID_CUSTOMIZATION: &[u8] = b"shekyl/snapshot-id-v1";
 pub(crate) fn snapshot_id_preimage(snapshot: &LedgerSnapshot) -> Vec<u8> {
     let n_blocks = snapshot.reorg_blocks.blocks.len();
     let mut buf = Vec::with_capacity(8 + 8 + n_blocks * (8 + 32));
-    buf.extend_from_slice(&snapshot.synced_height.to_le_bytes());
+    buf.extend_from_slice(&snapshot.synced_height.to_raw().to_le_bytes());
     buf.extend_from_slice(&(n_blocks as u64).to_le_bytes());
     for (height, hash) in &snapshot.reorg_blocks.blocks {
-        buf.extend_from_slice(&height.to_le_bytes());
+        buf.extend_from_slice(&height.to_raw().to_le_bytes());
         buf.extend_from_slice(hash);
     }
     buf

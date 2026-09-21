@@ -31,7 +31,7 @@ pub(crate) async fn refresh(
     let opts = RefreshOptions::default();
     let handle = Engine::start_refresh(engine.clone(), opts).await?;
     let summary = handle.join().await?;
-    let synced_height = engine.read().await.ledger().ledger.height();
+    let synced_height = engine.read().await.ledger().ledger.height().to_raw();
     let result = refresh_result(&summary, synced_height);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize refresh: {e}")))
@@ -62,7 +62,7 @@ pub(crate) async fn rescan_blockchain(
         .join()
         .await
         .map_err(WalletRpcError::from_rescan_scan_failure)?;
-    let synced_height = engine.read().await.ledger().ledger.height();
+    let synced_height = engine.read().await.ledger().ledger.height().to_raw();
     // OpenAPI `RescanBlockchainResult` omits `reorg_fork_height`.
     let result = rescan_result(&summary, synced_height);
     serde_json::to_value(result)
