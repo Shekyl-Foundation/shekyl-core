@@ -281,11 +281,13 @@ fn collapse<M, SrcF, SubF>(err: SendError<M, RunFault>) -> PipelineFault<SrcF, S
     }
 }
 
-/// The height after `tip`, or the first height on an empty store.
+/// The height after `tip`, or the first height on an empty store. A chain
+/// does not reach `u64::MAX` blocks; the store itself refuses to record a
+/// tip there, so no honest source can ask for its successor.
 fn next_height(tip: Option<BlockHeight>) -> BlockHeight {
     tip.map_or(BlockHeight::ZERO, |t| {
         t.checked_add(BlockCount::ONE)
-            .expect("a recorded tip is not u64::MAX")
+            .expect("the height space is not exhausted by a recorded chain")
     })
 }
 
@@ -592,7 +594,9 @@ where
                 self.report.checkpoint = Some(Checkpoint { at, ours, theirs });
             }
         }
-        self.report.refused = applied.refused;
+        if let Some(refused) = applied.refused {
+            self.report.refused = Some(refused);
+        }
         Ok(())
     }
 
