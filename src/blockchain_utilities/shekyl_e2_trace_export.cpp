@@ -18,7 +18,7 @@
 // build does not need it).
 //
 // Usage:
-//   shekyl-e2-trace-export --data-dir <dir> [--testnet|--stagenet]
+//   shekyl-e2-trace-export --data-dir <dir> [--testnet|--stagenet|--regtest]
 //       --out <trace file> [--block-start H] [--block-stop H]
 //
 // One checkpoint is written, after the last exported height, and only when
@@ -305,7 +305,6 @@ int main(int argc, char* argv[])
     const std::array<uint8_t, 32> live_root = db->get_curve_tree_root();
     const int32_t rc = shekyl_e2_trace_push_checkpoint(
         guard.w,
-        tip,
         hashes.data(),
         height,
         n_spent == 0 ? nullptr : spent.data(),

@@ -10,32 +10,35 @@
 //! exists only inside `ChainStore::write`'s branded closure and cannot be
 //! held across mailbox messages — the brand doing its job. So the
 //! transaction boundary is **one `write` closure per handler**: an
-//! [`Apply`] is a bounded run of consecutive `Extend`s in one closure (its
-//! length is the checkpoint granularity), a [`Rewind`] is one closure of
-//! pops. Between messages the actor holds the store, the rule set in force,
-//! the trace's `borrow` door, and nothing mutable.
+//! [`Apply`] is a bounded run of consecutive `Extend`s in one closure (the
+//! write-transaction granularity), a [`Rewind`] is one closure of pops.
+//! Between messages the actor holds the store, the rule set in force, the
+//! trace's `borrow` door, and nothing mutable.
 //!
 //! # The supervision table, as code
 //!
 //! Every non-verdict outcome the contracts can return maps to a lifecycle;
 //! none inherits the framework's default. The [`Apply`] handler is the
-//! table (§1.1):
+//! table (§1.1). **Store-terminal faults end the actor; everything else is
+//! a reply the driver owns.** A replay driver may treat a stale seed as
+//! run-ending; E3 re-forms on the same actor. A refusal is never `Over`.
 //!
 //! | outcome | here |
 //! | --- | --- |
-//! | `form` refused (`Err(InvalidBlock)` in the staged verdict) or `validate` refused | **a verdict, not a fault**: recorded in [`Applied::refused`]; the run of `Extend`s stops there (its child cannot connect) and what connected before it lands |
+//! | `form` refused (`Err(InvalidBlock)` in the formed verdict) or `validate` refused | **a verdict, not a fault**: recorded in [`Applied::refused`]; this run of `Extend`s stops there (its child cannot connect) and what connected before it lands; **the writer stays up** |
 //! | `Fault::View(store error)` | **halt**: the batch aborts, the error is the reply, the actor is over |
 //! | `Fault::Corrupt` | `WriteBatch::refuse_corrupt` arms the halt (SI-10) and its `InvariantViolated` — carrying the validator's value — is the reply; the batch aborts; **terminal** |
-//! | `Fault::Stale(Seed { .. })` | a **driver defect** in replay (RD-Q5): surfaced on first occurrence with the claim and the expectation; terminal for the run |
-//! | `Fault::Stale(RuleSet { .. })` | a **driver defect** (the schedule handed the two stages different sets): surfaced, not retried |
-//! | the trace has no facts at the height | the run cannot connect honestly: surfaced ([`RunFault::NoFacts`]) |
+//! | `Fault::Stale(Seed { .. })` | a **driver defect** in replay (RD-Q5): the reply carries the claim, the expectation, and the validator's `Retry`; the writer stays up so a later caller can re-`form` |
+//! | `Fault::Stale(RuleSet { .. })` | a **driver defect** (the schedule handed the two stages different sets): surfaced; the writer stays up |
+//! | the trace has no facts at the height | the run cannot connect honestly: surfaced ([`RunFault::NoFacts`]); the writer stays up |
 //!
 //! **No restart.** `on_panic` breaks; nothing supervises this actor into
 //! coming back (RD-Q11, RULED): a halt laundered into a retry loop is the
-//! `InvalidBlock`-mapping failure in another shape. Once a terminal fault
-//! has been replied, every later message is refused with
+//! `InvalidBlock`-mapping failure in another shape. Once a **store-terminal**
+//! fault has been replied, every later `Apply` / `Rewind` is refused with
 //! [`RunFault::Over`] until the driver stops the actor — the test written
-//! first in this commit holds that the actor does not come back.
+//! first in this commit holds that the actor does not come back. [`Digest`]
+//! stays a diagnosis read on a halted store.
 //!
 //! **No fault becomes a verdict, no verdict becomes a fault.** A refusal is
 //! data on the reply; a fault is the reply's error; the two never meet.
@@ -56,40 +59,14 @@ use shekyl_types::{BlockHash, BlockHeight};
 use crate::schedule::ChainRules;
 use crate::trace::Trace;
 
-/// Why a run ended, as the actor remembers it after the reply that carried
-/// the detail. `Copy` data only, so it can be repeated on every later
-/// message.
+/// Why the writer is over: store-terminal faults only. `Copy` data, so it
+/// can be repeated on every later `Apply` / `Rewind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunEnd {
     /// The store halted (a belt, or SI-10 through `refuse_corrupt`).
     Halted(StoreInvariant),
-    /// A store engine or capability error ended the run.
+    /// A store engine or capability error ended the writer.
     StoreFaulted,
-    /// The driver's seed claim disagreed with the store at `height`.
-    StaleSeed {
-        /// The connecting height.
-        height: BlockHeight,
-    },
-    /// `form` and `validate` were handed different rule sets at `height`.
-    StaleRuleSet {
-        /// The connecting height.
-        height: BlockHeight,
-    },
-    /// The trace has no facts for `height`.
-    NoFacts {
-        /// The connecting height.
-        height: BlockHeight,
-    },
-    /// A block was refused at `height`; the chain past it cannot connect.
-    Refused {
-        /// The refused height.
-        height: BlockHeight,
-    },
-    /// A rewind named a target the chain cannot reach.
-    RewindTarget {
-        /// The target.
-        to: BlockHeight,
-    },
 }
 
 /// The reply error of a connector message: the first occurrence carries
@@ -136,8 +113,8 @@ pub enum RunFault {
         /// The tip at the time.
         tip: Option<BlockHeight>,
     },
-    /// The run is over; the first fault was already replied.
-    #[error("the run is over: {0:?}")]
+    /// The writer is over: a store-terminal fault was already replied.
+    #[error("the writer is over: {0:?}")]
     Over(RunEnd),
 }
 
@@ -211,15 +188,15 @@ impl Connector {
     }
 
     fn end_for(fault: &RunFault) -> Option<RunEnd> {
-        Some(match fault {
-            RunFault::Store(StoreError::InvariantViolated(row)) => RunEnd::Halted(*row),
-            RunFault::Store(_) => RunEnd::StoreFaulted,
-            RunFault::StaleSeed { height, .. } => RunEnd::StaleSeed { height: *height },
-            RunFault::StaleRuleSet { height } => RunEnd::StaleRuleSet { height: *height },
-            RunFault::NoFacts { height } => RunEnd::NoFacts { height: *height },
-            RunFault::RewindTarget { to, .. } => RunEnd::RewindTarget { to: *to },
-            RunFault::Over(_) => return None,
-        })
+        match fault {
+            RunFault::Store(StoreError::InvariantViolated(row)) => Some(RunEnd::Halted(*row)),
+            RunFault::Store(_) => Some(RunEnd::StoreFaulted),
+            RunFault::StaleSeed { .. }
+            | RunFault::StaleRuleSet { .. }
+            | RunFault::NoFacts { .. }
+            | RunFault::RewindTarget { .. }
+            | RunFault::Over(_) => None,
+        }
     }
 }
 
@@ -313,12 +290,7 @@ impl Message<Apply> for Connector {
             Ok(applied)
         });
         match result {
-            Ok(applied) => {
-                if let Some((height, _)) = &applied.refused {
-                    self.end(RunEnd::Refused { height: *height });
-                }
-                Ok(applied)
-            }
+            Ok(applied) => Ok(applied),
             Err(fault) => {
                 if let Some(end) = Self::end_for(&fault) {
                     self.end(end);
@@ -367,6 +339,8 @@ impl Message<Digest> for Connector {
     type Reply = Result<crate::trace::Digest, RunFault>;
 
     async fn handle(&mut self, _: Digest, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        // A diagnosis read: stays open after a halt so the driver can still
+        // name the store's state (or meet the same hole the validator did).
         Ok(self.store.begin_read()?.logical_state_digest_v0()?)
     }
 }

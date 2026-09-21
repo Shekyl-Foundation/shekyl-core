@@ -4051,8 +4051,9 @@ int32_t shekyl_logical_state_digest_v0(
 // its checkpoints are hashed in Rust from the families the caller walked —
 // the C++ never hashes (RD-Q9).
 //
-// Lifecycle: open -> push_facts* (consecutive heights) -> push_checkpoint*
-// -> finish (trailer, frees) | abort (frees, file left truncated).
+// Lifecycle: open -> push_facts* (consecutive heights) -> push_checkpoint?
+// (at most one, at the last facts row) -> finish (trailer, frees) | abort
+// (frees, file left truncated).
 // ---------------------------------------------------------------------------
 struct ShekylE2TraceWriter;
 
@@ -4075,13 +4076,13 @@ int32_t shekyl_e2_trace_push_facts(
     uint64_t cumulative_difficulty_lo,
     uint64_t cumulative_difficulty_hi);
 
-/// The LMDB logical state after `height` (which must already have facts),
-/// from the families: `n_blocks` × 32-byte hashes in height order,
-/// `n_spent` × 32-byte key images in any order (either pointer may be NULL
-/// only when its count is 0), the 32-byte live root.
+/// The LMDB logical state after the last facts row (the covered tip), from
+/// the families: `n_blocks` × 32-byte hashes in height order, `n_spent` ×
+/// 32-byte key images in any order (either pointer may be NULL only when
+/// its count is 0), the 32-byte live root. Height is the writer's last
+/// facts row — this call does not take one.
 int32_t shekyl_e2_trace_push_checkpoint(
     struct ShekylE2TraceWriter* writer,
-    uint64_t height,
     const uint8_t* block_hashes,
     uint64_t n_blocks,
     const uint8_t* spent_keys,

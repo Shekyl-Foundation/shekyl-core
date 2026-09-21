@@ -18,7 +18,8 @@
 //!
 //! # Lifecycle
 //!
-//! `open` → `push_facts`* (consecutive heights) → `push_checkpoint`* →
+//! `open` → `push_facts`* (consecutive heights) → `push_checkpoint`?
+//! (at most one, at the last facts row) →
 //! `finish` (writes the trailer, frees) or `abort` (frees without a
 //! trailer; the file is then a truncated trace and a reader refuses it).
 //! A `finish` or `abort` consumes the handle; using it afterwards is
@@ -57,8 +58,10 @@ pub struct ShekylE2TraceWriter {
 fn code(fault: &TraceFault) -> i32 {
     match fault {
         TraceFault::HeightGap { .. }
-        | TraceFault::UnanchoredCheckpoint { .. }
-        | TraceFault::DuplicateCheckpoint { .. } => SHEKYL_E2_TRACE_ERR_SEQUENCE,
+        | TraceFault::UnanchoredCheckpoint
+        | TraceFault::CheckpointNotTip { .. }
+        | TraceFault::DuplicateCheckpoint { .. }
+        | TraceFault::FactsAfterCheckpoint { .. } => SHEKYL_E2_TRACE_ERR_SEQUENCE,
         // `Io` is the writer's only other fault; the reader-side arms cannot
         // come out of a writer and are reported as I/O if they ever do.
         TraceFault::Io(_)
@@ -158,11 +161,11 @@ pub unsafe extern "C" fn shekyl_e2_trace_push_facts(
     }
 }
 
-/// The LMDB logical state after `height` (which must already have a facts
-/// record), from the three families the exporter walked: `n_blocks`
-/// concatenated 32-byte block hashes in height order, `n_spent`
-/// concatenated 32-byte key images in any order, the 32-byte live root.
-/// Hashed here, never by the caller.
+/// The LMDB logical state after the last facts row (the covered tip), from
+/// the three families the exporter walked: `n_blocks` concatenated 32-byte
+/// block hashes in height order, `n_spent` concatenated 32-byte key images
+/// in any order, the 32-byte live root. Hashed here, never by the caller.
+/// Height is the writer's last facts row — the C++ does not name it.
 ///
 /// # Safety
 ///
@@ -172,7 +175,6 @@ pub unsafe extern "C" fn shekyl_e2_trace_push_facts(
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_e2_trace_push_checkpoint(
     writer: *mut ShekylE2TraceWriter,
-    height: u64,
     block_hashes: *const u8,
     n_blocks: u64,
     spent_keys: *const u8,
@@ -195,15 +197,13 @@ pub unsafe extern "C" fn shekyl_e2_trace_push_checkpoint(
     };
     // SAFETY: the caller's contract — a live handle from `open`.
     let w = unsafe { &mut *writer };
-    match w.inner.push_checkpoint_families(
-        BlockHeight::from_raw(height),
-        blocks,
-        spent,
-        CurveTreeRoot::from_bytes(root),
-    ) {
+    match w
+        .inner
+        .push_checkpoint_families(blocks, spent, CurveTreeRoot::from_bytes(root))
+    {
         Ok(_) => SHEKYL_E2_TRACE_OK,
         Err(e) => {
-            tracing::error!("e2 trace: checkpoint at {height}: {e}");
+            tracing::error!("e2 trace: checkpoint: {e}");
             code(&e)
         }
     }
@@ -311,28 +311,12 @@ mod tests {
         let hashes = [[0x11u8; 32], [0x12u8; 32]].concat();
         let spent = [0x21u8; 32];
         let rc = unsafe {
-            shekyl_e2_trace_push_checkpoint(
-                w,
-                1,
-                hashes.as_ptr(),
-                2,
-                spent.as_ptr(),
-                1,
-                root.as_ptr(),
-            )
+            shekyl_e2_trace_push_checkpoint(w, hashes.as_ptr(), 2, spent.as_ptr(), 1, root.as_ptr())
         };
         assert_eq!(rc, SHEKYL_E2_TRACE_OK);
-        // Out of order / unanchored is refused, the handle stays usable.
+        // A second checkpoint is refused (one, at the covered tip); the handle stays usable.
         let rc = unsafe {
-            shekyl_e2_trace_push_checkpoint(
-                w,
-                9,
-                hashes.as_ptr(),
-                2,
-                spent.as_ptr(),
-                1,
-                root.as_ptr(),
-            )
+            shekyl_e2_trace_push_checkpoint(w, hashes.as_ptr(), 2, spent.as_ptr(), 1, root.as_ptr())
         };
         assert_eq!(rc, SHEKYL_E2_TRACE_ERR_SEQUENCE);
         assert_eq!(unsafe { shekyl_e2_trace_finish(w) }, SHEKYL_E2_TRACE_OK);

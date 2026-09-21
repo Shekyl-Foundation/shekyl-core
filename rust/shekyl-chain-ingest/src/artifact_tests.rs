@@ -16,13 +16,16 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockWeight, CurveTreeRoot, LongTermWeight};
 use shekyl_units::AtomicUnits;
 
-use crate::test_support::{chain_listing, h, spend, wire};
+use crate::test_support::h;
+#[cfg(feature = "fetch")]
+use crate::test_support::{chain_listing, spend, wire};
 use crate::trace::{Facts, Trace, TraceFault, TraceWriter, CHECKPOINT_LEN, FACTS_LEN, TRACE_MAGIC};
 
 // ---------------------------------------------------------------- fixtures
 
 /// Three blocks — genesis, one spend, two spends — as the network carries
 /// them: (block bytes, body bytes).
+#[cfg(feature = "fetch")]
 fn three_blocks() -> Vec<(Vec<u8>, Vec<Vec<u8>>)> {
     chain_listing(vec![Vec::new(), vec![spend(1)], vec![spend(2), spend(3)]])
         .iter()
@@ -52,7 +55,7 @@ fn the_trace_round_trips_through_both_doors_and_the_borrow_is_passed_through() {
     let spent = [[0x21; 32], [0x22; 32]];
     let root = CurveTreeRoot::from_bytes([0xc2; 32]);
     let state = w
-        .push_checkpoint_families(h(2), &hashes, &spent, root)
+        .push_checkpoint_families(&hashes, &spent, root)
         .expect("checkpoint");
     assert_eq!(state, digest_v0(&hashes, &spent, root.as_bytes()));
     let bytes = w.finish().expect("trailer");
@@ -64,7 +67,11 @@ fn the_trace_round_trips_through_both_doors_and_the_borrow_is_passed_through() {
 
     let trace = Trace::read(Cursor::new(&bytes)).expect("read");
     assert_eq!(trace.covered(), Some((h(0), h(2))));
-    assert_eq!(trace.checkpoint_heights().collect::<Vec<_>>(), vec![h(2)]);
+    assert_eq!(
+        trace.checkpoint().map(|(hh, _)| hh),
+        Some(h(2)),
+        "one checkpoint, at the covered tip"
+    );
     assert_eq!(trace.borrow(h(1)).expect("covered").value(), &facts_at(1));
     assert!(
         trace.borrow(h(3)).is_none(),
@@ -101,28 +108,32 @@ fn trace_refusals_gap_unanchored_duplicate_reserved_and_trailer() {
         }
     ));
     let state = digest_v0(&[], &[], CurveTreeRoot::EMPTY.as_bytes());
+    let mut empty = TraceWriter::new(Vec::new()).expect("header");
     assert!(matches!(
-        w.push_checkpoint(h(5), &state).expect_err("unanchored"),
-        TraceFault::UnanchoredCheckpoint { height: 5 }
+        empty.push_checkpoint(&state).expect_err("no facts"),
+        TraceFault::UnanchoredCheckpoint
     ));
-    // Below the first facts row is as unanchored as above the last: a trace
-    // starting at 3 has nothing at 1, and the reader would refuse a
-    // checkpoint there — so the writer refuses it first (Bugbot, #811).
+    // The checkpoint is the covered tip: a trace starting at 3 checkpoints
+    // at 3, and a second call is a duplicate. Height is not a parameter, so
+    // a writer cannot name a height the reader would refuse.
     let mut from_three = TraceWriter::new(Vec::new()).expect("header");
     from_three.push_facts(h(3), &facts_at(3)).expect("facts");
-    assert!(matches!(
-        from_three
-            .push_checkpoint(h(1), &state)
-            .expect_err("below first"),
-        TraceFault::UnanchoredCheckpoint { height: 1 }
-    ));
     from_three
-        .push_checkpoint(h(3), &state)
+        .push_checkpoint(&state)
         .expect("anchored at its only row");
-    w.push_checkpoint(h(0), &state).expect("anchored");
     assert!(matches!(
-        w.push_checkpoint(h(0), &state).expect_err("twice"),
+        from_three.push_checkpoint(&state).expect_err("second"),
+        TraceFault::DuplicateCheckpoint { height: 3 }
+    ));
+    w.push_checkpoint(&state).expect("anchored at 0");
+    assert!(matches!(
+        w.push_checkpoint(&state).expect_err("twice"),
         TraceFault::DuplicateCheckpoint { height: 0 }
+    ));
+    assert!(matches!(
+        w.push_facts(h(1), &facts_at(1))
+            .expect_err("facts after checkpoint"),
+        TraceFault::FactsAfterCheckpoint { height: 1 }
     ));
     let good = w.finish().expect("trailer");
     assert!(Trace::read(Cursor::new(&good)).is_ok());
@@ -187,6 +198,7 @@ fn the_facts_layout_is_pinned() {
 
 // ------------------------------------------------------------------- fetch
 
+#[cfg(feature = "fetch")]
 mod fetch {
     use std::collections::VecDeque;
     use std::future::Future;

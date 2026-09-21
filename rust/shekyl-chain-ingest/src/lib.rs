@@ -10,7 +10,7 @@
 //! ```text
 //! Source ──► Form (N workers) ──► Sequencer ──► Validate+Connect ──► Sinks
 //! (corpus │  (stateless; real     (restore the  (one actor; owns    (digest/grader,
-//!  now,   │   RandomX per worker)  source order; the ChainStore;     checkpoints,
+//!  now,   │   RandomX per worker)  source order; the ChainStore;     checkpoint,
 //!  p2p at │                        Rewind is a   one write closure   metrics)
 //!  E3)    │                        barrier)      per handler)
 //! ```
@@ -32,13 +32,17 @@
 //!   **verifies** completeness against each header (RD-F15) and whose
 //!   reader re-verifies on every record. Network-shaped only; the trace is
 //!   a different artifact with a different door (RD-Q2).
+//! - [`trace`] — the LMDB-only facts and one digest checkpoint at the
+//!   covered tip (RD-F18), with typed [`trace::Borrowed`] / [`trace::Expected`]
+//!   doors. This is the harvest artifact `shekyl-ffi` compiles; the pipeline
+//!   stages sit behind the `pipeline` feature so the daemon image does not
+//!   pull the replay driver to write a trace.
 //! - [`substrate`] — the production [`Substrate`](shekyl_chain_rules::Substrate):
 //!   RandomX verification through `shekyl-pow-randomx`'s cache path and the
 //!   system clock. The only hasher any Shekyl validator runs (§1.3).
 //!
-//! The stages themselves (form workers, sequencer, the validate+connect
-//! actor, sinks) land with the commits that give each its first test
-//! (§7); this crate does not carry a stage before its behaviour is pinned.
+//! Form is `shekyl_chain_rules::form`. The sequencer, the validate+connect
+//! actor, the grader and the driver live behind `feature = "pipeline"`.
 //!
 //! # What this crate never does
 //!
@@ -54,34 +58,46 @@
 
 #[cfg(test)]
 mod artifact_tests;
+#[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
+#[cfg(feature = "fetch")]
 pub mod fetch;
+#[cfg(feature = "pipeline")]
 pub mod grader;
 pub mod metrics;
+#[cfg(feature = "pipeline")]
 pub mod pipeline;
-#[cfg(test)]
+#[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
+#[cfg(feature = "pipeline")]
 pub mod schedule;
+#[cfg(feature = "pipeline")]
 pub mod seed;
+#[cfg(feature = "pipeline")]
 pub mod sequencer;
 pub mod source;
-pub mod stage;
 pub mod substrate;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;
 
+#[cfg(feature = "pipeline")]
 pub use connector::{Applied, Apply, Connector, ConnectorArgs, Digest, Rewind, Rewound, RunFault};
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
+#[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
+#[cfg(feature = "pipeline")]
 pub use grader::{grade_run, GradedRun, Observations, Register};
 pub use metrics::{Metrics, MetricsArtifact};
+#[cfg(feature = "pipeline")]
 pub use pipeline::{run, PipelineConfig, PipelineFault, RunReport, Switch};
+#[cfg(feature = "pipeline")]
 pub use schedule::{Chain, ChainRules, FixedDifficultyRefused};
+#[cfg(feature = "pipeline")]
 pub use seed::{SeedLedger, SeedSchedule};
+#[cfg(feature = "pipeline")]
 pub use sequencer::{SequenceError, Sequencer};
 pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
-pub use stage::{form_extend, Staged};
 pub use substrate::{EpochPin, ProductionSubstrate, SubstrateFault};
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

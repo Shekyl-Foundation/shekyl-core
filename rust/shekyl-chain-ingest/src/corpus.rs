@@ -189,8 +189,6 @@ pub enum CorpusFault {
         /// The parser's error.
         cause: io::Error,
     },
-    /// The header's `count` disagrees with the records present: the file
-    /// was not finished, or was truncated.
     /// A record tag neither `extend` nor `rewind`.
     UnknownTag(u8),
     /// A `rewind` to the tip or above it: nothing to pop.
@@ -209,6 +207,8 @@ pub enum CorpusFault {
     },
     /// A `rewind` before any block: there is no tip.
     RewindOnEmpty,
+    /// The header's `count` disagrees with the records present: the file
+    /// was not finished, or was truncated.
     CountMismatch {
         /// What the header said.
         declared: u64,

@@ -6,15 +6,16 @@
 //! The driver: `Source → form (N workers) → Sequencer → Connector → sinks`
 //! (`DRS_E2_REPLAY_DRIVER.md` §1.1, RD-Q11, RD-Q13).
 //!
-//! One loop owns the whole run. It reads events from the [`Source`],
-//! claims each block's seed from the [`SeedLedger`] (falling back to the
-//! store for blocks recorded before this replay began), hands the block to
-//! a blocking `form` worker, restores order through the [`Sequencer`], and
-//! sends bounded runs of consecutive `Extend`s to the [`Connector`] in one
-//! message each — one write closure per message, the checkpoint
-//! granularity. A `Rewind` is a **barrier**: no block after it is formed
-//! until the pops have committed, because its seed context is the
-//! post-rewind chain.
+//! One [`Drive`] owns the loop. It reads events from the [`Source`], claims
+//! each block's seed from the [`SeedLedger`] (falling back to the store for
+//! blocks recorded before this replay began), hands the block to a blocking
+//! `form` worker (`shekyl-chain-rules::form` — this crate does not wrap
+//! it), restores order through the [`Sequencer`], and sends bounded runs of
+//! consecutive `Extend`s to the [`Connector`] in one message each — one
+//! write closure per message. A `Rewind` is a **barrier**: no block after
+//! it is formed until the pops have committed, because its seed context is
+//! the post-rewind chain. The rewind occupies a sequence number;
+//! [`Sequencer::advance`] moves past it without a formed payload.
 //!
 //! Stateless stages are plain tasks; the one stateful stage is the actor
 //! (RD-Q11). The only state this loop holds between events is the ledger,
@@ -22,20 +23,21 @@
 //!
 //! # Sinks
 //!
-//! Where the trace has a checkpoint, the loop asks the connector for the
-//! redb-side [`crate::trace::Digest`] right after that height connects and
-//! records it in the [`RunReport`] beside the trace's expectation; grading
-//! is commit 7's. A refusal ends the run as a **recorded verdict**, not a
-//! fault; a fault ends it as an error, with what connected before it in
-//! the report.
+//! The trace carries at most one checkpoint, at its covered tip (RD-F18).
+//! After that height connects, the loop asks the connector for the
+//! redb-side [`crate::trace::Digest`] and records it beside the trace's
+//! expectation. A refusal is a **recorded verdict**: the writer stays up;
+//! this driver ends the run (an honest chain that refuses is a
+//! disagreement; E3 and the mutation family keep the same actor and decide
+//! for themselves). A store halt is a fault.
 
 use std::sync::Arc;
 
 use kameo::actor::PreparedActor;
 use kameo::error::SendError;
-use shekyl_chain_rules::{FormAttempt, InvalidBlock, Substrate};
+use shekyl_chain_rules::{form, FormAttempt, InvalidBlock, StructurallyValid, Substrate, Verdict};
 use shekyl_chain_store::store::{ChainStore, StoreError};
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use tokio::task::JoinSet;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, Rewind, RunFault};
@@ -45,7 +47,6 @@ use crate::schedule::ChainRules;
 use crate::seed::{SeedLedger, SeedSchedule};
 use crate::sequencer::{SequenceError, Sequencer};
 use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
-use crate::stage::{form_extend, Staged};
 use crate::substrate::EpochPin;
 use crate::trace::Trace;
 
@@ -55,7 +56,7 @@ pub struct PipelineConfig {
     /// Blocks formed ahead of the writer at once — the speculative window.
     /// Bounded well below `SEEDHASH_EPOCH_LAG` (64) so a seed claim for a
     /// block in flight always names a block already read; also the maximum
-    /// run length one [`Apply`] carries, hence the checkpoint granularity.
+    /// run length one [`Apply`] carries.
     pub window: usize,
 }
 
@@ -63,7 +64,7 @@ impl PipelineConfig {
     /// The default window: half of `SEEDHASH_EPOCH_LAG` (64). A seed claim
     /// for a block in flight always names a block already read, with the
     /// same margin again to spare; and small enough that one `Apply` run
-    /// (the checkpoint granularity) stays a few dozen blocks.
+    /// stays a few dozen blocks.
     pub const DEFAULT_WINDOW: usize = (shekyl_difficulty::SEEDHASH_EPOCH_LAG / 2) as usize;
 }
 
@@ -89,9 +90,9 @@ pub struct RunReport {
     pub popped: u64,
     /// The refusal that ended the run, if a verdict did.
     pub refused: Option<(BlockHeight, InvalidBlock)>,
-    /// Redb-side digests taken at the trace's checkpoint heights, beside
-    /// the trace's expectation there.
-    pub checkpoints: Vec<(BlockHeight, crate::trace::Digest, crate::trace::Digest)>,
+    /// The redb-side digest at the trace's covered-tip checkpoint, beside
+    /// the trace's expectation, when that height connected.
+    pub checkpoint: Option<(BlockHeight, crate::trace::Digest, crate::trace::Digest)>,
     /// What the grader reads (RD-Q9): exercised rows, the refusal, digest
     /// agreement.
     pub observations: Observations,
@@ -151,7 +152,9 @@ pub enum PipelineFault<SrcF, SubF> {
     Mailbox,
 }
 
-type Formed<F> = Sequenced<Result<Staged, F>>;
+type Formed<F> = Sequenced<(BlockHeight, Result<Verdict<StructurallyValid>, F>)>;
+/// Sequencer payload: a formed height, or the substrate's inability to compute.
+type SequencedForm<F> = Result<(BlockHeight, Verdict<StructurallyValid>), F>;
 
 /// A handler's own error is the connector's fault; every other way an
 /// `ask` can fail is the mailbox.
@@ -194,7 +197,10 @@ where
         let snap = store.begin_read()?;
         // Only the heights a future claim can name: seed heights are
         // non-decreasing, so from the current one up to the tip.
-        let from = SEEDS.seed_height(BlockHeight::from_raw(tip.to_raw() + 1));
+        let from = SEEDS.seed_height(
+            tip.checked_add(BlockCount::ONE)
+                .expect("height space exhausted"),
+        );
         for h in from.to_raw()..=tip.to_raw() {
             if let shekyl_chain_rules::AtHeight::Recorded(info) =
                 snap.block_info(BlockHeight::from_raw(h))?
@@ -203,8 +209,10 @@ where
             }
         }
     }
-    let expected_next = starting_tip.map_or(0, |t| t.to_raw() + 1);
-    let checkpoints: Vec<BlockHeight> = trace.checkpoint_heights().collect();
+    let form_at = starting_tip.map_or(BlockHeight::from_raw(0), |t| {
+        t.checked_add(BlockCount::ONE)
+            .expect("height space exhausted")
+    });
 
     // Prepared rather than `Connector::spawn`, so the task handle is ours:
     // the actor owns the store, and `run` must not return before the task
@@ -218,19 +226,28 @@ where
         trace: Arc::clone(&trace),
     });
 
-    let outcome = drive(
+    let mut drive = Drive {
         source,
         substrate,
-        &metrics,
+        metrics: &metrics,
         rules,
-        &connector,
-        &trace,
+        connector: &connector,
+        trace: &trace,
         cfg,
-        &mut ledger,
-        expected_next,
-        &checkpoints,
-    )
-    .await;
+        ledger: &mut ledger,
+        form_at,
+        checkpoint_at: trace.checkpoint().map(|(h, _)| h),
+        report: RunReport {
+            metrics: metrics.snapshot(),
+            ..RunReport::default()
+        },
+        sequencer: Sequencer::new(SequenceNo::FIRST),
+        pinned: None,
+        in_flight: JoinSet::new(),
+        pending_rewind: None,
+        exhausted: false,
+    };
+    let outcome = drive.run_loop().await;
 
     // On every path — a finished run or a fault — stop the actor and wait
     // for its task to end, which is when the store it owns is dropped. A
@@ -242,178 +259,193 @@ where
     outcome
 }
 
-/// The loop proper; `run` owns the actor's lifecycle around it.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the loop's state is named, not bundled: each argument is one thing the loop reads"
-)]
-async fn drive<Src, S>(
-    source: &mut Src,
-    substrate: Arc<S>,
-    metrics: &Arc<Metrics>,
-    rules: ChainRules,
-    connector: &kameo::actor::ActorRef<Connector>,
-    trace: &Arc<Trace>,
-    cfg: PipelineConfig,
-    ledger: &mut SeedLedger,
-    mut expected_next: u64,
-    checkpoints: &[BlockHeight],
-) -> Result<RunReport, PipelineFault<Src::Fault, S::Fault>>
+/// The loop's state, named. Fill, collect, apply, rewind are the four
+/// steps; a `Drive` is what holds them together.
+struct Drive<'a, Src, S>
 where
     Src: Source,
     S: Substrate + EpochPin + Send + Sync + 'static,
     S::Fault: Send + 'static,
 {
-    let mut report = RunReport {
-        metrics: metrics.snapshot(),
-        ..RunReport::default()
-    };
-    let mut sequencer: Sequencer<Result<Staged, S::Fault>> = Sequencer::new(SequenceNo::FIRST);
-    let mut pinned: Option<BlockHash> = None;
-    let mut in_flight: JoinSet<Formed<S::Fault>> = JoinSet::new();
-    let mut pending_rewind: Option<Sequenced<BlockHeight>> = None;
-    let mut exhausted = false;
+    source: &'a mut Src,
+    substrate: Arc<S>,
+    metrics: &'a Arc<Metrics>,
+    rules: ChainRules,
+    connector: &'a kameo::actor::ActorRef<Connector>,
+    trace: &'a Arc<Trace>,
+    cfg: PipelineConfig,
+    ledger: &'a mut SeedLedger,
+    form_at: BlockHeight,
+    checkpoint_at: Option<BlockHeight>,
+    report: RunReport,
+    sequencer: Sequencer<SequencedForm<S::Fault>>,
+    pinned: Option<BlockHash>,
+    in_flight: JoinSet<Formed<S::Fault>>,
+    pending_rewind: Option<Sequenced<BlockHeight>>,
+    exhausted: bool,
+}
 
-    'run: loop {
-        // ---- fill the window from the source -----------------------------
-        while !exhausted && pending_rewind.is_none() && in_flight.len() < cfg.window {
-            let Some(event) = source.next().map_err(PipelineFault::Source)? else {
-                exhausted = true;
+impl<Src, S> Drive<'_, Src, S>
+where
+    Src: Source,
+    S: Substrate + EpochPin + Send + Sync + 'static,
+    S::Fault: Send + 'static,
+{
+    async fn run_loop(&mut self) -> Result<RunReport, PipelineFault<Src::Fault, S::Fault>> {
+        loop {
+            self.fill().await?;
+            self.collect_one().await?;
+            self.apply_ready().await?;
+            if self.report.refused.is_some() {
+                break;
+            }
+            self.try_rewind().await?;
+            if self.exhausted
+                && self.in_flight.is_empty()
+                && self.pending_rewind.is_none()
+                && self.sequencer.pending() == 0
+            {
+                break;
+            }
+        }
+        self.report.metrics = self.metrics.snapshot();
+        Ok(std::mem::take(&mut self.report))
+    }
+
+    async fn fill(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        while !self.exhausted
+            && self.pending_rewind.is_none()
+            && self.in_flight.len() < self.cfg.window
+        {
+            let Some(event) = self.source.next().map_err(PipelineFault::Source)? else {
+                self.exhausted = true;
                 break;
             };
             match event.event {
                 IngestEvent::Rewind { to } => {
-                    // Barrier: everything in flight must land before the pops.
-                    pending_rewind = Some(Sequenced {
+                    self.pending_rewind = Some(Sequenced {
                         seq: event.seq,
                         event: to,
                     });
                 }
                 IngestEvent::Extend(candidate) => {
-                    // A source emits candidates in order and carries no
-                    // height (`IngestEvent`): the pipeline assigns the next
-                    // one — the store's `tip + 1` at the start, `to + 1`
-                    // after a rewind. A corpus that does not begin where the
-                    // store ends is caught by `validate`'s chaining rule, not
-                    // by a height field the source could have got wrong.
-                    let height = BlockHeight::from_raw(expected_next);
-                    expected_next += 1;
-                    ledger.record(height, candidate.block.hash());
+                    let height = self.form_at;
+                    self.form_at = height
+                        .checked_add(BlockCount::ONE)
+                        .expect("height space exhausted");
+                    self.ledger.record(height, candidate.block.hash());
                     let seed_height = SEEDS.seed_height(height);
-                    let Some(seed) = ledger.claim(SEEDS, height) else {
+                    let Some(seed) = self.ledger.claim(SEEDS, height) else {
                         return Err(PipelineFault::SeedUnknown {
                             height,
                             seed_height,
                         });
                     };
-                    ledger.forget_below(seed_height);
-                    // A new epoch: pin its cache as canonical before any
-                    // block under it is formed (RD-F18). Genesis's NULL
-                    // seed is used once and is not an epoch.
-                    if seed != BlockHash::NULL && pinned != Some(seed) {
-                        let s = Arc::clone(&substrate);
+                    self.ledger.forget_below(seed_height);
+                    if seed != BlockHash::NULL && self.pinned != Some(seed) {
+                        let s = Arc::clone(&self.substrate);
                         tokio::task::spawn_blocking(move || s.pin_epoch(&seed)).await?;
-                        pinned = Some(seed);
+                        self.pinned = Some(seed);
                     }
-                    let substrate = Arc::clone(&substrate);
-                    let metrics = Arc::clone(metrics);
+                    let substrate = Arc::clone(&self.substrate);
+                    let metrics = Arc::clone(self.metrics);
                     let seq = event.seq;
-                    let in_force = rules.in_force(height);
-                    in_flight.spawn_blocking(move || {
+                    let in_force = self.rules.in_force(height);
+                    self.in_flight.spawn_blocking(move || {
                         let started = std::time::Instant::now();
-                        let staged = form_extend(
-                            height,
-                            *candidate,
-                            &in_force,
-                            &*substrate,
-                            seed,
-                            FormAttempt::FIRST,
-                        );
+                        let verdict =
+                            form(*candidate, &in_force, &*substrate, seed, FormAttempt::FIRST);
                         metrics.block_formed(started.elapsed());
-                        Sequenced { seq, event: staged }
+                        Sequenced {
+                            seq,
+                            event: (height, verdict),
+                        }
                     });
                 }
             }
         }
-
-        // ---- collect one finished form (or learn there is none) ------------
-        let finished = in_flight.join_next().await;
-        if let Some(done) = finished {
-            sequencer.push(done?)?;
-        }
-
-        // ---- release in order, apply in runs -------------------------------
-        let mut run: Vec<(BlockHeight, _)> = Vec::new();
-        while let Some(item) = sequencer.pop_ready() {
-            match item.event {
-                Err(fault) => return Err(PipelineFault::Substrate(fault)),
-                Ok(Staged::Extend { height, formed }) => run.push((height, *formed)),
-                Ok(Staged::Rewind { .. }) => unreachable!("rewinds are not formed"),
-            }
-        }
-        if !run.is_empty() {
-            let applied = connector.ask(Apply(run)).await.map_err(collapse)?;
-            report
-                .observations
-                .exercised
-                .extend(applied.exercised.iter().copied());
-            for (height, hash) in &applied.connected {
-                report.connected.push((*height, *hash));
-                if checkpoints.contains(height) {
-                    let ours = connector.ask(Digest).await.map_err(collapse)?;
-                    let theirs = *trace
-                        .expect(*height)
-                        .expect("checkpoint heights come from the trace")
-                        .value();
-                    report.observations.checkpoint(ours == theirs);
-                    report.checkpoints.push((*height, ours, theirs));
-                }
-            }
-            if let Some((height, refused)) = applied.refused {
-                report.observations.refused = Some((refused.rule.as_str(), height));
-                report.refused = Some((height, refused));
-                break 'run;
-            }
-        }
-
-        // ---- the barrier: rewind once everything before it has landed ------
-        if let Some(rewind) = pending_rewind.take() {
-            if in_flight.is_empty() && sequencer.pending() == 0 {
-                if sequencer.next_expected() != rewind.seq {
-                    return Err(PipelineFault::Sequence(SequenceError::AlreadyReleased(
-                        rewind.seq,
-                    )));
-                }
-                let rewound = connector
-                    .ask(Rewind { to: rewind.event })
-                    .await
-                    .map_err(collapse)?;
-                report.popped += rewound.popped;
-                let digest = connector.ask(Digest).await.map_err(collapse)?;
-                report.switches.push(Switch {
-                    to: rewind.event,
-                    popped: rewound.popped,
-                    digest,
-                });
-                ledger.rewind_to(rewind.event);
-                expected_next = rewind.event.to_raw() + 1;
-                // The sequencer moves past the rewind's position.
-                sequencer.push(Sequenced {
-                    seq: rewind.seq,
-                    event: Ok(Staged::Rewind { to: rewind.event }),
-                })?;
-                let _ = sequencer.pop_ready();
-            } else {
-                pending_rewind = Some(rewind);
-            }
-        }
-
-        if exhausted && in_flight.is_empty() && pending_rewind.is_none() && sequencer.pending() == 0
-        {
-            break 'run;
-        }
+        Ok(())
     }
 
-    report.metrics = metrics.snapshot();
-    Ok(report)
+    async fn collect_one(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let Some(done) = self.in_flight.join_next().await else {
+            return Ok(());
+        };
+        let item = done?;
+        self.sequencer.push(Sequenced {
+            seq: item.seq,
+            event: match item.event {
+                (height, Ok(verdict)) => Ok((height, verdict)),
+                (_, Err(fault)) => Err(fault),
+            },
+        })?;
+        Ok(())
+    }
+
+    async fn apply_ready(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let mut run: Vec<(BlockHeight, Verdict<StructurallyValid>)> = Vec::new();
+        while let Some(item) = self.sequencer.pop_ready() {
+            match item.event {
+                Err(fault) => return Err(PipelineFault::Substrate(fault)),
+                Ok((height, formed)) => run.push((height, formed)),
+            }
+        }
+        if run.is_empty() {
+            return Ok(());
+        }
+        let applied = self.connector.ask(Apply(run)).await.map_err(collapse)?;
+        self.report
+            .observations
+            .exercised
+            .extend(applied.exercised.iter().copied());
+        for (height, hash) in &applied.connected {
+            self.report.connected.push((*height, *hash));
+        }
+        if let Some(at) = self.checkpoint_at {
+            if applied.connected.iter().any(|(h, _)| *h == at) {
+                let ours = self.connector.ask(Digest).await.map_err(collapse)?;
+                let theirs = *self
+                    .trace
+                    .expect(at)
+                    .expect("checkpoint_at comes from the trace")
+                    .value();
+                self.report.observations.checkpoint(ours == theirs);
+                self.report.checkpoint = Some((at, ours, theirs));
+            }
+        }
+        if let Some((height, refused)) = applied.refused {
+            self.report.observations.refused = Some((refused.rule.as_str(), height));
+            self.report.refused = Some((height, refused));
+        }
+        Ok(())
+    }
+
+    async fn try_rewind(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let Some(rewind) = self.pending_rewind.take() else {
+            return Ok(());
+        };
+        if !(self.in_flight.is_empty() && self.sequencer.pending() == 0) {
+            self.pending_rewind = Some(rewind);
+            return Ok(());
+        }
+        self.sequencer.advance(rewind.seq)?;
+        let rewound = self
+            .connector
+            .ask(Rewind { to: rewind.event })
+            .await
+            .map_err(collapse)?;
+        self.report.popped += rewound.popped;
+        let digest = self.connector.ask(Digest).await.map_err(collapse)?;
+        self.report.switches.push(Switch {
+            to: rewind.event,
+            popped: rewound.popped,
+            digest,
+        });
+        self.ledger.rewind_to(rewind.event);
+        self.form_at = rewind
+            .event
+            .checked_add(BlockCount::ONE)
+            .expect("height space exhausted");
+        Ok(())
+    }
 }

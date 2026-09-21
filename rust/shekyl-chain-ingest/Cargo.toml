@@ -16,10 +16,30 @@ license.workspace = true
 # `WriteBatch::refuse_corrupt` (RD-Q4) and nothing else of the validator's
 # fault/substrate types; it never names RandomX or `InvalidBlock`. The
 # validator never names the store (G1); the pipeline names all three and
-# wires them. Dependencies are added as the stage that uses them lands — a
-# dependency with no consumer is a claim about the future, not a fact about
-# the crate. The store dependency lands with the Validate+Connect actor
-# (increment 2); this crate currently names rules + RandomX + the corpus.
+# wires them.
+#
+# Features keep the harvest FFI lean: `shekyl-ffi` depends with
+# `default-features = false` and compiles the trace writer only. The
+# pipeline (kameo/tokio), the corpus fetcher (RPC), and the replay CLI
+# (clap / HTTP / settlement epoch) are optional. Default enables all three
+# so `cargo test -p shekyl-chain-ingest` is the full crate.
+[features]
+default = ["pipeline", "fetch", "replay-cli"]
+pipeline = ["dep:kameo", "dep:tokio"]
+fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
+replay-cli = [
+    "pipeline",
+    "fetch",
+    "dep:clap",
+    "dep:shekyl-rpc-transport",
+    "dep:shekyl-archival-retention",
+]
+
+[[bin]]
+name = "shekyl-chain-replay"
+path = "src/bin/shekyl-chain-replay.rs"
+required-features = ["replay-cli"]
+
 [dependencies]
 # form (stateless) / validate (view-bound), Substrate, Candidate, the
 # verdict and fault types. The validator, never re-derived here.
@@ -38,12 +58,6 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-address = { path = "../shekyl-address" }
 # CumulativeDifficulty — the accumulator the trace records for SI-10.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
-# The daemon RPC contract the corpus fetcher speaks: the `Rpc` trait (a
-# transport is supplied by the binary) and the shared `.bin` request /
-# response types — the daemon serves these same definitions, so the fetcher
-# is not a second copy of the wire.
-shekyl-rpc-client = { path = "../shekyl-rpc-client" }
-shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # BlockHeight, BlockHash, PowHash, Timestamp, the weight newtypes.
 shekyl-types = { path = "../shekyl-types" }
 # AtomicUnits: coins_generated and burned in the trace.
@@ -51,25 +65,27 @@ shekyl-units = { path = "../shekyl-units" }
 # Block / Transaction parsing and hashing — the corpus verifies every record
 # against the header's list (RD-F15).
 shekyl-wire = { path = "../shekyl-wire" }
-# The one stateful stage is an actor (RD-Q11): kameo is the workspace's
-# actor stack (exact-pinned), tokio its runtime; form workers are blocking
-# tasks on the same runtime.
-kameo = { workspace = true }
 thiserror = { workspace = true }
-# The replay driver binary (`src/bin/shekyl-chain-replay.rs`): argument
-# parsing as shekyl-cli does it; the HTTP transport for `fetch`.
-clap = { version = "4", features = ["derive"] }
-# SETTLEMENT_EPOCH_BLOCKS — the consensus constant the store is sealed
-# under (config/consensus_constants.json → constants.rs, verified at
-# source); the driver takes no flag for a value no operator may vary.
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
-shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 # The graded-run artifact and the extracted register are JSON (RD-Q6:
 # drs_artifact.py's schema discipline; the register comes from the coverage
 # gate's own parse).
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync"] }
+
+# pipeline: the one stateful stage is an actor (RD-Q11); form workers are
+# blocking tasks on the same runtime.
+kameo = { workspace = true, optional = true }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync"], optional = true }
+
+# fetch: the daemon RPC contract the corpus fetcher speaks.
+shekyl-rpc-client = { path = "../shekyl-rpc-client", optional = true }
+shekyl-rpc-types = { path = "../shekyl-rpc-types", optional = true }
+
+# replay-cli: argument parsing as shekyl-cli does it; HTTP transport for
+# `fetch`; SETTLEMENT_EPOCH_BLOCKS — a consensus constant, not a flag.
+clap = { version = "4", features = ["derive"], optional = true }
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport", optional = true }
+shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = true }
 
 [dev-dependencies]
 # `shekyl-chain-rules`' fixtures are behind `harness`, a TEST_ONLY feature

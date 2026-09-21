@@ -229,10 +229,10 @@ async fn real_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
             eprintln!(
-                "connected {} block(s), popped {}, {} checkpoint(s) digested{}",
+                "connected {} block(s), popped {}, {} checkpoint digested{}",
                 report.connected.len(),
                 report.popped,
-                report.checkpoints.len(),
+                usize::from(report.checkpoint.is_some()),
                 report
                     .refused
                     .as_ref()
@@ -240,7 +240,7 @@ async fn real_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         "; refused at height {h}: {why:?}"
                     )),
             );
-            for (height, ours, theirs) in &report.checkpoints {
+            if let Some((height, ours, theirs)) = &report.checkpoint {
                 let verdict = if ours == theirs { "MATCH" } else { "DIVERGE" };
                 eprintln!("checkpoint after height {height}: digest {verdict}");
             }

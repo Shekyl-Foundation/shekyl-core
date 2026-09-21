@@ -299,7 +299,7 @@ pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace 
     if checkpoint && !chain.is_empty() {
         let last = chain.len() as u64 - 1;
         let hashes: Vec<[u8; 32]> = chain.iter().map(|(b, _)| b.hash().to_bytes()).collect();
-        w.push_checkpoint_families(h(last), &hashes, &spent_keys_of(chain), root_after(last))
+        w.push_checkpoint_families(&hashes, &spent_keys_of(chain), root_after(last))
             .expect("checkpoint");
     }
     Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read")

@@ -12,7 +12,9 @@ use kameo::actor::Spawn;
 use kameo::error::SendError;
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{FormAttempt, Retry, RuleSet};
+use shekyl_chain_rules::{
+    form, CenRow, FormAttempt, InvalidBlock, Locus, Retry, RuleSet, StructurallyValid, Verdict,
+};
 use shekyl_chain_store::codec::{BlockInfo, Canonical};
 use shekyl_chain_store::schema::{BLOCK_INFO, CURVE_TREE_ROOTS};
 use shekyl_chain_store::store::{ConnectState, StoreError, StoreInvariant};
@@ -25,7 +27,6 @@ use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, PipelineFault};
 use crate::schedule::ChainRules;
 use crate::source::IngestEvent;
-use crate::stage::{form_extend, Staged};
 use crate::test_support::{
     block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg, expected_state, h,
     open_store, reorg, spend, tmp, trace_of, Scripted,
@@ -47,21 +48,16 @@ fn formed(
     height: u64,
     candidate: Candidate,
     seed: BlockHash,
-) -> (
-    shekyl_types::BlockHeight,
-    Box<shekyl_chain_rules::Verdict<shekyl_chain_rules::StructurallyValid>>,
-) {
-    match form_extend(
-        h(height),
+) -> (shekyl_types::BlockHeight, Verdict<StructurallyValid>) {
+    let verdict = form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         seed,
         FormAttempt::FIRST,
-    ) {
-        Ok(Staged::Extend { height, formed }) => (height, formed),
-        other => panic!("form: {other:?}"),
-    }
+    )
+    .expect("mock substrate forms");
+    (h(height), verdict)
 }
 
 fn candidate(b: &shekyl_wire::Block, txs: &[shekyl_wire::Transaction]) -> Candidate {
@@ -94,7 +90,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
         });
         let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
         let applied = first
-            .ask(Apply(vec![(h0, *f0)]))
+            .ask(Apply(vec![(h0, f0)]))
             .await
             .expect("genesis connects");
         assert_eq!(applied.connected.len(), 1);
@@ -121,7 +117,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
 
     let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
     let err = connector
-        .ask(Apply(vec![(h1, *f1)]))
+        .ask(Apply(vec![(h1, f1)]))
         .await
         .expect_err("the view read is SI-7 → halt");
     let SendError::HandlerError(RunFault::Store(StoreError::InvariantViolated(row))) = err else {
@@ -132,7 +128,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     // Over: the same message again is refused with the recorded end.
     let (h1b, f1b) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
     let again = connector
-        .ask(Apply(vec![(h1b, *f1b)]))
+        .ask(Apply(vec![(h1b, f1b)]))
         .await
         .expect_err("over");
     assert!(
@@ -169,7 +165,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     let (h1c, f1c) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
     assert!(matches!(
         connector
-            .ask(Apply(vec![(h1c, *f1c)]))
+            .ask(Apply(vec![(h1c, f1c)]))
             .await
             .expect_err("dead"),
         SendError::ActorNotRunning(_)
@@ -224,11 +220,10 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     assert_eq!(report.popped, 0);
     // The checkpoint after block 4: the redb digest equals the trace's
     // expectation, and both equal the state computed from the chain.
-    assert_eq!(report.checkpoints.len(), 1);
-    let (at, ours, theirs) = &report.checkpoints[0];
-    assert_eq!(*at, h(4));
+    let (at, ours, theirs) = report.checkpoint.expect("covered-tip checkpoint");
+    assert_eq!(at, h(4));
     assert_eq!(ours, theirs, "redb and the LMDB-shaped checkpoint agree");
-    assert_eq!(*ours, expected_state(&chain));
+    assert_eq!(ours, expected_state(&chain));
 
     let reopened = open_store(&path);
     let tip = reopened
@@ -247,7 +242,7 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
 async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     // RD-Q5: the retry path exists (the fault carries Retry::Again(2)) and
     // is exercised here by injection, never by waiting for a bug; the
-    // connector surfaces it and the run is over.
+    // connector surfaces it and stays up.
     let path = tmp("connector-stale-seed");
     let chain = chain(2);
     let trace = Arc::new(trace_of(&chain, false));
@@ -257,14 +252,11 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
         trace,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
-    connector
-        .ask(Apply(vec![(h0, *f0)]))
-        .await
-        .expect("genesis");
+    connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
     let wrong = BlockHash::from_bytes([0xee; 32]);
     let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), wrong);
     let err = connector
-        .ask(Apply(vec![(h1, *f1)]))
+        .ask(Apply(vec![(h1, f1)]))
         .await
         .expect_err("stale seed");
     match err {
@@ -283,14 +275,48 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     }
     let again = connector.ask(Digest).await;
     assert!(again.is_ok(), "reads are unaffected");
+    // The writer stays up: a later Apply with the store's seed connects.
+    // Replay treats StaleSeed as run-ending; E3 re-forms on this actor.
     let (h1b, f1b) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
-    assert!(matches!(
-        connector
-            .ask(Apply(vec![(h1b, *f1b)]))
-            .await
-            .expect_err("over"),
-        SendError::HandlerError(RunFault::Over(RunEnd::StaleSeed { .. }))
-    ));
+    let applied = connector
+        .ask(Apply(vec![(h1b, f1b)]))
+        .await
+        .expect("writer stayed up");
+    assert_eq!(applied.connected.len(), 1);
+    assert!(applied.refused.is_none());
+    connector.stop_gracefully().await.expect("stop");
+    connector.wait_for_shutdown().await;
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
+    // A verdict is data on Applied. The writer does not go Over, so a
+    // later Apply at the same height can still run (E3 / mutation family).
+    let path = tmp("connector-refusal");
+    let chain = chain(2);
+    let trace = Arc::new(trace_of(&chain, false));
+    let connector = Connector::spawn(ConnectorArgs {
+        store: open_store(&path),
+        rules: GENESIS_RULES,
+        trace,
+    });
+    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+    connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
+    let refused = InvalidBlock::new(CenRow::A1, Locus::Block);
+    let applied = connector
+        .ask(Apply(vec![(h(1), Err(refused))]))
+        .await
+        .expect("a verdict is data");
+    assert_eq!(applied.refused, Some((h(1), refused)));
+    assert!(applied.connected.is_empty());
+    connector.ask(Digest).await.expect("writer is up");
+    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let applied = connector
+        .ask(Apply(vec![(h1, f1)]))
+        .await
+        .expect("writer stayed up");
+    assert_eq!(applied.connected.len(), 1);
     connector.stop_gracefully().await.expect("stop");
     connector.wait_for_shutdown().await;
     cleanup(&path);
@@ -439,10 +465,9 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
         ]
     );
     // The digest after the switch is the fork's, at the checkpoint (3).
-    assert_eq!(report.checkpoints.len(), 1);
-    let (_, ours, theirs) = &report.checkpoints[0];
+    let (_, ours, theirs) = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(ours, theirs);
-    assert_eq!(*ours, expected_state(&trace_chain));
+    assert_eq!(ours, expected_state(&trace_chain));
 
     let reopened = open_store(&path);
     let tip = reopened
@@ -625,11 +650,10 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     );
     let connected: Vec<u64> = report.connected.iter().map(|(hh, _)| hh.to_raw()).collect();
     assert_eq!(connected, [0, 1, 2, 3, 4, 2, 3, 4, 5]);
-    assert_eq!(report.checkpoints.len(), 1);
-    let (at, ours, theirs) = &report.checkpoints[0];
-    assert_eq!(*at, h(5));
+    let (at, ours, theirs) = report.checkpoint.expect("covered-tip checkpoint");
+    assert_eq!(at, h(5));
     assert_eq!(ours, theirs, "the fork's tip matches its own trace");
-    assert_eq!(*ours, expected_state(&r.after));
+    assert_eq!(ours, expected_state(&r.after));
     assert_eq!(report.observations.digest_identical, Some(true));
     cleanup(&path);
 }
@@ -652,8 +676,7 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
             w.push_facts(h(hh), &crate::test_support::facts_at(hh))
                 .expect("facts");
         }
-        w.push_checkpoint(h(2), &[0xEE; 32])
-            .expect("a wrong checkpoint");
+        w.push_checkpoint(&[0xEE; 32]).expect("a wrong checkpoint");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -669,7 +692,7 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
     )
     .await
     .expect("the run itself completes; the verdict is the grader's");
-    let (_, ours, theirs) = &report.checkpoints[0];
+    let (_, ours, theirs) = report.checkpoint.expect("covered-tip checkpoint");
     assert_ne!(ours, theirs, "DIVERGE");
     assert_eq!(report.observations.digest_identical, Some(false));
     let register = Register::from_json(

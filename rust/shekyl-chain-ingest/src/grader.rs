@@ -183,9 +183,9 @@ impl Observations {
         self.exercised.extend(rows.into_iter().map(CenRow::as_str));
     }
 
-    /// Fold one compared checkpoint in.
+    /// Record the one covered-tip checkpoint comparison.
     pub fn checkpoint(&mut self, identical: bool) {
-        self.digest_identical = Some(self.digest_identical.unwrap_or(true) && identical);
+        self.digest_identical = Some(identical);
     }
 }
 

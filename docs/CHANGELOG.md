@@ -26,8 +26,11 @@
   match.** `shekyl-chain-ingest` gains the pipeline (`form` workers → sequencer
   → a single validate+connect actor that does not restart after a halt), the
   **trace** artifact (LMDB's passed-through facts and one digest checkpoint at
-  the tip, harvested by the new `shekyl-e2-trace-export` C++ shim through the
-  FFI, `-DBUILD_E2_TRACE_EXPORT=ON`), the RPC corpus fetch, a `rewind` record
+  the covered tip — the writer takes no height — harvested by the new
+  `shekyl-e2-trace-export` C++ shim through the FFI,
+  `-DBUILD_E2_TRACE_EXPORT=ON`; `shekyl-ffi` depends with
+  `default-features = false` so the daemon image compiles the writer, not
+  clap / the pipeline), the RPC corpus fetch, a `rewind` record
   (corpus format v2) for the reorg family, `--fixed-difficulty` →
   `RuleSet::fakechain` on regtest only, CSR-3a grading with two typed evidence
   clauses per register row (`scripts/ci/export_conformance_register.py` is the
@@ -39,7 +42,10 @@
   the input `RANDOMX_V2_RUST.md` §9's dataset-mode decision was waiting for.
   `CacheStore::lookup_or_derive_reporting` reports how a call was served.
   `randomx-v2-differential` is stated as the permanent verifier↔JIT parity
-  gate.
+  gate. The validate+connect actor stays up on a verdict and on a stale
+  seed — only a store halt ends it — so E3 re-forms on the same writer;
+  `form` is `shekyl-chain-rules::form` (no ingest wrapper); a rewind
+  advances the sequencer without a formed payload.
 
 - **Transaction read surface (S-TX, DRS-E1 increment 6).** `ReadSnapshot`
   gains `tx_location` / `tx_record` by `TxHash` (returning `Option` — a hash

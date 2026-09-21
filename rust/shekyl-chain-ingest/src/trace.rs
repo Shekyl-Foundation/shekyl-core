@@ -3,8 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The trace artifact: the LMDB-only facts and the digest checkpoints
-//! (`DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q2).
+//! The trace artifact: the LMDB-only facts and one digest checkpoint
+//! (`DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q2, RD-F18).
 //!
 //! Produced by **one** C++ exporter walking LMDB and handing bytes across
 //! the FFI to [`TraceWriter`] — the whole of that C++ dies with the daemon
@@ -15,10 +15,16 @@
 //! facts       0x01 ‖ height u64 ‖ weight u64 ‖ long_term_weight u64 ‖ coins_generated u64
 //!                  ‖ burned u64 ‖ root_after[32] ‖ long_term_effective_median u64
 //!                  ‖ cumulative_difficulty u128                       (88 bytes after height)
-//! checkpoint  0x02 ‖ height u64 ‖ n_blocks u64 ‖ n_spent u64 ‖ chain[32] ‖ spent[32]
-//!                  ‖ curve_root[32] ‖ digest[32]                     (144 bytes after height)
+//! checkpoint  0x02 ‖ height u64 ‖ digest[32]                          (32 bytes after height)
 //! trailer     0xFF ‖ facts u64 ‖ checkpoints u64
 //! ```
+//!
+//! At most one checkpoint, at the **covered tip** (the last facts row):
+//! LMDB's spent set is tip-only (RD-F18), so a checkpoint at any other
+//! height would pair a past chain with the present set. The writer takes
+//! no height — it uses the last facts row — and refuses a second one and
+//! any facts after it. The on-disk height is that tip, so a reader can
+//! still name the expectation.
 //!
 //! # The two doors (RD-Q2, RULED)
 //!
@@ -56,7 +62,7 @@
 //! Tag `0x03` (**Verdict**, the mutation family, §3.8) is refused as
 //! [`TraceFault::ReservedTag`] until that family lands.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::ops::RangeInclusive;
 
@@ -146,16 +152,30 @@ pub enum TraceFault {
         /// The height it carried.
         found: u64,
     },
-    /// A checkpoint names a height with no facts record.
-    #[error("checkpoint at height {height} has no facts record to anchor to")]
-    UnanchoredCheckpoint {
+    /// A checkpoint with no facts row to hang it on.
+    #[error("checkpoint has no facts record to anchor to")]
+    UnanchoredCheckpoint,
+    /// A checkpoint naming a height that is not the last facts row
+    /// (RD-F18: the spent set is tip-only, so the expectation is the
+    /// covered tip).
+    #[error("checkpoint at height {height} is not the covered tip {tip}")]
+    CheckpointNotTip {
         /// The checkpoint's height.
         height: u64,
+        /// The last facts height.
+        tip: u64,
     },
-    /// Two checkpoints at one height.
-    #[error("a second checkpoint at height {height}")]
+    /// A second checkpoint: a trace carries one, at the covered tip.
+    #[error("a second checkpoint (the first was at height {height})")]
     DuplicateCheckpoint {
-        /// The height.
+        /// The height of the checkpoint already recorded.
+        height: u64,
+    },
+    /// A facts row after the checkpoint: the checkpoint is the covered
+    /// tip, so later facts would leave it behind.
+    #[error("facts at height {height} after the checkpoint; the checkpoint is the covered tip")]
+    FactsAfterCheckpoint {
+        /// The facts height that arrived too late.
         height: u64,
     },
     /// The trailer's counts disagree with the records read.
@@ -280,13 +300,12 @@ impl<T> Expected<T> {
 pub struct TraceWriter<W: Write> {
     out: W,
     /// The heights with a facts row so far — consecutive from the first,
-    /// so a range is exact. A checkpoint is **anchored** iff its height is
-    /// in here; the reader applies the same predicate over the rows it
-    /// read, so a writer cannot emit a checkpoint the reader refuses.
+    /// so a range is exact. The checkpoint, if any, is the covered tip
+    /// (`end`).
     covered: Option<RangeInclusive<u64>>,
     facts: u64,
-    checkpoints: u64,
-    checkpointed: BTreeSet<u64>,
+    /// The covered-tip height of the one checkpoint, once written.
+    checkpointed: Option<u64>,
 }
 
 impl<W: Write> TraceWriter<W> {
@@ -304,8 +323,7 @@ impl<W: Write> TraceWriter<W> {
             out,
             covered: None,
             facts: 0,
-            checkpoints: 0,
-            checkpointed: BTreeSet::new(),
+            checkpointed: None,
         })
     }
 
@@ -317,6 +335,9 @@ impl<W: Write> TraceWriter<W> {
     /// [`TraceFault::HeightGap`]; I/O.
     pub fn push_facts(&mut self, height: BlockHeight, facts: &Facts) -> Result<(), TraceFault> {
         let h = height.to_raw();
+        if self.checkpointed.is_some() {
+            return Err(TraceFault::FactsAfterCheckpoint { height: h });
+        }
         if let Some(covered) = &self.covered {
             let expected = covered.end().checked_add(1).expect("height fits u64");
             if h != expected {
@@ -334,9 +355,8 @@ impl<W: Write> TraceWriter<W> {
         Ok(())
     }
 
-    /// The LMDB logical state after `height`, assembled here from the
-    /// families the exporter walked (module docs). `height` must have a
-    /// facts record already.
+    /// The LMDB logical state after the covered tip, assembled here from
+    /// the families the exporter walked (module docs).
     ///
     /// # Errors
     ///
@@ -344,38 +364,34 @@ impl<W: Write> TraceWriter<W> {
     /// I/O.
     pub fn push_checkpoint_families(
         &mut self,
-        height: BlockHeight,
         block_hashes: &[[u8; 32]],
         spent_keys: &[[u8; 32]],
         curve_root: CurveTreeRoot,
     ) -> Result<Digest, TraceFault> {
         let state = digest_v0(block_hashes, spent_keys, curve_root.as_bytes());
-        self.push_checkpoint(height, &state)?;
+        self.push_checkpoint(&state)?;
         Ok(state)
     }
 
     /// A checkpoint already assembled (a redb-side state being recorded as
     /// an expectation, e.g. when re-baselining from Rust after cutover).
+    /// Written at the last facts height.
     ///
     /// # Errors
     ///
     /// As [`push_checkpoint_families`](Self::push_checkpoint_families).
-    pub fn push_checkpoint(
-        &mut self,
-        height: BlockHeight,
-        state: &Digest,
-    ) -> Result<(), TraceFault> {
-        let h = height.to_raw();
-        if !self.covered.as_ref().is_some_and(|c| c.contains(&h)) {
-            return Err(TraceFault::UnanchoredCheckpoint { height: h });
-        }
-        if !self.checkpointed.insert(h) {
-            return Err(TraceFault::DuplicateCheckpoint { height: h });
+    pub fn push_checkpoint(&mut self, state: &Digest) -> Result<(), TraceFault> {
+        let h = match &self.covered {
+            Some(covered) => *covered.end(),
+            None => return Err(TraceFault::UnanchoredCheckpoint),
+        };
+        if let Some(first) = self.checkpointed {
+            return Err(TraceFault::DuplicateCheckpoint { height: first });
         }
         self.out.write_all(&[tag::CHECKPOINT])?;
         self.out.write_all(&h.to_le_bytes())?;
         self.out.write_all(state)?;
-        self.checkpoints += 1;
+        self.checkpointed = Some(h);
         Ok(())
     }
 
@@ -387,7 +403,8 @@ impl<W: Write> TraceWriter<W> {
     pub fn finish(mut self) -> Result<W, TraceFault> {
         self.out.write_all(&[tag::TRAILER])?;
         self.out.write_all(&self.facts.to_le_bytes())?;
-        self.out.write_all(&self.checkpoints.to_le_bytes())?;
+        let n_checkpoints = u64::from(self.checkpointed.is_some());
+        self.out.write_all(&n_checkpoints.to_le_bytes())?;
         self.out.flush()?;
         Ok(self.out)
     }
@@ -402,7 +419,8 @@ impl<W: Write> TraceWriter<W> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Trace {
     facts: BTreeMap<u64, Facts>,
-    checkpoints: BTreeMap<u64, Digest>,
+    /// At most one, at the covered tip.
+    checkpoint: Option<(u64, Digest)>,
 }
 
 fn read_u64<R: Read>(r: &mut R) -> Result<u64, io::Error> {
@@ -432,7 +450,7 @@ impl Trace {
             return Err(TraceFault::ReservedNonZero);
         }
         let mut facts = BTreeMap::new();
-        let mut checkpoints = BTreeMap::new();
+        let mut checkpoint: Option<(u64, Digest)> = None;
         let mut next_height: Option<u64> = None;
         loop {
             let mut t = [0u8; 1];
@@ -459,13 +477,14 @@ impl Trace {
                 tag::CHECKPOINT => {
                     let h = read_u64(&mut input)?;
                     if !facts.contains_key(&h) {
-                        return Err(TraceFault::UnanchoredCheckpoint { height: h });
+                        return Err(TraceFault::UnanchoredCheckpoint);
                     }
                     let mut state = [0u8; CHECKPOINT_LEN];
                     input.read_exact(&mut state)?;
-                    if checkpoints.insert(h, state).is_some() {
-                        return Err(TraceFault::DuplicateCheckpoint { height: h });
+                    if let Some((first, _)) = checkpoint {
+                        return Err(TraceFault::DuplicateCheckpoint { height: first });
                     }
+                    checkpoint = Some((h, state));
                 }
                 tag::TRAILER => {
                     let n_facts = read_u64(&mut input)?;
@@ -473,12 +492,18 @@ impl Trace {
                     if n_facts != facts.len() as u64 {
                         return Err(TraceFault::TrailerMismatch { what: "facts" });
                     }
-                    if n_checkpoints != checkpoints.len() as u64 {
+                    if n_checkpoints != u64::from(checkpoint.is_some()) {
                         return Err(TraceFault::TrailerMismatch {
                             what: "checkpoints",
                         });
                     }
-                    return Ok(Self { facts, checkpoints });
+                    if let Some((h, _)) = checkpoint {
+                        let tip = *facts.keys().next_back().expect("a checkpoint is anchored");
+                        if h != tip {
+                            return Err(TraceFault::CheckpointNotTip { height: h, tip });
+                        }
+                    }
+                    return Ok(Self { facts, checkpoint });
                 }
                 tag::RESERVED_VERDICT => return Err(TraceFault::ReservedTag(t[0])),
                 other => return Err(TraceFault::UnknownTag(other)),
@@ -494,13 +519,20 @@ impl Trace {
     }
 
     /// The `expect` door: the LMDB logical state after `height`, for the
-    /// grader. `None` where no checkpoint was recorded.
+    /// grader. `None` where that height is not the covered-tip checkpoint.
     #[must_use]
     pub fn expect(&self, height: BlockHeight) -> Option<Expected<Digest>> {
-        self.checkpoints
-            .get(&height.to_raw())
-            .copied()
-            .map(Expected)
+        match self.checkpoint {
+            Some((h, d)) if h == height.to_raw() => Some(Expected(d)),
+            _ => None,
+        }
+    }
+
+    /// The one checkpoint: the logical state after the covered tip.
+    #[must_use]
+    pub fn checkpoint(&self) -> Option<(BlockHeight, Expected<Digest>)> {
+        self.checkpoint
+            .map(|(h, d)| (BlockHeight::from_raw(h), Expected(d)))
     }
 
     /// The heights this trace has facts for, as an inclusive range; `None`
@@ -510,10 +542,5 @@ impl Trace {
         let first = *self.facts.keys().next()?;
         let last = *self.facts.keys().next_back()?;
         Some((BlockHeight::from_raw(first), BlockHeight::from_raw(last)))
-    }
-
-    /// The heights with a checkpoint, ascending.
-    pub fn checkpoint_heights(&self) -> impl Iterator<Item = BlockHeight> + '_ {
-        self.checkpoints.keys().map(|&h| BlockHeight::from_raw(h))
     }
 }

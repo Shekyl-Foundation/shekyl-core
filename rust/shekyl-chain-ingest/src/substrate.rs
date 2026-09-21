@@ -99,6 +99,14 @@ impl ProductionSubstrate {
     pub fn metrics(&self) -> &Arc<Metrics> {
         &self.metrics
     }
+
+    fn record_cache(&self, outcome: CacheOutcome, started: Instant) {
+        match outcome {
+            CacheOutcome::Derived => self.metrics.derived(started.elapsed()),
+            CacheOutcome::Waited => self.metrics.waited(started.elapsed()),
+            CacheOutcome::Hit => {}
+        }
+    }
 }
 
 /// Pinning the canonical seed epoch (RD-F20).
@@ -125,11 +133,7 @@ impl EpochPin for ProductionSubstrate {
         let seedhash = Seedhash::from_bytes(*seed.as_bytes());
         let started = Instant::now();
         let (prepared, outcome) = self.caches.lookup_or_derive_reporting(&seedhash);
-        match outcome {
-            CacheOutcome::Derived => self.metrics.derived(started.elapsed()),
-            CacheOutcome::Waited => self.metrics.waited(started.elapsed()),
-            CacheOutcome::Hit => {}
-        }
+        self.record_cache(outcome, started);
         self.caches.set_canonical(prepared);
     }
 }
@@ -152,11 +156,7 @@ impl Substrate for ProductionSubstrate {
         // the leader's wall time and did none of the work (RD-F20).
         let started = Instant::now();
         let (cache, outcome) = self.caches.lookup_or_derive_reporting(&seedhash);
-        match outcome {
-            CacheOutcome::Derived => self.metrics.derived(started.elapsed()),
-            CacheOutcome::Waited => self.metrics.waited(started.elapsed()),
-            CacheOutcome::Hit => {}
-        }
+        self.record_cache(outcome, started);
         let hash = self.metrics.timed_hash(|| compute_hash(&cache, pow_blob));
         Ok(PowHash::from_bytes(hash))
     }

@@ -31,6 +31,19 @@ pub enum SequenceError {
     /// `seq` is already waiting: two results for one position.
     #[error("sequence {} is already pending", .0.to_raw())]
     Duplicate(SequenceNo),
+    /// `advance` named a position other than the next to release — a gap,
+    /// or a rewind whose sequence the dispatcher already moved past.
+    #[error(
+        "sequence {} is not the next to release ({})",
+        .found.to_raw(),
+        .expected.to_raw()
+    )]
+    NotNext {
+        /// The position the sequencer is waiting to release.
+        expected: SequenceNo,
+        /// The position the caller named.
+        found: SequenceNo,
+    },
 }
 
 /// Restores source order over out-of-order completions.
@@ -76,6 +89,33 @@ impl<T> Sequencer<T> {
         let seq = self.next;
         self.next = seq.next();
         Some(Sequenced { seq, event: item })
+    }
+
+    /// Release the current position without a payload. A `Rewind` is
+    /// committed by the dispatcher and never formed, so it occupies a
+    /// sequence number the sequencer must move past.
+    ///
+    /// # Errors
+    ///
+    /// [`SequenceError::AlreadyReleased`] / [`SequenceError::NotNext`]
+    /// when `seq` is not the next position; [`SequenceError::Duplicate`]
+    /// when a formed item is already waiting there.
+    pub fn advance(&mut self, seq: SequenceNo) -> Result<(), SequenceError> {
+        if seq != self.next {
+            return Err(if seq < self.next {
+                SequenceError::AlreadyReleased(seq)
+            } else {
+                SequenceError::NotNext {
+                    expected: self.next,
+                    found: seq,
+                }
+            });
+        }
+        if self.pending.contains_key(&seq) {
+            return Err(SequenceError::Duplicate(seq));
+        }
+        self.next = seq.next();
+        Ok(())
     }
 
     /// The position released next.
@@ -158,6 +198,31 @@ mod tests {
                 event: "a late"
             }),
             Err(SequenceError::AlreadyReleased(seq(0)))
+        );
+    }
+
+    #[test]
+    fn advance_moves_past_a_rewind_without_a_payload() {
+        let mut s = Sequencer::new(SequenceNo::FIRST);
+        s.advance(seq(0)).unwrap();
+        assert_eq!(s.next_expected(), seq(1));
+        s.push(Sequenced {
+            seq: seq(1),
+            event: "b",
+        })
+        .unwrap();
+        assert_eq!(drain(&mut s), vec![(1, "b")]);
+        assert_eq!(
+            s.advance(seq(0)),
+            Err(SequenceError::AlreadyReleased(seq(0)))
+        );
+        s.advance(seq(2)).unwrap();
+        assert_eq!(
+            s.advance(seq(4)),
+            Err(SequenceError::NotNext {
+                expected: seq(3),
+                found: seq(4)
+            })
         );
     }
 

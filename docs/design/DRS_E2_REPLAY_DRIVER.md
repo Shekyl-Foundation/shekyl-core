@@ -110,8 +110,9 @@ Source ──► Form (N workers) ──► Sequencer ──► Validate+Connect
   **one `write` closure per handler invocation**: a `Rewind` is one closure
   (pops to `to`); a bounded run of consecutive `Extend`s is one closure
   (`connect` may be called repeatedly on one batch — `connect.rs` doc — and
-  the run's length is the checkpoint granularity, so a checkpoint is a
-  transaction boundary). "The only state is the batch" reads: the only
+  the run's length is the write-transaction granularity). The trace carries
+  **one** checkpoint, at the covered tip (RD-F18); the driver samples the
+  redb digest after that height connects. "The only state is the batch" reads: the only
   *mutable* state is inside the closure while it runs; between messages the
   actor holds the store handle and the sequencer's cursor, nothing else. `kameo` is the workspace
   actor stack (exact-pinned `=0.20.0`, `shekyl-engine-core/Cargo.toml:113`),
@@ -122,11 +123,11 @@ Source ──► Form (N workers) ──► Sequencer ──► Validate+Connect
 
   | Outcome | Contract | Lifecycle |
   | --- | --- | --- |
-  | `Verdict::Err(InvalidBlock)` from `form` or `validate` | the block is refused | **not a fault**: recorded by the grader sink as the verdict (spec-first expected verdicts in the mutation family); the run continues with the next event |
+  | `Verdict::Err(InvalidBlock)` from `form` or `validate` | the block is refused | **not a fault**: recorded on `Applied::refused`; the writer stays up. The replay driver ends the run (an honest chain that refuses is a disagreement). E3 and the mutation family keep the same actor and continue |
   | `S::Fault` from `form` (the substrate could not compute: cache derivation, clock) | `form -> Result<Verdict<_>, S::Fault>` | **terminal for the run**, surfaced — a verifier that cannot compute is a fault, never a verdict (slice 2 Q1); in the live daemon it is the node's own outage, not the block's |
   | `Fault::View(store error)` from `validate` | *"the caller halts"* (`validate.rs:141`) | **halt**: if the store already poisoned the batch (`InvariantViolated`) the writer is halted and the run ends; an engine error ends the run — never retried, never a verdict |
   | `Fault::Corrupt` | RD-Q4 | `refuse_corrupt`, batch poisoned, **halt**, terminal (RD-Q11) |
-  | `Fault::Stale(Stale::Seed { retry: Again, .. })` | RD-Q5 | in replay a **driver defect**: recorded and surfaced on first occurrence; the bounded re-`form` runs so the live-mode bound is exercised, not as a cure |
+  | `Fault::Stale(Stale::Seed { retry: Again, .. })` | RD-Q5 | in replay a **driver defect**: recorded and surfaced on first occurrence (the reply carries the validator's `Retry`). The writer stays up so a later caller can re-`form`; this increment's driver treats the error as run-ending. The live-mode bound is the `Retry` in the fault, exercised by injection |
   | `Fault::Stale(Stale::Seed { retry: Exhausted, .. })` | RD-Q5 | **terminal run error**, surfaced |
   | `Fault::Stale(Stale::RuleSet { .. })` | `form` and `validate` were handed different sets | in replay a **driver defect** (the schedule must hand both stages one `&RuleSet`, §3.7): recorded and surfaced, **not retried** — there is no honest re-`form` for it; in the live daemon the same arm marks a schedule boundary crossed mid-formation and the block is re-formed under the in-force set once |
 
