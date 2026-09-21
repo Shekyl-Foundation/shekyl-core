@@ -4,6 +4,19 @@
 
 ### Daemon chain store
 
+- **DRS-E1 S-CURVE — the curve-tree read surface, typed.** Schema layout
+  **9**: `curve_tree_leaves`, `curve_tree_layers` and `curve_tree_meta` leave
+  `Unshaped`. The meta table is **one row** (`CurveTreeState`: root, depth,
+  leaf count) written `EMPTY` at store creation, so an empty tree is a value
+  and a missing row is a fault — the C++ defaulted three cells three ways and
+  told callers to compare the root against `hash_init` to tell them apart.
+  The layer key is a `(layer, chunk)` tuple, not the LMDB `(layer << 56) |
+  chunk` packing. Three reads on `ReadSnapshot`: `curve_tree()`,
+  `root_at(height)` (the validator's `ChainView::root_at` body, made public),
+  `leaves(range)` (bounded, dense by SI-11 `LeavesNotDense`). `TreePosition`
+  moves to `shekyl-types` and `TreeLeaf` is minted beside it; existing
+  wallet-side stores open unchanged. Pre-genesis: a daemon store at layout 8
+  is recreated, not migrated.
 - **DRS-E2 increment 1 — the ingest spine's first organs.** `shekyl-chain-ingest`
   is born: the daemon's block-ingest pipeline as production code shared by
   replay (E2) and live ingest (E3) — a `Source` event model
