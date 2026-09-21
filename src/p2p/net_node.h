@@ -61,9 +61,9 @@
 #include "math_helper.h"
 #include "net_node_common.h"
 #include "net/enums.h"
-#include "shekyl/shekyl_ffi.h"
 #include "net/parse.h"
 #include "common/command_line.h"
+#include "shekyl/shekyl_ffi.h"
 
 PUSH_WARNINGS
 DISABLE_VS_WARNINGS(4355)

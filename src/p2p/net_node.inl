@@ -3244,18 +3244,19 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::has_too_many_connections(const epee::net_utils::network_address &address)
   {
-    // Public-zone only, and the exemption is a NECESSITY. An anonymity zone's
-    // inbound peers all present as `tor_address::unknown()`, so a cap of 1
-    // there would bound the whole tor inbound population at one connection
-    // rather than one host. Read the Rust predicate's doc comment before
-    // reading this early return as a gap.
     // The zone byte crosses raw, so pin the mapping Rust's `InboundZone`
-    // assumes. Same pins the zone-route family asserts in `send_txs`.
+    // assumes -- the same pins the zone-route family asserts in `send_txs`.
     static_assert(std::is_same<std::underlying_type<epee::net_utils::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
     static_assert(unsigned(epee::net_utils::zone::invalid) == 0, "invalid expected to be 0");
     static_assert(unsigned(epee::net_utils::zone::public_) == 1, "public_ expected to be 1");
     static_assert(unsigned(epee::net_utils::zone::i2p) == 2, "i2p expected to be 2");
     static_assert(unsigned(epee::net_utils::zone::tor) == 3, "tor expected to be 3");
+
+    // Public-zone only, and the exemption is a NECESSITY. An anonymity zone's
+    // inbound peers all present as `tor_address::unknown()`, so a cap of 1
+    // there would bound the whole tor inbound population at one connection
+    // rather than one host. Read the Rust predicate's doc comment before
+    // reading this early return as a gap.
     if (!shekyl_host_inbound_zone_is_capped(static_cast<std::uint8_t>(address.get_zone())))
       return false; // Unable to determine how many connections from host
 
