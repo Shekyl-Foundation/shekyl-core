@@ -18,9 +18,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use std::collections::BTreeSet;
 
-use shekyl_difficulty::{
-    seedheight, CumulativeDifficulty, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG,
-};
+use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
 };
@@ -234,15 +232,15 @@ impl Substrate for MockSubstrate {
 
 /// The seed CEN-D3 expects for a candidate on `chain`'s tip: the null hash
 /// at genesis admission, else the identity of the block at
-/// `seedheight(connecting)`. What an honest driver claims to `form`.
+/// [`seed_height`](crate::seed_height). What an honest driver claims to
+/// `form`.
 #[must_use]
 pub fn expected_seed(chain: &MockChain) -> BlockHash {
-    let Some(tip) = chain.tip() else {
+    let connecting = BlockHeight::from_raw(chain.tip().map_or(0, |tip| tip.height.to_raw() + 1));
+    let Some(seed_height) = crate::seed_height(connecting) else {
         return BlockHash::NULL;
     };
-    let connecting = tip.height.to_raw() + 1;
-    let seed_height = seedheight(connecting, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG);
-    match chain.block(BlockHeight::from_raw(seed_height)) {
+    match chain.block(seed_height) {
         AtHeight::Recorded(block) => block.hash,
         AtHeight::AboveTip => unreachable!("the seed height is below the tip"),
     }

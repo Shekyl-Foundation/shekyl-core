@@ -83,6 +83,7 @@
 use std::fmt;
 
 use shekyl_pow_randomx::Seedhash;
+use shekyl_types::PowHash;
 
 use crate::adversarial_corpus::{iter_adversarial_data, iter_adversarial_seedhashes};
 use crate::c_oracle::{COracleError, COracleSession, RANDOMX_HASH_SIZE};
@@ -393,7 +394,7 @@ pub fn run(
 /// [`crate::cache_precondition`] rather than re-exported to keep
 /// the two modules' display formatting independent (a future
 /// reshape of one doesn't perturb the other).
-fn hex_lower(bytes: &[u8]) -> String {
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push_str(&format!("{b:02x}"));
@@ -440,7 +441,12 @@ pub(crate) fn cache_canonical_verdict(
 ///
 /// Legs, in the order §5.1.10 pins them:
 ///
-/// 1. **T1** — `rust_hash == c_hash`. The differential proper.
+/// 1. **T1** — `rust_hash == c_hash`, compared as [`PowHash`]es: the
+///    verifier's output and the JIT's are the same *kind* of value —
+///    the consensus longhash — and the seam this gate asserts across is
+///    that type, not a byte array that could be any 32 bytes (DRS-E2
+///    RD-Q12; `PowHash` is distinct from `BlockHash` since #785). The
+///    error payloads stay bytes because the forensics schema is bytes.
 /// 2. **T16 leg-3** — `rust_hash == canonical_hash`, when a canonical
 ///    is pinned for this index. `None` means no pin (the 2g scaffold
 ///    walk, if it ever yields a pair, uses `usize::MAX` and has no
@@ -474,7 +480,7 @@ pub(crate) fn three_leg_verdict(
     c_hash: [u8; RANDOMX_HASH_SIZE],
     canonical_hash: Option<[u8; RANDOMX_HASH_SIZE]>,
 ) -> Result<(), CorrectnessError> {
-    if rust_hash != c_hash {
+    if PowHash::from_bytes(rust_hash) != PowHash::from_bytes(c_hash) {
         return Err(CorrectnessError::HashMismatch {
             seedhash,
             canonical_index,

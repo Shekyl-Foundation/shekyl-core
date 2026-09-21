@@ -11,6 +11,10 @@
 //! [`SequenceNo`] the source assigns, and the pipeline's contract is stated
 //! against that number:
 //!
+//! - Sequence numbers are **consecutive from [`SequenceNo::FIRST`]**: the
+//!   pipeline asserts each event's number as it reads it, so a hole in a
+//!   source's numbering is a loud fault at the event, never an item parked
+//!   in the sequencer behind a position nothing will ever fill.
 //! - The **Sequencer** restores sequence order after parallel formation and
 //!   **never reorders across a `Rewind`**: a `Rewind` is a barrier. Formation
 //!   of the `Extend`s after it waits for it to commit, because their seed
@@ -113,8 +117,17 @@ pub trait Source {
     /// pipeline, which surfaces it and ends the run — never a verdict.
     type Fault;
 
+    /// The height the source's first `Extend` connects at. An `Extend`
+    /// carries no height — the pipeline assigns them from the store's tip —
+    /// so this is what the pipeline checks that assignment against before
+    /// forming anything: a source that starts elsewhere than `tip + 1`
+    /// would be formed at the wrong heights and its refusal recorded as a
+    /// consensus verdict instead of the driver fault it is.
+    fn first_height(&self) -> BlockHeight;
+
     /// The next event, `Ok(None)` when the stream is exhausted. Sequence
-    /// numbers strictly increase across the `Some`s a source yields.
+    /// numbers are consecutive from [`SequenceNo::FIRST`] across the
+    /// `Some`s a source yields (module docs).
     ///
     /// # Errors
     ///

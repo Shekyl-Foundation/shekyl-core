@@ -46,7 +46,6 @@ use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, CenRow, ChainView, Corrupt, Fault, FormAttempt, Locus,
     RecordedBlock, RuleSet, Stale, Substrate, Verdict,
 };
-use shekyl_difficulty::{seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 
 use super::connect_fixtures::{candidate, facts, judge, FixtureSubstrate};
@@ -140,11 +139,10 @@ impl Env {
 /// whose block 0 is `genesis` — the honest driver's claim, computed from
 /// the inputs, not read from either view.
 fn seed_for(len: u64, genesis: BlockHash) -> BlockHash {
-    if len == 0 {
+    let Some(seed_height) = shekyl_chain_rules::seed_height(BlockHeight::from_raw(len)) else {
         return BlockHash::NULL;
-    }
-    let seed_height = seedheight(len, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG);
-    assert_eq!(seed_height, 0, "short chains seed from block 0");
+    };
+    assert!(seed_height.is_zero(), "short chains seed from block 0");
     genesis
 }
 

@@ -208,6 +208,23 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_owners.py --selftest
 
+      - name: Run the conformance-register extractor self-test
+        # DRS-E2 RD-Q6: the E2 grader's register is the coverage gate's own
+        # parse, serialized. The self-test parses the serialized text back
+        # and asserts the shape the Rust grader reads (keys, sorted unique
+        # ids, the state vocabulary, at least one row).
+        if: '!cancelled()'
+        run: python3 scripts/ci/export_conformance_register.py --selftest
+
+      - name: Check the committed register fixture against the extractor
+        # The Rust grader's tests parse this fixture with `Register::from_json`
+        # (rust/shekyl-chain-ingest/src/grader.rs); this step holds the
+        # fixture equal to what the extractor emits now, so a key rename on
+        # either side goes red here and not after a whole replay has run.
+        # Regenerate with `--out` when the register changes.
+        if: '!cancelled()'
+        run: python3 scripts/ci/export_conformance_register.py --check-fixture rust/shekyl-chain-ingest/fixtures/conformance_register.json
+
       - name: Run code-citation resolver
         # Every code citation in the pinned review documents must resolve to
         # exactly one tracked file at the era that document declares — its

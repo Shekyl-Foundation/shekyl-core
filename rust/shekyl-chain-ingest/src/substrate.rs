@@ -25,19 +25,39 @@
 //! clock — a system time before the Unix epoch — and it is a fault, never a
 //! timestamp of zero.
 //!
+//! # Pinning the epoch (RD-F20)
+//!
+//! `CacheStore` holds two prepared caches — canonical and transient — and
+//! derives on every miss. A driver that never pins leaves both live seeds
+//! of a lag window fighting over the one transient slot, so each switch
+//! between them is a fresh 256 MiB fill: the first real run re-derived at
+//! window 16 on a 301-block chain with two seeds. [`Substrate::pin_seed`]
+//! is the hook: the pipeline calls it with the claimed seed whenever the
+//! seed changes, before the blocks under it are formed, and this substrate
+//! makes that seed canonical through [`CacheStore::pin_canonical`] — the
+//! same call the daemon's FFI pin makes, so an epoch switch is one
+//! operation whichever door it arrives through.
+//!
 //! # Measurement
 //!
 //! This is the first workload that runs RandomX verification at volume over
 //! a real chain, so the dataset-mode question (`RANDOMX_V2_RUST.md` §9,
 //! measure-first) is answered by numbers this pipeline emits (RD-F11). The
 //! metrics sink owns the timing; this adapter owns nothing but the calls.
+//! The sink is **shared with the pipeline** — [`ProductionSubstrate::new`]
+//! takes the `Arc` the pipeline snapshots — because the pipeline times each
+//! block's `form` into the same counters the substrate times hashes and
+//! derives into; a substrate recording into a sink nobody reads would make
+//! the artifact report zero hashes for a run that hashed every block.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use shekyl_chain_rules::Substrate;
-use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
+use shekyl_pow_randomx::{compute_hash, CacheOutcome, CacheStore, Seedhash};
 use shekyl_types::{BlockHash, PowHash, Timestamp};
+
+use crate::metrics::Metrics;
 
 /// What the production substrate could not answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,24 +80,37 @@ impl core::fmt::Display for SubstrateFault {
 impl core::error::Error for SubstrateFault {}
 
 /// RandomX through the verifier's cache path, and the system clock.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ProductionSubstrate {
     caches: Arc<CacheStore>,
+    /// The RandomX measurement sink (RD-F11); shared with the pipeline,
+    /// which times each block's `form` into the same counters.
+    metrics: Arc<Metrics>,
 }
 
 impl ProductionSubstrate {
-    /// A substrate over a fresh cache store. Callers that form in parallel
-    /// clone the value: the store is shared, derivation is de-duplicated
-    /// inside it, and each worker's `compute_hash` gets its own scratchpad.
+    /// A substrate over `caches` (the replay driver's own store, or the
+    /// daemon's at E3), recording into `metrics` — the same `Arc` the
+    /// pipeline is given (module docs). Callers that form in parallel clone
+    /// the value: the store is shared, derivation is de-duplicated inside
+    /// it, and each worker's `compute_hash` gets its own scratchpad.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new(caches: Arc<CacheStore>, metrics: Arc<Metrics>) -> Self {
+        Self { caches, metrics }
     }
 
-    /// Share an existing cache store (the daemon's, at E3).
+    /// The sink this substrate records into.
     #[must_use]
-    pub fn over(caches: Arc<CacheStore>) -> Self {
-        Self { caches }
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
+    }
+
+    fn record_cache(&self, outcome: CacheOutcome, started: Instant) {
+        match outcome {
+            CacheOutcome::Derived => self.metrics.derived(started.elapsed()),
+            CacheOutcome::Waited => self.metrics.waited(started.elapsed()),
+            CacheOutcome::Hit => {}
+        }
     }
 }
 
@@ -93,8 +126,24 @@ impl Substrate for ProductionSubstrate {
 
     fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, SubstrateFault> {
         let seedhash = Seedhash::from_bytes(*seed.as_bytes());
-        let cache = self.caches.lookup_or_derive(&seedhash);
-        Ok(PowHash::from_bytes(compute_hash(&cache, pow_blob)))
+        // A derive is the 256 MiB fill and is timed apart from the hash
+        // (metrics module docs). The store says how it served the call:
+        // only a `Derived` outcome is a derivation — a `Waited` caller spent
+        // the leader's wall time and did none of the work (RD-F20).
+        let started = Instant::now();
+        let (cache, outcome) = self.caches.lookup_or_derive_reporting(&seedhash);
+        self.record_cache(outcome, started);
+        let hash = self.metrics.timed_hash(|| compute_hash(&cache, pow_blob));
+        Ok(PowHash::from_bytes(hash))
+    }
+
+    /// Make `seed`'s cache the canonical one, deriving it if needed
+    /// (module docs: pinning the epoch).
+    fn pin_seed(&self, seed: &BlockHash) {
+        let seedhash = Seedhash::from_bytes(*seed.as_bytes());
+        let started = Instant::now();
+        let outcome = self.caches.pin_canonical(&seedhash);
+        self.record_cache(outcome, started);
     }
 }
 

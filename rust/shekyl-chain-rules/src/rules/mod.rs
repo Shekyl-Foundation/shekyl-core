@@ -60,6 +60,7 @@
 pub(crate) mod difficulty;
 pub(crate) mod header;
 pub(crate) mod pow;
+pub use pow::seed_height;
 pub(crate) mod timestamps;
 pub(crate) mod topology;
 

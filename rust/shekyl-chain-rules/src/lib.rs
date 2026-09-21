@@ -129,6 +129,7 @@ pub use rule_set::{
     AdmissionPolicy, AdmissionPolicyId, DifficultyRule, RuleSchedule, RuleSet, RuleSetId,
 };
 pub use rules::difficulty::Target;
+pub use rules::seed_height;
 pub use substrate::Substrate;
 pub use validate::{form, tx_against, tx_form, validate};
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
