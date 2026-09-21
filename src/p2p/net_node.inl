@@ -675,7 +675,11 @@ namespace nodetool
         return false;
     }
 
-    max_connections = command_line::get_arg(vm, arg_max_connections_per_ip);
+    // PWD-I7: pure marshaling. The descriptor carries the SENTINEL `-1`, and
+    // what a negative means, what `0` means, and what happens above u32::MAX
+    // are RULES -- so they live in Rust with the rest of the policy, not here.
+    // C++ passes the parsed argument through and stores the result.
+    max_connections = shekyl_host_inbound_resolve_cap(command_line::get_arg(vm, arg_max_connections_per_ip));
 
     return true;
   }
@@ -3232,10 +3236,29 @@ namespace nodetool
     return true;
   }
 
+  // PWD-I7: marshaling shim. This function owns the connection WALK -- the
+  // list is C++'s -- and nothing else. Which zones are host-capped, and
+  // whether a count exceeds the cap, are Rust's
+  // (`shekyl_host_inbound_zone_is_capped` / `shekyl_host_inbound_admits`).
+  // The comparison used to be written twice here, in the language whose
+  // default the forward cut exists to remove.
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::has_too_many_connections(const epee::net_utils::network_address &address)
   {
-    if (address.get_zone() != epee::net_utils::zone::public_)
+    // The zone byte crosses raw, so pin the mapping Rust's `InboundZone`
+    // assumes -- the same pins the zone-route family asserts in `send_txs`.
+    static_assert(std::is_same<std::underlying_type<epee::net_utils::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
+    static_assert(unsigned(epee::net_utils::zone::invalid) == 0, "invalid expected to be 0");
+    static_assert(unsigned(epee::net_utils::zone::public_) == 1, "public_ expected to be 1");
+    static_assert(unsigned(epee::net_utils::zone::i2p) == 2, "i2p expected to be 2");
+    static_assert(unsigned(epee::net_utils::zone::tor) == 3, "tor expected to be 3");
+
+    // Public-zone only, and the exemption is a NECESSITY. An anonymity zone's
+    // inbound peers all present as `tor_address::unknown()`, so a cap of 1
+    // there would bound the whole tor inbound population at one connection
+    // rather than one host. Read the Rust predicate's doc comment before
+    // reading this early return as a gap.
+    if (!shekyl_host_inbound_zone_is_capped(static_cast<std::uint8_t>(address.get_zone())))
       return false; // Unable to determine how many connections from host
 
     uint32_t count = 0;
@@ -3245,8 +3268,10 @@ namespace nodetool
       if (cntxt.m_is_income && cntxt.m_remote_address.is_same_host(address)) {
         count++;
 
-        // the only call location happens BEFORE foreach_connection list is updated
-        if (count >= max_connections) {
+        // the only call location happens BEFORE foreach_connection list is
+        // updated, so the candidate is NOT in `count` -- which is what
+        // `shekyl_host_inbound_admits` documents and asserts.
+        if (!shekyl_host_inbound_admits(count, max_connections)) {
           return false;
         }
       }
@@ -3254,7 +3279,7 @@ namespace nodetool
       return true;
     });
     // the only call location happens BEFORE foreach_connection list is updated
-    return count >= max_connections;
+    return !shekyl_host_inbound_admits(count, max_connections);
   }
 
   template<class t_payload_net_handler>

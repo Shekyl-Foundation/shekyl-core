@@ -229,7 +229,6 @@ Fleet: arm readouts must record the per-sample series, not a pooled
 Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms`
 Relay: `F'` may be per-POSTURE even though §89.2 correctly refused
 Relay: populate the 48-cell Pi verification surface, then consume it
-Levin p2p migration — LV-2 payload codec and LV-3 connection-path [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
 Relay lane: add a derivation check asserting `fluff_return_ms` equals the max over measured zones
 Register `shekyl/p2p-wire-prefix-v1` in [`CRYPTO_DOMAIN_REGISTRY.tsv`](design/CRYPTO_DOMAIN_REGISTRY.tsv) and bump the mechanism-1 count-pin when PWD-T5's prefix derivation gets its call site.
 Execute PWD-T6's PWC-F3 deletion: remove `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size`, and `network_config`'s KV serializer.

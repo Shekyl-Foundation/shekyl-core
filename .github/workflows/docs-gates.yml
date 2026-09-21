@@ -225,6 +225,20 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/export_conformance_register.py --check-fixture rust/shekyl-chain-ingest/fixtures/conformance_register.json
 
+      - name: Run pinned-anchor gate
+        # A `file:line` citation must resolve in the tree it is PINNED to, not
+        # in the working tree the author had open. PR #812 shipped five anchors
+        # derived from a tree where that PR's own edits shifted net_node.inl by
+        # +10 lines: substance right, line numbers wrong, which a reviewer
+        # spot-checking against the working tree cannot see. A row whose
+        # falsifier points at the wrong line is a row nobody can run.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_pinned_anchors.py
+
+      - name: Run pinned-anchor gate selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_pinned_anchors.py --selftest
+
       - name: Run code-citation resolver
         # Every code citation in the pinned review documents must resolve to
         # exactly one tracked file at the era that document declares — its
