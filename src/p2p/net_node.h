@@ -61,6 +61,7 @@
 #include "math_helper.h"
 #include "net_node_common.h"
 #include "net/enums.h"
+#include "shekyl/shekyl_ffi.h"
 #include "net/parse.h"
 #include "common/command_line.h"
 
@@ -446,7 +447,7 @@ namespace nodetool
         m_offline(false),
         is_closing(false),
         m_network_id(),
-        max_connections(1)
+        max_connections(shekyl_host_inbound_default_cap()) // PWD-I7: Rust-owned default (rule 20); was a bare `1`
     {}
     virtual ~node_server();
 
@@ -516,6 +517,11 @@ namespace nodetool
 
     void change_max_out_public_peers(size_t count);
     uint32_t get_max_out_public_peers() const;
+    //! PWD-I7: the resolved per-host INBOUND cap (`--max-connections-per-ip`).
+    //! An observer, so a test can see that the default arrived from Rust
+    //! (`shekyl_host_inbound_default_cap`) rather than a C++ literal. The
+    //! RULE is not here -- see `has_too_many_connections`.
+    uint32_t get_max_connections_per_ip() const { return max_connections; }
     void change_max_in_public_peers(size_t count);
     uint32_t get_max_in_public_peers() const;
     virtual bool block_host(epee::net_utils::network_address address, time_t seconds = P2P_IP_BLOCKTIME, bool add_only = false);

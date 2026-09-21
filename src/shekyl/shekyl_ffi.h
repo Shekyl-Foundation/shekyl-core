@@ -3576,6 +3576,25 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! substitute one for the other.
 std::uint32_t shekyl_p2p_default_out_peers();
 
+//! Per-host INBOUND admission (PWD-I7). Rust-owned (rule 20); replaces the
+//! `1` literals at `net_node.cpp`'s `--max-connections-per-ip` descriptor and
+//! the `node_server` constructor, and the comparison `has_too_many_connections`
+//! wrote twice. NOT PWD-I1's same-host cap, which is outbound-only by
+//! construction (`net_node.h`) -- separate rules, separate reasons.
+//!
+//! `..._zone_is_capped` is TRUE FOR THE PUBLIC ZONE ONLY, and the exemption is
+//! a necessity, not a leniency: an anonymity zone's inbound peers all present
+//! as `tor_address::unknown()`, so a cap of 1 there would bound the whole tor
+//! inbound population rather than one host. Unknown bytes are exempt, matching
+//! the inherited `!= public_` test.
+//!
+//! `..._admits` does NOT count the candidate in `existing_same_host_inbound` --
+//! the caller asks before its connection list is updated. No nettype input, by
+//! construction (rule 71).
+std::uint32_t shekyl_host_inbound_default_cap();
+bool shekyl_host_inbound_zone_is_capped(std::uint8_t zone);
+bool shekyl_host_inbound_admits(std::uint32_t existing_same_host_inbound, std::uint32_t cap);
+
 //! Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12,
 //! 18), moved from `cryptonote_protocol/enums.h` under rule 20. Bytes cross
 //! raw; the C++ wrappers in enums.h static_assert `relay_method`,

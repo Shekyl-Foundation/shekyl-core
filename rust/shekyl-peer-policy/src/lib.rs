@@ -57,7 +57,9 @@
 mod block_ingest;
 mod block_peer;
 mod drop_verdict;
+mod host_inbound;
 
 pub use block_ingest::BlockIngest;
 pub use block_peer::{BlockAnnounceAction, BlockSyncAction};
 pub use drop_verdict::DropVerdict;
+pub use host_inbound::{HostInboundCap, InboundZone};

@@ -40,7 +40,9 @@
 //! binary predates, fails safe rather than severing a peer it cannot
 //! classify.
 
-use shekyl_peer_policy::{BlockAnnounceAction, BlockIngest, BlockSyncAction, DropVerdict};
+use shekyl_peer_policy::{
+    BlockAnnounceAction, BlockIngest, BlockSyncAction, DropVerdict, HostInboundCap, InboundZone,
+};
 
 /// Does a rejection carrying this verdict justify dropping the connection that
 /// delivered it?
@@ -296,6 +298,57 @@ pub extern "C" fn shekyl_block_sync_heavier_score(action: u8) -> bool {
 #[no_mangle]
 pub extern "C" fn shekyl_block_sync_orphan_resync(action: u8) -> bool {
     BlockSyncAction::from_byte(action).orphan_resync()
+}
+
+// ---------------------------------------------------------------------------
+// Per-host inbound admission (PWD-I7)
+//
+// How many connections one remote HOST may hold INTO this node. C++ owns the
+// connection list and walks it; the verdict is Rust's. The inherited
+// mechanism was two `1` literals in `src/p2p/` and a comparison written twice
+// in `has_too_many_connections` — a number with no owner and a rule with two
+// copies. Rule 20: the value and the rule move here, the C++ becomes
+// marshaling, and the number a future ruling moves has one place to land.
+//
+// Deliberately NOT a nettype input. The decision is `(zone, count, cap)` and
+// nothing else, so rule 71 uniformity is structural rather than policed.
+// ---------------------------------------------------------------------------
+
+/// The default `--max-connections-per-ip`: inbound connections one remote
+/// host may hold.
+///
+/// Rust owns this value; C++ consumes it at the argument descriptor and at
+/// the `node_server` constructor, which are the two places the inherited `1`
+/// literal lived. **Unchanged by the forward cut** — moving it is a ruling,
+/// not a refactor (PWD-I7 owed-back question 1).
+#[no_mangle]
+pub extern "C" fn shekyl_host_inbound_default_cap() -> u32 {
+    HostInboundCap::DEFAULT.get()
+}
+
+/// Is a per-host inbound cap meaningful on this `epee::net_utils::zone` byte?
+///
+/// **Public zone only.** The anonymity-zone exemption is a necessity: the tor
+/// zone sets `set_default_remote(net::tor_address::unknown())`, so every
+/// inbound onion peer presents as the same address and
+/// `tor_address::is_same_host` compares those strings — a cap of 1 applied
+/// there would bound the whole tor inbound population at one connection, not
+/// one host. Unknown bytes are exempt, which is what the inherited
+/// `!= public_` test already did.
+#[no_mangle]
+pub extern "C" fn shekyl_host_inbound_zone_is_capped(zone: u8) -> bool {
+    InboundZone::from_byte(zone).is_host_capped()
+}
+
+/// May a further inbound connection be admitted from a host that already
+/// holds `existing_same_host_inbound` of them?
+///
+/// **The candidate is not counted in `existing_same_host_inbound`** — the
+/// caller asks before its connection list is updated. Counting it would
+/// refuse the first connection from every host at the default cap of 1.
+#[no_mangle]
+pub extern "C" fn shekyl_host_inbound_admits(existing_same_host_inbound: u32, cap: u32) -> bool {
+    HostInboundCap::from_configured(cap).admits(existing_same_host_inbound)
 }
 
 #[cfg(test)]

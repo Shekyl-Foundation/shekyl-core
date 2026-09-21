@@ -2737,3 +2737,235 @@ TEST(node_server, announced_port_is_derived_from_listener_and_zone)
     << "a node that refuses every inbound connection must not announce a port "
        "for peers to attract themselves to";
 }
+
+// ---------------------------------------------------------------------------
+// PWD-I7 — per-host INBOUND admission
+//
+// The rule itself is Rust's (`shekyl-peer-policy::host_inbound`, exhaustively
+// tested there against the whole zone-byte domain). These tests pin the SEAM:
+// that the production init path resolves the default from Rust rather than a
+// C++ literal, that the shipped `is_host_limit` reaches the Rust verdict, and
+// that neither depends on nettype (rule 71).
+//
+// NOT PWD-I1's same-host cap -- that one is outbound-only by construction and
+// has its own test above (`same_host_outbound_cap_matches_host_and_only_outbound`).
+// ---------------------------------------------------------------------------
+
+namespace
+{
+  struct host_inbound_fixture
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+
+    host_inbound_fixture(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+
+    // The PRODUCTION init path: the real option descriptor (whose default is
+    // now `shekyl_host_inbound_default_cap()`) parsed by the real parser.
+    // `per_ip < 0` leaves the flag unset so the descriptor's default stands.
+    bool init(const char* port, const int per_ip, const cryptonote::network_type nettype)
+    {
+      boost::program_options::options_description desc_options("Command line options");
+      cryptonote::core::init_options(desc_options);
+      Server::init_options(desc_options);
+
+      const char* argv[2] = {nullptr, nullptr};
+      boost::program_options::variables_map vm;
+      boost::program_options::store(
+        boost::program_options::parse_command_line(1, argv, desc_options), vm);
+
+      // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
+      vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+        boost::program_options::variable_value(std::string("127.0.0.2"), false);
+      vm.find(nodetool::arg_p2p_bind_port.name)->second =
+        boost::program_options::variable_value(std::string(port), false);
+      if (per_ip >= 0)
+        vm.find(nodetool::arg_max_connections_per_ip.name)->second =
+          boost::program_options::variable_value(static_cast<uint32_t>(per_ip), false);
+
+      // Nettype is set the way the daemon sets it: the real flags, through
+      // `handle_command_line`. There is no setter, and reaching around init
+      // would be testing a state the daemon never constructs.
+      if (nettype == cryptonote::TESTNET)
+        vm.find(cryptonote::arg_testnet_on.name)->second =
+          boost::program_options::variable_value(true, false);
+      else if (nettype == cryptonote::STAGENET)
+        vm.find(cryptonote::arg_stagenet_on.name)->second =
+          boost::program_options::variable_value(true, false);
+
+      boost::program_options::notify(vm);
+      return server->init(vm);
+    }
+  };
+}
+
+TEST(node_server, host_inbound_default_cap_comes_from_rust_not_a_cpp_literal)
+{
+  // The forward cut's whole point: the number has ONE owner. It used to be a
+  // `1` at the option descriptor and a second `1` in the `node_server`
+  // constructor, with nothing tying them together or to the rule.
+  //
+  // Red edit: put a literal back in `arg_max_connections_per_ip`'s descriptor
+  // (net_node.cpp) or in the constructor's `max_connections(...)` init.
+  EXPECT_EQ(1u, shekyl_host_inbound_default_cap())
+    << "the forward cut is behaviour-preserving: the inherited value is 1, and "
+       "moving it is a ruling (PWD-I7 owed-back Q1), not a refactor";
+
+  host_inbound_fixture d;
+  ASSERT_TRUE(d.init("48091", -1, cryptonote::TESTNET));
+  EXPECT_EQ(shekyl_host_inbound_default_cap(), d.server->get_max_connections_per_ip())
+    << "the daemon's resolved default did not come from the Rust owner";
+}
+
+TEST(node_server, host_inbound_cap_still_takes_an_explicit_operator_value)
+{
+  // Control for the test above: if the descriptor ignored the command line and
+  // always reported the Rust default, that test would still pass. This one
+  // fails in that case.
+  //
+  // Red edit: hard-code `max_connections = shekyl_host_inbound_default_cap()`
+  // in `init`, discarding the parsed argument.
+  host_inbound_fixture d;
+  ASSERT_TRUE(d.init("48092", 2, cryptonote::TESTNET));
+  EXPECT_EQ(2u, d.server->get_max_connections_per_ip());
+  EXPECT_NE(shekyl_host_inbound_default_cap(), d.server->get_max_connections_per_ip());
+}
+
+TEST(node_server, host_inbound_admission_runs_through_the_shipped_limit_interface)
+{
+  // The production pathway, not a copy of it: `abstract_tcp_server2` refuses an
+  // accepted socket by calling `i_connection_limit::is_host_limit`, and
+  // `node_server` IS that interface. This walks the shipped
+  // `is_host_limit` -> `has_too_many_connections` -> Rust verdict chain.
+  //
+  // The cap is driven to 0 rather than driving two real sockets in, because
+  // the count and the cap meet at one comparison: `admits(count, cap)`. At
+  // cap 0 the boundary is crossed with zero connections, deterministically and
+  // without a listener thread. The count side (a host's SECOND connection at
+  // cap 1) is the Rust test
+  // `a_second_inbound_from_one_host_is_refused_at_one_and_admitted_at_two`,
+  // which owns the rule.
+  //
+  // Red edit: `!shekyl_host_inbound_admits(count, max_connections)` ->
+  // `count > max_connections` at the tail of `has_too_many_connections`.
+  const epee::net_utils::network_address host{MAKE_IPV4_ADDRESS_PORT(203, 0, 113, 7, 12021)};
+
+  {
+    host_inbound_fixture d;
+    ASSERT_TRUE(d.init("48093", 1, cryptonote::TESTNET));
+    epee::net_utils::i_connection_limit& limit = *d.server;
+    EXPECT_FALSE(limit.is_host_limit(host))
+      << "a host holding no inbound connections must be admitted at cap 1";
+  }
+
+  {
+    host_inbound_fixture d;
+    ASSERT_TRUE(d.init("48094", 0, cryptonote::TESTNET));
+    epee::net_utils::i_connection_limit& limit = *d.server;
+    EXPECT_TRUE(limit.is_host_limit(host))
+      << "--max-connections-per-ip 0 must refuse every inbound connection; "
+         "if this passes at cap 0 the comparison is off by one and the FIRST "
+         "connection from every host is refused at the default cap of 1";
+  }
+}
+
+TEST(node_server, host_inbound_admission_is_nettype_uniform)
+{
+  // Rule 71: nettype selects DATA, never control flow, on this surface. The
+  // admission decision takes `(zone, count, cap)` and has no nettype input at
+  // all -- `shekyl_host_inbound_*` cannot be handed one. This test is what
+  // notices if someone adds the branch anyway, on either side of the FFI.
+  //
+  // Red edit: insert `if (m_nettype == cryptonote::TESTNET) return false;` at
+  // the top of `has_too_many_connections`, or make the descriptor default
+  // nettype-dependent.
+  const epee::net_utils::network_address host{MAKE_IPV4_ADDRESS_PORT(203, 0, 113, 7, 12021)};
+  const cryptonote::network_type nettypes[] = {
+    cryptonote::MAINNET, cryptonote::TESTNET, cryptonote::STAGENET
+  };
+
+  uint16_t port = 48095;
+  for (const cryptonote::network_type nettype : nettypes)
+  {
+    {
+      host_inbound_fixture d;
+      ASSERT_TRUE(d.init(std::to_string(port++).c_str(), -1, nettype));
+      EXPECT_EQ(shekyl_host_inbound_default_cap(), d.server->get_max_connections_per_ip())
+        << "the default cap diverged by nettype (nettype=" << nettype << ")";
+
+      epee::net_utils::i_connection_limit& limit = *d.server;
+      EXPECT_FALSE(limit.is_host_limit(host))
+        << "admission of an unconnected host diverged by nettype (nettype=" << nettype << ")";
+    }
+
+    {
+      host_inbound_fixture d;
+      ASSERT_TRUE(d.init(std::to_string(port++).c_str(), 0, nettype));
+      epee::net_utils::i_connection_limit& limit = *d.server;
+      EXPECT_TRUE(limit.is_host_limit(host))
+        << "refusal at cap 0 diverged by nettype (nettype=" << nettype << ")";
+    }
+  }
+}
+
+TEST(host_inbound_admission, the_anonymity_zones_are_exempt_and_the_exemption_is_load_bearing)
+{
+  // A future reader will meet the early return in `has_too_many_connections`
+  // and read it as a gap. It is not. The tor zone calls
+  // `set_default_remote(net::tor_address::unknown())`, so EVERY inbound onion
+  // peer presents as the same address, and `tor_address::is_same_host` is a
+  // `strcmp` of those host strings -- an applied cap of 1 would bound the whole
+  // tor inbound population at one connection rather than bounding one host.
+  //
+  // Asked of the shipped predicate over the whole byte domain rather than by
+  // restating the discriminants.
+  //
+  // Red edit: add `| Self::Tor` to `InboundZone::is_host_capped` in
+  // rust/shekyl-peer-policy/src/host_inbound.rs.
+  static_assert(unsigned(epee::net_utils::zone::public_) == 1, "public_ expected to be 1");
+  static_assert(unsigned(epee::net_utils::zone::i2p) == 2, "i2p expected to be 2");
+  static_assert(unsigned(epee::net_utils::zone::tor) == 3, "tor expected to be 3");
+
+  unsigned capped = 0;
+  for (unsigned byte = 0; byte <= 0xffu; ++byte)
+  {
+    if (shekyl_host_inbound_zone_is_capped(static_cast<std::uint8_t>(byte)))
+    {
+      ++capped;
+      EXPECT_EQ(unsigned(epee::net_utils::zone::public_), byte)
+        << "a zone other than public_ is host-capped";
+    }
+  }
+  EXPECT_EQ(1u, capped) << "exactly one zone byte may be host-capped";
+
+  EXPECT_FALSE(shekyl_host_inbound_zone_is_capped(
+    static_cast<std::uint8_t>(epee::net_utils::zone::tor)));
+  EXPECT_FALSE(shekyl_host_inbound_zone_is_capped(
+    static_cast<std::uint8_t>(epee::net_utils::zone::i2p)));
+  EXPECT_FALSE(shekyl_host_inbound_zone_is_capped(
+    static_cast<std::uint8_t>(epee::net_utils::zone::invalid)))
+    << "an undeterminable zone must stay exempt: a cap keyed on a host "
+       "identity we could not establish is keyed on nothing";
+}
+
+TEST(host_inbound_admission, the_candidate_is_not_counted_in_the_existing_total)
+{
+  // The load-bearing off-by-one. `has_too_many_connections` asks BEFORE its
+  // connection list is updated -- the call site says so twice -- so the
+  // candidate is not in the count. Counting it would refuse the FIRST
+  // connection from every host at the default cap of 1, which is a total
+  // inbound outage rather than PWD-I7's NAT failure.
+  //
+  // Red edit: `existing_same_host_inbound < self.0` -> `<=` in
+  // rust/shekyl-peer-policy/src/host_inbound.rs.
+  EXPECT_TRUE(shekyl_host_inbound_admits(0, 1)) << "the first connection from a host";
+  EXPECT_FALSE(shekyl_host_inbound_admits(1, 1)) << "the PWD-I7 observation";
+  EXPECT_TRUE(shekyl_host_inbound_admits(1, 2)) << "raising the cap admits the second daemon";
+  EXPECT_FALSE(shekyl_host_inbound_admits(2, 2));
+  EXPECT_FALSE(shekyl_host_inbound_admits(0, 0)) << "a zero cap admits nothing";
+}

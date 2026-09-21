@@ -188,7 +188,14 @@ namespace nodetool
     const command_line::arg_descriptor<bool> arg_pad_transactions = {
       "pad-transactions", "Pad relayed transactions to help defend against traffic volume analysis", false
     };
-    const command_line::arg_descriptor<uint32_t> arg_max_connections_per_ip = {"max-connections-per-ip", "Maximum number of p2p connections allowed from the same IP address", 1};
+    // The literal `1` that used to sit here is gone: the per-host INBOUND
+    // admission default is Rust-owned and reached through
+    // `shekyl_host_inbound_default_cap()` (`shekyl/shekyl_ffi.h`), rule 20.
+    // It was a number with no owner, written twice (here and the
+    // `node_server` constructor) and compared against in a rule C++ also
+    // wrote twice. See PWD-I7 in SHEKYL_P2P_PROTOCOL.md -- the VALUE is
+    // unchanged; a ruling that moves it now has one place to land.
+    const command_line::arg_descriptor<uint32_t> arg_max_connections_per_ip = {"max-connections-per-ip", "Maximum number of p2p connections allowed from the same IP address", shekyl_host_inbound_default_cap()};
 
     std::optional<std::vector<proxy>> get_proxies(boost::program_options::variables_map const& vm)
     {
