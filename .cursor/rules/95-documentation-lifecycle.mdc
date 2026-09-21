@@ -92,8 +92,18 @@ own named open residue stay in `design/`.
 ## FOLLOWUPS is a queue of one-liners
 
 Each item is **≤20 lines**: one sentence of what remains, a `Target:`
-from the three tokens below, and a link to the owning doc. Essays belong
-in the plan doc or the completed record, not in the queue.
+from the three tokens below, an **`Owner:`** sub-bullet, and a link to the
+owning doc. Essays belong in the plan doc or the completed record, not in
+the queue.
+
+`Owner:` names what the row **resolves to**, and it is gated
+(`scripts/ci/check_followups_owners.py`): a live `docs/design/` document,
+or a registered identifier family (`RD-Q4`, `SI-10`). A PR number may be
+cited beside it but is not an owner on its own — PRs merge and close, and
+a row whose only owner is a merged PR is a row nobody owns. Six rows once
+named "the E2 lane" as owner while no such lane existed in any form; that
+is the shape the cell makes visible (rule 22). Rows predating the cell are
+grandfathered by exact heading in a list that only burns down.
 
 Allowed `Target:` values only:
 

@@ -1,7 +1,9 @@
 # DRS-E2 — the ingest spine and its first source, the replay driver (pre-flight)
 
-**Status:** OPEN — **Round 1 RULED 2026-09-19 (RD-Q9–RD-Q12; implementation
-may begin on the commit plan §7).** Round 1 opened with the sweep of #785 as
+**Status:** OPEN — **implementation in progress: increment 1 (§7 commits 0,
+1, 2, 3, 4a, 6) LANDED on the branch 2026-09-20; increment 2 (4b, 5, 6b, 7,
+7b, 8, 8b, 8c, 9) is the next PR — a split inside this ruled plan, not a
+deferral.** Round 1 RULED 2026-09-19 (RD-Q9–RD-Q12). Round 1 opened with the sweep of #785 as
 merged (`dev` @ `93f91b0d4`; §3.7); ground re-pinned to `306af9bae` (§0.1). Round 0 REVIEWED and RULED 2026-09-19
 (maintainer). Round-0 text was written against `dev` @ `14f8dc739` with #785
 in flight; §3.7 records what the merged tree changed, and every citation
@@ -332,10 +334,10 @@ overflow`.**
   window, target). Internal to the rules crate; no pipeline consequence.
 - D4's window walk is the SI-8 observer; `lwma1_next`'s `Overflow` after a
   monotone `N+1` window is **unreachable** at the ratified `(N, T)` (pinned by a
-  `u128::MAX` fixture). `Corrupt` still has three variants
-  (`CumulativeDifficultyNotMonotone`, `CumulativeDifficultyOverflow`,
-  `ZeroTarget`); RD-Q4's arm→SI-row mapping covers all three and records the
-  second as unreachable-by-fixture rather than dropping it.
+  `u128::MAX` fixture). `Corrupt` had three variants at that point; **RD-F17
+  (2026-09-20) deleted `ZeroTarget`** — zero is CEN-D6's refusal, a verdict —
+  so RD-Q4's arm→SI-row mapping covers two, and records the overflow arm as
+  unreachable-by-fixture rather than dropping it.
 - Crate description: *"form (stateless) then validate (view-bound)"*.
 
 **`d6ba4d98f` — `chain-store: connect compares the rule set, not only its
@@ -400,7 +402,7 @@ states is now gated, and the ingest crate must not enable it.
 
 | Q | Question | Disposition | Why |
 | --- | --- | --- | --- |
-| **RD-Q1** | **Home.** | **RULED (memo §2): the new crate is the production ingest crate**, depending on rules + store + `shekyl-pow-randomx`, with the replay driver as its first `src/bin/`; corpus/trace format types live in this crate (or `shekyl-store-codec` once CTS PR A lands), never in a binary. **Its name is Q-A → default `shekyl-chain-ingest`** (REVIEW INPUT; adopted unless Round 1 objects). *Round-0 default was `shekyl-chain-replay`, "a test tool" — same dependency shape, different life expectancy.* | The store crate is `#![deny(unsafe_code)]`; it names `ChainValid` (the accepted verdict is `connect`'s input, `connect.rs:314`–`:318`) but **neither RandomX, nor the refusal type `InvalidBlock` (conversion ban clause 2), nor the validator's `Fault`/`Substrate` types** — and it must stay that way: the pipeline keeps the store ignorant of faults and of hashing, and G1 trivially true. |
+| **RD-Q1** | **Home.** | **RULED (memo §2): the new crate is the production ingest crate**, depending on rules + store + `shekyl-pow-randomx`, with the replay driver as its first `src/bin/`; corpus/trace format types live in this crate (or `shekyl-store-codec` once CTS PR A lands), never in a binary. **Its name is Q-A → default `shekyl-chain-ingest`** (REVIEW INPUT; adopted unless Round 1 objects). *Round-0 default was `shekyl-chain-replay`, "a test tool" — same dependency shape, different life expectancy.* | The store crate is `#![deny(unsafe_code)]`; it names `ChainValid` (the accepted verdict is `connect`'s input) but **neither RandomX, nor the refusal type `InvalidBlock` (conversion ban clause 2), nor the validator's `Substrate` types**. The one `Fault` payload it names is `Corrupt`, at `WriteBatch::refuse_corrupt` (RD-Q4) — the halt consequence of a store invariant the validator observed. It names no other `Fault` arm, never `Stale`, never `InvalidBlock`. The pipeline keeps hashing and the rest of the fault taxonomy out of the store, and G1 trivially true. |
 | **RD-Q2** | **Block, body and fact source** (§3.4). | **RULED (memo §2): corpus + trace, with typed doors.** **Corpus** — *network-shaped only*: per height, the block plus full transaction bodies in header order (what `Candidate` consumes, `block.rs:88`–`:93`), taken from an **unpruned** node, its completeness **verified per height** against the header's `tx_hashes` (count, order, hash — RD-F15) and refused on a shortfall; format minted in Rust, versioned — the Monero bootstrap/epee container is **not** extended (rules 42/16); **zero C++** — the existing block-by-height read suffices. **Trace** — the six facts, cumulative difficulty, digest checkpoints, and (later) verdicts — produced by **one** C++ exporter shim that walks LMDB and hands bytes to a Rust writer, deletable in the same commit that deletes the daemon. **The doors are the grader's law:** `expect(h)` feeds *only* the grader; `borrow(h)` feeds `connect` for facts Rust does not derive yet, keyed off `Fact::origin` — a borrowed value is never evidence (RD-Q6). RD-F1's option matrix collapses to this; RD-F2 dissolves — no LMDB crate enters the workspace. *Round-0 default (c) withdrawn (RD-F9).* | Byte transport across the FFI is what D12 allows; verdicts are what it rejected. The digest walker (`logical_state_digest.cpp` → FFI) is the existing shape. Two doors with different types make "the grader read a borrowed fact as evidence" a compile error, not a review catch. |
 | **RD-Q3** | **Production `Substrate`.** | **Default holds with one correction:** two-cache `CacheStore` keyed by the chain's seed at `seedheight(h)`, swapped at epoch boundaries; wall clock. *Round 0 called the retry loop "load-bearing" at the boundary; **withdrawn** (RD-F10) — the driver takes the seed from the chain it replays, so a `Stale::Seed` cannot arise from a correct driver; it is a defect signal (RD-Q5).* Throughput: parallel `form` workers over per-worker `compute_hash` (§1.1; the pool is not production, RD-F14) now; the Rust dataset mode is an **open option gated on a measurement E2 itself produces** — the pipeline's metrics sink records light-mode wall-clock per hash and per block, which is the number `RANDOMX_V2_MINING_ASYMMETRY.md` option (a) has been waiting for (RD-F11); never the JIT (§1.3). **Memo Q-C answered here:** checked at source — `shekyl-pow-randomx` does not expose full-dataset verification (`Cache::derive_item`, `cache.rs:449`; no public dataset builder) and cannot "cheaply" grow one inside this increment (it is the RandomX lane's and a 2 GiB-per-epoch provisioning question, rule 76); so parallel `form` is the win now, and the benchmark this pipeline emits is what decides the rest. **Caveat:** C1's FTL leg reads the clock and a historical block is always below `now + FTL`, so replay cannot exercise C1's refusal — recorded in §5. | Reuses the daemon's cache lifecycle; the epoch boundary is where a stale cache would silently produce wrong longhashes, and that now surfaces as a defect, not a retry. |
 | **RD-Q4** | **`Fault::Corrupt` at the store.** | **RULED as defaulted:** `WriteBatch::refuse_corrupt(Corrupt) -> StoreError`, inside the batch, arming the poison at the noted height with a `StoreInvariant` row mapped from the `Corrupt` arm (new SI rows minted with it), returning the `InvariantViolated` the pipeline propagates. Minted here **with its caller** — the commit-9 scope #785 shed, as ruled 2026-09-19. | The validator saw what a belt would have; the store's halt is the consequence and must poison *this* batch. Taking the value keeps the store from naming `CenRow`s it does not own. |
@@ -437,8 +439,23 @@ states is now gated, and the ingest crate must not enable it.
 - **RD-F3 — six items routed to a lane that did not exist.** Individually
   legitimate deferrals; in aggregate an unchosen queue (rule 22). This file is
   the repair; the generalization is RD-F4.
-- **RD-F4 — proposed gate: a deferral's owner must resolve** (endorsed
-  2026-09-19 as a standing check). Every `FOLLOWUPS.md` row's owner must
+- **RD-F4 (LANDED, §7 commit 0, 2026-09-20) — the gate: a deferral's owner
+  must resolve.** `scripts/ci/check_followups_owners.py`: every FOLLOWUPS row
+  carries `Owner:` resolving to a live `docs/design/` document or a
+  registered index-§2 family (read through the prefix gate's own registry
+  reader); pre-existing rows grandfathered by exact heading in a list that
+  only burns down — **338 at the gate's birth, 340 after the merge with
+  #792/#800 landed three pre-gate rows** — under a `GRANDFATHER_CEILING`
+  ratchet in the script (a longer list is refused; a ceiling more than five
+  above the list is refused, so the burn-down locks in); doc paths are
+  canonicalised beneath `docs/design/` so `design/../completed/` cannot pass
+  as live; selftest of sixteen cases; wired in `docs-gates.yml`.
+  **One narrowing of the memo, stated so it is reviewable:** the memo listed
+  "an open PR" among resolvable owners; the gate does not accept a PR number
+  alone — PRs merge and close, and a row whose only owner is a merged PR is
+  the shape the gate exists to catch; a PR may be cited beside the doc or
+  family it lands in. Rules 95 and 22 amended to carry the cell. *(As
+  proposed:)* endorsed 2026-09-19 as a standing check. Every `FOLLOWUPS.md` row's owner must
   resolve to a live `docs/design/` doc, an open PR, or an index-§2 family.
   Same family as `held_by_cxx` asserting its holder exists. **Falsify by**
   `scripts/ci/check_followups_owners.py` existing and refusing a row whose
@@ -503,6 +520,49 @@ states is now gated, and the ingest crate must not enable it.
   reads as a ruling. The JIT is never the lever (§1.3). *Same correction the
   driver deferral itself just received, one level up: an item pointed at
   nobody becoming an item pointed at the thing being built.*
+- **RD-F17 (increment 1 review, 2026-09-20) — LWMA-1 has no output floor;
+  zero is reachable from a conforming chain; slice 2 mis-filed it as
+  corruption.** The reviewer's strict SI-10 walk (`0476a22ab`) made slice 2's
+  zero-target fixture unreachable *as written* (an all-zero window is now a
+  `NotMonotone` before LWMA runs), which forced the question the fixture had
+  been standing in front of: can the formula itself derive zero? It can.
+  `lwma1_next`'s tail is `avg_D · 99·N·(N+1)·T / 200·L` with no floor
+  (`lwma1.rs:176`–`:206`); with every solvetime at the `+6T` clamp,
+  `L = 6T·N(N+1)/2 = 2 948 400` and the output is **zero for `avg_D ≤ 6`**,
+  `400 → 66` per maximally slow window — a conforming chain walks there in
+  a few windows (computed 2026-09-20; fixture
+  `cen_d6_a_slow_window_of_minimal_work_derives_zero_and_refuses_the_block`).
+  Three consequences. (1) The census CEN-D6 row's premise — *"the value can
+  only be 0 via a difficulty-function sentinel return"* — is false of the
+  implementation; amended on the row. (2) Slice 2 classified zero as
+  `Corrupt::ZeroTarget`, and this increment's commit 1 mapped it to SI-10 —
+  which would have **halted the redb writer on a chain whose work strictly
+  increased**, while the C++ merely refuses the block (`blockchain.cpp:5494`).
+  A misclassification, repaired: `Corrupt::ZeroTarget` deleted, `D6::mint`
+  returns the CEN-D6 verdict, `refuse_corrupt` maps two arms; the store never
+  sees a zero target. Parity restored; the premise slice 2 Q4 rested on is
+  refuted, not superseded (rule 16). (3) **The consensus finding itself is
+  not this lane's to rule:** a DAA that can derive zero, at which point every
+  successor block is refused, is a chain-death mode in the ratified
+  algorithm. Whether CEN-D6 becomes a floor of 1 (a consensus change to a
+  CLOSED plan, `docs/completed/DAA_LWMA1.md`) or stays a refusal is the DAA
+  owner's ruling — FOLLOWUPS row, `Owner:` the census document that holds the
+  rule, falsifier the fixture above (`lwma1_next` returning zero over a
+  strictly-increasing window). Rule-47 lesson recorded in
+  `CHAIN_RULES_CRATE.md` §4.4: beside "fold into a type" and "keep the
+  refusal", the adversarial-input test has a third outcome — **re-classify**.
+- **RD-F16 (implementation, 2026-09-20) — the rules harness's blocks do not
+  round-trip through bytes.** `harness::fixture::coinbase` builds a miner tx
+  with **no inputs**; `Block::read` refuses it (*"block miner tx must have a
+  sole gen input (coinbase, §2.5)"*). Every rule fixture passes blocks as
+  values, so nothing noticed; the corpus reader — the first consumer that
+  parses harness blocks from bytes — would refuse all of them. Not a defect
+  in what the harness tests (rules never read the miner tx's inputs at this
+  pin), but a gap the store's fixtures do not share (`connect_fixtures::
+  coinbase` carries `Input::Gen`). Owner: the rules crate; falsify by
+  `Block::read(&harness::fixture::candidate(vec![]).block.serialize())`
+  returning `Ok`. Recorded, not repaired here (rule 15's scope discipline);
+  the corpus tests build wire-valid fixtures of their own.
 - **RD-F15 (review, 2026-09-19) — a pruned RPC source fails silently, so the
   corpus writer verifies rather than declares.** `BlockEntry { block, txs }`
   carries no prune flag (`bin_commands.rs:201`–`:220`) and the handler drops
@@ -549,15 +609,25 @@ states is now gated, and the ingest crate must not enable it.
   Falsify by the workflow's header no longer reading as rewrite scaffolding
   and a `longhash` fuzz job existing across `randomx-v2-sys`.
 
-## 7. Commit plan (sketch; Round 1 fixes it)
+## 7. Commit plan (Round 1 fixed it; increments marked)
 
-0. `ci: check_followups_owners.py — a deferral's owner must resolve (live doc, open PR, or index family); Owner: sub-bullet convention; existing rows grandfathered by exact hit` (RD-F4). First, because the lane it protects against is the one this plan was opened to repair.
-1. `chain-store: WriteBatch::refuse_corrupt — the validator's Corrupt arms the halt` (RD-Q4; new SI rows; withdraws the FOLLOWUPS row). **Its commit message states that this is the API #785's commit 9 shed and why it waited: the deferral was circular ("no caller") until the caller was scheduled, and the API arrives with the driver that shapes it — value in, inside the batch — rather than guessed at from the store side.** A reader landing here from #785's FOLLOWUPS row gets the reason, not a reconstruction.
-2. `chain-store: ReadSnapshot::logical_state_digest_v0 — the redb half of E2` (RD-F5).
-3. `ingest: shekyl-chain-ingest scaffold — Source trait, pipeline stages, production Substrate over shekyl-pow-randomx's compute_hash (no pool; RD-F14)` (RD-Q1, RD-Q3).
-4. `ingest: corpus + trace formats (Rust-minted, versioned); RPC corpus reader with prune-state refusal; LMDB trace exporter as a C++ harvest shim` (RD-Q2, RD-F8, RD-F9).
+**Increment 1 (this branch, 2026-09-20): commits 0, 1, 2, 3, 4a, 6** — the
+gate, the two store APIs the pipeline calls (`refuse_corrupt`, the redb
+digest), the crate with its event model and production substrate, the corpus
+artifact, and the `in_force: RuleSet` repair. Each is a unit with its own
+tests; none depends on an unbuilt stage. **Increment 2 (next PR): 4b, 5, 6b,
+7, 7b, 8, 8b, 8c, 9** — the trace, the pipeline stages and actor, the flag,
+grading, metrics, first runs, the reorg family, closing docs. The split is
+by review size (rule 06), inside one ruled plan; every item keeps its slot.
+
+0. `ci: check_followups_owners.py — a deferral's owner must resolve (live doc or index family; a PR alone is not an owner); Owner: sub-bullet convention; existing rows grandfathered by exact hit` (RD-F4) — **LANDED** (built alongside commits 1–6 while #792 held the FOLLOWUPS file; ordered first in this list because the lane it protects against is the one this plan was opened to repair).
+1. **LANDED (`05ed7ac13`)** `chain-store: WriteBatch::refuse_corrupt — the validator's Corrupt arms the halt` (RD-Q4; SI-10 minted `built`; `CumulativeDifficultyOverflow` → SI-8; the FOLLOWUPS row now carries the owner and closes when the actor calls it). **Its commit message states that this is the API #785's commit 9 shed and why it waited: the deferral was circular ("no caller") until the caller was scheduled, and the API arrives with the driver that shapes it — value in, inside the batch — rather than guessed at from the store side.** A reader landing here from #785's FOLLOWUPS row gets the reason, not a reconstruction.
+2. **LANDED (`bf0e020fd`)** `chain-store: ReadSnapshot::logical_state_digest_v0 — the redb half of E2` (RD-F5; live root = `curve_tree_roots[tip + 1]`, EMPTY on an empty chain; negative control).
+3. **LANDED (`440ace308`)** `ingest: shekyl-chain-ingest scaffold — Source event model (Extend/Rewind, SequenceNo, barrier), production Substrate over compute_hash (no pool; RD-F14)` (RD-Q1, RD-Q3, RD-Q13). Stages land with their tests (increment 2).
+4a. **LANDED (`d7c4c0631`)** `ingest: the corpus — Rust-minted, versioned; writer verifies count/order/hash against the header (RD-F15), reader re-verifies and is a Source` (RD-Q2, RD-F8, RD-F9). **En route, RD-F16:** the rules harness's `fixture::coinbase` has no inputs and does not survive `Block::read` — the harness's blocks never round-trip through bytes; the corpus tests build wire-valid fixtures of their own.
+4b. *(increment 2)* `ingest: the trace — the six facts, cumulative difficulty, digest checkpoints; Rust-minted format; the LMDB exporter as a C++ harvest shim handing bytes across the FFI; the RPC corpus fetch feeding CorpusWriter` (RD-Q2).
 5. `ingest: form workers → sequencer → validate+connect actor (kameo, no-restart); Corrupt → halt, terminal — halt-then-assert-not-restarted test; Stale::Seed surfaced; injected-wrong-seed test` (RD-Q5, RD-Q11). **Test order inside the commit: the no-restart test is written first, while the actor is three lines** — it is cheap then and awkward once supervision is configured and a channel is plumbed through; it is also the test most likely to be deferred as obvious, and the failure it guards (a halt laundered into a retry) is silent by construction.
-6. `chain-store: connect takes the in-force RuleSet by value; RuleSetUnknown moves to schedule resolution; the CEN-B3 belt's comment cross-references Fixed's id-is-not-set caveat` (RD-Q10, RD-F13) — precedes 6b.
+6. **LANDED (`63aebab0f`)** `chain-store: connect takes the in-force RuleSet by value; RuleSetUnknown deleted (its consumer left the crate); RuleSetNotInForce carries the sets; the caveat at the CEN-B3 belt` (RD-Q10, RD-F13) — a Fakechain verdict now connects under the Fakechain set, fixture-pinned.
 6b. `ingest: --fixed-difficulty → RuleSet::fakechain on regtest; a schedule that names it` (RD-Q7).
 7. `ingest: CSR-3a grading — extractor, artifact, the two-clause evidence rule (verdict-evidence and component-evidence as typed row fields, RD-Q9), grader wiring` (RD-Q6, RD-F7).
 7b. `ingest: metrics sink — light-mode RandomX wall-clock per hash / per block; the dataset-mode measurement artifact` (RD-F11, item 7).
@@ -603,5 +673,8 @@ code or a re-pointed FOLLOWUPS row with a live owner.
 | 2026-09-19 | **Direction memo received and recorded (§0 verbatim, §0.1 provenance).** Re-pinned to `origin/dev@306af9bae` (`e80cdbf23`). RULED (memo §2) landed: the "is not" clause (§1.2 — not a second connect path), RD-Q1 (the production ingest crate; name is Q-A), RD-Q2 (corpus + trace with **typed doors** `expect(h)` / `borrow(h)` keyed off `Fact::origin`; RD-F1 collapsed, RD-F2 dissolved), the grader's law and adjudication sentence (RD-Q6; also `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1), RD-F12 corrected to the existing `randomx-v2-sys` boundary. REVIEW INPUT recorded, not ruled (§3.8): stage shape, mutation and reorg corpus families (the FTL §5 row's closer), `Stale::Seed` grounding verified at `fault.rs:70` / `block.rs:132`, `PowHash` as the parity seam. Memo §4: Q-A → RD-Q1 default; Q-B → **RD-Q11** posed (kameo for the one stateful actor); Q-C → answered under RD-Q3/RD-F11 (no dataset mode exposed; parallel `form`; benchmark in the deliverable); Q-D → **RD-Q12** posed (the differential workflow already triggers on both pins — promotion is the framing and a `longhash` fuzz job). Memo §5 honoured: RD-F5 stands, the FOLLOWUPS rows stand, the wallet-store lane untouched. |
 | 2026-09-19 | **Round 1 RULED** (all four verified against the plan text). RD-Q9 producers-only as **two clauses** — the rule's verdict grades on its own evidence; the digest component it feeds grades not-evidence — so "producers only" is not quoted as *B5 grades as evidence*. RD-Q10 as defaulted, plus the `Fixed` id-is-not-set caveat cross-referenced **from the CEN-B3 belt** (`connect.rs:441`), the likeliest site to use id equality as a proxy. RD-Q11 as defaulted, with the Validate+Connect actor's supervision **no-restart** — a `Corrupt` halt is terminal, and a restart would be the `InvalidBlock`-mapping failure in another shape; tested by halt-then-assert-not-back. RD-Q12 as defaulted, plus fuzz hygiene — seed logged, mismatching blob and both `PowHash`es emitted as an artifact, or the gate is an alarm that gets muted. Commit plan §7 updated (5, 6, 7, 8b). Implementation may begin. |
 | 2026-09-19 | Two implementation carry-forwards pinned on §7 so they outlive the review thread: commit 1's message names itself as what #785 shed and why it waited; commit 5 writes the no-restart test first. Ground confirmed: `dev` at `6c41bf820` with #785 in — no stale ground left in this file. |
+| 2026-09-20 | **Increment 1 LANDED on the branch** (§7 commits 0, 1, 2, 3, 4a, 6): the owner gate (RD-F4, 338 grandfathered, PR-alone narrowed and stated), `refuse_corrupt` + SI-10, the redb digest read, `shekyl-chain-ingest` with `Extend`/`Rewind` and the production substrate, the verifying corpus, `in_force: RuleSet`. Built while #792 held `FOLLOWUPS.md`; commit 0 landed once its rows were seen not to collide. **RD-F16** found en route (harness blocks do not round-trip). Increment 2 = the remaining §7 items, next PR — a split inside the plan. |
+| 2026-09-20 | **Increment 1 review (three commits by the maintainer, one CI failure, RD-F17).** `0476a22ab` made D4's window walk strict (equal adjacent work is Corrupt — SI-10 as written); `760e9a2d8` parses corpus blobs with `from_bytes` (exact consumption; a padded blob is `Malformed`); `f7326d9ab` names SI-10 as read-armed and the store's one `Corrupt` exception. The strict walk broke slice 2's zero-target fixture and exposed **RD-F17**: LWMA-1 has no floor, zero is reachable from a conforming slow chain, and filing it as `Corrupt` would have halted the writer where the C++ refuses a block. `Corrupt::ZeroTarget` deleted; `D6::mint` → the CEN-D6 verdict; census row amended; FOLLOWUPS row for the DAA owner. |
+| 2026-09-20 | **Increment 1 review (code-quality).** Corpus reader parses the block first so the header bounds `tx_count` (wire's no-prealloc discipline); writer emits one record per `write_all` and `finish` consumes (no finished flag). Digest assembly is exhaustive over `AtHeight` with an `n_blocks == tip+1` belt. `SequenceNo::next` panics on exhaustion rather than saturating. SI-10 tests extracted from `connect_tests`. Register §1 records the validator-read enforcement site; RD-Q1 names `Corrupt` at `refuse_corrupt` as the one Fault payload the store takes. |
 | 2026-09-19 | **PR review (Copilot, nine threads) taken.** RD-F14: `VmStatePool` is `cfg(test)`/bench-only — the parallel-`form` stage now rests on `compute_hash` per worker, the pool's promotion the RandomX lane's measure-first call. **RD-Q13 posed and defaulted:** a height-ordered stream cannot represent a reorg; the `Source` yields `Extend`/`Rewind` under a barrier rule, or E3 needs a second ingest path — commit 8c. The register count is the gate's (131 recorded, 126/2/3), not a literal; bare slice-2 `Q…` tokens qualified (rule 94 §2); RD-Q1's boundary sentence corrected (the store names `ChainValid`, never `InvalidBlock`/`Fault`/RandomX); the RD-Q9 two-clause rule restored in the CSR §5.4.1 and DRS-E2 restatements; the index documents-row and stamp brought current. |
 | 2026-09-19 | **Second PR review round (Copilot, eight threads) taken; merged `dev` `fbc92287a`.** The actor owns the `ChainStore`, not a `WriteBatch` — a batch is closure-scoped by the brand, so the transaction boundary is one `write` closure per handler (a `Rewind`; a bounded run of `Extend`s = the checkpoint granularity). The supervision map is now **complete** over every non-verdict outcome (`S::Fault`, `Fault::View`, `Corrupt`, both `Stale` arms, `Exhausted`), so nothing inherits a default restart. **RD-F15:** a pruned RPC source is silent (`missed` dropped; no flag on `BlockEntry`) — the corpus writer verifies count/order/hash against `tx_hashes`, not a declaration. RD-F4's gate gets a concrete carrier: **§7 commit 0**, with the owner-cell convention and grandfather shape named. §8's stale "RD-Q9 decides whether" removed; index header, RD-F range and documents-row brought to the current state; stamp moved to `fbc92287a` with the checks re-run. S-TX's coupled E2 reopen criterion acknowledged (E2 projects no tx table). |

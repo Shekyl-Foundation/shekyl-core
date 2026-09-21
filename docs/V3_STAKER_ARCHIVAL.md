@@ -722,6 +722,47 @@ as everywhere else in the privacy design. Three layers must hold:
 - **Bond funding.** Bond is `P`'s central collateral; lump principal→`P` bond
   funding is a correlation channel — weigh fund-from-earnings ramp vs lump initial
   bond in wallet hygiene.
+### A bond is immutable for its life
+
+**Ruled 2026-09-20.** A persona's bond is **immutable for its life**. The
+holdings set is fixed at the bond post and never mutates. The only
+holdings-change mechanism is **persona rotation**: under the two-active
+overlap, the new persona bonds the new set and the old releases and drains —
+two events of two pseudonyms, decorrelated, with the overlap covering serving
+continuity and the cooldown. `Reinstate` (né `Rebond`) survives as the sole
+in-place record operation: zero-money, post-slash, and not a change of
+holdings.
+
+**Why — and this paragraph is the protection, not commentary.** Clustering
+requires **same-class repetition**; a single event cannot be clustered. The
+design caps `P`-authored same-class events at **one per class per persona
+lifetime** — fund, bond, release, drain — bond amounts are **quantized** at
+`|S| · FLOOR` so the amount dimension carries no operator signal, and serving
+is **miner-authored** (the credit wire rides coinbases). A persona's authored
+chain footprint is therefore ~four transactions of four *distinct* classes.
+**The clusterable object is an incremental-update stream, and this ruling makes
+it unconstructible.**
+
+Read that as a standing constraint on future work, because the failure mode is
+specific and cheap to reach: **without this paragraph, incremental holdings
+updates return as an obvious efficiency PR** — *"why post a whole new bond to
+add one shard?"* — and silently destroy the property. The answer is that the
+efficiency is real and the cost is the anonymity set. Any proposal to
+re-introduce in-place holdings mutation must first say what it does about
+same-class repetition; *"it's only one more event"* is the argument that ends
+with a stream.
+
+**History — the shape of how this resolved is part of the record.** The idea
+was proposed early and **tabled** while shard selection was still open: under
+system-assigned shards an operator's holdings would be mutated *involuntarily
+and incrementally*, which forced exactly the update stream this ruling
+forbids — so the objection was real, and fatal, on the design as it then
+stood. Shard **self-selection** (market picker with the Foundation
+complete-tree floor) removed that premise entirely; the objection did not
+weaken, its subject ceased to exist. Reopened and ratified 2026-09-20. **The
+fence was not indecision — it was a dependency**, and tabling rather than
+deciding is what let the ruling be taken cleanly once the dependency cleared.
+
 ### The reward curve — retention, scarcity, banded plateau-cap
 
 - **Reward retention, not retrieval.** "Work" means **proven retention** —

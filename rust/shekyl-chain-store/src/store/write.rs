@@ -72,6 +72,8 @@ use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{post_image, Canonical, ChainState, PropertyCell, UndoEntry};
 use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 
+use shekyl_chain_rules::Corrupt;
+
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
 use super::keyed::{Handles, InsertTable, UpsertTable};
@@ -198,6 +200,58 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             StoreError::InvariantViolated(row) => self.poison.arm(row),
             other => other,
         }
+    }
+
+    /// The validator read this batch's view and found the store's record
+    /// inconsistent: arm the fatal latch for what it saw, so `complete` halts
+    /// the writer at the noted height exactly as a belt would have.
+    ///
+    /// A [`Corrupt`] is a store-invariant violation observed by the rules
+    /// crate instead of by a store write site — CEN-D4's window walk over
+    /// `BatchView` sees `block_info` rows whose cumulative work does not
+    /// increase (SI-10), or an overflow the store's own fold would have
+    /// caught had the store computed the value (SI-8). The store computes
+    /// none of it (C2-R8 Q4), so the observation arrives here and the store
+    /// supplies the consequence. The mapping is by arm:
+    ///
+    /// | `Corrupt` | `StoreInvariant` |
+    /// | --- | --- |
+    /// | `CumulativeDifficultyNotMonotone { at }` | `WorkNotIncreasing { height: at }` (SI-10) |
+    /// | `CumulativeDifficultyOverflow` | `FoldOverflow { cell: "block_info.cumulative_difficulty" }` (SI-8) |
+    ///
+    /// A zero next-block target is **not** in this table and never was a
+    /// store matter: LWMA-1 has no output floor and a conforming slow chain
+    /// derives zero, so it is CEN-D6's refusal of the block — a verdict the
+    /// validator returns, which the store never sees (RD-F17, 2026-09-20).
+    ///
+    /// Returns the `InvariantViolated` the caller propagates — the batch is
+    /// poisoned either way, and `complete` refuses to commit it. **This is
+    /// the one place the store names a validator fault type**, and it names
+    /// only `Corrupt`: never `InvalidBlock` (the conversion ban), never
+    /// `Stale` (unproven is not a store fault), never `Fault::View` (that is
+    /// the store's own error coming back). The ingest pipeline is its caller
+    /// (DRS-E2 RD-Q4; minted with that caller, as ruled 2026-09-19 — the API
+    /// #785's commit 9 shed rather than guess at from the store side).
+    ///
+    /// Refusing a `Corrupt` **is chain work**: the validator read this
+    /// store's chain to find it. So the connecting height is noted here if
+    /// nothing in the batch noted it yet (normally `chain_view` already did,
+    /// at `tip + 1`), and the writer halt fires at that height — §3.6.2's
+    /// "a batch that did no chain work does not halt" cannot apply to a
+    /// batch whose chain was just found inconsistent.
+    pub fn refuse_corrupt(&self, corrupt: Corrupt) -> StoreError {
+        if self.journal.height_hint().is_none() {
+            self.note_chain_work();
+        }
+        let row = match corrupt {
+            Corrupt::CumulativeDifficultyNotMonotone { at } => StoreInvariant::WorkNotIncreasing {
+                height: at.to_raw(),
+            },
+            Corrupt::CumulativeDifficultyOverflow => StoreInvariant::FoldOverflow {
+                cell: "block_info.cumulative_difficulty",
+            },
+        };
+        self.poison.arm(row)
     }
 
     /// Project this batch as the [`ChainView`](shekyl_chain_rules::ChainView)

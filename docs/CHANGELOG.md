@@ -4,6 +4,24 @@
 
 ### Daemon chain store
 
+- **DRS-E2 increment 1 — the ingest spine's first organs.** `shekyl-chain-ingest`
+  is born: the daemon's block-ingest pipeline as production code shared by
+  replay (E2) and live ingest (E3) — a `Source` event model
+  (`Extend`/`Rewind`, so a reorg is representable), the production RandomX
+  substrate (the verifier's `compute_hash`, never the JIT), and the
+  **corpus** artifact (Rust-minted, versioned) whose writer verifies every
+  block's bodies against its header before writing — a pruned source's
+  silent shortfall is refused by height — and whose reader takes the
+  header as the bound on `tx_count` (a crafted count cannot allocate
+  before the listed hashes are known). Store: `WriteBatch::refuse_corrupt`
+  lets the validator's `Fault::Corrupt` halt the writer (**SI-10**, recorded
+  cumulative work strictly increases; the first invariant armed by the
+  validator reading the store); `ReadSnapshot::logical_state_digest_v0`
+  reports the redb file's logical-state digest; **`connect` takes the
+  in-force `RuleSet` by value** (a Fakechain verdict can now connect;
+  `StoreCannot::RuleSetUnknown` deleted). Process: every FOLLOWUPS row
+  carries a gated `Owner:` (`check_followups_owners.py`).
+
 - **Transaction read surface (S-TX, DRS-E1 increment 6).** `ReadSnapshot`
   gains `tx_location` / `tx_record` by `TxHash` (returning `Option` — a hash
   miss is ordinary), `tx_count`, `tx_prunable` / `tx_output_indices` by
@@ -48,6 +66,14 @@
 - **The committed-chain read surface (S-CHAIN-R, DRS-E1 increment 4, PR #772).** `ReadSnapshot` gains nine typed reads (`tip`, `height_of`, `block_info`, `block_infos`, `block_blob`, `block`, `blocks`, `block_burn`, `total_burned`) plus `cumulative_tx_count` / `long_term_effective_median`; `TipState` carries the writer's halt beside the recorded tip. Store layout `SCHEMA_VERSION 2 → 5` (typed value shapes, `DAEMON_REDB_STORE.md` §11.1(f); `BlockInfo` 88 → 104 B; the seal creates every table with a writer; `txs_pqc_auth_hash`; `spent_keys` is `Present`). Pre-genesis: an existing redb store file is refused at open and rebuilt, per §11.1(a).
 
 ### Wallet
+
+- **Height-semantics Phase 2b: dispatch-clock stamps are `ChainCount`.**
+  `daemon_claimed_tip`, `BlockSource::tip_height`, `anchor_t0`, and
+  `Dispatched::at` carry the claimed chain **count** (same numeric as
+  Phase 1: a 3-block chain still reports 3). Pending-post schema
+  **v10 → v11** — postcard bytes of the transparent `u64` are identical;
+  the schema type-name change still bumps. Pre-genesis: a v10 seal is
+  refused, not migrated.
 
 - **"Synchronized" is a type the release gate must hold
   (`WALLET_SIDE_STORE.md` `WSS-Q14`, closing `WSS-25`).** New

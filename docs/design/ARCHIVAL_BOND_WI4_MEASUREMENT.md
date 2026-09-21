@@ -778,7 +778,8 @@ valid** (positive `P(link)=0.996 ≥ 0.80`; negative `P(link)=0.102`,
 > observer*. The spread is therefore **live defense-in-depth only against an
 > off-chain-anchored adversary** — someone who knows the principal and saw them
 > act at time `T` — and **dead against the chain observer**, which is exactly
-> the non-certified posture. Its single execution site is `due_height` in
+> the non-certified posture. Its single execution site is `due_count`
+> (was `due_height`) in
 > `shekyl-engine-core`'s `pscan/dispatch.rs`
 > (`due = anchor_t0 + bond_post_offset_blocks`) — the claim is checkable there,
 > not prose.
@@ -903,16 +904,19 @@ bound at posture.
 - **Block-unit `dispersal > 0`:** a **coarse-tick counterfactual**, not the
   realistic operating point. The live driver's dispersal is `U[0, 60s)`
   (`DEFAULT_PSCAN_CADENCE`), well under one block; and the emitted
-  `BondPostDispatched { at }` records the **due-check tip block, captured
-  before the dispersal sleep** (`pscan/dispatch.rs`), so the dispersal is
-  invisible at block granularity. The realistic block-time gate therefore
-  sits at `dispersal = 0`.
+  `BondPostDispatched { at }` records the **due-check claimed count, captured
+  before the dispersal sleep** (`pscan/dispatch.rs`; 2026-07 named this the
+  "due-check tip block"; the quantity was always COUNT — on a three-block
+  chain `at` is 3, not ordinal tip 2), so the dispersal is invisible at
+  block granularity. The realistic block-time gate therefore sits at
+  `dispersal = 0`.
 
 ### 13.3 Reconvergence leg (b): the wall-clock channel is the primary open uncertainty
 
 The block-time sealing re-run is **confirmatory by construction**: because
-the live `BondPostDispatched.at` is the due block (dispersal is sub-block,
-never enters `at`), the live block-time timeline reproduces the sim's
+the live `BondPostDispatched.at` is the due-check count (dispersal is
+sub-block, never enters `at`; 2026-07 named this the "due block"), the
+live block-time timeline reproduces the sim's
 `dispersal = 0` surface — already evidenced by the engine emission test
 `gf7_emits_bond_post_dispatched_per_submit` (`pscan/dispatch.rs`, feature
 `gf7-hooks`).

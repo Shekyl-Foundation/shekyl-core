@@ -196,6 +196,18 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_targets.py --selftest
 
+      - name: "Run FOLLOWUPS Owner: resolution gate"
+        # A deferral's owner must resolve — to a live docs/design/ document or
+        # a registered index-§2 family — or the row is a queue nobody chose
+        # (rule 22; DRS_E2_REPLAY_DRIVER.md RD-F4). Rows predating the cell are
+        # grandfathered by exact heading in a list that only burns down.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_followups_owners.py
+
+      - name: Run FOLLOWUPS owner gate selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_followups_owners.py --selftest
+
       - name: Run code-citation resolver
         # Every code citation in the pinned review documents must resolve to
         # exactly one tracked file at the era that document declares — its

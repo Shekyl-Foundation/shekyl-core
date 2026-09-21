@@ -574,21 +574,28 @@ each with its resolution:
      exists under that name; the clause is retired rather than carried, and re-derived
      from the substrate if the underlying concern resurfaces.
 
-   **What is genuinely still owed:** the two remaining **builders**. `shekyl-archival-bond-builder`
-   has `build_join_market_vin` (L158) and `build_release_vin` (L310); **`Reinstate` and
-   `HoldingsUpdate` have verify arms but no producer.** That is the whole of this item
-   now, and it maps to `fund_bond`'s top-up path and `partial_release` rather than to
-   `release`. Authority: [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §8.
+   **What was owed here is now a deletion, not a gap (2026-09-20).**
+   `shekyl-archival-bond-builder` has `build_join_market_vin` (L158) and
+   `build_release_vin` (L310); `Reinstate` (né `Rebond`) and `HoldingsUpdate` have
+   verify arms but no producer. Under the **immutable-bond ruling** (§5.3) that
+   missing producer is the correct end state for `HoldingsUpdate`, in **both**
+   directions: there is no holdings-change transaction to build, because holdings do
+   not change. The row therefore **flips from gap to deletion** — the verify arms are
+   what get removed, not the builders that were never written. `Reinstate` keeps its
+   place as the sole in-place record operation and still owes its producer; that half
+   of the item survives. Authority: [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
+   §8 for the original shape; §5.3 below for the ruling.
 3. **Reward-emission leg — LANDED (with PR-P5, 2026-08-26).** The drain consumes reward
    outputs, so the leg had to exist first; it and the gate-6 §12.9 ratification landed
    together and `drain` shipped against them (§4a PR-P5). The C-1 ML-DSA check gated
    *verifying* the `Bonded→emit` path, never the bond-lifecycle connect paths
    ([`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md); C-1 = PR-E3 step 8).
 
-**Landed state (2026-09-19):** DQ1–DQ6 closed; `stake_in`, `first_stake`, `drain`,
-`unstake` and `collect_unstaked` shipped through wallet-RPC and CLI (§4a); the query
-surface partially shipped (PR-P6). **What remains open on this surface is the
-`HoldingsUpdate` / `Reinstate` producer pair (item 2) and `release_readiness` (PR-P6,
+**Landed state (2026-09-19; item 2 re-stated 2026-09-20):** DQ1–DQ6 closed;
+`stake_in`, `first_stake`, `drain`, `unstake` and `collect_unstaked` shipped through
+wallet-RPC and CLI (§4a); the query surface partially shipped (PR-P6). **What remains
+open on this surface is the `Reinstate` producer (item 2 — its `HoldingsUpdate` half
+is now a deletion under §5.3, not a producer owed) and `release_readiness` (PR-P6,
 FOLLOWUPS).**
 
 ## 5.1 Round-1 entry questions & inherited carries (A5)
@@ -720,6 +727,69 @@ earnings-ramp `C_min` sizing" edifice on the pre-sim `C_min` phantom — rigorou
 channel the definitive sim had already superseded. With `C_min = 1 rung` sim-supported and the
 rung gate-4-pinned, there is no such convergence gate; the remaining work is the `stake_in`
 wiring + DQ4's steady-state funding sources named in the Correction.
+
+## 5.3 The immutable-bond ruling — lifecycle mechanics (ratified 2026-09-20)
+
+**The ruling itself, and the reason it holds, are recorded in
+[`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §"A bond is immutable for its
+life" (doctrine) and [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md)
+(2026-09-20, with the history line).** This section carries only what the lifecycle
+surface has to do differently. It does not restate the rationale — but note that the
+rationale *is* the protection, and a reader who arrives here proposing to re-add
+in-place holdings mutation should read it there before writing code.
+
+### 5.3.1 How holdings change, now that a bond cannot
+
+**By persona rotation, under §10.1's two-active overlap.** The new persona bonds the
+new set; the old persona releases and drains. Two events, two pseudonyms,
+decorrelated — and the overlap is what makes it safe to do: it covers **serving
+continuity** (the old persona keeps serving its shards until the new one is live) and
+the **release cooldown** (the old persona stays slashable through it, so rotation is
+not an exit-dodge).
+
+This replaces a same-persona mutation with a cross-persona handover, which is the
+whole privacy point: an operator who changes holdings authors one bond post under a
+*new* pseudonym rather than an *n*-th update under an old one.
+
+`Reinstate` (né `Rebond`) is unaffected and survives as the **sole in-place record
+operation**: zero-money, post-slash, re-arming slashability on a record whose holdings
+it is forbidden to change (its post-holdings superset rule already said so — it
+required a superset, and the immutable-bond ruling now makes that superset necessarily
+equal).
+
+### 5.3.2 The deletion set (rule 15 — enumerated here, deleted under separate authorization)
+
+**Enumerated in the record so the deletions are a known set rather than a discovery.**
+No code moves in the PR that records this ruling; each deletion is separately
+authorized.
+
+| # | Subject | Site / authority | Note |
+| --- | --- | --- | --- |
+| 1 | **`HoldingsUpdate`, both directions** — wire forms and verify arms | `verify_holdings_update_add` (`bond_post.rs:255`), `verify_holdings_update_drop` (`:324`), plus the wire kind and its FFI codes | The kind goes, not just the producers that were never written (§5 item 2) |
+| 2 | **Mid-epoch add-activation bookkeeping** — the *add* half of P2B-7 **Pin 5** | `ARCHIVAL_CHALLENGE_MECHANISM.md` §"Pin 5" | **Bond birth becomes the only activation event.** The drop half of Pin 5 is a separate question and is not claimed here |
+| 3 | **The per-shard drop anti-dodge** — P2B-7 **Pin 3** | `PHASE_2B_FSM_RETOOL.md` §"Pin 3 — slashable-when boundary" | **Subsumed** by the whole-bond release cooldown. Pin 3 was explicitly *"the exact per-shard analogue of the `Release` cooldown"*; with no per-shard drop, the analogue collapses back into its original |
+| 4 | **Drop-last-shard-rejected** | the same verify surface | **Subject deleted** — there is no drop, so there is no last-shard case to reject |
+| 5 | **`WSS` per-shard absence tracking** | `WALLET_SIDE_STORE.md` | Collapses to *"the record exists with `S`, or it does not"*. A bond's shard set is now a constant, so per-shard presence is not a tracked dimension |
+| 6 | **The `Rebond` → `Reinstate` rename** | separate PR | Rides the same wave; not caused by this ruling, but it touches the same surface and should land with it rather than against it |
+
+### 5.3.3 Residuals — named here so they are not discovered later
+
+- **Claims remain the one repeatable class.** Accrue-then-rare-claim, with
+  decorrelated timing. Folding into exit is an **offered zero-leak default, never
+  forced** — an operator who wants earlier liquidity may take it and pay the
+  observability.
+- **A pure shrink pays the cooldown.** An operator who only wants to *reduce*
+  holdings still rotates, and so still waits. **Recorded as intended, not as a
+  defect:** it prices deliberate sizing, and the alternative is a cheap shrink path
+  that is exactly the incremental stream the ruling exists to forbid.
+- **New-shard coverage is market-pulled**, with the Foundation complete-tree floor as
+  backstop. This is the one place the ruling has a measurable open question, and it is
+  **one economics-sim row: the pull latency for a fresh shard** — how long a newly
+  frozen shard waits for market coverage when no operator can incrementally add it.
+  Carried in [`FOLLOWUPS.md`](../FOLLOWUPS.md).
+- **TJ-7 (sybil-per-shard) is orthogonal.** This ruling **claims no credit there** and
+  does not weaken or strengthen it; a reader reconciling the two should treat them as
+  independent.
 
 ## 6. References (authoritative — reference, do not restate)
 

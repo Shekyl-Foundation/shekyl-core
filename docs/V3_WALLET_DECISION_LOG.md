@@ -39,6 +39,52 @@ the original reasoning and assume it was arbitrary.
 
 ---
 
+## 2026-09-20 — A persona's bond is immutable for its life
+
+**Decision.** A persona's bond is **immutable for its life**. The holdings set
+is fixed at the bond post and never mutates. The only holdings-change
+mechanism is **persona rotation** under the two-active overlap: the new
+persona bonds the new set, the old releases and drains — two events of two
+pseudonyms, decorrelated, with the overlap covering serving continuity and the
+release cooldown. `Reinstate` (né `Rebond`) survives as the sole in-place
+record operation: zero-money, post-slash, and not a change of holdings.
+
+**Rationale.** Clustering requires **same-class repetition**; a single event
+cannot be clustered. The design caps `P`-authored same-class events at **one
+per class per persona lifetime** (fund, bond, release, drain), bond amounts
+are **quantized** at `|S| · FLOOR` so the amount dimension carries no operator
+signal, and serving is **miner-authored** (the credit wire rides coinbases) —
+so a persona's authored chain footprint is ~four transactions of four distinct
+classes. **An incremental-update stream is the clusterable object, and this
+ruling makes it unconstructible.** That paragraph is the protection: without
+it, incremental holdings updates return as an obvious efficiency PR and
+silently destroy the property.
+
+**History.** Proposed early and **tabled** while shard selection was still
+open, because system-assigned shards forced involuntary incremental mutation —
+the objection was real and, on the design as it then stood, fatal. Shard
+**self-selection** (market picker with the Foundation complete-tree floor)
+removed the objection's premise; it did not weaken, its subject ceased to
+exist. Reopened and ratified 2026-09-20.
+
+**On the shape of that resolution, recorded because the pattern is reusable.**
+The idea was right, the objection was real, and the objection belonged
+*entirely* to a design that has since been ruled away. That is the tabling
+discipline working exactly as intended: **the fence was not indecision, it was
+a dependency.** A ruling deferred against a named open question can be taken
+cleanly the moment that question closes; a ruling argued to a verdict against
+a premise that is itself in flight cannot be.
+
+**Where it is recorded.** The principle and its protection paragraph in
+[`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) §"A bond is immutable for its
+life" (doctrine class); the lifecycle mechanics, the rule-15 deletion set and
+the residuals in
+[`design/PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
+§5.3.
+
+**Scope.** This entry records the ruling. **No code moves with it** — the
+deletion set is enumerated in PSL §5.3.2 and each deletion is separately
+authorized.
 ## 2026-09-20 — `Rebond` is renamed `Reinstate` (name only)
 
 **Decision.** The archival bond-post kind `Rebond` becomes `Reinstate`

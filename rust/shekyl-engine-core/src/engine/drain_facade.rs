@@ -608,7 +608,7 @@ mod tests {
                         funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(42)],
                         state: PendingPostState::Pending,
                     },
-                    shekyl_types::BlockHeight::from_raw(1),
+                    shekyl_types::ChainCount::from_raw(1),
                     g,
                 ) == SealAdmission::Admit;
                 (admitted, admitted)

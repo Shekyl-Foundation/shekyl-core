@@ -192,10 +192,11 @@ impl SyncedChainFacts {
 
     /// The daemon's block **count** — one more than the newest block's height.
     ///
-    /// Exists for one caller: `daemon_claimed_tip`, which historically
-    /// labelled this count as a `BlockHeight` and must keep doing so until
-    /// that off-by-one is ruled on separately (see its doc). Prefer
-    /// [`Self::tip`] everywhere else — a consumer that wants a height and
+    /// Exists for one caller: `daemon_claimed_tip`, which returns this
+    /// [`ChainCount`] as the dispatch clock. The number is the Phase 1 pin
+    /// (a 3-block chain reports 3); flipping to [`Self::tip`] would move
+    /// every stamp down by one block. Prefer [`Self::tip`] when the
+    /// consumer wants an ordinal — a consumer that wants a height and
     /// reaches for this is reintroducing the confusion the type exists to
     /// prevent.
     pub(crate) fn chain_height(&self) -> ChainCount {

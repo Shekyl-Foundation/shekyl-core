@@ -100,7 +100,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_archival_retention::MAX_CLAIM_AGE_W;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_engine_state::pscan_state::PScanState;
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch};
 
 use crate::engine::pscan::accrual::PScanAccrual;
 use crate::engine::stake_engine::test_fixtures::derive_bundle;
@@ -457,10 +457,11 @@ impl crate::engine::pscan::block_source::BlockSource for WalkBlockSource {
     fn tip_height(
         &self,
     ) -> impl std::future::Future<
-        Output = Result<BlockHeight, crate::engine::pscan::block_source::BlockSourceError>,
+        Output = Result<ChainCount, crate::engine::pscan::block_source::BlockSourceError>,
     > + Send {
-        // `horizon = tip - reorg_depth`, so this yields `cursor + 2` — a
-        // **two**-block range `[cursor, cursor + 2)`, and the `+ 2` is
+        // `horizon = claimed.saturating_sub_count(reorg).next_height()`, so this
+        // yields `cursor + 2` as COUNT — a **two**-block range `[cursor, cursor + 2)`,
+        // and the `+ 2` is
         // load-bearing rather than slack. With `batch_blocks = 1` each run
         // scans one batch: run 1 consumes the block at `cursor`, seals, and is
         // cancelled inside that seal; run 2 resumes at `cursor + 1` and needs a
@@ -468,8 +469,8 @@ impl crate::engine::pscan::block_source::BlockSource for WalkBlockSource {
         // retire dispatch live *inside* that loop. Bite-checked: `+ 1` leaves
         // run 2 with an empty range, the dispatch never runs, and the retire
         // does not re-fire. Do not "simplify" this to `+ 1`.
-        let tip = BlockHeight::from_raw(self.cursor_height + WALK_REORG_DEPTH + 2);
-        async move { Ok(tip) }
+        let claimed = ChainCount::from_raw(self.cursor_height + WALK_REORG_DEPTH + 2);
+        async move { Ok(claimed) }
     }
 
     fn block_at(
