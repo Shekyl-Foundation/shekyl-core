@@ -23,7 +23,12 @@ per input; reopens at mainnet scale); (b) store-backed / pruned-tree assembly
 (F5) — **superseded in design** by [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
 §6.3: the proving state is not a store (a public frontier at `F`, a recent-block
 buffer, per-output paths), and the `WSS-13` unwind retires the leaf store in code
-under its own authorization; (c) reactive `ProofStale` detection (→ Phase 6, needs a
+under its own authorization. **(a) and (b) are both discharged by `CT-6`**
+([`CT6_PROVING_STATE.md`](CT6_PROVING_STATE.md), design round opened 2026-09-20),
+which carries §6.3 as its design of record: (a) is that round's F3(b) and its
+increment 3, (b) its F3(a) and increment 4. Its Round-0 pre-flight **removed** the
+reference-height question from the round outright — `REF_ANCHOR_AGE` /
+`select_reference_height` (§5) are landed and privacy-canonical (`CT-6` F1); (c) reactive `ProofStale` detection (→ Phase 6, needs a
 daemon stale-root signal); (d) Track-2 (FAKECHAIN regtest) depth-3+ real-tree
 verify at scale + C++↔Rust FFI parity + CT-2 Tier-B KATs + the `get_curve_tree_leaves`
 C++ endpoint — the bulk-leaf RPC (§6) is **repositioned** to non-forward
