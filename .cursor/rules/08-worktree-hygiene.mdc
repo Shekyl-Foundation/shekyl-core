@@ -26,6 +26,17 @@ the cause is environmental rather than anything either lane did (a third instanc
   `dev` merge showed the plan doc modified, and the diff was the deletion
   of the decision-log row that commit had added. Caught by constraint 1
   (a file that was not edited showed as modified); restored from `HEAD`.
+- **`wt-scurve` (2026-09-21) — the dangerous case, observed.** Two files
+  drifted within twenty minutes of a commit: an archived plan's six
+  repointed links reverted in the working copy (caught by the links gate,
+  restored from `HEAD`); and two links in `IMPLEMENTATION_INDEX.md` reverted
+  *and were then committed*, because the next commit staged that file whole
+  for an unrelated edit — the stale content passed review as "the index
+  row" and reached the remote. Explicit paths were used; the file was
+  legitimately part of the commit. So constraint 1 is necessary and not
+  sufficient: **before staging a file you edited, diff it against `HEAD`
+  and read every hunk you did not make.** Fixed by a follow-up commit; the
+  pushed tip was wrong for eight minutes.
 
 Both were caught by a human or an agent reading the diff. That does not
 scale, and it is not the dangerous case. **The dangerous case is a drift

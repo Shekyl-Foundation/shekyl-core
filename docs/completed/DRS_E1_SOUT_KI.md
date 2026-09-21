@@ -1,6 +1,6 @@
 # DRS-E1 S-OUT-KI — outputs and key images: increment plan and Round-0 pre-flight
 
-**Status:** CLOSED-as-record — **archived 2026-09-19 by S-TX's pre-flight PR** ([`DRS_E1_STX.md`](../design/DRS_E1_STX.md) §2.5), the reader §10 was waiting for; owns no open residue (SOK-10 CLOSED by deletion in PR #784, [`SOK_10_PATH_POSITION_RESOLUTION.md`](SOK_10_PATH_POSITION_RESOLUTION.md)). Increment LANDED 2026-09-18 (the §7 commits 1–3 are
+**Status:** CLOSED-as-record — **archived 2026-09-19 by S-TX's pre-flight PR** ([`DRS_E1_STX.md`](DRS_E1_STX.md) §2.5), the reader §10 was waiting for; owns no open residue (SOK-10 CLOSED by deletion in PR #784, [`SOK_10_PATH_POSITION_RESOLUTION.md`](SOK_10_PATH_POSITION_RESOLUTION.md)). Increment LANDED 2026-09-18 (the §7 commits 1–3 are
 code: `store/read.rs` K1/K2/O1/O2, `store/at_index.rs`, layout v6 in
 `schema.rs` / `codec/chain.rs` / `codec/undo.rs` / `store/connect.rs`; Q3's
 deletion is PR #782). It stayed in `design/` until S-TX's pre-flight had read it
