@@ -42,10 +42,11 @@ async fn test_rpc() {
         // returning the parsed oxide `Block`) is retired — the canonical block parse
         // lives in `shekyl-wire`, fetched from raw bytes. `get_block_hash` /
         // `get_hardfork_version` / `get_height` remain and are smoked here.
-        let height = rpc.get_height().await.unwrap().to_raw() as usize;
-        let block_number = height - 1;
+        let chain = rpc.get_height().await.unwrap();
+        let prior = usize::try_from(chain.tip().expect("non-empty chain").to_raw())
+            .expect("block height fits usize");
         // There should be a block just prior; its hash route resolves.
-        rpc.get_block_hash(block_number).await.unwrap();
+        rpc.get_block_hash(prior).await.unwrap();
         // The hardfork version route resolves to a genesis-or-later version.
         assert!(rpc.get_hardfork_version().await.unwrap() >= 1);
     }
@@ -56,11 +57,13 @@ async fn test_rpc() {
             .generate_blocks(SAMPLE_MAINNET_ADDR.as_str(), amount_of_blocks)
             .await
             .unwrap();
-        let height = rpc.get_height().await.unwrap().to_raw() as usize;
-        assert_eq!(number, height - 1);
+        let chain = rpc.get_height().await.unwrap();
+        let tip = usize::try_from(chain.tip().expect("non-empty chain").to_raw())
+            .expect("block height fits usize");
+        assert_eq!(number, tip);
 
         let mut actual_blocks = Vec::with_capacity(amount_of_blocks);
-        for i in (height - amount_of_blocks)..height {
+        for i in (tip + 1 - amount_of_blocks)..=tip {
             actual_blocks.push(rpc.get_block_hash(i).await.unwrap());
         }
         assert_eq!(blocks, actual_blocks);
