@@ -164,7 +164,7 @@ question turns a judgement per site into a test.
 | S12 | `blockchain.cpp:1511` | `money_in_use += o.amount` **unchecked** — safe only because `check_outs_overflow` (F7) ran first | ordering | F7, F18 | `checked_add` in Rust; the ordering is not carried |
 | S13 | `blockchain.cpp:1519`–`:1527` | `if (version == 3)` decomposed-denomination gate | **dead** | F12 | Q2 |
 | S14 | `blockchain.cpp:1529` | `median_weight = m_current_block_cumul_weight_median` — cached daemon state | **RULE** operand | F14, F14b | G6's derivation (§3 F4); no Rust source |
-| S15 | `blockchain.cpp:1531` | `circulating_supply = already_generated_coins` — the **definition** of F17's "circulating supply" operand (gross emission, not net of burn) | **RULE** (definition) | F17 | Census F17 says "circulating supply" without the definition; amendment names it. Port as a named read |
+| S15 | `blockchain.cpp:1534` (validation), `:1821` (template) | `circulating_supply = already_generated_coins` — the **definition** of F17's "circulating supply" operand, **gross** emission ignoring burn, assigned at two sites | **RULED DEFECT** — FL-R16c (`FEE_LADDER_DERIVATION.md` §8, review round 4: *"the sweep must not walk past the pre-existing definitional bug … record — binds the implementing PR"*), rediscovered here as a fresh finding because the ruling's pins (`:1787`, `:2074`) had drifted | F17 | **Not an amendment — the binding disposition, landed (P1c):** `circulating_supply = coins_generated − total_burned`, derived **once** in `shekyl-economics::supply::CirculatingSupply::derive` from two store facts, `checked_sub` with the `None` arm a `SupplyInvariantViolation` (never a saturating zero: zero would sail through `calc_burn_pct`'s `total_supply == 0` guard and return a burn of `0` that looks valid). Both C++ sites pass `shekyl::supply_facts`; the accrual shares one read. The clamp at `burn.rs:83` **stays** — the two halves of FL-R16c are independent (the saturation is the perpetual tail's, not the gross operand's; `supply::tests::net_supply_exceeds_the_asymptote_under_the_tail`) — with its comment rewritten so it no longer names an operand that left |
 | S16 | `blockchain.cpp:1540` | `genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` | **RULE** as data | F21 | `RuleSet` parameter (Q5) |
 | S17 | `blockchain.cpp:1553`–`:1565` | `miner_base_reward + effective_fee` **unchecked**; `<` then `!=` (two arms, one outcome) | **RULE** | F18 | `checked_add`; one `!=` arm |
 | S18 | `blockchain.cpp:5470`, `:5675`–`:5676` (connect) | `cumulative_block_weight = weight(miner_tx) + Σ tx_weight`; `fee_summary = Σ fee` | **RULE** (operand definitions) | 4.G (weight), F17/F18 (fee) | Block weight is 4.G's definition (slice 7); the fee sum is the candidate's own and lands as a definition read here |
@@ -234,6 +234,50 @@ P1–P2 are the "commit rather than a PR" case the review anticipated if the
 sweep came back small; it came back with five shim sites and one missing
 constant, which is one PR's worth of relocation with fixtures, sequenced
 ahead of the slice's rule commits and reviewable on its own.
+
+**Precursor LANDED on the branch 2026-09-21 (P1a, P1b/c, P2, P3):**
+
+- **P1a (S8)** — `block_weight_full_reward_zone_bytes` in
+  `config/consensus_constants.json` (the surge factor's precedent: one key,
+  both generators); `EconomicParams::full_reward_zone`; the argument gone
+  from `paid_block_reward` / `block_reward_with_penalty` /
+  `block_weight_limit` / `shekyl_block_reward`; the C++ macro defined from
+  the generated header; params digest `0x02 → 0x03` (the zone selects the
+  penalty, so a stamp that omitted it would let two nodes agree while paying
+  differently); `PINNED_DIGEST` re-pinned with the chain question answered.
+  Behaviour unchanged. **Residue for the fee-ladder lane:**
+  `checked_corrected_fee_ladder` / `checked_relay_fee_floor` and their FFI
+  still take the zone as an argument (the policy path).
+- **P1b (S4, S6)** — `shekyl-economics::compute_emission_split` owns the
+  zero arm and the composition; `shekyl_compute_emission_split` FFI;
+  `economics.h` marshals one call.
+- **P1c (S1, S3, S15)** — `compute_fee_burn` / `calc_burn_pct_at` own the
+  zero-fee arm, the percentage from `params`, and the composition;
+  `CirculatingSupply::derive` is FL-R16c's definitional half, landed (see
+  the S15 row); `shekyl_compute_fee_burn` / `shekyl_calc_burn_pct_at` take
+  the two store facts and return a status (`SUPPLY_INVARIANT` writes
+  nothing — the caller halts); `validate_miner_transaction` gains
+  `total_burned`, read **once** at the connect site beside
+  `frozen_segment_count` and shared with the accrual; the template reads
+  its own at parent state; the info RPC's `burn_pct` is over the derived
+  supply. **Not moved, recorded on FL-R16c:** the relay-floor ring and the
+  fee estimate form `C` over the gross operand through the raw
+  `shekyl_calc_burn_pct` — the ring recomputes rungs at historical heights,
+  and neither store has a per-height cumulative-burn fact (only per-block
+  `block_burn` rows). A fee-ladder question with a store dependency.
+- **P2 (S22, S25, S26, S27)** — `shekyl_ct_balance::check_commitment_masks_for(masks, n_outputs, MaskSubject)`
+  is the entry: the arity gate (`MaskCountMismatch`, new) and the
+  fingerprint selection by subject; the `Option<&[u64]>` primitive is
+  crate-private. The FFI takes the CT type byte and the output count as
+  facts and derives the subject (`ERR_MASK_COUNT`, `ERR_CT_TYPE` new);
+  `check_commitment_mask_valid` and `check_outs_valid` lose their arms.
+- **P3** — census F10 (arity clause; selection), F16, F17 (the FL-R16c
+  definition; the shim content) amended with re-resolved pins; FL-R16a/b/c
+  pins re-resolved and R16c → BUILT (both halves, independence recorded);
+  FOLLOWUPS: the census-method question (owner: the census, §3.4). The
+  remaining 4.F line pins (F1) are the slice PR's.
+- **P4** waits on Q2 (F12) — S23's three dead `check_output_types` arms go
+  with it, in one rule-60 commit.
 
 
 ---
