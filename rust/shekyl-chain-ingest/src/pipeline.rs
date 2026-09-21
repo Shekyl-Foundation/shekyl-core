@@ -40,6 +40,7 @@ use shekyl_types::{BlockHash, BlockHeight};
 use tokio::task::JoinSet;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, Rewind, RunFault};
+use crate::grader::Observations;
 use crate::schedule::ChainRules;
 use crate::seed::{SeedLedger, SeedSchedule};
 use crate::sequencer::{SequenceError, Sequencer};
@@ -80,6 +81,9 @@ pub struct RunReport {
     /// Redb-side digests taken at the trace's checkpoint heights, beside
     /// the trace's expectation there.
     pub checkpoints: Vec<(BlockHeight, LogicalStateDigestV0, LogicalStateDigestV0)>,
+    /// What the grader reads (RD-Q9): exercised rows, the refusal, digest
+    /// agreement.
+    pub observations: Observations,
 }
 
 /// Why a run ended in an error.
@@ -302,6 +306,10 @@ where
         }
         if !run.is_empty() {
             let applied = connector.ask(Apply(run)).await.map_err(collapse)?;
+            report
+                .observations
+                .exercised
+                .extend(applied.exercised.iter().copied());
             for (height, hash) in &applied.connected {
                 report.connected.push((*height, *hash));
                 if checkpoints.contains(height) {
@@ -311,11 +319,13 @@ where
                         .expect("checkpoint heights come from the trace")
                         .value()
                         .clone();
+                    report.observations.checkpoint(ours == theirs);
                     report.checkpoints.push((*height, ours, theirs));
                 }
             }
-            if let Some(refused) = applied.refused {
-                report.refused = Some(refused);
+            if let Some((height, refused)) = applied.refused {
+                report.observations.refused = Some((refused.rule.as_str(), height));
+                report.refused = Some((height, refused));
                 break 'run;
             }
         }

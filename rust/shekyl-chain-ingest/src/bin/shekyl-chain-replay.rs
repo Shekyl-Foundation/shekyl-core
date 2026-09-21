@@ -34,6 +34,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use shekyl_address::Network;
 use shekyl_chain_ingest::corpus::{CorpusReader, CorpusWriter};
 use shekyl_chain_ingest::fetch::fetch_corpus;
+use shekyl_chain_ingest::grader::{grade_run, Register};
 use shekyl_chain_ingest::pipeline::{run, PipelineConfig};
 use shekyl_chain_ingest::schedule::{Chain, ChainRules};
 use shekyl_chain_ingest::substrate::ChainSubstrate;
@@ -120,6 +121,14 @@ enum Command {
         /// Blocks formed ahead of the writer at once.
         #[arg(long, default_value_t = PipelineConfig::default().window)]
         window: usize,
+        /// The CSR-3a register as `scripts/ci/export_conformance_register.py`
+        /// emits it. With it, the run is graded (RD-Q6) and exits non-zero on
+        /// an unadjudicated disagreement (§1.3).
+        #[arg(long)]
+        register: Option<PathBuf>,
+        /// Where to write the graded-run artifact (JSON). Requires `--register`.
+        #[arg(long, requires = "register")]
+        grade_out: Option<PathBuf>,
     },
 }
 
@@ -161,6 +170,8 @@ async fn real_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             fixed_difficulty,
             settlement_epoch_blocks,
             window,
+            register,
+            grade_out,
         } => {
             let rules = ChainRules::new(chain.into(), fixed_difficulty)?;
             let epoch = SettlementEpochBlocks::new(settlement_epoch_blocks)
@@ -193,6 +204,33 @@ async fn real_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             for (height, ours, theirs) in &report.checkpoints {
                 let verdict = if ours == theirs { "MATCH" } else { "DIVERGE" };
                 eprintln!("checkpoint after height {height}: digest {verdict}");
+            }
+            if let Some(register) = register {
+                let register = Register::from_json(&std::fs::read_to_string(&register)?)?;
+                let graded = grade_run(&register, &report.observations);
+                eprintln!(
+                    "graded: {} row(s); {} derived-and-conformant, {} borrowed, {} not exercised, \
+                     {} owed reviewed-divergence, {} unadjudicated",
+                    graded.rows.len(),
+                    graded.derived_and_conformant,
+                    graded.borrowed,
+                    graded.not_exercised,
+                    graded.owed_reviewed_divergence.len(),
+                    graded.unadjudicated.len(),
+                );
+                if let Some(out) = grade_out {
+                    std::fs::write(&out, graded.to_json()?)?;
+                    eprintln!("graded artifact → {}", out.display());
+                }
+                for u in &graded.unadjudicated {
+                    eprintln!(
+                        "UNADJUDICATED {} ({:?}): {:?}",
+                        u.id, u.clause, u.acceptance
+                    );
+                }
+                if !graded.passes() {
+                    return Err("the run has unadjudicated disagreements (§1.3)".into());
+                }
             }
             Ok(())
         }

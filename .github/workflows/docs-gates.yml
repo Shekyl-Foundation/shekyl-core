@@ -199,6 +199,13 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_targets.py --selftest
 
+      - name: Run the conformance-register extractor self-test
+        # DRS-E2 RD-Q6: the E2 grader's register is the coverage gate's own
+        # parse, serialized; the self-test holds the emitted tally equal to
+        # the gate's so the serialization cannot drift from the parse.
+        if: '!cancelled()'
+        run: python3 scripts/ci/export_conformance_register.py --selftest
+
       - name: "Run FOLLOWUPS Owner: gate (+ self-test)"
         # A deferral's owner must resolve — a live docs/design doc, an OPEN
         # PR, or an index §2 family (DRS-E2 RD-F4). Rows predating the

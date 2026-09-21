@@ -58,6 +58,11 @@ thiserror = { workspace = true }
 # parsing as shekyl-cli does it; the HTTP transport for `fetch`.
 clap = { version = "4", features = ["derive"] }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+# The graded-run artifact and the extracted register are JSON (RD-Q6:
+# drs_artifact.py's schema discipline; the register comes from the coverage
+# gate's own parse).
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync"] }
 
 [dev-dependencies]

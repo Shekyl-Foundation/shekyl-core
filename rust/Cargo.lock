@@ -3801,6 +3801,8 @@ dependencies = [
  "clap",
  "kameo",
  "redb",
+ "serde",
+ "serde_json",
  "shekyl-address",
  "shekyl-chain-rules",
  "shekyl-chain-store",

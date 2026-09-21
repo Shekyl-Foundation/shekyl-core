@@ -40,6 +40,7 @@
 //! **No fault becomes a verdict, no verdict becomes a fault.** A refusal is
 //! data on the reply; a fault is the reply's error; the two never meet.
 
+use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -47,7 +48,7 @@ use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    validate, ChainView, Fault, InvalidBlock, Retry, Stale, StructurallyValid, Verdict,
+    validate, CenRow, ChainView, Fault, InvalidBlock, Retry, Stale, StructurallyValid, Verdict,
 };
 use shekyl_chain_store::digest_v0::LogicalStateDigestV0;
 use shekyl_chain_store::store::{ChainStore, StoreError, StoreInvariant};
@@ -147,6 +148,9 @@ pub enum RunFault {
 pub struct Applied {
     /// Connected blocks, in order.
     pub connected: Vec<(BlockHeight, BlockHash)>,
+    /// The census rows the connected blocks' verdicts exercised — the
+    /// union of each `ChainValid`'s coverage, for the grader's clause (1).
+    pub exercised: BTreeSet<&'static str>,
     /// A refusal — `form`'s or `validate`'s verdict — and where.
     pub refused: Option<(BlockHeight, InvalidBlock)>,
 }
@@ -270,6 +274,9 @@ impl Message<Apply> for Connector {
                             return Err(RunFault::NoFacts { height });
                         };
                         let hash = valid.block().hash();
+                        applied
+                            .exercised
+                            .extend(valid.coverage().iter().map(CenRow::as_str));
                         batch.connect(valid, facts.into(), in_force)?;
                         applied.connected.push((height, hash));
                     }

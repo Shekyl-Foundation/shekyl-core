@@ -503,3 +503,96 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     drop(reopened);
     cleanup(&path);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replayed_run_grades_its_exercised_rows_correct_and_its_producers_borrowed() {
+    // RD-Q6 through the pipeline: the observations the run emits, graded
+    // against a register in the extractor's shape. Every row the landed
+    // rules exercised grades AcceptedAsCorrect on the verdict clause; the
+    // producers of passed-through facts are Borrowed on the component clause
+    // whatever their verdict; the digest matched, so the rest are real.
+    use crate::grader::{
+        grade_run, ComponentEvidence, GradedAcceptance, Register, VerdictEvidence,
+    };
+    let path = tmp("pipeline-grade");
+    let chain = chain(4);
+    let trace = Arc::new(trace_of(&chain, true));
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("replays");
+    assert!(
+        !report.observations.exercised.is_empty(),
+        "the landed rules ran"
+    );
+    assert_eq!(report.observations.digest_identical, Some(true));
+
+    // A register naming every exercised row CHECKED-CONFORMANT, plus the
+    // root producers as the register has them.
+    let mut rows: Vec<String> = report
+        .observations
+        .exercised
+        .iter()
+        .map(|id| format!("{{\"id\": \"{id}\", \"state\": \"CHECKED-CONFORMANT\"}}"))
+        .collect();
+    for extra in ["CEN-G6", "CEN-I12"] {
+        if !report.observations.exercised.contains(extra) {
+            rows.push(format!(
+                "{{\"id\": \"{extra}\", \"state\": \"CHECKED-CONFORMANT\"}}"
+            ));
+        }
+    }
+    let json = format!(
+        "{{\"schema_version\": \"shekyl_e2_register_v1\", \"rows\": [{}], \"unrecorded_ratified\": []}}",
+        rows.join(",")
+    );
+    let register = Register::from_json(&json).expect("register");
+    let graded = grade_run(&register, &report.observations);
+    assert!(graded.passes(), "{:?}", graded.unadjudicated);
+    for row in &graded.rows {
+        if report.observations.exercised.contains(row.id.as_str()) {
+            assert_eq!(
+                row.verdict,
+                VerdictEvidence::Exercised { agreed: true },
+                "{}",
+                row.id
+            );
+            assert_eq!(
+                row.verdict_acceptance,
+                Some(GradedAcceptance::AcceptedAsCorrect),
+                "{}",
+                row.id
+            );
+        }
+        let is_producer = shekyl_chain_store::store::ConnectFacts::DELETED_BY
+            .iter()
+            .any(|d| d.rows.contains(&row.id.as_str()));
+        if is_producer {
+            assert!(
+                matches!(row.component, ComponentEvidence::Borrowed { .. }),
+                "{}",
+                row.id
+            );
+        } else {
+            assert_eq!(
+                row.component,
+                ComponentEvidence::Real { identical: true },
+                "{}",
+                row.id
+            );
+        }
+    }
+    assert_eq!(
+        graded.derived_and_conformant,
+        report.observations.exercised.len()
+    );
+    cleanup(&path);
+}
