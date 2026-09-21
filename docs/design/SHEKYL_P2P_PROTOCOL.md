@@ -2725,6 +2725,59 @@ hour and **the run would have falsified the fix rather than the hypothesis**,
 exactly as this row predicted. **It nearly did not hold**, and that is the
 reason to keep the requirement rather than retire it as satisfied.
 
+#### The allocation is RACE-ASSIGNED, not merely unequal
+
+Whichever co-resident dials a given peer first takes the slot. So the 4/2
+split measured at cap 1 **was not a stable division — it was the residue of one
+dial order**, and it **re-rolls on every restart**. Structural rather than
+observed here (testable by restarting A and re-reading, if it is ever worth the
+minute). It matters because "each node gets *some* peers" is a much weaker
+guarantee than it sounds: **which** peers is arbitrary, and a co-resident can
+lose a peer it depended on to a sibling's restart.
+
+#### The estate works; the NETWORK does not — and the remedy decays toward success
+
+**Six hosts were raised. The compiled default is still `1`, and the cap applies
+at EVERY accepting node**, not only at seeds. So co-residents behind one
+address **still hold disjoint peer sets across every ordinary node they ever
+dial**. What the raise fixed is **bootstrap** — the symptom that was visible
+precisely because a fresh node's reachable set is only six. **The network-wide
+partition is untouched.**
+
+> **And the remedy decays in the direction of success.** As the network grows,
+> an ordinary node's peers come increasingly from the **peerlist** rather than
+> the seed list, so a **shrinking fraction** of any node's connections
+> terminate at the six treated hosts. **The masking is strongest today and
+> weakens monotonically from here.**
+
+**A fix whose coverage shrinks as the thing it protects grows is a fix with a
+timer on it.** That — not *"8 is unprincipled"* — is the argument that belongs
+in front of whoever decides PWD-I8's funding. The unprincipled-number point is
+true and easy to shrug at while everything is green; **the decay argument
+predicts that the green gets worse on its own**, which is harder to defer.
+
+#### The estate's `8` is a recorded DEVIATION with a named expiry
+
+**Valid until PWD-I8 rules. Not a ruling, not a precedent, and not a number
+with anything behind it.**
+
+| | |
+| --- | --- |
+| **What** | all six testnet seeds carry `max-connections-per-ip=8`; the compiled default remains `1` |
+| **Why it works** | `N = 2` behind the one address that needed it — **empirically adequate for this estate** |
+| **What invalidates it** | **CGNAT, or any address with more co-resident nodes than the cap.** `8` fails there exactly as `1` did; it is larger, not different in kind |
+| **Expires** | **when PWD-I8 rules.** Whatever it rules replaces this, including if it rules the cap away entirely |
+| **Recorded here so that** | the next person to find a seed config diverging from the compiled default learns *why* in the same place they learn *that* |
+
+**One real cost of the asymmetry, noted rather than remedied:** the estate now
+behaves differently from the network it seeds, so **nothing on testnet
+exercises the shipping default any more**. A testnet earns its keep by running
+what mainnet will run, and in this respect it currently does not. *(Leaving one
+or two seeds at the compiled default would keep the stock path live and the
+untreated arm available for any future measurement. Not done — it is an
+operational choice for the maintainer, and it is a mitigation of the
+measurement gap, not of the defect.)*
+
 #### What the green result does NOT settle — stated plainly, because it is the dangerous outcome
 
 **The node works, and that is precisely the outcome this row flagged as most
@@ -2777,7 +2830,17 @@ problem solved.
    the whole NAT, and a pre-handshake wire addition. The rule-82 remedy proposed
    below is local-only and needs neither.
 
-4. **Is PWD-I8's round opened now, and at which tier does it stop?** The
+4. ~~**Is PWD-I8's round opened now, and at which tier does it stop?**~~
+   **RULED 2026-09-21: land PR #812, then run a real design round (or rounds)
+   and a comprehensive fix.** Changing the compiled default is refused as a
+   remedy — it hides the problem. The threat posture is ruled on the facts:
+   testnet only, estate and test rigs only, **so this is not an urgent privacy
+   or security threat** — but the defect is real, network-wide, and its masking
+   decays as the network grows, so **the urgency is schedule pressure, not
+   incident pressure.** The round's own first question is now
+   [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.5 — *does the fix
+   reach the wire?* — because that answer, not this one, sets the schedule.
+   *Original question retained for the record:* The
    sequencing below makes tier 1 answerable without any wire change and without
    the reflection surface that motivated question 3's rejection — so the round
    can deliver the diagnosis that would have identified this failure in minutes

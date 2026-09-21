@@ -166,6 +166,24 @@ boundaries are drawn once.
 
 ---
 
+## 5.5 Sequencing ruled 2026-09-21 — land, then design
+
+**Ruled (Rick):** land PR #812 first, then run a **real design round (or
+rounds)** and a comprehensive fix. **Changing the compiled default is refused
+as a remedy — it hides the problem rather than fixing it**, and the estate's
+`8` is recorded as a time-boxed deviation rather than a precedent (PWD-I7).
+
+**Threat posture, ruled on the facts rather than assumed:** only **testnet** is
+running, and the only things on it are the Foundation estate and the test rigs.
+**So this is not an urgent privacy or security threat** — there is no
+third-party operator whose peer diversity is being cut, and no value at risk.
+That is a statement about *today's deployment*, not about the defect: the
+partition is real, network-wide, and its masking **decays as the network
+grows** (PWD-I7). **The urgency is schedule pressure, not incident pressure**,
+and the two should not be confused in either direction — nobody should rush the
+eclipse analysis, and nobody should conclude from a working testnet that the
+round can be dropped.
+
 ## 6. What this round does not decide
 
 Owed to the maintainer, and **not** to be decided inside a slice:

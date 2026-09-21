@@ -101,6 +101,32 @@ category** — *what this endpoint **is***:
 
 ---
 
+## 2.5 THE ROUND'S FIRST QUESTION — does the fix reach the wire?
+
+**Ask this early, because the answer sets the schedule.** It is answerable at
+the start of the round rather than discovered at the end of it.
+
+> **Is the endpoint category entirely LOCALLY DERIVED, or does any part of it
+> get SIGNALLED on the wire?**
+
+**Everything sketched so far is locally derivable** from what a node already
+observes: reachability class, admission accounting, eviction with a protection
+set. Nothing in §2 requires a peer to *tell* us anything new.
+
+| If the answer is… | Consequence for timing |
+| --- | --- |
+| **entirely local** | **PWD-I8 has NO genesis deadline.** Per-host admission is node-local policy — not consensus, not a wire rule, nothing depends on it — so the compiled default can move whenever I8 rules, before or after genesis. The round can take the time the eclipse analysis actually needs |
+| **any wire-signalled part** | **that slice wants to land PRE-GENESIS** and the rest can follow. Coordinating an upgrade today means six seeds and two VMs; after genesis it is a network-wide coordination problem with third-party operators |
+
+**So the cheapest moment for any wire-affecting piece is now, and the cheapest
+moment for everything else is whenever it is ready.** Establishing which bucket
+the design falls into is therefore the first thing the round does, not the
+last.
+
+*(Corollary worth stating: a design that is tempted toward signalling because
+it is easier should be priced against this table. "Ask the peer" is cheap in a
+round and expensive forever afterwards.)*
+
 ## 3. Two adversarial questions the round must ANSWER, not assume
 
 ### 3.1 The admission→eviction trade
