@@ -177,9 +177,14 @@ impl BlockRule for B5 {
 /// [`BlockRule`] and [`crate::rules::run`]. B6 is the identity function,
 /// so it is not a check that always passes — coverage is recorded here,
 /// when the identity is derived, and `implemented(rules::header::B6)`
-/// names this function (slice 1, Q5). `ValidatedBlock::derive` obtains
-/// the identity the verdict will carry from [`B6::identity`] and nowhere
-/// else.
+/// names this function (slice 1, Q5). **Derived once, by `form`**: the
+/// identity is stateless (a keccak over the hashing blob) and a view-bound
+/// rule reads it while the rules run (CEN-E1, slice 3 F8/Q7), so `form`
+/// calls [`B6::identity`] and the token carries it
+/// (`StructurallyValid::hash`); `ValidatedBlock::derive` takes that value
+/// and computes no second one. Slice 1 placed the derivation after the last
+/// rule on the premise that no rule reads the identity — refuted, not
+/// superseded.
 pub(crate) struct B6;
 
 impl Rule for B6 {

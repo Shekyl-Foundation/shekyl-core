@@ -48,7 +48,7 @@ use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, FormAttempt, Stale};
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::D4;
-use crate::rules::header::{B1, B2, B5, B7};
+use crate::rules::header::{B1, B2, B5, B6, B7};
 use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
@@ -119,13 +119,16 @@ pub fn form<S: Substrate>(
     let cx = FormContext::new(&candidate, rule_set);
     judge_form!(cx, coverage; B1, B2, B7);
 
-    // The one expensive definition, last — after the cheap refusals, and
-    // outside any transaction (D2; the seed is the caller's claim, D3
-    // verifies it in `validate`).
+    // Two definitions, after the cheap refusals and outside any
+    // transaction. The identity first (B6: one keccak over the hashing
+    // blob; a view-bound rule — E1 — reads it while the rules run, so it is
+    // derived here, once, and travels on the token), then the expensive one
+    // (D2; the seed is the caller's claim, D3 verifies it in `validate`).
+    let hash = B6::identity(&candidate.block, &mut coverage);
     let pow = D2::longhash(substrate, &candidate, seed, &mut coverage)?;
 
     Ok(Ok(StructurallyValid::new(
-        candidate, *rule_set, coverage, clock, seed, pow, attempt,
+        candidate, *rule_set, coverage, clock, hash, seed, pow, attempt,
     )))
 }
 
@@ -269,8 +272,8 @@ pub fn validate<'id, V: ChainView<'id>>(
     // Definitions the predicates read, derived once and recorded where they
     // are derived: the connecting height (one tip read), the seed
     // verification (D3), the MTP window (C3), the target (D4, minted
-    // through D6) and the work it implies, the comparison (D1b). B6 records
-    // at `ValidatedBlock::derive`.
+    // through D6) and the work it implies, the comparison (D1b). B6 was
+    // recorded by `form` (the identity is stateless) and rides on the token.
     let tip = view.tip().map_err(Fault::View)?;
     let connecting = Tip::connecting_height(tip.as_ref());
     // The seed claim first: a stale seed means the longhash below was
@@ -311,8 +314,9 @@ pub fn validate<'id, V: ChainView<'id>>(
         }
     }
 
+    let hash = formed.hash();
     let (candidate, _stateless) = formed.into_parts();
-    let block = ValidatedBlock::derive(candidate, target, cumulative_difficulty, &mut coverage);
+    let block = ValidatedBlock::derive(candidate, hash, target, cumulative_difficulty);
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }
 

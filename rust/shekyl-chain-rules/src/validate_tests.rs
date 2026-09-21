@@ -152,11 +152,14 @@ fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
     assert_eq!(formed.seed(), seed);
     assert_eq!(formed.attempt(), FormAttempt::FIRST);
     assert_eq!(formed.rule_set_id(), RuleSetId::GENESIS);
+    // The identity is derived here, once, and is the block's (slice 3 F8).
+    assert_eq!(formed.hash(), formed.candidate().block.hash());
     // The stateless rows, and only those, are recorded before the view
-    // stage runs — the three version rows and D2, the longhash.
+    // stage runs — the three version rows and the two definitions, B6 (the
+    // identity) and D2 (the longhash).
     assert_eq!(
         formed.coverage().iter().collect::<Vec<_>>(),
-        [CenRow::B1, CenRow::B2, CenRow::B7, CenRow::D2]
+        [CenRow::B1, CenRow::B2, CenRow::B6, CenRow::B7, CenRow::D2]
     );
 }
 
