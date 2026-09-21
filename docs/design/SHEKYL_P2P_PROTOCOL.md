@@ -2428,11 +2428,61 @@ and would produce it again.*
 
 1. **Raise `--max-connections-per-ip` on EVERY live seed**, not a subset — cap
    1 already permits the two nodes landing on different seeds, so a partial
-   raise reproduces the symptom and reads as a null result. **Six seeds are
-   compiled in** (`net_node.inl:734-741` at `dev` `059aca264`): `seedaus`,
-   `seeduse`, `seedusw`, `seedeu`, `seedjp`, `seedbrz`. Confirm which are live
-   first. **Restarting the SEEDS is fine** — it does not clear B's cache, which
-   is the one that matters.
+   raise reproduces the symptom and reads as a null result. **Restarting the
+   SEEDS is fine** — it does not clear B's cache, which is the one that matters.
+   **The live set is established below rather than assumed**, because a seed
+   that is dialled and does not answer burns the same 3600s window and puts
+   noise directly in the channel this run reads.
+
+#### Fleet survey, 2026-09-21 — the live set, and a defect it found
+
+**Six seeds are compiled in** (`net_node.inl:734-741` at `dev` `059aca264`).
+Surveyed directly over SSH; every figure below is measured, not inherited:
+
+| Seed | Address | `12021` external | Service | Height | Live for D2 |
+| --- | --- | --- | --- | --- | --- |
+| `seedaus` | 134.199.166.22 | **open** | active | 7408 | **yes** |
+| `seeduse` | 45.77.147.65 | **open** | active | 7408 | **yes** |
+| `seedusw` | 45.76.171.128 | **open** | active | 7408 | **yes** |
+| `seedeu` | 45.77.66.189 | **CLOSED** | active | 7408 | **NO — see below** |
+| `seedjp` | 139.162.71.114 | **open** | active | 7408 | **yes** |
+| `seedbrz` | 104.64.59.31 | **open** | active | 7408 | **yes** |
+
+**`seedeu` is ingress-blocked, and this is worse than a down seed.** Its daemon
+is **active and bound to `0.0.0.0:12021`**, so every health check that asks the
+host passes. But `12021` is closed **from three independent seeds** while the
+control (`seedjp:12021`) is open **from the same sources** — so the block is
+`seedeu`'s ingress, not any prober's egress. Its established-connection count
+is **5 against 10** on healthy seeds: outbound only, exactly the signature. The
+host firewall reports `ENABLED=yes` and the rule set needs privilege to read,
+so the cause is **not established here** — it is either a missing `ufw` rule or
+a provider-level firewall, and both need access this lane does not have.
+
+**Why it contaminates D2 specifically:** `seedeu` is *compiled into the seed
+list*, so every node dials it, **fails at CONNECT** (`net_node.inl:1549`,
+`:1609` — the connect-fail arms, not the handshake arms), and suppresses it for
+the flat 3600s. That is an independent 3600s clock running inside the exact
+channel the timing delta reads. **Either fix it before the run or exclude it
+and record the exclusion** — do not average over it.
+
+**Two further measurements, both of which settle open questions:**
+
+- **No seed sets `--max-connections-per-ip` at all.** All six run the compiled
+  default, so **the cap is 1 fleet-wide** — the mechanism is live on every seed
+  B dialled, which the attribution assumed and this confirms.
+- **All six set `in-peers=128` and `out-peers=64`**, confirming the pricing
+  paragraph's "unbounded at defaults, 128 as deployed" in both halves.
+- All six run the **identical binary** (`sha256` `8a8b1db0…`) at the **same
+  height**, so a binary or chain-identity divergence is dead **fleet-wide**,
+  not merely between the two hosts previously compared.
+
+**Two inherited facts corrected by this survey.** `skl-seedusw` is **up**,
+against `Q12_D6A_PEER_DISCOVERY_RUN.md` §9's record of it being down with a
+pristine `(example)` config — that snapshot is dated 2026-03-30 and is stale.
+And `104.64.59.31` (`seedbrz`) **is a Foundation host**: it answers SSH on the
+fleet key as `seedbrz` and runs the fleet binary. The address sits in space
+that looks like a CDN allocation rather than a hosting provider, which is worth
+knowing, but it is ours and it is reachable.
 2. **Do NOT restart B. Watch for the full hour**, capturing the two timestamps
    above.
 3. **Take the positive observation off the SEED** — two simultaneous
