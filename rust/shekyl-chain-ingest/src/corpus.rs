@@ -27,11 +27,24 @@
 //!
 //! ```text
 //! header  = MAGIC(8) ‖ version u32 ‖ net u8 ‖ first_height u64 ‖ count u64
-//! record  = height u64 ‖ block_len u32 ‖ block ‖ tx_count u32 ‖ (tx_len u32 ‖ tx)*
+//! extend  = 0x01 ‖ height u64 ‖ block_len u32 ‖ block ‖ tx_count u32 ‖ (tx_len u32 ‖ tx)*
+//! rewind  = 0x02 ‖ to u64
 //! ```
 //!
-//! `count` is written at [`CorpusWriter::finish`]; a file whose header
-//! count disagrees with its records was not finished and is refused.
+//! `count` counts records of both kinds and is written at
+//! [`CorpusWriter::finish`]; a file whose header count disagrees with its
+//! records was not finished and is refused.
+//!
+//! # Rewind — the reorg family's switch (RD-Q13, §7 commit 8c)
+//!
+//! `rewind { to }` is [`IngestEvent::Rewind`] as a record: the reader emits
+//! it, the pipeline pops to `to`, and the next `extend` carries `to + 1`.
+//! `to` lies in `[first_height, tip)`: a rewind to the tip pops nothing
+//! ([`CorpusFault::RewindNotBackward`]), one below the first height would
+//! leave the next block chained to a block the corpus does not hold
+//! ([`CorpusFault::RewindOutOfCorpus`]), and one before any block has no
+//! tip ([`CorpusFault::RewindOnEmpty`]). Version 1 had no record tag and
+//! no rewind; the tag byte is the version-2 change.
 //!
 //! # Verified, not declared (RD-F15)
 //!
@@ -69,7 +82,13 @@ pub const CORPUS_MAGIC: [u8; 8] = *b"SHKCORPS";
 
 /// The layout version this module writes and the only one it reads.
 /// A layout change bumps it; the reader refuses every other value.
-pub const CORPUS_FORMAT_VERSION: u32 = 1;
+pub const CORPUS_FORMAT_VERSION: u32 = 2;
+
+/// Record tags (module docs).
+mod tag {
+    pub const EXTEND: u8 = 0x01;
+    pub const REWIND: u8 = 0x02;
+}
 
 /// Which chain the corpus was taken from — the artifact's own tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +188,24 @@ pub enum CorpusFault {
     },
     /// The header's `count` disagrees with the records present: the file
     /// was not finished, or was truncated.
+    /// A record tag neither `extend` nor `rewind`.
+    UnknownTag(u8),
+    /// A `rewind` to the tip or above it: nothing to pop.
+    RewindNotBackward {
+        /// Where the rewind wanted the tip.
+        to: BlockHeight,
+        /// Where the tip was.
+        tip: BlockHeight,
+    },
+    /// A `rewind` below the corpus's first height.
+    RewindOutOfCorpus {
+        /// Where the rewind wanted the tip.
+        to: BlockHeight,
+        /// The corpus's first height.
+        first_height: BlockHeight,
+    },
+    /// A `rewind` before any block: there is no tip.
+    RewindOnEmpty,
     CountMismatch {
         /// What the header said.
         declared: u64,
@@ -224,6 +261,15 @@ impl core::fmt::Display for CorpusFault {
                 what,
                 cause,
             } => write!(f, "block {height}: {what} does not parse: {cause}"),
+            Self::UnknownTag(t) => write!(f, "unknown record tag {t:#04x}"),
+            Self::RewindNotBackward { to, tip } => {
+                write!(f, "rewind to {to} is not backward from tip {tip}")
+            }
+            Self::RewindOutOfCorpus { to, first_height } => write!(
+                f,
+                "rewind to {to} is below the corpus's first height {first_height}"
+            ),
+            Self::RewindOnEmpty => write!(f, "rewind before any block"),
             Self::CountMismatch { declared, present } => write!(
                 f,
                 "header declares {declared} records, {present} present; the corpus was not finished"
@@ -329,6 +375,7 @@ const COUNT_OFFSET: u64 = 8 + 4 + 1 + 8;
 /// after finish" is unrepresentable — there is no finished flag.
 pub struct CorpusWriter<W: Write + Seek> {
     out: W,
+    first: BlockHeight,
     /// The height the next `append` records; `None` once `u64::MAX` has
     /// been written.
     next: Option<BlockHeight>,
@@ -355,9 +402,31 @@ impl<W: Write + Seek> CorpusWriter<W> {
         out.write_all(&0u64.to_le_bytes())?;
         Ok(Self {
             out,
+            first: first_height,
             next: Some(first_height),
             count: 0,
         })
+    }
+
+    /// Append `rewind { to }`: the reader will emit [`IngestEvent::Rewind`]
+    /// and expect the next block at `to + 1` (module docs).
+    ///
+    /// # Errors
+    ///
+    /// [`CorpusFault::RewindNotBackward`], [`CorpusFault::RewindOutOfCorpus`],
+    /// [`CorpusFault::RewindOnEmpty`]; I/O.
+    pub fn rewind(&mut self, to: BlockHeight) -> Result<(), CorpusFault> {
+        check_rewind(self.first, self.next, to)?;
+        let mut record = Vec::with_capacity(9);
+        record.push(tag::REWIND);
+        record.extend_from_slice(&to.to_raw().to_le_bytes());
+        self.out.write_all(&record)?;
+        self.next = successor(to);
+        self.count = self
+            .count
+            .checked_add(1)
+            .expect("corpus record count exhausted");
+        Ok(())
     }
 
     /// Append the block at the next height with the bodies of its listed
@@ -405,13 +474,39 @@ impl<W: Write + Seek> CorpusWriter<W> {
     }
 }
 
-/// One record as the on-disk layout: `height ‖ block_len ‖ block ‖ tx_count ‖ (tx_len ‖ tx)*`.
+/// The rewind law shared by writer and reader: `to` is in
+/// `[first, tip)` where `tip = next − 1`, and there is a tip.
+fn check_rewind(
+    first: BlockHeight,
+    next: Option<BlockHeight>,
+    to: BlockHeight,
+) -> Result<(), CorpusFault> {
+    // `next` is `first` exactly when nothing has been appended; `None`
+    // means the height space is exhausted, whose tip is `u64::MAX`.
+    let tip = match next {
+        Some(n) if n == first => return Err(CorpusFault::RewindOnEmpty),
+        Some(n) => BlockHeight::from_raw(n.to_raw() - 1),
+        None => BlockHeight::from_raw(u64::MAX),
+    };
+    if to >= tip {
+        return Err(CorpusFault::RewindNotBackward { to, tip });
+    }
+    if to < first {
+        return Err(CorpusFault::RewindOutOfCorpus {
+            to,
+            first_height: first,
+        });
+    }
+    Ok(())
+}
+
+/// One `extend` as the on-disk layout: `0x01 ‖ height ‖ block_len ‖ block ‖ tx_count ‖ (tx_len ‖ tx)*`.
 fn encode_record(
     height: BlockHeight,
     block_blob: &[u8],
     tx_blobs: &[Vec<u8>],
 ) -> Result<Vec<u8>, CorpusFault> {
-    let mut buf = Vec::new();
+    let mut buf = vec![tag::EXTEND];
     write_len(
         &mut buf,
         "block",
@@ -468,7 +563,8 @@ fn write_len_only<W: Write>(
 pub struct CorpusReader<R: BufRead> {
     input: R,
     net: CorpusNet,
-    /// The height the next record must carry; `None` once `u64::MAX` has
+    first: BlockHeight,
+    /// The height the next `extend` must carry; `None` once `u64::MAX` has
     /// been read (a header that needs more is refused at `open`).
     next: Option<BlockHeight>,
     declared: u64,
@@ -513,6 +609,7 @@ impl<R: BufRead> CorpusReader<R> {
         Ok(Self {
             input,
             net,
+            first,
             next: Some(first),
             declared,
             read: 0,
@@ -534,7 +631,7 @@ impl<R: BufRead> CorpusReader<R> {
 
     /// One record, re-verified, or `None` at the declared end. Refuses a
     /// record count that disagrees with the header.
-    fn record(&mut self) -> Result<Option<Candidate>, CorpusFault> {
+    fn record(&mut self) -> Result<Option<IngestEvent>, CorpusFault> {
         if self.read == self.declared {
             // The declared end. Anything past it is a count mismatch: read
             // one byte to tell "clean EOF" from "more records".
@@ -547,16 +644,32 @@ impl<R: BufRead> CorpusReader<R> {
                 }),
             };
         }
-        let height = match read_u64(&mut self.input) {
-            Ok(h) => BlockHeight::from_raw(h),
-            Err(CorpusFault::Io(e)) if e.kind() == io::ErrorKind::UnexpectedEof => {
+        let mut tag_byte = [0u8; 1];
+        match self.input.read_exact(&mut tag_byte) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 return Err(CorpusFault::CountMismatch {
                     declared: self.declared,
                     present: self.read,
                 });
             }
-            Err(e) => return Err(e),
-        };
+            Err(e) => return Err(e.into()),
+        }
+        match tag_byte[0] {
+            tag::EXTEND => {}
+            tag::REWIND => {
+                let to = BlockHeight::from_raw(read_u64(&mut self.input)?);
+                check_rewind(self.first, self.next, to)?;
+                self.next = successor(to);
+                self.read = self
+                    .read
+                    .checked_add(1)
+                    .expect("corpus record count exhausted");
+                return Ok(Some(IngestEvent::Rewind { to }));
+            }
+            other => return Err(CorpusFault::UnknownTag(other)),
+        }
+        let height = BlockHeight::from_raw(read_u64(&mut self.input)?);
         let expected = self.next.ok_or(CorpusFault::HeightExhausted {
             after: BlockHeight::from_raw(u64::MAX),
         })?;
@@ -592,7 +705,10 @@ impl<R: BufRead> CorpusReader<R> {
             .read
             .checked_add(1)
             .expect("corpus record count exhausted");
-        Ok(Some(Candidate::new(block, transactions)))
+        Ok(Some(IngestEvent::Extend(Box::new(Candidate::new(
+            block,
+            transactions,
+        )))))
     }
 }
 
@@ -600,13 +716,10 @@ impl<R: BufRead> Source for CorpusReader<R> {
     type Fault = CorpusFault;
 
     fn next(&mut self) -> Result<Option<Sequenced<IngestEvent>>, CorpusFault> {
-        Ok(self.record()?.map(|candidate| {
+        Ok(self.record()?.map(|event| {
             let seq = self.seq;
             self.seq = seq.next();
-            Sequenced {
-                seq,
-                event: IngestEvent::Extend(Box::new(candidate)),
-            }
+            Sequenced { seq, event }
         }))
     }
 }

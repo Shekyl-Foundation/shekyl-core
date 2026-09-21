@@ -299,9 +299,9 @@ fn the_reader_refuses_a_crafted_tx_count_before_reading_bodies() {
     // n_tx" discipline, applied to the corpus record).
     let (_, b0, t0) = blobs(0, 0);
     let mut bytes = write(&[(b0.clone(), t0)]);
-    // MAGIC ‖ version ‖ net ‖ first_height ‖ count ‖ height ‖ block_len ‖ block ‖ tx_count
+    // MAGIC ‖ version ‖ net ‖ first_height ‖ count ‖ tag ‖ height ‖ block_len ‖ block ‖ tx_count
     const HEADER_LEN: usize = 8 + 4 + 1 + 8 + 8;
-    let tx_count_at = HEADER_LEN + 8 + 4 + b0.len();
+    let tx_count_at = HEADER_LEN + 1 + 8 + 4 + b0.len();
     bytes[tx_count_at..tx_count_at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
     let refused = reader.next().expect_err("crafted count");
@@ -373,4 +373,102 @@ fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
         ),
         "a header that outruns the height space is refused at open"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The rewind record (RD-Q13, §7 commit 8c)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_corpus_with_a_rewind_round_trips_as_events() {
+    use crate::test_support::{corpus_of_reorg, reorg};
+    let r = reorg(4, 1, 3);
+    let bytes = corpus_of_reorg(&r);
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    assert_eq!(
+        reader.declared(),
+        4 + 1 + 3,
+        "count is records of both kinds"
+    );
+    let mut kinds = Vec::new();
+    while let Some(ev) = reader.next().expect("event") {
+        kinds.push(match ev.event {
+            IngestEvent::Extend(c) => format!("E{}", c.block.transaction_hashes.len()),
+            IngestEvent::Rewind { to } => format!("R{}", to.to_raw()),
+        });
+    }
+    // main 0..=3 (genesis lists nothing, then one spend each), rewind to 1,
+    // fork 2'..=4' (one spend each).
+    assert_eq!(kinds, ["E0", "E1", "E1", "E1", "R1", "E1", "E1", "E1"]);
+}
+
+#[test]
+fn a_rewind_must_be_backward_inside_the_corpus_and_after_a_block() {
+    let (_, b0, t0) = blobs(0, 0);
+    let (_, b1, t1) = blobs(1, 1);
+    let (_, b2, t2) = blobs(2, 1);
+    let mut w = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        CorpusNet::Fakechain,
+        BlockHeight::from_raw(0),
+    )
+    .expect("header");
+    assert!(matches!(
+        w.rewind(BlockHeight::from_raw(0)).expect_err("no tip"),
+        CorpusFault::RewindOnEmpty
+    ));
+    w.append(&b0, &t0).expect("0");
+    w.append(&b1, &t1).expect("1");
+    w.append(&b2, &t2).expect("2");
+    let refused = w.rewind(BlockHeight::from_raw(2)).expect_err("tip");
+    assert!(
+        matches!(refused, CorpusFault::RewindNotBackward { to, tip } if to.to_raw() == 2 && tip.to_raw() == 2),
+        "{refused}"
+    );
+    // A corpus starting at 5 cannot rewind to 4.
+    let (_, b5, t5) = blobs(5, 0);
+    let (_, b6, t6) = blobs(6, 0);
+    let mut w5 = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        CorpusNet::Fakechain,
+        BlockHeight::from_raw(5),
+    )
+    .expect("header");
+    w5.append(&b5, &t5).expect("5");
+    w5.append(&b6, &t6).expect("6");
+    let refused = w5
+        .rewind(BlockHeight::from_raw(4))
+        .expect_err("below first");
+    assert!(
+        matches!(refused, CorpusFault::RewindOutOfCorpus { to, first_height } if to.to_raw() == 4 && first_height.to_raw() == 5),
+        "{refused}"
+    );
+    // The reader applies the same law to a hand-built rewind-to-tip record,
+    // and after a rewind the next extend must carry `to + 1`.
+    w.rewind(BlockHeight::from_raw(1)).expect("backward");
+    let mut bytes = w.finish().expect("count").into_inner();
+    // Patch the rewind's `to` (last 8 bytes) to 2 = the tip it followed.
+    let n = bytes.len();
+    bytes[n - 8..].copy_from_slice(&2u64.to_le_bytes());
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    let mut last = Ok(None);
+    for _ in 0..4 {
+        last = reader.next();
+        if !matches!(last, Ok(Some(_))) {
+            break;
+        }
+    }
+    assert!(
+        matches!(last, Err(CorpusFault::RewindNotBackward { .. })),
+        "{last:?}"
+    );
+    // An unknown tag is refused as such.
+    let mut junk = write(&[(b0.clone(), t0)]);
+    const HEADER_LEN: usize = 8 + 4 + 1 + 8 + 8;
+    junk[HEADER_LEN] = 0x7f;
+    let mut reader = CorpusReader::open(Cursor::new(junk)).expect("open");
+    assert!(matches!(
+        reader.next().expect_err("tag"),
+        CorpusFault::UnknownTag(0x7f)
+    ));
 }
