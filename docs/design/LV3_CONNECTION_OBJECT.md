@@ -331,9 +331,27 @@ the verification into gossip.
 
 > **The design consequence is the important part: VERIFICATION IS PER-FIELD,
 > NOT PER-RECORD.** A category must not inherit trust from being adjacent to
-> verified data. If the connection object holds a claimed field beside an
-> observed one, the *object* is not "observed" — each field carries its own
-> provenance, or a consumer reads the wrong one as a fact.
+> verified data.
+
+**And one notch harder than that (Rick):** `peerlist_entry` is **a record whose
+NAME implies a single trust level while carrying two.** A consumer holding the
+struct has **nothing in the type** telling it that `adr` was *earned* and
+`pruning_seed` was *asserted* — both are plain members, serialized side by side
+in both forms (`p2p_protocol_defs.h:65` KV, `:71` VARINT).
+
+> **So provenance belongs in the FIELD'S TYPE, not in a doc comment.** Where no
+> check exists, encode the constraint in a type — that is what makes *"each
+> field carries its own provenance"* **enforceable rather than remembered**, and
+> it is the same discipline `DropVerdict` already applies to a classification
+> byte. A `Claimed<T>` / `Observed<T>` distinction costs nothing at runtime and
+> makes the mixed-trust record impossible to read wrongly by accident.
+
+**The code already names the problem and then does it anyway:**
+`cryptonote_protocol_handler.inl:426` logs *"peer **claim** unexpected pruning
+seed"* — and `:438` assigns `context.m_pruning_seed = hshd.pruning_seed`
+**unconditionally**. The check at `:421-430` tests **well-formedness** only
+(`log_stripes` against the constant, stripe within range), so **any well-formed
+seed a peer asserts is accepted as fact.**
 
 *(This is the second time in this round that a claim about the code was
 asserted from the mechanism and was wrong at a site nobody had opened. It is
@@ -418,12 +436,16 @@ made).
 | outbound candidate selection | dials from gray, so acts on claims | same | **yes — one dial** |
 | **block-request routing** *(added)* | `pruning_seed` at `cryptonote_protocol_handler.inl:1729`, `:1903` — *which peer has the block we want* | the request fails and is re-routed | **no — repeats until the peer is dropped for other reasons** |
 
-**The third is the one the first pass missed, and it behaves differently.** The
-first two are the quarantine working as designed: a claim is a hypothesis with
-a one-dial cost and an observation resolves it. `pruning_seed` has **no
-promotion boundary** — nothing ever verifies it, it is disclosed onward in
-white entries (§2.7.4's correction), and a false seed misroutes repeatedly
-rather than once.
+**The third is a DIFFERENT CATEGORY OF EXPOSURE, not a third instance.** The
+first two are the quarantine working as designed: a claim is a hypothesis, it
+costs **one dial**, and an observation resolves it. **`pruning_seed` never
+resolves.** `has_unpruned_block` (`:1903`) and the stripe test (`:1729`) read
+the claim on **every routing decision, indefinitely**, and **no boundary ever
+promotes or refutes it** — so the cost is not bounded by a dial, it is
+**unbounded in time**.
+
+**It is also a self-selection surface of exactly the Round 1 shape:** *a peer
+chooses a seed that determines what it gets asked for.*
 
 *(Not this slice's defect and not this slice's fix. Named so the round does not
 inherit a clean-looking split that the code does not have.)*
@@ -471,9 +493,47 @@ dialer-only nodes.
   **at the door** rather than at eviction, which is §3.2's trap moved earlier
   rather than avoided.
 
-**If Round 2 rules it out on the sorting grounds, §2.8.3 holds cleanly. If it
-is kept, the slices reorder and the reason is on the record.** Either way it is
-ruled, not left to be proposed later by someone who has not read §3.2.
+#### RULED 2026-09-21: REJECTED — and on mechanical grounds, not on the values argument
+
+**The NAT-sorting objection is correct but it is a *values* argument.** There
+is a **mechanical** one that does not need it, and the round should rest on
+that:
+
+1. **The cost is not one dial — it is a reservation held for the life of the
+   connection.** Every other claimed consumer in §2.8.1 is bounded by an
+   attempt that resolves it. This one grants the benefit **at admission** and
+   holds it **indefinitely**.
+2. **There is no later observation that can resolve it**, because *the
+   reservation was already granted*. The Round 1 requirement — *a claim
+   proposes, an observation decides* — **cannot be satisfied here**: the
+   deciding moment is the door, and at the door nothing has been observed yet.
+3. **Making it safe would require verifying dialability BEFORE admitting** —
+   a hairpin or dial-back **inline in the accept path.** That is **a reflection
+   primitive at the door**, which is precisely the amplifier concern that
+   deferred PWD-E1/E2 in the first place.
+
+> **So this is not merely an unattractive policy — it is the one surface where
+> claimed-at-admission has NO bounded resolution.** Rejected.
+
+**Reopening criteria (rule 21):** reopen if a dialability signal becomes
+available at admission time **without** an inline network round-trip — for
+instance if §2.7.5's third-party proposal matures into something a node already
+holds *before* the connection arrives, in which case the fact would be observed
+rather than claimed and this objection dissolves. *Note that such a signal
+would still face the NAT-sorting objection on its own merits* — the mechanical
+rejection here does not pre-clear the values question.
+
+### 2.8.6 ROUND 2 CLOSES
+
+> **No admission or eviction decision reads the claimed half. PWD-E2 stays a
+> PARALLEL slice, and the slice register in
+> [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4 STANDS.**
+
+**What Round 3 inherits, and it is the harder half:** §2.8.4's second
+declaration — *what is the quantity a proxy for?* Rounds 1 and 2 settled the
+**trust** axis, which is checkable. The **relevance** axis is a judgement, it is
+where I8's original defect actually lives, and nothing established so far
+constrains it.
 
 ## 3. Two adversarial questions the round must ANSWER, not assume
 
