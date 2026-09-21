@@ -142,6 +142,30 @@ impl HostInboundCap {
     pub const fn admits(self, existing_same_host_inbound: u32) -> bool {
         existing_same_host_inbound < self.0
     }
+
+    /// Resolve the operator's `--max-connections-per-ip` as it arrives from a
+    /// command line: a **signed** value where anything negative is the
+    /// *sentinel* meaning "unset, use the default".
+    ///
+    /// The signedness is load-bearing and is why this is not a `u32` in the
+    /// first place: **`0` is a legal choice** meaning *refuse every inbound
+    /// connection*, so it cannot double as "unset".
+    ///
+    /// Values above `u32::MAX` **saturate** rather than wrap. A wrap would
+    /// turn a large cap into a small one — silently, and in the refusing
+    /// direction — which is the failure mode this whole row exists about.
+    /// Not `const`, and deliberately cast-free: `u32::try_from(..).unwrap_or`
+    /// *is* the saturation rule, where an `as` cast would need two clippy
+    /// suppressions to say the same thing less clearly. A suppression here
+    /// would be silencing the check exactly where it is right.
+    #[must_use]
+    pub fn resolve(configured: i64) -> Self {
+        if configured < 0 {
+            Self::DEFAULT
+        } else {
+            Self(u32::try_from(configured).unwrap_or(u32::MAX))
+        }
+    }
 }
 
 impl Default for HostInboundCap {
@@ -172,6 +196,37 @@ mod tests {
         assert!(two.admits(0));
         assert!(two.admits(1), "raising the cap admits the second daemon");
         assert!(!two.admits(2), "and still bounds the third");
+    }
+
+    /// The sentinel's three arms, including the one that is a trap: `0` is a
+    /// real choice and must not be swallowed as "unset".
+    ///
+    /// Red edit: `configured < 0` -> `configured <= 0` in [`HostInboundCap::resolve`].
+    #[test]
+    fn resolve_treats_negative_as_unset_and_zero_as_a_choice() {
+        assert_eq!(HostInboundCap::resolve(-1), HostInboundCap::DEFAULT);
+        assert_eq!(HostInboundCap::resolve(i64::MIN), HostInboundCap::DEFAULT);
+        assert_eq!(
+            HostInboundCap::resolve(0).get(),
+            0,
+            "--max-connections-per-ip 0 means refuse every inbound connection; \
+             swallowing it as unset hands the operator the default instead"
+        );
+        assert_eq!(HostInboundCap::resolve(2).get(), 2);
+    }
+
+    /// Above `u32::MAX` saturates. A wrap would turn a large cap into a small
+    /// one in the refusing direction.
+    ///
+    /// Red edit: `configured as u32` without the upper guard.
+    #[test]
+    fn resolve_saturates_rather_than_wrapping() {
+        assert_eq!(HostInboundCap::resolve(i64::from(u32::MAX)).get(), u32::MAX);
+        assert_eq!(
+            HostInboundCap::resolve(i64::from(u32::MAX) + 1).get(),
+            u32::MAX
+        );
+        assert_eq!(HostInboundCap::resolve(i64::MAX).get(), u32::MAX);
     }
 
     /// Control: a cap of 0 refuses everything, so `admits` is not a predicate

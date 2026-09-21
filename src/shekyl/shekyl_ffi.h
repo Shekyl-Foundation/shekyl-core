@@ -3465,6 +3465,12 @@ std::uint32_t shekyl_p2p_default_out_peers();
 //! the caller asks before its connection list is updated. No nettype input, by
 //! construction (rule 71).
 std::uint32_t shekyl_host_inbound_default_cap();
+//! Resolve `--max-connections-per-ip` from the command line. Signed because
+//! `0` is a legal choice (refuse every inbound connection) and cannot double
+//! as "unset"; negative is the sentinel. Saturates above UINT32_MAX rather
+//! than wrapping. C++ passes the parsed argument through and stores the
+//! result -- it does not test the sign, pick the default, or clamp.
+std::uint32_t shekyl_host_inbound_resolve_cap(std::int64_t configured);
 bool shekyl_host_inbound_zone_is_capped(std::uint8_t zone);
 bool shekyl_host_inbound_admits(std::uint32_t existing_same_host_inbound, std::uint32_t cap);
 

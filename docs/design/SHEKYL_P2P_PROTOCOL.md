@@ -2342,31 +2342,31 @@ A mismatched genesis lets the handshake **complete**; the divergence surfaces
 later, at block validation. The chain, verified:
 
 - peerlist entries arrive **only** through a `COMMAND_HANDSHAKE` response
-  (`net_node.inl:1270`) or a `COMMAND_TIMED_SYNC` response (`:1342`) — both
+  (`net_node.inl:1260`) or a `COMMAND_TIMED_SYNC` response (`:1332`) — both
   inside the *response* handler, so both require a completed exchange;
 - `process_payload_sync_data` has exactly **two** `return false` paths
   (`cryptonote_protocol_handler.inl:417` hard-fork-version mismatch, `:428`
   weird pruning seed) and **neither is genesis-related**. Two nodes on the same
   binary with different genesis share a hard-fork schedule, so both pass;
-- therefore a genesis-forked peer's handshake completes, `:1270` runs, and its
+- therefore a genesis-forked peer's handshake completes, `:1260` runs, and its
   lists fill.
 
 **The refused node's lists are empty, so no handshake response was ever
 processed.** That is the opposite of the genesis-fork signature.
 
 **Discriminator 2 — the absence of `wrong network` is a POSITIVE result.** A
-`network_id` mismatch is checked at `net_node.inl:1264` and logged at `:1266`
+`network_id` mismatch is checked at `net_node.inl:1254` and logged at `:1256`
 — `"COMMAND_HANDSHAKE Failed, wrong network! … closing connection."` — in the
 **dialing** node's own response handler, at `LOG_WARNING`. **Unlike the per-IP
 refusal, which is visible only on the refusing node**, this one is visible on
 the side that is being refused. Its absence from the refused node's log is
 therefore evidence, not a gap. (The accepting side logs its own variant at
-`:2856`, `WRONG NETWORK AGENT CONNECTED!`, at `LOG_INFO` — so a network-id
-mismatch is loud on **both** sides, and that asymmetry against the per-IP cap
-is itself the discriminator.)
-
-**If the `wrong network` line IS present in the captured log, the attribution
-changes entirely** and this row is wrong — that is worth checking before the
+`:2843`/`:2846`, `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
+two sides do **not** log at the same level, and "loud on both sides" would
+overstate it. The half this discriminator needs is the **refused** side, and
+that is the louder one: `LOG_WARNING_CC`, where the per-IP refusal reaches the
+refused operator **not at all**. That asymmetry is what makes the absence
+evidence rather than silence.)
 falsifier runs, not after, because it is free and it would redirect the whole
 lane.
 
@@ -3715,8 +3715,12 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 > **(b) The cardinality-derived batch bound exceeds the plaintext ceiling,
 > which contradicts PWD-T6.** The consensus weight limit **floors** at
 > `2 × get_min_block_weight` = **600,000 bytes**
-> (`src/cryptonote_core/blockchain.cpp:6564-6567`; the median is clamped up to
-> `full_reward_zone` at `:6543` before doubling). So even at `margin = 1`,
+> (`src/cryptonote_core/blockchain.cpp:6150-6153` at `dev` `059aca264`; the
+> median is clamped up to `full_reward_zone` at `:6150-6151` before the
+> doubling at `:6153`. *Re-pinned 2026-09-21: the earlier `:6564-6567` /
+> `:6543` anchors were written against a superseded tree and now land on a
+> blank line and an unrelated statement — substance unchanged, citation
+> refreshed.*). So even at `margin = 1`,
 > `100 × (600,000 + 876,808)` = **147,680,800 bytes**, above
 > `DECOMPRESSED_MAX_SIZE` = 128 MiB = **134,217,728**
 > (`rust/shekyl-levin/src/compress.rs:29`). PWD-T6 requires the plaintext
@@ -4015,7 +4019,9 @@ and calling it resource exhaustion protection.*
 > **And the surface is *every* dispatch, not the four p2p invokes.** `HANDLE_NOTIFY_T2`
 > is structurally the same macro — `is_notify && NOTIFY::ID == command`, then
 > the same `buff_to_t_adapter`
-> (`contrib/epee/include/storages/levin_abstract_invoke2.h:259-261`) — so the
+> (`contrib/epee/include/storages/levin_abstract_invoke2.h:269-271` at `dev`
+> `059aca264`; *re-pinned 2026-09-21 from `:259-261`, which now lands on the
+> `HANDLE_INVOKE2` macro two definitions earlier*) — so the
 > command id is known at exactly the same point and the parse happens in
 > exactly the same place.
 
