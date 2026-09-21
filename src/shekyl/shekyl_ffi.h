@@ -2030,22 +2030,34 @@ uint8_t shekyl_verify_ct_balance(
 /// Mask in a trivial amount-leaking form: identity, G, or coinbase
 /// zeroCommit(amount).
 #define SHEKYL_OUTPUT_POINTS_ERR_TRIVIAL_MASK  4
+/// outPk.size() != vout.size() (or, for a coinbase, the amount count differs):
+/// one mask per output (E6 slice 4 §3.1 S25 — was an uncensused C++ gate).
+#define SHEKYL_OUTPUT_POINTS_ERR_MASK_COUNT    5
+/// The CT type byte is neither CTTypeNull nor CTTypeFcmpPlusPlusPqc: no
+/// subject for the mask check.
+#define SHEKYL_OUTPUT_POINTS_ERR_CT_TYPE       6
 
 /// Flattened `num_keys x 32` output public keys; `keys_ptr` may be null when
-/// `num_keys` is zero.
+/// `num_keys` is zero. Zero keys is vacuously OK.
 uint8_t shekyl_check_output_keys(
     const uint8_t* keys_ptr,
     size_t num_keys);
 
-/// Flattened `num_masks x 32` outPk masks. For a coinbase tx pass the
-/// cleartext vout amounts (mask i is checked against zeroCommit(amounts[i])
-/// for i < num_coinbase_amounts); for non-coinbase pass (NULL, 0). Either
-/// pointer may be null when its count is zero.
+/// The commitment-mask gate, FACTS in: the tx's CT type byte, its vout
+/// count, the flattened `num_masks x 32` outPk masks, and every
+/// vout[i].amount (exactly num_outputs values; a spend's are zero on the
+/// wire). Rust derives the subject from ct_type — CTTypeNull is a coinbase
+/// and the zeroCommit(amount) fingerprint gate applies; the FCMP++ type is a
+/// spend and it does not — and refuses a mask count that is not the output
+/// count. Until E6 slice 4 (§3.1 S25/S27) the C++ caller made both decisions
+/// before calling; it makes neither now. Pointers may be null when their
+/// counts are zero.
 uint8_t shekyl_check_commitment_masks(
+    uint8_t ct_type,
+    size_t num_outputs,
     const uint8_t* masks_ptr,
     size_t num_masks,
-    const uint64_t* coinbase_amounts_ptr,
-    size_t num_coinbase_amounts);
+    const uint64_t* amounts_ptr);
 
 // JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++).
 // Codes 1 (NULL_PTR), 19 (LEN_OVERFLOW), and 23 (BOND_SPEND_PK_COUPLING) are shared

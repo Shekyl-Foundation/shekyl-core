@@ -838,9 +838,10 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool check_outs_valid(const transaction& tx)
   {
-    if (tx.vout.empty())
-      return true;
-
+    // No empty short-circuit (E6 slice 4 §3.1 S22): shekyl_check_output_keys
+    // over zero keys is vacuously OK on the Rust side, and a C++ arm that
+    // decided the outcome before the call — even a correct one — is the
+    // shape the slice-4 sweep exists to remove.
     std::vector<uint8_t> keys_flat;
     keys_flat.reserve(tx.vout.size() * sizeof(crypto::public_key));
     for(const tx_out& out: tx.vout)

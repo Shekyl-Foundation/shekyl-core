@@ -3236,49 +3236,47 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
 //
 // Coinbase fingerprint: C != zeroCommit(public_amount) = G + amount*H, the
 // trivially-computable commitment that would leak the confidential-coinbase
-// amount to any observer.
+// amount to any observer. Selected by the CT TYPE, in Rust (S27).
+//
+// Arity: one mask per output (outPk.size() == vout.size()), in Rust (S25).
 static bool check_commitment_mask_valid(const transaction& tx)
 {
+  // FACTS ONLY (E6 slice 4 §3.1 S25/S26/S27). This function used to decide
+  // three things before Rust ran: that outPk.size() must equal vout.size()
+  // (a rule the census never stated, and one CEN-L11's grading rests on),
+  // that an empty outPk passes (redundant: Rust accepts zero masks), and
+  // that the zeroCommit(amount) fingerprint gate applies iff the CT type is
+  // CTTypeNull. Every one of those is rule content; every one is
+  // shekyl_ct_balance::check_commitment_masks_for's now. What crosses here
+  // is the type byte, the two counts, the masks and the cleartext amounts.
   const auto& rv = tx.ct_signatures;
-
-  // Every tx shape carries exactly one outPk commitment per vout (0 == 0 for
-  // the no-output serve-credit shape). The wire serializer already pins this
-  // (serialize_ctsig_base sizes outPk to vout.size(), ct_types.h) and
-  // check_tx_semantic re-checks it for pool txs — but this gate must be
-  // locally sound rather than lean on a distant invariant, or an empty outPk
-  // beside a non-empty vout would skate through the empty fast-path below
-  // with no mask ever checked.
-  if (rv.outPk.size() != tx.vout.size())
-  {
-    MERROR("outPk count " << rv.outPk.size() << " != vout count " << tx.vout.size()
-      << ", tx " << get_transaction_hash(tx));
-    return false;
-  }
-  if (rv.outPk.empty())
-    return true;
-
   static_assert(sizeof(ct::key) == 32, "ct::key must be 32 bytes");
   std::vector<uint8_t> masks_flat;
   masks_flat.reserve(rv.outPk.size() * sizeof(ct::key));
   for (const auto& pk : rv.outPk)
     masks_flat.insert(masks_flat.end(), pk.mask.bytes, pk.mask.bytes + sizeof(ct::key));
-
-  std::vector<uint64_t> coinbase_amounts;
-  if (rv.type == ct::CTTypeNull)
-  {
-    coinbase_amounts.reserve(tx.vout.size());
-    for (const auto& o : tx.vout)
-      coinbase_amounts.push_back(o.amount);
-  }
+  std::vector<uint64_t> amounts;
+  amounts.reserve(tx.vout.size());
+  for (const auto& o : tx.vout)
+    amounts.push_back(o.amount);
 
   const uint8_t rc = shekyl_check_commitment_masks(
-    masks_flat.data(), rv.outPk.size(),
-    coinbase_amounts.empty() ? nullptr : coinbase_amounts.data(),
-    coinbase_amounts.size());
+    static_cast<uint8_t>(rv.type),
+    tx.vout.size(),
+    masks_flat.empty() ? nullptr : masks_flat.data(), rv.outPk.size(),
+    amounts.empty() ? nullptr : amounts.data());
   switch (rc)
   {
     case SHEKYL_OUTPUT_POINTS_OK:
       return true;
+    case SHEKYL_OUTPUT_POINTS_ERR_MASK_COUNT:
+      MERROR("outPk count " << rv.outPk.size() << " != vout count " << tx.vout.size()
+        << ", tx " << get_transaction_hash(tx));
+      return false;
+    case SHEKYL_OUTPUT_POINTS_ERR_CT_TYPE:
+      MERROR("CT type " << unsigned(rv.type) << " has no commitment-mask subject, tx "
+        << get_transaction_hash(tx));
+      return false;
     case SHEKYL_OUTPUT_POINTS_ERR_INVALID_MASK:
       MERROR("An output commitment mask is not a canonical prime-order point, tx "
         << get_transaction_hash(tx));
