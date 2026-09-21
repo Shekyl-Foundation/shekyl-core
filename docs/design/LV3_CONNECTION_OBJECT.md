@@ -305,10 +305,39 @@ ourselves**:
 | `:1343` | `COMMAND_TIMED_SYNC` **response** handler — likewise |
 | `:3313` | `gray_peerlist_housekeeping`, **only** in the `else` after `check_connection_and_handshake_with_peer` returns true; the failure branch **evicts** |
 
-> **So a white entry is not merely "observed" — it is a VERIFIED DIALABILITY
-> CLAIM: *I dialled this peer and it answered*. The peerlist has been running
-> PWD-E2's verification, for peers, all along — unnamed, at the promotion
-> boundary.**
+> **So a white entry's ADDRESS is not merely "observed" — it is a VERIFIED
+> DIALABILITY CLAIM: *I dialled this peer and it answered*. The peerlist has
+> been running PWD-E2's verification, for peers, all along — unnamed, at the
+> promotion boundary.**
+
+#### CORRECTION: the invariant holds per FIELD, not per RECORD
+
+**An earlier writing of this section said *"there is no path by which a claim
+reaches another node's view."* That is true of the ADDRESS and false of the
+record.** Verified at `f9e000f76`:
+
+- `peerlist_entry_base` carries `adr`, `last_seen` **and `pruning_seed`**, all
+  three serialized (`p2p_protocol_defs.h`);
+- the white append sets `pe_local.pruning_seed = con->m_pruning_seed`
+  (`net_node.inl:1586`), and `m_pruning_seed` is **the peer's own claim** —
+  `context.m_pruning_seed = hshd.pruning_seed`
+  (`cryptonote_protocol_handler.inl:438`);
+- validation at `:422-428` rejects only a **malformed** seed, not a **false**
+  one.
+
+**So a white entry is a MIXED-TRUST RECORD: a verified address carrying an
+unverified `pruning_seed`, and the whole record is disclosed.** The claim rides
+the verification into gossip.
+
+> **The design consequence is the important part: VERIFICATION IS PER-FIELD,
+> NOT PER-RECORD.** A category must not inherit trust from being adjacent to
+> verified data. If the connection object holds a claimed field beside an
+> observed one, the *object* is not "observed" — each field carries its own
+> provenance, or a consumer reads the wrong one as a fact.
+
+*(This is the second time in this round that a claim about the code was
+asserted from the mechanism and was wrong at a site nobody had opened. It is
+recorded rather than repaired silently because the pattern is the finding.)*
 
 *(This row's earlier draft asserted the weaker property from the mechanism
 without checking every site. Recorded because it is this lane's recurring
@@ -366,6 +395,85 @@ back-ping it was written against was deleted by PWD-B10), and **if that reaches
 for a new field the no-genesis-deadline conclusion is void**. So the round has a
 reason to prefer the hairpin that is **structural, not merely cheaper**: it
 keeps I8 out of the pre-genesis bucket.
+
+## 2.8 ROUND 2 — the classification, and what it does and does not settle
+
+**First pass by Rick, scrutinised here. The answer survives, with one consumer
+added and one axis it does not cover.**
+
+### 2.8.1 The classification
+
+**Reads OBSERVED only:** admission (current connection count, the socket's
+host, the zone — *what admitting costs us*); promotion (verification by
+definition); disclosure of the **address**; PWD-B1's token bucket and B2's
+jitter schedule (per-connection state); B7's score and PWC-E5's idle kick
+(observed behaviour); the failure-window class (the outcome of an attempt we
+made).
+
+**Reads CLAIMED — three, not two:**
+
+| Consumer | What it reads | Resolution | Bounded? |
+| --- | --- | --- | --- |
+| gray entry construction | claimed port, by design (`derive_advertised_endpoint`) | our dial succeeds or evicts | **yes — one dial** |
+| outbound candidate selection | dials from gray, so acts on claims | same | **yes — one dial** |
+| **block-request routing** *(added)* | `pruning_seed` at `cryptonote_protocol_handler.inl:1729`, `:1903` — *which peer has the block we want* | the request fails and is re-routed | **no — repeats until the peer is dropped for other reasons** |
+
+**The third is the one the first pass missed, and it behaves differently.** The
+first two are the quarantine working as designed: a claim is a hypothesis with
+a one-dial cost and an observation resolves it. `pruning_seed` has **no
+promotion boundary** — nothing ever verifies it, it is disclosed onward in
+white entries (§2.7.4's correction), and a false seed misroutes repeatedly
+rather than once.
+
+*(Not this slice's defect and not this slice's fix. Named so the round does not
+inherit a clean-looking split that the code does not have.)*
+
+### 2.8.2 REQUIREMENT — eviction and the protection set read OBSERVED only
+
+**No exceptions.** Rank on connection age, on useful work we witnessed, on
+whether **we** dialled it — facts the peer cannot assert. **The moment a
+protection set reads dialability, the peer picks its own treatment.**
+
+### 2.8.3 Provisional answer to Round 2
+
+> **No admission or eviction decision needs the claimed half, so PWD-E2 stays
+> a PARALLEL slice rather than a blocking dependency** — subject to §2.8.5.
+
+### 2.8.4 The caveat that matters more than the answer
+
+**Claimed-versus-observed is the TRUST axis. It does not settle the RELEVANCE
+axis — and I8's original defect lives entirely inside the observed half.**
+
+The per-host cap reads the **observed socket host**. Unforgeable. **Still the
+wrong quantity.** So *"use observed facts"* is a constraint **the current
+broken code already satisfies**, and a round that landed only that constraint
+would have changed nothing.
+
+> **So every decision owes TWO declarations, not one:**
+>
+> 1. **which half it reads** — stops the peer choosing its own treatment;
+> 2. **what the quantity is a PROXY FOR** — which is what this round was opened
+>    to fix.
+>
+> **The first is checkable and the second is a judgement, which is exactly why
+> it would be easy to land the first and call it done.**
+
+### 2.8.5 The one route from admission to the claimed half — Round 2 must RULE on it
+
+**Named so the round tests it rather than discovers it:** *reserving inbound
+capacity for dialable peers*, so the reachable core is not crowded out by
+dialer-only nodes.
+
+- It is a **plausible policy someone will propose**.
+- It **reads dialability at admission time**, which would make **E2 blocking**
+  and reorder the slice register.
+- It is a **NAT-sorting instance in its own right** — second-class treatment
+  **at the door** rather than at eviction, which is §3.2's trap moved earlier
+  rather than avoided.
+
+**If Round 2 rules it out on the sorting grounds, §2.8.3 holds cleanly. If it
+is kept, the slices reorder and the reason is on the record.** Either way it is
+ruled, not left to be proposed later by someone who has not read §3.2.
 
 ## 3. Two adversarial questions the round must ANSWER, not assume
 
