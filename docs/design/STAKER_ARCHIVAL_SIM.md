@@ -3800,7 +3800,7 @@ detectors are complementary, not redundant:
   instead points scarce budget at the *thinnest* shards and *holds* them; the shards that stay
   under target are in absolute shortage (nobody can afford them), never frozen-but-idle. **The
   scope of the preclusion is the rational-cooldown-aware regime, not all behavior:** a naive
-  operator who drops A intending to immediately reinstate into B, not modeling the cooldown,
+  operator who drops A intending to immediately bond B, not modeling the cooldown,
   discovers A's capital frozen and leaves B under-covered for the 2-epoch window — exactly the
   transient the sim precludes. So the transient is *reachable, just not by an optimizing
   agent*; that residual is routed to operator-education and a wallet-conformance guard (see

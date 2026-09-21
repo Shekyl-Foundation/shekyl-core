@@ -366,9 +366,6 @@ Default. Lands before genesis if it should exist at launch.
 - **`shekyl-stats` `Z_ALPHA_1E6` provenance vs. the `enc_label` test's**
   - Target: pre-genesis
 
-- **`HoldingsUpdate` (partial-release/reinstate) promoted to genesis scope + pre-seal**
-  - Target: pre-genesis
-
 - **Archival serve-credit / emission LMDB scans — bound the two unindexed table**
   - Target: pre-genesis
 

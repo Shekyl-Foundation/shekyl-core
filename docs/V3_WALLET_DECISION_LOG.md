@@ -85,22 +85,28 @@ the residuals in
 **Scope.** This entry records the ruling. **No code moves with it** — the
 deletion set is enumerated in PSL §5.3.2 and each deletion is separately
 authorized.
-## 2026-09-20 — `Rebond` is renamed `Reinstate` (name only)
+## 2026-09-20 — `Rebond` is renamed `Reinstate`; `HoldingsUpdate` is REJECTED
 
 **Decision.** The archival bond-post kind `Rebond` becomes `Reinstate`
-everywhere in code and in living documents. The wire discriminant stays `1`,
-every FFI error-code number is unchanged, and no rule moves.
+everywhere in code and in living documents. The wire discriminant stays `1`
+and every FFI error-code number is unchanged. Post-holdings must **equal**
+the record's current holdings; both terms are 0. Discriminant `3`
+(`HoldingsUpdate`) is REJECTED: in-place holdings mutation is a clusterable
+same-class stream, so a persona's bond is fixed at join. Holdings change is
+persona rotation. The name stays in the discriminant table as unassigned so
+it cannot be silently re-minted (rule 23).
 
 **Rationale.** The name mis-described its own mechanism, and the misreading was
 universal rather than occasional — readers took `Rebond` for *"post a bond
 again"* or *"re-enter after an exit"*. It is neither. The kind acts on a record
 that is still **Bonded** and has been **slashed**: it closes the open bad
-interval in place, re-arms slashability, requires post-holdings to be a
-**superset** of current, and moves zero collateral in the standing-only case.
-Re-entry after an exit or a terminal slash is `JoinMarket`; `Release` + rejoin
-*"annihilates exactly what `Reinstate` preserves — identity, tenure"*
-(`PHASE_2B_FSM_RETOOL.md`). The tree had already written the correction into its
-own prose without the name following it.
+interval in place and re-arms slashability, without changing holdings or
+moving collateral. Re-entry after an exit or a terminal slash is `JoinMarket`;
+`Release` + rejoin *"annihilates exactly what `Reinstate` preserves — identity,
+tenure"* (`PHASE_2B_FSM_RETOOL.md`). The same-day immutable-bond ruling
+(entry above) makes the old superset pin equal, and deletes the only kind that
+could have changed holdings in place. The tree had already written the
+correction into its own prose without the name following it.
 
 **Scope note.** Entries in this log dated before today, `docs/completed/`, and
 the changelog's back-entries use the old word and are **not** rewritten: they

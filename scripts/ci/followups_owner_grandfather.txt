@@ -116,7 +116,6 @@ Re-derive genesis-sealed redundancy params against the integer backend
 Funding-seam entry-standoff: consensus surface, wallet conformance, and the [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
 Wallet bond-funding/standoff call site (tracks the `shekyl-standoff`
 `shekyl-stats` `Z_ALPHA_1E6` provenance vs. the `enc_label` test's
-`HoldingsUpdate` (partial-release/reinstate) promoted to genesis scope + pre-seal
 Archival serve-credit / emission LMDB scans — bound the two unindexed table
 Emission-path micro-efficiency cluster — address with C-1 wiring / the schema
 Staker-archival settings are FROZEN; the remaining work is the operator experience, not [`docs/STAKER_OPERATOR_GUIDE.md`](STAKER_OPERATOR_GUIDE.md)
