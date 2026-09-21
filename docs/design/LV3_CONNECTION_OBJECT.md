@@ -523,11 +523,141 @@ rather than claimed and this objection dissolves. *Note that such a signal
 would still face the NAT-sorting objection on its own merits* — the mechanical
 rejection here does not pre-clear the values question.
 
-### 2.8.6 ROUND 2 CLOSES
+### 2.8.6 ROUND 2 CLOSES — *amended 2026-09-21, see §2.8.7*
 
-> **No admission or eviction decision reads the claimed half. PWD-E2 stays a
-> PARALLEL slice, and the slice register in
-> [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4 STANDS.**
+> ~~**No admission or eviction decision reads the claimed half.**~~ **FALSE as
+> written — withdrawn 2026-09-21.** The corrected statement is in §2.8.7. **PWD-E2
+> stays a PARALLEL slice, and the slice register in
+> [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4 STANDS** —
+> that half is unaffected, because the sites §2.8.7 names are `pruning_seed`, a
+> field already ruled retired, not an endpoint claim.
+
+### 2.8.7 CORRECTION — one eviction site and one selection site DO read a claimed field
+
+**The error was mine and it is the exact error §2.8.4 warned about:** the
+checkable half looked like an answer, so the sweep that produced §2.8.6 asked
+"does an admission or eviction decision read a claimed *endpoint*?" — and
+stopped. `pruning_seed` is a claimed field on the same records, it is read by
+both a selection decision and an eviction decision, and the sweep did not see it
+because it was keyed to the wrong noun. Verified at `f9e000f76`, the pin this
+document already carries:
+
+**Site 1 — eviction.** `should_drop_connection`
+([`cryptonote_protocol_handler.inl:1977`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1977),
+called at [`:1446`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1446),
+[`:1699`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1699) and
+[`:2116`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L2116))
+branches on `context.m_pruning_seed` — handshake-supplied, validated for
+well-formedness only ([`:421-430`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L421)),
+**never observed**. Seed `0` → not dropped (`:1979`). Stripe equal to the needed
+one → **not dropped** (`:1986-1989`). So a claimed attribute *protects a peer
+from eviction*.
+
+**Site 2 — outbound dial preference.** `try_to_connect_and_handshake_with_new_peer`'s
+candidate filter ([`net_node.inl:1832-1836`](../../src/p2p/net_node.inl#L1832))
+sorts on the **gossiped** `pruning_seed` of a peerlist entry: matching stripe →
+`filtered.insert(filtered.begin(), peer)`; seed `0` → `push_back`; mismatch →
+**skipped entirely**. The white-list draw is then cubic-front-biased
+([`:1359`](../../src/p2p/net_node.inl#L1359),
+`res = x³ / (max²·16³)` with `x ~ U{0..16·max}`), so `P(index 0) ≈ max^(-1/3)` —
+**≈ 0.37 at the 20-candidate white-list limit**. The gray draw is uniform
+(`crypto::rand_idx`), so the front-insert buys nothing there: this is a
+white-list effect, which is the list that matters.
+
+**Direction of error — it favours the claimant at both sites.** Claim the needed
+stripe and you are retained under eviction and moved to the front of the dial
+queue. Claim nothing and you are merely not preferred. There is no site anywhere
+that checks whether the peer actually serves the stripe it claimed before acting
+on the claim. This is Round 1's shape in its purest form: **a claim that decides
+rather than proposes.**
+
+**It is not gated on anyone pruning.** `get_next_needed_pruning_stripe`
+([`:2792`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L2792))
+derives the needed stripe from **heights only** —
+`get_pruning_stripe(want_height, blockchain_height, LOG_STRIPES)` returns `0`
+**only** when `want_height + CRYPTONOTE_PRUNING_TIP_BLOCKS >= blockchain_height`
+([`pruning.cpp:55-60`](../../src/common/pruning.cpp#L55); `TIP_BLOCKS` is 5500,
+[`cryptonote_config.h:344`](../../src/cryptonote_config.h#L344)). A node more
+than 5500 blocks behind the tip computes a non-zero needed stripe **regardless of
+its own seed**. Every node syncing from genesis on a chain longer than 5500
+blocks is in that state for the whole sync — so the surface is live for every
+node at least once, and again after any long outage. It is inert on testnet today
+only because the chain is 7672 blocks long and the fleet is at the tip.
+
+**The honest background is *absent*, not `0` — which makes the marker maximally
+effective.** Measured on the six seeds 2026-09-21: `get_blockchain_pruning_seed()`
+is `0` everywhere (§2.8.8), and `KV_SERIALIZE_OPT`
+([`keyvalue_serialization.h:89-95`](../../contrib/epee/include/serialization/keyvalue_serialization.h#L89))
+**skips the field on store when it equals the default**, so an archival node's
+gossiped entries omit `pruning_seed` entirely. `sanitize_peerlist`
+([`net_node.inl:2319`](../../src/p2p/net_node.inl#L2319)) accepts all eight
+well-formed values. On an all-archival network, therefore, **advertising any
+stripe is strictly better than advertising none** for reaching the front of a
+syncing node's dial queue, and a marked entry has nothing honest to hide among.
+
+**What §2.8.6 should have said, and does now:**
+
+> **No admission or eviction decision reads a claimed *endpoint*.** One eviction
+> decision and one outbound-selection decision read a claimed **`pruning_seed`**,
+> in the claimant's favour, with no observation resolving it — and that field is
+> already ruled retired (`PDM-Q7`).
+
+**Ownership — this is not a new cluster-I row.** `PDM-Q7`
+([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md), RULED
+2026-09-18) retires the wire slot, and [`FOLLOWUPS.md`](../FOLLOWUPS.md) already
+carries the row under **`LV-` / `PWC-`**. What is *not* in Q7's disposition table
+is the cell this correction fills: the table dispositions the **C++ engine**
+symbols (die at `DRS-E*`), the **Rust receiver** (ignores non-zero), the **Rust
+sender** (sends `0`) and the **RPC** fields (drop at the version bump). The **C++
+receiver's preference behaviour** — `:1832` and `should_drop_connection` — is the
+empty cell. Q7's ruling text names "complement-seeking peer selection" as part of
+the engine's purpose, so the mechanism was seen; it was not dispositioned, and
+`PDM-Q-S0` forbids a C++ landing before the cutover, so it cannot be quietly
+fixed either.
+
+**Two arms, for steering — neither built here.**
+
+1. **Delete now** as a rule-16 migration of a claimed read: drop the `else if` at
+   `:1834` and the stripe branches in `should_drop_connection`. Requires steering
+   to name a C++ landing window in writing — `PDM-Q-S0`'s reopening criterion 1.
+2. **Record the window.** Leave the code and write the exposure into Q7's table
+   explicitly, so it is a dated known exposure rather than an empty cell.
+
+**Falsifier for this correction:** a site that resolves a claimed `pruning_seed`
+against observed behaviour before preferring or retaining the peer. `rg -n
+'m_pruning_seed|peer\.pruning_seed' src/` returning a comparison against blocks
+actually served would falsify "no observation resolves it."
+
+### 2.8.8 The fleet measurement behind §2.8.7 — `get_blockchain_pruning_seed()` is `0` on all six seeds
+
+Run 2026-09-21 against the six testnet seeds (`skl-seedaus`, `skl-seedbrz`,
+`skl-seedeu`, `skl-seedjp`, `skl-seeduse`, `skl-seedusw`). The RPC route is
+closed — `prune_blockchain` is the only method that surfaces the getter, and the
+fleet runs `restricted-rpc=1`, which refuses it (`-32601 Method not allowed in
+restricted mode`, verified on `skl-seedeu`). So the seed was read where it is
+stored: the LMDB `properties` table, whose key is written **only** by
+`prune_worker` ([`db_lmdb.cpp:2363-2375`](../../src/blockchain_db/lmdb/db_lmdb.cpp#L2363)).
+
+| | Result |
+| --- | --- |
+| `prune` directive in any `/etc/shekyl/*.conf` on any host | **none** (18 files) |
+| `pruning_seed` key present in any LMDB (10 databases across 6 hosts) | **0 of 10** |
+| **Positive control**, same instrument, `skl-seedeu`'s testnet LMDB | `properties` 38, `hf_versions` 36, `txpool_meta` 35, `output_amounts` 33, `txs_pruned` 9, `block_heights` 7 |
+
+The control is the point: the instrument can find keys in these files, and finds
+no `pruning_seed`. **The random-stripe path at
+[`db_lmdb.cpp:2370`](../../src/blockchain_db/lmdb/db_lmdb.cpp#L2370) is not live
+in production.** It is reachable only through `prune_blockchain()` /
+`update_blockchain_pruning()`, both gated on `--prune-blockchain`
+([`cryptonote_core.cpp:668`](../../src/cryptonote_core/cryptonote_core.cpp#L668);
+descriptor default `false`, [`:171-175`](../../src/cryptonote_core/cryptonote_core.cpp#L171)),
+or through the RPC the fleet refuses.
+
+**What this does and does not settle.** It settles that the emitted values are
+**uniform**, not scattered — so there is no assigned per-node tag on the wire
+today, and the exposure is the eight unused marker values rather than a live
+three-bit identifier. It does **not** reduce §2.8.7, which it strengthens: a
+uniform-absent background is the best possible background for a marker.
 
 **What Round 3 inherits, and it is the harder half:** §2.8.4's second
 declaration — *what is the quantity a proxy for?* Rounds 1 and 2 settled the
