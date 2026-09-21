@@ -214,6 +214,84 @@ cannot share a representation, or a later consumer will read a claim as a
 fact. That is the same discipline `GRAY` already applies to the peerlist, at a
 different altitude.
 
+## 2.7 The CLAIMED / OBSERVED split, and Round 2's question
+
+**Sharper than "verified, not claimed" (Rick, 2026-09-21), and it is the
+distinction the connection object should be built on.** The category has two
+halves with different trust properties, and **every decision must be able to
+say which half it reads:**
+
+| Half | What it is | Trust |
+| --- | --- | --- |
+| **CLAIMED** | what the advert says — the port-only claim | **attacker-controlled, self-selected.** `last_seen = 0` on entry to GRAY is a **delay, not a defence** |
+| **OBSERVED** | what we witnessed ourselves — *"I hold an established inbound connection from this socket"*, *"I dialled this endpoint and it answered"* | **a fact we own.** Not forgeable by the peer |
+
+### 2.7.1 ROUND 2's QUESTION — which decisions read the CLAIMED half?
+
+**This is what sets the dependency, and it is answerable early:**
+
+| If… | Then |
+| --- | --- |
+| admission accounting and eviction are built **entirely on observed facts** | **I8 needs no verification, and PWD-E2 stays a PARALLEL slice** |
+| **any** admission or eviction decision reads the claimed half | **E2 becomes a HARD DEPENDENCY** and the slice register reorders |
+
+**Working hypothesis, recorded as a hypothesis and not an answer** (Rick): most
+of what I8 needs is observable. **Whether a peer is *dialable* may not be
+something admission needs to know at all** — that is a **peerlist-identity**
+property, which is where the address key belongs and always did. *Admission
+needs to know what admitting this connection COSTS US.* Round 2 answers this
+explicitly rather than letting it be assumed.
+
+### 2.7.2 The self-selection trap is not confined to eviction — with one correction
+
+**Any benefit attached to a category invites claiming it**, including
+benign-looking ones. So the requirement belongs in this round's
+**requirements**, not its analysis.
+
+**But the claim that the eclipse primitive is already free does not survive
+contact with the code, and the reason is the good news.** Checked at
+`f9e000f76`:
+
+- a derived entry enters **GRAY**, and **`get_peerlist_head` reads the WHITE
+  list only** (`net_node.inl:995`) — *"Gray is never disclosed to peers"*
+  (`:2907`);
+- **white is earned by an actual outbound dial** — `set_peer_just_seen` fires
+  from the `COMMAND_HANDSHAKE` response handler (`:1283`) and the
+  `COMMAND_TIMED_SYNC` response handler (`:1343`), i.e. **after we dialled and
+  they answered**;
+- so a **false** dialability claim buys **one wasted dial and eviction**, not
+  peerlist placement. Gossip is contingent on an **observed** fact.
+
+**The incentive to over-claim exists; the existing design already converts it
+into a cost rather than a benefit.** I8 does not inherit a free eclipse
+primitive — it inherits a working defence, and it must not break it.
+
+### 2.7.3 The precedent is in the same file: GRAY/WHITE *is* the split
+
+**The peerlist already implements exactly the discipline this round needs, at
+the promotion boundary:** a **claim** enters gray, an **observation** promotes
+it to white, and only white is disclosed. That is *claimed* and *observed* held
+in different states with an explicit rule for crossing between them.
+
+> **So I8 should COPY this, not invent it** — and the burden on any design that
+> departs from it is to say why the peerlist's answer was wrong. The two states
+> must not share a representation in the connection object either, or a later
+> consumer reads a claim as a fact.
+
+*(This is also the honest reason the category "needs naming, not inventing":
+the code has been making this distinction correctly in one place, without a
+name, and the unnamed version could not be reused by the seven consumers in
+§1.)*
+
+### 2.7.4 A reason to prefer E2(a) beyond cost
+
+**E2(a)'s hairpin reuses the existing handshake nonce, so it PRESERVES §2.6's
+no-new-wire conclusion.** E2(b) must specify its own dial-back mechanism (the
+back-ping it was written against was deleted by PWD-B10), and **if that reaches
+for a new field the no-genesis-deadline conclusion is void**. So the round has a
+reason to prefer the hairpin that is **structural, not merely cheaper**: it
+keeps I8 out of the pre-genesis bucket.
+
 ## 3. Two adversarial questions the round must ANSWER, not assume
 
 ### 3.1 The admission→eviction trade
