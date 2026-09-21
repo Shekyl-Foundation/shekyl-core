@@ -174,16 +174,20 @@ impl RuleSet {
     }
 
     /// The consensus rows this rule set holds a block to **and the
-    /// validator can evaluate**, in census order: rows held by the C++
-    /// ingest driver ([`RowStatus::HeldByCxx`]) are not the validator's and
-    /// are excluded, so `Coverage::is_complete_for` measures
-    /// `enforced − held` — the census denominator itself never moves for a
-    /// hold (the gate prints both figures side by side).
+    /// per-block stages can evaluate**, in census order. Excluded: rows
+    /// held by the C++ ingest driver ([`RowStatus::HeldByCxx`]), which are
+    /// not the validator's; and rows this crate enforces at another site
+    /// ([`RowStatus::EnforcedAt`] — CEN-E5 at writer open), which no
+    /// per-block coverage could contain. So `Coverage::is_complete_for`
+    /// measures `enforced − held − at-open` — the census denominator itself
+    /// never moves for either (the gate prints the subtractions beside it).
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_ {
-        self.enforced
-            .iter()
-            .copied()
-            .filter(|row| row.status() != RowStatus::HeldByCxx)
+        self.enforced.iter().copied().filter(|row| {
+            !matches!(
+                row.status(),
+                RowStatus::HeldByCxx | RowStatus::EnforcedAt { .. }
+            )
+        })
     }
 
     /// A rule set that admits `header_major_version`, for the version-rule
@@ -221,7 +225,7 @@ impl fmt::Debug for RuleSet {
             .field(
                 "enforced",
                 &format_args!(
-                    "{} of {} rows (validator-enforced; held rows excluded)",
+                    "{} of {} rows (per-block; held and at-open rows excluded)",
                     self.enforced().count(),
                     CenRow::ALL.len()
                 ),

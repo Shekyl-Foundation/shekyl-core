@@ -122,7 +122,7 @@ mod view;
 #[cfg(any(test, feature = "harness"))]
 pub mod harness;
 
-pub use anchors::{Anchor, ReleaseAnchors};
+pub use anchors::{Anchor, AnchorConflict, ReleaseAnchors, Remedy};
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};

@@ -57,6 +57,7 @@
 //! other row fails. `?` inside a rule propagates a **fault** and only a fault
 //! (`view.rs`, "Three answers, three positions").
 
+pub(crate) mod anchors;
 pub(crate) mod difficulty;
 pub(crate) mod header;
 pub(crate) mod pow;
