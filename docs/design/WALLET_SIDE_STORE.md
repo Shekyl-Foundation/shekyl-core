@@ -249,7 +249,7 @@ design-review material awaiting a ruling, and is marked so.
     open design gate with its retirement appended as an `UPDATE`, and the
     `GF-4b` note of 2026-09-11 says outright that it was *"annotated rather
     than edited"* — the pattern the current-only principle forbids. *(One row
-    checked and **sound**: §5 item 2 is still accurate — rebond and
+    checked and **sound**: §5 item 2 is still accurate — reinstate and
     `HoldingsUpdate` have verify arms at `bond_post.rs:255`, `:324`, `:440`
     and no builder; `shekyl-archival-bond-builder` has only
     `build_join_market_vin` and `build_release_vin`.)*

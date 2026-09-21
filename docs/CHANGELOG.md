@@ -22,6 +22,52 @@
   `StoreCannot::RuleSetUnknown` deleted). Process: every FOLLOWUPS row
   carries a gated `Owner:` (`check_followups_owners.py`).
 
+- **DRS-E2 increment 2 — the replay driver runs, and the first real chains
+  match.** `shekyl-chain-ingest` gains the pipeline (`form` workers → sequencer
+  → a single validate+connect actor that does not restart after a halt), the
+  **trace** artifact (LMDB's passed-through facts and one digest checkpoint at
+  the covered tip — the writer takes no height — harvested by the new
+  `shekyl-e2-trace-export` C++ shim through the FFI,
+  `-DBUILD_E2_TRACE_EXPORT=ON`; `shekyl-ffi` depends with
+  `default-features = false` so the daemon image compiles the writer, not
+  clap / the pipeline), the RPC corpus fetch, a `rewind` record
+  (corpus format v2) for the reorg family, `--fixed-difficulty` →
+  `RuleSet::fakechain` on regtest only, CSR-3a grading with two typed evidence
+  clauses per register row (`scripts/ci/export_conformance_register.py` is the
+  coverage gate's own parse, serialized), and a RandomX metrics sink. The
+  binary **`shekyl-chain-replay`** (`fetch`, `replay`) drives it. First runs:
+  301- and 2301-block regtest chains replay with the redb digest **matching
+  LMDB at the tip**, 0 unadjudicated rows, the seed-epoch boundary crossed.
+  Measured (light mode, Rust interpreter, x86_64): 0.60 s CPU per hash —
+  the input `RANDOMX_V2_RUST.md` §9's dataset-mode decision was waiting for.
+  `CacheStore::lookup_or_derive_reporting` reports how a call was served.
+  `randomx-v2-differential` is stated as the permanent verifier↔JIT parity
+  gate. The validate+connect actor stays up on a verdict and on a stale
+  seed — only a store halt ends it — so E3 re-forms on the same writer;
+  `form` is `shekyl-chain-rules::form` (no ingest wrapper); a rewind
+  advances the sequencer without a formed payload. **Review round
+  (2026-09-21):** a rewind across a seed-epoch step no longer ends the run
+  (`RD-F21` — the seed ledger asks the store for a height outside its
+  window, through the connector); a refusal is graded once as its own field
+  and is open unless the register records the row DIVERGENT, and the binary
+  exits non-zero on any disagreement no register adjudicated (`RD-F22`);
+  one `shekyl_chain_rules::seed_height` serves the validator, the harness
+  and the driver; sequence numbers are asserted consecutive at the event
+  and the source's first height against the store's next; `--hashers`
+  bounds RandomX concurrency apart from `--window` (the metrics artifact,
+  `shekyl_e2_metrics_v2`, records both); `Substrate::pin_seed` and
+  `CacheStore::pin_canonical` replace `EpochPin`; the exporter walks LMDB
+  under one read snapshot and pushes the daemon's own
+  `logical_state_digest_v0` (the families-shaped FFI is gone), refuses a
+  zero root, an out-of-range `--block-stop` and a `SEEDHASH_EPOCH_*`
+  override in its environment; the trace and corpus readers refuse a facts
+  row past `u64::MAX`, bytes after the trailer and a truncation anywhere in
+  a record; the register is preflighted; the store side of the comparator's
+  negative control exists (one raw-redb mutation per digested family); the
+  rotating differential lanes emit the failing blob in their failure
+  record; the extractor's committed output is parsed by the Rust grader and
+  held equal to the live register in `docs-gates`.
+
 - **Transaction read surface (S-TX, DRS-E1 increment 6).** `ReadSnapshot`
   gains `tx_location` / `tx_record` by `TxHash` (returning `Option` — a hash
   miss is ordinary), `tx_count`, `tx_prunable` / `tx_output_indices` by
@@ -66,6 +112,15 @@
 - **The committed-chain read surface (S-CHAIN-R, DRS-E1 increment 4, PR #772).** `ReadSnapshot` gains nine typed reads (`tip`, `height_of`, `block_info`, `block_infos`, `block_blob`, `block`, `blocks`, `block_burn`, `total_burned`) plus `cumulative_tx_count` / `long_term_effective_median`; `TipState` carries the writer's halt beside the recorded tip. Store layout `SCHEMA_VERSION 2 → 5` (typed value shapes, `DAEMON_REDB_STORE.md` §11.1(f); `BlockInfo` 88 → 104 B; the seal creates every table with a writer; `txs_pqc_auth_hash`; `spent_keys` is `Present`). Pre-genesis: an existing redb store file is refused at open and rebuilt, per §11.1(a).
 
 ### Wallet
+
+- **Height-semantics Phase 2c: inland decode of chain-count RPC facts.**
+  Daemon-RPC `ChainTip.chain_height` / `BlockHashAt` / `BlockHeaderAt` /
+  `BlockAt.chain_height` are `ChainCount`; `target_height` is
+  `Option<ChainCount>` (`None` = synchronized sentinel). Wallet client
+  `Rpc::get_height` returns `ChainCount`. Submit `ref_age_window` takes
+  `ChainCount` vs `BlockHeight`. Handlers bound a requested ordinal with
+  `ChainCount::has_block` and name the top with `ChainCount::tip`. Wire
+  DTOs and FFI PODs stay `u64`. No numeric change.
 
 - **Height-semantics Phase 2b: dispatch-clock stamps are `ChainCount`.**
   `daemon_claimed_tip`, `BlockSource::tip_height`, `anchor_t0`, and
@@ -126,6 +181,39 @@
   its absent-`target_height`-reads-as-synchronized default.
 
 ### Consensus
+
+- **The `Rebond` bond-post kind is renamed `Reinstate`, and lands with the
+  immutable-bond ruling.** The wire discriminant stays `1` and every
+  `SHEKYL_ARCHIVAL_*` FFI error-code **number** is unchanged. The old name was
+  read as *"bond again"* or *"re-enter after an exit"* by essentially every
+  reader, and it is neither — a `Reinstate` acts on a record that is **still
+  bonded but slashed**, closing its open bad interval in place and re-arming
+  slashability. Post-holdings must **equal** current (a persona cannot keep
+  `P` and change the bond); both credit and debit are 0. Holdings change is
+  persona rotation (`Release` + `JoinMarket`). Discriminant `3`
+  (`HoldingsUpdate`) is **REJECTED** — the kind is unrepresentable
+  (`from_u8(3)` is `InvalidPostKind`); verify/connect/pop/FFI arms are
+  deleted. The redb table `archival_bond_rebond_log` and its LMDB counterpart
+  become `archival_bond_reinstate_log`; pre-genesis, no store holds data, so
+  this is a rename and not a migration. Records-was documents
+  (`docs/completed/`, this file's back-entries, the decision log) keep the old
+  word and are not rewritten; `LMDB_WRITE_ATOMICITY_AUDIT.md` tracks the new
+  names in its §10/§12 matrices only, because those are a live inventory checked
+  against `SHEKYL_LMDB_TABLES`, and carries a note saying so.
+
+  One **defect** surfaced by the rename and fixed with it:
+  `ARCHIVAL_CHALLENGE_MECHANISM.md` described this kind as *"the re-entry path
+  for an operator who fixes the box"* for a slashed Foundation CompleteTree
+  node — wrong twice under either name, since the slash demotes the record to an
+  ordinary market position and `ReinstateOnCompleteTree` makes the kind
+  unrepresentable on a `CompleteTree` record at all.
+
+- **Reinstate CT admits zero-money; pop does not write a ghost counter.**
+  `BondTerm` gains `Unmoved` (credit and debit both 0) so a valid Reinstate
+  can close the ordinary CT equation; `from_credit_debit` is the single
+  conversion at the FFI and submit edges. `NO_BOND_TERM` (5) stays assigned
+  and is unhittable. The Reinstate pop arm no longer calls
+  `set_total_bonded_atomic` — connect does not move the counter.
 
 - **The Rust validator decides timestamps and proof-of-work (DRS-E6
   slice 2).** `shekyl-chain-rules` now evaluates census 4.C (CEN-C1 FTL,

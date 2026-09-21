@@ -16,9 +16,7 @@ use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, 
 use crate::rule_set::RuleSet;
 use crate::validate::{form, validate};
 use crate::verdict::ChainValid;
-use shekyl_difficulty::{
-    check_hash, seedheight, CumulativeDifficulty, Difficulty, GENESIS_DIFFICULTY,
-};
+use shekyl_difficulty::{check_hash, CumulativeDifficulty, Difficulty, GENESIS_DIFFICULTY};
 
 /// A chain of `len` blocks with distinct identities (timestamps a target
 /// block time apart) and the genesis constant of work per block — enough
@@ -190,8 +188,8 @@ fn cen_d3_the_seed_is_block_zero_through_the_first_epoch_and_lag() {
         let chain = chain_of(blocks);
         let connecting = blocks;
         assert_eq!(
-            seedheight(connecting, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG),
-            seed_height
+            crate::seed_height(BlockHeight::from_raw(connecting)),
+            Some(BlockHeight::from_raw(seed_height))
         );
         let seed = expected_seed(&chain);
         let at_seed_height = chain.with_view(|view| {

@@ -5,6 +5,8 @@
 DRS-W12 and DRS-W15 regraded 2026-09-09; §11 digest ledger added
 2026-09-11 by **DRS-P0e**; §12 accumulator class freeze and §10's
 `Accumulator class` column added 2026-09-12 by **DRS-0 slice A**
+**Rename, 2026-09-20:** the bond-post kind this document's journals and matrix rows refer to was named **`Rebond`** when every row below was written and verified; it is now **`Reinstate`** — same kind, same wire value `1`, same semantics (reinstatement of a *slashed* record, which is exactly what the old name obscured). Table and kind names here track the rename because the §10/§12 matrices are a **live inventory** checked against `SHEKYL_LMDB_TABLES`; the citations and shas remain records-was.
+
 **Pin:** five, and each row states which it was verified against. **P0b rows
 (DRS-W1 through DRS-W11) and §§0–8, §10: `dev` `2dba46537`. P0c rows
 (DRS-W12 through DRS-W15) as first written: `dev` `14aa42074`. The 2026-09-09
@@ -114,7 +116,7 @@ Ordering at the pin (the funnel every connected block traverses):
 
 1. `add_transaction` for the miner tx and each block tx — tx data, indices,
    outputs, spent keys, **and the per-vin archival journal writes** (bond
-   record mutations with their unbond/rebond/holdings-update pre-image
+   record mutations with their unbond/reinstate/holdings-update pre-image
    journals, emission-claim journal, serve-credit bits) ride tx-connect.
 2. The FCMP++ curve-tree block, in this order — the sequence is
    load-bearing, so it is transcribed as the code has it rather than
@@ -600,7 +602,7 @@ chain height *after* the block. The tx-connect journals key on the block's
 | `archival_emission_claim_log` revert | `removed_block_height − 1` | tx-connect at block index `N` |
 | `archival_bond_unbond_log` revert | `removed_block_height − 1` | tx-connect at `N` |
 | `archival_bond_holdings_update_log` revert | `removed_block_height − 1` | tx-connect at `N` |
-| `archival_bond_rebond_log` revert | `removed_block_height − 1` | tx-connect at `N` |
+| `archival_bond_reinstate_log` revert | `removed_block_height − 1` | tx-connect at `N` |
 | `archival_budget_accrual` remove | `removed_block_height − 1` | funnel step 6 at `prev_height` |
 | attestation witness remove | `removed_block_height` | store at key `prev_height` (`archival_attestation_witness_key` adds the +1) |
 | segment-freeze revert | height-free (row count) | hook at `prev_height + 1` |
@@ -637,7 +639,7 @@ exactly what it had done until this row was corrected. The hook base is
 | emission claims (index base, `removed_block_height − 1`) | claimed set, `first_paying_emission_height` | slashes + close | claims connect at tx-connect, before the hooks; **fields disjoint** from the slash revert's, so this one *could* compose either way — the order is the mirror, kept |
 | unbonds (index base, `removed_block_height − 1`) | `bonded_total`, holdings, interval log | slashes | defensive belt; a violation surfaces as `MISSING_CLEAN_CLOSE`, loud |
 | holdings updates (index base, `removed_block_height − 1`) | `bonded_total`, `held_shard_ids`, `shard_add_epochs` | slashes | **ORDER IS LOAD-BEARING**: the slash journal restores the very same fields; reverting in the wrong order makes the exactly-one-FLOOR delta check see `FLOOR ± slashed_amount` and abort the pop with `NotSingleShardDelta` |
-| rebonds (index base, `removed_block_height − 1`) | holdings/balance, closed interval | slashes | both journals touch `bad_intervals`; the slash revert strips its appended intervals before the rebond revert re-opens the journaled closed one |
+| reinstates (index base, `removed_block_height − 1`) | holdings/balance, closed interval | slashes | both journals touch `bad_intervals`; the slash revert strips its appended intervals before the reinstate revert re-opens the journaled closed one |
 | segment freezes (count) | frozen-segment counter | epoch-close revert | `:903`: counted against post-close state |
 
 Inserting a new journal that touches `bonded_total`/`held_shard_ids`/
@@ -1089,7 +1091,7 @@ every row of the table that follows:
 | `archival_attestation_witness` | `store/remove_…_at_height`; `delete_…_before_height` (prune) | §2/§3/§5a | excluded | small |
 | `archival_bond` | `put_archival_bond_value` / `remove_archival_bond_record` | §2/§3 | excluded | set-shaped |
 | `archival_bond_holdings_update_log` | journal helpers | §2/§3/§7/§8 | excluded | append-mostly |
-| `archival_bond_rebond_log` | journal helpers | §2/§3/§7/§8 | excluded | append-mostly |
+| `archival_bond_reinstate_log` | journal helpers | §2/§3/§7/§8 | excluded | append-mostly |
 | `archival_bond_unbond_log` | journal helpers (`archival_journal_put/delete`, param dbi) | §2/§3/§7/§8 | excluded | append-mostly |
 | `archival_budget` | epoch-close put; `delete_archival_budget_for_epoch` — the **pop-side** revert (`revert_archival_epoch_close_at_height`, `:8536`); `delete_archival_budget_before_epoch` — the retention prune | §2/§3/§5a | excluded | small |
 | `archival_budget_accrual` | `add/remove_archival_budget_accrual`; `delete_…_before_height` | §2/§3/§5a | excluded | small |
@@ -1750,7 +1752,7 @@ comparator becomes digest-relevant and this row must be revisited.*
    unbounded**. The six genuinely append-only journals
    (`archival_slash_log`, `archival_epoch_close_log`,
    `archival_emission_claim_log`, `archival_bond_unbond_log`,
-   `archival_bond_holdings_update_log`, `archival_bond_rebond_log`) have no
+   `archival_bond_holdings_update_log`, `archival_bond_reinstate_log`) have no
    prune and are graded `append-mostly`, not `small`. Three further archival
    tables (`archival_bond`, `archival_slash_applied`,
    `archival_shard_segment`) are live keyed state, not journals, and are

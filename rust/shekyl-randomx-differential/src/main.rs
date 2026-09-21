@@ -650,8 +650,15 @@ fn dispatch(invocation: &ModeInvocation) -> ExitCode {
                     // and native-arm lanes, and it needs saying twice
                     // here: under a rotating seed, re-running on a
                     // later index WOULD come back green. Replay the
-                    // recorded (seedhash, data) pair instead.
+                    // recorded (seedhash, data) pair instead — which is
+                    // why a divergence's structured record (the blob,
+                    // both hashes, both cache fingerprints; RD-Q12's
+                    // fuzz hygiene) is emitted here, into the log the
+                    // lane uploads as its failure artifact.
                     eprintln!("error: {err}");
+                    if let mode_rotating::RotationError::Divergence(divergence) = &err {
+                        divergence.record.emit_stderr();
+                    }
                     eprintln!(
                         "error: rotating-lane divergence at index {} — halt and escalate; \
                          replay the recorded pair, do NOT re-run the lane",

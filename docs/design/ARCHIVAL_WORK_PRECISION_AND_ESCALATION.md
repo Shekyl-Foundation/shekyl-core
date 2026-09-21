@@ -1252,7 +1252,7 @@ stay bonded**, post-slash holding *"still bonded on remaining shards"*
 (`FOUNDATION_GENESIS_IDENTITY_SET.md` §3.2, per-shard bonds). Only the
 foundation's **`CompleteTree`** kind takes the *whole* bond ("floor-or-whole").
 The record-level bad interval `[E_slash, ∞)` is the **serve-credit** consequence
-(it blocks `good_through` until `Rebond`) — **not** the collateral scope; the two
+(it blocks `good_through` until `Reinstate`) — **not** the collateral scope; the two
 are separate. **This correction is aggregate-neutral for the margin**, and the
 reason is scope-matching: the margin weighs a *full holding* proxied vs held, and
 each of the `MAX_HOLDINGS_SHARDS` shards is challenged and slashed

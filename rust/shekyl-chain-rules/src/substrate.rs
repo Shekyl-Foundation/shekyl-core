@@ -61,4 +61,12 @@ pub trait Substrate {
     /// may cache by it. An `Err` is the fail-closed gate: the block cannot
     /// be proven, and `form` returns the fault instead of a verdict.
     fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Self::Fault>;
+
+    /// `seed` is about to serve a run of blocks (CEN-D3's epoch). An
+    /// implementor that caches by seed may prepare and pin it now, off the
+    /// hot path, so the first block of the epoch does not pay the cache
+    /// fill inside [`longhash`](Self::longhash) and two live seeds of a lag
+    /// window do not evict each other. Advisory: `longhash` is correct
+    /// whether or not this was called. The default does nothing.
+    fn pin_seed(&self, _seed: &BlockHash) {}
 }

@@ -629,7 +629,7 @@ impl RefreshEngine for LocalRefresh {
             // the rate-limited diagnostic stream (per-block
             // ceiling + F13-S latch handled by `emit_state`).
             let tip = match daemon.get_height().await {
-                Ok(t) => t as u64,
+                Ok(t) => t.to_raw(),
                 Err(e) => {
                     error!(error = %e, "LocalRefresh: get_height failed");
                     emit_state.try_emit(

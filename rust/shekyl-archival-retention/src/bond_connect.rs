@@ -22,8 +22,8 @@
 
 use thiserror::Error;
 
-use crate::bond_floor::{bond_floor_of, ARCHIVAL_BOND_FLOOR_ATOMIC};
-use crate::bond_post::{single_shard_diff, superset_added_diff, SingleDiff};
+use crate::bond_floor::bond_floor_of;
+use crate::bond_post::holdings_unchanged;
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, ShardSet, MAX_HOLDINGS_SHARDS};
 use crate::consensus_state::BadInterval;
 
@@ -86,7 +86,7 @@ pub fn is_clean_interval_close(interval: &BadInterval, epoch: u64) -> bool {
 /// slash hook — a deterministic consensus halt. Appending only when no open
 /// interval exists leaves standing semantics unchanged (`good_through` only
 /// asks whether SOME open interval covers the epoch) and establishes the
-/// **at most one open interval** invariant the `Rebond` verify (Pin 5) and
+/// **at most one open interval** invariant the `Reinstate` verify (Pin 5) and
 /// its in-place close depend on.
 ///
 /// The decision and the interval shape are consensus semantics, so they live
@@ -277,271 +277,84 @@ pub fn release_pop(
         .ok_or(ReleasePopError::TotalBondedOverflow)
 }
 
-// ── HoldingsUpdate add / drop connect + pop (gate-4 §4.4 grace-tail) ─────────
-
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
-pub enum HoldingsUpdateConnectError {
-    /// The post-holdings are not `current ∪ {one new shard}` (add) — verify's
-    /// `HoldingsUpdateNotSingleAdd` should have rejected this.
-    #[error("HoldingsUpdate-add post is not current holdings plus exactly one shard")]
-    NotSingleAdd,
-    /// The post-holdings are not `current ∖ {one shard}` (drop).
-    #[error("HoldingsUpdate-drop post is not current holdings minus exactly one shard")]
-    NotSingleDrop,
-    /// Drop would empty the shard set — verify's `HoldingsUpdateDropLastShard`.
-    #[error("HoldingsUpdate-drop would leave no shards (use Release)")]
-    DropLastShard,
-    /// The record's `bonded_total == bond_floor(holdings)` invariant (§3.2)
-    /// does not hold — record corruption, not a tx fault.
-    #[error("record bonded_total != bond_floor(record holdings)")]
-    RecordFloorInvariantBroken,
-    /// `bonded_total_atomic` / `total_bonded_atomic` would overflow (add) or
-    /// underflow (drop) — the counter disagrees with the balance it aggregates.
-    #[error("bonded/total_bonded counter over/underflow on HoldingsUpdate")]
-    CounterRange,
-    /// The record is not Bonded (zero collateral / no held shards) — verify's
-    /// `HoldingsUpdateRecordNotBonded` is the admission decision (P2B-7 Pin 1:
-    /// `Bonded → Bonded`); this is the connect-fold belt so a verify-bypassing
-    /// caller cannot resurrect an Exited record through a voluntary adjustment.
-    /// Without it the add's floor invariant passes vacuously on an emptied
-    /// record (`bond_floor(∅) == 0 == bonded_total`).
-    #[error("HoldingsUpdate on a record with no bonded collateral (Exited/emptied)")]
-    RecordNotBonded,
-}
-
-/// The `HoldingsUpdate`-add connect effect (gate-4 §4.4). The C++ arm journals
-/// the record's full pre-image, then sets `held_shard_ids = post` and rebuilds
-/// the index-parallel `shard_add_epochs` — the carried-over shards keep their
-/// existing add-epoch, and `added_shard_id` takes `add_settlement_epoch` (the
-/// connecting block's settlement epoch, `E_add`). The counter movement is the
-/// absolute post-value, threaded per post (the `ReleaseConnect` note).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HoldingsUpdateAddConnect {
-    pub added_shard_id: u64,
-    pub add_settlement_epoch: u64,
-    /// `record_bonded_total + FLOOR`.
-    pub new_bonded_total: u64,
-    /// `total_bonded_atomic + FLOOR` (absolute — thread per post).
-    pub new_total_bonded_atomic: u64,
-}
-
-/// Fold the `HoldingsUpdate`-add connect: validate the single-shard growth and
-/// the record's floor invariant, and produce the counter movement.
-pub fn holdings_update_add_connect(
-    record_bonded_total: u64,
-    record_held_shard_ids: &[u64],
-    post_held_shard_ids: &[u64],
-    total_bonded_atomic: u64,
-    add_settlement_epoch: u64,
-) -> Result<HoldingsUpdateAddConnect, HoldingsUpdateConnectError> {
-    let SingleDiff::Added(added_shard_id) =
-        single_shard_diff(record_held_shard_ids, post_held_shard_ids)
-    else {
-        return Err(HoldingsUpdateConnectError::NotSingleAdd);
-    };
-    if record_bonded_total == 0 || record_held_shard_ids.is_empty() {
-        return Err(HoldingsUpdateConnectError::RecordNotBonded);
-    }
-    if bond_floor_of(HoldingsKind::ShardSetCompact, record_held_shard_ids.len())
-        != record_bonded_total
-    {
-        return Err(HoldingsUpdateConnectError::RecordFloorInvariantBroken);
-    }
-    let new_bonded_total = record_bonded_total
-        .checked_add(ARCHIVAL_BOND_FLOOR_ATOMIC)
-        .ok_or(HoldingsUpdateConnectError::CounterRange)?;
-    let new_total_bonded_atomic = total_bonded_atomic
-        .checked_add(ARCHIVAL_BOND_FLOOR_ATOMIC)
-        .ok_or(HoldingsUpdateConnectError::CounterRange)?;
-    Ok(HoldingsUpdateAddConnect {
-        added_shard_id,
-        add_settlement_epoch,
-        new_bonded_total,
-        new_total_bonded_atomic,
-    })
-}
-
-/// The `HoldingsUpdate`-drop connect effect (gate-4 §4.4 grace-tail). The C++ arm
-/// journals the pre-image, then sets `held_shard_ids = post` and rebuilds the
-/// index-parallel `shard_add_epochs` (the dropped shard's add-epoch vanishes with
-/// it). `refund_atomic == FLOOR` is the released collateral the `bond_debit`
-/// source term returns to circulation (CT-balance-enforced on the wire; not
-/// written by the connect — exposed so tests pin the §3.2 identity).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HoldingsUpdateDropConnect {
-    pub dropped_shard_id: u64,
-    /// `record_bonded_total − FLOOR`.
-    pub new_bonded_total: u64,
-    /// `total_bonded_atomic − FLOOR` (absolute — thread per post).
-    pub new_total_bonded_atomic: u64,
-    pub refund_atomic: u64,
-}
-
-/// Fold the `HoldingsUpdate`-drop connect: validate the single-shard shrink,
-/// drop-last rejection, and the record's floor invariant, and produce the
-/// counter movement.
-pub fn holdings_update_drop_connect(
-    record_bonded_total: u64,
-    record_held_shard_ids: &[u64],
-    post_held_shard_ids: &[u64],
-    total_bonded_atomic: u64,
-) -> Result<HoldingsUpdateDropConnect, HoldingsUpdateConnectError> {
-    let SingleDiff::Removed(dropped_shard_id) =
-        single_shard_diff(record_held_shard_ids, post_held_shard_ids)
-    else {
-        return Err(HoldingsUpdateConnectError::NotSingleDrop);
-    };
-    if post_held_shard_ids.is_empty() {
-        return Err(HoldingsUpdateConnectError::DropLastShard);
-    }
-    if bond_floor_of(HoldingsKind::ShardSetCompact, record_held_shard_ids.len())
-        != record_bonded_total
-    {
-        return Err(HoldingsUpdateConnectError::RecordFloorInvariantBroken);
-    }
-    let new_bonded_total = record_bonded_total
-        .checked_sub(ARCHIVAL_BOND_FLOOR_ATOMIC)
-        .ok_or(HoldingsUpdateConnectError::CounterRange)?;
-    let new_total_bonded_atomic = total_bonded_atomic
-        .checked_sub(ARCHIVAL_BOND_FLOOR_ATOMIC)
-        .ok_or(HoldingsUpdateConnectError::CounterRange)?;
-    Ok(HoldingsUpdateDropConnect {
-        dropped_shard_id,
-        new_bonded_total,
-        new_total_bonded_atomic,
-        refund_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
-    })
-}
-
-#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
-pub enum HoldingsUpdatePopError {
-    /// The per-`P` balance changed by something other than one `FLOOR` between
-    /// the journaled pre-image and the tip record — not a single-shard
-    /// HoldingsUpdate, so the pop would revert the wrong movement.
-    #[error("HoldingsUpdate pop delta is not a single FLOOR")]
-    NotSingleShardDelta,
-    /// Re-applying the counter delta would over/underflow.
-    #[error("total_bonded_atomic over/underflow on HoldingsUpdate pop")]
-    CounterRange,
-}
-
-/// Fold the `HoldingsUpdate` add/drop pop twin (gate-4 §5): the C++ arm restores
-/// the record's fields from the pre-image journal byte-identically (held shards,
-/// add-epochs, bonded_total, bad intervals); this fold reverts the global
-/// `total_bonded_atomic` by exactly the connect's `±FLOOR` delta. The tip
-/// record's `bonded_total` (the connect's post-value) and the journaled
-/// pre-image balance must differ by exactly one `FLOOR` — a single-shard change
-/// — or the journal does not describe a HoldingsUpdate at this height.
-pub fn holdings_update_pop(
-    current_record_bonded_total: u64,
-    journal_pre_bonded_total: u64,
-    total_bonded_atomic: u64,
-) -> Result<u64, HoldingsUpdatePopError> {
-    if current_record_bonded_total.abs_diff(journal_pre_bonded_total) != ARCHIVAL_BOND_FLOOR_ATOMIC
-    {
-        return Err(HoldingsUpdatePopError::NotSingleShardDelta);
-    }
-    // Revert the connect's counter movement: total += (pre − post). Branch on the
-    // direction so neither intermediate step over/underflows.
-    let restored = if journal_pre_bonded_total >= current_record_bonded_total {
-        total_bonded_atomic.checked_add(journal_pre_bonded_total - current_record_bonded_total)
-    } else {
-        total_bonded_atomic.checked_sub(current_record_bonded_total - journal_pre_bonded_total)
-    };
-    restored.ok_or(HoldingsUpdatePopError::CounterRange)
-}
-
-#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
-pub enum RebondConnectError {
-    /// The post set is not a duplicate-free superset of the record's holdings —
-    /// verify's `RebondNotSuperset`.
-    #[error("Rebond post-holdings are not a duplicate-free superset of current")]
-    NotSuperset,
+pub enum ReinstateConnectError {
+    /// The post set is not the record's current holdings —
+    /// verify's `ReinstateHoldingsChanged`.
+    #[error("Reinstate post-holdings do not equal current (bond is immutable)")]
+    HoldingsChanged,
     /// Empty post — verify's `ShardSetCompactEmpty` (reinstatement needs a position).
-    #[error("Rebond post-holdings are empty")]
+    #[error("Reinstate post-holdings are empty")]
     EmptyPost,
     /// The post set exceeds the codec shard cap — the resulting record could
-    /// never encode; verify's `RebondPostOversize` forecloses this at tx
+    /// never encode; verify's `ReinstatePostOversize` forecloses this at tx
     /// admission, this is the fold's belt for verify-bypassing callers.
-    #[error("Rebond post-holdings exceed the codec shard cap")]
+    #[error("Reinstate post-holdings exceed the codec shard cap")]
     PostOversize,
     /// The record's `bonded_total == bond_floor(holdings)` invariant (§3.2) does
     /// not hold — record corruption, not a tx fault.
     #[error("record bonded_total != bond_floor(record holdings)")]
     RecordFloorInvariantBroken,
-    /// No open bad interval — the record is not slashed; verify's `RebondNotSlashed`.
+    /// No open bad interval — the record is not slashed; verify's `ReinstateNotSlashed`.
     #[error("no open bad interval to close (record not slashed)")]
     NoOpenInterval,
     /// More than one open bad interval — corruption of the P2B-9 Pin 5 coalescing
     /// invariant (the loud multiplicity belt).
     #[error("multiple open bad intervals (coalescing invariant broken)")]
     MultipleOpenIntervals,
-    /// `E_rebond + 1` does not lie strictly after the open interval's start — the
+    /// `E_reinstate + 1` does not lie strictly after the open interval's start — the
     /// slash would have to postdate the reinstatement (corruption).
-    #[error("interval close E_rebond + 1 is not after the open interval's start")]
+    #[error("interval close E_reinstate + 1 is not after the open interval's start")]
     IntervalOrdering,
     /// Counter/epoch arithmetic over/underflow.
-    #[error("counter or epoch arithmetic out of range on Rebond")]
+    #[error("counter or epoch arithmetic out of range on Reinstate")]
     CounterRange,
 }
 
-/// The `Rebond` connect effect (gate-4 §3.4; P2B-9). The C++ arm journals the
-/// record's pre-image (bonded_total, held shards, add-epochs, the closed
-/// interval's index + pre-image), then: sets `held_shard_ids = post` and rebuilds
-/// the index-parallel `shard_add_epochs` — carried shards keep their add-epochs,
-/// every `added_shard_ids` member takes `add_settlement_epoch` (`E_rebond`,
-/// Pin 7) — and closes the open bad interval **in place**:
-/// `bad_intervals[closed_interval_index].end_exclusive = interval_end_exclusive`
-/// (`E_rebond + 1`, Pin 3 — standing resumes at `E_rebond + 1`; the partial rebond
-/// epoch is forfeited in both directions). The counter movement is the absolute
-/// post-value, threaded per post (the `ReleaseConnect` note). No interval is
-/// appended and none removed — post-connect `bad_intervals.len()` is unchanged,
-/// which is what the verify-side `≤ 254` headroom (Pin 6) budgeted for.
+/// The `Reinstate` connect effect: close the one open bad interval in place.
+/// Holdings, add-epochs, and counters do not move — a persona's bond is
+/// immutable (2026-09-20). The C++ arm journals the closed interval's identity
+/// (index + start) so pop re-opens exactly that entry.
+///
+/// `end_exclusive = E_reinstate + 1` (Pin 3 — standing resumes at
+/// `E_reinstate + 1`; the partial-reinstate epoch is forfeited in both
+/// directions). No interval is appended or removed — post-connect
+/// `bad_intervals.len()` is unchanged, which is what the verify-side `≤ 254`
+/// headroom (Pin 6) budgeted for.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RebondConnect {
-    /// `post ∖ current` — each takes `add_settlement_epoch` as its add-epoch.
-    pub added_shard_ids: Vec<u64>,
-    /// `E_rebond` (the connecting block's settlement epoch).
-    pub add_settlement_epoch: u64,
+pub struct ReinstateConnect {
     /// Index into the record's `bad_intervals` of the one open interval to close.
     pub closed_interval_index: usize,
-    /// `E_rebond + 1` — the value to write into the closed interval's
+    /// `E_reinstate + 1` — the value to write into the closed interval's
     /// `end_exclusive`.
     pub interval_end_exclusive: u64,
-    /// `record_bonded_total + |added|·FLOOR` (`== bond_floor(post)`).
-    pub new_bonded_total: u64,
-    /// `total_bonded_atomic + |added|·FLOOR` (absolute — thread per post).
-    pub new_total_bonded_atomic: u64,
 }
 
-/// Fold the `Rebond` connect: validate the superset re-spec, the record's floor
-/// invariant, and the single open interval, and produce the interval close + the
-/// counter movement.
-pub fn rebond_connect(
+/// Fold the `Reinstate` connect: post-holdings equal current, the record's floor
+/// invariant holds, and exactly one open interval closes at `E + 1`.
+pub fn reinstate_connect(
     record_bonded_total: u64,
     record_held_shard_ids: &[u64],
     record_bad_intervals: &[BadInterval],
     post_held_shard_ids: &[u64],
-    total_bonded_atomic: u64,
-    rebond_settlement_epoch: u64,
-) -> Result<RebondConnect, RebondConnectError> {
+    reinstate_settlement_epoch: u64,
+) -> Result<ReinstateConnect, ReinstateConnectError> {
     if post_held_shard_ids.is_empty() {
-        return Err(RebondConnectError::EmptyPost);
+        return Err(ReinstateConnectError::EmptyPost);
     }
-    // Codec-cap belt (verify's RebondPostOversize twin): a post past the cap
-    // would fold into a record ArchivalBondValue::encode refuses — fail typed
-    // and loud here instead of as an opaque encode throw in the LMDB writer.
+    // Codec-cap belt (verify's oversize twin): a post past the cap would fold
+    // into a record ArchivalBondValue::encode refuses — fail typed here instead
+    // of as an opaque encode throw in the LMDB writer.
     if post_held_shard_ids.len() > MAX_HOLDINGS_SHARDS {
-        return Err(RebondConnectError::PostOversize);
+        return Err(ReinstateConnectError::PostOversize);
     }
-    let Some(added_shard_ids) = superset_added_diff(record_held_shard_ids, post_held_shard_ids)
-    else {
-        return Err(RebondConnectError::NotSuperset);
-    };
+    if !holdings_unchanged(record_held_shard_ids, post_held_shard_ids) {
+        return Err(ReinstateConnectError::HoldingsChanged);
+    }
     if bond_floor_of(HoldingsKind::ShardSetCompact, record_held_shard_ids.len())
         != record_bonded_total
     {
-        return Err(RebondConnectError::RecordFloorInvariantBroken);
+        return Err(ReinstateConnectError::RecordFloorInvariantBroken);
     }
     let mut open_indices = record_bad_intervals
         .iter()
@@ -549,72 +362,45 @@ pub fn rebond_connect(
         .filter(|(_, iv)| iv.end_exclusive == u64::MAX)
         .map(|(i, _)| i);
     let Some(closed_interval_index) = open_indices.next() else {
-        return Err(RebondConnectError::NoOpenInterval);
+        return Err(ReinstateConnectError::NoOpenInterval);
     };
     if open_indices.next().is_some() {
-        return Err(RebondConnectError::MultipleOpenIntervals);
+        return Err(ReinstateConnectError::MultipleOpenIntervals);
     }
-    let interval_end_exclusive = rebond_settlement_epoch
+    let interval_end_exclusive = reinstate_settlement_epoch
         .checked_add(1)
-        .ok_or(RebondConnectError::CounterRange)?;
+        .ok_or(ReinstateConnectError::CounterRange)?;
     // The slash that opened the interval predates the reinstatement, so the close
     // must land strictly after the open's start — anything else is corruption.
     if interval_end_exclusive <= record_bad_intervals[closed_interval_index].start_epoch {
-        return Err(RebondConnectError::IntervalOrdering);
+        return Err(ReinstateConnectError::IntervalOrdering);
     }
-    let credit = (added_shard_ids.len() as u64)
-        .checked_mul(ARCHIVAL_BOND_FLOOR_ATOMIC)
-        .ok_or(RebondConnectError::CounterRange)?;
-    let new_bonded_total = record_bonded_total
-        .checked_add(credit)
-        .ok_or(RebondConnectError::CounterRange)?;
-    let new_total_bonded_atomic = total_bonded_atomic
-        .checked_add(credit)
-        .ok_or(RebondConnectError::CounterRange)?;
-    Ok(RebondConnect {
-        added_shard_ids,
-        add_settlement_epoch: rebond_settlement_epoch,
+    Ok(ReinstateConnect {
         closed_interval_index,
         interval_end_exclusive,
-        new_bonded_total,
-        new_total_bonded_atomic,
     })
 }
 
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
-pub enum RebondPopError {
-    /// The per-`P` balance moved by something other than a non-negative whole
-    /// number of `FLOOR`s between the journaled pre-image and the tip record —
-    /// the journal does not describe a `Rebond` at this height.
-    #[error("Rebond pop delta is not a non-negative whole number of FLOORs")]
-    NotRebondDelta,
-    /// Re-applying the counter delta would underflow.
-    #[error("total_bonded_atomic underflow on Rebond pop")]
-    CounterRange,
+pub enum ReinstatePopError {
+    /// The per-`P` balance moved between the journaled pre-image and the tip
+    /// record — a `Reinstate` is zero-money, so that is not this journal's row.
+    #[error("Reinstate pop: record bonded_total moved (must be unchanged)")]
+    NotReinstateDelta,
 }
 
-/// Fold the `Rebond` pop twin (gate-4 §5): the C++ arm restores the record's
-/// fields from the pre-image journal byte-identically (held shards, add-epochs,
-/// bonded_total, and the closed interval re-opened to `end_exclusive = MAX`);
-/// this fold reverts the global `total_bonded_atomic` by the connect's
-/// `|added|·FLOOR` credit. A `Rebond` only grows the balance, so the tip record's
-/// `bonded_total` must exceed the journaled pre-image by a non-negative whole
-/// number of `FLOOR`s — **zero included** (the common standing-only
-/// reinstatement moves no collateral).
-pub fn rebond_pop(
+/// Fold the `Reinstate` pop twin (gate-4 §5): the C++ arm re-opens the journaled
+/// interval to `end_exclusive = MAX`. Holdings and counters did not move at
+/// connect, so this fold only belts that the tip bonded_total still equals the
+/// journaled pre-image.
+pub fn reinstate_pop(
     current_record_bonded_total: u64,
     journal_pre_bonded_total: u64,
-    total_bonded_atomic: u64,
-) -> Result<u64, RebondPopError> {
-    let Some(delta) = current_record_bonded_total.checked_sub(journal_pre_bonded_total) else {
-        return Err(RebondPopError::NotRebondDelta);
-    };
-    if delta % ARCHIVAL_BOND_FLOOR_ATOMIC != 0 {
-        return Err(RebondPopError::NotRebondDelta);
+) -> Result<(), ReinstatePopError> {
+    if current_record_bonded_total != journal_pre_bonded_total {
+        return Err(ReinstatePopError::NotReinstateDelta);
     }
-    total_bonded_atomic
-        .checked_sub(delta)
-        .ok_or(RebondPopError::CounterRange)
+    Ok(())
 }
 
 #[cfg(test)]

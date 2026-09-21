@@ -47,9 +47,9 @@
 //! yields a span, and `height + height` / `count + height` /
 //! `height - timestamp` do not compile. The named bridges between
 //! [`ChainCount`] and [`BlockHeight`] are [`ChainCount::tip`],
-//! [`ChainCount::next_height`], and [`ChainCount::from_next_height`].
-//! `from_raw` / `to_raw` are the decode/encode edge, not a quantity
-//! bridge.
+//! [`ChainCount::next_height`], [`ChainCount::from_next_height`], and
+//! [`ChainCount::has_block`]. `from_raw` / `to_raw` are the decode/encode
+//! edge, not a quantity bridge.
 //!
 //! ## Boundaries
 //!
@@ -382,10 +382,11 @@ scalar_u64! {
     ///   operand and the exclusive end of a `0 .. count` scan;
     /// - [`ChainCount::from_next_height`] — C6's inverse: exclusive-end
     ///   ordinal back to count. Not "this existing block, laundered."
+    /// - [`ChainCount::has_block`] — whether an ordinal is in `0 .. count`.
     ///
     /// Which fact a call site means is spelled at the call site instead
     /// of carried in a comment. `from_raw` is the decode edge, not a
-    /// fourth bridge.
+    /// quantity bridge.
     ChainCount
 }
 

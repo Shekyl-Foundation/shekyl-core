@@ -14,9 +14,9 @@
 # `cold_authority_pin` / `shekyl_archival_cold_authority_pin`.
 #
 #   Release          always            (UB3 before UB9, §8.7.1.1)
-#   HoldingsUpdate   iff bond_debit > 0 (drop = cold, add = identity)
 #   JoinMarket       never             (the credit that COMMITS the cold key)
-#   Rebond           never             (credit path; verify needs debit == 0)
+#   Reinstate        never             (zero-money; both terms 0)
+#   (HoldingsUpdate discriminant 3 is REJECTED — immutable-bond 2026-09-20)
 #
 # The composed gate REFUSES if called on a predicate-false post
 # (NOT_COLD_AUTHORITY_POST). This script catches an arm that FORGETS the
@@ -69,7 +69,6 @@ done
 # belt's job is covered by the primary; CEN-G8 retired):
 #
 #   blockchain.cpp   "Release"                 per-tx debit verify
-#   blockchain.cpp   "HoldingsUpdate-drop"    per-tx debit verify
 #   daemon_submit_ffi.cpp                     the submit gather's work gate
 #
 # Comments are stripped first, so a mention in prose cannot stand in for a
@@ -132,9 +131,6 @@ require_call() {
 require_call src/cryptonote_core/blockchain.cpp \
   'archival_cold_authority_pin\(record,[^;]*"Release"\)' \
   "per-tx Release verify"
-require_call src/cryptonote_core/blockchain.cpp \
-  'archival_cold_authority_pin\(record,[^;]*"HoldingsUpdate-drop"\)' \
-  "per-tx HoldingsUpdate-drop verify"
 require_call src/rpc/daemon_submit_ffi.cpp \
   'shekyl_archival_cold_authority_pin\(' \
   "submit gather work gate"

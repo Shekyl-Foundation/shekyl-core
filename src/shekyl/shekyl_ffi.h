@@ -1926,6 +1926,7 @@ uint8_t shekyl_archival_verify_attestation(
 /// Invalid point, non-32-byte-aligned flat buffer, or count*32 overflow.
 #define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT   3
 #define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH    4
+/// Retired-assigned: (credit, debit) = (0, 0) is Unmoved (Reinstate), not an error.
 #define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM    5
 
 /// Flattened `num_pseudo_outs` / `num_out_masks` arrays of 32-byte curve points.
@@ -2121,31 +2122,31 @@ uint8_t shekyl_archival_check_bond_admission(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON  35
 // The record is not Bonded (zero collateral / no held shards) — P2B-7 Pin 1:
 // HoldingsUpdate is Bonded→Bonded; an Exited or slash-emptied record re-enters
-// via JoinMarket/Rebond, never a voluntary adjustment. Shared by both HU arms.
+// via JoinMarket/Reinstate, never a voluntary adjustment. Shared by both HU arms.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED    36
 
-// Rebond bond-post semantics (gate-4 §3.4; P2B-9 reinstatement pins). Extends
-// the shared SHEKYL_ARCHIVAL_BOND_POST_* space: 37-44 are Rebond-semantic; the
+// Reinstate bond-post semantics (gate-4 §3.4; P2B-9 reinstatement pins). Extends
+// the shared SHEKYL_ARCHIVAL_BOND_POST_* space: 37-44 are Reinstate-semantic; the
 // shared marshaling guards (10 HOLDINGS_KIND, 19 LEN_OVERFLOW, 23
 // BOND_SPEND_PK_COUPLING) and the reused RECORD_MISSING (12) /
 // SHARD_SET_EMPTY (2) apply as above.
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND    37
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE 38
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT 39
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED      40
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN    41
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM     42
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS            43
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET     44
-// RETIRED — never returned. Code 45 was the Rebond verify-level oversize belt,
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REINSTATE    37
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_ON_COMPLETE_TREE 38
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_POST_NOT_COMPACT 39
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_NOT_SLASHED      40
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_MULTIPLE_OPEN    41
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_LOG_HEADROOM     42
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_TERMS            43
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_HOLDINGS_CHANGED 44
+// RETIRED — never returned. Code 45 was the Reinstate verify-level oversize belt,
 // removed with the Rust ShardSet newtype (an oversize post is now
 // unrepresentable in the vin's holdings). The symbol stays DEFINED and reserved
 // (rather than renumbering 46/47/48) so the Rust<->C++ code contract is explicit
 // and a stray/legacy 45 maps to a meaningful message, not "unknown".
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED 45
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_POST_OVERSIZE_RETIRED 45
 // Record bonded_total != bond_floor(record holdings) — floor-drifted record,
 // rejected at verify so the tx never rides to the connect fold's FATAL belt.
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR     46
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_RECORD_FLOOR     46
 // Shared vin marshal (every bond-post verify entry): the vin's holdings shard
 // count exceeds the wire codec bound (MAX_HOLDINGS_SHARDS) — the FFI marshal
 // routes through ShardSet::new, a second decoder for the same wire object.
@@ -2227,7 +2228,7 @@ uint8_t shekyl_archival_last_served_scan(
 
 // Cold-authority gate. Rust owns both halves:
 //   selector  requires_cold_authority — Release always; HoldingsUpdate iff
-//             bond_debit > 0; JoinMarket / Rebond never
+//             bond_debit > 0; JoinMarket / Reinstate never
 //   pin       presented pqc_auths key vs the record's COMMITTED bond_spend_pk
 // C++ marshals and logs. A record committing no canonical-length key
 // authorizes NOTHING -- fail closed, no identity-key fallback. Code 51 is
@@ -2334,12 +2335,9 @@ uint8_t shekyl_archival_release_pop(
     uint64_t total_bonded_atomic,
     uint64_t* new_total_bonded_out);
 
-// HoldingsUpdate verify + connect/pop (gate-4 §4.4). Semantic verify returns the
-// shared SHEKYL_ARCHIVAL_BOND_POST_* space (OK=0, 24-35 HU-semantic, plus the
-// shared marshaling guards); the connect/pop folds return the HU_APPLY family
-// below. As with Release, a non-OK apply code is a connect-time invariant breach /
-// pop-time journal desync — the caller maps it to a FATAL abort, never a soft
-// skip.
+// HoldingsUpdate verify/connect/pop FFI: DELETED 2026-09-20 (immutable-bond).
+// Discriminant 3 is InvalidPostKind. Codes 24-36 and HU_APPLY 0-9 stay assigned
+// so an old log line cannot be misread as a new condition (rule 23).
 #define SHEKYL_ARCHIVAL_HU_APPLY_OK                        0
 #define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NULL_PTR              1
 #define SHEKYL_ARCHIVAL_HU_APPLY_ERR_LEN_OVERFLOW          2
@@ -2349,144 +2347,34 @@ uint8_t shekyl_archival_release_pop(
 #define SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_FLOOR_INVARIANT 6
 #define SHEKYL_ARCHIVAL_HU_APPLY_ERR_COUNTER_RANGE         7
 #define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DELTA      8
-// Connect-fold belt of the verify-side Bonded gate (an Exited record cannot
-// be resurrected through a voluntary adjustment).
 #define SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_NOT_BONDED     9
 
-/// HoldingsUpdate-ADD verify (gate-4 §4.4 credit path). `shard_ids_*` is the
-/// vin's POST holdings; `record_shard_ids_*` the record's CURRENT holdings (for
-/// the single-shard diff); `record_bad_intervals_ptr` is the flattened
-/// (start, end) interval pairs feeding good-standing, where
-/// `record_bad_intervals_len` counts **pairs** and the buffer therefore holds
-/// `2 * record_bad_intervals_len` u64s. A HoldingsUpdate vin never carries
-/// bond_spend_pk (credit path) — pass null/0.
-uint8_t shekyl_archival_verify_holdings_update_add(
-    uint8_t post_kind,
-    uint8_t holdings_kind,
-    const uint64_t* shard_ids_ptr,
-    size_t shard_ids_len,
-    const uint8_t* bond_spend_pk_ptr,
-    size_t bond_spend_pk_len,
-    uint64_t bonded_total_atomic,
-    uint64_t bond_credit,
-    uint64_t bond_debit,
-    uint8_t record_exists,
-    uint64_t record_bonded_total,
-    uint8_t record_holdings_kind,
-    const uint64_t* record_shard_ids_ptr,
-    size_t record_shard_ids_len,
-    uint64_t record_join_settlement_epoch,
-    const uint64_t* record_bad_intervals_ptr,
-    size_t record_bad_intervals_len,
-    uint64_t current_settlement_epoch);
-
-/// HoldingsUpdate-DROP verify (gate-4 §4.4 grace-tail debit path). C++ finds the
-/// dropped shard by set-difference (record CURRENT \ vin POST) and reads its
-/// per-shard facts: `dropped_shard_add_epoch` (the shard's stored v6 add-epoch)
-/// and `dropped_shard_freeze_height` (the shard SEGMENT's freeze height — 0 when
-/// the segment has no freeze row yet, the fail-closed oldest sentinel); the Rust
-/// verify derives age-at-add from the pair by evaluating the freeze against
-/// `H_close(add_epoch)` (`ShardAgeAtAdd::from_add`), then the retention horizon.
-/// `dropped_shard_last_served` (u64 max = never served) is the release-cooldown
-/// anchor; `last_settled_slash_epoch` is the slash scheduler's monotone
-/// watermark (u64 max = no epoch settled yet). The Rust verify recomputes the
-/// diff and cross-checks `dropped_shard_id`.
-uint8_t shekyl_archival_verify_holdings_update_drop(
-    uint8_t post_kind,
-    uint8_t holdings_kind,
-    const uint64_t* shard_ids_ptr,
-    size_t shard_ids_len,
-    const uint8_t* bond_spend_pk_ptr,
-    size_t bond_spend_pk_len,
-    uint64_t bonded_total_atomic,
-    uint64_t bond_credit,
-    uint64_t bond_debit,
-    uint8_t record_exists,
-    uint64_t record_bonded_total,
-    uint8_t record_holdings_kind,
-    const uint64_t* record_shard_ids_ptr,
-    size_t record_shard_ids_len,
-    uint64_t dropped_shard_id,
-    uint64_t dropped_shard_add_epoch,
-    uint64_t dropped_shard_freeze_height,
-    uint64_t dropped_shard_last_served,
-    uint64_t last_settled_slash_epoch,
-    uint64_t current_settlement_epoch);
-
-/// HoldingsUpdate-ADD connect fold (gate-4 §4.4). The C++ arm journals the record
-/// pre-image, sets held_shard_ids = post + appends `add_settlement_epoch_out` as
-/// the added shard's coupled add-epoch, and writes the counters from
-/// new_bonded_total_out / new_total_bonded_out. `total_bonded_atomic` is the LIVE
-/// global counter (thread it per post — never a hoisted block-start read).
-uint8_t shekyl_archival_holdings_update_add_connect(
-    uint64_t record_bonded_total,
-    const uint64_t* record_shard_ids_ptr,
-    size_t record_shard_ids_len,
-    const uint64_t* post_shard_ids_ptr,
-    size_t post_shard_ids_len,
-    uint64_t total_bonded_atomic,
-    uint64_t add_settlement_epoch,
-    uint64_t* added_shard_id_out,
-    uint64_t* add_settlement_epoch_out,
-    uint64_t* new_bonded_total_out,
-    uint64_t* new_total_bonded_out);
-
-/// HoldingsUpdate-DROP connect fold (gate-4 §4.4 grace-tail). The C++ arm journals
-/// the pre-image, sets held_shard_ids = post (dropping the coupled add-epoch of
-/// `dropped_shard_id_out`), and writes the counters. `refund_out` (== FLOOR) is
-/// the bond_debit CT-balance source term — no ledger write here. `total_bonded_atomic`
-/// is the LIVE global counter (thread it per post).
-uint8_t shekyl_archival_holdings_update_drop_connect(
-    uint64_t record_bonded_total,
-    const uint64_t* record_shard_ids_ptr,
-    size_t record_shard_ids_len,
-    const uint64_t* post_shard_ids_ptr,
-    size_t post_shard_ids_len,
-    uint64_t total_bonded_atomic,
-    uint64_t* dropped_shard_id_out,
-    uint64_t* new_bonded_total_out,
-    uint64_t* new_total_bonded_out,
-    uint64_t* refund_out);
-
-/// HoldingsUpdate pop twin (add + drop; gate-4 §5). The record fields are restored
-/// caller-side as a byte-copy of the pre-image journal row; this reverts the global
-/// total_bonded_atomic by the connect's ±FLOOR delta, guarding that the tip
-/// record's bonded_total and the journaled pre-image differ by exactly one FLOOR.
-uint8_t shekyl_archival_holdings_update_pop(
-    uint64_t current_record_bonded_total,
-    uint64_t journal_pre_bonded_total,
-    uint64_t total_bonded_atomic,
-    uint64_t* new_total_bonded_out);
-
-// Rebond verify + connect/pop (gate-4 §3.4; P2B-9 reinstatement). Semantic
+// Reinstate verify + connect/pop (gate-4 §3.4; P2B-9 reinstatement). Semantic
 // verify returns the shared SHEKYL_ARCHIVAL_BOND_POST_* space (OK=0, 37-44
-// Rebond-semantic, plus the shared guards); the connect/pop folds return the
-// REBOND_APPLY family below. As with Release/HoldingsUpdate, a non-OK apply code
+// Reinstate-semantic, plus the shared guards); the connect/pop folds return the
+// REINSTATE_APPLY family below. As with Release/HoldingsUpdate, a non-OK apply code
 // is a connect-time invariant breach / pop-time journal desync — the caller
 // maps it to a FATAL abort, never a soft skip.
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_OK                          0
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NULL_PTR                1
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW            2
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_SUPERSET            3
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_EMPTY_POST              4
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT  5
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NO_OPEN_INTERVAL        6
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_MULTIPLE_OPEN_INTERVALS 7
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_INTERVAL_ORDERING       8
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_COUNTER_RANGE           9
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_REBOND_DELTA       10
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_ADDED_BUFFER_TOO_SMALL 11
-#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_POST_OVERSIZE          12
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_OK                          0
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_NULL_PTR                1
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_LEN_OVERFLOW            2
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_HOLDINGS_CHANGED        3
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_EMPTY_POST              4
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_RECORD_FLOOR_INVARIANT  5
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_NO_OPEN_INTERVAL        6
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_MULTIPLE_OPEN_INTERVALS 7
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_INTERVAL_ORDERING       8
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_COUNTER_RANGE           9
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_NOT_REINSTATE_DELTA       10
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_ADDED_BUFFER_TOO_SMALL 11
+#define SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_POST_OVERSIZE          12
 
-/// Rebond verify (gate-4 §3.4; P2B-9). `shard_ids_*` is the vin's POST holdings
-/// (the superset re-spec); `record_shard_ids_*` the record's CURRENT holdings;
-/// `record_bad_intervals_ptr` the flattened (start, end_exclusive) interval
-/// pairs, where `record_bad_intervals_len` counts PAIRS (buffer holds 2*len
-/// u64s) — carries the open-interval precondition and the Pin-6 headroom bound.
-/// A Rebond vin never carries bond_spend_pk (credit path; the record keeps its
-/// join-time key) — pass null/0. No epoch operand: the precondition is interval-
-/// shaped, not epoch-shaped (an open interval covers every later epoch).
-uint8_t shekyl_archival_verify_rebond_bond_post(
+/// Reinstate verify (gate-4 §3.4; P2B-9). `shard_ids_*` is the vin's POST holdings
+/// and must equal `record_shard_ids_*` (immutable-bond). `record_bad_intervals_ptr`
+/// the flattened (start, end_exclusive) interval pairs, where
+/// `record_bad_intervals_len` counts PAIRS (buffer holds 2*len u64s). A Reinstate
+/// vin never carries bond_spend_pk (zero-money) — pass null/0.
+uint8_t shekyl_archival_verify_reinstate_bond_post(
     uint8_t post_kind,
     uint8_t holdings_kind,
     const uint64_t* shard_ids_ptr,
@@ -2504,16 +2392,9 @@ uint8_t shekyl_archival_verify_rebond_bond_post(
     const uint64_t* record_bad_intervals_ptr,
     size_t record_bad_intervals_len);
 
-/// Rebond connect fold (gate-4 §3.4; P2B-9). The C++ arm journals the record
-/// pre-image (including the closed interval's index + start), sets
-/// held_shard_ids = post and rebuilds the coupled add-epochs (carried shards
-/// keep theirs; every id in added_shard_ids_out takes add_settlement_epoch_out
-/// = E_rebond — Pin 7), closes the open interval IN PLACE
-/// (bad_intervals[closed_interval_index_out].end_exclusive =
-/// interval_end_exclusive_out == E_rebond + 1 — Pin 3), and writes the counters.
-/// `total_bonded_atomic` is the LIVE global counter (thread per post).
-/// `added_shard_ids_cap` must be >= the post length (added ⊆ post).
-uint8_t shekyl_archival_rebond_connect(
+/// Reinstate connect fold: post equals current, one open interval closes at
+/// E_reinstate + 1. Holdings and counters do not move.
+uint8_t shekyl_archival_reinstate_connect(
     uint64_t record_bonded_total,
     const uint64_t* record_shard_ids_ptr,
     size_t record_shard_ids_len,
@@ -2521,27 +2402,15 @@ uint8_t shekyl_archival_rebond_connect(
     size_t record_bad_intervals_len,
     const uint64_t* post_shard_ids_ptr,
     size_t post_shard_ids_len,
-    uint64_t total_bonded_atomic,
-    uint64_t rebond_settlement_epoch,
-    uint64_t* added_shard_ids_out,
-    size_t added_shard_ids_cap,
-    size_t* added_shard_ids_len_out,
-    uint64_t* add_settlement_epoch_out,
+    uint64_t reinstate_settlement_epoch,
     uint64_t* closed_interval_index_out,
-    uint64_t* interval_end_exclusive_out,
-    uint64_t* new_bonded_total_out,
-    uint64_t* new_total_bonded_out);
+    uint64_t* interval_end_exclusive_out);
 
-/// Rebond pop twin (gate-4 §5): the record fields are restored caller-side as a
-/// byte-copy of the pre-image journal row (including re-opening the closed
-/// interval to end_exclusive = MAX); this reverts the global total_bonded_atomic
-/// by the connect's |added|·FLOOR credit — zero delta included (the common
-/// standing-only reinstatement moved no collateral).
-uint8_t shekyl_archival_rebond_pop(
+/// Reinstate pop twin: belts that bonded_total is unchanged. C++ re-opens the
+/// journaled interval.
+uint8_t shekyl_archival_reinstate_pop(
     uint64_t current_record_bonded_total,
-    uint64_t journal_pre_bonded_total,
-    uint64_t total_bonded_atomic,
-    uint64_t* new_total_bonded_out);
+    uint64_t journal_pre_bonded_total);
 
 /// Returns 1 when settlement_epoch >= join_settlement_epoch + 1 (E_first lower bound).
 uint8_t shekyl_archival_serve_credit_epoch_ok(
@@ -4043,7 +3912,64 @@ int32_t shekyl_logical_state_digest_v0(
     const uint8_t* curve_root,
     uint8_t* out_digest);
 
+// ---------------------------------------------------------------------------
+// DRS-E2 trace writer (`docs/design/DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q2).
+// The one door the C++ LMDB exporter (`shekyl_e2_trace_export`) hands
+// bytes through. HARVEST SHIM: this surface and its C++ caller die with
+// the daemon at cutover (§1.3). The artifact's format is Rust-minted; its
+// checkpoint is the daemon's own `logical_state_digest_v0` (hashed in Rust
+// through `shekyl_logical_state_digest_v0`, RD-Q9) handed over finished —
+// the C++ never hashes, and walks no family twice.
+//
+// Lifecycle: open -> push_facts* (consecutive heights) -> push_checkpoint?
+// (at most one, at the last facts row) -> finish (trailer, frees) | abort
+// (frees, file left truncated).
+// ---------------------------------------------------------------------------
+struct ShekylE2TraceWriter;
+
+/// Create `path` (`path_len` UTF-8 bytes, not NUL-terminated) and write the
+/// header. NULL on failure (reason logged).
+struct ShekylE2TraceWriter* shekyl_e2_trace_open(const uint8_t* path, size_t path_len);
+
+/// Facts at `height` (the next consecutive height): the six passed-through
+/// facts in ConnectFacts order, `root_after` 32 bytes, cumulative
+/// difficulty as (lo, hi) u64 halves.
+int32_t shekyl_e2_trace_push_facts(
+    struct ShekylE2TraceWriter* writer,
+    uint64_t height,
+    uint64_t weight,
+    uint64_t long_term_weight,
+    uint64_t coins_generated,
+    uint64_t burned,
+    const uint8_t* root_after,
+    uint64_t long_term_effective_median,
+    uint64_t cumulative_difficulty_lo,
+    uint64_t cumulative_difficulty_hi);
+
+/// The LMDB logical state after the last facts row (the covered tip): the
+/// 32-byte `digest_v0` `BlockchainLMDB::logical_state_digest_v0` computed
+/// under one read snapshot. Height is the writer's last facts row — this
+/// call does not take one.
+int32_t shekyl_e2_trace_push_checkpoint(
+    struct ShekylE2TraceWriter* writer,
+    const uint8_t* digest);
+
+/// Trailer, flush, free. Consumes the handle either way.
+int32_t shekyl_e2_trace_finish(struct ShekylE2TraceWriter* writer);
+
+/// Free without a trailer.
+void shekyl_e2_trace_abort(struct ShekylE2TraceWriter* writer);
+
 } // extern "C"
+
+#define SHEKYL_E2_TRACE_OK               0
+#define SHEKYL_E2_TRACE_ERR_NULL_PTR    -1
+#define SHEKYL_E2_TRACE_ERR_OVERFLOW    -2
+/// A facts height gap, a height past u64::MAX, an unanchored checkpoint, a
+/// duplicate checkpoint, or facts after the checkpoint.
+#define SHEKYL_E2_TRACE_ERR_SEQUENCE    -3
+#define SHEKYL_E2_TRACE_ERR_IO          -4
+#define SHEKYL_E2_TRACE_ERR_BAD_PATH    -5
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and
 /// `*out_next_difficulty` carries the next-block difficulty target.

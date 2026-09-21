@@ -3,9 +3,10 @@
 **Status:** OPEN — Phase 1 walked 2026-09-19; height-semantics Phase 2a
 RULED 2026-09-20 (census, wire table, naming/difference convention);
 height-semantics Phase 2b RULED 2026-09-20 (dispatch-clock retype to
-`ChainCount`, no numeric change; `PENDING_POST_VERSION` 10 → 11). Remaining:
-Phase 2c (wire/FFI decode), Phase 2d (inland bare-`u64` tail). Numerics
-are frozen as pinned (Rick, 2026-09-19).
+`ChainCount`, no numeric change; `PENDING_POST_VERSION` 10 → 11);
+height-semantics Phase 2c RULED 2026-09-20 (wire/FFI inland decode).
+Remaining: Phase 2d (inland bare-`u64` tail). Numerics are frozen as
+pinned (Rick, 2026-09-19).
 
 <!-- claim-audit: citations -->
 
@@ -37,8 +38,9 @@ Named conversions, on `ChainCount`
 - `next_height()` — height the next block will carry (numerically the
   count); earliest inclusion; exclusive end of a `0 .. count` scan.
 - `from_next_height()` — C6's inverse: exclusive-end ordinal back to
-  count. Not "this existing block, laundered." `from_raw`/`to_raw` are
-  the decode edge, not a fourth bridge.
+  count. Not "this existing block, laundered."
+- `has_block(h)` — whether ordinal `h` is in `0 .. count` (`h < next_height()`).
+  `from_raw`/`to_raw` are the decode edge, not a quantity bridge.
 
 `SyncedChainFacts` (`WSS-Q14`, PR #792) is the pattern: `chain_height()`
 returns `ChainCount`, `.tip()` is the named conversion, and the type
@@ -182,8 +184,10 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
 - **C7 Naming, new inland fields.** Never a bare identifier `height`.
   Ordinal: `block_height` / `anchor_height`. Count: `chain_count`.
   Ages: `*_blocks`. Existing JSON/Levin keys are the wire and stay.
-  Exception (kept, not renamed): `BlockSource::tip_height` is the WI-3
-  named clock and returns `ChainCount`.
+  Exception (kept, not renamed): `BlockSource::tip_height`,
+  `ChainTip.chain_height` / `BlockHashAt.chain_height` /
+  `BlockHeaderAt.chain_height` / `BlockAt.chain_height`, and
+  `Rpc::get_height` are named clocks that return `ChainCount`.
 - **C8 C++ daemon glue stays `u64`.** Rule 20: this campaign does not
   retype C++. The wire table still names those producers so a Rust
   consumer cannot guess.
@@ -192,7 +196,12 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
   compiles is the proof the type is load-bearing. Height-semantics
   Phase 2b landed four crate-doc `compile_fail`s on `shekyl-types`
   (count as height, height as count, `ChainCount + BlockHeight`,
-  `ChainCount - BlockHeight`).
+  `ChainCount - BlockHeight`). Height-semantics Phase 2c landed
+  `compile_fail`s on `ChainTip.chain_height` / `target_height`
+  (`chain_facts.rs`), `Rpc::get_height` (`shekyl-rpc-client`), and
+  `ChainCount::has_block`. `ref_age_window`'s pin is the typed
+  signature and its two call sites — a rustdoc example cannot see a
+  private function.
 
 ### 3.2 One `BlockHeight`
 
@@ -260,14 +269,14 @@ one family. **Unclear: none.**
 | Dispatch clock (`daemon_claimed_tip` + six consumers, §2.2) | COUNT | `ChainCount` | `ChainCount` | RULED 2026-09-20 (height-semantics Phase 2b); schema v11 |
 | Wallet ledger (`TransferDetails.block_height` / `spent_height` / `eligible_height`, `rust/shekyl-engine-state/src/transfer.rs:226-237`, `rust/shekyl-engine-state/src/transfer.rs:328`) | ORDINAL | `BlockHeight` | `BlockHeight` | keep |
 | Emission / claim source | COUNT split at decode | `ChainCount` | `ChainCount` | keep (pattern) |
-| Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs:47-54`, wrap at `rust/shekyl-daemon-rpc/src/chain_facts.rs:439-442`) | COUNT (target: COUNT-or-sentinel) | COUNT as `BlockHeight` | `ChainCount` and `Option<ChainCount>` | height-semantics Phase 2c |
-| Wallet RPC client `Rpc::get_height` → `usize` | COUNT | bare | `ChainCount` at the client decode | height-semantics Phase 2c |
-| Submit ref-age (`ref_age_window(chain_height, ref_height)`, `rust/shekyl-daemon-rpc/src/submit/engine.rs:118`) | COUNT vs ORDINAL | both `u64` | `ChainCount` vs `BlockHeight` | height-semantics Phase 2c |
+| Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height` / `BlockHeaderAt.chain_height` / `BlockAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs`) | COUNT (target: COUNT-or-sentinel) | `ChainCount` and `Option<ChainCount>` | `ChainCount` and `Option<ChainCount>` | RULED 2026-09-20 (height-semantics Phase 2c); handlers bound with `has_block` / name the top with `tip()`; wire still writes `0` when synchronized |
+| Wallet RPC client `Rpc::get_height` | COUNT | `ChainCount` | `ChainCount` at the client decode | RULED 2026-09-20 (height-semantics Phase 2c); name kept (C7) |
+| Submit ref-age (`ref_age_window(chain_height, ref_height)`, `rust/shekyl-daemon-rpc/src/submit/engine.rs`) | COUNT vs ORDINAL | `ChainCount` vs `BlockHeight` | `ChainCount` vs `BlockHeight` | RULED 2026-09-20 (height-semantics Phase 2c); comparison punched to raw at that one named site |
 | Countersign / pass-anchor (`own_height`, `anchor_height`, `predecessor_height`) | ORDINAL | `u64` | `BlockHeight` | height-semantics Phase 2d |
 | Anchor depth / lag (`PASS_ANCHOR_DEPTH_BLOCKS`, `PASS_ANCHOR_LAG_BLOCKS`, `max_reorg_depth`, `BlockHeaderFacts.depth`) | DIFFERENCE | `u64` | `BlockCount` | height-semantics Phase 2d |
 | Curve-tree ingest / `block_at` / DAA timestamps | ORDINAL | `BlockHeight` (RTN-4 re-export) | `BlockHeight` | keep |
 | C++ daemon, p2p, mining RPC producers | as §3.3 | `uint64_t` | stay `uint64_t` (C8) | none in this campaign |
-| Wire DTOs / FFI PODs | as §3.3 | `u64` | stay `u64` (C1); decode at the consumer | consumer work is Phase 2c/2d |
+| Wire DTOs / FFI PODs | as §3.3 | `u64` | stay `u64` (C1); decode at the consumer | consumer work remaining is Phase 2d |
 
 **Not block-axis (named so they are not unclear):** curve-tree
 positions, gindex, leaf indices (`Gindex` is `GlobalOutputIndex`,
@@ -290,9 +299,18 @@ quantity.
   arithmetic is `due_count`. Offsets (`bond_post_offset_blocks`,
   `reorg_depth`, `alarm_horizon_blocks`) stay `u64` until Phase 2d
   (C4: convert at inland arithmetic only).
-- **Height-semantics Phase 2c — wire/FFI inland decode.**
-  `ChainTip` / `BlockHashAt` / client `get_height` / submit ref-age.
-  `compile_fail` at each new boundary.
+- **Height-semantics Phase 2c — wire/FFI inland decode — RULED 2026-09-20.**
+  `ChainTip.chain_height` / `BlockHashAt.chain_height` /
+  `BlockHeaderAt.chain_height` / `BlockAt.chain_height` are
+  `ChainCount`; `ChainTip.target_height` is `Option<ChainCount>`
+  (`None` = sentinel 0, C5). The handler still writes wire `0` when
+  synchronized (`wire_target_height`). Wallet client `Rpc::get_height`
+  returns `ChainCount` (name kept, C7). `ref_age_window` takes
+  `ChainCount` vs `BlockHeight` and punches to raw at that one named
+  site. Inland handlers bound a requested ordinal with
+  [`ChainCount::has_block`] and name the top with [`ChainCount::tip`]
+  (`too_big_height` takes `BlockHeight` and `ChainCount`). No numeric
+  change. C9 `compile_fail`s on each new public boundary.
 - **Height-semantics Phase 2d — remaining inland bare `u64`.**
   Countersign clocks and difference constants. Same `compile_fail` bar.
 
@@ -305,5 +323,5 @@ type-name check; C++ retyping (C8).
 
 "Which `h`?" — §1 for the two quantities, §2.2 for the six stamps, §3.1
 for the inland/wire split, §3.3 for a named RPC/FFI field, §3.4 for
-which family a site belongs to. After height-semantics Phase 2b–2d the
+which family a site belongs to. After height-semantics Phase 2c–2d the
 types make a wrong mix a compile error.
