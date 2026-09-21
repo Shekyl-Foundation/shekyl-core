@@ -724,8 +724,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Relay: populate the 48-cell Pi verification surface, then consume it**
   - Target: pre-genesis
 
-- **Levin p2p migration — LV-2 payload codec and LV-3 connection-path [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)**
+- **Levin p2p migration — LV-2 payload codec and LV-3 connection-path.** LV-1 and LV-2a/2b have landed. **LV-3 is not started**, and the [`IMPLEMENTATION_INDEX`](design/IMPLEMENTATION_INDEX.md) `LV-` row recorded that it "still gates on its own design round" — **a round that did not exist**. It exists as of 2026-09-21: P2P-3, with LV-3 as slice 1. Scoped as the connection becoming a **typed, owned Rust object whose identity is PWD-I8's category** — explicitly **not** a port of `p2p_connection_context`, which would carry the category error across the FFI boundary intact (rule 16). [`LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md) is LV-2's record.
   - Target: pre-genesis
+  - Owner: [`P2P_3_IMPLEMENTATION_ROUND.md`](design/P2P_3_IMPLEMENTATION_ROUND.md) §4 slice 1; the slice brief is [`LV3_CONNECTION_OBJECT.md`](design/LV3_CONNECTION_OBJECT.md)
 
 - **Relay lane: add a derivation check asserting `fluff_return_ms` equals the max over measured zones**, so adding a zone slower than Tor fails loudly instead of silently under-provisioning `F′`; `tests/carrier_window.rs` is the shape — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) §91.2
   - Target: pre-genesis

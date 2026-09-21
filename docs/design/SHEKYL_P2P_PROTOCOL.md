@@ -48,9 +48,14 @@ ruled — it is a deferral with extra words**:
 **Swept 2026-09-08 against `dev` `2f02cd3bc`.** Until that date this document
 claimed nothing in it was implemented. That was false: **eight merged PRs had
 already built parts of the round**, one of them (#629) naming a PWD id in its
-own branch. P2P-3, the round nominated to carry implementation, **has never
-been opened as a named round** — the work landed through ordinary lanes instead, and no
-document reconciled the two. **UPDATE 2026-09-09:** PWD-B7's typed drop
+own branch. P2P-3, the round nominated to carry implementation, **was never
+opened as a named round until 2026-09-21** — the work landed through ordinary lanes instead, and no
+document reconciled the two. **It is open now**
+([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md)), with LV-3
+as slice 1, and the opening carried a 37-citation sweep of the rows that were
+waiting on it. *Records-was: this sentence read "has never been opened" from
+the 2026-09-08 sweep until that date; the eight-merged-PRs finding above is
+what the absence cost.* **UPDATE 2026-09-09:** PWD-B7's typed drop
 verdict is the next instance of that pattern (`shekyl-peer-policy`, FFI
 `shekyl_drop_verdict_severs`; row flipped IMPLEMENTED below).
 **UPDATE 2026-09-21 (second):** **PWD-I8 is minted** — the accepting-side
