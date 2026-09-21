@@ -1034,15 +1034,31 @@ is consensus. Under the byte-range unit the check belongs to the daemon lane
 (**S-ARCH / E4**), not here. **This round raises it and does not assume either
 way.**
 
+**Where the check would sit — settled by the immutable-bond ruling
+(2026-09-20).** The successor rule has **exactly one site: the bond post**, and
+it applies **once per bond**. Under the pre-ruling design a holdings set could
+grow after the post, so an admission rule had to be enforced at the bond post
+*and again* at every later add, and a reader could reasonably expect two
+enforcement points. A persona's bond is now immutable for its life
+([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §"A bond is immutable for
+its life"), so the set a bond names is the set it dies with: one admission
+decision, taken once, over a set that cannot later change underneath it. This
+**narrows** the unbuilt rule rather than changing it — the question owed to the
+daemon lane is unchanged in substance, and strictly smaller in surface.
+
 #### 6.5.6 Two residuals, both answered
 
 - **Does filling before posting leak anything? No.** A fill from the local
   daemon is entirely over the operator leg, so nothing reaches the network. A
   **recovery** fill lets a serving archiver observe an anonymous Tor fetch of
-  shard `k`, and later an on-chain add of shard `k` by some persona — but the
-  add is public anyway, and the fetcher is a circuit, not an identity. The most
-  it links is *"the new holder of `k` fetched `k`"*. **No mitigation
-  warranted.**
+  shard `k`, and later an on-chain **bond post** naming shard `k` by some
+  persona — but the post is public anyway, and the fetcher is a circuit, not an
+  identity. The most it links is *"the new holder of `k` fetched `k`"*. **No
+  mitigation warranted.** *(Re-worded 2026-09-20: this residual was written when
+  a later `HoldingsUpdate`-add could name `k` after the fact. Under the
+  immutable-bond ruling the only on-chain event that can name `k` is the bond
+  post itself, which makes the observable strictly narrower — one event per
+  persona lifetime rather than a stream.)*
 - **Losing a bonded shard** (disk failure, corruption) uses the **same path**:
   refill by recovery fetch, verify by txid. The slash exposure in between is
   the operator's trade, which is how `PDM-Q9` already frames archiver-store
