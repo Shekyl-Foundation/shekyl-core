@@ -2647,6 +2647,81 @@ deterministic prediction on both arms:**
 distinguish a standing block from a transient — see the `seedeu` correction
 above, which is the whole reason this sentence exists.
 
+#### FALSIFIER RUN 2026-09-21 — PASSED, with an accidental control arm
+
+**Run by Rick on the production estate. Verified independently here off the
+seeds**, per the methodology's step 3. The cap was raised on **three of six**
+seeds, which was not the plan and produced **better evidence than a full raise
+would have**: the three unraised seeds are a **within-experiment control**,
+measured on the same network at the same moment.
+
+| Seed | `max-connections-per-ip` | Connections from `173.9.20.245` |
+| --- | --- | --- |
+| `seedaus` | **8** | **2** |
+| `seeduse` | **8** | **2** |
+| `seedusw` | **8** | **2** |
+| `seedeu` | *absent → compiled 1* | **1** |
+| `seedjp` | *absent → compiled 1* | **1** |
+| `seedbrz` | *absent → compiled 1* | **1** |
+
+**And the two connections are the two distinct daemons, not one daemon twice
+— checked from the dialing side to close that reading:**
+
+- **A** (`skl-miner-test`) holds **all six**.
+- **B** (`skl-foundation`) holds **exactly the three raised seeds**.
+- **Overlap = {seedaus, seeduse, seedusw} = the raised set precisely. Zero on
+  the unraised set.**
+
+**That is the prediction, on both arms, simultaneously:** overlap goes from
+zero to the full raised set where the cap was lifted, and stays at zero where
+it was not. **PWD-I7 is confirmed on the production path.** Downstream
+corroboration, offered as corroboration and not as the result: B went from
+height 1 to **7496, `synchronized=true`**, `white=4`.
+
+**It also re-demonstrates `:452` from the other side.** B held six healthy
+onion peers throughout the dead period and they never moved it; it moved the
+moment **public-zone** peers were admitted. Tor was present and useless, which
+is what `cryptonote_protocol_handler.inl:452` says it must be.
+
+#### Two corrections to this row's own methodology, from the run
+
+**1. "A subset proves nothing" was WRONG, and the run proves it wrong.** That
+requirement was written for the *timing* falsifier, where an unraised seed
+injected an unattributable delay. **For the overlap falsifier a subset is
+strictly better than a full raise**, because the unraised remainder is a
+control arm on the same network at the same instant. *The requirement was
+carried across a change of falsifier without being re-derived* — which is the
+same defect this row records elsewhere about inherited claims.
+
+**2. Requirement 2 held by LUCK, not design, and stays in the row for it.**
+`m_conn_fails_cache` held **176** handshake failures on B. It was cleared
+because B had been restarted during an unrelated database wipe *before* the cap
+changed — **not because anyone sequenced it**. Had the cap been raised without
+that restart, the poisoned cache would have suppressed retries for the full
+hour and **the run would have falsified the fix rather than the hypothesis**,
+exactly as this row predicted. **It nearly did not hold**, and that is the
+reason to keep the requirement rather than retire it as satisfied.
+
+#### What the green result does NOT settle — stated plainly, because it is the dangerous outcome
+
+**The node works, and that is precisely the outcome this row flagged as most
+likely to stop anyone looking again.**
+
+**PWD-I8 is re-sequenced, not closed.** The category error is untouched: **8 is
+no more principled than 1.** It is merely larger than the number of nodes that
+happen to sit behind one address in this deployment, and **under CGNAT it fails
+exactly as 1 did** — hundreds of unrelated subscribers, one address, and a cap
+that cannot tell them apart. The value is now *empirically adequate for this
+estate* and *still wrong as a design*.
+
+**The successful run makes the endpoint-categorisation argument harder to
+fund, not easier**, and that is said here rather than left for a future reader
+to discover: a working network is the strongest possible argument against
+paying for PWD-I8, and it is not a good one. **The three unraised seeds are
+still partitioning right now** — the table above measures it — which is the
+defect continuing to operate inside the same estate that just declared the
+problem solved.
+
 #### Owed to the maintainer — questions, not decisions
 
 1. ~~**The number.**~~ **DISSOLVED 2026-09-21 by the diagnosis above, and this
