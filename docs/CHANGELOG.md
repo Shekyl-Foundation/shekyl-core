@@ -45,7 +45,28 @@
   gate. The validate+connect actor stays up on a verdict and on a stale
   seed — only a store halt ends it — so E3 re-forms on the same writer;
   `form` is `shekyl-chain-rules::form` (no ingest wrapper); a rewind
-  advances the sequencer without a formed payload.
+  advances the sequencer without a formed payload. **Review round
+  (2026-09-21):** a rewind across a seed-epoch step no longer ends the run
+  (`RD-F21` — the seed ledger asks the store for a height outside its
+  window, through the connector); a refusal is graded once as its own field
+  and is open unless the register records the row DIVERGENT, and the binary
+  exits non-zero on any disagreement no register adjudicated (`RD-F22`);
+  one `shekyl_chain_rules::seed_height` serves the validator, the harness
+  and the driver; sequence numbers are asserted consecutive at the event
+  and the source's first height against the store's next; `--hashers`
+  bounds RandomX concurrency apart from `--window` (the metrics artifact,
+  `shekyl_e2_metrics_v2`, records both); `Substrate::pin_seed` and
+  `CacheStore::pin_canonical` replace `EpochPin`; the exporter walks LMDB
+  under one read snapshot and pushes the daemon's own
+  `logical_state_digest_v0` (the families-shaped FFI is gone), refuses a
+  zero root, an out-of-range `--block-stop` and a `SEEDHASH_EPOCH_*`
+  override in its environment; the trace and corpus readers refuse a facts
+  row past `u64::MAX`, bytes after the trailer and a truncation anywhere in
+  a record; the register is preflighted; the store side of the comparator's
+  negative control exists (one raw-redb mutation per digested family); the
+  rotating differential lanes emit the failing blob in their failure
+  record; the extractor's committed output is parsed by the Rust grader and
+  held equal to the live register in `docs-gates`.
 
 - **Transaction read surface (S-TX, DRS-E1 increment 6).** `ReadSnapshot`
   gains `tx_location` / `tx_record` by `TxHash` (returning `Option` — a hash
