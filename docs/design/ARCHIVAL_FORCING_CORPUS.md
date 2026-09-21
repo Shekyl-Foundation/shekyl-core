@@ -317,7 +317,7 @@ tiers.** Measured rather than assumed: of the apply hooks, only
 and only down its complete-tree branch. `process_archival_epoch_close_at_height`
 (which writes `archival_r_market`, `archival_sigma_work`, `archival_budget` and
 `archival_epoch_close_log`), `apply_archival_emission_claim`,
-`apply_archival_unbond`, `apply_archival_rebond`, `put_archival_bond_record`
+`apply_archival_unbond`, `apply_archival_reinstate`, `put_archival_bond_record`
 and `add_archival_budget_accrual` reference it **zero** times.
 
 | Tier | Families | Precondition |

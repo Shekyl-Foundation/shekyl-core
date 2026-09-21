@@ -67,6 +67,15 @@
 
 ### Wallet
 
+- **Height-semantics Phase 2c: inland decode of chain-count RPC facts.**
+  Daemon-RPC `ChainTip.chain_height` / `BlockHashAt` / `BlockHeaderAt` /
+  `BlockAt.chain_height` are `ChainCount`; `target_height` is
+  `Option<ChainCount>` (`None` = synchronized sentinel). Wallet client
+  `Rpc::get_height` returns `ChainCount`. Submit `ref_age_window` takes
+  `ChainCount` vs `BlockHeight`. Handlers bound a requested ordinal with
+  `ChainCount::has_block` and name the top with `ChainCount::tip`. Wire
+  DTOs and FFI PODs stay `u64`. No numeric change.
+
 - **Height-semantics Phase 2b: dispatch-clock stamps are `ChainCount`.**
   `daemon_claimed_tip`, `BlockSource::tip_height`, `anchor_t0`, and
   `Dispatched::at` carry the claimed chain **count** (same numeric as
@@ -126,6 +135,39 @@
   its absent-`target_height`-reads-as-synchronized default.
 
 ### Consensus
+
+- **The `Rebond` bond-post kind is renamed `Reinstate`, and lands with the
+  immutable-bond ruling.** The wire discriminant stays `1` and every
+  `SHEKYL_ARCHIVAL_*` FFI error-code **number** is unchanged. The old name was
+  read as *"bond again"* or *"re-enter after an exit"* by essentially every
+  reader, and it is neither — a `Reinstate` acts on a record that is **still
+  bonded but slashed**, closing its open bad interval in place and re-arming
+  slashability. Post-holdings must **equal** current (a persona cannot keep
+  `P` and change the bond); both credit and debit are 0. Holdings change is
+  persona rotation (`Release` + `JoinMarket`). Discriminant `3`
+  (`HoldingsUpdate`) is **REJECTED** — the kind is unrepresentable
+  (`from_u8(3)` is `InvalidPostKind`); verify/connect/pop/FFI arms are
+  deleted. The redb table `archival_bond_rebond_log` and its LMDB counterpart
+  become `archival_bond_reinstate_log`; pre-genesis, no store holds data, so
+  this is a rename and not a migration. Records-was documents
+  (`docs/completed/`, this file's back-entries, the decision log) keep the old
+  word and are not rewritten; `LMDB_WRITE_ATOMICITY_AUDIT.md` tracks the new
+  names in its §10/§12 matrices only, because those are a live inventory checked
+  against `SHEKYL_LMDB_TABLES`, and carries a note saying so.
+
+  One **defect** surfaced by the rename and fixed with it:
+  `ARCHIVAL_CHALLENGE_MECHANISM.md` described this kind as *"the re-entry path
+  for an operator who fixes the box"* for a slashed Foundation CompleteTree
+  node — wrong twice under either name, since the slash demotes the record to an
+  ordinary market position and `ReinstateOnCompleteTree` makes the kind
+  unrepresentable on a `CompleteTree` record at all.
+
+- **Reinstate CT admits zero-money; pop does not write a ghost counter.**
+  `BondTerm` gains `Unmoved` (credit and debit both 0) so a valid Reinstate
+  can close the ordinary CT equation; `from_credit_debit` is the single
+  conversion at the FFI and submit edges. `NO_BOND_TERM` (5) stays assigned
+  and is unhittable. The Reinstate pop arm no longer calls
+  `set_total_bonded_atomic` — connect does not move the counter.
 
 - **The Rust validator decides timestamps and proof-of-work (DRS-E6
   slice 2).** `shekyl-chain-rules` now evaluates census 4.C (CEN-C1 FTL,

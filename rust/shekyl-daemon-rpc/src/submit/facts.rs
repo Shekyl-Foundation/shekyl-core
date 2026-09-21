@@ -101,8 +101,9 @@ pub struct SubmitFacts {
     /// [`BlockHeight`]: C++ overloads "height" for this value, and holding
     /// a count in the height type is one `<=` away from an off-by-one
     /// (the emission-claim spendability anchor bug, claim-builder PR-3
-    /// review). The ref-age comparison consumes the raw count deliberately
-    /// — that is the consensus shape (`blockchain.cpp:3745-3765`).
+    /// review). The ref-age comparison consumes the typed count against the
+    /// reference's ordinal (`ref_age_window`) — that is the consensus
+    /// shape (`blockchain.cpp:3745-3765`).
     pub chain_height: ChainCount,
     /// An archival bond record exists for the submitted bond-post's
     /// `p_canonical_id` (`get_archival_bond_hybrid_pubkey` probe, read under

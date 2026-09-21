@@ -521,7 +521,7 @@ a Release leaves the row, endpoint included).
 | Flags | `MDB_CREATE` |
 | Key | `P_id[32]` (`P_canonical_id`) |
 | Value | versioned `ArchivalBondValue` blob (v7 at genesis: hybrid pubkey, **`bond_spend_pk`** (GF-1 debit authorizer, gate-4 §4.1), **`endpoint`** (32-byte serving endpoint, `EU-D3`), `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel with the index-parallel per-shard add-epochs (v6), bad intervals, claimed settlement epochs, `first_paying_emission_height`; every earlier version is rejected at decode) |
-| Writers | `put_archival_bond_record` (JoinMarket connect), `put_archival_bond_value` (every load-modify-store writer: slash apply/revert, Release, HoldingsUpdate, Rebond), `remove_archival_bond_record` (JoinMarket pop) |
+| Writers | `put_archival_bond_record` (JoinMarket connect), `put_archival_bond_value` (every load-modify-store writer: slash apply/revert, Release, HoldingsUpdate, Reinstate), `remove_archival_bond_record` (JoinMarket pop) |
 | Readers | `get_archival_bond_value`, `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
 | Encoder | `shekyl::db::ArchivalBondValue` in `blockchain_db/shekyl_types.h` |
 | Introduced | HF1 (gate-4 substrate; gate-2 §5.3 steps 2–3 reads) |
@@ -720,7 +720,7 @@ Per-block revert journal for slash connect / `pop_block` (gate-2 §8).
 ### The four pre-image journals
 
 `archival_emission_claim_log`, `archival_bond_unbond_log`,
-`archival_bond_holdings_update_log`, and `archival_bond_rebond_log` share
+`archival_bond_holdings_update_log`, and `archival_bond_reinstate_log` share
 the slash log's row layout and the height-keyed journal scaffold in
 `db_lmdb.cpp` (`archival_journal_{next_seq,put,read,delete}`): key
 `BE(block_height) ‖ BE(seq)` (12 bytes; each key type is an alias of
@@ -792,24 +792,24 @@ Unbond superset reused.
 | Writers | `apply_archival_holdings_update_add` / `_drop` via the single-sourced `apply_archival_bond_record_update` scaffold and `put_archival_holdings_update_journal`, the revert's clear |
 | Readers | `revert_archival_holdings_updates_at_height` |
 
-### `archival_bond_rebond_log`
+### `archival_bond_reinstate_log`
 
-Per-block journal for the Rebond connect's record pre-image
-(`ARCHIVAL_BOND_GATE4.md` §3.4; P2B-9 reinstatement). Rebond is the one
+Per-block journal for the Reinstate connect's record pre-image
+(`ARCHIVAL_BOND_GATE4.md` §3.4; P2B-9 reinstatement). Reinstate is the one
 bond-post kind that mutates an EXISTING interval in place (`end_exclusive`:
-MAX → `E_rebond + 1`), so alongside the holdings pre-image the row carries
+MAX → `E_reinstate + 1`), so alongside the holdings pre-image the row carries
 the closed interval's index + start; the pop re-opens exactly that entry to
 MAX, with a belt that the start must match and the entry must currently be
-closed (`FATAL: archival rebond revert interval desync` otherwise).
+closed (`FATAL: archival reinstate revert interval desync` otherwise).
 
 | Property | Value |
 |---|---|
-| LMDB name | `"archival_bond_rebond_log"` |
+| LMDB name | `"archival_bond_reinstate_log"` |
 | Flags | `MDB_CREATE` |
 | Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
-| Value | `ArchivalBondRebondRevertValue` v1, variable: `version[1] \|\| p_id[32] \|\| BE(pre_bonded_total)[8] \|\| BE32(closed_interval_index) \|\| BE(closed_interval_start)[8] \|\| BE32(shard_count) \|\| BE(pre_shard_ids[]) \|\| BE(pre_shard_add_epochs[])` (57 + 16·shards bytes; `pre_bonded_total == 0` is LEGAL — a terminal-slash reinstatement starts from a zero-balance record) |
-| Writers | `apply_archival_rebond` via the shared bond-record scaffold, the revert's clear |
-| Readers | `revert_archival_rebonds_at_height` |
+| Value | `ArchivalBondReinstateRevertValue` v1, variable: `version[1] \|\| p_id[32] \|\| BE(pre_bonded_total)[8] \|\| BE32(closed_interval_index) \|\| BE(closed_interval_start)[8] \|\| BE32(shard_count) \|\| BE(pre_shard_ids[]) \|\| BE(pre_shard_add_epochs[])` (57 + 16·shards bytes; `pre_bonded_total == 0` is LEGAL — a terminal-slash reinstatement starts from a zero-balance record) |
+| Writers | `apply_archival_reinstate` via the shared bond-record scaffold, the revert's clear |
+| Readers | `revert_archival_reinstates_at_height` |
 
 ### `archival_attestation_witness`
 

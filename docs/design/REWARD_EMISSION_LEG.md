@@ -716,7 +716,7 @@ attempts for epochs **after** slash and bond re-establishment flows (gate 4).
 
 **Interval encoding (F3):** `good_through(E)` is derived from a bonded/slashed/re-bond
 **event log** with interval semantics at epoch close — not `slash_epoch > E`. Re-bond
-after slash must restore good-standing for post-rebond epochs without retroactively
+after slash must restore good-standing for post-reinstate epochs without retroactively
 voiding pre-slash honest epochs (example and verifier rule in
 [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §3.4).
 

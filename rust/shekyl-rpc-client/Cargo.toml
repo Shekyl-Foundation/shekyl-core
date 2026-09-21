@@ -52,6 +52,9 @@ shekyl-curve-io = { path = "../shekyl-curve-io", default-features = false }
 # wire contract itself is still draft (`DAEMON_SUBMIT_VERDICT.md` §8 parity
 # matrix open).
 shekyl-rpc-types = { path = "../shekyl-rpc-types", default-features = false }
+# Decode edge for `Rpc::get_height` (`HEIGHT_SEMANTICS.md` C2). `no_std`
+# so this crate's aspirational `--no-default-features` path stays open.
+shekyl-types = { path = "../shekyl-types", default-features = false }
 
 
 [features]

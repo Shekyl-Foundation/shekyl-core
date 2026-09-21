@@ -185,11 +185,15 @@ pub(crate) async fn ensure_birthday_anchor<D: DaemonEngine>(
 
     // Gate the anchor on the daemon's current height so a floor above the
     // chain end does not request a nonexistent `floor - 1` block.
-    let daemon_height = daemon.get_height().await.map_err(|e| {
-        RefreshError::Io(IoError::Daemon {
-            detail: e.to_string(),
-        })
-    })? as u64;
+    let daemon_height = daemon
+        .get_height()
+        .await
+        .map_err(|e| {
+            RefreshError::Io(IoError::Daemon {
+                detail: e.to_string(),
+            })
+        })?
+        .to_raw();
     let Some(anchor_synced) = anchor_target(scan_start_floor, daemon_height) else {
         return Ok(());
     };

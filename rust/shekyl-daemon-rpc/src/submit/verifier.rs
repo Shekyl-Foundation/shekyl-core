@@ -63,10 +63,10 @@
 //!   fee-floor resolution lands; re-evaluation shape: extend
 //!   [`SubmitFacts`] with the §8.7.1 SC-row archival facts and implement
 //!   the serve-credit battery (SC1–SC8) in this match arm.
-//! - **HoldingsUpdate / Rebond** (wire `BondPostKind::Other`): the semantic
-//!   verifies exist in `shekyl-archival-retention` and the block path runs
-//!   them today, but **no wallet constructs either**. Building their
-//!   submit-side fact sets now would be pre-provisioned flexibility (rule
+//! - **Reinstate** (wire `BondPostKind::Other`): the semantic verify exists
+//!   in `shekyl-archival-retention` and the block path runs it today, but
+//!   **no wallet constructs it**. Building its submit-side fact set now
+//!   would be pre-provisioned flexibility (rule
 //!   21) whose Phase-D race classification could not be verified against
 //!   any real submission, so `verify_bond_post` refuses them at the kind
 //!   dispatch. Reopening criterion: a producer. Re-evaluation shape: the
@@ -86,7 +86,7 @@ use shekyl_archival_retention::{
     release_vin_statics, settlement_epoch_at_height, verify_bond_post_ct_balance,
     verify_join_market_bond_post, verify_release_bond_post, whole_record_last_served,
     ArchivalBondPostVin, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
-    ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
+    BondTermError, ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
     HoldingsKind, RewardCommit, ShardSet,
 };
@@ -254,9 +254,10 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
 
     // Kind dispatch: the credit arm (JoinMarket, §8.7.1 BP rows) and the
     // debit arm (Release, §8.7.1.1 UB rows) are the two kinds whose
-    // submit-side fact sets are pinned. HoldingsUpdate and Rebond have no
-    // producer, so their fact sets are deliberately unbuilt and they refuse
-    // loudly under their named rule-21 reopening criterion (module docs).
+    // submit-side fact sets are pinned. Reinstate has no producer, so its
+    // fact set is deliberately unbuilt and it refuses loudly under the named
+    // rule-21 reopening criterion (module docs). Discriminant 3
+    // (HoldingsUpdate) is REJECTED at the wire.
     let arm = match &bond.kind {
         WireBondPostKind::JoinMarket { bond_spend_pk, .. } => BondArm::Credit(bond_spend_pk),
         WireBondPostKind::Other(tag) if *tag == RetentionBondPostKind::Release as u8 => {
@@ -266,13 +267,12 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
             tracing::error!(
                 ?kind,
                 "bond-post submit battery covers JoinMarket (§8.7.1) and \
-                 Release (§8.7.1.1); HoldingsUpdate and Rebond refuse until \
-                 a producer exists and their fact set + Phase-D re-check \
-                 semantics are specified (rule-21 reopening criterion in \
-                 the module docs)"
+                 Release (§8.7.1.1); Reinstate refuses until a producer \
+                 exists and its fact set + Phase-D re-check semantics are \
+                 specified (rule-21 reopening criterion in the module docs)"
             );
             return Err(VerifyReject::malformed(
-                "bond-post: HoldingsUpdate/Rebond have no submit battery (rule-21)",
+                "bond-post: Reinstate has no submit battery (rule-21)",
             ));
         }
     };
@@ -286,22 +286,17 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // single-sourced `shekyl-archival-retention` equation — the same crate
     // the C++ `verCtSemanticsBondPost` dispatches to through
     // `shekyl_archival_verify_bond_post_ct_balance` (ct_semantics.cpp:325-340).
-    // The `(credit, debit) → BondTerm` conversion — rejecting the both /
-    // neither / zero states — happens here at the untrusted-input edge,
-    // mirroring the FFI boundary's identical conversion, so the total core
-    // function stays total. `pseudoOuts == ToKey subset` arity is
-    // `validate()`'s coupling and cannot fail here.
-    let term = match (
-        NonZeroAtomicUnits::new(AtomicUnits::from_raw(bond.bond_credit)),
-        NonZeroAtomicUnits::new(AtomicUnits::from_raw(bond.bond_debit)),
-    ) {
-        (None, None) | (Some(_), Some(_)) => {
+    // The `(credit, debit) → BondTerm` conversion is
+    // `BondTerm::from_credit_debit` (zero/zero is Unmoved; both-nonzero
+    // refuses). `pseudoOuts == ToKey subset` arity is `validate()`'s
+    // coupling and cannot fail here.
+    let term = match BondTerm::from_credit_debit(bond.bond_credit, bond.bond_debit) {
+        Ok(term) => term,
+        Err(BondTermError::BothTerms) => {
             return Err(VerifyReject::malformed(
-                "N7: bond credit/debit must be exactly one nonzero term",
+                "N7: bond credit and debit both nonzero",
             ));
         }
-        (Some(credit), None) => BondTerm::Credit(credit),
-        (None, Some(debit)) => BondTerm::Debit(debit),
     };
     if let Err(e) = verify_bond_post_ct_balance(
         prunable.pseudo_outs.as_flattened(),
@@ -682,7 +677,7 @@ fn verify_credit_arm(
     facts: &SubmitFacts,
 ) -> Result<(), VerifyReject> {
     // ── BP5: credit-path authorization pins the IDENTITY key ────────────
-    // (gate-4 §3.5 step 5; `blockchain.cpp`'s JoinMarket/Rebond arms): the
+    // (gate-4 §3.5 step 5; `blockchain.cpp`'s JoinMarket/Reinstate arms): the
     // bond slot's PQC auth key — whose signature over the whole-tx payload
     // the K13 leg verifies — must be P's identity key `P_pubkey`.
     if bond_auth.hybrid_public_key != bond.hybrid_public_key {

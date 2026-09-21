@@ -352,7 +352,7 @@ impl World {
     /// **not** "the computation is dead": the unit tests `freeze_predicate_fires_when_blocked`
     /// / `..._silent_when_*` are the positive/negative control proving the predicate fires
     /// when the state *is* constructed. The state stays **reachable by a naive operator** who
-    /// drops A intending to immediately rebond into B without modeling the cooldown — that
+    /// drops A intending to immediately bond B without modeling the cooldown — that
     /// residual is routed to operator-education + a wallet-conformance guard (§L18), not the
     /// consensus floor. Consequently the freeze-harm bracket
     /// (`freeze_harm_co − freeze_harm_causal`) is maximally wide in this sweep ⇒ maximal

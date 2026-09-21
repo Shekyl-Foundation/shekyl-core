@@ -26,6 +26,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use shekyl_curve_io::*;
+use shekyl_types::ChainCount;
 // Number of blocks the fee estimate will be valid for
 // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
 //   /src/wallet/wallet2.cpp#L121
@@ -380,8 +381,35 @@ pub trait Rpc: Sync + Clone {
     /// Get the height of the Shekyl blockchain.
     ///
     /// The height is defined as the amount of blocks on the blockchain. For a blockchain with only
-    /// its genesis block, the height will be 1.
-    fn get_height(&self) -> impl Send + Future<Output = Result<usize, RpcError>> {
+    /// its genesis block, the height will be 1. Typed [`ChainCount`] at this
+    /// decode (`HEIGHT_SEMANTICS.md` C2); the method name is kept (C7).
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: `get_height` is a count, not `usize`.
+    /// fn wants_usize_fut<F>(_: F)
+    /// where
+    ///     F: core::future::Future<Output = Result<usize, shekyl_rpc_client::RpcError>>,
+    /// {
+    /// }
+    /// fn check<R: shekyl_rpc_client::Rpc>(rpc: &R) {
+    ///     wants_usize_fut(rpc.get_height());
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: `get_height` is not an ordinal.
+    /// fn wants_height_fut<F>(_: F)
+    /// where
+    ///     F: core::future::Future<
+    ///         Output = Result<shekyl_types::BlockHeight, shekyl_rpc_client::RpcError>,
+    ///     >,
+    /// {
+    /// }
+    /// fn check<R: shekyl_rpc_client::Rpc>(rpc: &R) {
+    ///     wants_height_fut(rpc.get_height());
+    /// }
+    /// ```
+    fn get_height(&self) -> impl Send + Future<Output = Result<ChainCount, RpcError>> {
         async move {
             // The wire type is `shekyl-rpc-types`'s (RK-D1): one definition for
             // the daemon that serves it and the wallet that reads it.
@@ -396,14 +424,12 @@ pub trait Rpc: Sync + Clone {
                     reply.status.0
                 )));
             }
-            let res = usize::try_from(reply.height)
-                .map_err(|_| RpcError::InvalidNode("height does not fit usize".to_string()))?;
-            if res == 0 {
-                Err(RpcError::InvalidNode(
+            if reply.height == 0 {
+                return Err(RpcError::InvalidNode(
                     "node responded with 0 for the height".to_string(),
-                ))?;
+                ));
             }
-            Ok(res)
+            Ok(ChainCount::from_raw(reply.height))
         }
     }
 

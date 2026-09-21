@@ -55,7 +55,7 @@ unbuilt, permanent code.
 
 ### In scope (this design)
 
-- The full architecture for all four `BondPostKind`s (`JoinMarket`, `Rebond`,
+- The full architecture for all four `BondPostKind`s (`JoinMarket`, `Reinstate`,
   `Release`, `HoldingsUpdate`), so the JoinMarket-first implementation does not
   paint into a corner.
 - The `archival_p` key-derivation primitive (`P` identity + `bond_spend_pk`),
@@ -68,7 +68,7 @@ JoinMarket is the only kind with a complete verify counterpart today
 ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)
 `verify_join_market_bond_post`;
 [`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_ct_balance.rs)).
-Rebond / Release / HoldingsUpdate have wire types
+Reinstate / Release / HoldingsUpdate have wire types
 ([`bond_wire.rs`](../../rust/shekyl-archival-retention/src/bond_wire.rs)
 `BondPostKind`) but **no verify implementation** ("V3.0 open"). Their
 construction is **provisional** until paired with the verify-side work -- see
@@ -81,7 +81,7 @@ Section 9.
   and it is named here as a sequenced dependency, not buried as an out-of-scope
   bullet.
 - Off-chain announce/backing-presentation wire (separate gate-6 §7 item).
-- HoldingsUpdate / Rebond / Release verify-side (their own PRs).
+- HoldingsUpdate / Reinstate / Release verify-side (their own PRs).
 
 ## 3. The honest milestone for this unit
 
@@ -429,7 +429,7 @@ the standard weight-priced floor fee; there is no fee-less class (gate-4
    way; the type is origin-edge hygiene at the wallet layer, the coin-pool
    sibling of `P`'s dedicated Arti client (§9's transport split).
 2. **Exit-fee reserve.** Mid-life constructors (claim fee inputs, both
-   `HoldingsUpdate` directions, `Rebond`) never spend the pool below
+   `HoldingsUpdate` directions, `Reinstate`) never spend the pool below
    `EXIT_FEE_RESERVE_ATOMIC` — a pessimistically-margined weight-priced
    `Release` fee — so the terminal post is always fundable. Spend-time
    invariant only; the cover **draw** is never consulted or narrowed by it
@@ -492,7 +492,7 @@ submit fact set (2026-08-29), and PR-B's dispatch seam + daemon walk,
 each narrowing without lifting — was **lifted by PR-C (2026-09-03)**:
 `StakeFacade::unstake` drives `Engine::submit_release` from wallet-RPC and
 the CLI, and `collect_unstaked`'s terminal sweep completes the arc
-(reconciliation in `wallet_rpc.yaml`'s PR-C census). **`Rebond` and `HoldingsUpdate` remain
+(reconciliation in `wallet_rpc.yaml`'s PR-C census). **`Reinstate` and `HoldingsUpdate` remain
 provisional** — both have verify arms, neither has a producer — and for them the
 paragraph below stands unchanged: construction is **a hypothesis validated only
 on paper**, **reopenable** when that work begins, and the deferred architecture
@@ -509,7 +509,7 @@ exists to track.
 | JoinMarket | `P_pubkey` | `verify_join_market_bond_post` | PR 1 (KAT-validated) |
 | HoldingsUpdate add | `P_pubkey` | `verify_holdings_update_add` | provisional — no producer |
 | HoldingsUpdate drop | `bond_spend_pk` | `verify_holdings_update_drop` | provisional — no producer (operator-guide footguns live here) |
-| Rebond | `P_pubkey` | `verify_rebond_bond_post` | provisional — no producer |
+| Reinstate | `P_pubkey` | `verify_reinstate_bond_post` | provisional — no producer |
 | Release | `bond_spend_pk` | `verify_release_bond_post` | PR-P4 — `build_release_vin` (KAT-validated) + `AssembleRelease` (full tx; auth under `bond_spend_pk`). **Built, not reachable:** no RPC method or CLI verb; slice 3's engine walk has landed and did not lift it |
 
 The `Auth key` column is unchanged and remains correct: `Release` and
