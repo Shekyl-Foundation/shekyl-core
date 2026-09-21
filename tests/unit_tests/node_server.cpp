@@ -2810,8 +2810,13 @@ TEST(node_server, host_inbound_default_cap_comes_from_rust_not_a_cpp_literal)
   // `1` at the option descriptor and a second `1` in the `node_server`
   // constructor, with nothing tying them together or to the rule.
   //
-  // Red edit: put a literal back in `arg_max_connections_per_ip`'s descriptor
-  // (net_node.cpp) or in the constructor's `max_connections(...)` init.
+  // Red edit: a literal that DISAGREES -- `2` in `arg_max_connections_per_ip`'s
+  // descriptor (net_node.cpp) or in the constructor's `max_connections(...)`
+  // init. Restoring a literal `1` does NOT redden this: both sides still read
+  // 1, because what this pins is that the two AGREE and that the agreed value
+  // is the inherited one. Ownership itself is not observable from a test --
+  // it is observable from the absence of a second literal to disagree with,
+  // which is what the deletion in net_node.cpp/.h accomplishes.
   EXPECT_EQ(1u, shekyl_host_inbound_default_cap())
     << "the forward cut is behaviour-preserving: the inherited value is 1, and "
        "moving it is a ruling (PWD-I7 owed-back Q1), not a refactor";

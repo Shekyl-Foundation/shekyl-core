@@ -3250,7 +3250,7 @@ namespace nodetool
     // rather than one host. Read the Rust predicate's doc comment before
     // reading this early return as a gap.
     // The zone byte crosses raw, so pin the mapping Rust's `InboundZone`
-    // assumes. Same pins as the zone-route family at `:2572`.
+    // assumes. Same pins the zone-route family asserts in `send_txs`.
     static_assert(std::is_same<std::underlying_type<epee::net_utils::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
     static_assert(unsigned(epee::net_utils::zone::invalid) == 0, "invalid expected to be 0");
     static_assert(unsigned(epee::net_utils::zone::public_) == 1, "public_ expected to be 1");

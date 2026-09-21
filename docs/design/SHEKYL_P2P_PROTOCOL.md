@@ -2140,7 +2140,8 @@ Three properties follow, and all three were confirmed at those lines:
 - **(c) INBOUND ONLY.** It counts `m_is_income`.
 
 **Not PWD-I1, and this row exists partly to stop that re-attribution.** PWD-I1's
-same-host cap at `net_node.h:144` is `!connection_is_income && ...` — outbound-only
+same-host cap at `net_node.h:144` (**at the `dev` `f6df3abc2` pin**, as with the
+table above; this PR's own edits shift it by one) is `!connection_is_income && ...` — outbound-only
 *by construction*, with a comment giving the reason (capping inbound there
 would let any peer suppress this node's dials to a host simply by connecting to
 us). P2P-2 did not cause this. The mechanism was first attributed to that cap
@@ -2174,9 +2175,22 @@ comparison at `net_node.inl:235` is unsigned against an unsigned counter
 (`net_node.h:403`). Inbound slots are therefore **effectively unbounded by
 default**, and a sweep of the accept path found no other inbound
 connection-count limiter — `get_connections_count()`
-(`abstract_tcp_server2.h:433`) is an observer, not a bound. **So this per-IP cap
-is the only inbound resource bound the daemon actually has at default
-settings.**
+(`abstract_tcp_server2.h:433`) is an observer, not a bound. **So at DEFAULT
+settings this per-IP cap is the only inbound resource bound the daemon has.**
+
+**Stated at defaults deliberately, because the deployed fleet is not at
+defaults.** Checked on the live testnet hosts rather than assumed: both
+`skl-foundation` and `skl-seeduse` set `in-peers=128` (with `out-peers=64`)
+explicitly in `/etc/shekyl/shekyld-testnet.conf`. **As deployed, the inbound
+bound is 128 and the per-IP cap is not the only one** — the unbounded form is a
+property of the shipped default, not of this network. Both statements are load-
+bearing and they are not interchangeable: the default is what an ordinary
+operator inherits, the 128 is what the seeds this observation was made against
+were actually running. *(Noted because the stronger claim — "the only inbound
+bound", unqualified — is falsified by the maintainer's own seed config, and a
+pricing argument that dies on contact with the deployment is worse than no
+argument.)* There is no read-only RPC reporting `max_in_connection_count`; the
+`in_peers` RPC on this lineage **sets** the limit, so it is not a read.
 
 **Does PWD-E4's reasoning transfer?** PWD-E4, ruled 2026-09-06 and recorded at
 `P2P_HANDSHAKE_ADDRESS.md` §1 row 3, says a host cap "bounds honest duplicates
