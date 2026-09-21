@@ -60,6 +60,7 @@ pub mod fetch;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_tests;
+pub mod schedule;
 pub mod seed;
 pub mod sequencer;
 pub mod source;
@@ -73,6 +74,7 @@ pub use connector::{Applied, Connector, ConnectorArgs, RunEnd, RunFault};
 pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, VerifiedRecord};
 pub use fetch::{fetch_corpus, FetchFault};
 pub use pipeline::{run, PipelineConfig, PipelineFault, RunReport};
+pub use schedule::{Chain, ChainRules, FixedDifficultyRefused};
 pub use seed::{SeedLedger, SeedSchedule};
 pub use sequencer::{SequenceError, Sequencer};
 pub use source::{CorpusBlock, IngestEvent, Seq, Sequenced, Source};

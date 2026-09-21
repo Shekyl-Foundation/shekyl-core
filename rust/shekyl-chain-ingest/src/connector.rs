@@ -47,12 +47,13 @@ use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    validate, ChainView, Fault, InvalidBlock, Retry, RuleSet, Stale, StructurallyValid, Verdict,
+    validate, ChainView, Fault, InvalidBlock, Retry, Stale, StructurallyValid, Verdict,
 };
 use shekyl_chain_store::digest_v0::LogicalStateDigestV0;
 use shekyl_chain_store::store::{ChainStore, StoreError, StoreInvariant};
 use shekyl_types::{BlockHash, BlockHeight};
 
+use crate::schedule::ChainRules;
 use crate::trace::Trace;
 
 /// Why a run ended, as the actor remembers it after the reply that carried
@@ -178,9 +179,8 @@ pub struct Digest;
 pub struct ConnectorArgs {
     /// The store this actor alone writes.
     pub store: ChainStore,
-    /// The rule set in force for the run (a schedule that varies it by
-    /// height is commit 6b's).
-    pub in_force: RuleSet,
+    /// Which rules are in force at each height (RD-Q10's driver half).
+    pub rules: ChainRules,
     /// The trace, for the `borrow` door.
     pub trace: Arc<Trace>,
 }
@@ -188,7 +188,7 @@ pub struct ConnectorArgs {
 /// The single writer (module docs).
 pub struct Connector {
     store: ChainStore,
-    in_force: RuleSet,
+    rules: ChainRules,
     trace: Arc<Trace>,
     over: Option<RunEnd>,
 }
@@ -227,7 +227,7 @@ impl Actor for Connector {
     async fn on_start(args: ConnectorArgs, _actor_ref: ActorRef<Self>) -> Result<Self, RunFault> {
         Ok(Self {
             store: args.store,
-            in_force: args.in_force,
+            rules: args.rules,
             trace: args.trace,
             over: None,
         })
@@ -250,7 +250,7 @@ impl Message<Apply> for Connector {
 
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         self.over()?;
-        let in_force = self.in_force;
+        let rules = self.rules;
         let trace = Arc::clone(&self.trace);
         let result: Result<Applied, RunFault> = self.store.write(|batch| {
             let view = batch.chain_view();
@@ -263,6 +263,7 @@ impl Message<Apply> for Connector {
                         break;
                     }
                 };
+                let in_force = rules.in_force(height);
                 match validate(formed, &view, &in_force) {
                     Ok(Ok(valid)) => {
                         let Some(facts) = trace.borrow(height) else {

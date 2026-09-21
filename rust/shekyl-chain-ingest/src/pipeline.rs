@@ -33,13 +33,14 @@ use std::sync::Arc;
 
 use kameo::actor::PreparedActor;
 use kameo::error::SendError;
-use shekyl_chain_rules::{FormAttempt, InvalidBlock, RuleSet, Substrate};
+use shekyl_chain_rules::{FormAttempt, InvalidBlock, Substrate};
 use shekyl_chain_store::digest_v0::LogicalStateDigestV0;
 use shekyl_chain_store::store::{ChainStore, StoreError};
 use shekyl_types::{BlockHash, BlockHeight};
 use tokio::task::JoinSet;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, Rewind, RunFault};
+use crate::schedule::ChainRules;
 use crate::seed::{SeedLedger, SeedSchedule};
 use crate::sequencer::{SequenceError, Sequencer};
 use crate::source::{IngestEvent, Seq, Sequenced, Source};
@@ -54,18 +55,18 @@ pub struct PipelineConfig {
     /// block in flight always names a block already read; also the maximum
     /// run length one [`Apply`] carries, hence the checkpoint granularity.
     pub window: usize,
-    /// The seed-epoch schedule `form` is told (Fakechain overrides it).
-    pub schedule: SeedSchedule,
 }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
-        Self {
-            window: 32,
-            schedule: SeedSchedule::MAINNET,
-        }
+        Self { window: 32 }
     }
 }
+
+/// The seed-epoch schedule the driver claims under — the validator's
+/// (slice 2 F5: the mainnet constants at every nettype, no environment),
+/// so it is not a knob (`schedule` module docs).
+const SEEDS: SeedSchedule = SeedSchedule::MAINNET;
 
 /// What a run produced.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -148,7 +149,7 @@ fn collapse<M, SrcF, SubF>(err: SendError<M, RunFault>) -> PipelineFault<SrcF, S
 pub async fn run<Src, S>(
     source: &mut Src,
     substrate: Arc<S>,
-    rule_set: RuleSet,
+    rules: ChainRules,
     store: ChainStore,
     trace: Arc<Trace>,
     cfg: PipelineConfig,
@@ -165,10 +166,9 @@ where
     let mut ledger = SeedLedger::new();
     if let Some(tip) = starting_tip {
         let snap = store.begin_read()?;
-        let sched = cfg.schedule;
         // Only the heights a future claim can name: seed heights are
         // non-decreasing, so from the current one up to the tip.
-        let from = sched.seed_height(BlockHeight::from_raw(tip.to_raw() + 1));
+        let from = SEEDS.seed_height(BlockHeight::from_raw(tip.to_raw() + 1));
         for h in from.to_raw()..=tip.to_raw() {
             if let shekyl_chain_rules::AtHeight::Recorded(info) =
                 snap.block_info(BlockHeight::from_raw(h))?
@@ -188,14 +188,14 @@ where
     let connector = prepared.actor_ref().clone();
     let actor_task = prepared.spawn(ConnectorArgs {
         store,
-        in_force: rule_set,
+        rules,
         trace: Arc::clone(&trace),
     });
 
     let outcome = drive(
         source,
         substrate,
-        rule_set,
+        rules,
         &connector,
         &trace,
         cfg,
@@ -223,7 +223,7 @@ where
 async fn drive<Src, S>(
     source: &mut Src,
     substrate: Arc<S>,
-    rule_set: RuleSet,
+    rules: ChainRules,
     connector: &kameo::actor::ActorRef<Connector>,
     trace: &Arc<Trace>,
     cfg: PipelineConfig,
@@ -264,8 +264,8 @@ where
                     }
                     expected_next += 1;
                     ledger.record(height, block.candidate.block.hash());
-                    let seed_height = cfg.schedule.seed_height(height);
-                    let Some(seed) = ledger.claim(cfg.schedule, height) else {
+                    let seed_height = SEEDS.seed_height(height);
+                    let Some(seed) = ledger.claim(SEEDS, height) else {
                         return Err(PipelineFault::SeedUnknown {
                             height,
                             seed_height,
@@ -274,10 +274,11 @@ where
                     ledger.forget_below(seed_height);
                     let substrate = Arc::clone(&substrate);
                     let seq = event.seq;
+                    let in_force = rules.in_force(height);
                     in_flight.spawn_blocking(move || {
                         Sequenced::new(
                             seq,
-                            form_extend(*block, &rule_set, &*substrate, seed, FormAttempt::FIRST),
+                            form_extend(*block, &in_force, &*substrate, seed, FormAttempt::FIRST),
                         )
                     });
                 }

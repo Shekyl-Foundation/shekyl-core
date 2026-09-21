@@ -17,9 +17,11 @@
 //! described different chains — surfaced on first occurrence, not retried
 //! away.
 //!
-//! The schedule is a value, not a constant: the mainnet epoch/lag pair is
-//! [`SeedSchedule::MAINNET`], and Fakechain runs hand `form` a clamped
-//! override (RD-Q7, commit 6b) the same way the FFI does.
+//! The schedule is [`SeedSchedule::MAINNET`] at every nettype: the
+//! validator derives the seed height with the mainnet constants and reads
+//! no environment (slice 2 F5, CEN-D3), so the driver must claim on the
+//! same schedule or earn `Stale::Seed` at every block. The type exists so
+//! the pair is named where it is used, not so it can vary.
 
 use std::collections::BTreeMap;
 

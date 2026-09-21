@@ -22,11 +22,17 @@ use shekyl_types::BlockHash;
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, RunEnd, RunFault};
 use crate::corpus::CorpusReader;
 use crate::pipeline::{run, PipelineConfig, PipelineFault};
+use crate::schedule::ChainRules;
 use crate::source::{CorpusBlock, IngestEvent};
 use crate::stage::{form_extend, Staged};
 use crate::test_support::{
     block_with_nonce, chain, cleanup, corpus_of, expected_state, h, open_store, spend, tmp,
     trace_of, wire, Scripted,
+};
+
+/// Regtest without a fixed target: the genesis rules at every height.
+const GENESIS_RULES: ChainRules = ChainRules::Regtest {
+    fixed_difficulty: None,
 };
 
 fn substrate() -> Arc<MockSubstrate> {
@@ -86,7 +92,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
         let first = prepared.actor_ref().clone();
         let task = prepared.spawn(ConnectorArgs {
             store: open_store(&path),
-            in_force: RuleSet::GENESIS,
+            rules: GENESIS_RULES,
             trace: Arc::clone(&trace),
         });
         let (h0, f0) = formed(corpus_block(0, &chain[0].0, &chain[0].1), BlockHash::NULL);
@@ -112,7 +118,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     }
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path),
-        in_force: RuleSet::GENESIS,
+        rules: GENESIS_RULES,
         trace,
     });
 
@@ -200,13 +206,10 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     let report = run(
         &mut source,
         substrate(),
-        RuleSet::GENESIS,
+        GENESIS_RULES,
         open_store(&path),
         Arc::clone(&trace),
-        PipelineConfig {
-            window: 2,
-            ..PipelineConfig::default()
-        },
+        PipelineConfig { window: 2 },
     )
     .await
     .expect("the corpus replays");
@@ -253,7 +256,7 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     let trace = Arc::new(trace_of(&chain, false));
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path),
-        in_force: RuleSet::GENESIS,
+        rules: GENESIS_RULES,
         trace,
     });
     let (h0, f0) = formed(corpus_block(0, &chain[0].0, &chain[0].1), BlockHash::NULL);
@@ -312,7 +315,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     let report = run(
         &mut source,
         substrate(),
-        RuleSet::GENESIS,
+        GENESIS_RULES,
         open_store(&path),
         Arc::clone(&trace),
         PipelineConfig::default(),
@@ -354,7 +357,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     let err = run(
         &mut source,
         substrate(),
-        RuleSet::GENESIS,
+        GENESIS_RULES,
         open_store(&path),
         trace,
         PipelineConfig::default(),
@@ -420,13 +423,10 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     let report = run(
         &mut source,
         substrate(),
-        RuleSet::GENESIS,
+        GENESIS_RULES,
         open_store(&path),
         Arc::clone(&trace),
-        PipelineConfig {
-            window: 4,
-            ..PipelineConfig::default()
-        },
+        PipelineConfig { window: 4 },
     )
     .await
     .expect("the scripted reorg replays");
@@ -460,6 +460,46 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
         .expect("tip")
         .recorded;
     assert_eq!(tip.map(|t| (t.height, t.hash)), Some((h(3), fork3.hash())));
+    drop(reopened);
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
+    // RD-Q7 through the pipeline: `--fixed-difficulty 7` → RuleSet::fakechain(7)
+    // in force at every height, formed and validated under the same set,
+    // and connect accepts it (RD-F13's repair) while the CEN-B3 belt lands
+    // GENESIS's id. Cumulative work climbs by the fixed target per block.
+    let path = tmp("pipeline-fakechain");
+    let chain = chain(4);
+    let trace = Arc::new(trace_of(&chain, false));
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let rules = ChainRules::Regtest {
+        fixed_difficulty: std::num::NonZeroU128::new(7),
+    };
+    let report = run(
+        &mut source,
+        substrate(),
+        rules,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("a fakechain corpus replays under its own set");
+    assert_eq!(report.connected.len(), 4);
+    let reopened = open_store(&path);
+    let snap = reopened.begin_read().expect("read");
+    let shekyl_chain_rules::AtHeight::Recorded(info) = snap.block_info(h(3)).expect("read") else {
+        panic!("block 3 recorded");
+    };
+    // Genesis carries 1 (blockchain.cpp:975), then +7 per block.
+    assert_eq!(
+        info.cumulative_difficulty,
+        CumulativeDifficulty::from_raw(1 + 3 * 7)
+    );
+    drop(snap);
     drop(reopened);
     cleanup(&path);
 }
