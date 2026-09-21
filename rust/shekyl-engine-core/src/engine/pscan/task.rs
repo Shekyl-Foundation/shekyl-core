@@ -65,7 +65,7 @@ pub(crate) struct PScanConfig {
     /// Blocks below `tip` the scan stays behind — the finality horizon. Production
     /// is `ARCHIVAL_REORG_DEPTH_BLOCKS` (the consensus const); a smaller value is a
     /// weaker finality guarantee and must only be used in tests.
-    pub reorg_depth: u64,
+    pub reorg_depth: BlockCount,
     /// Blocks per bounded scan-step. Must be `1..=MAX_SCAN_STEP_BLOCKS`.
     pub batch_blocks: u64,
 }
@@ -74,7 +74,7 @@ impl PScanConfig {
     /// The production config: the consensus finality depth + the default batch.
     pub(crate) fn production() -> Self {
         Self {
-            reorg_depth: ARCHIVAL_REORG_DEPTH_BLOCKS,
+            reorg_depth: BlockCount::from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS),
             batch_blocks: DEFAULT_PSCAN_BATCH_BLOCKS,
         }
     }
@@ -248,7 +248,7 @@ where
     // `next_height()` of that shortened count (COUNT=100, depth=10 → 90).
     // Flipping to `.tip()` would skip the last reorg-deep block.
     let horizon = claimed
-        .saturating_sub_count(BlockCount::from_raw(config.reorg_depth))
+        .saturating_sub_count(config.reorg_depth)
         .next_height();
     let batch = config.batch();
 
@@ -497,10 +497,10 @@ async fn dispatch_retires(
     // only the durable removal takes the token gate.
     // Exclusive scan end is `next_height`; C6's inverse puts it back on
     // the count clock so the corroboration min is same-clock. Adding
-    // reorg_depth as a span is C4. `to_raw` is the edge into
-    // `settlement_epoch_at_height` (still a u64 until Phase 2d).
+    // reorg_depth as a span is C4. `settlement_epoch_at_height` takes the
+    // raw count: its result is an epoch index, not a block-axis quantity.
     let scanned_as_count = ChainCount::from_next_height(accrual.next_height());
-    let corroborated = scanned_as_count.saturating_add(BlockCount::from_raw(config.reorg_depth));
+    let corroborated = scanned_as_count.saturating_add(config.reorg_depth);
     let token_count = claimed_tip.min(corroborated);
     let token_settled = settlement_epoch_at_height(token_count.to_raw())
         .checked_sub(1)

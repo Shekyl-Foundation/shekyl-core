@@ -6,10 +6,18 @@
 //! The one request header (`SF-D5`, second amendment): what the requester
 //! puts on the wire and what `P` signs over.
 
+//! ```compile_fail
+//! // HEIGHT_SEMANTICS.md C9: request-header height is ordinal, not a count.
+//! use shekyl_p_fetch::RequestHeader;
+//! use shekyl_types::ChainCount;
+//! let _ = RequestHeader::with_nonce([0u8; 32], ChainCount::from_raw(1), [0u8; 32]);
+//! ```
+
 use shekyl_archival_retention::pass_anchor::{
     PassRequestHeader, PASS_ANCHOR_HASH_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_BYTES};
+use shekyl_types::BlockHeight;
 
 // The textual carrier (`serving_route`) and the signed layout (`pass_anchor`)
 // are owned by different crates on purpose; this is where they must agree.
@@ -41,7 +49,7 @@ impl RequestHeader {
     /// The OS entropy source failed. There is no fallback: a header with a
     /// predictable nonce is a pass record an adversary can pre-compute.
     pub fn fresh(
-        anchor_height: u64,
+        anchor_height: BlockHeight,
         anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
     ) -> Result<Self, getrandom::Error> {
         let mut nonce = [0u8; PASS_NONCE_LEN];
@@ -58,7 +66,7 @@ impl RequestHeader {
     #[must_use]
     pub const fn with_nonce(
         nonce: [u8; PASS_NONCE_LEN],
-        anchor_height: u64,
+        anchor_height: BlockHeight,
         anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
     ) -> Self {
         Self(PassRequestHeader::from_parts(
@@ -76,7 +84,7 @@ impl RequestHeader {
 
     /// The requester's anchor height (`tip − 720` at mint time).
     #[must_use]
-    pub const fn anchor_height(&self) -> u64 {
+    pub const fn anchor_height(&self) -> BlockHeight {
         self.0.anchor_height()
     }
 
@@ -127,7 +135,11 @@ mod tests {
 
     #[test]
     fn the_wire_value_round_trips_to_the_signed_bytes() {
-        let h = RequestHeader::with_nonce([7; 32], 0x0102_0304_0506_0708, [9; 32]);
+        let h = RequestHeader::with_nonce(
+            [7; 32],
+            BlockHeight::from_raw(0x0102_0304_0506_0708),
+            [9; 32],
+        );
         let bytes = h.to_bytes();
         assert_eq!(&bytes[..32], &[7; 32]);
         assert_eq!(&bytes[32..40], &[8, 7, 6, 5, 4, 3, 2, 1]);
@@ -141,7 +153,7 @@ mod tests {
 
     #[test]
     fn the_transcript_is_the_header_then_the_shard_id() {
-        let h = RequestHeader::with_nonce([1; 32], 5, [2; 32]);
+        let h = RequestHeader::with_nonce([1; 32], BlockHeight::from_raw(5), [2; 32]);
         let t = h.transcript(0x0a0b);
         assert_eq!(&t[..72], &h.to_bytes());
         assert_eq!(&t[72..], &[0x0b, 0x0a, 0, 0, 0, 0, 0, 0]);
@@ -149,10 +161,10 @@ mod tests {
 
     #[test]
     fn fresh_headers_do_not_share_a_nonce() {
-        let a = RequestHeader::fresh(1, [0; 32]).expect("entropy");
-        let b = RequestHeader::fresh(1, [0; 32]).expect("entropy");
+        let a = RequestHeader::fresh(BlockHeight::from_raw(1), [0; 32]).expect("entropy");
+        let b = RequestHeader::fresh(BlockHeight::from_raw(1), [0; 32]).expect("entropy");
         assert_ne!(a.nonce(), b.nonce());
-        assert_eq!(a.anchor_height(), 1);
+        assert_eq!(a.anchor_height(), BlockHeight::from_raw(1));
         assert_eq!(a.anchor_hash(), &[0; 32]);
     }
 }

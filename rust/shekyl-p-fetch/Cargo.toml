@@ -23,6 +23,8 @@ shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 # `HybridPublicKey` is the target's verifying key; `HybridSignature` is the
 # envelope's type and canonical codec.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Decoded request-header height is ordinal `BlockHeight` (C1 punch at encode).
+shekyl-types = { path = "../shekyl-types" }
 # The SF-D8 transcript and its verifier (`pass_anchor`, `verify_pass_transcript`)
 # — one implementation shared with the admission verifier, so the client and
 # the chain can never disagree about what `P` signed. Retention is a pure

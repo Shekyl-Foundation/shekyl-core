@@ -60,7 +60,7 @@ use std::time::Duration;
 use serde_json::Value;
 use shekyl_p_host::DaemonTipCache;
 use shekyl_rpc_types::RpcStatus;
-use shekyl_types::ChainCount;
+use shekyl_types::{BlockHeight, ChainCount};
 
 use crate::engine::daemon::synced_chain_facts::{
     daemon_reports_synchronized, health_from_get_info,
@@ -176,7 +176,7 @@ pub(crate) enum NotFollowing {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TipReading {
     /// The daemon is following the chain and its top block is at this height.
-    Synced(u64),
+    Synced(BlockHeight),
     /// The daemon said something that means its height is not the chain's.
     /// The gate must not centre on it, so the cache is cleared.
     NotFollowing(NotFollowing),
@@ -308,7 +308,7 @@ pub(crate) fn tip_reading_from_info(info: &Value) -> TipReading {
     // Chain height -> top block height, through the type: an empty chain has
     // no top block to stamp.
     match chain_height.tip() {
-        Some(top_block) => TipReading::Synced(top_block.to_raw()),
+        Some(top_block) => TipReading::Synced(top_block),
         None => TipReading::Unusable,
     }
 }
@@ -457,12 +457,12 @@ mod tests {
         let reading = tip_reading_from_info(&info);
         assert_eq!(
             reading,
-            TipReading::Synced(TOP_BLOCK),
+            TipReading::Synced(BlockHeight::from_raw(TOP_BLOCK)),
             "the gate's height is the top block, not the chain height"
         );
         assert_ne!(
             reading,
-            TipReading::Synced(CHAIN_HEIGHT),
+            TipReading::Synced(BlockHeight::from_raw(CHAIN_HEIGHT)),
             "stamping the chain height unconverted centres the gate one block high"
         );
     }
@@ -479,7 +479,7 @@ mod tests {
         refresh_tip_once(&rpc, &tip).await;
         assert_eq!(
             tip.height(),
-            Some(9_000),
+            Some(BlockHeight::from_raw(9_000)),
             "a gate reading 9_001 would sign anchors admission refuses"
         );
     }
@@ -518,7 +518,7 @@ mod tests {
         });
         assert_eq!(
             tip_reading_from_info(&level),
-            TipReading::Synced(9_499),
+            TipReading::Synced(BlockHeight::from_raw(9_499)),
             "height >= target is the lifted predicate's accepting edge"
         );
     }
@@ -604,7 +604,7 @@ mod tests {
     #[test]
     fn unusable_holds_the_tip_and_syncing_clears_it() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
-        tip.stamp_synced(9_000);
+        tip.stamp_synced(BlockHeight::from_raw(9_000));
 
         // What `refresh_tip_once` does for each reading, without a transport.
         assert_eq!(
@@ -613,7 +613,7 @@ mod tests {
         );
         assert_eq!(
             tip.height(),
-            Some(9_000),
+            Some(BlockHeight::from_raw(9_000)),
             "an unreadable reply stamps nothing"
         );
 
@@ -664,7 +664,7 @@ mod tests {
         let targets = u32::try_from(TIP_MAX_AGE_BLOCK_TARGETS)
             .expect("the age bound is a small multiple of the block target");
         let lambda = f64::from(targets);
-        let l = u32::try_from(PASS_ANCHOR_LAG_BLOCKS).expect("L is small");
+        let l = u32::try_from(PASS_ANCHOR_LAG_BLOCKS.to_raw()).expect("L is small");
         // P(N > L) = 1 - sum_{k=0..L} e^-lambda lambda^k / k!
         let mut term = (-lambda).exp();
         let mut cdf = term;
@@ -699,15 +699,19 @@ mod tests {
         }));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
-            TipReading::Synced(9_000)
+            TipReading::Synced(BlockHeight::from_raw(9_000))
         );
-        assert_eq!(tip.height(), Some(9_000), "the reading reached the cache");
+        assert_eq!(
+            tip.height(),
+            Some(BlockHeight::from_raw(9_000)),
+            "the reading reached the cache"
+        );
     }
 
     #[tokio::test]
     async fn a_reply_that_stopped_following_clears_a_held_tip() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
-        tip.stamp_synced(9_000);
+        tip.stamp_synced(BlockHeight::from_raw(9_000));
         let rpc = CannedRpc::replying(&json!({
             "height": 9_001, "target_height": 12_000, "status": "OK", "synchronized": true
         }));
@@ -733,7 +737,7 @@ mod tests {
             ("an unreachable daemon", CannedRpc::unreachable()),
         ] {
             let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
-            tip.stamp_synced(9_000);
+            tip.stamp_synced(BlockHeight::from_raw(9_000));
             assert_eq!(
                 refresh_tip_once(&rpc, &tip).await,
                 TipReading::Unusable,
@@ -741,7 +745,7 @@ mod tests {
             );
             assert_eq!(
                 tip.height(),
-                Some(9_000),
+                Some(BlockHeight::from_raw(9_000)),
                 "{name} must not refuse challenges the held tip can still gate"
             );
         }
@@ -794,7 +798,7 @@ mod tests {
             });
             assert_eq!(
                 tip_reading_from_info(&info),
-                TipReading::Synced(9_000),
+                TipReading::Synced(BlockHeight::from_raw(9_000)),
                 "{field} = 1 is somebody to learn from"
             );
         }
@@ -815,7 +819,7 @@ mod tests {
         });
         assert_eq!(
             tip_reading_from_info(&info),
-            TipReading::Synced(9_000),
+            TipReading::Synced(BlockHeight::from_raw(9_000)),
             "a policy-zeroed count is an absent fact, not a peerless daemon"
         );
     }
@@ -858,7 +862,7 @@ mod tests {
         });
         assert_eq!(
             tip_reading_from_info(&info),
-            TipReading::Synced(9_000),
+            TipReading::Synced(BlockHeight::from_raw(9_000)),
             "absent `offline` / `following_degraded` / `restricted` are all false"
         );
     }
@@ -869,7 +873,7 @@ mod tests {
     #[tokio::test]
     async fn a_peerless_daemon_clears_the_tip_instead_of_restamping_it() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
-        tip.stamp_synced(9_000);
+        tip.stamp_synced(BlockHeight::from_raw(9_000));
         let rpc = CannedRpc::replying(&json!({
             "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 0, "incoming_connections_count": 0
@@ -924,7 +928,7 @@ mod tests {
     #[tokio::test]
     async fn a_busy_daemon_holds_the_tip_it_cannot_speak_to() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
-        tip.stamp_synced(9_000);
+        tip.stamp_synced(BlockHeight::from_raw(9_000));
         let rpc = CannedRpc::replying(&json!({
             "status": "BUSY", "height": 12_345, "target_height": 0,
             "synchronized": true, "outgoing_connections_count": 8
@@ -932,7 +936,7 @@ mod tests {
         assert_eq!(refresh_tip_once(&rpc, &tip).await, TipReading::Unusable);
         assert_eq!(
             tip.height(),
-            Some(9_000),
+            Some(BlockHeight::from_raw(9_000)),
             "neither cleared by the refusal nor refreshed from its body"
         );
     }

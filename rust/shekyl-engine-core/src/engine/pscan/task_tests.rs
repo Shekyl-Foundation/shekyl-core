@@ -135,7 +135,7 @@ fn spawn_stake(bonded: &[u32]) -> StakeEngineHandle {
 /// A tiny test horizon so a sweep needs only a few real blocks.
 fn cfg(reorg_depth: u64, batch_blocks: u64) -> PScanConfig {
     PScanConfig {
-        reorg_depth,
+        reorg_depth: BlockCount::from_raw(reorg_depth),
         batch_blocks,
     }
 }

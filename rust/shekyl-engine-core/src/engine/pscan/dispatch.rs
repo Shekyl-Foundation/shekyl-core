@@ -212,7 +212,7 @@ pub(crate) struct DispatchConfig {
     /// Blocks past `Dispatched::at` after which an unconfirmed post alarms
     /// and stops resubmitting. Production is
     /// [`DISPATCH_ALARM_HORIZON_BLOCKS`]; see its rationale.
-    pub alarm_horizon_blocks: u64,
+    pub alarm_horizon_blocks: BlockCount,
     /// Upper bound (exclusive) of the send-time dispersal draw (§3.2
     /// part 3): each dispatch sleeps `U[0, bound)` before the submit call,
     /// decorrelating the send from the sweep's tick phase. Production is
@@ -226,7 +226,7 @@ impl DispatchConfig {
     /// window the draw must cover).
     pub(crate) fn production(tick_interval: Duration) -> Self {
         Self {
-            alarm_horizon_blocks: DISPATCH_ALARM_HORIZON_BLOCKS,
+            alarm_horizon_blocks: BlockCount::from_raw(DISPATCH_ALARM_HORIZON_BLOCKS),
             dispersal_bound: tick_interval,
         }
     }
@@ -524,7 +524,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         let held = &self.held_this_session;
         let alarmed = &self.alarmed_this_session;
         let reservation_alarmed = &self.alarmed_reservations;
-        let horizon = BlockCount::from_raw(self.config.alarm_horizon_blocks);
+        let horizon = self.config.alarm_horizon_blocks;
         let plan = self
             .store
             .mutate(|block| {
@@ -691,7 +691,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 persona = ?persona,
                 dispatched_at = at.to_raw(),
                 tip = tip.to_raw(),
-                horizon_blocks = self.config.alarm_horizon_blocks,
+                horizon_blocks = self.config.alarm_horizon_blocks.to_raw(),
                 "reservation STALL: a dispatched {} has not settled past the alarm horizon — \
                  at least one input it reserved is still live on chain, so its one-live gate \
                  stays shut and this persona cannot start another. NOTE the reservation may \
@@ -716,7 +716,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 dispatched_at = at.to_raw(),
                 tip = tip.to_raw(),
                 attempts,
-                horizon_blocks = self.config.alarm_horizon_blocks,
+                horizon_blocks = self.config.alarm_horizon_blocks.to_raw(),
                 "bond-post dispatch ALARM: dispatched post unconfirmed past the alarm horizon — \
                  resubmits stop (F31: the pool either holds the bytes or is censoring); the \
                  record and its funding reservation are HELD (funds-safety over liveness). \

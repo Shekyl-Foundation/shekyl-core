@@ -33,12 +33,12 @@ use tokio::net::TcpStream;
 /// The test persona's height and the in-gate anchor a requester at the
 /// same tip attaches (`tip − 720`).
 const OWN_HEIGHT: u64 = 20_000;
-const ANCHOR_HEIGHT: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS;
+const ANCHOR_HEIGHT: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
 const NONCE: [u8; 32] = [0x3c; 32];
 const ANCHOR_HASH: [u8; 32] = [0xc3; 32];
 
 async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeySigner>) {
-    let signer = Arc::new(TestKeySigner::ephemeral(OWN_HEIGHT));
+    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
     let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
         .await
         .expect("bind endpoint");
@@ -73,7 +73,7 @@ async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
     let mut s = TcpStream::connect(addr).await.expect("connect");
     let header = encode_request_header(&pass_request_header_bytes(
         &NONCE,
-        ANCHOR_HEIGHT,
+        BlockHeight::from_raw(ANCHOR_HEIGHT),
         &ANCHOR_HASH,
     ));
     s.write_all(
@@ -135,7 +135,7 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
     verify_pass_transcript(
         signer.public_key(),
         &NONCE,
-        ANCHOR_HEIGHT,
+        BlockHeight::from_raw(ANCHOR_HEIGHT),
         &ANCHOR_HASH,
         0,
         &signature,

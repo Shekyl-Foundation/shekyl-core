@@ -71,6 +71,7 @@ use shekyl_engine_prefs::{
 use shekyl_engine_state::{
     BookkeepingBlock, LedgerBlock, StakingBlock, SyncStateBlock, TxMetaBlock, WalletLedger,
 };
+use shekyl_types::BlockCount;
 
 use crate::atomic::{atomic_write_file, atomic_write_file_with};
 use crate::capability::Capability;
@@ -1093,7 +1094,7 @@ impl WalletFile {
     /// session.
     ///
     /// [`NetworkSafetyConstants::max_reorg_depth`]: shekyl_engine_state::NetworkSafetyConstants::max_reorg_depth
-    pub fn effective_max_reorg_depth(&self) -> u64 {
+    pub fn effective_max_reorg_depth(&self) -> BlockCount {
         self.overrides.effective_max_reorg_depth(self.network)
     }
 
@@ -2045,7 +2046,7 @@ mod tests {
         }
 
         let overrides = SafetyOverrides {
-            max_reorg_depth: Some(2),
+            max_reorg_depth: Some(BlockCount::from_raw(2)),
             skip_to_height: Some(12_345),
             refresh_from_block_height: None,
         };
@@ -2055,7 +2056,7 @@ mod tests {
         // Overrides survive on the handle.
         assert_eq!(handle.overrides(), overrides);
         // Overridden fields take the override's value.
-        assert_eq!(handle.effective_max_reorg_depth(), 2);
+        assert_eq!(handle.effective_max_reorg_depth(), BlockCount::from_raw(2));
         assert_eq!(handle.effective_skip_to_height(), 12_345);
         // Non-overridden field still reads the network default.
         let k = NetworkSafetyConstants::for_network(TEST_NETWORK);

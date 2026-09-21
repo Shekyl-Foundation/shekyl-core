@@ -45,9 +45,38 @@
 //! };
 //! ```
 
+//! ```compile_fail
+//! // HEIGHT_SEMANTICS.md C9: `BlockHeaderFacts.depth` is a span, not an ordinal.
+//! use shekyl_daemon_rpc::chain_facts::BlockHeaderFacts;
+//! use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, TxHash};
+//! let _ = BlockHeaderFacts {
+//!     hash: BlockHash::from_bytes([0u8; 32]),
+//!     prev_hash: BlockHash::from_bytes([0u8; 32]),
+//!     miner_tx_hash: TxHash::from_bytes([0u8; 32]),
+//!     curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+//!     attestation_root: AttestationRoot::from_bytes([0u8; 32]),
+//!     pow_hash: None,
+//!     height: BlockHeight::from_raw(1),
+//!     depth: BlockHeight::from_raw(0),
+//!     timestamp: 0,
+//!     difficulty: 0,
+//!     cumulative_difficulty: 0,
+//!     reward: 0,
+//!     block_weight: 0,
+//!     long_term_weight: 0,
+//!     num_txes: 0,
+//!     nonce: 0,
+//!     major_version: 0,
+//!     minor_version: 0,
+//!     orphan_status: false,
+//! };
+//! ```
+
 use std::sync::Arc;
 
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash};
+use shekyl_types::{
+    AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
+};
 
 use crate::core::{ConnectionsSnapshot, CoreRpc, PeerFacts, SyncSpansSnapshot};
 use crate::ffi;
@@ -126,7 +155,8 @@ pub struct BlockHeaderFacts {
     /// a proof-of-work hash is not any block's identity.
     pub pow_hash: Option<[u8; 32]>,
     pub height: BlockHeight,
-    pub depth: u64,
+    /// Confirmations behind the tip. DIFFERENCE (`HEIGHT_SEMANTICS.md` C4).
+    pub depth: BlockCount,
     pub timestamp: u64,
     pub difficulty: u128,
     pub cumulative_difficulty: u128,
@@ -407,7 +437,7 @@ fn header_facts_from_pod(pod: &ffi::BlockHeaderFactsFfi) -> BlockHeaderFacts {
         attestation_root: AttestationRoot::from_bytes(pod.attestation_root),
         pow_hash: (pod.pow_hash_filled != 0).then_some(pod.pow_hash),
         height: BlockHeight::from_raw(pod.height),
-        depth: pod.depth,
+        depth: BlockCount::from_raw(pod.depth),
         timestamp: pod.timestamp,
         difficulty: u128::from(pod.difficulty_hi) << 64 | u128::from(pod.difficulty_lo),
         cumulative_difficulty: u128::from(pod.cumulative_difficulty_hi) << 64

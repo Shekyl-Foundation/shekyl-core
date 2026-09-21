@@ -684,7 +684,7 @@ mod lifecycle_tests {
                 let tip = std::sync::Arc::new(shekyl_p_host::DaemonTipCache::new(
                     Duration::from_secs(3_600),
                 ));
-                tip.stamp_synced(9_000);
+                tip.stamp_synced(BlockHeight::from_raw(9_000));
                 tip
             },
         }

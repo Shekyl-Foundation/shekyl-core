@@ -518,6 +518,7 @@ async fn read_body<S: AsyncRead + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_types::BlockHeight;
 
     fn head(s: &str) -> Result<Head, FetchError> {
         parse_head(s.as_bytes())
@@ -625,7 +626,7 @@ mod tests {
 
     #[test]
     fn the_request_is_the_route_and_the_one_header() {
-        let h = RequestHeader::with_nonce([1; 32], 2, [3; 32]);
+        let h = RequestHeader::with_nonce([1; 32], BlockHeight::from_raw(2), [3; 32]);
         let req = String::from_utf8(request_bytes(7, &h)).unwrap();
         assert_eq!(
             req,

@@ -12,6 +12,7 @@ use shekyl_archival_retention::{
     HYBRID_PUBKEY_CANONICAL_BYTES, MAX_ATTESTATION_RECORDS, PASS_ANCHOR_HASH_LEN,
 };
 use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_types::BlockHeight;
 
 use crate::legacy_util::slice_from_typed_ptr;
 
@@ -185,12 +186,14 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     else {
         return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
     };
-    let window: Option<PassAnchorWindow> =
-        match PassAnchorWindow::from_table(ctx.predecessor_height, anchor_hashes) {
-            Ok(w) => Some(w),
-            Err(PassAnchorWindowError::BelowThreshold { .. }) if anchor_hashes.is_empty() => None,
-            Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE,
-        };
+    let window: Option<PassAnchorWindow> = match PassAnchorWindow::from_table(
+        BlockHeight::from_raw(ctx.predecessor_height),
+        anchor_hashes,
+    ) {
+        Ok(w) => Some(w),
+        Err(PassAnchorWindowError::BelowThreshold { .. }) if anchor_hashes.is_empty() => None,
+        Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE,
+    };
 
     // 1. Header blob: cap FIRST (structural, before per-record work), then parse ONCE. The parsed
     //    records are carried through coverage / recompute / countersig — never re-parsed.
@@ -345,9 +348,9 @@ pub unsafe extern "C" fn shekyl_archival_pass_anchor_window(
     if out_first_height.is_null() || out_len.is_null() {
         return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
     }
-    match PassAnchorWindow::shape_for_predecessor(predecessor_height) {
+    match PassAnchorWindow::shape_for_predecessor(BlockHeight::from_raw(predecessor_height)) {
         Some((first, len)) => unsafe {
-            *out_first_height = first;
+            *out_first_height = first.to_raw();
             *out_len = len;
         },
         None => unsafe {

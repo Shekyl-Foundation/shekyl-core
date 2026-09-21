@@ -13,8 +13,13 @@ use crate::pass_anchor::{
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
 };
+use shekyl_types::BlockHeight;
 
 const H: u64 = 5000;
+
+fn bh(n: u64) -> BlockHeight {
+    BlockHeight::from_raw(n)
+}
 
 fn keypair() -> (HybridPublicKey, HybridSecretKey) {
     HybridEd25519MlDsa
@@ -45,9 +50,12 @@ fn chain_hash(height: u64) -> [u8; 32] {
 }
 
 fn window_at(predecessor_height: u64) -> PassAnchorWindow {
-    let (first, len) = PassAnchorWindow::shape_for_predecessor(predecessor_height).expect("window");
-    let hashes: Vec<_> = (0..len as u64).map(|i| chain_hash(first + i)).collect();
-    PassAnchorWindow::from_table(predecessor_height, &hashes).expect("table sized to the window")
+    let pred = bh(predecessor_height);
+    let (first, len) = PassAnchorWindow::shape_for_predecessor(pred).expect("window");
+    let hashes: Vec<_> = (0..len as u64)
+        .map(|i| chain_hash(first.to_raw() + i))
+        .collect();
+    PassAnchorWindow::from_table(pred, &hashes).expect("table sized to the window")
 }
 
 fn pass_record(
@@ -55,7 +63,7 @@ fn pass_record(
     shard_id: u64,
     settlement_epoch: u64,
     nonce: [u8; PASS_NONCE_LEN],
-    anchor_height: u64,
+    anchor_height: BlockHeight,
     signature: HybridSignature,
 ) -> PassRecord {
     PassRecord {
@@ -72,13 +80,18 @@ fn signed_pass(
     sk: &HybridSecretKey,
     p_id: [u8; 32],
     nonce: [u8; PASS_NONCE_LEN],
-    anchor_height: u64,
+    anchor_height: BlockHeight,
     shard_id: u64,
     settlement_epoch: u64,
 ) -> PassRecord {
     let sig = att_sign(
         sk,
-        &pass_countersignature_message(&nonce, anchor_height, &chain_hash(anchor_height), shard_id),
+        &pass_countersignature_message(
+            &nonce,
+            anchor_height,
+            &chain_hash(anchor_height.to_raw()),
+            shard_id,
+        ),
     );
     pass_record(p_id, shard_id, settlement_epoch, nonce, anchor_height, sig)
 }
@@ -118,7 +131,7 @@ fn header_bytes_roundtrip_and_reject_malformed() {
 fn pass_record_to_header_is_always_pass() {
     let (_pk, sk) = keypair();
     let sig = att_sign(&sk, b"x");
-    let rec = pass_record([1u8; 32], 2, 3, [0u8; 32], 4, sig);
+    let rec = pass_record([1u8; 32], 2, 3, [0u8; 32], bh(4), sig);
     assert_eq!(rec.to_header().kind, AttestationKind::Pass);
 }
 
@@ -126,11 +139,11 @@ fn pass_record_to_header_is_always_pass() {
 fn pass_record_message_matches_free_function() {
     let (_pk, sk) = keypair();
     let sig = att_sign(&sk, b"n");
-    let rec = pass_record([3u8; 32], 4, 5, [9u8; 32], 77, sig);
+    let rec = pass_record([3u8; 32], 4, 5, [9u8; 32], bh(77), sig);
     let hash = [0xDDu8; 32];
     assert_eq!(
         rec.countersignature_message(&hash),
-        pass_countersignature_message(&rec.nonce, 77, &hash, rec.shard_id)
+        pass_countersignature_message(&rec.nonce, bh(77), &hash, rec.shard_id)
     );
 }
 
@@ -140,7 +153,7 @@ fn a_valid_countersignature_verifies_and_a_wrong_key_or_term_fails() {
     let p_id = p_id_of(&pubkey);
     let nonce = [0x11u8; 32];
     let anchor = H - 720;
-    let rec = signed_pass(&secret, p_id, nonce, anchor, 42, 1000);
+    let rec = signed_pass(&secret, p_id, nonce, bh(anchor), 42, 1000);
     let w = window_at(H);
 
     assert_eq!(verify_pass_countersignature(&w, &pubkey, &rec), Ok(()));
@@ -158,7 +171,7 @@ fn a_valid_countersignature_verifies_and_a_wrong_key_or_term_fails() {
         Err(PassCountersignatureError::InvalidSignature)
     );
     let mut moved_anchor = rec.clone();
-    moved_anchor.anchor_height = anchor - 1;
+    moved_anchor.anchor_height = bh(anchor - 1);
     assert_eq!(
         verify_pass_countersignature(&w, &pubkey, &moved_anchor),
         Err(PassCountersignatureError::InvalidSignature)
@@ -170,7 +183,7 @@ fn a_valid_countersignature_verifies_and_a_wrong_key_or_term_fails() {
         Ok(())
     );
 
-    let foreign = signed_pass(&secret, [0xABu8; 32], nonce, anchor, 42, 1000);
+    let foreign = signed_pass(&secret, [0xABu8; 32], nonce, bh(anchor), 42, 1000);
     assert_eq!(
         verify_pass_countersignature(&w, &pubkey, &foreign),
         Err(PassCountersignatureError::PIdMismatch)
@@ -184,9 +197,9 @@ fn a_fabricated_anchor_hash_fails_against_the_chains_hash() {
     let anchor = H - 722;
     let lied = att_sign(
         &secret,
-        &pass_countersignature_message(&[0x55u8; 32], anchor, &[0xFFu8; 32], 42),
+        &pass_countersignature_message(&[0x55u8; 32], bh(anchor), &[0xFFu8; 32], 42),
     );
-    let rec = pass_record(p_id, 42, 1000, [0x55u8; 32], anchor, lied);
+    let rec = pass_record(p_id, 42, 1000, [0x55u8; 32], bh(anchor), lied);
     assert_eq!(
         verify_pass_countersignature(&window_at(H), &pubkey, &rec),
         Err(PassCountersignatureError::InvalidSignature)
@@ -203,7 +216,7 @@ fn anchor_window_bounds_are_inclusive_and_out_of_window_is_typed() {
         let rec = signed_pass(&secret, p_id, [0x66u8; 32], anchor, 7, 1000);
         assert_eq!(verify_pass_countersignature(&w, &pubkey, &rec), Ok(()));
     }
-    for anchor in [w.first() - 1, w.last() + 1] {
+    for anchor in [bh(w.first().to_raw() - 1), bh(w.last().to_raw() + 1)] {
         let rec = signed_pass(&secret, p_id, [0x66u8; 32], anchor, 7, 1000);
         assert_eq!(
             verify_pass_countersignature(&w, &pubkey, &rec),
@@ -216,8 +229,8 @@ fn anchor_window_bounds_are_inclusive_and_out_of_window_is_typed() {
     }
 
     let anchor = H - 720;
-    let rec = signed_pass(&secret, p_id, [0x77u8; 32], anchor, 7, 1000);
-    for h in H..=H + PASS_ANCHOR_LAG_BLOCKS {
+    let rec = signed_pass(&secret, p_id, [0x77u8; 32], bh(anchor), 7, 1000);
+    for h in H..=H + PASS_ANCHOR_LAG_BLOCKS.to_raw() {
         assert_eq!(
             verify_pass_countersignature(&window_at(h), &pubkey, &rec),
             Ok(()),
@@ -229,7 +242,11 @@ fn anchor_window_bounds_are_inclusive_and_out_of_window_is_typed() {
         Err(PassCountersignatureError::AnchorOutOfWindow { .. })
     ));
     assert!(matches!(
-        verify_pass_countersignature(&window_at(H + PASS_ANCHOR_LAG_BLOCKS + 1), &pubkey, &rec),
+        verify_pass_countersignature(
+            &window_at(H + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1),
+            &pubkey,
+            &rec
+        ),
         Err(PassCountersignatureError::AnchorOutOfWindow { .. })
     ));
 }
@@ -240,8 +257,8 @@ fn a_signature_over_one_shard_cannot_be_replayed_against_another() {
     let p_id = p_id_of(&pubkey);
     let nonce = [0x33u8; 32];
     let anchor = H - 721;
-    let served = signed_pass(&secret, p_id, nonce, anchor, 42, 1000);
-    let replayed = pass_record(p_id, 43, 1000, nonce, anchor, served.signature.clone());
+    let served = signed_pass(&secret, p_id, nonce, bh(anchor), 42, 1000);
+    let replayed = pass_record(p_id, 43, 1000, nonce, bh(anchor), served.signature.clone());
     let w = window_at(H);
     assert_eq!(verify_pass_countersignature(&w, &pubkey, &served), Ok(()));
     assert_eq!(
@@ -256,11 +273,11 @@ fn v1_domain_signature_does_not_verify_under_v2() {
     let p_id = p_id_of(&pubkey);
     let nonce = [0x44u8; 32];
     let anchor = H - 720;
-    let msg = pass_countersignature_message(&nonce, anchor, &chain_hash(anchor), 42);
+    let msg = pass_countersignature_message(&nonce, bh(anchor), &chain_hash(anchor), 42);
     let v1_sig = HybridEd25519MlDsa
         .sign(&secret, b"shekyl/archival-attestation-scheme-v1", &msg)
         .expect("sign");
-    let rec = pass_record(p_id, 42, 1000, nonce, anchor, v1_sig);
+    let rec = pass_record(p_id, 42, 1000, nonce, bh(anchor), v1_sig);
     assert_eq!(
         verify_pass_countersignature(&window_at(H), &pubkey, &rec),
         Err(PassCountersignatureError::InvalidSignature)
@@ -280,7 +297,7 @@ fn attestation_root_is_defined_empty_order_independent_and_pairing_committed() {
     let s1 = att_sign(&sk, b"a");
     let s2 = att_sign(&sk, b"b");
     let (n1, n2) = ([1u8; 32], [2u8; 32]);
-    let (a1, a2) = (4276u64, 4277u64);
+    let (a1, a2) = (bh(4276), bh(4277));
     let r1 = pass_record([7u8; 32], 42, 1000, n1, a1, s1.clone());
     let r2 = pass_record([7u8; 32], 43, 1000, n2, a2, s2.clone());
 
@@ -349,12 +366,12 @@ fn witness_roundtrips_including_empty() {
         passes: vec![
             PassWitness {
                 nonce: [5u8; 32],
-                anchor_height: 0x0102_0304_0506_0708,
+                anchor_height: bh(0x0102_0304_0506_0708),
                 signature: s0,
             },
             PassWitness {
                 nonce: [6u8; 32],
-                anchor_height: 4277,
+                anchor_height: bh(4277),
                 signature: s1,
             },
         ],
@@ -391,7 +408,7 @@ fn witness_decode_rejects_malformed() {
     let good = BlockAttestationWitness {
         passes: vec![PassWitness {
             nonce: [0u8; 32],
-            anchor_height: 1,
+            anchor_height: bh(1),
             signature: s0,
         }],
     }
@@ -451,7 +468,7 @@ fn witness_encode_rejects_over_cap() {
         passes: vec![
             PassWitness {
                 nonce: [0u8; 32],
-                anchor_height: 0,
+                anchor_height: bh(0),
                 signature: sig,
             };
             MAX_ATTESTATION_RECORDS + 1
@@ -470,8 +487,8 @@ fn pairing_zips_pass_headers_and_reproduces_the_root() {
     let w = window_at(H);
     let (n_a, n_b) = ([0xA0u8; 32], [0xB0u8; 32]);
     let (a_a, a_b) = (H - 720, H - 723);
-    let rec_a = signed_pass(&sk, p_id, n_a, a_a, 10, 1000);
-    let rec_b = signed_pass(&sk, p_id, n_b, a_b, 20, 1000);
+    let rec_a = signed_pass(&sk, p_id, n_a, bh(a_a), 10, 1000);
+    let rec_b = signed_pass(&sk, p_id, n_b, bh(a_b), 20, 1000);
 
     let headers = vec![
         AttestationHeader {
@@ -504,8 +521,8 @@ fn pairing_zips_pass_headers_and_reproduces_the_root() {
 
     let records = pass_records_from_headers_and_witness(&headers, &witness).unwrap();
     assert_eq!(records.len(), 2);
-    assert_eq!((records[0].nonce, records[0].anchor_height), (n_a, a_a));
-    assert_eq!((records[1].nonce, records[1].anchor_height), (n_b, a_b));
+    assert_eq!((records[0].nonce, records[0].anchor_height), (n_a, bh(a_a)));
+    assert_eq!((records[1].nonce, records[1].anchor_height), (n_b, bh(a_b)));
     for rec in &records {
         assert_eq!(verify_pass_countersignature(&w, &pk, rec), Ok(()));
     }

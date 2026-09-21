@@ -30,9 +30,19 @@
 //! wire-level message. A misguided future attempt to derive
 //! `Serialize` will break this contract and should be loudly refused
 //! in code review.
+//!
+//! ```compile_fail
+//! // HEIGHT_SEMANTICS.md C9: the reorg-depth override is a span.
+//! let _ = shekyl_engine_file::SafetyOverrides {
+//!     max_reorg_depth: Some(10u64),
+//!     skip_to_height: None,
+//!     refresh_from_block_height: None,
+//! };
+//! ```
 
 use shekyl_address::Network;
 use shekyl_engine_state::NetworkSafetyConstants;
+use shekyl_types::BlockCount;
 
 /// Runtime-only safety overrides supplied at wallet open.
 ///
@@ -47,8 +57,8 @@ use shekyl_engine_state::NetworkSafetyConstants;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct SafetyOverrides {
     /// Override for [`NetworkSafetyConstants::max_reorg_depth`]. CLI
-    /// flag: `--max-reorg-depth N`.
-    pub max_reorg_depth: Option<u64>,
+    /// flag: `--max-reorg-depth N`. Same span as the default it replaces.
+    pub max_reorg_depth: Option<BlockCount>,
 
     /// Override for
     /// [`NetworkSafetyConstants::default_skip_to_height`]. CLI flag:
@@ -84,7 +94,7 @@ impl SafetyOverrides {
 
     /// Resolve the effective `max_reorg_depth` against the given
     /// network's hardcoded default.
-    pub fn effective_max_reorg_depth(&self, network: Network) -> u64 {
+    pub fn effective_max_reorg_depth(&self, network: Network) -> BlockCount {
         self.max_reorg_depth
             .unwrap_or_else(|| NetworkSafetyConstants::for_network(network).max_reorg_depth)
     }
@@ -121,12 +131,12 @@ impl SafetyOverrides {
             "advanced safety override(s) active for this session; values are ephemeral and not persisted"
         );
         let defaults = NetworkSafetyConstants::for_network(network);
-        if let Some(v) = self.max_reorg_depth {
+        if let Some(depth) = self.max_reorg_depth {
             tracing::warn!(
                 target: "shekyl_engine_file",
                 field = "max_reorg_depth",
-                override_value = v,
-                network_default = defaults.max_reorg_depth,
+                override_value = depth.to_raw(),
+                network_default = defaults.max_reorg_depth.to_raw(),
                 "safety override"
             );
         }
@@ -167,7 +177,7 @@ mod tests {
     fn any_active_true_when_any_field_set() {
         let mut o = SafetyOverrides::none();
         assert!(!o.is_any_active());
-        o.max_reorg_depth = Some(0);
+        o.max_reorg_depth = Some(BlockCount::ZERO);
         assert!(o.is_any_active());
         let o2 = SafetyOverrides {
             skip_to_height: Some(100),
@@ -198,7 +208,7 @@ mod tests {
     #[test]
     fn effective_some_returns_override() {
         let o = SafetyOverrides {
-            max_reorg_depth: Some(42),
+            max_reorg_depth: Some(BlockCount::from_raw(42)),
             skip_to_height: Some(1_000_000),
             refresh_from_block_height: Some(999),
         };
@@ -206,7 +216,7 @@ mod tests {
         // active — the caller has explicitly chosen to bypass the
         // per-network default.
         for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
-            assert_eq!(o.effective_max_reorg_depth(net), 42);
+            assert_eq!(o.effective_max_reorg_depth(net), BlockCount::from_raw(42));
             assert_eq!(o.effective_skip_to_height(net), 1_000_000);
             assert_eq!(o.effective_refresh_from_block_height(net), 999);
         }
@@ -236,7 +246,7 @@ mod tests {
         // the NetworkSafetyConstants::for_network branch on each
         // network).
         let o = SafetyOverrides {
-            max_reorg_depth: Some(0),
+            max_reorg_depth: Some(BlockCount::ZERO),
             skip_to_height: Some(u64::MAX),
             refresh_from_block_height: Some(1),
         };

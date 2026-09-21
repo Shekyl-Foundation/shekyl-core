@@ -104,6 +104,8 @@ use std::time::{Duration, Instant};
 use shekyl_address::Network;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
+#[cfg(test)]
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 
 use crate::engine::{
@@ -794,12 +796,16 @@ pub(crate) fn submit_pending_tx_in_state(
     let safety = NetworkSafetyConstants::for_network(network);
     let max_reorg = safety.max_reorg_depth;
     let synced = ledger.height();
+    let built = entry.built_at_height;
 
-    if synced.saturating_sub(entry.built_at_height) > max_reorg {
+    // Both heights are still raw ordinals on this helper (`TooOld` reports
+    // that same triple). The comparison is instant − instant against the span.
+    let age = BlockHeight::from_raw(synced).saturating_sub(BlockHeight::from_raw(built));
+    if age > max_reorg {
         return Err(PendingTxError::TooOld {
-            built: entry.built_at_height,
+            built,
             current: synced,
-            max_reorg,
+            max_reorg: max_reorg.to_raw(),
         });
     }
 
