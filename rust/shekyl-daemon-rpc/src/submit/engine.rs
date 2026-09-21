@@ -10,20 +10,6 @@
 //! (crypto seam), so the full control flow — including every race
 //! classification — is testable with deterministic mocks (§10 item 2)
 //! before the FFI shims exist.
-//!
-//! ```compile_fail
-//! // HEIGHT_SEMANTICS.md C9: ref-age takes COUNT then ORDINAL, not swapped.
-//! fn ref_age_window(
-//!     chain_height: shekyl_types::ChainCount,
-//!     ref_height: shekyl_types::BlockHeight,
-//! ) {
-//!     let _ = (chain_height, ref_height);
-//! }
-//! ref_age_window(
-//!     shekyl_types::BlockHeight::from_raw(10),
-//!     shekyl_types::ChainCount::from_raw(100),
-//! );
-//! ```
 
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_types::{BlockHeight, ChainCount};

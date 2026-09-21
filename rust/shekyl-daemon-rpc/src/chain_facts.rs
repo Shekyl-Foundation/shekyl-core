@@ -93,9 +93,10 @@ pub struct ChainTip {
 /// What the chain holds at one height: the block's hash, or `None` when — and
 /// only when — the height is at or past the tip. An in-range height the store
 /// cannot produce a block for is [`FactsFault::Inconsistent`], not `None`, so
-/// `None` always means exactly one thing to the handler. `chain_height` is the tip as of the same
-/// read, so a refusal can name the top height without a second call (and
-/// without a window in which the two disagree).
+/// `None` always means exactly one thing to the handler. `chain_height` is
+/// the chain **count** as of the same read, so a refusal can name the top
+/// via [`ChainCount::tip`] without a second call (and without a window in
+/// which the two disagree).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockHashAt {
     pub hash: Option<BlockHash>,
@@ -139,9 +140,9 @@ pub struct BlockHeaderFacts {
     pub orphan_status: bool,
 }
 
-/// The header at one height, with the tip as of the same read — `None` when,
-/// and only when, the height is at or past the tip. An in-range height the
-/// store cannot produce a block for is [`FactsFault::Inconsistent`].
+/// The header at one height, with the chain **count** as of the same read —
+/// `None` when, and only when, the height is at or past the tip. An in-range
+/// height the store cannot produce a block for is [`FactsFault::Inconsistent`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockHeaderAt {
     pub header: Option<BlockHeaderFacts>,
@@ -201,7 +202,7 @@ impl FactsFault {
 
 /// C5: a core-reported `0` is the synchronized sentinel, not a genesis-only
 /// chain. Inland never wraps 0 as [`ChainCount`].
-fn decode_target_count(raw: u64) -> Option<ChainCount> {
+pub(crate) fn decode_target_count(raw: u64) -> Option<ChainCount> {
     (raw != 0).then(|| ChainCount::from_raw(raw))
 }
 

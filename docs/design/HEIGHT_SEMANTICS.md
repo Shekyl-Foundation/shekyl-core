@@ -38,8 +38,9 @@ Named conversions, on `ChainCount`
 - `next_height()` — height the next block will carry (numerically the
   count); earliest inclusion; exclusive end of a `0 .. count` scan.
 - `from_next_height()` — C6's inverse: exclusive-end ordinal back to
-  count. Not "this existing block, laundered." `from_raw`/`to_raw` are
-  the decode edge, not a fourth bridge.
+  count. Not "this existing block, laundered."
+- `has_block(h)` — whether ordinal `h` is in `0 .. count` (`h < next_height()`).
+  `from_raw`/`to_raw` are the decode edge, not a quantity bridge.
 
 `SyncedChainFacts` (`WSS-Q14`, PR #792) is the pattern: `chain_height()`
 returns `ChainCount`, `.tip()` is the named conversion, and the type
@@ -198,7 +199,9 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
   `ChainCount - BlockHeight`). Height-semantics Phase 2c landed
   `compile_fail`s on `ChainTip.chain_height` / `target_height`
   (`chain_facts.rs`), `Rpc::get_height` (`shekyl-rpc-client`), and
-  `ref_age_window` (`submit/engine.rs`).
+  `ChainCount::has_block`. `ref_age_window`'s pin is the typed
+  signature and its two call sites — a rustdoc example cannot see a
+  private function.
 
 ### 3.2 One `BlockHeight`
 
@@ -266,7 +269,7 @@ one family. **Unclear: none.**
 | Dispatch clock (`daemon_claimed_tip` + six consumers, §2.2) | COUNT | `ChainCount` | `ChainCount` | RULED 2026-09-20 (height-semantics Phase 2b); schema v11 |
 | Wallet ledger (`TransferDetails.block_height` / `spent_height` / `eligible_height`, `rust/shekyl-engine-state/src/transfer.rs:226-237`, `rust/shekyl-engine-state/src/transfer.rs:328`) | ORDINAL | `BlockHeight` | `BlockHeight` | keep |
 | Emission / claim source | COUNT split at decode | `ChainCount` | `ChainCount` | keep (pattern) |
-| Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height` / `BlockHeaderAt.chain_height` / `BlockAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs`) | COUNT (target: COUNT-or-sentinel) | `ChainCount` and `Option<ChainCount>` | `ChainCount` and `Option<ChainCount>` | RULED 2026-09-20 (height-semantics Phase 2c); wire still writes `0` when synchronized |
+| Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height` / `BlockHeaderAt.chain_height` / `BlockAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs`) | COUNT (target: COUNT-or-sentinel) | `ChainCount` and `Option<ChainCount>` | `ChainCount` and `Option<ChainCount>` | RULED 2026-09-20 (height-semantics Phase 2c); handlers bound with `has_block` / name the top with `tip()`; wire still writes `0` when synchronized |
 | Wallet RPC client `Rpc::get_height` | COUNT | `ChainCount` | `ChainCount` at the client decode | RULED 2026-09-20 (height-semantics Phase 2c); name kept (C7) |
 | Submit ref-age (`ref_age_window(chain_height, ref_height)`, `rust/shekyl-daemon-rpc/src/submit/engine.rs`) | COUNT vs ORDINAL | `ChainCount` vs `BlockHeight` | `ChainCount` vs `BlockHeight` | RULED 2026-09-20 (height-semantics Phase 2c); comparison punched to raw at that one named site |
 | Countersign / pass-anchor (`own_height`, `anchor_height`, `predecessor_height`) | ORDINAL | `u64` | `BlockHeight` | height-semantics Phase 2d |
@@ -304,7 +307,10 @@ quantity.
   synchronized (`wire_target_height`). Wallet client `Rpc::get_height`
   returns `ChainCount` (name kept, C7). `ref_age_window` takes
   `ChainCount` vs `BlockHeight` and punches to raw at that one named
-  site. No numeric change. C9 `compile_fail`s on each new boundary.
+  site. Inland handlers bound a requested ordinal with
+  [`ChainCount::has_block`] and name the top with [`ChainCount::tip`]
+  (`too_big_height` takes `BlockHeight` and `ChainCount`). No numeric
+  change. C9 `compile_fail`s on each new public boundary.
 - **Height-semantics Phase 2d — remaining inland bare `u64`.**
   Countersign clocks and difference constants. Same `compile_fail` bar.
 

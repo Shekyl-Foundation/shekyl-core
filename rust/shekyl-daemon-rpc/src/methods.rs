@@ -294,6 +294,7 @@ pub fn get_block(
     fill_pow_hash: bool,
 ) -> Result<GetBlockResponse, RpcFault> {
     let by_hash = !request.hash.is_empty();
+    let height = BlockHeight::from_raw(request.height);
     let lookup = if by_hash {
         let parsed = HashHex::from_hex(&request.hash).map_err(|_| {
             RpcFault::Refused(RpcRefusal::wrong_param(&format!(
@@ -303,7 +304,7 @@ pub fn get_block(
         })?;
         BlockLookup::Hash(parsed.to_bytes())
     } else {
-        BlockLookup::Height(BlockHeight::from_raw(request.height))
+        BlockLookup::Height(height)
     };
 
     let at = match facts.block_at(lookup, fill_pow_hash) {
@@ -322,8 +323,8 @@ pub fn get_block(
         // Past the tip is the height refusal; anything else the lookup could
         // not produce keeps the C++ "can't get block by hash" wording, whose
         // `Hash = .` for a height lookup is inherited, not a slip.
-        if !by_hash && request.height >= at.chain_height.to_raw() {
-            return Err(too_big_height(request.height, at.chain_height.to_raw()));
+        if !by_hash && !at.chain_height.has_block(height) {
+            return Err(too_big_height(height, at.chain_height));
         }
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
@@ -402,24 +403,32 @@ pub fn block_header_request(
 ///
 /// The reply is a bare JSON string — no object, no `status` — as the C++
 /// path's was. A height at or past the tip is `TOO_BIG_HEIGHT`, whose message
-/// names the top height (`chain_height - 1`), read in the same call as the
+/// names the top height ([`ChainCount::tip`]), read in the same call as the
 /// hash so the two cannot disagree.
 pub fn get_block_hash(facts: &dyn ChainFacts, height: u64) -> Result<HashHex, RpcFault> {
-    let at = facts.block_hash_at(BlockHeight::from_raw(height))?;
+    let height = BlockHeight::from_raw(height);
+    let at = facts.block_hash_at(height)?;
     match at.hash {
         Some(hash) => Ok(HashHex::from_bytes(hash.to_bytes())),
-        None => Err(too_big_height(height, at.chain_height.to_raw())),
+        None => Err(too_big_height(height, at.chain_height)),
     }
+}
+
+/// Newest existing block, or genesis on an empty chain so a handler that
+/// must remain total has a height to name. Production always has genesis.
+fn newest_block(chain: ChainCount) -> BlockHeight {
+    chain.tip().unwrap_or(BlockHeight::ZERO)
 }
 
 /// The refusal a height past the tip earns, naming the top height — one
 /// wording, since `get_block_hash` and every header method share it.
-fn too_big_height(height: u64, chain_height: u64) -> RpcFault {
+fn too_big_height(height: BlockHeight, chain: ChainCount) -> RpcFault {
     RpcFault::Refused(RpcRefusal {
         code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
         message: format!(
-            "Requested block height: {height} greater than current top block height: {}",
-            chain_height.saturating_sub(1)
+            "Requested block height: {} greater than current top block height: {}",
+            height.to_raw(),
+            newest_block(chain).to_raw(),
         ),
     })
 }
@@ -440,21 +449,22 @@ pub fn get_block_header_by_height(
     height: u64,
     fill_pow_hash: bool,
 ) -> Result<GetBlockHeaderByHeightResponse, RpcFault> {
-    let at = match facts.block_header_at(
-        BlockLookup::Height(BlockHeight::from_raw(height)),
-        fill_pow_hash,
-    ) {
+    let height = BlockHeight::from_raw(height);
+    let at = match facts.block_header_at(BlockLookup::Height(height), fill_pow_hash) {
         Ok(at) => at,
         Err(FactsFault::Inconsistent) => {
             return Err(RpcFault::Refused(RpcRefusal {
                 code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-                message: format!("Internal error: can't get block by height. Height = {height}."),
+                message: format!(
+                    "Internal error: can't get block by height. Height = {}.",
+                    height.to_raw()
+                ),
             }))
         }
         Err(other) => return Err(RpcFault::Facts(other)),
     };
     let Some(header) = at.header else {
-        return Err(too_big_height(height, at.chain_height.to_raw()));
+        return Err(too_big_height(height, at.chain_height));
     };
     Ok(GetBlockHeaderByHeightResponse {
         status: RpcStatus::ok(),
@@ -865,8 +875,8 @@ pub fn get_last_block_header(
     }
     // `chain_height` is the count; the tip's own height is one below it
     // (`ChainCount::tip`). A chain with no blocks cannot occur (genesis is
-    // block 0); `unwrap_or(ZERO)` keeps the empty case total.
-    let mut top = tip.chain_height.tip().unwrap_or(BlockHeight::ZERO);
+    // block 0); `newest_block` keeps the empty case total.
+    let mut top = newest_block(tip.chain_height);
     for _ in 0..TIP_READ_ATTEMPTS {
         let at = facts.block_header_at(BlockLookup::Height(top), pow)?;
         let Some(header) = at.header else {
@@ -875,7 +885,7 @@ pub fn get_last_block_header(
             // produce a block it claims to hold, or the chain shortened under
             // us; both are read as "try the current top", and the loop bound
             // stops that becoming unbounded.
-            top = at.chain_height.tip().unwrap_or(BlockHeight::ZERO);
+            top = newest_block(at.chain_height);
             continue;
         };
         // The tip test, against the snapshot that produced this header rather
@@ -888,7 +898,7 @@ pub fn get_last_block_header(
                 block_header: block_header(&header),
             });
         }
-        top = at.chain_height.tip().unwrap_or(BlockHeight::ZERO);
+        top = newest_block(at.chain_height);
     }
     Err(RpcFault::Refused(RpcRefusal {
         code: CORE_RPC_ERROR_CODE_CORE_BUSY,
@@ -951,11 +961,10 @@ pub fn get_block_headers_range(
     // lowers it. So this bound is a fast refusal for the common case, not a
     // guarantee for the loop below — which is why the loop still has to say
     // what a vanished height means.
-    let chain_height = facts.chain_tip()?.chain_height.to_raw();
-    if request.start_height > request.end_height
-        || request.start_height >= chain_height
-        || request.end_height >= chain_height
-    {
+    let chain = facts.chain_tip()?.chain_height;
+    let start = BlockHeight::from_raw(request.start_height);
+    let end = BlockHeight::from_raw(request.end_height);
+    if start > end || !chain.has_block(start) || !chain.has_block(end) {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
             message: "Invalid start/end heights.".to_owned(),
@@ -963,10 +972,9 @@ pub fn get_block_headers_range(
     }
     // The span, not the endpoints, is what the cap bounds — and it is computed
     // before any chain read so an absurd range costs nothing to refuse.
-    let span = request
-        .end_height
-        .saturating_sub(request.start_height)
-        .saturating_add(1);
+    // Inclusive length is the ordinal difference plus one; the cap constant
+    // stays a raw count until Phase 2d.
+    let span = end.saturating_sub(start).to_raw().saturating_add(1);
     // **The cap bounds the count, not the difference.** The C++ tested
     // `end_height - start_height > RESTRICTED_BLOCK_HEADER_RANGE`, which
     // permits 1001 headers against a cap of 1000 — the same off-by-one the
@@ -979,13 +987,14 @@ pub fn get_block_headers_range(
         }));
     }
     let mut headers = Vec::new();
-    for height in request.start_height..=request.end_height {
-        let at = facts.block_header_at(BlockLookup::Height(BlockHeight::from_raw(height)), pow)?;
+    for raw in request.start_height..=request.end_height {
+        let height = BlockHeight::from_raw(raw);
+        let at = facts.block_header_at(BlockLookup::Height(height), pow)?;
         let Some(header) = at.header else {
             // **A missing header here can only mean the chain shortened.**
             // On the height path the shim returns `found == 0` for exactly
-            // one condition — `height >= chain_height` as read *inside* that
-            // call — and reports a store that cannot produce a block it
+            // one condition — `!chain.has_block(height)` as read *inside*
+            // that call — and reports a store that cannot produce a block it
             // claims to hold as an error, which `?` has already propagated
             // above. So this arm is not a store contradiction and must not be
             // reported as one: it is the tip moving down between the bound
@@ -993,7 +1002,7 @@ pub fn get_block_headers_range(
             // `pop_blocks`), and the caller's range was valid when it was
             // checked. `TOO_BIG_HEIGHT` with the height that has gone is what
             // a caller can act on; a generic internal error is not.
-            return Err(too_big_height(height, at.chain_height.to_raw()));
+            return Err(too_big_height(height, at.chain_height));
         };
         headers.push(block_header(&header));
     }
@@ -1354,13 +1363,13 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
 pub(crate) mod tests {
     use super::*;
     use crate::chain_facts::{
-        BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts, ChainTip,
-        DaemonIdentity, FeeEstimate, HardFork, HardForkInfo, NetStats,
+        decode_target_count, BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts,
+        ChainTip, DaemonIdentity, FeeEstimate, HardFork, HardForkInfo, NetStats,
     };
     use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
     use serde_json::json;
     use shekyl_types::{
-        AttestationRoot, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
+        AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
     };
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -1374,8 +1383,8 @@ pub(crate) mod tests {
     pub(crate) struct FakeFacts {
         pub tip: Result<ChainTip, FactsFault>,
         pub forks: Result<Vec<HardFork>, FactsFault>,
-        /// Tip of the fake chain for `block_hash_at`'s bound.
-        pub hash_chain_height: u64,
+        /// Length of the fake chain for `block_hash_at`'s bound.
+        pub hash_chain_height: ChainCount,
         /// When set, `block_hash_at` faults instead of answering.
         pub hash_fault: Option<FactsFault>,
         /// The last height `block_hash_at` was asked for.
@@ -1421,6 +1430,13 @@ pub(crate) mod tests {
         /// mainnet identity", so the many tests that do not care about the
         /// tuple need not construct one.
         pub identity: Option<Result<DaemonIdentity, FactsFault>>,
+    }
+
+    impl FakeFacts {
+        fn grown_chain(&self) -> ChainCount {
+            self.hash_chain_height
+                .saturating_add(BlockCount::from_raw(self.tip_grown.load(Ordering::Relaxed)))
+        }
     }
 
     impl ChainFacts for FakeFacts {
@@ -1477,8 +1493,11 @@ pub(crate) mod tests {
                 return Err(fault);
             }
             Ok(BlockHashAt {
-                hash: (height.to_raw() < self.hash_chain_height).then(patterned_hash),
-                chain_height: ChainCount::from_raw(self.hash_chain_height),
+                hash: self
+                    .hash_chain_height
+                    .has_block(height)
+                    .then(patterned_hash),
+                chain_height: self.hash_chain_height,
             })
         }
 
@@ -1487,10 +1506,7 @@ pub(crate) mod tests {
             if let Some(fault) = self.block_fault {
                 return Err(fault);
             }
-            let chain_height = ChainCount::from_raw(
-                self.hash_chain_height
-                    .saturating_add(self.tip_grown.load(Ordering::Relaxed)),
-            );
+            let chain_height = self.grown_chain();
             // The fake applies the same bound the shim does, so a handler that
             // forgets to check one cannot pass by luck.
             let present = match at {
@@ -1501,7 +1517,7 @@ pub(crate) mod tests {
                 }
                 BlockLookup::Height(height) => {
                     self.asked_height.store(height.to_raw(), Ordering::Relaxed);
-                    height.to_raw() < self.hash_chain_height
+                    self.hash_chain_height.has_block(height)
                 }
             };
             if !present {
@@ -1543,10 +1559,7 @@ pub(crate) mod tests {
             if let Some(fault) = self.hash_fault {
                 return Err(fault);
             }
-            let chain_height = ChainCount::from_raw(
-                self.hash_chain_height
-                    .saturating_add(self.tip_grown.load(Ordering::Relaxed)),
-            );
+            let chain_height = self.grown_chain();
             // Same two-arm shape as `block_at`, because it answers the same
             // question. **This is a fake chain's own shape, not a copy of the
             // shim's rule** — the fake chain has a height and nothing above it,
@@ -1572,7 +1585,7 @@ pub(crate) mod tests {
                 }
                 BlockLookup::Height(height) => {
                     self.asked_height.store(height.to_raw(), Ordering::Relaxed);
-                    if height.to_raw() >= chain_height.to_raw() {
+                    if !chain_height.has_block(height) {
                         return Ok(BlockHeaderAt {
                             header: None,
                             chain_height,
@@ -1592,9 +1605,9 @@ pub(crate) mod tests {
             // test used to compensate by hand, setting `hash_chain_height` to
             // `1_234_567 + 42 + 1` so the canned depth would line up.
             h.depth = chain_height
-                .to_raw()
-                .saturating_sub(height.to_raw())
-                .saturating_sub(1);
+                .tip()
+                .map(|top| top.saturating_sub(height).to_raw())
+                .unwrap_or(0);
             h.pow_hash = fill_pow_hash.then(|| tagged_bytes(23));
             // Only the alt case overrides it. `sample_header()` carries the
             // value the RK-3 oracle vector was captured with, and clobbering
@@ -1623,7 +1636,7 @@ pub(crate) mod tests {
             tip: Ok(ChainTip {
                 chain_height: ChainCount::from_raw(1_234_567),
                 top_hash: patterned_hash(),
-                target_height: (target != 0).then(|| ChainCount::from_raw(target)),
+                target_height: decode_target_count(target),
                 synchronized,
                 release_build: false,
             }),
@@ -1631,7 +1644,7 @@ pub(crate) mod tests {
                 version: 1,
                 height: BlockHeight::from_raw(0),
             }]),
-            hash_chain_height: 1_234_567,
+            hash_chain_height: ChainCount::from_raw(1_234_567),
             hash_fault: None,
             asked_height: AtomicU64::new(u64::MAX),
             header_reads: AtomicU64::new(0),
@@ -1944,7 +1957,7 @@ pub(crate) mod tests {
         let f = FakeFacts {
             tip: Err(FactsFault::NotReady),
             forks: Ok(vec![]),
-            hash_chain_height: 0,
+            hash_chain_height: ChainCount::ZERO,
             hash_fault: Some(FactsFault::NotReady),
             asked_height: AtomicU64::new(u64::MAX),
             header_reads: AtomicU64::new(0),
@@ -2033,7 +2046,7 @@ pub(crate) mod tests {
     /// vary `get_block_header_by_height`'s own `fill_pow_hash` argument.
     fn header_facts() -> FakeFacts {
         let mut f = facts(true, 0);
-        f.hash_chain_height = 1_234_610; // 1_234_567 + depth 42 + 1
+        f.hash_chain_height = ChainCount::from_raw(1_234_610); // 1_234_567 + depth 42 + 1
         f
     }
 
@@ -2268,7 +2281,7 @@ pub(crate) mod tests {
         let f = header_facts();
         assert_eq!(
             get_block(&f, &block_req("", 9_000_000), false).unwrap_err(),
-            too_big_height(9_000_000, f.hash_chain_height)
+            too_big_height(BlockHeight::from_raw(9_000_000), f.hash_chain_height,)
         );
 
         let unknown = HashHex::from_bytes([9u8; 32]).to_string();
@@ -2474,13 +2487,14 @@ pub(crate) mod tests {
     #[test]
     fn a_block_arriving_mid_read_does_not_yield_a_stale_tip() {
         let f = facts(true, 0);
-        let base = f.tip.as_ref().expect("a tip").chain_height.to_raw();
+        let before = f.tip.as_ref().expect("a tip").chain_height;
         f.tip_growth_remaining.store(1, Ordering::Relaxed);
 
         let out = get_last_block_header(&f, false, false).expect("the tip, after one retry");
         // The header returned is the *new* tip, not the height chosen from
-        // the pre-growth snapshot.
-        assert_eq!(out.block_header.height, base);
+        // the pre-growth snapshot. One growth makes the old exclusive end
+        // (`next_height`) the new tip ordinal.
+        assert_eq!(out.block_header.height, before.next_height().to_raw());
         assert_eq!(
             out.block_header.depth, 0,
             "a header reported as the last block must be the last block"
@@ -2563,7 +2577,7 @@ pub(crate) mod tests {
     #[test]
     fn a_missing_hash_costs_only_its_own_slot() {
         let mut f = facts(false, 0);
-        f.hash_chain_height = 1_234_567;
+        f.hash_chain_height = ChainCount::from_raw(1_234_567);
         let known = HashHex::from_bytes(patterned_hash().to_bytes());
         let absent = HashHex::from_bytes(tagged_hash(200).to_bytes());
         let request = GetBlockHeaderByHashRequest {
@@ -2644,20 +2658,21 @@ pub(crate) mod tests {
             "an unbounded range must cost no header reads"
         );
 
-        // The tip itself is past the end: `chain_height` is a count, so the
-        // highest readable height is one below it.
-        let tip = f.tip.as_ref().expect("a tip").chain_height.to_raw();
+        // Asking for the count as an ordinal is past the exclusive end.
+        let chain = f.tip.as_ref().expect("a tip").chain_height;
+        let past = chain.next_height().to_raw();
         let before = reads();
         assert!(matches!(
-            get_block_headers_range(&f, &range(tip, tip), false),
+            get_block_headers_range(&f, &range(past, past), false),
             Err(RpcFault::Refused(_))
         ));
-        assert_eq!(reads(), before, "the tip's own height is not readable");
+        assert_eq!(reads(), before, "the exclusive end is not readable");
 
         // And the last valid height still answers, so the bound is not
         // off by one in the other direction.
+        let last = chain.tip().expect("non-empty fake").to_raw();
         let before = reads();
-        assert!(get_block_headers_range(&f, &range(tip - 1, tip - 1), false).is_ok());
+        assert!(get_block_headers_range(&f, &range(last, last), false).is_ok());
         assert_eq!(reads(), before + 1, "exactly one header for one height");
     }
 
@@ -2681,7 +2696,7 @@ pub(crate) mod tests {
     fn a_height_that_vanishes_under_the_bound_is_a_caller_error() {
         let mut f = facts(true, 0);
         // The bound sees 1_234_567; the header arm holds only 1_000 blocks.
-        f.hash_chain_height = 1_000;
+        f.hash_chain_height = ChainCount::from_raw(1_000);
         let out = get_block_headers_range(
             &f,
             &GetBlockHeadersRangeRequest {

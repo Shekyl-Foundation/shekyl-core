@@ -174,6 +174,11 @@ fn chain_count_bridges() {
     // `from_next_height` is C6's inverse, not "this existing block as a count".
     assert_eq!(ChainCount::from_next_height(count.next_height()), count);
     assert_eq!(ChainCount::from_next_height(empty.next_height()), empty);
+
+    assert!(count.has_block(BlockHeight::from_raw(30_000)));
+    assert!(count.has_block(BlockHeight::ZERO));
+    assert!(!count.has_block(count.next_height()));
+    assert!(!empty.has_block(BlockHeight::ZERO));
 }
 
 #[test]
