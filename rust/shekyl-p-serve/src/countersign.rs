@@ -29,6 +29,16 @@
 //! `HybridEd25519MlDsa::sign` directly, so a host cannot bind the
 //! transcript under a neighbouring domain and produce a signature the
 //! daemon's `verify_pass_transcript` rejects.
+//!
+//! Inland clocks are ordinal [`shekyl_types::BlockHeight`]; depths are
+//! [`shekyl_types::BlockCount`].
+//!
+//! ```compile_fail
+//! // HEIGHT_SEMANTICS.md C9: own_height is ordinal, not a chain count.
+//! use shekyl_p_serve::anchor_within_gate;
+//! use shekyl_types::{BlockHeight, ChainCount};
+//! let _ = anchor_within_gate(ChainCount::from_raw(10_000), BlockHeight::from_raw(9_280));
+//! ```
 
 use shekyl_archival_retention::pass_anchor::{
     PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
@@ -38,6 +48,7 @@ use shekyl_crypto_pq::signature::{
     SCHEME_DOMAIN_ATTESTATION,
 };
 use shekyl_crypto_pq::CryptoError;
+use shekyl_types::BlockHeight;
 
 /// Length of the countersignature envelope that precedes the frame on the
 /// wire: the canonical `HybridSignature` encoding, and nothing else.
@@ -91,7 +102,7 @@ pub trait PassSigner: PassKey {
     /// so a host that has lost its store is visible in the aggregate
     /// rather than refusing every anchor silently. A fresh store at
     /// height `0` is `Some(0)`, not `None`: readable, and below the gate.
-    fn own_height(&self) -> Option<u64>;
+    fn own_height(&self) -> Option<BlockHeight>;
 }
 
 /// A host's refusal to sign. The detail is operator-facing, never sent on
@@ -142,11 +153,11 @@ pub fn sign_pass_transcript(
 /// own height is below the anchor depth has no admissible anchor at all
 /// and refuses everything — nobody can have anchored at `tip − 720` yet.
 #[must_use]
-pub fn anchor_within_gate(own_height: u64, anchor_height: u64) -> bool {
-    let Some(centre) = own_height.checked_sub(PASS_ANCHOR_DEPTH_BLOCKS) else {
+pub fn anchor_within_gate(own_height: BlockHeight, anchor_height: BlockHeight) -> bool {
+    let Some(centre) = own_height.checked_sub_count(PASS_ANCHOR_DEPTH_BLOCKS) else {
         return false;
     };
-    let lo = centre.saturating_sub(PASS_ANCHOR_LAG_BLOCKS);
+    let lo = centre.saturating_sub_count(PASS_ANCHOR_LAG_BLOCKS);
     let hi = centre.saturating_add(PASS_ANCHOR_LAG_BLOCKS);
     (lo..=hi).contains(&anchor_height)
 }
@@ -177,14 +188,14 @@ impl TestKeySigner {
     /// Only if the underlying keygen fails, which is a broken crypto
     /// backend, not a test condition.
     #[must_use]
-    pub fn ephemeral(height: u64) -> Self {
+    pub fn ephemeral(height: BlockHeight) -> Self {
         let (public, secret) = HybridEd25519MlDsa
             .generate_ephemeral_keypair_for_tests()
             .expect("ephemeral hybrid keygen");
         Self {
             secret,
             public,
-            height: std::sync::atomic::AtomicU64::new(height),
+            height: std::sync::atomic::AtomicU64::new(height.to_raw()),
         }
     }
 
@@ -193,9 +204,9 @@ impl TestKeySigner {
         &self.public
     }
 
-    pub fn set_height(&self, height: u64) {
+    pub fn set_height(&self, height: BlockHeight) {
         self.height
-            .store(height, std::sync::atomic::Ordering::Relaxed);
+            .store(height.to_raw(), std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -211,8 +222,10 @@ impl PassKey for TestKeySigner {
 
 #[cfg(any(test, feature = "test-signer"))]
 impl PassSigner for TestKeySigner {
-    fn own_height(&self) -> Option<u64> {
-        Some(self.height.load(std::sync::atomic::Ordering::Relaxed))
+    fn own_height(&self) -> Option<BlockHeight> {
+        Some(BlockHeight::from_raw(
+            self.height.load(std::sync::atomic::Ordering::Relaxed),
+        ))
     }
 }
 
@@ -221,36 +234,40 @@ mod tests {
     use super::*;
     use shekyl_archival_retention::{verify_pass_transcript, PassRequestHeader};
 
-    const DEPTH: u64 = PASS_ANCHOR_DEPTH_BLOCKS;
-    const L: u64 = PASS_ANCHOR_LAG_BLOCKS;
+    const DEPTH: u64 = PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
+    const L: u64 = PASS_ANCHOR_LAG_BLOCKS.to_raw();
+
+    const fn bh(n: u64) -> BlockHeight {
+        BlockHeight::from_raw(n)
+    }
 
     #[test]
     fn gate_is_two_sided_and_inclusive_around_p_minus_depth() {
         let p = 10_000;
         let c = p - DEPTH;
-        assert!(anchor_within_gate(p, c));
-        assert!(anchor_within_gate(p, c - L));
-        assert!(anchor_within_gate(p, c + L));
-        assert!(!anchor_within_gate(p, c - L - 1));
-        assert!(!anchor_within_gate(p, c + L + 1));
+        assert!(anchor_within_gate(bh(p), bh(c)));
+        assert!(anchor_within_gate(bh(p), bh(c - L)));
+        assert!(anchor_within_gate(bh(p), bh(c + L)));
+        assert!(!anchor_within_gate(bh(p), bh(c - L - 1)));
+        assert!(!anchor_within_gate(bh(p), bh(c + L + 1)));
     }
 
     #[test]
     fn gate_refuses_everything_below_the_anchor_depth() {
-        assert!(!anchor_within_gate(DEPTH - 1, 0));
-        assert!(!anchor_within_gate(0, 0));
+        assert!(!anchor_within_gate(bh(DEPTH - 1), bh(0)));
+        assert!(!anchor_within_gate(bh(0), bh(0)));
         // Exactly at depth: centre is 0, lower bound saturates.
-        assert!(anchor_within_gate(DEPTH, 0));
-        assert!(anchor_within_gate(DEPTH, L));
-        assert!(!anchor_within_gate(DEPTH, L + 1));
+        assert!(anchor_within_gate(bh(DEPTH), bh(0)));
+        assert!(anchor_within_gate(bh(DEPTH), bh(L)));
+        assert!(!anchor_within_gate(bh(DEPTH), bh(L + 1)));
         // No wrap at the top.
-        assert!(anchor_within_gate(u64::MAX, u64::MAX - DEPTH));
+        assert!(anchor_within_gate(bh(u64::MAX), bh(u64::MAX - DEPTH)));
     }
 
     #[test]
     fn test_key_signer_round_trips_through_the_consensus_verifier() {
-        let signer = TestKeySigner::ephemeral(DEPTH + 50);
-        let f = PassRequestHeader::from_parts([7; 32], 49, [8; 32]);
+        let signer = TestKeySigner::ephemeral(bh(DEPTH + 50));
+        let f = PassRequestHeader::from_parts([7; 32], bh(49), [8; 32]);
         let sig = signer.sign_pass(&f.transcript(7)).expect("sign");
         assert_eq!(
             sig.to_canonical_bytes().unwrap().len(),

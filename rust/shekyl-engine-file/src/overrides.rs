@@ -33,6 +33,7 @@
 
 use shekyl_address::Network;
 use shekyl_engine_state::NetworkSafetyConstants;
+use shekyl_types::BlockCount;
 
 /// Runtime-only safety overrides supplied at wallet open.
 ///
@@ -84,8 +85,9 @@ impl SafetyOverrides {
 
     /// Resolve the effective `max_reorg_depth` against the given
     /// network's hardcoded default.
-    pub fn effective_max_reorg_depth(&self, network: Network) -> u64 {
+    pub fn effective_max_reorg_depth(&self, network: Network) -> BlockCount {
         self.max_reorg_depth
+            .map(BlockCount::from_raw)
             .unwrap_or_else(|| NetworkSafetyConstants::for_network(network).max_reorg_depth)
     }
 
@@ -126,7 +128,7 @@ impl SafetyOverrides {
                 target: "shekyl_engine_file",
                 field = "max_reorg_depth",
                 override_value = v,
-                network_default = defaults.max_reorg_depth,
+                network_default = defaults.max_reorg_depth.to_raw(),
                 "safety override"
             );
         }
@@ -206,7 +208,7 @@ mod tests {
         // active — the caller has explicitly chosen to bypass the
         // per-network default.
         for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
-            assert_eq!(o.effective_max_reorg_depth(net), 42);
+            assert_eq!(o.effective_max_reorg_depth(net), BlockCount::from_raw(42));
             assert_eq!(o.effective_skip_to_height(net), 1_000_000);
             assert_eq!(o.effective_refresh_from_block_height(net), 999);
         }

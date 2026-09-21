@@ -4145,6 +4145,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-engine-prefs",
  "shekyl-engine-state",
+ "shekyl-types",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -4395,6 +4396,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-onion-v3",
  "shekyl-p-serve",
+ "shekyl-types",
  "tokio",
  "tokio-socks",
 ]
@@ -4409,6 +4411,7 @@ dependencies = [
  "shekyl-p-host",
  "shekyl-p-serve",
  "shekyl-tor-control-wallet",
+ "shekyl-types",
  "tempfile",
  "tokio",
 ]
@@ -4421,6 +4424,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-tree",
  "shekyl-p-serve",
+ "shekyl-types",
  "tokio",
 ]
 

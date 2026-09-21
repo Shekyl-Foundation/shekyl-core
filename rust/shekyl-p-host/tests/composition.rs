@@ -260,7 +260,7 @@ fn identity() -> OnionIdentity {
 /// An ephemeral attestation key for a host under test; the test keeps the
 /// handle to read the public half back.
 fn test_key() -> Arc<TestKeySigner> {
-    Arc::new(TestKeySigner::ephemeral(0))
+    Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(0)))
 }
 
 /// The gate's height source under test: a daemon tip stamped at `height`.
@@ -276,7 +276,7 @@ fn test_key() -> Arc<TestKeySigner> {
 /// drives it against a supplied instant rather than a clock.
 fn tip_at(height: u64) -> Arc<DaemonTipCache> {
     let tip = Arc::new(DaemonTipCache::new(Duration::from_secs(3_600)));
-    tip.stamp_synced(height);
+    tip.stamp_synced(BlockHeight::from_raw(height));
     tip
 }
 
@@ -285,8 +285,8 @@ fn tip_at(height: u64) -> Arc<DaemonTipCache> {
 const NONCE: [u8; 32] = [0x5a; 32];
 const ANCHOR_HASH: [u8; 32] = [0xa5; 32];
 
-fn anchor_for(own_height: u64) -> u64 {
-    own_height - PASS_ANCHOR_DEPTH_BLOCKS
+fn anchor_for(own_height: u64) -> BlockHeight {
+    BlockHeight::from_raw(own_height - PASS_ANCHOR_DEPTH_BLOCKS.to_raw())
 }
 
 /// Split a 200 response into its `SF-D8` envelope and the framed body that
@@ -777,7 +777,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
         .expect("freeze segment 1");
     // The daemon the persona reads has moved with the chain — what the tip
     // refresher does on its cadence in production.
-    tip.stamp_synced(20_000);
+    tip.stamp_synced(BlockHeight::from_raw(20_000));
 
     // The prune that would have cost the shard. The refresh's pin is what
     // survives it — taken before the freeze, which is the whole point.
@@ -1683,7 +1683,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
     // Compile-time: the fixture must put the scan tip OUTSIDE the gate, or
     // this test proves nothing. A later edit to either constant that closed
     // the gap would otherwise leave a green test asserting nothing.
-    const _: () = assert!(CHAIN_TIP - SCAN_TIP > PASS_ANCHOR_LAG_BLOCKS);
+    const _: () = assert!(CHAIN_TIP - SCAN_TIP > PASS_ANCHOR_LAG_BLOCKS.to_raw());
 
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
@@ -1772,7 +1772,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
 
     // Once the daemon is synced again the persona serves again — the refusal
     // is a state, not a latch.
-    tip.stamp_synced(CHAIN_TIP);
+    tip.stamp_synced(BlockHeight::from_raw(CHAIN_TIP));
     assert!(
         !is_refused(&fetch(host.serve_addr(), "/shard/0", CHAIN_TIP).await),
         "a persona must recover when its daemon does"

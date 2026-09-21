@@ -115,7 +115,7 @@ pub const APPARATUS_OWN_HEIGHT: u64 = 100_000;
 
 /// The anchor height every request carries: `APPARATUS_OWN_HEIGHT − 720`, the
 /// value a synced daemon would compute against its own tip.
-pub const APPARATUS_ANCHOR_HEIGHT: u64 = APPARATUS_OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS;
+pub const APPARATUS_ANCHOR_HEIGHT: u64 = APPARATUS_OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
 
 /// The anchor hash every request carries. Fixed, not looked up: the rig has
 /// no chain to read `block_hash(anchor_height)` from, `P` never interprets
@@ -424,8 +424,11 @@ impl std::fmt::Display for FetchFault {
 /// nonces has nothing left to measure. It stops loudly rather than filing
 /// the failure under a class Tor would be blamed for.
 pub async fn fetch_via(client: &PFetchClient, target: &FetchTarget) -> Result<usize, FetchFault> {
-    let header = RequestHeader::fresh(APPARATUS_ANCHOR_HEIGHT, APPARATUS_ANCHOR_HASH)
-        .expect("OS entropy source failed; the apparatus cannot mint request nonces");
+    let header = RequestHeader::fresh(
+        shekyl_types::BlockHeight::from_raw(APPARATUS_ANCHOR_HEIGHT),
+        APPARATUS_ANCHOR_HASH,
+    )
+    .expect("OS entropy source failed; the apparatus cannot mint request nonces");
     let fetched = tokio::time::timeout(
         FETCH_CEILING,
         client.fetch(target, &header, Arc::new(AcceptAnyContent)),
@@ -653,7 +656,9 @@ impl Apparatus {
             // the shipped serve path, and signing is on it. Its own height is
             // the apparatus's fixed chain view; the client leg anchors its
             // requests against the same number.
-            let signer = Arc::new(TestKeySigner::ephemeral(APPARATUS_OWN_HEIGHT));
+            let signer = Arc::new(TestKeySigner::ephemeral(
+                shekyl_types::BlockHeight::from_raw(APPARATUS_OWN_HEIGHT),
+            ));
             let verifying_key = signer.public_key().clone();
             let endpoint = PServeEndpoint::bind(
                 Arc::new(FixtureShardProvider::new(Arc::clone(&payload))),
@@ -987,7 +992,7 @@ mod tests {
         // call it `Refused` — visible, but for the wrong reason.
         assert_eq!(
             APPARATUS_OWN_HEIGHT - APPARATUS_ANCHOR_HEIGHT,
-            PASS_ANCHOR_DEPTH_BLOCKS
+            PASS_ANCHOR_DEPTH_BLOCKS.to_raw()
         );
     }
 

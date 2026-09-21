@@ -795,11 +795,11 @@ pub(crate) fn submit_pending_tx_in_state(
     let max_reorg = safety.max_reorg_depth;
     let synced = ledger.height();
 
-    if synced.saturating_sub(entry.built_at_height) > max_reorg {
+    if synced.saturating_sub(entry.built_at_height) > max_reorg.to_raw() {
         return Err(PendingTxError::TooOld {
             built: entry.built_at_height,
             current: synced,
-            max_reorg,
+            max_reorg: max_reorg.to_raw(),
         });
     }
 

@@ -25,12 +25,13 @@ use shekyl_p_fetch::{
 use shekyl_p_serve::{
     PServeEndpoint, PassSigner, ProviderError, ShardBody, ShardProvider, TestKeySigner,
 };
+use shekyl_types::BlockHeight;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 const SHARD: u64 = 3;
 const OWN_HEIGHT: u64 = 10_000;
-const ANCHOR: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS;
+const ANCHOR: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
 
 struct Fixture {
     shards: HashMap<u64, Arc<[u8]>>,
@@ -116,7 +117,7 @@ async fn fetch_client_accepts_a_real_served_body() {
     let provider = Arc::new(Fixture {
         shards: HashMap::from([(SHARD, Arc::from(payload.clone().into_boxed_slice()))]),
     });
-    let signer = Arc::new(TestKeySigner::ephemeral(OWN_HEIGHT));
+    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
     let public: HybridPublicKey = signer.public_key().clone();
     let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
         .await
@@ -137,7 +138,7 @@ async fn fetch_client_accepts_a_real_served_body() {
         verifying_key: public,
         shard_id: SHARD,
     };
-    let header = RequestHeader::with_nonce([0xa5; 32], ANCHOR, [0x5a; 32]);
+    let header = RequestHeader::with_nonce([0xa5; 32], BlockHeight::from_raw(ANCHOR), [0x5a; 32]);
     let shard = client
         .fetch(&target, &header, Arc::new(Accepting))
         .await

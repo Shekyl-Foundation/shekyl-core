@@ -495,7 +495,7 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
         nonce: facts.nonce,
         orphan_status: facts.orphan_status,
         height: facts.height.to_raw(),
-        depth: facts.depth,
+        depth: facts.depth.to_raw(),
         hash: HashHex::from_bytes(facts.hash.to_bytes()),
         difficulty,
         wide_difficulty,
@@ -1606,8 +1606,8 @@ pub(crate) mod tests {
             // `1_234_567 + 42 + 1` so the canned depth would line up.
             h.depth = chain_height
                 .tip()
-                .map(|top| top.saturating_sub(height).to_raw())
-                .unwrap_or(0);
+                .map(|top| top.saturating_sub(height))
+                .unwrap_or(BlockCount::from_raw(0));
             h.pow_hash = fill_pow_hash.then(|| tagged_bytes(23));
             // Only the alt case overrides it. `sample_header()` carries the
             // value the RK-3 oracle vector was captured with, and clobbering
@@ -1671,7 +1671,7 @@ pub(crate) mod tests {
             attestation_root: AttestationRoot::from_bytes(tagged_bytes(53)),
             pow_hash: None,
             height: BlockHeight::from_raw(1_234_567),
-            depth: 42,
+            depth: BlockCount::from_raw(42),
             timestamp: 1_700_000_000,
             difficulty: (1u128 << 70) + 12345,
             cumulative_difficulty: (1u128 << 71) + 99,

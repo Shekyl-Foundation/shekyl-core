@@ -20,6 +20,7 @@ use shekyl_archival_retention::{
     PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_NONCE_LEN,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SignatureScheme};
+use shekyl_types::BlockHeight;
 
 const SHARD: u64 = 42;
 const EPOCH: u64 = 1000;
@@ -28,7 +29,7 @@ const EPOCH: u64 = 1000;
 const HEIGHT: u64 = 7777;
 /// The requester's anchor: `tip − depth` at request time, which lands at the top of the window
 /// for a block whose predecessor is `HEIGHT`.
-const ANCHOR: u64 = HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS;
+const ANCHOR: u64 = HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
 /// The requester-random nonce the pass record carries (SF-D8). Fixed here so each test perturbs
 /// exactly one field.
 const NONCE: [u8; PASS_NONCE_LEN] = [7u8; PASS_NONCE_LEN];
@@ -84,7 +85,12 @@ fn one_pass(
     claimed_p_id: [u8; 32],
     claimed_pubkey: Vec<u8>,
 ) -> Scenario {
-    let msg = pass_countersignature_message(&NONCE, ANCHOR, &chain_hash(ANCHOR), SHARD);
+    let msg = pass_countersignature_message(
+        &NONCE,
+        BlockHeight::from_raw(ANCHOR),
+        &chain_hash(ANCHOR),
+        SHARD,
+    );
     let sig = HybridEd25519MlDsa
         .sign(
             signing_sk,
@@ -97,7 +103,7 @@ fn one_pass(
         shard_id: SHARD,
         settlement_epoch: EPOCH,
         nonce: NONCE,
-        anchor_height: ANCHOR,
+        anchor_height: BlockHeight::from_raw(ANCHOR),
         signature: sig.clone(),
     };
     let header = AttestationHeader {
@@ -110,7 +116,7 @@ fn one_pass(
         witness: BlockAttestationWitness {
             passes: vec![PassWitness {
                 nonce: NONCE,
-                anchor_height: ANCHOR,
+                anchor_height: BlockHeight::from_raw(ANCHOR),
                 signature: sig,
             }],
         }
@@ -610,7 +616,7 @@ fn predecessor_height_moves_the_window() {
     let (pubkey, p_id, sk) = real_p();
     let s = one_pass(&sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &s.pubkey)];
-    for later in 1..=PASS_ANCHOR_LAG_BLOCKS {
+    for later in 1..=PASS_ANCHOR_LAG_BLOCKS.to_raw() {
         assert_eq!(
             call_at_height(HEIGHT + later, s.root, &s.headers, &s.witness, &pairs),
             SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK,
@@ -619,7 +625,7 @@ fn predecessor_height_moves_the_window() {
     }
     assert_eq!(
         call_at_height(
-            HEIGHT + PASS_ANCHOR_LAG_BLOCKS + 1,
+            HEIGHT + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1,
             s.root,
             &s.headers,
             &s.witness,
@@ -649,9 +655,10 @@ fn different_chain_hash_at_anchor_is_countersig_invalid() {
     let s = one_pass(&sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &s.pubkey)];
     let mut table = window_table(HEIGHT);
-    let idx =
-        usize::try_from(ANCHOR - (HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS - PASS_ANCHOR_LAG_BLOCKS))
-            .expect("window index fits usize");
+    let idx = usize::try_from(
+        ANCHOR - (HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw() - PASS_ANCHOR_LAG_BLOCKS.to_raw()),
+    )
+    .expect("window index fits usize");
     table[idx][9] ^= 0x01;
     assert_eq!(
         call_with_table(HEIGHT, &table, s.root, &s.headers, &s.witness, &pairs),
@@ -693,7 +700,7 @@ fn anchor_table_shape_is_checked_on_every_block() {
     // Below the threshold the only right shape is empty.
     assert_eq!(
         call_with_table(
-            PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT - 1,
+            PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT.to_raw() - 1,
             &full,
             empty_attestation_root(),
             &[],
@@ -704,7 +711,7 @@ fn anchor_table_shape_is_checked_on_every_block() {
     );
     assert_eq!(
         call_with_table(
-            PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT - 1,
+            PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT.to_raw() - 1,
             &[],
             empty_attestation_root(),
             &[],
@@ -720,7 +727,7 @@ fn anchor_table_shape_is_checked_on_every_block() {
 /// retention crate pins.
 #[test]
 fn anchor_window_threshold_is_pinned_at_723_and_724() {
-    assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, 724);
+    assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT.to_raw(), 724);
     let mut first = 99u64;
     let mut len = 99usize;
     let below = unsafe { shekyl_archival_pass_anchor_window(723, &raw mut first, &raw mut len) };
@@ -734,7 +741,7 @@ fn anchor_window_threshold_is_pinned_at_723_and_724() {
     assert_eq!(
         (first, len),
         (
-            HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS - PASS_ANCHOR_LAG_BLOCKS,
+            HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw() - PASS_ANCHOR_LAG_BLOCKS.to_raw(),
             PASS_ANCHOR_WINDOW_LEN
         )
     );
@@ -866,11 +873,11 @@ fn pinned_v2_fixture_verifies_through_ffi() {
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID
     );
     let aged: Vec<_> = (0..table.len() as u64)
-        .map(|i| chain_hash(first + PASS_ANCHOR_LAG_BLOCKS + 1 + i))
+        .map(|i| chain_hash(first + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1 + i))
         .collect();
     assert_eq!(
         call_with_table(
-            height + PASS_ANCHOR_LAG_BLOCKS + 1,
+            height + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1,
             &aged,
             root,
             &headers,

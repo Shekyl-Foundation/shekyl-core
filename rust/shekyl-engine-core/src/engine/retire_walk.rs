@@ -100,7 +100,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_archival_retention::MAX_CLAIM_AGE_W;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_engine_state::pscan_state::PScanState;
-use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch};
 
 use crate::engine::pscan::accrual::PScanAccrual;
 use crate::engine::stake_engine::test_fixtures::derive_bundle;
@@ -598,7 +598,7 @@ async fn run_one_sweep(
         store,
         schedule,
         PScanConfig {
-            reorg_depth: WALK_REORG_DEPTH,
+            reorg_depth: BlockCount::from_raw(WALK_REORG_DEPTH),
             batch_blocks: 1,
         },
         initial,

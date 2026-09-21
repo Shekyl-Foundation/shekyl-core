@@ -62,6 +62,15 @@ use shekyl_crypto_pq::signature::{
     HYBRID_SCHEME_ID_ED25519_ML_DSA_65, HYBRID_SIG_VERSION, ML_DSA_65_SIGNATURE_LENGTH,
     SCHEME_DOMAIN_ATTESTATION,
 };
+use shekyl_types::{BlockCount, BlockHeight};
+
+fn bh(n: u64) -> BlockHeight {
+    BlockHeight::from_raw(n)
+}
+
+fn bc(n: u64) -> BlockCount {
+    BlockCount::from_raw(n)
+}
 
 const SIG_PINNED: &str = include_str!("fixtures/attestation_pass_countersignature_v2_pinned.json");
 
@@ -72,7 +81,7 @@ const SIG_PINNED: &str = include_str!("fixtures/attestation_pass_countersignatur
 /// compile-time assert, not a runtime one: `shekyl-curve-tree` is a
 /// dev-dependency here, so the pin lives in the test crate.)
 const _: () = assert!(
-    shekyl_curve_tree::SEGMENT_FREEZE_REORG_MARGIN_BLOCKS == PASS_ANCHOR_DEPTH_BLOCKS,
+    shekyl_curve_tree::SEGMENT_FREEZE_REORG_MARGIN_BLOCKS == PASS_ANCHOR_DEPTH_BLOCKS.to_raw(),
     "pass anchor depth must equal the segment-freeze reorg margin"
 );
 
@@ -193,7 +202,7 @@ fn two_record_root() -> [u8; 32] {
             shard_id: 1,
             settlement_epoch: 100,
             nonce: NONCE_A,
-            anchor_height: ANCHOR_A,
+            anchor_height: bh(ANCHOR_A),
             signature: sa,
         },
         PassRecord {
@@ -201,7 +210,7 @@ fn two_record_root() -> [u8; 32] {
             shard_id: 2,
             settlement_epoch: 200,
             nonce: NONCE_B,
-            anchor_height: ANCHOR_B,
+            anchor_height: bh(ANCHOR_B),
             signature: sb,
         },
     ])
@@ -216,12 +225,16 @@ fn header_canonical_bytes_match_pin() {
 
 #[test]
 fn request_header_and_transcript_match_pin() {
-    let hdr = pass_request_header_bytes(&MSG_NONCE, MSG_ANCHOR_HEIGHT, &MSG_ANCHOR_HASH);
+    let hdr = pass_request_header_bytes(&MSG_NONCE, bh(MSG_ANCHOR_HEIGHT), &MSG_ANCHOR_HASH);
     assert_eq!(hdr.len(), PASS_REQUEST_HEADER_LEN);
     assert_eq!(hex::encode(hdr), REQUEST_HEADER_EXPECT_HEX);
 
-    let msg =
-        pass_countersignature_message(&MSG_NONCE, MSG_ANCHOR_HEIGHT, &MSG_ANCHOR_HASH, MSG_SHARD);
+    let msg = pass_countersignature_message(
+        &MSG_NONCE,
+        bh(MSG_ANCHOR_HEIGHT),
+        &MSG_ANCHOR_HASH,
+        MSG_SHARD,
+    );
     assert_eq!(msg.len(), PASS_COUNTERSIGNATURE_MESSAGE_LEN);
     assert_eq!(hex::encode(msg), MSG_EXPECT_HEX);
 }
@@ -253,9 +266,9 @@ fn attestation_constants_are_pinned() {
     assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 80);
     // The anchor window: depth from the generated reorg-depth constant, lag
     // PROVISIONAL 4 (the JSON key carries the falsifier), threshold 724.
-    assert_eq!(PASS_ANCHOR_DEPTH_BLOCKS, 720);
-    assert_eq!(PASS_ANCHOR_LAG_BLOCKS, 4);
-    assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, 724);
+    assert_eq!(PASS_ANCHOR_DEPTH_BLOCKS, bc(720));
+    assert_eq!(PASS_ANCHOR_LAG_BLOCKS, bc(4));
+    assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, bh(724));
     assert_eq!(PASS_ANCHOR_WINDOW_LEN, 5);
     // Exact witness maximum = WITNESS_PREFIX_LEN + 256 × (nonce ‖ anchor_height ‖ HybridSignature).
     // Pinned to the literal so a signature-size or entry-layout change surfaces
@@ -286,12 +299,13 @@ fn pinned_chain_hash(height: u64) -> [u8; PASS_ANCHOR_HASH_LEN] {
 /// The window a block connecting to `predecessor_height` sees, filled from
 /// `pinned_chain_hash` — the same table the fixture carries for the pinned height.
 fn pinned_window(predecessor_height: u64) -> PassAnchorWindow {
-    let (first, len) = PassAnchorWindow::shape_for_predecessor(predecessor_height)
+    let pred = bh(predecessor_height);
+    let (first, len) = PassAnchorWindow::shape_for_predecessor(pred)
         .unwrap_or_else(|| panic!("predecessor {predecessor_height} has a window"));
     let hashes: Vec<_> = (0..len as u64)
-        .map(|i| pinned_chain_hash(first + i))
+        .map(|i| pinned_chain_hash(first.to_raw() + i))
         .collect();
-    PassAnchorWindow::from_table(predecessor_height, &hashes).expect("table sized to the window")
+    PassAnchorWindow::from_table(pred, &hashes).expect("table sized to the window")
 }
 
 /// 723 has no window (any pass record is refused there); 724 is the first
@@ -300,16 +314,16 @@ fn pinned_window(predecessor_height: u64) -> PassAnchorWindow {
 /// 723 — the genesis boundary from both sides.
 #[test]
 fn anchor_window_genesis_boundary_is_pinned_at_723_and_724() {
-    assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, 724);
-    assert_eq!(PassAnchorWindow::shape_for_predecessor(723), None);
+    assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, bh(724));
+    assert_eq!(PassAnchorWindow::shape_for_predecessor(bh(723)), None);
     assert_eq!(
-        PassAnchorWindow::from_table(723, &[[0u8; 32]; PASS_ANCHOR_WINDOW_LEN]).unwrap_err(),
+        PassAnchorWindow::from_table(bh(723), &[[0u8; 32]; PASS_ANCHOR_WINDOW_LEN]).unwrap_err(),
         PassAnchorWindowError::BelowThreshold {
-            predecessor_height: 723
+            predecessor_height: bh(723)
         }
     );
-    let (first, len) = PassAnchorWindow::shape_for_predecessor(724).expect("724 has a window");
-    assert_eq!((first, len), (0, 5));
+    let (first, len) = PassAnchorWindow::shape_for_predecessor(bh(724)).expect("724 has a window");
+    assert_eq!((first, len), (bh(0), 5));
 
     let (pk, sk, p_id) = pinned_persona();
     let anchor = 0u64;
@@ -317,7 +331,7 @@ fn anchor_window_genesis_boundary_is_pinned_at_723_and_724() {
         .sign(
             &sk,
             SCHEME_DOMAIN_ATTESTATION,
-            &pass_countersignature_message(&[0x09; 32], anchor, &pinned_chain_hash(anchor), 3),
+            &pass_countersignature_message(&[0x09; 32], bh(anchor), &pinned_chain_hash(anchor), 3),
         )
         .expect("sign");
     let rec = PassRecord {
@@ -325,7 +339,7 @@ fn anchor_window_genesis_boundary_is_pinned_at_723_and_724() {
         shard_id: 3,
         settlement_epoch: 1,
         nonce: [0x09; 32],
-        anchor_height: anchor,
+        anchor_height: bh(anchor),
         signature: sig,
     };
     assert_eq!(
@@ -336,9 +350,9 @@ fn anchor_window_genesis_boundary_is_pinned_at_723_and_724() {
     assert_eq!(
         verify_pass_countersignature(&pinned_window(725), &pk, &rec),
         Err(PassCountersignatureError::AnchorOutOfWindow {
-            anchor_height: 0,
-            first: 1,
-            last: 5,
+            anchor_height: bh(0),
+            first: bh(1),
+            last: bh(5),
         })
     );
 }
@@ -360,12 +374,12 @@ fn witness_two_sig() -> BlockAttestationWitness {
         passes: vec![
             PassWitness {
                 nonce: NONCE_A,
-                anchor_height: ANCHOR_A,
+                anchor_height: bh(ANCHOR_A),
                 signature: sa,
             },
             PassWitness {
                 nonce: NONCE_B,
-                anchor_height: ANCHOR_B,
+                anchor_height: bh(ANCHOR_B),
                 signature: sb,
             },
         ],
@@ -525,7 +539,7 @@ const SIG_NONCE: [u8; PASS_NONCE_LEN] = [0xC4; 32];
 const SIG_PREDECESSOR_HEIGHT: u64 = 4_242;
 /// The requester's anchor: `tip − depth` for a block at `h + 1`, i.e. the
 /// window's upper bound (the nominal no-skew case).
-const SIG_ANCHOR_HEIGHT: u64 = SIG_PREDECESSOR_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS;
+const SIG_ANCHOR_HEIGHT: u64 = SIG_PREDECESSOR_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
 const SIG_SHARD_ID: u64 = 17;
 const SIG_EPOCH: u64 = 6;
 
@@ -549,7 +563,7 @@ fn pinned_persona() -> (HybridPublicKey, HybridSecretKey, [u8; 32]) {
 fn pinned_signature(sk: &HybridSecretKey) -> HybridSignature {
     let msg = pass_countersignature_message(
         &SIG_NONCE,
-        SIG_ANCHOR_HEIGHT,
+        bh(SIG_ANCHOR_HEIGHT),
         &pinned_chain_hash(SIG_ANCHOR_HEIGHT),
         SIG_SHARD_ID,
     );
@@ -564,7 +578,7 @@ fn pinned_record(p_id: [u8; 32], signature: HybridSignature) -> PassRecord {
         shard_id: SIG_SHARD_ID,
         settlement_epoch: SIG_EPOCH,
         nonce: SIG_NONCE,
-        anchor_height: SIG_ANCHOR_HEIGHT,
+        anchor_height: bh(SIG_ANCHOR_HEIGHT),
         signature,
     }
 }
@@ -576,12 +590,12 @@ fn build_signature_document() -> Value {
     let witness = BlockAttestationWitness {
         passes: vec![PassWitness {
             nonce: SIG_NONCE,
-            anchor_height: SIG_ANCHOR_HEIGHT,
+            anchor_height: bh(SIG_ANCHOR_HEIGHT),
             signature: sig.clone(),
         }],
     };
     let window = pinned_window(SIG_PREDECESSOR_HEIGHT);
-    let table: Vec<String> = (window.first()..=window.last())
+    let table: Vec<String> = (window.first().to_raw()..=window.last().to_raw())
         .map(|h| hex::encode(pinned_chain_hash(h)))
         .collect();
     json!({
@@ -605,12 +619,12 @@ fn build_signature_document() -> Value {
         "predecessor_height": SIG_PREDECESSOR_HEIGHT,
         "anchor_height": SIG_ANCHOR_HEIGHT,
         "anchor_hash_hex": hex::encode(pinned_chain_hash(SIG_ANCHOR_HEIGHT)),
-        "anchor_window_first_height": window.first(),
+        "anchor_window_first_height": window.first().to_raw(),
         "anchor_window_hashes_hex": table,
         "shard_id": SIG_SHARD_ID,
         "settlement_epoch": SIG_EPOCH,
         "request_header_hex": hex::encode(pass_request_header_bytes(
-            &SIG_NONCE, SIG_ANCHOR_HEIGHT, &pinned_chain_hash(SIG_ANCHOR_HEIGHT))),
+            &SIG_NONCE, bh(SIG_ANCHOR_HEIGHT), &pinned_chain_hash(SIG_ANCHOR_HEIGHT))),
         "message_hex": hex::encode(record.countersignature_message(&pinned_chain_hash(SIG_ANCHOR_HEIGHT))),
         "header_hex": hex::encode(record.to_header().to_canonical_bytes()),
         "hybrid_signature_hex": hex::encode(sig.to_canonical_bytes().expect("sig")),
@@ -643,8 +657,11 @@ fn fixture_window(kat: &Value) -> PassAnchorWindow {
                 .expect("32 bytes")
         })
         .collect();
-    PassAnchorWindow::from_table(kat["predecessor_height"].as_u64().expect("height"), &hashes)
-        .expect("fixture window is well-formed")
+    PassAnchorWindow::from_table(
+        bh(kat["predecessor_height"].as_u64().expect("height")),
+        &hashes,
+    )
+    .expect("fixture window is well-formed")
 }
 
 /// The pinned operands are the ones this file derives from — a fixture edited
@@ -675,12 +692,15 @@ fn pinned_v2_signature_fixture_operands_match_this_test() {
         fixture_hex(&kat, "anchor_hash_hex"),
         pinned_chain_hash(SIG_ANCHOR_HEIGHT)
     );
-    let (first, _) = PassAnchorWindow::shape_for_predecessor(SIG_PREDECESSOR_HEIGHT).unwrap();
-    assert_eq!(kat["anchor_window_first_height"].as_u64(), Some(first));
+    let (first, _) = PassAnchorWindow::shape_for_predecessor(bh(SIG_PREDECESSOR_HEIGHT)).unwrap();
+    assert_eq!(
+        kat["anchor_window_first_height"].as_u64(),
+        Some(first.to_raw())
+    );
     let window = fixture_window(&kat);
     assert_eq!(window.first(), first);
-    for h in window.first()..=window.last() {
-        assert_eq!(window.hash_at(h), Some(&pinned_chain_hash(h)));
+    for h in window.first().to_raw()..=window.last().to_raw() {
+        assert_eq!(window.hash_at(bh(h)), Some(&pinned_chain_hash(h)));
     }
     assert_eq!(kat["shard_id"].as_u64(), Some(SIG_SHARD_ID));
     assert_eq!(kat["settlement_epoch"].as_u64(), Some(SIG_EPOCH));
@@ -735,7 +755,7 @@ fn pinned_v2_signature_verifies_and_is_bound_to_every_term() {
     // Anchor window, sliding: the SAME record verifies at predecessors h ..= h + L
     // (the accepted replay window), and is AnchorOutOfWindow at h − 1 (anchor
     // above the upper bound: a pre-fetched read) and at h + L + 1 (stale).
-    for h in SIG_PREDECESSOR_HEIGHT..=SIG_PREDECESSOR_HEIGHT + PASS_ANCHOR_LAG_BLOCKS {
+    for h in SIG_PREDECESSOR_HEIGHT..=SIG_PREDECESSOR_HEIGHT + PASS_ANCHOR_LAG_BLOCKS.to_raw() {
         assert_eq!(
             verify_pass_countersignature(&pinned_window(h), &pk, &record),
             Ok(()),
@@ -748,7 +768,7 @@ fn pinned_v2_signature_verifies_and_is_bound_to_every_term() {
     ));
     assert!(matches!(
         verify_pass_countersignature(
-            &pinned_window(SIG_PREDECESSOR_HEIGHT + PASS_ANCHOR_LAG_BLOCKS + 1),
+            &pinned_window(SIG_PREDECESSOR_HEIGHT + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1),
             &pk,
             &record
         ),
@@ -757,14 +777,14 @@ fn pinned_v2_signature_verifies_and_is_bound_to_every_term() {
     // Anchor hash: a chain whose hash at the anchor height differs (a fork, or a
     // requester who lied to P) rejects the signature — the hash is P's
     // transcript term, checked against the CHAIN's value, never the header's.
-    let forked_hashes: Vec<_> = (window.first()..=window.last())
+    let forked_hashes: Vec<_> = (window.first().to_raw()..=window.last().to_raw())
         .map(|h| {
             let mut x = pinned_chain_hash(h);
             x[9] ^= 0xFF;
             x
         })
         .collect();
-    let forked = PassAnchorWindow::from_table(SIG_PREDECESSOR_HEIGHT, &forked_hashes).unwrap();
+    let forked = PassAnchorWindow::from_table(bh(SIG_PREDECESSOR_HEIGHT), &forked_hashes).unwrap();
     assert_eq!(
         verify_pass_countersignature(&forked, &pk, &record),
         Err(PassCountersignatureError::InvalidSignature)
@@ -772,7 +792,7 @@ fn pinned_v2_signature_verifies_and_is_bound_to_every_term() {
     // Anchor height (carried), moved inside the window: the chain's hash at the
     // new height is not the one signed over.
     let mut moved = record.clone();
-    moved.anchor_height -= 1;
+    moved.anchor_height = bh(moved.anchor_height.to_raw() - 1);
     assert_eq!(
         verify_pass_countersignature(&window, &pk, &moved),
         Err(PassCountersignatureError::InvalidSignature)
@@ -837,7 +857,7 @@ fn regenerate_attestation_wire_vectors() {
         "REQUEST_HEADER_EXPECT_HEX = \"{}\"",
         hex::encode(pass_request_header_bytes(
             &MSG_NONCE,
-            MSG_ANCHOR_HEIGHT,
+            bh(MSG_ANCHOR_HEIGHT),
             &MSG_ANCHOR_HASH
         ))
     );
@@ -845,7 +865,7 @@ fn regenerate_attestation_wire_vectors() {
         "MSG_EXPECT_HEX            = \"{}\"",
         hex::encode(pass_countersignature_message(
             &MSG_NONCE,
-            MSG_ANCHOR_HEIGHT,
+            bh(MSG_ANCHOR_HEIGHT),
             &MSG_ANCHOR_HASH,
             MSG_SHARD
         ))

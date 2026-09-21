@@ -34,6 +34,7 @@
 //! wallet safety policy is wallet-state concern.
 
 use shekyl_address::Network;
+use shekyl_types::BlockCount;
 
 /// Per-network wallet safety defaults.
 ///
@@ -58,7 +59,7 @@ pub struct NetworkSafetyConstants {
     /// rejected; higher values merely delay UX. See
     /// `docs/WALLET_PREFS.md` §3.3 — this field accepts a CLI-ephemeral
     /// override (`--max-reorg-depth N`) but is never persisted.
-    pub max_reorg_depth: u64,
+    pub max_reorg_depth: BlockCount,
 
     /// Key-reuse mitigation v2 (defensive derivation that hardens the
     /// wallet against view-key-reuse linkability attacks). Invariant:
@@ -86,7 +87,7 @@ impl NetworkSafetyConstants {
     /// Mainnet defaults.
     pub const fn mainnet() -> Self {
         Self {
-            max_reorg_depth: 10,
+            max_reorg_depth: BlockCount::from_raw(10),
             key_reuse_mitigation2: true,
             default_skip_to_height: 0,
             default_refresh_from_block_height: 0,
@@ -98,7 +99,7 @@ impl NetworkSafetyConstants {
     /// concern.
     pub const fn testnet() -> Self {
         Self {
-            max_reorg_depth: 6,
+            max_reorg_depth: BlockCount::from_raw(6),
             key_reuse_mitigation2: true,
             default_skip_to_height: 0,
             default_refresh_from_block_height: 0,
@@ -110,7 +111,7 @@ impl NetworkSafetyConstants {
     /// non-production value.
     pub const fn stagenet() -> Self {
         Self {
-            max_reorg_depth: 10,
+            max_reorg_depth: BlockCount::from_raw(10),
             key_reuse_mitigation2: true,
             default_skip_to_height: 0,
             default_refresh_from_block_height: 0,
@@ -148,15 +149,15 @@ const _: () = assert!(
     "key_reuse_mitigation2 must be true on stagenet",
 );
 const _: () = assert!(
-    NetworkSafetyConstants::mainnet().max_reorg_depth >= 1,
+    NetworkSafetyConstants::mainnet().max_reorg_depth.to_raw() >= 1,
     "max_reorg_depth must be at least 1 on mainnet",
 );
 const _: () = assert!(
-    NetworkSafetyConstants::testnet().max_reorg_depth >= 1,
+    NetworkSafetyConstants::testnet().max_reorg_depth.to_raw() >= 1,
     "max_reorg_depth must be at least 1 on testnet",
 );
 const _: () = assert!(
-    NetworkSafetyConstants::stagenet().max_reorg_depth >= 1,
+    NetworkSafetyConstants::stagenet().max_reorg_depth.to_raw() >= 1,
     "max_reorg_depth must be at least 1 on stagenet",
 );
 

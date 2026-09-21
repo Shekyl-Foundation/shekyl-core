@@ -65,7 +65,7 @@ use serde_json::json;
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
 use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse};
-use shekyl_types::TxHash;
+use shekyl_types::{BlockCount, TxHash};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 /// `cargo test` runs tests in parallel; spawning multiple daemons concurrently
@@ -1630,7 +1630,7 @@ async fn pscan_until(
     let handle = super::Engine::start_pscan_with(
         arc.clone(),
         PScanConfig {
-            reorg_depth: PSCAN_TEST_REORG_DEPTH,
+            reorg_depth: BlockCount::from_raw(PSCAN_TEST_REORG_DEPTH),
             // Small batches so each seal lands quickly: the sweep persists state
             // only at batch boundaries, and a debug-build scan-step is slow
             // enough that a whole-backlog batch could outlive the deadline

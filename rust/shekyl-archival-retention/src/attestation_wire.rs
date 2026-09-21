@@ -13,6 +13,7 @@ use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
 };
 use shekyl_crypto_pq::CryptoError;
+use shekyl_types::BlockHeight;
 
 use crate::attestation::AttestationKind;
 use crate::hash::cshake256_32;
@@ -112,7 +113,7 @@ pub struct PassRecord {
     pub shard_id: u64,
     pub settlement_epoch: u64,
     pub nonce: [u8; PASS_NONCE_LEN],
-    pub anchor_height: u64,
+    pub anchor_height: BlockHeight,
     pub signature: HybridSignature,
 }
 
@@ -152,7 +153,7 @@ pub fn attestation_root(records: &[PassRecord]) -> Result<[u8; 32], CryptoError>
         let mut rec = [0u8; RECORD_LEN];
         rec[..ATTESTATION_HEADER_LEN].copy_from_slice(&record.to_header().to_canonical_bytes());
         rec[ATTESTATION_HEADER_LEN..NONCE_END].copy_from_slice(&record.nonce);
-        rec[NONCE_END..ANCHOR_END].copy_from_slice(&record.anchor_height.to_le_bytes());
+        rec[NONCE_END..ANCHOR_END].copy_from_slice(&record.anchor_height.to_raw().to_le_bytes());
         rec[ANCHOR_END..].copy_from_slice(&record.signature.to_canonical_bytes()?);
         record_bytes.push(rec);
     }
@@ -176,7 +177,7 @@ pub fn empty_attestation_root() -> [u8; 32] {
 #[derive(Debug, Clone)]
 pub struct PassWitness {
     pub nonce: [u8; PASS_NONCE_LEN],
-    pub anchor_height: u64,
+    pub anchor_height: BlockHeight,
     pub signature: HybridSignature,
 }
 
@@ -247,7 +248,7 @@ impl BlockAttestationWitness {
                 .map_err(|source| WitnessError::Signature { index, source })?;
             debug_assert_eq!(sig.len(), HybridSignature::CANONICAL_LEN);
             out.extend_from_slice(&entry.nonce);
-            out.extend_from_slice(&entry.anchor_height.to_le_bytes());
+            out.extend_from_slice(&entry.anchor_height.to_raw().to_le_bytes());
             out.extend_from_slice(&sig);
         }
         Ok(out)
@@ -280,8 +281,9 @@ impl BlockAttestationWitness {
             let end = start + WITNESS_ENTRY_LEN;
             let mut nonce = [0u8; PASS_NONCE_LEN];
             nonce.copy_from_slice(&bytes[start..nonce_end]);
-            let anchor_height =
-                u64::from_le_bytes(bytes[nonce_end..anchor_end].try_into().expect("8 bytes"));
+            let anchor_height = BlockHeight::from_raw(u64::from_le_bytes(
+                bytes[nonce_end..anchor_end].try_into().expect("8 bytes"),
+            ));
             let signature = HybridSignature::from_canonical_bytes(&bytes[anchor_end..end])
                 .map_err(|source| WitnessError::Signature { index, source })?;
             passes.push(PassWitness {
@@ -338,9 +340,9 @@ pub enum PassCountersignatureError {
     PIdMismatch,
     #[error("pass anchor height {anchor_height} outside admission window [{first}, {last}]")]
     AnchorOutOfWindow {
-        anchor_height: u64,
-        first: u64,
-        last: u64,
+        anchor_height: BlockHeight,
+        first: BlockHeight,
+        last: BlockHeight,
     },
     #[error("pass countersignature does not verify")]
     InvalidSignature,
@@ -392,7 +394,7 @@ pub fn verify_pass_countersignature(
 pub fn verify_pass_transcript(
     p_pubkey: &HybridPublicKey,
     nonce: &[u8; PASS_NONCE_LEN],
-    anchor_height: u64,
+    anchor_height: BlockHeight,
     anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
     shard_id: u64,
     signature: &HybridSignature,
