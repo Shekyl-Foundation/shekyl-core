@@ -283,7 +283,82 @@ the code has been making this distinction correctly in one place, without a
 name, and the unnamed version could not be reused by the seven consumers in
 §1.)*
 
-### 2.7.4 A reason to prefer E2(a) beyond cost
+### 2.7.4 The invariant, verified exhaustively — WHITE *is* a verified dialability claim
+
+**Stronger than "gossip is contingent on an observation": there is no path by
+which a claim reaches another node's view.** Every site checked at
+`f9e000f76`:
+
+| Direction | Site | Lands in |
+| --- | --- | --- |
+| gossip **in** from a peer | `merge_peerlist` → `append_with_peer_gray` (`net_peerlist.h:239`) | **gray** |
+| derived advert from a handshake | `net_node.inl:2920`, `last_seen = 0` | **gray** |
+| disclosure **out** | `get_peerlist_head` reads `m_peers_white` (`net_peerlist.h:285`) | **white only** |
+
+And **all four gray→white promotions run after an outbound dial we made
+ourselves**:
+
+| Site | Trigger |
+| --- | --- |
+| `net_node.inl:1587` | `append_with_peer_white` after **our** handshake succeeds |
+| `:1283` | `COMMAND_HANDSHAKE` **response** handler — a dial we initiated |
+| `:1343` | `COMMAND_TIMED_SYNC` **response** handler — likewise |
+| `:3313` | `gray_peerlist_housekeeping`, **only** in the `else` after `check_connection_and_handshake_with_peer` returns true; the failure branch **evicts** |
+
+> **So a white entry is not merely "observed" — it is a VERIFIED DIALABILITY
+> CLAIM: *I dialled this peer and it answered*. The peerlist has been running
+> PWD-E2's verification, for peers, all along — unnamed, at the promotion
+> boundary.**
+
+*(This row's earlier draft asserted the weaker property from the mechanism
+without checking every site. Recorded because it is this lane's recurring
+failure shape — plausible from the mechanism, wrong at the code — and the
+exhaustive version is the one the design can lean on.)*
+
+### 2.7.5 CANDIDATE for Round 2 — third-party endpoint proposals, at zero new wire
+
+**A candidate, not a conclusion.** PWD-E1's problem is circular: a node cannot
+verify its own endpoint because it does not know what its endpoint *is*.
+**But the network already verified it, from the other side.**
+
+If some peer dialled us successfully, it promoted our derived entry to
+**white** — and white is exactly what gets disclosed. **So every peerlist head
+we receive is a set of third-party-verified dialable endpoints.** If our own
+endpoint is among them, *somebody verified us*.
+
+**This reuses `get_peerlist_head`'s existing disclosure and adds no wire.**
+
+| Step | Mechanism | Status |
+| --- | --- | --- |
+| **propose** | our own port appears in a received peerlist head | existing disclosure, no new field |
+| **decide** | dial the port-matching candidate; `detect_self_handshake` (`net_node.inl:1411`) matches our own in-flight nonce, within-zone and erase-on-match | existing machinery (PWD-E3) |
+
+**That is exactly E1(c) — sources propose, a verifier decides** — with the
+source being *the network's own verified state* rather than a router's claim
+or an operator's flag.
+
+**Why the negative signal is better than the one PWD-I7 proposed.** *"Nothing
+matching our port has appeared across many received peerlists"* is **positively
+grounded in the absence of anybody's successful dial**. The tier-1 heuristic
+this row proposed earlier — *zero inbound in `T`* — is grounded in **our own
+absence of observation**, which is weaker: it cannot distinguish "unreachable"
+from "reachable but unpopular". **On PWD-I7's daemon B this would have
+concluded unreachable correctly, and from the network's verified state rather
+than from a timeout.**
+
+**Three caveats to carry if Round 2 takes it up:**
+
+1. **A NAT'd node cannot recognise its own endpoint**, since it does not know
+   its WAN address. **Port-matching alone is suggestive, not proof** — which is
+   precisely why it is a *proposal* and the hairpin is the *verifier*.
+2. **It is a hairpin underneath**, so it inherits E2(a)'s **under-reporting**
+   where routers do not support hairpin. Safe direction, and real.
+3. **The candidate set is attacker-influenced** — a peer chooses which white
+   entries it discloses, so it can offer a **port-matching decoy**. The hairpin
+   defeats it: *a decoy cannot return our nonce.* **Another instance of §2.7's
+   requirement — a claim proposes, an observation decides.**
+
+### 2.7.6 A reason to prefer E2(a) beyond cost
 
 **E2(a)'s hairpin reuses the existing handshake nonce, so it PRESERVES §2.6's
 no-new-wire conclusion.** E2(b) must specify its own dial-back mechanism (the
