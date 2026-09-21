@@ -2428,11 +2428,10 @@ and would produce it again.*
 
 1. **Raise `--max-connections-per-ip` on every seed in the live set** — cap 1
    already permits the two nodes landing on different seeds, so a partial raise
-   reproduces the symptom and reads as a null result. **The live set is the
-   five reachable seeds**: `seedaus`, `seeduse`, `seedusw`, `seedjp`,
-   `seedbrz`. **`seedeu` is excluded** (provider-side outage, undiagnosable at
-   the time of the run) and its noise is filtered by log arm, not by timing —
-   see the disposition above. **Restarting the
+   reproduces the symptom and reads as a null result. **The live set is all SIX** as of the
+   re-probe — `seedeu` recovered and its exclusion is lifted. **Re-probe
+   immediately before the run anyway**: that is the whole lesson of the
+   exclusion, since one sample cannot tell a standing block from a transient. **Restarting the
    SEEDS is fine** — it does not clear B's cache, which is the one that matters.
    **The live set is established below rather than assumed**, because a seed
    that is dialled and does not answer burns the same 3600s window and puts
@@ -2448,7 +2447,7 @@ Surveyed directly over SSH; every figure below is measured, not inherited:
 | `seedaus` | 134.199.166.22 | **open** | active | 7408 | **yes** |
 | `seeduse` | 45.77.147.65 | **open** | active | 7408 | **yes** |
 | `seedusw` | 45.76.171.128 | **open** | active | 7408 | **yes** |
-| `seedeu` | 45.77.66.189 | **CLOSED** | active | 7408 | **NO — EXCLUDED, see below** |
+| `seedeu` | 45.77.66.189 | **closed at survey, OPEN on re-probe** | active | 7408 | **yes — see the recovery note** |
 | `seedjp` | 139.162.71.114 | **open** | active | 7408 | **yes** |
 | `seedbrz` | 104.64.59.31 | **open** | active | 7408 | **yes** |
 
@@ -2468,12 +2467,20 @@ list*, so every node dials it, **fails at CONNECT** (`net_node.inl:1549`,
 the flat 3600s. That is an independent 3600s clock running inside the exact
 channel the timing delta reads.
 
-**DISPOSITION 2026-09-21: EXCLUDED, not fixed** (Rick). The Frankfurt facility
-is having provider-side errors, so the ingress block **cannot be diagnosed or
-verified** right now — and a fix that cannot be confirmed is not a fix. The
-run proceeds against the **five reachable seeds**; `seedeu` is excluded and
-this paragraph is the record of it, per the rule above that an exclusion is
-written down rather than averaged over.
+**RECOVERY, AND A CORRECTED CAUSE, 2026-09-21.** `seedeu` was excluded on the
+strength of the survey above. Re-probed after the Frankfurt incident cleared,
+it is **OPEN from all five vantage points that previously measured it closed**
+— this box, `seedaus`, `seedjp`, `seeduse`, and `skl-foundation`. **It was a
+transient provider outage, not the standing firewall misconfiguration the
+survey inferred**, and the exclusion is lifted: the live set is **six**.
+
+**The survey's measurement was right and its CAUSE was wrong, which is worth
+keeping.** Daemon-active, bound to `0.0.0.0`, and closed from several
+independent sources is consistent with a standing block *and* with an
+upstream outage. **A point-in-time reachability probe cannot separate them** —
+the discriminator is *time*, and the survey had one sample and did not say so.
+The seed-to-seed control correctly excluded *prober egress*; it could not
+exclude *transience*, and those are different confounds.
 
 **The exclusion is clean, because the contamination is separable in the log
 rather than merely bounded.** `seedeu` is still compiled in, so B will still
@@ -2518,85 +2525,60 @@ knowing, but it is ours and it is reachable.
 first**. Only if B never recovers do you restart it — which then separates *"the
 cap raise did not work"* from *"cache plus something else"*.
 
-#### Chain-identity divergence is RULED OUT, with the discriminator named
+#### LIVE CONFIRMATION 2026-09-21: the cap does not merely refuse — it PARTITIONS
 
-**Not "untested" — ruled out by two discriminators already present in the
-captured data** (Rick, 2026-09-21; verified at `dev` `059aca264`). Recorded
-because the obvious check ran the wrong way round: the genesis comparison was
-made against the node that *worked*, and a chain-identity mismatch would hide
-in the one that failed.
+**Measured on the two NAT'd hosts in steady state, with nothing perturbed.**
+Stronger evidence than the falsifier was designed to produce, and it arrived
+without touching production.
 
-**Discriminator 1 — `white_list: 0 / gray_list: 0` rules out a genesis fork.**
-A mismatched genesis lets the handshake **complete**; the divergence surfaces
-later, at block validation. The chain, verified:
+Both hosts share one WAN address (`173.9.20.245`, confirmed on each). Their
+established outbound connections to the six compiled seeds:
 
-- peerlist entries arrive **only** through a `COMMAND_HANDSHAKE` response
-  (`net_node.inl:1260`) or a `COMMAND_TIMED_SYNC` response (`:1332`) — both
-  inside the *response* handler, so both require a completed exchange;
-- `process_payload_sync_data` has exactly **two** `return false` paths
-  (`cryptonote_protocol_handler.inl:417` hard-fork-version mismatch, `:428`
-  weird pruning seed) and **neither is genesis-related**. Two nodes on the same
-  binary with different genesis share a hard-fork schedule, so both pass;
-- therefore a genesis-forked peer's handshake completes, `:1260` runs, and its
-  lists fill.
+| | Seeds held |
+| --- | --- |
+| **A** (`skl-miner-test`) | `seedaus`, `seedbrz`, `seedjp`, `seeduse` — **4** |
+| **B** (`skl-foundation`) | `seedusw`, `seedeu` — **2** |
+| **Overlap** | **ZERO** |
+| **Union** | **6 of 6** |
 
-**The refused node's lists are empty, so no handshake response was ever
-processed.** That is the opposite of the genesis-fork signature.
+**Disjointness across six independent hosts is not what chance produces.**
+Without a cap, two daemons selecting peers independently would overlap —
+`crypto::rand_idx` over six seeds makes a clean partition the *unlikely*
+outcome. **With `max-connections-per-ip = 1` it is the only possible outcome**:
+each seed accepts exactly one connection from that address, so the two daemons
+must divide the set.
 
-**Discriminator 2 — the absence of `wrong network` is a POSITIVE result.** A
-`network_id` mismatch is checked at `net_node.inl:1254` and logged at `:1256`
-— `"COMMAND_HANDSHAKE Failed, wrong network! … closing connection."` — in the
-**dialing** node's own response handler, at `LOG_WARNING`. **Unlike the per-IP
-refusal, which is visible only on the refusing node**, this one is visible on
-the side that is being refused. Its absence from the refused node's log is
-therefore evidence, not a gap. (The accepting side logs its own variant at
-`:2843`/`:2846`, `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
-two sides do **not** log at the same level, and "loud on both sides" would
-overstate it. The half this discriminator needs is the **refused** side, and
-that is the louder one: `LOG_WARNING_CC`, where the per-IP refusal reaches the
-refused operator **not at all**. That asymmetry is what makes the absence
-evidence rather than silence.)
-falsifier runs, not after, because it is free and it would redirect the whole
-lane.
+**This states the defect more sharply than "B was refused."** The failure is
+not binary, it is a **capacity division**: *N* nodes behind one address share
+*S* reachable seeds and each gets a disjoint slice. Two nodes over six seeds is
+survivable — B is at height 5841 climbing toward 7433 as this is written. **The
+dead end happened when the reachable count fell below what the partition
+needed**: `seedeu` was down during the original observation, and A held enough
+of the remaining five that B got none. Same mechanism at both ends; the
+variable is *how many seeds are reachable*, not whether the cap fires.
 
-#### What the falsifier can and cannot settle
+**Two corollaries, neither visible from the refusal alone:**
 
-**It re-sequences PWD-I8. It cannot close it.** Stated explicitly because the
-cheap outcome is the dangerous one.
+- **The damage scales with `N/S`, not with adversarial behaviour.** More honest
+  nodes behind one egress, or fewer reachable seeds, makes it worse — and both
+  are ordinary operating conditions, not attacks.
+- **A dead seed is a cap MULTIPLIER.** `seedeu` being unreachable did not cost
+  one connection; it removed a slot from the partition and pushed B to zero.
+  That is why the `seedeu` row is pre-genesis rather than housekeeping.
 
-The cap is *already* demonstrated to be what **refuses** B: the refusal log
-line, the port-move control, and A holding every seed's slot are all in the
-record. What the falsifier settles is whether the failure cache is what makes
-that refusal **unrecoverable** — which changes the remedy for *this incident*
-and the urgency of the window row, and nothing else.
+**What this does to the falsifier.** Its original question — *does B recover
+immediately, or only after the cache window?* — is **no longer answerable from
+this state**, because B has already recovered: its daemon restarted
+2026-09-21 01:57 EDT, clearing `m_conn_fails_cache`, and `seedeu` returned,
+giving it two seeds A was not holding. **That recovery is explained by
+availability, not by the cap being fixed** — the cap is still 1 fleet-wide and
+still partitioning, which the table above measures directly.
 
-**PWD-I8 was minted because `is_same_host` answers two questions with one
-quantity, and that is true whichever mechanism produced this particular dead
-node.** If the falsifier shows that tier 1 plus a window fix restores the second
-daemon, the result is **a fixed incident and an unfixed category error** — and
-a working node is the single thing most likely to stop anyone looking at I8
-again. A green falsifier is therefore a re-sequencing signal, never a closure.
-
-**Methodology, because the run is cheap to do wrong:**
-
-1. **Raise the cap on every live seed**, not one — the refusing side enforces
-   it, and one unraised seed reproduces the symptom and reads as a null result.
-2. **Restart both daemons afterwards**, to clear `m_conn_fails_cache`. B is
-   *poisoned* — 34 recorded failures — so without a restart the cache alone
-   reproduces the old behaviour against a correctly-raised cap, and the run
-   would falsify the fix rather than the hypothesis. **B's restart matters more
-   than A's**, which is the opposite of the intuition that the synced node is
-   the interesting one.
-3. **Read the observation off the SEED**, as two simultaneous connections from
-   one address — not off either daemon's sync progress, which confounds
-   admission with everything downstream of it.
-
-**Reopening criteria if the number is later raised and the row closed:** reopen
-if a fleet run shows a single host sustaining more inbound connections than the
-raised cap was provisioned for *without* address diversity — that is, if the
-honest-duplicate shape and the adversarial shape stop being distinguishable by
-address count, the cap's remaining job disappears and the row becomes a deletion
-rather than a tuning.
+**The remaining value is the other half, and it is a sharper prediction:** with
+the cap raised on the reachable seeds, **A and B should both hold every seed
+they dial, and the overlap should go from zero to the full shared set.** That
+does not depend on catching a transient, and it is read off the seeds exactly
+as the methodology's step 3 already requires.
 
 #### Owed to the maintainer — questions, not decisions
 
