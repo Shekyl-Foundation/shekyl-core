@@ -224,8 +224,8 @@ impl EpochCache {
 ///    production grew a post-slash cooldown gate in the connect; the probe is
 ///    kept so such a gate moves this floor automatically.
 ///
-/// (`release_cooldown.rs` is the VOLUNTARY-EXIT gate — `Release` /
-/// `HoldingsUpdate`-drop, gate-4 §4.3/§4.4 — and is not on the slash path;
+/// (`release_cooldown.rs` is the VOLUNTARY-EXIT gate — `Release`,
+/// gate-4 §4.3 — and is not on the slash path;
 /// verified at source 2026-07-29. Nothing bounds WHEN a `Reinstate` may happen —
 /// the interval stays open indefinitely; there is no reinstate deadline.)
 #[must_use]
@@ -241,7 +241,7 @@ pub fn reinstate_structural_downtime_epochs() -> f64 {
     // (today 0 — the connect admits a same-epoch close).
     let validation_downtime = (SLASH_EPOCH..SLASH_EPOCH + 64)
         .find_map(|e_reinstate| {
-            reinstate_connect(bonded, &held, &open, &held, bonded, e_reinstate)
+            reinstate_connect(bonded, &held, &open, &held, e_reinstate)
                 .ok()
                 .map(|c| (c.interval_end_exclusive - 1 - SLASH_EPOCH) as f64)
         })

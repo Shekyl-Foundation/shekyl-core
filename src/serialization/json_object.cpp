@@ -667,7 +667,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_bond_p
     throw WRONG_TYPE("archival bond-post hybrid_public_key length not canonical");
   GET_FROM_JSON_OBJECT(val, txin.p_canonical_id, p_canonical_id);
   GET_FROM_JSON_OBJECT(val, txin.post_kind, post_kind);
-  if (txin.post_kind > static_cast<uint8_t>(cryptonote::archival_bond_post_kind::HoldingsUpdate))
+  if (txin.post_kind > static_cast<uint8_t>(cryptonote::archival_bond_post_kind::Release))
     throw WRONG_TYPE("invalid archival_bond_post_kind");
   // JoinMarket requires both coupled members; any other kind refuses them.
   if (txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket))

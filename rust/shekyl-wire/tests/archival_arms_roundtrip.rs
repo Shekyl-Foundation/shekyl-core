@@ -140,7 +140,8 @@ fn bond_post_joinmarket_round_trips_with_bond_spend_pk() {
 
 #[test]
 fn bond_post_non_joinmarket_has_no_bond_spend_pk() {
-    // post_kind 3 = HoldingsUpdate: bond_spend_pk is absent on the wire.
+    // post_kind 3 was HoldingsUpdate (REJECTED); the envelope still carries
+    // Other(tag) without bond_spend_pk. Retention decode refuses the tag.
     let input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0x01; PQC_HYBRID_SINGLE_KEY_LEN],
         p_canonical_id: PCanonicalId::from_bytes([0x02; 32]),

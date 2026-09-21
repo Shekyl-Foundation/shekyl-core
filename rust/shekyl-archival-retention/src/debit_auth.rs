@@ -10,7 +10,7 @@
 //! load-bearing.
 //!
 //! - [`requires_cold_authority`] is the selector — exhaustive over
-//!   `(post_kind, bond_debit)`.
+//!   `post_kind`.
 //! - [`cold_authority_pin`] consults the selector and, when it holds, runs
 //!   [`debit_auth_pin`] against the **record's committed** key. Never a key
 //!   the transaction brings along, never the persona's identity key.
@@ -18,15 +18,15 @@
 //! | `post_kind`      | requires cold authority |
 //! |------------------|-------------------------|
 //! | `Release`        | always                  |
-//! | `HoldingsUpdate` | iff `bond_debit > 0`    |
 //! | `JoinMarket`     | never                   |
-//! | `Reinstate`         | never                   |
+//! | `Reinstate`      | never                   |
 //!
 //! `Release` is unconditional because UB3 runs before the debit-term guards
 //! (UB9); a zero-debit Release with the wrong key is refused here, not later.
-//! `HoldingsUpdate` keys on the term because that is how the kind tells drop
-//! (cold) from add (identity). Credit paths never pin: JoinMarket is the post
-//! that *commits* the cold key; Reinstate's verify requires `bond_debit == 0`.
+//! Credit paths never pin: JoinMarket is the post that *commits* the cold key;
+//! Reinstate is zero-money (immutable-bond) and verify requires both terms 0.
+//! Discriminant 3 (`HoldingsUpdate`) is REJECTED — there is no in-place
+//! holdings-change kind, so no debit-amount selector remains.
 //!
 //! [`cold_authority_pin`] refuses a predicate-false call
 //! ([`ColdAuthorityError::NotAColdAuthorityPost`]) before the keys are
@@ -91,14 +91,17 @@ pub fn debit_auth_pin(
     Ok(())
 }
 
-/// Whether this `(post_kind, bond_debit)` must authorize against the record's
-/// cold `bond_spend_pk`. Exhaustive: a new [`BondPostKind`] does not compile
-/// until its row is decided here.
+/// Whether this `post_kind` must authorize against the record's cold
+/// `bond_spend_pk`. Exhaustive: a new [`BondPostKind`] does not compile until
+/// its row is decided here.
+///
+/// `bond_debit` is unused. It selected HoldingsUpdate-drop vs add, and that
+/// kind is REJECTED (immutable-bond, 2026-09-20). The parameter stays so the
+/// FFI signature does not fork.
 #[must_use]
-pub fn requires_cold_authority(post_kind: BondPostKind, bond_debit: u64) -> bool {
+pub fn requires_cold_authority(post_kind: BondPostKind, _bond_debit: u64) -> bool {
     match post_kind {
         BondPostKind::Release => true,
-        BondPostKind::HoldingsUpdate => bond_debit > 0,
         BondPostKind::JoinMarket | BondPostKind::Reinstate => false,
     }
 }
@@ -205,9 +208,6 @@ mod tests {
         assert!(requires_cold_authority(Release, 0));
         assert!(requires_cold_authority(Release, 1));
         assert!(requires_cold_authority(Release, u64::MAX));
-        assert!(!requires_cold_authority(HoldingsUpdate, 0));
-        assert!(requires_cold_authority(HoldingsUpdate, 1));
-        assert!(requires_cold_authority(HoldingsUpdate, u64::MAX));
         assert!(!requires_cold_authority(JoinMarket, 0));
         assert!(!requires_cold_authority(JoinMarket, 1));
         assert!(!requires_cold_authority(Reinstate, 0));
@@ -216,11 +216,7 @@ mod tests {
 
     #[test]
     fn composed_gate_forwards_the_pin_unchanged_where_the_predicate_holds() {
-        for (kind, debit) in [
-            (BondPostKind::Release, 0u64),
-            (BondPostKind::Release, 7),
-            (BondPostKind::HoldingsUpdate, 7),
-        ] {
+        for (kind, debit) in [(BondPostKind::Release, 0u64), (BondPostKind::Release, 7)] {
             assert_eq!(
                 cold_authority_pin(kind, debit, &canonical(7), &canonical(7)),
                 Ok(()),
@@ -246,7 +242,6 @@ mod tests {
         for (kind, debit) in [
             (BondPostKind::JoinMarket, 0u64),
             (BondPostKind::Reinstate, 0),
-            (BondPostKind::HoldingsUpdate, 0),
         ] {
             assert_eq!(
                 cold_authority_pin(kind, debit, &canonical(7), &canonical(7)),

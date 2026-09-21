@@ -300,133 +300,9 @@ fn pop_rejects_total_bonded_overflow() {
     );
 }
 
-// ── HoldingsUpdate add / drop connect + pop ──────────────────────────────
-
-const HU_TOTAL: u64 = 5 * ARCHIVAL_BOND_FLOOR_ATOMIC;
-
-#[test]
-fn add_connect_grows_by_one_floor() {
-    let effect = holdings_update_add_connect(
-        2 * ARCHIVAL_BOND_FLOOR_ATOMIC, // record: 2 shards
-        &[7, 9],
-        &[7, 9, 11], // post
-        HU_TOTAL,
-        42, // E_add
-    )
-    .expect("valid add");
-    assert_eq!(effect.added_shard_id, 11);
-    assert_eq!(effect.add_settlement_epoch, 42);
-    assert_eq!(effect.new_bonded_total, 3 * ARCHIVAL_BOND_FLOOR_ATOMIC);
-    assert_eq!(
-        effect.new_total_bonded_atomic,
-        HU_TOTAL + ARCHIVAL_BOND_FLOOR_ATOMIC
-    );
-}
-
-#[test]
-fn drop_connect_shrinks_by_one_floor() {
-    let effect = holdings_update_drop_connect(
-        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        &[7, 11],
-        &[7], // post
-        HU_TOTAL,
-    )
-    .expect("valid drop");
-    assert_eq!(effect.dropped_shard_id, 11);
-    assert_eq!(effect.new_bonded_total, ARCHIVAL_BOND_FLOOR_ATOMIC);
-    assert_eq!(
-        effect.new_total_bonded_atomic,
-        HU_TOTAL - ARCHIVAL_BOND_FLOOR_ATOMIC
-    );
-    // §3.2: the refund the bond_debit source term returns == one FLOOR.
-    assert_eq!(effect.refund_atomic, ARCHIVAL_BOND_FLOOR_ATOMIC);
-}
-
-#[test]
-fn add_connect_rejects_non_single_and_broken_invariant() {
-    // Two shards added.
-    assert_eq!(
-        holdings_update_add_connect(
-            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-            &[7, 9],
-            &[7, 9, 11, 13],
-            HU_TOTAL,
-            42
-        ),
-        Err(HoldingsUpdateConnectError::NotSingleAdd)
-    );
-    // Record bonded_total disagrees with bond_floor(current 2 shards).
-    assert_eq!(
-        holdings_update_add_connect(
-            3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-            &[7, 9],
-            &[7, 9, 11],
-            HU_TOTAL,
-            42
-        ),
-        Err(HoldingsUpdateConnectError::RecordFloorInvariantBroken)
-    );
-}
-
-#[test]
-fn drop_connect_rejects_last_shard() {
-    assert_eq!(
-        holdings_update_drop_connect(ARCHIVAL_BOND_FLOOR_ATOMIC, &[7], &[], HU_TOTAL),
-        Err(HoldingsUpdateConnectError::DropLastShard)
-    );
-}
-
-#[test]
-fn holdings_update_pop_reverts_both_directions() {
-    // ADD: connect took total → total+FLOOR, record pre 2·FLOOR → post 3·FLOOR.
-    // Pop: total+FLOOR back to total, given post/pre.
-    let restored = holdings_update_pop(
-        3 * ARCHIVAL_BOND_FLOOR_ATOMIC, // current (post)
-        2 * ARCHIVAL_BOND_FLOOR_ATOMIC, // journal pre
-        HU_TOTAL + ARCHIVAL_BOND_FLOOR_ATOMIC,
-    )
-    .expect("add pop");
-    assert_eq!(restored, HU_TOTAL);
-
-    // DROP: post 1·FLOOR, pre 2·FLOOR; pop re-credits the FLOOR.
-    let restored = holdings_update_pop(
-        ARCHIVAL_BOND_FLOOR_ATOMIC,
-        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        HU_TOTAL - ARCHIVAL_BOND_FLOOR_ATOMIC,
-    )
-    .expect("drop pop");
-    assert_eq!(restored, HU_TOTAL);
-}
-
-#[test]
-fn holdings_update_add_connect_rejects_released_record() {
-    // The connect-fold belt of the verify-side Bonded gate: an Exited
-    // record's floor invariant is vacuously true (bond_floor(∅) == 0 ==
-    // bonded_total), so without the explicit gate the fold proceeded and
-    // the C++ writer only failed later, throwing on the empty-pre-image
-    // journal row.
-    assert_eq!(
-        holdings_update_add_connect(0, &[], &[11], 0, 5),
-        Err(HoldingsUpdateConnectError::RecordNotBonded)
-    );
-}
-
-#[test]
-fn holdings_update_pop_rejects_non_floor_delta() {
-    assert_eq!(
-        holdings_update_pop(
-            3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-            ARCHIVAL_BOND_FLOOR_ATOMIC, // delta 2·FLOOR, not a single shard
-            HU_TOTAL,
-        ),
-        Err(HoldingsUpdatePopError::NotSingleShardDelta)
-    );
-}
-
 // ── Reinstate connect/pop (P2B-9) ────────────────────────────────────────────
 
 const RB_EPOCH: u64 = 20;
-const RB_TOTAL: u64 = 9 * ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 fn rb_open(start: u64) -> BadInterval {
     BadInterval {
@@ -443,34 +319,25 @@ fn rb_closed(start: u64, end: u64) -> BadInterval {
 }
 
 #[test]
-fn reinstate_connect_standing_only_moves_no_collateral() {
+fn reinstate_connect_closes_the_open_interval_and_moves_nothing() {
     let intervals = [rb_closed(2, 3), rb_open(5)];
     let e = reinstate_connect(
         2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
         &[7, 9],
         &intervals,
         &[7, 9],
-        RB_TOTAL,
         RB_EPOCH,
     )
     .unwrap();
-    assert!(e.added_shard_ids.is_empty());
-    assert_eq!(e.add_settlement_epoch, RB_EPOCH);
     assert_eq!(e.closed_interval_index, 1);
     assert_eq!(e.interval_end_exclusive, RB_EPOCH + 1); // Pin 3
-    assert_eq!(e.new_bonded_total, 2 * ARCHIVAL_BOND_FLOOR_ATOMIC);
-    assert_eq!(e.new_total_bonded_atomic, RB_TOTAL);
 }
 
 #[test]
-fn reinstate_connect_growth_credits_added_floors() {
-    // Terminal-slash reinstatement: empty current, two shards re-specified.
-    let e = reinstate_connect(0, &[], &[rb_open(5)], &[7, 11], RB_TOTAL, RB_EPOCH).unwrap();
-    assert_eq!(e.added_shard_ids, vec![7, 11]);
-    assert_eq!(e.new_bonded_total, 2 * ARCHIVAL_BOND_FLOOR_ATOMIC);
+fn reinstate_connect_rejects_growth() {
     assert_eq!(
-        e.new_total_bonded_atomic,
-        RB_TOTAL + 2 * ARCHIVAL_BOND_FLOOR_ATOMIC
+        reinstate_connect(0, &[], &[rb_open(5)], &[7, 11], RB_EPOCH),
+        Err(ReinstateConnectError::HoldingsChanged)
     );
 }
 
@@ -478,7 +345,7 @@ fn reinstate_connect_growth_credits_added_floors() {
 fn reinstate_connect_rejects_shape_and_invariant_breaches() {
     let intervals = [rb_open(5)];
     assert_eq!(
-        reinstate_connect(0, &[], &intervals, &[], RB_TOTAL, RB_EPOCH),
+        reinstate_connect(0, &[], &intervals, &[], RB_EPOCH),
         Err(ReinstateConnectError::EmptyPost)
     );
     assert_eq!(
@@ -487,10 +354,9 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[7, 9],
             &intervals,
             &[7, 13], // swap
-            RB_TOTAL,
             RB_EPOCH,
         ),
-        Err(ReinstateConnectError::NotSuperset)
+        Err(ReinstateConnectError::HoldingsChanged)
     );
     assert_eq!(
         reinstate_connect(
@@ -498,7 +364,6 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[7, 9],
             &intervals,
             &[7, 9],
-            RB_TOTAL,
             RB_EPOCH,
         ),
         Err(ReinstateConnectError::RecordFloorInvariantBroken)
@@ -509,7 +374,6 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[7, 9],
             &[rb_closed(2, 3)], // nothing open
             &[7, 9],
-            RB_TOTAL,
             RB_EPOCH,
         ),
         Err(ReinstateConnectError::NoOpenInterval)
@@ -520,7 +384,6 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[7, 9],
             &[rb_open(5), rb_open(5)], // coalescing invariant broken
             &[7, 9],
-            RB_TOTAL,
             RB_EPOCH,
         ),
         Err(ReinstateConnectError::MultipleOpenIntervals)
@@ -531,7 +394,6 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[7, 9],
             &[rb_open(RB_EPOCH + 5)], // slash start after the close point
             &[7, 9],
-            RB_TOTAL,
             RB_EPOCH,
         ),
         Err(ReinstateConnectError::IntervalOrdering)
@@ -588,60 +450,30 @@ fn reinstate_connect_rejects_oversize_post() {
     // a record the codec cannot encode.
     let post: Vec<u64> = (0..=(MAX_HOLDINGS_SHARDS as u64)).collect();
     assert_eq!(
-        reinstate_connect(0, &[], &[rb_open(5)], &post, RB_TOTAL, RB_EPOCH),
+        reinstate_connect(0, &[], &[rb_open(5)], &post, RB_EPOCH),
         Err(ReinstateConnectError::PostOversize)
     );
 }
 
 #[test]
-fn reinstate_pop_reverts_growth_and_tolerates_zero_delta() {
-    // Growth of 2·FLOOR reverts exactly.
-    assert_eq!(
-        reinstate_pop(
-            3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-            ARCHIVAL_BOND_FLOOR_ATOMIC,
-            RB_TOTAL,
-        ),
-        Ok(RB_TOTAL - 2 * ARCHIVAL_BOND_FLOOR_ATOMIC)
-    );
-    // Standing-only: zero delta, counter unchanged.
+fn reinstate_pop_accepts_unchanged_balance() {
     assert_eq!(
         reinstate_pop(
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-            RB_TOTAL,
         ),
-        Ok(RB_TOTAL)
+        Ok(())
     );
 }
 
 #[test]
-fn reinstate_pop_rejects_shrink_partial_floor_and_underflow() {
-    // A Reinstate never shrinks the balance.
+fn reinstate_pop_rejects_any_balance_move() {
     assert_eq!(
-        reinstate_pop(
-            ARCHIVAL_BOND_FLOOR_ATOMIC,
-            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-            RB_TOTAL,
-        ),
+        reinstate_pop(ARCHIVAL_BOND_FLOOR_ATOMIC, 2 * ARCHIVAL_BOND_FLOOR_ATOMIC,),
         Err(ReinstatePopError::NotReinstateDelta)
     );
-    // Delta must be a whole number of FLOORs.
     assert_eq!(
-        reinstate_pop(
-            2 * ARCHIVAL_BOND_FLOOR_ATOMIC + 1,
-            ARCHIVAL_BOND_FLOOR_ATOMIC,
-            RB_TOTAL,
-        ),
+        reinstate_pop(3 * ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_BOND_FLOOR_ATOMIC,),
         Err(ReinstatePopError::NotReinstateDelta)
-    );
-    // Reverting more than the global counter holds is corruption.
-    assert_eq!(
-        reinstate_pop(
-            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-            0,
-            ARCHIVAL_BOND_FLOOR_ATOMIC
-        ),
-        Err(ReinstatePopError::CounterRange)
     );
 }

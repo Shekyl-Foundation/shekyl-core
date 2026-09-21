@@ -246,10 +246,11 @@ TEST(archival_bond_post, vin_serializer_enforces_endpoint_coupling)
     EXPECT_TRUE(std::get<txin_archival_bond_post>(decoded).join_market_coupled_fields_absent());
   }
   {
-    // The kind bound is HoldingsUpdate: the byte one above it does not parse.
+    // The kind table ends at Release. Byte 3 was HoldingsUpdate (REJECTED);
+    // the byte one above Release does not parse.
     std::string wire = join_wire;
     wire[kind_off] = static_cast<char>(
-      static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate) + 1);
+      static_cast<uint8_t>(archival_bond_post_kind::Release) + 1);
     txin_v decoded;
     EXPECT_FALSE(decode(wire, decoded));
   }

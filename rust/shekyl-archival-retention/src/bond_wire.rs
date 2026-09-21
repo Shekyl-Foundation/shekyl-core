@@ -36,13 +36,18 @@ pub const ENDPOINT_BYTES: usize = 32;
 
 /// Wire discriminant of a bond-post vin (gate-4 §3.4.1). Copy so FFI, debit-auth,
 /// and `as u8` sites can name the byte without carrying JoinMarket's fields.
+///
+/// Discriminant `3` was `HoldingsUpdate`. **REJECTED 2026-09-20** (immutable-bond
+/// ruling): in-place holdings mutation is a clusterable same-class stream, so a
+/// persona's bond is fixed at join. The byte stays unassigned — `from_u8(3)` is
+/// [`WireError::InvalidPostKind`] — so the name cannot be silently re-minted
+/// (rule 23). Holdings change is persona rotation (`Release` + `JoinMarket`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BondPostKind {
     JoinMarket = 0,
     Reinstate = 1,
     Release = 2,
-    HoldingsUpdate = 3,
 }
 
 impl BondPostKind {
@@ -51,18 +56,16 @@ impl BondPostKind {
             0 => Ok(Self::JoinMarket),
             1 => Ok(Self::Reinstate),
             2 => Ok(Self::Release),
-            3 => Ok(Self::HoldingsUpdate),
             _ => Err(WireError::InvalidPostKind(v)),
         }
     }
 
-    /// Unit kinds: Reinstate / Release / HoldingsUpdate. `None` for JoinMarket,
-    /// which needs `bond_spend_pk` and the endpoint before it is a [`BondKind`].
+    /// Unit kinds: Reinstate / Release. `None` for JoinMarket, which needs
+    /// `bond_spend_pk` and the endpoint before it is a [`BondKind`].
     pub const fn unit_kind(self) -> Option<BondKind> {
         match self {
             Self::Reinstate => Some(BondKind::Reinstate),
             Self::Release => Some(BondKind::Release),
-            Self::HoldingsUpdate => Some(BondKind::HoldingsUpdate),
             Self::JoinMarket => None,
         }
     }
@@ -79,7 +82,6 @@ pub enum BondKind {
     },
     Reinstate,
     Release,
-    HoldingsUpdate,
 }
 
 impl BondKind {
@@ -88,7 +90,6 @@ impl BondKind {
             Self::JoinMarket { .. } => BondPostKind::JoinMarket,
             Self::Reinstate => BondPostKind::Reinstate,
             Self::Release => BondPostKind::Release,
-            Self::HoldingsUpdate => BondPostKind::HoldingsUpdate,
         }
     }
 
@@ -167,9 +168,8 @@ pub enum LastServedScan {
 ///
 /// - **bounded**: `len <= MAX_HOLDINGS_SHARDS` (the codec cap);
 /// - **duplicate-free**: a shard id appears at most once ("a set on the wire" —
-///   previously rejected only inside the `HoldingsUpdate`/`Reinstate` diffs and
-///   silently tolerated by `JoinMarket`, which let `[7, 7]` bond `2·FLOOR` for
-///   one shard).
+///   previously rejected only inside per-kind diffs and silently tolerated by
+///   `JoinMarket`, which let `[7, 7]` bond `2·FLOOR` for one shard).
 ///
 /// **Insertion order is preserved** (ratified 2026-07-15): the §3.4.1 encoding
 /// writes the ids in slice order, so a valid `ShardSet` encodes byte-identically
@@ -487,25 +487,6 @@ impl ArchivalBondPostVin {
         }
     }
 
-    pub fn holdings_update(
-        hybrid_public_key: Vec<u8>,
-        p_canonical_id: [u8; 32],
-        holdings: HoldingsDescriptor,
-        bonded_total_atomic: u64,
-        bond_credit: u64,
-        bond_debit: u64,
-    ) -> Self {
-        Self {
-            hybrid_public_key,
-            p_canonical_id,
-            kind: BondKind::HoldingsUpdate,
-            holdings,
-            bonded_total_atomic,
-            bond_credit,
-            bond_debit,
-        }
-    }
-
     pub const fn post_kind(&self) -> BondPostKind {
         self.kind.tag()
     }
@@ -601,7 +582,6 @@ impl ArchivalBondPostVin {
             }
             BondPostKind::Reinstate => BondKind::Reinstate,
             BondPostKind::Release => BondKind::Release,
-            BondPostKind::HoldingsUpdate => BondKind::HoldingsUpdate,
         };
         let holdings = read_holdings_descriptor(r)?;
         let bonded_total_atomic = read_varint(r)?;

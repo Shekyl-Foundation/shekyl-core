@@ -326,37 +326,18 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
         // converts from its N+1 chain-height convention (see pop_block).
         apply_archival_unbond(block_height, bond.p_canonical_id, bond.bond_debit);
       }
-      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
-      {
-        // HoldingsUpdate connect (gate-4 §4.4): the record stays Bonded — one
-        // shard is added or dropped. Direction is verify-pinned (add: +FLOOR
-        // credit, no debit; drop: -FLOOR debit, no credit), so bond_debit == 0
-        // selects the add arm. Both writers journal the record pre-image and
-        // apply the Rust fold's counter movement with the per-post live-counter
-        // threading inside. The vin's holdings carry the POST shard set.
-        if (bond.bond_debit == 0)
-          apply_archival_holdings_update_add(block_height, bond.p_canonical_id,
-            bond.holdings.shard_ids);
-        else
-          apply_archival_holdings_update_drop(block_height, bond.p_canonical_id,
-            bond.holdings.shard_ids);
-      }
       else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Reinstate))
       {
-        // Reinstate connect (gate-4 §3.4; P2B-9 reinstatement): the record stays
-        // Bonded — the open bad interval closes in place at E_reinstate + 1 and
-        // the verified superset re-spec lands (carried shards keep add-epochs,
-        // added take E_reinstate). The writer journals the pre-image (including
-        // the closed interval's identity) and applies the Rust fold's counter
-        // movement with the per-post live-counter threading inside. The vin's
-        // holdings carry the POST shard set.
+        // Reinstate connect: the record stays Bonded. Holdings do not move
+        // (immutable-bond 2026-09-20). The open bad interval closes in place at
+        // E_reinstate + 1. The writer journals the closed interval's identity.
         apply_archival_reinstate(block_height, bond.p_canonical_id,
           bond.holdings.shard_ids);
       }
       else
       {
         throw std::runtime_error(
-          "FATAL: bond-post connect supports JoinMarket, Release, HoldingsUpdate, and Reinstate only");
+          "FATAL: bond-post connect supports JoinMarket, Release, and Reinstate only");
       }
     }
     else if (std::holds_alternative<txin_archival_reward_emission>(tx_input))

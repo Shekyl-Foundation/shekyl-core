@@ -87,12 +87,10 @@ pub use attestation_wire::{
     WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
 pub use bond_connect::{
-    clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
-    holdings_update_pop, is_clean_interval_close, reinstate_connect, reinstate_pop,
-    release_connect, release_pop, slash_open_interval_to_append, HoldingsUpdateAddConnect,
-    HoldingsUpdateConnectError, HoldingsUpdateDropConnect, HoldingsUpdatePopError,
-    ReinstateConnect, ReinstateConnectError, ReinstatePopError, ReleaseConnect,
-    ReleaseConnectError, ReleasePopError, MAX_BOND_BAD_INTERVALS,
+    clean_interval_close, is_clean_interval_close, reinstate_connect, reinstate_pop,
+    release_connect, release_pop, slash_open_interval_to_append, ReinstateConnect,
+    ReinstateConnectError, ReinstatePopError, ReleaseConnect, ReleaseConnectError, ReleasePopError,
+    MAX_BOND_BAD_INTERVALS,
 };
 pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
 pub use bond_duration::{bond_duration, ShardAgeAtAdd};
@@ -103,9 +101,8 @@ pub use bond_floor::{
 };
 pub use bond_post::{
     bond_post_block_unique, bond_post_funding_floor_met, release_pre_cooldown_guards,
-    release_vin_statics, verify_holdings_update_add, verify_holdings_update_drop,
-    verify_join_market_bond_post, verify_reinstate_bond_post, verify_release_bond_post,
-    BondPostError,
+    release_vin_statics, verify_join_market_bond_post, verify_reinstate_bond_post,
+    verify_release_bond_post, BondPostError,
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondKind, BondPostKind, HoldingsDescriptor,

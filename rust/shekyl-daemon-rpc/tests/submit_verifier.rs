@@ -1345,35 +1345,30 @@ fn bond_balance_mismatch_is_rejected() {
 #[test]
 fn producerless_bond_post_kinds_refuse_loudly() {
     // The named rule-21 refusal arm (verifier module docs), NARROWED when
-    // the Release fact set landed (§8.7.1.1): Reinstate and HoldingsUpdate
-    // parse and clear Phase A (the wire admits `Other` kinds), but they
-    // have no producer, so building their submit-side fact sets now would
-    // be pre-provisioned flexibility with an unverifiable Phase-D race
-    // classification. The battery must refuse at the KIND DISPATCH rather
-    // than run the JoinMarket legs against the wrong kind — which is why
-    // this asserts against `bond_admitting_facts` (a JoinMarket-shaped
-    // fact set): reaching a verdict on it at all would be the defect.
-    for kind in [
-        shekyl_archival_retention::BondPostKind::Reinstate,
-        shekyl_archival_retention::BondPostKind::HoldingsUpdate,
-    ] {
-        let parsed = bond_mutated(|tx| {
-            for input in &mut tx.prefix.inputs {
-                if let shekyl_wire::transaction::Input::BondPost(bp) = input {
-                    bp.kind = shekyl_wire::transaction::BondPostKind::Other(kind as u8);
-                }
+    // the Release fact set landed (§8.7.1.1): Reinstate parses and clears
+    // Phase A (the wire admits `Other` kinds), but it has no producer, so
+    // building its submit-side fact set now would be pre-provisioned
+    // flexibility with an unverifiable Phase-D race classification. The
+    // battery must refuse at the KIND DISPATCH rather than run the
+    // JoinMarket legs against the wrong kind. Discriminant 3
+    // (HoldingsUpdate) is REJECTED at the retention wire.
+    let kind = shekyl_archival_retention::BondPostKind::Reinstate;
+    let parsed = bond_mutated(|tx| {
+        for input in &mut tx.prefix.inputs {
+            if let shekyl_wire::transaction::Input::BondPost(bp) = input {
+                bp.kind = shekyl_wire::transaction::BondPostKind::Other(kind as u8);
             }
-        });
-        assert!(
-            !parsed.bond_post_is_release(),
-            "{kind:?} must not route to the debit arm"
-        );
-        assert_eq!(
-            verify(&parsed, &bond_admitting_facts()),
-            Err(VerifyFailure::Malformed),
-            "{kind:?} has no producer and must refuse loudly at the submit battery"
-        );
-    }
+        }
+    });
+    assert!(
+        !parsed.bond_post_is_release(),
+        "{kind:?} must not route to the debit arm"
+    );
+    assert_eq!(
+        verify(&parsed, &bond_admitting_facts()),
+        Err(VerifyFailure::Malformed),
+        "{kind:?} has no producer and must refuse loudly at the submit battery"
+    );
 }
 
 // ─── The Release fixture (§8.7.1.1 UB rows) ──────────────────────────────

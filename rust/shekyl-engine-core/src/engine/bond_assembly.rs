@@ -601,15 +601,13 @@ pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
 /// allowed-terms row with implemented verify since #303. `build_release_vin` is
 /// that producer, so the premise is discharged for this one kind.
 ///
-/// `Reinstate` and `HoldingsUpdate` still refuse, and now say so by name rather
-/// than by being everything-else: their producers genuinely do not exist. The
-/// `docs/FOLLOWUPS.md` entry ("Staking has no exit") stays open for them, with
-/// its pre-genesis deadline intact — staking is default-on and genesis-frozen,
-/// and half a discharge is not one.
+/// `Reinstate` still refuses: its producer does not exist yet (staged, not
+/// dead — verify/connect are live). `HoldingsUpdate` is REJECTED
+/// (immutable-bond): the kind is unrepresentable, so it cannot appear here.
 ///
 /// Map a retention vin onto the consensus wire. JoinMarket-coupled fields
 /// live on [`shekyl_archival_retention::BondKind`]; a Release cannot carry
-/// them. HoldingsUpdate / Reinstate have no wallet producer yet.
+/// them. Reinstate has no wallet producer yet.
 pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, BondAssemblyError> {
     let kind = match &vin.kind {
         shekyl_archival_retention::BondKind::JoinMarket {

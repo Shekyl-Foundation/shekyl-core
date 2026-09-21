@@ -63,10 +63,10 @@
 //!   fee-floor resolution lands; re-evaluation shape: extend
 //!   [`SubmitFacts`] with the §8.7.1 SC-row archival facts and implement
 //!   the serve-credit battery (SC1–SC8) in this match arm.
-//! - **HoldingsUpdate / Reinstate** (wire `BondPostKind::Other`): the semantic
-//!   verifies exist in `shekyl-archival-retention` and the block path runs
-//!   them today, but **no wallet constructs either**. Building their
-//!   submit-side fact sets now would be pre-provisioned flexibility (rule
+//! - **Reinstate** (wire `BondPostKind::Other`): the semantic verify exists
+//!   in `shekyl-archival-retention` and the block path runs it today, but
+//!   **no wallet constructs it**. Building its submit-side fact set now
+//!   would be pre-provisioned flexibility (rule
 //!   21) whose Phase-D race classification could not be verified against
 //!   any real submission, so `verify_bond_post` refuses them at the kind
 //!   dispatch. Reopening criterion: a producer. Re-evaluation shape: the
@@ -254,9 +254,10 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
 
     // Kind dispatch: the credit arm (JoinMarket, §8.7.1 BP rows) and the
     // debit arm (Release, §8.7.1.1 UB rows) are the two kinds whose
-    // submit-side fact sets are pinned. HoldingsUpdate and Reinstate have no
-    // producer, so their fact sets are deliberately unbuilt and they refuse
-    // loudly under their named rule-21 reopening criterion (module docs).
+    // submit-side fact sets are pinned. Reinstate has no producer, so its
+    // fact set is deliberately unbuilt and it refuses loudly under the named
+    // rule-21 reopening criterion (module docs). Discriminant 3
+    // (HoldingsUpdate) is REJECTED at the wire.
     let arm = match &bond.kind {
         WireBondPostKind::JoinMarket { bond_spend_pk, .. } => BondArm::Credit(bond_spend_pk),
         WireBondPostKind::Other(tag) if *tag == RetentionBondPostKind::Release as u8 => {
@@ -266,13 +267,12 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
             tracing::error!(
                 ?kind,
                 "bond-post submit battery covers JoinMarket (§8.7.1) and \
-                 Release (§8.7.1.1); HoldingsUpdate and Reinstate refuse until \
-                 a producer exists and their fact set + Phase-D re-check \
-                 semantics are specified (rule-21 reopening criterion in \
-                 the module docs)"
+                 Release (§8.7.1.1); Reinstate refuses until a producer \
+                 exists and its fact set + Phase-D re-check semantics are \
+                 specified (rule-21 reopening criterion in the module docs)"
             );
             return Err(VerifyReject::malformed(
-                "bond-post: HoldingsUpdate/Reinstate have no submit battery (rule-21)",
+                "bond-post: Reinstate has no submit battery (rule-21)",
             ));
         }
     };
