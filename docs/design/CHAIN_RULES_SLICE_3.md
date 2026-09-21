@@ -5,7 +5,7 @@
 reframing in §0). **Rules-crate commits 1–6 LANDED on the branch
 2026-09-20** (§7 record: `implemented 18 / validator-enforced 151`,
 `held-by-cxx 2`, `at-open 1`, `4.E 2 / 3`, `ratified 126 / 153` unmoved).
-The PR lands **after #806** (Q2): the rebase adds the one-line
+The PR lands **after #811** (Q2; #806 was closed and reopened as #811): the rebase adds the one-line
 `connector.rs` update. E5's writer wiring is a FOLLOWUPS row (owner DRS-E2).
 Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessors
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md),
