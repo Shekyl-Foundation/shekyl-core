@@ -74,6 +74,11 @@ pub mod difficulty_ffi;
 // production LMDB; the hasher is shekyl-chain-store.
 pub mod chain_digest_ffi;
 
+// DRS-E2 trace writer: the C++ LMDB exporter's one door. Facts records and
+// digest checkpoints, written and hashed in Rust (`shekyl-chain-ingest`);
+// the exporter and this surface die with the daemon at cutover.
+pub mod e2_trace_ffi;
+
 // RandomX v2 light-cache PoW verification FFI. Wraps `shekyl_pow_randomx`
 // (`compute_hash` + `CacheStore`) in a C-ABI surface — the consensus
 // PoW hash (`shekyl_pow_randomx_v2_hash`) plus the canonical-seedhash

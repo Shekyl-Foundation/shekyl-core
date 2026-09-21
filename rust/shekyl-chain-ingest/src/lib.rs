@@ -52,10 +52,18 @@
 
 #![deny(unsafe_code)]
 
+#[cfg(test)]
+mod artifact_tests;
 pub mod corpus;
+pub mod fetch;
 pub mod source;
 pub mod substrate;
+#[cfg(test)]
+pub(crate) mod test_support;
+pub mod trace;
 
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
+pub use fetch::{fetch_corpus, FetchFault};
 pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
 pub use substrate::{ProductionSubstrate, SubstrateFault};
+pub use trace::{Facts, Trace, TraceFault, TraceWriter};

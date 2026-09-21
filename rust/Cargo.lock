@@ -3798,10 +3798,24 @@ dependencies = [
 name = "shekyl-chain-ingest"
 version = "3.1.0"
 dependencies = [
+ "clap",
+ "kameo",
+ "redb",
+ "serde",
+ "serde_json",
+ "shekyl-address",
  "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-difficulty",
  "shekyl-pow-randomx",
+ "shekyl-rpc-client",
+ "shekyl-rpc-transport",
+ "shekyl-rpc-types",
  "shekyl-types",
+ "shekyl-units",
  "shekyl-wire",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -4272,6 +4286,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-bulletproofs",
  "shekyl-chacha",
+ "shekyl-chain-ingest",
  "shekyl-chain-store",
  "shekyl-consensus",
  "shekyl-crypto-hash",
@@ -4482,6 +4497,7 @@ dependencies = [
  "sha2",
  "shekyl-crypto-hash",
  "shekyl-pow-randomx",
+ "shekyl-types",
 ]
 
 [[package]]
