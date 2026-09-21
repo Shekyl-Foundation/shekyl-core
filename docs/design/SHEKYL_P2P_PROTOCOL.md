@@ -2426,9 +2426,13 @@ the lag IS the signal.** *Recorded as an inversion rather than silently
 swapped, because the reasoning that produced the wrong instruction was sound
 and would produce it again.*
 
-1. **Raise `--max-connections-per-ip` on EVERY live seed**, not a subset — cap
-   1 already permits the two nodes landing on different seeds, so a partial
-   raise reproduces the symptom and reads as a null result. **Restarting the
+1. **Raise `--max-connections-per-ip` on every seed in the live set** — cap 1
+   already permits the two nodes landing on different seeds, so a partial raise
+   reproduces the symptom and reads as a null result. **The live set is the
+   five reachable seeds**: `seedaus`, `seeduse`, `seedusw`, `seedjp`,
+   `seedbrz`. **`seedeu` is excluded** (provider-side outage, undiagnosable at
+   the time of the run) and its noise is filtered by log arm, not by timing —
+   see the disposition above. **Restarting the
    SEEDS is fine** — it does not clear B's cache, which is the one that matters.
    **The live set is established below rather than assumed**, because a seed
    that is dialled and does not answer burns the same 3600s window and puts
@@ -2444,7 +2448,7 @@ Surveyed directly over SSH; every figure below is measured, not inherited:
 | `seedaus` | 134.199.166.22 | **open** | active | 7408 | **yes** |
 | `seeduse` | 45.77.147.65 | **open** | active | 7408 | **yes** |
 | `seedusw` | 45.76.171.128 | **open** | active | 7408 | **yes** |
-| `seedeu` | 45.77.66.189 | **CLOSED** | active | 7408 | **NO — see below** |
+| `seedeu` | 45.77.66.189 | **CLOSED** | active | 7408 | **NO — EXCLUDED, see below** |
 | `seedjp` | 139.162.71.114 | **open** | active | 7408 | **yes** |
 | `seedbrz` | 104.64.59.31 | **open** | active | 7408 | **yes** |
 
@@ -2462,8 +2466,28 @@ a provider-level firewall, and both need access this lane does not have.
 list*, so every node dials it, **fails at CONNECT** (`net_node.inl:1549`,
 `:1609` — the connect-fail arms, not the handshake arms), and suppresses it for
 the flat 3600s. That is an independent 3600s clock running inside the exact
-channel the timing delta reads. **Either fix it before the run or exclude it
-and record the exclusion** — do not average over it.
+channel the timing delta reads.
+
+**DISPOSITION 2026-09-21: EXCLUDED, not fixed** (Rick). The Frankfurt facility
+is having provider-side errors, so the ingress block **cannot be diagnosed or
+verified** right now — and a fix that cannot be confirmed is not a fix. The
+run proceeds against the **five reachable seeds**; `seedeu` is excluded and
+this paragraph is the record of it, per the rule above that an exclusion is
+written down rather than averaged over.
+
+**The exclusion is clean, because the contamination is separable in the log
+rather than merely bounded.** `seedeu` is still compiled in, so B will still
+dial it and still burn a suppression — but that failure lands on the
+**connect-fail** arms (`:1549`, `:1609`, *"Connect failed to"*), while the cap
+refusals land on the **handshake-fail** arms (`:1561`, `:1619`, *"Failed to
+HANDSHAKE with peer"*). **Two different log strings, so the observer filters
+`seedeu`'s noise out by arm rather than by guessing at timing.** The timestamps
+that answer the run's question are taken from the *handshake* arm only.
+
+*That separability is the same distinction the failure-cache row is built on —
+the class is known at the call site and discarded crossing it. Here it survives
+in the log line even though it is lost in `record_addr_failed`, which is why
+the run is still readable with a dead seed in the list.*
 
 **Two further measurements, both of which settle open questions:**
 
