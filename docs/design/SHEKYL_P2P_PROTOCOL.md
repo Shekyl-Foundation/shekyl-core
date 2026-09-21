@@ -2089,6 +2089,17 @@ The **number** is not ruled — see *Owed to the maintainer* below. This is the
 same split PWD-B9 carries for the outbound cap, and for the same reason: a
 mechanism can ship while its value is still a question.
 
+#### What this row is, in one paragraph
+
+**The cap does not refuse connections — it PARTITIONS the network among
+co-residents.** Nodes behind one address hold **permanently disjoint peer
+sets**, network-wide and not only at bootstrap, because the cap applies at
+every accepting node. Measured live: two daemons on one WAN address holding
+**4 and 2 of six seeds with zero overlap**. The refusal that opened this row is
+the boundary case — **the partition starves a node when the reachable set
+falls below what it needs**, which is what happened when a seed went down. The
+number was never the fix; the noun was wrong, which is PWD-I8.
+
 #### The observation
 
 Two daemons in two VMs behind one NAT, `v3.1.0-alpha.8`, testnet. Neither
@@ -2451,6 +2462,19 @@ Surveyed directly over SSH; every figure below is measured, not inherited:
 | `seedjp` | 139.162.71.114 | **open** | active | 7408 | **yes** |
 | `seedbrz` | 104.64.59.31 | **open** | active | 7408 | **yes** |
 
+**Record the systemd unit per host — THREE conventions are live on this
+fleet**, and checking the wrong one reports a running daemon as down:
+
+| Host class | Unit | Config |
+| --- | --- | --- |
+| the six seeds | `shekyld-testnet.service` | `shekyld-testnet.conf` |
+| `skl-miner-test` (A) | **`shekyld.service`** | `shekyld-miner-testnet.conf` |
+| `skl-foundation` (B) | **`shekyld-testnet-rpc.service`** | `shekyld-testnet.conf` |
+
+*This is not pedantry: "A's daemon is down" was reported and relayed on the
+strength of `systemctl is-active shekyld-testnet` against a host that runs
+`shekyld.service`, while A held four seed connections throughout.*
+
 **`seedeu` is ingress-blocked, and this is worse than a down seed.** Its daemon
 is **active and bound to `0.0.0.0:12021`**, so every health check that asks the
 host passes. But `12021` is closed **from three independent seeds** while the
@@ -2473,6 +2497,13 @@ it is **OPEN from all five vantage points that previously measured it closed**
 — this box, `seedaus`, `seedjp`, `seeduse`, and `skl-foundation`. **It was a
 transient provider outage, not the standing firewall misconfiguration the
 survey inferred**, and the exclusion is lifted: the live set is **six**.
+
+**A standing condition needs a sample count and an interval, or it is a
+point-in-time reading.** Adopted as an idiom from this error (Rick,
+2026-09-21): *a probe asserting that something **is** the case — blocked,
+unreachable, down — states how many samples over what interval, or it is
+written as "closed at HH:MM" rather than "is closed".* Cheap to apply, and it
+would have flagged the firewall inference at the moment it was written.
 
 **The survey's measurement was right and its CAUSE was wrong, which is worth
 keeping.** Daemon-active, bound to `0.0.0.0`, and closed from several
@@ -2525,60 +2556,96 @@ knowing, but it is ours and it is reachable.
 first**. Only if B never recovers do you restart it — which then separates *"the
 cap raise did not work"* from *"cache plus something else"*.
 
-#### LIVE CONFIRMATION 2026-09-21: the cap does not merely refuse — it PARTITIONS
+#### LIVE CONFIRMATION 2026-09-21: the cap does not refuse — it PARTITIONS
 
-**Measured on the two NAT'd hosts in steady state, with nothing perturbed.**
-Stronger evidence than the falsifier was designed to produce, and it arrived
+**Measured on the two NAT'd hosts in steady state, nothing perturbed.**
+Stronger evidence than the falsifier was built to produce, and it arrived
 without touching production.
 
-Both hosts share one WAN address (`173.9.20.245`, confirmed on each). Their
+Both share one WAN address (`173.9.20.245`, confirmed on each). Their
 established outbound connections to the six compiled seeds:
 
-| | Seeds held |
+| | Unit | out-peers | Seeds held |
+| --- | --- | --- | --- |
+| **A** (`skl-miner-test`) | `shekyld.service` | **12** (compiled default) | `seedaus`, `seedbrz`, `seedjp`, `seeduse` — **4** |
+| **B** (`skl-foundation`) | `shekyld-testnet-rpc.service` | 64 | `seedusw`, `seedeu` — **2** |
+| **Overlap** | | | **ZERO** |
+| **Union** | | | **6 of 6** |
+
+**Reading the evidence in the right direction.** Zero overlap is *not* an
+improbable coincidence — at cap 1 it is **forced**, because each seed holds
+exactly one of {A, B} by construction. *(An earlier writing of this paragraph
+argued from improbability-under-chance. That was backwards and is corrected
+here.)* **The evidential weight runs the other way:** with no cap, both nodes
+would accumulate seed connections independently from their peerlists — A alone
+carries 12 default outbound against a six-seed set — and **overlap would be
+near-total**. Observing zero across six independent hosts is therefore strong
+evidence that **the cap is binding everywhere**, which the survey's *"no seed
+overrides the default"* half implied statically and this confirms
+behaviourally.
+
+#### The partition is not over seeds — it is over the whole reachable network
+
+**The cap applies at every accepting node, not only at seeds.** So co-residents
+behind one address hold **permanently disjoint peer sets, network-wide** — not
+merely at bootstrap. Seeds are where it bites *first*, because a fresh node's
+reachable set is only six. **It never stops applying.**
+
+**The security consequence, scoped honestly.** Each co-resident's effective
+peer diversity is cut by roughly a factor of *N*, which **lowers the eclipse
+threshold for all of them**. In a large network with thousands of reachable
+peers the chance a co-resident holds the specific peer you wanted is small and
+the effect washes out. **It bites when the reachable set is small relative to
+`N × out-degree`** — which is precisely a **young** network, a **partitioned**
+one, or one **under pressure**.
+
+> **The mechanism's harm is anti-correlated with the network's robustness: it
+> costs most exactly when the network can least afford it.**
+
+**Set beside PWD-E4, the trade is not merely unfavourable — it is inverted.**
+E4 ruled that a host cap buys no Sybil resistance because a /24 gives 256 free
+hosts. So **the cost falls entirely on honest co-residents, who cannot
+coordinate their way out of it, while the adversary who can afford addresses
+pays nothing.** That is the opposite of what a defence is supposed to do, and
+it is the strongest single argument in this row for PWD-I8's re-categorisation.
+
+**The dead-seed multiplier composes with the failure cache.** `seedeu` cost a
+**partition slot** *and* burned **an hour on every node that dialled it**
+(sibling row). ***S* shrinks twice from one outage** — once because the seed is
+gone from the partition, once because the cache holds it gone after it returns.
+
+#### The falsifier, replaced: overlap-from-zero
+
+**Strictly better than the timing question, which died with B's recovery.** B's
+daemon restarted 2026-09-21 01:57 EDT, clearing `m_conn_fails_cache`, and
+`seedeu` returned — so the dead end resolved by **availability, not by the cap
+being fixed**. The cap is still 1 fleet-wide and still partitioning, which the
+table above measures directly.
+
+**The replacement has no timing dependence, no transient to catch, and a
+deterministic prediction on both arms:**
+
+| Arm | Prediction |
 | --- | --- |
-| **A** (`skl-miner-test`) | `seedaus`, `seedbrz`, `seedjp`, `seeduse` — **4** |
-| **B** (`skl-foundation`) | `seedusw`, `seedeu` — **2** |
-| **Overlap** | **ZERO** |
-| **Union** | **6 of 6** |
+| **cap = 1** (today) | overlap **zero** |
+| **cap ≥ 2** | overlap **substantial** — both nodes hold every seed they dial |
+| **a seed dies mid-run** | it **drops out of the shared set on both sides**, rather than contaminating a delta |
 
-**Disjointness across six independent hosts is not what chance produces.**
-Without a cap, two daemons selecting peers independently would overlap —
-`crypto::rand_idx` over six seeds makes a clean partition the *unlikely*
-outcome. **With `max-connections-per-ip = 1` it is the only possible outcome**:
-each seed accepts exactly one connection from that address, so the two daemons
-must divide the set.
+**Method:**
 
-**This states the defect more sharply than "B was refused."** The failure is
-not binary, it is a **capacity division**: *N* nodes behind one address share
-*S* reachable seeds and each gets a disjoint slice. Two nodes over six seeds is
-survivable — B is at height 5841 climbing toward 7433 as this is written. **The
-dead end happened when the reachable count fell below what the partition
-needed**: `seedeu` was down during the original observation, and A held enough
-of the remaining five that B got none. Same mechanism at both ends; the
-variable is *how many seeds are reachable*, not whether the cap fires.
+1. **Raise `--max-connections-per-ip` on all six seeds** and restart them.
+2. **Then restart B.** *This lapses the earlier "do NOT restart B"
+   instruction rather than reversing it:* that prohibition was scoped to the
+   **timing** question, and that question died with B's 01:57 recovery. **The
+   prohibition lapses with the question it served.** The restart is now
+   *required*, because B will not re-dial a seed its peerlist has aged out, and
+   the test needs B **actively refilling**.
+3. **Read overlap off the seeds**, as connections from one address in each
+   seed's connection list.
 
-**Two corollaries, neither visible from the refusal alone:**
-
-- **The damage scales with `N/S`, not with adversarial behaviour.** More honest
-  nodes behind one egress, or fewer reachable seeds, makes it worse — and both
-  are ordinary operating conditions, not attacks.
-- **A dead seed is a cap MULTIPLIER.** `seedeu` being unreachable did not cost
-  one connection; it removed a slot from the partition and pushed B to zero.
-  That is why the `seedeu` row is pre-genesis rather than housekeeping.
-
-**What this does to the falsifier.** Its original question — *does B recover
-immediately, or only after the cache window?* — is **no longer answerable from
-this state**, because B has already recovered: its daemon restarted
-2026-09-21 01:57 EDT, clearing `m_conn_fails_cache`, and `seedeu` returned,
-giving it two seeds A was not holding. **That recovery is explained by
-availability, not by the cap being fixed** — the cap is still 1 fleet-wide and
-still partitioning, which the table above measures directly.
-
-**The remaining value is the other half, and it is a sharper prediction:** with
-the cap raised on the reachable seeds, **A and B should both hold every seed
-they dial, and the overlap should go from zero to the full shared set.** That
-does not depend on catching a transient, and it is read off the seeds exactly
-as the methodology's step 3 already requires.
+**Re-probe every seed immediately before the run.** One sample cannot
+distinguish a standing block from a transient — see the `seedeu` correction
+above, which is the whole reason this sentence exists.
 
 #### Owed to the maintainer — questions, not decisions
 

@@ -702,8 +702,30 @@ Full unit suite 1055 passed, 0 failed.
 
 ## 9. Q12-R-W2 progress — the unprivileged half is done
 
-State as of 2026-08-11. Everything below was done without root; the remainder
-is blocked on privileged access (§9.4).
+**State as of 2026-08-11**, and **superseded in three particulars by a direct
+fleet survey on 2026-09-21** (PWD-I7's falsifier precondition,
+[`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md)). The section is kept as the
+record of the August run; the corrections are stated here so a reader does not
+plan against them:
+
+| §9 says | Surveyed 2026-09-21 |
+| --- | --- |
+| **four** `skl-` seeds | **six** — `seedjp` and `seedbrz` were provisioned after this snapshot and are reachable, serving, and compiled into `get_seed_nodes` |
+| `skl-seedusw` **down**, pristine `(example)` config | **up, serving at the fleet height**, with a real `shekyld-testnet.conf` (`out-peers=64`, `in-peers=128`) |
+| *(not covered)* | `skl-seedeu`'s `12021` was **closed during a Frankfurt provider incident on 2026-09-21 and has since recovered** — a transient, not a configuration state |
+
+**What is unchanged and still load-bearing:** the portable-baseline ruling
+(§9.1), the build artifact (§9.2), and the hidden-service key custody
+precondition (§9.3) — the HS secret-key backup being a single copy on one
+machine beside the genesis wallet, which still gates Q12-R1.
+
+**Also measured 2026-09-21, and not previously recorded anywhere:** all six
+seeds run the **identical binary** (`sha256` `8a8b1db0…`) at the **same
+height**, and **none sets `--max-connections-per-ip`**, so the inherited
+default of 1 is live fleet-wide.
+
+Everything below was done without root; the remainder is blocked on privileged
+access (§9.4).
 
 ### 9.1 Q12-R7 — build at a portable baseline, not at the build host
 
