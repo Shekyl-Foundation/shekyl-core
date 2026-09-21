@@ -205,6 +205,11 @@ namespace nodetool
     // would get a silent, total inbound outage. The precedent this pattern
     // copies does not do it either: `shekyl_p2p_default_out_peers()` is only
     // ever called from function bodies.
+    //
+    // With the literal back, that hazard is GONE rather than mitigated: this
+    // is constant initialization again, and no `shekyl_*` call remains in a
+    // namespace-scope initializer. The comment stays because it records why
+    // the obvious alternative is refused, not because the hazard is live.
     const command_line::arg_descriptor<int64_t> arg_max_connections_per_ip = {"max-connections-per-ip", "Maximum number of p2p connections allowed from the same IP address (-1 = default)", -1};
 
     std::optional<std::vector<proxy>> get_proxies(boost::program_options::variables_map const& vm)

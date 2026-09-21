@@ -9,7 +9,29 @@ folded into feature work. Rule 26 cited explicitly. Owner:
 
 ---
 
-## 0. The guardrail, stated first because it decides everything else
+## 0. The empirical case, before any argument
+
+**PR #812 is at the maximum Rust reachable without a connection object, and
+that is a measurement rather than a preference.** At the merge point it holds
+**85 lines of shipped C++ (41 of them comments) against 409 lines of Rust.**
+
+What remains in C++ is the `foreach_connection` walk, and it **cannot** move:
+there is no connection object in Rust to walk. Exporting epee's context shape
+across the FFI to make it movable is the port §0 forbids — it would carry
+PWD-I8's category error into Rust intact.
+
+So the seam's location is **checkable**, not asserted. Re-measure it at any
+pin: the C++ that survives is exactly the code that needs a noun Rust does not
+have. *That is the case for this slice, and it is falsifiable — if a later
+measurement shows shipped C++ growing while the noun is still missing, this
+slice was scoped wrong.*
+
+*(The converging-rows argument in §1 reaches the same conclusion from seven
+consumers. Two independent derivations, one empirical and one structural.)*
+
+---
+
+## 0.5 The guardrail, stated early because it decides everything else
 
 > ### LV-3 IS NOT A PORT.
 
@@ -34,7 +56,7 @@ this round has failed to justify — delete it or find its ruling.
 
 ---
 
-## 1. Why this slice is first
+## 1. Why this slice is first — the structural case
 
 **Nothing in Rust owns a connection.** `shekyl-levin` owns bytes;
 `shekyl-peer-policy` owns stateless verdicts that C++ calls with values C++

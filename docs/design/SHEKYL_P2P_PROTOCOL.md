@@ -2388,6 +2388,121 @@ daemon, the result is **a fixed incident and an unfixed category error** — and
 a working node is the single thing most likely to stop anyone looking at I8
 again. A green falsifier is therefore a re-sequencing signal, never a closure.
 
+**The run has ONE question, and it is not "do both daemons connect"** (Rick,
+2026-09-21):
+
+> **After the seeds stop refusing, does daemon B recover immediately, or only
+> after its failure-cache window expires?**
+
+Everything else is already settled. The cap is demonstrated as what *refuses*
+B — the seed's refusal log line, the port-move control, A holding the slots,
+and chain identity now ruled out below. **What is unseparated is whether the
+cap alone accounts for the DEAD END, or whether the flat 3600s window is doing
+independent work.**
+
+**The discriminator is TIMING, not connectedness:**
+
+| Observation | Reading |
+| --- | --- |
+| **B recovers within a retry cycle** | the cap alone accounted for it; the window row stays real but is **not load-bearing for this incident**, and its urgency drops |
+| **B recovers 0–3600s later, lagging the seed change** | the cache is **independently load-bearing**; the window row moves up and the class-carry fix at `record_addr_failed` becomes near-term rather than queued |
+| **B never recovers** | **the attribution is wrong** and both rows reopen |
+
+**The predicted lag is bounded and specific.** `record_failure` re-arms on each
+failure, and once every seed is suppressed B **stops dialling** — so no new
+failures accrue and the clock runs down from B's *last* attempt. **Capture two
+timestamps:** B's last refused handshake before the seed change, and its first
+successful one after. **The delta against 3600 is the answer.**
+
+#### Methodology — and the earlier version of this was WRONG
+
+**DO NOT restart daemon B.** An earlier writing of this row instructed a
+restart of both daemons to clear B's poisoned cache. **That is correct for
+testing the cap in isolation and it destroys the evidence this run exists to
+collect** — the restart is precisely what hides the thing being measured. The
+instruction it replaced was defending against an observer checking at t+5min,
+seeing "still broken", and wrongly concluding the cap raise had failed. **But
+the lag IS the signal.** *Recorded as an inversion rather than silently
+swapped, because the reasoning that produced the wrong instruction was sound
+and would produce it again.*
+
+1. **Raise `--max-connections-per-ip` on EVERY live seed**, not a subset — cap
+   1 already permits the two nodes landing on different seeds, so a partial
+   raise reproduces the symptom and reads as a null result. **Six seeds are
+   compiled in** (`net_node.inl:734-741` at `dev` `059aca264`): `seedaus`,
+   `seeduse`, `seedusw`, `seedeu`, `seedjp`, `seedbrz`. Confirm which are live
+   first. **Restarting the SEEDS is fine** — it does not clear B's cache, which
+   is the one that matters.
+2. **Do NOT restart B. Watch for the full hour**, capturing the two timestamps
+   above.
+3. **Take the positive observation off the SEED** — two simultaneous
+   connections from one address in its connection list. **This falsifies the
+   cap attribution directly and does not depend on B's recovery timing at
+   all**, so it is worth having even if the timing result is ambiguous.
+
+**Ordering follows from the inversion.** Run the **no-restart observation
+first**. Only if B never recovers do you restart it — which then separates *"the
+cap raise did not work"* from *"cache plus something else"*.
+
+#### Chain-identity divergence is RULED OUT, with the discriminator named
+
+**Not "untested" — ruled out by two discriminators already present in the
+captured data** (Rick, 2026-09-21; verified at `dev` `059aca264`). Recorded
+because the obvious check ran the wrong way round: the genesis comparison was
+made against the node that *worked*, and a chain-identity mismatch would hide
+in the one that failed.
+
+**Discriminator 1 — `white_list: 0 / gray_list: 0` rules out a genesis fork.**
+A mismatched genesis lets the handshake **complete**; the divergence surfaces
+later, at block validation. The chain, verified:
+
+- peerlist entries arrive **only** through a `COMMAND_HANDSHAKE` response
+  (`net_node.inl:1260`) or a `COMMAND_TIMED_SYNC` response (`:1332`) — both
+  inside the *response* handler, so both require a completed exchange;
+- `process_payload_sync_data` has exactly **two** `return false` paths
+  (`cryptonote_protocol_handler.inl:417` hard-fork-version mismatch, `:428`
+  weird pruning seed) and **neither is genesis-related**. Two nodes on the same
+  binary with different genesis share a hard-fork schedule, so both pass;
+- therefore a genesis-forked peer's handshake completes, `:1260` runs, and its
+  lists fill.
+
+**The refused node's lists are empty, so no handshake response was ever
+processed.** That is the opposite of the genesis-fork signature.
+
+**Discriminator 2 — the absence of `wrong network` is a POSITIVE result.** A
+`network_id` mismatch is checked at `net_node.inl:1254` and logged at `:1256`
+— `"COMMAND_HANDSHAKE Failed, wrong network! … closing connection."` — in the
+**dialing** node's own response handler, at `LOG_WARNING`. **Unlike the per-IP
+refusal, which is visible only on the refusing node**, this one is visible on
+the side that is being refused. Its absence from the refused node's log is
+therefore evidence, not a gap. (The accepting side logs its own variant at
+`:2843`/`:2846`, `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
+two sides do **not** log at the same level, and "loud on both sides" would
+overstate it. The half this discriminator needs is the **refused** side, and
+that is the louder one: `LOG_WARNING_CC`, where the per-IP refusal reaches the
+refused operator **not at all**. That asymmetry is what makes the absence
+evidence rather than silence.)
+falsifier runs, not after, because it is free and it would redirect the whole
+lane.
+
+#### What the falsifier can and cannot settle
+
+**It re-sequences PWD-I8. It cannot close it.** Stated explicitly because the
+cheap outcome is the dangerous one.
+
+The cap is *already* demonstrated to be what **refuses** B: the refusal log
+line, the port-move control, and A holding every seed's slot are all in the
+record. What the falsifier settles is whether the failure cache is what makes
+that refusal **unrecoverable** — which changes the remedy for *this incident*
+and the urgency of the window row, and nothing else.
+
+**PWD-I8 was minted because `is_same_host` answers two questions with one
+quantity, and that is true whichever mechanism produced this particular dead
+node.** If the falsifier shows that tier 1 plus a window fix restores the second
+daemon, the result is **a fixed incident and an unfixed category error** — and
+a working node is the single thing most likely to stop anyone looking at I8
+again. A green falsifier is therefore a re-sequencing signal, never a closure.
+
 **Methodology, because the run is cheap to do wrong:**
 
 1. **Raise the cap on every live seed**, not one — the refusing side enforces
