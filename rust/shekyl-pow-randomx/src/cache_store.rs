@@ -545,6 +545,17 @@ impl CacheStore {
         }
     }
 
+    /// Derive `seedhash`'s cache if the store lacks it, then make it the
+    /// canonical slot: the one call an epoch switch is, whichever door it
+    /// arrives through (the daemon's FFI pin, the ingest pipeline's seed
+    /// claim). Returns how the derivation was served so a caller that
+    /// measures derivations counts this one at its source (DRS-E2 RD-F20).
+    pub fn pin_canonical(&self, seedhash: &Seedhash) -> CacheOutcome {
+        let (prepared, outcome) = self.lookup_or_derive_reporting(seedhash);
+        self.set_canonical(prepared);
+        outcome
+    }
+
     /// Advance the canonical slot to hold `prepared`.
     ///
     /// Semantics:

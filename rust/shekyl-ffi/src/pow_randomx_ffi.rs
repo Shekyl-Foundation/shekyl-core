@@ -120,7 +120,7 @@
 //! module-level state (`RANDOMX_V2_RUST.md` §7.2); the memo lives here
 //! at the FFI boundary.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use shekyl_difficulty::{next_seedheight, seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
@@ -273,13 +273,11 @@ pub unsafe extern "C" fn shekyl_pow_randomx_v2_set_canonical(seedhash: *const [u
     // contract guarantees an aligned, initialized [u8; 32].
     let seed = Seedhash::from_bytes(*seedhash);
 
-    // Eager derivation off the hot path, then sticky-pin. The two steps
-    // are deliberately not collapsed: lookup_or_derive both warms the
-    // cache and returns the Arc that set_canonical pins, so the 256 MiB
-    // fill is paid exactly once here rather than lazily on the first
-    // verifying call of the epoch.
-    let prepared: Arc<_> = cache_store().lookup_or_derive(&seed);
-    cache_store().set_canonical(prepared);
+    // Eager derivation off the hot path, then sticky-pin — one call, so
+    // the 256 MiB fill is paid exactly once here rather than lazily on the
+    // first verifying call of the epoch. The daemon does not measure
+    // derivations; the outcome is the ingest pipeline's to read.
+    let _served = cache_store().pin_canonical(&seed);
     SHEKYL_POW_RANDOMX_V2_OK
 }
 
