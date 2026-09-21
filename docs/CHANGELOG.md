@@ -101,6 +101,34 @@
 
 ### Consensus
 
+- **The `Rebond` bond-post kind is renamed `Reinstate`.** Name only: the wire
+  discriminant stays `1`, every `SHEKYL_ARCHIVAL_*` FFI error code keeps its
+  number, and no verify, connect, or pop rule changes. The old name was read as
+  *"bond again"* or *"re-enter after an exit"* by essentially every reader, and
+  it is neither — a `Reinstate` acts on a record that is **still bonded but
+  slashed**, closing its open bad interval in place and re-arming slashability,
+  with post-holdings required to be a **superset** of current (reinstatement,
+  not restructuring) and a credit that is zero in the standing-only case. Exit
+  and re-entry are `Release` + `JoinMarket`, a different path that annihilates
+  the identity and tenure this one preserves. The codebase already carried the
+  correction in prose — `bond_post.rs`'s own error text says *"reinstatement,
+  not restructuring"* and the cartel model shouts *"REINSTATEMENT, NOT
+  RE-ENTRY"* — so the rename adopts the word the code was already using to
+  explain itself. The redb table `archival_bond_rebond_log` and its LMDB
+  counterpart become `archival_bond_reinstate_log`; pre-genesis, no store holds
+  data, so this is a rename and not a migration. Records-was documents
+  (`docs/completed/`, this file's back-entries, the decision log) keep the old
+  word and are not rewritten; `LMDB_WRITE_ATOMICITY_AUDIT.md` tracks the new
+  names in its §10/§12 matrices only, because those are a live inventory checked
+  against `SHEKYL_LMDB_TABLES`, and carries a note saying so.
+
+  One **defect** surfaced by the rename and fixed with it:
+  `ARCHIVAL_CHALLENGE_MECHANISM.md` described this kind as *"the re-entry path
+  for an operator who fixes the box"* for a slashed Foundation CompleteTree
+  node — wrong twice under either name, since the slash demotes the record to an
+  ordinary market position and `ReinstateOnCompleteTree` makes the kind
+  unrepresentable on a `CompleteTree` record at all.
+
 - **The Rust validator decides timestamps and proof-of-work (DRS-E6
   slice 2).** `shekyl-chain-rules` now evaluates census 4.C (CEN-C1 FTL,
   C2 strict MTP, C3 genesis-padded window) and 4.D (D1/D1b PoW vs target,

@@ -97,7 +97,7 @@ pub enum TimelineEvent {
 
     // -- Axis (ii): `P`'s other broadcasts ---------------------------------
     /// Any other per-`P` submit through the `PerP` arm (serve-credit claims,
-    /// rebond top-ups as later slices land them).
+    /// reinstate top-ups as later slices land them).
     PerPSubmitDispatched {
         persona: PersonaOrdinal,
         at: LogicalTime,

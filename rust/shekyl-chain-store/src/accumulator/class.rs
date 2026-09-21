@@ -116,7 +116,10 @@ pub const TABLE_CLASSES: &[(&str, AccumulatorClass)] = &[
         "archival_bond_holdings_update_log",
         AccumulatorClass::AppendMostly,
     ),
-    ("archival_bond_rebond_log", AccumulatorClass::AppendMostly),
+    (
+        "archival_bond_reinstate_log",
+        AccumulatorClass::AppendMostly,
+    ),
     ("archival_bond_unbond_log", AccumulatorClass::AppendMostly),
     ("archival_budget", AccumulatorClass::Small),
     ("archival_budget_accrual", AccumulatorClass::Small),

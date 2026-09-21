@@ -545,8 +545,13 @@ two derivations**. Add one when this lands.
   them — and do not exempt them from the slash side either (examined and
   closed 2026-08-07): a Foundation node down long enough to cross the
   window is not serving, and a backstop that is not serving is not a
-  backstop; clearing its holdings is an accurate statement of reality, and
-  Rebond is the re-entry path for an operator who fixes the box.
+  backstop; clearing its holdings is an accurate statement of reality. What
+  the operator who fixes the box gets back is **an ordinary market position,
+  not the backstop posture**: the slash demotes the record, `Reinstate` is
+  reinstatement rather than re-entry (P2B-9), and it is *unrepresentable* on a
+  `CompleteTree` record anyway (`ReinstateOnCompleteTree`). Returning to
+  `CompleteTree` posture takes a fresh foundation bond under a new persona —
+  which is what `shekyl-wallet-rpc`'s slash copy already tells the operator.
 
 ## 7. Open forks — resolve on this record, never implicitly in code
 
@@ -1031,7 +1036,7 @@ the round kept trying to add forensics underneath it.
    design (endpoint rotation REJECTED 2026-09-13, item 2 above), so the
    service index is not a parameter.
    **Carrier — REJECTED (2026-09-13).** There is no `EndpointUpdate`
-   post kind. The bond-post kinds are JoinMarket, Rebond, Release and
+   post kind. The bond-post kinds are JoinMarket, Reinstate, Release and
    HoldingsUpdate; byte 4 is unassigned. The endpoint field is present iff
    `JoinMarket`, born at post — a bond without an endpoint was the
    discovery gap — and immutable for the record's life. The text this

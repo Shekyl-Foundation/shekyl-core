@@ -185,7 +185,7 @@ Default. Lands before genesis if it should exist at launch.
 
 - **Drain/claim/release dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572; the release lane joined the residue with #601, which landed the SEAM-side release for a definite first-send refusal — `RejectedTerminal` on the one send the seam itself makes — leaving exactly the driver legs the other two lanes carry: crash-window/ambiguous resubmit, and the driver-side prune for records a future resubmit path re-sends).** UPDATE 2026-09-07: the landing site now exists — the cadence driver (`ENGINE_CADENCE_DRIVER.md` §3 leg 4, `engine/cadence/` `TerminalRejectSlot`) registers and invokes an empty leg-4 slot each tick, wiring-proven by test; the residue is exactly the slot's body (prune + resubmit, landed together per the security note below). The per-epoch claim leg itself landed live in the same PR.
   - **PR-C made this residue USER-VISIBLE (2026-09-03):** `unstake` is reachable, and an ambiguous/held exit now surfaces as `-29522 UNSTAKE_FATE_UNKNOWN` (seal held funds-safe, lane shut, stall alarm in the operator log) with **no recovery verb** — the honest rendering of this unbuilt driver, stated in the contract rather than hidden. The prune half remains a SECURITY item (below); never land resubmit alone.
-  - The prune is a **security** item, not only hygiene (raised 2026-08-31, PR-A): a terminal `DoubleSpendConflict` on a Release is terminal on *remedy*, not on impossibility — a partial slash then a compensating `Rebond` can restore the balance these bytes bind (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1, UB2 note). The retained copy is the replay channel, and pruning it is what closes it; the reference age window is the only other bound.
+  - The prune is a **security** item, not only hygiene (raised 2026-08-31, PR-A): a terminal `DoubleSpendConflict` on a Release is terminal on *remedy*, not on impossibility — a partial slash then a compensating `Reinstate` can restore the balance these bytes bind (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1, UB2 note). The retained copy is the replay channel, and pruning it is what closes it; the reference age window is the only other bound.
   - Target: pre-genesis
 
 - **Q11 zero-fee-input emission claim has no settlement evidence** (destitute mint-pays-fee; named blocker: accrual has no claim-match set).
@@ -206,7 +206,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Solo address registry: decide (a registration tx type is genesis-only)**
   - Target: pre-genesis
 
-- **Release verify: record-floor belt (the `RebondRecordFloorBroken` twin)**
+- **Release verify: record-floor belt (the `ReinstateRecordFloorBroken` twin)**
   - Target: pre-genesis
 
 - **RPC transport posture — RULED 2026-08-21; RT-W1 landed; RT-W2/W5/W7 authorized**
@@ -357,7 +357,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`shekyl-stats` `Z_ALPHA_1E6` provenance vs. the `enc_label` test's**
   - Target: pre-genesis
 
-- **`HoldingsUpdate` (partial-release/rebond) promoted to genesis scope + pre-seal**
+- **`HoldingsUpdate` (partial-release/reinstate) promoted to genesis scope + pre-seal**
   - Target: pre-genesis
 
 - **Archival serve-credit / emission LMDB scans — bound the two unindexed table**

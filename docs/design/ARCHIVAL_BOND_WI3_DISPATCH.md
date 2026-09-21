@@ -297,7 +297,7 @@ the funding reservation in the same seal.
 - **Persona-level matching is sufficient at genesis** because of the
   one-live-post-per-persona invariant: there is at most one in-flight post
   a match could confirm. Reopen criterion (rule 21): the multi-kind /
-  multi-post future (Rebond etc., CONSTRUCTION §9) adds a txid or
+  multi-post future (Reinstate etc., CONSTRUCTION §9) adds a txid or
   post-hash discriminator to both `BondPostMatch` and the record — a
   version-bumping change owned by that slice.
 - **State-agnostic**: the check runs against `Pending` records too. A

@@ -3617,7 +3617,7 @@ but four things bound the result; the first two change the meaning, not just the
     `population_anchor_independence_disperses_shared_trigger_clusters`.
   - **Serial independence across a `P`'s repeated draws (now load-bearing).** A marginal GoF cannot
     see autocorrelation; a weak PRNG can produce a beautiful uniform marginal with correlated
-    successive draws. This was moot when a `P` drew one gap in its life, but **rebond / partial-release
+    successive draws. This was moot when a `P` drew one gap in its life, but **reinstate / partial-release
     / re-entry at genesis** make a `P` draw several gaps over its lifetime — and a conformant-but-weak
     wallet's correlated successive gaps make those recurring bond ops linkable to each other (exactly
     the recurring-surface exposure). For a *cross-wallet* vector (different implementations, different
@@ -3663,7 +3663,7 @@ but four things bound the result; the first two change the meaning, not just the
 
 ## L18 — `HoldingsUpdate` release-cooldown freeze (R-3 reconciliation, 2026-06-16)
 
-**Why.** `HoldingsUpdate` (voluntary partial-release / rebond) is promoted to genesis
+**Why.** `HoldingsUpdate` (voluntary partial-release / reinstate) is promoted to genesis
 (V3.0). The prior layers modeled mobility as *frictionless* re-allocation: an actor
 could shed a deep shard and re-deploy that capital the same epoch. The FSM
 ([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md), pins P2B-7) does not permit that —
@@ -3800,11 +3800,11 @@ detectors are complementary, not redundant:
   instead points scarce budget at the *thinnest* shards and *holds* them; the shards that stay
   under target are in absolute shortage (nobody can afford them), never frozen-but-idle. **The
   scope of the preclusion is the rational-cooldown-aware regime, not all behavior:** a naive
-  operator who drops A intending to immediately rebond into B, not modeling the cooldown,
+  operator who drops A intending to immediately reinstate into B, not modeling the cooldown,
   discovers A's capital frozen and leaves B under-covered for the 2-epoch window — exactly the
   transient the sim precludes. So the transient is *reachable, just not by an optimizing
   agent*; that residual is routed to operator-education and a wallet-conformance guard (see
-  Disposition), and is the mechanism by which the reopen clause's named rebond/release churn
+  Disposition), and is the mechanism by which the reopen clause's named reinstate/release churn
   would erode the band — which is why "precluded under optimization" (consistent with a reopen
   path) is the correct framing and "by construction" (which would contradict it) is not.
 - *Detector validation owed and delivered (the triangular-trap discipline).* To distinguish
@@ -3847,7 +3847,7 @@ emergent slack underneath.** "Buffered arms settle to exactly `r_target_deep`" m
 **no self-correcting cushion** below the provisioned floor. The reopen clause is widened
 accordingly (see Disposition): it fires on *any* newly-discovered friction that erodes the
 deep band, not only on "the freeze pushes under `+1`", because there is nothing beneath to
-absorb a new bite. The rebond/release recurring surface and the cooldown-anchor edge case are
+absorb a new bite. The reinstate/release recurring surface and the cooldown-anchor edge case are
 both live candidates.
 
 **5. Under compounding stress (`lag2`), the committed floor survives; only serving
@@ -3891,7 +3891,7 @@ cushion beneath it** (findings 4, 6), the reopen trigger is **any newly-discover
 that erodes the deep band** — not only "the freeze pushes under `+1`". Named live candidates:
 (a) a `RELEASE_COOLDOWN` increase past `~3` epochs (the faithful arm approaches the `0.10`
 ceiling); (b) `BOND_DURATION_AGE_SCALE` sealed at/near `0` in the joint cluster pass (flat
-becomes faithful → the cliff moves into the realistic arm); (c) the rebond/release
+becomes faithful → the cliff moves into the realistic arm); (c) the reinstate/release
 recurring-surface friction (R-2/R-3) consuming margin; (d) the cooldown last-served-anchor
 edge case if actors hold-but-don't-serve before dropping. Any of these re-opens the floor
 question via a fresh `--axis=holdingsupdate_cooldown` sweep at the new parameters; on a

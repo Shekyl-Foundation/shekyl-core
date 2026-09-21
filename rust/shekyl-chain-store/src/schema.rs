@@ -418,9 +418,9 @@ tables! {
     pub const ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_bond_holdings_update_log");
 
-    /// `archival_bond_rebond_log` — default flags.
-    pub const ARCHIVAL_BOND_REBOND_LOG: TableDefinition<&[u8], Unshaped> =
-        TableDefinition::new("archival_bond_rebond_log");
+    /// `archival_bond_reinstate_log` — default flags.
+    pub const ARCHIVAL_BOND_REINSTATE_LOG: TableDefinition<&[u8], Unshaped> =
+        TableDefinition::new("archival_bond_reinstate_log");
 
     /// `archival_r_market` — default flags.
     pub const ARCHIVAL_R_MARKET: TableDefinition<&[u8], Unshaped> =

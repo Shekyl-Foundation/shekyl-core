@@ -39,6 +39,30 @@ the original reasoning and assume it was arbitrary.
 
 ---
 
+## 2026-09-20 — `Rebond` is renamed `Reinstate` (name only)
+
+**Decision.** The archival bond-post kind `Rebond` becomes `Reinstate`
+everywhere in code and in living documents. The wire discriminant stays `1`,
+every FFI error-code number is unchanged, and no rule moves.
+
+**Rationale.** The name mis-described its own mechanism, and the misreading was
+universal rather than occasional — readers took `Rebond` for *"post a bond
+again"* or *"re-enter after an exit"*. It is neither. The kind acts on a record
+that is still **Bonded** and has been **slashed**: it closes the open bad
+interval in place, re-arms slashability, requires post-holdings to be a
+**superset** of current, and moves zero collateral in the standing-only case.
+Re-entry after an exit or a terminal slash is `JoinMarket`; `Release` + rejoin
+*"annihilates exactly what `Reinstate` preserves — identity, tenure"*
+(`PHASE_2B_FSM_RETOOL.md`). The tree had already written the correction into its
+own prose without the name following it.
+
+**Scope note.** Entries in this log dated before today, `docs/completed/`, and
+the changelog's back-entries use the old word and are **not** rewritten: they
+record what was. `docs/LMDB_WRITE_ATOMICITY_AUDIT.md` is the one record-class
+exception — its §10/§12 matrices are a live inventory checked against
+`SHEKYL_LMDB_TABLES`, so its table names track the rename and it carries a note
+saying which of its contents moved and which did not.
+
 ## 2026-04-25 — Wallet stack greenfield Rust rewrite (supersedes incremental rewire)
 
 **Decision.** The Monero-inherited `wallet2.cpp` C++ wallet is replaced

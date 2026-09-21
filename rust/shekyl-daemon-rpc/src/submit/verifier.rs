@@ -63,7 +63,7 @@
 //!   fee-floor resolution lands; re-evaluation shape: extend
 //!   [`SubmitFacts`] with the §8.7.1 SC-row archival facts and implement
 //!   the serve-credit battery (SC1–SC8) in this match arm.
-//! - **HoldingsUpdate / Rebond** (wire `BondPostKind::Other`): the semantic
+//! - **HoldingsUpdate / Reinstate** (wire `BondPostKind::Other`): the semantic
 //!   verifies exist in `shekyl-archival-retention` and the block path runs
 //!   them today, but **no wallet constructs either**. Building their
 //!   submit-side fact sets now would be pre-provisioned flexibility (rule
@@ -254,7 +254,7 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
 
     // Kind dispatch: the credit arm (JoinMarket, §8.7.1 BP rows) and the
     // debit arm (Release, §8.7.1.1 UB rows) are the two kinds whose
-    // submit-side fact sets are pinned. HoldingsUpdate and Rebond have no
+    // submit-side fact sets are pinned. HoldingsUpdate and Reinstate have no
     // producer, so their fact sets are deliberately unbuilt and they refuse
     // loudly under their named rule-21 reopening criterion (module docs).
     let arm = match &bond.kind {
@@ -266,13 +266,13 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
             tracing::error!(
                 ?kind,
                 "bond-post submit battery covers JoinMarket (§8.7.1) and \
-                 Release (§8.7.1.1); HoldingsUpdate and Rebond refuse until \
+                 Release (§8.7.1.1); HoldingsUpdate and Reinstate refuse until \
                  a producer exists and their fact set + Phase-D re-check \
                  semantics are specified (rule-21 reopening criterion in \
                  the module docs)"
             );
             return Err(VerifyReject::malformed(
-                "bond-post: HoldingsUpdate/Rebond have no submit battery (rule-21)",
+                "bond-post: HoldingsUpdate/Reinstate have no submit battery (rule-21)",
             ));
         }
     };
@@ -682,7 +682,7 @@ fn verify_credit_arm(
     facts: &SubmitFacts,
 ) -> Result<(), VerifyReject> {
     // ── BP5: credit-path authorization pins the IDENTITY key ────────────
-    // (gate-4 §3.5 step 5; `blockchain.cpp`'s JoinMarket/Rebond arms): the
+    // (gate-4 §3.5 step 5; `blockchain.cpp`'s JoinMarket/Reinstate arms): the
     // bond slot's PQC auth key — whose signature over the whole-tx payload
     // the K13 leg verifies — must be P's identity key `P_pubkey`.
     if bond_auth.hybrid_public_key != bond.hybrid_public_key {

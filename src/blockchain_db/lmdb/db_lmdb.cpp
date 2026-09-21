@@ -364,7 +364,7 @@ namespace
   X(LMDB_ARCHIVAL_EMISSION_CLAIM_LOG,       "archival_emission_claim_log") \
   X(LMDB_ARCHIVAL_BOND_UNBOND_LOG,          "archival_bond_unbond_log") \
   X(LMDB_ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG, "archival_bond_holdings_update_log") \
-  X(LMDB_ARCHIVAL_BOND_REBOND_LOG,          "archival_bond_rebond_log") \
+  X(LMDB_ARCHIVAL_BOND_REINSTATE_LOG,          "archival_bond_reinstate_log") \
   X(LMDB_ARCHIVAL_R_MARKET,                 "archival_r_market") \
   X(LMDB_ARCHIVAL_SIGMA_WORK,               "archival_sigma_work") \
   X(LMDB_ARCHIVAL_EPOCH_CLOSE_LOG,          "archival_epoch_close_log") \
@@ -1719,8 +1719,8 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   lmdb_db_open(txn, LMDB_ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG, MDB_CREATE,
     m_archival_bond_holdings_update_log,
     "Failed to open db handle for m_archival_bond_holdings_update_log");
-  lmdb_db_open(txn, LMDB_ARCHIVAL_BOND_REBOND_LOG, MDB_CREATE, m_archival_bond_rebond_log,
-    "Failed to open db handle for m_archival_bond_rebond_log");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_BOND_REINSTATE_LOG, MDB_CREATE, m_archival_bond_reinstate_log,
+    "Failed to open db handle for m_archival_bond_reinstate_log");
   lmdb_db_open(txn, LMDB_ARCHIVAL_R_MARKET, MDB_CREATE, m_archival_r_market,
     "Failed to open db handle for m_archival_r_market");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SIGMA_WORK, MDB_CREATE, m_archival_sigma_work,
@@ -5310,7 +5310,7 @@ namespace {
 // ─── Height-keyed archival journal helpers ─────────────────────────────────
 //
 // Five archival journals (slash log, emission-claim log, release log,
-// holdings-update log, rebond log) share the same BE(height)‖BE(seq) row
+// holdings-update log, reinstate log) share the same BE(height)‖BE(seq) row
 // layout and the same three sub-operations: probe the next free seq for a
 // height, read every row at a height, delete every row at a height. `KeyT`
 // is the row-key type (constructed from (height, seq)); the write-txn and
@@ -5670,7 +5670,7 @@ bool BlockchainLMDB::archival_baseline_observed_at_epoch(uint64_t block_height,
   // epoch this returns false for, which is what scopes the window to the pair's
   // current continuous challengeable run. Three consensus boundaries fall out
   // of that, none special-cased: before E_join + 1 and inside a bad interval
-  // good_through is false (so a slash -> Rebond reinstatement starts the window
+  // good_through is false (so a slash -> Reinstate reinstatement starts the window
   // clean); at or before the shard's E_add the as-of-H_fire holdings read is
   // false (the partial add epoch is forfeited in both directions, P2B-7 Pin 5).
 
@@ -6640,7 +6640,7 @@ std::vector<uint64_t> rebuild_shard_add_epochs(
   prev_add_epoch_of.reserve(prev_shard_ids.size());
   for (size_t i = 0; i < prev_shard_ids.size(); ++i)
     prev_add_epoch_of.emplace(prev_shard_ids[i], prev_add_epochs[i]);
-  // The common no-override path (HoldingsUpdate-drop, standing-only Rebond)
+  // The common no-override path (HoldingsUpdate-drop, standing-only Reinstate)
   // skips populating the lookup set — an empty set answers every query false
   // without paying its buckets.
   std::unordered_set<uint64_t> overrides;
@@ -6670,7 +6670,7 @@ std::vector<uint64_t> rebuild_shard_add_epochs(
 // record load, v6 desync check, pre-image capture, live-counter read, the
 // kind-specific Rust fold via `fold`, the optional in-place interval close,
 // then the coupled-array rebuild + record/counter writes + the kind's journal
-// append. HoldingsUpdate add/drop and Rebond differ ONLY in the fold and the
+// append. HoldingsUpdate add/drop and Reinstate differ ONLY in the fold and the
 // journal row they supply; single-sourcing the scaffold means a
 // journal/ordering/invariant change cannot land on one bond-post kind and
 // silently miss another (the kinds must stay reorg-twinned with their pops).
@@ -6710,7 +6710,7 @@ void BlockchainLMDB::apply_archival_bond_record_update(uint64_t block_height,
     throw std::runtime_error(std::string("FATAL: archival ") + arm
       + " connect fold failed (code " + std::to_string(static_cast<unsigned>(fold_rc)) + ")");
 
-  // Optional in-place interval close (Rebond Pin 3): the fold names the one
+  // Optional in-place interval close (Reinstate Pin 3): the fold names the one
   // open interval; its pre-close start_epoch rides the pre-image so the pop
   // re-opens exactly that entry.
   if (outs.has_interval_close)
@@ -6860,22 +6860,22 @@ void BlockchainLMDB::revert_archival_holdings_updates_at_height(uint64_t block_h
     static_cast<uint32_t>(rows.size()), "archival bond holdings-update log");
 }
 
-void BlockchainLMDB::apply_archival_rebond(uint64_t block_height,
+void BlockchainLMDB::apply_archival_reinstate(uint64_t block_height,
   const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids)
 {
-  const uint64_t rebond_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
-  apply_archival_bond_record_update(block_height, p_id, post_shard_ids, "rebond",
+  const uint64_t reinstate_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
+  apply_archival_bond_record_update(block_height, p_id, post_shard_ids, "reinstate",
     [&](const shekyl::db::ArchivalBondValue& bond, uint64_t total_bonded,
       BondRecordFoldOuts& outs) -> uint8_t {
       // Marshal the interval log as flattened (start, end_exclusive) pairs —
-      // the fold owns the open-interval selection and the E_rebond + 1 close.
+      // the fold owns the open-interval selection and the E_reinstate + 1 close.
       const std::vector<uint64_t> intervals_flat = archival_bad_intervals_flat(bond);
       std::vector<uint64_t> added(post_shard_ids.size(), 0);
       size_t added_len = 0;
       uint64_t add_epoch = 0;
       uint64_t closed_idx = 0;
       uint64_t interval_end = 0;
-      const uint8_t rc = shekyl_archival_rebond_connect(
+      const uint8_t rc = shekyl_archival_reinstate_connect(
         bond.bonded_total_atomic,
         bond.held_shard_ids.empty() ? nullptr : bond.held_shard_ids.data(),
         bond.held_shard_ids.size(),
@@ -6883,16 +6883,16 @@ void BlockchainLMDB::apply_archival_rebond(uint64_t block_height,
         bond.bad_intervals.size(),
         post_shard_ids.empty() ? nullptr : post_shard_ids.data(),
         post_shard_ids.size(),
-        total_bonded, rebond_epoch,
+        total_bonded, reinstate_epoch,
         added.empty() ? nullptr : added.data(), added.size(), &added_len,
         &add_epoch, &closed_idx, &interval_end,
         &outs.new_bonded_total, &outs.new_total_bonded);
-      if (rc != SHEKYL_ARCHIVAL_REBOND_APPLY_OK)
+      if (rc != SHEKYL_ARCHIVAL_REINSTATE_APPLY_OK)
         return rc;
       added.resize(added_len);
-      // Added shards (post ∖ current) take E_rebond as their coupled
-      // add-epoch (Pin 7); the open interval closes IN PLACE at E_rebond + 1
-      // (Pin 3 — the record stays Bonded, standing resumes at E_rebond + 1).
+      // Added shards (post ∖ current) take E_reinstate as their coupled
+      // add-epoch (Pin 7); the open interval closes IN PLACE at E_reinstate + 1
+      // (Pin 3 — the record stays Bonded, standing resumes at E_reinstate + 1).
       outs.override_shard_ids = std::move(added);
       outs.override_add_epoch = add_epoch;
       outs.has_interval_close = true;
@@ -6904,7 +6904,7 @@ void BlockchainLMDB::apply_archival_rebond(uint64_t block_height,
       // The closed interval's identity rides the journal row so the pop
       // re-opens exactly that entry; pre_bonded_total == 0 is legal (terminal
       // reinstatement).
-      shekyl::db::ArchivalBondRebondRevertValue log_entry{};
+      shekyl::db::ArchivalBondReinstateRevertValue log_entry{};
       std::memcpy(log_entry.p_id, p_id.data, 32);
       log_entry.pre_bonded_total = pre.pre_bonded_total;
       log_entry.closed_interval_index =
@@ -6912,27 +6912,27 @@ void BlockchainLMDB::apply_archival_rebond(uint64_t block_height,
       log_entry.closed_interval_start = pre.closed_interval_start;
       log_entry.pre_shard_ids = pre.pre_shard_ids;
       log_entry.pre_shard_add_epochs = pre.pre_shard_add_epochs;
-      const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalBondRebondLogKey>(
-        *m_write_txn, m_archival_bond_rebond_log, block_height, "archival bond rebond log");
-      archival_journal_put<shekyl::db::ArchivalBondRebondLogKey>(
-        *m_write_txn, m_archival_bond_rebond_log, block_height, seq, log_entry.encode(),
-        "archival bond rebond log");
+      const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalBondReinstateLogKey>(
+        *m_write_txn, m_archival_bond_reinstate_log, block_height, "archival bond reinstate log");
+      archival_journal_put<shekyl::db::ArchivalBondReinstateLogKey>(
+        *m_write_txn, m_archival_bond_reinstate_log, block_height, seq, log_entry.encode(),
+        "archival bond reinstate log");
     });
 }
 
-void BlockchainLMDB::revert_archival_rebonds_at_height(uint64_t block_height)
+void BlockchainLMDB::revert_archival_reinstates_at_height(uint64_t block_height)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
   if (!m_write_txn)
-    throw std::runtime_error("FATAL: archival rebond revert requires active write txn");
+    throw std::runtime_error("FATAL: archival reinstate revert requires active write txn");
 
-  const std::vector<shekyl::db::ArchivalBondRebondRevertValue> rows =
-    archival_journal_read<shekyl::db::ArchivalBondRebondLogKey,
-      shekyl::db::ArchivalBondRebondRevertValue>(
-      *m_write_txn, m_archival_bond_rebond_log, block_height, "archival bond rebond log");
+  const std::vector<shekyl::db::ArchivalBondReinstateRevertValue> rows =
+    archival_journal_read<shekyl::db::ArchivalBondReinstateLogKey,
+      shekyl::db::ArchivalBondReinstateRevertValue>(
+      *m_write_txn, m_archival_bond_reinstate_log, block_height, "archival bond reinstate log");
 
-  const uint64_t rebond_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
+  const uint64_t reinstate_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
 
   // Restore in reverse connect order (§5). The record stays Bonded throughout;
   // the pop fold guards the counter delta (a non-negative whole number of
@@ -6945,26 +6945,26 @@ void BlockchainLMDB::revert_archival_rebonds_at_height(uint64_t block_height)
 
     shekyl::db::ArchivalBondValue bond{};
     if (!load_archival_bond_value(p_id, bond))
-      throw std::runtime_error("FATAL: archival rebond revert without bond record");
+      throw std::runtime_error("FATAL: archival reinstate revert without bond record");
 
     const uint64_t total_bonded = get_total_bonded_atomic();
     uint64_t new_total_bonded = 0;
-    const uint8_t fold_rc = shekyl_archival_rebond_pop(
+    const uint8_t fold_rc = shekyl_archival_reinstate_pop(
       bond.bonded_total_atomic, it->pre_bonded_total, total_bonded, &new_total_bonded);
-    if (fold_rc != SHEKYL_ARCHIVAL_REBOND_APPLY_OK)
-      throw std::runtime_error("FATAL: archival rebond pop fold failed (code "
+    if (fold_rc != SHEKYL_ARCHIVAL_REINSTATE_APPLY_OK)
+      throw std::runtime_error("FATAL: archival reinstate pop fold failed (code "
         + std::to_string(static_cast<unsigned>(fold_rc)) + ")");
 
     // Re-open the journaled interval: the entry must exist, carry the
-    // journaled start, and be the connect's close (end == E_rebond + 1) —
+    // journaled start, and be the connect's close (end == E_reinstate + 1) —
     // anything else means the journal does not describe this record's tip
     // state (desync), which must be loud, not papered over.
     const size_t idx = it->closed_interval_index;
     if (idx >= bond.bad_intervals.size()
       || bond.bad_intervals[idx].start_epoch != it->closed_interval_start
-      || bond.bad_intervals[idx].end_exclusive != rebond_epoch + 1)
+      || bond.bad_intervals[idx].end_exclusive != reinstate_epoch + 1)
       throw std::runtime_error(
-        "FATAL: archival rebond revert interval desync (journal does not match tip)");
+        "FATAL: archival reinstate revert interval desync (journal does not match tip)");
     bond.bad_intervals[idx].end_exclusive = std::numeric_limits<uint64_t>::max();
 
     // Restore exactly the mutated fields from the pre-image; holdings_kind
@@ -6976,9 +6976,9 @@ void BlockchainLMDB::revert_archival_rebonds_at_height(uint64_t block_height)
     set_total_bonded_atomic(new_total_bonded);
   }
 
-  archival_journal_delete<shekyl::db::ArchivalBondRebondLogKey>(
-    *m_write_txn, m_archival_bond_rebond_log, block_height,
-    static_cast<uint32_t>(rows.size()), "archival bond rebond log");
+  archival_journal_delete<shekyl::db::ArchivalBondReinstateLogKey>(
+    *m_write_txn, m_archival_bond_reinstate_log, block_height,
+    static_cast<uint32_t>(rows.size()), "archival bond reinstate log");
 }
 
 bool BlockchainLMDB::archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const

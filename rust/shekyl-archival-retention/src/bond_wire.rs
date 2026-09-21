@@ -40,7 +40,7 @@ pub const ENDPOINT_BYTES: usize = 32;
 #[repr(u8)]
 pub enum BondPostKind {
     JoinMarket = 0,
-    Rebond = 1,
+    Reinstate = 1,
     Release = 2,
     HoldingsUpdate = 3,
 }
@@ -49,18 +49,18 @@ impl BondPostKind {
     pub fn from_u8(v: u8) -> Result<Self, WireError> {
         match v {
             0 => Ok(Self::JoinMarket),
-            1 => Ok(Self::Rebond),
+            1 => Ok(Self::Reinstate),
             2 => Ok(Self::Release),
             3 => Ok(Self::HoldingsUpdate),
             _ => Err(WireError::InvalidPostKind(v)),
         }
     }
 
-    /// Unit kinds: Rebond / Release / HoldingsUpdate. `None` for JoinMarket,
+    /// Unit kinds: Reinstate / Release / HoldingsUpdate. `None` for JoinMarket,
     /// which needs `bond_spend_pk` and the endpoint before it is a [`BondKind`].
     pub const fn unit_kind(self) -> Option<BondKind> {
         match self {
-            Self::Rebond => Some(BondKind::Rebond),
+            Self::Reinstate => Some(BondKind::Reinstate),
             Self::Release => Some(BondKind::Release),
             Self::HoldingsUpdate => Some(BondKind::HoldingsUpdate),
             Self::JoinMarket => None,
@@ -77,7 +77,7 @@ pub enum BondKind {
         bond_spend_pk: Vec<u8>,
         endpoint: [u8; ENDPOINT_BYTES],
     },
-    Rebond,
+    Reinstate,
     Release,
     HoldingsUpdate,
 }
@@ -86,7 +86,7 @@ impl BondKind {
     pub const fn tag(&self) -> BondPostKind {
         match self {
             Self::JoinMarket { .. } => BondPostKind::JoinMarket,
-            Self::Rebond => BondPostKind::Rebond,
+            Self::Reinstate => BondPostKind::Reinstate,
             Self::Release => BondPostKind::Release,
             Self::HoldingsUpdate => BondPostKind::HoldingsUpdate,
         }
@@ -167,7 +167,7 @@ pub enum LastServedScan {
 ///
 /// - **bounded**: `len <= MAX_HOLDINGS_SHARDS` (the codec cap);
 /// - **duplicate-free**: a shard id appears at most once ("a set on the wire" —
-///   previously rejected only inside the `HoldingsUpdate`/`Rebond` diffs and
+///   previously rejected only inside the `HoldingsUpdate`/`Reinstate` diffs and
 ///   silently tolerated by `JoinMarket`, which let `[7, 7]` bond `2·FLOOR` for
 ///   one shard).
 ///
@@ -468,7 +468,7 @@ impl ArchivalBondPostVin {
         }
     }
 
-    pub fn rebond(
+    pub fn reinstate(
         hybrid_public_key: Vec<u8>,
         p_canonical_id: [u8; 32],
         holdings: HoldingsDescriptor,
@@ -479,7 +479,7 @@ impl ArchivalBondPostVin {
         Self {
             hybrid_public_key,
             p_canonical_id,
-            kind: BondKind::Rebond,
+            kind: BondKind::Reinstate,
             holdings,
             bonded_total_atomic,
             bond_credit,
@@ -599,7 +599,7 @@ impl ArchivalBondPostVin {
                     endpoint,
                 }
             }
-            BondPostKind::Rebond => BondKind::Rebond,
+            BondPostKind::Reinstate => BondKind::Reinstate,
             BondPostKind::Release => BondKind::Release,
             BondPostKind::HoldingsUpdate => BondKind::HoldingsUpdate,
         };

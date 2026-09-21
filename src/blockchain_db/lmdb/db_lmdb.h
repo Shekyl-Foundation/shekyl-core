@@ -521,7 +521,7 @@ private:
   /// The kind-specific fold outputs consumed by the shared bond-record
   /// connect-writer scaffold: the counter movement, the add-epoch overrides
   /// for the rebuilt index-parallel `shard_add_epochs` (empty = every POST
-  /// shard is carried), and the optional in-place interval close (Rebond).
+  /// shard is carried), and the optional in-place interval close (Reinstate).
   struct BondRecordFoldOuts
   {
     uint64_t new_bonded_total = 0;
@@ -548,7 +548,7 @@ private:
   using bond_record_journal_t = std::function<void(
     const BondRecordPreImage& pre, const BondRecordFoldOuts& outs)>;
   /// Shared connect-writer scaffold for every POST-holdings bond-record
-  /// mutation (HoldingsUpdate add/drop, Rebond): txn guard, record load + v6
+  /// mutation (HoldingsUpdate add/drop, Reinstate): txn guard, record load + v6
   /// desync check, pre-image capture, live counter read, fold, optional
   /// in-place interval close, coupled-array rebuild, record/counter writes,
   /// then the kind's journal append (same atomic txn). Single-sourced so a
@@ -562,9 +562,9 @@ private:
   void put_archival_holdings_update_journal(uint64_t block_height,
     const crypto::hash& p_id, const BondRecordPreImage& pre);
   virtual void revert_archival_holdings_updates_at_height(uint64_t block_height) override;
-  virtual void apply_archival_rebond(uint64_t block_height, const crypto::hash& p_id,
+  virtual void apply_archival_reinstate(uint64_t block_height, const crypto::hash& p_id,
     const std::vector<uint64_t>& post_shard_ids) override;
-  virtual void revert_archival_rebonds_at_height(uint64_t block_height) override;
+  virtual void revert_archival_reinstates_at_height(uint64_t block_height) override;
   virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const override;
   virtual void fold_archival_market_bonded_counts(std::vector<uint64_t>& bonded_count) const override;
   virtual std::vector<uint64_t> archival_bond_last_served_epochs(const crypto::hash& p_id,
@@ -940,7 +940,7 @@ private:
   MDB_dbi m_archival_emission_claim_log; // BE(height)||BE(seq) -> claimed-set pre-image journal
   MDB_dbi m_archival_bond_unbond_log; // BE(height)||BE(seq) -> Release record pre-image journal
   MDB_dbi m_archival_bond_holdings_update_log; // BE(height)||BE(seq) -> HoldingsUpdate record pre-image journal
-  MDB_dbi m_archival_bond_rebond_log; // BE(height)||BE(seq) -> Rebond record pre-image journal
+  MDB_dbi m_archival_bond_reinstate_log; // BE(height)||BE(seq) -> Reinstate record pre-image journal
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)
   MDB_dbi m_archival_sigma_work;      // BE(E) -> BE(sigma_milli)
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized

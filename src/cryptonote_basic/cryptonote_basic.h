@@ -155,7 +155,7 @@ namespace cryptonote
   enum class archival_bond_post_kind : uint8_t
   {
     JoinMarket = 0,
-    Rebond = 1,
+    Reinstate = 1,
     Release = 2,
     HoldingsUpdate = 3,
   };

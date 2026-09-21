@@ -210,13 +210,13 @@ fact sets were JoinMarket-only (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 pinned the JM
 BP rows only) and **no wallet constructs these kinds yet** — so no Release could
 reach a regtest chain through any production path. Named blockers: the
 non-JoinMarket submit battery (the PR-4b sibling for
-`Release`/`Rebond`/`HoldingsUpdate` rows) **and** the wallet-side release entry.
+`Release`/`Reinstate`/`HoldingsUpdate` rows) **and** the wallet-side release entry.
 The armed settlement-epoch override for the W-lapse rides whichever lands last.
 
 **UPDATE 2026-08-29 (PR-A) — the first named blocker is CLEARED for `Release`.**
 `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 now pins the UB rows and the native battery
 dispatches `verify_release_bond_post`, so `/submit_transaction` **accepts** a
-well-formed `Release`. `Rebond` and `HoldingsUpdate` fact sets remain
+well-formed `Release`. `Reinstate` and `HoldingsUpdate` fact sets remain
 deliberately unbuilt (rule 21: no producer) and are not on arm #2's trigger
 path, so the blocker is discharged for everything arm #2 needs. **Still
 blocking: the wallet-side release entry** — the dispatch seam exists as of PR-B

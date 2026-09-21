@@ -99,45 +99,45 @@ pub enum BondPostError {
     HoldingsUpdateDropWithinHorizon,
     #[error(
         "HoldingsUpdate requires a Bonded record (bonded collateral and at least one \
-         held shard); an Exited or slash-emptied record re-enters via JoinMarket/Rebond"
+         held shard); an Exited or slash-emptied record re-enters via JoinMarket/Reinstate"
     )]
     HoldingsUpdateRecordNotBonded,
-    #[error("post_kind is not Rebond")]
-    PostKindNotRebond,
-    #[error("Rebond is only valid on a ShardSetCompact record (not CompleteTree)")]
-    RebondOnCompleteTree,
-    #[error("Rebond post-holdings must be ShardSetCompact")]
-    RebondPostNotCompact,
-    #[error("Rebond requires an open bad interval (the record is not slashed)")]
-    RebondNotSlashed,
+    #[error("post_kind is not Reinstate")]
+    PostKindNotReinstate,
+    #[error("Reinstate is only valid on a ShardSetCompact record (not CompleteTree)")]
+    ReinstateOnCompleteTree,
+    #[error("Reinstate post-holdings must be ShardSetCompact")]
+    ReinstatePostNotCompact,
+    #[error("Reinstate requires an open bad interval (the record is not slashed)")]
+    ReinstateNotSlashed,
     #[error(
         "record carries more than one open bad interval — record corruption (the \
          same-epoch slash coalescing invariant, P2B-9 Pin 5, guarantees at most one)"
     )]
-    RebondMultipleOpenIntervals,
+    ReinstateMultipleOpenIntervals,
     #[error(
-        "record interval log lacks Rebond headroom (> 254 entries): re-arming \
+        "record interval log lacks Reinstate headroom (> 254 entries): re-arming \
          slashability must leave one slot for the next slash and one for the Release \
          clean close, so exit stays reachable"
     )]
-    RebondIntervalLogHeadroom,
+    ReinstateIntervalLogHeadroom,
     #[error(
-        "Rebond terms mismatch: bond_debit must be 0 and bond_credit must equal \
+        "Reinstate terms mismatch: bond_debit must be 0 and bond_credit must equal \
          bond_floor(post) − record bonded_total (zero for standing-only reinstatement)"
     )]
-    RebondTerms,
+    ReinstateTerms,
     #[error(
-        "Rebond post-holdings must be a duplicate-free superset of the record's \
+        "Reinstate post-holdings must be a duplicate-free superset of the record's \
          current holdings (reinstatement, not restructuring — shedding is \
          HoldingsUpdate-drop's gated job)"
     )]
-    RebondNotSuperset,
+    ReinstateNotSuperset,
     #[error(
         "record bonded_total != bond_floor(record holdings) — record corruption; \
          rejected at verify so a verify-valid tx can never meet the connect \
          fold's loud floor belt (tx rejection, not a chain halt)"
     )]
-    RebondRecordFloorBroken,
+    ReinstateRecordFloorBroken,
 }
 
 /// The single-shard set difference `post ∖ current` when `post` grows `current` by
@@ -208,7 +208,7 @@ pub(crate) fn single_shard_diff(current: &[u64], post: &[u64]) -> SingleDiff {
 /// JoinMarket-bypassing resurrection path whose connect then throws on the
 /// empty-pre-image journal encode — a verify-valid tx no block can connect
 /// (chain-stall vector). Re-entry after an exit or a full slash is
-/// `JoinMarket`/`Rebond`, never a voluntary adjustment.
+/// `JoinMarket`/`Reinstate`, never a voluntary adjustment.
 fn holdings_update_prologue(
     vin: &ArchivalBondPostVin,
     record_bonded_total: Option<u64>,
@@ -272,7 +272,7 @@ pub fn verify_holdings_update_add(
         return Err(BondPostError::HoldingsUpdateAddTerms);
     }
     // Good standing (Q4): voluntary growth requires the record be good_through the
-    // current epoch — an open bad interval (post-slash, pre-Rebond) forecloses add.
+    // current epoch — an open bad interval (post-slash, pre-Reinstate) forecloses add.
     if !crate::consensus_state::good_through(
         record_join_settlement_epoch,
         current_settlement_epoch,
@@ -389,7 +389,7 @@ pub fn verify_holdings_update_drop(
     Ok(())
 }
 
-/// The added-set difference for a `Rebond` re-specification: `post ∖ current` when
+/// The added-set difference for a `Reinstate` re-specification: `post ∖ current` when
 /// `post` is a duplicate-free **superset** of `current` (set semantics; the record's
 /// `current` is trusted, the vin's `post` is validated). Returns `None` when `post`
 /// carries a duplicate or misses any current shard — the reinstatement-not-
@@ -416,7 +416,7 @@ pub(crate) fn superset_added_diff(current: &[u64], post: &[u64]) -> Option<Vec<u
     )
 }
 
-/// Verify `Rebond` bond-post semantics — post-slash reinstatement of a record with
+/// Verify `Reinstate` bond-post semantics — post-slash reinstatement of a record with
 /// an open bad interval (gate-4 §3.4; P2B-9, ratified 2026-07-14). Credit path
 /// (`bond_debit == 0`), so the pqc auth is the identity key `P_pubkey` (the GF-1
 /// selector routes credit → identity; enforced C++-side — P2B-9 Pin 4).
@@ -437,15 +437,15 @@ pub(crate) fn superset_added_diff(current: &[u64], post: &[u64]) -> Option<Vec<u
 /// is always reachable. Exactly one open interval may exist (Pin 5's coalescing
 /// invariant); more is record corruption, rejected here so a verify-valid tx can
 /// never meet the connect fold's loud multiplicity belt.
-pub fn verify_rebond_bond_post(
+pub fn verify_reinstate_bond_post(
     vin: &ArchivalBondPostVin,
     record_bonded_total: Option<u64>,
     record_holdings_kind: HoldingsKind,
     record_held_shard_ids: &[u64],
     record_bad_intervals: &[crate::consensus_state::BadInterval],
 ) -> Result<(), BondPostError> {
-    if !matches!(vin.kind, BondKind::Rebond) {
-        return Err(BondPostError::PostKindNotRebond);
+    if !matches!(vin.kind, BondKind::Reinstate) {
+        return Err(BondPostError::PostKindNotReinstate);
     }
     let Some(current_bonded) = record_bonded_total else {
         return Err(BondPostError::RecordMissing);
@@ -453,10 +453,10 @@ pub fn verify_rebond_bond_post(
     // A CompleteTree record with an open bad interval is unrepresentable (the
     // demotion flips the kind atomically with the interval append) — belt anyway.
     if record_holdings_kind != HoldingsKind::ShardSetCompact {
-        return Err(BondPostError::RebondOnCompleteTree);
+        return Err(BondPostError::ReinstateOnCompleteTree);
     }
     if vin.holdings.kind != HoldingsKind::ShardSetCompact {
-        return Err(BondPostError::RebondPostNotCompact);
+        return Err(BondPostError::ReinstatePostNotCompact);
     }
     // Reinstatement needs a position to reinstate into; `∅` is a zombie (good
     // standing, no shards, no balance — HU-add and Release both reject it).
@@ -465,28 +465,28 @@ pub fn verify_rebond_bond_post(
     }
     // (No oversize guard here: `vin.holdings.shard_ids` is a `ShardSet`, bounded
     // at construction, so an oversize post is unrepresentable by the time verify
-    // runs — the former `RebondPostOversize` belt was retired with the newtype.
-    // The raw-slice connect path re-guards it in `rebond_connect`'s `PostOversize`.)
+    // runs — the former `ReinstatePostOversize` belt was retired with the newtype.
+    // The raw-slice connect path re-guards it in `reinstate_connect`'s `PostOversize`.)
     // Precondition: exactly one open bad interval (Pin 5's coalescing invariant).
     let open_count = record_bad_intervals
         .iter()
         .filter(|iv| iv.end_exclusive == u64::MAX)
         .count();
     if open_count == 0 {
-        return Err(BondPostError::RebondNotSlashed);
+        return Err(BondPostError::ReinstateNotSlashed);
     }
     if open_count > 1 {
-        return Err(BondPostError::RebondMultipleOpenIntervals);
+        return Err(BondPostError::ReinstateMultipleOpenIntervals);
     }
     // Pin 6 headroom: one slot reserved for the next slash + one for the Release
-    // clean close (the close below is in-place, so post-Rebond size == size).
+    // clean close (the close below is in-place, so post-Reinstate size == size).
     if record_bad_intervals.len() > crate::bond_connect::MAX_BOND_BAD_INTERVALS - 2 {
-        return Err(BondPostError::RebondIntervalLogHeadroom);
+        return Err(BondPostError::ReinstateIntervalLogHeadroom);
     }
     // Pin 1: duplicate-free superset of the current holdings. (The added-set
     // itself is the CONNECT fold's operand — verify only needs the shape.)
     if superset_added_diff(record_held_shard_ids, &vin.holdings.shard_ids).is_none() {
-        return Err(BondPostError::RebondNotSuperset);
+        return Err(BondPostError::ReinstateNotSuperset);
     }
     // §3.2 record floor invariant, checked HERE against the marshaled record
     // facts — not deferred to the connect fold's RecordFloorInvariantBroken
@@ -495,7 +495,7 @@ pub fn verify_rebond_bond_post(
     // node at block connect. Verify rejects the tx; the fold's belt stays for
     // verify-bypassing callers (the multiplicity check's posture, one check up).
     if bond_floor_of(record_holdings_kind, record_held_shard_ids.len()) != current_bonded {
-        return Err(BondPostError::RebondRecordFloorBroken);
+        return Err(BondPostError::ReinstateRecordFloorBroken);
     }
     // Pin 2 terms (§3.2): no debit; credit == bond_floor(post) − current bonded
     // (== |added|·FLOOR under the record floor invariant, checked just above;
@@ -503,14 +503,14 @@ pub fn verify_rebond_bond_post(
     // a record whose bonded exceeds the post floor (corruption — the superset
     // makes an honest shrink unrepresentable).
     if vin.bond_debit != 0 {
-        return Err(BondPostError::RebondTerms);
+        return Err(BondPostError::ReinstateTerms);
     }
     let post_floor = bond_floor(&vin.holdings);
     let Some(expected_credit) = post_floor.checked_sub(current_bonded) else {
-        return Err(BondPostError::RebondTerms);
+        return Err(BondPostError::ReinstateTerms);
     };
     if vin.bond_credit != expected_credit || vin.bonded_total_atomic != post_floor {
-        return Err(BondPostError::RebondTerms);
+        return Err(BondPostError::ReinstateTerms);
     }
     Ok(())
 }

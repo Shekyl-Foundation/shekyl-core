@@ -20,13 +20,13 @@
 //! | `Release`        | always                  |
 //! | `HoldingsUpdate` | iff `bond_debit > 0`    |
 //! | `JoinMarket`     | never                   |
-//! | `Rebond`         | never                   |
+//! | `Reinstate`         | never                   |
 //!
 //! `Release` is unconditional because UB3 runs before the debit-term guards
 //! (UB9); a zero-debit Release with the wrong key is refused here, not later.
 //! `HoldingsUpdate` keys on the term because that is how the kind tells drop
 //! (cold) from add (identity). Credit paths never pin: JoinMarket is the post
-//! that *commits* the cold key; Rebond's verify requires `bond_debit == 0`.
+//! that *commits* the cold key; Reinstate's verify requires `bond_debit == 0`.
 //!
 //! [`cold_authority_pin`] refuses a predicate-false call
 //! ([`ColdAuthorityError::NotAColdAuthorityPost`]) before the keys are
@@ -99,7 +99,7 @@ pub fn requires_cold_authority(post_kind: BondPostKind, bond_debit: u64) -> bool
     match post_kind {
         BondPostKind::Release => true,
         BondPostKind::HoldingsUpdate => bond_debit > 0,
-        BondPostKind::JoinMarket | BondPostKind::Rebond => false,
+        BondPostKind::JoinMarket | BondPostKind::Reinstate => false,
     }
 }
 
@@ -210,8 +210,8 @@ mod tests {
         assert!(requires_cold_authority(HoldingsUpdate, u64::MAX));
         assert!(!requires_cold_authority(JoinMarket, 0));
         assert!(!requires_cold_authority(JoinMarket, 1));
-        assert!(!requires_cold_authority(Rebond, 0));
-        assert!(!requires_cold_authority(Rebond, 1));
+        assert!(!requires_cold_authority(Reinstate, 0));
+        assert!(!requires_cold_authority(Reinstate, 1));
     }
 
     #[test]
@@ -245,7 +245,7 @@ mod tests {
     fn composed_gate_refuses_a_post_that_needs_no_cold_authority() {
         for (kind, debit) in [
             (BondPostKind::JoinMarket, 0u64),
-            (BondPostKind::Rebond, 0),
+            (BondPostKind::Reinstate, 0),
             (BondPostKind::HoldingsUpdate, 0),
         ] {
             assert_eq!(

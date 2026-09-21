@@ -89,7 +89,7 @@ fn serve_credit_and_bond_post_drop_verdicts_do_not_sever_on_our_state() {
     );
     assert!(
         !DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_ON_COMPLETE_TREE
         ))
         .severs()
     );
@@ -277,7 +277,7 @@ fn bond_post_ffi_maps_each_reject_reason() {
         verify(0, 0, Some(&shard), 1, floor, floor, 0, 0),
         SHEKYL_ARCHIVAL_BOND_POST_OK
     );
-    // This entry is JoinMarket-only: a Rebond byte is the post-kind verdict,
+    // This entry is JoinMarket-only: a Reinstate byte is the post-kind verdict,
     // whether or not the caller also handed an endpoint or a spend key.
     assert_eq!(
         unsafe {
@@ -695,9 +695,9 @@ fn release_ffi_rejects_oversize_holdings_masquerading_as_empty() {
 }
 
 #[test]
-fn rebond_ffi_rejects_oversize_post_at_the_marshal_boundary() {
+fn reinstate_ffi_rejects_oversize_post_at_the_marshal_boundary() {
     use shekyl_archival_retention::{BondPostKind, HoldingsKind};
-    // The finding this closes: a >4096-shard Rebond post on a
+    // The finding this closes: a >4096-shard Reinstate post on a
     // terminal-slashed record (bonded 0) collapsed bond_floor to 0, so the
     // zero-credit terms verified and the connect then aborted block apply
     // at the record encode. The marshal cap makes the oversize set
@@ -705,12 +705,12 @@ fn rebond_ffi_rejects_oversize_post_at_the_marshal_boundary() {
     let shards: Vec<u64> = (0..4097u64).collect();
     let intervals = [5u64, u64::MAX]; // one open interval (slashed record)
     let code = unsafe {
-        shekyl_archival_verify_rebond_bond_post(
-            BondPostKind::Rebond as u8,
+        shekyl_archival_verify_reinstate_bond_post(
+            BondPostKind::Reinstate as u8,
             HoldingsKind::ShardSetCompact as u8,
             shards.as_ptr(),
             shards.len(),
-            std::ptr::null(), // bond_spend_pk (§9.11: never on Rebond)
+            std::ptr::null(), // bond_spend_pk (§9.11: never on Reinstate)
             0,
             0, // bonded_total_atomic — the floor-collapse masquerade
             0, // bond_credit — zero collateral demanded

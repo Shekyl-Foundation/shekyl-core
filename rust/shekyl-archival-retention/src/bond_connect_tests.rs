@@ -423,7 +423,7 @@ fn holdings_update_pop_rejects_non_floor_delta() {
     );
 }
 
-// ── Rebond connect/pop (P2B-9) ────────────────────────────────────────────
+// ── Reinstate connect/pop (P2B-9) ────────────────────────────────────────────
 
 const RB_EPOCH: u64 = 20;
 const RB_TOTAL: u64 = 9 * ARCHIVAL_BOND_FLOOR_ATOMIC;
@@ -443,9 +443,9 @@ fn rb_closed(start: u64, end: u64) -> BadInterval {
 }
 
 #[test]
-fn rebond_connect_standing_only_moves_no_collateral() {
+fn reinstate_connect_standing_only_moves_no_collateral() {
     let intervals = [rb_closed(2, 3), rb_open(5)];
-    let e = rebond_connect(
+    let e = reinstate_connect(
         2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
         &[7, 9],
         &intervals,
@@ -463,9 +463,9 @@ fn rebond_connect_standing_only_moves_no_collateral() {
 }
 
 #[test]
-fn rebond_connect_growth_credits_added_floors() {
+fn reinstate_connect_growth_credits_added_floors() {
     // Terminal-slash reinstatement: empty current, two shards re-specified.
-    let e = rebond_connect(0, &[], &[rb_open(5)], &[7, 11], RB_TOTAL, RB_EPOCH).unwrap();
+    let e = reinstate_connect(0, &[], &[rb_open(5)], &[7, 11], RB_TOTAL, RB_EPOCH).unwrap();
     assert_eq!(e.added_shard_ids, vec![7, 11]);
     assert_eq!(e.new_bonded_total, 2 * ARCHIVAL_BOND_FLOOR_ATOMIC);
     assert_eq!(
@@ -475,14 +475,14 @@ fn rebond_connect_growth_credits_added_floors() {
 }
 
 #[test]
-fn rebond_connect_rejects_shape_and_invariant_breaches() {
+fn reinstate_connect_rejects_shape_and_invariant_breaches() {
     let intervals = [rb_open(5)];
     assert_eq!(
-        rebond_connect(0, &[], &intervals, &[], RB_TOTAL, RB_EPOCH),
-        Err(RebondConnectError::EmptyPost)
+        reinstate_connect(0, &[], &intervals, &[], RB_TOTAL, RB_EPOCH),
+        Err(ReinstateConnectError::EmptyPost)
     );
     assert_eq!(
-        rebond_connect(
+        reinstate_connect(
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             &[7, 9],
             &intervals,
@@ -490,10 +490,10 @@ fn rebond_connect_rejects_shape_and_invariant_breaches() {
             RB_TOTAL,
             RB_EPOCH,
         ),
-        Err(RebondConnectError::NotSuperset)
+        Err(ReinstateConnectError::NotSuperset)
     );
     assert_eq!(
-        rebond_connect(
+        reinstate_connect(
             ARCHIVAL_BOND_FLOOR_ATOMIC, // != 2·FLOOR for two shards
             &[7, 9],
             &intervals,
@@ -501,10 +501,10 @@ fn rebond_connect_rejects_shape_and_invariant_breaches() {
             RB_TOTAL,
             RB_EPOCH,
         ),
-        Err(RebondConnectError::RecordFloorInvariantBroken)
+        Err(ReinstateConnectError::RecordFloorInvariantBroken)
     );
     assert_eq!(
-        rebond_connect(
+        reinstate_connect(
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             &[7, 9],
             &[rb_closed(2, 3)], // nothing open
@@ -512,10 +512,10 @@ fn rebond_connect_rejects_shape_and_invariant_breaches() {
             RB_TOTAL,
             RB_EPOCH,
         ),
-        Err(RebondConnectError::NoOpenInterval)
+        Err(ReinstateConnectError::NoOpenInterval)
     );
     assert_eq!(
-        rebond_connect(
+        reinstate_connect(
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             &[7, 9],
             &[rb_open(5), rb_open(5)], // coalescing invariant broken
@@ -523,10 +523,10 @@ fn rebond_connect_rejects_shape_and_invariant_breaches() {
             RB_TOTAL,
             RB_EPOCH,
         ),
-        Err(RebondConnectError::MultipleOpenIntervals)
+        Err(ReinstateConnectError::MultipleOpenIntervals)
     );
     assert_eq!(
-        rebond_connect(
+        reinstate_connect(
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             &[7, 9],
             &[rb_open(RB_EPOCH + 5)], // slash start after the close point
@@ -534,7 +534,7 @@ fn rebond_connect_rejects_shape_and_invariant_breaches() {
             RB_TOTAL,
             RB_EPOCH,
         ),
-        Err(RebondConnectError::IntervalOrdering)
+        Err(ReinstateConnectError::IntervalOrdering)
     );
 }
 
@@ -583,21 +583,21 @@ fn slash_coalescing_caps_same_epoch_sweep_at_one_interval() {
 }
 
 #[test]
-fn rebond_connect_rejects_oversize_post() {
-    // The verify-side RebondPostOversize twin: the fold refuses to produce
+fn reinstate_connect_rejects_oversize_post() {
+    // The verify-side ReinstatePostOversize twin: the fold refuses to produce
     // a record the codec cannot encode.
     let post: Vec<u64> = (0..=(MAX_HOLDINGS_SHARDS as u64)).collect();
     assert_eq!(
-        rebond_connect(0, &[], &[rb_open(5)], &post, RB_TOTAL, RB_EPOCH),
-        Err(RebondConnectError::PostOversize)
+        reinstate_connect(0, &[], &[rb_open(5)], &post, RB_TOTAL, RB_EPOCH),
+        Err(ReinstateConnectError::PostOversize)
     );
 }
 
 #[test]
-fn rebond_pop_reverts_growth_and_tolerates_zero_delta() {
+fn reinstate_pop_reverts_growth_and_tolerates_zero_delta() {
     // Growth of 2·FLOOR reverts exactly.
     assert_eq!(
-        rebond_pop(
+        reinstate_pop(
             3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             ARCHIVAL_BOND_FLOOR_ATOMIC,
             RB_TOTAL,
@@ -606,7 +606,7 @@ fn rebond_pop_reverts_growth_and_tolerates_zero_delta() {
     );
     // Standing-only: zero delta, counter unchanged.
     assert_eq!(
-        rebond_pop(
+        reinstate_pop(
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             RB_TOTAL,
@@ -616,32 +616,32 @@ fn rebond_pop_reverts_growth_and_tolerates_zero_delta() {
 }
 
 #[test]
-fn rebond_pop_rejects_shrink_partial_floor_and_underflow() {
-    // A Rebond never shrinks the balance.
+fn reinstate_pop_rejects_shrink_partial_floor_and_underflow() {
+    // A Reinstate never shrinks the balance.
     assert_eq!(
-        rebond_pop(
+        reinstate_pop(
             ARCHIVAL_BOND_FLOOR_ATOMIC,
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             RB_TOTAL,
         ),
-        Err(RebondPopError::NotRebondDelta)
+        Err(ReinstatePopError::NotReinstateDelta)
     );
     // Delta must be a whole number of FLOORs.
     assert_eq!(
-        rebond_pop(
+        reinstate_pop(
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC + 1,
             ARCHIVAL_BOND_FLOOR_ATOMIC,
             RB_TOTAL,
         ),
-        Err(RebondPopError::NotRebondDelta)
+        Err(ReinstatePopError::NotReinstateDelta)
     );
     // Reverting more than the global counter holds is corruption.
     assert_eq!(
-        rebond_pop(
+        reinstate_pop(
             2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             0,
             ARCHIVAL_BOND_FLOOR_ATOMIC
         ),
-        Err(RebondPopError::CounterRange)
+        Err(ReinstatePopError::CounterRange)
     );
 }

@@ -71,8 +71,8 @@
 //!
 //! ## Scope: `JoinMarket` only
 //!
-//! Rebond pins its post-holdings as a **superset** of the record
-//! ([`crate::bond_post::verify_rebond_bond_post`] Pin 1) and HoldingsUpdate-add
+//! Reinstate pins its post-holdings as a **superset** of the record
+//! ([`crate::bond_post::verify_reinstate_bond_post`] Pin 1) and HoldingsUpdate-add
 //! only adds, so both are **monotone in credited work** and cannot turn a viable
 //! position into a zero — there is no bypass through them. HoldingsUpdate-**drop**
 //! can reduce work and is left ungated *on purpose*: refusing an **entry** into a

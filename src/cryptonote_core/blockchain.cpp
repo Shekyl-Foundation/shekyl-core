@@ -4449,7 +4449,7 @@ uint8_t archival_cold_authority_pin(const shekyl::db::ArchivalBondValue& record,
 }
 
 // Shared record-fact marshal for the record-mutating bond-post verify arms
-// (HoldingsUpdate, Rebond): load the bond record, belt the v6 index-parallel
+// (HoldingsUpdate, Reinstate): load the bond record, belt the v6 index-parallel
 // coupling, and flatten the interval log into the FFI's (start, end_exclusive)
 // pair layout. Returns false — rejecting the tx — on the desync belt.
 // Single-sourced so the arms verify against identically-gathered record facts;
@@ -4730,9 +4730,9 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return true;
   }
 
-  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Rebond))
+  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Reinstate))
   {
-    // Rebond semantic verify (gate-4 §3.4; P2B-9 reinstatement): marshal the
+    // Reinstate semantic verify (gate-4 §3.4; P2B-9 reinstatement): marshal the
     // record's current holdings + the full interval log as flattened
     // (start, end_exclusive) pairs — the open-interval precondition, the Pin-5
     // single-open check, and the Pin-6 headroom bound all read it Rust-side.
@@ -4740,15 +4740,15 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     shekyl::db::ArchivalBondValue record{};
     bool have_record = false;
     std::vector<uint64_t> intervals_flat;
-    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "Rebond",
+    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "Reinstate",
         record, have_record, intervals_flat))
       return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
-    const uint8_t rb_rc = shekyl_archival_verify_rebond_bond_post(
+    const uint8_t rb_rc = shekyl_archival_verify_reinstate_bond_post(
       bond.post_kind,
       static_cast<uint8_t>(bond.holdings.kind),
       shard_ptr,
       bond.holdings.shard_ids.size(),
-      nullptr, // bond_spend_pk: empty on Rebond (belt above)
+      nullptr, // bond_spend_pk: empty on Reinstate (belt above)
       0,
       bond.bonded_total_atomic,
       bond.bond_credit,
@@ -4762,17 +4762,17 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       record.bad_intervals.size());
     if (rb_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
     {
-      MERROR_VER("Archival Rebond verify failed (code "
+      MERROR_VER("Archival Reinstate verify failed (code "
         << static_cast<unsigned>(rb_rc) << "): "
         << shekyl_archival_bond_post_err_string(rb_rc));
       return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(rb_rc));
     }
     // Credit-path authorization (P2B-9 Pin 4, the GF-1 selector): the identity
-    // key — a Rebond proves control of P_canonical_id; the funded value (if
+    // key — a Reinstate proves control of P_canonical_id; the funded value (if
     // any) arrives via self-authorizing txin_to_key inputs.
     if (auth_pubkey != bond.hybrid_public_key)
     {
-      MERROR_VER("Archival Rebond rejected: credit-path pqc auth key does not "
+      MERROR_VER("Archival Reinstate rejected: credit-path pqc auth key does not "
         "match the identity key P_pubkey");
       return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     }
@@ -4801,7 +4801,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(verify_rc));
   }
 
-  // D3/R3 admission viability (JoinMarket only — rebond/HU-add are monotone
+  // D3/R3 admission viability (JoinMarket only — reinstate/HU-add are monotone
   // in credited work; HU-drop is left ungated so we do not trap exit-ward
   // capital). Predicate + epoch key + age live in Rust; C++ only marshals
   // LMDB rows. parent_height = chain_height - 1 (tip would self-score).

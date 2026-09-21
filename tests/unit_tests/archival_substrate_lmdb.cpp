@@ -3757,14 +3757,14 @@ TEST(archival_substrate_lmdb, same_epoch_slashes_coalesce_one_open_interval)
   EXPECT_EQ(db.get_total_burned(), 0u);
 }
 
-// Direct codec round-trip for the Rebond record pre-image journal value
+// Direct codec round-trip for the Reinstate record pre-image journal value
 // (gate-4 §3.4; P2B-9): encode → decode reproduces every field.
 // pre_bonded_total == 0 is LEGAL here (terminal-slash reinstatement) — unlike
 // the Release/HoldingsUpdate journals; only the per-shard array length desync
 // rejects at encode.
-TEST(archival_substrate_lmdb, rebond_revert_value_round_trips)
+TEST(archival_substrate_lmdb, reinstate_revert_value_round_trips)
 {
-  shekyl::db::ArchivalBondRebondRevertValue v{};
+  shekyl::db::ArchivalBondReinstateRevertValue v{};
   std::memset(v.p_id, 0xA3, sizeof(v.p_id));
   v.pre_bonded_total = 0; // terminal-slash pre-image: legal
   v.closed_interval_index = 2;
@@ -3773,8 +3773,8 @@ TEST(archival_substrate_lmdb, rebond_revert_value_round_trips)
   v.pre_shard_add_epochs = {};
 
   std::vector<uint8_t> encoded = v.encode();
-  shekyl::db::ArchivalBondRebondRevertValue out{};
-  ASSERT_TRUE(shekyl::db::ArchivalBondRebondRevertValue::decode(
+  shekyl::db::ArchivalBondReinstateRevertValue out{};
+  ASSERT_TRUE(shekyl::db::ArchivalBondReinstateRevertValue::decode(
     encoded.data(), encoded.size(), out));
   EXPECT_EQ(0, std::memcmp(out.p_id, v.p_id, sizeof(v.p_id)));
   EXPECT_EQ(out.pre_bonded_total, 0u);
@@ -3786,23 +3786,23 @@ TEST(archival_substrate_lmdb, rebond_revert_value_round_trips)
   v.pre_shard_ids = {7, 9};
   v.pre_shard_add_epochs = {3, 5};
   encoded = v.encode();
-  ASSERT_TRUE(shekyl::db::ArchivalBondRebondRevertValue::decode(
+  ASSERT_TRUE(shekyl::db::ArchivalBondReinstateRevertValue::decode(
     encoded.data(), encoded.size(), out));
   EXPECT_EQ(out.pre_shard_ids, v.pre_shard_ids);
   EXPECT_EQ(out.pre_shard_add_epochs, v.pre_shard_add_epochs);
 
-  shekyl::db::ArchivalBondRebondRevertValue desync{};
+  shekyl::db::ArchivalBondReinstateRevertValue desync{};
   desync.pre_shard_ids = {1, 2};
   desync.pre_shard_add_epochs = {1}; // length mismatch
   EXPECT_THROW(desync.encode(), std::runtime_error);
 }
 
-// Slashed-record seed shared by the Rebond round-trip KATs: survivors {7, 9}
+// Slashed-record seed shared by the Reinstate round-trip KATs: survivors {7, 9}
 // (add-epochs 0), one open bad interval from epoch 0, floor-consistent balance
 // 2·FLOOR, global counter 5·FLOOR. The record shape is single-sourced so a
-// future ArchivalBondValue field the Rebond path must carry lands in every
+// future ArchivalBondValue field the Reinstate path must carry lands in every
 // round-trip at once instead of leaving one green-passing on a stale seed.
-static crypto::hash seed_slashed_rebond_record(TempLMDB& fixture, uint8_t p_byte)
+static crypto::hash seed_slashed_reinstate_record(TempLMDB& fixture, uint8_t p_byte)
 {
   BlockchainDB& db = fixture.db;
   const crypto::hash p_id = make_hash(p_byte);
@@ -3826,8 +3826,8 @@ static crypto::hash seed_slashed_rebond_record(TempLMDB& fixture, uint8_t p_byte
   return p_id;
 }
 
-// A Rebond tx (credit path, no debit) carrying the POST holdings re-spec.
-static transaction make_rebond_tx(const crypto::hash& p_id,
+// A Reinstate tx (credit path, no debit) carrying the POST holdings re-spec.
+static transaction make_reinstate_tx(const crypto::hash& p_id,
   std::vector<uint64_t> post_shard_ids, uint64_t bonded_total_atomic, uint64_t bond_credit)
 {
   transaction tx{};
@@ -3835,7 +3835,7 @@ static transaction make_rebond_tx(const crypto::hash& p_id,
   txin_archival_bond_post vin{};
   vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
   vin.p_canonical_id = p_id;
-  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Rebond);
+  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Reinstate);
   vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
   vin.holdings.shard_ids = std::move(post_shard_ids);
   vin.bonded_total_atomic = bonded_total_atomic;
@@ -3845,14 +3845,14 @@ static transaction make_rebond_tx(const crypto::hash& p_id,
   return tx;
 }
 
-// Rebond connect/pop twin through the REAL block path (gate-4 §3.4; P2B-9):
-// add_block drives the vin dispatch → apply_archival_rebond (pre-image journal
+// Reinstate connect/pop twin through the REAL block path (gate-4 §3.4; P2B-9):
+// add_block drives the vin dispatch → apply_archival_reinstate (pre-image journal
 // incl. the closed interval's identity, Rust fold counter movement, the
-// in-place E_rebond + 1 close, the add-epoch rebuild with added shards taking
-// E_rebond), pop_block drives revert_archival_rebonds_at_height (pop fold +
+// in-place E_reinstate + 1 close, the add-epoch rebuild with added shards taking
+// E_reinstate), pop_block drives revert_archival_reinstates_at_height (pop fold +
 // interval re-open + byte-exact restore). Growth case: a partially-slashed
 // record re-acquires the slashed shard and adds a new one.
-TEST(archival_substrate_lmdb, rebond_connect_pop_roundtrip_through_real_block_path)
+TEST(archival_substrate_lmdb, reinstate_connect_pop_roundtrip_through_real_block_path)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -3864,17 +3864,17 @@ TEST(archival_substrate_lmdb, rebond_connect_pop_roundtrip_through_real_block_pa
 
   // Post-slash record: shard 42 was slashed away at epoch 0 (open interval),
   // survivors {7, 9}; floor-consistent balance.
-  const crypto::hash p_id = seed_slashed_rebond_record(fixture, 0xB4);
+  const crypto::hash p_id = seed_slashed_reinstate_record(fixture, 0xB4);
   const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t total_bonded = 5 * floor;
 
   const uint64_t connect_height = db.height();
-  const uint64_t e_rebond = shekyl_archival_settlement_epoch_at_height(connect_height);
-  ASSERT_GT(e_rebond, 0u);
+  const uint64_t e_reinstate = shekyl_archival_settlement_epoch_at_height(connect_height);
+  ASSERT_GT(e_reinstate, 0u);
 
-  // The Rebond vin carries the POST holdings (superset: survivors + the
+  // The Reinstate vin carries the POST holdings (superset: survivors + the
   // re-acquired 42 + new 99) and the growth credit 2·FLOOR.
-  connect_block_with_txs(db, {make_rebond_tx(p_id, {7, 9, 42, 99}, 4 * floor, 2 * floor)});
+  connect_block_with_txs(db, {make_reinstate_tx(p_id, {7, 9, 42, 99}, 4 * floor, 2 * floor)});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -3883,12 +3883,12 @@ TEST(archival_substrate_lmdb, rebond_connect_pop_roundtrip_through_real_block_pa
   EXPECT_EQ(read.bonded_total_atomic, 4 * floor);
   EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7, 9, 42, 99}));
   // Carried shards keep their add-epochs; the re-acquired and new shards take
-  // E_rebond (Pin 7).
-  EXPECT_EQ(read.shard_add_epochs, (std::vector<uint64_t>{0, 0, e_rebond, e_rebond}));
-  // The open interval closed IN PLACE at E_rebond + 1 (Pin 3) — count unchanged.
+  // E_reinstate (Pin 7).
+  EXPECT_EQ(read.shard_add_epochs, (std::vector<uint64_t>{0, 0, e_reinstate, e_reinstate}));
+  // The open interval closed IN PLACE at E_reinstate + 1 (Pin 3) — count unchanged.
   ASSERT_EQ(read.bad_intervals.size(), 1u);
   EXPECT_EQ(read.bad_intervals[0].start_epoch, 0u);
-  EXPECT_EQ(read.bad_intervals[0].end_exclusive, e_rebond + 1);
+  EXPECT_EQ(read.bad_intervals[0].end_exclusive, e_reinstate + 1);
   EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded + 2 * floor);
 
   block popped{};
@@ -3908,11 +3908,11 @@ TEST(archival_substrate_lmdb, rebond_connect_pop_roundtrip_through_real_block_pa
   EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded);
 }
 
-// The standing-only Rebond (P2B-9 Pin 2's common case): same shard set,
+// The standing-only Reinstate (P2B-9 Pin 2's common case): same shard set,
 // credit 0 — the connect moves NO collateral, only the interval closes; the
 // pop's zero-delta arm re-opens it. Also proves the zero-credit vin flows the
 // real dispatch (a bond post whose both terms are zero).
-TEST(archival_substrate_lmdb, rebond_standing_only_zero_credit_roundtrip)
+TEST(archival_substrate_lmdb, reinstate_standing_only_zero_credit_roundtrip)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -3922,14 +3922,14 @@ TEST(archival_substrate_lmdb, rebond_standing_only_zero_credit_roundtrip)
 
   append_minimal_blocks(db, kSeb + 3);
 
-  const crypto::hash p_id = seed_slashed_rebond_record(fixture, 0xB5);
+  const crypto::hash p_id = seed_slashed_reinstate_record(fixture, 0xB5);
   const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t total_bonded = 5 * floor;
 
-  const uint64_t e_rebond = shekyl_archival_settlement_epoch_at_height(db.height());
+  const uint64_t e_reinstate = shekyl_archival_settlement_epoch_at_height(db.height());
 
   // Same shard set, zero credit — pure standing reinstatement.
-  connect_block_with_txs(db, {make_rebond_tx(p_id, {7, 9}, 2 * floor, 0)});
+  connect_block_with_txs(db, {make_reinstate_tx(p_id, {7, 9}, 2 * floor, 0)});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -3939,7 +3939,7 @@ TEST(archival_substrate_lmdb, rebond_standing_only_zero_credit_roundtrip)
   EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7, 9}));
   EXPECT_EQ(read.shard_add_epochs, (std::vector<uint64_t>{0, 0}));
   ASSERT_EQ(read.bad_intervals.size(), 1u);
-  EXPECT_EQ(read.bad_intervals[0].end_exclusive, e_rebond + 1);
+  EXPECT_EQ(read.bad_intervals[0].end_exclusive, e_reinstate + 1);
   EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded); // no movement
 
   block popped{};

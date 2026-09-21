@@ -70,7 +70,7 @@ pub const CT_TYPE_FCMP: u8 = 0x01;
 /// `txin_archival_serve_credit_response` tag (gate-2, non-spending).
 pub const TAG_INPUT_SERVE_CREDIT: u8 = 0x02;
 /// `txin_archival_bond_post` tag (gate-4). JoinMarket (credit) and Release
-/// (debit) are the wallet-constructible archival kinds; Rebond and
+/// (debit) are the wallet-constructible archival kinds; Reinstate and
 /// HoldingsUpdate have verify arms and no producer yet.
 pub const TAG_INPUT_BOND_POST: u8 = 0x03;
 /// `txin_archival_reward_emission` tag (C-1) — an opaque canonical blob whose

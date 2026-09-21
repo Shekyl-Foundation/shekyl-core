@@ -34,8 +34,8 @@ archival_bond_unbond_log	apply	FORCED-BY:bond-post-Release	blockchain_db.cpp:327
 archival_bond_unbond_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:783	revert_archival_unbonds_at_height	revert_archival_unbonds_at_height
 archival_bond_holdings_update_log	apply	FORCED-BY:bond-post-HoldingsUpdate	blockchain_db.cpp:338	apply_archival_holdings_update_add	apply_archival_holdings_update_add/drop
 archival_bond_holdings_update_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:797	revert_archival_holdings_updates_at_height	revert_archival_holdings_updates_at_height
-archival_bond_rebond_log	apply	FORCED-BY:bond-post-Rebond	blockchain_db.cpp:353	apply_archival_rebond	apply_archival_rebond
-archival_bond_rebond_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:805	revert_archival_rebonds_at_height	revert_archival_rebonds_at_height
+archival_bond_reinstate_log	apply	FORCED-BY:bond-post-Reinstate	blockchain_db.cpp:353	apply_archival_reinstate	apply_archival_reinstate
+archival_bond_reinstate_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:805	revert_archival_reinstates_at_height	revert_archival_reinstates_at_height
 archival_r_market	apply	FORCED-BY:epoch-close	db_lmdb.cpp:8394	m_archival_r_market	written by process_archival_epoch_close_at_height
 archival_r_market	revert	FORCED-BY:pop-across-the-epoch-close	db_lmdb.cpp:7241	delete_archival_r_market_for_epoch	delete_archival_r_market_for_epoch from the close revert
 archival_sigma_work	apply	FORCED-BY:epoch-close	db_lmdb.cpp:8404	m_archival_sigma_work	written by process_archival_epoch_close_at_height

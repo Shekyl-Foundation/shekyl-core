@@ -1345,7 +1345,7 @@ fn bond_balance_mismatch_is_rejected() {
 #[test]
 fn producerless_bond_post_kinds_refuse_loudly() {
     // The named rule-21 refusal arm (verifier module docs), NARROWED when
-    // the Release fact set landed (§8.7.1.1): Rebond and HoldingsUpdate
+    // the Release fact set landed (§8.7.1.1): Reinstate and HoldingsUpdate
     // parse and clear Phase A (the wire admits `Other` kinds), but they
     // have no producer, so building their submit-side fact sets now would
     // be pre-provisioned flexibility with an unverifiable Phase-D race
@@ -1354,7 +1354,7 @@ fn producerless_bond_post_kinds_refuse_loudly() {
     // this asserts against `bond_admitting_facts` (a JoinMarket-shaped
     // fact set): reaching a verdict on it at all would be the defect.
     for kind in [
-        shekyl_archival_retention::BondPostKind::Rebond,
+        shekyl_archival_retention::BondPostKind::Reinstate,
         shekyl_archival_retention::BondPostKind::HoldingsUpdate,
     ] {
         let parsed = bond_mutated(|tx| {
@@ -2340,7 +2340,7 @@ fn a_competing_release_that_exits_the_record_is_a_terminal_conflict() {
 
 #[test]
 fn a_balance_that_moved_under_the_debit_is_also_terminal() {
-    // The credit-side twin: a Rebond or HoldingsUpdate-add connecting during
+    // The credit-side twin: a Reinstate or HoldingsUpdate-add connecting during
     // Phase C RAISES the record's total, so the vin's `bond_debit` no longer
     // equals it and the full-exit equality can never hold again for these
     // bytes. Keying on "exited" alone would miss this; keying on the balance

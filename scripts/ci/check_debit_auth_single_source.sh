@@ -16,7 +16,7 @@
 #   Release          always            (UB3 before UB9, §8.7.1.1)
 #   HoldingsUpdate   iff bond_debit > 0 (drop = cold, add = identity)
 #   JoinMarket       never             (the credit that COMMITS the cold key)
-#   Rebond           never             (credit path; verify needs debit == 0)
+#   Reinstate           never             (credit path; verify needs debit == 0)
 #
 # The composed gate REFUSES if called on a predicate-false post
 # (NOT_COLD_AUTHORITY_POST). This script catches an arm that FORGETS the

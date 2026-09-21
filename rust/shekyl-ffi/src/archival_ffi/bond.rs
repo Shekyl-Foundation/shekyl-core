@@ -4,13 +4,13 @@
 // BSD-3-Clause
 
 //! Bond-post verify / connect / pop FFI (JoinMarket, Release, HoldingsUpdate,
-//! Rebond).
+//! Reinstate).
 
 use shekyl_archival_retention::{
     cold_authority_pin, holdings_update_add_connect, holdings_update_drop_connect,
-    holdings_update_pop, rebond_connect, rebond_pop, release_connect, release_pop,
+    holdings_update_pop, reinstate_connect, reinstate_pop, release_connect, release_pop,
     verify_holdings_update_add, verify_holdings_update_drop, verify_join_market_bond_post,
-    verify_rebond_bond_post, verify_release_bond_post, whole_record_last_served,
+    verify_reinstate_bond_post, verify_release_bond_post, whole_record_last_served,
     ArchivalBondPostVin, BadInterval, BondKind, BondPostKind, ColdAuthorityError, DebitAuthError,
     HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet, ShardSetError, ENDPOINT_BYTES,
     HYBRID_PUBKEY_CANONICAL_BYTES,
@@ -440,7 +440,7 @@ pub unsafe extern "C" fn shekyl_archival_last_served_scan(
 /// Composed cold-authority gate (`shekyl-archival-retention::cold_authority_pin`).
 ///
 /// Selector: `Release` always; `HoldingsUpdate` iff `bond_debit > 0`;
-/// `JoinMarket` / `Rebond` never. Unknown `post_kind` → `ERR_POST_KIND`.
+/// `JoinMarket` / `Reinstate` never. Unknown `post_kind` → `ERR_POST_KIND`.
 /// Predicate-false → `ERR_NOT_COLD_AUTHORITY_POST` (implementation error).
 ///
 /// # Safety
@@ -620,7 +620,7 @@ pub unsafe extern "C" fn shekyl_archival_release_pop(
 
 /// Shared record-fact entry-point prologue for the bond-post kinds that verify
 /// against an existing record's holdings (`HoldingsUpdate` add + drop,
-/// `Rebond`): decode the post kind (an out-of-range byte maps to the caller's
+/// `Reinstate`): decode the post kind (an out-of-range byte maps to the caller's
 /// `wrong_post_kind_err` — the kinds name it differently), marshal the vin
 /// (§9.11 coupling enforced by the shared marshaler), decode the record's
 /// holdings kind, and gather the common record facts. Keeping this
@@ -649,7 +649,7 @@ unsafe fn bond_post_record_marshal_prologue(
     record_shard_ids_ptr: *const u64,
     record_shard_ids_len: usize,
 ) -> Result<(ArchivalBondPostVin, Option<u64>, HoldingsKind, Vec<u64>), u8> {
-    // HoldingsUpdate and Rebond carry no endpoint; JoinMarket is this
+    // HoldingsUpdate and Reinstate carry no endpoint; JoinMarket is this
     // entry's wrong-kind verdict.
     let kind = BondPostKind::from_u8(post_kind)
         .ok()
@@ -981,20 +981,20 @@ pub unsafe extern "C" fn shekyl_archival_holdings_update_pop(
     }
 }
 
-/// Verify `Rebond` bond-post semantics (gate-4 §3.4; P2B-9 reinstatement). The
+/// Verify `Reinstate` bond-post semantics (gate-4 §3.4; P2B-9 reinstatement). The
 /// vin's post-holdings arrive via `shard_ids_*`; `record_shard_ids_*` is the
 /// record's **current** holdings (the superset base), and
 /// `record_bad_intervals_*` is the flattened `(start, end_exclusive)` pairs —
 /// `record_bad_intervals_len` counts **pairs** (buffer holds `2 × len` u64s) —
 /// carrying the open-interval precondition and the Pin-6 headroom bound. A
-/// `Rebond` vin never carries `bond_spend_pk` (credit path; the record keeps its
+/// `Reinstate` vin never carries `bond_spend_pk` (credit path; the record keeps its
 /// join-time key), so a conforming caller passes null/0.
 ///
 /// # Safety
 /// Each `*_ptr` must be valid for its `*_len` elements, or null when the len is 0.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn shekyl_archival_verify_rebond_bond_post(
+pub unsafe extern "C" fn shekyl_archival_verify_reinstate_bond_post(
     post_kind: u8,
     holdings_kind: u8,
     shard_ids_ptr: *const u64,
@@ -1014,7 +1014,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_rebond_bond_post(
 ) -> u8 {
     let (vin, record_bonded_total, record_holdings_kind, record_shards) = match unsafe {
         bond_post_record_marshal_prologue(
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND,
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REINSTATE,
             post_kind,
             holdings_kind,
             shard_ids_ptr,
@@ -1039,7 +1039,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_rebond_bond_post(
     else {
         return SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW;
     };
-    match verify_rebond_bond_post(
+    match verify_reinstate_bond_post(
         &vin,
         record_bonded_total,
         record_holdings_kind,
@@ -1051,13 +1051,13 @@ pub unsafe extern "C" fn shekyl_archival_verify_rebond_bond_post(
     }
 }
 
-/// Fold the `Rebond` connect (gate-4 §3.4; P2B-9). The C++ arm journals the
+/// Fold the `Reinstate` connect (gate-4 §3.4; P2B-9). The C++ arm journals the
 /// record pre-image (including the closed interval's index + start), sets
 /// `held_shard_ids = post` and rebuilds the coupled add-epochs (carried shards
 /// keep theirs; every id written to `added_shard_ids_out` takes
-/// `add_settlement_epoch_out = E_rebond`), closes the open interval **in place**
+/// `add_settlement_epoch_out = E_reinstate`), closes the open interval **in place**
 /// (`bad_intervals[closed_interval_index_out].end_exclusive =
-/// interval_end_exclusive_out`, `== E_rebond + 1`), and sets the counters.
+/// interval_end_exclusive_out`, `== E_reinstate + 1`), and sets the counters.
 /// `total_bonded_atomic` is the LIVE global counter (thread per post).
 /// `added_shard_ids_cap` must be ≥ the post length (added ⊆ post).
 ///
@@ -1067,7 +1067,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_rebond_bond_post(
 /// out-pointers valid for writes.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn shekyl_archival_rebond_connect(
+pub unsafe extern "C" fn shekyl_archival_reinstate_connect(
     record_bonded_total: u64,
     record_shard_ids_ptr: *const u64,
     record_shard_ids_len: usize,
@@ -1076,7 +1076,7 @@ pub unsafe extern "C" fn shekyl_archival_rebond_connect(
     post_shard_ids_ptr: *const u64,
     post_shard_ids_len: usize,
     total_bonded_atomic: u64,
-    rebond_settlement_epoch: u64,
+    reinstate_settlement_epoch: u64,
     added_shard_ids_out: *mut u64,
     added_shard_ids_cap: usize,
     added_shard_ids_len_out: *mut usize,
@@ -1094,36 +1094,36 @@ pub unsafe extern "C" fn shekyl_archival_rebond_connect(
         || new_bonded_total_out.is_null()
         || new_total_bonded_out.is_null()
     {
-        return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NULL_PTR;
+        return SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_NULL_PTR;
     }
     let current = match unsafe {
         with_bond_post_u64_slice(record_shard_ids_ptr, record_shard_ids_len, <[u64]>::to_vec)
     } {
         Ok(v) => v,
-        Err(_) => return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW,
+        Err(_) => return SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_LEN_OVERFLOW,
     };
     let post = match unsafe {
         with_bond_post_u64_slice(post_shard_ids_ptr, post_shard_ids_len, <[u64]>::to_vec)
     } {
         Ok(v) => v,
-        Err(_) => return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW,
+        Err(_) => return SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_LEN_OVERFLOW,
     };
     let Some(bad) =
         (unsafe { gather_bad_intervals(record_bad_intervals_ptr, record_bad_intervals_len) })
     else {
-        return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW;
+        return SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_LEN_OVERFLOW;
     };
-    match rebond_connect(
+    match reinstate_connect(
         record_bonded_total,
         &current,
         &bad,
         &post,
         total_bonded_atomic,
-        rebond_settlement_epoch,
+        reinstate_settlement_epoch,
     ) {
         Ok(e) => {
             if e.added_shard_ids.len() > added_shard_ids_cap {
-                return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_ADDED_BUFFER_TOO_SMALL;
+                return SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_ADDED_BUFFER_TOO_SMALL;
             }
             unsafe {
                 if !e.added_shard_ids.is_empty() {
@@ -1140,13 +1140,13 @@ pub unsafe extern "C" fn shekyl_archival_rebond_connect(
                 *new_bonded_total_out = e.new_bonded_total;
                 *new_total_bonded_out = e.new_total_bonded_atomic;
             }
-            SHEKYL_ARCHIVAL_REBOND_APPLY_OK
+            SHEKYL_ARCHIVAL_REINSTATE_APPLY_OK
         }
-        Err(e) => map_rebond_connect_error(e),
+        Err(e) => map_reinstate_connect_error(e),
     }
 }
 
-/// Fold the `Rebond` pop twin (gate-4 §5): the C++ arm restores the record
+/// Fold the `Reinstate` pop twin (gate-4 §5): the C++ arm restores the record
 /// fields from the pre-image journal byte-identically (including re-opening the
 /// closed interval to `end_exclusive = MAX`); this reverts the global
 /// `total_bonded_atomic` by the connect's `|added|·FLOOR` credit — zero delta
@@ -1155,24 +1155,24 @@ pub unsafe extern "C" fn shekyl_archival_rebond_connect(
 /// # Safety
 /// `new_total_bonded_out` must be valid for a write.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_archival_rebond_pop(
+pub unsafe extern "C" fn shekyl_archival_reinstate_pop(
     current_record_bonded_total: u64,
     journal_pre_bonded_total: u64,
     total_bonded_atomic: u64,
     new_total_bonded_out: *mut u64,
 ) -> u8 {
     if new_total_bonded_out.is_null() {
-        return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NULL_PTR;
+        return SHEKYL_ARCHIVAL_REINSTATE_APPLY_ERR_NULL_PTR;
     }
-    match rebond_pop(
+    match reinstate_pop(
         current_record_bonded_total,
         journal_pre_bonded_total,
         total_bonded_atomic,
     ) {
         Ok(new_total) => {
             unsafe { *new_total_bonded_out = new_total };
-            SHEKYL_ARCHIVAL_REBOND_APPLY_OK
+            SHEKYL_ARCHIVAL_REINSTATE_APPLY_OK
         }
-        Err(e) => map_rebond_pop_error(e),
+        Err(e) => map_reinstate_pop_error(e),
     }
 }

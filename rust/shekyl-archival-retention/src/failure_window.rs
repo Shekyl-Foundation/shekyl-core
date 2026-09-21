@@ -61,21 +61,21 @@
 //!   false, so the walk stops. The partial add epoch is forfeited in both
 //!   directions (P2B-7 Pin 5: no credit earned in it, and no challenge fired in
 //!   it can slash).
-//! - **Across a closed bad interval (slash → `Rebond`)** — `good_through` is
+//! - **Across a closed bad interval (slash → `Reinstate`)** — `good_through` is
 //!   false inside the interval, so the walk stops at the reinstatement boundary.
 //!
 //! That third boundary is a **ruling, not an accident**, so it is stated
 //! plainly: *a reinstated record starts the window clean*. The alternative —
-//! carrying pre-slash misses across the `Rebond` — punishes one absence twice
+//! carrying pre-slash misses across the `Reinstate` — punishes one absence twice
 //! and, worse, defeats the pin at exactly the point it matters: an archiver that
 //! has already forfeited a `FLOOR` would then be one or two misses from the next
 //! slash, i.e. back to the single-strike knife-edge this whole mechanism exists
-//! to remove. Gate-4 §3.4 calls `Rebond` *reinstatement*, and §4.2 makes slash
-//! forward-only; a clean window is the symmetric reading. The `Rebond` is not a
+//! to remove. Gate-4 §3.4 calls `Reinstate` *reinstatement*, and §4.2 makes slash
+//! forward-only; a clean window is the symmetric reading. The `Reinstate` is not a
 //! cheap window reset either — it is reachable only by having been slashed, and
 //! the burned collateral is the price. Note the shard that *was* slashed gets
-//! this for free through its add-epoch (a slash removes it; `Rebond` re-adds it
-//! at `E_rebond`); the interval boundary is what extends the same treatment to a
+//! this for free through its add-epoch (a slash removes it; `Reinstate` re-adds it
+//! at `E_reinstate`); the interval boundary is what extends the same treatment to a
 //! **carried** shard the same sweep did not slash.
 //!
 //! ## Persistence: recomputed, never stored
