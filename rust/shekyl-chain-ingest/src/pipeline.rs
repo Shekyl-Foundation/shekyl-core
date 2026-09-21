@@ -87,6 +87,22 @@ pub struct RunReport {
     pub observations: Observations,
     /// The RandomX measurement (RD-F11), as of the run's end.
     pub metrics: MetricsArtifact,
+    /// One entry per committed `Rewind`: the digest **after the pop**, at
+    /// `to` — the reorg family's "digest after each switch" (§3.8), and the
+    /// pop-symmetry check through the actor (the state at `to` must be the
+    /// state the chain had when `to` was first the tip).
+    pub switches: Vec<Switch>,
+}
+
+/// A committed rewind and the state it left.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Switch {
+    /// The tip after the pop.
+    pub to: BlockHeight,
+    /// How many blocks the pop removed.
+    pub popped: u64,
+    /// The store's logical state at `to`, after the pop.
+    pub digest: LogicalStateDigestV0,
 }
 
 /// Why a run ended in an error.
@@ -354,6 +370,12 @@ where
                     .await
                     .map_err(collapse)?;
                 report.popped += rewound.popped;
+                let digest = connector.ask(Digest).await.map_err(collapse)?;
+                report.switches.push(Switch {
+                    to: rewind.item,
+                    popped: rewound.popped,
+                    digest,
+                });
                 ledger.rewind_to(rewind.item);
                 expected_next = rewind.item.to_raw() + 1;
                 // The sequencer moves past the rewind's position.

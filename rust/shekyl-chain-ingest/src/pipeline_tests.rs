@@ -27,8 +27,8 @@ use crate::schedule::ChainRules;
 use crate::source::{CorpusBlock, IngestEvent};
 use crate::stage::{form_extend, Staged};
 use crate::test_support::{
-    block_with_nonce, chain, cleanup, corpus_of, expected_state, h, open_store, spend, tmp,
-    trace_of, wire, Scripted,
+    block_with_nonce, chain, cleanup, corpus_of, corpus_of_reorg, expected_state, h, open_store,
+    reorg, spend, tmp, trace_of, wire, Scripted,
 };
 
 /// Regtest without a fixed target: the genesis rules at every height.
@@ -601,5 +601,49 @@ async fn a_replayed_run_grades_its_exercised_rows_correct_and_its_producers_borr
         graded.derived_and_conformant,
         report.observations.exercised.len()
     );
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_the_switch() {
+    // §3.8 / RD-Q13 through the real Source: main 0..=4, Rewind { to: 1 },
+    // fork 2'..=5'. The digest after the switch is the state at 1 exactly as
+    // it was when 1 was first the tip (pop symmetry through the actor); the
+    // trace checkpoint at the fork's tip (5, beyond every pre-switch tip)
+    // MATCHes the fork's state; the exercised rows include the rules the
+    // fork blocks ran under.
+    let path = tmp("pipeline-reorg-family");
+    let r = reorg(5, 1, 4);
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_of_reorg(&r);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig { window: 2 },
+    )
+    .await
+    .expect("the reorg replays");
+    assert_eq!(report.popped, 3, "blocks 2, 3, 4 popped");
+    assert_eq!(report.switches.len(), 1);
+    let sw = &report.switches[0];
+    assert_eq!((sw.to, sw.popped), (h(1), 3));
+    assert_eq!(
+        sw.digest,
+        expected_state(&r.main[..=1]),
+        "pop restored the state at 1"
+    );
+    let connected: Vec<u64> = report.connected.iter().map(|(hh, _)| hh.to_raw()).collect();
+    assert_eq!(connected, [0, 1, 2, 3, 4, 2, 3, 4, 5]);
+    assert_eq!(report.checkpoints.len(), 1);
+    let (at, ours, theirs) = &report.checkpoints[0];
+    assert_eq!(*at, h(5));
+    assert_eq!(ours, theirs, "the fork's tip matches its own trace");
+    assert_eq!(*ours, expected_state(&r.after));
+    assert_eq!(report.observations.digest_identical, Some(true));
     cleanup(&path);
 }

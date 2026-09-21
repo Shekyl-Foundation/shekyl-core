@@ -6,17 +6,30 @@
 //! The corpus artifact: what the network carries, as a file
 //! (`DRS_E2_REPLAY_DRIVER.md` §3.9).
 //!
-//! A height-ordered run of records, each a block with the full bodies of
-//! its listed transactions in header order — exactly what a
+//! A sequence-ordered run of records: `Extend`, a block with the full
+//! bodies of its listed transactions in header order — exactly what a
 //! [`Candidate`] consumes and nothing else (RD-Q2: network-shaped; the
-//! passed-through facts travel in the trace, never here). Rust-minted and
+//! passed-through facts travel in the trace, never here) — and `Rewind`,
+//! the reorg family's switch (RD-Q13, commit 8c). Rust-minted and
 //! versioned (RD-F9), fixed layout, little-endian throughout.
 //!
 //! ```text
 //! header   magic "SHKCORP\0" ‖ version u8 ‖ reserved[7] = 0 ‖ first_height u64
-//! record   0x01 ‖ height u64 ‖ block_len u32 ‖ block ‖ tx_count u32 ‖ (tx_len u32 ‖ body)*
+//! extend   0x01 ‖ height u64 ‖ block_len u32 ‖ block ‖ tx_count u32 ‖ (tx_len u32 ‖ body)*
+//! rewind   0x02 ‖ to u64
 //! trailer  0xFF ‖ count u64 ‖ tip_hash[32]
 //! ```
+//!
+//! `count` is records of both kinds; `tip_hash` is the hash at the lineage's
+//! tip after the last record. An `Extend`'s height is the lineage's next
+//! (`first_height` at the start, `to + 1` after a `Rewind`); a `Rewind`'s
+//! `to` lies in `[first_height, tip)` — a rewind to the current tip is a
+//! no-op the format refuses ([`CorpusFault::RewindNotBackward`]), and one
+//! below the first height would leave the next block's `previous`
+//! unverifiable ([`CorpusFault::RewindOutOfCorpus`]). Writer and reader
+//! keep the **lineage** — every height's hash since `first_height`,
+//! truncated by a rewind — so chaining is re-established across a switch
+//! exactly as within a straight run.
 //!
 //! # Verified, never declared (RD-F15)
 //!
@@ -31,12 +44,15 @@
 //! [`CorpusFault::Unchained`]); an artifact the reader cannot re-verify is
 //! refused whatever its writer believed.
 //!
-//! # Reserved
+//! # Checkpoints under reorgs
 //!
-//! Tag `0x02` (**Rewind**, RD-Q13) is reserved for the reorg family and is
-//! refused as [`CorpusFault::ReservedTag`] until that commit lands — named
-//! in §3.9's table so the byte is not re-minted, absent from this code so
-//! nothing reads as half-built (rule 23).
+//! The trace keys checkpoints by height and the pipeline compares the
+//! first time a height is the tip. A reorg corpus whose checkpoint height
+//! was reached before the switch would compare the wrong chain; a C++
+//! trace cannot do this (RD-F16: tip-only, after every reorg) and a fixture
+//! puts its checkpoint beyond every pre-switch tip. Digests **after each
+//! switch** are the pipeline's own record (`RunReport::switches`), not
+//! trace checkpoints.
 
 use std::io::{self, BufRead, Read, Write};
 
@@ -52,10 +68,10 @@ pub const CORPUS_MAGIC: [u8; 8] = *b"SHKCORP\0";
 /// order or widths bumps it; a reader refuses every other value.
 pub const CORPUS_VERSION: u8 = 0x00;
 
-/// Record tags. `Rewind` (`0x02`) is reserved and deliberately absent.
+/// Record tags.
 mod tag {
     pub const EXTEND: u8 = 0x01;
-    pub const RESERVED_REWIND: u8 = 0x02;
+    pub const REWIND: u8 = 0x02;
     pub const TRAILER: u8 = 0xFF;
 }
 
@@ -84,9 +100,26 @@ pub enum CorpusFault {
     /// A record tag this reader does not know.
     #[error("unknown record tag {0:#04x}")]
     UnknownTag(u8),
-    /// The `Rewind` tag, reserved for the reorg family and not yet built.
-    #[error("record tag {0:#04x} is reserved (Rewind, RD-Q13) and not yet readable")]
-    ReservedTag(u8),
+    /// A `Rewind` to the tip or above it: nothing to pop.
+    #[error("rewind to {to} is not backward from tip {tip}")]
+    RewindNotBackward {
+        /// Where the rewind wanted the tip.
+        to: u64,
+        /// Where the tip was.
+        tip: u64,
+    },
+    /// A `Rewind` below the corpus's first height: the block the next
+    /// `Extend` chains to is not in the corpus, so it cannot be verified.
+    #[error("rewind to {to} is below the corpus's first height {first_height}")]
+    RewindOutOfCorpus {
+        /// Where the rewind wanted the tip.
+        to: u64,
+        /// The corpus's first height.
+        first_height: u64,
+    },
+    /// A `Rewind` before any `Extend`: there is no tip.
+    #[error("rewind before any block")]
+    RewindOnEmpty,
     /// Records must be consecutive from the first height.
     #[error("height gap: expected {expected}, found {found}")]
     HeightGap {
@@ -246,6 +279,64 @@ fn u32_len(height: u64, len: usize) -> Result<u32, CorpusFault> {
 }
 
 // ---------------------------------------------------------------------------
+// Lineage — shared by writer and reader
+// ---------------------------------------------------------------------------
+
+/// Every height's hash since `first_height`, as the records so far leave
+/// it. The one place the two ends of the format agree on what "next" and
+/// "previous" mean across a rewind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Lineage {
+    first_height: u64,
+    hashes: Vec<BlockHash>,
+}
+
+impl Lineage {
+    const fn new(first_height: u64) -> Self {
+        Self {
+            first_height,
+            hashes: Vec::new(),
+        }
+    }
+
+    /// The height the next `Extend` must carry.
+    fn next_height(&self) -> u64 {
+        self.first_height
+            .checked_add(self.hashes.len() as u64)
+            .expect("height fits u64")
+    }
+
+    /// The tip's hash — the next `Extend`'s `previous`.
+    fn previous(&self) -> Option<BlockHash> {
+        self.hashes.last().copied()
+    }
+
+    fn extend(&mut self, hash: BlockHash) {
+        self.hashes.push(hash);
+    }
+
+    /// Apply `Rewind { to }`, checking it is backward and in the corpus.
+    fn rewind(&mut self, to: u64) -> Result<(), CorpusFault> {
+        if self.hashes.is_empty() {
+            return Err(CorpusFault::RewindOnEmpty);
+        }
+        let tip = self.next_height() - 1;
+        if to >= tip {
+            return Err(CorpusFault::RewindNotBackward { to, tip });
+        }
+        if to < self.first_height {
+            return Err(CorpusFault::RewindOutOfCorpus {
+                to,
+                first_height: self.first_height,
+            });
+        }
+        let keep = usize::try_from(to - self.first_height + 1).expect("fits: bounded by len");
+        self.hashes.truncate(keep);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Writer
 // ---------------------------------------------------------------------------
 
@@ -253,9 +344,8 @@ fn u32_len(height: u64, len: usize) -> Result<u32, CorpusFault> {
 #[derive(Debug)]
 pub struct CorpusWriter<W: Write> {
     out: W,
-    next_height: u64,
+    lineage: Lineage,
     count: u64,
-    previous: Option<BlockHash>,
 }
 
 impl<W: Write> CorpusWriter<W> {
@@ -272,10 +362,24 @@ impl<W: Write> CorpusWriter<W> {
         out.write_all(&first_height.to_raw().to_le_bytes())?;
         Ok(Self {
             out,
-            next_height: first_height.to_raw(),
+            lineage: Lineage::new(first_height.to_raw()),
             count: 0,
-            previous: None,
         })
+    }
+
+    /// Append `Rewind { to }`: the reader will pop to `to` and expect the
+    /// next block at `to + 1`, chained to the block at `to`.
+    ///
+    /// # Errors
+    ///
+    /// [`CorpusFault::RewindNotBackward`], [`CorpusFault::RewindOutOfCorpus`],
+    /// [`CorpusFault::RewindOnEmpty`]; I/O.
+    pub fn rewind(&mut self, to: BlockHeight) -> Result<(), CorpusFault> {
+        self.lineage.rewind(to.to_raw())?;
+        self.out.write_all(&[tag::REWIND])?;
+        self.out.write_all(&to.to_raw().to_le_bytes())?;
+        self.count += 1;
+        Ok(())
     }
 
     /// Verify and write the next record: `block_bytes` and its `bodies` as
@@ -289,8 +393,8 @@ impl<W: Write> CorpusWriter<W> {
         block_bytes: &[u8],
         bodies: &[Vec<u8>],
     ) -> Result<BlockHash, CorpusFault> {
-        let height = self.next_height;
-        let record = verify(height, block_bytes, bodies, self.previous)?;
+        let height = self.lineage.next_height();
+        let record = verify(height, block_bytes, bodies, self.lineage.previous())?;
         let hash = record.hash();
         self.out.write_all(&[tag::EXTEND])?;
         self.out.write_all(&height.to_le_bytes())?;
@@ -304,9 +408,8 @@ impl<W: Write> CorpusWriter<W> {
                 .write_all(&u32_len(height, body.len())?.to_le_bytes())?;
             self.out.write_all(body)?;
         }
-        self.next_height = height.checked_add(1).expect("height fits u64");
+        self.lineage.extend(hash);
         self.count += 1;
-        self.previous = Some(hash);
         Ok(hash)
     }
 
@@ -318,7 +421,7 @@ impl<W: Write> CorpusWriter<W> {
     pub fn finish(mut self) -> Result<W, CorpusFault> {
         self.out.write_all(&[tag::TRAILER])?;
         self.out.write_all(&self.count.to_le_bytes())?;
-        let tip = self.previous.unwrap_or(BlockHash::NULL);
+        let tip = self.lineage.previous().unwrap_or(BlockHash::NULL);
         self.out.write_all(tip.as_bytes())?;
         self.out.flush()?;
         Ok(self.out)
@@ -340,11 +443,20 @@ impl<W: Write> CorpusWriter<W> {
 #[derive(Debug)]
 pub struct CorpusReader<R: BufRead> {
     input: R,
-    next_height: u64,
+    lineage: Lineage,
     count: u64,
-    previous: Option<BlockHash>,
     seq: Seq,
     done: bool,
+}
+
+/// One verified record, either kind.
+#[derive(Debug)]
+pub enum CorpusRecord {
+    /// A block, verified and chained. Boxed for the same reason
+    /// `IngestEvent::Extend` is: a rewind is eight bytes.
+    Extend(Box<VerifiedRecord>),
+    /// Pop to `to`.
+    Rewind(BlockHeight),
 }
 
 fn read_exact<R: Read, const N: usize>(r: &mut R) -> Result<Option<[u8; N]>, io::Error> {
@@ -396,18 +508,17 @@ impl<R: BufRead> CorpusReader<R> {
         let first = u64::from_le_bytes(header[16..24].try_into().expect("8 bytes"));
         Ok(Self {
             input,
-            next_height: first,
+            lineage: Lineage::new(first),
             count: 0,
-            previous: None,
             seq: Seq::FIRST,
             done: false,
         })
     }
 
-    /// The height the next record must carry.
+    /// The height the next `Extend` must carry.
     #[must_use]
-    pub const fn next_height(&self) -> BlockHeight {
-        BlockHeight::from_raw(self.next_height)
+    pub fn next_height(&self) -> BlockHeight {
+        BlockHeight::from_raw(self.lineage.next_height())
     }
 
     /// The next verified record, `None` once the trailer has been read and
@@ -416,7 +527,7 @@ impl<R: BufRead> CorpusReader<R> {
     /// # Errors
     ///
     /// Any [`CorpusFault`]; after an error the reader is exhausted.
-    pub fn next_record(&mut self) -> Result<Option<VerifiedRecord>, CorpusFault> {
+    pub fn next_record(&mut self) -> Result<Option<CorpusRecord>, CorpusFault> {
         if self.done {
             return Ok(None);
         }
@@ -427,7 +538,7 @@ impl<R: BufRead> CorpusReader<R> {
         out
     }
 
-    fn read_one(&mut self) -> Result<Option<VerifiedRecord>, CorpusFault> {
+    fn read_one(&mut self) -> Result<Option<CorpusRecord>, CorpusFault> {
         let Some([t]) = read_exact::<_, 1>(&mut self.input)? else {
             return Err(CorpusFault::Truncated {
                 records: self.count,
@@ -435,17 +546,22 @@ impl<R: BufRead> CorpusReader<R> {
         };
         match t {
             tag::EXTEND => {}
+            tag::REWIND => {
+                let to = read_u64(&mut self.input)?;
+                self.lineage.rewind(to)?;
+                self.count += 1;
+                return Ok(Some(CorpusRecord::Rewind(BlockHeight::from_raw(to))));
+            }
             tag::TRAILER => {
                 self.check_trailer()?;
                 return Ok(None);
             }
-            tag::RESERVED_REWIND => return Err(CorpusFault::ReservedTag(t)),
             other => return Err(CorpusFault::UnknownTag(other)),
         }
         let height = read_u64(&mut self.input)?;
-        if height != self.next_height {
+        if height != self.lineage.next_height() {
             return Err(CorpusFault::HeightGap {
-                expected: self.next_height,
+                expected: self.lineage.next_height(),
                 found: height,
             });
         }
@@ -457,11 +573,10 @@ impl<R: BufRead> CorpusReader<R> {
             let len = read_u32(&mut self.input)? as usize;
             bodies.push(read_vec(&mut self.input, len)?);
         }
-        let record = verify(height, &block_bytes, &bodies, self.previous)?;
-        self.previous = Some(record.hash());
-        self.next_height = height.checked_add(1).expect("height fits u64");
+        let record = verify(height, &block_bytes, &bodies, self.lineage.previous())?;
+        self.lineage.extend(record.hash());
         self.count += 1;
-        Ok(Some(record))
+        Ok(Some(CorpusRecord::Extend(Box::new(record))))
     }
 
     fn check_trailer(&mut self) -> Result<(), CorpusFault> {
@@ -471,7 +586,7 @@ impl<R: BufRead> CorpusReader<R> {
         if count != self.count {
             return Err(CorpusFault::TrailerMismatch { what: "count" });
         }
-        let expected = self.previous.unwrap_or(BlockHash::NULL);
+        let expected = self.lineage.previous().unwrap_or(BlockHash::NULL);
         if BlockHash::from_bytes(tip) != expected {
             return Err(CorpusFault::TrailerMismatch { what: "tip_hash" });
         }
@@ -488,9 +603,10 @@ impl<R: BufRead> Source for CorpusReader<R> {
         };
         let seq = self.seq;
         self.seq = seq.next();
-        Ok(Some(Sequenced::new(
-            seq,
-            IngestEvent::Extend(Box::new(record.into_corpus_block())),
-        )))
+        let event = match record {
+            CorpusRecord::Extend(r) => IngestEvent::Extend(Box::new((*r).into_corpus_block())),
+            CorpusRecord::Rewind(to) => IngestEvent::Rewind { to },
+        };
+        Ok(Some(Sequenced::new(seq, event)))
     }
 }

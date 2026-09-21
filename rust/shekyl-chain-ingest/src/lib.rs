@@ -73,11 +73,11 @@ mod test_support;
 pub mod trace;
 
 pub use connector::{Applied, Connector, ConnectorArgs, RunEnd, RunFault};
-pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, VerifiedRecord};
+pub use corpus::{CorpusFault, CorpusReader, CorpusRecord, CorpusWriter, VerifiedRecord};
 pub use fetch::{fetch_corpus, FetchFault};
 pub use grader::{grade_run, GradedRun, Observations, Register};
 pub use metrics::{Metrics, MetricsArtifact};
-pub use pipeline::{run, PipelineConfig, PipelineFault, RunReport};
+pub use pipeline::{run, PipelineConfig, PipelineFault, RunReport, Switch};
 pub use schedule::{Chain, ChainRules, FixedDifficultyRefused};
 pub use seed::{SeedLedger, SeedSchedule};
 pub use sequencer::{SequenceError, Sequencer};

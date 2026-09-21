@@ -15,9 +15,13 @@ use shekyl_types::{BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermW
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
-use crate::corpus::{CorpusFault, CorpusReader, CorpusWriter, CORPUS_MAGIC, CORPUS_VERSION};
+use crate::corpus::{
+    CorpusFault, CorpusReader, CorpusRecord, CorpusWriter, CORPUS_MAGIC, CORPUS_VERSION,
+};
 use crate::source::{IngestEvent, Seq, Source};
-use crate::test_support::{block, chain_listing, spend, wire};
+use crate::test_support::{
+    block, block_with_nonce, chain_listing, corpus_of_reorg, reorg, spend, wire,
+};
 use crate::trace::{Facts, Trace, TraceFault, TraceWriter, CHECKPOINT_LEN, FACTS_LEN, TRACE_MAGIC};
 
 // ---------------------------------------------------------------- fixtures
@@ -221,14 +225,14 @@ fn header_and_trailer_refusals() {
         "{last:?}"
     );
 
-    // The reserved Rewind tag is refused as reserved, not unknown.
+    // A Rewind as the first record has no tip to rewind from.
     let mut rewind = good.clone();
     let first_record = 8 + 1 + 7 + 8;
     rewind[first_record] = 0x02;
     let mut r = CorpusReader::open(Cursor::new(&rewind)).expect("open");
     assert!(matches!(
-        r.next_record().expect_err("reserved"),
-        CorpusFault::ReservedTag(0x02)
+        r.next_record().expect_err("no tip"),
+        CorpusFault::RewindOnEmpty
     ));
 }
 
@@ -545,4 +549,117 @@ mod fetch {
             FetchFault::Rpc(RpcError::ConnectionError(_))
         ));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Corpus: the Rewind record (RD-Q13, commit 8c)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_corpus_with_a_rewind_round_trips_and_chains_the_fork_onto_the_rewound_tip() {
+    let r = reorg(4, 1, 3);
+    let bytes = corpus_of_reorg(&r);
+    let mut reader = CorpusReader::open(Cursor::new(&bytes)).expect("open");
+    let mut heights = Vec::new();
+    loop {
+        match reader.next_record().expect("record") {
+            Some(CorpusRecord::Extend(rec)) => heights.push(format!("E{}", rec.height.to_raw())),
+            Some(CorpusRecord::Rewind(to)) => heights.push(format!("R{}", to.to_raw())),
+            None => break,
+        }
+    }
+    assert_eq!(heights, ["E0", "E1", "E2", "E3", "R1", "E2", "E3", "E4"]);
+    // As a Source, the same shape in events.
+    let mut src = CorpusReader::open(Cursor::new(&bytes)).expect("open");
+    let mut kinds = Vec::new();
+    while let Some(ev) = src.next().expect("event") {
+        kinds.push(match ev.item {
+            IngestEvent::Extend(b) => format!("E{}", b.height.to_raw()),
+            IngestEvent::Rewind { to } => format!("R{}", to.to_raw()),
+        });
+    }
+    assert_eq!(kinds, heights);
+}
+
+#[test]
+fn a_rewind_must_be_backward_inside_the_corpus_and_after_a_block() {
+    let three = chain_listing(vec![Vec::new(), vec![spend(1)], vec![spend(2)]]);
+    // Before any block: no tip.
+    let mut w = CorpusWriter::new(Vec::new(), BlockHeight::from_raw(0)).expect("header");
+    assert!(matches!(
+        w.rewind(BlockHeight::from_raw(0)).expect_err("empty"),
+        CorpusFault::RewindOnEmpty
+    ));
+    for (b, txs) in &three {
+        let (bytes, bodies) = wire(b, txs);
+        w.push(&bytes, &bodies).expect("push");
+    }
+    // To the tip: nothing to pop.
+    assert!(matches!(
+        w.rewind(BlockHeight::from_raw(2)).expect_err("tip"),
+        CorpusFault::RewindNotBackward { to: 2, tip: 2 }
+    ));
+    // A corpus starting at 5 cannot rewind to 4: the block at 4 is not in it.
+    let mut w5 = CorpusWriter::new(Vec::new(), BlockHeight::from_raw(5)).expect("header");
+    let b5 = block(5, BlockHash::from_bytes([9u8; 32]), &[]);
+    let (bytes, bodies) = wire(&b5, &[]);
+    w5.push(&bytes, &bodies).expect("push 5");
+    let b6 = block(6, b5.hash(), &[]);
+    let (bytes, bodies) = wire(&b6, &[]);
+    w5.push(&bytes, &bodies).expect("push 6");
+    assert!(matches!(
+        w5.rewind(BlockHeight::from_raw(4))
+            .expect_err("below first"),
+        CorpusFault::RewindOutOfCorpus {
+            to: 4,
+            first_height: 5
+        }
+    ));
+    // The reader applies the same law to a hand-built rewind-to-tip record.
+    let mut good = CorpusWriter::new(Vec::new(), BlockHeight::from_raw(0)).expect("header");
+    for (b, txs) in &three {
+        let (bytes, bodies) = wire(b, txs);
+        good.push(&bytes, &bodies).expect("push");
+    }
+    let mut bytes = good.finish().expect("finish");
+    let trailer_at = bytes.len() - (1 + 8 + 32);
+    let mut with_bad_rewind = bytes[..trailer_at].to_vec();
+    with_bad_rewind.push(0x02);
+    with_bad_rewind.extend_from_slice(&2u64.to_le_bytes());
+    with_bad_rewind.extend_from_slice(&bytes[trailer_at..]);
+    bytes = with_bad_rewind;
+    let mut r = CorpusReader::open(Cursor::new(&bytes)).expect("open");
+    let mut last = Ok(None);
+    for _ in 0..4 {
+        last = r.next_record();
+        if !matches!(last, Ok(Some(_))) {
+            break;
+        }
+    }
+    assert!(
+        matches!(last, Err(CorpusFault::RewindNotBackward { to: 2, tip: 2 })),
+        "{last:?}"
+    );
+}
+
+#[test]
+fn after_a_rewind_the_next_block_must_chain_onto_the_rewound_tip() {
+    let r = reorg(4, 1, 3);
+    let mut w = CorpusWriter::new(Vec::new(), BlockHeight::from_raw(0)).expect("header");
+    for (b, txs) in &r.main {
+        let (bytes, bodies) = wire(b, txs);
+        w.push(&bytes, &bodies).expect("push");
+    }
+    w.rewind(BlockHeight::from_raw(1)).expect("rewind");
+    // A block at 2 chained onto main[2] (the popped block) is unchained now.
+    let wrong = block_with_nonce(2, r.main[2].0.hash(), &[spend(0xB0)], 5);
+    let (bytes, bodies) = wire(&wrong, &[spend(0xB0)]);
+    assert!(matches!(
+        w.push(&bytes, &bodies).expect_err("unchained"),
+        CorpusFault::Unchained { height: 2 }
+    ));
+    // Chained onto main[1], it is accepted.
+    let (bytes, bodies) = wire(&r.after[2].0, &r.after[2].1);
+    w.push(&bytes, &bodies)
+        .expect("the fork chains onto the rewound tip");
 }

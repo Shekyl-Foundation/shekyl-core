@@ -171,6 +171,62 @@ pub fn chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
     )
 }
 
+/// The reorg family (§3.8, RD-Q13): a main chain of `main_len` blocks, a
+/// `Rewind { to }`, then `fork_len` fork blocks chained onto `main[to]`
+/// with nonces and key images the main chain never used. `fork_len` must
+/// exceed `main_len - 1 - to` so the fork's tip is beyond every pre-switch
+/// tip (corpus module docs: a checkpoint height is compared the first time
+/// it is the tip).
+pub struct Reorg {
+    /// The chain before the switch.
+    pub main: Vec<(Block, Vec<Transaction>)>,
+    /// Where the switch rewinds to.
+    pub to: u64,
+    /// The chain after the switch: `main[..=to]` then the fork blocks.
+    pub after: Vec<(Block, Vec<Transaction>)>,
+}
+
+pub fn reorg(main_len: u64, to: u64, fork_len: u64) -> Reorg {
+    assert!(to + 1 < main_len, "the rewind must pop at least one block");
+    assert!(
+        to + fork_len >= main_len,
+        "the fork's tip must reach beyond every pre-switch tip"
+    );
+    let main = chain(main_len);
+    let mut after: Vec<(Block, Vec<Transaction>)> =
+        main[..=usize::try_from(to).expect("small")].to_vec();
+    let mut previous = after.last().expect("non-empty").0.hash();
+    for i in 0..fork_len {
+        let height = to + 1 + i;
+        // Key images 0xA0.. are never used by `chain`'s 1..=250 range.
+        let txs = vec![spend(0xA0 + u8::try_from(i).expect("small fork"))];
+        let b = block_with_nonce(
+            height,
+            previous,
+            &txs,
+            99 + u32::try_from(i).expect("small"),
+        );
+        previous = b.hash();
+        after.push((b, txs));
+    }
+    Reorg { main, to, after }
+}
+
+/// The reorg as a corpus: main's blocks, a Rewind record, the fork's.
+pub fn corpus_of_reorg(r: &Reorg) -> Vec<u8> {
+    let mut w = CorpusWriter::new(Vec::new(), h(0)).expect("header");
+    for (b, txs) in &r.main {
+        let (bytes, bodies) = wire(b, txs);
+        w.push(&bytes, &bodies).expect("push");
+    }
+    w.rewind(h(r.to)).expect("rewind");
+    for (b, txs) in &r.after[usize::try_from(r.to).expect("small") + 1..] {
+        let (bytes, bodies) = wire(b, txs);
+        w.push(&bytes, &bodies).expect("push fork");
+    }
+    w.finish().expect("finish")
+}
+
 pub fn wire(b: &Block, txs: &[Transaction]) -> (Vec<u8>, Vec<Vec<u8>>) {
     let bodies = txs
         .iter()
