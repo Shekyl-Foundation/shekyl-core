@@ -86,7 +86,7 @@ use shekyl_archival_retention::{
     release_vin_statics, settlement_epoch_at_height, verify_bond_post_ct_balance,
     verify_join_market_bond_post, verify_release_bond_post, whole_record_last_served,
     ArchivalBondPostVin, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
-    ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
+    BondTermError, ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
     HoldingsKind, RewardCommit, ShardSet,
 };
@@ -286,22 +286,17 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // single-sourced `shekyl-archival-retention` equation — the same crate
     // the C++ `verCtSemanticsBondPost` dispatches to through
     // `shekyl_archival_verify_bond_post_ct_balance` (ct_semantics.cpp:325-340).
-    // The `(credit, debit) → BondTerm` conversion — rejecting the both /
-    // neither / zero states — happens here at the untrusted-input edge,
-    // mirroring the FFI boundary's identical conversion, so the total core
-    // function stays total. `pseudoOuts == ToKey subset` arity is
-    // `validate()`'s coupling and cannot fail here.
-    let term = match (
-        NonZeroAtomicUnits::new(AtomicUnits::from_raw(bond.bond_credit)),
-        NonZeroAtomicUnits::new(AtomicUnits::from_raw(bond.bond_debit)),
-    ) {
-        (None, None) | (Some(_), Some(_)) => {
+    // The `(credit, debit) → BondTerm` conversion is
+    // `BondTerm::from_credit_debit` (zero/zero is Unmoved; both-nonzero
+    // refuses). `pseudoOuts == ToKey subset` arity is `validate()`'s
+    // coupling and cannot fail here.
+    let term = match BondTerm::from_credit_debit(bond.bond_credit, bond.bond_debit) {
+        Ok(term) => term,
+        Err(BondTermError::BothTerms) => {
             return Err(VerifyReject::malformed(
-                "N7: bond credit/debit must be exactly one nonzero term",
+                "N7: bond credit and debit both nonzero",
             ));
         }
-        (Some(credit), None) => BondTerm::Credit(credit),
-        (None, Some(debit)) => BondTerm::Debit(debit),
     };
     if let Err(e) = verify_bond_post_ct_balance(
         prunable.pseudo_outs.as_flattened(),

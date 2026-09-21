@@ -92,7 +92,9 @@ pub use bond_connect::{
     ReinstateConnectError, ReinstatePopError, ReleaseConnect, ReleaseConnectError, ReleasePopError,
     MAX_BOND_BAD_INTERVALS,
 };
-pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
+pub use bond_ct_balance::{
+    verify_bond_post_ct_balance, BondCtBalanceError, BondTerm, BondTermError,
+};
 pub use bond_duration::{bond_duration, ShardAgeAtAdd};
 pub use bond_floor::{
     bond_floor, ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_BOND_FLOOR_ATOMIC,

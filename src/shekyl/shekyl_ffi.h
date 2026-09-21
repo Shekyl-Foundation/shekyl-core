@@ -1926,6 +1926,7 @@ uint8_t shekyl_archival_verify_attestation(
 /// Invalid point, non-32-byte-aligned flat buffer, or count*32 overflow.
 #define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT   3
 #define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH    4
+/// Retired-assigned: (credit, debit) = (0, 0) is Unmoved (Reinstate), not an error.
 #define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM    5
 
 /// Flattened `num_pseudo_outs` / `num_out_masks` arrays of 32-byte curve points.

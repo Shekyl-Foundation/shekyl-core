@@ -1004,16 +1004,18 @@ fn bond_ct_balance_ffi_rejects_count_overflow() {
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT);
 }
 
-// The both / neither bond-term rigidity is unrepresentable inside the core
-// `BondTerm`, so it is enforced (and tested) here at the `(credit, debit) ->
-// BondTerm` FFI conversion — the boundary where the untrusted u64s enter.
+// Both-terms is unrepresentable inside `BondTerm`; zero/zero is Unmoved.
+// The FFI conversion is `BondTerm::from_credit_debit` — tested here at the
+// untrusted u64 edge.
 #[test]
-fn bond_ct_balance_ffi_rejects_neither_bond_term() {
-    // credit = debit = 0 (empty balance) → NO_BOND_TERM, not OK.
+fn bond_ct_balance_ffi_unmoved_closes_empty() {
+    // credit = debit = 0, empty commitments, fee 0 → Unmoved, OK.
     let code = unsafe {
         shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 0, 0)
     };
-    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM);
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK);
+    // Retired-assigned: zero-money used to return this. Number 5 stays.
+    assert_eq!(SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM, 5);
 }
 
 #[test]

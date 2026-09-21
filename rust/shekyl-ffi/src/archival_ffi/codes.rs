@@ -109,7 +109,8 @@ pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS: u8 = 2;
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT: u8 = 3;
 /// Left and right commitment sums differ.
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH: u8 = 4;
-/// Neither `bond_credit` nor `bond_debit` is set (§3.2 term rigidity).
+/// Retired-assigned: zero-money is `BondTerm::Unmoved` (Reinstate), not an
+/// error. Number 5 stays so it cannot be reminted.
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM: u8 = 5;
 
 /// JoinMarket bond-post semantic verify succeeded (gate-4 §3.5).
