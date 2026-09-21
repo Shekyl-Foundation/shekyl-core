@@ -164,10 +164,34 @@ impl From<GindexKey> for Gindex {
 redb_delegated_key!(GindexKey, u64, "shekyl_curve_tree::Gindex");
 
 /// Dense tree position in drain order (`(maturity, gindex)` sort).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct TreePosition(pub u64);
+/// Re-exported from [`shekyl_types`] — both stores key their leaf tables by
+/// it, so the word lives with the vocabulary (`SCU-Q2`, 2026-09-21); this
+/// crate keeps the arithmetic that assigns one. The local tuple struct with
+/// a public field is retired; construct with `from_raw`, read with
+/// `to_raw`.
+pub use shekyl_types::TreePosition;
 
-redb_delegated_key!(TreePosition, u64, "shekyl_curve_tree::TreePosition");
+/// redb table key for a [`TreePosition`]. The orphan rule forbids
+/// `impl redb::Key for shekyl_types::TreePosition`; this wrapper is
+/// store-local, as [`GindexKey`] is. `TypeName` is kept as
+/// `shekyl_curve_tree::TreePosition` so existing stores still open (layout
+/// identical to the retired struct: the bare `u64`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub(crate) struct TreePositionKey(pub(crate) u64);
+
+impl From<TreePosition> for TreePositionKey {
+    fn from(p: TreePosition) -> Self {
+        Self(p.to_raw())
+    }
+}
+
+impl From<TreePositionKey> for TreePosition {
+    fn from(k: TreePositionKey) -> Self {
+        TreePosition::from_raw(k.0)
+    }
+}
+
+redb_delegated_key!(TreePositionKey, u64, "shekyl_curve_tree::TreePosition");
 
 /// A drained tree leaf: its global output index, its maturity height, the
 /// 128-byte curve-tree leaf (`{O.x, I.x, C.x, CM.x}`), and the public

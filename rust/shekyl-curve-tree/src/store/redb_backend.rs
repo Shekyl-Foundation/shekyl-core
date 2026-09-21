@@ -16,15 +16,17 @@ use crate::served_frame::ServedFrameHeader;
 use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
-use crate::types::{BlockHeight, Gindex, GindexKey, LeafEntry, TargetKind, TreePosition};
+use crate::types::{
+    BlockHeight, Gindex, GindexKey, LeafEntry, TargetKind, TreePosition, TreePositionKey,
+};
 use shekyl_fcmp::tree::{hash_grow_selene, selene_hash_init, SCALARS_PER_LEAF};
 
-const LEAVES_TABLE: TableDefinition<TreePosition, &[u8; 128]> = TableDefinition::new("leaves");
-const LEAF_META_TABLE: TableDefinition<TreePosition, &[u8; 192]> =
+const LEAVES_TABLE: TableDefinition<TreePositionKey, &[u8; 128]> = TableDefinition::new("leaves");
+const LEAF_META_TABLE: TableDefinition<TreePositionKey, &[u8; 192]> =
     TableDefinition::new("leaf_meta");
 const FROZEN_SEGMENTS_TABLE: TableDefinition<SegmentId, &[u8; 56]> =
     TableDefinition::new("frozen_segments");
-const OWNED_IDENTITIES_TABLE: TableDefinition<TreePosition, &[u8; 128]> =
+const OWNED_IDENTITIES_TABLE: TableDefinition<TreePositionKey, &[u8; 128]> =
     TableDefinition::new("owned_identities");
 const PINNED_SEGMENTS_TABLE: TableDefinition<SegmentId, u32> =
     TableDefinition::new("pinned_segments");
@@ -875,7 +877,7 @@ impl LeafStore {
             let (id, _) = row?;
             let id = id.value();
             let start = u64::from(id.0) * e;
-            if leaves.get(TreePosition(start))?.is_none() {
+            if leaves.get(TreePositionKey(start))?.is_none() {
                 pruned.push(u64::from(id.0));
             }
         }
@@ -1004,7 +1006,7 @@ impl LeafStore {
                 if !leaf_bytes_are_canonical(&entry.leaf) {
                     return Err(StoreError::InvalidLeafBytes { batch_index });
                 }
-                let pos = TreePosition(leaf_count);
+                let pos = TreePositionKey(leaf_count);
                 leaves.insert(pos, &entry.leaf)?;
                 leaf_meta.insert(pos, &encode_leaf_meta(entry))?;
                 leaf_count += 1;
@@ -1178,7 +1180,7 @@ impl LeafStore {
             let r_k = recompute_segment_r_k(&seg_leaves).map_err(store_mixed_root_err)?;
             let record = FrozenSegmentRecord {
                 r_k,
-                end_tree_pos: TreePosition(end_tree_pos),
+                end_tree_pos: TreePosition::from_raw(end_tree_pos),
                 end_block_height: BlockHeight::from_raw(end_block_height),
                 frozen_at_height: BlockHeight::from_raw(tip_height),
             };
@@ -1285,7 +1287,7 @@ impl LeafStore {
         pos: TreePosition,
         new_tip: BlockHeight,
     ) -> Result<(), StoreError> {
-        let pos = pos.0;
+        let pos = pos.to_raw();
         // Bounds check inside the write txn (one snapshot); the caller
         // dropping the uncommitted txn on error aborts it.
         let current_leaf_count = {
@@ -1305,7 +1307,7 @@ impl LeafStore {
                 let leaves = txn.open_table(LEAVES_TABLE)?;
                 let seg_start = ((pos - 1) / e) * e;
                 for p in seg_start..pos {
-                    if leaves.get(TreePosition(p))?.is_none() {
+                    if leaves.get(TreePositionKey(p))?.is_none() {
                         return Err(StoreError::TruncatedIntoPrunedRange { pos: p });
                     }
                 }
@@ -1314,7 +1316,7 @@ impl LeafStore {
         {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
-            delete_pos_range_batched(&mut leaves, &mut leaf_meta, TreePosition(pos))?;
+            delete_pos_range_batched(&mut leaves, &mut leaf_meta, TreePositionKey(pos))?;
         }
         {
             let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
@@ -1338,7 +1340,7 @@ impl LeafStore {
         }
         {
             let mut owned = txn.open_table(OWNED_IDENTITIES_TABLE)?;
-            delete_pos_keys_batched(&mut owned, TreePosition(pos))?;
+            delete_pos_keys_batched(&mut owned, TreePositionKey(pos))?;
         }
         {
             let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
@@ -1391,14 +1393,14 @@ impl LeafStore {
     /// an empty table to `leaf_count` — an empty search range.
     fn present_suffix_start(
         txn: &redb::WriteTransaction,
-        leaf_meta: &impl ReadableTable<TreePosition, &'static [u8; 192]>,
+        leaf_meta: &impl ReadableTable<TreePositionKey, &'static [u8; 192]>,
         leaf_count: u64,
     ) -> Result<u64, StoreError> {
         let e = leaves_per_segment() as u64;
         let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
         for row in frozen.iter()?.rev() {
             let seg_start = u64::from(row?.0.value().0) * e;
-            if leaf_meta.get(TreePosition(seg_start))?.is_none() {
+            if leaf_meta.get(TreePositionKey(seg_start))?.is_none() {
                 return Ok(seg_start + e);
             }
         }
@@ -1472,7 +1474,7 @@ impl LeafStore {
             let frontier = Self::present_suffix_start(&txn, &leaf_meta, leaf_count)?;
             let maturity_at = |pos: u64| -> Result<u64, StoreError> {
                 let row = leaf_meta
-                    .get(TreePosition(pos))?
+                    .get(TreePositionKey(pos))?
                     .ok_or(StoreError::CorruptMeta(
                         "hole in present suffix during partition search",
                     ))?;
@@ -1504,7 +1506,7 @@ impl LeafStore {
             let mut migrated = Vec::with_capacity(
                 usize::try_from(leaf_count - partition).expect("suffix fits usize"),
             );
-            for pos in (partition..leaf_count).map(TreePosition) {
+            for pos in (partition..leaf_count).map(TreePositionKey) {
                 let meta_row = leaf_meta
                     .get(pos)?
                     .ok_or(StoreError::CorruptMeta("missing leaf meta in suffix"))?;
@@ -1524,7 +1526,7 @@ impl LeafStore {
         };
 
         // Step 3: shared truncation core (F9 freeze-aware), tip = fork.
-        Self::truncate_internals(&txn, TreePosition(partition), fork_height)?;
+        Self::truncate_internals(&txn, TreePosition::from_raw(partition), fork_height)?;
 
         // Steps 4–5: migrate to pending, then the uniform class-(a) filter.
         {
@@ -1620,7 +1622,7 @@ impl LeafStore {
                     // transaction, so the first position is an exact
                     // pruned/present discriminant — no full-segment scan.
                     let start = u64::from(id.0) * leaves_per_segment() as u64;
-                    if leaves.get(TreePosition(start))?.is_none() {
+                    if leaves.get(TreePositionKey(start))?.is_none() {
                         SegmentPin::AlreadyPruned
                     } else {
                         SegmentPin::PinnedServable
@@ -1786,8 +1788,11 @@ impl LeafStore {
     /// never a silent no-op: under that posture every frozen byte is owed,
     /// and a caller that wanted to prune anyway must find out here.
     pub fn prune_frozen(&self, owned_positions: &[TreePosition]) -> Result<(), StoreError> {
-        let owned: std::collections::BTreeSet<TreePosition> =
-            owned_positions.iter().copied().collect();
+        let owned: std::collections::BTreeSet<TreePositionKey> = owned_positions
+            .iter()
+            .copied()
+            .map(TreePositionKey::from)
+            .collect();
         let txn = self.db.begin_write()?;
         // Posture check inside the same write transaction that would
         // mutate, so a concurrent declaration cannot land between the
@@ -1824,7 +1829,7 @@ impl LeafStore {
                 }
                 let start = u64::from(seg_id.0) * e;
                 let end = start + e;
-                for pos in (start..end).map(TreePosition) {
+                for pos in (start..end).map(TreePositionKey) {
                     let leaf_bytes = match leaves.get(pos)? {
                         Some(leaf) => *leaf.value(),
                         None => continue,
@@ -1888,7 +1893,7 @@ impl LeafStore {
             }
             let pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?.get(id)?.is_some();
             let leaves = txn.open_table(LEAVES_TABLE)?;
-            if leaves.get(TreePosition(start))?.is_none() {
+            if leaves.get(TreePositionKey(start))?.is_none() {
                 return Err(if pinned {
                     StoreError::CorruptMeta("pinned frozen segment is missing leaf bytes")
                 } else {
@@ -1948,11 +1953,11 @@ impl LeafStore {
 }
 
 fn delete_pos_keys_batched<V: redb::Value>(
-    table: &mut redb::Table<'_, TreePosition, V>,
-    start: TreePosition,
+    table: &mut redb::Table<'_, TreePositionKey, V>,
+    start: TreePositionKey,
 ) -> Result<(), StoreError> {
     loop {
-        let batch: Vec<TreePosition> = table
+        let batch: Vec<TreePositionKey> = table
             .range(start..)?
             .take(TRUNCATE_DELETE_BATCH)
             .map(|r| r.map(|(k, _)| k.value()))
@@ -1968,12 +1973,12 @@ fn delete_pos_keys_batched<V: redb::Value>(
 }
 
 fn delete_pos_range_batched(
-    leaves: &mut redb::Table<'_, TreePosition, &[u8; 128]>,
-    leaf_meta: &mut redb::Table<'_, TreePosition, &[u8; 192]>,
-    start: TreePosition,
+    leaves: &mut redb::Table<'_, TreePositionKey, &[u8; 128]>,
+    leaf_meta: &mut redb::Table<'_, TreePositionKey, &[u8; 192]>,
+    start: TreePositionKey,
 ) -> Result<(), StoreError> {
     loop {
-        let batch: Vec<TreePosition> = leaves
+        let batch: Vec<TreePositionKey> = leaves
             .range(start..)?
             .take(TRUNCATE_DELETE_BATCH)
             .map(|r| r.map(|(k, _)| k.value()))
@@ -2075,7 +2080,7 @@ fn leaf_bytes_are_canonical(leaf: &[u8; 128]) -> bool {
 fn read_drain_height(txn: &redb::WriteTransaction, tree_pos: u64) -> Result<u64, StoreError> {
     let meta = txn.open_table(LEAF_META_TABLE)?;
     let m = meta
-        .get(TreePosition(tree_pos))?
+        .get(TreePositionKey(tree_pos))?
         .ok_or(StoreError::CorruptMeta("missing leaf meta"))?;
     let stored = decode_stored_leaf_meta(m.value())?;
     Ok(stored.maturity.to_raw().saturating_add(1))
@@ -2092,7 +2097,7 @@ struct StoredLeafMeta {
 
 /// What a hole in a leaf range means everywhere except the serving read's
 /// servability check: store corruption, naming the position.
-fn missing_leaf(_pos: TreePosition) -> StoreError {
+fn missing_leaf(_pos: TreePositionKey) -> StoreError {
     StoreError::CorruptMeta("missing leaf")
 }
 
@@ -2105,10 +2110,10 @@ fn missing_leaf(_pos: TreePosition) -> StoreError {
 /// accumulate — a leaf array for root recomposition, flat bytes for the
 /// wire — so there is one loop and no second copy of the hole logic.
 fn scan_leaf_range(
-    leaves: &impl ReadableTable<TreePosition, &'static [u8; 128]>,
+    leaves: &impl ReadableTable<TreePositionKey, &'static [u8; 128]>,
     start: u64,
     end: u64,
-    missing: impl Fn(TreePosition) -> StoreError,
+    missing: impl Fn(TreePositionKey) -> StoreError,
     mut take: impl FnMut(&[u8; 128]),
 ) -> Result<(), StoreError> {
     // A range walk *skips* absent keys rather than yielding a `None`, so
@@ -2116,23 +2121,23 @@ fn scan_leaf_range(
     // expected names the missing position exactly, and a walk that ends
     // short names the first missing tail position.
     let mut expected = start;
-    for row in leaves.range(TreePosition(start)..TreePosition(end))? {
+    for row in leaves.range(TreePositionKey(start)..TreePositionKey(end))? {
         let (key, value) = row?;
         if key.value().0 != expected {
-            return Err(missing(TreePosition(expected)));
+            return Err(missing(TreePositionKey(expected)));
         }
         take(value.value());
         expected += 1;
     }
     if expected != end {
-        return Err(missing(TreePosition(expected)));
+        return Err(missing(TreePositionKey(expected)));
     }
     Ok(())
 }
 
 /// Bulk leaf read into a leaf array, for the root/recompute paths.
 fn read_leaf_bytes_range_in(
-    leaves: &impl ReadableTable<TreePosition, &'static [u8; 128]>,
+    leaves: &impl ReadableTable<TreePositionKey, &'static [u8; 128]>,
     start: u64,
     end: u64,
 ) -> Result<Vec<[u8; 128]>, StoreError> {
@@ -2160,7 +2165,7 @@ fn read_leaf_bytes_range_read(
 fn encode_frozen_segment(rec: &FrozenSegmentRecord) -> [u8; 56] {
     let mut buf = [0u8; 56];
     buf[..32].copy_from_slice(&rec.r_k);
-    buf[32..40].copy_from_slice(&rec.end_tree_pos.0.to_be_bytes());
+    buf[32..40].copy_from_slice(&rec.end_tree_pos.to_raw().to_be_bytes());
     buf[40..48].copy_from_slice(&rec.end_block_height.to_raw().to_be_bytes());
     buf[48..56].copy_from_slice(&rec.frozen_at_height.to_raw().to_be_bytes());
     buf
@@ -2171,7 +2176,9 @@ fn decode_frozen_segment(buf: &[u8; 56]) -> FrozenSegmentRecord {
     r_k.copy_from_slice(&buf[..32]);
     FrozenSegmentRecord {
         r_k,
-        end_tree_pos: TreePosition(u64::from_be_bytes(buf[32..40].try_into().expect("8 bytes"))),
+        end_tree_pos: TreePosition::from_raw(u64::from_be_bytes(
+            buf[32..40].try_into().expect("8 bytes"),
+        )),
         end_block_height: BlockHeight::from_raw(u64::from_be_bytes(
             buf[40..48].try_into().expect("8 bytes"),
         )),
@@ -2538,7 +2545,7 @@ mod tests {
             let txn = store.db.begin_write().unwrap();
             {
                 let mut meta = txn.open_table(LEAF_META_TABLE).unwrap();
-                meta.remove(TreePosition(1)).unwrap();
+                meta.remove(TreePositionKey(1)).unwrap();
             }
             txn.commit().unwrap();
         }
@@ -3120,7 +3127,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.leaf_count().unwrap(), 2);
-        store.truncate_from_tree_position(TreePosition(1)).unwrap();
+        store
+            .truncate_from_tree_position(TreePosition::from_raw(1))
+            .unwrap();
         assert_eq!(store.leaf_count().unwrap(), 1);
     }
 
@@ -3726,7 +3735,7 @@ mod tests {
         let txn = store.db.begin_write().unwrap();
         {
             let mut leaves = txn.open_table(LEAVES_TABLE).unwrap();
-            drop(leaves.remove(TreePosition(0)).unwrap());
+            drop(leaves.remove(TreePositionKey(0)).unwrap());
         }
         txn.commit().unwrap();
 
@@ -3789,7 +3798,9 @@ mod tests {
             .append_drained(&entries, BlockHeight::from_raw(10_000))
             .unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
-        store.truncate_from_tree_position(TreePosition(0)).unwrap();
+        store
+            .truncate_from_tree_position(TreePosition::from_raw(0))
+            .unwrap();
         assert_eq!(store.leaf_count().unwrap(), 0);
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
     }
@@ -3827,7 +3838,9 @@ mod tests {
             .append_drained(&entries, BlockHeight::from_raw(10_000))
             .unwrap();
         store.pin_segment_for_serving(SegmentId(0)).unwrap();
-        store.truncate_from_tree_position(TreePosition(0)).unwrap();
+        store
+            .truncate_from_tree_position(TreePosition::from_raw(0))
+            .unwrap();
         store
             .append_drained(&entries, BlockHeight::from_raw(20_000))
             .unwrap();
@@ -3835,7 +3848,7 @@ mod tests {
         let txn = store.db.begin_read().unwrap();
         let leaves = txn.open_table(LEAVES_TABLE).unwrap();
         assert!(
-            leaves.get(TreePosition(0)).unwrap().is_none(),
+            leaves.get(TreePositionKey(0)).unwrap().is_none(),
             "stale pin must not block prune"
         );
     }
@@ -3847,7 +3860,9 @@ mod tests {
             .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(500))
             .unwrap();
         assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(500));
-        store.truncate_from_tree_position(TreePosition(0)).unwrap();
+        store
+            .truncate_from_tree_position(TreePosition::from_raw(0))
+            .unwrap();
         assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
     }
 
@@ -3864,7 +3879,7 @@ mod tests {
         store.prune_frozen(&[]).unwrap();
         let pos_in_seg = e / 2;
         let err = store
-            .truncate_from_tree_position(TreePosition(
+            .truncate_from_tree_position(TreePosition::from_raw(
                 u64::try_from(pos_in_seg).expect("position fits u64"),
             ))
             .unwrap_err();
@@ -3911,7 +3926,7 @@ mod tests {
             .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
             .unwrap();
         let err = store
-            .truncate_from_tree_position(TreePosition(2))
+            .truncate_from_tree_position(TreePosition::from_raw(2))
             .unwrap_err();
         assert!(matches!(
             err,
@@ -3955,7 +3970,7 @@ mod tests {
             }
         }
 
-        check_u64::<TreePosition>(TreePosition);
+        check_u64::<TreePositionKey>(TreePositionKey);
         check_u64::<GindexKey>(|v| GindexKey::from(Gindex::from_raw(v)));
 
         // SegmentId wraps u32; same parity properties against the u32 impl.

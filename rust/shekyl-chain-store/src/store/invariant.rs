@@ -120,6 +120,23 @@ pub enum StoreInvariant {
     /// is not folded into SI-3: R8-Q1's three-arm test needs rule-twinned
     /// belts and pure invariants to stay distinguishable.
     IdNotFresh,
+    /// **SI-11** — `curve_tree_leaves` is dense over `[0, leaf_count)`:
+    /// the summary row's count (`curve_tree_meta`, `CurveTreeState`) is the
+    /// leaf table's entry count, and every position below it has a row.
+    /// The C++ wrote the count and the leaves in one grow
+    /// (`db_lmdb.cpp:8936–8966`) and every reader took the count as the
+    /// bound; here the reads assert it instead of assuming it (DRS-E1
+    /// S-CURVE §3.3, SCU-3).
+    ///
+    /// Armed by the reads, since the grow path (DRS-E3) is not yet built:
+    /// the summary read compares the count with the table's length, and the
+    /// leaf walk names the first position in range with no row.
+    LeavesNotDense {
+        /// The position that breaks density: the first in `[0, leaf_count)`
+        /// with no row, or `leaf_count` itself when the table's length and
+        /// the count disagree without a hole having been walked.
+        position: u64,
+    },
 }
 
 impl StoreInvariant {
@@ -133,6 +150,7 @@ impl StoreInvariant {
             Self::RootRewritten => 4,
             Self::UndoLogIncoherent { .. } => 6,
             Self::WorkNotIncreasing { .. } => 10,
+            Self::LeavesNotDense { .. } => 11,
             Self::CellCorrupt { .. } => 7,
             Self::FoldOverflow { .. } => 8,
             Self::IdNotFresh => 9,
@@ -179,6 +197,11 @@ impl core::fmt::Display for StoreInvariant {
                 "undo log at height {height}: {fault}; the journal no longer describes the \
                  tables, rebuild from the block corpus"
             ),
+            Self::LeavesNotDense { position } => write!(
+                f,
+                "curve_tree_leaves is not dense at position {position}; the summary's leaf \
+                 count and the leaf table disagree, rebuild from the block corpus"
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -206,6 +229,7 @@ impl core::error::Error for StoreInvariant {
             | Self::RootRewritten
             | Self::FoldOverflow { .. }
             | Self::IdNotFresh
+            | Self::LeavesNotDense { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

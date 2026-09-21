@@ -38,9 +38,9 @@ use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 
 use crate::apply_policy::ApplyPolicy;
 use crate::codec::{
-    ApplyPolicyCell, Blob, Canonical, CoverageGaps, CoverageGapsCell, PassedThroughFacts,
-    PassedThroughFactsCell, PropertyCell, PropertyCellBytes, Raw, SchemaVersionCell,
-    SettlementEpochBlocks, SettlementEpochBlocksCell, SCHEMA_VERSION,
+    ApplyPolicyCell, Blob, Canonical, CoverageGaps, CoverageGapsCell, CurveTreeState,
+    PassedThroughFacts, PassedThroughFactsCell, PropertyCell, PropertyCellBytes, Raw,
+    SchemaVersionCell, SettlementEpochBlocks, SettlementEpochBlocksCell, SCHEMA_VERSION,
 };
 use crate::provenance::Provenance;
 use crate::schema::{self, PROPERTIES};
@@ -71,6 +71,13 @@ pub(super) fn seal(
     for table in schema::UNDO_TARGETS {
         table.create(txn)?;
     }
+    // S-CURVE (`SCU-Q1`, SCU-1): the empty tree is a **written** row, so a
+    // reader never has to read *absent summary* as *empty tree* — the
+    // absence-as-default the C++ meta cells had.
+    txn.open_table(schema::CURVE_TREE_META)
+        .map_err(EngineError::Table)?
+        .insert((), CurveTreeState::EMPTY.encoded().as_encoded())
+        .map_err(EngineError::Storage)?;
     Ok(provenance)
 }
 

@@ -894,7 +894,7 @@ async fn a_store_rollback_beneath_the_pins_is_its_own_reading() {
 
     // A reorg deep enough to invalidate the sync tip.
     store
-        .truncate_from_tree_position(TreePosition(0))
+        .truncate_from_tree_position(TreePosition::from_raw(0))
         .expect("rollback");
 
     // The truncation deleted this member's pin row, so the reading is the
@@ -953,7 +953,7 @@ async fn re_ingest_past_the_baseline_does_not_clear_a_dropped_pin() {
 
     // Reorg: the pin row for segment 0 goes with it.
     store
-        .truncate_from_tree_position(TreePosition(0))
+        .truncate_from_tree_position(TreePosition::from_raw(0))
         .expect("rollback");
 
     // The chain re-converges and the principal ingests straight back past the
