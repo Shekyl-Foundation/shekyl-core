@@ -143,23 +143,96 @@ list — *a sweep cannot tell a quotation from a reference.*
 
 ---
 
-## 4. The slice register
+## 4. The slice register — RESTRUCTURED 2026-09-21
 
-Rule 26, not a plan. A register records **what a slice is and what it flips**;
-it does not schedule slices that have not been designed.
+**Rule 26: a register records what a slice is and what it flips.** It does not
+schedule slices that have not been designed. Every row carries **what it
+inherits** and **a command that greens when it lands**, for the reason
+[`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §6.1 records: this
+round's own history is a nomination that decayed into intentions (§0).
 
-| Slice | What | §0.5 rows it flips | Status |
-| --- | --- | --- | --- |
-| **1** | **LV-3 — the connection as a typed, owned Rust object.** Brief: [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) | unblocks B1, B2, B7's score, E1/E2, PWC-E5. **No longer flips I8** — see slice 2 | **DESIGN ROUND CLOSED 2026-09-21** (Rounds 1–3 answered) — no code. Identity amended by §2.9.8: the endpoint's provenance plus per-peer state, **not** I8's category |
-| **2** | **I8's remedy — DELETE the per-host inbound cap, and give `--in-peers` a measured default.** Ruled [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.9.4. **Two halves, one deletion and one measurement** — see §7.1 for the ripples, which are larger than the diff | **I8** OPEN → ruled-and-closed; **I7** PARTIAL → the row's mechanism is deleted, not completed | **DISPATCHABLE** — design complete, no blocker. Not yet cut |
-| — | *candidates below are **not dispatched**; they are named so the register is not mistaken for a complete queue* | | |
-| **3** | **E1 tier-1 — the DIAGNOSTIC half only.** A node reports its own inbound state, uptime and advertised endpoint to its operator. **No wire, no dial-back, no amplification surface, and no threshold** — it builds the rule-82 surface PWD-I7 records as absent. Ruled [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.10. *Label corrected from "E2 tier-1": **E2 is defined as what VERIFIES a candidate endpoint**, and tier 1 has no verifier, so it cannot be E2* | **E1 (partial)** — the diagnostic half only | **DISPATCHABLE.** The *action* half (`stops advertising`) is **BLOCKED on `T`**, owed to PWD-E8's deferred measurement — §2.10.2 |
-| *(cand.)* | **The failure-class carry at `record_addr_failed`** — the class is known one line above the call and discarded crossing it | the failure-window FOLLOWUPS row | not dispatched; **blocked on a number that is not owed** (rule 76) |
-| *(cand.)* | **Cluster T** — see §5, the sequencing question | T1–T4, T6, T8 | not dispatched |
-| *(cand.)* | **The `pruning_seed` C++ RECEIVER** — `should_drop_connection` and the candidate filter at `net_node.inl:1832` both act on a claimed field ([`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.8.7) | none — it is `PDM-Q7`'s empty cell, not a `PWD-` row | not dispatched; **three arms in §7.2**, and the choice is steering's |
-| *(cand.)* | **B1 / B2 / B12** — token bucket, per-peer accounting, fluff batch bound | B1, B2, B12 | not dispatched; B1/B2 depend on slice 1's noun |
+### 4.1 WITHDRAWN: "LV-3 is slice 1"
 
----
+**Ruled 2026-09-21 (steering): LV-3 is not a slice, it is nearly the whole
+round, and it goes LAST.** Both halves of the original ordering were wrong, and
+they were wrong for different reasons — recorded separately because only one of
+them is a measurement error.
+
+**Wrong boundary.** LV-3's scope was drawn **from a family name rather than from
+the work**. `LV-` properly names the `levin_notify` / `net_node` seam — **the
+socket layer and relay dispatch**. The **peerlist, admission policy, discovery
+policy and handshake state machine are not Levin work at all**; they are P2P-3
+slices in their own right. A "first slice" containing all of them is the round.
+
+**Measured, because the size claim should not be asserted either.** The
+candidate surface is **11,793 lines** at `f9e000f76`: `src/p2p/` 6,391
+(`net_node.inl` 3,542 · `net_node.h` 797 · `net_peerlist.h` 550 ·
+`net_node.cpp` 528 · `net_peerlist.cpp` 328 · `p2p_protocol_defs.h` 266 ·
+`net_peerlist_boost_serialization.h` 234 · `net_node_common.h` 146),
+`levin_notify.{h,cpp}` 2,189, `cryptonote_protocol_handler.{h,inl}` 3,213.
+*(Steering's figure was 10,400. The two share no derivation, so this one is the
+tree's and that one is theirs — not reconciled, because a composite figure that
+disagrees with its own itemisation is the shape rule 94 §3 exists to catch.)*
+
+**Wrong ordering, and this half is mine.** *"LV-3 must be slice 1"* rested on
+§0's measurement — **85 lines of shipped C++ against 409 of Rust**, with the
+residue being a `foreach_connection` walk that cannot move without a connection
+object. **The measurement was real. Its scope was not**: it measured
+**admission**, where `foreach_connection` is the blocker, and **one decision's
+ceiling was generalised into the whole round's ordering.**
+
+**Three independent facts invert it, and all three are checkable:**
+
+1. **The peerlist has no such ceiling.** `net_peerlist.{h,cpp}` is **878 lines**
+   of data structure. Verified at `f9e000f76`, not assumed: it includes **no**
+   socket header, **no** `net_node.h`, and **no** connection context, and
+   `grep -cE 'foreach_connection|m_net_server|connection_context|socket|boost::asio|drop_connection|p2p_connection'`
+   over both files returns **0**. The dependency runs the *other* way —
+   `net_node` includes `net_peerlist`. It is independently compilable,
+   differentially testable, and **gray/white already lives there**. **Nothing
+   about it waits on the noun.**
+2. **Round 3's deletion dissolves admission's dependency too.** `is_host_limit`
+   ([`net_node.inl:232`](../../src/p2p/net_node.inl#L232)) does exactly two
+   things: an atomic counter comparison, and `has_too_many_connections`
+   ([`:241`](../../src/p2p/net_node.inl#L241)) — the per-host **walk**. §2.9.4
+   arm 1 deletes the walk, leaving a comparison against
+   `std::atomic<unsigned int> m_current_number_of_in_peers`
+   ([`net_node.h:404`](../../src/p2p/net_node.h#L404)). **The 85/409 ceiling was
+   a property of the per-host cap, not of admission** — so this round's own
+   ruling removes the reason LV-3 looked like it had to be first.
+3. **The eviction site's walk goes with the same cut.**
+   `should_drop_connection` is **wholly stripe logic** (§7.2 as corrected), and
+   removing it removes its unconditional `for_each_connection` tally. So after
+   the alpha.9 cut **no policy decision walks connections**, which is the
+   round-level form of the claim rather than the admission-level one.
+
+**Better shape, and worth saying plainly:** the four policy slices establish the
+patterns and the differential test harness first, and **the big-bang lands last,
+where the cost and the irreversibility already are.**
+
+### 4.2 The register
+
+| # | Slice | Inherits | Flips | Greens when it lands |
+| --- | --- | --- | --- | --- |
+| **1** | **Peerlist** — `net_peerlist.{h,cpp}`, 878 lines, gray/white and the promotion boundary. Differentially testable against the C++ with no daemon | **the alpha.9 cut's receiver deletion**, because the peerlist has **its own** seed reads: the two carry-forward guards at [`net_peerlist.h:367`](../../src/p2p/net_peerlist.h#L367) and [`:414`](../../src/p2p/net_peerlist.h#L414) (*"guard against older nodes not passing pruning info around"*) — **`PDM-Q7`'s emitter-half does not clear these, because they read RECEIVED seeds** | I2's remaining acceptance rules; the white-list writer invariant | `rg -n 'pruning_seed' src/p2p/net_peerlist.*` returns **nothing** at open; a differential harness runs both implementations over one input sequence and agrees on gray/white membership |
+| **2** | **Admission policy** — the ceiling, and nothing else after §2.9.4 | slice 1, and a **measured `--in-peers`** (§7.3) rather than `UINT32_MAX` | **I7** (mechanism deleted), **I8** (closed) | `rg -n 'has_too_many_connections' src/` returns nothing; `is_host_limit` is a counter comparison |
+| **3** | **Discovery policy** — seed handling, the dial-candidate selection, `m_used_stripe_peers`' removal | slices 1–2, and the candidate filter's `else if` already gone (§7.2) | B9's mechanism half; PWC-E9's re-derivation | `rg -n 'm_used_stripe_peers\|next_needed_pruning_stripe' src/p2p/` returns nothing |
+| **4** | **Handshake state machine** — the phases, and PWD-B1/B2's per-peer state, which have no landed mechanism and so land here first rather than migrating | slices 1–3 | **B1, B2**; B7's remainder and PWC-E5 | PWD-B1's four unguarded invoke handlers are guarded |
+| **5** | **LV-3 — sockets and relay dispatch.** The `levin_notify` / `net_node` seam: 2,189 lines of dispatch plus `net_node.inl`'s connection registry. **The connection object lives here** | slices 1–4 — **the patterns and the harness**. Plus the walk-fed counter at [`net_node.inl:1112`](../../src/p2p/net_node.inl#L1112): a once-per-second `foreach_connection` recount feeding admission's atomic, which **a Rust connection registry should own its own count of** rather than inherit | the failure-window row; LV-3's own `IMPLEMENTATION_INDEX` cell | the C++ connection registry has no remaining policy caller; `:1112`'s recount thread is gone |
+| *(open)* | **The fate of `cryptonote_protocol_handler`** — 3,213 lines, and **not yet a slice** | — | — | named so its absence is visible, per §0's defect |
+
+**E1/E2 are deliberately not rows.** E1 tier-1's diagnostic half lands in
+alpha.9 (§7.4); E2(b) is blocked on the amplifier analysis; E1's remainder and
+E2(a) are cluster E's own work and are **consumers** of slice 5's provenance
+type. *A register that absorbs its consumers is how a slice becomes a
+subsystem* — the mistake §2.9.4 just finished unwinding for I8.
+
+**What the restructure does to the `pruning_seed` sequencing.** LV-3 is now
+**further away** than it looked — it is slice 5 of five, not slice 1 — while
+**slices 1–4 can start much sooner** because none of them waits on the noun.
+That strengthens the alpha.9 receiver deletion rather than weakening it: the
+field must go in C++, because the Rust receiver that would ignore it is now four
+slices out.
 
 ## 5. The open sequencing question: does cluster T land through LV-3's seam or beside it?
 
@@ -269,11 +342,27 @@ from inside `PDM-Q7` and is not.
 
 ### 7.2 Three arms for the receiver — the gate makes one cheap
 
-1. **Delete the receiver branches in C++ before the cut** — the two live ones
-   (`should_drop_connection`'s seed-`0` and stripe-match arms, and the candidate
-   filter's `else if`); a third at `:1992` is gated on `--sync-pruned-blocks`,
-   **already deleted under `PDM-Q5`**, so it goes with that ruling rather than
-   this one. Smallest diff,
+1. **Delete the receiver in C++ before the cut. CORRECTED 2026-09-21 — it is
+   the whole function, not two branches.** An earlier revision of this arm said
+   *"the two live branches,"* which was wrong and would have shipped a
+   half-deletion: after removing `should_drop_connection`'s seed-`0` and
+   stripe-match arms, **the rest of the function still reads claimed seeds** —
+   `has_unpruned_block(…, context.m_pruning_seed)` on the `m_needed_objects`
+   branch, and the `next_stripe > 0` tail, which also runs an **unconditional
+   `for_each_connection` tally**. The function is **wholly stripe logic**: 14 of
+   its lines name a stripe or a seed, its parameter *is* a stripe, and **its
+   first check already returns false for every honest peer** (`m_pruning_seed ==
+   0`), so **its entire body past line one is reachable only for a peer that
+   claims**. So the correct cut is **the function and its three call sites**
+   ([`:1446`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1446),
+   [`:1699`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1699),
+   [`:2116`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L2116)),
+   plus the candidate filter's `else if`. **That is larger than two branches and
+   cleaner than them** — and it is what makes §4.1 fact 3 true, because the
+   tally goes with the function. A fourth site at
+   [`:1992`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1992)
+   is gated on `--sync-pruned-blocks`, **already deleted under `PDM-Q5`**, so it
+   goes with that ruling. Still the smallest of the three arms,
    and `PDM-Q-S0` does **not** govern it — S0 governs set-B discard and the
    engine row's *store* symbols, and neither `:1832` nor `should_drop_connection`
    is on that list. This is a rule-15/16 deletion question, not a sequencing one.
@@ -306,7 +395,7 @@ which is right depends on §7.3's scope call, which is steering's.
 | # | Item | Why it qualifies |
 | --- | --- | --- |
 | 1 | **Delete the per-host inbound cap** | ruled §2.9.4, three independent arms, no blocker |
-| 2 | **`--in-peers` measured default** | the ceiling exists and is checked; a **measurement** at the rule-76 floor, not a ruling |
+| 2 | **`--in-peers` measured default** | the ceiling exists and is checked; a **measurement** at the rule-76 floor, not a ruling. **One input the measurement must accept:** the counter it compares against is refreshed by a `foreach_connection` recount on a **one-second sleep** ([`net_node.inl:1112`](../../src/p2p/net_node.inl#L1112)), so the ceiling is enforced against a value up to a second stale. **That staleness is inert today and becomes load-bearing the moment the ceiling is reachable** — the Pi 4 run must price a second's worth of accepts at the floor, or the measured value is off by exactly that burst |
 | 3 | **The `pruning_seed` receiver branches** (§7.2 arm 1) | two live branches; not governed by `PDM-Q-S0` |
 | 4 | **E1 tier-1, diagnostic half** | *"no wire, no amplifier and no ruling owed,"* and it **closes the operator-diagnostic gap that started the lane** — the merit that earns it a place beside three ready items |
 
@@ -339,6 +428,39 @@ deliverable that decays visibly. §6.3 gives the register three falsifiers that
 are commands rather than judgements, and L1/L2's rows name what they **inherit
 from this cut** — so if the cut does not land, the register goes red instead of
 going quiet.
+
+### 7.4.1 The gate is a named PR, not a policy — queue freeze WITHDRAWN
+
+**Withdrawn 2026-09-21 (steering).** The standing *"confirm the PR-queue freeze
+before opening anything"* constraint is withdrawn, and the honest disposition is
+that **there is nothing to delete from a document.**
+
+**Searched before saying so, because this is a negative claim.**
+`grep -rniE "queue freeze|pr[- ]queue|freeze the (pr|queue)|open no (new )?pr|before opening (anything|a pr)" docs/`
+returns **three hits, none of them the constraint** — a decision-log phrase
+about *"this PR queue"*, a CHANGELOG entry, and a completed plan's *"Precursor
+PR queued"*. **It was never in
+[`P2P_2_DISPATCH_BRIEF.md`](P2P_2_DISPATCH_BRIEF.md), or anywhere else under
+`docs/`.**
+
+**That absence is the finding, not a tidy result.** The constraint existed only
+in the relay stream, and **a constraint that is never written down cannot be
+checked against anything** — which is precisely how it survived being cited
+between two parties without either verifying it. Recorded here rather than
+silently dropped, because the next such constraint should be written where a
+`grep` can find it.
+
+**What replaces it, and why it behaves differently:**
+
+> **PR #818 — `DRS-E1 S-CURVE: typed curve-tree reads` — is the gate.** It is
+> the redb lane the alpha.9 cut inherits from, and **it resolves by a merge
+> rather than by someone deciding.** Resolution condition:
+> `gh pr view 818 --json merged` reporting `true`.
+
+**A dependency on a named PR is checkable and expires; a policy is neither.**
+The queue's *state* is a fact to read when it matters
+(`gh pr list --state open`) — at `f9e000f76` it held #818, #819 and #820 — not
+a precondition to assert.
 
 ### 7.5 The deletion's ripples — enumerated here, not discovered in the PR
 
@@ -417,11 +539,13 @@ reached by subtraction in C++ rather than by construction in Rust.
 > **Retired, two halves, each at the substrate that exists when it lands:**
 > a daemon **sends `0`** — the C++ "unpruned" sentinel — so legacy peers read it
 > correctly through the transition; and a daemon **ignores** any non-zero it
-> receives. **The ignore lands in C++ at the alpha.9 cut, by deleting the
-> non-zero branches** (`net_node.inl:1834`'s `else if`, and
-> `should_drop_connection`'s seed-`0` and stripe-match arms), **which leaves the
-> pre-existing zero path as the only path** — not by waiting for a Rust p2p
-> receiver, which `DRS-E*` does not deliver. The Rust receiver's ignore then
+> receives. **The ignore lands in C++ at the alpha.9 cut**, by deleting
+> `net_node.inl:1834`'s `else if` and **`should_drop_connection` in whole, with
+> its three call sites** — the function is entirely stripe logic and its first
+> check already returns false for every non-claiming peer, so **its body is
+> reachable only for a claimant and deleting it IS the ignore**. That leaves
+> `:1832`'s pre-existing zero path as the only remaining path — not a wait for a
+> Rust p2p receiver, which `DRS-E*` does not deliver. The Rust receiver's ignore then
 > lands with **LV-3** and is **redundant on arrival**, which is the correct
 > outcome for a retirement rather than a regression. The ignore becomes a
 > *drop reason* only after the emitter is gone. No framing change.
@@ -441,6 +565,15 @@ reached by subtraction in C++ rather than by construction in Rust.
    `should_drop_connection` is on that list. This is a rule-15/16 deletion of a
    claimed read, so **no S0 reopening criterion has to be invoked** — which is
    what makes the respec available without a steering exception.
+
+**A third note, added on re-reading the function:** the peerlist carries **its
+own** received-seed reads, at
+[`net_peerlist.h:367`](../../src/p2p/net_peerlist.h#L367) and
+[`:414`](../../src/p2p/net_peerlist.h#L414) — the carry-forward guards *"against
+older nodes not passing pruning info around."* **Q7's emitter-half does not
+clear them**, because they read what arrives rather than what we send. They are
+**not** part of this amendment (they are slice 1's inheritance, §4.2), but the
+lane should know the field has a reader outside the two files Q7's row names.
 
 ### What the lane is owed alongside it
 
