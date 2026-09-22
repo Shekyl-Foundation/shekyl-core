@@ -214,7 +214,7 @@ where the cost and the irreversibility already are.**
 
 | # | Slice | Inherits | Flips | Greens when it lands |
 | --- | --- | --- | --- | --- |
-| **1** | **Peerlist** — `net_peerlist.{h,cpp}`, 878 lines, gray/white and the promotion boundary. Differentially testable against the C++ with no daemon | **the alpha.9 cut's receiver deletion**, because the peerlist has **its own** seed reads: the two carry-forward guards at [`net_peerlist.h:367`](../../src/p2p/net_peerlist.h#L367) and [`:414`](../../src/p2p/net_peerlist.h#L414) (*"guard against older nodes not passing pruning info around"*) — **`PDM-Q7`'s emitter-half does not clear these, because they read RECEIVED seeds** | I2's remaining acceptance rules; the white-list writer invariant | `rg -n 'pruning_seed' src/p2p/net_peerlist.*` returns **nothing** at open; a differential harness runs both implementations over one input sequence and agrees on gray/white membership |
+| **1** | **Peerlist** — `net_peerlist.{h,cpp}`, 878 lines, gray/white and the promotion boundary. Differentially testable against the C++ with no daemon | **the alpha.9 cut's ignore (§7.2 arm 1)**, because the peerlist has **three** received-seed sites of its own: the carry-forward guards at [`net_peerlist.h:367`](../../src/p2p/net_peerlist.h#L367) and [`:414`](../../src/p2p/net_peerlist.h#L414) (*"guard against older nodes not passing pruning info around"*), **and the persisted-peerlist load path, which never sanitizes — `sanitize` appears nowhere in `net_peerlist.cpp`.** `PDM-Q7`'s emitter-half clears none of them: they read what ARRIVES | I2's remaining acceptance rules; the white-list writer invariant | `rg -n 'pruning_seed' src/p2p/net_peerlist.*` returns **nothing** at open; a differential harness runs both implementations over one input sequence and agrees on gray/white membership |
 | **2** | **Admission policy** — the ceiling, and nothing else after §2.9.4 | slice 1, and a **measured `--in-peers`** (§7.3) rather than `UINT32_MAX` | **I7** (mechanism deleted), **I8** (closed) | `rg -n 'has_too_many_connections' src/` returns nothing; `is_host_limit` is a counter comparison |
 | **3** | **Discovery policy** — seed handling, the dial-candidate selection, `m_used_stripe_peers`' removal | slices 1–2, and the candidate filter's `else if` already gone (§7.2) | B9's mechanism half; PWC-E9's re-derivation | `rg -n 'm_used_stripe_peers\|next_needed_pruning_stripe' src/p2p/` returns nothing |
 | **4** | **Handshake state machine** — the phases, and PWD-B1/B2's per-peer state, which have no landed mechanism and so land here first rather than migrating | slices 1–3 | **B1, B2**; B7's remainder and PWC-E5 | PWD-B1's four unguarded invoke handlers are guarded |
@@ -233,6 +233,36 @@ subsystem* — the mistake §2.9.4 just finished unwinding for I8.
 That strengthens the alpha.9 receiver deletion rather than weakening it: the
 field must go in C++, because the Rust receiver that would ignore it is now four
 slices out.
+
+### 4.3 The stripe scaffolding census — where the REMOVAL goes, slice by slice
+
+**Measured at `f9e000f76`, because the removal's size has been understated three
+times.** `git grep -E "pruning_seed|pruning_stripe|stripe_proceed|used_stripe|PRUNING_LOG_STRIPES|has_unpruned_block|…" -- src/ contrib/`
+returns **311 sites across 31 files.** Most is the **local engine** — `db_lmdb`
+32, `pruning.cpp` 34, `blockchain.cpp` 7 — which `PDM-Q7` already dispositions
+as dying at `DRS-E*` with the C++ store. What follows is only the **receiver**
+half, which Q7's table leaves as its empty cell (§7.1).
+
+**§7.2 arm 1 makes all of this DEAD at the alpha.9 cut. Removing it is a
+separate act, and it distributes across the register:**
+
+| Surface | Sites | Slice |
+| --- | --- | --- |
+| Peerlist seed field + carry-forward guards ([`net_peerlist.h:342`](../../src/p2p/net_peerlist.h#L342), [`:367-368`](../../src/p2p/net_peerlist.h#L367), [`:414-415`](../../src/p2p/net_peerlist.h#L414)) **and the unsanitized load path** | 5 + load | **1 — peerlist** |
+| `m_used_stripe_peers`: a **pure-virtual interface** ([`net_node_common.h:72-74`](../../src/p2p/net_node_common.h#L72) + stubs at `:136-142`, [`net_node.h:535-537`](../../src/p2p/net_node.h#L535), `:751-752`, three bodies at [`net_node.inl:3321-3355`](../../src/p2p/net_node.inl#L3321)), its four call sites, and the reuse block at `:1856-1860` | ~20 | **3 — discovery** |
+| `get_next_needed_pruning_stripe` ([`:2792`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L2792)) + callers; the candidate filter's remainder | ~8 | **3 — discovery** |
+| `context.m_pruning_seed` itself ([`connection_context.h:119`](../../src/cryptonote_basic/connection_context.h#L119)); `block_queue`'s signatures — `reserve_span` loses **two** params, `has_unpruned_height` one ([`block_queue.h:85-86`](../../src/cryptonote_protocol/block_queue.h#L85)) + 10 bodies | ~15 | **5 — LV-3** |
+| `should_drop_connection`, `notify_new_stripe`, and the `:2086-2199` span block | ~25 | ***(open)* — the `cryptonote_protocol_handler` row.** Named here so they are not left ownerless merely because the field they read is spoken for |
+| Wire (`p2p_protocol_defs.h:65,:71`; Rust `types.rs:104,149`) and RPC/JSON (`rpc_facts_ffi`, `json_object`, `core_rpc_server`) | ~12 | `PWC-` / `LV-`, per `PDM-Q7` |
+
+**The lesson this census is the evidence for, and it generalises past
+`pruning_seed`:** *when a mechanism is degenerate on the honest path rather than
+absent from it, every intermediate deletion point is a half-deletion.* The scope
+question is not *"which function?"* but *"where does the data stop entering?"* —
+and stopping the input is a different, much smaller act than removing what reads
+it.
+
+---
 
 ## 5. The open sequencing question: does cluster T land through LV-3's seam or beside it?
 
@@ -342,30 +372,75 @@ from inside `PDM-Q7` and is not.
 
 ### 7.2 Three arms for the receiver — the gate makes one cheap
 
-1. **Delete the receiver in C++ before the cut. CORRECTED 2026-09-21 — it is
-   the whole function, not two branches.** An earlier revision of this arm said
-   *"the two live branches,"* which was wrong and would have shipped a
-   half-deletion: after removing `should_drop_connection`'s seed-`0` and
-   stripe-match arms, **the rest of the function still reads claimed seeds** —
-   `has_unpruned_block(…, context.m_pruning_seed)` on the `m_needed_objects`
-   branch, and the `next_stripe > 0` tail, which also runs an **unconditional
-   `for_each_connection` tally**. The function is **wholly stripe logic**: 14 of
-   its lines name a stripe or a seed, its parameter *is* a stripe, and **its
-   first check already returns false for every honest peer** (`m_pruning_seed ==
-   0`), so **its entire body past line one is reachable only for a peer that
-   claims**. So the correct cut is **the function and its three call sites**
-   ([`:1446`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1446),
-   [`:1699`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1699),
-   [`:2116`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L2116)),
-   plus the candidate filter's `else if`. **That is larger than two branches and
-   cleaner than them** — and it is what makes §4.1 fact 3 true, because the
-   tally goes with the function. A fourth site at
-   [`:1992`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1992)
-   is gated on `--sync-pruned-blocks`, **already deleted under `PDM-Q5`**, so it
-   goes with that ruling. Still the smallest of the three arms,
-   and `PDM-Q-S0` does **not** govern it — S0 governs set-B discard and the
-   engine row's *store* symbols, and neither `:1832` nor `should_drop_connection`
-   is on that list. This is a rule-15/16 deletion question, not a sequencing one.
+1. **IGNORE the claimed seed at every entry point — four edits, not a
+   deletion. RE-SPECIFIED 2026-09-22, and this is the third widening.** The
+   history is worth keeping because the pattern in it is the finding:
+
+   | Revision | Claimed scope | Why it was a half-deletion |
+   | --- | --- | --- |
+   | first | two branches of `should_drop_connection` | the rest of the function still read claimed seeds |
+   | second | the function + its three call sites | call site `:2116` sits inside a stripe block that does not go with it |
+   | **third (this)** | **every entry point where a claimed seed is STORED** | — |
+
+   **What the second revision missed**, found by steering and confirmed by
+   constant-folding the block at `f9e000f76`: deleting the function leaves
+   `!stripe_proceed_main && !stripe_proceed_secondary &&` as a dangling guard at
+   [`:2116`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L2116),
+   and **both operands are computed from a claimed seed two lines up** —
+   [`:2112`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L2112)
+   reads `context.m_pruning_seed` directly. `add_used_stripe_peer` fires at
+   `:1450`, `:1703` and `:2119`, which is a **pure-virtual interface** across
+   `net_node_common.h`, `net_node.h` and `net_node.inl`. Stopping at the
+   function would have shipped a tree that still read claimed seeds.
+
+   **The termination point is the DATA, not any function.** Every intermediate
+   stopping point is a half-deletion, because the stripe apparatus is
+   **degenerate on the honest path rather than absent from it** — verified by
+   folding it at a seed of `0`:
+
+   | Expression | Honest-path value | Why |
+   | --- | --- | --- |
+   | `peer_stripe` | `0` | `get_pruning_stripe(0) == 0` |
+   | `stripe_proceed_secondary` ([`:2112`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L2112)) | **constant `true`** | `has_unpruned_block(…, 0)` returns `true` at [`pruning.cpp:47-49`](../../src/common/pruning.cpp#L47) |
+   | `stripe_proceed_main` ([`:2111`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L2111)) | `next_height_proceed` | the `peer_stripe == 0` disjunct is true, so the stripe conjunction vanishes |
+   | `proceed` ([`:2115`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L2115)) | `queue_proceed` | the stripe disjunction is vacuous |
+   | `:2116`'s guard and `:2199`'s branch | **unreachable** | `… && !true` |
+
+   **So the ignore is achieved by refusing the input, and everything downstream
+   folds to the honest path at runtime with no behavioural difference from a
+   deletion.** Four entry points, enumerated rather than sampled:
+
+   | | Entry | Edit |
+   | --- | --- | --- |
+   | **E1** | handshake — `context.m_pruning_seed = hshd.pruning_seed` ([`:438`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L438)) | store `0` |
+   | **E2** | gossiped peerlist — `sanitize_peerlist` ([`net_node.inl:2319`](../../src/p2p/net_node.inl#L2319)) | **zero instead of reject** |
+   | **E3** | persisted `p2pstate.bin` — the `load_peers` → `init` path. **`sanitize` appears NOWHERE in `net_peerlist.cpp`**, so a stored peerlist carries its seeds straight into the gray list | zero on load |
+   | **E4** | the outbound candidate filter's `else if` ([`net_node.inl:1834`](../../src/p2p/net_node.inl#L1834)) | **delete** — it is the site that favours the claimant, and dead code here resurrects if a zeroing is ever missed |
+
+   **Plus one removal, not a retention:** the well-formedness check at
+   [`:422-427`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L422)
+   **goes too**. A validity check on a field we are about to discard is a
+   **gratuitous disconnect keyed on a claim** — a claim deciding treatment in
+   the punitive direction is still a claim deciding treatment, and the argument
+   that removes the preference removes this.
+
+   **This is Q7's ruling at its narrowest expression, not a mitigation of it.**
+   Q7 says *"ignores any non-zero it receives"* — **ignore and remove are
+   separate in Q7's own text**, and the second revision conflated them. The
+   ~11-surface removal is real and is dispositioned in §4.3; it was never this
+   item.
+
+   **Falsifiers, and they must fail in BOTH directions** (rule 50) — a grep
+   alone passes an edit that never compiles into the live path:
+
+   - **Input side:** a peer sends a **well-formed non-zero** seed at handshake
+     and `context.m_pruning_seed` reads `0` afterwards; a gossiped entry
+     carrying a non-zero seed lands in the white list at `0`.
+   - **Static side:** `rg -n 'm_pruning_seed = ' src/` shows only the
+     zero-assignment, and `rg -n 'pruning_seed' src/p2p/net_peerlist.*` shows no
+     value-carrying read.
+
+   Still the **smallest** of the three arms — four edits and one removal.
 2. **Land LV-3's implementation before the cut, so the Rust connection object
    *is* the receiver.** This is the arm that discharges Q7's ignore-half as
    specified rather than by proxy — **the only arm that does** — and it is the
@@ -539,13 +614,17 @@ reached by subtraction in C++ rather than by construction in Rust.
 > **Retired, two halves, each at the substrate that exists when it lands:**
 > a daemon **sends `0`** — the C++ "unpruned" sentinel — so legacy peers read it
 > correctly through the transition; and a daemon **ignores** any non-zero it
-> receives. **The ignore lands in C++ at the alpha.9 cut**, by deleting
-> `net_node.inl:1834`'s `else if` and **`should_drop_connection` in whole, with
-> its three call sites** — the function is entirely stripe logic and its first
-> check already returns false for every non-claiming peer, so **its body is
-> reachable only for a claimant and deleting it IS the ignore**. That leaves
-> `:1832`'s pre-existing zero path as the only remaining path — not a wait for a
-> Rust p2p receiver, which `DRS-E*` does not deliver. The Rust receiver's ignore then
+> receives. **The ignore lands in C++ at the alpha.9 cut, by refusing the input
+> at all four entry points** — handshake ingest, `sanitize_peerlist`, the
+> persisted-peerlist load, and the candidate filter's `else if` — **not by
+> removing what reads it.** Everything downstream is degenerate at a seed of
+> `0` and folds to the honest path at runtime, so the ignore is complete
+> without touching the stripe scaffolding (§4.3 routes that removal across
+> slices 1, 3, 5 and the handler row). The well-formedness check goes with it: a
+> validity test on a discarded field is a gratuitous disconnect keyed on a
+> claim. **Ignore and remove are separate in this ruling's own text**, and an
+> earlier revision of this amendment conflated them. No wait for a Rust p2p
+> receiver, which `DRS-E*` does not deliver. The Rust receiver's ignore then
 > lands with **LV-3** and is **redundant on arrival**, which is the correct
 > outcome for a retirement rather than a regression. The ignore becomes a
 > *drop reason* only after the emitter is gone. No framing change.
@@ -566,8 +645,11 @@ reached by subtraction in C++ rather than by construction in Rust.
    claimed read, so **no S0 reopening criterion has to be invoked** — which is
    what makes the respec available without a steering exception.
 
-**A third note, added on re-reading the function:** the peerlist carries **its
-own** received-seed reads, at
+**A third note, widened on census:** the peerlist carries **three** received-seed
+sites of its own — the two carry-forward guards below, **and a persisted-peerlist
+load path that never sanitizes** (`sanitize` appears nowhere in
+`net_peerlist.cpp`), so a stored peerlist carries its seeds straight into the
+gray list. The guards are at
 [`net_peerlist.h:367`](../../src/p2p/net_peerlist.h#L367) and
 [`:414`](../../src/p2p/net_peerlist.h#L414) — the carry-forward guards *"against
 older nodes not passing pruning info around."* **Q7's emitter-half does not
