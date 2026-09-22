@@ -1,7 +1,7 @@
 # LMDB Schema Reference
 
 **Last updated:** August 2026
-**DB version:** 14 (schema v14: `PL-D3` — the curve-tree leaf's 4th scalar is `CM.x`, the x-coordinate of the output's `0x07` leaf-commitment point, and the `0x07` entry is 64 B per output (`CM ‖ record`); a v13 datadir's leaves and roots were computed from the retired leaf hash and the datadir is refused (`FCMP_SPEND_LINKABILITY.md` §6.2); v13: the `archival_bond` value v6 → v7 gains the 32-byte serving `endpoint` committed at JoinMarket (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`); a v12 datadir's records fail the value's version pin and the datadir is refused; v12: the prune-watermark receipt — `properties` key `archival_prune_watermark_epoch`, the pop floor's source (C2-R1b-Q1c); a v11 datadir pruned without receipts and is refused; v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
+**DB version:** 15 (schema v15: two tables leave the X-macro — `txs_prunable_tip` and `output_metadata` — with the C++ tx-data prune (2026-09-22); a v14 datadir holds two named DBs a v15 binary never opens and is refused at open; v14: `PL-D3` — the curve-tree leaf's 4th scalar is `CM.x`, the x-coordinate of the output's `0x07` leaf-commitment point, and the `0x07` entry is 64 B per output (`CM ‖ record`); a v13 datadir's leaves and roots were computed from the retired leaf hash and the datadir is refused (`FCMP_SPEND_LINKABILITY.md` §6.2); v13: the `archival_bond` value v6 → v7 gains the 32-byte serving `endpoint` committed at JoinMarket (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`); a v12 datadir's records fail the value's version pin and the datadir is refused; v12: the prune-watermark receipt — `properties` key `archival_prune_watermark_epoch`, the pop floor's source (C2-R1b-Q1c); a v11 datadir pruned without receipts and is refused; v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
 **Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
 
 ## Conventions
@@ -204,7 +204,7 @@ PQC authentication data for v3+ transactions (second unprunable segment, between
 | Key comparator | `compare_uint64` |
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value | Byte slice `[pqc_auths_offset, unprunable_size)` from the tx blob. Variable length. Only present for non-coinbase transactions with `tx.version >= 3`. |
-| Writers | `add_transaction_data` (conditional), `remove_transaction_data`. **Not** `prune_tx_data` — this is the second unprunable segment. |
+| Writers | `add_transaction_data` (conditional), `remove_transaction_data`. Never a discard — this is the second unprunable segment. |
 | Readers | `get_pruned_tx_blob` (concatenates with txs_pruned) |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (DB v6, `migrate_5_6`) |
 
@@ -219,7 +219,7 @@ Prunable suffix of serialized transactions (`CtSigPrunable`: Bulletproof+ range 
 | Key comparator | `compare_uint64` |
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value | Bytes from `unprunable_size` to end of tx blob. Variable length. |
-| Writers | `add_transaction_data`, `remove_transaction_data`, `prune_tx_data` (delete only) |
+| Writers | `add_transaction_data`, `remove_transaction_data` (no C++ discard since v15; the uniform discard is S-PRUNE, on the redb store) |
 | Readers | `get_prunable_tx_blob` |
 | Introduced | Genesis (DB v0) |
 
@@ -234,23 +234,15 @@ Hash of the prunable section, kept for verification when the prunable data itsel
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value (dup) | `crypto::hash` (32 bytes) |
 | Dup sort | `compare_uint64` (first 8 bytes of hash treated as uint64) |
-| Writers | `add_transaction_data` (for tx version > 1), `remove_transaction_data`. **Not** `prune_tx_data` — the hash is what still names a pruned transaction. |
+| Writers | `add_transaction_data` (for tx version > 1), `remove_transaction_data`. Never a discard — the hash is what still names a pruned transaction. |
 | Introduced | Genesis (DB v0) |
 
-### `txs_prunable_tip`
+### ~~`txs_prunable_tip`~~ — DELETED (DB v15, 2026-09-22)
 
-Tracks which transactions are at the pruning frontier. Not opened in read-only mode.
-
-| Property | Value |
-|---|---|
-| LMDB name | `"txs_prunable_tip"` |
-| Flags | `MDB_INTEGERKEY \| MDB_DUPSORT \| MDB_DUPFIXED` |
-| Key | `uint64_t` tx_id (8 bytes) |
-| Value (dup) | `uint64_t` block height at insertion (8 bytes) |
-| Dup sort | `compare_uint64` |
-| Writers | `add_transaction_data` (when pruning seed != 0), `remove_transaction_data` |
-| Note | Only present when blockchain pruning is active. |
-| Introduced | Genesis (DB v0) |
+The stripe engine's tip index (`tx_id` → height, `MDB_INTEGERKEY | MDB_DUPSORT`,
+written only when a pruning seed was set). Write-never since `PDM-Q7` deleted
+the engine (#821); left the X-macro at v15 with the C++ tx-data prune. Its
+redb twin left the catalogue at `SCHEMA_VERSION 10`.
 
 ### `txs` (legacy)
 
@@ -375,32 +367,15 @@ Offset  Size  Field
 | Note | Shekyl uses only RCT outputs (amount = 0), so all entries use the `outkey` layout. The `pre_rct_outkey` layout is retained for migration compatibility. |
 | Introduced | Genesis (DB v0, rebuilt in v1 migration) |
 
-### `output_metadata`
+### ~~`output_metadata`~~ — DELETED (DB v15, 2026-09-22)
 
-Pruning-safe output metadata, retained after transaction pruning.
-
-| Property | Value |
-|---|---|
-| LMDB name | `"output_metadata"` |
-| Flags | `MDB_INTEGERKEY` |
-| Key | `uint64_t` global output index (8 bytes) |
-| Value | `output_pruning_metadata_t`, 88 bytes (`#pragma pack(1)`): |
-
-```
-Offset  Size  Field
-0       32    crypto::public_key pubkey
-32      32    ct::key commitment
-64       8    uint64_t unlock_time
-72       8    uint64_t height
-80       1    uint8_t pruned (1 if parent tx prunable data removed)
-81       7    uint8_t padding[7]
-```
-
-| Property | Value |
-|---|---|
-| Writers | `add_output` (when pruning enabled), `prune_tx_data` |
-| Readers | `get_output_metadata` |
-| Introduced | DB v6 |
+The C++ tx-data prune's post-discard scan cache (`global_output_index` → an
+88-byte `output_pruning_metadata_t`: pubkey, commitment, unlock time, height,
+pruned flag; introduced v6). Its only writer was inside `prune_tx_data` and its
+read chain (`get_output_metadata` → `is_output_pruned`) had no caller. Deleted
+with the prune. Under archival pruning the retained set is the transaction
+prefix, which already carries what a scanner needs
+(`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q6 item 1), so there is no successor table.
 
 ---
 
@@ -1175,8 +1150,8 @@ General key-value store for database-level metadata.
 | `"version"` (NUL-terminated) | `uint32_t` | Database schema version — tracks `#define VERSION` in `db_lmdb.cpp` (the header of this document names the current value; a third copy here just drifts) |
 | `"archival_prune_watermark_epoch"` | `uint64_t` | The retention prune's monotonic receipt (C2-R1b-Q1c, v12): highest `prune_below_epoch` ever applied, written in the prune's own txn before its deletions. The pop floor's source (`pop_target_allowed`). One writer, never lowered, **exempt from pop reversal** — unlike `archival_frozen_shard_count`, this key records destruction a pop cannot undo |
 | `"pruning_seed"` (NUL-terminated) | `uint32_t` | ~~Blockchain pruning seed~~ **RETIRED 2026-09-21** (`PDM-Q7`: the stripe engine is deleted; no writer, no reader — a key left in an old datadir is ignored). Not a layout change, so no version bump. |
-| `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | Next block height for tx pruning |
-| `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | Height of last pruned tx data |
+| `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | ~~Next block height for tx pruning~~ **RETIRED v15** with `prune_tx_data`; a key left in an old datadir is ignored |
+| `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | ~~Height of last pruned tx data~~ **RETIRED v15** (the legacy spelling of the same watermark) |
 | `"total_bonded_atomic"` (no NUL) | `uint64_t` | Global audit scalar: sum of per-`P` `bonded_total_atomic` (gate-4 §4.5). Credited on JoinMarket `bond_credit`; debited on Unbond/slash connect paths |
 | `"total_burned"` (no NUL) | `uint64_t` | Cumulative amount of SHEKYL destroyed (zero-staker burns + explicit burns) |
 | `"archival_frozen_shard_count"` (no NUL) | `uint64_t` | Pop-symmetric `archival_shard_segment` row counter — the M1 gate operand's O(1) backing store (V8; `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4). +1 in `put_archival_shard_segment`, −1 per deleted row in `revert_archival_segment_freezes`; mutation surface CI-pinned |
@@ -1282,6 +1257,19 @@ JoinMarket from the vin's field and never changed. No table is born. Every v12
 record fails the value codec's version pin, so a v12 datadir cannot be read
 by a v13 binary and is refused at open rather than mis-decoded. Pre-genesis:
 delete and resync.
+
+DB v14: `PL-D3` — the curve-tree leaf's 4th scalar (see the header line).
+
+DB v15: two tables leave the X-macro (2026-09-22) — `txs_prunable_tip`, the
+Monero stripe engine's tip index, write-never since `PDM-Q7` deleted the
+engine (#821); and `output_metadata`, the C++ tx-data prune's post-discard
+scan cache, whose read chain was dead two levels deep. Layout, not content:
+no surviving table's bytes change, but a v14 env has two named DBs a v15
+binary never opens, and the `maxdbs` ceiling is derived from a shorter list.
+The `tx_prune_next_block` / `last_pruned_tx_data_height` properties are
+retired with the prune. The discard that replaces all of it is S-PRUNE,
+Rust, on the redb store (`DRS_E1_SPRUNE.md`; redb `SCHEMA_VERSION` 9 → 10 in
+the same PR). Pre-genesis: delete and resync.
 
 `BlockchainLMDB::migrate` refuses any pre-`VERSION` database with a message
 that tracks the constant, so each bump extends the refusal automatically.
