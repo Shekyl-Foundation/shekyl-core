@@ -762,24 +762,22 @@ The curve tree and related metadata are stored in five LMDB tables.
 
 `get_pruned_tx_blob` / `get_tx_blob` concatenate `txs_pruned` + `txs_pqc_auths` (if present) + `txs_prunable` (if present). The in-memory `transaction::pqc_auths_offset` records the split point when serializing.
 
-### Output Metadata Table
+### ~~Output Metadata Table~~ — DELETED 2026-09-22 (LMDB v15)
 
-| Table | Key | Value | Purpose |
-|-------|-----|-------|---------|
-| `output_metadata` | `global_output_index` (u64) | `output_pruning_metadata_t` (packed struct) | Wallet scanning after tx pruning |
+`output_metadata` was the C++ tx-data prune's post-discard scan cache (per
+output: public key, commitment, unlock time, height, pruned flag). It went
+with `prune_tx_data`; its read chain had no caller. Under archival pruning
+(`docs/design/ARCHIVAL_PRUNED_DAEMON_MODE.md` Q6 item 1) the discard unit is
+the prunable region + `pqc_auths` and **the transaction prefix is retained on
+every node**, so what a scanner needs — outputs, view tags, and the `tx_extra`
+hybrid KEM ciphertexts (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`, `0x06`) that wallet
+restore and PQC key re-derivation read — is in `m_txs_pruned` by
+construction, not in a side table.
 
-The `output_pruning_metadata_t` struct stores per-output scan data:
-output public key, Pedersen commitment, unlock_time, block height, and a
-pruned flag. This allows wallets to scan for owned outputs even after the
-full transaction data has been pruned.
-
-**Invariant (PQC restore):** `output_metadata` does **not** duplicate the
-`tx_extra` hybrid KEM ciphertexts (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`, `0x06`).
-Wallet restore and PQC key re-derivation still read those ciphertexts from the
-**transaction prefix** stored in `m_txs_pruned`. Any future “deep prune” mode
-must **not** delete or truncate `m_txs_pruned` in a way that removes `tx_extra`
-while leaving outputs discoverable, or ML-KEM ciphertexts needed for PQC
-material would be lost.
+**Invariant (PQC restore), unchanged:** no discard may delete or truncate
+`m_txs_pruned` in a way that removes `tx_extra` while leaving outputs
+discoverable, or the ML-KEM ciphertexts needed for PQC material would be lost.
+S-PRUNE inherits this as a constraint on its predicate, not as a table.
 
 ### Database API
 
@@ -802,12 +800,9 @@ bool get_curve_tree_checkpoint(uint64_t block_height, std::vector<uint8_t>& data
 uint64_t get_latest_curve_tree_checkpoint_height() const;
 void prune_curve_tree_intermediate_layers(uint64_t checkpoint_height);
 
-// Output metadata (pruning support)
-void store_output_metadata(uint64_t global_output_index, const output_pruning_metadata_t& meta);
-output_pruning_metadata_t get_output_metadata(uint64_t global_output_index) const;
-bool is_output_pruned(uint64_t global_output_index) const;
-bool prune_tx_data(uint64_t depth = 0);  // depth 0 → CRYPTONOTE_TX_PRUNE_DEPTH
-uint64_t get_last_pruned_tx_data_height() const;
+// (The output-metadata / tx-data-prune API — store_output_metadata,
+// get_output_metadata, is_output_pruned, prune_tx_data,
+// get_last_pruned_tx_data_height — was deleted 2026-09-22 with LMDB v15.)
 bool tx_has_verification_data(const crypto::hash& tx_hash) const;
 ```
 
@@ -1033,26 +1028,25 @@ automatically triggered after each `save_curve_tree_checkpoint` call in
 
 ### Transaction Data Pruning
 
-`prune_tx_data(depth)` removes `txs_prunable` for transactions in blocks
-below `height - depth` (default `depth`: `CRYPTONOTE_TX_PRUNE_DEPTH` = 5000
-when `depth == 0`). The prunable **hash** and the `txs_pqc_auths` slice stay:
-both are operands of the transaction's identity, and a pruned node that
-dropped them could no longer name what it kept. The complete body is served
-from shard archival (`docs/V3_STAKER_ARCHIVAL.md` set C), not from the pruned
-node. It stores `output_pruning_metadata_t` for each affected output, then
-deletes the prunable verification body. For RCT coinbase outputs, output lookups use
-amount `0` in the amount index (matching `add_transaction`), not the
-plaintext `vout.amount`. A `tx_prune_next_block` watermark in `m_properties`
-stores the first block height not yet processed (with one-time read of legacy
-`last_pruned_tx_data_height` as last-inclusive + 1) so runs are idempotent.
-If any expected transaction row is missing (`TX_DNE`) during a pruning batch,
-the batch now fails immediately and does not advance the watermark, preventing
-partial-prune state from being recorded as completed.
-*(2026-09-21: the stripe engine — `--prune-blockchain`,
-`update_blockchain_pruning`, the periodic pass — is deleted under `PDM-Q7`.
-`prune_tx_data` remains in the C++ store with no production caller until
-the store is replaced; the uniform daemon discard is S-PRUNE,
-`docs/design/DRS_E1_SPRUNE.md`.)*
+**The C++ tx-data prune is deleted (2026-09-22, LMDB v15).** `prune_tx_data`
+discarded `txs_prunable` per transaction at a fixed confirmation depth
+(`CRYPTONOTE_TX_PRUNE_DEPTH` = 5000), cached per-output scan data in
+`output_metadata`, and kept an idempotent `tx_prune_next_block` watermark. It
+was reachable only through the Monero stripe engine, which `PDM-Q7` deleted
+on 2026-09-21 (#821); with no caller it went the next day, with its table,
+its watermark and `get_info.tx_prune_height` (RPC 3.36).
+
+What replaces it is not a port. Under archival pruning
+(`docs/design/ARCHIVAL_PRUNED_DAEMON_MODE.md`) **every** daemon discards the
+same good — the prunable region + `pqc_auths` — **shard-granularly** at
+`[b_k, b_{k+1})` once `b_{k+1} ≤ first_tx_id(tip − W)` and the epoch floor
+has passed, never a transaction at a time and never at an operator-chosen
+depth. The prunable **hash** and `txs_pqc_auth_hash` stay on every node as
+the txid's operands; the bodies are served from the bonded archivers'
+wallet-side stores and the Foundation floor. That discard is **S-PRUNE**,
+Rust, on the redb store (`docs/design/DRS_E1_SPRUNE.md`), and its frontier is
+chain-derivable (the largest `k` the predicate admits) rather than a stored
+watermark.
 
 ---
 
@@ -1280,7 +1274,7 @@ Do not reintroduce them. Archival emission is a different vin
 |-----------|--------|----------|
 | Curve tree LMDB schema (leaves, layers, meta) | **Done** | `db_lmdb.h`, `db_lmdb.cpp` |
 | Curve tree checkpoint table | **Done** | `db_lmdb.h`, `db_lmdb.cpp` |
-| Output metadata table (`m_output_metadata`) | **Done** | `db_lmdb.h`, `db_lmdb.cpp` |
+| ~~Output metadata table (`m_output_metadata`)~~ | **DELETED 2026-09-22** (LMDB v15; see §9) | — |
 | `curve_tree_root` in block header | **Done** | `cryptonote_basic.h`, `blockchain.cpp` |
 | referenceBlock age validation | **Done** | `blockchain.cpp` |
 | key_offsets empty check | **Done** | `blockchain.cpp` |
@@ -1291,7 +1285,7 @@ Do not reintroduce them. Archival emission is a different vin
 | Wallet tree-path precomputation | **Migrated to Rust** | `wallet2.cpp` was deleted 2026-08-19; the wallet stack is `shekyl-engine-*` / `shekyl-tx-builder` |
 | PQC key rederivation from stored secret | **Deleted 2026-08-19** with `wallet2.cpp` (it was the Phase-5 deletion target named here) | — |
 | Restore-from-seed PQC rederivation | **Done** (frozen v1 pipeline; `shekyl_account_rederive`) | `rust/shekyl-crypto-pq/src/account.rs` |
-| `prune_tx_data` + `txs_pqc_auths` split | **Done** | `db_lmdb.cpp`, `cryptonote_basic.h` |
+| `txs_pqc_auths` split (the `prune_tx_data` half **DELETED 2026-09-22**; see §12) | **Done** | `db_lmdb.cpp`, `cryptonote_basic.h` |
 | `get_curve_tree_path` RPC | **REMOVED 2026-09-18** (RPC 3.34; spend-revealing, `PHASE_2A` §3.0.1; `SOK-10` Q7 → A) | paths are wallet-assembled (`shekyl-curve-tree::assemble_path`) |
 | `get_curve_tree_info` RPC | **Done** | `core_rpc_server.cpp` |
 | `get_curve_tree_checkpoint` RPC | **Done** | `core_rpc_server.cpp` |

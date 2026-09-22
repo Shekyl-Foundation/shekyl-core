@@ -300,7 +300,7 @@ prune they refer to.
 
 | Prune name | Where it lives | What it discards |
 | --- | --- | --- |
-| **Daemon-side discard** | full node, not running. S-PRUNE is an unbuilt skeleton ([`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md)). The stripe engine (`--prune-blockchain`) was deleted 2026-09-21 (`PDM-Q7`); `prune_tx_data` has no production caller. There is no `--no-prune` flag | when S-PRUNE lands: historical witness/proof data, consensus state kept. Today a daemon serves full bodies |
+| **Daemon-side discard** | full node, not running. S-PRUNE is an unbuilt skeleton ([`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md)). The stripe engine (`--prune-blockchain`) was deleted 2026-09-21 (`PDM-Q7`); `prune_tx_data` was deleted 2026-09-22 (LMDB v15). There is no `--no-prune` flag | when S-PRUNE lands: historical witness/proof data, consensus state kept. Today a daemon serves full bodies |
 | **Archival retention** (`--no-prune` is `PDM-Q-F2`: documentation for "do nothing", not a CLI flag) | Foundation reference daemons | nothing extra. The role is a daemon that keeps what S-PRUNE will discard, so a cold-sync client has a full source (per [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) multi-source disposition) |
 | **RPC-server prune** | wallet-RPC server (the `wallet_rpc_server` cutover scope) | mempool / cache / response-buffer data; affects long-running RPC sessions, not on-chain validity |
 | **Wallet-side prune-by-birthday** | wallet client | blocks below `refresh_from_block_height`; the producer skips the prefix entirely when starting a refresh. P2 FOLLOWUPS entry on `dev` ("P2: wallet-birthday plumbing not wired into producer start-height") names this as a deferred V3.0 item |

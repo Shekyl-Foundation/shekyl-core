@@ -32,7 +32,9 @@ with both flags and the `pruning_seed` wire field — `S0` forbids
 *implementing* in C++, not deleting, and the wire half did not die with the
 store). Not an extraction and not a port: four of its six methods were
 the stripe engine and are gone; `prune_tx_data` (Shekyl's C++ tx-data
-discard, a different mechanism) dies at `DRS-E*` with the store;
+discard, a different mechanism) went 2026-09-22 with its `output_metadata`
+cache, its watermark and `txs_prunable_tip` (LMDB v15, redb v10) — S-PRUNE
+starts from a store with no discard mechanism to inherit;
 `PDM-Q-F17`'s triple — assignment /
 advertisement / coverage — is **not** read from, because each has a
 successor that is not the engine (the bond, the bond, price). S-PRUNE reads
@@ -212,8 +214,9 @@ under `PDM-Q-S0`. The stripe engine's four methods (`check_pruning`,
 `get_blockchain_pruning_seed`, `prune_blockchain`, `update_pruning`;
 `PDM-Q7`), `src/common/pruning.{h,cpp}`, `CRYPTONOTE_PRUNING_*` and
 `--prune-blockchain` **were deleted 2026-09-21** — gated by
-`scripts/ci/check_no_stripe_engine.sh`; `prune_tx_data` stays until the
-store goes. Not touched by this surface's increments. The `u32` seed
+`scripts/ci/check_no_stripe_engine.sh`; `prune_tx_data` and its two tables
+followed on 2026-09-22 (`feat/delete-cxx-tx-data-prune`). Nothing is left
+for this surface's increments to delete. The `u32` seed
 arithmetic (`PDM-Q-F17`) is **not** read from — `PDM-Q7` refuted the triple;
 the holdings advertisement is the bond. `--sync-pruned-blocks` **was deleted
 with them (2026-09-21), under `PDM-Q5`'s rejection**

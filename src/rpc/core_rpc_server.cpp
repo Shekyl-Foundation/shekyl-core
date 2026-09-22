@@ -293,8 +293,6 @@ namespace cryptonote
     else
       res.emission_era = "Tail";
 
-    res.tx_prune_height = m_core.get_blockchain_storage().get_db().get_last_pruned_tx_data_height();
-
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

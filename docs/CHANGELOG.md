@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Daemon store — the C++ tx-data prune is gone; S-PRUNE starts clean
+
+- **`prune_tx_data` and everything it owned are deleted.** The depth-based
+  C++ discard (`CRYPTONOTE_TX_PRUNE_DEPTH = 5000`) was reachable only
+  through the stripe engine removed the day before; with no caller it goes,
+  with its `output_metadata` scan cache, its `tx_prune_next_block` /
+  `last_pruned_tx_data_height` watermark, and the write-never
+  `txs_prunable_tip` table. **LMDB `VERSION 14 → 15`** (two tables leave the
+  X-macro; a v14 datadir is refused at open — pre-genesis: delete and
+  resync). **redb `SCHEMA_VERSION 9 → 10`** (the two twin definitions leave
+  the catalogue; every ordinal after #8 shifts, and the pop journal persists
+  ordinals). The uniform, shard-granular discard is S-PRUNE, Rust, on the
+  redb store (`docs/design/DRS_E1_SPRUNE.md`); nothing of the C++ shape —
+  per-tx depth, side-table scan cache, stored watermark — is carried into it.
+- **Daemon RPC 3.36:** `get_info` drops `tx_prune_height`.
+- CI: the redb key-type gate's constraint floor moves 29 → 27 with the two
+  tables; its `WRITE_NEVER` declaration for `txs_prunable_tip` expired as
+  designed (table gone → entry gone).
+
 ### P2P wire, daemon RPC, CLI — the stripe engine is gone (`PDM-Q7`)
 
 - **`pruning_seed` is deleted from the P2P wire** — from `CORE_SYNC_DATA`
@@ -20,8 +39,8 @@
   per-operator pruning posture. The Monero stripe engine
   (`common/pruning.*`, `prune_worker`, `CRYPTONOTE_PRUNING_*`, the 5-hour
   prune timer) is deleted. Uniform discard is S-PRUNE
-  (`docs/design/DRS_E1_SPRUNE.md`), still an unfilled skeleton:
-  `prune_tx_data` remains in the C++ store with no production caller.
+  (`docs/design/DRS_E1_SPRUNE.md`), still an unfilled skeleton.
+  `prune_tx_data` went with the section above (LMDB v15).
 - **Daemon RPC 3.35:** `pruning_seed` leaves `get_peer_list`,
   `get_connections` and `sync_info.peers`; `next_needed_pruning_seed`
   leaves `sync_info`; the `prune_blockchain` JSON-RPC method and the

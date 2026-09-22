@@ -243,11 +243,6 @@ public:
   virtual bool get_output_leaf_index(shekyl::db::OutputIndex, shekyl::db::TreePosition&) const override { return false; }
   virtual bool get_leaf_output_index(shekyl::db::TreePosition, shekyl::db::OutputIndex&) const override { return false; }
 
-  virtual void store_output_metadata(uint64_t, const output_pruning_metadata_t&) override {}
-  virtual bool get_output_metadata(uint64_t, output_pruning_metadata_t&) const override { return false; }
-  virtual bool is_output_pruned(uint64_t) const override { return false; }
-  virtual bool prune_tx_data(uint64_t) override { return true; }
-  virtual uint64_t get_last_pruned_tx_data_height() const override { return 0; }
   virtual bool tx_has_verification_data(const crypto::hash&) const override { return true; }
 
   virtual void grow_curve_tree(const std::vector<uint8_t>&, uint64_t) override {}

@@ -149,7 +149,6 @@ pub const TABLE_CLASSES: &[(&str, AccumulatorClass)] = &[
     ("hf_versions", AccumulatorClass::Small),
     ("leaf_to_output", AccumulatorClass::SetShaped),
     ("output_amounts", AccumulatorClass::SetShaped),
-    ("output_metadata", AccumulatorClass::Excluded),
     ("output_to_leaf", AccumulatorClass::SetShaped),
     ("output_txs", AccumulatorClass::SetShaped),
     ("pending_tree_drain", AccumulatorClass::SetShaped),
@@ -164,7 +163,6 @@ pub const TABLE_CLASSES: &[(&str, AccumulatorClass)] = &[
     ("txs_pqc_auths", AccumulatorClass::AppendMostly),
     ("txs_prunable", AccumulatorClass::Excluded),
     ("txs_prunable_hash", AccumulatorClass::AppendMostly),
-    ("txs_prunable_tip", AccumulatorClass::Excluded),
     ("txs_pruned", AccumulatorClass::AppendMostly),
 ];
 
