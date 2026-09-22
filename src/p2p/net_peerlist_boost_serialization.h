@@ -41,7 +41,7 @@
 #include "net/i2p_address.h"
 #include "p2p/p2p_protocol_defs.h"
 
-BOOST_CLASS_VERSION(nodetool::peerlist_entry, 5)
+BOOST_CLASS_VERSION(nodetool::peerlist_entry, 6)
 
 namespace boost
 {
@@ -224,11 +224,11 @@ namespace boost
       // store bump). The floor also covers an interim-branch v8 store that
       // still carried v4 entries: it throws instead of desyncing, and
       // open() turns the throw into the default-config fallback.
-      if (ver < 5)
-        throw std::runtime_error("peerlist_entry version < 5: pre-current peerlist stores must be dropped by load_peers, not read");
+      // v6: pruning_seed is gone (PDM-Q7; folded into the v9 store bump).
+      if (ver < 6)
+        throw std::runtime_error("peerlist_entry version < 6: pre-current peerlist stores must be dropped by load_peers, not read");
       a & pl.adr;
       a & pl.last_seen;
-      a & pl.pruning_seed;
     }
   }
 }

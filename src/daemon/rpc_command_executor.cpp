@@ -30,7 +30,6 @@
 
 #include "string_tools.h"
 #include "common/scoped_message_writer.h"
-#include "common/pruning.h"
 #include "daemon/rpc_command_executor.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "cryptonote_core/cryptonote_core.h"

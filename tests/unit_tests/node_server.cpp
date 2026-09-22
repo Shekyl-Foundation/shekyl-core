@@ -87,7 +87,7 @@ public:
   void pause_mine(){}
   void resume_mine(){}
   bool on_idle(){return true;}
-  bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, bool clip_pruned, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){return true;}
+  bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){return true;}
   bool handle_get_objects(cryptonote::NOTIFY_REQUEST_GET_OBJECTS::request& arg, cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::request& rsp, cryptonote::cryptonote_connection_context& context){return true;}
   cryptonote::blockchain_storage &get_blockchain_storage() { throw std::runtime_error("Called invalid member function: please never call get_blockchain_storage on the TESTING class test_core."); }
   bool get_test_drop_download() const {return true;}
@@ -128,8 +128,6 @@ public:
   uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return 0; }
   cryptonote::difficulty_type get_block_cumulative_difficulty(uint64_t height) const { return 0; }
   bool pad_transactions() { return false; }
-  uint32_t get_blockchain_pruning_seed() const { return 0; }
-  bool prune_blockchain(uint32_t pruning_seed = 0) { return true; }
   bool get_txpool_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes) { return false; }
   bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const { return false; }
   crypto::hash get_block_id_by_height(uint64_t height) const { return crypto::null_hash; }
@@ -253,10 +251,10 @@ TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
   cprotocol.set_p2p_endpoint(&server);
 
   std::vector<nodetool::peerlist_entry> peers;
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 100, 0});   // kept
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100, 0});   // ip 0: dropped
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100, 0});       // port 0: dropped
-  peers.push_back({net::tor_address::unknown(), 100, 0});                 // tor port 0: kept
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 100});   // kept
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100});   // ip 0: dropped
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100});       // port 0: dropped
+  peers.push_back({net::tor_address::unknown(), 100});                 // tor port 0: kept
 
   ASSERT_TRUE(server.sanitize_peerlist(peers));
 
@@ -603,6 +601,13 @@ TEST(node_server, bind_same_p2p_port)
   EXPECT_TRUE(init(new_node(), port_another));
 }
 
+// Chain lengths the race test drives the two daemons to. They were the
+// stripe-engine constants (a stripe, and the unpruned tip window) when the
+// test was inherited; the engine is deleted (PDM-Q7) and these are now just
+// "enough blocks" for the sync race to have something to race over.
+constexpr uint64_t RACE_SYNC_BLOCKS = 4096;
+constexpr uint64_t RACE_TIP_BLOCKS = 5500;
+
 TEST(cryptonote_protocol_handler, race_condition)
 {
   GTEST_SKIP() << "Flaky race-condition stress test; skipped for deterministic CI signal.";
@@ -838,9 +843,6 @@ TEST(cryptonote_protocol_handler, race_condition)
       else
         return {};
     }
-    virtual void add_used_stripe_peer(const contexts::cryptonote&) override {}
-    virtual void clear_used_stripe_peers() override {}
-    virtual void remove_used_stripe_peer(const contexts::cryptonote&) override {}
     virtual void for_each_connection(callback_t f) override {
       if (shared_state)
         shared_state->foreach_connection([&f](context_t &context){
@@ -1112,7 +1114,7 @@ TEST(cryptonote_protocol_handler, race_condition)
     events.prepare.wait();
     daemon.main.core->get_blockchain_storage().add_block_notify(
       [&events](height_t height, span::blocks blocks){
-        if (height >= CRYPTONOTE_PRUNING_STRIPE_SIZE)
+        if (height >= RACE_SYNC_BLOCKS)
           events.sync.raise();
       }
     );
@@ -1125,7 +1127,7 @@ TEST(cryptonote_protocol_handler, race_condition)
           daemon.alt.core->get_current_blockchain_height() - 1
         ),
       };
-      while (daemon.alt.core->get_current_blockchain_height() < CRYPTONOTE_PRUNING_STRIPE_SIZE + CRYPTONOTE_PRUNING_TIP_BLOCKS) {
+      while (daemon.alt.core->get_current_blockchain_height() < RACE_SYNC_BLOCKS + RACE_TIP_BLOCKS) {
         block_t block;
         diff_t diff;
         reward_t reward;
@@ -1133,7 +1135,7 @@ TEST(cryptonote_protocol_handler, race_condition)
         stat.diff += diff;
         stat.reward = stat.reward < (SHEKYL_EMISSION_CURVE_ASYMPTOTE - stat.reward) ? stat.reward + reward : SHEKYL_EMISSION_CURVE_ASYMPTOTE;
         add_block(*daemon.alt.core, block, stat);
-        if (daemon.main.core->get_current_blockchain_height() + 1 < CRYPTONOTE_PRUNING_STRIPE_SIZE)
+        if (daemon.main.core->get_current_blockchain_height() + 1 < RACE_SYNC_BLOCKS)
           add_block(*daemon.main.core, block, stat);
       }
     }
@@ -1218,7 +1220,6 @@ TEST(node_server, race_condition)
     using span_t = epee::span<const uint8_t>;
     using blobs_t = epee::span<const cryptonote::blobdata>;
     using block_queue_t = cryptonote::block_queue;
-    using stripes_t = std::pair<uint32_t, uint32_t>;
     using byte_stream_t = epee::byte_stream;
     struct core_events_t: cryptonote::i_core_events {
       uint64_t get_current_blockchain_height() const override { return {}; }
@@ -1308,7 +1309,6 @@ TEST(node_server, race_condition)
     bool no_sync() const { return {}; }
     void set_no_sync(bool value) {}
     string_t get_peers_overview() const { return {}; }
-    stripes_t get_next_needed_pruning_stripe() const { return {}; }
     bool needs_new_sync_connections(epee::net_utils::zone zone) const { return {}; }
     bool is_busy_syncing() { return {}; }
   };
@@ -2398,7 +2398,6 @@ TEST(block_sync_span_lifecycle, an_incorrect_height_span_leaves_the_queue_with_i
   const crypto::hash parent = a_parent_hash();
   auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
   const auto reserved = queue.reserve_span(50, 50, 1, liar, unknown_tor,
-    /*sync_pruned_blocks=*/true, /*local_pruning_seed=*/0, /*pruning_seed=*/0,
     /*blockchain_height=*/51, {{parent, 0}}, boost::date_time::min_date_time);
   ASSERT_EQ(50u, reserved.first);
   queue.add_blocks(50, {one_block(parent)}, liar, unknown_tor, 1.0f, 1);

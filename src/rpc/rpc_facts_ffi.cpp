@@ -749,8 +749,7 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
 
         // The prunable HASH is read unconditionally, and the prunable BLOB is
         // optional — that asymmetry is pruning's design, not an oversight.
-        // Both `prune_worker` and `prune_tx_data` delete `txs_prunable` (and
-        // the worker, `txs_prunable_tip`) and never `txs_prunable_hash`:
+        // `prune_tx_data` deletes `txs_prunable` and never `txs_prunable_hash`:
         // keeping the hash after dropping the bytes is the entire point of
         // storing it, since it is what still lets a client bind the pruned
         // body to the transaction. Reading the hash only when the blob

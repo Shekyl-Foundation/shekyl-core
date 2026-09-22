@@ -72,7 +72,6 @@
 #include "common/perf_timer.h"
 #include "common/notify.h"
 #include "common/varint.h"
-#include "common/pruning.h"
 #include "time_helper.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -2542,14 +2541,10 @@ bool Blockchain::handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NO
     get_transactions_blobs(bl.second.tx_hashes, e.txs, missed_tx_ids, arg.prune);
     if (missed_tx_ids.size() != 0)
     {
-      // do not display an error if the peer asked for an unpruned block which we are not meant to have
-      if (tools::has_unpruned_block(get_block_height(bl.second), get_current_blockchain_height(), get_blockchain_pruning_seed()))
-      {
-        LOG_ERROR("Error retrieving blocks, missed " << missed_tx_ids.size()
-            << " transactions for block with hash: " << get_block_hash(bl.second)
-            << std::endl
-        );
-      }
+      LOG_ERROR("Error retrieving blocks, missed " << missed_tx_ids.size()
+          << " transactions for block with hash: " << get_block_hash(bl.second)
+          << std::endl
+      );
 
       // append missed transaction hashes to response missed_ids field,
       // as done below if any standalone transactions were requested
@@ -2923,7 +2918,7 @@ bool Blockchain::get_transactions(const t_ids_container& txs_ids, t_tx_container
 // Find the split point between us and foreign blockchain and return
 // (by reference) the most recent common block hash along with up to
 // BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT additional (more recent) hashes.
-bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, std::vector<crypto::hash>& hashes, std::vector<uint64_t>* weights, uint64_t& start_height, uint64_t& current_height, bool clip_pruned) const
+bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, std::vector<crypto::hash>& hashes, std::vector<uint64_t>* weights, uint64_t& start_height, uint64_t& current_height) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
@@ -2936,17 +2931,9 @@ bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qbloc
 
   db_rtxn_guard rtxn_guard(m_db);
   current_height = get_current_blockchain_height();
-  uint64_t stop_height = current_height;
-  if (clip_pruned)
-  {
-    const uint32_t pruning_seed = get_blockchain_pruning_seed();
-    if (start_height < tools::get_next_unpruned_block_height(start_height, current_height, pruning_seed))
-    {
-      MDEBUG("We only have a pruned version of the common ancestor");
-      return false;
-    }
-    stop_height = tools::get_next_pruned_block_height(start_height, current_height, pruning_seed);
-  }
+  // Every block is held in full (no stripes, PDM-Q7): the supplement runs
+  // to the current height whatever the peer asked for.
+  const uint64_t stop_height = current_height;
   size_t count = 0;
   const size_t reserve = std::min((size_t)(stop_height - start_height), (size_t)BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT);
   hashes.reserve(reserve);
@@ -2962,12 +2949,12 @@ bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qbloc
   return true;
 }
 
-bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, bool clip_pruned, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const
+bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
 
-  bool result = find_blockchain_supplement(qblock_ids, resp.m_block_ids, &resp.m_block_weights, resp.start_height, resp.total_height, clip_pruned);
+  bool result = find_blockchain_supplement(qblock_ids, resp.m_block_ids, &resp.m_block_weights, resp.start_height, resp.total_height);
   if (result)
   {
     cryptonote::difficulty_type wide_cumulative_difficulty = m_db->get_block_cumulative_difficulty(resp.total_height - 1);
@@ -6063,43 +6050,6 @@ leave:
   return true;
 }
 //------------------------------------------------------------------
-bool Blockchain::prune_blockchain(uint32_t pruning_seed)
-{
-  m_tx_pool.lock();
-  epee::misc_utils::auto_scope_leave_caller unlocker = epee::misc_utils::create_scope_leave_handler([&](){m_tx_pool.unlock();});
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  if (!m_db->prune_blockchain(pruning_seed))
-    return false;
-  // The confirmed prune is complete only with the output-metadata pass:
-  // stripe pruning alone leaves the txs_pqc_auths/txs_prunable rows that
-  // update_blockchain_pruning would otherwise free up to five hours later,
-  // and the console tells the operator to compact once this call returns.
-  return m_db->prune_tx_data(CRYPTONOTE_TX_PRUNE_DEPTH);
-}
-//------------------------------------------------------------------
-bool Blockchain::update_blockchain_pruning()
-{
-  m_tx_pool.lock();
-  epee::misc_utils::auto_scope_leave_caller unlocker = epee::misc_utils::create_scope_leave_handler([&](){m_tx_pool.unlock();});
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  if (!m_db->update_pruning())
-    return false;
-  if (m_db->get_blockchain_pruning_seed() && !m_db->prune_tx_data(CRYPTONOTE_TX_PRUNE_DEPTH))
-    return false;
-  return true;
-}
-//------------------------------------------------------------------
-bool Blockchain::check_blockchain_pruning()
-{
-  m_tx_pool.lock();
-  epee::misc_utils::auto_scope_leave_caller unlocker = epee::misc_utils::create_scope_leave_handler([&](){m_tx_pool.unlock();});
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  return m_db->check_pruning();
-}
-//------------------------------------------------------------------
 uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) const
 {
   PERF_TIMER(get_next_long_term_block_weight);
@@ -6408,8 +6358,6 @@ bool Blockchain::cleanup_handle_incoming_blocks(bool force_sync)
 
   CRITICAL_REGION_END();
   m_tx_pool.unlock();
-
-  update_blockchain_pruning();
 
   return success;
 }
