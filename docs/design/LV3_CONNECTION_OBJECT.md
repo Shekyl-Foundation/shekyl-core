@@ -20,6 +20,13 @@ boundary had been drawn **from a family name rather than from the work**, and a
 "first slice" that contained all of them was the round, not a slice. §1's
 first-slice argument is withdrawn at §1.
 
+**Re-anchored 2026-09-22.** `dev` has moved 52 commits past this document's
+pin, and **PR #821 deleted the stripe engine and the `pruning_seed` wire
+field**. Every claim this document makes about that field is now a record of a
+closed defect — see §2.8.8's banner. **The structural claims were re-verified
+at `fdf17b729` and hold**: the peerlist is 874 lines with zero
+connection-registry symbols, and no policy decision walks connections.
+
 **One part of this round's scope is NOT deferred:** E1 tier-1's diagnostic half
 and I8's remedy join the **alpha.9 cut** — see §2.10 and §2.9.4, and
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4 for the
@@ -690,6 +697,16 @@ fixed either.
 against observed behaviour before preferring or retaining the peer. `rg -n
 'm_pruning_seed|peer\.pruning_seed' src/` returning a comparison against blocks
 actually served would falsify "no observation resolves it."
+
+> **OVERTAKEN 2026-09-22 — PR #821 deleted the stripe engine and the
+> `pruning_seed` wire field outright** (`dev` `fdf17b729`; 311 stripe sites →
+> 4, all comments). **§2.8.7's two claimed-seed sites no longer exist**, so the
+> defect it reports is closed by deletion rather than by design. The finding,
+> the measurement below, and the correction to §2.8.6 are kept as the record:
+> **§2.8.6's amended statement — *no admission or eviction decision reads a
+> claimed endpoint* — is now true without qualification**, because the one
+> counter-example was removed. *Re-verified at `fdf17b729`:
+> `git grep -c should_drop_connection -- src/` returns 0.*
 
 ### 2.8.8 The fleet measurement behind §2.8.7 — `get_blockchain_pruning_seed()` is `0` on all six seeds
 
