@@ -154,12 +154,11 @@ t_rpc_command_executor::~t_rpc_command_executor()
   }
 }
 
-bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit, bool pruned_only) {
-  std::vector<std::string> argv{"print_peer_list", white && gray ? "both" : (white ? "white" : "gray"),
-    std::to_string(limit)};
-  if (pruned_only)
-    argv.emplace_back("pruned");
-  return run_rust_console(argv);
+bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit) {
+  // No `pruned` selector: per-peer pruning state left with the stripe engine
+  // (PDM-Q7), so the Rust console has nothing to filter on.
+  return run_rust_console({"print_peer_list", white && gray ? "both" : (white ? "white" : "gray"),
+    std::to_string(limit)});
 }
 
 bool t_rpc_command_executor::print_peer_list_stats() {
