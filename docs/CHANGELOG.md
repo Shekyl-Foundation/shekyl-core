@@ -212,7 +212,13 @@
   selection are Rust's (`shekyl_ct_balance::check_commitment_masks_for`,
   `MaskSubject`); `validate_miner_transaction` gains `total_burned`. The
   info RPC's `burn_pct` is over the derived supply. Census F10/F16/F17
-  amended; FL-R16a/b/c pins re-resolved, R16c BUILT.
+  amended; FL-R16a/b/c pins re-resolved, R16c BUILT. **Rule-60 deletions
+  (slice 4 Q2, ruled (a)):** CEN-F12's decomposed-denomination gate
+  (`if (version == 3)` on a hard-fork version that is always 1 — never ran),
+  `is_valid_decomposed_amount`, the CryptoNote denomination table and their
+  test; `check_output_types`' three dead Monero-era arms and its `hf_version`
+  parameter. Census F12 → bucket 3; the validator's denominator moves
+  153 → 152 (validator-enforced 150). No behaviour changes.
 - **The `Rebond` bond-post kind is renamed `Reinstate`, and lands with the
   immutable-bond ruling.** The wire discriminant stays `1` and every
   `SHEKYL_ARCHIVAL_*` FFI error-code **number** is unchanged. The old name was

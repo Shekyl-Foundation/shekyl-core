@@ -93,7 +93,7 @@ The census pins its C++ lines at `02c086f4b`; every 4.F pin has drifted
 | F9 | 1 | output keys canonical, prime-order, non-identity | `shekyl_ct_balance::check_output_keys` | `form` | **Land as adopted** |
 | F10 | 1 | commitment masks canonical, ≠ identity, ≠ G, ≠ `zeroCommit(amount)` | `shekyl_ct_balance::check_commitment_masks` | `form` | **Land as adopted** |
 | F11 | 1 | genesis (height 0) emission accepted as configured (`GENESIS_TX` per nettype); structure validated, amount not recomputed | none in Rust (`GENESIS_TX` lives in `cryptonote_config.h:367`/`:501`/`:512`) | `validate` | **Two halves** — (a) *amount not recomputed*: the genesis arm of F13–F18, a `connecting.is_zero()` short-circuit, lands here; (b) *as configured*: the genesis block per network is release-carried data of `ReleaseAnchors`' kind — **§8 Q3** |
-| F12 | 4 | decomposed-denomination gate is **dead code** (`version == 3` where `version` is the HF version, always 1) | — | — | **Disposition, not a port** (§8 Q2): a dead branch has no fixture that fires |
+| F12 | **3** (was 4) | decomposed-denomination gate was **dead code** (`version == 3` where `version` is the HF version, always 1) | — | — | **RULED Q2 (a), 2026-09-21; DELETED (P4).** Branch, predicate, table, header declaration and `canonical_amounts.cpp` gone; census row → bucket 3; registry variant removed; denominator 153 → 152 |
 | F13 | 1 | base subsidy `(MONEY_SUPPLY − already_generated) >> 21`, tail floor | `emission::base_block_reward` | `validate` | **Land** — a definition row (like D4): operand `block_at(tip).coins_generated` (view grows), value carried on the verdict |
 | F14 | 1 | weight `> 2·median` rejects; `== 2·median` accepted at zero subsidy (recorded divergence) | `emission::paid_block_reward` (`apply_weight_penalty`) | `validate` | **Blocked on G6** (the median) — or pulled forward, §8 Q1 |
 | F14b | 2 | the penalty curve | same | `validate` | **Blocked on G6** |
@@ -162,7 +162,7 @@ question turns a judgement per site into a test.
 | S10 | `blockchain.cpp:1509` | `block_height = txin_gen.height` — `validate_miner_transaction` reads the **claim**, safe only because `prevalidate` ran F5 first | **RULE** (operand source by ordering) | F11, F4, F6 | Moot in Rust: `cx.connecting` is the operand; F5 checks the claim. Recorded so the ordering dependency does not get re-created |
 | S11 | `blockchain.cpp:1513`–`:1517` | `if (block_height == 0) { base_reward = money_in_use; return true; }` — genesis skips the reward and **defines** genesis's `coins_generated` as its coinbase sum | **RULE** (two facts) | F11, F13 | Port as F11's genesis arm; the `coins_generated` definition at height 0 is a store-side fact `connect` needs when `coins_generated` is derived — recorded on the S-CHAIN-W row |
 | S12 | `blockchain.cpp:1511` | `money_in_use += o.amount` **unchecked** — safe only because `check_outs_overflow` (F7) ran first | ordering | F7, F18 | `checked_add` in Rust; the ordering is not carried |
-| S13 | `blockchain.cpp:1519`–`:1527` | `if (version == 3)` decomposed-denomination gate | **dead** | F12 | Q2 |
+| S13 | `blockchain.cpp:1519`–`:1527` | `if (version == 3)` decomposed-denomination gate | **dead** | F12 | Q2 (a) — **deleted (P4)** |
 | S14 | `blockchain.cpp:1529` | `median_weight = m_current_block_cumul_weight_median` — cached daemon state | **RULE** operand | F14, F14b | G6's derivation (§3 F4); no Rust source |
 | S15 | `blockchain.cpp:1534` (validation), `:1821` (template) | `circulating_supply = already_generated_coins` — the **definition** of F17's "circulating supply" operand, **gross** emission ignoring burn, assigned at two sites | **RULED DEFECT** — FL-R16c (`FEE_LADDER_DERIVATION.md` §8, review round 4: *"the sweep must not walk past the pre-existing definitional bug … record — binds the implementing PR"*), rediscovered here as a fresh finding because the ruling's pins (`:1787`, `:2074`) had drifted | F17 | **Not an amendment — the binding disposition, landed (P1c):** `circulating_supply = coins_generated − total_burned`, derived **once** in `shekyl-economics::supply::CirculatingSupply::derive` from two store facts, `checked_sub` with the `None` arm a `SupplyInvariantViolation` (never a saturating zero: zero would sail through `calc_burn_pct`'s `total_supply == 0` guard and return a burn of `0` that looks valid). Both C++ sites pass `shekyl::supply_facts`; the accrual shares one read. The clamp at `burn.rs:83` **stays** — the two halves of FL-R16c are independent (the saturation is the perpetual tail's, not the gross operand's; `supply::tests::net_supply_exceeds_the_asymptote_under_the_tail`) — with its comment rewritten so it no longer names an operand that left |
 | S16 | `blockchain.cpp:1540` | `genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` | **RULE** as data | F21 | `RuleSet` parameter (Q5) |
@@ -276,8 +276,14 @@ ahead of the slice's rule commits and reviewable on its own.
   pins re-resolved and R16c → BUILT (both halves, independence recorded);
   FOLLOWUPS: the census-method question (owner: the census, §3.4). The
   remaining 4.F line pins (F1) are the slice PR's.
-- **P4** waits on Q2 (F12) — S23's three dead `check_output_types` arms go
-  with it, in one rule-60 commit.
+- **P4 — LANDED (Q2 ruled (a), 2026-09-21).** One rule-60 commit: F12's
+  gate, `is_valid_decomposed_amount`, `valid_decomposed_outputs[]`, the
+  header declaration and `tests/unit_tests/canonical_amounts.cpp` (which
+  exercised only them); S23's three dead `check_output_types` arms and the
+  `hf_version` parameter that selected among them (three callers). Census
+  F12 → bucket 3 with the deletion recorded in the row; `CenRow::F12`
+  removed; the gate reports `validator-enforced 150 / enforced 152`; §3.1
+  and Table 3 figures moved (`4.F 13/4/4/21`).
 
 
 ---
@@ -371,6 +377,7 @@ pin against the C++ (the 81-vector emission KAT already pins
   C++ deletion is the smallest rule-20-shaped touch there is, and bucket 3
   moves the denominator honestly (153 → 152, `validator-enforced` 151 →
   150) rather than counting a rule that never ran as ported.
+  **RULED (a), 2026-09-21. Landed as P4 (§3.1).**
 - **Q3 — genesis as the height-0 anchor (F6).** F11's "as configured" is a
   per-network block identity the binary carries — the definition of an
   anchor. **(a)** put `(0, genesis_hash)` into `ReleaseAnchors::for_network`

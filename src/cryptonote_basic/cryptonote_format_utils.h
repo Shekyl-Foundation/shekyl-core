@@ -100,7 +100,7 @@ namespace cryptonote
   bool get_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash& payment_id);
   bool get_encrypted_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash8& payment_id);
   void set_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const bool use_view_tags, const crypto::view_tag& view_tag, tx_out& out);
-  bool check_output_types(const transaction& tx, const uint8_t hf_version);
+  bool check_output_types(const transaction& tx);
   /// The tx_extra PQC field shape rule (GENESIS_TX_WIRE_FORMAT.md §9.6a as
   /// ruled 2026-09-05; census CEN-I19): with n = vout.size(), exactly one 0x06
   /// KEM-ciphertext field of 1120·n bytes and exactly one 0x07 leaf-hash
@@ -274,7 +274,6 @@ namespace cryptonote
   void get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes, crypto::hash& h);
   crypto::hash get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes);
   crypto::hash get_tx_tree_hash(const block& b);
-  bool is_valid_decomposed_amount(uint64_t amount);
   void get_hash_stats(uint64_t &tx_hashes_calculated, uint64_t &tx_hashes_cached, uint64_t &block_hashes_calculated, uint64_t & block_hashes_cached);
 
 #define CHECKED_GET_SPECIFIC_VARIANT(variant_var, specific_type, variable_name, fail_return_val) \

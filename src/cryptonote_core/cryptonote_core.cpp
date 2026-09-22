@@ -867,7 +867,7 @@ namespace cryptonote
       return false;
     }
 
-    if (!check_output_types(tx, hf_version))
+    if (!check_output_types(tx))
     {
       MERROR_VER("tx does not use valid output type(s)");
       tvc.m_verifivation_failed = true;

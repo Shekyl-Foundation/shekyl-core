@@ -1441,7 +1441,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
     return false;
   }
 
-  CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
+  CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
   // CEN-I19: the coinbase carries its outputs' 0x06 / 0x07 fields like every
   // other transaction (construct_miner_tx emits both); the shape rule runs
   // here because the coinbase never passes core::check_tx_semantic.
@@ -1518,15 +1518,6 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     // prevalidate_miner_transaction and accept the configured amount here.
     base_reward = money_in_use;
     return true;
-  }
-
-  if (version == 3) {
-    for (auto &o: b.miner_tx.vout) {
-      if (!is_valid_decomposed_amount(o.amount)) {
-        MERROR_VER("miner tx output " << print_money(o.amount) << " is not a valid decomposed amount");
-        return false;
-      }
-    }
   }
 
   uint64_t median_weight = m_current_block_cumul_weight_median;
@@ -3341,7 +3332,7 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   }
 
   // require view tags on outputs
-  if (!check_output_types(tx, hf_version))
+  if (!check_output_types(tx))
   {
     tvc.m_invalid_output = true;
     return reject_form(tvc);

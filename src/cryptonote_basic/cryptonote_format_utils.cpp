@@ -52,29 +52,6 @@ using namespace epee;
 
 using namespace crypto;
 
-static const uint64_t valid_decomposed_outputs[] = {
-  (uint64_t)1, (uint64_t)2, (uint64_t)3, (uint64_t)4, (uint64_t)5, (uint64_t)6, (uint64_t)7, (uint64_t)8, (uint64_t)9, // 1 piconero
-  (uint64_t)10, (uint64_t)20, (uint64_t)30, (uint64_t)40, (uint64_t)50, (uint64_t)60, (uint64_t)70, (uint64_t)80, (uint64_t)90,
-  (uint64_t)100, (uint64_t)200, (uint64_t)300, (uint64_t)400, (uint64_t)500, (uint64_t)600, (uint64_t)700, (uint64_t)800, (uint64_t)900,
-  (uint64_t)1000, (uint64_t)2000, (uint64_t)3000, (uint64_t)4000, (uint64_t)5000, (uint64_t)6000, (uint64_t)7000, (uint64_t)8000, (uint64_t)9000,
-  (uint64_t)10000, (uint64_t)20000, (uint64_t)30000, (uint64_t)40000, (uint64_t)50000, (uint64_t)60000, (uint64_t)70000, (uint64_t)80000, (uint64_t)90000,
-  (uint64_t)100000, (uint64_t)200000, (uint64_t)300000, (uint64_t)400000, (uint64_t)500000, (uint64_t)600000, (uint64_t)700000, (uint64_t)800000, (uint64_t)900000,
-  (uint64_t)1000000, (uint64_t)2000000, (uint64_t)3000000, (uint64_t)4000000, (uint64_t)5000000, (uint64_t)6000000, (uint64_t)7000000, (uint64_t)8000000, (uint64_t)9000000, // 1 micronero
-  (uint64_t)10000000, (uint64_t)20000000, (uint64_t)30000000, (uint64_t)40000000, (uint64_t)50000000, (uint64_t)60000000, (uint64_t)70000000, (uint64_t)80000000, (uint64_t)90000000,
-  (uint64_t)100000000, (uint64_t)200000000, (uint64_t)300000000, (uint64_t)400000000, (uint64_t)500000000, (uint64_t)600000000, (uint64_t)700000000, (uint64_t)800000000, (uint64_t)900000000,
-  (uint64_t)1000000000, (uint64_t)2000000000, (uint64_t)3000000000, (uint64_t)4000000000, (uint64_t)5000000000, (uint64_t)6000000000, (uint64_t)7000000000, (uint64_t)8000000000, (uint64_t)9000000000,
-  (uint64_t)10000000000, (uint64_t)20000000000, (uint64_t)30000000000, (uint64_t)40000000000, (uint64_t)50000000000, (uint64_t)60000000000, (uint64_t)70000000000, (uint64_t)80000000000, (uint64_t)90000000000,
-  (uint64_t)100000000000, (uint64_t)200000000000, (uint64_t)300000000000, (uint64_t)400000000000, (uint64_t)500000000000, (uint64_t)600000000000, (uint64_t)700000000000, (uint64_t)800000000000, (uint64_t)900000000000,
-  (uint64_t)1000000000000, (uint64_t)2000000000000, (uint64_t)3000000000000, (uint64_t)4000000000000, (uint64_t)5000000000000, (uint64_t)6000000000000, (uint64_t)7000000000000, (uint64_t)8000000000000, (uint64_t)9000000000000, // 1 monero
-  (uint64_t)10000000000000, (uint64_t)20000000000000, (uint64_t)30000000000000, (uint64_t)40000000000000, (uint64_t)50000000000000, (uint64_t)60000000000000, (uint64_t)70000000000000, (uint64_t)80000000000000, (uint64_t)90000000000000,
-  (uint64_t)100000000000000, (uint64_t)200000000000000, (uint64_t)300000000000000, (uint64_t)400000000000000, (uint64_t)500000000000000, (uint64_t)600000000000000, (uint64_t)700000000000000, (uint64_t)800000000000000, (uint64_t)900000000000000,
-  (uint64_t)1000000000000000, (uint64_t)2000000000000000, (uint64_t)3000000000000000, (uint64_t)4000000000000000, (uint64_t)5000000000000000, (uint64_t)6000000000000000, (uint64_t)7000000000000000, (uint64_t)8000000000000000, (uint64_t)9000000000000000,
-  (uint64_t)10000000000000000, (uint64_t)20000000000000000, (uint64_t)30000000000000000, (uint64_t)40000000000000000, (uint64_t)50000000000000000, (uint64_t)60000000000000000, (uint64_t)70000000000000000, (uint64_t)80000000000000000, (uint64_t)90000000000000000,
-  (uint64_t)100000000000000000, (uint64_t)200000000000000000, (uint64_t)300000000000000000, (uint64_t)400000000000000000, (uint64_t)500000000000000000, (uint64_t)600000000000000000, (uint64_t)700000000000000000, (uint64_t)800000000000000000, (uint64_t)900000000000000000,
-  (uint64_t)1000000000000000000, (uint64_t)2000000000000000000, (uint64_t)3000000000000000000, (uint64_t)4000000000000000000, (uint64_t)5000000000000000000, (uint64_t)6000000000000000000, (uint64_t)7000000000000000000, (uint64_t)8000000000000000000, (uint64_t)9000000000000000000, // 1 meganero
-  (uint64_t)10000000000000000000ull
-};
-
 static std::atomic<unsigned int> default_decimal_point(CRYPTONOTE_DISPLAY_DECIMAL_POINT);
 
 static std::atomic<uint64_t> tx_hashes_calculated_count(0);
@@ -1019,52 +996,34 @@ namespace cryptonote
     return false;
   }
   //---------------------------------------------------------------
-  bool check_output_types(const transaction& tx, const uint8_t hf_version)
+  bool check_output_types(const transaction& tx)
   {
+    // One rule, no version dispatch (CEN-F8; E6 slice 4 §3.1 S23, ruled Q2
+    // (a)). This was a four-arm hard-fork ladder — `>= NG`, `> VIEW_TAGS`,
+    // `< VIEW_TAGS`, `== VIEW_TAGS` — of which exactly one arm was reachable:
+    // both constants are 1 and the hard-fork version is never below 1. The
+    // three Monero-era arms were rule-60 deletions ("when you encounter
+    // `if (version < N)` … delete the dead branch"); the `hf_version`
+    // parameter went with them, so a caller cannot select a rule that does
+    // not exist.
     for (const auto &o: tx.vout)
     {
-      if (hf_version >= HF_VERSION_SHEKYL_NG)
-      {
-        // txout_to_tagged_key is the sole output type from genesis (the
-        // claim-era txout_to_staked_key was retired with the confidential-
-        // staking cutover; GENESIS_TX_WIRE_FORMAT.md tag registry).
-        //
-        // LOAD-BEARING DOWNSTREAM (CEN-L11/H12): blockchain_db.cpp's
-        // curve-tree leaf collector handles exactly txout_to_tagged_key and
-        // the retained legacy txout_to_key arm, and THROWS on any other target
-        // rather than skipping the output. Admitting a variant outside those
-        // two without teaching the collector to build its leaf turns a widened
-        // rule into an abort at block connect. (The legacy arm is itself
-        // rule-60 deletion residue owned by the census §10 R5 queue; deleting
-        // it there narrows this pair to one.)
-        CHECK_AND_ASSERT_MES(
-          std::holds_alternative<txout_to_tagged_key>(o.target),
-          false, "wrong variant type (index " << o.target.index()
-            << "), expected txout_to_tagged_key in transaction id=" << get_transaction_hash(tx));
-      }
-      else if (hf_version > HF_VERSION_VIEW_TAGS)
-      {
-        CHECK_AND_ASSERT_MES(std::holds_alternative<txout_to_tagged_key>(o.target), false, "wrong variant type (index "
-          << o.target.index() << "), expected txout_to_tagged_key in transaction id=" << get_transaction_hash(tx));
-      }
-      else if (hf_version < HF_VERSION_VIEW_TAGS)
-      {
-        // require outputs to be of type txout_to_key
-        CHECK_AND_ASSERT_MES(std::holds_alternative<txout_to_key>(o.target), false, "wrong variant type (index "
-          << o.target.index() << "), expected txout_to_key in transaction id=" << get_transaction_hash(tx));
-      }
-      else  //(hf_version == HF_VERSION_VIEW_TAGS)
-      {
-        // require outputs be of type txout_to_key OR txout_to_tagged_key
-        // to allow grace period before requiring all to be txout_to_tagged_key
-        CHECK_AND_ASSERT_MES(std::holds_alternative<txout_to_key>(o.target) || std::holds_alternative<txout_to_tagged_key>(o.target), false, "wrong variant type (index "
-          << o.target.index() << "), expected txout_to_key or txout_to_tagged_key in transaction id=" << get_transaction_hash(tx));
-
-        // require all outputs in a tx be of the same type
-        CHECK_AND_ASSERT_MES(o.target.index() == tx.vout[0].target.index(), false, "non-matching variant types (index "
-          << o.target.index() << " and " << tx.vout[0].target.index() << "), "
-          << "expected matching variant types in transaction id=" << get_transaction_hash(tx));
-      }
+      // txout_to_tagged_key is the sole output type from genesis (the
+      // claim-era txout_to_staked_key was retired with the confidential-
+      // staking cutover; GENESIS_TX_WIRE_FORMAT.md tag registry).
+      //
+      // LOAD-BEARING DOWNSTREAM (CEN-L11/H12): blockchain_db.cpp's
+      // curve-tree leaf collector handles exactly txout_to_tagged_key and
+      // the retained legacy txout_to_key arm, and THROWS on any other target
+      // rather than skipping the output. Admitting a variant outside those
+      // two without teaching the collector to build its leaf turns a widened
+      // rule into an abort at block connect. (The legacy arm is itself
+      // rule-60 deletion residue owned by the census §10 R5 queue; deleting
+      // it there narrows this pair to one.)
+      CHECK_AND_ASSERT_MES(
+        std::holds_alternative<txout_to_tagged_key>(o.target),
+        false, "wrong variant type (index " << o.target.index()
+          << "), expected txout_to_tagged_key in transaction id=" << get_transaction_hash(tx));
     }
     return true;
   }
@@ -1583,13 +1542,6 @@ namespace cryptonote
     for(auto& th: b.tx_hashes)
       txs_ids.push_back(th);
     return get_tx_tree_hash(txs_ids);
-  }
-  //---------------------------------------------------------------
-  bool is_valid_decomposed_amount(uint64_t amount)
-  {
-    const uint64_t *begin = valid_decomposed_outputs;
-    const uint64_t *end = valid_decomposed_outputs + sizeof(valid_decomposed_outputs) / sizeof(valid_decomposed_outputs[0]);
-    return std::binary_search(begin, end, amount);
   }
   //---------------------------------------------------------------
   void get_hash_stats(uint64_t &tx_hashes_calculated, uint64_t &tx_hashes_cached, uint64_t &block_hashes_calculated, uint64_t & block_hashes_cached)
