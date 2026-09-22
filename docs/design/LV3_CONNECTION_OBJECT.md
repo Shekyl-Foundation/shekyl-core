@@ -480,6 +480,78 @@ for a new field the no-genesis-deadline conclusion is void**. So the round has a
 reason to prefer the hairpin that is **structural, not merely cheaper**: it
 keeps I8 out of the pre-genesis bucket.
 
+### 2.7.7 RETRACTION — non-transitivity is not the defect; what survives is narrower
+
+**Retracted 2026-09-22 (steering), and the retraction is mine to carry because
+the framing was load-bearing:** calling the non-transitivity of a peerlist
+advert a **defect** was wrong. **An advert has always meant *"I reached this,"*
+never *"you can reach this,"* and that is the honest posture for zero-trust
+gossip.** No stronger claim is available to anyone — so treating the weaker one
+as a flaw **imports a guarantee the network was never offering.**
+
+**What survives is sharper than what was retracted.** Both claims are
+non-transitive; they differ in whether they are **predictive**:
+
+| Hint | Non-transitive? | Predictive for the recipient? | Expected value |
+| --- | --- | --- | --- |
+| *"I reached this **listener** at this address"* | yes | **may hold** — the listener's reachability **outlives our session** | positive |
+| *"I reached this daemon at its **NAT-mapped source port**"* | yes | **known not to hold** — the mapping is **bound to our connection** | negative |
+
+**Same epistemic status, opposite expected value.** The peerlist is a **hint
+mechanism**, and feeding it hints *known* to be false **degrades it without
+lying about its semantics.** That is the whole objection, and it is a quality
+argument rather than a truth argument.
+
+**The code already draws exactly this line, which is why the objection lands
+nowhere.** `derive_advertised_endpoint`
+([`net_node.cpp:398-399`](../../src/p2p/net_node.cpp#L398)) takes **the observed
+host and the claimed listen port as separate inputs**, and the call site's own
+comment states the reasoning
+([`net_node.inl:2872-2881`](../../src/p2p/net_node.inl#L2872)): *"only its PORT
+is admissible: the host is the one this node OBSERVED on the socket … the
+derived entry enters GRAY (white is earned by an actual outbound dial)."*
+**The claimed port might be true; the observed source port is known not to be**
+— and the observed source port is never advertised.
+
+### 2.7.8 THREE PORTS — the vocabulary, because conflating them is how this got muddled
+
+| Port | What it is | Who can use it | Advertised? |
+| --- | --- | --- | --- |
+| **observed source port** | part of the 4-tuple; **distinguishes connections** | us, for this connection only | **never** |
+| **claimed listen port** | what the peer says it listens on; goes in the advert; **may be true**, and **promotion resolves it** | anyone, if true | yes |
+| **local bind port** | what we listen on | — | via our own advert |
+
+**The consequence for admission, and it is the smallest possible change:**
+admission counts **connections**, and **the 4-tuple already distinguishes them
+at the socket layer.** So *"count connections, not hosts"* **needs no new
+information at all** — only the **removal of a collapse**. That is why §2.9.4's
+remedy is a deletion rather than a mechanism: the information admission needs
+was never missing.
+
+### 2.7.9 Divergent white lists are a PRIVACY PROPERTY, not an accepted cost
+
+**Stated as a principle in its own right**, because it is what makes topology
+inference expensive rather than free, and because the earlier framing treated
+divergence as a tolerable side-effect of local verification.
+
+**A globally consistent peerlist would mean any ONE node's view reveals the
+whole topology.** Divergence means an observer must **aggregate many nodes** to
+reconstruct it — and **each node's view is partly a function of its own dial
+history, which is private and unreproducible.** An observer cannot recompute
+what it did not watch.
+
+**The inherited code already reasons this way at one site and not as a
+principle:** `get_peerlist_head`'s `anonymize` path
+([`net_peerlist.h:282`](../../src/p2p/net_peerlist.h#L282)) randomises which
+white entries it returns specifically so a repeat query cannot be differenced,
+citing Cao et al. **That is this principle applied to one query. The principle
+is more general, and stating it is what stops a future "consistency"
+optimisation from being read as an improvement.**
+
+**Load-bearing consequence:** *any proposal that makes white lists converge
+across nodes is a privacy regression*, and must be refused on that ground —
+not traded against the sync or diagnostic convenience that motivates it.
+
 ## 2.8 ROUND 2 — the classification, and what it does and does not settle
 
 **First pass by Rick, scrutinised here. The answer survives, with one consumer
@@ -877,6 +949,74 @@ contribute to.
 4. **Build the connection object anyway — for LV-3, not for I8.** The Rust
    migration needs it regardless. See §2.9.7, because this does change what the
    object *is*.
+
+### 2.9.4a A SECOND, INDEPENDENT derivation — from the promotion boundary
+
+**§2.9.3 reached the deletion from §6.5's measured adversary. This reaches it
+from the peerlist's own promotion rule, and the two share no premise.**
+
+**The proof.** Promotion to white requires a **successful outbound dial from us
+to a claimed listen port**. Therefore an inbound flood from one IP produces **at
+most one gray entry per host**, and each one costs the attacker a dial that
+either
+
+- **resolves to a real listener they control** — in which case they are an
+  **ordinary peer occupying one white slot, priced at one host**; or
+- **fails, and the entry is evicted.**
+
+> **So the white list is already defended at the promotion boundary,
+> independently of admission.** The per-IP inbound cap is **not protecting
+> peerlist integrity at all.** It protects nothing but **slots** — and a total
+> ceiling protects slots better, because it bounds the resource directly
+> instead of keying on a proxy with an inverted ratio (§2.9.2).
+
+**Verified at `dev` `fdf17b729`, not assumed — all four white-promotion sites
+require an outbound dial:**
+
+| Site | Path | Guard |
+| --- | --- | --- |
+| [`net_node.inl:1282`](../../src/p2p/net_node.inl#L1282) | `do_handshake_with_peer` | **we initiated** — the function exists only for dials we make |
+| [`:1342`](../../src/p2p/net_node.inl#L1342) | timed sync | **explicit** — `if(!context.m_is_income)` |
+| [`:1585`](../../src/p2p/net_node.inl#L1585) | outbound connect completion | the address is the one **we dialled** |
+| [`:3283`](../../src/p2p/net_node.inl#L3283) | `gray_peerlist_housekeeping` | the gray **probe**, which dials out; the failing arm evicts |
+
+**And the code supplies a third leg the proof does not need but gets anyway:
+gray is never disclosed.** `get_peerlist_head` reads the **white list only**
+([`net_peerlist.h:282`](../../src/p2p/net_peerlist.h#L282)), and
+[`net_node.inl:994`](../../src/p2p/net_node.inl#L994) says so in those words.
+**So an inbound flood's gray entries never reach any other node's view** — they
+poison nothing but our own, for one dial each.
+
+**Two independent derivations agreeing is a cross-check, not a restatement** —
+the same kind that validated the constant fold in §7.2 of the round doc, where
+a predicted simplification matched a landed one line for line. §2.9.3 could have
+been wrong about the measured adversary and this argument would still hold;
+this one could be wrong about promotion and §2.9.3 would still hold.
+
+### 2.9.4b The admission argument in PROOF form, not posture form
+
+**Sharpened 2026-09-22.** The reason to admit two connections from one IP on
+different ports is **not** that they are probably benign. *"Don't assume
+attack"* is a **posture, and postures erode under review.** The actual reason
+is stronger and survives an adversarial reading:
+
+> **No discriminator exists, and no consequence follows either way.**
+>
+> - **Neither case can reach the white list** — promotion needs our outbound
+>   dial (§2.9.4a).
+> - **Neither buys observation** the first-spy adversary does not already have
+>   at **one** edge (§2.9.3: the measured supernode opens exactly one inbound
+>   edge per victim and a cap of `1` admits it).
+> - **Both are bounded by the same ceiling** — the resource bound, which is
+>   what actually constrains them.
+
+***"We can't tell, and it doesn't matter"* is a proof. *"Don't be paranoid"* is
+a posture.** The first is what belongs in a ruling.
+
+**The whole residual, stated so it is not mistaken for an open question:** once
+the cap goes, the one thing genuinely unbounded is **resources** — which is the
+ceiling's job, and a **measurement** (§2.9.4 arm 2), not a judgement. There is
+no second residual.
 
 ### 2.9.5 The eviction deferral, stated as rule 22 requires
 

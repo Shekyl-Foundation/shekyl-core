@@ -286,6 +286,44 @@ boundaries are drawn once.
 
 ---
 
+### 5.1 A constraint cluster T inherits — NN is SELECTED by the foundations, not permitted by them
+
+**Recorded 2026-09-21/22 (steering), and it changes how a later proposal must be
+refused rather than what T builds.**
+
+PWD-T1 specifies a **Noise `NN`** handshake — unauthenticated, no static keys.
+That has read as a **cost accepted** for simplicity. It is not. **The
+foundations select it:**
+
+| Foundation | Consequence |
+| --- | --- |
+| **Each peer owns its own white list** ([`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.7.9) | there is **no global registry** to anchor identities against |
+| **Reachability carries no identity** — an endpoint is a hypothesis about where a peer can be dialed, not a name (PWD-I1, `p2p_protocol_defs.h`) | there are **no static keys** for a handshake to authenticate |
+
+**An authenticated handshake variant would need exactly the durable per-peer key
+material that PWD-I1 deleted `peer_id` to eliminate** — a stored identifier keyed
+to an address, which is the shape the design forbids. So `NN` **falls out of the
+foundations rather than being a compromise against them.**
+
+> **The load-bearing consequence:** the unauthenticated property is
+> **load-bearing, not tolerated.** Anything later that wants to **authenticate a
+> peer is asking to reintroduce identity**, and must be **refused on that
+> ground** — not on cost, not on complexity, and not on "we could but it isn't
+> worth it."
+
+**Why the distinction is not pedantic:** a refusal on cost **expires** the
+moment someone finds a cheaper construction, and a reviewer reading "too
+complex" will reasonably propose a simpler authenticated variant. A refusal on
+**identity** does not expire, because the cheaper construction has the same
+defect. *This is rule 21's shape: reject now with a reopening criterion that
+names the real condition* — and the real condition here is **a design in which
+peers have durable identities**, which the mission's privacy commitment refuses
+independently.
+
+**What this does NOT settle:** whether T's remaining work crosses LV-3's seam
+(§5, still open). This is a constraint on *what T may become*, not an answer to
+*when it lands*.
+
 ## 5.5 Sequencing ruled 2026-09-21 — land, then design
 
 **Ruled (Rick):** land PR #812 first, then run a **real design round (or
