@@ -1174,7 +1174,7 @@ General key-value store for database-level metadata.
 |---|---|---|
 | `"version"` (NUL-terminated) | `uint32_t` | Database schema version — tracks `#define VERSION` in `db_lmdb.cpp` (the header of this document names the current value; a third copy here just drifts) |
 | `"archival_prune_watermark_epoch"` | `uint64_t` | The retention prune's monotonic receipt (C2-R1b-Q1c, v12): highest `prune_below_epoch` ever applied, written in the prune's own txn before its deletions. The pop floor's source (`pop_target_allowed`). One writer, never lowered, **exempt from pop reversal** — unlike `archival_frozen_shard_count`, this key records destruction a pop cannot undo |
-| `"pruning_seed"` (NUL-terminated) | `uint32_t` | Blockchain pruning seed |
+| `"pruning_seed"` (NUL-terminated) | `uint32_t` | ~~Blockchain pruning seed~~ **RETIRED 2026-09-21** (`PDM-Q7`: the stripe engine is deleted; no writer, no reader — a key left in an old datadir is ignored). Not a layout change, so no version bump. |
 | `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | Next block height for tx pruning |
 | `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | Height of last pruned tx data |
 | `"total_bonded_atomic"` (no NUL) | `uint64_t` | Global audit scalar: sum of per-`P` `bonded_total_atomic` (gate-4 §4.5). Credited on JoinMarket `bond_credit`; debited on Unbond/slash connect paths |
@@ -1184,7 +1184,7 @@ General key-value store for database-level metadata.
 | Property | Value |
 |---|---|
 | Writers | Various — `set_total_bonded_atomic`, `set_total_burned`, pruning code (`migrate()` writes nothing — refuse-loudly since the Monero ladder deletion) |
-| Readers | Various — `get_total_bonded_atomic`, `get_total_burned`, `get_blockchain_pruning_seed`, etc. |
+| Readers | Various — `get_total_bonded_atomic`, `get_total_burned`, etc. (`get_blockchain_pruning_seed` deleted 2026-09-21) |
 | Introduced | Genesis (DB v0) |
 
 ---

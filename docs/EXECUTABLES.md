@@ -76,7 +76,6 @@ shekyld [options] [command]
 | `--out-peers <n>` | Maximum outbound connections |
 | `--in-peers <n>` | Maximum inbound connections |
 | `--no-igd` | Disable UPnP port forwarding |
-| `--prune-blockchain` | Enable blockchain pruning |
 | `--offline` | Run without P2P networking |
 | `--ban-list <file>` | File of IPs to ban |
 | `--max-txpool-weight <bytes>` | Maximum transaction pool size |
@@ -141,8 +140,6 @@ shekyld --non-interactive --rpc-restricted-bind-port 11030 \
 # Use a custom data directory
 shekyld --data-dir /mnt/ssd/shekyl-data
 
-# Pruned node (saves ~2/3 disk space)
-shekyld --prune-blockchain
 ```
 
 ---
@@ -555,10 +552,11 @@ FCMP++ transactions).
 ### `shekyl-mdb-copy`
 
 Compacts a stopped daemon's LMDB database by copying it without its free
-pages (upstream LMDB's `mdb_copy`, built from the vendored source). Pruning
-itself happens inside the daemon (`--prune-blockchain`, or the
-`prune_blockchain` command); an in-place prune marks pages free without
-shrinking the file, and this tool reclaims that space. You temporarily need
+pages (upstream LMDB's `mdb_copy`, built from the vendored source). Discard
+itself happens inside the daemon, uniformly on every node (there is no
+pruning flag — the Monero-era stripe engine was deleted 2026-09-21,
+`PDM-Q7`); an in-place discard marks pages free without shrinking the file,
+and this tool reclaims that space. You temporarily need
 disk space for both copies.
 
 ```bash

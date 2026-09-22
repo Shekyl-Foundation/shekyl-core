@@ -630,7 +630,7 @@ below is written out so the partition is a set, not a description of one.
 | **S-ARCH** | Archival reads/writes reached from `blockchain.cpp` | 18 | `archival_bond_all_last_served_epochs` `archival_bond_good_through` `archival_bond_holds_shard` `archival_bond_join_epoch` `archival_bond_last_served_epochs` `archival_serve_credit_pass_count` `archival_shard_freeze_height` `gather_archival_emission_epoch_snapshot` `get_archival_alt_attestation_witness` `get_archival_attestation_witness_at_height` `get_archival_bond_hybrid_pubkey` `get_archival_bond_value` `get_archival_last_slash_epoch` `get_archival_prune_watermark_epoch` `get_archival_r_market` `get_archival_shard_segment_at_height` `set_archival_serve_credit_bit` `store_archival_alt_attestation_witness` | **7** — Largest surface (18) and **gated on the P0b journal audit** — its write paths are the ones whose atomicity is still being characterised. Extracting before that audit ports an unaudited contract. | Cursor surface for retention (E4) |
 | **S-POOL** | Tx pool | 8 | `add_txpool_tx` `for_all_txpool_txes` `get_txpool_tx_blob` `get_txpool_tx_count` `get_txpool_tx_meta` `remove_txpool_tx` `txpool_tx_matches_category` `update_txpool_tx` | **8** — No consensus state and no dependency on the chain surfaces, so it can parallelize with 4–7 if there is capacity. Ordered here rather than earlier because it is privacy-sensitive (Dandelion++) and deserves attention that is not competing with the consensus path. | Privacy-sensitive (Dandelion++) |
 | **S-ALT** | Alt chain | 6 | `add_alt_block` `drop_alt_blocks` `for_all_alt_blocks` `get_alt_block` `get_alt_block_count` `remove_alt_block` | **9** — Alt-chain storage depends on both chain surfaces being settled; its reorg path is the one place both are exercised together. |  |
-| **S-PRUNE** | Pruning | 6 | `check_pruning` `get_blockchain_pruning_seed` `pop_target_allowed` `prune_blockchain` `prune_tx_data` `update_pruning` | **NOT EXTRACTED** — five of the six are the Monero-era stripe engine, superseded before they can be ported (see the PDM note below). `pop_target_allowed` **dissolved 2026-09-15 (S-CHAIN-W SCW-7)**: pop-ability is "does `undo_log[h]` exist", so the retention prune that eventually lives here inherits a contract before it has a home — **it deletes `undo_log` rows below its watermark in its own transaction, and the watermark may not go shallower than `D_max` blocks below the tip** (`ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q11, **RULED 2026-09-18** — `D_max = 720` PROVISIONAL): undo-log retention ≥ `D_max`, or a legal reorg returns `StoreCannot::PopBelowFloor`. Until this surface lands the floor is genesis and that refusal is unreachable — which is why the constraint is written on this row now rather than discovered by the implementation that picks the watermark. [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) §5.4. **Plan doc owed before the first increment (`PDM-Q-F31`, 2026-09-17, rule 26):** this row now carries two contracts (SCW-7's floor; `PDM-Q-F26`'s three-leg hash-row invariant) and is the landing surface for the **store-side** items of [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §8 — discard predicate, ~~retention exceptions~~ (struck 2026-09-18: Q9 ruled no daemon holds any), undo-log floor, `pqc_auths` discard, `W` in D11; **not** F27's below-anchor mode (E6) or F28's wire field (`LV-`/`PWC-`) — with — until 2026-09-18 — no `DRS_E*_SPRUNE.md`. E1 got its plan before its writers; so does this. **Skeleton landed 2026-09-18 (a skeleton, `Status: SKELETON, not a plan` — the plan itself is still owed):** [`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md) — predicate (Q2, no exceptions — Q9 RULED on #775: no daemon holds retention exceptions, all daemons prune uniformly), horizons, the store invariant (three legs landed, A4's fourth owed), Q3's instrument, D10/D11, the serve-credit precondition, named inputs, C++ deletion timing; filename provisional until DRS numbers the increment. The plan itself is still DRS-E's; its `PDM-Q1` gate cleared 2026-09-18 (Q1 RULED), so it may open. FOLLOWUPS row carries the falsifier. | Bootstrap / prune tools |
+| **S-PRUNE** | Pruning | 6 | ~~`check_pruning` `get_blockchain_pruning_seed` `prune_blockchain` `update_pruning`~~ (**DELETED from C++ 2026-09-21**, `PDM-Q7`) `pop_target_allowed` `prune_tx_data` | **NOT EXTRACTED** — four of the six were the Monero-era stripe engine, superseded before they could be ported and now gone (see the PDM note below and its 2026-09-21 update); `prune_tx_data` is Shekyl's tx-data discard and dies with the C++ store. `pop_target_allowed` **dissolved 2026-09-15 (S-CHAIN-W SCW-7)**: pop-ability is "does `undo_log[h]` exist", so the retention prune that eventually lives here inherits a contract before it has a home — **it deletes `undo_log` rows below its watermark in its own transaction, and the watermark may not go shallower than `D_max` blocks below the tip** (`ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q11, **RULED 2026-09-18** — `D_max = 720` PROVISIONAL): undo-log retention ≥ `D_max`, or a legal reorg returns `StoreCannot::PopBelowFloor`. Until this surface lands the floor is genesis and that refusal is unreachable — which is why the constraint is written on this row now rather than discovered by the implementation that picks the watermark. [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) §5.4. **Plan doc owed before the first increment (`PDM-Q-F31`, 2026-09-17, rule 26):** this row now carries two contracts (SCW-7's floor; `PDM-Q-F26`'s three-leg hash-row invariant) and is the landing surface for the **store-side** items of [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §8 — discard predicate, ~~retention exceptions~~ (struck 2026-09-18: Q9 ruled no daemon holds any), undo-log floor, `pqc_auths` discard, `W` in D11; **not** F27's below-anchor mode (E6) or F28's wire field (`LV-`/`PWC-`) — with — until 2026-09-18 — no `DRS_E*_SPRUNE.md`. E1 got its plan before its writers; so does this. **Skeleton landed 2026-09-18 (a skeleton, `Status: SKELETON, not a plan` — the plan itself is still owed):** [`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md) — predicate (Q2, no exceptions — Q9 RULED on #775: no daemon holds retention exceptions, all daemons prune uniformly), horizons, the store invariant (three legs landed, A4's fourth owed), Q3's instrument, D10/D11, the serve-credit precondition, named inputs, C++ deletion timing; filename provisional until DRS numbers the increment. The plan itself is still DRS-E's; its `PDM-Q1` gate cleared 2026-09-18 (Q1 RULED), so it may open. FOLLOWUPS row carries the falsifier. | Bootstrap / prune tools |
 
 **This is analysis, and it stops here (CSR-4, ruled 2026-09-01, status line
 §0).** DRS-C does not ship as C++ refactor PRs. The partition is the scoping
@@ -656,6 +656,21 @@ selection. So S-PRUNE's order is **not extracted**, not "later" — and the
 distinction is load-bearing, because two lanes read rules 60/16 as licence to
 delete that code and #723 overturns that reading.
 
+**UPDATE 2026-09-21 — the engine is deleted, and the reading above is
+superseded by the round's own rulings.** `PDM-Q7` (RULED 2026-09-18) removed
+the stripe engine completely as *design*, and `PDM-Q-S0` — read at source —
+forbids *implementing* set-B discard in the C++ daemon, not deleting the
+inherited engine. The trigger for deleting now rather than at `DRS-E*` was
+the wire half: `pruning_seed` on `CORE_SYNC_DATA` and every peerlist entry
+was `PWD-I1`'s forbidden shape with eight free marker values against a
+uniformly-zero fleet, and it does not die with the store — LV-2 had already
+ported it into `shekyl-levin`. Deleted on `feat/pruning-seed-wire-deletion`:
+`prune_worker`, the four engine methods, `common/pruning.{h,cpp}`,
+`CRYPTONOTE_PRUNING_*`, both CLI flags, stripe-aware sync and peer
+selection, the wire field in both languages, the RPC readouts (3.35).
+`prune_tx_data` and the now write-never `txs_prunable_tip` table stay and
+die with the C++ store. Gate: `scripts/ci/check_no_stripe_engine.sh`.
+
 **Grounding, stated because it changes how much this is worth relying on:**
 `PDM-Q-S0` and `PDM-Q7` are ruled, but **PR #723 is OPEN and unmerged as of
 2026-09-13** — `ARCHIVAL_PRUNED_DAEMON_MODE.md` does not exist on `dev`, which
@@ -663,9 +678,10 @@ is why it is named here in prose rather than linked. Verified against the
 round's own text on `docs/pruned-daemon-mode-round`, not from a relayed summary.
 
 **The supersession does not cover the whole surface, and the remainder is a
-scoping problem this note creates rather than solves.** Five methods
+scoping problem this note creates rather than solves.** Four methods
 (`check_pruning`, `get_blockchain_pruning_seed`, `prune_blockchain`,
-`prune_tx_data`, `update_pruning`) are stripe-era and die with it.
+`update_pruning`) were stripe-era and are deleted (2026-09-21);
+`prune_tx_data` is Shekyl's own and dies with the store.
 `pop_target_allowed` is **not** — it answers a question about Shekyl's own
 archival prune watermark (C2-R1b-Q1c), which PDM does not retire. Parked in a
 surface that is never extracted, it becomes a method the pop path needs and no
@@ -2522,7 +2538,9 @@ reasons row for row** — two instruments, one field, cross-checked:
 >   every node today — the table is **never populated** and the delete is a
 >   tolerated no-op. Its *population*, not its call sites, is what ties it to
 >   the mechanism. That is a reason to ask whether it ports; it is **not** a
->   settled deletion, and nothing is reclassified on it here.
+>   settled deletion, and nothing is reclassified on it here. *(UPDATE
+>   2026-09-21: the guarded write is deleted with the stripe engine; the
+>   table is now write-never on every node and dies with the C++ store.)*
 > - **`output_metadata` — the stated reason does not cover it, and the correct
 >   one is a different shape.** It is not discarded content; it is content
 >   **created by discarding** — `store_output_metadata` is called from exactly

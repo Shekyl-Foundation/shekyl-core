@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### P2P wire, daemon RPC, CLI — the stripe engine is gone (`PDM-Q7`)
+
+- **`pruning_seed` is deleted from the P2P wire** — from `CORE_SYNC_DATA`
+  (the handshake) and from every peerlist entry, in the C++ daemon and in
+  `shekyl-levin`. It was a durable, address-keyed, self-asserted attribute
+  gossiped in every peerlist — the shape `PWD-I1` deleted `peer_id` for —
+  and with every honest node emitting `0` (verified across the seed fleet)
+  the eight other values the validator accepted were free markers for
+  topology tracing. Both wire homes were optional fields, so mixed fleets
+  interoperate in either direction; a peer that still sends the key is
+  decoded with the key ignored. The on-disk peerlist store moves `v8 → v9`
+  and an old `p2pstate.bin` is dropped on load, as with the `peer_id`
+  removal. Stripe-aware peer selection and sync gating go with it.
+- **`--prune-blockchain` and `--sync-pruned-blocks` are removed** from
+  `shekyld`; a config file naming either now fails to parse. Under archival
+  pruning every daemon discards the same data at the same depth (S-PRUNE,
+  Rust, `docs/design/DRS_E1_SPRUNE.md`); there is no per-operator pruning
+  posture to select, and the Monero stripe engine (`common/pruning.*`,
+  `prune_worker`, `CRYPTONOTE_PRUNING_*`, the 5-hour prune timer) is
+  deleted rather than carried to the store cutover.
+- **Daemon RPC 3.35:** `pruning_seed` leaves `get_peer_list`,
+  `get_connections` and `sync_info.peers`; `next_needed_pruning_seed`
+  leaves `sync_info`; the `prune_blockchain` JSON-RPC method and the
+  `prune_blockchain` / `check_blockchain_pruning` console commands are
+  removed (the method name stays REJECTED in the RK-8 registry). Console
+  `sync_info` drops its seed column; `print_pl` drops its `pruned` filter.
+- CI: `scripts/ci/check_no_stripe_engine.sh` keeps the engine and the
+  wire field from returning in either language.
+
 ### Daemon chain store
 
 - **DRS-E2 increment 1 — the ingest spine's first organs.** `shekyl-chain-ingest`

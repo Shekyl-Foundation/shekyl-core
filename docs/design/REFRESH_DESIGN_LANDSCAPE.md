@@ -300,7 +300,7 @@ prune they refer to.
 
 | Prune name | Where it lives | What it discards |
 | --- | --- | --- |
-| **Daemon-side `--prune-blockchain`** | full node | historical witness/proof data; keeps consensus state. Wallet refresh against pruned daemons works for current blocks; cold-sync requires `--no-prune` source for the wallet's birthday-to-tip range |
+| **Daemon-side discard** (was `--prune-blockchain`; the Monero-era stripe engine was deleted 2026-09-21 under `PDM-Q7` — every daemon now discards uniformly, S-PRUNE) | full node | historical witness/proof data; keeps consensus state. Wallet refresh against pruned daemons works for current blocks; cold-sync requires `--no-prune` source for the wallet's birthday-to-tip range |
 | **Archival prune (`--no-prune` policy)** | Foundation reference daemons | nothing; the archival role exists precisely so cold-sync clients have a `--no-prune` source to scan against (per [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) multi-source disposition) |
 | **RPC-server prune** | wallet-RPC server (the `wallet_rpc_server` cutover scope) | mempool / cache / response-buffer data; affects long-running RPC sessions, not on-chain validity |
 | **Wallet-side prune-by-birthday** | wallet client | blocks below `refresh_from_block_height`; the producer skips the prefix entirely when starting a refresh. P2 FOLLOWUPS entry on `dev` ("P2: wallet-birthday plumbing not wired into producer start-height") names this as a deferred V3.0 item |
@@ -314,14 +314,14 @@ independent axes:
   set of blocks fetched; it changes the fetch *concurrency*.
   Prune-by-birthday and prune-by-skip-to-height *do* change the
   set of blocks fetched (the prefix is dropped entirely).
-  Daemon-side `--prune-blockchain` does *not* change the set of
+  Daemon-side discard does *not* change the set of
   blocks fetched (the wallet still asks the daemon for every
   block in its range; pruning affects what data the daemon
   serves per block, not the block count).
 - **Scan less network bandwidth.** β internal batching reduces
   *latency* but not *bytes*. Prune-by-birthday reduces both
   bytes and latency for cold-sync. Daemon-side
-  `--prune-blockchain` reduces bytes per block but does not
+  discard reduces bytes per block but does not
   reduce the round-trip count.
 
 Under α, each block is fetched in one daemon RPC round-trip

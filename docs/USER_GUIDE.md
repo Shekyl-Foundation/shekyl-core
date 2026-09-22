@@ -58,7 +58,9 @@ Use the CLI tools when you want to:
   analysis). If your hardware is 32-bit-only — older Raspberry Pi Zero
   / Pi 1, pre-2005 x86 desktops, some embedded boards — Shekyl is not
   appropriate for it.
-- **Disk:** ~50 GB for a full node; ~10 GB with `--prune-blockchain`
+- **Disk:** ~50 GB for a full node (every node prunes the same way under
+  archival pruning once it lands; there is no pruning flag — see
+  `docs/design/ARCHIVAL_PRUNED_DAEMON_MODE.md`)
 - **RAM:** 4 GB minimum, 8 GB recommended during initial sync
 - **Network:** Reliable broadband; the initial sync downloads the full chain
 
@@ -121,7 +123,6 @@ file. The syntax is `optionname=value`, one per line. Boolean flags use
 data-dir=/var/lib/shekyl
 log-file=/var/log/shekyl/shekyld.log
 log-level=0
-prune-blockchain=1
 # RPC defaults to loopback. For your own wallet on another machine you
 # control, bind a view-only second listener (not a public remote node):
 # rpc-restricted-bind-port=11030
@@ -147,7 +148,6 @@ example.
 
 | Flag | Description |
 |------|-------------|
-| `--prune-blockchain` | Enable pruning (~95% storage reduction for old prunable data) |
 | `--db-sync-mode <mode>` | LMDB sync mode: `safe`, `fast`, `fastest` |
 | `--block-sync-size <n>` | Number of blocks per sync batch |
 
@@ -258,7 +258,6 @@ so scripts can check it without parsing the output.
 | `flush_txpool [txid]` | Remove transaction(s) from the pool |
 | `flush_cache [bad-txs\|bad-blocks]` | Clear internal caches |
 | `pop_blocks <n>` | Roll back the last N blocks |
-| `prune_blockchain` | Enable pruning on a non-pruned database |
 
 **Exit**
 
@@ -990,10 +989,11 @@ Export the blockchain to a portable file:
 
 ### `shekyl-mdb-copy`
 
-Pruning happens inside the daemon: start `shekyld` with `--prune-blockchain`,
-or run the `prune_blockchain` command in the daemon console. An in-place
-prune marks database pages as free without shrinking the file. To reclaim
-the disk space, stop `shekyld` and compact the database:
+There is no operator-selected pruning: under archival pruning every daemon
+discards the same data at the same depth, uniformly (the Monero-era
+`--prune-blockchain` stripe engine was deleted 2026-09-21). An in-place
+discard marks database pages as free without shrinking the file. To
+reclaim the disk space, stop `shekyld` and compact the database:
 
 ```bash
 mkdir /path/to/compacted
@@ -1092,8 +1092,8 @@ prompts for the current password, then the new one twice.
 
 - **Firewall:** Ensure port 11021 (P2P) is open for inbound connections, or
   use `--out-peers` to increase outbound connections.
-- **Disk space:** A full node needs ~50 GB. Use `--prune-blockchain` to
-  reduce to ~5 GB.
+- **Disk space:** A full node needs ~50 GB. There is no pruning flag;
+  every node prunes uniformly under archival pruning.
 - **Corrupted database:** Try `pop_blocks 100` in the daemon console to
   roll back recent blocks. As a last resort, delete the LMDB directory and
   resync.
