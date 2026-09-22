@@ -87,6 +87,24 @@ SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
 # moves only with a rule, never to make a run pass.
 MIN_CONSTRAINTS = 29
 
+# Tables the C++ no longer writes at all, with the put shape they carried
+# when they were last written. The classifying fact for a uint64-dupsort
+# INTEGERKEY table is its put; a table with no put has no fact, and this
+# gate treats a missing fact as red rather than as "unconstrained" — so a
+# table that legitimately lost its writer needs its last shape declared here,
+# by name, with the reason. Each entry is a reversion clause (rule 21): the
+# gate goes red if the table gains a put again (the entry must go) or leaves
+# the X-macro (the entry is stale), so the declaration cannot outlive either
+# of the facts it stands in for.
+WRITE_NEVER: dict[str, tuple[str, str]] = {
+    # `txs_prunable_tip`: only a stripe-pruned node ever wrote it, and the
+    # stripe engine is deleted (PDM-Q7, 2026-09-21). The delete in
+    # `remove_transaction_data` still addresses it by real tx_id key, as the
+    # deleted put did. The table stays in the X-macro until a layout bump
+    # drops it (DAEMON_REDB_STORE.md, S-PRUNE row).
+    "txs_prunable_tip": ("real", "PDM-Q7: the stripe engine's write is deleted; table dies at the next layout bump"),
+}
+
 # The value type may itself be generic — `Coded<BlockInfo>`, `Blob<BlockBody>`
 # (DAEMON_REDB_STORE.md §11.1(f)) — so it is matched up to the `=` rather than
 # to the first `>`. Keys are not generic but may be a **tuple** (`(u64, u64)`,
@@ -282,6 +300,14 @@ def selftest() -> None:
         got = classify_puts(puts)
         if got != want:
             failures.append(f"put fold {label}: expected {want!r}, got {got!r}")
+    # WRITE_NEVER: a declared shape must be a shape the rule function accepts
+    # (a typo here would silently classify nothing), and the declared table
+    # must be one the X-macro parse can find on this tree.
+    for wn_name, (wn_shape, _why) in WRITE_NEVER.items():
+        if wn_shape not in (PUT_ZEROKVAL, PUT_REAL_APPENDDUP, PUT_REAL):
+            failures.append(f"WRITE_NEVER[{wn_name!r}] declares unknown put shape {wn_shape!r}")
+        if wn_name not in (lmdb_facts()[0] or {}):
+            failures.append(f"WRITE_NEVER[{wn_name!r}] names a table the X-macro parse does not find")
     # The tuple parse: the key group must cross the inner comma.
     m = DEF_RE.search(
         'pub const X: TableDefinition<(u64, u64), Coded<OutKey>> = TableDefinition::new("x");'
@@ -337,6 +363,15 @@ def main():
     if not names:
         report([f"{LMDB.name}: parsed ZERO tables — subject missing"])
 
+    # A WRITE_NEVER entry names a table that must still exist in the X-macro:
+    # once a layout bump drops the table, the entry is a declaration about
+    # nothing and has to go with it.
+    for stale in sorted(set(WRITE_NEVER) - set(facts)):
+        failures.append(
+            f"{stale}: named in WRITE_NEVER ({WRITE_NEVER[stale][1]}) but no longer in the "
+            f"X-macro — the table is gone; remove the WRITE_NEVER entry"
+        )
+
     # Rust-only tables (schema.rs `RUST_ONLY_TABLES`) have no LMDB flags to
     # derive a key type from, so they are outside this gate's domain — but
     # only when named there. An unnamed extra is still red below: naming a
@@ -357,6 +392,16 @@ def main():
             )
             continue
         flags, cmps, _const, put = facts[name]
+        if name in WRITE_NEVER:
+            declared, why = WRITE_NEVER[name]
+            if put is not PUT_UNSEEN:
+                failures.append(
+                    f"{name}: declared write-never ({why}) but a `mdb_cursor_put` on its "
+                    f"cursor parsed as {put!r} — the table is written again; remove the "
+                    f"WRITE_NEVER entry and let the put classify it"
+                )
+                continue
+            put = declared
         key, value = key.strip(), value.strip()
         kinds = {k: fn for k, fn in cmps}
 
