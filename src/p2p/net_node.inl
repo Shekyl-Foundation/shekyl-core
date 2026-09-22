@@ -131,7 +131,6 @@ namespace nodetool
     command_line::add_arg(desc, arg_limit_rate_down);
     command_line::add_arg(desc, arg_limit_rate);
     command_line::add_arg(desc, arg_pad_transactions);
-    command_line::add_arg(desc, arg_max_connections_per_ip);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -237,11 +236,41 @@ namespace nodetool
       return true;
     }
 
-    if(has_too_many_connections(address))
-    {
-      MWARNING("CONNECTION FROM " << address.host_str() << " REFUSED, too many connections from the same address");
-      return true;
-    }
+    // The per-host INBOUND cap that used to sit here is DELETED (PWD-I7/I8,
+    // 2026-09-22). Read this before proposing one back -- the four reasons are
+    // independent, and three of them are measurements rather than judgements:
+    //
+    //  1. A host is not an operator. Under CGNAT one address is hundreds of
+    //     unrelated subscribers, so a small k is broken for them and a large k
+    //     bounds nothing. There is no value of k that works.
+    //  2. PWD-E4: a /24 is ~256 addresses for a few dollars a month, so the
+    //     cap priced an attacker at about three cents per evasion while a
+    //     CGNAT subscriber could not evade it at any price. The ratio is
+    //     inverted -- it bound the population it was not aimed at.
+    //  3. The only MEASURED inbound adversary in the project
+    //     (DAEMON_RELAY_PRIVACY.md 6.5, `simulate_transport_observation`)
+    //     opens exactly ONE inbound edge per victim. A cap of 1 admits it in
+    //     full, so the cap was orthogonal to the observation job, not weak at
+    //     it.
+    //  4. The white list is already defended at the PROMOTION boundary:
+    //     gossip lands in gray, gray is never disclosed, and every
+    //     white-promotion site runs after an OUTBOUND dial we made. An inbound
+    //     flood is therefore a set of leaves -- it cannot promote, cannot be
+    //     gossiped onward, and cannot be dialed back. The only thing it can
+    //     consume is a SLOT.
+    //
+    // A slot is a resource question, and the resource bound is the ceiling
+    // SIX LINES ABOVE this comment: same function, same inbound path, already
+    // zone-scoped. The cap was a redundant branch standing in for it while it
+    // was effectively disabled (`--in-peers` resolves to UINT32_MAX by
+    // default -- see the FOLLOWUPS row that owes its measured value).
+    //
+    // The zone exemption the deleted walk carried was a NECESSITY, not a gap:
+    // an anonymity zone's inbound peers all present as
+    // `tor_address::unknown()`, so a per-host cap of 1 there would have
+    // bounded the whole tor inbound population at one connection rather than
+    // one host. Anything that reintroduces host-keyed inbound admission
+    // inherits that problem too.
 
     return false;
   }
@@ -678,7 +707,6 @@ namespace nodetool
     // what a negative means, what `0` means, and what happens above u32::MAX
     // are RULES -- so they live in Rust with the rest of the policy, not here.
     // C++ passes the parsed argument through and stores the result.
-    max_connections = shekyl_host_inbound_resolve_cap(command_line::get_arg(vm, arg_max_connections_per_ip));
 
     return true;
   }
@@ -2221,7 +2249,33 @@ namespace nodetool
       return true;
 
     const auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
-    if (public_zone != m_network_zones.end() && get_incoming_connections_count(public_zone->second) == 0)
+    if (public_zone == m_network_zones.end())
+      return true;
+
+    // PWD-E1 tier 1, DIAGNOSTIC HALF ONLY. Report the STATE; the operator
+    // draws the line, the daemon does not. A verdict ("probably unreachable")
+    // would need a threshold, and that threshold is PWD-E8's, deferred on its
+    // own measurement -- so stating the observation is what lets this land
+    // without inventing one.
+    //
+    // Three operands, because no one of them is readable alone: a count with
+    // no window does not distinguish "unreachable" from "just started", and
+    // neither tells an operator whether the port they forwarded is the port
+    // this node actually advertises. That last one is the whole of the
+    // PWD-I7 incident's diagnosis, in a line.
+    //
+    // This does NOT stop advertising, classify, or infer anything about a
+    // remote peer -- all three are the deferred action half.
+    const size_t inbound_now = get_incoming_connections_count(public_zone->second);
+    const uint32_t announced = get_announced_port(epee::net_utils::zone::public_);
+    const auto uptime_min = std::chrono::duration_cast<std::chrono::minutes>(
+        std::chrono::steady_clock::now() - m_started_at).count();
+    MGINFO("p2p inbound state: " << inbound_now << " connection(s) held, over "
+        << uptime_min << " min of uptime; advertising "
+        << (announced ? "port " + std::to_string(announced) : std::string("NO port"))
+        << ", listening on " << m_listening_port);
+
+    if (inbound_now == 0)
     {
       if (public_zone->second.m_config.m_net_config.max_in_connection_count == 0)
       {
@@ -3204,52 +3258,6 @@ namespace nodetool
     }
 
     return true;
-  }
-
-  // PWD-I7: marshaling shim. This function owns the connection WALK -- the
-  // list is C++'s -- and nothing else. Which zones are host-capped, and
-  // whether a count exceeds the cap, are Rust's
-  // (`shekyl_host_inbound_zone_is_capped` / `shekyl_host_inbound_admits`).
-  // The comparison used to be written twice here, in the language whose
-  // default the forward cut exists to remove.
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::has_too_many_connections(const epee::net_utils::network_address &address)
-  {
-    // The zone byte crosses raw, so pin the mapping Rust's `InboundZone`
-    // assumes -- the same pins the zone-route family asserts in `send_txs`.
-    static_assert(std::is_same<std::underlying_type<epee::net_utils::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
-    static_assert(unsigned(epee::net_utils::zone::invalid) == 0, "invalid expected to be 0");
-    static_assert(unsigned(epee::net_utils::zone::public_) == 1, "public_ expected to be 1");
-    static_assert(unsigned(epee::net_utils::zone::i2p) == 2, "i2p expected to be 2");
-    static_assert(unsigned(epee::net_utils::zone::tor) == 3, "tor expected to be 3");
-
-    // Public-zone only, and the exemption is a NECESSITY. An anonymity zone's
-    // inbound peers all present as `tor_address::unknown()`, so a cap of 1
-    // there would bound the whole tor inbound population at one connection
-    // rather than one host. Read the Rust predicate's doc comment before
-    // reading this early return as a gap.
-    if (!shekyl_host_inbound_zone_is_capped(static_cast<std::uint8_t>(address.get_zone())))
-      return false; // Unable to determine how many connections from host
-
-    uint32_t count = 0;
-
-    m_network_zones.at(epee::net_utils::zone::public_).m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      if (cntxt.m_is_income && cntxt.m_remote_address.is_same_host(address)) {
-        count++;
-
-        // the only call location happens BEFORE foreach_connection list is
-        // updated, so the candidate is NOT in `count` -- which is what
-        // `shekyl_host_inbound_admits` documents and asserts.
-        if (!shekyl_host_inbound_admits(count, max_connections)) {
-          return false;
-        }
-      }
-
-      return true;
-    });
-    // the only call location happens BEFORE foreach_connection list is updated
-    return !shekyl_host_inbound_admits(count, max_connections);
   }
 
   template<class t_payload_net_handler>

@@ -447,7 +447,7 @@ namespace nodetool
         m_offline(false),
         is_closing(false),
         m_network_id(),
-        max_connections(shekyl_host_inbound_default_cap()) // PWD-I7: Rust-owned default (rule 20); was a bare `1`
+        m_started_at(std::chrono::steady_clock::now())
     {}
     virtual ~node_server();
 
@@ -517,11 +517,6 @@ namespace nodetool
 
     void change_max_out_public_peers(size_t count);
     uint32_t get_max_out_public_peers() const;
-    //! PWD-I7: the resolved per-host INBOUND cap (`--max-connections-per-ip`).
-    //! An observer, so a test can see that the default arrived from Rust
-    //! (`shekyl_host_inbound_default_cap`) rather than a C++ literal. The
-    //! RULE is not here -- see `has_too_many_connections`.
-    uint32_t get_max_connections_per_ip() const { return max_connections; }
     void change_max_in_public_peers(size_t count);
     uint32_t get_max_in_public_peers() const;
     virtual bool block_host(epee::net_utils::network_address address, time_t seconds = P2P_IP_BLOCKTIME, bool add_only = false);
@@ -649,7 +644,6 @@ namespace nodetool
     bool set_rate_down_limit(const boost::program_options::variables_map& vm, int64_t limit);
     bool set_rate_limit(const boost::program_options::variables_map& vm, int64_t limit);
 
-    bool has_too_many_connections(const epee::net_utils::network_address &address);
     //! \return True if this zone already holds an outbound connection to `adr`'s host.
     bool has_outbound_connection_to_host(network_zone& zone, const epee::net_utils::network_address& adr);
     size_t get_incoming_connections_count();
@@ -747,11 +741,14 @@ namespace nodetool
 
 
     boost::uuids::uuid m_network_id;
+
+    //! Process start, for the E1 tier-1 diagnostic in `check_incoming_connections`.
+    //! An inbound count is unreadable without the window it was observed over:
+    //! zero inbound after 40 seconds says nothing, zero after six hours does.
+    std::chrono::steady_clock::time_point m_started_at;
     cryptonote::network_type m_nettype;
 
     epee::net_utils::ssl_support_t m_ssl_support;
-
-    uint32_t max_connections;
   };
 
     const int64_t default_limit_up = P2P_DEFAULT_LIMIT_RATE_UP;      // kB/s
@@ -785,7 +782,6 @@ namespace nodetool
     extern const command_line::arg_descriptor<int64_t> arg_limit_rate_down;
     extern const command_line::arg_descriptor<int64_t> arg_limit_rate;
     extern const command_line::arg_descriptor<bool> arg_pad_transactions;
-    extern const command_line::arg_descriptor<int64_t> arg_max_connections_per_ip;
 }
 
 POP_WARNINGS

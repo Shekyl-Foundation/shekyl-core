@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+### P2P inbound admission — the per-host cap is deleted (`PWD-I7` / `PWD-I8`)
+
+- **`--max-connections-per-ip` is removed**, and with it
+  `has_too_many_connections`, the `max_connections` member, the
+  `HostInboundCap` / `InboundZone` policy in `shekyl-peer-policy`, and the four
+  `shekyl_host_inbound_*` FFI exports. `is_host_limit` is now the total inbound
+  ceiling check and nothing else. The flag is **retired by name** through
+  `REMOVED_FLAGS`, so a config file carrying it exits with a named message
+  explaining the replacement rather than a parse error.
+- **Why it went rather than changed value.** A host is not an operator: under
+  CGNAT one address is hundreds of unrelated subscribers, so a small cap is
+  broken for them and a large one bounds nothing — **no value works**. It was
+  measured partitioning honest co-residents on testnet: two daemons behind one
+  address held **disjoint** seed sets (4 and 2 of six, zero overlap), and one
+  starved entirely when the reachable set fell below what the partition needed.
+  Damage scales with nodes-per-address over reachable peers, not with
+  adversarial behaviour.
+- **What it was not doing.** Peerlist integrity is defended at the **promotion
+  boundary** — gossip lands in gray, gray is never disclosed, and every
+  white-list promotion follows an outbound dial this node made — so an inbound
+  flood can neither promote, nor be gossiped onward, nor be dialed back. The
+  only thing it consumes is a connection slot, and the bound for that is the
+  total ceiling six lines above the deleted call.
+- **Operator diagnostic (`PWD-E1` tier 1, diagnostic half).** The hourly
+  inbound check now reports a **state** rather than only a verdict: connections
+  held, uptime, and the port actually being advertised. A per-IP refusal was
+  previously visible only on the refusing node, which is what made a one-line
+  cause take an afternoon to find. It does not classify, threshold, or stop
+  advertising — that half needs `PWD-E8`'s measurement.
+- **Known residual:** `--in-peers` still resolves to `UINT32_MAX` at the
+  shipped default, so the remaining ceiling does not fire. Its value is a
+  **measurement** at the rule-76 floor, not a ruling, and is tracked in
+  `FOLLOWUPS.md`.
+
 ### P2P wire, daemon RPC, CLI — the stripe engine is gone (`PDM-Q7`)
 
 - **`pruning_seed` is deleted from the P2P wire** — from `CORE_SYNC_DATA`
