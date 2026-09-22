@@ -513,9 +513,12 @@ happened to compute the quantity the prose asserts.
 
 ### FL-V8 — The two supply clamps encode opposite terminal policies, and both are live (review round 2; anchors at a566a466)
 
-The FFI calls them twins (`rust/shekyl-ffi/src/legacy_core.rs:585`, "the
-emission-side twin of `shekyl_advance_already_generated`"). They are not
-twins:
+The FFI called them twins (at `a566a466` the doc comment on the
+capped-composition entry read "the emission-side twin of
+`shekyl_advance_already_generated`"; that comment went with the cap under
+FL-R12′, and the economics FFI has since moved from `legacy_core.rs` to
+`rust/shekyl-ffi/src/economics_ffi.rs:536`, where the surviving function's
+comment states the perpetual tail). They were not twins:
 
 - **`blockchain.cpp:6420`** advances the supply accumulator through
   `shekyl_advance_already_generated`, saturating at `money_supply`. The
