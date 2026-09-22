@@ -24,8 +24,8 @@
 //! Every economics quantity comes from canonical `shekyl-economics`
 //! functions or build-generated params (drift-pair ban, §1.9): the reward
 //! family, `emission_speed_factor` / `tail_subsidy_per_block`, and
-//! `TX_VOLUME_WINDOW` are all imported; the block-policy zone constant is
-//! read from its single Rust owner (`shekyl_wire::transaction::MIN_BLOCK_WEIGHT`).
+//! `TX_VOLUME_WINDOW` are all imported; the block-policy zone is
+//! [`shekyl_economics::FULL_REWARD_ZONE`].
 //! Four deliberate exceptions, marked at their definitions: the ArticMine
 //! ladder transliteration (the round's *subject* — porting it faithfully is
 //! the point of the comparison column), `REF_TX_WEIGHT` (a C++ constant
@@ -51,10 +51,9 @@ use shekyl_economics::{
     RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
-/// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
-/// Rust owner (`shekyl-wire`; `fee_policy.rs` single-sources from the same
-/// constant).
-pub(crate) const FULL_REWARD_ZONE_V5: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
+/// Penalty-free zone. [`shekyl_economics::FULL_REWARD_ZONE`], generated from
+/// `config/consensus_constants.json`.
+pub(crate) const FULL_REWARD_ZONE: u64 = shekyl_economics::FULL_REWARD_ZONE;
 
 /// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h:70`).
 /// Declared exception: no single Rust owner exists;
@@ -213,13 +212,13 @@ fn articmine_ladder_raw(base_reward: u64, mnw: u64, mlw: u64) -> [u64; 4] {
     // Hard asserts, not debug_asserts: the instrument runs in --release,
     // and the doc above promises loud failure — a stripped check would
     // print fees the daemon cannot emit instead (Copilot PR #614).
-    assert!(mlw >= FULL_REWARD_ZONE_V5, "wrapper guarantees Mlw >= zone");
+    assert!(mlw >= FULL_REWARD_ZONE, "wrapper guarantees Mlw >= zone");
     assert!(mnw >= mlw, "wrapper guarantees Mnw >= Mlw");
     let mfw = mnw.min(mlw);
     let fl = base_reward * REF_TX_WEIGHT / (mfw * mfw);
     let fn_ = 4 * base_reward * REF_TX_WEIGHT / (mfw * mfw);
-    let fm = 16 * base_reward * REF_TX_WEIGHT / (FULL_REWARD_ZONE_V5 * mfw);
-    let fh = (4 * fm).max(4 * fm * mfw / (32 * REF_TX_WEIGHT * mnw / FULL_REWARD_ZONE_V5));
+    let fm = 16 * base_reward * REF_TX_WEIGHT / (FULL_REWARD_ZONE * mfw);
+    let fh = (4 * fm).max(4 * fm * mfw / (32 * REF_TX_WEIGHT * mnw / FULL_REWARD_ZONE));
     [fl, fn_, fm, fh]
 }
 
@@ -288,9 +287,9 @@ fn served_ladder(base_reward: u64, median: u64, c: u64) -> [u64; SERVED_SLOTS] {
     corrected_fee_ladder(
         base_reward,
         median,
-        FULL_REWARD_ZONE_V5,
         REF_TX_WEIGHT,
         FeeCorrection::from_scaled(c),
+        &EconomicParams::default(),
     )
     .as_slots()
 }
@@ -312,9 +311,9 @@ fn relay_floor(base_reward: u64, median: u64, c: u64) -> u64 {
     relay_fee_floor(
         base_reward,
         median,
-        FULL_REWARD_ZONE_V5,
         REF_TX_WEIGHT,
         FeeCorrection::from_scaled(c),
+        &EconomicParams::default(),
     )
 }
 
@@ -483,7 +482,7 @@ pub struct XServedRow {
 
 fn x_served_row(base_reward: u64, median: u64, c_scaled: u64) -> XServedRow {
     let f = served_ladder(base_reward, median, c_scaled);
-    let m = median.max(FULL_REWARD_ZONE_V5);
+    let m = median.max(FULL_REWARD_ZONE);
     let x = f.map(|fi| {
         u64::try_from(u128::from(fi) * u128::from(m) * u128::from(SCALE) / u128::from(base_reward))
             .expect("x fits u64")
@@ -1241,18 +1240,18 @@ impl LadderMode {
 /// degenerate mean; v=100 the `M_r` rail; v=500 the largest burn
 /// gradient); the ramp is the registered 50→200 over one window.
 const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
-    ("stationary-v0", 0.0, 0.0, FULL_REWARD_ZONE_V5),
-    ("stationary-v5", 5.0, 5.0, FULL_REWARD_ZONE_V5),
-    ("stationary-v50", 50.0, 50.0, FULL_REWARD_ZONE_V5),
-    ("stationary-v100", 100.0, 100.0, FULL_REWARD_ZONE_V5),
-    ("stationary-v200", 200.0, 200.0, FULL_REWARD_ZONE_V5),
-    ("stationary-v500", 500.0, 500.0, FULL_REWARD_ZONE_V5),
-    ("stationary-v50-m10z", 50.0, 50.0, 10 * FULL_REWARD_ZONE_V5),
-    ("ramp-v50-to-v200", 50.0, 200.0, FULL_REWARD_ZONE_V5),
+    ("stationary-v0", 0.0, 0.0, FULL_REWARD_ZONE),
+    ("stationary-v5", 5.0, 5.0, FULL_REWARD_ZONE),
+    ("stationary-v50", 50.0, 50.0, FULL_REWARD_ZONE),
+    ("stationary-v100", 100.0, 100.0, FULL_REWARD_ZONE),
+    ("stationary-v200", 200.0, 200.0, FULL_REWARD_ZONE),
+    ("stationary-v500", 500.0, 500.0, FULL_REWARD_ZONE),
+    ("stationary-v50-m10z", 50.0, 50.0, 10 * FULL_REWARD_ZONE),
+    ("ramp-v50-to-v200", 50.0, 200.0, FULL_REWARD_ZONE),
     // §10.14.6: the same crossing downward. Peak-hold's lag is P up and
     // W·P down by construction; a grid with one ramp direction measures
     // C10-8 on the side that flatters it.
-    ("ramp-v200-to-v50", 200.0, 50.0, FULL_REWARD_ZONE_V5),
+    ("ramp-v200-to-v50", 200.0, 50.0, FULL_REWARD_ZONE),
 ];
 
 /// Advance the traced chain state by one block: the SHIPPED paid emission
@@ -1971,8 +1970,8 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
     // the asymptote — it pays the perpetual tail through the one owner.
     // §4.6's `[0,0,0,0]` ladder is the pre-implementation defect record.
     let val_reward = paid_block_reward(
-        FULL_REWARD_ZONE_V5,
-        FULL_REWARD_ZONE_V5,
+        FULL_REWARD_ZONE,
+        FULL_REWARD_ZONE,
         s,
         TxVolume::per_block(params.tx_volume_baseline),
         params,
@@ -2006,23 +2005,23 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
         estimate_reward_at_exhaustion: est_reward,
         validation_reward_at_exhaustion: val_reward,
         penalty_at_tail_x_half: block_reward_with_penalty(
-            FULL_REWARD_ZONE_V5,
-            FULL_REWARD_ZONE_V5 + FULL_REWARD_ZONE_V5 / 2,
+            FULL_REWARD_ZONE,
+            FULL_REWARD_ZONE + FULL_REWARD_ZONE / 2,
             s,
             params,
         )
         .expect("tail-reward penalty pin"),
         estimate_ladder_at_exhaustion: rounded(articmine_ladder_raw(
             est_reward,
-            FULL_REWARD_ZONE_V5,
-            FULL_REWARD_ZONE_V5,
+            FULL_REWARD_ZONE,
+            FULL_REWARD_ZONE,
         )),
         validation_ladder_at_exhaustion: rounded(articmine_ladder_raw(
             val_reward.max(1),
-            FULL_REWARD_ZONE_V5,
-            FULL_REWARD_ZONE_V5,
+            FULL_REWARD_ZONE,
+            FULL_REWARD_ZONE,
         )),
-        relay_floor_at_exhaustion: relay_floor(val_reward, FULL_REWARD_ZONE_V5, SCALE),
+        relay_floor_at_exhaustion: relay_floor(val_reward, FULL_REWARD_ZONE, SCALE),
     }
 }
 
@@ -2129,7 +2128,7 @@ pub struct FeeLadderReport {
 /// Run the FL instrument and build the report.
 pub fn report() -> FeeLadderReport {
     let params = EconomicParams::default();
-    let zone = FULL_REWARD_ZONE_V5;
+    let zone = FULL_REWARD_ZONE;
 
     // §1.8 grid.
     let ages: [u64; 5] = [0, 1, 4, 12, 30];
@@ -2933,7 +2932,7 @@ mod tests {
         // Same constructor the report uses, so the probe and the full
         // simulation cannot disagree about what they measured.
         let params = EconomicParams::default();
-        let zone = FULL_REWARD_ZONE_V5;
+        let zone = FULL_REWARD_ZONE;
         let genesis = age_state(0, &params);
         let c = correction_factor(
             params.tx_volume_baseline,
@@ -3140,9 +3139,9 @@ mod tests {
             corrected_fee_ladder(
                 10 * coin,
                 1_500_000,
-                FULL_REWARD_ZONE_V5,
                 REF_TX_WEIGHT,
-                FeeCorrection::from_scaled(16 * SCALE)
+                FeeCorrection::from_scaled(16 * SCALE),
+                &EconomicParams::default(),
             )
             .as_slots()
         );

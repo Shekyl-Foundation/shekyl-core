@@ -254,9 +254,11 @@ uint64_t shekyl_calc_release_multiplier(
     uint64_t release_min,
     uint64_t release_max);
 
-/// Calculate fee burn percentage based on network metrics. Volume operand
-/// as for shekyl_calc_release_multiplier: the exact window
-/// (tx_count_sum, window_blocks), FL-R24.
+/// Free-parameter burn percentage. Not the consensus burn: consensus uses
+/// shekyl_compute_fee_burn / shekyl_calc_burn_pct_at, which derive the
+/// supply. The relay-floor ring still calls this with gross
+/// already_generated_coins (FL-R16c: no per-height burn fold). Volume
+/// operand as for shekyl_calc_release_multiplier.
 uint64_t shekyl_calc_burn_pct(
     uint64_t tx_count_sum,
     uint64_t window_blocks,
@@ -310,13 +312,12 @@ uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 
 // --- the composed owners (E6 slice 4 precursor, CHAIN_RULES_SLICE_4.md §3.1) --
 //
-// Until these landed the C++ helpers in shekyl/economics.h owned rule
-// content between the caller and the Rust calls: the zero-fee and
-// zero-emission arms, the pct→split and share→split compositions, and the
-// definition `circulating_supply = already_generated_coins` at two call
-// sites (gross emission ignoring burn — FL-R16c's definitional bug). All
-// of it is Rust now; C++ passes FACTS read at parent state and marshals a
-// result. There is nothing left on this side that changes with a rule.
+// The composed owners. C++ passes parent-state facts; Rust derives the
+// supply, the percentage, and the split. shekyl_calc_burn_pct stays the
+// free-parameter entry: the relay-floor ring still calls it with gross
+// already_generated_coins, because the ring walks historical heights and
+// no per-height burn fold is stored (FL-R16c). That entry is not the
+// consensus burn.
 
 /// Status codes for the composed fee-burn entries.
 #define SHEKYL_ECONOMICS_OK                 0
@@ -342,8 +343,9 @@ int32_t shekyl_compute_fee_burn(
     uint64_t frozen_segment_count,
     ShekylBurnSplit *out);
 
-/// The burn percentage alone, from the same two facts (info RPC; relay-floor
-/// fee correction). Same derivation, same status codes.
+/// The burn percentage the info RPC reports, from the same two store facts
+/// as shekyl_compute_fee_burn. The relay floor does not call this — see
+/// shekyl_calc_burn_pct. Same status codes.
 int32_t shekyl_calc_burn_pct_at(
     uint64_t tx_count_sum,
     uint64_t window_blocks,
@@ -380,11 +382,11 @@ int32_t shekyl_relay_floor_admits(
     uint32_t slack_bp);
 
 // F = R*C*w_ref/M^2, floored at 1. Same function as the ladder's economy
-// rung. Returns 0 written, -1 null out_floor, -2 out of u128 domain.
+// rung. The penalty-free zone is EconomicParams::full_reward_zone, not an
+// argument. Returns 0 written, -1 null out_floor, -2 out of u128 domain.
 int32_t shekyl_relay_fee_floor(
     uint64_t base_reward,
     uint64_t median,
-    uint64_t full_reward_zone,
     uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t* out_floor);
@@ -402,11 +404,12 @@ uint64_t shekyl_relay_floor_lookback(void);
 uint32_t shekyl_relay_admission_slack_bp(void);
 
 // Three-slot ladder [economy, standard, priority]. Economy is the relay
-// floor at the same operands. Returns 0 written, -1 null, -2 out of domain.
+// floor at the same operands. The penalty-free zone is
+// EconomicParams::full_reward_zone, not an argument.
+// Returns 0 written, -1 null, -2 out of domain.
 int32_t shekyl_corrected_fee_ladder(
     uint64_t base_reward,
     uint64_t median,
-    uint64_t full_reward_zone,
     uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t *out_fees);

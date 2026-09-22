@@ -6,6 +6,16 @@ include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
 
 pub const SCALE: u64 = GENERATED_SCALE;
 
+/// Penalty-free block-weight zone in bytes.
+///
+/// Generated from `config/consensus_constants.json`
+/// `block_weight_full_reward_zone_bytes`. The C++ macro
+/// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` and
+/// `shekyl_wire::transaction::MIN_BLOCK_WEIGHT` are generated from the same
+/// key. [`EconomicParams::full_reward_zone`] carries it; the reward and the
+/// fee floor read the field, not a caller-supplied copy.
+pub const FULL_REWARD_ZONE: u64 = GENERATED_BLOCK_WEIGHT_FULL_REWARD_ZONE;
+
 /// The emission curve's asymptote in atomic units
 /// (`emission_curve_asymptote` from `config/economics_params.json`) — the
 /// value `curve = (asymptote − already_generated) >> esf` decays toward,
@@ -139,9 +149,9 @@ struct EconomicParamsWire {
     emission_speed_factor_per_minute: u64,
     final_subsidy_per_minute: u64,
     daa_target_seconds: u64,
-    full_reward_zone: u64,
     escalation_knee_n: u64,
     escalation_asymptote_share: u64,
+    full_reward_zone: u64,
 }
 
 impl TryFrom<EconomicParamsWire> for EconomicParams {
@@ -159,9 +169,9 @@ impl TryFrom<EconomicParamsWire> for EconomicParams {
             emission_speed_factor_per_minute: w.emission_speed_factor_per_minute,
             final_subsidy_per_minute: w.final_subsidy_per_minute,
             daa_target_seconds: w.daa_target_seconds,
-            full_reward_zone: w.full_reward_zone,
             escalation_knee_n: w.escalation_knee_n,
             escalation_asymptote_share: w.escalation_asymptote_share,
+            full_reward_zone: w.full_reward_zone,
         };
         p.validate()?;
         Ok(p)
@@ -181,15 +191,6 @@ pub struct EconomicParams {
     pub emission_speed_factor_per_minute: u64,
     pub final_subsidy_per_minute: u64,
     pub daa_target_seconds: u64,
-    /// The penalty-free block-weight zone in bytes (CEN-F14b, G6b): the
-    /// effective median is soft-raised to it before the weight penalty, and
-    /// the block-weight limit is twice it. Authority
-    /// `config/consensus_constants.json` `block_weight_full_reward_zone_bytes`,
-    /// which also generates the C++ `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`
-    /// — one value, two generated readers (E6 slice 4 §3.1 S8; before it the
-    /// C++ macro was hand-written and every reward call carried the zone as
-    /// an argument).
-    pub full_reward_zone: u64,
     /// `frozen_segment_count` at which the D2 escalation saturates. Shape frozen,
     /// **number provisional-until-testnet** (§11.4 ceremony).
     pub escalation_knee_n: u64,
@@ -197,6 +198,16 @@ pub struct EconomicParams {
     /// value equals `staker_pool_share`, which makes the escalation flat and the
     /// behaviour bit-identical to today's constant until the ceremony pins it.
     pub escalation_asymptote_share: u64,
+    /// Penalty-free block-weight zone in bytes (CEN-F14b, G6b). The effective
+    /// median is soft-raised to it before the weight penalty, and the
+    /// block-weight limit is twice it.
+    ///
+    /// Authority: `config/consensus_constants.json`
+    /// `block_weight_full_reward_zone_bytes`, also read by the C++ header
+    /// generator and by `shekyl-wire`'s `MIN_BLOCK_WEIGHT`. Declared last so
+    /// the params digest appends it (format `0x03`); the preimage order is
+    /// this declaration order.
+    pub full_reward_zone: u64,
 }
 
 impl Default for EconomicParams {
@@ -212,9 +223,9 @@ impl Default for EconomicParams {
             emission_speed_factor_per_minute: GENERATED_EMISSION_SPEED_FACTOR_PER_MINUTE,
             final_subsidy_per_minute: GENERATED_FINAL_SUBSIDY_PER_MINUTE,
             daa_target_seconds: GENERATED_DAA_TARGET_SECONDS,
-            full_reward_zone: GENERATED_BLOCK_WEIGHT_FULL_REWARD_ZONE,
             escalation_knee_n: GENERATED_ESCALATION_KNEE_N,
             escalation_asymptote_share: GENERATED_ESCALATION_ASYMPTOTE_SHARE,
+            full_reward_zone: FULL_REWARD_ZONE,
         };
         // Build-generated constants must satisfy the frozen shape; the unit test
         // `shipped_defaults_are_well_formed` is the loud gate, this is the

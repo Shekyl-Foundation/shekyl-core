@@ -37,7 +37,7 @@ use shekyl_economics::emission::block_weight_limit;
 use shekyl_economics::EconomicParams;
 use shekyl_fcmp::tree::outputs_per_node;
 use shekyl_tx_weight::{predict_weight, InputCount, OutputCount, MAX_OUTPUTS};
-use shekyl_wire::transaction::{MIN_BLOCK_WEIGHT, TX_WEIGHT_LIMIT};
+use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
 
 /// Finalization depth `W`, in blocks: the age at which the wallet's frontier is
 /// taken to be beyond reorg.
@@ -82,8 +82,8 @@ pub const CANONICAL_OUTPUTS: usize = 2;
 /// **This is the operand the opening brief could not find**, and it is a
 /// function call, not a constant:
 ///
-/// 1. The long-term effective median is floored at the full-reward zone
-///    [`MIN_BLOCK_WEIGHT`] (300 000).
+/// 1. The long-term effective median is floored at
+///    [`EconomicParams::full_reward_zone`].
 /// 2. The short-term governor may run it up to `S ×` that floor
 ///    ([`BLOCK_WEIGHT_SURGE_FACTOR`], ratified `S = 4`);
 ///    `shekyl_economics::block_weight` records in its own words that for the
@@ -178,8 +178,8 @@ pub const GRADED_TREE_DEPTH: u8 = 6;
 
 /// The **nominal** per-block weight the open edge grades at.
 ///
-/// The full-reward zone, [`MIN_BLOCK_WEIGHT`] — a block that fills the space
-/// every block gets regardless of the dynamic median.
+/// The full-reward zone, [`EconomicParams::full_reward_zone`] — a block that
+/// fills the space every block gets regardless of the dynamic median.
 ///
 /// **This is a stated judgment, not a derivation**, in the same class as
 /// §6.3.4's 2 s and 15 % budgets. There is no chain history to take a typical
@@ -201,7 +201,7 @@ pub const GRADED_TREE_DEPTH: u8 = 6;
 /// budget breaks below this density.
 #[must_use]
 pub fn nominal_block_weight() -> u64 {
-    MIN_BLOCK_WEIGHT as u64
+    EconomicParams::default().full_reward_zone
 }
 
 /// Worst-case leaves per block at a stated tree depth.

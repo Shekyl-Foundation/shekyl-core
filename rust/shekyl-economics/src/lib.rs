@@ -56,7 +56,7 @@ pub use fee::{
 };
 pub use params::{
     calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,
-    EMISSION_CURVE_ASYMPTOTE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    EMISSION_CURVE_ASYMPTOTE, FULL_REWARD_ZONE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 pub use release::calc_release_multiplier;
 pub use supply::{CirculatingSupply, SupplyInvariantViolation};

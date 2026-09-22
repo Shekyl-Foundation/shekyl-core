@@ -872,20 +872,17 @@ fn label_plaintext_for_payment_uri_parse_fail_writes_sentinel() {
 // writes, and the null checks. Those only exist at the boundary, so they are
 // tested at the boundary — the gap Copilot raised on PR #518.
 
-/// The penalty-free zone the vectors below were minted at. Since E6 slice 4
-/// it is `EconomicParams::full_reward_zone` (one authority, generated for
-/// both languages), not an argument C++ passes; the pin asserts the vectors
-/// still describe the shipped value.
-const ZONE: u64 = 300_000;
+/// Penalty-free zone the block-reward vectors below are denominated in.
+/// Generated from `block_weight_full_reward_zone_bytes`. `shekyl-wire`
+/// reads the same key into `MIN_BLOCK_WEIGHT`; [`the_zone_readers_agree`]
+/// fails if one generator reads a different key.
+const ZONE: u64 = shekyl_economics::FULL_REWARD_ZONE;
 #[test]
-fn the_zone_the_vectors_assume_is_the_shipped_parameter() {
+fn the_zone_readers_agree() {
     assert_eq!(
         shekyl_economics::EconomicParams::default().full_reward_zone,
         ZONE
     );
-    // shekyl-wire's MIN_BLOCK_WEIGHT is the same constant, kept there because
-    // the wire crate cannot depend on economics; this pin is what holds the
-    // two readers together.
     assert_eq!(shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64, ZONE);
 }
 /// A value no computed reward can equal, so "untouched" is distinguishable
@@ -1192,8 +1189,7 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
     let st = unsafe {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
-            300_000,
-            300_000,
+            ZONE,
             3_000,
             shekyl_economics::params::SCALE,
             std::ptr::null_mut(),
@@ -1208,22 +1204,21 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
 #[test]
 fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
     let mut fees = [SENTINEL; 3];
-    for (base, median, zone, w, c) in [
-        (u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX),
-        (u64::MAX, 300_000, 300_000, 3_000, u64::MAX),
-        (u64::MAX, 300_000, 300_000, u64::MAX, 1_000_000),
-        (1, u64::MAX, u64::MAX, 3_000, 1_000_000),
+    for (base, median, w, c) in [
+        (u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        (u64::MAX, ZONE, 3_000, u64::MAX),
+        (u64::MAX, ZONE, u64::MAX, 1_000_000),
+        (1, u64::MAX, 3_000, 1_000_000),
         // Priority is `2·R·C` and does not carry `w_ref`: a zero `w_ref`
         // zeroes every other product, so a domain check written against a
         // `w_ref`-bearing product would miss this overflow.
-        (u64::MAX, 300_000, 300_000, 0, u64::MAX),
+        (u64::MAX, ZONE, 0, u64::MAX),
     ] {
-        let st =
-            unsafe { shekyl_corrected_fee_ladder(base, median, zone, w, c, fees.as_mut_ptr()) };
+        let st = unsafe { shekyl_corrected_fee_ladder(base, median, w, c, fees.as_mut_ptr()) };
         assert_eq!(
             st, -2,
             "out-of-domain scalars must be refused, not computed \
-             (base={base}, median={median}, zone={zone}, w={w}, c={c})"
+             (base={base}, median={median}, w={w}, c={c})"
         );
         assert_eq!(fees, [SENTINEL; 3], "a refused call must not write");
     }
@@ -1231,8 +1226,7 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
     let st = unsafe {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
-            300_000,
-            300_000,
+            ZONE,
             3_000,
             shekyl_economics::params::SCALE,
             fees.as_mut_ptr(),
@@ -1248,8 +1242,7 @@ fn corrected_fee_ladder_marshals_the_heritage_vector() {
     let st = unsafe {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
-            300_000,
-            300_000,
+            ZONE,
             3_000,
             shekyl_economics::params::SCALE,
             fees.as_mut_ptr(),

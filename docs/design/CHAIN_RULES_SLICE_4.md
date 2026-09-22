@@ -157,7 +157,7 @@ question turns a judgement per site into a test.
 | S5 | `economics.h:107`–`:111` | `SHEKYL_STAKER_EMISSION_SHARE`, `…_DECAY`, `SHEKYL_BLOCKS_PER_YEAR` as arguments | marshaling | F16 | as S2 |
 | S6 | `economics.h:107`–`:114` | the composition `calc_emission_share → split_block_emission` | **RULE** | F16 | Relocate with S4 |
 | S7 | `cryptonote_basic_impl.cpp:93` `get_block_reward` (5-arg) | substitutes `tx_volume_window{BASELINE, 1}` — the "`M_r`-neutral view" for fee/relay floors | **RULE** (policy) | CEN-M3's held machinery, not 4.F | Out of this slice; recorded for slice 10 / E5: a policy operand chosen in C++ |
-| S8 | `cryptonote_basic_impl.cpp:81`–`:86`, `:143` | `get_min_block_weight(version)` → `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` (300 000), a hand-written `#define` in `cryptonote_config.h` — **`EconomicParams` has no zone field**; `paid_block_reward` takes it as an argument on every call | **RULE as data** (a consensus constant with no Rust home) | F14b, G6b | `full_reward_zone` joins `config/economics_params.json` → `EconomicParams`; the argument goes. Precursor to F14b regardless of Q1 |
+| S8 | `cryptonote_basic_impl.cpp:81`–`:86`, `:143` | `get_min_block_weight(version)` → `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` (300 000), a hand-written `#define` in `cryptonote_config.h` — **`EconomicParams` has no zone field**; `paid_block_reward` takes it as an argument on every call | **RULE as data** (a consensus constant with no Rust home) | F14b, G6b | `full_reward_zone` joins `config/consensus_constants.json` (`block_weight_full_reward_zone_bytes`) → `EconomicParams`; the reward and the fee floor read the field. Precursor to F14b regardless of Q1 |
 | S9 | `cryptonote_basic_impl.cpp:150`–`:163` | `BLOCK_TOO_BIG → false`, other status `→ false` | marshaling | F14 | Rust already classifies (`EmissionError::BlockTooBig` vs the rest); the rules crate reads the `Result` directly. Note: the C++ folds *every* other error into a refusal; the Rust rule must decide verdict-vs-fault per variant (slice 2's "unproven ≠ disproven") |
 | S10 | `blockchain.cpp:1509` | `block_height = txin_gen.height` — `validate_miner_transaction` reads the **claim**, safe only because `prevalidate` ran F5 first | **RULE** (operand source by ordering) | F11, F4, F6 | Moot in Rust: `cx.connecting` is the operand; F5 checks the claim. Recorded so the ordering dependency does not get re-created |
 | S11 | `blockchain.cpp:1513`–`:1517` | `if (block_height == 0) { base_reward = money_in_use; return true; }` — genesis skips the reward and **defines** genesis's `coins_generated` as its coinbase sum | **RULE** (two facts) | F11, F13 | Port as F11's genesis arm; the `coins_generated` definition at height 0 is a store-side fact `connect` needs when `coins_generated` is derived — recorded on the S-CHAIN-W row |
@@ -245,14 +245,19 @@ ahead of the slice's rule commits and reviewable on its own.
   the generated header; params digest `0x02 → 0x03` (the zone selects the
   penalty, so a stamp that omitted it would let two nodes agree while paying
   differently); `PINNED_DIGEST` re-pinned with the chain question answered.
-  Behaviour unchanged. **Residue for the fee-ladder lane:**
-  `checked_corrected_fee_ladder` / `checked_relay_fee_floor` and their FFI
-  still take the zone as an argument (the policy path).
+  `full_reward_zone` is the last `EconomicParams` field, so the digest
+  order is the declaration order. `shekyl-wire::MIN_BLOCK_WEIGHT` is
+  generated from the same key (the wire crate cannot depend on economics).
+  `checked_relay_fee_floor` / `checked_corrected_fee_ladder` and their FFI
+  read `params.full_reward_zone`; the zone argument is gone there too.
+  Behaviour unchanged.
 - **P1b (S4, S6)** — `shekyl-economics::compute_emission_split` owns the
-  zero arm and the composition; `shekyl_compute_emission_split` FFI;
-  `economics.h` marshals one call.
+  composition. Zero emission is the split at zero (both legs zero); there
+  is no separate arm. `shekyl_compute_emission_split` FFI; `economics.h`
+  marshals one call.
 - **P1c (S1, S3, S15)** — `compute_fee_burn` / `calc_burn_pct_at` own the
-  zero-fee arm, the percentage from `params`, and the composition;
+  percentage from `params` and the composition. Zero fees are the pipeline
+  at zero; there is no separate arm.
   `CirculatingSupply::derive` is FL-R16c's definitional half, landed (see
   the S15 row); `shekyl_compute_fee_burn` / `shekyl_calc_burn_pct_at` take
   the two store facts and return a status (`SUPPLY_INVARIANT` writes
@@ -265,12 +270,14 @@ ahead of the slice's rule commits and reviewable on its own.
   `shekyl_calc_burn_pct` — the ring recomputes rungs at historical heights,
   and neither store has a per-height cumulative-burn fact (only per-block
   `block_burn` rows). A fee-ladder question with a store dependency.
-- **P2 (S22, S25, S26, S27)** — `shekyl_ct_balance::check_commitment_masks_for(masks, n_outputs, MaskSubject)`
-  is the entry: the arity gate (`MaskCountMismatch`, new) and the
-  fingerprint selection by subject; the `Option<&[u64]>` primitive is
-  crate-private. The FFI takes the CT type byte and the output count as
-  facts and derives the subject (`ERR_MASK_COUNT`, `ERR_CT_TYPE` new);
+- **P2 (S22, S25, S26, S27)** — `shekyl_ct_balance::check_commitment_masks(masks, n_outputs, MaskSubject)`
+  is the one entry: the arity gate (`MaskCountMismatch`) and the
+  fingerprint selected by the subject. There is no `Option<&[u64]>`
+  primitive under it. The FFI takes the CT type byte and the output count
+  as facts and derives the subject (`ERR_MASK_COUNT`, `ERR_CT_TYPE`);
   `check_commitment_mask_valid` and `check_outs_valid` lose their arms.
+  The economics exports live in `shekyl-ffi`'s `economics_ffi`, not
+  `legacy_core`.
 - **P3** — census F10 (arity clause; selection), F16, F17 (the FL-R16c
   definition; the shim content) amended with re-resolved pins; FL-R16a/b/c
   pins re-resolved and R16c → BUILT (both halves, independence recorded);

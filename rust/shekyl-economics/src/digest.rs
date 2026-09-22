@@ -81,7 +81,9 @@
 //! | 89     | 8     | `escalation_asymptote_share`       | u64 LE              |
 //! | 97     | 8     | `full_reward_zone`                 | u64 LE              |
 //!
-//! The field order mirrors the [`EconomicParams`] struct declaration.
+//! The field order is the [`EconomicParams`] declaration order.
+//! `full_reward_zone` is the struct's last field, so format `0x03` appends
+//! it and every earlier offset is unchanged.
 //! **Adding, removing, or reordering a field is a breaking layout
 //! change** and must bump [`DIGEST_FORMAT_VERSION`] (so a stale fixture
 //! produced under the old layout fails the staleness guard rather than

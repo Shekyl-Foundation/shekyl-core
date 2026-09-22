@@ -4315,7 +4315,6 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward
   const int32_t rc = shekyl_corrected_fee_ladder(
       base_reward,
       median,
-      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
       DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
       c,
       slots);
