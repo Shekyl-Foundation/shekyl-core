@@ -89,10 +89,10 @@ use shekyl_chain_rules::{AtHeight, ChainView, RecordedBlock, Tip};
 use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
 
 use crate::codec::BlockInfo;
-use crate::schema::CURVE_TREE_ROOTS;
 
 use super::chain_reads::{self, ReadFault};
-use super::error::{CellFault, StoreError, StoreInvariant};
+use super::curve_reads;
+use super::error::StoreError;
 use super::write::WriteBatch;
 
 /// The recorded chain as this batch sees it — including the batch's own
@@ -129,15 +129,6 @@ impl<'b, 'id> BatchView<'b, 'id> {
     /// classify absence against it.
     fn tip_row(&self) -> Result<Option<(u64, BlockInfo)>, StoreError> {
         chain_reads::tip_of(self.batch.txn()).map_err(|f| self.arm(f))
-    }
-
-    /// SI-7 for a row that the dense ranges say must exist and does not:
-    /// poisons the batch and returns the fault.
-    fn absent_below_tip(&self, cell_name: &'static str) -> StoreError {
-        self.arm(ReadFault::Invariant(StoreInvariant::CellCorrupt {
-            key: cell_name,
-            fault: CellFault::Absent,
-        }))
     }
 }
 
@@ -193,21 +184,12 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     /// by the connect of `height − 1` (module docs). Height 0 is the empty
     /// tree, [`CurveTreeRoot::EMPTY`]; `1..=tip + 1` must be present (SI-7
     /// otherwise); above that is [`AtHeight::AboveTip`].
+    ///
+    /// The body is `curve_reads::root_at` — the store's public **C2** read
+    /// (S-CURVE), shared with `ReadSnapshot::root_at` so the batch and the
+    /// committed snapshot cannot disagree about the table's key or its
+    /// absence rule; here a fault poisons the batch.
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, StoreError> {
-        let h = height.to_raw();
-        if h == 0 {
-            return Ok(AtHeight::Recorded(CurveTreeRoot::EMPTY));
-        }
-        match self.tip_row()? {
-            // `tip + 1` is the state a candidate at `tip + 1` is checked
-            // against — CEN-B5's read — and the last row `connect` wrote.
-            Some((tip, _)) if h <= tip.saturating_add(1) => {}
-            _ => return Ok(AtHeight::AboveTip),
-        }
-        let root: CurveTreeRoot =
-            chain_reads::cell(self.batch.txn(), CURVE_TREE_ROOTS, h, "curve_tree_roots")
-                .map_err(|f| self.arm(f))?
-                .ok_or_else(|| self.absent_below_tip("curve_tree_roots"))?;
-        Ok(AtHeight::Recorded(root))
+        curve_reads::root_at(self.batch.txn(), height).map_err(|f| self.arm(f))
     }
 }

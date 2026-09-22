@@ -11,6 +11,8 @@
 //! workflow file, not its test suite (the
 //! `transfer/transfer_pending_tx_tests.rs` pattern).
 
+use shekyl_types::BlockHeight;
+
 use super::*;
 use crate::engine::diagnostics::NoopDiagnosticSink;
 
@@ -105,7 +107,7 @@ fn emit_state_block_reset_clears_counter_not_latch() {
     state.try_emit(
         &NoopDiagnosticSink,
         RefreshDiagnostic::ScanProgress {
-            height: 1,
+            height: BlockHeight::from_raw(1),
             candidates: 0,
         },
     );
@@ -113,7 +115,7 @@ fn emit_state_block_reset_clears_counter_not_latch() {
     state.try_emit(
         &NoopDiagnosticSink,
         RefreshDiagnostic::ScanProgress {
-            height: 1,
+            height: BlockHeight::from_raw(1),
             candidates: 0,
         },
     );

@@ -91,6 +91,10 @@ pub trait Restorable: Value {
 // tuple of fixed-width parts.
 impl Restorable for u64 {}
 impl Restorable for (u64, u64) {}
+// `curve_tree_layers`' `(layer, chunk)` (S-CURVE `SCU-Q3`): 9 fixed bytes.
+impl Restorable for (u8, u64) {}
+// `curve_tree_meta`'s unit key (S-CURVE `SCU-Q1`): the one-row table.
+impl Restorable for () {}
 impl Restorable for LmdbHashKey {}
 impl Restorable for &[u8] {}
 

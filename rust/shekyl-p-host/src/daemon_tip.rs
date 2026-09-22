@@ -61,6 +61,8 @@
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use shekyl_types::BlockHeight;
+
 /// The daemon's tip as of a moment, or nothing.
 ///
 /// `None` from [`height`](Self::height) means the gate must refuse, and it
@@ -94,7 +96,7 @@ pub struct DaemonTipCache {
     /// `Some((top_block_height, stamped_at))`, or `None` for "no usable
     /// tip". Plain data with no invariant across its fields, which is why a
     /// poisoned lock is recovered rather than propagated.
-    state: Mutex<Option<(u64, Instant)>>,
+    state: Mutex<Option<(BlockHeight, Instant)>>,
 }
 
 impl DaemonTipCache {
@@ -117,7 +119,7 @@ impl DaemonTipCache {
     /// `top_block_height` is the height of the **top block** — not the
     /// chain height an info surface reports. See the module doc; getting
     /// this wrong centres the gate one block high.
-    pub fn stamp_synced(&self, top_block_height: u64) {
+    pub fn stamp_synced(&self, top_block_height: BlockHeight) {
         self.stamp_synced_at(top_block_height, Instant::now());
     }
 
@@ -136,13 +138,13 @@ impl DaemonTipCache {
 
     /// The tip to gate on, or `None` per [`DaemonTipCache`]'s contract.
     #[must_use]
-    pub fn height(&self) -> Option<u64> {
+    pub fn height(&self) -> Option<BlockHeight> {
         self.height_at(Instant::now())
     }
 
     /// [`stamp_synced`](Self::stamp_synced) against a caller-supplied
     /// instant, so the age policy is testable without sleeping.
-    pub(crate) fn stamp_synced_at(&self, top_block_height: u64, at: Instant) {
+    pub(crate) fn stamp_synced_at(&self, top_block_height: BlockHeight, at: Instant) {
         *self.guard() = Some((top_block_height, at));
     }
 
@@ -153,7 +155,7 @@ impl DaemonTipCache {
     /// reading in the past) reads as age zero via `saturating_duration_since`
     /// rather than as an enormous age — the tip is not *less* trustworthy
     /// for the clock having moved the wrong way, and the next stamp fixes it.
-    pub(crate) fn height_at(&self, now: Instant) -> Option<u64> {
+    pub(crate) fn height_at(&self, now: Instant) -> Option<BlockHeight> {
         let (height, at) = (*self.guard())?;
         (now.saturating_duration_since(at) <= self.max_age).then_some(height)
     }
@@ -164,7 +166,7 @@ impl DaemonTipCache {
     /// fields, so a panic elsewhere cannot have left it half-written. The
     /// alternative — propagating the poison — would turn an unrelated panic
     /// into a permanent refusal to serve, which is a slash.
-    fn guard(&self) -> std::sync::MutexGuard<'_, Option<(u64, Instant)>> {
+    fn guard(&self) -> std::sync::MutexGuard<'_, Option<(BlockHeight, Instant)>> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -192,8 +194,8 @@ mod tests {
     fn a_fresh_stamp_is_the_tip_it_recorded() {
         let c = cache();
         let now = Instant::now();
-        c.stamp_synced_at(9_000, now);
-        assert_eq!(c.height_at(now), Some(9_000));
+        c.stamp_synced_at(BlockHeight::from_raw(9_000), now);
+        assert_eq!(c.height_at(now), Some(BlockHeight::from_raw(9_000)));
     }
 
     /// The age bound is a boundary, and the boundary is inclusive: a stamp
@@ -203,11 +205,11 @@ mod tests {
     fn a_stamp_gates_until_max_age_and_not_past_it() {
         let c = cache();
         let now = Instant::now();
-        c.stamp_synced_at(9_000, now);
+        c.stamp_synced_at(BlockHeight::from_raw(9_000), now);
 
         assert_eq!(
             c.height_at(now + MAX_AGE),
-            Some(9_000),
+            Some(BlockHeight::from_raw(9_000)),
             "exactly at the bound is still fresh"
         );
         assert_eq!(
@@ -223,12 +225,12 @@ mod tests {
     fn restamping_restarts_the_age() {
         let c = cache();
         let t0 = Instant::now();
-        c.stamp_synced_at(9_000, t0);
+        c.stamp_synced_at(BlockHeight::from_raw(9_000), t0);
         let t1 = t0 + MAX_AGE;
-        c.stamp_synced_at(9_001, t1);
+        c.stamp_synced_at(BlockHeight::from_raw(9_001), t1);
         assert_eq!(
             c.height_at(t1 + MAX_AGE),
-            Some(9_001),
+            Some(BlockHeight::from_raw(9_001)),
             "the second stamp's age, not the first's"
         );
     }
@@ -240,7 +242,7 @@ mod tests {
     fn a_daemon_that_stopped_following_clears_a_stamp_that_is_still_young() {
         let c = cache();
         let now = Instant::now();
-        c.stamp_synced_at(9_000, now);
+        c.stamp_synced_at(BlockHeight::from_raw(9_000), now);
         c.stamp_not_following();
         assert_eq!(
             c.height_at(now),
@@ -256,11 +258,11 @@ mod tests {
     fn a_held_tip_survives_until_it_ages_out_when_nothing_is_stamped() {
         let c = cache();
         let now = Instant::now();
-        c.stamp_synced_at(9_000, now);
+        c.stamp_synced_at(BlockHeight::from_raw(9_000), now);
         // No stamp at all — the producer's poll failed.
         assert_eq!(
             c.height_at(now + MAX_AGE),
-            Some(9_000),
+            Some(BlockHeight::from_raw(9_000)),
             "a dropped loopback poll must not refuse an in-window challenge"
         );
         assert_eq!(c.height_at(now + MAX_AGE + Duration::from_secs(1)), None);
@@ -271,7 +273,7 @@ mod tests {
     fn a_reading_before_the_stamp_is_age_zero_not_expired() {
         let c = cache();
         let now = Instant::now();
-        c.stamp_synced_at(9_000, now + Duration::from_secs(5));
-        assert_eq!(c.height_at(now), Some(9_000));
+        c.stamp_synced_at(BlockHeight::from_raw(9_000), now + Duration::from_secs(5));
+        assert_eq!(c.height_at(now), Some(BlockHeight::from_raw(9_000)));
     }
 }

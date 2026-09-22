@@ -27,6 +27,9 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `HybridSignature` is the countersignature's type and canonical codec;
 # `SCHEME_DOMAIN_ATTESTATION` is the domain the signer binds under.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Inland clocks on the pre-sign gate (`PassSigner::own_height`,
+# `anchor_within_gate`) are ordinal `BlockHeight`.
+shekyl-types = { path = "../shekyl-types" }
 
 [features]
 # Exposes `TestKeySigner` — a `PassSigner` over an ephemeral, non-derived

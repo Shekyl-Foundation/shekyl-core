@@ -20,7 +20,25 @@ use crate::rig::{Environment, RigVerdict};
 use crate::timing::Series;
 
 /// Record schema version. Bump on any field removal or meaning change.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// - **`1`** — the schema the first graded runs emitted.
+/// - **`2`** (2026-09-21) — [`Series::stopped_because`]'s value domain
+///   changed: `"iteration cap"` is gone and `"limits met, unconverged"`
+///   names the exit it was silently standing in for. No field is added or
+///   removed, which is why this needs saying out loud: it is a **meaning**
+///   change, and the sharper kind. A `v1` record reading `"iteration cap"`
+///   does **not** mean a cap truncated the run — that exit was unreachable
+///   — it means the run met both limits and never settled. **So `v1`'s
+///   value is not merely worded differently, it is wrong**, and a reader who
+///   has learned the `v2` semantics would draw the opposite remedy from it
+///   (raise the cap, rather than: the machine has no steady state). The bump
+///   is what stops a corrected reader from misreading an uncorrected record.
+///
+/// **No CI arm enforces this constant** — the `schema-snapshot` workflow's
+/// version-bump job covers `shekyl-chain-store`'s persisted schema, not this
+/// record. Bumping it is a reviewer obligation, which is why the history
+/// above is kept here rather than only in the changelog.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// The spend-edge budget's absolute floor, in seconds (§6.3.4 row 2).
 pub const SPEND_DELTA_FLOOR_S: f64 = 2.0;

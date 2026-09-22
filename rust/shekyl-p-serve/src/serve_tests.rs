@@ -18,16 +18,17 @@ use shekyl_archival_retention::verify_pass_transcript;
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{ServedFrameHeader, LEAF_BYTES};
+use shekyl_types::BlockHeight;
 
 /// The test persona's own height, and the anchor a requester at the same
 /// tip would attach (`tip − 720`), which sits at the centre of the gate.
 const OWN_HEIGHT: u64 = 10_000;
-const IN_GATE_ANCHOR: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS;
+const IN_GATE_ANCHOR: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
 const NONCE: [u8; 32] = [0x5a; 32];
 const ANCHOR_HASH: [u8; 32] = [0xa5; 32];
 
 fn header_at(anchor_height: u64) -> [u8; PASS_REQUEST_HEADER_LEN] {
-    pass_request_header_bytes(&NONCE, anchor_height, &ANCHOR_HASH)
+    pass_request_header_bytes(&NONCE, BlockHeight::from_raw(anchor_height), &ANCHOR_HASH)
 }
 
 fn good_header() -> [u8; PASS_REQUEST_HEADER_LEN] {
@@ -44,7 +45,7 @@ fn header_line(bytes: &[u8; PASS_REQUEST_HEADER_LEN]) -> String {
 /// Bind with a fresh ephemeral test signer at [`OWN_HEIGHT`]; the signer is
 /// returned so a test can verify the countersignature or move the height.
 async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeySigner>) {
-    let signer = Arc::new(TestKeySigner::ephemeral(OWN_HEIGHT));
+    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
     let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
         .await
         .expect("bind");
@@ -339,11 +340,15 @@ async fn every_non_servable_outcome_renders_one_identical_404() {
         // Out of gate, both sides.
         format!(
             "GET /shard/3 HTTP/1.1\r\n{}\r\n",
-            header_line(&header_at(IN_GATE_ANCHOR - PASS_ANCHOR_LAG_BLOCKS - 1))
+            header_line(&header_at(
+                IN_GATE_ANCHOR - PASS_ANCHOR_LAG_BLOCKS.to_raw() - 1
+            ))
         ),
         format!(
             "GET /shard/3 HTTP/1.1\r\n{}\r\n",
-            header_line(&header_at(IN_GATE_ANCHOR + PASS_ANCHOR_LAG_BLOCKS + 1))
+            header_line(&header_at(
+                IN_GATE_ANCHOR + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1
+            ))
         ),
     ] {
         seen.push(request_raw(ep.addr(), &head).await);
@@ -525,7 +530,7 @@ async fn the_served_body_leads_with_the_countersignature_then_the_frame() {
     verify_pass_transcript(
         signer.public_key(),
         &NONCE,
-        IN_GATE_ANCHOR,
+        BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
         0,
         &signature,
@@ -535,7 +540,7 @@ async fn the_served_body_leads_with_the_countersignature_then_the_frame() {
     assert!(verify_pass_transcript(
         signer.public_key(),
         &NONCE,
-        IN_GATE_ANCHOR,
+        BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
         1,
         &signature
@@ -544,7 +549,7 @@ async fn the_served_body_leads_with_the_countersignature_then_the_frame() {
     assert!(verify_pass_transcript(
         signer.public_key(),
         &[0u8; 32],
-        IN_GATE_ANCHOR,
+        BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
         0,
         &signature
@@ -572,7 +577,7 @@ async fn the_gate_is_two_sided_with_the_admission_lag() {
     // `anchor_height ∈ [p − 720 − L, p − 720 + L]`: both edges serve, one
     // past either edge is the shared 404 with no store read and no sign.
     let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 1))])).await;
-    let l = PASS_ANCHOR_LAG_BLOCKS;
+    let l = PASS_ANCHOR_LAG_BLOCKS.to_raw();
     for (anchor, servable) in [
         (IN_GATE_ANCHOR, true),
         (IN_GATE_ANCHOR - l, true),
@@ -619,8 +624,8 @@ async fn a_refusing_signer_renders_the_shared_404_and_counts_separately() {
         }
     }
     impl PassSigner for Refusing {
-        fn own_height(&self) -> Option<u64> {
-            Some(OWN_HEIGHT)
+        fn own_height(&self) -> Option<BlockHeight> {
+            Some(BlockHeight::from_raw(OWN_HEIGHT))
         }
     }
     let signer: Arc<dyn PassSigner> = Arc::new(Refusing);
@@ -657,11 +662,11 @@ async fn an_unreadable_height_renders_the_shared_404_and_counts_a_lookup_failure
         }
     }
     impl PassSigner for Storeless {
-        fn own_height(&self) -> Option<u64> {
+        fn own_height(&self) -> Option<BlockHeight> {
             None
         }
     }
-    let key = Arc::new(TestKeySigner::ephemeral(OWN_HEIGHT));
+    let key = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
     let signer: Arc<dyn PassSigner> = Arc::new(Storeless(Arc::clone(&key)));
     let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]), signer)
         .await

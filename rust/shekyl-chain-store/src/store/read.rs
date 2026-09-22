@@ -37,28 +37,29 @@
 //!   writer exists from the seal (amendment A2), so `TableDoesNotExist` on
 //!   a chain table is a file this store did not write, not an empty chain.
 
-use core::ops::RangeInclusive;
+use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, Tip};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
-    TxHash,
+    TreeLeaf, TreePosition, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
-use crate::codec::{BlockInfo, OutTx, PropertyCell, TotalBurnedCell, TxOutputIndices};
+use crate::codec::{
+    BlockInfo, CurveTreeState, OutTx, PropertyCell, TotalBurnedCell, TxOutputIndices,
+};
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{
-    BLOCK_BURN, BLOCK_HEIGHTS, CURVE_TREE_ROOTS, PROPERTIES, SPENT_KEYS, TX_INDICES,
-};
+use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
 use super::tx_reads::{self, Prunable, TxLocation, TxRecord};
 
 use super::chain_reads;
+use super::curve_reads;
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
 use super::halt::ConnectState;
 use super::header;
@@ -580,24 +581,12 @@ impl ReadSnapshot<'_> {
     }
 
     /// `curve_tree_roots[tip + 1]`, or [`CurveTreeRoot::EMPTY`] on an empty
-    /// chain. A tip with no live-root row is SI-7.
+    /// chain. A tip with no live-root row is SI-7. The body is
+    /// [`curve_reads::live_root`] — the digest, [`Self::root_at`], and the
+    /// summary's SI-12 belt share it, so a missing row means one thing.
     fn live_root(&self, tip: Option<&(u64, BlockInfo)>) -> Result<CurveTreeRoot, StoreError> {
-        match tip {
-            None => Ok(CurveTreeRoot::EMPTY),
-            Some((tip_height, _)) => {
-                let key = tip_height
-                    .checked_add(1)
-                    .expect("a recorded tip is not u64::MAX");
-                Ok(
-                    chain_reads::cell(&self.txn, CURVE_TREE_ROOTS, key, "curve_tree_roots")
-                        .map_err(chain_reads::ReadFault::into_plain)?
-                        .ok_or(StoreInvariant::CellCorrupt {
-                            key: "curve_tree_roots",
-                            fault: CellFault::Absent,
-                        })?,
-                )
-            }
-        }
+        curve_reads::live_root(&self.txn, tip.map(|(height, _)| *height))
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     // ------------------------------------------------------------------
@@ -778,6 +767,62 @@ impl ReadSnapshot<'_> {
             .map_err(|e| StoreError::from(EngineError::Storage(e)))?;
         Ok(tx_reads::walk_indices(range, count)
             .map(|item| item.map_err(chain_reads::ReadFault::into_plain)))
+    }
+
+    // ------------------------------------------------------------------
+    // S-CURVE (`DRS_E1_SCURVE.md` §3.2): the curve tree.
+    // ------------------------------------------------------------------
+
+    /// **C1.** The tree's summary as **one row**: its root, its depth
+    /// (layers above the leaves) and its leaf count — `curve_tree_meta`'s
+    /// whole content ([`CurveTreeState`]). Replaces `get_curve_tree_root`,
+    /// `get_curve_tree_depth` and `get_curve_tree_leaf_count`, which the
+    /// C++ always consumed together and wrote together; three cells that
+    /// had to agree become one value that cannot disagree (`SCU-Q1`).
+    ///
+    /// The empty tree is [`CurveTreeState::EMPTY`], **a row the seal
+    /// wrote** — so an absent row is SI-7 (`CellCorrupt { Absent }`), never
+    /// a default, and no caller compares a root against the identity to
+    /// learn whether the tree is empty (SCU-1). EMPTY stays the answer
+    /// after `connect` until the grow path (DRS-E3) replaces it: connect
+    /// records the live root in `curve_tree_roots` whether or not the tree
+    /// has grown (SI-4). A summary that is not EMPTY must carry that live
+    /// root (SI-12, [`StoreInvariant::SummaryRootDiverged`]). A count that
+    /// is not the leaf table's length is SI-11
+    /// ([`LeafDensity::Length`](crate::store::LeafDensity::Length)).
+    pub fn curve_tree(&self) -> Result<CurveTreeState, StoreError> {
+        curve_reads::summary(&self.txn).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **C2.** `curve_tree_roots[height]` — the tree state **going into**
+    /// block `height`, written by the connect of `height − 1`; the table's
+    /// own key, stated once. Height 0 is [`CurveTreeRoot::EMPTY`]; rows
+    /// `1..=tip + 1` are present (SI-7 otherwise) and `tip + 1` is the live
+    /// root; above that is [`AtHeight::AboveTip`]. The same body the
+    /// validator's `ChainView::root_at` reads inside a batch (CEN-B5),
+    /// made the store's public read. Replaces `get_curve_tree_root_at`,
+    /// whose all-zero root on `MDB_NOTFOUND` (SCU-4) is the arm the type
+    /// removes.
+    pub fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, StoreError> {
+        curve_reads::root_at(&self.txn, height).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **C3.** The leaves at `range`, in position order — a bounded walk
+    /// over `curve_tree_leaves`. Bound first: a range whose end is past the
+    /// summary's count is [`AtIndex::BeyondCount`] and no row is read.
+    /// Inside the count the table is dense (SI-11): a position with no row
+    /// is `LeavesNotDense { observed: Hole { position } }`, an undecodable
+    /// row is SI-7. An
+    /// empty range is `Recorded(vec![])`.
+    ///
+    /// Successor to `get_curve_tree_leaves`, whose C++ consumer is retired
+    /// (SCU-2); lands on completeness grounds (S-TX Q3's re-ruling — a range
+    /// read is part of what makes a dense keyed table a table) with its
+    /// Rust consumer named: **DRS-E3**, the grow path, reads back what it
+    /// writes (`SCU-Q4`, rule 23 STAGED). A range is one chunk's worth of
+    /// leaves in practice; this is not a full-tree walk.
+    pub fn leaves(&self, range: Range<TreePosition>) -> Result<AtIndex<Vec<TreeLeaf>>, StoreError> {
+        curve_reads::leaves(&self.txn, range).map_err(chain_reads::ReadFault::into_plain)
     }
 }
 

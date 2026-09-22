@@ -169,7 +169,7 @@ interaction has never been written down.
 **This is the highest-value item in the census.** It needs a ruling, not a
 port.
 
-**UPDATE 2026-09-19 (S-TX pre-flight, [`DRS_E1_STX.md`](DRS_E1_STX.md)
+**UPDATE 2026-09-19 (S-TX pre-flight, [`DRS_E1_STX.md`](../completed/DRS_E1_STX.md)
 STX-1 / STX-9):** the `:2681` residue is now **transitively callerless** —
 `get_tx_unlock_time`'s only caller is `get_output_key_mask_unlocked`, which
 has no caller of its own (SOK-7). The redb store keeps writing

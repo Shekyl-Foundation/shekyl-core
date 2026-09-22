@@ -114,6 +114,7 @@ use shekyl_scanner::BalanceSummary;
 
 use crate::engine::error::LedgerError;
 use crate::engine::refresh::LedgerSnapshot;
+use shekyl_types::BlockHeight;
 
 /// Engine-side view of the confirmed-chain ledger surface (§2.2).
 ///
@@ -176,7 +177,7 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// The Stage 1 implementor `LocalLedger` panics on
     /// [`RwLock`] poisoning (the inner `expect("LocalLedger lock
     /// poisoned")` in `LocalLedger::read`). The synchronous
-    /// infallible return type of this method (`u64`, no
+    /// infallible return type of this method (`BlockHeight`, no
     /// [`Result`]) is deliberate per §2.2's Round-3 disposition
     /// — poisoning indicates a deeper invariant violation upstream
     /// (a panic while a write guard was held) rather than a
@@ -186,11 +187,11 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// through the supervisor's restart mechanism per §5.1's
     /// `RuntimeFailure` discipline; the trait surface is unchanged
     /// at that point, so callers continue to treat this method as
-    /// "panics on actor-level failure, returns a `u64` otherwise."
+    /// "panics on actor-level failure, returns a `BlockHeight` otherwise."
     ///
     /// [`LedgerBlock::height()`]: shekyl_engine_state::LedgerBlock::height
     /// [`RwLock`]: std::sync::RwLock
-    fn synced_height(&self) -> u64;
+    fn synced_height(&self) -> BlockHeight;
 
     /// Snapshot the reorg-detection window the producer needs for
     /// parent-hash compares and the fork-point walk.

@@ -187,7 +187,7 @@ where
 pub(super) struct BuiltPendingMeta {
     pub(super) fee: AtomicUnits,
     pub(super) selected: SelectedOutputs,
-    pub(super) synced: u64,
+    pub(super) synced: shekyl_types::BlockHeight,
     pub(super) tip_hash: [u8; 32],
     /// Output locks are held from assembly until `consumer_held` commit.
     pub(super) reservation_id: ReservationId,
@@ -286,9 +286,14 @@ where
     /// many intervening reorgs for free, since it compares against the *current*
     /// canonical hash, not a retained fork history.
     pub(super) fn reference_orphaned(&self, reference: &ReferenceBlock) -> bool {
+        self.ledger_block_hash(reference.height) != Some(reference.block_hash.to_bytes())
+    }
+
+    /// Hash at an inclusive ordinal, if the reorg window still holds it.
+    /// One sync ledger read (F-J).
+    fn ledger_block_hash(&self, height: BlockHeight) -> Option<[u8; 32]> {
         self.ledger
-            .with_ledger_block(|ledger| ledger.block_hash_at(reference.height.to_raw()).copied())
-            != Some(reference.block_hash.to_bytes())
+            .with_ledger_block(|ledger| ledger.block_hash_at(height).copied())
     }
 
     #[allow(clippy::unused_self)] // `self` is used only under `test` / `test-helpers` cfgs.
@@ -412,7 +417,8 @@ where
             not_yet_spendable_total,
             not_yet_spendable,
         ) = self.ledger.with_wallet_ledger(|wallet| {
-            let synced = wallet.ledger.height();
+            let tip = wallet.ledger.height();
+            let synced = tip;
             // Gate against the height the *bound* reference anchors to (computed
             // in `build` before the cursor-read `.await`), so the C2 spendability
             // decision and the tx's anchored reference are the same height even
@@ -425,12 +431,12 @@ where
             let reference_height = if c2_active {
                 reference
                     .as_ref()
-                    .map(|r| r.height.to_raw())
+                    .map(|r| r.height)
                     .or_else(|| select_reference_height(synced))
             } else {
                 None
             };
-            let tip_hash = wallet.ledger.block_hash_at(synced).copied();
+            let tip_hash = wallet.ledger.block_hash_at(tip).copied();
             let locked: HashSet<OutputId> = state.output_locks.keys().copied().collect();
             // Partition the matured, non-reserved set across three buckets so an
             // insufficiency surfaces as the precise, self-resolving error rather
@@ -446,8 +452,8 @@ where
             // wait-blocks signal can account for the *subset needed to cover the
             // shortfall* rather than just the soonest output (which alone may
             // not suffice — that would underestimate the wait).
-            let mut not_yet_spendable: Vec<(u64, u64)> = Vec::new();
-            for (idx, td) in wallet.spendable_outputs(synced, None) {
+            let mut not_yet_spendable: Vec<(shekyl_types::BlockHeight, u64)> = Vec::new();
+            for (idx, td) in wallet.spendable_outputs(tip, None) {
                 if locked.contains(&idx) {
                     continue;
                 }
@@ -456,12 +462,12 @@ where
                     // C2 active: spendability is decided against the *reference*
                     // height, not the per-output eligible height.
                     Some(rh) => {
-                        if td.eligible_height.to_raw() > rh {
+                        if td.eligible_height > rh {
                             // Too fresh for the reference block — not in the tree
                             // there even if its leaf is already ingested.
                             let raw = amount.to_raw();
                             not_yet_spendable_total = not_yet_spendable_total.saturating_add(raw);
-                            not_yet_spendable.push((td.eligible_height.to_raw(), raw));
+                            not_yet_spendable.push((td.eligible_height, raw));
                         } else if tree_gate.covers(rh) {
                             // The tree has reached the reference height, so its
                             // root is reconstructable and every `eligible <= rh`
@@ -485,7 +491,7 @@ where
                     // decides (`Unenforced` ⇒ covers all), preserving the
                     // no-tree path.
                     None => {
-                        if tree_gate.covers(td.eligible_height.to_raw()) {
+                        if tree_gate.covers(td.eligible_height) {
                             spendable_now_total =
                                 spendable_now_total.saturating_add(amount.to_raw());
                             candidates.push(OutputCandidate { index: idx, amount });
@@ -979,7 +985,7 @@ where
             recipients: summary,
             // Fresh build: generation 0, anchored at the resolved reference.
             content_gen: 0,
-            reference_height: reference.height.to_raw(),
+            reference_height: reference.height,
         };
 
         emit_pending_tx_diagnostic(
@@ -1088,8 +1094,7 @@ where
             let covered_through = handle
                 .ingested_tip_height()
                 .await
-                .map_err(|err| map_handle_err_to_reanchor(&err))?
-                .map(shekyl_types::BlockHeight::to_raw);
+                .map_err(|err| map_handle_err_to_reanchor(&err))?;
             let ingested = covered_through.ok_or(ReanchorError::ReferenceResyncing {
                 detail: "curve tree has not ingested any block yet",
             })?;
@@ -1116,16 +1121,14 @@ where
                         },
                     }
                 })?;
+            let reference_ordinal = reference_height;
             let (curve_tree_root, depth) = handle
-                .reference_root_and_depth(BlockHeight::from_raw(reference_height))
+                .reference_root_and_depth(reference_ordinal)
                 .await
                 .map_err(|err| map_handle_err_to_reanchor(&err))?;
-            let reference = match self
-                .ledger
-                .with_ledger_block(|ledger| ledger.block_hash_at(reference_height).copied())
-            {
+            let reference = match self.ledger_block_hash(reference_ordinal) {
                 Some(block_hash) => ReferenceBlock {
-                    height: BlockHeight::from_raw(reference_height),
+                    height: reference_ordinal,
                     curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
                     block_hash: BlockHash::from_bytes(block_hash),
                 },
@@ -1281,20 +1284,16 @@ where
             // §3a/§5): the fresh reference must still be canonical and not itself
             // already due for re-anchor. All sync ledger reads (F-J).
             let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
-            let still_canonical = self
-                .ledger
-                .with_ledger_block(|ledger| ledger.block_hash_at(reference_height).copied())
-                == Some(reference.block_hash.to_bytes());
+            let reference_ordinal = reference_height;
+            let still_canonical =
+                self.ledger_block_hash(reference_ordinal) == Some(reference.block_hash.to_bytes());
             if !still_canonical || should_reanchor(current_tip, reference_height) {
                 last_resync = Some(ReanchorError::ReferenceResyncing {
                     detail: "reference re-staled during the prover run",
                 });
                 continue;
             }
-            let Some(current_tip_hash) = self
-                .ledger
-                .with_ledger_block(|ledger| ledger.block_hash_at(current_tip).copied())
-            else {
+            let Some(current_tip_hash) = self.ledger_block_hash(current_tip) else {
                 return Err(ReanchorError::Failed(SendError::CannotSign {
                     reason: "current tip block hash missing from ledger",
                 }));
@@ -1400,8 +1399,8 @@ where
 
         // Staleness decision — ledger reads only, no pending-tx lock held (F-J).
         let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
-        let stale = should_reanchor(current_tip, reference.height.to_raw())
-            || self.reference_orphaned(&reference);
+        let stale =
+            should_reanchor(current_tip, reference.height) || self.reference_orphaned(&reference);
 
         // --- re-anchor if stale (three-phase, lock-free prover) ---
         if stale {

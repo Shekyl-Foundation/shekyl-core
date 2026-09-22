@@ -57,6 +57,7 @@
 //! other row fails. `?` inside a rule propagates a **fault** and only a fault
 //! (`view.rs`, "Three answers, three positions").
 
+pub(crate) mod anchors;
 pub(crate) mod difficulty;
 pub(crate) mod header;
 pub(crate) mod pow;
@@ -70,6 +71,7 @@ use crate::coverage::RuleCoverage;
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::Target;
 use crate::rules::timestamps::MtpWindow;
+use crate::trust::Trust;
 use crate::verdict::Verdict;
 use crate::view::{ChainView, Tip};
 use shekyl_types::BlockHeight;
@@ -169,6 +171,10 @@ pub(crate) struct BlockContext<'a> {
     pub(crate) mtp_window: Option<MtpWindow>,
     /// D4's target. D1 compares `formed.pow()` against it.
     pub(crate) target: Target,
+    /// What this node takes on the release's word — the anchors (E1 reads
+    /// them at anchored heights); from slice 6, the posture the 4.I rows
+    /// read.
+    pub(crate) trust: &'a Trust,
 }
 
 impl<'a> BlockContext<'a> {
@@ -177,6 +183,7 @@ impl<'a> BlockContext<'a> {
         tip: Option<Tip>,
         mtp_window: Option<MtpWindow>,
         target: Target,
+        trust: &'a Trust,
     ) -> Self {
         Self {
             formed,
@@ -184,6 +191,7 @@ impl<'a> BlockContext<'a> {
             tip,
             mtp_window,
             target,
+            trust,
         }
     }
 
@@ -192,15 +200,22 @@ impl<'a> BlockContext<'a> {
         self.formed.candidate()
     }
 
-    /// Isolated-rule tests that do not read the target. Production
-    /// `validate` always passes D4's.
+    /// Isolated-rule tests that read neither the target nor the anchors.
+    /// Production `validate` always passes D4's target and the driver's
+    /// `Trust`.
     #[cfg(test)]
     pub(crate) fn for_tests(
         formed: &'a StructurallyValid,
         tip: Option<Tip>,
         mtp_window: Option<MtpWindow>,
     ) -> Self {
-        Self::new(formed, tip, mtp_window, Target::GENESIS_BLOCK)
+        Self::new(
+            formed,
+            tip,
+            mtp_window,
+            Target::GENESIS_BLOCK,
+            &Trust::UNANCHORED,
+        )
     }
 }
 

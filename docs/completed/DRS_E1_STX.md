@@ -1,6 +1,6 @@
 # DRS-E1 S-TX — transaction blob and existence: increment plan and Round-0 pre-flight
 
-**Status:** OPEN — **increment LANDED 2026-09-19** (the §3 contract is code: `store/tx_reads.rs`, `store/read.rs` T1–T6, `store/tx_read_tests.rs`, the STX-9 gate `check_store_unlock_time_projection.py`; no layout change). Stays in `design/` until S-CURVE's pre-flight has read it (archive-or-contract per index §8 then). History: **Round 0 (pre-flight) executed 2026-09-19** at `dev` =
+**Status:** CLOSED-as-record — **archived 2026-09-21 by S-CURVE's pre-flight PR** ([`DRS_E1_SCURVE.md`](../design/DRS_E1_SCURVE.md) §2.5, the reader this row held the file in `design/` for); owns no open residue. History follows. **Increment LANDED 2026-09-19** (the §3 contract is code: `store/tx_reads.rs`, `store/read.rs` T1–T6, `store/tx_read_tests.rs`, the STX-9 gate `check_store_unlock_time_projection.py`; no layout change). Stays in `design/` until S-CURVE's pre-flight has read it (archive-or-contract per index §8 then). History: **Round 0 (pre-flight) executed 2026-09-19** at `dev` =
 `8b48f574c` (the tree that merged PR #783, S-OUT-KI); re-based through `6c41bf820`
 (#784 … #790; the increment cut from `fbc92287a`). **Round 1 RULED 2026-09-19** (maintainer,
 on PR #786; §9, each ruling line-local): **Q1 B** (`Option`, the counter-rule's
@@ -16,25 +16,25 @@ stored row; T6 is the walk `tx_indices` can actually give at v6 — its own
 key order, its own projection — and **#788 answered the E2 question**: E2's
 redb-side reads are `block_info` hashes, `key_images` and the root into
 `digest_v0`; it projects no tx table, so `TxHeader` and its join are not
-built. (Implementation started when this document merged, #786, and landed the same day.) Implements *from* [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
+built. (Implementation started when this document merged, #786, and landed the same day.) Implements *from* [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md)
 §3.5/§7 (the S-TX row: extraction order **5**, "tx blob and existence reads,
 dependent on chain-R for height context; no writer of its own — the daemon
 writes txs only through `add_block`"), §7.6 (parity first; the ported
 partition is transitional; the comparator projects logical content) and
 §7.7 (the hash-row / segment invariant); from
-[`DRS_E1_SCHAIN_R.md`](../completed/DRS_E1_SCHAIN_R.md) (the read handle and
+[`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) (the read handle and
 its fault policy — this surface is more reads on `ReadSnapshot`, and its
 "Option stays Option" counter-rule is applied, not overridden, in §3.3); from
-[`DRS_E1_SOUT_KI.md`](../completed/DRS_E1_SOUT_KI.md) §2.2 (which handed
+[`DRS_E1_SOUT_KI.md`](DRS_E1_SOUT_KI.md) §2.2 (which handed
 `get_tx_unlock_time` and `get_tx_block_height` to this surface, and whose
 `AtIndex<T>` is reused for the one dense-id read here); and from
-[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) **`PDM-Q6`
+[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](../design/ARCHIVAL_PRUNED_DAEMON_MODE.md) **`PDM-Q6`
 item 1** (the prunable region *is* the archival good) and **`PDM-Q7`** (the
 stripe engine is deleted) — the two rulings whose interaction §2.3 states,
 because a reader who has only heard of the second will draw the wrong
 conclusion about this surface's three prunable reads. Process per
 `26-sub-pr-design-discipline.mdc`; identifier family **`STX-`** registered
-in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 by the PR that
+in [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 by the PR that
 adds this file (rule 94 §1).
 
 **Steering, 2026-09-19 (maintainer, on the S-OUT-KI closeout):** three
@@ -143,7 +143,7 @@ exist so that they can.
 
 - **The prune itself** — the discard, its predicate, the journal horizon,
   the `u32` length rows (S-CHAIN-W amendment **A4**, owed by `PDM-Q-F32`).
-  That is S-PRUNE's ([`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md), a skeleton at
+  That is S-PRUNE's ([`DRS_E1_SPRUNE.md`](../design/DRS_E1_SPRUNE.md), a skeleton at
   this pin). This surface **reads** the state S-PRUNE will produce
   (§7.7 leg (iii)) and adds nothing S-PRUNE's first increment would have to
   move. T4's `Discarded` arm is well-defined today on legs (i)–(iii) alone:

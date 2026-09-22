@@ -440,7 +440,7 @@ mod tests {
         BondPostRecord, PFundingOutputRecord, RetiredPersonaRecord,
     };
     use shekyl_engine_state::{PendingBondPost, PendingPostState};
-    use shekyl_types::{PCanonicalId, SettlementEpoch};
+    use shekyl_types::{BlockCount, PCanonicalId, SettlementEpoch};
 
     fn persona(b: u8) -> PCanonicalId {
         PCanonicalId::from_bytes([b; 32])
@@ -498,7 +498,7 @@ mod tests {
             p_slot: PSlot::from_raw(0),
             persona: persona(id),
             tx_bytes: vec![0xAB; 4],
-            bond_post_offset_blocks: 0,
+            bond_post_offset_blocks: BlockCount::ZERO,
             anchor_t0: ChainCount::from_raw(1),
             funding_gindexes: Vec::new(),
             state: PendingPostState::Pending,

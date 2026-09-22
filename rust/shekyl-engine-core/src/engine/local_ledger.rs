@@ -83,6 +83,7 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 use shekyl_scanner::{BalanceSummary, WalletLedgerExt};
+use shekyl_types::BlockHeight;
 
 use super::{error::LedgerError, refresh::LedgerSnapshot, traits::LedgerEngine};
 
@@ -327,7 +328,7 @@ impl LocalLedger {
 ///
 /// Each method acquires its own [`RwLock`] read guard for the
 /// duration of the call: the three read methods take a
-/// [`RwLockReadGuard`] and project owned values (`u64`,
+/// [`RwLockReadGuard`] and project owned values (`BlockHeight`,
 /// [`LedgerSnapshot`], [`BalanceSummary`]). The trait carries no
 /// mutator — the ledger merge (snapshot fold plus the engine
 /// handle-field post-pass) lives on
@@ -340,7 +341,7 @@ impl LocalLedger {
 impl LedgerEngine for LocalLedger {
     type Error = LedgerError;
 
-    fn synced_height(&self) -> u64 {
+    fn synced_height(&self) -> BlockHeight {
         self.read().ledger.ledger.height()
     }
 
@@ -363,7 +364,7 @@ impl LedgerEngine for LocalLedger {
 impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
     type Error = L::Error;
 
-    fn synced_height(&self) -> u64 {
+    fn synced_height(&self) -> BlockHeight {
         (**self).synced_height()
     }
 

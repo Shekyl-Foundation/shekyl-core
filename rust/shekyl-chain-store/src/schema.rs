@@ -148,13 +148,13 @@
 
 use redb::{TableDefinition, TableHandle, TypeName};
 
-use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash};
+use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash, TreeLeaf};
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    Blob, BlockBody, BlockInfo, Coded, OutKey, OutTx, Present, PropertyCellBytes, RuleSetInForce,
-    TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog,
-    Unshaped,
+    Blob, BlockBody, BlockInfo, Coded, CurveTreeState, LayerHash, OutKey, OutTx, Present,
+    PropertyCellBytes, RuleSetInForce, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
+    TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
@@ -459,16 +459,24 @@ tables! {
     /// `leaf_to_output` — INTEGERKEY.
     pub const LEAF_TO_OUTPUT: TableDefinition<u64, Unshaped> = TableDefinition::new("leaf_to_output");
 
-    /// `curve_tree_leaves` — INTEGERKEY.
-    pub const CURVE_TREE_LEAVES: TableDefinition<u64, Unshaped> =
+    /// `curve_tree_leaves` — INTEGERKEY; `TreePosition` (as `u64`, the key
+    /// contract of [`crate::ids`]) → the stored 128-byte leaf. Dense over
+    /// `[0, leaf_count)` (SI-11). S-CURVE.
+    pub const CURVE_TREE_LEAVES: TableDefinition<u64, Coded<TreeLeaf>> =
         TableDefinition::new("curve_tree_leaves");
 
-    /// `curve_tree_layers` — INTEGERKEY. Derived: recomputed from leaves, not folded.
-    pub const CURVE_TREE_LAYERS: TableDefinition<u64, Unshaped> =
+    /// `curve_tree_layers` — `(layer, chunk)` → the chunk's Selene hash.
+    /// [`crate::ids::LayerChunk::key`] assembles the tuple; layer-major
+    /// order is that tuple's (`SCU-Q3`). Derived: recomputed from leaves,
+    /// not folded. S-CURVE.
+    pub const CURVE_TREE_LAYERS: TableDefinition<(u8, u64), Coded<LayerHash>> =
         TableDefinition::new("curve_tree_layers");
 
-    /// `curve_tree_meta` — default flags.
-    pub const CURVE_TREE_META: TableDefinition<&[u8], Unshaped> = TableDefinition::new("curve_tree_meta");
+    /// `curve_tree_meta` — **one row** under the unit key: the tree's
+    /// summary (`SCU-Q1`), written `EMPTY` by the seal so absence is a fault
+    /// and never a default (SCU-1). S-CURVE.
+    pub const CURVE_TREE_META: TableDefinition<(), Coded<CurveTreeState>> =
+        TableDefinition::new("curve_tree_meta");
 
     /// `curve_tree_checkpoints` — INTEGERKEY. Derived: recomputed, not folded.
     pub const CURVE_TREE_CHECKPOINTS: TableDefinition<u64, Unshaped> =

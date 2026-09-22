@@ -78,7 +78,7 @@ private:
 
 public:
 
-  bool print_peer_list(bool white = true, bool gray = true, size_t limit = 0, bool pruned_only = false);
+  bool print_peer_list(bool white = true, bool gray = true, size_t limit = 0);
 
   bool print_peer_list_stats();
 
@@ -165,9 +165,7 @@ public:
 
   bool pop_blocks(uint64_t num_blocks);
 
-  bool prune_blockchain();
 
-  bool check_blockchain_pruning();
 
   bool print_net_stats();
 

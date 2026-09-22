@@ -1017,8 +1017,8 @@ namespace
 {
   // A store holding one transaction, with each accompanying fact
   // independently withholdable. Modelled on the real reads: the prunable HASH
-  // survives pruning (`prune_worker` and `prune_tx_data` never delete
-  // `txs_prunable_hash`), so its absence is a fault, while the prunable BLOB
+  // survives pruning (`prune_tx_data` never deletes `txs_prunable_hash`),
+  // so its absence is a fault, while the prunable BLOB
   // legitimately disappears.
   class OneTxDB : public BaseTestDB
   {

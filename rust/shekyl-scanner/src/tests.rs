@@ -12,6 +12,11 @@ fn txh(fill: u8) -> shekyl_types::TxHash {
     shekyl_types::TxHash::from_bytes([fill; 32])
 }
 
+/// Fixture ordinal. Test heights are raw literals; this is the decode edge.
+fn block(height: u64) -> shekyl_types::BlockHeight {
+    shekyl_types::BlockHeight::from_raw(height)
+}
+
 #[cfg(test)]
 pub(crate) mod ledger_ops {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
@@ -28,7 +33,7 @@ pub(crate) mod ledger_ops {
     use shekyl_engine_state::{InFlightSpendLocks, LedgerBlock, LedgerIndexes, SendJournalBlock};
     use shekyl_units::AtomicUnits;
 
-    use super::txh;
+    use super::{block, txh};
 
     /// These tests drive a bare [`LedgerBlock`] with no send journal, so
     /// nothing is in flight and the derived lock set is empty. Spelled
@@ -43,7 +48,11 @@ pub(crate) mod ledger_ops {
     /// `WalletLedgerExt::balance` needs a `WalletLedger`, which these
     /// ingestion tests deliberately do not build.
     fn balance_of(ledger: &LedgerBlock, current_height: u64) -> BalanceSummary {
-        BalanceSummary::compute(ledger.transfers(), current_height, &no_locks())
+        BalanceSummary::compute(
+            ledger.transfers(),
+            shekyl_types::BlockHeight::from_raw(current_height),
+            &no_locks(),
+        )
     }
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
@@ -138,13 +147,18 @@ pub(crate) mod ledger_ops {
                 2_000_000_000,
             ),
         ];
-        indexes.process_scanned_outputs(&mut ledger, 100, [0xA0; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            block(100),
+            [0xA0; 32],
+            make_timelocked(outputs),
+        );
 
         let ki_0 = ledger.transfers()[0].key_image.unwrap();
         let ki_1 = ledger.transfers()[1].key_image.unwrap();
 
-        assert!(indexes.mark_spent(&mut ledger, &ki_0, 200, txh(0xEE)));
-        assert!(indexes.mark_spent(&mut ledger, &ki_1, 200, txh(0xEE)));
+        assert!(indexes.mark_spent(&mut ledger, &ki_0, block(200), txh(0xEE)));
+        assert!(indexes.mark_spent(&mut ledger, &ki_1, block(200), txh(0xEE)));
         assert!(ledger.transfers()[0].spent);
         assert!(ledger.transfers()[1].spent);
 
@@ -174,7 +188,12 @@ pub(crate) mod ledger_ops {
             make_wallet_output(txh(61), 0, 810, 1_000_000_000),
             1_000_000_000,
         )];
-        indexes.process_scanned_outputs(&mut ledger, 100, [0xA1; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            block(100),
+            [0xA1; 32],
+            make_timelocked(outputs),
+        );
 
         let bogus_ki = shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xFFu8; 32]);
         let unmarked = indexes.unmark_spent(&mut ledger, &[bogus_ki]);
@@ -189,7 +208,12 @@ pub(crate) mod ledger_ops {
             make_wallet_output(txh(62), 0, 820, 1_000_000_000),
             1_000_000_000,
         )];
-        indexes.process_scanned_outputs(&mut ledger, 100, [0xA2; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            block(100),
+            [0xA2; 32],
+            make_timelocked(outputs),
+        );
 
         let ki = ledger.transfers()[0].key_image.unwrap();
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki]);
@@ -213,15 +237,20 @@ pub(crate) mod ledger_ops {
                 3_000_000_000,
             ),
         ];
-        indexes.process_scanned_outputs(&mut ledger, 100, [0xA3; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            block(100),
+            [0xA3; 32],
+            make_timelocked(outputs),
+        );
 
         let ki_0 = ledger.transfers()[0].key_image.unwrap();
         let ki_1 = ledger.transfers()[1].key_image.unwrap();
         let ki_2 = ledger.transfers()[2].key_image.unwrap();
 
-        indexes.mark_spent(&mut ledger, &ki_0, 200, txh(0xEE));
-        indexes.mark_spent(&mut ledger, &ki_1, 200, txh(0xEE));
-        indexes.mark_spent(&mut ledger, &ki_2, 200, txh(0xEE));
+        indexes.mark_spent(&mut ledger, &ki_0, block(200), txh(0xEE));
+        indexes.mark_spent(&mut ledger, &ki_1, block(200), txh(0xEE));
+        indexes.mark_spent(&mut ledger, &ki_2, block(200), txh(0xEE));
 
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki_1]);
         assert_eq!(unmarked, 1);
@@ -247,13 +276,18 @@ pub(crate) mod ledger_ops {
                 1_000_000_000,
             ),
         ];
-        indexes.process_scanned_outputs(&mut ledger, 100, [0xA4; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            block(100),
+            [0xA4; 32],
+            make_timelocked(outputs),
+        );
 
         let ki_0 = ledger.transfers()[0].key_image.unwrap();
         let ki_1 = ledger.transfers()[1].key_image.unwrap();
 
-        indexes.mark_spent(&mut ledger, &ki_0, 200, txh(0xEE));
-        indexes.mark_spent(&mut ledger, &ki_1, 200, txh(0xEE));
+        indexes.mark_spent(&mut ledger, &ki_0, block(200), txh(0xEE));
+        indexes.mark_spent(&mut ledger, &ki_1, block(200), txh(0xEE));
         indexes
             .check_invariants(&ledger)
             .expect("invariants after mark_spent");
@@ -278,15 +312,20 @@ pub(crate) mod ledger_ops {
             make_wallet_output(txh(65), 0, 850, 1_000_000_000),
             1_000_000_000,
         )];
-        indexes.process_scanned_outputs(&mut ledger, 100, [0xA5; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            block(100),
+            [0xA5; 32],
+            make_timelocked(outputs),
+        );
 
-        let spendable = ledger.spendable_outputs(105, None, &no_locks());
+        let spendable = ledger.spendable_outputs(block(105), None, &no_locks());
         assert!(
             spendable.is_empty(),
             "output mined at 100 should NOT be spendable at 105"
         );
 
-        let spendable = ledger.spendable_outputs(110, None, &no_locks());
+        let spendable = ledger.spendable_outputs(block(110), None, &no_locks());
         assert_eq!(
             spendable.len(),
             1,
@@ -311,11 +350,16 @@ pub(crate) mod ledger_ops {
             (make_wallet_output(txh(66), 0, 860, 1_000), 1_000),
             (make_wallet_output(txh(66), 1, 861, 2_000), 2_000),
         ];
-        indexes.process_scanned_outputs(&mut ledger, 100, [0xB0; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            block(100),
+            [0xB0; 32],
+            make_timelocked(outputs),
+        );
         indexes.check_invariants(&ledger).expect("after process");
 
         let ki = ledger.transfers()[0].key_image.unwrap();
-        indexes.mark_spent(&mut ledger, &ki, 200, txh(0xEE));
+        indexes.mark_spent(&mut ledger, &ki, block(200), txh(0xEE));
         indexes.check_invariants(&ledger).expect("after mark_spent");
 
         indexes.unmark_spent(&mut ledger, &[ki]);
@@ -329,12 +373,12 @@ pub(crate) mod ledger_ops {
         ledger.thaw(0);
         indexes.check_invariants(&ledger).expect("after thaw");
 
-        indexes.handle_reorg(&mut ledger, 200);
+        indexes.handle_reorg(&mut ledger, block(200));
         indexes
             .check_invariants(&ledger)
             .expect("after reorg (noop — no blocks at 200)");
 
-        indexes.handle_reorg(&mut ledger, 50);
+        indexes.handle_reorg(&mut ledger, block(50));
         indexes
             .check_invariants(&ledger)
             .expect("after reorg removing all");
@@ -347,30 +391,30 @@ pub(crate) mod ledger_ops {
 
         indexes.process_scanned_outputs(
             &mut ledger,
-            100,
+            block(100),
             [0xC0; 32],
             make_timelocked(vec![(make_wallet_output(txh(70), 0, 900, 1_000), 1_000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
-            200,
+            block(200),
             [0xC1; 32],
             make_timelocked(vec![(make_wallet_output(txh(71), 0, 901, 2_000), 2_000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
-            300,
+            block(300),
             [0xC2; 32],
             make_timelocked(vec![(make_wallet_output(txh(72), 0, 902, 3_000), 3_000)]),
         );
         indexes.check_invariants(&ledger).expect("3 blocks");
 
-        indexes.handle_reorg(&mut ledger, 200);
+        indexes.handle_reorg(&mut ledger, block(200));
         indexes
             .check_invariants(&ledger)
             .expect("after reorg at 200");
         assert_eq!(ledger.transfers().len(), 1);
-        assert_eq!(ledger.height(), 100);
+        assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(100));
     }
 }
 
@@ -403,7 +447,7 @@ mod ledger_proptest {
     use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
     use shekyl_units::AtomicUnits;
 
-    use super::txh;
+    use super::{block, txh};
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -506,7 +550,7 @@ mod ledger_proptest {
                         }).collect();
                         indexes.process_scanned_outputs(
                             &mut ledger,
-                            next_height,
+                            block(next_height),
                             {
                                 let mut h = [0u8; 32];
                                 h[..8].copy_from_slice(&next_height.to_le_bytes());
@@ -521,7 +565,7 @@ mod ledger_proptest {
                         if count > 0 {
                             let idx = ((*frac * count as f64) as usize).min(count - 1);
                             if let Some(ki) = ledger.transfers()[idx].key_image {
-                                indexes.mark_spent(&mut ledger, &ki, next_height, txh(0xEE));
+                                indexes.mark_spent(&mut ledger, &ki, block(next_height), txh(0xEE));
                             }
                         }
                     }
@@ -549,10 +593,10 @@ mod ledger_proptest {
                         }
                     }
                     Op::Reorg { frac } => {
-                        if ledger.height() > 0 {
-                            let fork_at = ((ledger.height() as f64 * frac) as u64).max(1);
-                            indexes.handle_reorg(&mut ledger, fork_at);
-                            next_height = ledger.height() + 10;
+                        if ledger.height().to_raw() > 0 {
+                            let fork_at = ((ledger.height().to_raw() as f64 * frac) as u64).max(1);
+                            indexes.handle_reorg(&mut ledger, block(fork_at));
+                            next_height = ledger.height().to_raw() + 10;
                         }
                     }
                 }
@@ -601,7 +645,7 @@ mod sync_bookkeeping {
     use shekyl_engine_state::{InFlightSpendLocks, LedgerBlock, LedgerIndexes, SendJournalBlock};
     use shekyl_units::AtomicUnits;
 
-    use super::txh;
+    use super::{block, txh};
 
     /// These tests drive a bare [`LedgerBlock`] with no send journal, so
     /// nothing is in flight and the derived lock set is empty. Spelled
@@ -616,7 +660,11 @@ mod sync_bookkeeping {
     /// `WalletLedgerExt::balance` needs a `WalletLedger`, which these
     /// ingestion tests deliberately do not build.
     fn balance_of(ledger: &LedgerBlock, current_height: u64) -> BalanceSummary {
-        BalanceSummary::compute(ledger.transfers(), current_height, &no_locks())
+        BalanceSummary::compute(
+            ledger.transfers(),
+            shekyl_types::BlockHeight::from_raw(current_height),
+            &no_locks(),
+        )
     }
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
@@ -728,11 +776,11 @@ mod sync_bookkeeping {
 
             indexes.process_scanned_outputs(
                 &mut ledger,
-                *height,
+                block(*height),
                 block_hash(*height),
                 Timelocked(recovered),
             );
-            heights.push(ledger.height());
+            heights.push(ledger.height().to_raw());
         }
 
         for window in heights.windows(2) {
@@ -755,12 +803,17 @@ mod sync_bookkeeping {
         let o1 = mock_output(100, 5000);
         let ki_100 = o1.key_image;
         let o2 = mock_output(101, 3000);
-        indexes.process_scanned_outputs(&mut ledger, 10, block_hash(10), Timelocked(vec![o1, o2]));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            block(10),
+            block_hash(10),
+            Timelocked(vec![o1, o2]),
+        );
 
         assert_eq!(ledger.transfers().len(), 2);
         assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(8000));
 
-        indexes.detect_spends(&mut ledger, 20, &[(ki_100, txh(0xEE))]);
+        indexes.detect_spends(&mut ledger, block(20), &[(ki_100, txh(0xEE))]);
         assert!(ledger.transfers()[0].spent);
         assert!(!ledger.transfers()[1].spent);
         assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(3000));
@@ -776,19 +829,19 @@ mod sync_bookkeeping {
 
         indexes.process_scanned_outputs(
             &mut ledger,
-            10,
+            block(10),
             block_hash(10),
             Timelocked(vec![mock_output(200, 1000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
-            20,
+            block(20),
             block_hash(20),
             Timelocked(vec![mock_output(201, 2000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
-            30,
+            block(30),
             block_hash(30),
             Timelocked(vec![mock_output(202, 3000)]),
         );
@@ -796,16 +849,16 @@ mod sync_bookkeeping {
         assert_eq!(ledger.transfers().len(), 3);
         assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(6000));
 
-        indexes.handle_reorg(&mut ledger, 20);
+        indexes.handle_reorg(&mut ledger, block(20));
 
         assert_eq!(ledger.transfers().len(), 1);
-        assert_eq!(ledger.height(), 10);
+        assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(10));
         assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(1000));
         indexes.check_invariants(&ledger).expect("after reorg");
 
         indexes.process_scanned_outputs(
             &mut ledger,
-            20,
+            block(20),
             block_hash(20),
             Timelocked(vec![mock_output(301, 7000)]),
         );
@@ -823,10 +876,15 @@ mod sync_bookkeeping {
         let mut indexes = LedgerIndexes::empty();
 
         for h in 1..=10 {
-            indexes.process_scanned_outputs(&mut ledger, h, block_hash(h), Timelocked(vec![]));
+            indexes.process_scanned_outputs(
+                &mut ledger,
+                block(h),
+                block_hash(h),
+                Timelocked(vec![]),
+            );
         }
 
-        assert_eq!(ledger.height(), 10);
+        assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(10));
         assert_eq!(ledger.transfers().len(), 0);
         indexes
             .check_invariants(&ledger)
@@ -840,9 +898,14 @@ mod sync_bookkeeping {
 
         let o = mock_output(500, 10_000);
         let ki = o.key_image;
-        indexes.process_scanned_outputs(&mut ledger, 10, block_hash(10), Timelocked(vec![o]));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            block(10),
+            block_hash(10),
+            Timelocked(vec![o]),
+        );
 
-        let spent = indexes.detect_spends(&mut ledger, 20, &[(ki, txh(0xEE))]);
+        let spent = indexes.detect_spends(&mut ledger, block(20), &[(ki, txh(0xEE))]);
         assert_eq!(spent, 1);
         assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::ZERO);
 

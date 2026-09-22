@@ -86,6 +86,11 @@ impl PortableMap for BasicNodeData {
 
 /// `cryptonote::CORE_SYNC_DATA`.
 ///
+/// Carries no `pruning_seed`: the stripe engine is deleted (`PDM-Q7`), and
+/// the field was a self-asserted, durable, address-keyed attribute on the
+/// wire — the shape `PWD-I1` forbids. A peer that still sends the key is
+/// decoded with the key ignored; nothing is ever emitted.
+///
 /// `cumulative_difficulty_top64` is **always stored** (even when 0) and
 /// `KV_SERIALIZE_OPT` on load — C++ `is_store` branch in the map.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,8 +105,6 @@ pub struct CoreSyncData {
     pub top_id: [u8; 32],
     /// `KV_SERIALIZE_OPT` default 0.
     pub top_version: u8,
-    /// `KV_SERIALIZE_OPT` default 0.
-    pub pruning_seed: u32,
 }
 
 impl PortableMap for CoreSyncData {
@@ -118,7 +121,6 @@ impl PortableMap for CoreSyncData {
         );
         section.insert("top_id", Value::Bytes(self.top_id.to_vec()));
         get::insert_opt_u8(&mut section, "top_version", self.top_version, 0);
-        get::insert_opt_u32(&mut section, "pruning_seed", self.pruning_seed, 0);
         Ok(section)
     }
 
@@ -133,20 +135,21 @@ impl PortableMap for CoreSyncData {
             },
             top_id: get::blob(section, "top_id")?,
             top_version: get::opt_u8(section, "top_version", 0)?,
-            pruning_seed: get::opt_u32(section, "pruning_seed", 0)?,
         })
     }
 }
 
 /// `nodetool::peerlist_entry`.
+///
+/// The address and a freshness stamp, nothing else: `peer_id` went with
+/// `PWD-I1`, `pruning_seed` with `PDM-Q7` (the stripe engine is deleted).
+/// A gossiped entry carrying either key decodes with the key ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerlistEntry {
     /// `network_address` union.
     pub adr: NetworkAddress,
     /// `KV_SERIALIZE_OPT` default 0.
     pub last_seen: i64,
-    /// `KV_SERIALIZE_OPT` default 0.
-    pub pruning_seed: u32,
 }
 
 impl PortableMap for PeerlistEntry {
@@ -154,7 +157,6 @@ impl PortableMap for PeerlistEntry {
         let mut section = Section::new();
         section.insert("adr", Value::Object(self.adr.to_section()?));
         get::insert_opt_i64(&mut section, "last_seen", self.last_seen, 0);
-        get::insert_opt_u32(&mut section, "pruning_seed", self.pruning_seed, 0);
         Ok(section)
     }
 
@@ -162,7 +164,6 @@ impl PortableMap for PeerlistEntry {
         Ok(Self {
             adr: NetworkAddress::from_section(get::object(section, "adr")?)?,
             last_seen: get::opt_i64(section, "last_seen", 0)?,
-            pruning_seed: get::opt_u32(section, "pruning_seed", 0)?,
         })
     }
 }

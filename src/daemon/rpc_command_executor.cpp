@@ -30,7 +30,6 @@
 
 #include "string_tools.h"
 #include "common/scoped_message_writer.h"
-#include "common/pruning.h"
 #include "daemon/rpc_command_executor.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "cryptonote_core/cryptonote_core.h"
@@ -155,12 +154,11 @@ t_rpc_command_executor::~t_rpc_command_executor()
   }
 }
 
-bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit, bool pruned_only) {
-  std::vector<std::string> argv{"print_peer_list", white && gray ? "both" : (white ? "white" : "gray"),
-    std::to_string(limit)};
-  if (pruned_only)
-    argv.emplace_back("pruned");
-  return run_rust_console(argv);
+bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit) {
+  // No `pruned` selector: per-peer pruning state left with the stripe engine
+  // (PDM-Q7), so the Rust console has nothing to filter on.
+  return run_rust_console({"print_peer_list", white && gray ? "both" : (white ? "white" : "gray"),
+    std::to_string(limit)});
 }
 
 bool t_rpc_command_executor::print_peer_list_stats() {
@@ -1316,71 +1314,6 @@ bool t_rpc_command_executor::pop_blocks(uint64_t num_blocks)
   tools::success_msg_writer() << "new height: " << res.height;
 
   return true;
-}
-
-bool t_rpc_command_executor::prune_blockchain()
-{
-    cryptonote::COMMAND_RPC_PRUNE_BLOCKCHAIN::request req;
-    cryptonote::COMMAND_RPC_PRUNE_BLOCKCHAIN::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    req.check = false;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "prune_blockchain", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_prune_blockchain(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    tools::success_msg_writer() << "Blockchain pruned";
-    return true;
-}
-
-bool t_rpc_command_executor::check_blockchain_pruning()
-{
-    cryptonote::COMMAND_RPC_PRUNE_BLOCKCHAIN::request req;
-    cryptonote::COMMAND_RPC_PRUNE_BLOCKCHAIN::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    req.check = true;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "prune_blockchain", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_prune_blockchain(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    if (res.pruning_seed)
-    {
-      tools::success_msg_writer() << "Blockchain is pruned";
-    }
-    else
-    {
-      tools::success_msg_writer() << "Blockchain is not pruned";
-    }
-    return true;
 }
 
 bool t_rpc_command_executor::flush_cache(bool bad_blocks)

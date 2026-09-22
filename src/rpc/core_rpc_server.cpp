@@ -1379,30 +1379,6 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_prune_blockchain(const COMMAND_RPC_PRUNE_BLOCKCHAIN::request& req, COMMAND_RPC_PRUNE_BLOCKCHAIN::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(prune_blockchain);
-
-    try
-    {
-      if (!(req.check ? m_core.check_blockchain_pruning() : m_core.prune_blockchain()))
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-        error_resp.message = req.check ? "Failed to check blockchain pruning" : "Failed to prune blockchain";
-        return false;
-      }
-      res.pruning_seed = m_core.get_blockchain_pruning_seed();
-      res.pruned = res.pruning_seed != 0;
-    }
-    catch (const std::exception &e)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Failed to prune blockchain";
-      return false;
-    }
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_flush_cache(const COMMAND_RPC_FLUSH_CACHE::request& req, COMMAND_RPC_FLUSH_CACHE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
   {

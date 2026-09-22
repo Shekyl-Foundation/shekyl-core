@@ -324,9 +324,6 @@ Re-examine the C++-anchored CI gates at the LMDB cutover
 E6 shaping under `PDM-Q5` / `PDM-Q3`: a below-anchor `RuleSet`, and `ChainView` without a recorded-body accessor
 S-PRUNE needs a rule-26 plan doc before its first increment
 Skeleton block payload grows `pqc_auth_hash`
-`pruning_seed` wire slot retired — send `0`, ignore received non-zero
-`prune_blockchain` is REJECTED in the daemon RPC method registry
-Delete `--sync-pruned-blocks` — under `PDM-Q5`'s rejection, not `PDM-Q7`'s engine
 Journal horizon asserted at the journals' retirement site
 S-CHAIN-W amendment A4 — the two per-tx length rows
 The archiver serving-store rebuild — a wallet-lane design round, unbuilt by design

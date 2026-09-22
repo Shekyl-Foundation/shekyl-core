@@ -26,6 +26,7 @@ use shekyl_p_serve::{PServeEndpoint, PassSigner, ShardBody, TestKeySigner};
 use shekyl_sp_t3_spike::fixture::{FixtureShardProvider, LEAF_BYTES};
 use shekyl_sp_t3_spike::harness::{ClientLeg, APPARATUS_OWN_HEIGHT};
 use shekyl_sp_t3_spike::measure::FailureKind;
+use shekyl_types::BlockHeight;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -101,7 +102,9 @@ fn target_for(signer: &TestKeySigner) -> FetchTarget {
 
 #[tokio::test]
 async fn apparatus_anchor_passes_the_gate_and_the_body_verifies() {
-    let signer = Arc::new(TestKeySigner::ephemeral(APPARATUS_OWN_HEIGHT));
+    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(
+        APPARATUS_OWN_HEIGHT,
+    )));
     let (ep, proxy) = persona(Arc::clone(&signer)).await;
     let leg = ClientLeg::new(proxy, 1);
 
@@ -126,7 +129,9 @@ async fn a_persona_at_a_far_height_is_refused_not_blamed_on_tor() {
     // anchor outside `[own − 720 − L, own − 720 + L]` and renders the
     // identical 404. The client leg must class that as `Refused`: it is a
     // completed exchange, and the rig — not the network — is what is wrong.
-    let signer = Arc::new(TestKeySigner::ephemeral(APPARATUS_OWN_HEIGHT + 720));
+    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(
+        APPARATUS_OWN_HEIGHT + 720,
+    )));
     let (ep, proxy) = persona(Arc::clone(&signer)).await;
     let leg = ClientLeg::new(proxy, 1);
 
@@ -141,8 +146,10 @@ async fn a_body_under_the_wrong_key_is_refused() {
     // The persona signs under one key; the "bond record" names another. The
     // production client refuses the countersignature, and the leg reports
     // it as `Refused`, distinguishable from a stall.
-    let signer = Arc::new(TestKeySigner::ephemeral(APPARATUS_OWN_HEIGHT));
-    let other = TestKeySigner::ephemeral(APPARATUS_OWN_HEIGHT);
+    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(
+        APPARATUS_OWN_HEIGHT,
+    )));
+    let other = TestKeySigner::ephemeral(BlockHeight::from_raw(APPARATUS_OWN_HEIGHT));
     let (_ep, proxy) = persona(signer).await;
     let leg = ClientLeg::new(proxy, 1);
 

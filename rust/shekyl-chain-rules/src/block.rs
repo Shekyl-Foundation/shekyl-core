@@ -17,7 +17,6 @@ use crate::coverage::RuleCoverage;
 use crate::fault::FormAttempt;
 use crate::rule_set::{RuleSet, RuleSetId};
 use crate::rules::difficulty::Target;
-use crate::rules::header::B6;
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
 ///
@@ -167,6 +166,7 @@ pub struct StructurallyValid {
     rule_set: RuleSet,
     coverage: RuleCoverage,
     judged_at: Timestamp,
+    hash: BlockHash,
     seed: BlockHash,
     pow: PowHash,
     attempt: FormAttempt,
@@ -175,11 +175,16 @@ pub struct StructurallyValid {
 impl StructurallyValid {
     /// Called by `form` once every stateless rule has passed, and nowhere
     /// else.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one field per stateless-stage output; a builder would let a caller omit one"
+    )]
     pub(crate) const fn new(
         candidate: Candidate,
         rule_set: RuleSet,
         coverage: RuleCoverage,
         judged_at: Timestamp,
+        hash: BlockHash,
         seed: BlockHash,
         pow: PowHash,
         attempt: FormAttempt,
@@ -189,6 +194,7 @@ impl StructurallyValid {
             rule_set,
             coverage,
             judged_at,
+            hash,
             seed,
             pow,
             attempt,
@@ -229,6 +235,16 @@ impl StructurallyValid {
         self.judged_at
     }
 
+    /// The block's identity (CEN-B6), derived once by `form` — stateless,
+    /// outside any transaction — and read by every rule that needs it while
+    /// the view-bound stage runs (CEN-E1 first; `CHAIN_RULES_SLICE_3.md`
+    /// F8). `ValidatedBlock::derive` carries this value into the verdict;
+    /// nothing derives the identity a second time.
+    #[must_use]
+    pub const fn hash(&self) -> BlockHash {
+        self.hash
+    }
+
     /// The seed the caller claimed for CEN-D3 — verified, not trusted, by
     /// `validate`.
     #[must_use]
@@ -257,9 +273,12 @@ impl StructurallyValid {
 }
 
 impl fmt::Debug for StructurallyValid {
+    // The candidate is summarised (identity + listed count), not dumped: a
+    // block body is kilobytes and a failing assertion wants the token's claims.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StructurallyValid")
-            .field("block", &self.candidate.block.hash())
+            .field("hash", &self.hash)
+            .field("transactions", &self.candidate.transactions.len())
             .field("rule_set", &self.rule_set)
             .field("coverage", &self.coverage)
             .field("judged_at", &self.judged_at)
@@ -305,23 +324,28 @@ pub struct ValidatedBlock {
 }
 
 impl ValidatedBlock {
-    /// Derive every identity once. Called by `validate` after the last rule
-    /// has passed and nowhere else. The block's identity comes from CEN-B6's
-    /// function, which records the row in `coverage` (slice 1, Q5); the
-    /// target and the cumulative work are CEN-D4's derivation, recorded
-    /// where it ran.
+    /// Assemble the verdict's block. Called by `validate` after the last
+    /// rule has passed and nowhere else. The block's identity is **not**
+    /// derived here: `form` derived it once under CEN-B6 and the token
+    /// carried it (`StructurallyValid::hash`), because a view-bound rule
+    /// reads it while the rules run (CEN-E1). The slice-1 placement —
+    /// *"derived after the last rule has passed"* — rested on the premise
+    /// that no rule reads the identity; E1 refuted the premise
+    /// (`CHAIN_RULES_SLICE_3.md` F8, Q7). The transaction identities are
+    /// derived here, once; the target and the cumulative work are CEN-D4's
+    /// derivation, recorded where it ran.
     pub(crate) fn derive(
         candidate: Candidate,
+        hash: BlockHash,
         target: Target,
         cumulative_difficulty: CumulativeDifficulty,
-        coverage: &mut RuleCoverage,
     ) -> Self {
         let Candidate {
             block,
             transactions,
         } = candidate;
         Self {
-            hash: B6::identity(&block, coverage),
+            hash,
             miner_tx: TxIdentity::of(&block.miner_transaction),
             block,
             transactions: transactions

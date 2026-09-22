@@ -116,7 +116,7 @@ fn post(persona_byte: u8, anchor: u64, offset: u64, gindexes: &[u64]) -> Pending
         p_slot: PSlot::from_raw(u32::from(persona_byte)),
         persona: persona(persona_byte),
         tx_bytes: vec![persona_byte, 0xBE, 0xEF],
-        bond_post_offset_blocks: offset,
+        bond_post_offset_blocks: BlockCount::from_raw(offset),
         anchor_t0: ChainCount::from_raw(anchor),
         funding_gindexes: gindexes
             .iter()
@@ -129,7 +129,7 @@ fn post(persona_byte: u8, anchor: u64, offset: u64, gindexes: &[u64]) -> Pending
 
 fn test_config() -> DispatchConfig {
     DispatchConfig {
-        alarm_horizon_blocks: 100,
+        alarm_horizon_blocks: BlockCount::from_raw(100),
         // No dispersal sleep in tests: the draw's decorrelation is a
         // WI-4-graded behavior, not a unit-testable invariant.
         dispersal_bound: Duration::ZERO,
@@ -677,7 +677,7 @@ async fn a_stalled_claim_drain_and_release_on_one_persona_all_alarm() {
         .into();
     driver
         .on_tick(
-            ChainCount::from_raw(100 + test_config().alarm_horizon_blocks),
+            ChainCount::from_raw(100 + test_config().alarm_horizon_blocks.to_raw()),
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &live,
@@ -791,7 +791,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
         test_config(),
         test_lock(),
     );
-    let stalled_tip = ChainCount::from_raw(100 + test_config().alarm_horizon_blocks);
+    let stalled_tip = ChainCount::from_raw(100 + test_config().alarm_horizon_blocks.to_raw());
     let all_live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22, 33]
         .map(shekyl_types::GlobalOutputIndex::from_raw)
         .into();

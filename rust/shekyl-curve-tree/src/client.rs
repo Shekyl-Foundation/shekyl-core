@@ -820,16 +820,13 @@ impl CurveTreeClient {
         // point refuses the whole block (the local vec is discarded), so no
         // partial leaf set can reach the store or memory.
         let mut new_leaves: Vec<LeafEntry> = Vec::new();
-        let next_gindex = collect_block_leaves(
-            block.height.to_raw(),
-            &txs,
-            self.next_gindex,
-            &mut new_leaves,
-        )
-        .map_err(|source| ClientError::LeafPoint {
-            height: block.height,
-            source,
-        })?;
+        let next_gindex =
+            collect_block_leaves(block.height, &txs, self.next_gindex, &mut new_leaves).map_err(
+                |source| ClientError::LeafPoint {
+                    height: block.height,
+                    source,
+                },
+            )?;
 
         // The bucket newly final at this block's cutoff, read from the
         // *existing* maturity index (a leaf created in this block can never

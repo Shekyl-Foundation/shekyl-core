@@ -381,7 +381,7 @@ where
                 g.ledger.snapshot(),
             )
         };
-        let block_hash_at = move |h: u64| snapshot.block_hash_at(h);
+        let block_hash_at = move |h: BlockHeight| snapshot.block_hash_at(h);
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
         // Canonical P-lane floor fee — the shared single fee decision (doc
@@ -502,7 +502,7 @@ where
         let reference = anchored_reference_block(&curve_tree, chain_tip, block_hash_at)
             .await
             .map_err(StakeEngineError::from)?;
-        let reference_height = BlockHeight::from_raw(reference.height.to_raw());
+        let reference_height = reference.height;
         let required = AtomicUnits::from_raw(
             fee.to_raw()
                 .saturating_add(2)

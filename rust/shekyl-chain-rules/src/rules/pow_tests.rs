@@ -14,6 +14,7 @@ use crate::fault::{FormAttempt, Retry};
 use crate::harness::fixture::{candidate_on, recorded_with_work, root};
 use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, MockSubstrate};
 use crate::rule_set::RuleSet;
+use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::ChainValid;
 use shekyl_difficulty::{check_hash, CumulativeDifficulty, Difficulty, GENESIS_DIFFICULTY};
@@ -48,7 +49,8 @@ fn judge_with(
         Err(Faulted) => unreachable!("the mock substrate never faults here"),
     };
     chain.with_view(|view| {
-        validate(formed, &view, &RuleSet::GENESIS).map(|v| v.map(|_valid: ChainValid<_>| ()))
+        validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+            .map(|v| v.map(|_valid: ChainValid<_>| ()))
     })
 }
 
@@ -263,7 +265,13 @@ fn cen_d3_records_and_the_pow_rows_cover_on_a_passing_block() {
     .expect("no fault")
     .expect("passes");
     chain.with_view(|view| {
-        let valid = judged(validate(formed, &view, &RuleSet::GENESIS)).expect("passes");
+        let valid = judged(validate(
+            formed,
+            &view,
+            &RuleSet::GENESIS,
+            &Trust::UNANCHORED,
+        ))
+        .expect("passes");
         for row in [CenRow::D1, CenRow::D1b, CenRow::D2, CenRow::D3] {
             assert!(valid.coverage().contains(row), "{row}");
         }

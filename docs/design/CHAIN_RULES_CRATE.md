@@ -227,9 +227,19 @@ rust/shekyl-chain-rules/
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Flag { Consensus, Policy }
 
-/// Whether a rule function exists for the row in this crate.
+/// How a row is held: not yet; by a rule type the per-block stages run; by a
+/// rule type this crate enforces at another site (slice 3 Q4 — CEN-E5 at
+/// writer open; A1/A4 take it at cutover); by the C++ ingest driver until
+/// cutover (slice 1 Q2). `EnforcedAt` and `HeldByCxx` both leave
+/// `RuleSet::enforced()` (no per-block coverage can contain them); only
+/// `EnforcedAt` counts as implemented — the enforcement is Rust's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum RowStatus { Pending, Implemented }
+pub enum RowStatus {
+    Pending,
+    Implemented,
+    EnforcedAt, // unit: the path and the proof test stay on the registry entry
+    HeldByCxx,
+}
 
 /// A census row identity. **Sealed**: implemented only by the two registry
 /// enums; generic code (`Coverage<R>`, the harness) is written once over it.
@@ -580,8 +590,35 @@ pub fn form<S: Substrate>(
 /// Verifies the claims first; a refuted claim is a `Fault::Stale`, never a
 /// refusal (unproven ≠ disproven); redo `form` as the payload's `Retry` allows.
 pub fn validate<'id, V: ChainView<'id>>(
-    formed: StructurallyValid, view: &V, rule_set: &RuleSet,
+    formed: StructurallyValid, view: &V, rule_set: &RuleSet, trust: &Trust,
 ) -> Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>>;
+
+/// What this node takes on the release's word — orthogonal to `RuleSet`
+/// (PDM-Q5 / PDM-Q-F27; slice 3 Q1). Carries the release anchors (CEN-E1
+/// reads them per block); slice 6 adds the posture arm by a second
+/// constructor, `Trust::below_anchor(anchors)` (PDM-Q5 :293: band 1's
+/// skeleton), and no existing caller changes.
+pub struct Trust { anchors: ReleaseAnchors /* , posture — slice 6 */ }
+impl Trust { pub const UNANCHORED: Self; pub const fn full(anchors: ReleaseAnchors) -> Self; pub const fn anchors(&self) -> &ReleaseAnchors; }
+
+/// The release-carried anchor table, per network — `const` data shipped with
+/// the binary (PDM-Q5 "trusted with the binary"; never an operator-editable
+/// carrier), strictly ascending, const-asserted well formed. Empty on every
+/// network today (`no_release_has_shipped_an_anchor_yet` pins it).
+pub struct Anchor { pub height: BlockHeight, pub hash: BlockHash }
+pub struct ReleaseAnchors { entries: &'static [Anchor] }
+impl ReleaseAnchors {
+    pub const EMPTY: Self;
+    pub const fn for_network(network: Network) -> Self;
+    pub fn expected_at(&self, height: BlockHeight) -> Option<BlockHash>;   // CEN-E1's read
+    pub const fn current(&self) -> Option<Anchor>;                           // `C`
+    pub fn covers(&self, height: BlockHeight) -> bool;                       // band 1: `height ≤ C`
+    /// CEN-E5, run once by the writer at open; the remedy is the writer's.
+    pub fn conflict_with<'id, V: ChainView<'id>>(&self, view: &V) -> Result<Option<AnchorConflict>, V::Fault>;
+}
+pub struct AnchorConflict { pub height: BlockHeight, pub expected: BlockHash, pub recorded: Option<BlockHash> }
+impl AnchorConflict { pub const fn remedy(&self) -> Remedy; }
+pub enum Remedy { RefuseToRun /* at genesis */, PopTo(ChainCount) /* stop at max(h − 2, 1) blocks; the tip is count.tip() */ }
 
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
 pub enum Stale { Seed { claimed, expected, retry: Retry }, RuleSet { formed_under: RuleSet, in_force: RuleSet, retry } }
@@ -607,7 +644,7 @@ listed tx, re-homing a `Locus::Tx { slot: Lone }` / `Locus::Input { slot: Lone,
 Block-level **predicates** run in census order, each through
 `rules::run_form` (stateless, in `form`) or `rules::run` (view-bound, in
 `validate`), inserting `R::ROW` iff `R` passed. **Definition** rows record at
-their derivation site: CEN-B6 at `B6::identity` (from `ValidatedBlock::derive`);
+their derivation site: CEN-B6 at `B6::identity` (in `form`, carried on `StructurallyValid::hash`);
 CEN-D2 at `D2::longhash` (in `form`); CEN-C3 at `C3::window`, CEN-D4 at
 `D4::target` (D7 consulted inside it, D6 recorded at every `Target`
 production — `D6::mint` for LWMA-1, `D6::record` for genesis-block `1` and
@@ -618,7 +655,7 @@ Fakechain `Fixed`), CEN-D1b at `D1b::record` — all derived once in
 of a claim**, recorded at `D3::verify_seed`, whose failure is `Fault::Stale`.
 `Stale::RuleSet` compares the `RuleSet` by value: a Fakechain `Fixed`
 target reuses `RuleSetId::GENESIS`, so the id is not the set. Stage
-membership at slice 2: `form` runs B1, B2, B7 and derives D2;
+membership: `form` runs B1, B2, B7 and derives B6 and D2;
 `validate` verifies D3, derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
 D1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's
@@ -662,12 +699,19 @@ census_rows! {
 ```
 
 Grammar: header `pub enum <Name>: <Consensus|Policy> { … }`; per entry
-`<Var> <pending | implemented(<rust::path>) | held_by_cxx("<repo/file.cpp>", "<test>")> ,`
-with optional `///` doc and `//` comments between entries. `held_by_cxx`
+`<Var> <pending | implemented(<rust::path>) | enforced_at(<rust::path>, "<test_fn>") | held_by_cxx("<repo/file.cpp>", "<test>")> ,`
+with optional `///` doc and `//` comments between entries. `enforced_at`
+(slice 3, Q4 — [`CHAIN_RULES_SLICE_3.md`](CHAIN_RULES_SLICE_3.md)) marks a
+row **this crate** enforces at a site other than the per-block stages (CEN-E5
+at writer open); it takes the same compile pins as `implemented` plus a Rust
+`#[test]` in the crate that the gate asserts is *defined* (rule 47), leaves
+`RuleSet::enforced()` like a hold, and counts as implemented unlike one.
+`held_by_cxx`
 (slice 1, Q2 — [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §4.1) marks
 acceptance topology the C++ ingest driver decides until cutover; the value is
 the C++ **test that proves the holder refuses**, which the gate asserts
-exists, and the row leaves `RuleSet::enforced()` so completeness is `E − H`. Entries are in census §4 order restricted to the flag
+exists, and the row leaves `RuleSet::enforced()` so per-block completeness is
+`E − H − O` (`O` the at-open rows). Entries are in census §4 order restricted to the flag
 (subsystem, then row order within the table) — the gate asserts this so
 `index()` is census-derived, not arbitrary.
 
@@ -740,7 +784,7 @@ figures are still printed, as derived), **0** when they agree.
 | ≥ 1 `census_rows!` invocation; braces balance | `no census_rows! invocation` / `has no closing brace` (2) |
 | exactly one `census_rows!` per flag; header parses; flag ∈ {`Consensus`, `Policy`} | `no registry for flag F` / `N registries for flag F` / `unparseable header at line N` / `unknown flag` (2) |
 | ≥ 1 entry per registry | `registry <Name> empty` (2) |
-| entry grammar — `Var pending,`, `Var implemented(rust::path),` or `Var held_by_cxx("file", "test"),`; `implemented` **must** carry a non-empty path; `held_by_cxx` **must** carry a quoted repo-relative file and a quoted identifier | `unparseable entry at line N` (2) |
+| entry grammar — `Var pending,`, `Var implemented(rust::path),`, `Var enforced_at(rust::path, "test_fn"),` or `Var held_by_cxx("file", "test"),`; `implemented` / `enforced_at` **must** carry a non-empty path; `enforced_at` **must** carry a quoted identifier that is a `#[test] fn` defined in the crate (a mention in a comment or a call is not a definition); `held_by_cxx` **must** carry a quoted repo-relative file and a quoted identifier | `unparseable entry at line N` (2) |
 | no attribute on an entry (a `#[cfg]` the gate cannot evaluate would let the compiled enum and the counted enum differ; the enum's own attributes are fine) | `attribute on entry at line N` (2) |
 | nothing after the enum's closing brace inside the invocation | `text after the enum body at line N` (2) |
 | no duplicate variant across both registries | `duplicate entry X` (1) |
@@ -757,11 +801,14 @@ figures are still printed, as derived), **0** when they agree.
 ### 6.3 Output format (ruling §9.4, verbatim shape)
 
 ```text
-consensus: implemented I / validator-enforced (E−H)   held-by-cxx H   enforced E   ratified R / enforced E   (E = C-rows − bucket 3; validator-enforced = E − held)
-policy:    implemented I / validator-enforced (E−H)   held-by-cxx H   enforced E   ratified R / enforced E   (E = P-rows − bucket 3; validator-enforced = E − held)
+consensus: implemented I / validator-enforced (E−H)   held-by-cxx H   at-open O   enforced E   ratified R / enforced E   (E = C-rows − bucket 3; validator-enforced = E − held; per-block completeness over E − held − at-open)
+policy:    implemented I / validator-enforced (E−H)   held-by-cxx H   at-open O   enforced E   ratified R / enforced E   (E = P-rows − bucket 3; validator-enforced = E − held; per-block completeness over E − held − at-open)
 ```
 
-`I` = entries of that registry with status `implemented`; `H` = entries with
+`I` = entries of that registry with status `implemented` **or `enforced_at`**
+(Rust enforces both); `O` = entries with status `enforced_at` — printed so the
+per-block completeness denominator `E − H − O` (what `Coverage::is_complete_for`
+measures against) can be read off the line; `H` = entries with
 status `held_by_cxx`; `E` = enforced rows of that flag from the census; `R` =
 census rows of that flag in bucket 1 or 2. **`H` is a subtraction, not a
 denominator** (slice 1, Q2 condition 3): `E` is printed and never moves for a
@@ -776,7 +823,10 @@ enforced 9     ratified 5 / enforced 9`. **After slice 1's first rules (PR
 #762):** `consensus: implemented 3 / enforced 153` (4.B `3/7`), policy
 unchanged. **After the `held_by_cxx` PR:** `consensus: implemented 3 /
 validator-enforced 151   held-by-cxx 2   enforced 153   ratified 126 /
-enforced 153` (A1, A4 held). The figure moves with each slice and the landing
+enforced 153` (A1, A4 held). **After slice 3 (2026-09-20):** `consensus:
+implemented 18 / validator-enforced 151   held-by-cxx 2   at-open 1   enforced
+153   ratified 126 / enforced 153` (E5 at open; the `at-open` term added by
+that slice). The figure moves with each slice and the landing
 PR quotes its own.
 
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
@@ -913,7 +963,7 @@ lint scans them as production — no debug macros anywhere).
   ```rust
   with_view(|outer| {
       with_view(|inner| {
-          let valid = validate(candidate(), &inner, &RuleSet::GENESIS).unwrap().unwrap();
+          let valid = validate(formed(), &inner, &RuleSet::GENESIS, &Trust::UNANCHORED).unwrap().unwrap();
           connect(&outer, valid);   // fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>)
       })
   });
@@ -1271,7 +1321,21 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `validate` acquires callers beyond the store tests and the E2 driver —
   the signature is one parameter today and every later caller is a retrofit
   (SCW-7's standard). Falsify by: a band-1 sync test that connects a
-  skeleton block under `RuleSet::GENESIS` and is refused.
+  skeleton block under `RuleSet::GENESIS` and is refused. **Slice 3 opened
+  first (2026-09-20, [`CHAIN_RULES_SLICE_3.md`](CHAIN_RULES_SLICE_3.md) §4.1,
+  Q1):** Round-0 default is the `Trust` parameter in its final position,
+  carrying the release anchors E1 reads today, with the posture arm (and
+  this item's falsifier, which cannot run until a proof row exists to skip
+  and a skeleton block has a type — slice 3 F10) arriving in slice 6 through
+  a second constructor so no caller is retrofitted. `validate` has one
+  production caller at the time of the decision (`shekyl-chain-ingest`
+  `connector.rs:271`, PR #806). **LANDED as the parameter, slice 3 c3
+  (2026-09-20):** `Trust { anchors }`, `Trust::full` / `Trust::UNANCHORED`,
+  `validate(formed, view, rule_set, trust)`; CEN-E1 is its first reader.
+  **Still owed to slice 6:** the posture arm (`Trust::below_anchor`, band 1
+  per `PDM-Q5` `:293`), the 4.I skip it governs, and this item's falsifier —
+  which needs a proof row to skip and a **skeleton candidate type** a
+  band-1 block can be (slice 3 F10; `Candidate` holds full transactions).
 - **`TxIdentity::pqc_auth_hash: Option<PqcAuthHash>`** — **LANDED in the
   `tip()` PR (slice 1, 2026-09-17)**, items 1 **and** 2 of
   `DAEMON_REDB_STORE.md` §7.7's plan for `PDM-Q-F26` (PR #765): the

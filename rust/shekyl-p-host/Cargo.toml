@@ -18,6 +18,8 @@ shekyl-p-serve = { path = "../shekyl-p-serve" }
 # `HybridSignature` is the `PassKey` return type (the trait lives in
 # `shekyl-p-serve`; this crate names the type only in `NoResidentKey`).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Inland daemon-tip cache is ordinal `BlockHeight` (WSS-24 top-block).
+shekyl-types = { path = "../shekyl-types" }
 # The onion half: the supervisor, the serving posture (vanguards + onion as one
 # indivisible knob), and the derived serving identity.
 shekyl-tor-control-wallet = { path = "../shekyl-tor-control-wallet" }

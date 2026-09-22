@@ -2,8 +2,54 @@
 
 ## [Unreleased]
 
+### P2P wire, daemon RPC, CLI — the stripe engine is gone (`PDM-Q7`)
+
+- **`pruning_seed` is deleted from the P2P wire** — from `CORE_SYNC_DATA`
+  (the handshake) and from every peerlist entry, in the C++ daemon and in
+  `shekyl-levin`. It was a durable, address-keyed, self-asserted attribute
+  gossiped in every peerlist — the shape `PWD-I1` deleted `peer_id` for —
+  and with every honest node emitting `0` (verified across the seed fleet)
+  the eight other values the validator accepted were free markers for
+  topology tracing. Both wire homes were optional fields, so mixed fleets
+  interoperate in either direction; a peer that still sends the key is
+  decoded with the key ignored. The on-disk peerlist store moves `v8 → v9`
+  and an old `p2pstate.bin` is dropped on load, as with the `peer_id`
+  removal. Stripe-aware peer selection and sync gating go with it.
+- **`--prune-blockchain` and `--sync-pruned-blocks` are removed** from
+  `shekyld`; a config file naming either now fails to parse. There is no
+  per-operator pruning posture. The Monero stripe engine
+  (`common/pruning.*`, `prune_worker`, `CRYPTONOTE_PRUNING_*`, the 5-hour
+  prune timer) is deleted. Uniform discard is S-PRUNE
+  (`docs/design/DRS_E1_SPRUNE.md`), still an unfilled skeleton:
+  `prune_tx_data` remains in the C++ store with no production caller.
+- **Daemon RPC 3.35:** `pruning_seed` leaves `get_peer_list`,
+  `get_connections` and `sync_info.peers`; `next_needed_pruning_seed`
+  leaves `sync_info`; the `prune_blockchain` JSON-RPC method and the
+  `prune_blockchain` / `check_blockchain_pruning` console commands are
+  removed (the method name stays REJECTED in the RK-8 registry). Console
+  `sync_info` drops its seed column; `print_pl` drops its `pruned` filter.
+- CI: `scripts/ci/check_no_stripe_engine.sh` keeps the engine and the
+  wire field from returning in either language.
+
 ### Daemon chain store
 
+- **DRS-E1 S-CURVE — the curve-tree read surface, typed.** Schema layout
+  **9**: `curve_tree_leaves`, `curve_tree_layers` and `curve_tree_meta` leave
+  `Unshaped`. The meta table is **one row** (`CurveTreeState`: root, depth,
+  leaf count) written `EMPTY` at store creation, so an empty tree is a value
+  and a missing row is a fault — the C++ defaulted three cells three ways and
+  told callers to compare the root against `hash_init` to tell them apart.
+  The layer key is a `(layer, chunk)` tuple assembled by `LayerChunk::key`
+  (`ids`), not the LMDB `(layer << 56) | chunk` packing. Three reads on
+  `ReadSnapshot`: `curve_tree()`, `root_at(height)` (the validator's
+  `ChainView::root_at` body, made public), `leaves(range)` (bounded; SI-11
+  reports a length disagreement and a missing position as different
+  observations). A grown summary's root must equal the live root (SI-12);
+  the seal's `EMPTY` row does not, because connect records roots before the
+  grow path runs. `TreePosition`
+  moves to `shekyl-types` and `TreeLeaf` is minted beside it; existing
+  wallet-side stores open unchanged. Pre-genesis: a daemon store at layout 8
+  is recreated, not migrated.
 - **DRS-E2 increment 1 — the ingest spine's first organs.** `shekyl-chain-ingest`
   is born: the daemon's block-ingest pipeline as production code shared by
   replay (E2) and live ingest (E3) — a `Source` event model
@@ -113,6 +159,25 @@
 
 ### Wallet
 
+- **Height-semantics Phase 2f: remaining inland block ordinals are typed.**
+  `ScanResult` heights, the birthday floor, and the send-journal clocks
+  are `BlockHeight`. The scan producer walks those ordinals; the JSON
+  block number is `usize` inside the fetch helpers, and the exclusive
+  end is `ChainCount::next_height`. Persisted: `SEND_JOURNAL_BLOCK_VERSION` **2 → 3**,
+  `SYNC_STATE_BLOCK_VERSION` **2 → 3**, paired `WALLET_LEDGER_FORMAT_VERSION`
+  **19 → 20**. Postcard bytes of the transparent `u64` are identical; the
+  schema type-name change still bumps. Pre-genesis: a v2 send journal, a
+  v2 sync-state block, or a v19 wallet ledger is refused, not migrated.
+  Wire RPC and FFI pods unchanged.
+
+- **Height-semantics Phase 2e: wallet-ledger tip and bond-post offset are typed.**
+  `bond_post_offset_blocks` is `BlockCount` (`PENDING_POST_VERSION` **v11 →
+  v12**). Wallet-ledger tip / reorg heights are `BlockHeight`
+  (`LEDGER_BLOCK_VERSION` **11 → 12**, paired `WALLET_LEDGER_FORMAT_VERSION`
+  **18 → 19**). Postcard bytes of the transparent `u64` are identical; the
+  schema type-name change still bumps. Pre-genesis: a v11 ledger or v11
+  pending-post seal is refused, not migrated. Wire RPC unchanged.
+
 - **Height-semantics Phase 2c: inland decode of chain-count RPC facts.**
   Daemon-RPC `ChainTip.chain_height` / `BlockHashAt` / `BlockHeaderAt` /
   `BlockAt.chain_height` are `ChainCount`; `target_height` is
@@ -215,6 +280,28 @@
   and is unhittable. The Reinstate pop arm no longer calls
   `set_total_bonded_atomic` — connect does not move the counter.
 
+- **The anchor model has a Rust home (DRS-E6 slice 3, census 4.E).**
+  `shekyl-chain-rules` gains `ReleaseAnchors` — the release-carried
+  `assumevalid` anchor table `PDM-Q5` ratified, as `const` data per network
+  shipped with the binary (never an operator-editable file; every table is
+  empty until the first checkpoint release) — and `Trust`, a fourth input to
+  `validate(formed, view, rule_set, trust)` orthogonal to `RuleSet`
+  (**API change**: every caller passes `&Trust::UNANCHORED` or
+  `&Trust::full(ReleaseAnchors::for_network(net))`; the below-anchor posture
+  arrives in slice 6 by a second constructor). CEN-E1 (a block at an anchored
+  height carries the anchor's hash) is evaluated per block and recorded even
+  where vacuous; CEN-E5 (the recorded chain agrees with the binary's anchors)
+  is `ReleaseAnchors::conflict_with`, run by the writer at open, with the
+  C2-R1b remedy stated once as `AnchorConflict::remedy` (`RefuseToRun` at a
+  genesis conflict; `PopTo` a `ChainCount` otherwise — stop at `max(h − 2, 1)`
+  blocks, whose tip is `count.tip()`). CEN-E2 has no Rust
+  site (the store admits no alternative block) and waits on the alt view and
+  `D_max`. The block identity (CEN-B6) is now derived once in `form` and
+  carried on `StructurallyValid::hash`. The registry gains
+  `enforced_at(path, "test")` / `RowStatus::EnforcedAt` for a row Rust
+  enforces outside the per-block stages; the coverage gate prints it as
+  `at-open`. Record: `implemented 18 / validator-enforced 151, held-by-cxx 2,
+  at-open 1, enforced 153`; `ratified 126 / 153` unmoved.
 - **The Rust validator decides timestamps and proof-of-work (DRS-E6
   slice 2).** `shekyl-chain-rules` now evaluates census 4.C (CEN-C1 FTL,
   C2 strict MTP, C3 genesis-padded window) and 4.D (D1/D1b PoW vs target,

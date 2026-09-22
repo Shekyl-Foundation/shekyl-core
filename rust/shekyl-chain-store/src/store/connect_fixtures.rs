@@ -11,7 +11,7 @@ use core::convert::Infallible;
 
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt, RuleSet,
-    StructurallyValid, Substrate,
+    StructurallyValid, Substrate, Trust,
 };
 use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight, PowHash,
@@ -220,7 +220,12 @@ pub(super) fn judge<'b, 'id>(
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    match validate(formed(view, candidate)?, view, &RuleSet::GENESIS) {
+    match validate(
+        formed(view, candidate)?,
+        view,
+        &RuleSet::GENESIS,
+        &Trust::UNANCHORED,
+    ) {
         Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),
         Err(Fault::View(fault)) => Err(fault),
         Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),

@@ -144,7 +144,7 @@ pub(crate) struct ConsumerHeldEntry {
     /// [`SnapshotId`] pinned at build for submit-time comparison.
     pub snapshot_id: SnapshotId,
     /// Engine `synced_height` at build (defense-in-depth checks).
-    pub built_at_height: u64,
+    pub built_at_height: shekyl_types::BlockHeight,
     /// `block_hash_at(built_at_height)` at build.
     pub built_at_tip_hash: [u8; 32],
     /// Serialized signed transaction for daemon broadcast.
@@ -189,7 +189,7 @@ impl ConsumerHeldEntry {
         Self {
             created_at: Instant::now(),
             snapshot_id: SnapshotId([0u8; 16]),
-            built_at_height: 0,
+            built_at_height: shekyl_types::BlockHeight::ZERO,
             built_at_tip_hash: [0u8; 32],
             tx_bytes,
             request: TxRequest {

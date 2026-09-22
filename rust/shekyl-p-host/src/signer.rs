@@ -53,6 +53,7 @@ use std::sync::Arc;
 
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_p_serve::{PassKey, PassSigner, SignRefused, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
+use shekyl_types::BlockHeight;
 
 use crate::daemon_tip::DaemonTipCache;
 
@@ -118,7 +119,7 @@ impl PassSigner for HostSigner {
     /// renders the identical 404 and counts a lookup failure, so a persona
     /// that has lost sight of the chain shows up in `ServeCounters` rather
     /// than refusing every anchor behind an indistinguishable sentinel.
-    fn own_height(&self) -> Option<u64> {
+    fn own_height(&self) -> Option<BlockHeight> {
         self.tip.height()
     }
 }
@@ -155,10 +156,10 @@ mod tests {
             None,
             "before any stamp the persona cannot say where the chain is"
         );
-        tip.stamp_synced(4_321);
+        tip.stamp_synced(BlockHeight::from_raw(4_321));
         assert_eq!(
             signer.own_height(),
-            Some(4_321),
+            Some(BlockHeight::from_raw(4_321)),
             "the gate reads the daemon tip the producer stamped"
         );
     }
@@ -168,7 +169,7 @@ mod tests {
     #[test]
     fn a_daemon_that_stopped_following_refuses() {
         let (tip, signer) = signer();
-        tip.stamp_synced(4_321);
+        tip.stamp_synced(BlockHeight::from_raw(4_321));
         tip.stamp_not_following();
         assert_eq!(signer.own_height(), None);
     }
@@ -182,7 +183,7 @@ mod tests {
         let long_ago = Instant::now()
             .checked_sub(MAX_AGE + Duration::from_secs(1))
             .expect("the test clock is past the age bound");
-        tip.stamp_synced_at(4_321, long_ago);
+        tip.stamp_synced_at(BlockHeight::from_raw(4_321), long_ago);
         assert_eq!(signer.own_height(), None);
     }
 
@@ -191,7 +192,7 @@ mod tests {
     #[test]
     fn the_key_still_refuses_independently_of_the_height() {
         let (tip, signer) = signer();
-        tip.stamp_synced(4_321);
+        tip.stamp_synced(BlockHeight::from_raw(4_321));
         assert!(signer
             .sign_pass(&[0u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN])
             .is_err());

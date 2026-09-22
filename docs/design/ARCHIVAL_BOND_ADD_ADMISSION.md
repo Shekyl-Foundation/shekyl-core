@@ -177,7 +177,7 @@ The **rule** is ruled. These are **how**, and they are E4 / S-ARCH's:
 - **`D_max`** — `archival_reorg_depth_blocks` = 720
   (`config/consensus_constants.json:26`), for the finality leg.
 - **The dense `tx_id` space the partition is derived over.**
-  [`DRS_E1_STX.md`](DRS_E1_STX.md) — **landed 2026-09-19, PR #786** — makes
+  [`DRS_E1_STX.md`](../completed/DRS_E1_STX.md) — **landed 2026-09-19, PR #786** — makes
   `tx_count()` the dense count authority over `txs_pruned` (T2, `:233`) and
   records that **`tx_id` order is ruled and dense** (SI-9, STX-10 `:494`). That
   density is what makes *"does shard `k` exist"* a determinate question rather

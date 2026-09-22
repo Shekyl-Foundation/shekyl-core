@@ -144,7 +144,7 @@ impl<
         self_arc: std::sync::Arc<tokio::sync::RwLock<Self>>,
         opts: RefreshOptions,
         slot_guard: SlotGuard,
-        synced_height: u64,
+        synced_height: shekyl_types::BlockHeight,
     ) -> RefreshHandle
     where
         S: EngineSignerKind + Send + Sync + 'static,
@@ -323,7 +323,7 @@ impl<
         // (best-effort sends to a no-subscriber watch channel
         // silently succeed by replacing the buffered latest value).
         let (progress_tx, _progress_rx) = tokio::sync::watch::channel(RefreshProgress::phase_only(
-            0,
+            shekyl_types::BlockHeight::ZERO,
             0,
             0,
             RefreshPhase::Scanning,
@@ -409,8 +409,8 @@ impl<
                     debug!(
                         attempt,
                         max_retries = opts.max_retries,
-                        wallet,
-                        result,
+                        wallet = wallet.to_raw(),
+                        result = result.to_raw(),
                         "Engine::refresh: snapshot race, retrying with fresh snapshot",
                     );
                     match retry.after_race() {

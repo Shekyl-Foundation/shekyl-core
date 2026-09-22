@@ -120,6 +120,50 @@ pub enum StoreInvariant {
     /// is not folded into SI-3: R8-Q1's three-arm test needs rule-twinned
     /// belts and pure invariants to stay distinguishable.
     IdNotFresh,
+    /// **SI-11** — `curve_tree_leaves` is dense over `[0, leaf_count)`:
+    /// the summary row's count (`curve_tree_meta`, `CurveTreeState`) is the
+    /// leaf table's entry count, and every position below it has a row.
+    /// The C++ wrote the count and the leaves in one grow
+    /// (`db_lmdb.cpp:8936–8966`) and every reader took the count as the
+    /// bound; here the reads assert it instead of assuming it (DRS-E1
+    /// S-CURVE §3.3, SCU-3).
+    ///
+    /// Armed by the reads, since the grow path (DRS-E3) is not yet built.
+    /// The two observations are different and the payload says which one
+    /// fired: [`LeafDensity::Length`] is the summary read comparing the
+    /// count with the table's length, [`LeafDensity::Hole`] is the leaf
+    /// walk naming the first missing position in the range it was asked
+    /// for. A length-preserving hole (a missing position made up for by a
+    /// row past the count) is visible to the walk only.
+    LeavesNotDense {
+        /// Which disagreement the read observed.
+        observed: LeafDensity,
+    },
+    /// **SI-12** — a grown summary's root is the live root. The seal writes
+    /// [`crate::codec::CurveTreeState::EMPTY`], and `connect` records
+    /// `curve_tree_roots` on every connect whether or not the tree has
+    /// grown (SI-4), so the EMPTY row is not a claim about that live root.
+    /// Once the summary is no longer EMPTY, its `root` is
+    /// `curve_tree_roots[tip + 1]` (or [`shekyl_types::CurveTreeRoot::EMPTY`]
+    /// when the chain has no tip). The summary read compares them.
+    ///
+    /// The grow path (DRS-E3) is what replaces EMPTY. Until it does, a
+    /// connected chain keeps the seal's row and this belt stays quiet.
+    SummaryRootDiverged,
+}
+
+/// What an SI-11 read observed. One invariant, two observations: a length
+/// comparison does not know which position is missing, and a walk knows the
+/// position and not the table's length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeafDensity {
+    /// `curve_tree_meta`'s `leaf_count` is not `curve_tree_leaves`' length.
+    /// `count` is the summary; `rows` is the table.
+    Length { count: u64, rows: u64 },
+    /// `position` is inside `[0, leaf_count)` and the leaf table has no row
+    /// there. This is the first such position in the range the walk was
+    /// asked for.
+    Hole { position: u64 },
 }
 
 impl StoreInvariant {
@@ -133,6 +177,8 @@ impl StoreInvariant {
             Self::RootRewritten => 4,
             Self::UndoLogIncoherent { .. } => 6,
             Self::WorkNotIncreasing { .. } => 10,
+            Self::LeavesNotDense { .. } => 11,
+            Self::SummaryRootDiverged => 12,
             Self::CellCorrupt { .. } => 7,
             Self::FoldOverflow { .. } => 8,
             Self::IdNotFresh => 9,
@@ -179,6 +225,22 @@ impl core::fmt::Display for StoreInvariant {
                 "undo log at height {height}: {fault}; the journal no longer describes the \
                  tables, rebuild from the block corpus"
             ),
+            Self::LeavesNotDense { observed } => match observed {
+                LeafDensity::Length { count, rows } => write!(
+                    f,
+                    "curve_tree_leaves has {rows} rows and the summary's leaf count is {count}; \
+                     the summary and the leaf table disagree, rebuild from the block corpus"
+                ),
+                LeafDensity::Hole { position } => write!(
+                    f,
+                    "curve_tree_leaves has no row at position {position}; the summary's leaf \
+                     count includes that position, rebuild from the block corpus"
+                ),
+            },
+            Self::SummaryRootDiverged => f.write_str(
+                "the grown curve_tree_meta root is not the live root at curve_tree_roots[tip + 1]; \
+                 the summary and the recorded root disagree, rebuild from the block corpus",
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -206,6 +268,8 @@ impl core::error::Error for StoreInvariant {
             | Self::RootRewritten
             | Self::FoldOverflow { .. }
             | Self::IdNotFresh
+            | Self::LeavesNotDense { .. }
+            | Self::SummaryRootDiverged
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

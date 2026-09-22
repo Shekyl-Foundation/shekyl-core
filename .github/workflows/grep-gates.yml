@@ -133,6 +133,11 @@ jobs:
             scripts/ci/domain_registry_gate.sh
           run_one "Consensus-invariants" \
             scripts/ci/check_consensus_invariants.sh
+          # PDM-Q7: the stripe engine and its pruning_seed wire field are
+          # deleted; a codec port carries a wire field by default (LV-2 did),
+          # so this is the only thing that keeps either from coming back.
+          run_one "PDM-Q7: no stripe engine, no pruning_seed on the wire" \
+            scripts/ci/check_no_stripe_engine.sh
           run_one "Pending-post single-write-path" \
             scripts/ci/check_pending_post_write_path.sh
           run_one "Unbounded /dev read" \

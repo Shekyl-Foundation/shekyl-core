@@ -186,7 +186,7 @@ where
             let g = self_arc.read().await;
             let snap = g.ledger.snapshot();
             let chain_tip = g.ledger.synced_height();
-            let block_hash_at = move |h: u64| snap.block_hash_at(h);
+            let block_hash_at = move |h: BlockHeight| snap.block_hash_at(h);
             (
                 g.curve_tree.clone(),
                 chain_tip,

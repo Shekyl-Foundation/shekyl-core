@@ -26,7 +26,23 @@
 #   mdb_set_compare compare_hash32     -> LmdbHashKey
 #   mdb_set_compare compare_string     -> &str
 #   mdb_set_dupsort compare_hash32     -> LmdbHashKey  (zerokval collapse)
-#   MDB_INTEGERKEY                     -> u64
+#   MDB_INTEGERKEY                     -> u64, or the tuple that UNPACKS a
+#                                         composite key: where the C++ builds
+#                                         the table's key with a shift-or pack
+#                                         `(uintA_t hi << (64 - A)) | lo`
+#                                         (`ct_layer_chunk_key`, S-CURVE), the
+#                                         tuple `(uA, u64)` orders component-
+#                                         wise exactly as the packed u64 does
+#                                         over every key the pack can produce
+#                                         — the high field is the high bits —
+#                                         so both reproduce LMDB's order. The
+#                                         pack is read off the builder's body
+#                                         and bound to the table its callers
+#                                         address (`packed_key_facts`); a
+#                                         shift that is not `64 - A` is not
+#                                         order-equivalent and mints no tuple.
+#                                         `SCU-Q3` ruled the tuple for
+#                                         `curve_tree_layers`.
 #   MDB_INTEGERKEY + dupsort compare_uint64: decided by HOW THE C++ WRITES
 #                                         the table — the key argument of its
 #                                         `mdb_cursor_put` calls, which is the
@@ -87,6 +103,24 @@ SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
 # moves only with a rule, never to make a run pass.
 MIN_CONSTRAINTS = 29
 
+# Tables the C++ no longer writes at all, with the put shape they carried
+# when they were last written. The classifying fact for a uint64-dupsort
+# INTEGERKEY table is its put; a table with no put has no fact, and this
+# gate treats a missing fact as red rather than as "unconstrained" — so a
+# table that legitimately lost its writer needs its last shape declared here,
+# by name, with the reason. Each entry is a reversion clause (rule 21): the
+# gate goes red if the table gains a put again (the entry must go) or leaves
+# the X-macro (the entry is stale), so the declaration cannot outlive either
+# of the facts it stands in for.
+WRITE_NEVER: dict[str, tuple[str, str]] = {
+    # `txs_prunable_tip`: only a stripe-pruned node ever wrote it, and the
+    # stripe engine is deleted (PDM-Q7, 2026-09-21). The delete in
+    # `remove_transaction_data` still addresses it by real tx_id key, as the
+    # deleted put did. The table stays in the X-macro until a layout bump
+    # drops it (DAEMON_REDB_STORE.md, S-PRUNE row).
+    "txs_prunable_tip": ("real", "PDM-Q7: the stripe engine's write is deleted; table dies at the next layout bump"),
+}
+
 # The value type may itself be generic — `Coded<BlockInfo>`, `Blob<BlockBody>`
 # (DAEMON_REDB_STORE.md §11.1(f)) — so it is matched up to the `=` rather than
 # to the first `>`. Keys are not generic but may be a **tuple** (`(u64, u64)`,
@@ -117,7 +151,10 @@ class UnclassifiedTable(Exception):
 
 
 def expected_key_types(
-    flags: str, kinds: dict[str, str], put: str | None = PUT_UNSEEN
+    flags: str,
+    kinds: dict[str, str],
+    put: str | None = PUT_UNSEEN,
+    packed: tuple[int, int] | None = None,
 ) -> tuple[str, ...] | None:
     """The redb key types that reproduce the table's LMDB order, or None if
     the table is unconstrained. More than one only where two shapes both
@@ -131,6 +168,10 @@ def expected_key_types(
         return ("LmdbHashKey",)
     if "MDB_INTEGERKEY" in flags:
         if kinds.get("dupsort") != "compare_uint64":
+            if packed is not None:
+                hi_bits, shift = packed
+                if shift == 64 - hi_bits:
+                    return ("u64", f"(u{hi_bits}, u64)")
             return ("u64",)
         if put == PUT_ZEROKVAL:
             return ("u64",)
@@ -162,6 +203,52 @@ def classify_puts(puts: list[tuple[str, str]]) -> str | None:
     return PUT_REAL
 
 
+# A composite key built by shift-or: `uint64_t f(uintA_t hi, uint64_t lo) {
+# return (static_cast<uint64_t>(hi) << S) | lo; }`. Captures (name, A, S).
+PACK_RE = re.compile(
+    r"uint64_t\s+(\w+)\s*\(\s*uint(\d+)_t\s+(\w+)\s*,\s*uint64_t\s+\w+\s*\)\s*\{\s*"
+    r"return\s*\(\s*static_cast<uint64_t>\(\s*\3\s*\)\s*<<\s*(\d+)\s*\)\s*\|\s*\w+\s*;",
+    re.S,
+)
+# How far below a pack call the table it keys is addressed. Every site in
+# db_lmdb.cpp is `key = f(..); MDB_val k = {..}; mdb_*(txn, m_<table>, &k, ..)`,
+# three lines; the window is generous, not loose — a second table inside it
+# is ambiguity, and ambiguity is a raise, not a guess.
+PACK_WINDOW_LINES = 8
+
+
+class AmbiguousPack(Exception):
+    """A packed-key builder whose call sites address more than one table, or
+    none: the fact that binds the pack to a table is missing."""
+
+
+def packed_key_facts(src: str) -> dict[str, tuple[int, int]]:
+    """`{table member: (hi_bits, shift)}` for every shift-or key builder in
+    `src`, bound to the table its callers address within `PACK_WINDOW_LINES`
+    of the call. Raises `AmbiguousPack` rather than guessing."""
+    lines = src.splitlines()
+    out: dict[str, tuple[int, int]] = {}
+    for m in PACK_RE.finditer(src):
+        fn, hi_bits, _hi, shift = m.group(1), int(m.group(2)), m.group(3), int(m.group(4))
+        tables: set[str] = set()
+        call = re.compile(r"=\s*" + re.escape(fn) + r"\s*\(")
+        for i, line in enumerate(lines):
+            if not call.search(line):
+                continue
+            window = "\n".join(lines[i : i + PACK_WINDOW_LINES])
+            # The dbi is the argument after the txn (`mdb_get(txn, m_<t>, ..)`);
+            # a cursor op names its table in the cursor (`m_cur_<t>`).
+            tables.update(re.findall(r"mdb_(?:get|put|del)\(\s*[^,]+,\s*m_(\w+)\b", window))
+            tables.update(re.findall(r"mdb_cursor_\w+\(\s*m_cur_(\w+)\b", window))
+        if len(tables) != 1:
+            raise AmbiguousPack(
+                f"{fn}: pack builder's call sites address {sorted(tables) or 'no'} table(s); "
+                "exactly one is the fact that binds a pack to a table"
+            )
+        out[tables.pop()] = (hi_bits, shift)
+    return out
+
+
 def lmdb_facts():
     src = LMDB.read_text(encoding="utf-8")
     macro = re.search(r"#define SHEKYL_LMDB_TABLES\(X\)(.*?)\n\n", src, re.S)
@@ -182,11 +269,18 @@ def lmdb_facts():
         r"mdb_cursor_put\(\s*m_cur_(\w+)\s*,\s*([^,]+),\s*[^,]+,\s*([^)]*)\)", src
     ):
         puts.setdefault(m.group(1), []).append((m.group(2).strip(), m.group(3).strip()))
+    packs = packed_key_facts(src)
     facts = {}
     for const, name in names:
         flags, member = opens.get(const, ("", ""))
         member = re.sub(r"^m_", "", member)
-        facts[name] = (flags, cmps.get(member, []), const, classify_puts(puts.get(member, [])))
+        facts[name] = (
+            flags,
+            cmps.get(member, []),
+            const,
+            classify_puts(puts.get(member, [])),
+            packs.get(member),
+        )
     return facts, names, opens
 
 
@@ -248,13 +342,46 @@ def selftest() -> None:
             "MDB_CREATE",
             {},
             PUT_UNSEEN,
-            None,),
+            None,
+        ),
     ]
     failures = []
     for label, flags, kinds, put, want in cases:
         got = expected_key_types(flags, kinds, put)
         if got != want:
             failures.append(f"{label}: expected key {want!r}, got {got!r}")
+    # A packed INTEGERKEY admits the order-equivalent tuple, and only that
+    # one: the high field must be the high bits (`shift == 64 - A`).
+    packed_cases = [
+        ("curve_tree_layers pack (8, 56)", (8, 56), ("u64", "(u8, u64)")),
+        ("a pack whose shift is not 64 - A is not order-equivalent", (8, 40), ("u64",)),
+        ("a 16-bit high field", (16, 48), ("u64", "(u16, u64)")),
+    ]
+    for label, packed, want in packed_cases:
+        got = expected_key_types("MDB_INTEGERKEY | MDB_CREATE", {}, PUT_UNSEEN, packed)
+        if got != want:
+            failures.append(f"{label}: expected key {want!r}, got {got!r}")
+    # The pack extractor: the builder's body, and the binding to the table
+    # its callers address — one table, or a raise.
+    pack_src = """
+  uint64_t ct_layer_chunk_key(uint8_t layer, uint64_t chunk) {
+    return (static_cast<uint64_t>(layer) << 56) | chunk;
+  }
+  void f() {
+    uint64_t layer_key = ct_layer_chunk_key(layer, chunk);
+    MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+    const int result = mdb_del(*m_write_txn, m_curve_tree_layers, &k, nullptr);
+  }
+"""
+    if packed_key_facts(pack_src) != {"curve_tree_layers": (8, 56)}:
+        failures.append(f"pack extractor: {packed_key_facts(pack_src)!r}")
+    try:
+        packed_key_facts(pack_src.replace("mdb_del(*m_write_txn, m_curve_tree_layers", "g("))
+        failures.append("a pack bound to no table was accepted instead of raised")
+    except AmbiguousPack:
+        pass
+    if packed_key_facts("  uint64_t plain(uint64_t a) { return a; }\n") != {}:
+        failures.append("a non-pack builder minted a pack fact")
     # A uint64-dupsort table with no parsed put is a failure, never None.
     try:
         expected_key_types(
@@ -282,6 +409,14 @@ def selftest() -> None:
         got = classify_puts(puts)
         if got != want:
             failures.append(f"put fold {label}: expected {want!r}, got {got!r}")
+    # WRITE_NEVER: a declared shape must be a shape the rule function accepts
+    # (a typo here would silently classify nothing), and the declared table
+    # must be one the X-macro parse can find on this tree.
+    for wn_name, (wn_shape, _why) in WRITE_NEVER.items():
+        if wn_shape not in (PUT_ZEROKVAL, PUT_REAL_APPENDDUP, PUT_REAL):
+            failures.append(f"WRITE_NEVER[{wn_name!r}] declares unknown put shape {wn_shape!r}")
+        if wn_name not in (lmdb_facts()[0] or {}):
+            failures.append(f"WRITE_NEVER[{wn_name!r}] names a table the X-macro parse does not find")
     # The tuple parse: the key group must cross the inner comma.
     m = DEF_RE.search(
         'pub const X: TableDefinition<(u64, u64), Coded<OutKey>> = TableDefinition::new("x");'
@@ -295,6 +430,7 @@ def selftest() -> None:
         sys.exit(1)
     print(
         f"redb key-type selftest: {len(cases)} key-rule cases + 1 unclassified case + "
+        f"{len(packed_cases)} packed-key cases + 3 pack-extractor cases + "
         f"{len(folds)} put-fold cases + 1 parse case, all held"
     )
 
@@ -307,7 +443,10 @@ def main():
     if failures:
         report(failures)
 
-    facts, names, opens = lmdb_facts()
+    try:
+        facts, names, opens = lmdb_facts()
+    except AmbiguousPack as e:
+        report([f"{LMDB.name}: {e}"])
     if not facts:
         report([f"{LMDB.name}: SHEKYL_LMDB_TABLES did not parse — subject missing"])
 
@@ -337,6 +476,15 @@ def main():
     if not names:
         report([f"{LMDB.name}: parsed ZERO tables — subject missing"])
 
+    # A WRITE_NEVER entry names a table that must still exist in the X-macro:
+    # once a layout bump drops the table, the entry is a declaration about
+    # nothing and has to go with it.
+    for stale in sorted(set(WRITE_NEVER) - set(facts)):
+        failures.append(
+            f"{stale}: named in WRITE_NEVER ({WRITE_NEVER[stale][1]}) but no longer in the "
+            f"X-macro — the table is gone; remove the WRITE_NEVER entry"
+        )
+
     # Rust-only tables (schema.rs `RUST_ONLY_TABLES`) have no LMDB flags to
     # derive a key type from, so they are outside this gate's domain — but
     # only when named there. An unnamed extra is still red below: naming a
@@ -356,7 +504,17 @@ def main():
                 f"(and is not named in RUST_ONLY_TABLES)"
             )
             continue
-        flags, cmps, _const, put = facts[name]
+        flags, cmps, _const, put, packed = facts[name]
+        if name in WRITE_NEVER:
+            declared, why = WRITE_NEVER[name]
+            if put is not PUT_UNSEEN:
+                failures.append(
+                    f"{name}: declared write-never ({why}) but a `mdb_cursor_put` on its "
+                    f"cursor parsed as {put!r} — the table is written again; remove the "
+                    f"WRITE_NEVER entry and let the put classify it"
+                )
+                continue
+            put = declared
         key, value = key.strip(), value.strip()
         kinds = {k: fn for k, fn in cmps}
 
@@ -370,7 +528,7 @@ def main():
                 )
 
         try:
-            exp_key = expected_key_types(flags, kinds, put)
+            exp_key = expected_key_types(flags, kinds, put, packed)
         except UnclassifiedTable as e:
             failures.append(f"{name}: {e} — the gate's classifying fact is missing")
             continue

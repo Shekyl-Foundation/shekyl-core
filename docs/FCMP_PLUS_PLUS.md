@@ -1048,12 +1048,11 @@ stores the first block height not yet processed (with one-time read of legacy
 If any expected transaction row is missing (`TX_DNE`) during a pruning batch,
 the batch now fails immediately and does not advance the watermark, preventing
 partial-prune state from being recorded as completed.
-`Blockchain::update_blockchain_pruning()`
-calls `prune_tx_data` when the node is in stripe-pruning mode so the
-chain prunes incrementally.
-
-The `--prune-blockchain` CLI flag triggers both stripe-based pruning and
-this tx-data pass at startup.
+*(2026-09-21: the stripe engine — `--prune-blockchain`,
+`update_blockchain_pruning`, the periodic pass — is deleted under `PDM-Q7`.
+`prune_tx_data` remains in the C++ store with no production caller until
+the store is replaced; the uniform daemon discard is S-PRUNE,
+`docs/design/DRS_E1_SPRUNE.md`.)*
 
 ---
 

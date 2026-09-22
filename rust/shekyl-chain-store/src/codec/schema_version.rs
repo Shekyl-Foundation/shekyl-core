@@ -77,7 +77,17 @@ use super::{Canonical, CodecError};
 ///   and does not find it. The wire is untouched (the `Reinstate` bond-post
 ///   kind keeps discriminant `1`, and the FFI error-code values are
 ///   unchanged); this bump is about the store's file, not the chain's bytes.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(8);
+/// - `9` — DRS-E1 S-CURVE (`DRS_E1_SCURVE.md` §4): three curve-tree tables
+///   leave `Unshaped`. `curve_tree_leaves` → `Coded<tree_leaf>` (128 bytes,
+///   the C++ row as-is); `curve_tree_layers` re-keys from the packed
+///   `(layer << 56) | chunk` `u64` to the tuple `(u8, u64)` (`SCU-Q3`) with
+///   `Coded<layer_hash>` values; `curve_tree_meta` collapses three
+///   string-keyed cells into **one** `Coded<curve_tree_state>` row under the
+///   unit key (`SCU-Q1`), written `EMPTY` by the seal. Leaf and hash bytes
+///   are unchanged; the layer key and the meta row are new layouts. Four
+///   codec fixtures are born; the digest's root family (`curve_tree_roots`)
+///   does not move.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(9);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -134,10 +144,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(8));
-        assert_eq!(SCHEMA_VERSION.encode(), [8, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(9));
+        assert_eq!(SCHEMA_VERSION.encode(), [9, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[8, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[9, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

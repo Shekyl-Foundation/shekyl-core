@@ -67,14 +67,14 @@
 //! `Zeroizing<[u8; 32]>` and the wrapping `RecoveredWalletOutput`
 //! is `ZeroizeOnDrop`, so dropping a `ScanResult` (whether applied
 //! or discarded) wipes the secret material in place. `ScanResult`
-//! itself does not derive `ZeroizeOnDrop` — `Range<u64>` is not
+//! itself does not derive `ZeroizeOnDrop` — `Range<BlockHeight>` is not
 //! `Zeroize` — but composition handles the secret-wipe contract.
 
 use std::ops::Range;
 
 use shekyl_curve_tree::RawOutput;
 use shekyl_scanner::RecoveredWalletOutput;
-use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 
 /// One transaction's leaf inputs, decoded from a `ScannableBlock` and
 /// owned (`Send + 'static`) so it can ride on [`ScanResult`] and cross the
@@ -126,7 +126,7 @@ pub struct OwnedTxLeaves {
 pub struct ScanResult {
     /// Half-open height range covered by this result. Empty ranges
     /// (`start == end`) are permitted and apply as a no-op.
-    pub processed_height_range: Range<u64>,
+    pub processed_height_range: Range<BlockHeight>,
 
     /// Block hash of `processed_height_range.start - 1`, or `None`
     /// when `start == 1` (the genesis case). The merge checks this
@@ -140,7 +140,7 @@ pub struct ScanResult {
     /// drives [`shekyl_engine_state::LedgerIndexes::ingest_block`]
     /// per height, even when no events fired in that block, because
     /// the persisted ledger's `synced_height` advances per block.
-    pub block_hashes: Vec<(u64, BlockHash)>,
+    pub block_hashes: Vec<(BlockHeight, BlockHash)>,
 
     /// Outputs detected as belonging to the wallet. Each carries
     /// the block height it was found in; the merge groups them by
@@ -175,7 +175,7 @@ pub struct ScanResult {
     /// **A1 frozen-contract** (CT-5 §3.2): the field shape is frozen here.
     /// CT-5a populates and carries it; the merge-driven ingest that consumes
     /// it lands in CT-5a commit 4.
-    pub block_leaves: Vec<(u64, Vec<OwnedTxLeaves>)>,
+    pub block_leaves: Vec<(BlockHeight, Vec<OwnedTxLeaves>)>,
 
     /// Per-block consensus header `curve_tree_root` (from pre-0's parser),
     /// keyed by height in `processed_height_range`, ascending. Consumed by the
@@ -185,7 +185,7 @@ pub struct ScanResult {
     /// CT-5a populates this field but does **not** yet consume it — the §3.3
     /// verify lands in CT-5b. This is a deliberate write-but-not-read transit
     /// field, not dead code; do not remove it (CT-5 §6 E6b note).
-    pub block_curve_tree_roots: Vec<(u64, CurveTreeRoot)>,
+    pub block_curve_tree_roots: Vec<(BlockHeight, CurveTreeRoot)>,
 
     /// Bond-post sightings from the principal scan's **bond watch**
     /// (SA-R-6 from-seed reconstruction): slots whose cached persona
@@ -207,7 +207,7 @@ pub struct DetectedTransfer {
     /// Block height the output was found in. Must be a height
     /// present in the enclosing
     /// [`ScanResult::processed_height_range`].
-    pub block_height: u64,
+    pub block_height: BlockHeight,
 
     /// Recovered output material. Holds PQC re-derivation values
     /// (`ho`, `y`, `z`, `k_amount`, `combined_shared_secret`) that
@@ -223,7 +223,7 @@ pub struct DetectedTransfer {
 #[derive(Debug, Clone)]
 pub struct KeyImageObserved {
     /// Block height the spend was observed in.
-    pub block_height: u64,
+    pub block_height: BlockHeight,
 
     /// Per-input key image as it appears on-wire in
     /// `Input::ToKey { key_image, .. }` and
@@ -254,7 +254,7 @@ pub struct ReorgRewind {
     /// Height at and above which the wallet's recorded chain
     /// diverged from the daemon's; the merge drops state at and
     /// above this height before applying the rest of the result.
-    pub fork_height: u64,
+    pub fork_height: BlockHeight,
 }
 
 impl ScanResult {
@@ -264,7 +264,7 @@ impl ScanResult {
     ///
     /// Useful in tests and as the "nothing-changed" return shape
     /// from a scanner pass that found the wallet already at tip.
-    pub fn empty_at(start: u64, parent_hash: Option<BlockHash>) -> Self {
+    pub fn empty_at(start: BlockHeight, parent_hash: Option<BlockHash>) -> Self {
         Self {
             processed_height_range: start..start,
             parent_hash,
@@ -291,7 +291,7 @@ impl ScanResult {
 pub struct BondSightingObserved {
     /// Block height the bond post was observed in. Must be a height in the
     /// enclosing [`ScanResult::processed_height_range`].
-    pub block_height: u64,
+    pub block_height: BlockHeight,
     /// The persona slot whose cached canonical id matched.
     pub slot: u32,
 }

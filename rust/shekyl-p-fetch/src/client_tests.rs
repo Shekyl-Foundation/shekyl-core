@@ -17,6 +17,7 @@ use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_ATTESTATION,
 };
+use shekyl_types::BlockHeight;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -263,7 +264,7 @@ fn target(keys: &Keys) -> FetchTarget {
 }
 
 fn header() -> RequestHeader {
-    RequestHeader::with_nonce([0xa5; 32], 9_000, [0x5a; 32])
+    RequestHeader::with_nonce([0xa5; 32], BlockHeight::from_raw(9_000), [0x5a; 32])
 }
 
 fn fast() -> Timeouts {
@@ -668,7 +669,7 @@ async fn a_signature_over_a_different_transcript_or_key_is_bad_countersignature(
     assert!(matches!(out, Err(FetchError::BadCountersignature)));
 
     // Right key, wrong nonce in the transcript.
-    let other = RequestHeader::with_nonce([0x11; 32], 9_000, [0x5a; 32]);
+    let other = RequestHeader::with_nonce([0x11; 32], BlockHeight::from_raw(9_000), [0x5a; 32]);
     let (out, _) = run(
         Script::Respond(signed_response(&keys, &other, SHARD)),
         Arc::clone(&hole),

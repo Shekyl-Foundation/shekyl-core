@@ -168,10 +168,6 @@ public:
   virtual uint8_t get_hard_fork_version(uint64_t height) const override { return 0; }
   virtual void check_hard_fork_info() override {}
 
-  virtual uint32_t get_blockchain_pruning_seed() const override { return 0; }
-  virtual bool prune_blockchain(uint32_t pruning_seed = 0) override { return true; }
-  virtual bool update_pruning() override { return true; }
-  virtual bool check_pruning() override { return true; }
 
   virtual void add_alt_block(const crypto::hash &blkid, const cryptonote::alt_block_data_t &data, const cryptonote::blobdata_ref &blob) override {}
   virtual bool get_alt_block(const crypto::hash &blkid, alt_block_data_t *data, cryptonote::blobdata *blob) override { return false; }
