@@ -160,20 +160,12 @@ pub fn calc_burn_pct_at(
     )
 }
 
-/// **The one owner of the fee burn** (CEN-F17; E6 slice 4 §3.1 S1/S3):
+/// The fee burn (CEN-F17): the percentage from `params` and `supply`, then
+/// the D2-escalated split at `n`.
 ///
-/// ```text
-/// fees == 0  ⇒  { miner_fee_income: 0, staker_pool: 0, destroyed: 0 }
-/// otherwise  ⇒  compute_burn_split_at(fees, calc_burn_pct_at(volume, supply), n)
-/// ```
-///
-/// Until this landed, both lines lived in the C++ shim `economics.h`
-/// (`compute_fee_burn`): the zero-fee arm decided the outcome before any
-/// Rust ran, and the composition — the percentage feeding the split — was
-/// C++'s. Neither survives a rule change, so neither is marshaling (R8's
-/// discriminator); both are here, with fixtures. The zero arm is
-/// behaviour-identical to running the pipeline on zero fees and is kept
-/// as the rule's own statement of the case, not as an optimisation.
+/// Zero fees are the pipeline at zero. The percentage does not depend on
+/// the fee, and the split is linear in it, so the three legs are zero
+/// without a separate arm.
 #[must_use]
 pub fn compute_fee_burn(
     total_fees: u64,
@@ -182,13 +174,6 @@ pub fn compute_fee_burn(
     n: FrozenSegmentCount,
     params: &EconomicParams,
 ) -> BurnSplit {
-    if total_fees == 0 {
-        return BurnSplit {
-            miner_fee_income: 0,
-            staker_pool_amount: 0,
-            actually_destroyed: 0,
-        };
-    }
     let burn_pct = calc_burn_pct_at(tx_volume, supply, params);
     compute_burn_split_at(total_fees, burn_pct, n, params)
 }
@@ -198,7 +183,7 @@ pub fn compute_fee_burn(
 /// `n` is parent-block [`FrozenSegmentCount`]. The share is derived from
 /// `params` via [`staker_pool_share_at`] — numerics never need to cross FFI as
 /// a free parameter. Consensus paths reach this through
-/// [`compute_fee_burn`], which owns the zero-fee arm and the percentage.
+/// [`compute_fee_burn`], which owns the percentage and this split.
 #[must_use]
 pub fn compute_burn_split_at(
     total_fees: u64,
@@ -219,9 +204,7 @@ mod tests {
         CirculatingSupply::derive(AtomicUnits::from_raw(net), AtomicUnits::ZERO).expect("no burn")
     }
 
-    /// The zero-fee arm the C++ shim owned (S1): all three legs zero, and
-    /// identical to running the pipeline on zero fees — the arm is the
-    /// rule's statement, not a shortcut with its own answer.
+    /// Zero fees are the pipeline at zero: every leg is zero.
     #[test]
     fn zero_fees_burn_nothing_and_pay_nothing() {
         let p = EconomicParams::default();
@@ -234,11 +217,6 @@ mod tests {
                 staker_pool_amount: 0,
                 actually_destroyed: 0
             }
-        );
-        let pct = calc_burn_pct_at(v, supply(1_000_000), &p);
-        assert_eq!(
-            split,
-            compute_burn_split_at(0, pct, FrozenSegmentCount::new(0), &p)
         );
     }
 

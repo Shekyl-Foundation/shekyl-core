@@ -21,34 +21,20 @@ pub struct EmissionSplit {
     pub staker_emission: u64,
 }
 
-/// **The one owner of the emission split** (CEN-F16; E6 slice 4 §3.1 S4/S6):
+/// The emission split (CEN-F16): the effective share at `current_height`,
+/// measured from `epoch`, then [`split_block_emission`].
 ///
-/// ```text
-/// emission == 0  ⇒  { miner: 0, staker: 0 }
-/// otherwise      ⇒  split_block_emission(emission,
-///                       calc_effective_emission_share(height, epoch, SHARE, DECAY, BLOCKS_PER_YEAR))
-/// ```
-///
-/// `epoch` is the height the decay is measured from — CEN-F21's
-/// `genesis_ng_height`, **1** on every shipped network (the C++ derives it
-/// from the one-row hardfork table; the Rust validator states it as a
-/// `RuleSet` parameter). Until this landed the zero arm and the
-/// composition lived in the C++ shim `economics.h` (`compute_emission_split`)
-/// with the three constants marshaled from `cryptonote_config.h` (S5); the
-/// constants are this crate's generated `params` consts, so nothing crosses
-/// a boundary as a free parameter.
+/// The share constants are this crate's generated params, not caller
+/// arguments. `epoch` is CEN-F21's `genesis_ng_height` (1 on every shipped
+/// network). Zero emission is the split at zero: both legs are zero,
+/// because [`split_block_emission`] returns the emission unchanged and a
+/// zero staker leg when the emission is zero.
 #[must_use]
 pub fn compute_emission_split(
     block_emission: u64,
     current_height: u64,
     epoch: u64,
 ) -> EmissionSplit {
-    if block_emission == 0 {
-        return EmissionSplit {
-            miner_emission: 0,
-            staker_emission: 0,
-        };
-    }
     let effective_share = calc_effective_emission_share(
         current_height,
         epoch,
@@ -133,8 +119,7 @@ pub fn split_block_emission(block_emission: u64, effective_share: u64) -> (u64, 
 mod tests {
     use super::*;
 
-    /// The zero arm the C++ shim owned (S4): both legs zero, and identical
-    /// to composing the split on zero emission.
+    /// Zero emission is the split at zero: both legs are zero.
     #[test]
     fn zero_emission_splits_to_nothing() {
         let split = compute_emission_split(0, 1_000_000, 1);
@@ -145,14 +130,6 @@ mod tests {
                 staker_emission: 0
             }
         );
-        let share = calc_effective_emission_share(
-            1_000_000,
-            1,
-            STAKER_EMISSION_SHARE,
-            STAKER_EMISSION_DECAY,
-            BLOCKS_PER_YEAR,
-        );
-        assert_eq!(split_block_emission(0, share), (0, 0));
     }
 
     /// The composition the C++ shim owned (S6): the effective share at the
