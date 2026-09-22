@@ -542,12 +542,15 @@ quality.
 
 **One asymmetry to carry with it, because it is why §2.7.5's route degenerated.**
 The verifier is **one-directional**: it resolves claims **about others**, from
-our side, and **its verdict never returns to the claimant.** The network learns
-whether *you* are reachable; *you* do not. So E1 has **two** gaps, not one —
-**what to claim**, and **no feedback channel for the answer** — and §2.10.3
-showed that the obvious feedback route (spotting our own entry in a received
-peerlist head) collapses at the default port. **E2's verification is not the
-hard half. E1's proposal source is.**
+our side, and its verdict does not return to the claimant. §2.10.3 showed the
+obvious feedback route — spotting our own entry in a received peerlist head —
+collapses at the default port. **E2's verification is not the hard half. E1's
+proposal source is.**
+
+> ***"Gap" is RETRACTED for the feedback half*** (2026-09-22). The absence of a
+> feedback channel is **load-bearing, not missing** — §2.11 states the rule it
+> serves. E1 has **one** gap (what to claim) and **one property** (no
+> transmissible self-attestation).
 
 ### 2.7.8 THREE PORTS — the vocabulary, because conflating them is how this got muddled
 
@@ -1303,6 +1306,85 @@ that.
 **a node with healthy inbound reports the same state as an unreachable one** —
 which would mean the observation set is too small to discriminate and a
 threshold was doing the work after all.
+
+## 2.11 THE ROUND'S CLOSING RULE — peers supply hypotheses; only your own dials supply facts
+
+**Stated 2026-09-22 (steering). This is the round's most portable result**, and
+everything above is an instance of it.
+
+### 2.11.1 Learning is free; TRANSMITTING is what breaks the design
+
+The earlier framing — that a node cannot *find out* whether it is reachable —
+was the wrong invariant, and calling it a gap was the wrong word.
+
+> **Learning a fact about yourself breaks nothing. Being able to transmit it
+> does.**
+
+The design's guarantee is **not** that you never find out. It is that **no
+self-originated claim is ever accepted without independent verification.** A
+node that discovers it is unreachable and stops advertising **has not cheated —
+it has less to say, not more**, and the network is strictly better off.
+
+**What would break it** is a node able to present **evidence** of its own
+reachability that a third party accepts **without dialing**. That is a
+**credential**. Credentials are **transferable**. And a transferable attestation
+about a node is **durable identity arriving through the back door** — precisely
+the shape cluster I deleted `peer_id` to prevent.
+
+### 2.11.2 The rule
+
+> **A node may learn any fact about itself. No node may transmit a fact about
+> itself that another accepts without its own verification.**
+
+### 2.11.3 The portable form
+
+> **Peers supply hypotheses; only your own dials supply facts.**
+>
+> **Gray is the hypothesis space. White is the fact space. The dial is the only
+> operator that moves anything between them.**
+
+**This is why divergent white lists are correct rather than tolerated**
+(§2.7.9): **each node's fact space is built from its own observations, and there
+is no shared one to converge on.** Convergence would not be an optimisation of
+a distributed fact — it would be the substitution of someone else's hypothesis
+for your own fact.
+
+### 2.11.4 It re-ranks E2(a) against E2(b) on ARCHITECTURE, not cost
+
+**Both survive the rule**, and that is worth stating before separating them —
+both terminate in **something we observe ourselves**:
+
+| | Terminates in | Transmissible? |
+| --- | --- | --- |
+| **E2(a) hairpin** | **our own nonce** coming back | **no** |
+| **E2(b) dial-back** | **a connection arriving at our own socket** | **no** |
+
+So neither produces a credential. **What separates them is who has to act:**
+
+- **(a) needs no other party to act.**
+- **(b) requires a peer to do something on our behalf** — and ***"a peer can be
+  induced to dial an address"* is simultaneously the amplifier surface and a
+  peer-graph steering primitive.**
+
+> **So (a) wins on the architecture, not only on the nonce reuse §2.7.6 gave
+> it.** That is a stronger basis, because a cost argument expires when someone
+> finds a cheaper dial-back and an architectural one does not — the same
+> distinction §5.1 of the round doc draws for Noise `NN`.
+
+### 2.11.5 §2.7.5 died for the RIGHT reason
+
+§2.10.3 rejected the peerlist-head candidate because `P2P_DEFAULT_PORT` makes
+the signal degenerate. **True, and not the deepest objection.**
+
+Reading your own endpoint out of a gossiped white list is **receiving someone
+else's fact about you.** It would have been **the wrong shape even if it
+worked**, because it makes **another node's verification the source of your
+self-knowledge** — which inverts §2.11.2 without transmitting anything, by
+*importing* rather than *exporting* an unverified self-fact.
+
+**Recorded because a detection failure invites a fix and a shape failure does
+not.** Someone who reads only §2.10.3 will reasonably propose making ports
+distinctive so the signal works again. §2.11.3 says not to.
 
 ## 3. Two adversarial questions the round must ANSWER, not assume
 

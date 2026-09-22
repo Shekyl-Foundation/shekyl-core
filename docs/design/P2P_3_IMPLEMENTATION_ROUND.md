@@ -219,7 +219,7 @@ where the cost and the irreversibility already are.**
 
 | # | Slice | Inherits | Flips | Greens when it lands |
 | --- | --- | --- | --- | --- |
-| **1** | **Peerlist** — `net_peerlist.{h,cpp}`, 878 lines, gray/white and the promotion boundary. Differentially testable against the C++ with no daemon | **the alpha.9 cut's ignore (§7.2 arm 1)**, because the peerlist has **three** received-seed sites of its own: the carry-forward guards at [`net_peerlist.h:367`](../../src/p2p/net_peerlist.h#L367) and [`:414`](../../src/p2p/net_peerlist.h#L414) (*"guard against older nodes not passing pruning info around"*), **and the persisted-peerlist load path, which never sanitizes — `sanitize` appears nowhere in `net_peerlist.cpp`.** `PDM-Q7`'s emitter-half clears none of them: they read what ARRIVES | I2's remaining acceptance rules; the white-list writer invariant | `rg -n 'pruning_seed' src/p2p/net_peerlist.*` returns **nothing** at open; a differential harness runs both implementations over one input sequence and agrees on gray/white membership |
+| **1** | **Peerlist** — `net_peerlist.{h,cpp}`, **874 lines** at `fdf17b729` (*was 878; PR #821 removed the seed field*), gray/white and the promotion boundary. Differentially testable against the C++ with no daemon. **Carries §4.4's type contract** — the round's rule encoded, not restated | **the alpha.9 cut's ignore (§7.2 arm 1)**, because the peerlist has **three** received-seed sites of its own: the carry-forward guards at [`net_peerlist.h:367`](../../src/p2p/net_peerlist.h#L367) and [`:414`](../../src/p2p/net_peerlist.h#L414) (*"guard against older nodes not passing pruning info around"*), **and the persisted-peerlist load path, which never sanitizes — `sanitize` appears nowhere in `net_peerlist.cpp`.** `PDM-Q7`'s emitter-half clears none of them: they read what ARRIVES | I2's remaining acceptance rules; the white-list writer invariant | `rg -n 'pruning_seed' src/p2p/net_peerlist.*` returns **nothing** at open; a differential harness runs both implementations over one input sequence and agrees on gray/white membership |
 | **2** | **Admission policy** — the ceiling, and nothing else after §2.9.4 | slice 1, and a **measured `--in-peers`** (§7.3) rather than `UINT32_MAX` | **I7** (mechanism deleted), **I8** (closed) | `rg -n 'has_too_many_connections' src/` returns nothing; `is_host_limit` is a counter comparison |
 | **3** | **Discovery policy** — seed handling, the dial-candidate selection, `m_used_stripe_peers`' removal | slices 1–2, and the candidate filter's `else if` already gone (§7.2) | B9's mechanism half; PWC-E9's re-derivation | `rg -n 'm_used_stripe_peers\|next_needed_pruning_stripe' src/p2p/` returns nothing |
 | **4** | **Handshake state machine** — the phases, and PWD-B1/B2's per-peer state, which have no landed mechanism and so land here first rather than migrating | slices 1–3 | **B1, B2**; B7's remainder and PWC-E5 | PWD-B1's four unguarded invoke handlers are guarded |
@@ -267,6 +267,63 @@ still refreshed by a `foreach_connection` recount on a one-second sleep —
 [`net_node.inl:1111`](../../src/p2p/net_node.inl#L1111) at `fdf17b729`
 (*was `:1112`*). It remains slice 5's, and remains a rule-76 measurement input
 for `--in-peers`.
+
+### 4.4 SLICE 1's TYPE CONTRACT — the round's rule, encoded rather than written down
+
+**Ruled 2026-09-22 (steering).** This is what slice 1's brief must carry, and it
+is the reason slice 1 is worth more than a port of 874 lines.
+
+**The problem it solves.** [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md)
+§2.11 states the round's rule — *peers supply hypotheses; only your own dials
+supply facts; the dial is the only operator between gray and white.* **A rule in
+prose has to be re-derived by every lane that touches the peerlist.** This round
+watched a deletion scope be understated three times, and a constraint survive
+nine turns unverified **because it was written nowhere a check could find it.**
+The same failure applied to this rule would be considerably more expensive.
+
+> **Where no check exists, encode the constraint in a type.**
+
+**The contract.** In the Rust peerlist (**greenfield** — no peerlist crate
+exists in `rust/` today; the RPC hits are read-only projections of the C++ one):
+
+1. **Gray holds hypotheses; white holds observations**, and they are
+   **different types**, not one type with a flag.
+2. **The observed type has NO public constructor except from a completed dial
+   result.** Not a convention, not a doc comment, not a review rule. **A lane
+   that wants to promote an entry without dialing finds it cannot write the
+   code.**
+
+**Three properties this buys that prose cannot**, each naming the lane it
+constrains:
+
+| Lane | What the type refuses |
+| --- | --- |
+| **Noise / cluster T** | cannot shortcut promotion with a **handshake transcript** — a transcript is not a dial result |
+| **D++ / relay** | cannot treat a **stem peer as verified because it relayed successfully** — successful relay is not a dial |
+| **any** | §2.7.4's **per-field provenance correction is ENFORCED rather than remembered** — a record cannot claim one trust level while carrying two, because **the fields have different types** |
+
+**Where it needs the most care: the FFI boundary.** A `u16` crossing as a port
+**carries no provenance** — the type is erased at the seam, and a claimed port
+and an observed one are the same 16 bits. **So the marshaling has to name which
+kind it is on both sides.** *This is the lesson PR 812 already paid for once*,
+when the per-host policy moved to Rust and the C++ became a call: the value
+crossed cleanly, and what needed stating explicitly was the **sentinel's
+meaning**, because a bare `int64_t` does not carry it either.
+
+**The relationship to the alpha.9 cut, stated so neither is mistaken for the
+other:**
+
+> **Deleting `has_too_many_connections` is what the principle implies at ONE
+> site. The type is what stops the principle from having to be re-derived at the
+> next twelve.**
+
+**Rule 26:** slice 1's brief is **owed before its first increment**, and this
+contract is its first content — the same discipline `PDM-Q-F31` applied to
+S-PRUNE's plan doc. **Falsify by** slice 1's first PR introducing a peerlist
+entry type with a public constructor reachable without a dial result, or by a
+single type carrying a `bool verified` flag.
+
+---
 
 ---
 
