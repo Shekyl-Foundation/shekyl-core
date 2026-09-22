@@ -110,7 +110,10 @@ impl<
         // accurate baseline rather than a misleading `height: 0`.
         let (slot, synced_height) = {
             let engine = self_arc.read().await;
-            (engine.refresh_slot.clone(), engine.ledger.synced_height())
+            (
+                engine.refresh_slot.clone(),
+                engine.ledger.synced_height().to_raw(),
+            )
         };
         let slot_guard = slot.try_claim().ok_or(RefreshError::AlreadyRunning)?;
 

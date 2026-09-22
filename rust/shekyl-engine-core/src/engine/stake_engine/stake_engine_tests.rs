@@ -856,7 +856,8 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
                 "scheduled offset must be the drawn spread"
             );
             assert_eq!(
-                bond_post_offset_blocks, post.bond_post_offset_blocks,
+                bond_post_offset_blocks,
+                post.bond_post_offset_blocks.to_raw(),
                 "schedule event must match the offset riding the reply"
             );
         }

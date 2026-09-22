@@ -195,8 +195,13 @@
                   {
                     "name": "bond_post_offset_blocks",
                     "ty": {
-                      "name": "u64",
-                      "ty": "U64"
+                      "name": "BlockCount",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
                     }
                   },
                   {

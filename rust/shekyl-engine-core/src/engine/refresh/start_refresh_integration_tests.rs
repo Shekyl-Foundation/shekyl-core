@@ -391,7 +391,7 @@ impl<R: RefreshEngine> RefreshEngine for StaleThenRealRefresh<R> {
         // future is constructed, so nothing is held across the
         // `.await`.
         let stale = (self.calls.fetch_add(1, Ordering::SeqCst) == 0)
-            .then(|| ScanResult::empty_at(snapshot.synced_height.saturating_add(2), None));
+            .then(|| ScanResult::empty_at(snapshot.synced_height.to_raw().saturating_add(2), None));
         async move {
             if let Some(stale) = stale {
                 return Ok(stale);
@@ -464,7 +464,7 @@ async fn hybrid_linear_scan_5_blocks_advances_synced_height() {
         let g = arc.read().await;
         assert_eq!(
             g.synced_height(),
-            0,
+            shekyl_types::BlockHeight::from_raw(0),
             "fresh hybrid engine starts at synced_height 0"
         );
     }
@@ -486,7 +486,7 @@ async fn hybrid_linear_scan_5_blocks_advances_synced_height() {
         let g = arc.read().await;
         assert_eq!(
             g.synced_height(),
-            5,
+            shekyl_types::BlockHeight::from_raw(5),
             "post-refresh synced_height matches the producer's range upper bound"
         );
     }
@@ -571,7 +571,7 @@ async fn hybrid_refresh_feeds_curve_tree_from_genesis() {
         let g = arc.read().await;
         assert_eq!(
             g.synced_height(),
-            5,
+            shekyl_types::BlockHeight::from_raw(5),
             "post-refresh ledger tip matches the producer range upper bound"
         );
         let tip = g
@@ -1074,7 +1074,7 @@ async fn hybrid_apply_scan_result_retries_on_concurrent_mutation() {
         let g = arc.read().await;
         assert_eq!(
             g.ledger.synced_height(),
-            0,
+            shekyl_types::BlockHeight::from_raw(0),
             "fresh hybrid engine starts at LocalLedger synced_height 0"
         );
     }
@@ -1101,7 +1101,7 @@ async fn hybrid_apply_scan_result_retries_on_concurrent_mutation() {
         let g = arc.read().await;
         assert_eq!(
             g.synced_height(),
-            5,
+            shekyl_types::BlockHeight::from_raw(5),
             "post-retry LocalLedger synced_height matches the producer's range upper bound"
         );
     }
@@ -1244,7 +1244,7 @@ async fn hybrid_refresh_engine_orchestrator_cancellation_retries() {
         let g = arc.read().await;
         assert_eq!(
             g.ledger.synced_height(),
-            0,
+            shekyl_types::BlockHeight::from_raw(0),
             "fresh hybrid engine starts at LocalLedger synced_height 0"
         );
     }
@@ -1273,7 +1273,7 @@ async fn hybrid_refresh_engine_orchestrator_cancellation_retries() {
         let g = arc.read().await;
         assert_eq!(
             g.synced_height(),
-            5,
+            shekyl_types::BlockHeight::from_raw(5),
             "post-retry LocalLedger synced_height matches the producer's range upper bound"
         );
     }

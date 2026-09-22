@@ -248,7 +248,7 @@ fn advance_ledger_empty_blocks(ledger: &LocalLedger, from: u64, to: u64) {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             ledger_block,
-            h,
+            shekyl_types::BlockHeight::from_raw(h),
             hash,
             Timelocked::from_vec(Vec::new()),
         );
@@ -269,14 +269,18 @@ fn populate_ledger(
     let indexes = &mut state.indexes;
     let timelocked = Timelocked::from_vec(outputs);
     let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
-    let inserted_range =
-        indexes.process_scanned_outputs(ledger_block, block_height, block_hash, timelocked);
+    let inserted_range = indexes.process_scanned_outputs(
+        ledger_block,
+        shekyl_types::BlockHeight::from_raw(block_height),
+        block_hash,
+        timelocked,
+    );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
     for h in (block_height + 1)..=final_height {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             ledger_block,
-            h,
+            shekyl_types::BlockHeight::from_raw(h),
             hash,
             Timelocked::from_vec(Vec::new()),
         );
@@ -2373,14 +2377,14 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         .expect("derive spend secrets for funding output");
 
     // ── Reference selection — mirror the engine `build` path ─────────
-    let synced = ledger.with_ledger_block(LedgerBlock::height);
+    let synced = ledger.with_ledger_block(LedgerBlock::height).to_raw();
     let rh = select_reference_height(synced).expect("reference height resolves");
     let (curve_tree_root, ref_depth) = tree
         .reference_root_and_depth(BlockHeight::from_raw(rh))
         .await
         .expect("reference root+depth");
     let block_hash = ledger
-        .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
+        .with_ledger_block(|ledger| ledger.block_hash_at(BlockHeight::from_raw(rh)).copied())
         .expect("reference block hash present");
     let reference = ReferenceBlock {
         height: BlockHeight::from_raw(rh),
@@ -3296,14 +3300,18 @@ fn populate_ledger_scan_only(
     let indexes = &mut state.indexes;
     let timelocked = Timelocked::from_vec(outputs);
     let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
-    let inserted_range =
-        indexes.process_scanned_outputs(ledger_block, block_height, block_hash, timelocked);
+    let inserted_range = indexes.process_scanned_outputs(
+        ledger_block,
+        shekyl_types::BlockHeight::from_raw(block_height),
+        block_hash,
+        timelocked,
+    );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
     for h in (block_height + 1)..=final_height {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             ledger_block,
-            h,
+            shekyl_types::BlockHeight::from_raw(h),
             hash,
             Timelocked::from_vec(Vec::new()),
         );

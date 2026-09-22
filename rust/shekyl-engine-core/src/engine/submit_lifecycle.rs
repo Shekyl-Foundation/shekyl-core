@@ -74,7 +74,7 @@
 use std::collections::{HashMap, HashSet};
 
 use shekyl_rpc_client::RejectCause;
-use shekyl_types::TxHash;
+use shekyl_types::{BlockHeight, TxHash};
 
 use super::diagnostics::{PendingTxDiagnostic, WatchdogAlarmReason, WatchdogProbeOutcome};
 use super::local_pending_tx::RescanRequest;
@@ -103,12 +103,12 @@ pub(crate) trait WatchdogHost: Send + Sync {
 
     /// The wallet's current synced chain height — the horizon reference
     /// and the fruitless-soundness guard's `synced_height`.
-    fn synced_height(&self) -> u64;
+    fn synced_height(&self) -> BlockHeight;
 
     /// The ledger's stored block hash at `height`, or `None` when the
     /// height is outside the retained range. Used by the F40 executor's
     /// cheap hash-compare (decision 1).
-    fn block_hash_at(&self, height: u64) -> Option<[u8; 32]>;
+    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]>;
 
     /// The retained network-exposed bytes for `tx_hash` (§5.3 decision
     /// 2), cloned for the resubmit-same-bytes probe. `None` means the
@@ -276,7 +276,7 @@ impl SubmitLifecycleDriver {
             Err(_) => return,
         };
 
-        let synced = host.synced_height();
+        let synced = host.synced_height().to_raw();
         // Snapshot the entries so no overlay borrow is held across the
         // per-tx `.await`.
         let entries: Vec<HeldSubmit> = self.overlay.values().copied().collect();
@@ -324,7 +324,7 @@ impl SubmitLifecycleDriver {
         if self.rescan_targets.is_empty() {
             return;
         }
-        let synced = host.synced_height();
+        let synced = host.synced_height().to_raw();
         // Snapshot keys so no `rescan_targets` borrow is held across the
         // per-target `.await`.
         let targets: Vec<(TxHash, u64)> = self
@@ -364,7 +364,7 @@ impl SubmitLifecycleDriver {
         // the retained range) → the cheap hash-compare is impossible, so
         // the fruitless inference cannot be made soundly: defer (the
         // escape ladder still bounds liveness). Counter untouched.
-        let Some(ledger_hash) = host.block_hash_at(claimed_height) else {
+        let Some(ledger_hash) = host.block_hash_at(BlockHeight::from_raw(claimed_height)) else {
             return;
         };
 

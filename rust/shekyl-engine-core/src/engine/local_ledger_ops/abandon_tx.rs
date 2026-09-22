@@ -355,7 +355,7 @@ mod tests {
             ));
             spent.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
             wallet.ledger.transfers.push(spent);
-            wallet.ledger.tip.synced_height = 40;
+            wallet.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(40);
 
             wallet.reconcile_after_scan_merge(None);
 
@@ -375,7 +375,10 @@ mod tests {
         }
         // The wallet still reports the height it was seeded at.
         let engine = arc.read().await;
-        assert_eq!(engine.ledger.synced_height(), 40);
+        assert_eq!(
+            engine.ledger.synced_height(),
+            shekyl_types::BlockHeight::from_raw(40)
+        );
     }
 
     /// Abandon-from-Dispatched keeps the carried-input locks alive
@@ -410,7 +413,7 @@ mod tests {
         crate::engine::rescan::reset_scan_derived_state(&mut state.ledger, &mut state.indexes);
         let wallet = &mut state.ledger;
         wallet.ledger.transfers.push(mk_row(0x11, 7));
-        wallet.ledger.tip.synced_height = 40;
+        wallet.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(40);
 
         wallet.reconcile_after_scan_merge(None);
 

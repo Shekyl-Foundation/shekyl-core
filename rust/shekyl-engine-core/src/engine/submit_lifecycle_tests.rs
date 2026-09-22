@@ -141,16 +141,16 @@ impl WatchdogHost for StubHost {
         self.state.lock().unwrap().held.clone()
     }
 
-    fn synced_height(&self) -> u64 {
-        self.state.lock().unwrap().synced
+    fn synced_height(&self) -> BlockHeight {
+        BlockHeight::from_raw(self.state.lock().unwrap().synced)
     }
 
-    fn block_hash_at(&self, height: u64) -> Option<[u8; 32]> {
+    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
         self.state
             .lock()
             .unwrap()
             .block_hashes
-            .get(&height)
+            .get(&height.to_raw())
             .copied()
     }
 

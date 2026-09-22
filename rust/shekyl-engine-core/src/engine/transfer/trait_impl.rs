@@ -65,11 +65,11 @@ where
             .with_wallet_ledger(submit_watchdog::held_submits)
     }
 
-    fn synced_height(&self) -> u64 {
+    fn synced_height(&self) -> BlockHeight {
         self.ledger.with_ledger_block(LedgerBlock::height)
     }
 
-    fn block_hash_at(&self, height: u64) -> Option<[u8; 32]> {
+    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
         self.ledger
             .with_ledger_block(|ledger| ledger.block_hash_at(height).copied())
     }
@@ -220,7 +220,7 @@ where
         // its `1` default is inert because those unresolved cases never assemble.
         let (reference, tree_depth) = match &self.curve_tree {
             Some(handle) => {
-                let synced = self.ledger.with_ledger_block(LedgerBlock::height);
+                let synced = self.ledger.with_ledger_block(LedgerBlock::height).to_raw();
                 match select_reference_height(synced) {
                     Some(rh)
                         if matches!(
@@ -239,7 +239,9 @@ where
                             })?;
                         let block_hash = self
                             .ledger
-                            .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
+                            .with_ledger_block(|ledger| {
+                                ledger.block_hash_at(BlockHeight::from_raw(rh)).copied()
+                            })
                             .ok_or_else(|| {
                                 fail_build_after_attempted(
                                     self.sink.as_ref(),
