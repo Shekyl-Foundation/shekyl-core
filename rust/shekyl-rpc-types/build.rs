@@ -61,7 +61,20 @@ use std::path::PathBuf;
 /// copy). The same change also re-commented `archival_reorg_depth_blocks`
 /// (value unchanged at 720): `_comment_*` keys are outside the canonical
 /// form, so that edit alone would not have moved this digest.
-const PINNED_DIGEST: &str = "47bb9de937866bc9686dcc15efe3aee7bf8a33b419a2f61ee68c6d23d2dabf4d";
+///
+/// **Re-pinned 2026-09-21 (E6 slice 4 precursor, `CHAIN_RULES_SLICE_4.md`
+/// §3.1 S8): a key was ADDED — `block_weight_full_reward_zone_bytes = 300000`
+/// in `consensus_constants.json`.** The chain question, answered: a different
+/// zone pays a different reward for the same block (the effective median is
+/// soft-raised to it before the weight penalty; the block-weight limit is
+/// twice it — CEN-F14b, G6b), so the key belongs here. The value is the one
+/// every node already ran — it was the hand-written C++
+/// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, with no Rust home and
+/// supplied to `shekyl-economics` as an argument on every call; the move
+/// gives it one authority and two generated readers (`EconomicParams::
+/// full_reward_zone`; the C++ macro is now defined from the generated
+/// header). No behaviour changes; the digest moves because the binding grew.
+const PINNED_DIGEST: &str = "78dffcb388c529e040836ecf8982d130d2acf9052394d07e088f6d76be3364bf";
 
 fn main() {
     let manifest_dir =

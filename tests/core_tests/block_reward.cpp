@@ -42,7 +42,7 @@ namespace
     size_t target_block_weight, uint64_t fee = 0)
   {
     if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, fee, /*frozen_segment_count=*/0, miner_address, miner_tx, blobdata(), /*max_outs=*/1, 1,
-        /*tx_volume=*/{}, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
+        /*tx_volume=*/{}, shekyl::supply_facts{already_generated_coins, /*total_burned=*/0}, /*genesis_ng_height=*/0))
       return false;
 
     size_t current_weight = get_transaction_weight(miner_tx);
@@ -259,7 +259,6 @@ bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_
         0,
         1,
         0,
-        CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
         /*tx_count_sum=*/0,
         /*window_blocks=*/0,
         &base_reward,

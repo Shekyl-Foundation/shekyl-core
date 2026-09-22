@@ -35,7 +35,7 @@ use crate::calibration::{
 use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
 
 /// Long-term block-weight median floor — the penalty-free zone.
-pub const BLOCK_WEIGHT_FLOOR: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
+pub const BLOCK_WEIGHT_FLOOR: u64 = shekyl_economics::FULL_REWARD_ZONE;
 
 pub use shekyl_economics::{blocks_to_surge_saturation, BLOCK_WEIGHT_SURGE_FACTOR};
 

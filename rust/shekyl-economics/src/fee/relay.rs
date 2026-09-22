@@ -6,7 +6,7 @@
 //! Relay floor `F = R·C·w_ref/M²` and lookback-min admission.
 
 use super::correction::FeeCorrection;
-use crate::params::SCALE;
+use crate::params::{EconomicParams, SCALE};
 
 /// Lookback depth `G`, in blocks. Admission takes `min F` over `h′−G ..= h′`,
 /// so a quote at `F(h)` is admitted at every node whose tip lies in
@@ -25,8 +25,10 @@ pub const RELAY_FLOOR_WINDOW: usize = RELAY_FLOOR_LOOKBACK + 1;
 pub const RELAY_ADMISSION_SLACK_BP: u32 = 0;
 
 /// Fee median `M` every rung and the relay floor divide by.
-pub(super) fn clamped_median(median: u64, full_reward_zone: u64) -> u64 {
-    median.max(full_reward_zone).max(1)
+///
+/// A median below [`EconomicParams::full_reward_zone`] is raised to it.
+pub(super) fn clamped_median(median: u64, params: &EconomicParams) -> u64 {
+    median.max(params.full_reward_zone).max(1)
 }
 
 /// `F = R·C·w_ref/M²`, floored at 1. `None` only outside the `u128` domain.
@@ -38,11 +40,11 @@ pub(super) fn clamped_median(median: u64, full_reward_zone: u64) -> u64 {
 pub fn checked_relay_fee_floor(
     base_reward: u64,
     median: u64,
-    full_reward_zone: u64,
     ref_tx_weight: u64,
     c: FeeCorrection,
+    params: &EconomicParams,
 ) -> Option<u64> {
-    let mfw = u128::from(clamped_median(median, full_reward_zone));
+    let mfw = u128::from(clamped_median(median, params));
     let ms = mfw.checked_mul(u128::from(SCALE))?;
     let m2s = mfw.checked_mul(ms)?;
     let num = u128::from(base_reward)
@@ -56,12 +58,11 @@ pub fn checked_relay_fee_floor(
 pub fn relay_fee_floor(
     base_reward: u64,
     median: u64,
-    full_reward_zone: u64,
     ref_tx_weight: u64,
     c: FeeCorrection,
+    params: &EconomicParams,
 ) -> u64 {
-    checked_relay_fee_floor(base_reward, median, full_reward_zone, ref_tx_weight, c)
-        .unwrap_or(u64::MAX)
+    checked_relay_fee_floor(base_reward, median, ref_tx_weight, c, params).unwrap_or(u64::MAX)
 }
 
 /// Admit iff `fee >= mask_round_up(weight · min(floors))` less `slack_bp`
@@ -95,35 +96,36 @@ mod tests {
     #[test]
     fn relay_floor_matches_the_migrated_heritage_grid() {
         const COIN: u64 = 1_000_000_000;
-        const ZONE: u64 = 300_000;
         const W_REF: u64 = 3_000;
+        let params = EconomicParams::default();
+        let zone = params.full_reward_zone;
 
         // (reward, median, old 0.95 value, new FL-R20 value)
         let grid: [(u64, u64, u64, u64); 18] = [
-            (10 * COIN, ZONE, 317, 333),
-            (10 * COIN, ZONE / 2, 317, 333),
+            (10 * COIN, zone, 317, 333),
+            (10 * COIN, zone / 2, 317, 333),
             (10 * COIN, 1, 317, 333),
             (10 * COIN, 100_000, 317, 333),
             (10 * COIN, 600_000, 79, 83),
             (10 * COIN, 3_000_000, 3, 3),
             (10 * COIN, 6_000_000, 1, 1),
-            (COIN, ZONE, 32, 33),
-            (COIN, ZONE / 2, 32, 33),
+            (COIN, zone, 32, 33),
+            (COIN, zone / 2, 32, 33),
             (COIN, 1, 32, 33),
             (COIN, 600_000, 8, 8),
             (COIN, 3_000_000, 1, 1),
-            (3 * COIN / 10, ZONE, 10, 10),
-            (3 * COIN / 10, ZONE / 2, 10, 10),
+            (3 * COIN / 10, zone, 10, 10),
+            (3 * COIN / 10, zone / 2, 10, 10),
             (3 * COIN / 10, 1, 10, 10),
             (3 * COIN / 10, 600_000, 2, 2),
             (3 * COIN / 10, 3_000_000, 1, 1),
-            (1, ZONE, 1, 1),
+            (1, zone, 1, 1),
         ];
 
         let mut moved = 0usize;
         for &(reward, median, old, new) in &grid {
             assert_eq!(
-                relay_fee_floor(reward, median, ZONE, W_REF, FeeCorrection::UNITY),
+                relay_fee_floor(reward, median, W_REF, FeeCorrection::UNITY, &params),
                 new,
                 "FL-R20 floor at reward={reward} median={median} (C = 1)"
             );
@@ -135,7 +137,7 @@ mod tests {
         assert_eq!(moved, 8, "exactly eight rows move when the 0.95 goes");
 
         assert_eq!(
-            relay_fee_floor(COIN, 100_000 * ZONE, ZONE, W_REF, FeeCorrection::UNITY),
+            relay_fee_floor(COIN, 100_000 * zone, W_REF, FeeCorrection::UNITY, &params),
             1,
             "max(1) is kept: a zero floor admits everything"
         );

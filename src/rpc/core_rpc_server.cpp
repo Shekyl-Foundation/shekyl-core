@@ -263,11 +263,20 @@ namespace cryptonote
         tx_volume.tx_count_sum, tx_volume.blocks, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
     // Burn is a pure function of activity and supply — stake was deleted as a
     // burn input (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md F-D).
-    res.burn_pct = shekyl_calc_burn_pct(
-        tx_volume.tx_count_sum, tx_volume.blocks, SHEKYL_TX_VOLUME_BASELINE,
-        already_generated, SHEKYL_EMISSION_CURVE_ASYMPTOTE,
-        SHEKYL_BURN_BASE_RATE, SHEKYL_BURN_CAP);
     res.total_burned = m_core.get_blockchain_storage().get_db().get_total_burned();
+    // The percentage the next coinbase burns: over the DERIVED supply
+    // (already_generated − total_burned, FL-R16c), from the shipped
+    // EconomicParams — the same function consensus pays on. A supply
+    // underflow is a store-invariant violation; the field reports 0 and the
+    // refusal is logged rather than swallowed as a plausible percentage.
+    res.burn_pct = 0;
+    {
+      const int32_t st = shekyl_calc_burn_pct_at(
+          tx_volume.tx_count_sum, tx_volume.blocks, already_generated, res.total_burned, &res.burn_pct);
+      if (st != SHEKYL_ECONOMICS_OK)
+        MERROR("get_info: shekyl_calc_burn_pct_at refused (status " << st << "): total_burned "
+            << res.total_burned << " exceeds already_generated " << already_generated);
+    }
 
     // Component 4: effective staker emission share at current height
     const uint64_t genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);

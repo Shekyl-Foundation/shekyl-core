@@ -35,7 +35,6 @@ set(unit_tests_sources
   economics_c2a_prime.cpp
   bulletproofs_plus.cpp
   gap7_bp_bench.cpp
-  canonical_amounts.cpp
   checkpoints.cpp
   command_line.cpp
   crypto.cpp

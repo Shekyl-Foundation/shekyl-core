@@ -152,6 +152,7 @@ pub use shekyl_logging;
 
 // Legacy monofile FFI surface (split from the former body of this file).
 // Domain modules keep #[no_mangle] symbols; this root only wires and re-exports.
+mod economics_ffi;
 mod legacy_core;
 mod legacy_curve_tree;
 mod legacy_fcmp;
@@ -162,6 +163,8 @@ mod legacy_tx;
 mod legacy_types;
 mod legacy_util;
 
+#[allow(unused_imports)]
+pub use economics_ffi::*;
 #[allow(unused_imports)]
 pub use legacy_core::*;
 #[allow(unused_imports)]

@@ -8,7 +8,7 @@
 
 use super::correction::FeeCorrection;
 use super::relay::{checked_relay_fee_floor, clamped_median};
-use crate::params::SCALE;
+use crate::params::{EconomicParams, SCALE};
 
 /// `round_money_up(v, 2)` — round UP to 2 significant decimal digits.
 ///
@@ -72,11 +72,11 @@ impl FeeLadder {
 pub fn corrected_fee_ladder(
     base_reward: u64,
     median: u64,
-    full_reward_zone: u64,
     ref_tx_weight: u64,
     c: FeeCorrection,
+    params: &EconomicParams,
 ) -> FeeLadder {
-    checked_corrected_fee_ladder(base_reward, median, full_reward_zone, ref_tx_weight, c)
+    checked_corrected_fee_ladder(base_reward, median, ref_tx_weight, c, params)
         .unwrap_or(FeeLadder::SATURATED)
 }
 
@@ -88,16 +88,16 @@ pub fn corrected_fee_ladder(
 pub fn checked_corrected_fee_ladder(
     base_reward: u64,
     median: u64,
-    full_reward_zone: u64,
     ref_tx_weight: u64,
     c: FeeCorrection,
+    params: &EconomicParams,
 ) -> Option<FeeLadder> {
-    let mfw = u128::from(clamped_median(median, full_reward_zone));
+    let mfw = u128::from(clamped_median(median, params));
     let base = u128::from(base_reward);
     let cq = u128::from(c.as_scaled());
     let ms = mfw.checked_mul(u128::from(SCALE))?;
 
-    let economy = checked_relay_fee_floor(base_reward, median, full_reward_zone, ref_tx_weight, c)?;
+    let economy = checked_relay_fee_floor(base_reward, median, ref_tx_weight, c, params)?;
     // `4F` in u128, saturating at the u64 rail. Not `economy.checked_mul(4)`:
     // that multiplies in u64 and would refuse a ladder the pre-FL-R20 shape
     // still priced (BLOCK_REWARD_OVERESTIMATE fallback).
@@ -121,23 +121,27 @@ mod tests {
     use crate::base_block_reward;
     use crate::fee::relay::relay_fee_floor;
 
+    fn shipped() -> EconomicParams {
+        EconomicParams::default()
+    }
+
     #[test]
     fn neutral_ladder_matches_heritage_vectors_with_signed_shape() {
+        let params = shipped();
+        let zone = params.full_reward_zone;
         let coin = 1_000_000_000u64;
         assert_eq!(
-            corrected_fee_ladder(10 * coin, 300_000, 300_000, 3_000, FeeCorrection::UNITY)
-                .as_slots(),
+            corrected_fee_ladder(10 * coin, zone, 3_000, FeeCorrection::UNITY, &params).as_slots(),
             [333, 1332, 66_666]
         );
-        // Heritage case 2 used to pass Mnw = 15 MB over Mlw = 300 kB. The
-        // median is one operand now; that pair always reduced to 300 kB.
+        // Heritage case 2 used to pass Mnw = 15 MB over Mlw = the zone. The
+        // median is one operand now; that pair always reduced to the zone.
         assert_eq!(
-            corrected_fee_ladder(10 * coin, 300_000, 300_000, 3_000, FeeCorrection::UNITY)
-                .as_slots(),
+            corrected_fee_ladder(10 * coin, zone, 3_000, FeeCorrection::UNITY, &params).as_slots(),
             [333, 1332, 66_666]
         );
         assert_eq!(
-            corrected_fee_ladder(10 * coin, 1_500_000, 300_000, 3_000, FeeCorrection::UNITY)
+            corrected_fee_ladder(10 * coin, 5 * zone, 3_000, FeeCorrection::UNITY, &params)
                 .as_slots(),
             [13, 52, 13_333]
         );
@@ -145,51 +149,64 @@ mod tests {
 
     #[test]
     fn the_domain_covers_each_rung_separately() {
-        let z = 300_000;
+        let params = shipped();
+        let z = params.full_reward_zone;
         assert!(checked_corrected_fee_ladder(
             u64::MAX,
-            z,
             z,
             0,
-            FeeCorrection::from_scaled(u64::MAX)
+            FeeCorrection::from_scaled(u64::MAX),
+            &params,
         )
         .is_none());
-        assert!(checked_corrected_fee_ladder(u64::MAX, z, z, 0, FeeCorrection::UNITY).is_some());
+        assert!(
+            checked_corrected_fee_ladder(u64::MAX, z, 0, FeeCorrection::UNITY, &params).is_some()
+        );
         assert!(checked_corrected_fee_ladder(
             u64::MAX,
             z,
-            z,
             u64::MAX,
-            FeeCorrection::from_scaled(2)
+            FeeCorrection::from_scaled(2),
+            &params,
         )
         .is_none());
         assert!(checked_corrected_fee_ladder(
             u64::MAX,
             z,
-            z,
             u64::MAX,
-            FeeCorrection::from_scaled(1)
+            FeeCorrection::from_scaled(1),
+            &params,
         )
         .is_some());
         assert!(checked_corrected_fee_ladder(
             1,
             u64::MAX,
-            u64::MAX,
             1,
-            FeeCorrection::from_scaled(1)
+            FeeCorrection::from_scaled(1),
+            &params,
         )
         .is_none());
-        assert!(
-            checked_corrected_fee_ladder(10_000_000_000, z, z, 3_000, FeeCorrection::UNITY)
-                .is_some()
-        );
+        assert!(checked_corrected_fee_ladder(
+            10_000_000_000,
+            z,
+            3_000,
+            FeeCorrection::UNITY,
+            &params
+        )
+        .is_some());
     }
 
     #[test]
     fn the_infallible_entry_saturates_outside_the_domain() {
-        let z = 300_000;
+        let params = shipped();
         assert_eq!(
-            corrected_fee_ladder(u64::MAX, z, z, 0, FeeCorrection::from_scaled(u64::MAX)),
+            corrected_fee_ladder(
+                u64::MAX,
+                params.full_reward_zone,
+                0,
+                FeeCorrection::from_scaled(u64::MAX),
+                &params,
+            ),
             FeeLadder::SATURATED
         );
         assert_eq!(FeeLadder::SATURATED.as_slots(), [u64::MAX; 3]);
@@ -197,13 +214,14 @@ mod tests {
 
     #[test]
     fn correction_lives_in_the_numerator() {
+        let params = shipped();
         let coin = 1_000_000_000u64;
         let ladder = corrected_fee_ladder(
             10 * coin,
-            1_500_000,
-            300_000,
+            5 * params.full_reward_zone,
             3_000,
             FeeCorrection::from_scaled(16 * SCALE),
+            &params,
         );
         assert_eq!(ladder.economy, 213);
         assert_eq!(13 * 16, 208, "the rescale-after value this rung must beat");
@@ -215,35 +233,32 @@ mod tests {
 
     #[test]
     fn genesis_top_rung_anchors() {
-        let p = crate::params::EconomicParams::default();
+        let p = shipped();
+        let zone = p.full_reward_zone;
         let base = base_block_reward(0, &p).unwrap();
         assert_eq!(
-            corrected_fee_ladder(base, 300_000, 300_000, 3_000, FeeCorrection::UNITY).priority,
+            corrected_fee_ladder(base, zone, 3_000, FeeCorrection::UNITY, &p).priority,
             13_653_333
         );
         assert_eq!(
-            corrected_fee_ladder(
-                base,
-                300_000,
-                300_000,
-                3_000,
-                FeeCorrection::from_scaled(2 * SCALE)
-            )
-            .priority,
+            corrected_fee_ladder(base, zone, 3_000, FeeCorrection::from_scaled(2 * SCALE), &p)
+                .priority,
             27_306_666
         );
     }
 
     #[test]
     fn economy_rung_is_the_relay_floor() {
+        let params = shipped();
+        let zone = params.full_reward_zone;
         let coin = 1_000_000_000u64;
         let mut floored = 0usize;
         for &reward in &[1u64, 1_000, 10 * coin, 2_048_000_000_000] {
-            for &median in &[300_000u64, 1_500_000, 15_000_000, 50_000_000] {
+            for &median in &[zone, 5 * zone, 50 * zone, 50_000_000] {
                 for &c in &[SCALE * 68 / 100, SCALE, 2 * SCALE, 16 * SCALE] {
                     let c = FeeCorrection::from_scaled(c);
-                    let ladder = corrected_fee_ladder(reward, median, 300_000, 3_000, c);
-                    let floor = relay_fee_floor(reward, median, 300_000, 3_000, c);
+                    let ladder = corrected_fee_ladder(reward, median, 3_000, c, &params);
+                    let floor = relay_fee_floor(reward, median, 3_000, c, &params);
                     assert_eq!(
                         ladder.economy, floor,
                         "economy != relay floor at reward={reward} median={median} c={c:?}",
@@ -260,16 +275,18 @@ mod tests {
 
     #[test]
     fn the_served_ladder_is_monotone() {
+        let params = shipped();
+        let zone = params.full_reward_zone;
         let coin = 1_000_000_000u64;
         for &reward in &[1u64, 1_000, 10 * coin, 2_048_000_000_000] {
-            for &m in &[300_000u64, 1_500_000, 15_000_000, 50_000_000] {
+            for &m in &[zone, 5 * zone, 50 * zone, 50_000_000] {
                 for &c in &[SCALE * 68 / 100, SCALE, 16 * SCALE] {
                     let ladder = corrected_fee_ladder(
                         reward,
                         m,
-                        300_000,
                         3_000,
                         FeeCorrection::from_scaled(c),
+                        &params,
                     );
                     assert!(
                         ladder.economy <= ladder.standard,
@@ -287,7 +304,7 @@ mod tests {
             }
         }
 
-        let degenerate = corrected_fee_ladder(1, 300_000, 300_000, 3_000, FeeCorrection::UNITY);
+        let degenerate = corrected_fee_ladder(1, zone, 3_000, FeeCorrection::UNITY, &params);
         assert_eq!(
             degenerate.as_slots(),
             [1, 4, 4],

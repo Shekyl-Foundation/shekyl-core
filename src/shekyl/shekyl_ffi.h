@@ -254,9 +254,11 @@ uint64_t shekyl_calc_release_multiplier(
     uint64_t release_min,
     uint64_t release_max);
 
-/// Calculate fee burn percentage based on network metrics. Volume operand
-/// as for shekyl_calc_release_multiplier: the exact window
-/// (tx_count_sum, window_blocks), FL-R24.
+/// Free-parameter burn percentage. Not the consensus burn: consensus uses
+/// shekyl_compute_fee_burn / shekyl_calc_burn_pct_at, which derive the
+/// supply. The relay-floor ring still calls this with gross
+/// already_generated_coins (FL-R16c: no per-height burn fold). Volume
+/// operand as for shekyl_calc_release_multiplier.
 uint64_t shekyl_calc_burn_pct(
     uint64_t tx_count_sum,
     uint64_t window_blocks,
@@ -308,6 +310,49 @@ ShekylBurnSplit shekyl_compute_burn_split_escalated(
 /// read-point obligation as shekyl_compute_burn_split_escalated.
 uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 
+// --- the composed owners (E6 slice 4 precursor, CHAIN_RULES_SLICE_4.md §3.1) --
+//
+// The composed owners. C++ passes parent-state facts; Rust derives the
+// supply, the percentage, and the split. shekyl_calc_burn_pct stays the
+// free-parameter entry: the relay-floor ring still calls it with gross
+// already_generated_coins, because the ring walks historical heights and
+// no per-height burn fold is stored (FL-R16c). That entry is not the
+// consensus burn.
+
+/// Status codes for the composed fee-burn entries.
+#define SHEKYL_ECONOMICS_OK                 0
+#define SHEKYL_ECONOMICS_NULL_OUT          (-1)
+/// total_burned > coins_generated: a store-invariant violation (every burned
+/// unit was first emitted). Nothing is written; the caller halts — it does
+/// not proceed on a zero supply, which the burn would read as "nothing
+/// emitted" and answer with a burn of 0 (FL-R16c).
+#define SHEKYL_ECONOMICS_SUPPLY_INVARIANT  (-2)
+
+/// The fee burn from the store facts (CEN-F17). coins_generated is the
+/// PARENT's already_generated_coins and total_burned the destroyed-fee fold
+/// at the same state; Rust derives circulating_supply = coins_generated −
+/// total_burned (checked), the percentage from the shipped EconomicParams,
+/// the D2-escalated split at frozen_segment_count, and the zero-fee arm.
+/// Same parent-state read-point obligation for all three facts.
+int32_t shekyl_compute_fee_burn(
+    uint64_t total_fees,
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
+    uint64_t coins_generated,
+    uint64_t total_burned,
+    uint64_t frozen_segment_count,
+    ShekylBurnSplit *out);
+
+/// The burn percentage the info RPC reports, from the same two store facts
+/// as shekyl_compute_fee_burn. The relay floor does not call this — see
+/// shekyl_calc_burn_pct. Same status codes.
+int32_t shekyl_calc_burn_pct_at(
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
+    uint64_t coins_generated,
+    uint64_t total_burned,
+    uint64_t *out_pct);
+
 /// Effective block-weight median: short_term bounded to
 /// [long_term, S * long_term], S from consensus_constants.json.
 /// Cannot fail. C++ gathers the window medians; Rust owns the clamp.
@@ -337,11 +382,11 @@ int32_t shekyl_relay_floor_admits(
     uint32_t slack_bp);
 
 // F = R*C*w_ref/M^2, floored at 1. Same function as the ladder's economy
-// rung. Returns 0 written, -1 null out_floor, -2 out of u128 domain.
+// rung. The penalty-free zone is EconomicParams::full_reward_zone, not an
+// argument. Returns 0 written, -1 null out_floor, -2 out of u128 domain.
 int32_t shekyl_relay_fee_floor(
     uint64_t base_reward,
     uint64_t median,
-    uint64_t full_reward_zone,
     uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t* out_floor);
@@ -359,11 +404,12 @@ uint64_t shekyl_relay_floor_lookback(void);
 uint32_t shekyl_relay_admission_slack_bp(void);
 
 // Three-slot ladder [economy, standard, priority]. Economy is the relay
-// floor at the same operands. Returns 0 written, -1 null, -2 out of domain.
+// floor at the same operands. The penalty-free zone is
+// EconomicParams::full_reward_zone, not an argument.
+// Returns 0 written, -1 null, -2 out of domain.
 int32_t shekyl_corrected_fee_ladder(
     uint64_t base_reward,
     uint64_t median,
-    uint64_t full_reward_zone,
     uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t *out_fees);
@@ -388,12 +434,16 @@ int32_t shekyl_corrected_fee_ladder(
 /// state, not an error. INVALID covers a null out-pointer and an input
 /// beyond the exact arithmetic domain (medians around 2^43 and above, where
 /// the product leaves 128 bits) — fail-closed rather than wrapping.
-/// Neither out-pointer may be null.
+/// Neither out-pointer may be null. The penalty-free zone is NOT an
+/// argument: it is EconomicParams::full_reward_zone, generated from
+/// config/consensus_constants.json for both languages (E6 slice 4 §3.1 S8) —
+/// the C++ macro CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 is now defined
+/// from the same generated header, and a caller can no longer pass a
+/// different one.
 int32_t shekyl_block_reward(
     uint64_t median_weight,
     uint64_t current_block_weight,
     uint64_t already_generated_coins,
-    uint64_t full_reward_zone,
     uint64_t tx_count_sum,
     uint64_t window_blocks,
     uint64_t *out_reward,
@@ -424,6 +474,16 @@ struct ShekylEmissionSplit {
 ShekylEmissionSplit shekyl_split_block_emission(
     uint64_t block_emission,
     uint64_t effective_share);
+
+/// The emission split (CEN-F16) as ONE owner: the effective share at
+/// current_height measured from genesis_ng_height (CEN-F21's epoch, 1 on
+/// every shipped network), the split, and the zero-emission arm — all Rust,
+/// with the three share/decay constants read from shekyl-economics rather
+/// than marshaled (E6 slice 4 §3.1 S4/S5/S6). Infallible.
+ShekylEmissionSplit shekyl_compute_emission_split(
+    uint64_t block_emission,
+    uint64_t current_height,
+    uint64_t genesis_ng_height);
 
 /// Generate self-signed SSL certificate (Ed25519 key + X.509 via rcgen).
 bool shekyl_generate_ssl_certificate(
@@ -1973,22 +2033,34 @@ uint8_t shekyl_verify_ct_balance(
 /// Mask in a trivial amount-leaking form: identity, G, or coinbase
 /// zeroCommit(amount).
 #define SHEKYL_OUTPUT_POINTS_ERR_TRIVIAL_MASK  4
+/// outPk.size() != vout.size() (or, for a coinbase, the amount count differs):
+/// one mask per output (E6 slice 4 §3.1 S25 — was an uncensused C++ gate).
+#define SHEKYL_OUTPUT_POINTS_ERR_MASK_COUNT    5
+/// The CT type byte is neither CTTypeNull nor CTTypeFcmpPlusPlusPqc: no
+/// subject for the mask check.
+#define SHEKYL_OUTPUT_POINTS_ERR_CT_TYPE       6
 
 /// Flattened `num_keys x 32` output public keys; `keys_ptr` may be null when
-/// `num_keys` is zero.
+/// `num_keys` is zero. Zero keys is vacuously OK.
 uint8_t shekyl_check_output_keys(
     const uint8_t* keys_ptr,
     size_t num_keys);
 
-/// Flattened `num_masks x 32` outPk masks. For a coinbase tx pass the
-/// cleartext vout amounts (mask i is checked against zeroCommit(amounts[i])
-/// for i < num_coinbase_amounts); for non-coinbase pass (NULL, 0). Either
-/// pointer may be null when its count is zero.
+/// The commitment-mask gate, FACTS in: the tx's CT type byte, its vout
+/// count, the flattened `num_masks x 32` outPk masks, and every
+/// vout[i].amount (exactly num_outputs values; a spend's are zero on the
+/// wire). Rust derives the subject from ct_type — CTTypeNull is a coinbase
+/// and the zeroCommit(amount) fingerprint gate applies; the FCMP++ type is a
+/// spend and it does not — and refuses a mask count that is not the output
+/// count. Until E6 slice 4 (§3.1 S25/S27) the C++ caller made both decisions
+/// before calling; it makes neither now. Pointers may be null when their
+/// counts are zero.
 uint8_t shekyl_check_commitment_masks(
+    uint8_t ct_type,
+    size_t num_outputs,
     const uint8_t* masks_ptr,
     size_t num_masks,
-    const uint64_t* coinbase_amounts_ptr,
-    size_t num_coinbase_amounts);
+    const uint64_t* amounts_ptr);
 
 // JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++).
 // Codes 1 (NULL_PTR), 19 (LEN_OVERFLOW), and 23 (BOND_SPEND_PK_COUPLING) are shared

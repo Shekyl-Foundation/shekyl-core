@@ -146,8 +146,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // The denominators the design quotes (CHAIN_RULES_CRATE.md §6.3), verified
     // against the census by the gate. Pinned here so a registry edit that
     // changes the count is visible in Rust as well as in the gate's output;
-    // when the census moves, both move together in the same PR.
-    assert_eq!(CenRow::ALL.len(), 153);
+    // when the census moves, both move together in the same PR. 153 → 152
+    // on 2026-09-21: CEN-F12 (the dead decomposed-denomination gate) went
+    // to bucket 3 and was deleted with its C++ in the same PR (E6 slice 4
+    // Q2 (a)).
+    assert_eq!(CenRow::ALL.len(), 152);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 

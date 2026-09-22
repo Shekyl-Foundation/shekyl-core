@@ -6,6 +6,16 @@ include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
 
 pub const SCALE: u64 = GENERATED_SCALE;
 
+/// Penalty-free block-weight zone in bytes.
+///
+/// Generated from `config/consensus_constants.json`
+/// `block_weight_full_reward_zone_bytes`. The C++ macro
+/// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` and
+/// `shekyl_wire::transaction::MIN_BLOCK_WEIGHT` are generated from the same
+/// key. [`EconomicParams::full_reward_zone`] carries it; the reward and the
+/// fee floor read the field, not a caller-supplied copy.
+pub const FULL_REWARD_ZONE: u64 = GENERATED_BLOCK_WEIGHT_FULL_REWARD_ZONE;
+
 /// The emission curve's asymptote in atomic units
 /// (`emission_curve_asymptote` from `config/economics_params.json`) — the
 /// value `curve = (asymptote − already_generated) >> esf` decays toward,
@@ -141,6 +151,7 @@ struct EconomicParamsWire {
     daa_target_seconds: u64,
     escalation_knee_n: u64,
     escalation_asymptote_share: u64,
+    full_reward_zone: u64,
 }
 
 impl TryFrom<EconomicParamsWire> for EconomicParams {
@@ -160,6 +171,7 @@ impl TryFrom<EconomicParamsWire> for EconomicParams {
             daa_target_seconds: w.daa_target_seconds,
             escalation_knee_n: w.escalation_knee_n,
             escalation_asymptote_share: w.escalation_asymptote_share,
+            full_reward_zone: w.full_reward_zone,
         };
         p.validate()?;
         Ok(p)
@@ -186,6 +198,16 @@ pub struct EconomicParams {
     /// value equals `staker_pool_share`, which makes the escalation flat and the
     /// behaviour bit-identical to today's constant until the ceremony pins it.
     pub escalation_asymptote_share: u64,
+    /// Penalty-free block-weight zone in bytes (CEN-F14b, G6b). The effective
+    /// median is soft-raised to it before the weight penalty, and the
+    /// block-weight limit is twice it.
+    ///
+    /// Authority: `config/consensus_constants.json`
+    /// `block_weight_full_reward_zone_bytes`, also read by the C++ header
+    /// generator and by `shekyl-wire`'s `MIN_BLOCK_WEIGHT`. Declared last so
+    /// the params digest appends it (format `0x03`); the preimage order is
+    /// this declaration order.
+    pub full_reward_zone: u64,
 }
 
 impl Default for EconomicParams {
@@ -203,6 +225,7 @@ impl Default for EconomicParams {
             daa_target_seconds: GENERATED_DAA_TARGET_SECONDS,
             escalation_knee_n: GENERATED_ESCALATION_KNEE_N,
             escalation_asymptote_share: GENERATED_ESCALATION_ASYMPTOTE_SHARE,
+            full_reward_zone: FULL_REWARD_ZONE,
         };
         // Build-generated constants must satisfy the frozen shape; the unit test
         // `shipped_defaults_are_well_formed` is the loud gate, this is the
@@ -349,7 +372,7 @@ mod escalation_param_tests {
             r#"{{"release_min":1,"release_max":2,"tx_volume_baseline":3,
                 "burn_base_rate":4,"burn_cap":5,"staker_pool_share":{floor},
                 "emission_curve_asymptote":7,"emission_speed_factor_per_minute":8,
-                "final_subsidy_per_minute":9,"daa_target_seconds":10,
+                "final_subsidy_per_minute":9,"daa_target_seconds":10,"full_reward_zone":300000,
                 "escalation_knee_n":100000,"escalation_asymptote_share":{asymptote}}}"#
         )
     }

@@ -117,17 +117,20 @@ pub fn effective_emission(
 /// penalty is the LAST operator, not an emission stage.
 ///
 /// Shape (per the C2a port, arithmetic unchanged): the effective median is
-/// `max(median_weight, full_reward_zone)`; at or below it no penalty;
+/// `max(median_weight, params.full_reward_zone)`; at or below it no penalty;
 /// above twice it the block is rejected ([`EmissionError::BlockTooBig`]);
 /// otherwise `amount·(2m − c)·c/m²` in `u128`, fail-closed on overflow.
+/// The zone is read from `params`, never taken from the caller: a
+/// consensus constant a caller could vary per call is a second source
+/// (E6 slice 4 §3.1 S8 — the C++ used to supply it on every call).
 pub(crate) fn apply_weight_penalty(
     amount: u64,
     median_weight: u64,
     current_block_weight: u64,
-    full_reward_zone: u64,
+    params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
     // "make it soft" — a median below the free zone is raised to it.
-    let median = median_weight.max(full_reward_zone);
+    let median = median_weight.max(params.full_reward_zone);
 
     if current_block_weight <= median {
         return Ok(amount);
@@ -173,7 +176,6 @@ pub fn paid_block_reward(
     median_weight: u64,
     current_block_weight: u64,
     already_generated_coins: u64,
-    full_reward_zone: u64,
     tx_volume: TxVolume,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
@@ -181,7 +183,7 @@ pub fn paid_block_reward(
         effective_emission(already_generated_coins, tx_volume, params)?,
         median_weight,
         current_block_weight,
-        full_reward_zone,
+        params,
     )
 }
 
@@ -242,14 +244,12 @@ pub fn block_reward_with_penalty(
     median_weight: u64,
     current_block_weight: u64,
     already_generated_coins: u64,
-    full_reward_zone: u64,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
     paid_block_reward(
         median_weight,
         current_block_weight,
         already_generated_coins,
-        full_reward_zone,
         TxVolume::per_block(params.tx_volume_baseline),
         params,
     )
@@ -262,8 +262,8 @@ pub fn block_reward_with_penalty(
 /// clamp and risking a message that disagrees with the decision.
 /// Saturating: the true limit above `u64::MAX / 2` is unrepresentable, and a
 /// saturated value is only ever used for diagnostics.
-pub fn block_weight_limit(median_weight: u64, full_reward_zone: u64) -> u64 {
-    median_weight.max(full_reward_zone).saturating_mul(2)
+pub fn block_weight_limit(median_weight: u64, params: &EconomicParams) -> u64 {
+    median_weight.max(params.full_reward_zone).saturating_mul(2)
 }
 
 /// Advance `already_generated_coins` by a block reward.
@@ -461,7 +461,7 @@ mod tests {
             // arm: FL-R16a): TAIL exactly, on this rail as on the other.
             for ag in [s - tail + 1, s, s + tail] {
                 assert_eq!(
-                    paid_block_reward(zone, zone, ag, zone, TxVolume::per_block(v), &p).unwrap(),
+                    paid_block_reward(zone, zone, ag, TxVolume::per_block(v), &p).unwrap(),
                     tail,
                     "paid reward != TAIL on the {rail} rail at already_generated={ag}"
                 );
@@ -477,7 +477,7 @@ mod tests {
             };
             assert_eq!(expected, 450_000_000);
             assert_eq!(
-                paid_block_reward(median, weight, s, zone, TxVolume::per_block(v), &p).unwrap(),
+                paid_block_reward(median, weight, s, TxVolume::per_block(v), &p).unwrap(),
                 expected,
                 "penalized tail reward != TAIL*(1-x^2) on the {rail} rail: \
                  penalty must compose AFTER the floor"
@@ -486,7 +486,7 @@ mod tests {
             // Leg 4's paid limb — the projection-fed state pays the same
             // rail-independent TAIL contract.
             assert_eq!(
-                paid_block_reward(zone, 1, ag_proj, zone, TxVolume::per_block(v), &p).unwrap(),
+                paid_block_reward(zone, 1, ag_proj, TxVolume::per_block(v), &p).unwrap(),
                 tail,
                 "projection-fed paid reward != TAIL on the {rail} rail (height {past_boundary})"
             );
@@ -496,7 +496,7 @@ mod tests {
         // everywhere, mid-curve included (weight = 1 ⇒ no penalty).
         for ag in [0, s / 2, s - tail + 1, s, s + tail] {
             assert_eq!(
-                paid_block_reward(zone, 1, ag, zone, TxVolume::per_block(dormancy_v), &p).unwrap(),
+                paid_block_reward(zone, 1, ag, TxVolume::per_block(dormancy_v), &p).unwrap(),
                 effective_emission(ag, TxVolume::per_block(dormancy_v), &p).unwrap(),
                 "pre-penalty paid quantity != effective_emission at ag={ag}"
             );
@@ -686,7 +686,10 @@ mod tests {
     /// `expect_ok` is false.
     #[test]
     fn c2a_prime_layer1_weight_penalty_pinned_vectors() {
-        const ZONE: u64 = 300_000; // CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5
+        // The zone is `p.full_reward_zone` (config/consensus_constants.json);
+        // the vectors were minted at 300 000 and the pin below says so.
+        let p = EconomicParams::default();
+        assert_eq!(p.full_reward_zone, 300_000, "vectors minted at the V5 zone");
         const VECTORS: &[(u64, u64, u64, bool, u64)] = &[
             (0, 150000, 0, true, 2048000000000),
             (0, 150000, 2048000000000, true, 2047999023437),
@@ -771,12 +774,11 @@ mod tests {
             (2100000, 4200001, 2756434948434199641, false, 0),
         ];
 
-        let p = EconomicParams::default();
         let mut penalty_bearing = 0usize;
         let mut rejected = 0usize;
 
         for &(median, current, ag, expect_ok, expect_reward) in VECTORS {
-            match block_reward_with_penalty(median, current, ag, ZONE, &p) {
+            match block_reward_with_penalty(median, current, ag, &p) {
                 Ok(reward) => {
                     assert!(
                         expect_ok,
@@ -827,20 +829,17 @@ mod tests {
         // not rejected. A u64 doubling would wrap to 0 here and reject every
         // block instead, so this pins the u128 comparison specifically.
         let huge = u64::MAX / 2 + 1;
-        assert_eq!(
-            block_reward_with_penalty(huge, u64::MAX, 0, ZONE, &p).unwrap(),
-            0
-        );
+        assert_eq!(block_reward_with_penalty(huge, u64::MAX, 0, &p).unwrap(), 0);
 
         // One weight above the doubled median IS rejected, and computing that
         // boundary must not wrap either. `huge * 2 == u64::MAX + 1`, so no u64
         // current can exceed it: the whole domain is accepted at this median.
-        assert!(block_reward_with_penalty(huge - 1, u64::MAX, 0, ZONE, &p).is_err());
+        assert!(block_reward_with_penalty(huge - 1, u64::MAX, 0, &p).is_err());
 
         // Maximum median with maximum weight: current <= median, so the base
         // reward is returned untouched. No panic, no overflow.
         assert_eq!(
-            block_reward_with_penalty(u64::MAX, u64::MAX, 0, ZONE, &p).unwrap(),
+            block_reward_with_penalty(u64::MAX, u64::MAX, 0, &p).unwrap(),
             base_block_reward(0, &p).unwrap()
         );
 
@@ -848,7 +847,7 @@ mod tests {
         // perpetual-tail state, not an error — the old error arm was the
         // build-blocking dead-letter. Totalized: pays the tail.
         assert_eq!(
-            block_reward_with_penalty(0, ZONE, u64::MAX, ZONE, &p).unwrap(),
+            block_reward_with_penalty(0, ZONE, u64::MAX, &p).unwrap(),
             tail_subsidy_per_block(&p).unwrap()
         );
 
@@ -858,7 +857,7 @@ mod tests {
         // observed, not reasoned about. Now it fails closed.
         let m: u64 = 1 << 48;
         assert_eq!(
-            block_reward_with_penalty(m, m + m / 2, 0, ZONE, &p),
+            block_reward_with_penalty(m, m + m / 2, 0, &p),
             Err(EmissionError::Overflow)
         );
     }
@@ -880,7 +879,6 @@ mod tests {
     #[test]
     fn c2a_prime_layer1_penalty_diverges_from_the_legacy_u64_wrap() {
         let p = EconomicParams::default();
-        const ZONE: u64 = 300_000;
 
         // 2^33 median, block at 1.5x: the legacy multiplicand is
         // 0.75 * 2^66, which is exactly 0 modulo 2^64 — the most legible
@@ -899,7 +897,7 @@ mod tests {
         assert_eq!(legacy_reward, 0, "the legacy path pays nothing here");
 
         // Exact: (2m - c) * c = 0.5m * 1.5m = 0.75 m^2, so reward = 0.75 base.
-        let exact = block_reward_with_penalty(m, c, 0, ZONE, &p).unwrap();
+        let exact = block_reward_with_penalty(m, c, 0, &p).unwrap();
         assert_eq!(exact, base / 4 * 3);
         assert_ne!(exact, legacy_reward, "this test exists to pin a divergence");
     }
@@ -913,7 +911,6 @@ mod tests {
     #[test]
     fn block_reward_with_penalty_exact_domain_boundary() {
         let p = EconomicParams::default();
-        const ZONE: u64 = 300_000;
         let base_u64 = base_block_reward(0, &p).unwrap();
         let base = u128::from(base_u64);
 
@@ -925,7 +922,7 @@ mod tests {
             let c: u64 = m + m / 2;
             let multiplicand = (u128::from(m) * 2 - u128::from(c)) * u128::from(c);
             let fits = base.checked_mul(multiplicand).is_some();
-            let got = block_reward_with_penalty(m, c, 0, ZONE, &p);
+            let got = block_reward_with_penalty(m, c, 0, &p);
             if fits {
                 assert!(got.is_ok(), "median 2^{shift} should be exact");
                 assert_eq!(got.unwrap(), base_u64 / 4 * 3, "2^{shift}");
@@ -942,10 +939,11 @@ mod tests {
 
     #[test]
     fn block_weight_limit_reports_the_effective_double_median() {
-        assert_eq!(block_weight_limit(0, 300_000), 600_000);
-        assert_eq!(block_weight_limit(2_100_000, 300_000), 4_200_000);
+        let p = EconomicParams::default();
+        assert_eq!(block_weight_limit(0, &p), 600_000);
+        assert_eq!(block_weight_limit(2_100_000, &p), 4_200_000);
         // Saturating rather than wrapping — diagnostics only.
-        assert_eq!(block_weight_limit(u64::MAX, 300_000), u64::MAX);
+        assert_eq!(block_weight_limit(u64::MAX, &p), u64::MAX);
     }
 
     /// FL-R12′: the accumulator advances THROUGH the emission-curve
@@ -998,9 +996,7 @@ mod tests {
     fn fl_r24_exact_window_mean_moves_the_reward_off_the_truncated_value() {
         let p = EconomicParams::default();
         let ag = p.emission_curve_asymptote / 2;
-        let zone = 300_000;
-        let paid =
-            |v: TxVolume| paid_block_reward(0, 1, ag, zone, v, &p).expect("mid-curve reward");
+        let paid = |v: TxVolume| paid_block_reward(0, 1, ag, v, &p).expect("mid-curve reward");
 
         // 40.5 per block, exact.
         assert_eq!(paid(TxVolume::window(29_160, 720)), 829_440_000_000);

@@ -34,9 +34,10 @@ use shekyl_curve_tree::reference::REFERENCE_BLOCK_MIN_AGE;
 use shekyl_curve_tree::segment::{SEGMENT_FREEZE_REORG_MARGIN_BLOCKS, SPENDABLE_AGE_BLOCKS};
 use shekyl_economics::block_weight::BLOCK_WEIGHT_SURGE_FACTOR;
 use shekyl_economics::emission::block_weight_limit;
+use shekyl_economics::EconomicParams;
 use shekyl_fcmp::tree::outputs_per_node;
 use shekyl_tx_weight::{predict_weight, InputCount, OutputCount, MAX_OUTPUTS};
-use shekyl_wire::transaction::{MIN_BLOCK_WEIGHT, TX_WEIGHT_LIMIT};
+use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
 
 /// Finalization depth `W`, in blocks: the age at which the wallet's frontier is
 /// taken to be beyond reorg.
@@ -81,8 +82,8 @@ pub const CANONICAL_OUTPUTS: usize = 2;
 /// **This is the operand the opening brief could not find**, and it is a
 /// function call, not a constant:
 ///
-/// 1. The long-term effective median is floored at the full-reward zone
-///    [`MIN_BLOCK_WEIGHT`] (300 000).
+/// 1. The long-term effective median is floored at
+///    [`EconomicParams::full_reward_zone`].
 /// 2. The short-term governor may run it up to `S ×` that floor
 ///    ([`BLOCK_WEIGHT_SURGE_FACTOR`], ratified `S = 4`);
 ///    `shekyl_economics::block_weight` records in its own words that for the
@@ -91,15 +92,17 @@ pub const CANONICAL_OUTPUTS: usize = 2;
 /// 3. A block's admissible weight is then
 ///    [`block_weight_limit`]`(median, zone)` = `2 × max(median, zone)`.
 ///
-/// `config/consensus_constants.json` carries step 2's `S` and nothing else of
-/// this chain — there is no maximum block weight in it, and
-/// `shekyl_wire::block::MAX_BLOCK_BLOB_SIZE` is a parse-DoS guard rather than a
-/// consensus bound. Deriving a ceiling from that file would have named a value
-/// that does not exist.
+/// `config/consensus_constants.json` carries step 2's `S` and, since E6
+/// slice 4, the zone (`block_weight_full_reward_zone_bytes`, read here through
+/// `EconomicParams::full_reward_zone`) — and nothing else of this chain: there
+/// is no maximum block weight in it, and `shekyl_wire::block::MAX_BLOCK_BLOB_SIZE`
+/// is a parse-DoS guard rather than a consensus bound. Deriving a ceiling
+/// from that file would have named a value that does not exist.
 #[must_use]
 pub fn sustained_block_weight_ceiling() -> u64 {
-    let surged_median = (MIN_BLOCK_WEIGHT as u64) * BLOCK_WEIGHT_SURGE_FACTOR;
-    block_weight_limit(surged_median, MIN_BLOCK_WEIGHT as u64)
+    let params = EconomicParams::default();
+    let surged_median = params.full_reward_zone * BLOCK_WEIGHT_SURGE_FACTOR;
+    block_weight_limit(surged_median, &params)
 }
 
 /// The transaction shape that produces the most leaves per unit of block
@@ -175,8 +178,8 @@ pub const GRADED_TREE_DEPTH: u8 = 6;
 
 /// The **nominal** per-block weight the open edge grades at.
 ///
-/// The full-reward zone, [`MIN_BLOCK_WEIGHT`] — a block that fills the space
-/// every block gets regardless of the dynamic median.
+/// The full-reward zone, [`EconomicParams::full_reward_zone`] — a block that
+/// fills the space every block gets regardless of the dynamic median.
 ///
 /// **This is a stated judgment, not a derivation**, in the same class as
 /// §6.3.4's 2 s and 15 % budgets. There is no chain history to take a typical
@@ -198,7 +201,7 @@ pub const GRADED_TREE_DEPTH: u8 = 6;
 /// budget breaks below this density.
 #[must_use]
 pub fn nominal_block_weight() -> u64 {
-    MIN_BLOCK_WEIGHT as u64
+    EconomicParams::default().full_reward_zone
 }
 
 /// Worst-case leaves per block at a stated tree depth.

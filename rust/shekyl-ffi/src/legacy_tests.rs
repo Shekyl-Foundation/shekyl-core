@@ -872,8 +872,19 @@ fn label_plaintext_for_payment_uri_parse_fail_writes_sentinel() {
 // writes, and the null checks. Those only exist at the boundary, so they are
 // tested at the boundary — the gap Copilot raised on PR #518.
 
-/// The zone C++ passes in (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`).
-const ZONE: u64 = 300_000;
+/// Penalty-free zone the block-reward vectors below are denominated in.
+/// Generated from `block_weight_full_reward_zone_bytes`. `shekyl-wire`
+/// reads the same key into `MIN_BLOCK_WEIGHT`; [`the_zone_readers_agree`]
+/// fails if one generator reads a different key.
+const ZONE: u64 = shekyl_economics::FULL_REWARD_ZONE;
+#[test]
+fn the_zone_readers_agree() {
+    assert_eq!(
+        shekyl_economics::EconomicParams::default().full_reward_zone,
+        ZONE
+    );
+    assert_eq!(shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64, ZONE);
+}
 /// A value no computed reward can equal, so "untouched" is distinguishable
 /// from "written with something plausible".
 const SENTINEL: u64 = 0xDEAD_BEEF_DEAD_BEEF;
@@ -894,7 +905,6 @@ fn block_reward_ok_writes_both_out_params() {
             0,
             ZONE / 2,
             0,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -918,7 +928,6 @@ fn block_reward_accepts_the_inclusive_limit_and_pays_zero() {
             0,
             2 * ZONE,
             0,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -940,7 +949,6 @@ fn block_reward_too_big_writes_the_limit_and_leaves_the_reward_untouched() {
             0,
             2 * ZONE + 1,
             0,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -977,7 +985,6 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
             0,
             ZONE / 2,
             0,
-            ZONE,
             baseline_v(),
             1,
             std::ptr::null_mut(),
@@ -999,7 +1006,6 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
             0,
             ZONE / 2,
             0,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -1017,7 +1023,6 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
             0,
             ZONE / 2,
             0,
-            ZONE,
             baseline_v(),
             1,
             std::ptr::null_mut(),
@@ -1040,7 +1045,6 @@ fn block_reward_beyond_the_exact_domain_is_invalid_not_wrapped() {
             m,
             m + m / 2,
             0,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -1066,7 +1070,6 @@ fn block_reward_past_the_asymptote_pays_the_tail() {
             0,
             ZONE / 2,
             u64::MAX,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -1096,7 +1099,6 @@ fn block_reward_marshals_the_signed_composition() {
             0,
             ZONE / 2,
             s - tail + 1,
-            ZONE,
             0,
             0,
             &raw mut reward,
@@ -1113,7 +1115,6 @@ fn block_reward_marshals_the_signed_composition() {
             ZONE,
             ZONE + ZONE / 2,
             s + tail,
-            ZONE,
             0,
             0,
             &raw mut reward,
@@ -1124,18 +1125,8 @@ fn block_reward_marshals_the_signed_composition() {
     assert_eq!(reward, tail / 4 * 3);
 
     // Mid-curve dormancy: the paid quantity carries M_r.
-    let st = unsafe {
-        shekyl_block_reward(
-            0,
-            ZONE / 2,
-            s / 2,
-            ZONE,
-            0,
-            0,
-            &raw mut reward,
-            &raw mut limit,
-        )
-    };
+    let st =
+        unsafe { shekyl_block_reward(0, ZONE / 2, s / 2, 0, 0, &raw mut reward, &raw mut limit) };
     assert_eq!(st, SHEKYL_BLOCK_REWARD_OK);
     assert_eq!(
         reward,
@@ -1198,8 +1189,7 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
     let st = unsafe {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
-            300_000,
-            300_000,
+            ZONE,
             3_000,
             shekyl_economics::params::SCALE,
             std::ptr::null_mut(),
@@ -1214,22 +1204,21 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
 #[test]
 fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
     let mut fees = [SENTINEL; 3];
-    for (base, median, zone, w, c) in [
-        (u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX),
-        (u64::MAX, 300_000, 300_000, 3_000, u64::MAX),
-        (u64::MAX, 300_000, 300_000, u64::MAX, 1_000_000),
-        (1, u64::MAX, u64::MAX, 3_000, 1_000_000),
+    for (base, median, w, c) in [
+        (u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        (u64::MAX, ZONE, 3_000, u64::MAX),
+        (u64::MAX, ZONE, u64::MAX, 1_000_000),
+        (1, u64::MAX, 3_000, 1_000_000),
         // Priority is `2·R·C` and does not carry `w_ref`: a zero `w_ref`
         // zeroes every other product, so a domain check written against a
         // `w_ref`-bearing product would miss this overflow.
-        (u64::MAX, 300_000, 300_000, 0, u64::MAX),
+        (u64::MAX, ZONE, 0, u64::MAX),
     ] {
-        let st =
-            unsafe { shekyl_corrected_fee_ladder(base, median, zone, w, c, fees.as_mut_ptr()) };
+        let st = unsafe { shekyl_corrected_fee_ladder(base, median, w, c, fees.as_mut_ptr()) };
         assert_eq!(
             st, -2,
             "out-of-domain scalars must be refused, not computed \
-             (base={base}, median={median}, zone={zone}, w={w}, c={c})"
+             (base={base}, median={median}, w={w}, c={c})"
         );
         assert_eq!(fees, [SENTINEL; 3], "a refused call must not write");
     }
@@ -1237,8 +1226,7 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
     let st = unsafe {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
-            300_000,
-            300_000,
+            ZONE,
             3_000,
             shekyl_economics::params::SCALE,
             fees.as_mut_ptr(),
@@ -1254,8 +1242,7 @@ fn corrected_fee_ladder_marshals_the_heritage_vector() {
     let st = unsafe {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
-            300_000,
-            300_000,
+            ZONE,
             3_000,
             shekyl_economics::params::SCALE,
             fees.as_mut_ptr(),
@@ -1275,4 +1262,117 @@ fn relay_constants_cross_the_abi_from_the_rust_owner() {
         shekyl_relay_admission_slack_bp(),
         shekyl_economics::RELAY_ADMISSION_SLACK_BP
     );
+}
+
+// --- the composed fee-burn / emission-split boundary (E6 slice 4 precursor) -----
+//
+// `compute_fee_burn` / `compute_emission_split` own their arithmetic and are
+// tested in shekyl-economics. What only exists at THIS boundary: the supply
+// derivation from the two store facts, the invariant status, the null
+// check, and the out-pointer write.
+
+/// The fee burn at the boundary equals the crate's composition over the
+/// derived supply, for a non-trivial fee and a burned total below emission.
+#[test]
+fn compute_fee_burn_ffi_derives_the_supply_and_matches_the_crate() {
+    use shekyl_economics::{
+        compute_fee_burn, CirculatingSupply, EconomicParams, FrozenSegmentCount, TxVolume,
+    };
+    use shekyl_units::AtomicUnits;
+    let p = EconomicParams::default();
+    let (fees, sum, blocks, generated, burned, n) = (
+        1_000_000_000u64,
+        29_160u64,
+        720u64,
+        p.emission_curve_asymptote / 2,
+        1_000_000u64,
+        3u64,
+    );
+    let mut out = ShekylBurnSplit {
+        miner_fee_income: 0xDEAD,
+        staker_pool_amount: 0xDEAD,
+        actually_destroyed: 0xDEAD,
+    };
+    let st =
+        unsafe { shekyl_compute_fee_burn(fees, sum, blocks, generated, burned, n, &raw mut out) };
+    assert_eq!(st, SHEKYL_ECONOMICS_OK);
+    let supply = CirculatingSupply::derive(
+        AtomicUnits::from_raw(generated),
+        AtomicUnits::from_raw(burned),
+    )
+    .expect("burned < generated");
+    let want = compute_fee_burn(
+        fees,
+        TxVolume::window(sum, blocks),
+        supply,
+        FrozenSegmentCount::new(n),
+        &p,
+    );
+    assert_eq!(out.miner_fee_income, want.miner_fee_income);
+    assert_eq!(out.staker_pool_amount, want.staker_pool_amount);
+    assert_eq!(out.actually_destroyed, want.actually_destroyed);
+}
+
+/// `total_burned > coins_generated` is a store-invariant violation: the
+/// status says so and NOTHING is written — the caller halts rather than
+/// proceeding on a zero that `calc_burn_pct` would read as "nothing
+/// emitted" (FL-R16c; supply.rs module docs).
+#[test]
+fn compute_fee_burn_ffi_refuses_a_supply_underflow_and_writes_nothing() {
+    let mut out = ShekylBurnSplit {
+        miner_fee_income: 0xDEAD,
+        staker_pool_amount: 0xDEAD,
+        actually_destroyed: 0xDEAD,
+    };
+    let st = unsafe { shekyl_compute_fee_burn(1_000, 1, 1, 100, 101, 0, &raw mut out) };
+    assert_eq!(st, SHEKYL_ECONOMICS_SUPPLY_INVARIANT);
+    assert_eq!(out.miner_fee_income, 0xDEAD, "untouched");
+    let mut pct = 0xDEADu64;
+    let st = unsafe { shekyl_calc_burn_pct_at(1, 1, 100, 101, &raw mut pct) };
+    assert_eq!(st, SHEKYL_ECONOMICS_SUPPLY_INVARIANT);
+    assert_eq!(pct, 0xDEAD, "untouched");
+}
+
+#[test]
+fn fee_burn_ffi_null_out_is_refused() {
+    let st = unsafe { shekyl_compute_fee_burn(1, 1, 1, 10, 0, 0, std::ptr::null_mut()) };
+    assert_eq!(st, SHEKYL_ECONOMICS_NULL_OUT);
+    let st = unsafe { shekyl_calc_burn_pct_at(1, 1, 10, 0, std::ptr::null_mut()) };
+    assert_eq!(st, SHEKYL_ECONOMICS_NULL_OUT);
+}
+
+/// The percentage at the boundary equals the crate's over the derived supply.
+#[test]
+fn calc_burn_pct_at_ffi_matches_the_crate() {
+    use shekyl_economics::{calc_burn_pct_at, CirculatingSupply, EconomicParams, TxVolume};
+    use shekyl_units::AtomicUnits;
+    let p = EconomicParams::default();
+    let (generated, burned) = (p.emission_curve_asymptote / 3, 5_000_000u64);
+    let mut pct = 0u64;
+    let st = unsafe { shekyl_calc_burn_pct_at(29_160, 720, generated, burned, &raw mut pct) };
+    assert_eq!(st, SHEKYL_ECONOMICS_OK);
+    let supply = CirculatingSupply::derive(
+        AtomicUnits::from_raw(generated),
+        AtomicUnits::from_raw(burned),
+    )
+    .expect("burned < generated");
+    assert_eq!(
+        pct,
+        calc_burn_pct_at(TxVolume::window(29_160, 720), supply, &p)
+    );
+}
+
+/// The emission split at the boundary is the crate's, including the zero arm.
+#[test]
+fn compute_emission_split_ffi_matches_the_crate() {
+    for (emission, height) in [
+        (0u64, 5u64),
+        (1_638_400_000_000, 1),
+        (1_000_000_000, 3_000_000),
+    ] {
+        let ffi = shekyl_compute_emission_split(emission, height, 1);
+        let want = shekyl_economics::compute_emission_split(emission, height, 1);
+        assert_eq!(ffi.miner_emission, want.miner_emission);
+        assert_eq!(ffi.staker_emission, want.staker_emission);
+    }
 }
