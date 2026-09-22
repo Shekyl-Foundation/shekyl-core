@@ -95,6 +95,10 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = 
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # Planting a corrupt row for the SI-10 path.
 redb = { workspace = true }
+# The mutation family's seed-sensitive mock longhash (`keccak256(blob ‖ seed)`,
+# DRS_E2_REPLAY_DRIVER.md §3.10): already in the normal graph via shekyl-wire;
+# named here only so the test can call it directly.
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 
 [lints]
 workspace = true

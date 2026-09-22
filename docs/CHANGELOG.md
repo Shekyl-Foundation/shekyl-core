@@ -68,6 +68,21 @@
   `StoreCannot::RuleSetUnknown` deleted). Process: every FOLLOWUPS row
   carries a gated `Owner:` (`check_followups_owners.py`).
 
+- **DRS-E2 increment 3 — the mutation family.** `shekyl-chain-ingest` gains
+  `Mutated<S>`, a source wrapper that invalidates one block of a valid chain
+  nine systematic ways (header version, orphan, wrong root, future and stale
+  timestamps, PoW mined under a wrong seed, wrong reward, reordered bodies,
+  double spend), each naming from the consensus census the row that refuses
+  it. Six refuse on exactly that row through the real pipeline; the three
+  whose rows are not yet ported (F13, G2, I7) are pinned at today's
+  behaviour with the census as the falsifier — a double spend today reaches
+  the store and halts on SI-1 rather than being refused by the validator.
+  Each mutation also names the place that row points (`Block` for the six
+  live rows, an input for the double spend; F13 and G2 stay unnamed until
+  those slices site them). A timestamp mutation that cannot provoke its row
+  — genesis, where C1 and C2 do not judge, or a clock with no representable
+  instant past the future-time limit — is a fault, not a block that connects.
+  Closes the replay driver's open FTL deviation (C1 is now exercised).
 - **DRS-E2 increment 2 — the replay driver runs, and the first real chains
   match.** `shekyl-chain-ingest` gains the pipeline (`form` workers → sequencer
   → a single validate+connect actor that does not restart after a halt), the
