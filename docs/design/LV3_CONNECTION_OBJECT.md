@@ -1,4 +1,4 @@
-# LV-3 — the connection as a typed, owned Rust object (P2P-3 slice 1)
+# LV-3 — sockets and relay dispatch, and the connection object that lives there (P2P-3 slice 5)
 
 **Status: DESIGN ROUND CLOSED 2026-09-21** — Rounds 1, 2 and 3 answered; **the
 deliverable is the slice register at §6**, and implementation is deferred past
@@ -8,7 +8,17 @@ block. **The deliverable of this round is a design, not code** — rule 20 is
 explicit that migrating a subsystem is a planning activity with its own design
 document, review cycle and test gates, never folded into feature work. Rule 26
 cited explicitly. Owner:
-[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4, slice 1.
+[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4, **slice
+5 — the LAST slice** (restructured 2026-09-21, §4.1 there).
+
+**SCOPE NARROWED 2026-09-21 (steering).** *Records-was: "P2P-3 slice 1", and the
+scope was the whole p2p surface.* **LV-3 is the `levin_notify` / `net_node`
+seam — the socket layer and relay dispatch — and nothing else.** The peerlist,
+admission policy, discovery policy and handshake state machine are **not Levin
+work**; they are P2P-3 slices 1–4 and none of them waits on this one. The
+boundary had been drawn **from a family name rather than from the work**, and a
+"first slice" that contained all of them was the round, not a slice. §1's
+first-slice argument is withdrawn at §1.
 
 **One part of this round's scope is NOT deferred:** E1 tier-1's diagnostic half
 and I8's remedy join the **alpha.9 cut** — see §2.10 and §2.9.4, and
@@ -30,12 +40,30 @@ PWD-I8's category error into Rust intact.
 
 So the seam's location is **checkable**, not asserted. Re-measure it at any
 pin: the C++ that survives is exactly the code that needs a noun Rust does not
-have. *That is the case for this slice, and it is falsifiable — if a later
-measurement shows shipped C++ growing while the noun is still missing, this
-slice was scoped wrong.*
+have.
 
-*(The converging-rows argument in §1 reaches the same conclusion from six
-consumers. Two independent derivations, one empirical and one structural.)*
+**CORRECTION 2026-09-21 — what this measurement is ABOUT, which is narrower than
+what it was used for.** It measured **admission**, where `foreach_connection` is
+the blocker. It was then used to order **the whole round** — *"LV-3 must be slice
+1"* — and **one decision's ceiling does not generalise to a round's ordering.**
+Two things falsify the generalisation, and both are checkable
+([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.1):
+
+- **The peerlist has no such ceiling.** 878 lines, zero socket or
+  connection-registry symbols, does not include `net_node.h`.
+- **§2.9.4's deletion removes admission's ceiling too**, because the walk was
+  `has_too_many_connections` — after it goes, `is_host_limit` is a comparison
+  against an atomic.
+
+**So the measurement stands and its conclusion is re-scoped:** it establishes
+where *admission's* seam was under the cap, not that this slice comes first. **It
+comes last** (§4.1 there). *Still falsifiable in its own terms — if a later
+measurement shows shipped C++ growing while the noun is missing, the seam moved.*
+
+*(The converging-rows argument in §1 reached the same **first-slice** conclusion
+from six consumers, and is withdrawn with it — see §1. Two derivations agreeing
+on a wrong ordering is worth recording: both were about which decisions need the
+noun, and neither was about which work is independent of it.)*
 
 ---
 
@@ -64,7 +92,7 @@ this round has failed to justify — delete it or find its ruling.
 
 ---
 
-## 1. Why this slice is first — the structural case
+## 1. ~~Why this slice is first~~ — WITHDRAWN 2026-09-21; why the consumers still converge
 
 **Nothing in Rust owns a connection.** `shekyl-levin` owns bytes;
 `shekyl-peer-policy` owns stateless verdicts that C++ calls with values C++
@@ -78,7 +106,22 @@ B7's score, PWC-E5, and the failure-window row. *(Was seven — **PWD-I8 struck
 2026-09-21 by §2.9.4**, whose remedy is a deletion plus a measurement and reads
 no category. Counted from rows, not carried.)*
 
-So this is not the cheapest slice. **It is the one the others are waiting on.**
+~~So this is not the cheapest slice. **It is the one the others are waiting
+on.**~~ **WITHDRAWN 2026-09-21.** The conclusion does not follow from the
+premise. **Six consumers needing the noun says the noun must exist before
+THEY land — it says nothing about what else in the round is independent of
+it**, and four of P2P-3's five slices are. Peerlist, admission, discovery and
+handshake do not wait on a connection object; **this slice is where the cost
+and the irreversibility are, so it goes last**, after four slices have
+established the patterns and the differential harness
+([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.1).
+
+**What survives, and it is the part worth keeping:** the six consumers are real,
+they do converge on one noun, and **the noun must exist before any of them
+lands**. That is an argument about *their* ordering relative to this slice, and
+it is intact. It was never an argument about this slice's position in the
+round — and reading it as one is what put a 2,189-line dispatch cutover in
+front of an 878-line data structure with no dependencies.
 
 ---
 
@@ -1121,52 +1164,80 @@ checkable part of this register is the ORDERING**, because that is the part that
 rots: a row whose inheritance has quietly stopped being true is a row that will
 be re-planned on arrival.
 
-### 6.2 The register
+### 6.2 The register moved — it is the ROUND's, not this slice's
 
-Rule 26: a register records **what a slice is and what it flips.** It does not
-schedule slices that have not been designed.
+**Restructured 2026-09-21.** The five-row register that stood here was **P2P-3's
+register wearing LV-3's name** — which is the same boundary error §1 withdraws,
+one level up: a slice's closing deliverable cannot be the round's plan.
 
-| # | Slice | Inherits (from the alpha.9 cut) | Flips | Greens when it lands |
-| --- | --- | --- | --- | --- |
-| **L1** | **The object, with no callers.** `Connection` in Rust: the endpoint with Round 2's claimed/observed provenance, direction, zone, established-at. No C++ caller, no FFI export | **a p2p tree with no `pruning_seed` read anywhere** (alpha.9 §7.2 arm 1), so L1 does not design around a claimed field it would then delete | nothing in §0.5 — deliberately. A type with no caller flips no decision | `rg -n 'pruning_seed' src/p2p/` returns **no read** at L1's open; the crate's round-trip test passes with `Claimed<T>`/`Observed<T>` distinct in the type, per §2.7.4 |
-| **L2** | **Ownership transfer.** The Rust object becomes authoritative for connection identity; `p2p_connection_context` becomes a handle | L1, and a `--in-peers` ceiling that is a **measured value rather than `UINT32_MAX`** (§2.9.4 arm 2), so the accept path L2 rewires already has a real bound | **I8's accounting half** — the category becomes readable as a projection | one owner: `rg -n 'm_pruning_seed\|m_is_income' src/p2p/` shows no *decision* reading a field the Rust object owns |
-| **L3** | **Per-peer state moves onto the object** — PWD-B1's bucket and PWD-B2's per-connection deadline, which are the two consumers with no other home | L2. **Neither B1 nor B2 has a landed mechanism**, so L3 is their first home rather than a migration | **B1, B2** | the four unguarded invoke handlers PWD-B1 names are guarded, and `rg -n 'm_connections_maker_interval' src/p2p/` no longer backs a fixed-interval timer B2 replaced |
-| **L4** | **The score and the floor** — PWD-B7's tri-state verdict remainder and PWC-E5's idle kick / score floor, which §0.5 records as *"owed to P2P-3"* | L3, because a score is per-peer state | **B7's remainder, PWC-E5** | `SHEKYL_P2P_PROTOCOL.md`'s two "owed to P2P-3" citations for B7 and E5 resolve to a landed mechanism rather than to this round |
-| **L5** | **The failure-class carry.** `record_addr_failed` takes an address and nothing else, so the failure *class* — known one line above — is discarded crossing the call | L2 | the failure-window FOLLOWUPS row | the call site passes a class; **still blocked on a number that is not owed** (rule 76), so L5 may land the carry with the window unruled |
+> **The register now lives at
+> [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2**, with
+> five slices in dependency order and LV-3 as **slice 5**. Each row carries what
+> it inherits and a command that greens when it lands.
 
-**E1/E2 are deliberately NOT rows here.** E1 tier-1's diagnostic half lands in
-alpha.9 (§2.10) and is not LV-3's; E2(b) is blocked on the amplifier analysis;
-E1's remainder and E2(a) are cluster E's own work and are **consumers** of L1's
-provenance type rather than slices of it. **A register that absorbs its
-consumers is how a slice becomes a subsystem**, which is the mistake §2.9.4
-just finished unwinding for I8.
+*Records-was: rows `L1`…`L5` here named the object, the ownership transfer,
+per-peer state, the score, and the failure-class carry — a decomposition of
+**this slice's internals** presented as the round's ordering. The internals are
+still the right decomposition of slice 5 and are recorded as §6.2.1; what was
+wrong was calling them the round.*
 
-### 6.3 The register's own falsifier (rule 21)
+#### 6.2.1 Slice 5's internal order, and what it inherits
 
-**This register is stale, and must be re-derived rather than followed, if any
-of the following is true when L1 opens:**
+| Step | What | Note |
+| --- | --- | --- |
+| **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, zone, established-at | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
+| **b** | Ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle | |
+| **c** | The connection registry, **including its own count** | see the inheritance below |
+| **d** | Relay dispatch — `levin_notify`'s 2,189 lines | the bulk, and the irreversible part |
 
-1. **L1's inheritance has lapsed** — `rg -n 'pruning_seed' src/p2p/` returns a
-   read. That means the alpha.9 receiver deletion did not land, and L1 would be
-   designing around a claimed field instead of inheriting its absence.
-2. **L2's inheritance has lapsed** — `--in-peers` still resolves to
-   `UINT32_MAX` at the default. L2 would be rewiring an accept path with no real
-   bound, which is the state §2.9.5's deferral was predicated on ending.
-3. **Any consumer landed its own private connection state** — the §5 reopening
-   criterion, now with a register to check it against: the missing noun
-   re-created in one of six places means the ordering below it is wrong, not
-   just late.
+**What slice 5 inherits from slices 1–4, and it is the reason it goes last:**
+the peerlist's differential harness, admission's ceiling, discovery's candidate
+selection and the handshake phases are all **already in Rust and already
+tested** before the sockets move. **The big-bang lands against established
+patterns rather than defining them.**
 
-**Each of the three is a command, not a judgement.** That is the property this
-register exists to have.
+**And one concrete inheritance worth naming**, because it is invisible from
+`levin_notify`: admission's ceiling is compared against an atomic that a
+**once-per-second `foreach_connection` recount** maintains
+([`net_node.inl:1112`](../../src/p2p/net_node.inl#L1112)). **A Rust connection
+registry should own its own count** rather than inherit a sleeping recount
+thread, so step **c** is where `:1112` dies. *(The one-second staleness is
+separately a rule-76 measurement input for `--in-peers` —
+[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4 item 2 —
+not a design question for this slice.)*
+
+### 6.3 This slice's falsifiers (rule 21)
+
+**Slice 5 is mis-scoped, and must be re-cut rather than followed, if:**
+
+1. **Any of slices 1–4 turns out to need the connection object.** That would
+   mean §4.1's inversion is wrong and the ordering goes back. Check per slice
+   against its own file set — the peerlist's check is
+   `grep -cE 'foreach_connection|m_net_server|connection_context|socket' src/p2p/net_peerlist.*`
+   returning **0**, which it does at `f9e000f76`.
+2. **A consumer landed its own private connection state** while slice 5 waited —
+   §5's reopening criterion, now with a register to check it against. The
+   missing noun re-created in one of six places means the ordering **below** it
+   is wrong, not merely late.
+3. **`levin_notify` stops being the dispatch seam** — if relay dispatch moves
+   or is displaced by cluster T's work (§4 and
+   [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §5, still
+   open), then this slice's 2,189-line core is not where it is assumed to be.
+
+**Each of the first two is a command. The third is why cluster T's sequencing
+is still named as open** rather than quietly assumed.
 
 ### 6.4 ROUND CLOSES
 
 > **LV-3's design round is CLOSED 2026-09-21.** Rounds 1, 2 and 3 are answered
 > (§2.6, §2.8.6 as amended by §2.8.7, §2.9). Identity is settled (§2.9.8): the
 > endpoint's provenance plus the per-peer state with nowhere else to live.
-> **Implementation is deferred past the alpha.9 freeze, and §6.2 is the
-> deliverable.** The first slice lands after the freeze.
+> **Scope is the `levin_notify` / `net_node` seam, and this is P2P-3's slice
+> 5 — the last one.** The round's deliverable is the register at
+> [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2;
+> **P2P-3 slice 1 (the peerlist) is what lands first, and it is not blocked on
+> this document at all.** Slice 5's gate is PR **#818**'s merge, plus slices
+> 1–4.
 
 **What is NOT closed, and is named so it cannot be read as closed:** cluster
 T's sequencing against this seam (§4 and
