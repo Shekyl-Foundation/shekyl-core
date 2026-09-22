@@ -139,9 +139,7 @@ public:
 
   bool version(const std::vector<std::string>& args);
 
-  bool prune_blockchain(const std::vector<std::string>& args);
 
-  bool check_blockchain_pruning(const std::vector<std::string>& args);
 
   bool print_net_stats(const std::vector<std::string>& args);
 

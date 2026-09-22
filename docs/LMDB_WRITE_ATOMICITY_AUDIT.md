@@ -1396,8 +1396,9 @@ cells — `total_burned`, `total_bonded_atomic`, `archival_last_slash_epoch`,
 (the redb store's `schema_version`), `settlement_epoch_blocks_pin` (the redb
 store's `settlement_epoch_blocks`), `pruning_seed`, `tx_prune_next_block`,
 `last_pruned_tx_data_height`, and the redb store's `apply_policy` provenance
-— are per-node facts two honest nodes legitimately differ on: a prune seed is
-random, a provenance is a test-harness history. Folding the whole table would
+— are per-node facts two honest nodes legitimately differ on: a prune seed was
+random (the cell is retired since 2026-09-21, `PDM-Q7`), a provenance is a
+test-harness history. Folding the whole table would
 make the digest disagree between two correct nodes, so the `small` full-domain
 digest for this row is over the **chain-state cells only**. The redb store
 makes the boundary a type: `codec::PropertyCell::Scope` is `ChainState` or
@@ -1544,7 +1545,9 @@ them under one reason hid:
   the table's independence from the prune exactly as enumerating the reads
   understated it. Whether the Rust store carries it is a live
   prune-policy question — a real one, on the population argument — and
-  **not** a settled deletion.
+  **not** a settled deletion. *(UPDATE 2026-09-21: the guarded write is
+  deleted with the stripe engine, `PDM-Q7`; the table is write-never on
+  every node and dies with the C++ store.)*
 - **`output_metadata`** — the `node-local` reason does not describe it at
   all, and the true shape is stronger. It is not discarded content; it is
   content **created by discarding**, written from one site inside

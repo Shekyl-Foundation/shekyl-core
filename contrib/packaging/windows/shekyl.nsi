@@ -48,9 +48,9 @@ Section "Shekyl Core (required)" SecCore
   File /nonfatal "${BIN_DIR}\shekyl-cli.exe"
   File /nonfatal "${BIN_DIR}\shekyl-wallet-rpc.exe"
   File /nonfatal "${BIN_DIR}\shekyl-gen-trusted-multisig.exe"
-  ; Hard-required, not /nonfatal: the daemon's prune_blockchain console
-  ; warning names this tool, so an installer without it ships a broken
-  ; instruction — better to fail the makensis run than omit it silently.
+  ; Hard-required, not /nonfatal: operator docs name this tool for compacting
+  ; the database, so an installer without it ships a broken instruction —
+  ; better to fail the makensis run than omit it silently.
   File "${BIN_DIR}\shekyl-mdb-copy.exe"
 
   WriteRegStr HKLM "Software\Shekyl" "InstallDir" "$INSTDIR"

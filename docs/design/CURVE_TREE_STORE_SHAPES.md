@@ -218,7 +218,7 @@ that sits inside the type's valid range, and each time the reader downstream
 could not tell it from data:
 
 1. **`curve_tree_roots`, daemon (CEN-I12):** a missing key returned a
-   zero-initialised array on `MDB_NOTFOUND` (`src/blockchain_db/lmdb/db_lmdb.cpp:9745`–`:9760`),
+   zero-initialised array on `MDB_NOTFOUND` (`src/blockchain_db/lmdb/db_lmdb.cpp:9064`–`:9080`),
    which decodes to the identity point *O* — and a proof anchored at
    `ref_height = 0` was verified against it. Consequence-free by a
    discrete-log argument, not by design (`CONSENSUS_STORE_RECONCILIATION.md`

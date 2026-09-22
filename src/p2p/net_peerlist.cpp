@@ -81,7 +81,8 @@ namespace nodetool
       // rpc_port / rpc_credits_per_hash advertisement fields, v8 for the
       // deleted anchor AND white lists -- the stream carries one list where it
       // carried three, so an old reader and a new stream disagree on
-      // structure, not merely on content.
+      // structure, not merely on content. v9 for the deleted pruning_seed
+      // entry field (PDM-Q7): one fewer varint per entry.
       if (ver < CURRENT_PEERLIST_STORAGE_ARCHIVE_VER)
         return {};
 

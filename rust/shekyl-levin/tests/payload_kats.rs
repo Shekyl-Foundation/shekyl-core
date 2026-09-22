@@ -42,7 +42,6 @@ fn sync_data() -> CoreSyncData {
         cumulative_difficulty_top64: 0,
         top_id: [0xab; 32],
         top_version: 0,
-        pruning_seed: 0,
     }
 }
 
@@ -126,7 +125,34 @@ fn deleted_rpc_advert_fields_never_written_still_readable() {
             port: 18_080,
         },
         last_seen: 0,
-        pruning_seed: 0,
+    });
+}
+
+/// `pruning_seed` was deleted from `CORE_SYNC_DATA` and `peerlist_entry`
+/// with the stripe engine (`PDM-Q7`): a self-asserted, durable,
+/// address-keyed attribute gossiped in every peerlist — the shape `PWD-I1`
+/// forbids, and with a uniform honest population every non-zero value was
+/// a free marker. Never emitted; a peer that still sends a well-formed
+/// stripe seed (`384` = stripe 1 at log-stripes 3) decodes with the key
+/// ignored, so the deletion is interop-safe against a mixed fleet in both
+/// directions (`KV_SERIALIZE_OPT` on the C++ side, absent reads as 0).
+fn stale_pruning_seed_ignored<T: PortableMap + PartialEq + std::fmt::Debug>(value: &T) {
+    let mut section = value.to_section().expect("section");
+    assert!(section.get("pruning_seed").is_none());
+    section.insert("pruning_seed", shekyl_portable_storage::Value::UInt32(384));
+    let bytes = store_to_binary(&section).expect("encode");
+    assert_eq!(&T::load(&bytes).expect("load"), value);
+}
+
+#[test]
+fn deleted_pruning_seed_never_written_still_readable() {
+    stale_pruning_seed_ignored(&sync_data());
+    stale_pruning_seed_ignored(&PeerlistEntry {
+        adr: NetworkAddress::Ipv4 {
+            ip: Ipv4Addr::new(10, 0, 0, 1),
+            port: 18_080,
+        },
+        last_seen: 0,
     });
 }
 
@@ -232,7 +258,6 @@ fn handshake_with_ipv4_peerlist_round_trip() {
                 port: 18_080,
             },
             last_seen: 0,
-            pruning_seed: 0,
         }],
     };
     round_trip(&rsp);

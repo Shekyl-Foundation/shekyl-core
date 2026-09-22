@@ -1849,31 +1849,6 @@ public:
    */
   bool txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category);
 
-  /**
-   * @brief get the blockchain pruning seed
-   * @return the blockchain pruning seed
-   */
-  virtual uint32_t get_blockchain_pruning_seed() const = 0;
-
-  /**
-   * @brief prunes the blockchain
-   * @param pruning_seed the seed to use, 0 for default (highly recommended)
-   * @return success iff true
-   */
-  virtual bool prune_blockchain(uint32_t pruning_seed = 0) = 0;
-
-  /**
-   * @brief prunes recent blockchain changes as needed, iff pruning is enabled
-   * @return success iff true
-   */
-  virtual bool update_pruning() = 0;
-
-  /**
-   * @brief checks pruning was done correctly, iff enabled
-   * @return success iff true
-   */
-  virtual bool check_pruning() = 0;
-
   // ─── Output Metadata Pruning ──────────────────────────────────────────────
 
   /**

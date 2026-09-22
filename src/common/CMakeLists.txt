@@ -38,7 +38,6 @@ set(common_sources
   notify.cpp
   password.cpp
   perf_timer.cpp
-  pruning.cpp
   removed_flags.cpp
   spawn.cpp
   threadpool.cpp
