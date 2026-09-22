@@ -1166,7 +1166,7 @@ General key-value store for database-level metadata.
 
 ## Sub-database total
 
-Total: **49 sub-databases**. The single source of truth is the
+Total: **47 sub-databases**. The single source of truth is the
 `SHEKYL_LMDB_TABLES` X-macro list in `db_lmdb.cpp`; its derived
 `kLmdbTableCount` is what `mdb_env_set_maxdbs` receives (`SO-D4`,
 `ARCHIVAL_SETTLEMENT_WRITER.md`), so the count is exact by construction with

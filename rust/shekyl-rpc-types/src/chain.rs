@@ -80,8 +80,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `= 26` is textually identical whoever writes it. 3.33 is the
 /// `get_output_histogram` deletion on this branch; 3.34 the
 /// `get_curve_tree_path` removal, chained after it on merge; 3.35 the
-/// `pruning_seed` deletion; 3.36 the `tx_prune_height` deletion. Was: 3.35 the
-/// `pruning_seed` deletion.
+/// `pruning_seed` deletion; 3.36 the `tx_prune_height` deletion.
 pub const CORE_RPC_VERSION_MINOR: u32 = 36;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;

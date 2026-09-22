@@ -97,13 +97,13 @@ DRS-D12 — no store handle by construction).
 
 | Fact | Measurement |
 | --- | --- |
-| Live `MDB_dbi` table handles in `db_lmdb.h` | **49** (1:1 with opens; was 46 at the Round-2 pin — the three births are in the P0a registry below) |
-| `lmdb_db_open(` **call** sites (macro path) | **49** — the 50th `rg` hit is the **function definition**, not an open (the pin-era shape R2-3 ruled on: N calls + 1 definition; was 46+1) |
-| `docs/LMDB_SCHEMA.md` claimed total | **49** — **current and gate-pinned** (`check_lmdb_schema_coverage.py`; claimed 41 at the Round-2 pin) |
+| Live `MDB_dbi` table handles in `db_lmdb.h` | **47** (1:1 with opens; was 46 at the Round-2 pin — the three births are in the P0a registry below; `output_metadata` and `txs_prunable_tip` left on 2026-09-22, LMDB v15) |
+| `lmdb_db_open(` **call** sites (macro path) | **47** — the 48th `rg` hit is the **function definition**, not an open (the pin-era shape R2-3 ruled on: N calls + 1 definition; was 46+1) |
+| `docs/LMDB_SCHEMA.md` claimed total | **47** — **current and gate-pinned** (`check_lmdb_schema_coverage.py`; claimed 41 at the Round-2 pin) |
 | Tables in code, **0 hits** in schema doc | **none** (P0a, 2026-09-05). At the Round-2 pin these **seven** had zero hits: `block_burn`, `archival_budget`, `archival_budget_accrual`, `archival_bond_unbond_log`, `archival_bond_reinstate_log`, `archival_bond_holdings_update_log`, **`archival_emission_claim_log`** — all documented since (`2572e6f5b`, 2026-08-25 — the commit that landed all seven sections and the coverage gate; the gate's header dates its census 2026-08-26, the same moment in UTC, and counts **nine** = these seven + the two witness tables born 2026-08-04) |
 | Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
-| Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 48), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
+| Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 46), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
 | Hardfork pop | `HardFork::on_block_popped` **reads** `get_hard_fork_version(height)` for heights **above** new tip (`hardfork.cpp:286–302`); interface has **set/get only**, no delete (`blockchain_db.h:1938,1947`) |
 
 ### Oracles of record — status
@@ -131,6 +131,10 @@ so "no deaths" is a measurement, not an unstated conjunct of
 `4 births − 1 death`). The registry key is the on-disk name string — what
 a deployed datadir contains; the `db_lmdb.h` handle set was separately
 verified `m_<name>` 1:1 against it at HEAD (49/49).
+
+**UPDATE 2026-09-22.** `output_metadata` and `txs_prunable_tip` left the
+X-macro (LMDB v15). Declared tables and handles are 47/47. The census
+above is the measurement at `9742ec4f6` (births 3, deaths ∅).
 
 **Birth provenance.** The independent witness is the schema version
 ladder (`LMDB_SCHEMA.md` header): the pin defines `VERSION 8`, HEAD
@@ -172,10 +176,10 @@ born 2026-08-04 (between pin and census) and undocumented at birth.
 Phantoms at HEAD: **0** — both lost their sections with the claim-era
 wire deletion, and the gate's ghost leg refuses their return.
 
-**49 rows**, one per **declared** table (declared, not runtime — a writable
-`open()` drops `hf_starting_heights`, leaving 48; DRS-W5); dispositions
-count 39 documented-at-pin
-+ 7 since-documented + 3 born-since:
+**47 rows**, one per **declared** table (declared, not runtime — a writable
+`open()` drops `hf_starting_heights`, leaving 46; DRS-W5). The 2026-09-05
+census was 49 (39 documented-at-pin + 7 since-documented + 3 born-since);
+the two 2026-09-22 deaths leave 47. Dispositions:
 
 | Table | Disposition (pin `3247fe3b6` → `9742ec4f6`) |
 | --- | --- |
@@ -256,7 +260,7 @@ store, don't patch blind.
 
 ## 0. Problem statement
 
-Durable state lives in C++ LMDB (**49** declared tables, 48 at runtime —
+Durable state lives in C++ LMDB (**47** declared tables, 46 at runtime —
 DRS-W5). Orchestration tangle is
 **`blockchain.cpp`** (259 store call sites, 95 store methods), not the
 storage class alone.
@@ -1179,8 +1183,8 @@ pressure. **DRS-0 freezes accumulator design** (constrains codecs):
 Total coverage = every table in inventory contributes to some accumulator or
 named exclusion. **No silent sampling.**
 
-**Frozen 2026-09-12 by DRS-0 slice A.** The per-table assignment for all
-**49** inventory tables is the `Accumulator class` column of
+**Frozen 2026-09-12 by DRS-0 slice A.** The per-table assignment for every
+declared table is the `Accumulator class` column of
 [`LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) §10,
 with the five tokens, the `set-shaped` delete-path falsifier, the named
 exclusion reasons and the gate's stated limitation defined in that
@@ -2086,8 +2090,8 @@ name-derived `m_<name>`, verified 1:1 by P0a):
 4. After digest exists: every `MDB_dbi` in digest set **or** named exclusion
    row
 
-**Seed count: 49/49** (46/46 at the Round-2 pin — R2-3's "no phantom 47"
-ruled the definition-site `rg` hit; the same N+1 shape reads 49+1 today).
+**Seed count: 47/47** (46/46 at the Round-2 pin — R2-3's "no phantom 47"
+ruled the definition-site `rg` hit; the same N+1 shape reads 47+1 today).
 Gate must not cry wolf on day one — it has run green on `dev` since
 its landing (`2572e6f5b`, 2026-08-25).
 

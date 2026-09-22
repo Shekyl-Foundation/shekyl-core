@@ -47,7 +47,6 @@
 #define CURRENT_BLOCK_MAJOR_VERSION                     1
 #define CURRENT_BLOCK_MINOR_VERSION                     0
 #define CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE             10
-/** Depth (in blocks) below the chain tip before tx verification data may be pruned (~7d at 120s/block). */
 
 // SHEKYL_EMISSION_CURVE_ASYMPTOTE/COIN/emission constants are generated from config/economics_params.json.
 

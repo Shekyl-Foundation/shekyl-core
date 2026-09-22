@@ -352,12 +352,15 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
 #[test]
 fn the_second_rust_only_table_is_catalogued_last_and_named() {
     let ordinal = schema::ordinal_of("txs_pqc_auth_hash").expect("catalogued");
+    let catalogue_len = schema::catalogue().len();
     assert_eq!(
-        ordinal.index(),
-        48,
-        "appended, so no existing ordinal moved"
+        ordinal.index() + 1,
+        catalogue_len,
+        "txs_pqc_auth_hash is the final catalogue slot"
     );
-    assert_eq!(schema::catalogue().len(), 49);
+    // 47 LMDB mirrors plus the two Rust-only tables (`undo_log`,
+    // `txs_pqc_auth_hash`) at SCHEMA_VERSION 10.
+    assert_eq!(catalogue_len, 49);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(names, ["undo_log", "txs_pqc_auth_hash"]);
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.

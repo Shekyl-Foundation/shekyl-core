@@ -70,9 +70,9 @@ tables with dead migration code):
   `output_to_leaf`), −2 (`staker_accrual`, `staker_claims`, deleted with the
   claim-era wire). **Round-2 → this pin: +3** (both attestation-witness
   tables, `archival_settlement`), −0. Both directions of each delta measured.
-- **22 of the 49 declared tables post-date the April audit** (declared,
+- **22 of the 47 declared tables post-date the April audit** (declared,
   not live: DRS-W5 and §10 record that a writable `open()` deletes
-  `hf_starting_heights`, so the running store holds 48) and had zero
+  `hf_starting_heights`, so the running store holds 46) and had zero
   atomicity coverage until this rewrite. The April PASS was doing work it
   was never entitled to do: a verdict over a store that is now half tables
   it never saw, while several of its covered subjects are dead. A seal is
@@ -682,7 +682,7 @@ the figure was left as a bound; it is no longer a live deferral.)*
 | DRS-W2 | `LockedTXN::commit` swallows `batch_stop` exceptions — silent commit failure (April note, still true) | wart | RECORD-AND-SPECIFY: Rust store commit is `Result`, callers must consume it |
 | DRS-W3 | 129 dereferences of `*m_write_txn` in `db_lmdb.cpp` with no guard **at the dereference site**; an unknown subset is dominated by a caller's guard (worked example: `process_archival_slash_at_height`, `:5930`), so 129 is the total census and an **upper bound** on the unguarded set, not a count of latent null dereferences | wart (latent; **bound, not measured** — P0c declined the dominance analysis; the upper bound is the recorded figure) | RECORD-AND-SPECIFY: the Rust store's write handle is possession-typed, which makes the precondition unrepresentable and the whole census moot — that is why the exact figure is not worth computing in C++ |
 | DRS-W4 | `txs` has **zero write and zero read sites** — the handle's only occurrence in `db_lmdb.cpp` is its `open()` (`:1662`); every live tx write goes to the pruned/prunable split. Verified wide across `src/` and `tests/` (the tests' `m_txs` is a test-local vector, not the handle) | wart (inherited-dead surface; no unsound state) | RECORD-AND-SPECIFY: the Rust store does not port the table. Deleting it here is a C++ **and** schema-version change, owned by the census/DRS lane, not by a docs pass |
-| DRS-W5 | `hf_starting_heights` is `mdb_drop(…, del=1)`-deleted at every writable `open()` (`:1779`) and never re-created, so the **declared** table set (49) and the **runtime** set (48) differ permanently — and the coverage gate cannot see the class, since both sides of its comparisons derive from the same macro (§10) | wart (structural divergence between register and runtime; no unsound state) | RECORD-AND-SPECIFY, and routed to census **R4**, which owns the hardfork machinery. A runtime census is out of this pass's scope by design |
+| DRS-W5 | `hf_starting_heights` is `mdb_drop(…, del=1)`-deleted at every writable `open()` (`db_lmdb.cpp`, the writable-open arm) and never re-created, so the **declared** table set (47) and the **runtime** set (46) differ permanently — and the coverage gate cannot see the class, since both sides of its comparisons derive from the same macro (§10) | wart (structural divergence between register and runtime; no unsound state) | RECORD-AND-SPECIFY, and routed to census **R4**, which owns the hardfork machinery. A runtime census is out of this pass's scope by design |
 | DRS-W6 | The post-pop burn pair (`total_burned` reversal + `block_burn` row removal, `blockchain.cpp:896`–`:905`) sits at the **core layer, outside `BlockchainDB::pop_block`**. Two consequences: a batchless core-path caller pops in two transactions; and a caller popping through the DB funnel skips both writes entirely — **live today** via `blockchain_import --pop-blocks`, which calls `get_db().pop_block(...)` directly and documents why (§3). A database added through the verifying path and popped by that tool keeps burns the chain no longer contains | wart (**latent bookkeeping, live reachability** — graded on the complete five-site consumer census: RPC readout, connect add, pop reversal, and the two slash guards — an *inflated* value satisfies the underflow guard more easily but **reduces** the overflow guard's headroom, so the earlier reading ("satisfies both with headroom") was wrong in direction; the grade survives on magnitude instead, since that guard fires only within `slashed_amount` of `UINT64_MAX`, astronomically far from any burn total in atomic units. DRS-W6's own tool path can repeat, so the inflation is unbounded in principle: popping through the DB and re-adding increments the aggregate again each cycle. No emission, supply, or validation arithmetic consumes the scalar — `shekyl-economics-sim/src/record.rs:143` refuses the `already_generated − total_burned` derivation on the record, and the conservation helper is KAT-only with synthetic operands. **Grade expires with its ground**: any consensus consumer of the scalar re-grades this at that consumer's design round) | RECORD-AND-SPECIFY: **derived-total reversal belongs in the pop funnel** in the Rust store, so popping through the store cannot mean something different from popping through the node **CLOSED-AT-PORT 2026-09-15 (S-CHAIN-W, `rust/shekyl-chain-store`):** the burn pair is inside the funnel on both sides — `connect` writes `block_burn[h]` and folds `total_burned` in the same batch as the block, and `pop` restores `total_burned` from the journaled pre-image (`UndoEntry::Replaced`), so there is no pop-side arithmetic and no saturate to reason about. |
 | DRS-W7 | **Four** sites, four semantics for the same scalar's impossible value: the connect increment **wraps** (`blockchain.cpp:6436` — unchecked `uint64_t +=`, no guard at all), the pop reversal **clamps** to floor (`:902`), the slash add **throws** `FATAL` on overflow (`db_lmdb.cpp:6050`), the slash revert **throws** `FATAL` on underflow (`:6362`). The census read "three sites, three semantics" until review found the unchecked connect add — the one site with no opinion at all about an impossible value | wart (**reachable — regraded**: DRS-W9 produces the too-LOW scalar the `:6362` underflow tests, and DRS-W6's tool path the too-HIGH one. The disagreement is live, and the fourth site is the sharpest part of it: three sites decided what an impossible total means and the fourth never asked) | RECORD-AND-SPECIFY: the Rust store gets **one** ruled semantic for an impossible derived total, applied at every site including the increment — checked arithmetic, not `+=`. The ruling belongs to the economics lane |
 | DRS-W8 | `correct_block_cumulative_difficulties` (`:3034`) aborts explicitly on its size-mismatch guard but not on its loop throws — and there is no stack owner to unwind them: `block_wtxn_start` heap-allocates into `m_write_txn` (`:4311`) and only stop/abort delete and clear it (`:4344`, `:4361`). A loop throw therefore leaves the LMDB write transaction **live** and the member non-null, so the next `block_wtxn_start()` throws `DB_ERROR_TXN_START` and every subsequent block write fails until the process restarts. It also has **no production caller** (§5c) | wart (no partial commit — nothing commits — but a **poisoned writer**, not merely an open transaction; unwired today) | RECORD-AND-SPECIFY: one unwinding path in the Rust store, and a write handle whose lifetime is owned by the scope that opened it rather than by a raw member pointer |
@@ -1042,7 +1042,7 @@ count is the macro's length by construction). "Path §" points at the
 section above whose verdict covers the table's writers. **`Digest v0`**
 states what digest v0 sees of that table — one of `v0`, `v0-partial`,
 `excluded` or `uncovered`, defined in §11 and gate-enforced one-per-table
-by the P0e leg. A state token is **not** a coverage claim: 24 of the 49 read
+by the P0e leg. A state token is **not** a coverage claim: 22 of the 47 read
 `uncovered`. **`Accumulator class`** states what the frozen design commits
 to — one of `set-shaped`, `append-mostly`, `small`, `derived` or `excluded`,
 defined in §12 and gate-enforced one-per-table by the slice-A leg. **The two
@@ -1051,9 +1051,9 @@ disagree on the count §12 states and the gate derives, because the archival
 journals are v0-`excluded` and carry a real accumulator class. A class token
 is **not** a soundness claim — see §12's stated limitation.
 
-**49 rows** (the stated figure is gate-checked against the macro's
+**47 rows** (the stated figure is gate-checked against the macro's
 length, like the P0a registry's). **A stated property of this matrix, not
-a footnote on one row:** it covers the 49 **declared** tables — the
+a footnote on one row:** it covers the 47 **declared** tables — the
 X-macro is a register of declarations, not a census of what exists at
 runtime — and DRS-W5 proves the two populations differ: `hf_starting_heights`
 is dropped (`del=1`) at every writable `open()`, so the running store
@@ -1158,10 +1158,10 @@ pin.*
 covered** — three of its four states say the opposite, and the count below is
 the measured size of the gap P0d named when it scoped v0 as a *minimum*.
 
-**Every one of the 49 declared tables carries exactly one state token in
+**Every declared table carries exactly one state token in
 §10's `Digest v0` column**, and the schema-coverage gate's P0e leg enforces
 that — one token per table, drawn from the four below, no blanks. The leg
-asserts **statehood, not coverage**: a tree where all 49 read `uncovered`
+asserts **statehood, not coverage**: a tree where every table reads `uncovered`
 passes it. What the leg prevents is a table entering or leaving the digest
 with nobody writing it down.
 
@@ -1346,10 +1346,10 @@ it requires those journals in digest coverage *before* S-ARCH extraction,
 which is only possible if the freeze gives them a class. **Do not read
 either column as a proxy for the other.**
 
-**Every one of the 49 declared tables carries exactly one class token in
+**Every declared table carries exactly one class token in
 §10's `Accumulator class` column**, drawn from the five below, gate-enforced
 one-per-table. As with the P0e leg, **the leg asserts classhood, not
-soundness** — a tree where all 49 read `excluded` passes it. See the stated
+soundness** — a tree where every table reads `excluded` passes it. See the stated
 limitation at the end of this section, which is not a footnote.
 
 The vocabulary and the set-shaped write contracts live in
@@ -1829,7 +1829,7 @@ source is independently specified.
 
 This is demonstrated, not merely asserted: the negative control for this leg
 marks `curve_tree_layers` — a table whose contents the pop path recomputes —
-as `set-shaped`, and confirms **the gate stays GREEN**. So **"49/49
-classified" means every table carries one of five tokens and nothing more.**
+as `set-shaped`, and confirms **the gate stays GREEN**. So a full
+classification means every table carries one of five tokens and nothing more.
 It is a statement on the *classhood* axis. The reversibility evidence lives
 in the falsifier run above, per row, and in no exit code.
