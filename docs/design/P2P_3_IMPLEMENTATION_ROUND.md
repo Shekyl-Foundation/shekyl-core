@@ -153,7 +153,7 @@ it does not schedule slices that have not been designed.
 | **1** | **LV-3 — the connection as a typed, owned Rust object.** Brief: [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) | unblocks B1, B2, B7's score, E1/E2, PWC-E5. **No longer flips I8** — see slice 2 | **DESIGN ROUND CLOSED 2026-09-21** (Rounds 1–3 answered) — no code. Identity amended by §2.9.8: the endpoint's provenance plus per-peer state, **not** I8's category |
 | **2** | **I8's remedy — DELETE the per-host inbound cap, and give `--in-peers` a measured default.** Ruled [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.9.4. **Two halves, one deletion and one measurement** — see §7.1 for the ripples, which are larger than the diff | **I8** OPEN → ruled-and-closed; **I7** PARTIAL → the row's mechanism is deleted, not completed | **DISPATCHABLE** — design complete, no blocker. Not yet cut |
 | — | *candidates below are **not dispatched**; they are named so the register is not mistaken for a complete queue* | | |
-| *(cand.)* | **E2 tier-1 self-classification.** A node with a published endpoint and zero inbound in `T` classifies itself unreachable, stops advertising, and tells the operator. **No wire change, no dial-back, no amplification surface** — and it builds the rule-82 surface PWD-I7 records as absent | E1/E2 (partial) | not dispatched |
+| **3** | **E1 tier-1 — the DIAGNOSTIC half only.** A node reports its own inbound state, uptime and advertised endpoint to its operator. **No wire, no dial-back, no amplification surface, and no threshold** — it builds the rule-82 surface PWD-I7 records as absent. Ruled [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.10. *Label corrected from "E2 tier-1": **E2 is defined as what VERIFIES a candidate endpoint**, and tier 1 has no verifier, so it cannot be E2* | **E1 (partial)** — the diagnostic half only | **DISPATCHABLE.** The *action* half (`stops advertising`) is **BLOCKED on `T`**, owed to PWD-E8's deferred measurement — §2.10.2 |
 | *(cand.)* | **The failure-class carry at `record_addr_failed`** — the class is known one line above the call and discarded crossing it | the failure-window FOLLOWUPS row | not dispatched; **blocked on a number that is not owed** (rule 76) |
 | *(cand.)* | **Cluster T** — see §5, the sequencing question | T1–T4, T6, T8 | not dispatched |
 | *(cand.)* | **The `pruning_seed` C++ RECEIVER** — `should_drop_connection` and the candidate filter at `net_node.inl:1832` both act on a claimed field ([`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.8.7) | none — it is `PDM-Q7`'s empty cell, not a `PWD-` row | not dispatched; **three arms in §7.2**, and the choice is steering's |
@@ -299,22 +299,46 @@ which is right depends on §7.3's scope call, which is steering's.
 | **E2 — endpoint verification** | **DESIGN only** | with E1; **the amplifier warning stands** — *"rushing a dial-back mechanism into a release is how you get the ping-back-as-DoS-amplifier problem"* — and Round 2 **rejected** the reserve-capacity shortcut on mechanical grounds (§2.8.5) | E2 |
 | **LV-3 implementation** | **DESIGN CLOSED** | reviewer bandwidth, and the object's identity only settled 2026-09-21 (§2.9.8) | unblocks six consumers; is §7.2 arm 2 |
 
-### 7.4 The scope question, which is steering's
+### 7.4 SCOPE RULED 2026-09-21 (steering) — take four, respec one, defer two
 
-**"This should be a part of it" admits two readings, and they differ by a lot:**
+**TAKE NOW — the alpha.9 cut:**
 
-- **Minimal** — slice 2's deletion, the `--in-peers` measurement, and §7.2
-  arm 1. **All three are ready, none is blocked, and together they are a small
-  diff with a large ripple** (§7.5). This removes a mechanism that defends
-  nothing and gives a real ceiling a reachable value.
-- **Full** — the above **plus** LV-3's implementation and E1/E2, which is the
-  deferral list as originally written. This is the only reading that discharges
-  `PDM-Q7`'s ignore-half as specified, and it is **much** larger: E1/E2 have no
-  mechanism at all, and the amplifier warning that deferred them has not been
-  answered by anything in Rounds 1–3.
+| # | Item | Why it qualifies |
+| --- | --- | --- |
+| 1 | **Delete the per-host inbound cap** | ruled §2.9.4, three independent arms, no blocker |
+| 2 | **`--in-peers` measured default** | the ceiling exists and is checked; a **measurement** at the rule-76 floor, not a ruling |
+| 3 | **The `pruning_seed` receiver branches** (§7.2 arm 1) | two live branches; not governed by `PDM-Q-S0` |
+| 4 | **E1 tier-1, diagnostic half** | *"no wire, no amplifier and no ruling owed,"* and it **closes the operator-diagnostic gap that started the lane** — the merit that earns it a place beside three ready items |
 
-**Recorded, not chosen.** The round's job was to make the two readings
-separable and priced; picking between them is a release-scope decision.
+**Steering's framing, recorded because it is the reason item 4 is in and not
+merely cheap:** *"Three ready plus one with no wire, no amplifier and no ruling
+owed. Tier-1 still earns its place on merit."* **A cheap item that closes
+nothing does not qualify**, which is the test items 1–3 also pass.
+
+**RESPEC, rather than expand scope to satisfy:** `PDM-Q7`'s ignore-half
+presupposes a receiver alpha.9 does not deliver, so **Q7 is re-specified against
+the receiver that will exist** — §7.6. *That is the ruling that keeps item 3
+from pulling LV-3's implementation into the cut behind it*, which is how a
+scope grows by obligation rather than by decision.
+
+**DEFER:**
+
+- **LV-3's implementation** — the design round **closes with a slice register**
+  as its deliverable ([`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md)
+  §6), and **the first slice lands after the freeze.** The register is required
+  to be *checkable* rather than a plan, for the reason §6.1 records: a round
+  that closes on intentions is indistinguishable from a round that never
+  closed, **which is this round's own history** (§0).
+- **E2(b)** — stays blocked on the amplifier analysis. Unchanged, and Round 2's
+  §2.8.5 rejection does not substitute for it.
+
+**And the aside that shaped the deferral, kept because it is an argument and not
+an aside:** if `pruning_seed` is gone before LV-3 starts, **that is a statement
+about LV-3's distance**, not about `pruning_seed`. A far-off round owes a
+deliverable that decays visibly. §6.3 gives the register three falsifiers that
+are commands rather than judgements, and L1/L2's rows name what they **inherit
+from this cut** — so if the cut does not land, the register goes red instead of
+going quiet.
 
 ### 7.5 The deletion's ripples — enumerated here, not discovered in the PR
 
@@ -356,3 +380,81 @@ Slice 2 is a small diff with a **larger** ripple than its size suggests:
   already built the Rust-side pattern for it.
 
 ---
+
+---
+
+## 7.6 PROPOSED AMENDMENT to `PDM-Q7` — for the pruning lane's ratification, not applied here
+
+**Ruled 2026-09-21 (steering): respec Q7 rather than expand scope to satisfy
+it.** This section is the proposed text. **It is deliberately not written into
+[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)** — `PDM-Q7`
+is the pruning lane's ruling, a `PWD-` round does not amend a `PDM-Q` one, and
+an amendment applied by the lane that wants it is not a ratification.
+
+### What is wrong with the row as written
+
+`PDM-Q7`'s **P2P wire** row retires the slot in two halves: a Rust daemon
+**sends `0`**, and **ignores** any non-zero it receives, *"the ignore becomes a
+drop reason only after the C++ emitter is deleted."* The sequencing is sound and
+**the landing site is not**: *"a Rust daemon ignores"* presupposes a **Rust p2p
+receiver**, and `DRS-E*` delivers a Rust **store** behind **C++ p2p** (§7.1).
+**So at the cutover the send-half lands and the ignore-half has nowhere to go.**
+
+### The observation that makes the respec cheap rather than new work
+
+**A receiver-side ignore already exists in the tree, as the zero path.** At
+[`net_node.inl:1832`](../../src/p2p/net_node.inl#L1832) the first branch is
+`next_needed_pruning_stripe == 0 || peer.pruning_seed == 0` → `push_back`: **a
+zero seed already means *no preference*.** The non-zero handling is the
+`else if` beneath it, and the matching retention in `should_drop_connection`.
+
+**So deleting the non-zero branches does not build an ignore — it leaves the
+ignore as the only remaining path.** That is the same semantics Q7 specified,
+reached by subtraction in C++ rather than by construction in Rust.
+
+### Proposed replacement for the P2P-wire row's disposition
+
+> **Retired, two halves, each at the substrate that exists when it lands:**
+> a daemon **sends `0`** — the C++ "unpruned" sentinel — so legacy peers read it
+> correctly through the transition; and a daemon **ignores** any non-zero it
+> receives. **The ignore lands in C++ at the alpha.9 cut, by deleting the
+> non-zero branches** (`net_node.inl:1834`'s `else if`, and
+> `should_drop_connection`'s seed-`0` and stripe-match arms), **which leaves the
+> pre-existing zero path as the only path** — not by waiting for a Rust p2p
+> receiver, which `DRS-E*` does not deliver. The Rust receiver's ignore then
+> lands with **LV-3** and is **redundant on arrival**, which is the correct
+> outcome for a retirement rather than a regression. The ignore becomes a
+> *drop reason* only after the emitter is gone. No framing change.
+
+**Two notes for the lane, both narrowing rather than widening the amendment:**
+
+1. **A third branch at
+   [`:1992`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1992)
+   also reads the seed but is gated on `m_sync_pruned_blocks`**, whose
+   descriptor supplies no default
+   ([`cryptonote_core.cpp:127`](../../src/cryptonote_core/cryptonote_core.cpp#L127)).
+   It is dead unless `--sync-pruned-blocks` is passed, and **that flag is
+   already deleted under `PDM-Q5`'s rejection** — so it goes with Q5, not with
+   this amendment.
+2. **`PDM-Q-S0` does not govern this.** S0 forbids a C++ landing for **set-B
+   discard** and the engine row's **store** symbols; neither `:1832` nor
+   `should_drop_connection` is on that list. This is a rule-15/16 deletion of a
+   claimed read, so **no S0 reopening criterion has to be invoked** — which is
+   what makes the respec available without a steering exception.
+
+### What the lane is owed alongside it
+
+The **fleet answer**, already delivered: `get_blockchain_pruning_seed()` is `0`
+on all six seeds, the `pruning_seed` property is absent from all ten LMDBs, and
+no host passes `--prune-blockchain`
+([`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.8.8). **The
+random-stripe path is not live in production** — so the emitter half is already
+satisfied in fact, and the amendment above is about the half that is not.
+
+**Falsifier for this amendment (rule 21):** it is wrong, and Q7's original
+sequencing is right, if **`DRS-E*`'s scope is shown to include `src/p2p/`** —
+in which case a Rust receiver *does* arrive at the cutover and the ignore-half
+has its specified landing site after all. Check:
+`rg -n 'net_node|src/p2p' docs/design/DAEMON_REDB_STORE.md` returning a scope
+row. **At `f9e000f76` it returns nothing**, which is the evidence this
+amendment rests on.
