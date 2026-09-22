@@ -646,8 +646,9 @@ rather than proposes.**
 derives the needed stripe from **heights only** —
 `get_pruning_stripe(want_height, blockchain_height, LOG_STRIPES)` returns `0`
 **only** when `want_height + CRYPTONOTE_PRUNING_TIP_BLOCKS >= blockchain_height`
-([`pruning.cpp:55-60`](../../src/common/pruning.cpp#L55); `TIP_BLOCKS` is 5500,
-[`cryptonote_config.h:344`](../../src/cryptonote_config.h#L344)). A node more
+(`src/common/pruning.cpp:55-60` and `CRYPTONOTE_PRUNING_TIP_BLOCKS` = 5500 at
+`cryptonote_config.h:344`, **both at `f9e000f76`; PR #821 deleted the file and
+the constant, so these are historical and deliberately unlinked**). A node more
 than 5500 blocks behind the tip computes a non-zero needed stripe **regardless of
 its own seed**. Every node syncing from genesis on a chain longer than 5500
 blocks is in that state for the whole sync — so the surface is live for every
@@ -699,7 +700,11 @@ against observed behaviour before preferring or retaining the peer. `rg -n
 actually served would falsify "no observation resolves it."
 
 > **OVERTAKEN 2026-09-22 — PR #821 deleted the stripe engine and the
-> `pruning_seed` wire field outright** (`dev` `fdf17b729`; 311 stripe sites →
+> `pruning_seed` wire field outright.** **Every `file:line` in §2.8.7 and
+> §2.9.3 below is at `f9e000f76` and DOES NOT resolve in the current tree** —
+> the files mostly survive, so the links render, but the lines are now
+> unrelated code. They are kept as the record of what was read, not as
+> navigation.** (`dev` `fdf17b729`; 311 stripe sites →
 > 4, all comments). **§2.8.7's two claimed-seed sites no longer exist**, so the
 > defect it reports is closed by deletion rather than by design. The finding,
 > the measurement below, and the correction to §2.8.6 are kept as the record:

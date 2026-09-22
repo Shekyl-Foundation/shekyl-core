@@ -395,6 +395,11 @@ from inside `PDM-Q7` and is not.
    field is read and discarded. **That is the ignore-half, built and tested, at
    the layer this round argued it had to live at.**
 
+   *(Anchors in the superseded revisions above — `should_drop_connection`,
+   `:2112`, `:2116`, `:2199`, the entry-point table — are at `f9e000f76` and do
+   not resolve in the current tree; the code is gone. The anchors in the
+   paragraph below are at `fdf17b729` and do.)*
+
    **The analysis was independently confirmed by the landed diff, which is the
    part worth keeping.** This round predicted, by constant-folding the block at
    a seed of `0`, that a correct deletion must collapse
@@ -585,7 +590,10 @@ now** — which is better than either arm it proposed, and available because
 received-seed reads the emitter-half would not clear. **It did not need to be
 carried — the same PR removed them**, and the peerlist is clean at `fdf17b729`.
 
-**Superseded text follows, unedited.**
+**Superseded text follows, unedited. Its `file:line` anchors are at
+`f9e000f76` and DO NOT resolve in the current tree** — most of the code they
+name was deleted by PR #821, and where the file survives the line is now
+unrelated. Kept as the record of what was read.
 
 ### 7.6.1 (superseded) PROPOSED AMENDMENT to `PDM-Q7` — for the pruning lane's ratification, not applied here
 
