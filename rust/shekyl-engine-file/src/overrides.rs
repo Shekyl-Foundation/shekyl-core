@@ -42,7 +42,7 @@
 
 use shekyl_address::Network;
 use shekyl_engine_state::NetworkSafetyConstants;
-use shekyl_types::BlockCount;
+use shekyl_types::{BlockCount, BlockHeight};
 
 /// Runtime-only safety overrides supplied at wallet open.
 ///
@@ -101,17 +101,20 @@ impl SafetyOverrides {
 
     /// Resolve the effective `skip_to_height` against the given
     /// network's hardcoded default.
-    pub fn effective_skip_to_height(&self, network: Network) -> u64 {
+    pub fn effective_skip_to_height(&self, network: Network) -> BlockHeight {
         self.skip_to_height
+            .map(BlockHeight::from_raw)
             .unwrap_or_else(|| NetworkSafetyConstants::for_network(network).default_skip_to_height)
     }
 
     /// Resolve the effective `refresh_from_block_height` against the
     /// given network's hardcoded default.
-    pub fn effective_refresh_from_block_height(&self, network: Network) -> u64 {
-        self.refresh_from_block_height.unwrap_or_else(|| {
-            NetworkSafetyConstants::for_network(network).default_refresh_from_block_height
-        })
+    pub fn effective_refresh_from_block_height(&self, network: Network) -> BlockHeight {
+        self.refresh_from_block_height
+            .map(BlockHeight::from_raw)
+            .unwrap_or_else(|| {
+                NetworkSafetyConstants::for_network(network).default_refresh_from_block_height
+            })
     }
 
     /// Emit a `tracing::warn!` line per active override at the given
@@ -145,7 +148,7 @@ impl SafetyOverrides {
                 target: "shekyl_engine_file",
                 field = "skip_to_height",
                 override_value = v,
-                network_default = defaults.default_skip_to_height,
+                network_default = defaults.default_skip_to_height.to_raw(),
                 "safety override"
             );
         }
@@ -154,7 +157,7 @@ impl SafetyOverrides {
                 target: "shekyl_engine_file",
                 field = "refresh_from_block_height",
                 override_value = v,
-                network_default = defaults.default_refresh_from_block_height,
+                network_default = defaults.default_refresh_from_block_height.to_raw(),
                 "safety override"
             );
         }
@@ -217,8 +220,14 @@ mod tests {
         // per-network default.
         for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
             assert_eq!(o.effective_max_reorg_depth(net), BlockCount::from_raw(42));
-            assert_eq!(o.effective_skip_to_height(net), 1_000_000);
-            assert_eq!(o.effective_refresh_from_block_height(net), 999);
+            assert_eq!(
+                o.effective_skip_to_height(net),
+                BlockHeight::from_raw(1_000_000)
+            );
+            assert_eq!(
+                o.effective_refresh_from_block_height(net),
+                BlockHeight::from_raw(999)
+            );
         }
     }
 

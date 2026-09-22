@@ -19,7 +19,7 @@
 //! Bytes are what the `u64` and `hash32` codecs already wrote: only the
 //! value's *name* is new.
 
-use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash};
+use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash, TreeLeaf, TreePosition};
 use shekyl_units::AtomicUnits;
 
 use crate::{exact, Canonical, CodecError};
@@ -111,6 +111,43 @@ impl Canonical for AtomicUnits {
         u64::decode(bytes)
             .map(Self::from_raw)
             .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+/// `curve_tree_leaves[position]`'s **key**, as a value where a position is
+/// stored (DRS-E1 S-CURVE, `SCU-Q2`): the curve tree's dense drain-order
+/// position, the `shekyl-types` newtype, stored as its raw LE `u64`. Both
+/// stores key leaves by it; each wraps it in its own redb key type, and
+/// this is the codec they share.
+impl Canonical for TreePosition {
+    const NAME: &'static str = "tree_position";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+/// `curve_tree_leaves[position]` — one stored leaf: the four Selene
+/// scalars `{O.x, I.x, C.x, CM.x}` as 128 bytes, the layout the C++
+/// `CT_LEAF_SIZE` row has and the wallet-side `leaves` table holds. The
+/// `shekyl-types` name for those bytes (S-CURVE, `SCU-Q2`).
+impl Canonical for TreeLeaf {
+    const NAME: &'static str = "tree_leaf";
+    const FIXED_WIDTH: Option<usize> = Some(TreeLeaf::LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.as_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        exact::<{ TreeLeaf::LEN }>(Self::NAME, bytes).map(Self::from_bytes)
     }
 }
 

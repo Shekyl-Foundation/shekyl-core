@@ -89,6 +89,7 @@
 mod at_index;
 mod chain_reads;
 mod connect;
+mod curve_reads;
 mod error;
 mod halt;
 mod header;
@@ -106,7 +107,8 @@ mod write;
 pub use at_index::AtIndex;
 pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
 pub use error::{
-    CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant, UndoFault,
+    CellFault, EngineError, ErrorClass, LeafDensity, StoreCannot, StoreError, StoreInvariant,
+    UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
@@ -560,6 +562,9 @@ mod amendments_tests;
 #[path = "read_tests.rs"]
 mod read_tests;
 
+#[cfg(test)]
+#[path = "curve_read_tests.rs"]
+mod curve_read_tests;
 #[cfg(test)]
 #[path = "output_read_tests.rs"]
 mod output_read_tests;

@@ -12,10 +12,13 @@
 //! [`shekyl_types::GlobalOutputIndex`] / [`shekyl_types::OutputIndexInTx`]
 //! / [`shekyl_types::TxHash`] is the error they exist to make unrepresentable.
 //!
-//! Table **keys** stay `u64` (the redb / LMDB order contract). Convert at
-//! the decoded handle via [`Self::from_raw`] / [`Self::to_raw`]. The one
-//! composite key, `output_amounts`' `(amount, amount_index)`, has a named
-//! shape — [`OutputSlot`] — so the tuple is assembled in exactly one place.
+//! Table **keys** stay primitive at redb (`u64`, `(u64, u64)`, `(u8, u64)`):
+//! that is the order contract. Convert at the handle. A scalar id converts
+//! through `from_raw` / `to_raw`. A composite key has one named shape, and
+//! that shape is the only place the tuple is assembled:
+//!
+//! - [`OutputSlot`] — `output_amounts`' `(amount, amount_index)`
+//! - [`LayerChunk`] — `curve_tree_layers`' `(layer, chunk)`
 
 use core::fmt;
 
@@ -157,6 +160,123 @@ impl OutputSlot {
     }
 }
 
+// ---------------------------------------------------------------------------
+// curve_tree_layers — (layer, chunk). In flight for the grow path (DRS-E3):
+// no writer calls these yet. The types are the key's shape, so E3 assembles
+// the tuple here and cannot spell a second order.
+// ---------------------------------------------------------------------------
+
+/// A hashed layer's index above the leaf layer: `0` is the layer of chunk
+/// hashes directly over the leaves. A `u8`, and not a
+/// [`crate::codec::TreeDepth`]: a depth is how many such layers the tree
+/// has, a layer is which one this chunk sits in.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct TreeLayer(u8);
+
+impl TreeLayer {
+    /// The layer of chunk hashes directly over the leaves.
+    pub const FIRST: Self = Self(0);
+
+    /// Wrap a raw layer index.
+    #[must_use]
+    pub const fn from_raw(layer: u8) -> Self {
+        Self(layer)
+    }
+
+    /// The layer index.
+    #[must_use]
+    pub const fn to_raw(self) -> u8 {
+        self.0
+    }
+}
+
+/// A chunk's index within its [`TreeLayer`]. Not a
+/// [`shekyl_types::TreePosition`]: a position names a leaf, a chunk index
+/// names one hash in the layer above the leaves.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ChunkIndex(u64);
+
+impl ChunkIndex {
+    /// The layer's first chunk.
+    pub const FIRST: Self = Self(0);
+
+    /// Wrap a raw chunk index.
+    #[must_use]
+    pub const fn from_raw(chunk: u64) -> Self {
+        Self(chunk)
+    }
+
+    /// The chunk index.
+    #[must_use]
+    pub const fn to_raw(self) -> u64 {
+        self.0
+    }
+}
+
+/// `curve_tree_layers`'s key: which chunk of which layer (S-CURVE `SCU-Q3`).
+///
+/// The table's redb key is the tuple `(layer, chunk)`. The C++ packed that
+/// pair into one `u64` because LMDB needs one integer; redb orders the tuple
+/// layer-major, which is the order the shift produced, with no 56-bit chunk
+/// ceiling. Fields are private: the tuple is assembled only through
+/// [`Self::key`] / [`Self::from_key`], and a layer's scan is only
+/// [`Self::layer_range`], the same discipline as [`OutputSlot`].
+///
+/// `TreeLayer` is a `u8` and `ChunkIndex` is a `u64`, so the two components
+/// cannot be swapped inside the tuple. The newtypes still earn their place:
+/// a layer is not a [`crate::codec::TreeDepth`] (also a `u8`), and a chunk
+/// index is not a [`shekyl_types::TreePosition`] (also a `u64`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct LayerChunk {
+    layer: TreeLayer,
+    chunk: ChunkIndex,
+}
+
+impl LayerChunk {
+    /// The key for `chunk` of `layer`.
+    #[must_use]
+    pub const fn new(layer: TreeLayer, chunk: ChunkIndex) -> Self {
+        Self { layer, chunk }
+    }
+
+    /// Which layer.
+    #[must_use]
+    pub const fn layer(self) -> TreeLayer {
+        self.layer
+    }
+
+    /// Which chunk within the layer.
+    #[must_use]
+    pub const fn chunk(self) -> ChunkIndex {
+        self.chunk
+    }
+
+    /// The redb key. An *edge* accessor: the tuple is the engine's shape,
+    /// not the store's vocabulary.
+    #[must_use]
+    pub const fn key(self) -> (u8, u64) {
+        (self.layer.to_raw(), self.chunk.to_raw())
+    }
+
+    /// A chunk key from the redb tuple. An *edge* constructor.
+    #[must_use]
+    pub const fn from_key((layer, chunk): (u8, u64)) -> Self {
+        Self::new(TreeLayer::from_raw(layer), ChunkIndex::from_raw(chunk))
+    }
+
+    /// Every key of one layer, as the inclusive range a table scan takes:
+    /// `(layer, 0) ..= (layer, u64::MAX)`. Inclusive at the top so the last
+    /// layer (`u8::MAX`) has a range too — there is no layer after 255 whose
+    /// first key could be the exclusive end. Both ends go through [`Self::key`],
+    /// so the field order is written once.
+    #[must_use]
+    pub const fn layer_range(layer: TreeLayer) -> core::ops::RangeInclusive<(u8, u64)> {
+        let lo = Self::new(layer, ChunkIndex::FIRST).key();
+        let hi = Self::new(layer, ChunkIndex::from_raw(u64::MAX)).key();
+        lo..=hi
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +301,30 @@ mod tests {
             OutputSlot::new(AtomicUnits::from_raw(8), AmountIndex::from_raw(0)).key() > *r.end(),
             "a greater amount sorts after this bucket"
         );
+    }
+
+    #[test]
+    fn layer_chunk_key_is_layer_then_chunk_and_a_layer_range_is_that_key() {
+        let layer0_last = LayerChunk::new(TreeLayer::from_raw(0), ChunkIndex::from_raw(u64::MAX));
+        let layer1_first = LayerChunk::new(TreeLayer::from_raw(1), ChunkIndex::FIRST);
+        assert!(
+            layer0_last.key() < layer1_first.key(),
+            "every chunk of layer 0 precedes layer 1's first"
+        );
+        assert_eq!(LayerChunk::from_key(layer0_last.key()), layer0_last);
+        let range = LayerChunk::layer_range(TreeLayer::from_raw(1));
+        assert_eq!(*range.start(), layer1_first.key());
+        assert_eq!(
+            *range.end(),
+            LayerChunk::new(TreeLayer::from_raw(1), ChunkIndex::from_raw(u64::MAX)).key()
+        );
+        assert!(range.contains(&layer1_first.key()));
+        assert!(!range.contains(&layer0_last.key()));
+        assert!(!range.contains(&LayerChunk::new(TreeLayer::from_raw(2), ChunkIndex::FIRST).key()));
+        // The last layer has a range too — no successor layer to exclude against.
+        let last = LayerChunk::layer_range(TreeLayer::from_raw(u8::MAX));
+        assert!(last.contains(
+            &LayerChunk::new(TreeLayer::from_raw(u8::MAX), ChunkIndex::from_raw(7)).key()
+        ));
     }
 }

@@ -256,8 +256,8 @@ pub(crate) async fn get_wallet_info(
             crate::staking::ledger_snapshot_with_staking(&engine, |wallet| {
                 let wallet_height =
                     i64::try_from(wallet.ledger.height().to_raw()).unwrap_or(i64::MAX);
-                let restore_height =
-                    i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
+                let restore_height = i64::try_from(wallet.sync_state.restore_from_height.to_raw())
+                    .unwrap_or(i64::MAX);
                 (wallet_height, restore_height)
             })?;
 
@@ -457,7 +457,7 @@ mod tests {
             block.rows.insert(
                 [seed; 32],
                 SendRecord {
-                    dispatched_at_height: 100,
+                    dispatched_at_height: shekyl_types::BlockHeight::from_raw(100),
                     fee: 700,
                     recipients: vec![SendRecipient {
                         address: "shekyl1a".to_owned(),
@@ -501,7 +501,12 @@ mod tests {
     /// before this projection existed — flips both assertions.
     #[test]
     fn direction_filter_selects_the_matching_source() {
-        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+        let block = journal(&[(
+            0xab,
+            SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250),
+            },
+        )]);
 
         let all = collect_transfers(&[], &block, &no_notes(), &filters(None, None), None)
             .expect("project");
@@ -536,7 +541,12 @@ mod tests {
     fn state_filter_applies_to_journal_rows() {
         let block = journal(&[
             (0x01, SendState::Dispatched),
-            (0x02, SendState::Confirmed { height: 250 }),
+            (
+                0x02,
+                SendState::Confirmed {
+                    height: shekyl_types::BlockHeight::from_raw(250),
+                },
+            ),
             (0x03, SendState::TerminalRejected),
             (0x04, SendState::PresumedDead),
             (0x05, SendState::Abandoned),
@@ -577,7 +587,12 @@ mod tests {
     /// transaction), so the same lookup feeds both directions of a txid.
     #[test]
     fn note_projects_onto_the_transfer_view() {
-        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+        let block = journal(&[(
+            0xab,
+            SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250),
+            },
+        )]);
         let mut notes = no_notes();
         notes.insert([0xab; 32], "rent".to_owned());
 
@@ -597,7 +612,12 @@ mod tests {
     /// about a payment this wallet made.
     #[test]
     fn attribution_filter_excludes_journal_rows() {
-        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+        let block = journal(&[(
+            0xab,
+            SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250),
+            },
+        )]);
         let mut f = filters(None, None);
         f.attribution = Some(ReceiveAttributionFilter::Unattributed);
 
@@ -617,7 +637,12 @@ mod tests {
     fn since_height_never_hides_a_send_that_was_never_mined() {
         let block = journal(&[
             (0x01, SendState::Dispatched),
-            (0x02, SendState::Confirmed { height: 250 }),
+            (
+                0x02,
+                SendState::Confirmed {
+                    height: shekyl_types::BlockHeight::from_raw(250),
+                },
+            ),
             (0x03, SendState::TerminalRejected),
             (0x04, SendState::PresumedDead),
             (0x05, SendState::Abandoned),

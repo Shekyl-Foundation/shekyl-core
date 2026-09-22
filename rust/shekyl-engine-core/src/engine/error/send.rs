@@ -5,6 +5,8 @@
 
 //! Send / build / tx error vocabulary.
 
+use shekyl_types::{BlockCount, BlockHeight};
+
 use crate::engine::pending::ReservationId;
 
 use super::{FeeEstimatorError, IoError, TerminalErrorKind};
@@ -130,13 +132,13 @@ pub enum SendError {
     )]
     OutputNotYetSpendable {
         /// The height at which the output enters the tree (matures).
-        eligible_height: u64,
+        eligible_height: BlockHeight,
         /// The reference-block height the proof anchors to (`tip − REF_ANCHOR_AGE`).
-        reference_block_height: u64,
+        reference_block_height: BlockHeight,
         /// Blocks the tip must still advance before the output's
         /// `eligible_height` reaches the reference height and it becomes
         /// spendable (`eligible_height − reference_block_height`).
-        wait_blocks: u64,
+        wait_blocks: BlockCount,
     },
 
     /// The chain is too short to anchor a reference block: `synced_height <
@@ -151,9 +153,9 @@ pub enum SendError {
     )]
     WalletTooYoungToSpend {
         /// The wallet's current synced height.
-        synced_height: u64,
+        synced_height: BlockHeight,
         /// `REF_ANCHOR_AGE` — the minimum synced height to anchor a reference.
-        ref_anchor_age: u64,
+        ref_anchor_age: BlockCount,
     },
 
     /// The F28/F37 rebuild-loop circuit breaker is tripped
@@ -200,12 +202,12 @@ pub enum PendingTxError {
     )]
     TooOld {
         /// `PendingTx.built_at_height` of the offending handle.
-        built: u64,
+        built: BlockHeight,
         /// `wallet.synced_height` observed at submit time.
-        current: u64,
+        current: BlockHeight,
         /// Network's `max_reorg_depth` per `NetworkSafetyConstants`
         /// (after any per-wallet override).
-        max_reorg: u64,
+        max_reorg: BlockCount,
     },
 
     /// The wallet's recorded block hash at `built_at_height` no longer
@@ -216,7 +218,7 @@ pub enum PendingTxError {
     )]
     ChainStateChanged {
         /// `PendingTx.built_at_height` of the offending handle.
-        height: u64,
+        height: BlockHeight,
     },
 
     /// `submit_pending_tx` or `discard_pending_tx` was called with a

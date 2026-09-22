@@ -73,10 +73,12 @@
 use std::collections::BTreeSet;
 
 use shekyl_curve_tree::{
-    two_sided_reference_height, AssembleInput, BlockHash, BlockHeight as TreeBlockHeight,
-    CurveTreeRoot, Gindex, ReferenceBlock, TwoSidedRefusal,
+    two_sided_reference_height, AssembleInput, BlockHash, CurveTreeRoot, Gindex, ReferenceBlock,
+    TwoSidedRefusal,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
+#[cfg(test)]
+use shekyl_types::BlockCount;
 use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
 use shekyl_units::AtomicUnits;
 
@@ -197,8 +199,8 @@ fn last_confirmed_sweep_height(posts: &[BondPostRecord], persona: &PCanonicalId)
 /// anchor (the tip) and the reference anchor come from one derivation.
 fn claim_reference_height(
     chain_height: ChainCount,
-    ingested_tip: Option<u64>,
-) -> Result<(BlockHeight, u64), ClaimOrchestrationError> {
+    ingested_tip: Option<BlockHeight>,
+) -> Result<(BlockHeight, BlockHeight), ClaimOrchestrationError> {
     let tip = chain_height
         .tip()
         .ok_or(ClaimOrchestrationError::ReferenceUnanchorable {
@@ -207,17 +209,16 @@ fn claim_reference_height(
     let ingested = ingested_tip.ok_or(ClaimOrchestrationError::ReferenceUnanchorable {
         detail: "curve tree has not ingested any block yet",
     })?;
-    let reference_height =
-        two_sided_reference_height(tip.to_raw(), ingested).map_err(|refusal| {
-            ClaimOrchestrationError::ReferenceUnanchorable {
-                detail: match refusal {
-                    TwoSidedRefusal::ChainTooShort => "chain too short to anchor a reference",
-                    TwoSidedRefusal::TreeTooFarBehind => {
-                        "tree too far behind the daemon tip to anchor a submittable reference"
-                    }
-                },
-            }
-        })?;
+    let reference_height = two_sided_reference_height(tip, ingested).map_err(|refusal| {
+        ClaimOrchestrationError::ReferenceUnanchorable {
+            detail: match refusal {
+                TwoSidedRefusal::ChainTooShort => "chain too short to anchor a reference",
+                TwoSidedRefusal::TreeTooFarBehind => {
+                    "tree too far behind the daemon tip to anchor a submittable reference"
+                }
+            },
+        }
+    })?;
     Ok((tip, reference_height))
 }
 
@@ -227,11 +228,11 @@ fn claim_reference_height(
 /// Borrows: the designation and the sweep clone only what they select.
 fn provable_records(
     records: &[PFundingOutputRecord],
-    reference_height: u64,
+    reference_height: BlockHeight,
 ) -> Vec<&PFundingOutputRecord> {
     records
         .iter()
-        .filter(|r| r.spendable_height.to_raw() <= reference_height)
+        .filter(|r| r.spendable_height <= reference_height)
         .collect()
 }
 
@@ -247,7 +248,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     rpc: &R,
     handle: PersonaHandle,
     ctx: ClaimAssemblyContext<'_>,
-    block_hash_at: impl Fn(u64) -> Option<[u8; 32]>,
+    block_hash_at: impl Fn(BlockHeight) -> Option<[u8; 32]>,
 ) -> Result<AssembledEmissionClaim, ClaimOrchestrationError> {
     // 1+2a. Fetch the claim source (single-field query over the persona's
     //    OWN transport — the `PersonaIsolatedTransport` bound is the §7.4
@@ -289,10 +290,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     //    cannot be laundered into a height) and the reference height (the
     //    shared two-sided gate over gather tip × ingested tip), from one
     //    derivation.
-    let (gather_tip, reference_height) = claim_reference_height(
-        source.chain_height,
-        ingested.map(shekyl_types::BlockHeight::to_raw),
-    )?;
+    let (gather_tip, reference_height) = claim_reference_height(source.chain_height, ingested)?;
 
     // Provability pre-filter (module docs): only outputs drained into the
     // tree at the reference height can carry a membership proof.
@@ -327,15 +325,15 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     // 5. One reference snapshot, every membership path against it.
     let (curve_tree_root, _depth) = ctx
         .tree
-        .reference_root_and_depth(TreeBlockHeight::from_raw(reference_height))
+        .reference_root_and_depth(reference_height)
         .await
         .map_err(ClaimOrchestrationError::Tree)?;
     let block_hash =
         block_hash_at(reference_height).ok_or(ClaimOrchestrationError::MissingBlockHash {
-            height: reference_height,
+            height: reference_height.to_raw(),
         })?;
     let reference = ReferenceBlock {
-        height: TreeBlockHeight::from_raw(reference_height),
+        height: reference_height,
         curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
         block_hash: BlockHash::from_bytes(block_hash),
     };
@@ -429,14 +427,22 @@ mod tests {
 
         // Happy: tree synced to the tip; count 30_001 → tip 30_000.
         assert_eq!(
-            claim_reference_height(count(30_001), Some(30_000)).expect("anchorable"),
-            (BlockHeight::from_raw(30_000), 30_000 - REF_ANCHOR_AGE)
+            claim_reference_height(count(30_001), Some(BlockHeight::from_raw(30_000)))
+                .expect("anchorable"),
+            (
+                BlockHeight::from_raw(30_000),
+                BlockHeight::from_raw(30_000) - REF_ANCHOR_AGE,
+            )
         );
         // Happy, tree one block behind: the min-arm anchors off the tree;
         // the gather tip stays the chain's.
         assert_eq!(
-            claim_reference_height(count(30_001), Some(29_999)).expect("anchorable"),
-            (BlockHeight::from_raw(30_000), 29_999 - REF_ANCHOR_AGE)
+            claim_reference_height(count(30_001), Some(BlockHeight::from_raw(29_999)))
+                .expect("anchorable"),
+            (
+                BlockHeight::from_raw(30_000),
+                BlockHeight::from_raw(29_999) - REF_ANCHOR_AGE,
+            )
         );
 
         // Refusal: no ingest.
@@ -447,22 +453,28 @@ mod tests {
         // Refusal: chain shorter than the anchor age (and the empty chain,
         // where `ChainCount::tip()` itself is None).
         assert!(matches!(
-            claim_reference_height(count(REF_ANCHOR_AGE), Some(REF_ANCHOR_AGE - 1)),
+            claim_reference_height(
+                count(REF_ANCHOR_AGE.to_raw()),
+                Some(BlockHeight::from_raw(REF_ANCHOR_AGE.to_raw() - 1)),
+            ),
             Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
         ));
         assert!(matches!(
-            claim_reference_height(ChainCount::ZERO, Some(0)),
+            claim_reference_height(
+                ChainCount::ZERO,
+                Some(shekyl_types::BlockHeight::from_raw(0))
+            ),
             Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
         ));
         // Refusal: the tree so far behind that the anchored reference is
         // already at the re-anchor threshold. Boundary-exact: one block
         // inside the threshold anchors, at the threshold refuses.
-        let tip = 30_000u64;
+        let tip = BlockHeight::from_raw(30_000);
         let rebuild_at = shekyl_curve_tree::REBUILD_AT;
-        let barely_ok = tip - rebuild_at + REF_ANCHOR_AGE + 1;
-        assert!(claim_reference_height(count(tip + 1), Some(barely_ok)).is_ok());
+        let barely_ok = tip - rebuild_at + REF_ANCHOR_AGE + BlockCount::ONE;
+        assert!(claim_reference_height(count(tip.to_raw() + 1), Some(barely_ok)).is_ok());
         assert!(matches!(
-            claim_reference_height(count(tip + 1), Some(barely_ok - 1)),
+            claim_reference_height(count(tip.to_raw() + 1), Some(barely_ok - BlockCount::ONE)),
             Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
         ));
     }
@@ -489,7 +501,7 @@ mod tests {
         );
         later.spendable_height = BlockHeight::from_raw(at.spendable_height.to_raw() + 1);
 
-        let reference_height = at.spendable_height.to_raw();
+        let reference_height = at.spendable_height;
         let records = [at, later];
         let kept = provable_records(&records, reference_height);
         assert_eq!(
@@ -706,7 +718,7 @@ mod tests {
                     };
                     client
                         .ingest_block(BlockLeaves {
-                            height: TreeBlockHeight::from_raw(h),
+                            height: BlockHeight::from_raw(h),
                             txs: &txs,
                         })
                         .expect("fixture chain ingests");
@@ -726,7 +738,7 @@ mod tests {
                 post_kind: 0,
             }];
 
-            let expected_reference = tip - REF_ANCHOR_AGE;
+            let expected_reference = BlockHeight::from_raw(tip) - REF_ANCHOR_AGE;
             let funding_records = vec![backing_record, fee_record];
             let reserved = BTreeSet::new();
             let pruned = SpentRecordsDurablyPruned::for_test();
@@ -828,7 +840,7 @@ mod tests {
             // leaf gate, and both auths against the root and depth the tree
             // reports at the anchored reference.
             let (root, depth) = tree
-                .reference_root_and_depth(TreeBlockHeight::from_raw(expected_reference))
+                .reference_root_and_depth(expected_reference)
                 .await
                 .expect("reference root resolves");
             let mut cursor: &[u8] = reply.bound_tx.bytes();

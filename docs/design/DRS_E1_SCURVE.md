@@ -1,12 +1,13 @@
 # DRS-E1 S-CURVE — curve-tree reads: increment plan and Round-0 pre-flight
 
-**Status:** OPEN — **Round 0 executed 2026-09-21** against `dev` @
-`b680d59e0` (the tree that merged PR #811, DRS-E2 increment 2). **Round 1
-RULED 2026-09-21** (maintainer, on PR #815; §9, each row line-local):
-**SCU-Q1 one row, SCU-Q2 move to `shekyl-types` and write the rule down
-(done: `18-type-placement.mdc`), SCU-Q3 overridden to a tuple key, SCU-Q4
-now with E3 named; SCU-1 regraded the worst of its class.** Implementation
-starts when this document merges. Implements *from*
+**Status:** LANDED — **implemented 2026-09-21** on the S-CURVE PR cut from
+`dev` @ `fdb5db954` (three commits, §7); **Round 0 executed 2026-09-21** at
+`b680d59e0`, **Round 1 RULED 2026-09-21** (maintainer, on PR #815; §9, each
+row line-local): **SCU-Q1 one row, SCU-Q2 move to `shekyl-types` and write
+the rule down (done: `18-type-placement.mdc`), SCU-Q3 overridden to a tuple
+key, SCU-Q4 now with E3 named; SCU-1 regraded the worst of its class.** This
+file stays in `design/` as the E3 boundary statement (§2.3) until E3's plan
+owns that statement; then it archives (rule 95). Implements *from*
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7 (the S-CURVE row:
 extraction order **6**, "reads only; the arithmetic lives in `shekyl-fcmp`,
 not here; depends on chain state but nothing depends on it, so it can move
@@ -214,7 +215,7 @@ semantics; otherwise `Option`. Applied:
 | `curve_tree_meta` | `&[u8]` (`"root"` / `"depth"` / `"leaf_count"`) → `Unshaped` | one key → `Coded<CurveTreeState>` | C1 |
 | `curve_tree_roots` | `u64` → `Coded<CurveTreeRoot>` | unchanged | C2 (and the digest) |
 | `curve_tree_leaves` | `u64` → `Unshaped` (128 bytes) | `TreePosition` → `Coded<TreeLeaf>` | C3 |
-| `curve_tree_layers` | `u64` (packed `(layer << 56) \| chunk`) → `Unshaped` (32) | `(TreeLayer, ChunkIndex)` tuple key → `Coded<LayerHash>` | none in the census — shaped because E3 writes it and the key's shape must exist *before* a writer does |
+| `curve_tree_layers` | `u64` (packed `(layer << 56) \| chunk`) → `Unshaped` (32) | `(u8, u64)` via `LayerChunk::key` → `Coded<LayerHash>` | none in the census — shaped because E3 writes it and the key's shape must exist *before* a writer does |
 | `curve_tree_checkpoints` | `u64` → `Unshaped` | unchanged | none — E3's (§2.2) |
 
 ---
@@ -223,10 +224,11 @@ semantics; otherwise `Option`. Applied:
 
 | Row | Statement | Armed where |
 |---|---|---|
-| **SI-11** (new) | **The tree is dense and its summary is its count:** `curve_tree_leaves` holds exactly the positions `[0, leaf_count)` and `CurveTreeState.leaf_count == leaves.len()`. A missing position inside the count, or a row at or past it, is the invariant. | C3 on read (a gap inside the range); E3 on write (the count and the rows move in one batch) |
+| **SI-11** | **The tree is dense and its summary is its count:** `curve_tree_leaves` holds exactly the positions `[0, leaf_count)` and `CurveTreeState.leaf_count == leaves.len()`. Two observations, one row: `LeafDensity::Length { count, rows }` when the lengths differ (C1, which does not know the missing position), `LeafDensity::Hole { position }` when a walk finds the first missing position in its range (C3). | C1 (length) and C3 (the hole); E3 on write (the count and the rows move in one batch) |
+| **SI-12** | **A grown summary carries the live root.** Any `CurveTreeState` other than the seal's `EMPTY` has `root == curve_tree_roots[tip + 1]` (`CurveTreeRoot::EMPTY` when there is no tip). `EMPTY` is not that claim: `connect` records roots grown or not (SI-4), and E3 is what replaces the seal's row. | C1, once the summary is not `EMPTY` |
 | **SI-7** (restated) | A `curve_tree_meta` row that does not decode, or is absent, is `CellCorrupt` — `EMPTY` is a written row, not a default. | C1 |
 
-Register rows land with commit 1 (`STORE_INVARIANT_REGISTER.md`).
+SI-11's register row landed with commit 1; SI-12 with the review on the implementation PR (`STORE_INVARIANT_REGISTER.md`).
 
 ---
 
@@ -308,7 +310,8 @@ table's key semantics are inherited and documented (§3.5), not a deviation.
    (rule 42); `CurveTreeState::EMPTY` written at store creation; SI-11 in the
    register.
 2. **The reads.** `store/curve_reads.rs`: C1, C2, C3; `live_root` re-homed on
-   C1; `ChainView::root_at` delegates to C2; tests: empty store, planted
+   C2's `root_row` (decision log 2026-09-21, not C1 as first written);
+   `ChainView::root_at` delegates to C2; tests: empty store, planted
    rows, `AboveTip`, `AboveCount`, the SI-11 gap, a decoded `CurveTreeState`
    round trip.
 3. **Docs** (rule 91): §7 row flip in `DAEMON_REDB_STORE.md`, index rows,
@@ -359,5 +362,7 @@ table's key semantics are inherited and documented (§3.5), not a deviation.
 
 | Date | Entry |
 |---|---|
+| 2026-09-21 | **Review, on the implementation PR.** Three corrections, each toward a type the store already had. **(1)** `LayerChunk`, `TreeLayer`, and `ChunkIndex` live in `ids.rs` beside `OutputSlot` — private fields, `key` / `from_key`, and `layer_range` returning `RangeInclusive<(u8, u64)>` built only through `key()`. The table stays `(u8, u64)`. `to_tuple` / `from_tuple` are gone; `layer_range` returns `RangeInclusive<(u8, u64)>`, the range `table.range` takes. The newtypes stay because a layer is not a `TreeDepth` and a chunk index is not a `TreePosition`; E3 is their caller and is not built yet. **(2)** SI-11's payload is `LeafDensity`: `Length { count, rows }` from the summary read, `Hole { position }` from the walk. The length belt no longer names `leaf_count` as if it were the missing row. **(3)** SI-12 `SummaryRootDiverged`: once the summary is not the seal's `EMPTY`, its root is the live root (`curve_tree_roots[tip + 1]`, or `EMPTY` with no tip). `EMPTY` stays quiet after `connect`, because connect records roots grown or not (SI-4) and E3 is what replaces the seal's row — arming the comparison on `EMPTY` would call today's connect output corrupt. The digest still reads C2. The wallet-side `TreePositionKey` field is private, with `from_raw` / `to_raw`, matching `GindexKey`. |
+| 2026-09-21 | **Implemented** (three commits on the S-CURVE PR, cut from `dev` @ `fdb5db954`). Two departures from the letter of §7, both toward the store's own conventions and disclosed here: **(a)** table keys stay bare `u64` / `(u8, u64)` / `()` at the redb layer per `ids.rs`'s key contract ("table keys stay `u64`; convert at the decoded handle" — as `output_amounts`' bare `(u64, u64)` does), so `LayerChunk` is the *API* type with `to_tuple`/`from_tuple` and `TreePosition` is the handle's type, not a redb `Key` wrapper in the daemon store; the wallet-side store, whose tables were already typed-keyed, wraps the moved `TreePosition` in a store-local `TreePositionKey` (the `GindexKey` precedent, orphan rule) with its `TypeName` unchanged so existing wallet files open. **(b)** the wallet-side `LeafEntry.leaf` stays `[u8; 128]` rather than adopting `TreeLeaf` now — that row is being re-laid-out by the WSS lane (`WALLET_SIDE_STORE.md`, PDM-Q12), which adopts the word when it lays the row out; a rename against a table about to move would be re-done (rule 22: named owner, disclosed in commit 1). `live_root` re-homes on C2's `root_row` rather than on C1 (§7 item 2 said C1): the digest reads the root *at the tip it already decoded*, which is `curve_tree_roots[tip + 1]`, C2's table — C1's row is the same value only while E3 keeps them in step, and a read that is right only while a belt holds is the wrong read (SOK O2's argument). SI-11 armed by C1 (count = table length) and C3 (the walk names the first missing position). **Gate consequence of `SCU-Q3`:** `check_redb_schema_key_types.py`'s INTEGERKEY rule was `u64` only; it gains a fact-derived arm — a shift-or key builder `(uintA_t hi << (64 − A)) \| lo` read off `db_lmdb.cpp` (`ct_layer_chunk_key`, `:8744`) and bound to the table its callers address admits the order-equivalent tuple `(uA, u64)`; a shift that is not `64 − A` mints nothing, and a builder bound to zero or two tables is a raise, not a guess. No table-name allowlist (the gate's own rule). |
 | 2026-09-21 | **Round 1 RULED** (maintainer, PR #815). Three defaults held (Q1 one row — it composes with SCU-1's fix, emptiness becomes a single state; Q2 move to `shekyl-types`, with the general form written into `18-type-placement.mdc` so the fourth instance is a lookup; Q4 now, E3 named). **Q3 overridden: tuple key.** The packing has three sites, all inside the LMDB backend, crossing no boundary; it exists because LMDB needs one integer key and redb does not; SOK-Q1's delegated compare gives the same layer-major order; SCU-7's "nothing pins it" argues for removing the thing that needs pinning. Byte-parity with LMDB's key was never the constraint (`zerokval`; S-CHAIN-R Q4). **SCU-1 regraded:** not the fourth instance but the worst — the C++ documents the ambiguity and delegates its resolution to a second read the caller may skip; CEN-I12 is what happens when one does. |
 | 2026-09-21 | **Round 0 executed** at `b680d59e0`. Nine findings (SCU-1…SCU-9); four questions posed with defaults (SCU-Q1…Q4). The surface's five C++ reads map to three Rust reads; two of the five have only retired consumers (SCU-2, SCU-3) and one is already typed in Rust (SCU-4). The E3 boundary is stated: this increment mints the shapes, E3 writes them. S-TX read and archived (§2.5). |

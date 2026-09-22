@@ -104,8 +104,6 @@ use std::time::{Duration, Instant};
 use shekyl_address::Network;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
-#[cfg(test)]
-use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 
 use crate::engine::{
@@ -388,7 +386,7 @@ pub(crate) struct Reservation {
     /// build. Sorted ascending so a debug print is deterministic.
     pub selected_transfer_indices: Vec<usize>,
     /// Engine's `synced_height` at the moment of the build.
-    pub built_at_height: u64,
+    pub built_at_height: shekyl_types::BlockHeight,
     /// Engine's recorded `block_hash_at(built_at_height)` at build
     /// time. The reorg-rewind invariant in
     /// [`PendingTxError::ChainStateChanged`] compares this against
@@ -455,7 +453,7 @@ pub struct PendingTx {
     /// [`Engine::submit_pending_tx`] / [`Engine::discard_pending_tx`].
     pub id: ReservationId,
     /// Engine's `synced_height` at build time.
-    pub built_at_height: u64,
+    pub built_at_height: shekyl_types::BlockHeight,
     /// Engine's recorded block hash at `built_at_height` at build
     /// time.
     pub built_at_tip_hash: [u8; 32],
@@ -493,7 +491,7 @@ pub struct PendingTx {
     /// CT-5d: the height of the reference block this proof is anchored to
     /// (`tip − REF_ANCHOR_AGE` at build). Diagnostics-only — lets a UI surface
     /// the anchor age without parsing `tx_bytes`.
-    pub reference_height: u64,
+    pub reference_height: shekyl_types::BlockHeight,
 }
 
 /// Default reservation TTL used by both
@@ -742,7 +740,7 @@ pub(crate) fn build_pending_tx_in_state(
 
     let reservation = Reservation {
         selected_transfer_indices: selected,
-        built_at_height: synced.to_raw(),
+        built_at_height: synced,
         built_at_tip_hash: tip_hash,
         snapshot_id,
         extensions: Vec::new(),
@@ -753,7 +751,7 @@ pub(crate) fn build_pending_tx_in_state(
 
     let pending = PendingTx {
         id,
-        built_at_height: synced.to_raw(),
+        built_at_height: synced,
         built_at_tip_hash: tip_hash,
         fee_atomic_units: fee,
         snapshot_id,
@@ -767,7 +765,7 @@ pub(crate) fn build_pending_tx_in_state(
         // REF_ANCHOR_AGE`, so the canonical height always exists — no `0`
         // (genesis-looking) fallback.
         content_gen: 0,
-        reference_height: shekyl_curve_tree::select_reference_height(synced.to_raw())
+        reference_height: shekyl_curve_tree::select_reference_height(synced)
             .expect("a built tx implies synced >= SPENDABLE_AGE > REF_ANCHOR_AGE"),
     };
 
@@ -798,19 +796,17 @@ pub(crate) fn submit_pending_tx_in_state(
     let synced = ledger.height();
     let built = entry.built_at_height;
 
-    // `synced` is the inclusive tip. `built` is the reservation's stored
-    // ordinal (`built_at_height` is still `u64`). Age is instant − instant.
-    let built_at = BlockHeight::from_raw(built);
-    let age = synced.saturating_sub(built_at);
+    // `synced` is the inclusive tip. Age is instant − instant.
+    let age = synced.saturating_sub(built);
     if age > max_reorg {
         return Err(PendingTxError::TooOld {
             built,
-            current: synced.to_raw(),
-            max_reorg: max_reorg.to_raw(),
+            current: synced,
+            max_reorg,
         });
     }
 
-    let stored = ledger.block_hash_at(built_at).copied();
+    let stored = ledger.block_hash_at(built).copied();
     if stored != Some(entry.built_at_tip_hash) {
         return Err(PendingTxError::ChainStateChanged {
             height: entry.built_at_height,

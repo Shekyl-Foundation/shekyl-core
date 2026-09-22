@@ -187,7 +187,7 @@ where
 pub(super) struct BuiltPendingMeta {
     pub(super) fee: AtomicUnits,
     pub(super) selected: SelectedOutputs,
-    pub(super) synced: u64,
+    pub(super) synced: shekyl_types::BlockHeight,
     pub(super) tip_hash: [u8; 32],
     /// Output locks are held from assembly until `consumer_held` commit.
     pub(super) reservation_id: ReservationId,
@@ -418,7 +418,7 @@ where
             not_yet_spendable,
         ) = self.ledger.with_wallet_ledger(|wallet| {
             let tip = wallet.ledger.height();
-            let synced = tip.to_raw();
+            let synced = tip;
             // Gate against the height the *bound* reference anchors to (computed
             // in `build` before the cursor-read `.await`), so the C2 spendability
             // decision and the tx's anchored reference are the same height even
@@ -431,7 +431,7 @@ where
             let reference_height = if c2_active {
                 reference
                     .as_ref()
-                    .map(|r| r.height.to_raw())
+                    .map(|r| r.height)
                     .or_else(|| select_reference_height(synced))
             } else {
                 None
@@ -452,7 +452,7 @@ where
             // wait-blocks signal can account for the *subset needed to cover the
             // shortfall* rather than just the soonest output (which alone may
             // not suffice — that would underestimate the wait).
-            let mut not_yet_spendable: Vec<(u64, u64)> = Vec::new();
+            let mut not_yet_spendable: Vec<(shekyl_types::BlockHeight, u64)> = Vec::new();
             for (idx, td) in wallet.spendable_outputs(tip, None) {
                 if locked.contains(&idx) {
                     continue;
@@ -462,12 +462,12 @@ where
                     // C2 active: spendability is decided against the *reference*
                     // height, not the per-output eligible height.
                     Some(rh) => {
-                        if td.eligible_height.to_raw() > rh {
+                        if td.eligible_height > rh {
                             // Too fresh for the reference block — not in the tree
                             // there even if its leaf is already ingested.
                             let raw = amount.to_raw();
                             not_yet_spendable_total = not_yet_spendable_total.saturating_add(raw);
-                            not_yet_spendable.push((td.eligible_height.to_raw(), raw));
+                            not_yet_spendable.push((td.eligible_height, raw));
                         } else if tree_gate.covers(rh) {
                             // The tree has reached the reference height, so its
                             // root is reconstructable and every `eligible <= rh`
@@ -491,7 +491,7 @@ where
                     // decides (`Unenforced` ⇒ covers all), preserving the
                     // no-tree path.
                     None => {
-                        if tree_gate.covers(td.eligible_height.to_raw()) {
+                        if tree_gate.covers(td.eligible_height) {
                             spendable_now_total =
                                 spendable_now_total.saturating_add(amount.to_raw());
                             candidates.push(OutputCandidate { index: idx, amount });
@@ -985,7 +985,7 @@ where
             recipients: summary,
             // Fresh build: generation 0, anchored at the resolved reference.
             content_gen: 0,
-            reference_height: reference.height.to_raw(),
+            reference_height: reference.height,
         };
 
         emit_pending_tx_diagnostic(
@@ -1094,12 +1094,11 @@ where
             let covered_through = handle
                 .ingested_tip_height()
                 .await
-                .map_err(|err| map_handle_err_to_reanchor(&err))?
-                .map(shekyl_types::BlockHeight::to_raw);
+                .map_err(|err| map_handle_err_to_reanchor(&err))?;
             let ingested = covered_through.ok_or(ReanchorError::ReferenceResyncing {
                 detail: "curve tree has not ingested any block yet",
             })?;
-            let chain_tip = self.ledger.with_ledger_block(LedgerBlock::height).to_raw();
+            let chain_tip = self.ledger.with_ledger_block(LedgerBlock::height);
             // Two-sided ingested-tip gate (§3b, F-C) — the shared
             // [`two_sided_reference_height`] definition (also the emission
             // claim orchestrator's): the lower arm anchors at or below the
@@ -1122,7 +1121,7 @@ where
                         },
                     }
                 })?;
-            let reference_ordinal = BlockHeight::from_raw(reference_height);
+            let reference_ordinal = reference_height;
             let (curve_tree_root, depth) = handle
                 .reference_root_and_depth(reference_ordinal)
                 .await
@@ -1285,10 +1284,10 @@ where
             // §3a/§5): the fresh reference must still be canonical and not itself
             // already due for re-anchor. All sync ledger reads (F-J).
             let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
-            let reference_ordinal = BlockHeight::from_raw(reference_height);
+            let reference_ordinal = reference_height;
             let still_canonical =
                 self.ledger_block_hash(reference_ordinal) == Some(reference.block_hash.to_bytes());
-            if !still_canonical || should_reanchor(current_tip.to_raw(), reference_height) {
+            if !still_canonical || should_reanchor(current_tip, reference_height) {
                 last_resync = Some(ReanchorError::ReferenceResyncing {
                     detail: "reference re-staled during the prover run",
                 });
@@ -1335,7 +1334,7 @@ where
             entry.reference = reference;
             entry.fingerprint = new_fingerprint;
             entry.content_gen = content_gen;
-            entry.built_at_height = current_tip.to_raw();
+            entry.built_at_height = current_tip;
             entry.built_at_tip_hash = current_tip_hash;
             entry.snapshot_id = snapshot_id;
 
@@ -1400,8 +1399,8 @@ where
 
         // Staleness decision — ledger reads only, no pending-tx lock held (F-J).
         let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
-        let stale = should_reanchor(current_tip.to_raw(), reference.height.to_raw())
-            || self.reference_orphaned(&reference);
+        let stale =
+            should_reanchor(current_tip, reference.height) || self.reference_orphaned(&reference);
 
         // --- re-anchor if stale (three-phase, lock-free prover) ---
         if stale {

@@ -117,7 +117,10 @@ fn build_reserves_outputs_and_advances_id_counter() {
     assert_eq!(pending.id.raw(), 0);
     assert_eq!(next_id, 1);
     assert_eq!(pending.fee_atomic_units, STUB_FEE_ATOMIC_UNITS);
-    assert_eq!(pending.built_at_height, 20);
+    assert_eq!(
+        pending.built_at_height,
+        shekyl_types::BlockHeight::from_raw(20)
+    );
     assert!(
         pending.tx_bytes.is_empty(),
         "the reference body leaves tx_bytes empty; production fills it"
@@ -310,9 +313,9 @@ fn submit_too_old_when_built_height_outside_reorg_window() {
             current,
             max_reorg,
         } => {
-            assert_eq!(built, 20);
-            assert_eq!(current, 40);
-            assert_eq!(max_reorg, 6);
+            assert_eq!(built, shekyl_types::BlockHeight::from_raw(20));
+            assert_eq!(current, shekyl_types::BlockHeight::from_raw(40));
+            assert_eq!(max_reorg, shekyl_types::BlockCount::from_raw(6));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -353,7 +356,10 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
         &standard_request(1_000),
     )
     .expect("build");
-    assert_eq!(pending.built_at_height, 15);
+    assert_eq!(
+        pending.built_at_height,
+        shekyl_types::BlockHeight::from_raw(15)
+    );
 
     // Reorg: rewind to fork height 15, replay 15..=20 with new
     // hashes. After rewind, `block_hash_at(15)` differs from
@@ -374,7 +380,7 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
             .unwrap_err();
     match err {
         PendingTxError::ChainStateChanged { height } => {
-            assert_eq!(height, 15);
+            assert_eq!(height, shekyl_types::BlockHeight::from_raw(15));
         }
         other => panic!("unexpected error: {other:?}"),
     }

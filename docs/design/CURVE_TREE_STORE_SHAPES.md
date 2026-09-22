@@ -230,6 +230,16 @@ could not tell it from data:
    `leaf_count` reads as `0`, a missing `prune_disabled` as `false`, and a
    missing `sync_tip` as height `0` — each a value the store could legitimately
    hold.
+4. **`curve_tree_meta`, daemon (S-CURVE SCU-1, 2026-09-21) — the worst of the
+   four:** three string-keyed cells defaulted three ways (`root` → Selene
+   `hash_init`, `depth` → `0`, `leaf_count` → `0`; `db_lmdb.cpp:9259`–`:9313`),
+   and the root read *documented* its own ambiguity — "callers should compare
+   against `hash_init` or check `get_curve_tree_leaf_count()`" (`:9264`) — an
+   API whose contract is "this return is ambiguous, disambiguate with a second
+   read the caller may skip." One table over, a caller did skip it (instance 1).
+   Closed in Rust by one typed row whose `EMPTY` is **written at store
+   creation**, so absence is SI-7 and emptiness is a value
+   ([`DRS_E1_SCURVE.md`](DRS_E1_SCURVE.md) §3.3).
 
 The discriminator is already written where the rules crate reads by height
 (`rust/shekyl-chain-rules/src/view.rs` §"Absence is a case, not a `None`",

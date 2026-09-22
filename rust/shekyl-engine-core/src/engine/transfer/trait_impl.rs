@@ -201,9 +201,7 @@ where
                         map_curve_tree_handle_error_for_send(&err),
                     )
                 })?;
-                TreeSpendGate::Enforced {
-                    covered_through: covered_through.map(shekyl_types::BlockHeight::to_raw),
-                }
+                TreeSpendGate::Enforced { covered_through }
             }
         };
         // CT-5b §3.2 / CT-5c: bind the reference block the proof anchors to and
@@ -220,7 +218,7 @@ where
         // its `1` default is inert because those unresolved cases never assemble.
         let (reference, tree_depth) = match &self.curve_tree {
             Some(handle) => {
-                let synced = self.ledger.with_ledger_block(LedgerBlock::height).to_raw();
+                let synced = self.ledger.with_ledger_block(LedgerBlock::height);
                 match select_reference_height(synced) {
                     Some(rh)
                         if matches!(
@@ -228,10 +226,8 @@ where
                             TreeSpendGate::Enforced { covered_through: Some(c) } if c >= rh
                         ) =>
                     {
-                        let (curve_tree_root, depth) = handle
-                            .reference_root_and_depth(BlockHeight::from_raw(rh))
-                            .await
-                            .map_err(|err| {
+                        let (curve_tree_root, depth) =
+                            handle.reference_root_and_depth(rh).await.map_err(|err| {
                                 fail_build_after_attempted(
                                     self.sink.as_ref(),
                                     map_curve_tree_handle_error_for_send(&err),
@@ -239,9 +235,7 @@ where
                             })?;
                         let block_hash = self
                             .ledger
-                            .with_ledger_block(|ledger| {
-                                ledger.block_hash_at(BlockHeight::from_raw(rh)).copied()
-                            })
+                            .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
                             .ok_or_else(|| {
                                 fail_build_after_attempted(
                                     self.sink.as_ref(),
@@ -252,7 +246,7 @@ where
                             })?;
                         (
                             Some(ReferenceBlock {
-                                height: BlockHeight::from_raw(rh),
+                                height: rh,
                                 curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
                                 block_hash: BlockHash::from_bytes(block_hash),
                             }),
@@ -389,7 +383,7 @@ where
             ConsumerHeldEntry {
                 created_at: Instant::now(),
                 snapshot_id: SnapshotId([0u8; 16]),
-                built_at_height: 0,
+                built_at_height: shekyl_types::BlockHeight::ZERO,
                 built_at_tip_hash: [0u8; 32],
                 tx_bytes: Vec::new(),
                 request: TxRequest {

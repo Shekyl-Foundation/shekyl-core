@@ -26,11 +26,11 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 /// Types that carry the wallet open-time scan floor into refresh.
 pub(crate) trait ScanStartFloorProvider {
     /// Minimum height for the producer scan loop (`0` = none).
-    fn scan_start_floor(&self) -> u64;
+    fn scan_start_floor(&self) -> BlockHeight;
 }
 
 impl ScanStartFloorProvider for LocalRefresh {
-    fn scan_start_floor(&self) -> u64 {
+    fn scan_start_floor(&self) -> BlockHeight {
         LocalRefresh::scan_start_floor(self)
     }
 }
@@ -38,35 +38,31 @@ impl ScanStartFloorProvider for LocalRefresh {
 /// Resolve the effective scan floor from persisted and session hints.
 ///
 /// Each argument is already resolved against network defaults where
-/// applicable (`WalletFile::effective_skip_to_height`, etc.). Zero
-/// means "no contribution" for override fields; `persisted_restore` is
-/// always taken from `SyncStateBlock.restore_from_height` (may be 0).
+/// applicable (`WalletFile::effective_skip_to_height`, etc.).
+/// `persisted_restore` is `SyncStateBlock.restore_from_height`.
 ///
-/// The floor is the maximum of all non-zero contributions. When every
-/// input is zero the floor is zero and refresh behaves as today (scan
-/// from `synced_height + 1` only).
+/// The floor is the maximum of the three ordinals. [`BlockHeight::ZERO`]
+/// is the bottom of the order, so an override left at genesis does not
+/// raise the floor. When every input is genesis the floor is genesis
+/// and refresh scans from `synced_height + 1` only.
 pub(crate) fn effective_scan_floor(
-    persisted_restore: u64,
-    skip_to_height: u64,
-    refresh_from_block_height: u64,
-) -> u64 {
-    let mut floor = persisted_restore;
-    if skip_to_height > 0 {
-        floor = floor.max(skip_to_height);
-    }
-    if refresh_from_block_height > 0 {
-        floor = floor.max(refresh_from_block_height);
-    }
-    floor
+    persisted_restore: BlockHeight,
+    skip_to_height: BlockHeight,
+    refresh_from_block_height: BlockHeight,
+) -> BlockHeight {
+    persisted_restore
+        .max(skip_to_height)
+        .max(refresh_from_block_height)
 }
 
 /// Whether the ledger must be anchored before scanning so the merge gate
 /// sees the next ordinal equal the scan floor.
 ///
-/// Both arguments are inclusive ordinals. A zero floor is "no floor".
-/// The gap is `floor > synced + 1`.
+/// Both arguments are inclusive ordinals. The gap is
+/// `floor > synced + 1`. A genesis floor is below every such successor,
+/// so it never anchors.
 pub(crate) fn needs_birthday_anchor(synced: BlockHeight, scan_start_floor: BlockHeight) -> bool {
-    !scan_start_floor.is_zero() && scan_start_floor > synced.saturating_add(BlockCount::ONE)
+    scan_start_floor > synced.saturating_add(BlockCount::ONE)
 }
 
 /// Block height to anchor at, given the floor and the daemon's current
@@ -101,8 +97,7 @@ pub(crate) fn anchor_target(
 /// Used when jumping over a genesis→birthday prefix without ingesting
 /// intermediate blocks. Requires an empty transfer set; callers must
 /// not anchor across existing scanner state. `anchor` is the inclusive
-/// ordinal to write. Callers that still hold `restore_from_height` as
-/// `u64` convert once before this call.
+/// ordinal to write.
 pub(crate) fn anchor_ledger_block(
     ledger: &mut LedgerBlock,
     anchor: BlockHeight,
@@ -163,11 +158,12 @@ pub(crate) fn anchor_ledger_block(
 /// Fetch the canonical block hash at `height` from the daemon.
 pub(crate) async fn fetch_block_hash_at<D: DaemonEngine>(
     daemon: &D,
-    height: u64,
+    height: BlockHeight,
 ) -> Result<BlockHash, RefreshError> {
-    let number = usize::try_from(height).map_err(|_| RefreshError::MalformedScanResult {
-        reason: "block height exceeds usize",
-    })?;
+    let number =
+        usize::try_from(height.to_raw()).map_err(|_| RefreshError::MalformedScanResult {
+            reason: "block height exceeds usize",
+        })?;
     let block = daemon.fetch_scannable_block(number).await.map_err(|e| {
         RefreshError::Io(IoError::Daemon {
             detail: e.to_string(),
@@ -181,12 +177,10 @@ pub(crate) async fn fetch_block_hash_at<D: DaemonEngine>(
 pub(crate) async fn ensure_birthday_anchor<D: DaemonEngine>(
     ledger: &LocalLedger,
     daemon: &D,
-    scan_start_floor: u64,
+    scan_start_floor: BlockHeight,
 ) -> Result<(), RefreshError> {
     let synced = ledger.synced_height();
-    // `scan_start_floor` is still the raw `restore_from_height` ordinal.
-    let floor = BlockHeight::from_raw(scan_start_floor);
-    if !needs_birthday_anchor(synced, floor) {
+    if !needs_birthday_anchor(synced, scan_start_floor) {
         return Ok(());
     }
 
@@ -197,14 +191,14 @@ pub(crate) async fn ensure_birthday_anchor<D: DaemonEngine>(
             detail: e.to_string(),
         })
     })?;
-    let Some(anchor) = anchor_target(floor, daemon_height) else {
+    let Some(anchor) = anchor_target(scan_start_floor, daemon_height) else {
         return Ok(());
     };
     if synced >= anchor {
         return Ok(());
     }
 
-    let tip_hash = fetch_block_hash_at(daemon, anchor.to_raw()).await?;
+    let tip_hash = fetch_block_hash_at(daemon, anchor).await?;
 
     let mut guard = ledger.write();
     anchor_ledger_block(&mut guard.ledger.ledger, anchor, tip_hash)
@@ -224,13 +218,34 @@ mod tests {
 
     #[test]
     fn effective_scan_floor_maxes_non_zero_hints() {
-        assert_eq!(effective_scan_floor(1000, 0, 0), 1000);
-        assert_eq!(effective_scan_floor(1000, 1200, 0), 1200);
-        assert_eq!(effective_scan_floor(1000, 0, 900), 1000);
-        assert_eq!(effective_scan_floor(1000, 500, 1200), 1200);
-        assert_eq!(effective_scan_floor(1000, 1500, 900), 1500);
-        assert_eq!(effective_scan_floor(0, 500, 0), 500);
-        assert_eq!(effective_scan_floor(0, 0, 0), 0);
+        assert_eq!(
+            effective_scan_floor(ordinal(1000), ordinal(0), ordinal(0)),
+            ordinal(1000)
+        );
+        assert_eq!(
+            effective_scan_floor(ordinal(1000), ordinal(1200), ordinal(0)),
+            ordinal(1200)
+        );
+        assert_eq!(
+            effective_scan_floor(ordinal(1000), ordinal(0), ordinal(900)),
+            ordinal(1000)
+        );
+        assert_eq!(
+            effective_scan_floor(ordinal(1000), ordinal(500), ordinal(1200)),
+            ordinal(1200)
+        );
+        assert_eq!(
+            effective_scan_floor(ordinal(1000), ordinal(1500), ordinal(900)),
+            ordinal(1500)
+        );
+        assert_eq!(
+            effective_scan_floor(ordinal(0), ordinal(500), ordinal(0)),
+            ordinal(500)
+        );
+        assert_eq!(
+            effective_scan_floor(ordinal(0), ordinal(0), ordinal(0)),
+            ordinal(0)
+        );
     }
 
     #[test]
