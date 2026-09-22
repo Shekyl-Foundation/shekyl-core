@@ -254,7 +254,8 @@ pub(crate) async fn get_wallet_info(
         // stay coherent with the balance summary under ONE ledger guard.
         let (summary, (wallet_height, restore_height), staking_view) =
             crate::staking::ledger_snapshot_with_staking(&engine, |wallet| {
-                let wallet_height = i64::try_from(wallet.ledger.height()).unwrap_or(i64::MAX);
+                let wallet_height =
+                    i64::try_from(wallet.ledger.height().to_raw()).unwrap_or(i64::MAX);
                 let restore_height =
                     i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
                 (wallet_height, restore_height)
@@ -422,7 +423,8 @@ pub(crate) async fn get_height(
     let shared = require_open_engine(tenants).await?;
     let (wallet_height, daemon) = {
         let engine = shared.read().await;
-        let wallet_height = i64::try_from(engine.ledger().ledger.height()).unwrap_or(i64::MAX);
+        let wallet_height =
+            i64::try_from(engine.ledger().ledger.height().to_raw()).unwrap_or(i64::MAX);
         (wallet_height, engine.daemon().clone())
     };
 

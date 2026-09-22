@@ -38,7 +38,7 @@ use crate::engine::{
 use crate::scan::ScanResult;
 use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
 use shekyl_engine_state::{BlockchainTip, LedgerBlock, ReorgBlocks};
-use shekyl_types::BlockHash;
+use shekyl_types::{BlockHash, BlockHeight};
 
 use super::{derive_snapshot_id, summarize, LedgerSnapshot, RefreshReorgEvent};
 use crate::engine::pending::SnapshotId;
@@ -146,7 +146,7 @@ fn drain<T>(queue: &Mutex<Vec<T>>) -> T {
 /// to the wallet's snapshot. Applies as a no-op merge and
 /// terminates the loop with `Ok(_)`.
 fn empty_result_for(snapshot: &LedgerSnapshot) -> ScanResult {
-    let start = snapshot.synced_height.saturating_add(1);
+    let start = snapshot.synced_height.to_raw().saturating_add(1);
     // The snapshot's reorg rows are persisted bytes (RAW_TYPE PR C).
     let parent_hash = snapshot
         .block_hash_at(snapshot.synced_height)
@@ -170,7 +170,7 @@ fn stale_snapshot_result(bad_start: u64) -> ScanResult {
 /// before any other invariant, so this fires the malformed
 /// path deterministically.
 fn malformed_result_for(snapshot: &LedgerSnapshot) -> ScanResult {
-    let start = snapshot.synced_height.saturating_add(1);
+    let start = snapshot.synced_height.to_raw().saturating_add(1);
     let mut result = ScanResult::empty_at(
         start,
         snapshot
@@ -411,7 +411,9 @@ fn snapshot_is_refreshed_between_retries() {
     let summary = fix
         .wallet
         .refresh_with(&opts, |attempt, snapshot| {
-            snapshots_seen.borrow_mut().push(snapshot.synced_height);
+            snapshots_seen
+                .borrow_mut()
+                .push(snapshot.synced_height.to_raw());
             *attempt_counter.borrow_mut() = attempt;
             if attempt == 1 {
                 // Force a ConcurrentMutation by emitting a
@@ -531,16 +533,28 @@ fn ledger_snapshot_is_independent_of_transfer_count() {
     // confirm `LedgerSnapshot::from_ledger` reads only the tip
     // height and the reorg window — `transfers` (when populated
     // in production) does not contribute to snapshot cost.
-    let tip = BlockchainTip::new(1234, [0xAA; 32]);
+    let tip = BlockchainTip::new(BlockHeight::from_raw(1234), [0xAA; 32]);
     let reorg_blocks = ReorgBlocks {
-        blocks: vec![(1233, [0xBB; 32]), (1234, [0xAA; 32])],
+        blocks: vec![
+            (shekyl_types::BlockHeight::from_raw(1233), [0xBB; 32]),
+            (shekyl_types::BlockHeight::from_raw(1234), [0xAA; 32]),
+        ],
     };
     let ledger = LedgerBlock::new(Vec::new(), tip, reorg_blocks);
     let snap = LedgerSnapshot::from_ledger(&ledger);
-    assert_eq!(snap.synced_height, 1234);
+    assert_eq!(
+        snap.synced_height,
+        shekyl_types::BlockHeight::from_raw(1234)
+    );
     assert_eq!(snap.reorg_blocks.blocks.len(), 2);
-    assert_eq!(snap.block_hash_at(1234), Some([0xAA; 32]));
-    assert_eq!(snap.block_hash_at(1232), None);
+    assert_eq!(
+        snap.block_hash_at(shekyl_types::BlockHeight::from_raw(1234)),
+        Some([0xAA; 32])
+    );
+    assert_eq!(
+        snap.block_hash_at(shekyl_types::BlockHeight::from_raw(1232)),
+        None
+    );
 }
 
 // ── SnapshotId derivation (Stage 1 PR 5 — Phase 0b) ────────
@@ -550,9 +564,12 @@ fn ledger_snapshot_is_independent_of_transfer_count() {
 /// surrounding tests use; the C1 derivation tests do not need a
 /// `LedgerBlock` — they exercise `derive_snapshot_id` over the
 /// snapshot's fields directly.
-fn snapshot_from_parts(synced_height: u64, blocks: Vec<(u64, [u8; 32])>) -> LedgerSnapshot {
+fn snapshot_from_parts(
+    synced_height: u64,
+    blocks: Vec<(shekyl_types::BlockHeight, [u8; 32])>,
+) -> LedgerSnapshot {
     LedgerSnapshot {
-        synced_height,
+        synced_height: BlockHeight::from_raw(synced_height),
         reorg_blocks: ReorgBlocks { blocks },
     }
 }
@@ -564,22 +581,46 @@ fn snapshot_from_parts(synced_height: u64, blocks: Vec<(u64, [u8; 32])>) -> Ledg
 /// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §5.0 ground 2.
 #[test]
 fn derive_snapshot_id_deterministic() {
-    let snap_a = snapshot_from_parts(100, vec![(99, [0x11; 32]), (100, [0x22; 32])]);
-    let snap_a_again = snapshot_from_parts(100, vec![(99, [0x11; 32]), (100, [0x22; 32])]);
+    let snap_a = snapshot_from_parts(
+        100,
+        vec![
+            (shekyl_types::BlockHeight::from_raw(99), [0x11; 32]),
+            (shekyl_types::BlockHeight::from_raw(100), [0x22; 32]),
+        ],
+    );
+    let snap_a_again = snapshot_from_parts(
+        100,
+        vec![
+            (shekyl_types::BlockHeight::from_raw(99), [0x11; 32]),
+            (shekyl_types::BlockHeight::from_raw(100), [0x22; 32]),
+        ],
+    );
     assert_eq!(
         derive_snapshot_id(&snap_a),
         derive_snapshot_id(&snap_a_again),
         "identical snapshot fields must derive identical ids"
     );
 
-    let snap_b_height = snapshot_from_parts(101, vec![(99, [0x11; 32]), (100, [0x22; 32])]);
+    let snap_b_height = snapshot_from_parts(
+        101,
+        vec![
+            (shekyl_types::BlockHeight::from_raw(99), [0x11; 32]),
+            (shekyl_types::BlockHeight::from_raw(100), [0x22; 32]),
+        ],
+    );
     assert_ne!(
         derive_snapshot_id(&snap_a),
         derive_snapshot_id(&snap_b_height),
         "different synced_height must change the id"
     );
 
-    let snap_b_blocks = snapshot_from_parts(100, vec![(99, [0x11; 32]), (100, [0x33; 32])]);
+    let snap_b_blocks = snapshot_from_parts(
+        100,
+        vec![
+            (shekyl_types::BlockHeight::from_raw(99), [0x11; 32]),
+            (shekyl_types::BlockHeight::from_raw(100), [0x33; 32]),
+        ],
+    );
     assert_ne!(
         derive_snapshot_id(&snap_a),
         derive_snapshot_id(&snap_b_blocks),
@@ -601,7 +642,13 @@ fn derive_snapshot_id_deterministic() {
 /// defeat the submit-time staleness check this digest exists to serve.
 #[test]
 fn derive_snapshot_id_domain_separated() {
-    let snap = snapshot_from_parts(7, vec![(6, [0xCD; 32]), (7, [0xAB; 32])]);
+    let snap = snapshot_from_parts(
+        7,
+        vec![
+            (shekyl_types::BlockHeight::from_raw(6), [0xCD; 32]),
+            (shekyl_types::BlockHeight::from_raw(7), [0xAB; 32]),
+        ],
+    );
 
     // Independent oracle for the documented canonical encoding.
     let mut expected_preimage = Vec::new();
@@ -651,8 +698,17 @@ fn derive_snapshot_id_domain_separated() {
 #[test]
 fn derive_snapshot_id_length_prefix_separates_neighbours() {
     let snap_zero = snapshot_from_parts(50, Vec::new());
-    let snap_one = snapshot_from_parts(50, vec![(49, [0x77; 32])]);
-    let snap_two = snapshot_from_parts(50, vec![(49, [0x77; 32]), (50, [0x88; 32])]);
+    let snap_one = snapshot_from_parts(
+        50,
+        vec![(shekyl_types::BlockHeight::from_raw(49), [0x77; 32])],
+    );
+    let snap_two = snapshot_from_parts(
+        50,
+        vec![
+            (shekyl_types::BlockHeight::from_raw(49), [0x77; 32]),
+            (shekyl_types::BlockHeight::from_raw(50), [0x88; 32]),
+        ],
+    );
 
     let id_zero = derive_snapshot_id(&snap_zero);
     let id_one = derive_snapshot_id(&snap_one);

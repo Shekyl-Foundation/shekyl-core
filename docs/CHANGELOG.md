@@ -142,6 +142,14 @@
 
 ### Wallet
 
+- **Height-semantics Phase 2e: wallet-ledger tip and bond-post offset are typed.**
+  `bond_post_offset_blocks` is `BlockCount` (`PENDING_POST_VERSION` **v11 →
+  v12**). Wallet-ledger tip / reorg heights are `BlockHeight`
+  (`LEDGER_BLOCK_VERSION` **11 → 12**, paired `WALLET_LEDGER_FORMAT_VERSION`
+  **18 → 19**). Postcard bytes of the transparent `u64` are identical; the
+  schema type-name change still bumps. Pre-genesis: a v11 ledger or v11
+  pending-post seal is refused, not migrated. Wire RPC unchanged.
+
 - **Height-semantics Phase 2c: inland decode of chain-count RPC facts.**
   Daemon-RPC `ChainTip.chain_height` / `BlockHashAt` / `BlockHeaderAt` /
   `BlockAt.chain_height` are `ChainCount`; `target_height` is

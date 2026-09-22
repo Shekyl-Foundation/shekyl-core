@@ -116,7 +116,7 @@ fn post(persona_byte: u8, anchor: u64, offset: u64, gindexes: &[u64]) -> Pending
         p_slot: PSlot::from_raw(u32::from(persona_byte)),
         persona: persona(persona_byte),
         tx_bytes: vec![persona_byte, 0xBE, 0xEF],
-        bond_post_offset_blocks: offset,
+        bond_post_offset_blocks: BlockCount::from_raw(offset),
         anchor_t0: ChainCount::from_raw(anchor),
         funding_gindexes: gindexes
             .iter()

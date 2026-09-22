@@ -70,6 +70,7 @@ use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingDrain, PendingPostState, SealAdmission};
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
@@ -270,12 +271,12 @@ where
                 stake,
                 g.curve_tree.clone(),
                 g.pending_gate.clone(),
-                g.ledger.synced_height(),
+                g.ledger.synced_height().to_raw(),
                 g.ledger.snapshot(),
                 g.primary_address(),
             )
         };
-        let block_hash_at = move |h: u64| snapshot.block_hash_at(h);
+        let block_hash_at = move |h: u64| snapshot.block_hash_at(BlockHeight::from_raw(h));
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
         // Resolve the principal destination triple with the SAME birational map

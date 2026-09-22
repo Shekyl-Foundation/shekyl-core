@@ -85,6 +85,10 @@ pub enum TimelineEvent {
     /// bond post is chain-attributable.
     BondPostScheduled {
         persona: PersonaOrdinal,
+        /// Blocks from the private-intent anchor. Stays `u64` on this
+        /// measurement-hook edge (same class as `spread_blocks` /
+        /// `window_blocks`); inland assemble carriers are
+        /// `shekyl_types::BlockCount` (height-semantics Phase 2e C4).
         bond_post_offset_blocks: u64,
     },
     /// The bond-post actually went to a wire (absolute logical time in the

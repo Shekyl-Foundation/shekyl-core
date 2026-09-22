@@ -219,7 +219,7 @@ mod tests {
             global_idx,
             amount,
         );
-        TransferDetails::from_wallet_output(&output, height)
+        TransferDetails::from_wallet_output(&output, shekyl_types::BlockHeight::from_raw(height))
     }
 
     #[test]

@@ -33,11 +33,15 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
+use shekyl_types::{BlockCount, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the durable pending-post block. **v11** retypes the
+/// Schema version of the durable pending-post block. **v12** retypes
+/// [`PendingBondPost::bond_post_offset_blocks`] from bare `u64` to
+/// [`BlockCount`] (height-semantics Phase 2e, C4; postcard bytes of the
+/// transparent `u64` are identical; the schema type-name change still
+/// bumps per rule 42). Pre-genesis: refuse, don't migrate. **v11** retypes the
 /// dispatch-clock stamp fields (`anchor_t0`, `Dispatched::at`) from
 /// ordinal `BlockHeight` to [`ChainCount`] (height-semantics Phase 2b;
 /// postcard bytes of the transparent `u64` are identical; the schema
@@ -87,7 +91,7 @@ use crate::error::WalletLedgerError;
 /// a different version **refuse rather than migrate** — pre-genesis, a v4
 /// seal under a v5 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 11;
+pub const PENDING_POST_VERSION: u32 = 12;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -141,8 +145,24 @@ pub struct PendingBondPost {
     /// The fully-assembled, signed, wire-encoded transaction bytes — the
     /// value itself, per pin P-2: retries re-send these stored bytes.
     pub tx_bytes: Vec<u8>,
-    /// Blocks from `anchor_t0` to the bond-post broadcast.
-    pub bond_post_offset_blocks: u64,
+    /// Blocks from `anchor_t0` to the bond-post broadcast — a span
+    /// ([`BlockCount`]), on the same clock as `anchor_t0`.
+    ///
+    /// ```
+    /// fn needs_span(offset: shekyl_types::BlockCount) {}
+    /// fn check(post: &shekyl_engine_state::PendingBondPost) {
+    ///     needs_span(post.bond_post_offset_blocks);
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: the due-count offset is a span, not an ordinal.
+    /// fn needs_height(_: shekyl_types::BlockHeight) {}
+    /// fn check(post: &shekyl_engine_state::PendingBondPost) {
+    ///     needs_height(post.bond_post_offset_blocks);
+    /// }
+    /// ```
+    pub bond_post_offset_blocks: BlockCount,
     /// Claimed chain **count** at assemble time — the private intent
     /// anchor `t0` the plan's offsets are relative to. WI-3's due-check
     /// is pure: `due = anchor_t0 + bond_post_offset_blocks` on this
@@ -1054,7 +1074,7 @@ mod tests {
             p_slot: PSlot::from_raw(0),
             persona: PCanonicalId::from_bytes([persona_byte; 32]),
             tx_bytes: vec![0xAB; 16],
-            bond_post_offset_blocks: 12,
+            bond_post_offset_blocks: BlockCount::from_raw(12),
             anchor_t0: ChainCount::from_raw(1_000),
             funding_gindexes: gindexes
                 .iter()

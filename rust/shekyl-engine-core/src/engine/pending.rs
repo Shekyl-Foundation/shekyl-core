@@ -742,7 +742,7 @@ pub(crate) fn build_pending_tx_in_state(
 
     let reservation = Reservation {
         selected_transfer_indices: selected,
-        built_at_height: synced,
+        built_at_height: synced.to_raw(),
         built_at_tip_hash: tip_hash,
         snapshot_id,
         extensions: Vec::new(),
@@ -753,7 +753,7 @@ pub(crate) fn build_pending_tx_in_state(
 
     let pending = PendingTx {
         id,
-        built_at_height: synced,
+        built_at_height: synced.to_raw(),
         built_at_tip_hash: tip_hash,
         fee_atomic_units: fee,
         snapshot_id,
@@ -767,7 +767,7 @@ pub(crate) fn build_pending_tx_in_state(
         // REF_ANCHOR_AGE`, so the canonical height always exists — no `0`
         // (genesis-looking) fallback.
         content_gen: 0,
-        reference_height: shekyl_curve_tree::select_reference_height(synced)
+        reference_height: shekyl_curve_tree::select_reference_height(synced.to_raw())
             .expect("a built tx implies synced >= SPENDABLE_AGE > REF_ANCHOR_AGE"),
     };
 
@@ -798,18 +798,19 @@ pub(crate) fn submit_pending_tx_in_state(
     let synced = ledger.height();
     let built = entry.built_at_height;
 
-    // Both heights are still raw ordinals on this helper (`TooOld` reports
-    // that same triple). The comparison is instant − instant against the span.
-    let age = BlockHeight::from_raw(synced).saturating_sub(BlockHeight::from_raw(built));
+    // `synced` is the inclusive tip. `built` is the reservation's stored
+    // ordinal (`built_at_height` is still `u64`). Age is instant − instant.
+    let built_at = BlockHeight::from_raw(built);
+    let age = synced.saturating_sub(built_at);
     if age > max_reorg {
         return Err(PendingTxError::TooOld {
             built,
-            current: synced,
+            current: synced.to_raw(),
             max_reorg: max_reorg.to_raw(),
         });
     }
 
-    let stored = ledger.block_hash_at(entry.built_at_height).copied();
+    let stored = ledger.block_hash_at(built_at).copied();
     if stored != Some(entry.built_at_tip_hash) {
         return Err(PendingTxError::ChainStateChanged {
             height: entry.built_at_height,

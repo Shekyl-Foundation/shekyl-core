@@ -37,7 +37,7 @@
 rust/shekyl-engine-state/src/ledger_block.rs|pub tip_hash: Option<[u8; 32]>
 # Reorg trail is the height-plus-block-hash tuple sequence used to
 # detect reorgs at scan time. Block hashes are public network state.
-rust/shekyl-engine-state/src/ledger_block.rs|pub blocks: Vec<(u64, [u8; 32])>
+rust/shekyl-engine-state/src/ledger_block.rs|pub blocks: Vec<(BlockHeight, [u8; 32])>
 
 # ── payment_request.rs ────────────────────────────────────────────────
 #

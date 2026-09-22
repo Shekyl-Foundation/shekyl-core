@@ -97,7 +97,7 @@ fn build_ledger(n: usize) -> WalletLedger {
         block_version: w.ledger.block_version,
         transfers,
         tip: BlockchainTip {
-            synced_height: tip_height,
+            synced_height: shekyl_types::BlockHeight::from_raw(tip_height),
             tip_hash: Some([0xAB; 32]),
         },
         reorg_blocks: w.ledger.reorg_blocks.clone(),

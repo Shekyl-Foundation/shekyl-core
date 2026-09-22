@@ -6,8 +6,9 @@ height-semantics Phase 2b RULED 2026-09-20 (dispatch-clock retype to
 `ChainCount`, no numeric change; `PENDING_POST_VERSION` 10 → 11);
 height-semantics Phase 2c RULED 2026-09-20 (wire/FFI inland decode);
 height-semantics Phase 2d RULED 2026-09-21 (countersign clocks +
-difference constants). Named C4 residue: persisted
-`bond_post_offset_blocks` stays `u64` (schema v11). Numerics are frozen
+difference constants); height-semantics Phase 2e RULED 2026-09-21
+(C4 `bond_post_offset_blocks` + wallet-ledger tip/reorg wrap). Stamp-clock
+COUNT→ORDINAL conversion is optional-not-owed. Numerics are frozen
 as pinned (Rick, 2026-09-19).
 
 <!-- claim-audit: citations -->
@@ -98,8 +99,8 @@ ruled-fix item for **that** PR, not a Phase 1 value change.
 | `block_at` / `block_number` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:134-137`, `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:200` | **ORDINAL** (which block) | `BlockHeight` used as a 0-indexed fetch number | `get_block_hash` `number` is "zero-indexed position" (`rust/shekyl-rpc-client/src/lib.rs:410-413`). | Already the right type; keep. |
 | P-scan sweep exclusive end | `rust/shekyl-engine-core/src/engine/pscan/task.rs:245-252`, `rust/shekyl-engine-core/src/engine/pscan/task.rs:282` | bound = COUNT; index = ORDINAL | COUNT − `reorg_depth` as exclusive ordinal (`saturating_sub_count` then `next_height()`); loop calls `block_at(ordinal)` | Half-open range over a count. Flipping the bound to `.tip()` without changing the loop **skips the last block**. Corroboration min uses `from_next_height` of the scan frontier (`task.rs:502`), not `from_raw(to_raw())`. | RULED 2026-09-20: types split; numeric unchanged. |
 | `anchor_t0` stamp | `rust/shekyl-engine-core/src/engine/bond_orchestrator.rs:555-557`; field `rust/shekyl-engine-state/src/pending_post_block.rs:147-151` | same-clock threshold (WI-3 R2-1) | COUNT as `ChainCount` | Spec name is "tip height at assemble time" (`ARCHIVAL_BOND_WI2_ASSEMBLY.md:250-268`); the consuming rule is `due = anchor_t0 + offset` compared to the **same** `daemon_claimed_tip` read. Arithmetic never indexes a block. | RULED 2026-09-20: `ChainCount`. Converting to ordinal is only legal if stamp, due-check, and alarm move together. |
-| Due-check | `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:260-263`, `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:291` | same clock as `anchor_t0` | COUNT vs COUNT (`ChainCount`) | `due_count(p) <= tip`. WI-3 R2-1: stamp and due-check switch together or offsets change meaning. | RULED 2026-09-20: both ends `ChainCount`. |
-| Alarm / resubmit horizon | `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:296` | same clock as dispatch `at` | COUNT vs COUNT (`ChainCount`) | `tip < at.saturating_add(horizon)`. `at` is the dispatch stamp. | RULED 2026-09-20. Same as due-check. |
+| Due-check | `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:268-270`, `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:298` | same clock as `anchor_t0` | COUNT vs COUNT (`ChainCount`) | `due_count(p) <= tip`. WI-3 R2-1: stamp and due-check switch together or offsets change meaning. | RULED 2026-09-20: both ends `ChainCount`. |
+| Alarm / resubmit horizon | `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:303` | same clock as dispatch `at` | COUNT vs COUNT (`ChainCount`) | `tip < at.saturating_add(horizon)`. `at` is the dispatch stamp. | RULED 2026-09-20. Same as due-check. |
 | Claim dispatch `at` | `rust/shekyl-engine-core/src/engine/claim_dispatch.rs:369` | "when dispatched" vs a later same-clock tip | COUNT as `ChainCount` | Comment: same named clock as bond dispatch (WI-3 R2-1). | RULED 2026-09-20 with the clock. |
 | Drain dispatch `at` | `rust/shekyl-engine-core/src/engine/drain_dispatch.rs:397` | same | COUNT as `ChainCount` | Same clock comment (`rust/shekyl-engine-core/src/engine/drain_dispatch.rs:394-396`). | RULED 2026-09-20. |
 | Release dispatch `at` | `rust/shekyl-engine-core/src/engine/release_dispatch.rs:606` | same | COUNT as `ChainCount` | Same clock comment (`rust/shekyl-engine-core/src/engine/release_dispatch.rs:604-605`). | RULED 2026-09-20. |
@@ -270,6 +271,8 @@ one family. **Unclear: none.**
 | --- | --- | --- | --- | --- |
 | Dispatch clock (`daemon_claimed_tip` + six consumers, §2.2) | COUNT | `ChainCount` | `ChainCount` | RULED 2026-09-20 (height-semantics Phase 2b); schema v11 |
 | Wallet ledger (`TransferDetails.block_height` / `spent_height` / `eligible_height`, `rust/shekyl-engine-state/src/transfer.rs:226-237`, `rust/shekyl-engine-state/src/transfer.rs:328`) | ORDINAL | `BlockHeight` | `BlockHeight` | keep |
+| Wallet-ledger tip / reorg (`BlockchainTip.synced_height`, `LedgerBlock::height`, `LedgerEngine::synced_height`, `ReorgBlocks`, `LedgerSnapshot`) | ORDINAL (inclusive tip) | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2e); `LEDGER_BLOCK_VERSION` 11 → 12 and `WALLET_LEDGER_FORMAT_VERSION` 18 → 19; P-scan cursor same name is exclusive-end (C6), comments name the mix |
+| Bond-post offset (`PendingBondPost.bond_post_offset_blocks` + assemble carriers) | DIFFERENCE | `BlockCount` | `BlockCount` | RULED 2026-09-21 (height-semantics Phase 2e); `PENDING_POST_VERSION` 11 → 12; `due_count` uses the field directly |
 | Emission / claim source | COUNT split at decode | `ChainCount` | `ChainCount` | keep (pattern) |
 | Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height` / `BlockHeaderAt.chain_height` / `BlockAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs`) | COUNT (target: COUNT-or-sentinel) | `ChainCount` and `Option<ChainCount>` | `ChainCount` and `Option<ChainCount>` | RULED 2026-09-20 (height-semantics Phase 2c); handlers bound with `has_block` / name the top with `tip()`; wire still writes `0` when synchronized |
 | Wallet RPC client `Rpc::get_height` | COUNT | `ChainCount` | `ChainCount` at the client decode | RULED 2026-09-20 (height-semantics Phase 2c); name kept (C7) |
@@ -278,7 +281,7 @@ one family. **Unclear: none.**
 | Anchor depth / lag (`PASS_ANCHOR_DEPTH_BLOCKS`, `PASS_ANCHOR_LAG_BLOCKS`, `max_reorg_depth`, `BlockHeaderFacts.depth`) | DIFFERENCE | `BlockCount` | `BlockCount` | RULED 2026-09-21 (height-semantics Phase 2d); generated `u64` wrapped at the const def (C4) |
 | Curve-tree ingest / `block_at` / DAA timestamps | ORDINAL | `BlockHeight` (RTN-4 re-export) | `BlockHeight` | keep |
 | C++ daemon, p2p, mining RPC producers | as §3.3 | `uint64_t` | stay `uint64_t` (C8) | none in this campaign |
-| Wire DTOs / FFI PODs | as §3.3 | `u64` | stay `u64` (C1); decode at the consumer | RULED 2026-09-20/21 (Phases 2c–2d); C4 residue is persisted `bond_post_offset_blocks` |
+| Wire DTOs / FFI PODs | as §3.3 | `u64` | stay `u64` (C1); decode at the consumer | RULED 2026-09-20/21 (Phases 2c–2e) |
 
 **Not block-axis (named so they are not unclear):** curve-tree
 positions, gindex, leaf indices (`Gindex` is `GlobalOutputIndex`,
@@ -301,8 +304,8 @@ quantity.
   arithmetic is `due_count`. Offsets that participate in inland
   arithmetic (`reorg_depth`, `alarm_horizon_blocks`,
   `max_reorg_depth`) are `BlockCount` as of height-semantics Phase 2d.
-  Persisted `bond_post_offset_blocks` stays `u64` (C4 residue: a typed
-  wrap is a schema bump `PENDING_POST_VERSION` 11 → 12).
+  Persisted `bond_post_offset_blocks` is `BlockCount` as of
+  height-semantics Phase 2e (`PENDING_POST_VERSION` 11 → 12).
 - **Height-semantics Phase 2c — wire/FFI inland decode — RULED 2026-09-20.**
   `ChainTip.chain_height` / `BlockHashAt.chain_height` /
   `BlockHeaderAt.chain_height` / `BlockAt.chain_height` are
@@ -326,9 +329,29 @@ quantity.
   `DispatchConfig.alarm_horizon_blocks`, and `BlockHeaderFacts.depth`
   are `BlockCount` inland. Wire header still 8 LE bytes; FFI PODs stay
   `u64` (C1). C9 `compile_fail`s on each new public boundary. No
-  numeric change. Named C4 residue: persisted
-  `pending_post_block.bond_post_offset_blocks: u64`
-  (`PENDING_POST_VERSION` = 11).
+  numeric change.
+- **Height-semantics Phase 2e — C2-complete inland remainder — RULED
+  2026-09-21.** `PendingBondPost.bond_post_offset_blocks` and the
+  assemble-carrier twins are `BlockCount` (`PENDING_POST_VERSION` 11 →
+  12). `BlockchainTip.synced_height`, `LedgerBlock::height` /
+  `block_hash_at`, `ReorgBlocks`, `LedgerEngine::synced_height`, and
+  `LedgerSnapshot` are `BlockHeight` (`LEDGER_BLOCK_VERSION` 11 → 12
+  paired with `WALLET_LEDGER_FORMAT_VERSION` 18 → 19). Inclusive ledger
+  tip vs exclusive-end P-scan cursor: both `BlockHeight`, different
+  conventions, comments name the mix. The refresh caught-up check is
+  [`ChainCount::has_block`] of `synced.saturating_add(BlockCount::ONE)`.
+  Ledger mutations (`ingest_block`, `handle_reorg`, `detect_spends`,
+  `spendable_outputs`, `process_scanned_outputs`) take `BlockHeight`.
+  `ScanResult`'s range stays `u64`; `from_raw` happens once at that
+  edge. Snapshot-id preimage stays the same 8 LE bytes via `.to_raw()`.
+  C9 pins: `Engine::synced_height` rejects `ChainCount`;
+  `PendingBondPost.bond_post_offset_blocks` is `BlockCount` (compiling
+  doctest) and rejects `BlockHeight` (`compile_fail`). No numeric change.
+  Remainders
+  named in-line: stamp-clock COUNT→ORDINAL conversion is
+  optional-not-owed (§2.3 item 1); `SyncStateBlock.restore_from_height`
+  still `u64`; `get_version` `target_height` wire `0` still `RK-`;
+  requester mint still a pin on the mint PR.
 
 **Out of scope of the whole audit:** any stamp value change (none from
 Phase 1); the daemon-RPC `target_height` *wire* sentinel deletion
@@ -339,5 +362,5 @@ type-name check; C++ retyping (C8).
 
 "Which `h`?" — §1 for the two quantities, §2.2 for the six stamps, §3.1
 for the inland/wire split, §3.3 for a named RPC/FFI field, §3.4 for
-which family a site belongs to. After height-semantics Phase 2c–2d the
+which family a site belongs to. After height-semantics Phase 2c–2e the
 types make a wrong mix a compile error.

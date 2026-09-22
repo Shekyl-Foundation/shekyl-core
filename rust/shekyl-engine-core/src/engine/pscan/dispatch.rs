@@ -256,10 +256,10 @@ pub(crate) enum DispatchError {
 /// The pure due-count arithmetic (§3.1): `due = anchor_t0 +
 /// bond_post_offset_blocks` on the dispatch count clock. Saturating: a
 /// plan whose offset overflows the count space can only push due *later*
-/// (monotone noise), never wrap to "due immediately".
+/// (monotone noise), never wrap to "due immediately". The offset's type
+/// is pinned on [`PendingBondPost::bond_post_offset_blocks`].
 fn due_count(post: &PendingBondPost) -> ChainCount {
-    post.anchor_t0
-        .saturating_add(BlockCount::from_raw(post.bond_post_offset_blocks))
+    post.anchor_t0.saturating_add(post.bond_post_offset_blocks)
 }
 
 /// Select the single post to dispatch this tick, or `None` (§3.2 part 2).

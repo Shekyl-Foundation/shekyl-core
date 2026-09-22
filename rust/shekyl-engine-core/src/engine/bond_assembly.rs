@@ -669,7 +669,7 @@ mod tests {
     use crate::engine::test_support::funding_record;
     use shekyl_engine_state::pending_post_block::PendingPostState;
     use shekyl_engine_state::pscan_state::MintLineageOutput;
-    use shekyl_types::{BlockHeight, ChainCount};
+    use shekyl_types::{BlockCount, BlockHeight, ChainCount};
 
     // The sweep is lineage-blind (it consumes *all* spendable funding
     // regardless of rung — GF-4b §3.1), so these helpers pin rung 3 as the
@@ -1119,7 +1119,7 @@ mod tests {
             p_slot: PSlot::from_raw(0),
             persona,
             tx_bytes: bytes.clone(),
-            bond_post_offset_blocks: 7,
+            bond_post_offset_blocks: BlockCount::from_raw(7),
             anchor_t0: ChainCount::from_raw(100),
             funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(1)],
             state: PendingPostState::Pending,

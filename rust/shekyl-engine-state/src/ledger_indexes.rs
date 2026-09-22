@@ -45,6 +45,7 @@ use tracing::warn;
 use zeroize::Zeroize;
 
 use crate::{ledger_block::LedgerBlock, transfer::TransferDetails};
+use shekyl_types::BlockHeight;
 
 /// Runtime-only state derived from chain replay. None of these fields
 /// are persisted in [`LedgerBlock`]; all are rebuilt by replaying
@@ -129,7 +130,7 @@ impl LedgerIndexes {
     pub fn ingest_block(
         &mut self,
         ledger: &mut LedgerBlock,
-        block_height: u64,
+        block_height: BlockHeight,
         block_hash: [u8; 32],
         transfers: Vec<TransferDetails>,
     ) -> Range<usize> {
@@ -179,13 +180,13 @@ impl LedgerIndexes {
         &self,
         ledger: &mut LedgerBlock,
         key_image: &KeyImage,
-        spent_height: u64,
+        spent_height: BlockHeight,
         spending_tx: shekyl_types::TxHash,
     ) -> bool {
         if let Some(&idx) = self.key_images.get(key_image) {
             if let Some(td) = ledger.transfers.get_mut(idx) {
                 td.spent = true;
-                td.spent_height = Some(shekyl_types::BlockHeight::from_raw(spent_height));
+                td.spent_height = Some(spent_height);
                 td.spending_tx_hash = Some(spending_tx);
                 // F14 confirmed-present release (§2.6) needs no write
                 // since PR-SJ-1b: the derived lock view is superseded by
@@ -241,7 +242,7 @@ impl LedgerIndexes {
     pub fn detect_spends(
         &self,
         ledger: &mut LedgerBlock,
-        block_height: u64,
+        block_height: BlockHeight,
         spends: &[(KeyImage, shekyl_types::TxHash)],
     ) -> usize {
         let mut spent_count = 0;
@@ -299,10 +300,9 @@ impl LedgerIndexes {
     /// Drops the corresponding `(height, hash)` entries from
     /// `ledger.reorg_blocks`, rewinds `ledger.tip` to the highest
     /// remaining block, and rebuilds `key_images` and `pub_keys`.
-    pub fn handle_reorg(&mut self, ledger: &mut LedgerBlock, fork_height: u64) {
-        let fork = shekyl_types::BlockHeight::from_raw(fork_height);
+    pub fn handle_reorg(&mut self, ledger: &mut LedgerBlock, fork_height: BlockHeight) {
         for idx in (0..ledger.transfers.len()).rev() {
-            if ledger.transfers[idx].block_height >= fork {
+            if ledger.transfers[idx].block_height >= fork_height {
                 ledger.transfers.remove(idx);
             }
         }
@@ -315,7 +315,7 @@ impl LedgerIndexes {
         // never in a block) are left untouched: a reorg of confirmed blocks does not
         // affect a spend that was never confirmed.
         for td in &mut ledger.transfers {
-            if td.spent_height.is_some_and(|h| h >= fork) {
+            if td.spent_height.is_some_and(|h| h >= fork_height) {
                 td.spent = false;
                 td.spent_height = None;
                 // The spending tx's block is gone with the fork; the
@@ -336,7 +336,7 @@ impl LedgerIndexes {
                 ledger.tip.tip_hash = Some(hash);
             }
             None => {
-                ledger.tip.synced_height = 0;
+                ledger.tip.synced_height = BlockHeight::ZERO;
                 ledger.tip.tip_hash = None;
             }
         }
@@ -563,7 +563,7 @@ mod tests {
         ];
         let ledger = LedgerBlock::new(
             transfers,
-            BlockchainTip::new(120, [0; 32]),
+            BlockchainTip::new(BlockHeight::from_raw(120), [0; 32]),
             ReorgBlocks::default(),
         );
         let indexes = LedgerIndexes::rebuild_from_ledger(&ledger);
@@ -591,12 +591,12 @@ mod tests {
 
         let inserted = indexes.ingest_block(
             &mut ledger,
-            100,
+            BlockHeight::from_raw(100),
             [0xCC; 32],
             vec![mk_transfer(1, 100, Some(ki(0xAA)))],
         );
         assert_eq!(inserted, 0..1);
-        assert_eq!(ledger.tip.synced_height, 100);
+        assert_eq!(ledger.tip.synced_height, BlockHeight::from_raw(100));
         assert_eq!(ledger.tip.tip_hash, Some([0xCC; 32]));
         assert_eq!(ledger.transfers.len(), 1);
         assert_eq!(indexes.key_images.get(&ki(0xAA)).copied(), Some(0));
@@ -614,7 +614,12 @@ mod tests {
         // (submitted count).
         let t1 = mk_transfer(1, 100, Some(ki(0xAA)));
         let t2 = mk_transfer(1, 110, Some(ki(0xBB)));
-        let inserted = indexes.ingest_block(&mut ledger, 110, [0; 32], vec![t1, t2]);
+        let inserted = indexes.ingest_block(
+            &mut ledger,
+            BlockHeight::from_raw(110),
+            [0; 32],
+            vec![t1, t2],
+        );
         assert_eq!(inserted, 0..1);
         assert_eq!(ledger.transfers.len(), 1);
     }
@@ -634,7 +639,7 @@ mod tests {
         // prior merge. The next batch's range must start at 1.
         let prior = indexes.ingest_block(
             &mut ledger,
-            100,
+            BlockHeight::from_raw(100),
             [0x11; 32],
             vec![mk_transfer(1, 100, Some(ki(0x10)))],
         );
@@ -645,14 +650,20 @@ mod tests {
         // the returned range covers only transfer 1 at index 1.
         let t1 = mk_transfer(2, 200, Some(ki(0x20)));
         let t2 = mk_transfer(2, 210, Some(ki(0x21))); // duplicate `key`
-        let inserted = indexes.ingest_block(&mut ledger, 200, [0x22; 32], vec![t1, t2]);
+        let inserted = indexes.ingest_block(
+            &mut ledger,
+            BlockHeight::from_raw(200),
+            [0x22; 32],
+            vec![t1, t2],
+        );
         assert_eq!(inserted, 1..2);
         assert_eq!(inserted.len(), 1);
         assert_eq!(ledger.transfers.len(), 2);
 
         // An empty submission returns an empty range whose start
         // equals the current ledger size.
-        let empty = indexes.ingest_block(&mut ledger, 300, [0x33; 32], vec![]);
+        let empty =
+            indexes.ingest_block(&mut ledger, BlockHeight::from_raw(300), [0x33; 32], vec![]);
         assert_eq!(empty, 2..2);
         assert!(empty.is_empty());
     }
@@ -663,7 +674,7 @@ mod tests {
         let mut indexes = LedgerIndexes::empty();
         indexes.ingest_block(
             &mut ledger,
-            100,
+            BlockHeight::from_raw(100),
             [0; 32],
             vec![mk_transfer(1, 100, Some(ki(0xAA)))],
         );
@@ -671,7 +682,7 @@ mod tests {
         assert!(indexes.mark_spent(
             &mut ledger,
             &ki(0xAA),
-            200,
+            BlockHeight::from_raw(200),
             shekyl_types::TxHash::from_bytes([0xEE; 32])
         ));
         assert!(ledger.transfers[0].spent);
@@ -687,21 +698,21 @@ mod tests {
         let mut indexes = LedgerIndexes::empty();
         indexes.ingest_block(
             &mut ledger,
-            100,
+            BlockHeight::from_raw(100),
             [0xAA; 32],
             vec![mk_transfer(1, 100, Some(ki(0x10)))],
         );
         indexes.ingest_block(
             &mut ledger,
-            200,
+            BlockHeight::from_raw(200),
             [0xBB; 32],
             vec![mk_transfer(2, 200, Some(ki(0x20)))],
         );
         assert_eq!(ledger.transfers.len(), 2);
 
-        indexes.handle_reorg(&mut ledger, 200);
+        indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(200));
         assert_eq!(ledger.transfers.len(), 1);
-        assert_eq!(ledger.tip.synced_height, 100);
+        assert_eq!(ledger.tip.synced_height, BlockHeight::from_raw(100));
         assert_eq!(ledger.tip.tip_hash, Some([0xAA; 32]));
         assert!(indexes.key_images.contains_key(&ki(0x10)));
         assert!(!indexes.key_images.contains_key(&ki(0x20)));
@@ -714,7 +725,7 @@ mod tests {
         // Two outputs received well before the fork, so they survive the rewind.
         indexes.ingest_block(
             &mut ledger,
-            100,
+            BlockHeight::from_raw(100),
             [0xAA; 32],
             vec![
                 mk_transfer(1, 100, Some(ki(0x10))),
@@ -725,15 +736,15 @@ mod tests {
         assert!(indexes.mark_spent(
             &mut ledger,
             &ki(0x10),
-            200,
+            BlockHeight::from_raw(200),
             shekyl_types::TxHash::from_bytes([0xEE; 32])
         ));
         // Output 1: spend IN FLIGHT — optimistically marked at submit, no height yet.
         ledger.transfers[1].spent = true;
         // Advance the tip past the fork (empty block) so the rewind is well-formed.
-        indexes.ingest_block(&mut ledger, 250, [0xBB; 32], vec![]);
+        indexes.ingest_block(&mut ledger, BlockHeight::from_raw(250), [0xBB; 32], vec![]);
 
-        indexes.handle_reorg(&mut ledger, 150);
+        indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(150));
 
         // The orphaned CONFIRMED spend (200 ≥ 150) returns to the spendable pool.
         assert!(!ledger.transfers[0].spent);
@@ -747,7 +758,12 @@ mod tests {
     fn set_key_image_is_idempotent() {
         let mut ledger = LedgerBlock::empty();
         let mut indexes = LedgerIndexes::empty();
-        indexes.ingest_block(&mut ledger, 100, [0; 32], vec![mk_transfer(1, 100, None)]);
+        indexes.ingest_block(
+            &mut ledger,
+            BlockHeight::from_raw(100),
+            [0; 32],
+            vec![mk_transfer(1, 100, None)],
+        );
 
         indexes.set_key_image(&mut ledger, 0, ki(0xAA));
         assert_eq!(ledger.transfers[0].key_image, Some(ki(0xAA)));
