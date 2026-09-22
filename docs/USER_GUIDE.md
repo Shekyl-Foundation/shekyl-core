@@ -989,11 +989,11 @@ Export the blockchain to a portable file:
 
 ### `shekyl-mdb-copy`
 
-There is no operator-selected pruning: under archival pruning every daemon
-discards the same data at the same depth, uniformly (the Monero-era
-`--prune-blockchain` stripe engine was deleted 2026-09-21). An in-place
-discard marks database pages as free without shrinking the file. To
-reclaim the disk space, stop `shekyld` and compact the database:
+The stripe engine (`--prune-blockchain`) was deleted 2026-09-21 (`PDM-Q7`).
+No daemon path discards tx bodies today: `prune_tx_data` has no production
+caller, and uniform discard is the unbuilt S-PRUNE skeleton
+(`docs/design/DRS_E1_SPRUNE.md`). `shekyl-mdb-copy` reclaims free pages the
+store already holds. Stop `shekyld` and compact the database:
 
 ```bash
 mkdir /path/to/compacted
@@ -1092,8 +1092,9 @@ prompts for the current password, then the new one twice.
 
 - **Firewall:** Ensure port 11021 (P2P) is open for inbound connections, or
   use `--out-peers` to increase outbound connections.
-- **Disk space:** A full node needs ~50 GB. There is no pruning flag;
-  every node prunes uniformly under archival pruning.
+- **Disk space:** A full node needs ~50 GB. There is no pruning flag. The
+  stripe engine was deleted 2026-09-21 (`PDM-Q7`); uniform archival discard
+  has not landed (S-PRUNE, `docs/design/DRS_E1_SPRUNE.md`).
 - **Corrupted database:** Try `pop_blocks 100` in the daemon console to
   roll back recent blocks. As a last resort, delete the LMDB directory and
   resync.

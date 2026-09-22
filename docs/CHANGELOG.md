@@ -16,12 +16,12 @@
   and an old `p2pstate.bin` is dropped on load, as with the `peer_id`
   removal. Stripe-aware peer selection and sync gating go with it.
 - **`--prune-blockchain` and `--sync-pruned-blocks` are removed** from
-  `shekyld`; a config file naming either now fails to parse. Under archival
-  pruning every daemon discards the same data at the same depth (S-PRUNE,
-  Rust, `docs/design/DRS_E1_SPRUNE.md`); there is no per-operator pruning
-  posture to select, and the Monero stripe engine (`common/pruning.*`,
-  `prune_worker`, `CRYPTONOTE_PRUNING_*`, the 5-hour prune timer) is
-  deleted rather than carried to the store cutover.
+  `shekyld`; a config file naming either now fails to parse. There is no
+  per-operator pruning posture. The Monero stripe engine
+  (`common/pruning.*`, `prune_worker`, `CRYPTONOTE_PRUNING_*`, the 5-hour
+  prune timer) is deleted. Uniform discard is S-PRUNE
+  (`docs/design/DRS_E1_SPRUNE.md`), still an unfilled skeleton:
+  `prune_tx_data` remains in the C++ store with no production caller.
 - **Daemon RPC 3.35:** `pruning_seed` leaves `get_peer_list`,
   `get_connections` and `sync_info.peers`; `next_needed_pruning_seed`
   leaves `sync_info`; the `prune_blockchain` JSON-RPC method and the

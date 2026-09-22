@@ -552,11 +552,12 @@ FCMP++ transactions).
 ### `shekyl-mdb-copy`
 
 Compacts a stopped daemon's LMDB database by copying it without its free
-pages (upstream LMDB's `mdb_copy`, built from the vendored source). Discard
-itself happens inside the daemon, uniformly on every node (there is no
-pruning flag — the Monero-era stripe engine was deleted 2026-09-21,
-`PDM-Q7`); an in-place discard marks pages free without shrinking the file,
-and this tool reclaims that space. You temporarily need
+pages (upstream LMDB's `mdb_copy`, built from the vendored source). The
+stripe engine that used to free those pages (`--prune-blockchain`) was
+deleted 2026-09-21 (`PDM-Q7`). No daemon path discards tx bodies today:
+`prune_tx_data` has no production caller, and the uniform discard is
+S-PRUNE, still a skeleton (`docs/design/DRS_E1_SPRUNE.md`). The tool
+reclaims whatever free pages the store already holds. You temporarily need
 disk space for both copies.
 
 ```bash

@@ -2931,15 +2931,12 @@ bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qbloc
 
   db_rtxn_guard rtxn_guard(m_db);
   current_height = get_current_blockchain_height();
-  // Every block is held in full (no stripes, PDM-Q7): the supplement runs
-  // to the current height whatever the peer asked for.
-  const uint64_t stop_height = current_height;
   size_t count = 0;
-  const size_t reserve = std::min((size_t)(stop_height - start_height), (size_t)BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT);
+  const size_t reserve = std::min((size_t)(current_height - start_height), (size_t)BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT);
   hashes.reserve(reserve);
   if (weights)
     weights->reserve(reserve);
-  for(size_t i = start_height; i < stop_height && count < BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT; i++, count++)
+  for(size_t i = start_height; i < current_height && count < BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT; i++, count++)
   {
     hashes.push_back(m_db->get_block_hash_from_height(i));
     if (weights)

@@ -1952,15 +1952,12 @@ skip:
           ? next_needed_height
           : context.m_last_response_height - context.m_needed_objects.size() + 1;
         const bool next_height_proceed = next_needed_height < std::max(next_block_height, bc_height + 1);
-        // Every peer holds every block (no stripes, PDM-Q7): the only gate on
-        // proceeding is whether the next needed height is in reach.
-        // override queue_proceed_init if we need the immediate block(s)
+        // The immediate next block overrides a full queue: the chain cannot
+        // advance while that span waits on the capacity gate.
         const bool queue_proceed = (next_needed_height == bc_height) ? next_height_proceed : queue_proceed_init;
-        const bool proceed = queue_proceed;
 
         MDEBUG(context
                << "last_response_height " << context.m_last_response_height << ", m_needed_objects size " << context.m_needed_objects.size()
-               << ", proceed : " << proceed
                << ", queue_proceed : " << queue_proceed
                << ", next_height_proceed : " << next_height_proceed
                << ", next_block_height/next_needed_height/bc_height : " << next_block_height << "/" << next_needed_height << "/" << bc_height
@@ -1977,7 +1974,7 @@ skip:
           break;
         }
 
-        if (proceed)
+        if (queue_proceed)
         {
           if (context.m_state != cryptonote_connection_context::state_standby)
           {

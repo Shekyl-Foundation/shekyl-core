@@ -981,27 +981,26 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     };
 
     // Per link, the members that bump is allowed to introduce. Empty for a
-    // pure version bump. VC-2 adds the identity tuple at the last link, and
-    // naming them here is what keeps "differs by exactly the version" a real
-    // invariant rather than one weakened until it stopped failing.
+    // pure version bump. VC-2 adds the identity tuple on the 3.29 link
+    // (newer vector `get_version_synced_v6`), and naming the members here is
+    // what keeps "differs by exactly the version" a real invariant rather
+    // than one weakened until it stopped failing.
+    //
+    // The trailing comment names the minor the *newer* vector carries.
+    // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
+    // on its element, so it cannot attach to the neighbor.
     const ADDED_AT_LINK: [&[&str]; 11] = [
-        &[],
-        &[],
-        &[],
-        &[],
-        &["consensus_constants_digest", "nettype", "genesis_hash"],
-        // 3.30 (FL-R25) removes a fee slot; `get_version` gains nothing.
-        &[],
-        // 3.31 (coverage/fetch RPC); `get_version` gains nothing.
-        &[],
-        // 3.32 (`calc_pow` drops leftover `major_version`); `get_version` gains nothing.
-        &[],
-        // 3.33 (`get_output_histogram` deleted); `get_version` gains nothing.
-        // 3.34 (`get_curve_tree_path` removed, SOK-10 Q7 → A); `get_version` gains nothing.
-        &[],
-        &[],
-        // 3.35 (`pruning_seed` deleted from the p2p readouts, `PDM-Q7`); `get_version` gains nothing.
-        &[],
+        &[],                                                        // 3.25
+        &[],                                                        // 3.26
+        &[],                                                        // 3.27
+        &[],                                                        // 3.28
+        &["consensus_constants_digest", "nettype", "genesis_hash"], // 3.29 (VC-2)
+        &[], // 3.30 (FL-R25 removes a fee slot; get_version gains nothing)
+        &[], // 3.31 (coverage/fetch RPC; get_version gains nothing)
+        &[], // 3.32 (calc_pow drops leftover major_version; get_version gains nothing)
+        &[], // 3.33 (get_output_histogram deleted; get_version gains nothing)
+        &[], // 3.34 (get_curve_tree_path removed, SOK-10 Q7 → A; get_version gains nothing)
+        &[], // 3.35 (pruning_seed deleted from the p2p readouts, PDM-Q7; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
