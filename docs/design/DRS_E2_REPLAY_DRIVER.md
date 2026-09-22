@@ -421,6 +421,62 @@ Tag `0x03` (**Verdict**, the mutation family's expected verdicts, §7 item 8d)
 is RESERVED: named here so the byte is not re-minted, no code until that PR
 (rule 23).
 
+### 3.10 The mutation family — spec-first expected verdicts (increment 3, §7 item 8d)
+
+**Written before the code (rule 05), 2026-09-22, at `dev` @ `0642d60cb`.**
+The family is a `Source` that wraps any Extend-only source and replaces the
+`Extend` at one height with a *systematically invalidated* candidate. Each
+mutation names, **from the census and not from the C++**, the row that
+refuses it. That named row is the whole of the family's oracle: a regtest
+daemon is secondary evidence (§1.3) and is item 8's regtest leg, not this
+increment's; trace tag `0x03` (Verdict) **stays RESERVED** — the expected
+verdict is code (`Mutation::expected`), not an artifact row.
+
+**What a mutation must be.** One block, one deliberate violation, everything
+else valid — so a refusal on any *other* row is itself a finding (the
+family's tests assert the row, not merely "refused"). The wrapper is
+Extend-only and keeps the source's numbering; heights are the pipeline's
+(`first_height + n`), never the mutation's to choose.
+
+**The table.** Status is the census's own (`CenRow::status`), read at the
+pin and re-read by the test at every run; **the test's branch is chosen by
+that status**, so an E6 slice that ports a pending row turns the family's
+"pinned today" assertion red and forces it onto the refusal branch — the
+falsifier is the census, not a date (rule 22).
+
+| Mutation | What changes | Expected row (spec) | Stage | Status at pin | What the family asserts while the row is `Pending` |
+|---|---|---|---|---|---|
+| `HeaderVersion` | `major_version` bumped past the set's admitted version | **CEN-B1** | `form` | Implemented | — |
+| `Orphan` | `previous` = a hash the chain never held | **CEN-A2** | `validate` | Implemented | — |
+| `WrongRoot` | `curve_tree_root` replaced by a root the tree never had | **CEN-B5** | `validate` | Implemented | — |
+| `FutureTimestamp` | `timestamp` = `clock + FTL + 1` — **closes §5's FTL row** | **CEN-C1** | `validate` | Implemented | — |
+| `StaleTimestamp` | `timestamp` = `0`, at or below every MTP median | **CEN-C2** | `validate` | Implemented | — |
+| `PowUnderWrongSeed` | nonce re-mined so the longhash **satisfies the target under a wrong seed and fails it under the true seed** (D1b's `check_hash`, both legs); the pipeline claims the true seed (RD-Q5), so D2 hashes under it and D1 refuses. The seed is not in the block — "bad seed" is a block *mined* against the wrong one | **CEN-D1** | `validate` | Implemented | — |
+| `WrongReward` | the coinbase's clear output amount off by one | **CEN-F13** | `validate` (4.F) | **Pending** | the block **connects** — Rust has no emission check yet; the family pins the acceptance so the gap is a red test the moment F13 lands, not a surprise in a security review |
+| `ReorderedBodies` | two listed bodies swapped; the header's `tx_hashes` untouched | **CEN-G2** (body ↔ hash agreement) | `validate` (4.G) | **Pending** | the block **connects**. The corpus *writer and reader* refuse this shape as a source fault (RD-F15) — that is artifact hygiene, not the verdict; the in-memory family reaches `validate` with it and shows the rule is absent |
+| `DoubleSpend` | a listed spend reuses a key image an earlier block spent | **CEN-I7** (+ CEN-L1 at connect) | `validate` (4.I) | **Pending** | `validate` accepts; `connect` arms **SI-1** `KeyImageNotFresh` and the run ends in a **halt** (`PipelineFault`, the writer `Over`) — exactly C2-R8's taxonomy: *a belt firing is the validator's hole*. Pinned as the observed shape; flips to a refusal at `Locus::Input` when I7 lands |
+
+**Environment a mutation needs**, supplied by the caller (`Environment`): the
+clock the substrate will report (C1's bound is computed from it, not
+guessed), and for `PowUnderWrongSeed` the longhash function, the target and
+the two seeds. Nothing else: `StaleTimestamp` needs no median (`0` is below
+any), `DoubleSpend` takes its key image from the `Extend`s the wrapper has
+already passed through, `Orphan`/`WrongRoot` use constants no chain holds.
+
+**Fixture PoW.** `MockSubstrate::always_satisfies` makes D1 unfalsifiable,
+so the D1 case runs under a **seed-sensitive mock longhash** —
+`keccak256(pow_blob ‖ seed)` — at `fixed_difficulty = 2` (half of all
+hashes pass), with the valid chain **mined** against it. This is the first
+fixture in the crate where PoW can fail; the mock is a test fn, the target
+a `ChainRules::Regtest { fixed_difficulty }` the driver already supports
+(RD-Q7). Not RandomX: the family tests the *rule*, and RD-Q12's parity gate
+tests the hasher.
+
+**Out of this increment, named:** the reorg × mutation cross (a mutation on
+a fork block) — the wrapper is Extend-only by §3.8's own sentence, and a
+`Rewind`-aware wrapper is a second barrier rule with no consumer today; the
+regtest C++ leg (item 8); tag `0x03`.
+
 ## 4. Questions — Round 0 defaults, with the 2026-09-19 rulings in-line
 
 | Q | Question | Disposition | Why |
