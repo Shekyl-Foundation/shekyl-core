@@ -257,7 +257,7 @@ pub(crate) async fn get_wallet_info(
                 let wallet_height =
                     i64::try_from(wallet.ledger.height().to_raw()).unwrap_or(i64::MAX);
                 let restore_height =
-                    i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
+                    i64::try_from(wallet.sync_state.restore_from_height.to_raw()).unwrap_or(i64::MAX);
                 (wallet_height, restore_height)
             })?;
 

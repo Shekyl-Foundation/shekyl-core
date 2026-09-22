@@ -283,7 +283,7 @@ where
                 g.ledger.snapshot(),
             )
         };
-        let block_hash_at = move |h: u64| snapshot.block_hash_at(BlockHeight::from_raw(h));
+        let block_hash_at = move |h: BlockHeight| snapshot.block_hash_at(h);
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate.clone());
 
         // Three independent reads, joined: the claimant identity (a pure

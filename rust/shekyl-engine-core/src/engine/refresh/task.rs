@@ -253,7 +253,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 std::sync::Arc::clone(&g.refresh),
             )
         };
-        let current_synced = snapshot.synced_height.to_raw();
+        let current_synced = snapshot.synced_height;
 
         // Trait dispatch: the producer body lives in the
         // [`RefreshEngine`] implementor (production default
@@ -312,7 +312,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         let merge_height = summary
             .processed_height_range
             .end
-            .saturating_sub(1)
+            .saturating_sub_count(shekyl_types::BlockCount::ONE)
             .max(current_synced);
 
         // Pre-merge cancel checkpoint. The producer returned a valid
@@ -461,8 +461,8 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 debug!(
                     attempt,
                     max_retries = opts.max_retries,
-                    wallet,
-                    result,
+                    wallet = wallet.to_raw(),
+                    result = result.to_raw(),
                     "run_refresh_task: snapshot race, retrying with fresh snapshot",
                 );
                 // Re-baseline progress with current_synced and zeroed

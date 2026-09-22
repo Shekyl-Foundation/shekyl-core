@@ -573,7 +573,7 @@ pub(crate) struct DrainCtx<'a> {
     /// reserve deadlock this avoids).
     pub retired: bool,
     /// The wallet's synced chain tip — the send-path anchor input.
-    pub chain_tip: u64,
+    pub chain_tip: shekyl_types::BlockHeight,
 }
 
 /// The terminal sweep's pool residue: everything the pass leaves on the
@@ -748,7 +748,7 @@ fn scoped_records(
 pub(crate) async fn orchestrate_drain(
     handle: PersonaHandle,
     ctx: DrainCtx<'_>,
-    block_hash_at: impl FnOnce(u64) -> Option<[u8; 32]>,
+    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<[u8; 32]>,
 ) -> Result<OrchestratedDrain, DrainOrchestrationError> {
     // 1. Anchor one ReferenceBlock via the ordinary send-path procedure
     //    (shared with the bond path — never a hand-rolled `tip − age`, WI-2

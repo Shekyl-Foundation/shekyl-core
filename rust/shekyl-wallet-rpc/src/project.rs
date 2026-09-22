@@ -302,7 +302,7 @@ pub fn outgoing_transfer_id(txid: &TxHash) -> String {
 /// confirmed row back to `Dispatched` (rule 82).
 pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
     match row.state {
-        SendState::Confirmed { height } => Some(height),
+        SendState::Confirmed { height } => Some(height.to_raw()),
         SendState::Dispatched
         | SendState::TerminalRejected
         | SendState::PresumedDead
@@ -392,7 +392,7 @@ pub fn refresh_result(summary: &RefreshSummary, synced_height: u64) -> RefreshRe
         reorg_fork_height: summary
             .reorg
             .as_ref()
-            .map(|r| i64::try_from(r.fork_height).unwrap_or(i64::MAX)),
+            .map(|r| i64::try_from(r.fork_height.to_raw()).unwrap_or(i64::MAX)),
     }
 }
 
@@ -443,7 +443,7 @@ pub fn submit_pending_tx_result(outcome: &SubmitOutcome) -> SubmitPendingTxResul
 pub fn pending_tx_result(tx: &PendingTx) -> BuildPendingTxResult {
     BuildPendingTxResult {
         pending_tx_id: tx.id.raw().to_string(),
-        built_at_height: i64::try_from(tx.built_at_height).unwrap_or(i64::MAX),
+        built_at_height: i64::try_from(tx.built_at_height.to_raw()).unwrap_or(i64::MAX),
         built_at_tip_hash: hex::encode(tx.built_at_tip_hash),
         fee: atomic_units_string(tx.fee_atomic_units),
         content_gen: i64::try_from(tx.content_gen).unwrap_or(i64::MAX),

@@ -125,7 +125,7 @@ fn reconstruct_roots(blocks: &[Block]) -> Vec<[u8; 32]> {
             is_miner: true,
             outputs: &blk.outputs,
         }];
-        gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries)
+        gindex = collect_block_leaves(BlockHeight::from_raw(blk.height), &txs, gindex, &mut entries)
             .expect("KAT chain has no bad published point");
         let drained_through = BlockHeight::from_raw(blk.height.saturating_sub(1));
         let scalars = assemble_leaf_stream(&entries, drained_through);

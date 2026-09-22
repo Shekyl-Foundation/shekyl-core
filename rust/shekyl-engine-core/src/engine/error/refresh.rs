@@ -5,6 +5,8 @@
 
 //! Refresh and ledger error vocabulary.
 
+use shekyl_types::BlockHeight;
+
 use super::IoError;
 
 // --- Refresh ---------------------------------------------------------------
@@ -26,10 +28,10 @@ pub enum RefreshError {
     )]
     ConcurrentMutation {
         /// `wallet.synced_height` observed at merge time.
-        wallet: u64,
+        wallet: BlockHeight,
         /// `result.start_height` in the value passed to
         /// `apply_scan_result`.
-        result: u64,
+        result: BlockHeight,
     },
 
     /// A second `refresh` was attempted while one was already in flight.

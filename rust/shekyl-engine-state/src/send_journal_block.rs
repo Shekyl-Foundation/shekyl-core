@@ -37,6 +37,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use shekyl_types::BlockHeight;
 
 /// Current send-journal block schema version.
 ///
@@ -46,7 +47,11 @@ use serde::{Deserialize, Serialize};
 /// break: pre-genesis, strict-equality gating stays the cheapest honest
 /// policy, and the additive-read-forward load path is the A4 reopen's
 /// concern (`docs/FOLLOWUPS.md` "A4 DECIDED").
-pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 2;
+/// Version `3` (height-semantics Phase 2f): `dispatched_at_height` and
+/// `SendState::Confirmed::height` are [`BlockHeight`]. Postcard bytes of
+/// the transparent `u64` stay identical; the schema type-name change
+/// still bumps.
+pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 3;
 
 /// The wallet's own outputs that must not be spent again yet, keyed by
 /// `global_output_index`: for each, a transaction spending it is already
@@ -169,7 +174,7 @@ pub enum SendState {
     /// (refresh-authoritative — never set from a daemon verdict, C3).
     Confirmed {
         /// Height the spend was observed at.
-        height: u64,
+        height: BlockHeight,
     },
     /// The daemon definitively refused the dispatch (terminal verdict);
     /// the tx never relayed (single-egress). Kept as failed-send
@@ -267,7 +272,7 @@ pub enum AbandonEdge {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct SendRecord {
     /// Wallet synced height at dispatch.
-    pub dispatched_at_height: u64,
+    pub dispatched_at_height: BlockHeight,
     /// Realized fee of the built transaction, in atomic units — parsed
     /// from the wire tx (the same cleartext value the chain sees),
     /// never an estimator output (roadmap R-4).
@@ -361,7 +366,7 @@ impl SendJournalBlock {
     pub fn record_dispatched(
         &mut self,
         txid: [u8; 32],
-        dispatched_at_height: u64,
+        dispatched_at_height: BlockHeight,
         fee: u64,
         recipients: Vec<SendRecipient>,
         inputs: Vec<SendInputRef>,
@@ -535,7 +540,7 @@ mod tests {
 
     fn sample_record(state: SendState, lock_baseline: Option<u64>) -> SendRecord {
         SendRecord {
-            dispatched_at_height: 42,
+            dispatched_at_height: BlockHeight::from_raw(42),
             fee: 700,
             recipients: vec![SendRecipient {
                 address: "shekyl1example".to_owned(),
@@ -560,7 +565,7 @@ mod tests {
         assert!(SendState::Dispatched.holds_tx_key_retention());
         assert!(SendState::PresumedDead.holds_tx_key_retention());
         assert!(SendState::Abandoned.holds_tx_key_retention());
-        assert!(!SendState::Confirmed { height: 1 }.holds_tx_key_retention());
+        assert!(!SendState::Confirmed { height: BlockHeight::from_raw(1) }.holds_tx_key_retention());
         assert!(!SendState::TerminalRejected.holds_tx_key_retention());
 
         assert!(SendState::Dispatched.locks_carried_inputs());
@@ -569,12 +574,12 @@ mod tests {
             !SendState::PresumedDead.locks_carried_inputs(),
             "PresumedDead holds retention but never re-places locks"
         );
-        assert!(!SendState::Confirmed { height: 1 }.locks_carried_inputs());
+        assert!(!SendState::Confirmed { height: BlockHeight::from_raw(1) }.locks_carried_inputs());
 
         assert!(SendState::Dispatched.is_abandonable());
         assert!(SendState::PresumedDead.is_abandonable());
         assert!(!SendState::Abandoned.is_abandonable());
-        assert!(!SendState::Confirmed { height: 1 }.is_abandonable());
+        assert!(!SendState::Confirmed { height: BlockHeight::from_raw(1) }.is_abandonable());
         assert!(!SendState::TerminalRejected.is_abandonable());
     }
 
@@ -583,7 +588,7 @@ mod tests {
     fn postcard_round_trips_all_states() {
         for (i, state) in [
             SendState::Dispatched,
-            SendState::Confirmed { height: 99 },
+            SendState::Confirmed { height: BlockHeight::from_raw(99) },
             SendState::TerminalRejected,
             SendState::PresumedDead,
             SendState::Abandoned,
@@ -612,7 +617,7 @@ mod tests {
         let pins: [(SendState, &[u8]); 5] = [
             (SendState::Dispatched, &[0]),
             // variant index 1, then height 99 as a varint
-            (SendState::Confirmed { height: 99 }, &[1, 99]),
+            (SendState::Confirmed { height: BlockHeight::from_raw(99) }, &[1, 99]),
             (SendState::TerminalRejected, &[2]),
             (SendState::PresumedDead, &[3]),
             // PR-SJ-3: appended after the v1 tail — the four pins above
@@ -649,7 +654,7 @@ mod tests {
         let txid = [7u8; 32];
         block.record_dispatched(
             txid,
-            42,
+            BlockHeight::from_raw(42),
             700,
             vec![SendRecipient {
                 address: "shekyl1example".to_owned(),
@@ -733,12 +738,12 @@ mod tests {
         let confirmed = [3u8; 32];
         block.rows.insert(
             confirmed,
-            sample_record(SendState::Confirmed { height: 99 }, None),
+            sample_record(SendState::Confirmed { height: BlockHeight::from_raw(99) }, None),
         );
         assert_eq!(
             block.mark_abandoned(&confirmed),
             AbandonEdge::Forbidden {
-                state: SendState::Confirmed { height: 99 }
+                state: SendState::Confirmed { height: BlockHeight::from_raw(99) }
             }
         );
         let rejected = [4u8; 32];
@@ -770,7 +775,7 @@ mod tests {
             ([3u8; 32], SendState::PresumedDead, Some(35), 102),
             (
                 [4u8; 32],
-                SendState::Confirmed { height: 40 },
+                SendState::Confirmed { height: BlockHeight::from_raw(40) },
                 Some(20),
                 103,
             ),
@@ -857,7 +862,7 @@ mod tests {
         let txid = [8u8; 32];
         block.record_dispatched(
             txid,
-            1,
+            BlockHeight::from_raw(1),
             0,
             Vec::new(),
             vec![SendInputRef {

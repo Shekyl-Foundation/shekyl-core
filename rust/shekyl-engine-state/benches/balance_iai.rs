@@ -86,7 +86,7 @@ fn hot_path_bench_balance_compute(
     let spend_locks = shekyl_engine_state::SendJournalBlock::empty().spend_locks();
     let summary = black_box(BalanceSummary::compute(
         &transfers,
-        h,
+        shekyl_types::BlockHeight::from_raw(h),
         black_box(&spend_locks),
     ));
     // Return the fixture: its zeroize-on-drop teardown must be charged to the

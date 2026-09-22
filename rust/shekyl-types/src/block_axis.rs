@@ -147,6 +147,38 @@ impl BlockCount {
     pub const ONE: Self = Self(1);
 }
 
+impl Sub<BlockCount> for BlockCount {
+    type Output = BlockCount;
+
+    /// Difference of two spans. Panics if `rhs` is larger than `self`.
+    fn sub(self, rhs: BlockCount) -> BlockCount {
+        BlockCount(
+            self.0
+                .checked_sub(rhs.0)
+                .expect("BlockCount - BlockCount underflowed"),
+        )
+    }
+}
+
+impl BlockHeight {
+    /// Half-open ordinals `[self, exclusive_end)`.
+    ///
+    /// A scan window is stored as `Range<BlockHeight>`. That range does
+    /// not iterate: `core::iter::Step` is unstable. Walk it here.
+    pub fn ordinals_until(self, exclusive_end: Self) -> impl Iterator<Item = Self> {
+        let mut cur = self;
+        core::iter::from_fn(move || {
+            if cur < exclusive_end {
+                let here = cur;
+                cur = cur.saturating_add(BlockCount::ONE);
+                Some(here)
+            } else {
+                None
+            }
+        })
+    }
+}
+
 impl ChainCount {
     /// The newest existing block's height (`count − 1`), or `None` on an
     /// empty chain. The spendability / reference-anchoring operand.

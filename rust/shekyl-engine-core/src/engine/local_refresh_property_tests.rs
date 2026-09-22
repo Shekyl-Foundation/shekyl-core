@@ -62,7 +62,7 @@ fn make_local_refresh() -> LocalRefresh {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    LocalRefresh::new(vm, 0)
+    LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0))
 }
 
 fn snapshot_at_anchor(synced: u64, hash: BlockHash) -> LedgerSnapshot {
@@ -188,7 +188,7 @@ async fn bond_watch_emits_sightings_for_watched_ids_only() {
     )
     .expect("rederive");
     let vm = ViewMaterial::try_from_keys(&blob).expect("view material");
-    let refresh = LocalRefresh::with_bond_watch(vm, 0, watch);
+    let refresh = LocalRefresh::with_bond_watch(vm, shekyl_types::BlockHeight::from_raw(0), watch);
 
     let sink = AssertionSink::new();
     let (progress_tx, _progress_rx) = fresh_progress_channel();
@@ -213,7 +213,7 @@ async fn bond_watch_emits_sightings_for_watched_ids_only() {
         result.bond_sightings[0].slot, 4,
         "slot-resolved from the watch"
     );
-    assert_eq!(result.bond_sightings[0].block_height, 1);
+    assert_eq!(result.bond_sightings[0].block_height, shekyl_types::BlockHeight::from_raw(1));
 }
 
 /// An intra-attempt reorg discards abandoned-fork bond sightings with the
@@ -259,7 +259,7 @@ async fn reorg_discards_abandoned_fork_bond_sightings() {
     .expect("rederive");
     let vm = ViewMaterial::try_from_keys(&blob).expect("view material");
     let watch = std::collections::BTreeMap::from([(test_persona_id(&mine), 4u32)]);
-    let refresh = LocalRefresh::with_bond_watch(vm, 0, watch);
+    let refresh = LocalRefresh::with_bond_watch(vm, shekyl_types::BlockHeight::from_raw(0), watch);
 
     let sink = AssertionSink::new();
     let (progress_tx, _progress_rx) = fresh_progress_channel();
@@ -365,7 +365,7 @@ async fn intra_attempt_reorg_is_detected_and_rewound() {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    let refresh = LocalRefresh::new(vm, 0);
+    let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0));
 
     let chain_a = linear_chain(TIP);
     let tail_b = divergent_tail(&chain_a, FORK, TIP);
@@ -397,7 +397,7 @@ async fn intra_attempt_reorg_is_detected_and_rewound() {
     // locate it precisely.
     assert_eq!(
         result.reorg_rewind.map(|r| r.fork_height),
-        Some(SYNCED + 1),
+        Some(shekyl_types::BlockHeight::from_raw(SYNCED + 1)),
         "intra-attempt straddle must be detected and rewound"
     );
 
@@ -405,11 +405,11 @@ async fn intra_attempt_reorg_is_detected_and_rewound() {
     // below the fork, B at and above it. No old-chain block above
     // the fork survives — the pre-fix behavior (A6/A7 spliced
     // against B8..B11) is exactly what this rules out.
-    let expected: Vec<(u64, BlockHash)> = (SYNCED + 1..FORK)
-        .map(|h| (h, chain_a[usize::try_from(h).unwrap()].block.hash()))
+    let expected: Vec<(shekyl_types::BlockHeight, BlockHash)> = (SYNCED + 1..FORK)
+        .map(|h| (shekyl_types::BlockHeight::from_raw(h), chain_a[usize::try_from(h).unwrap()].block.hash()))
         .chain((FORK..TIP).map(|h| {
             let idx = usize::try_from(h - FORK).unwrap();
-            (h, tail_b[idx].block.hash())
+            (shekyl_types::BlockHeight::from_raw(h), tail_b[idx].block.hash())
         }))
         .collect();
     assert_eq!(
@@ -448,7 +448,7 @@ async fn intra_attempt_reorg_at_exact_synced_height_rewinds_through_seam() {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    let refresh = LocalRefresh::new(vm, 0);
+    let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0));
 
     let chain_a = linear_chain(TIP);
     let tail_b = divergent_tail(&chain_a, FORK, TIP);
@@ -478,17 +478,17 @@ async fn intra_attempt_reorg_at_exact_synced_height_rewinds_through_seam() {
     // one above it — the seam is rewound through, not spliced around.
     assert_eq!(
         result.reorg_rewind.map(|r| r.fork_height),
-        Some(FORK),
+        Some(shekyl_types::BlockHeight::from_raw(FORK)),
         "a fork at exactly synced_height must rewind to it, not splice"
     );
 
     // Every height from the fork up carries the B-chain hash — including
     // height 4 itself (the window-top block the reorg replaced) and
     // heights 5/6 (fetched as A before the swap, purged, refetched as B).
-    let expected: Vec<(u64, BlockHash)> = (FORK..TIP)
+    let expected: Vec<(shekyl_types::BlockHeight, BlockHash)> = (FORK..TIP)
         .map(|h| {
             let idx = usize::try_from(h - FORK).unwrap();
-            (h, tail_b[idx].block.hash())
+            (shekyl_types::BlockHeight::from_raw(h), tail_b[idx].block.hash())
         })
         .collect();
     assert_eq!(
@@ -532,7 +532,7 @@ async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    let refresh = LocalRefresh::new(vm, 0);
+    let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0));
 
     let chain_a = linear_chain(TIP);
     // Chain B: A below FORK1, divergent tail at/above it.
@@ -575,7 +575,7 @@ async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
     // boundary — the merge rolls persisted state back to it and re-ingests.
     assert_eq!(
         result.reorg_rewind.map(|r| r.fork_height),
-        Some(SYNCED + 1),
+        Some(shekyl_types::BlockHeight::from_raw(SYNCED + 1)),
         "the second intra-attempt straddle must also rewind, not slip through"
     );
 
@@ -583,15 +583,15 @@ async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
     // below FORK1, B between the forks, C at and above FORK2. The pre-fix
     // behavior — B8/B9 spliced against C10/C11 with a broken link at 10 — is
     // exactly what this rules out.
-    let expected: Vec<(u64, BlockHash)> = (SYNCED + 1..FORK1)
-        .map(|h| (h, chain_a[usize::try_from(h).unwrap()].block.hash()))
+    let expected: Vec<(shekyl_types::BlockHeight, BlockHash)> = (SYNCED + 1..FORK1)
+        .map(|h| (shekyl_types::BlockHeight::from_raw(h), chain_a[usize::try_from(h).unwrap()].block.hash()))
         .chain((FORK1..FORK2).map(|h| {
             let idx = usize::try_from(h - FORK1).unwrap();
-            (h, tail_b[idx].block.hash())
+            (shekyl_types::BlockHeight::from_raw(h), tail_b[idx].block.hash())
         }))
         .chain((FORK2..TIP).map(|h| {
             let idx = usize::try_from(h - FORK2).unwrap();
-            (h, tail_c[idx].block.hash())
+            (shekyl_types::BlockHeight::from_raw(h), tail_c[idx].block.hash())
         }))
         .collect();
     assert_eq!(
@@ -715,7 +715,7 @@ async fn produce_scan_respects_birthday_floor_when_ledger_anchored() {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    let refresh = LocalRefresh::new(vm, FLOOR);
+    let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(FLOOR));
     let chain = linear_chain(TIP);
     let parent_at_999 = chain[usize::try_from(FLOOR - 1).unwrap()].block.hash();
     let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
@@ -736,8 +736,8 @@ async fn produce_scan_respects_birthday_floor_when_ledger_anchored() {
         .await
         .expect("anchored birthday scan succeeds");
 
-    assert_eq!(result.processed_height_range.start, FLOOR);
-    assert_eq!(result.processed_height_range.end, TIP);
+    assert_eq!(result.processed_height_range.start, shekyl_types::BlockHeight::from_raw(FLOOR));
+    assert_eq!(result.processed_height_range.end, shekyl_types::BlockHeight::from_raw(TIP));
     assert_eq!(
         result.block_hashes.len(),
         usize::try_from(TIP - FLOOR).unwrap()
@@ -760,7 +760,7 @@ async fn produce_scan_floor_noop_when_synced_past_birthday() {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    let refresh = LocalRefresh::new(vm, FLOOR);
+    let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(FLOOR));
     let chain = linear_chain(TIP);
     let parent = chain[usize::try_from(SYNCED).unwrap()].block.hash();
     let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
@@ -781,7 +781,7 @@ async fn produce_scan_floor_noop_when_synced_past_birthday() {
         .await
         .expect("incremental scan past floor succeeds");
 
-    assert_eq!(result.processed_height_range, (SYNCED + 1)..TIP);
+    assert_eq!(result.processed_height_range, shekyl_types::BlockHeight::from_raw(SYNCED + 1)..shekyl_types::BlockHeight::from_raw(TIP));
 }
 
 // ── Coherence: clean path (Ok → no error-class events) ─────

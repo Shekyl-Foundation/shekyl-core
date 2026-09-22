@@ -34,7 +34,7 @@
 //! wallet safety policy is wallet-state concern.
 
 use shekyl_address::Network;
-use shekyl_types::BlockCount;
+use shekyl_types::{BlockCount, BlockHeight};
 
 /// Per-network wallet safety defaults.
 ///
@@ -75,13 +75,13 @@ pub struct NetworkSafetyConstants {
     /// `SafetyOverrides::skip_to_height` (§3.3). Once the scanner has
     /// produced a `SyncStateBlock` the stored `restore_from_height`
     /// takes over and this field becomes irrelevant.
-    pub default_skip_to_height: u64,
+    pub default_skip_to_height: BlockHeight,
 
     /// Default refresh cursor when reopening a wallet whose
     /// `SyncStateBlock` is absent (the lost-`.wallet` recovery path).
     /// Same structure as `default_skip_to_height`; the CLI override is
     /// `SafetyOverrides::refresh_from_block_height` (§3.3).
-    pub default_refresh_from_block_height: u64,
+    pub default_refresh_from_block_height: BlockHeight,
 }
 
 impl NetworkSafetyConstants {
@@ -90,8 +90,8 @@ impl NetworkSafetyConstants {
         Self {
             max_reorg_depth: BlockCount::from_raw(10),
             key_reuse_mitigation2: true,
-            default_skip_to_height: 0,
-            default_refresh_from_block_height: 0,
+            default_skip_to_height: BlockHeight::ZERO,
+            default_refresh_from_block_height: BlockHeight::ZERO,
         }
     }
 
@@ -102,8 +102,8 @@ impl NetworkSafetyConstants {
         Self {
             max_reorg_depth: BlockCount::from_raw(6),
             key_reuse_mitigation2: true,
-            default_skip_to_height: 0,
-            default_refresh_from_block_height: 0,
+            default_skip_to_height: BlockHeight::ZERO,
+            default_refresh_from_block_height: BlockHeight::ZERO,
         }
     }
 
@@ -114,8 +114,8 @@ impl NetworkSafetyConstants {
         Self {
             max_reorg_depth: BlockCount::from_raw(10),
             key_reuse_mitigation2: true,
-            default_skip_to_height: 0,
-            default_refresh_from_block_height: 0,
+            default_skip_to_height: BlockHeight::ZERO,
+            default_refresh_from_block_height: BlockHeight::ZERO,
         }
     }
 
@@ -204,8 +204,8 @@ mod tests {
     fn import_hint_defaults_are_zero_on_every_network() {
         for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
             let k = NetworkSafetyConstants::for_network(net);
-            assert_eq!(k.default_skip_to_height, 0);
-            assert_eq!(k.default_refresh_from_block_height, 0);
+            assert_eq!(k.default_skip_to_height, BlockHeight::ZERO);
+            assert_eq!(k.default_refresh_from_block_height, BlockHeight::ZERO);
         }
     }
 

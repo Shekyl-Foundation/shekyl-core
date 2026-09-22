@@ -176,7 +176,12 @@ fn verdict_reaches_the_ledger_row_and_the_balance() {
     assert!(!td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &no_locks()));
 
     let amount = td.amount();
-    let summary = BalanceSummary::compute(&ledger.transfers, u64::MAX, &no_locks());
+    let summary =
+        BalanceSummary::compute(
+            &ledger.transfers,
+            shekyl_types::BlockHeight::from_raw(u64::MAX),
+            &no_locks(),
+        );
     assert_eq!(summary.total, amount);
     assert_eq!(summary.unspendable, amount);
     assert_eq!(summary.unlocked, AtomicUnits::ZERO);

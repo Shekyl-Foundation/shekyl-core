@@ -196,15 +196,15 @@ pub trait WalletLedgerExt {
     fn balance(&self) -> BalanceSummary;
 
     /// Balance at an explicit chain height (tests / historical views).
-    fn balance_at(&self, current_height: u64) -> BalanceSummary;
+    fn balance_at(&self, current_height: shekyl_types::BlockHeight) -> BalanceSummary;
 }
 
 impl WalletLedgerExt for shekyl_engine_state::WalletLedger {
     fn balance(&self) -> BalanceSummary {
-        self.balance_at(self.ledger.height().to_raw())
+        self.balance_at(self.ledger.height())
     }
 
-    fn balance_at(&self, current_height: u64) -> BalanceSummary {
+    fn balance_at(&self, current_height: shekyl_types::BlockHeight) -> BalanceSummary {
         BalanceSummary::compute(self.ledger.transfers(), current_height, &self.spend_locks())
     }
 }

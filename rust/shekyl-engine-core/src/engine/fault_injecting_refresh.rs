@@ -183,7 +183,7 @@ impl<R> super::scan_floor::ScanStartFloorProvider for FaultInjecting<R>
 where
     R: super::scan_floor::ScanStartFloorProvider + RefreshEngine,
 {
-    fn scan_start_floor(&self) -> u64 {
+    fn scan_start_floor(&self) -> shekyl_types::BlockHeight {
         self.inner.scan_start_floor()
     }
 }
@@ -324,8 +324,8 @@ mod tests {
     struct DelegationStub;
 
     impl crate::engine::scan_floor::ScanStartFloorProvider for DelegationStub {
-        fn scan_start_floor(&self) -> u64 {
-            0
+        fn scan_start_floor(&self) -> shekyl_types::BlockHeight {
+            shekyl_types::BlockHeight::ZERO
         }
     }
 
@@ -344,7 +344,7 @@ mod tests {
         ) -> impl std::future::Future<Output = Result<ScanResult, Self::Error>> + Send {
             async move {
                 let start = snapshot.synced_height.to_raw().saturating_add(1);
-                Ok(ScanResult::empty_at(start, None))
+                Ok(ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(start), None))
             }
         }
     }
@@ -368,7 +368,7 @@ mod tests {
         let snapshot = LedgerSnapshot::from_ledger(&LedgerBlock::empty());
         let cancel = CancellationToken::new();
         let (progress, _rx) =
-            watch::channel(RefreshProgress::phase_only(0, 0, 0, RefreshPhase::Scanning));
+            watch::channel(RefreshProgress::phase_only(shekyl_types::BlockHeight::from_raw(0), 0, 0, RefreshPhase::Scanning));
         (snapshot, cancel, progress)
     }
 

@@ -159,7 +159,7 @@ use std::time::Duration;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use shekyl_rpc_client::RpcError;
 use shekyl_scanner::{ScanError, ScanOutcome, ScannableBlock, Scanner, ViewPair, MAX_OUTPUTS};
-use shekyl_types::{BlockCount, BlockHash, CurveTreeRoot, PCanonicalId};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId};
 use shekyl_wire::Input;
 use std::collections::BTreeMap;
 
@@ -286,7 +286,7 @@ pub struct LocalRefresh {
     /// `synced_height + 1` only. The orchestrator anchors the ledger
     /// when this exceeds `synced_height + 1` before taking a
     /// snapshot; see [`super::scan_floor`].
-    scan_start_floor: u64,
+    scan_start_floor: shekyl_types::BlockHeight,
     /// The bond watch's candidate set (SA-R-6): persona canonical id →
     /// slot, inverted from the open-built `StakingBlock::persona_id_cache`
     /// (durably-retired slots already excluded at open). Public
@@ -313,7 +313,7 @@ impl LocalRefresh {
     /// per §5.4.7 R4 a-instance-scoped; on drop the embedded
     /// [`ViewMaterial`]'s [`ZeroizeOnDrop`](zeroize::ZeroizeOnDrop)
     /// chain wipes the secret bytes.
-    pub const fn new(view_material: ViewMaterial, scan_start_floor: u64) -> Self {
+    pub const fn new(view_material: ViewMaterial, scan_start_floor: shekyl_types::BlockHeight) -> Self {
         Self::with_bond_watch(view_material, scan_start_floor, BTreeMap::new())
     }
 
@@ -322,7 +322,7 @@ impl LocalRefresh {
     /// `assemble`, the seam that already holds the cache.
     pub const fn with_bond_watch(
         view_material: ViewMaterial,
-        scan_start_floor: u64,
+        scan_start_floor: shekyl_types::BlockHeight,
         bond_watch: BTreeMap<PCanonicalId, u32>,
     ) -> Self {
         Self {
@@ -333,7 +333,7 @@ impl LocalRefresh {
     }
 
     /// Persisted/session scan floor wired at wallet open.
-    pub(crate) const fn scan_start_floor(&self) -> u64 {
+    pub(crate) const fn scan_start_floor(&self) -> shekyl_types::BlockHeight {
         self.scan_start_floor
     }
 
@@ -665,7 +665,10 @@ impl RefreshEngine for LocalRefresh {
             let end = chain_tip.to_raw();
             if !chain_tip.has_block(next_block) {
                 let parent_hash = parent_hash_for_start(&snapshot, original_start);
-                return Ok(ScanResult::empty_at(original_start, parent_hash));
+                return Ok(ScanResult::empty_at(
+                    BlockHeight::from_raw(original_start),
+                    parent_hash,
+                ));
             }
 
             // Per-block scan loop with checkpoint-5 per-output
@@ -689,7 +692,7 @@ impl RefreshEngine for LocalRefresh {
                 .await?;
                 effective_parent_hash = Some(parent.block.hash());
             }
-            let mut block_hashes: Vec<(u64, BlockHash)> = Vec::new();
+            let mut block_hashes: Vec<(BlockHeight, BlockHash)> = Vec::new();
             let mut new_transfers: Vec<DetectedTransfer> = Vec::new();
             let mut spent_key_images: Vec<KeyImageObserved> = Vec::new();
             let mut bond_sightings: Vec<BondSightingObserved> = Vec::new();
@@ -705,8 +708,8 @@ impl RefreshEngine for LocalRefresh {
             // leaf set and the consensus header `curve_tree_root`, materialized
             // here where the `ScannableBlock` is in hand and carried on
             // `ScanResult` for the merge-driven ingest (CT-5a commit 4).
-            let mut block_leaves: Vec<(u64, Vec<OwnedTxLeaves>)> = Vec::new();
-            let mut block_curve_tree_roots: Vec<(u64, CurveTreeRoot)> = Vec::new();
+            let mut block_leaves: Vec<(BlockHeight, Vec<OwnedTxLeaves>)> = Vec::new();
+            let mut block_curve_tree_roots: Vec<(BlockHeight, CurveTreeRoot)> = Vec::new();
 
             let mut h = original_start;
             while h < end {
@@ -754,7 +757,11 @@ impl RefreshEngine for LocalRefresh {
                 // would pass O5 and burn cursor slots permanently).
                 if h > 1 {
                     let expected_parent = match block_hashes.last() {
-                        Some(&(prev_h, prev_hash)) if prev_h + 1 == h => Some(prev_hash),
+                        Some(&(prev_h, prev_hash))
+                            if prev_h + BlockCount::ONE == BlockHeight::from_raw(h) =>
+                        {
+                            Some(prev_hash)
+                        }
                         _ => parent_hash_for_start(&snapshot, h).or(if h == effective_start {
                             effective_parent_hash
                         } else {
@@ -822,7 +829,9 @@ impl RefreshEngine for LocalRefresh {
                             // The latest fork wins: it is the current
                             // divergence-from-window, so it is the correct
                             // merge rewind target even after earlier reorgs.
-                            reorg_rewind = Some(ReorgRewind { fork_height });
+                            reorg_rewind = Some(ReorgRewind {
+                                fork_height: BlockHeight::from_raw(fork_height),
+                            });
                             reorg_rewinds += 1;
                             if reorg_rewinds == MAX_REORG_REWINDS_PER_ATTEMPT {
                                 warn!(
@@ -903,7 +912,7 @@ impl RefreshEngine for LocalRefresh {
                 }
 
                 let block_hash = scannable.block.hash();
-                block_hashes.push((h, block_hash));
+                block_hashes.push((BlockHeight::from_raw(h), block_hash));
 
                 // Collect every input's key image unfiltered. The
                 // merge matches against the live wallet's
@@ -922,7 +931,7 @@ impl RefreshEngine for LocalRefresh {
                         let containing_tx_hash =
                             *miner_tx_hash.get_or_insert_with(|| miner_tx.hash());
                         spent_key_images.push(KeyImageObserved {
-                            block_height: h,
+                            block_height: BlockHeight::from_raw(h),
                             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                                 *key_image,
                             ),
@@ -941,7 +950,7 @@ impl RefreshEngine for LocalRefresh {
                     for input in &tx.prefix.inputs {
                         if let Input::ToKey { key_image, .. } = input {
                             spent_key_images.push(KeyImageObserved {
-                                block_height: h,
+                                block_height: BlockHeight::from_raw(h),
                                 key_image:
                                     shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                                         *key_image,
@@ -956,7 +965,7 @@ impl RefreshEngine for LocalRefresh {
                     // first occurrence is the earliest height — the one
                     // the merge's first-sighting semantics would keep —
                     // and duplicates stay off the channel.
-                    for sighting in sightings_in(tx, h, &self.bond_watch) {
+                    for sighting in sightings_in(tx, BlockHeight::from_raw(h), &self.bond_watch) {
                         if sighted_slots.insert(sighting.slot) {
                             bond_sightings.push(sighting);
                         }
@@ -980,8 +989,11 @@ impl RefreshEngine for LocalRefresh {
                     );
                     LocalRefreshError::Malformed
                 })?;
-                block_leaves.push((h, leaves));
-                block_curve_tree_roots.push((h, scannable.block.header.curve_tree_root));
+                block_leaves.push((BlockHeight::from_raw(h), leaves));
+                block_curve_tree_roots.push((
+                    BlockHeight::from_raw(h),
+                    scannable.block.header.curve_tree_root,
+                ));
 
                 // Per-output safe-point cancellation (checkpoint 5)
                 // via Scanner::scan_with_cancel. The closure reads
@@ -1019,7 +1031,7 @@ impl RefreshEngine for LocalRefresh {
                 let candidates_count = recovered.len();
                 for output in recovered {
                     new_transfers.push(DetectedTransfer {
-                        block_height: h,
+                                block_height: BlockHeight::from_raw(h),
                         output,
                     });
                 }
@@ -1044,7 +1056,7 @@ impl RefreshEngine for LocalRefresh {
                 // `ScanResult` (see `run_refresh_task`), so the streaming
                 // per-block frame carries the zeroed display fields.
                 _ = progress.send(RefreshProgress::phase_only(
-                    h,
+                    BlockHeight::from_raw(h),
                     block_hashes.len() as u64,
                     end.saturating_sub(original_start),
                     RefreshPhase::Scanning,
@@ -1054,7 +1066,8 @@ impl RefreshEngine for LocalRefresh {
             }
 
             Ok(ScanResult {
-                processed_height_range: effective_start..end,
+                processed_height_range: BlockHeight::from_raw(effective_start)
+                    ..BlockHeight::from_raw(end),
                 parent_hash: effective_parent_hash,
                 block_hashes,
                 new_transfers,
@@ -1081,7 +1094,7 @@ fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: u64) -> Option<BlockH
         None
     } else {
         snapshot
-            .block_hash_at_ordinal(start - 1)
+            .block_hash_at(BlockHeight::from_raw(start - 1))
             .map(BlockHash::from_bytes)
     }
 }
@@ -1208,7 +1221,10 @@ async fn find_fork_point<R: DaemonEngine>(
             return Ok(1);
         }
 
-        let Some(stored_hash) = snapshot.block_hash_at_ordinal(h).map(BlockHash::from_bytes) else {
+        let Some(stored_hash) = snapshot
+            .block_hash_at(BlockHeight::from_raw(h))
+            .map(BlockHash::from_bytes)
+        else {
             return Ok(h + 1);
         };
 

@@ -113,9 +113,13 @@ pub fn extract_leaf_commitments(
 /// arithmetic in `collect_outputs`. Returns `None` for [`TargetKind::Other`]
 /// (the C++ `else continue` — not a leaf candidate).
 #[must_use]
-pub fn maturity_height(block_height: u64, is_miner: bool, target: TargetKind) -> Option<u64> {
-    let coinbase = COINBASE_LOCK_WINDOW as u64;
-    let spendable = DEFAULT_LOCK_WINDOW as u64;
+pub fn maturity_height(
+    block_height: shekyl_types::BlockHeight,
+    is_miner: bool,
+    target: TargetKind,
+) -> Option<shekyl_types::BlockHeight> {
+    let coinbase = shekyl_types::BlockCount::from_raw(COINBASE_LOCK_WINDOW as u64);
+    let spendable = shekyl_types::BlockCount::from_raw(DEFAULT_LOCK_WINDOW as u64);
     match target {
         TargetKind::TaggedKey | TargetKind::Key => {
             let lock = if is_miner { coinbase } else { spendable };
@@ -245,7 +249,7 @@ pub fn try_build_leaf(out: &OutputIdentity) -> Result<Option<[u8; 128]>, LeafPoi
 /// and building a silently divergent tree. `out` may hold a partial batch
 /// on `Err`; the caller discards it.
 pub fn collect_block_leaves(
-    block_height: u64,
+    block_height: shekyl_types::BlockHeight,
     txs: &[TxOutputs<'_>],
     next_gindex: u64,
     out: &mut Vec<LeafEntry>,
@@ -263,8 +267,8 @@ pub fn collect_block_leaves(
             match try_build_leaf(output) {
                 Ok(Some(leaf)) => out.push(LeafEntry {
                     gindex: Gindex::from_raw(this_gindex),
-                    maturity: BlockHeight::from_raw(maturity),
-                    creation_height: BlockHeight::from_raw(block_height),
+                    maturity,
+                    creation_height: block_height,
                     leaf,
                     identity: *output,
                 }),
@@ -428,19 +432,24 @@ mod tests {
 
     #[test]
     fn maturity_coinbase_is_plus_60() {
-        let m = maturity_height(100, true, TargetKind::TaggedKey).expect("coinbase matures");
-        assert_eq!(m, 100 + COINBASE_LOCK_WINDOW as u64);
+        let m = maturity_height(BlockHeight::from_raw(100), true, TargetKind::TaggedKey)
+            .expect("coinbase matures");
+        assert_eq!(
+            m,
+            BlockHeight::from_raw(100 + COINBASE_LOCK_WINDOW as u64)
+        );
     }
 
     #[test]
     fn maturity_regular_is_plus_10() {
-        let m = maturity_height(100, false, TargetKind::TaggedKey).expect("regular matures");
-        assert_eq!(m, 100 + DEFAULT_LOCK_WINDOW as u64);
+        let m = maturity_height(BlockHeight::from_raw(100), false, TargetKind::TaggedKey)
+            .expect("regular matures");
+        assert_eq!(m, BlockHeight::from_raw(100 + DEFAULT_LOCK_WINDOW as u64));
     }
 
     #[test]
     fn maturity_other_is_none() {
-        assert!(maturity_height(100, true, TargetKind::Other).is_none());
+        assert!(maturity_height(BlockHeight::from_raw(100), true, TargetKind::Other).is_none());
     }
 
     #[test]
@@ -539,7 +548,7 @@ mod tests {
         }];
         let mut leaves = Vec::new();
         assert_eq!(
-            collect_block_leaves(60, &txs, 0, &mut leaves),
+            collect_block_leaves(BlockHeight::from_raw(60), &txs, 0, &mut leaves),
             Err(LeafPointError {
                 gindex: Gindex::from_raw(1),
                 point: LeafPoint::LeafCommitment,
@@ -560,7 +569,7 @@ mod tests {
             outputs: &outputs,
         }];
         let mut leaves = Vec::new();
-        let next = collect_block_leaves(60, &txs, 0, &mut leaves).expect("no bad point");
+        let next = collect_block_leaves(BlockHeight::from_raw(60), &txs, 0, &mut leaves).expect("no bad point");
         assert_eq!(next, 2, "both vouts consume an index");
         assert_eq!(leaves.len(), 1, "only the valid output is a leaf");
         assert_eq!(

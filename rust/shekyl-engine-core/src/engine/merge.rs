@@ -280,11 +280,11 @@ impl<
             let dropped = state
                 .ledger
                 .staking
-                .discard_sightings_at_or_above(shekyl_types::BlockHeight::from_raw(fork));
+                .discard_sightings_at_or_above(fork);
             if !dropped.is_empty() {
                 tracing::info!(
                     dropped = dropped.len(),
-                    fork_height = fork,
+                    fork_height = fork.to_raw(),
                     "bond watch: reorg orphaned sighting rows discarded at merge"
                 );
             }
@@ -455,7 +455,7 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
     curve_tree: &CurveTreeHandle,
     daemon: &D,
     result: &ScanResult,
-    producer_leaves: &BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>,
+    producer_leaves: &BTreeMap<BlockHeight, Arc<Vec<OwnedTxLeaves>>>,
 ) -> Result<(), RefreshError> {
     match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await {
         Ok(()) => Ok(()),
@@ -486,8 +486,8 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
 /// height and feed the curve tree an unintended leaf set — the same hazard the
 /// `block_hashes` duplicate-height check closes in [`apply_scan_result_to_state`].
 pub(super) fn index_block_leaves(
-    block_leaves: Vec<(u64, Vec<OwnedTxLeaves>)>,
-) -> Result<BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>, RefreshError> {
+    block_leaves: Vec<(BlockHeight, Vec<OwnedTxLeaves>)>,
+) -> Result<BTreeMap<BlockHeight, Arc<Vec<OwnedTxLeaves>>>, RefreshError> {
     let mut map = BTreeMap::new();
     for (height, leaves) in block_leaves {
         if map.insert(height, Arc::new(leaves)).is_some() {
@@ -508,8 +508,8 @@ pub(super) fn index_block_leaves(
 /// rewinds the *entire* tree (`keep = fork_height - 1` underflowing to genesis)
 /// or wipes the whole ledger ([`LedgerIndexes::handle_reorg`] drops state
 /// at-and-above 0). Surface it loudly instead of absorbing it.
-fn validate_reorg_fork_height(fork_height: u64) -> Result<(), RefreshError> {
-    if fork_height == 0 {
+fn validate_reorg_fork_height(fork_height: BlockHeight) -> Result<(), RefreshError> {
+    if fork_height.is_zero() {
         return Err(RefreshError::MalformedScanResult {
             reason: "reorg fork_height of 0 would orphan genesis",
         });
@@ -521,7 +521,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     curve_tree: &CurveTreeHandle,
     daemon: &D,
     result: &ScanResult,
-    producer_leaves: &BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>,
+    producer_leaves: &BTreeMap<BlockHeight, Arc<Vec<OwnedTxLeaves>>>,
 ) -> Result<(), RefreshError> {
     // Range well-formedness (O5/O2). This pre-pass runs *before* the ledger
     // merge's own `end >= start` check (`apply_scan_result_to_state`), so guard
@@ -543,7 +543,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     // `block_hashes`). Backfill heights below `range_start` are not in this map
     // (the producer only emits roots for its scanned range); their header root
     // comes from the daemon-fetched block instead.
-    let mut producer_roots: BTreeMap<u64, CurveTreeRoot> = BTreeMap::new();
+    let mut producer_roots: BTreeMap<BlockHeight, CurveTreeRoot> = BTreeMap::new();
     for (height, root) in &result.block_curve_tree_roots {
         if producer_roots.insert(*height, *root).is_some() {
             return Err(RefreshError::MalformedScanResult {
@@ -559,7 +559,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     // still climbing below it has nothing to drop (R3-Q6).
     if let Some(rewind) = result.reorg_rewind.as_ref() {
         validate_reorg_fork_height(rewind.fork_height)?;
-        let keep = BlockHeight::from_raw(rewind.fork_height - 1);
+        let keep = rewind.fork_height - BlockCount::ONE;
         if let Some(tip) = curve_tree
             .ingested_tip_height()
             .await
@@ -583,14 +583,11 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         // break bounds `next` at `range_end`, so this never trips in practice,
         // but block heights are consensus-adjacent — never silently wrap.
         let next = match tip {
-            None => 0,
-            Some(t) => t
-                .to_raw()
-                .checked_add(1)
-                .ok_or(RefreshError::CurveTreeIngest {
-                    context: "ingested tip height overflow",
-                    recoverable_by_respawn: false,
-                })?,
+            None => BlockHeight::ZERO,
+            Some(t) => t.checked_add(BlockCount::ONE).ok_or(RefreshError::CurveTreeIngest {
+                context: "ingested tip height overflow",
+                recoverable_by_respawn: false,
+            })?,
         };
         if next >= range_end {
             break;
@@ -600,7 +597,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         // match. Both branches yield the pair so the verify below is uniform.
         let (leaves, expected_root) = if next < range_start {
             // Genesis/birthday backfill: tree-only daemon fetch + decode.
-            let number = usize::try_from(next).map_err(|_| RefreshError::CurveTreeIngest {
+            let number = usize::try_from(next.to_raw()).map_err(|_| RefreshError::CurveTreeIngest {
                 context: "backfill height exceeds usize",
                 recoverable_by_respawn: false,
             })?;
@@ -647,7 +644,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         };
 
         curve_tree
-            .ingest(BlockHeight::from_raw(next), leaves)
+            .ingest(next, leaves)
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?;
 
@@ -661,7 +658,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         // liar (bad leaves + matching bad header) passes here and is caught at
         // consensus submit — still DoS, never a witness leak.
         curve_tree
-            .verify_root(BlockHeight::from_raw(next), expected_root)
+            .verify_root(next, expected_root)
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?;
     }
@@ -727,11 +724,11 @@ pub(crate) fn apply_scan_result_to_state(
     // result must continue exactly where the wallet left off.
     let expected_start = match result.reorg_rewind {
         Some(rewind) => rewind.fork_height,
-        None => synced.saturating_add(BlockCount::ONE).to_raw(),
+        None => synced.saturating_add(BlockCount::ONE),
     };
     if result.processed_height_range.start != expected_start {
         return Err(RefreshError::ConcurrentMutation {
-            wallet: synced.to_raw(),
+            wallet: synced,
             result: result.processed_height_range.start,
         });
     }
@@ -741,10 +738,9 @@ pub(crate) fn apply_scan_result_to_state(
     // the wallet's recorded `block_hash_at(start - 1)` must match the
     // result's claim. (For `start == 1`, both sides must be `None`.)
     let start = result.processed_height_range.start;
-    if start > 1 {
-        // `start` is the scan-range ordinal (`ScanResult` still speaks `u64`).
+    if start.to_raw() > 1 {
         let stored = ledger
-            .block_hash_at(BlockHeight::from_raw(start - 1))
+            .block_hash_at(start - BlockCount::ONE)
             .copied()
             .map(BlockHash::from_bytes);
         match (stored, result.parent_hash) {
@@ -756,7 +752,7 @@ pub(crate) fn apply_scan_result_to_state(
             // current wallet no longer matches.
             _ => {
                 return Err(RefreshError::ConcurrentMutation {
-                    wallet: synced.to_raw(),
+                    wallet: synced,
                     result: start,
                 });
             }
@@ -766,7 +762,7 @@ pub(crate) fn apply_scan_result_to_state(
         // has nothing recorded at height 0, so a `Some` parent_hash
         // here is itself a snapshot-disagreement signal.
         return Err(RefreshError::ConcurrentMutation {
-            wallet: synced.to_raw(),
+            wallet: synced,
             result: start,
         });
     }
@@ -794,7 +790,7 @@ pub(crate) fn apply_scan_result_to_state(
     } = result;
 
     if let Some(rewind) = reorg_rewind {
-        indexes.handle_reorg(ledger, BlockHeight::from_raw(rewind.fork_height));
+        indexes.handle_reorg(ledger, rewind.fork_height);
     }
 
     if processed_height_range.start == processed_height_range.end {
@@ -849,7 +845,7 @@ pub(crate) fn apply_scan_result_to_state(
             reason: "processed_height_range end precedes start",
         })?;
     let expected_len =
-        usize::try_from(range_len_u64).map_err(|_| RefreshError::MalformedScanResult {
+        usize::try_from(range_len_u64.to_raw()).map_err(|_| RefreshError::MalformedScanResult {
             reason: "processed_height_range length exceeds usize",
         })?;
     if block_hashes.len() != expected_len {
@@ -858,7 +854,7 @@ pub(crate) fn apply_scan_result_to_state(
         });
     }
 
-    let mut hash_at: BTreeMap<u64, BlockHash> = BTreeMap::new();
+    let mut hash_at: BTreeMap<BlockHeight, BlockHash> = BTreeMap::new();
     for (h, hash) in block_hashes {
         if !processed_height_range.contains(&h) {
             return Err(RefreshError::MalformedScanResult {
@@ -872,7 +868,8 @@ pub(crate) fn apply_scan_result_to_state(
         }
     }
 
-    let mut transfers_by_height: BTreeMap<u64, Vec<RecoveredWalletOutput>> = BTreeMap::new();
+    let mut transfers_by_height: BTreeMap<BlockHeight, Vec<RecoveredWalletOutput>> =
+        BTreeMap::new();
     for dt in new_transfers {
         if !processed_height_range.contains(&dt.block_height) {
             return Err(RefreshError::MalformedScanResult {
@@ -889,7 +886,7 @@ pub(crate) fn apply_scan_result_to_state(
     // `detect_spends` can record the spend-quadruple leg (F-9:
     // `TransferDetails::spending_tx_hash`).
     let mut key_images_by_height: BTreeMap<
-        u64,
+        BlockHeight,
         Vec<(shekyl_crypto_pq::key_image::KeyImage, shekyl_types::TxHash)>,
     > = BTreeMap::new();
     for ki in spent_key_images {
@@ -906,7 +903,10 @@ pub(crate) fn apply_scan_result_to_state(
 
     // --- Apply phase ---------------------------------------------------
 
-    for h in processed_height_range.start..processed_height_range.end {
+    for h in processed_height_range
+        .start
+        .ordinals_until(processed_height_range.end)
+    {
         let Some(block_hash) = hash_at.remove(&h) else {
             // Defensive: pre-validation (length match + in-range +
             // no-duplicates) makes this branch unreachable. We keep it
@@ -920,8 +920,7 @@ pub(crate) fn apply_scan_result_to_state(
 
         let outputs = transfers_by_height.remove(&h).unwrap_or_default();
         let timelocked = Timelocked::from_vec(outputs);
-        // One decode of the scan-range ordinal into the ledger's height.
-        let height = BlockHeight::from_raw(h);
+        let height = h;
         let inserted_range =
             indexes.process_scanned_outputs(ledger, height, block_hash.to_bytes(), timelocked);
         // Per-height ranges are contiguous suffixes of

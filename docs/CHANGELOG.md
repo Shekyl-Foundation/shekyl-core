@@ -113,6 +113,15 @@
 
 ### Wallet
 
+- **Height-semantics Phase 2f: remaining inland block ordinals are typed.**
+  `ScanResult` heights, the birthday floor, and the send-journal clocks
+  are `BlockHeight`. Persisted: `SEND_JOURNAL_BLOCK_VERSION` **2 → 3**,
+  `SYNC_STATE_BLOCK_VERSION` **2 → 3**, paired `WALLET_LEDGER_FORMAT_VERSION`
+  **19 → 20**. Postcard bytes of the transparent `u64` are identical; the
+  schema type-name change still bumps. Pre-genesis: a v2 send journal, a
+  v2 sync-state block, or a v19 wallet ledger is refused, not migrated.
+  Wire RPC and FFI pods unchanged.
+
 - **Height-semantics Phase 2e: wallet-ledger tip and bond-post offset are typed.**
   `bond_post_offset_blocks` is `BlockCount` (`PENDING_POST_VERSION` **v11 →
   v12**). Wallet-ledger tip / reorg heights are `BlockHeight`

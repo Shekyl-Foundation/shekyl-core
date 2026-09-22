@@ -377,11 +377,11 @@ where
                 stake,
                 g.curve_tree.clone(),
                 g.pending_gate.clone(),
-                g.ledger.synced_height().to_raw(),
+                g.ledger.synced_height(),
                 g.ledger.snapshot(),
             )
         };
-        let block_hash_at = move |h: u64| snapshot.block_hash_at(BlockHeight::from_raw(h));
+        let block_hash_at = move |h: BlockHeight| snapshot.block_hash_at(h);
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
         // Canonical P-lane floor fee — the shared single fee decision (doc

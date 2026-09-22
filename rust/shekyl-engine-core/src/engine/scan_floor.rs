@@ -26,11 +26,11 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 /// Types that carry the wallet open-time scan floor into refresh.
 pub(crate) trait ScanStartFloorProvider {
     /// Minimum height for the producer scan loop (`0` = none).
-    fn scan_start_floor(&self) -> u64;
+    fn scan_start_floor(&self) -> BlockHeight;
 }
 
 impl ScanStartFloorProvider for LocalRefresh {
-    fn scan_start_floor(&self) -> u64 {
+    fn scan_start_floor(&self) -> BlockHeight {
         LocalRefresh::scan_start_floor(self)
     }
 }
@@ -46,15 +46,15 @@ impl ScanStartFloorProvider for LocalRefresh {
 /// input is zero the floor is zero and refresh behaves as today (scan
 /// from `synced_height + 1` only).
 pub(crate) fn effective_scan_floor(
-    persisted_restore: u64,
-    skip_to_height: u64,
-    refresh_from_block_height: u64,
-) -> u64 {
+    persisted_restore: BlockHeight,
+    skip_to_height: BlockHeight,
+    refresh_from_block_height: BlockHeight,
+) -> BlockHeight {
     let mut floor = persisted_restore;
-    if skip_to_height > 0 {
+    if !skip_to_height.is_zero() {
         floor = floor.max(skip_to_height);
     }
-    if refresh_from_block_height > 0 {
+    if !refresh_from_block_height.is_zero() {
         floor = floor.max(refresh_from_block_height);
     }
     floor
@@ -101,8 +101,7 @@ pub(crate) fn anchor_target(
 /// Used when jumping over a genesis→birthday prefix without ingesting
 /// intermediate blocks. Requires an empty transfer set; callers must
 /// not anchor across existing scanner state. `anchor` is the inclusive
-/// ordinal to write. Callers that still hold `restore_from_height` as
-/// `u64` convert once before this call.
+/// ordinal to write.
 pub(crate) fn anchor_ledger_block(
     ledger: &mut LedgerBlock,
     anchor: BlockHeight,
@@ -181,12 +180,10 @@ pub(crate) async fn fetch_block_hash_at<D: DaemonEngine>(
 pub(crate) async fn ensure_birthday_anchor<D: DaemonEngine>(
     ledger: &LocalLedger,
     daemon: &D,
-    scan_start_floor: u64,
+    scan_start_floor: BlockHeight,
 ) -> Result<(), RefreshError> {
     let synced = ledger.synced_height();
-    // `scan_start_floor` is still the raw `restore_from_height` ordinal.
-    let floor = BlockHeight::from_raw(scan_start_floor);
-    if !needs_birthday_anchor(synced, floor) {
+    if !needs_birthday_anchor(synced, scan_start_floor) {
         return Ok(());
     }
 
@@ -197,7 +194,7 @@ pub(crate) async fn ensure_birthday_anchor<D: DaemonEngine>(
             detail: e.to_string(),
         })
     })?;
-    let Some(anchor) = anchor_target(floor, daemon_height) else {
+    let Some(anchor) = anchor_target(scan_start_floor, daemon_height) else {
         return Ok(());
     };
     if synced >= anchor {

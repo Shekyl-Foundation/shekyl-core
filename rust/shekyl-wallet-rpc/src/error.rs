@@ -1448,8 +1448,8 @@ mod tests {
                 reason: "test malformed",
             },
             RefreshError::ConcurrentMutation {
-                wallet: 1,
-                result: 2,
+                wallet: shekyl_types::BlockHeight::from_raw(1),
+                result: shekyl_types::BlockHeight::from_raw(2),
             },
             RefreshError::InternalInvariantViolation {
                 context: "test invariant",
@@ -1503,7 +1503,7 @@ mod tests {
         assert_eq!(err.code(), WalletRpcErrorCode::UnknownTransferId);
 
         let err: WalletRpcError = AbandonTxError::StateForbids {
-            state: SendState::Confirmed { height: 42 },
+            state: SendState::Confirmed { height: shekyl_types::BlockHeight::from_raw(42) },
         }
         .into();
         assert_eq!(err.code(), WalletRpcErrorCode::AbandonStateForbids);

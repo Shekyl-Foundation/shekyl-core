@@ -244,7 +244,7 @@ impl<
                     return Err(RefreshError::RescanPersist(e.to_string()));
                 }
             }
-            engine.ledger.synced_height().to_raw()
+            engine.ledger.synced_height()
         };
 
         Ok(Self::spawn_refresh_producer(

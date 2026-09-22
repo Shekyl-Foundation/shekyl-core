@@ -7,8 +7,11 @@ height-semantics Phase 2b RULED 2026-09-20 (dispatch-clock retype to
 height-semantics Phase 2c RULED 2026-09-20 (wire/FFI inland decode);
 height-semantics Phase 2d RULED 2026-09-21 (countersign clocks +
 difference constants); height-semantics Phase 2e RULED 2026-09-21
-(C4 `bond_post_offset_blocks` + wallet-ledger tip/reorg wrap). Stamp-clock
-COUNT→ORDINAL conversion is optional-not-owed. Numerics are frozen
+(C4 `bond_post_offset_blocks` + wallet-ledger tip/reorg wrap);
+height-semantics Phase 2f RULED 2026-09-21 (ScanResult and the remaining
+inland ordinals are `BlockHeight`; reference spans are `BlockCount`).
+Stamp-clock COUNT→ORDINAL conversion is optional-not-owed. The
+`get_version` `target_height` wire `0` stays `RK-`. Numerics are frozen
 as pinned (Rick, 2026-09-19).
 
 <!-- claim-audit: citations -->
@@ -280,8 +283,13 @@ one family. **Unclear: none.**
 | Countersign / pass-anchor (`own_height`, `anchor_height`, `predecessor_height`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2d); wire punch at encode/decode (C1) |
 | Anchor depth / lag (`PASS_ANCHOR_DEPTH_BLOCKS`, `PASS_ANCHOR_LAG_BLOCKS`, `max_reorg_depth`, `BlockHeaderFacts.depth`) | DIFFERENCE | `BlockCount` | `BlockCount` | RULED 2026-09-21 (height-semantics Phase 2d); generated `u64` wrapped at the const def (C4) |
 | Curve-tree ingest / `block_at` / DAA timestamps | ORDINAL | `BlockHeight` (RTN-4 re-export) | `BlockHeight` | keep |
+| Scan result and its echoes (`ScanResult` heights, `RefreshSummary.processed_height_range`, `RefreshReorgEvent.fork_height`, `RefreshProgress.height`, `RefreshError::ConcurrentMutation`, `validate_reorg_fork_height`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2f); producer loop stays `u64` for the JSON block fetch and wraps once at the carrier; `LedgerSnapshot::block_hash_at_ordinal` deleted |
+| Build and journal clocks (`PendingTx` / `Reservation` / `ConsumerHeldEntry` / `BuiltPendingMeta` runtime; `SendRecord.dispatched_at_height`, `SendState::Confirmed::height` persisted) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2f); `SEND_JOURNAL_BLOCK_VERSION` 2 → 3 |
+| Birthday floor (`SyncStateBlock.restore_from_height`, `SafetyConstants` skip/refresh defaults, `scan_start_floor` / `effective_scan_floor`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2f); `SYNC_STATE_BLOCK_VERSION` 2 → 3; CLI `SafetyOverrides` stay `Option<u64>` and wrap inside the effective resolvers |
+| Balance clock (`BalanceSummary::compute`, `WalletLedgerExt::balance_at`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2f); same ordinal `is_spendable` already took |
+| Curve-tree reference clock (`select_reference_height`, `two_sided_reference_height`, `reference_block_age`, `proof_submittable`, `proof_expired`, `should_reanchor`, `maturity_height`, `TreeSpendGate::covers`) | ORDINAL; the subtracted spans are DIFFERENCE | `BlockHeight` and `BlockCount` | `BlockHeight` and `BlockCount` | RULED 2026-09-21 (height-semantics Phase 2f); `REF_ANCHOR_AGE` / `REFERENCE_BLOCK_MIN_AGE` / `REFERENCE_BLOCK_MAX_AGE` / `REBUILD_AT` / `PROOF_VALIDITY_HORIZON` are `BlockCount` |
 | C++ daemon, p2p, mining RPC producers | as §3.3 | `uint64_t` | stay `uint64_t` (C8) | none in this campaign |
-| Wire DTOs / FFI PODs | as §3.3 | `u64` | stay `u64` (C1); decode at the consumer | RULED 2026-09-20/21 (Phases 2c–2e) |
+| Wire DTOs / FFI PODs | as §3.3 | `u64` | stay `u64` (C1); decode at the consumer | RULED 2026-09-20/21 (Phases 2c–2f leave the pods raw) |
 
 **Not block-axis (named so they are not unclear):** curve-tree
 positions, gindex, leaf indices (`Gindex` is `GlobalOutputIndex`,
@@ -342,16 +350,37 @@ quantity.
   [`ChainCount::has_block`] of `synced.saturating_add(BlockCount::ONE)`.
   Ledger mutations (`ingest_block`, `handle_reorg`, `detect_spends`,
   `spendable_outputs`, `process_scanned_outputs`) take `BlockHeight`.
-  `ScanResult`'s range stays `u64`; `from_raw` happens once at that
-  edge. Snapshot-id preimage stays the same 8 LE bytes via `.to_raw()`.
+  Phase 2e left `ScanResult`'s range as `u64` (the `from_raw` edge);
+  height-semantics Phase 2f typed that carrier. Snapshot-id preimage
+  stays the same 8 LE bytes via `.to_raw()`.
   C9 pins: `Engine::synced_height` rejects `ChainCount`;
   `PendingBondPost.bond_post_offset_blocks` is `BlockCount` (compiling
   doctest) and rejects `BlockHeight` (`compile_fail`). No numeric change.
   Remainders
-  named in-line: stamp-clock COUNT→ORDINAL conversion is
-  optional-not-owed (§2.3 item 1); `SyncStateBlock.restore_from_height`
-  still `u64`; `get_version` `target_height` wire `0` still `RK-`;
-  requester mint still a pin on the mint PR.
+  named in-line at the close of Phase 2e, and taken or kept by
+  height-semantics Phase 2f: `SyncStateBlock.restore_from_height` is
+  `BlockHeight` as of Phase 2f; stamp-clock COUNT→ORDINAL conversion
+  stays optional-not-owed (§2.3 item 1); `get_version` `target_height`
+  wire `0` stays `RK-`; requester mint stays a pin on the mint PR.
+- **Height-semantics Phase 2f — remaining inland ordinals — RULED
+  2026-09-21.** `ScanResult`'s eight height fields, the refresh echoes,
+  the build and send-journal clocks, the birthday floor (including
+  persisted `restore_from_height`), `BalanceSummary::compute` /
+  `balance_at`, and the curve-tree reference clock are `BlockHeight`.
+  The spans that clock subtracts (`REF_ANCHOR_AGE`,
+  `REFERENCE_BLOCK_MIN_AGE`, `REFERENCE_BLOCK_MAX_AGE`, `REBUILD_AT`,
+  `PROOF_VALIDITY_HORIZON`) are `BlockCount`. `TreeSpendGate::covers`
+  takes `BlockHeight`. Error payloads that repeat those numbers
+  (`OutputNotYetSpendable`, `WalletTooYoungToSpend`, `TooOld`,
+  `ChainStateChanged`) carry the same types. Persisted:
+  `SEND_JOURNAL_BLOCK_VERSION` 2 → 3, `SYNC_STATE_BLOCK_VERSION` 2 → 3,
+  paired `WALLET_LEDGER_FORMAT_VERSION` 19 → 20. Postcard bytes of the
+  transparent `u64` are identical; the schema type-name change still
+  bumps. Pre-genesis: a v2 send journal, a v2 sync-state block, or a
+  v19 wallet ledger is refused, not migrated. The scan producer's block
+  fetch stays `u64` and wraps at the `ScanResult` edge. FFI pods, the
+  snapshot-id preimage, the `get_version` wire `0`, and the gf7
+  measurement hook stay raw. No numeric change.
 
 **Out of scope of the whole audit:** any stamp value change (none from
 Phase 1); the daemon-RPC `target_height` *wire* sentinel deletion
@@ -362,5 +391,5 @@ type-name check; C++ retyping (C8).
 
 "Which `h`?" — §1 for the two quantities, §2.2 for the six stamps, §3.1
 for the inland/wire split, §3.3 for a named RPC/FFI field, §3.4 for
-which family a site belongs to. After height-semantics Phase 2c–2e the
+which family a site belongs to. After height-semantics Phase 2c–2f the
 types make a wrong mix a compile error.

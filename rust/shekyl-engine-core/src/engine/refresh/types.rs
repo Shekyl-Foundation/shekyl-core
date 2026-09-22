@@ -49,8 +49,8 @@ use crate::scan::ScanResult;
 /// # Cloning, not Arc-wrapping
 ///
 /// Per the Phase 2a snapshot-strategy decision, the snapshot is built
-/// by cloning these two fields directly (`u64` is trivially cheap;
-/// `ReorgBlocks` is a `Vec<(u64, [u8; 32])>` capped at the
+/// by cloning these two fields directly (`BlockHeight` is trivially cheap;
+/// `ReorgBlocks` is a `Vec<(BlockHeight, [u8; 32])>` capped at the
 /// persistence-layer `DEFAULT_REORG_BLOCKS_CAPACITY`, so cloning it
 /// is a small allocation, not a full-ledger walk).
 ///
@@ -101,12 +101,6 @@ impl LedgerSnapshot {
             .rev()
             .find(|(h, _)| *h == height)
             .map(|(_, hash)| *hash)
-    }
-
-    /// Hash at a raw scan-range ordinal. The producer loop and
-    /// `ScanResult` still speak `u64`; the window stores [`BlockHeight`].
-    pub(crate) fn block_hash_at_ordinal(&self, height: u64) -> Option<[u8; 32]> {
-        self.block_hash_at(BlockHeight::from_raw(height))
     }
 }
 
@@ -213,7 +207,7 @@ pub struct RefreshSummary {
     /// daemon's tip and no new blocks were available, this is
     /// `synced_height + 1 .. synced_height + 1` (an empty range with
     /// `blocks_processed == 0`).
-    pub processed_height_range: Range<u64>,
+    pub processed_height_range: Range<BlockHeight>,
 
     /// Count of distinct heights for which the producer recorded a
     /// `(height, block_hash)` entry. On the no-reorg path this equals
@@ -257,7 +251,7 @@ pub struct RefreshReorgEvent {
     /// scan. Heights `>= fork_height` from the wallet's pre-refresh
     /// state were discarded; heights `< fork_height` survive the merge
     /// unchanged.
-    pub fork_height: u64,
+    pub fork_height: BlockHeight,
 }
 
 // ── Branch 2: async refresh driver surface ─────────────────────────
@@ -363,7 +357,7 @@ pub enum RefreshPhase {
 #[non_exhaustive]
 pub struct RefreshProgress {
     /// Height the producer most recently completed scanning.
-    pub height: u64,
+    pub height: BlockHeight,
 
     /// Blocks processed in the current attempt (resets on retry).
     pub blocks_processed: u64,
@@ -396,7 +390,7 @@ impl RefreshProgress {
     /// not carry a pending-incoming summary. The merge / success
     /// emissions that *do* carry the summary build the literal directly.
     pub(crate) const fn phase_only(
-        height: u64,
+        height: BlockHeight,
         blocks_processed: u64,
         blocks_total: u64,
         phase: RefreshPhase,
@@ -422,7 +416,7 @@ impl RefreshProgress {
     /// blank starting value.
     #[cfg(test)]
     pub(crate) const fn initial() -> Self {
-        Self::phase_only(0, 0, 0, RefreshPhase::Scanning)
+        Self::phase_only(shekyl_types::BlockHeight::from_raw(0), 0, 0, RefreshPhase::Scanning)
     }
 }
 
@@ -438,9 +432,9 @@ impl RefreshProgress {
 /// is.
 pub(crate) fn membership_rebuilding(
     tree_cursor: Option<shekyl_curve_tree::BlockHeight>,
-    ledger_synced: u64,
+    ledger_synced: BlockHeight,
 ) -> bool {
-    let covered = tree_cursor.map_or(0, shekyl_types::BlockHeight::to_raw);
+    let covered = tree_cursor.unwrap_or(BlockHeight::ZERO);
     covered < ledger_synced
 }
 

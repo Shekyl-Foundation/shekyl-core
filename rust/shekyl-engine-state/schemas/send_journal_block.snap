@@ -157,8 +157,13 @@
                     {
                       "name": "dispatched_at_height",
                       "ty": {
-                        "name": "u64",
-                        "ty": "U64"
+                        "name": "BlockHeight",
+                        "ty": {
+                          "NewtypeStruct": {
+                            "name": "u64",
+                            "ty": "U64"
+                          }
+                        }
                       }
                     },
                     {
@@ -262,8 +267,13 @@
                                   {
                                     "name": "height",
                                     "ty": {
-                                      "name": "u64",
-                                      "ty": "U64"
+                                      "name": "BlockHeight",
+                                      "ty": {
+                                        "NewtypeStruct": {
+                                          "name": "u64",
+                                          "ty": "U64"
+                                        }
+                                      }
                                     }
                                   }
                                 ]

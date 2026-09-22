@@ -821,7 +821,7 @@ impl CurveTreeClient {
         // partial leaf set can reach the store or memory.
         let mut new_leaves: Vec<LeafEntry> = Vec::new();
         let next_gindex = collect_block_leaves(
-            block.height.to_raw(),
+            block.height,
             &txs,
             self.next_gindex,
             &mut new_leaves,

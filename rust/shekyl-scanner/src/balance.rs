@@ -6,6 +6,7 @@
 //! Balance computation with lock/frozen categorization.
 
 use serde::Serialize;
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 
 use crate::transfer::TransferDetails;
@@ -58,7 +59,7 @@ impl BalanceSummary {
     /// reconciler applied.
     pub fn compute(
         transfers: &[TransferDetails],
-        current_height: u64,
+        current_height: BlockHeight,
         spend_locks: &shekyl_engine_state::InFlightSpendLocks,
     ) -> Self {
         let mut summary = BalanceSummary::default();
@@ -86,8 +87,7 @@ impl BalanceSummary {
                 continue;
             }
 
-            let timelock_satisfied =
-                shekyl_types::BlockHeight::from_raw(current_height) >= td.eligible_height;
+            let timelock_satisfied = current_height >= td.eligible_height;
 
             if !timelock_satisfied {
                 summary.locked_by_timelock = accumulate(summary.locked_by_timelock, amount);
@@ -142,7 +142,7 @@ mod tests {
         let mut journal = SendJournalBlock::empty();
         journal.record_dispatched(
             txid,
-            90,
+            BlockHeight::from_raw(90),
             0,
             Vec::new(),
             vec![SendInputRef { gindex, amount: 0 }],
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn empty_balance() {
-        let summary = BalanceSummary::compute(&[], 100, &no_locks());
+        let summary = BalanceSummary::compute(&[], BlockHeight::from_raw(100), &no_locks());
         assert_eq!(summary.total, AtomicUnits::ZERO);
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
     }
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn basic_unlocked_balance() {
         let transfers = vec![make_td(1000, 50), make_td(2000, 60)];
-        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
+        let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
         assert_eq!(summary.total, AtomicUnits::from_raw(3000));
         assert_eq!(summary.unlocked, AtomicUnits::from_raw(3000));
     }
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn timelocked_outputs() {
         let transfers = vec![make_td(1000, 95)];
-        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
+        let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.locked_by_timelock, AtomicUnits::from_raw(1000));
@@ -187,7 +187,7 @@ mod tests {
         let mut td = make_td(1000, 50);
         td.spent = true;
         let transfers = vec![td];
-        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
+        let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
         assert_eq!(summary.total, AtomicUnits::ZERO);
     }
 
@@ -199,7 +199,7 @@ mod tests {
         td.global_output_index = shekyl_types::GlobalOutputIndex::from_raw(77);
         let locks = locks_over(77, [7u8; 32]);
         let transfers = vec![td];
-        let summary = BalanceSummary::compute(&transfers, 100, &locks);
+        let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &locks);
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.awaiting_confirmation, AtomicUnits::from_raw(1000));
@@ -214,7 +214,7 @@ mod tests {
         td.global_output_index = shekyl_types::GlobalOutputIndex::from_raw(78);
         td.spent = true;
         let locks = locks_over(78, [8u8; 32]);
-        let summary = BalanceSummary::compute(&[td], 100, &locks);
+        let summary = BalanceSummary::compute(&[td], BlockHeight::from_raw(100), &locks);
         assert_eq!(summary.total, AtomicUnits::ZERO);
         assert_eq!(summary.awaiting_confirmation, AtomicUnits::ZERO);
     }
@@ -224,7 +224,7 @@ mod tests {
         let mut td = make_td(1000, 50);
         td.frozen = true;
         let transfers = vec![td];
-        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
+        let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.frozen, AtomicUnits::from_raw(1000));
@@ -243,7 +243,7 @@ mod tests {
             let mut td = make_td(1000, 50);
             td.unspendable = Some(reason);
             let transfers = vec![td];
-            let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
+            let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
             assert_eq!(summary.total, AtomicUnits::from_raw(1000), "{reason:?}");
             assert_eq!(summary.unlocked, AtomicUnits::ZERO, "{reason:?}");
             assert_eq!(
