@@ -16,7 +16,7 @@ use shekyl_chain_rules::AtHeight;
 use shekyl_types::{BlockHeight, CurveTreeRoot, TreeLeaf, TreePosition};
 
 use super::connect_fixtures::{connect_chain, root_at_height};
-use super::error::{CellFault, StoreError, StoreInvariant};
+use super::error::{CellFault, LeafDensity, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{Canonical, CurveTreeState, LeafCount, TreeDepth};
@@ -30,14 +30,31 @@ fn leaf(fill: u8) -> TreeLeaf {
     TreeLeaf::from_bytes([fill; TreeLeaf::LEN])
 }
 
-/// A grown tree as E3 will leave one: `count` leaves at `0..count`, the
-/// summary naming them. Written raw into a sealed file.
-fn plant_tree(path: &std::path::Path, count: u64) -> CurveTreeState {
-    let state = CurveTreeState {
-        root: CurveTreeRoot::from_bytes([0xc1; 32]),
+/// A grown summary: depth 2, `count` leaves, `root` as given.
+fn grown(root: CurveTreeRoot, count: u64) -> CurveTreeState {
+    CurveTreeState {
+        root,
         depth: TreeDepth::from_raw(2),
         leaf_count: LeafCount::from_raw(count),
-    };
+    }
+}
+
+/// Three blocks from genesis. The live root is [`live_root_after_three`].
+fn connect_three(path: &std::path::Path) {
+    let store = ChainStore::create(path, EPOCH).expect("create");
+    connect_chain(&store, &[vec![], vec![], vec![]]);
+}
+
+/// `curve_tree_roots[tip + 1]` after [`connect_three`]: tip is 2, so key 3,
+/// the root the connect of block 2 wrote.
+fn live_root_after_three() -> CurveTreeRoot {
+    root_at_height(3)
+}
+
+/// Write `state` over the seal's summary and leaves at `0..leaf_count`.
+/// Rows already past that count are left where they are.
+fn plant_summary(path: &std::path::Path, state: CurveTreeState) {
+    let count = state.leaf_count.to_raw();
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     {
@@ -53,13 +70,30 @@ fn plant_tree(path: &std::path::Path, count: u64) -> CurveTreeState {
         }
     }
     txn.commit().expect("commit");
-    state
 }
 
-fn is_not_dense(err: &StoreError, position: u64) -> bool {
+fn is_length(err: &StoreError, count: u64, rows: u64) -> bool {
     matches!(
         err,
-        StoreError::InvariantViolated(StoreInvariant::LeavesNotDense { position: p }) if *p == position
+        StoreError::InvariantViolated(StoreInvariant::LeavesNotDense {
+            observed: LeafDensity::Length { count: c, rows: r }
+        }) if *c == count && *r == rows
+    )
+}
+
+fn is_hole(err: &StoreError, position: u64) -> bool {
+    matches!(
+        err,
+        StoreError::InvariantViolated(StoreInvariant::LeavesNotDense {
+            observed: LeafDensity::Hole { position: p }
+        }) if *p == position
+    )
+}
+
+fn is_root_diverged(err: &StoreError) -> bool {
+    matches!(
+        err,
+        StoreError::InvariantViolated(StoreInvariant::SummaryRootDiverged)
     )
 }
 
@@ -82,16 +116,60 @@ fn a_fresh_store_reads_the_empty_tree_as_a_row_not_a_default() {
 }
 
 #[test]
-fn the_summary_is_the_planted_row_when_its_count_matches_the_leaves() {
+fn an_ungrown_chain_keeps_the_seal_summary_while_the_live_root_moves() {
+    let path = tmp("curve-c1-ungrown");
+    connect_three(&path);
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    assert_eq!(snap.curve_tree().expect("summary"), CurveTreeState::EMPTY);
+    assert_eq!(
+        snap.root_at(BlockHeight::from_raw(3)).expect("live"),
+        AtHeight::Recorded(live_root_after_three()),
+        "connect recorded a live root the summary does not claim"
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn the_summary_is_the_planted_row_when_its_root_is_the_live_root() {
     let path = tmp("curve-c1-grown");
-    ChainStore::create(&path, EPOCH).expect("create");
-    let planted = plant_tree(&path, 3);
+    connect_three(&path);
+    let planted = grown(live_root_after_three(), 3);
+    plant_summary(&path, planted);
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
     let state = snap.curve_tree().expect("summary");
     assert_eq!(state, planted);
     assert_eq!(state.depth.fcmp_layers(), 3, "depth 2 ⇒ three proof layers");
     assert_eq!(state.leaf_count.next_position(), pos(3));
+    cleanup(&path);
+}
+
+#[test]
+fn a_grown_summary_whose_root_is_not_the_live_root_is_si12() {
+    let path = tmp("curve-c1-root");
+    connect_three(&path);
+    plant_summary(&path, grown(CurveTreeRoot::from_bytes([0x11; 32]), 3));
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    let err = snap.curve_tree().expect_err("roots disagree");
+    assert!(is_root_diverged(&err), "{err}");
+    assert_eq!(StoreInvariant::SummaryRootDiverged.row(), 12);
+    cleanup(&path);
+}
+
+#[test]
+fn a_grown_summary_on_an_empty_chain_is_si12() {
+    let path = tmp("curve-c1-root-empty-chain");
+    ChainStore::create(&path, EPOCH).expect("create");
+    // Count 0, so the length belt would agree; the root is what fails.
+    plant_summary(&path, grown(CurveTreeRoot::from_bytes([0xc1; 32]), 0));
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    let err = snap
+        .curve_tree()
+        .expect_err("no tip, so the live root is EMPTY");
+    assert!(is_root_diverged(&err), "{err}");
     cleanup(&path);
 }
 
@@ -142,10 +220,10 @@ fn a_missing_summary_row_is_si7_absent_never_the_empty_tree() {
 }
 
 #[test]
-fn a_count_that_is_not_the_leaf_tables_length_is_si11_at_the_count() {
+fn a_count_that_is_not_the_leaf_tables_length_is_si11_length() {
     let path = tmp("curve-c1-count");
-    ChainStore::create(&path, EPOCH).expect("create");
-    plant_tree(&path, 3);
+    connect_three(&path);
+    plant_summary(&path, grown(live_root_after_three(), 3));
     {
         // Drop the last leaf; the summary still claims three.
         let db = redb::Database::open(&path).expect("open raw");
@@ -159,10 +237,10 @@ fn a_count_that_is_not_the_leaf_tables_length_is_si11_at_the_count() {
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
     let err = snap.curve_tree().expect_err("count and rows disagree");
-    assert!(is_not_dense(&err, 3), "{err}");
-    // The walk finds the same disagreement at the position it is missing.
+    assert!(is_length(&err, 3, 2), "{err}");
+    // The walk names the missing position. The length belt does not.
     let err = snap.leaves(pos(0)..pos(3)).expect_err("a hole at 2");
-    assert!(is_not_dense(&err, 2), "{err}");
+    assert!(is_hole(&err, 2), "{err}");
     cleanup(&path);
 }
 
@@ -228,8 +306,8 @@ fn root_at_reads_key_h_through_the_live_root_and_refuses_above_it() {
 #[test]
 fn leaves_walks_a_range_in_position_order_and_refuses_past_the_count() {
     let path = tmp("curve-c3-walk");
-    ChainStore::create(&path, EPOCH).expect("create");
-    plant_tree(&path, 3);
+    connect_three(&path);
+    plant_summary(&path, grown(live_root_after_three(), 3));
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
     assert_eq!(
@@ -269,8 +347,8 @@ fn leaves_walks_a_range_in_position_order_and_refuses_past_the_count() {
 #[test]
 fn a_hole_inside_the_count_is_si11_at_the_first_missing_position() {
     let path = tmp("curve-c3-hole");
-    ChainStore::create(&path, EPOCH).expect("create");
-    plant_tree(&path, 4);
+    connect_three(&path);
+    plant_summary(&path, grown(live_root_after_three(), 4));
     {
         let db = redb::Database::open(&path).expect("open raw");
         let txn = db.begin_write().expect("write");
@@ -291,7 +369,7 @@ fn a_hole_inside_the_count_is_si11_at_the_first_missing_position() {
         LeafCount::from_raw(4)
     );
     let err = snap.leaves(pos(0)..pos(3)).expect_err("hole at 1");
-    assert!(is_not_dense(&err, 1), "{err}");
+    assert!(is_hole(&err, 1), "{err}");
     // A range that starts past the hole is fine; the belt is per read.
     assert_eq!(
         snap.leaves(pos(2)..pos(4)).expect("walk"),

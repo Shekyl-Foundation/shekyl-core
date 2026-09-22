@@ -99,4 +99,6 @@ pub mod provenance;
 pub mod schema;
 pub mod store;
 
-pub use ids::{AmountIndex, OutputSlot, OutputStorageId, TxStorageId};
+pub use ids::{
+    AmountIndex, ChunkIndex, LayerChunk, OutputSlot, OutputStorageId, TreeLayer, TxStorageId,
+};

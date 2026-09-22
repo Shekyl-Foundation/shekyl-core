@@ -465,9 +465,10 @@ tables! {
     pub const CURVE_TREE_LEAVES: TableDefinition<u64, Coded<TreeLeaf>> =
         TableDefinition::new("curve_tree_leaves");
 
-    /// `curve_tree_layers` — `(layer, chunk)` → the chunk's Selene hash
-    /// (`LayerChunk::to_tuple`; layer-major order is the tuple's, `SCU-Q3`).
-    /// Derived: recomputed from leaves, not folded. S-CURVE.
+    /// `curve_tree_layers` — `(layer, chunk)` → the chunk's Selene hash.
+    /// [`crate::ids::LayerChunk::key`] assembles the tuple; layer-major
+    /// order is that tuple's (`SCU-Q3`). Derived: recomputed from leaves,
+    /// not folded. S-CURVE.
     pub const CURVE_TREE_LAYERS: TableDefinition<(u8, u64), Coded<LayerHash>> =
         TableDefinition::new("curve_tree_layers");
 

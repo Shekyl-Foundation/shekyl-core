@@ -10,10 +10,14 @@
   leaf count) written `EMPTY` at store creation, so an empty tree is a value
   and a missing row is a fault — the C++ defaulted three cells three ways and
   told callers to compare the root against `hash_init` to tell them apart.
-  The layer key is a `(layer, chunk)` tuple, not the LMDB `(layer << 56) |
-  chunk` packing. Three reads on `ReadSnapshot`: `curve_tree()`,
-  `root_at(height)` (the validator's `ChainView::root_at` body, made public),
-  `leaves(range)` (bounded, dense by SI-11 `LeavesNotDense`). `TreePosition`
+  The layer key is a `(layer, chunk)` tuple assembled by `LayerChunk::key`
+  (`ids`), not the LMDB `(layer << 56) | chunk` packing. Three reads on
+  `ReadSnapshot`: `curve_tree()`, `root_at(height)` (the validator's
+  `ChainView::root_at` body, made public), `leaves(range)` (bounded; SI-11
+  reports a length disagreement and a missing position as different
+  observations). A grown summary's root must equal the live root (SI-12);
+  the seal's `EMPTY` row does not, because connect records roots before the
+  grow path runs. `TreePosition`
   moves to `shekyl-types` and `TreeLeaf` is minted beside it; existing
   wallet-side stores open unchanged. Pre-genesis: a daemon store at layout 8
   is recreated, not migrated.

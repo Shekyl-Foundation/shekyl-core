@@ -581,19 +581,12 @@ impl ReadSnapshot<'_> {
     }
 
     /// `curve_tree_roots[tip + 1]`, or [`CurveTreeRoot::EMPTY`] on an empty
-    /// chain. A tip with no live-root row is SI-7. The row read is C2's
-    /// ([`curve_reads::root_row`]) — the digest and [`Self::root_at`] agree
-    /// on what a missing row means by sharing the body, not a comment.
+    /// chain. A tip with no live-root row is SI-7. The body is
+    /// [`curve_reads::live_root`] — the digest, [`Self::root_at`], and the
+    /// summary's SI-12 belt share it, so a missing row means one thing.
     fn live_root(&self, tip: Option<&(u64, BlockInfo)>) -> Result<CurveTreeRoot, StoreError> {
-        match tip {
-            None => Ok(CurveTreeRoot::EMPTY),
-            Some((tip_height, _)) => {
-                let key = tip_height
-                    .checked_add(1)
-                    .expect("a recorded tip is not u64::MAX");
-                curve_reads::root_row(&self.txn, key).map_err(chain_reads::ReadFault::into_plain)
-            }
-        }
+        curve_reads::live_root(&self.txn, tip.map(|(height, _)| *height))
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     // ------------------------------------------------------------------
@@ -780,7 +773,7 @@ impl ReadSnapshot<'_> {
     // S-CURVE (`DRS_E1_SCURVE.md` §3.2): the curve tree.
     // ------------------------------------------------------------------
 
-    /// **C1.** The tree's summary as **one row**: its live root, its depth
+    /// **C1.** The tree's summary as **one row**: its root, its depth
     /// (layers above the leaves) and its leaf count — `curve_tree_meta`'s
     /// whole content ([`CurveTreeState`]). Replaces `get_curve_tree_root`,
     /// `get_curve_tree_depth` and `get_curve_tree_leaf_count`, which the
@@ -790,8 +783,13 @@ impl ReadSnapshot<'_> {
     /// The empty tree is [`CurveTreeState::EMPTY`], **a row the seal
     /// wrote** — so an absent row is SI-7 (`CellCorrupt { Absent }`), never
     /// a default, and no caller compares a root against the identity to
-    /// learn whether the tree is empty (SCU-1). A count that is not the
-    /// leaf table's length is SI-11 ([`StoreInvariant::LeavesNotDense`]).
+    /// learn whether the tree is empty (SCU-1). EMPTY stays the answer
+    /// after `connect` until the grow path (DRS-E3) replaces it: connect
+    /// records the live root in `curve_tree_roots` whether or not the tree
+    /// has grown (SI-4). A summary that is not EMPTY must carry that live
+    /// root (SI-12, [`StoreInvariant::SummaryRootDiverged`]). A count that
+    /// is not the leaf table's length is SI-11
+    /// ([`LeafDensity::Length`](crate::store::LeafDensity::Length)).
     pub fn curve_tree(&self) -> Result<CurveTreeState, StoreError> {
         curve_reads::summary(&self.txn).map_err(chain_reads::ReadFault::into_plain)
     }
@@ -813,7 +811,8 @@ impl ReadSnapshot<'_> {
     /// over `curve_tree_leaves`. Bound first: a range whose end is past the
     /// summary's count is [`AtIndex::BeyondCount`] and no row is read.
     /// Inside the count the table is dense (SI-11): a position with no row
-    /// is `InvariantViolated(LeavesNotDense)`, an undecodable row SI-7. An
+    /// is `LeavesNotDense { observed: Hole { position } }`, an undecodable
+    /// row is SI-7. An
     /// empty range is `Recorded(vec![])`.
     ///
     /// Successor to `get_curve_tree_leaves`, whose C++ consumer is retired

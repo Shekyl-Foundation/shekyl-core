@@ -72,9 +72,7 @@ pub use chain::{
     BlockBody, BlockInfo, OutKey, OutTx, RuleSetInForce, TxIndex, TxOutputIndices,
     TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
-pub use curve::{
-    ChunkIndex, CurveTreeState, LayerChunk, LayerHash, LeafCount, TreeDepth, TreeLayer,
-};
+pub use curve::{CurveTreeState, LayerHash, LeafCount, TreeDepth};
 pub use evidence::{CoverageGaps, PassedThroughFacts, FACT_FIELDS};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;

@@ -11,8 +11,8 @@
 //! shape for the same byte. The vocabulary two stores share —
 //! [`TreePosition`], [`TreeLeaf`] — lives in `shekyl-types` with its codec
 //! in `shekyl-store-codec` (`SCU-Q2`); what is here is the daemon store's
-//! own: the tree's summary row, the layer table's key and value, and the two
-//! redb key wrappers.
+//! own: the tree's summary row and the layer table's value. The layer
+//! key's types live in [`crate::ids`] (`LayerChunk::key` is the tuple).
 //!
 //! # `curve_tree_meta` is one row (`SCU-Q1`)
 //!
@@ -28,14 +28,13 @@
 //! (`crate::store::StoreInvariant`), never a default. No caller compares a
 //! root against `hash_init` to learn whether the tree is empty.
 //!
-//! # `curve_tree_layers`'s key is a tuple (`SCU-Q3`)
+//! # `curve_tree_layers`
 //!
-//! The C++ packed `(layer << 56) | chunk` into one `u64` because LMDB needs
-//! one integer key. redb does not: [`LayerChunk`] is a `(u8, u64)` tuple key
-//! whose byte-lexicographic order over redb's fixed-width encodings **is**
-//! layer-major then chunk order — the order the shift produced — so a
-//! layer's chunks are `range(LayerChunk::layer_range(l))` and no chunk
-//! ceiling was inherited. Nothing here needs a KAT to pin a shift.
+//! The key is [`crate::ids::LayerChunk`]: a `(u8, u64)` tuple, layer then
+//! chunk, assembled in one place (`SCU-Q3`). The C++ packed the same pair
+//! into one `u64` because LMDB needs one integer; the tuple orders
+//! layer-major without a shift to pin and without a 56-bit chunk ceiling.
+//! [`LayerHash`] is the 32-byte value stored under that key.
 //!
 //! # Where the types stop
 //!
@@ -125,8 +124,12 @@ impl LeafCount {
 /// Layout (41 bytes): `root`[32] ‖ `depth` u8 ‖ `leaf_count` u64 LE.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct CurveTreeState {
-    /// The live root — the same value `curve_tree_roots[tip + 1]` holds
-    /// after the last connect; kept here so the summary is one read.
+    /// The root stored with this summary. The seal writes [`Self::EMPTY`],
+    /// and `connect` records `curve_tree_roots` whether or not the tree has
+    /// grown (SI-4), so an EMPTY row is not a claim about the live root.
+    /// Once the grow path replaces EMPTY, this field is that live root
+    /// (`curve_tree_roots[tip + 1]`, or [`CurveTreeRoot::EMPTY`] on an empty
+    /// chain) and the summary read refuses a disagreement (SI-12).
     pub root: CurveTreeRoot,
     /// Layers above the leaf layer.
     pub depth: TreeDepth,
@@ -178,93 +181,6 @@ impl Canonical for CurveTreeState {
             depth,
             leaf_count,
         })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Layers
-// ---------------------------------------------------------------------------
-
-/// A hashed layer's index above the leaf layer: `0` is the first layer of
-/// chunk hashes over leaves, `depth - 1` the layer under the root.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct TreeLayer(u8);
-
-impl TreeLayer {
-    /// The layer of chunk hashes directly over the leaves.
-    pub const FIRST: Self = Self(0);
-
-    /// Wrap a raw layer index.
-    #[must_use]
-    pub const fn from_raw(layer: u8) -> Self {
-        Self(layer)
-    }
-
-    /// The layer index.
-    #[must_use]
-    pub const fn to_raw(self) -> u8 {
-        self.0
-    }
-}
-
-/// A chunk's index within its layer.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct ChunkIndex(u64);
-
-impl ChunkIndex {
-    /// The layer's first chunk.
-    pub const FIRST: Self = Self(0);
-
-    /// Wrap a raw chunk index.
-    #[must_use]
-    pub const fn from_raw(chunk: u64) -> Self {
-        Self(chunk)
-    }
-
-    /// The chunk index.
-    #[must_use]
-    pub const fn to_raw(self) -> u64 {
-        self.0
-    }
-}
-
-/// `curve_tree_layers`'s key: one chunk hash's coordinates (module docs,
-/// `SCU-Q3`). Ordered layer-major, then by chunk — as a tuple compares.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct LayerChunk {
-    /// Which hashed layer.
-    pub layer: TreeLayer,
-    /// Which chunk within it.
-    pub chunk: ChunkIndex,
-}
-
-impl LayerChunk {
-    /// The key for `chunk` of `layer`.
-    #[must_use]
-    pub const fn new(layer: TreeLayer, chunk: ChunkIndex) -> Self {
-        Self { layer, chunk }
-    }
-
-    /// Every key of one layer, as the half-open range a table scan takes:
-    /// `(layer, 0) ..= (layer, u64::MAX)`. Inclusive at the top so the last
-    /// layer (`u8::MAX`) has a range too — the tuple order makes the next
-    /// layer's first key the exclusive successor otherwise, and there is no
-    /// layer after 255.
-    #[must_use]
-    pub const fn layer_range(layer: TreeLayer) -> core::ops::RangeInclusive<Self> {
-        Self::new(layer, ChunkIndex::FIRST)..=Self::new(layer, ChunkIndex(u64::MAX))
-    }
-
-    /// The redb tuple this key is stored as.
-    #[must_use]
-    pub const fn to_tuple(self) -> (u8, u64) {
-        (self.layer.0, self.chunk.0)
-    }
-
-    /// From the stored tuple.
-    #[must_use]
-    pub const fn from_tuple((layer, chunk): (u8, u64)) -> Self {
-        Self::new(TreeLayer(layer), ChunkIndex(chunk))
     }
 }
 
@@ -350,23 +266,5 @@ mod tests {
         assert!(three.holds(TreePosition::from_raw(2)));
         assert!(!three.holds(TreePosition::from_raw(3)));
         assert_eq!(three.next_position(), TreePosition::from_raw(3));
-    }
-
-    #[test]
-    fn layer_chunk_orders_layer_major_and_a_layer_range_holds_exactly_its_chunks() {
-        let a = LayerChunk::new(TreeLayer::from_raw(0), ChunkIndex::from_raw(u64::MAX));
-        let b = LayerChunk::new(TreeLayer::from_raw(1), ChunkIndex::from_raw(0));
-        assert!(a < b, "every chunk of layer 0 precedes layer 1's first");
-        assert_eq!(LayerChunk::from_tuple(a.to_tuple()), a);
-        let range = LayerChunk::layer_range(TreeLayer::from_raw(1));
-        assert!(range.contains(&b));
-        assert!(!range.contains(&a));
-        assert!(!range.contains(&LayerChunk::new(TreeLayer::from_raw(2), ChunkIndex::FIRST)));
-        // The last layer has a range too — no successor layer needed.
-        let last = LayerChunk::layer_range(TreeLayer::from_raw(u8::MAX));
-        assert!(last.contains(&LayerChunk::new(
-            TreeLayer::from_raw(u8::MAX),
-            ChunkIndex::from_raw(7)
-        )));
     }
 }
