@@ -92,7 +92,11 @@ and in epee's context object.
 there was no object to hang a category on.** PWD-I8 is a missing **noun**, and
 it is the same missing noun for:
 
-- **PWD-I8** — *what is this inbound connection to me?*
+- ~~**PWD-I8** — *what is this inbound connection to me?*~~ **STRUCK
+  2026-09-21** by [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.9.4:
+  I8's remedy is a **deletion plus a measurement**, and neither reads a
+  category. Retained struck rather than removed, because I8 is why this slice
+  was cut first and the register must show that the reason changed.
 - **PWD-E1/E2** — the endpoint a connection claims, and what verified it
 - **PWD-B1** — the token bucket, which is per-peer state with no peer to live on
 - **PWD-B2** — per-peer accounting, same
@@ -103,8 +107,13 @@ it is the same missing noun for:
 - **the failure-window row** — `record_addr_failed` takes an address and
   nothing else, so the failure *class* is discarded at the call site
 
-**One missing noun, seven consumers.** That is the argument for LV-3 as slice
-1: it is not the cheapest slice, it is the one the others are waiting on.
+**One missing noun, six consumers** — counted from the rows above with I8
+struck, not carried from the prior figure. That is still the argument for LV-3
+as slice 1: it is not the cheapest slice, it is the one the others are waiting
+on. **What changed on 2026-09-21 is the object's identity, not the case for
+building it** — see [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md)
+§2.9.8, where identity moves from I8's category to the endpoint's provenance
+plus the per-peer state that has nowhere else to live.
 
 ---
 
@@ -141,11 +150,13 @@ it does not schedule slices that have not been designed.
 
 | Slice | What | §0.5 rows it flips | Status |
 | --- | --- | --- | --- |
-| **1** | **LV-3 — the connection as a typed, owned Rust object.** Brief: [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) | I8 (from OPEN), and unblocks B1, B2, B7's score, E1/E2, PWC-E5 | **DESIGN ROUND OPEN** — no code |
+| **1** | **LV-3 — the connection as a typed, owned Rust object.** Brief: [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) | unblocks B1, B2, B7's score, E1/E2, PWC-E5. **No longer flips I8** — see slice 2 | **DESIGN ROUND CLOSED 2026-09-21** (Rounds 1–3 answered) — no code. Identity amended by §2.9.8: the endpoint's provenance plus per-peer state, **not** I8's category |
+| **2** | **I8's remedy — DELETE the per-host inbound cap, and give `--in-peers` a measured default.** Ruled [`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.9.4. **Two halves, one deletion and one measurement** — see §7.1 for the ripples, which are larger than the diff | **I8** OPEN → ruled-and-closed; **I7** PARTIAL → the row's mechanism is deleted, not completed | **DISPATCHABLE** — design complete, no blocker. Not yet cut |
 | — | *candidates below are **not dispatched**; they are named so the register is not mistaken for a complete queue* | | |
 | *(cand.)* | **E2 tier-1 self-classification.** A node with a published endpoint and zero inbound in `T` classifies itself unreachable, stops advertising, and tells the operator. **No wire change, no dial-back, no amplification surface** — and it builds the rule-82 surface PWD-I7 records as absent | E1/E2 (partial) | not dispatched |
 | *(cand.)* | **The failure-class carry at `record_addr_failed`** — the class is known one line above the call and discarded crossing it | the failure-window FOLLOWUPS row | not dispatched; **blocked on a number that is not owed** (rule 76) |
 | *(cand.)* | **Cluster T** — see §5, the sequencing question | T1–T4, T6, T8 | not dispatched |
+| *(cand.)* | **The `pruning_seed` C++ RECEIVER** — `should_drop_connection` and the candidate filter at `net_node.inl:1832` both act on a claimed field ([`LV3_CONNECTION_OBJECT.md`](LV3_CONNECTION_OBJECT.md) §2.8.7) | none — it is `PDM-Q7`'s empty cell, not a `PWD-` row | not dispatched; **three arms in §7.2**, and the choice is steering's |
 | *(cand.)* | **B1 / B2 / B12** — token bucket, per-peer accounting, fluff batch bound | B1, B2, B12 | not dispatched; B1/B2 depend on slice 1's noun |
 
 ---
@@ -200,5 +211,135 @@ Owed to the maintainer, and **not** to be decided inside a slice:
 - Q12-R1 (compiling the testnet seed onions into `get_seed_nodes`), held by
   Q12-R2 for experimental control, precondition in
   [`Q12_D6A_PEER_DISCOVERY_RUN.md`](Q12_D6A_PEER_DISCOVERY_RUN.md) §9.3.
-- **No cap number. No `--in-peers` number.** Both dissolved into design
-  questions by PWD-I7's re-diagnosis and PWD-I8's routing.
+- ~~**No cap number. No `--in-peers` number.** Both dissolved into design
+  questions by PWD-I7's re-diagnosis and PWD-I8's routing.~~ **AMENDED
+  2026-09-21 — neither is owed to the maintainer any more, and for two
+  different reasons:** the **cap number is dissolved by deletion** (§2.9.4
+  arm 1 — there is no constant left to pick), and the **`--in-peers` number is
+  a MEASUREMENT at the rule-76 floor**, not a ruling (§2.9.4 arm 2). Recorded
+  as an amendment rather than a rewrite because "owed to the maintainer" was
+  the live status for the whole of Rounds 1–2.
+
+---
+
+## 7. The alpha.9 gate — re-ratification, not a schedule
+
+**Added 2026-09-21 on steering's note:** alpha.9 cuts **as soon as the redb
+conversion (`DRS-E*`) is done**, and p2p work "should be a part of it."
+
+**Why this section is a re-ratification and not a plan.** The alpha.9 deferral
+list in [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md):117 — **B9's number,
+E1, E2** — was ruled when **alpha.9 had no date**. "Defer to alpha.9" then meant
+*later*; it now means *at a gate with a known trigger*. **A deferral ruled
+against an undated release is not automatically a commitment against a dated
+one**, so each candidate is re-stated with its readiness and its blocker rather
+than inherited. New anchors in this section verified at `f9e000f76`.
+
+### 7.1 The finding that reorders this: `DRS-E*` removes the EMITTER, not the RECEIVER
+
+**This is the load-bearing correction, and it is easy to get backwards.**
+
+`PDM-Q7` (RULED 2026-09-18) retires the `pruning_seed` wire slot in two halves:
+a Rust daemon **sends `0`**, and **ignores** any non-zero it receives. The C++
+engine "dies at `DRS-E*`". It is tempting to read that as *the cutover closes
+this*, and to treat alpha.9 as self-cleaning.
+
+**It does not, because `DRS-E*` is the STORE.**
+[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) contains **zero** references to
+`net_node` or `src/p2p/`, and the `LV-` index row says so from the other
+direction: *"the C++ path (`contrib/epee`, `levin_notify.cpp`, `src/p2p/`) stays
+live"* until LV-3. So at the cutover:
+
+| Half | Lives in | Survives `DRS-E*`? |
+| --- | --- | --- |
+| **The emitter** — `get_blockchain_pruning_seed()` feeding the handshake | the **store** | **No.** Dies with LMDB. We stop claiming a stripe |
+| **The receiver** — `should_drop_connection`, the candidate filter at `net_node.inl:1832` | **p2p** | **YES.** Untouched by the store swap |
+
+**Consequence:** after alpha.9 as currently gated, a Shekyl node **sends `0` and
+still honours any non-zero it receives** — preferring the claimant at dial
+([`net_node.inl:1834`](../../src/p2p/net_node.inl#L1834)) and protecting it from
+eviction
+([`cryptonote_protocol_handler.inl:1986`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L1986)).
+
+**And Q7's ignore-half has no landing site at that gate**, because "a Rust
+daemon ignores" presupposes a **Rust p2p receiver**, which `DRS-E*` does not
+deliver — it delivers a Rust *store* behind C++ p2p. **This is a one-line
+handover the pruning lane is owed**, since the sequencing looks self-closing
+from inside `PDM-Q7` and is not.
+
+### 7.2 Three arms for the receiver — the gate makes one cheap
+
+1. **Delete the two receiver branches in C++ before the cut.** Smallest diff,
+   and `PDM-Q-S0` does **not** govern it — S0 governs set-B discard and the
+   engine row's *store* symbols, and neither `:1832` nor `should_drop_connection`
+   is on that list. This is a rule-15/16 deletion question, not a sequencing one.
+2. **Land LV-3's implementation before the cut, so the Rust connection object
+   *is* the receiver.** This is the arm that discharges Q7's ignore-half as
+   specified rather than by proxy — **the only arm that does** — and it is the
+   expensive one.
+3. **Cut with it, and date the exposure** in Q7's table so it is a known dated
+   window rather than an empty cell.
+
+**Not picked here.** Arm 1 is cheap and arm 2 is the one Q7 actually asked for;
+which is right depends on §7.3's scope call, which is steering's.
+
+### 7.3 The candidates, with readiness and blocker
+
+| Candidate | Ready? | Blocker | What it flips |
+| --- | --- | --- | --- |
+| **Slice 2 — delete the per-host cap** | **YES** — ruled §2.9.4, three independent arms | none | I8 closed; I7's mechanism deleted |
+| **`--in-peers` measured default** | **YES, mechanism-wise** — the ceiling exists and is checked; the default is the sentinel `-1` narrowed to `UINT32_MAX` | a **Pi 4 measurement** (rule 76 floor). Not a decision | creates §2.9.5's discharge trigger; no §0.5 row |
+| **`pruning_seed` C++ receiver** | **YES** — §7.2 arm 1 is a two-branch deletion | none technical; it is a **scope call** | `PDM-Q7`'s empty cell |
+| **B9's number** | **NO** | **PWD-I4**, deferred with parameter ownership unresolved. Unchanged by this round | B9 PARTIAL → done |
+| **E1 — endpoint determination** | **DESIGN only** | no mechanism anywhere in `src/p2p/` or `shekyl-levin`; "largest of the nine by a distance". Rounds 1–2 produced the **claimed/observed split** and the §2.7.5 third-party-proposal candidate — **design, not mechanism** | E1 |
+| **E2 — endpoint verification** | **DESIGN only** | with E1; **the amplifier warning stands** — *"rushing a dial-back mechanism into a release is how you get the ping-back-as-DoS-amplifier problem"* — and Round 2 **rejected** the reserve-capacity shortcut on mechanical grounds (§2.8.5) | E2 |
+| **LV-3 implementation** | **DESIGN CLOSED** | reviewer bandwidth, and the object's identity only settled 2026-09-21 (§2.9.8) | unblocks six consumers; is §7.2 arm 2 |
+
+### 7.4 The scope question, which is steering's
+
+**"This should be a part of it" admits two readings, and they differ by a lot:**
+
+- **Minimal** — slice 2's deletion, the `--in-peers` measurement, and §7.2
+  arm 1. **All three are ready, none is blocked, and together they are a small
+  diff with a large ripple** (§7.5). This removes a mechanism that defends
+  nothing and gives a real ceiling a reachable value.
+- **Full** — the above **plus** LV-3's implementation and E1/E2, which is the
+  deferral list as originally written. This is the only reading that discharges
+  `PDM-Q7`'s ignore-half as specified, and it is **much** larger: E1/E2 have no
+  mechanism at all, and the amplifier warning that deferred them has not been
+  answered by anything in Rounds 1–3.
+
+**Recorded, not chosen.** The round's job was to make the two readings
+separable and priced; picking between them is a release-scope decision.
+
+### 7.5 The deletion's ripples — enumerated here, not discovered in the PR
+
+Slice 2 is a small diff with a **larger** ripple than its size suggests:
+
+- **[`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) §0.5 I7** flips from
+  PARTIAL, and *not* to IMPLEMENTED — the mechanism is **deleted**, which §0.5
+  has no status for. **A status vocabulary that cannot express "the mechanism
+  was removed as the fix" is itself a finding**; resolve it when the row flips.
+- **I7's "the NUMBER is owed to the maintainer" dissolves.** There is no
+  constant left to pick.
+- **[`FOLLOWUPS.md`](../FOLLOWUPS.md) rows at `:756` and `:768`** both name
+  **PWC-E11** as *the current inbound bound*. Both become false on deletion, and
+  `:768`'s "anonymity zones have no inbound per-host cap at all" stops being an
+  asymmetry to fix and becomes **the uniform state**.
+- **A flag six production hosts pass.** All six seeds carry
+  `max-connections-per-ip=8` (verified 2026-09-21). **Deleting the option makes
+  every one of those config files a startup failure**, so the cut is either a
+  coordinated config change or an accept-and-ignore deprecation window. **This
+  is a rule-82 surface**, and it is the half most likely to be missed because it
+  is not in the diff.
+- **PR 812's surface becomes dead**: seven `node_server` tests, `HostInboundCap`
+  / `InboundZone` in `rust/shekyl-peer-policy/src/host_inbound.rs`, and four
+  `shekyl_host_inbound_*` FFI exports. **Deleting them is the correct outcome,
+  not a regression** — PR 812 moved ownership into Rust so the mechanism could
+  be reasoned about, and the reasoning concluded *delete*. Rule 15: the
+  migration-shaped code goes with the thing it was migrating.
+- **`--in-peers`' sentinel narrowing** (§2.9.4 arm 2) should be resolved in the
+  same cut, since it is the identical defect one descriptor away and PR 812
+  already built the Rust-side pattern for it.
+
+---
