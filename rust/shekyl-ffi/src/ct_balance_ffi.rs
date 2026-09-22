@@ -26,7 +26,7 @@
 //! `check_commitment_mask_valid` fingerprint block in `blockchain.cpp`.
 
 use shekyl_ct_balance::{
-    check_commitment_masks_for, check_output_keys, verify_ct_balance, CtBalanceError, MaskSubject,
+    check_commitment_masks, check_output_keys, verify_ct_balance, CtBalanceError, MaskSubject,
     OutputPointsError,
 };
 use shekyl_units::AtomicUnits;
@@ -215,7 +215,7 @@ pub unsafe extern "C" fn shekyl_check_output_keys(keys_ptr: *const u8, num_keys:
 /// E6 slice 4 (`CHAIN_RULES_SLICE_4.md` §3.1 S25/S27) the C++ caller made
 /// both decisions — whether the fingerprint applies, and the
 /// `outPk.size() != vout.size()` arity refusal — before Rust ran; both are
-/// rule content and both are `shekyl_ct_balance::check_commitment_masks_for`'s
+/// rule content and both are `shekyl_ct_balance::check_commitment_masks`'s
 /// now. `amounts_ptr` must carry exactly `num_outputs` values for every
 /// shape (a spend's are all zero on the wire); the FFI does not select.
 ///
@@ -264,7 +264,7 @@ pub unsafe extern "C" fn shekyl_check_commitment_masks(
         CT_TYPE_FCMP => MaskSubject::Spend,
         _ => return SHEKYL_OUTPUT_POINTS_ERR_CT_TYPE,
     };
-    match check_commitment_masks_for(masks_flat, num_outputs, subject) {
+    match check_commitment_masks(masks_flat, num_outputs, subject) {
         Ok(()) => SHEKYL_OUTPUT_POINTS_OK,
         Err(e) => map_output_points_err(e),
     }

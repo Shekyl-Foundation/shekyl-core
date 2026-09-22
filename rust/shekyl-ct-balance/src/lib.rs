@@ -239,7 +239,7 @@ impl core::fmt::Display for OutputPointsError {
                  or coinbase zeroCommit)"
             }
             OutputPointsError::MaskCountMismatch => {
-                "the commitment-mask count does not match the output count (one mask per output)"
+                "the commitment-mask count does not match the output count (one mask per output, and one cleartext amount per coinbase output)"
             }
         })
     }
@@ -247,16 +247,9 @@ impl core::fmt::Display for OutputPointsError {
 
 impl std::error::Error for OutputPointsError {}
 
-/// Whose masks are being judged — the selection that decides whether the
-/// coinbase `zeroCommit(amount)` fingerprint gate applies.
-///
-/// Until E6 slice 4 (`CHAIN_RULES_SLICE_4.md` §3.1 S27) the C++ caller made
-/// this decision (`if (rv.type == CTTypeNull) → coinbase_amounts`) and the
-/// Rust primitive did what it was told through an `Option<&[u64]>`. The
-/// decision is rule content — a coinbase's masks must not equal the
-/// trivially-computable commitment to its public amount — so the entry point
-/// takes the subject and derives the gate; a caller cannot pass the wrong
-/// selection because there is no bare `Option` to pass.
+/// Whose masks are being judged. A coinbase applies the `zeroCommit(amount)`
+/// fingerprint gate; a spend does not. The caller passes the subject, not an
+/// `Option` it could set the wrong way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaskSubject<'a> {
     /// A coinbase (`CTTypeNull`): amounts are cleartext, and mask `i` must
@@ -280,7 +273,7 @@ pub enum MaskSubject<'a> {
 ///
 /// `masks` is the flattened `outPk` masks (`N × 32`); `n_outputs` is
 /// `vout.len()`.
-pub fn check_commitment_masks_for(
+pub fn check_commitment_masks(
     masks: &[u8],
     n_outputs: usize,
     subject: MaskSubject<'_>,
@@ -291,15 +284,35 @@ pub fn check_commitment_masks_for(
     if masks.len() / 32 != n_outputs {
         return Err(OutputPointsError::MaskCountMismatch);
     }
-    match subject {
+    let coinbase_amounts = match subject {
         MaskSubject::Coinbase { amounts } => {
             if amounts.len() != n_outputs {
                 return Err(OutputPointsError::MaskCountMismatch);
             }
-            check_commitment_masks(masks, Some(amounts))
+            Some(amounts)
         }
-        MaskSubject::Spend => check_commitment_masks(masks, None),
+        MaskSubject::Spend => None,
+    };
+
+    for (i, chunk) in masks.chunks_exact(32).enumerate() {
+        let key: &[u8; 32] = chunk
+            .try_into()
+            .map_err(|_| OutputPointsError::InvalidMask)?;
+        let point = decompress_point(key).map_err(|_| OutputPointsError::InvalidMask)?;
+        if point.is_identity() || point == ED25519_BASEPOINT_POINT {
+            return Err(OutputPointsError::TrivialMask);
+        }
+        if let Some(amounts) = coinbase_amounts {
+            // `amounts.len() == n_outputs ==` the mask count, so `i` is in range.
+            let amount = amounts[i];
+            let trivial =
+                ED25519_BASEPOINT_POINT + amount_commitment(AtomicUnits::from_raw(amount));
+            if point == trivial {
+                return Err(OutputPointsError::TrivialMask);
+            }
+        }
     }
+    Ok(())
 }
 
 /// Check every output public key `O` in a flattened `N × 32` buffer against the
@@ -328,57 +341,6 @@ pub fn check_output_keys(flat: &[u8]) -> Result<(), OutputPointsError> {
     Ok(())
 }
 
-/// Check every commitment mask (`outPk[i].mask`) in a flattened `N × 32` buffer
-/// against the §2.3 output-point rule plus the trivial-mask fingerprint guards.
-///
-/// Structural gates (every mask): canonical encoding and prime-order
-/// (torsion-free), rejected as [`OutputPointsError::InvalidMask`].
-/// For non-coinbase txs these are redundant with the balance equation's own
-/// point gate; applying them here keeps the rule uniform and covers coinbase
-/// (`CTTypeNull`), which has no balance equation.
-///
-/// Trivial-form gates (every mask): the identity (`mask=0, amount=0`) and bare
-/// `G` (`mask=1, amount=0`) → [`OutputPointsError::TrivialMask`] — defense in
-/// depth against construction bugs.
-///
-/// Coinbase fingerprint gate: when `coinbase_amounts` is `Some`, mask `i` (for
-/// `i < coinbase_amounts.len()`) must not equal
-/// `zeroCommit(amount) = G + amount*H` — the trivially-computable commitment
-/// that leaks the confidential-coinbase amount to any observer.
-///
-/// **The primitive, not the entry.** Whether the fingerprint gate applies is
-/// a rule ([`MaskSubject`]), and the one-mask-per-output arity gate is a
-/// rule too; both belong to [`check_commitment_masks_for`], which is what
-/// the FFI and every consumer call. This stays crate-visible for the
-/// point-level vectors below.
-pub(crate) fn check_commitment_masks(
-    flat: &[u8],
-    coinbase_amounts: Option<&[u64]>,
-) -> Result<(), OutputPointsError> {
-    if !flat.len().is_multiple_of(32) {
-        return Err(OutputPointsError::InvalidMask);
-    }
-    for (i, chunk) in flat.chunks_exact(32).enumerate() {
-        let key: &[u8; 32] = chunk
-            .try_into()
-            .map_err(|_| OutputPointsError::InvalidMask)?;
-        let point = decompress_point(key).map_err(|_| OutputPointsError::InvalidMask)?;
-        if point.is_identity() || point == ED25519_BASEPOINT_POINT {
-            return Err(OutputPointsError::TrivialMask);
-        }
-        if let Some(amounts) = coinbase_amounts {
-            if let Some(&amount) = amounts.get(i) {
-                let trivial =
-                    ED25519_BASEPOINT_POINT + amount_commitment(AtomicUnits::from_raw(amount));
-                if point == trivial {
-                    return Err(OutputPointsError::TrivialMask);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +358,12 @@ mod tests {
 
     fn h_only(amount: u64) -> [u8; 32] {
         amount_commitment(au(amount)).compress().to_bytes()
+    }
+
+    /// Point-level call: one mask per 32 bytes, judged as `subject`.
+    fn masks(flat: &[u8], subject: MaskSubject<'_>) -> Result<(), OutputPointsError> {
+        let n = flat.len() / 32;
+        check_commitment_masks(flat, n, subject)
     }
 
     #[test]
@@ -555,15 +523,15 @@ mod tests {
     #[test]
     fn masks_reject_torsion_and_non_canonical_as_invalid() {
         assert_eq!(
-            check_commitment_masks(&TORSION, None),
+            masks(&TORSION, MaskSubject::Spend),
             Err(OutputPointsError::InvalidMask)
         );
         assert_eq!(
-            check_commitment_masks(&non_canonical_identity(), None),
+            masks(&non_canonical_identity(), MaskSubject::Spend),
             Err(OutputPointsError::InvalidMask)
         );
         assert_eq!(
-            check_commitment_masks(&[0u8; 33], None),
+            masks(&[0u8; 33], MaskSubject::Spend),
             Err(OutputPointsError::InvalidMask)
         );
     }
@@ -572,12 +540,12 @@ mod tests {
     fn masks_reject_trivial_forms() {
         let identity = EdwardsPoint::default().compress().to_bytes();
         assert_eq!(
-            check_commitment_masks(&identity, None),
+            masks(&identity, MaskSubject::Spend),
             Err(OutputPointsError::TrivialMask)
         );
         let g = G.compress().to_bytes();
         assert_eq!(
-            check_commitment_masks(&g, None),
+            masks(&g, MaskSubject::Spend),
             Err(OutputPointsError::TrivialMask)
         );
     }
@@ -588,21 +556,27 @@ mod tests {
         // zeroCommit(amount) = G + amount*H — the amount-leaking fingerprint.
         let zero_commit = (G + amount_commitment(au(AMOUNT))).compress().to_bytes();
         assert_eq!(
-            check_commitment_masks(&zero_commit, Some(&[AMOUNT])),
+            masks(&zero_commit, MaskSubject::Coinbase { amounts: &[AMOUNT] }),
             Err(OutputPointsError::TrivialMask)
         );
         // Same point with a different claimed amount is not the fingerprint.
-        assert!(check_commitment_masks(&zero_commit, Some(&[AMOUNT + 1])).is_ok());
-        // And without the coinbase amounts it is just a well-formed mask.
-        assert!(check_commitment_masks(&zero_commit, None).is_ok());
+        assert!(masks(
+            &zero_commit,
+            MaskSubject::Coinbase {
+                amounts: &[AMOUNT + 1]
+            }
+        )
+        .is_ok());
+        // A spend does not apply the fingerprint gate.
+        assert!(masks(&zero_commit, MaskSubject::Spend).is_ok());
     }
 
     #[test]
     fn honest_masks_accept() {
         let mask = commit(42, Scalar::from_bytes_mod_order([3u8; 32]));
-        assert!(check_commitment_masks(&mask, None).is_ok());
-        assert!(check_commitment_masks(&mask, Some(&[42])).is_ok());
-        assert!(check_commitment_masks(&[], None).is_ok());
+        assert!(masks(&mask, MaskSubject::Spend).is_ok());
+        assert!(masks(&mask, MaskSubject::Coinbase { amounts: &[42] }).is_ok());
+        assert!(masks(&[], MaskSubject::Spend).is_ok());
     }
 
     // ---- the entry: subject-selected gate and the arity gate (slice 4 S25/S27)
@@ -614,21 +588,21 @@ mod tests {
     fn entry_refuses_a_mask_count_that_is_not_the_output_count() {
         let mask = commit(42, Scalar::from_bytes_mod_order([3u8; 32]));
         assert_eq!(
-            check_commitment_masks_for(&mask, 2, MaskSubject::Spend),
+            check_commitment_masks(&mask, 2, MaskSubject::Spend),
             Err(OutputPointsError::MaskCountMismatch)
         );
         assert_eq!(
-            check_commitment_masks_for(&[], 1, MaskSubject::Spend),
+            check_commitment_masks(&[], 1, MaskSubject::Spend),
             Err(OutputPointsError::MaskCountMismatch)
         );
         // A coinbase's amount count must match too.
         assert_eq!(
-            check_commitment_masks_for(&mask, 1, MaskSubject::Coinbase { amounts: &[] }),
+            check_commitment_masks(&mask, 1, MaskSubject::Coinbase { amounts: &[] }),
             Err(OutputPointsError::MaskCountMismatch)
         );
         // Zero outputs, zero masks: vacuous, accepted (the C++ `outPk.empty()`
         // short-circuit was redundant with this).
-        assert!(check_commitment_masks_for(&[], 0, MaskSubject::Spend).is_ok());
+        assert!(check_commitment_masks(&[], 0, MaskSubject::Spend).is_ok());
     }
 
     /// The fingerprint gate is selected by the subject, not by the caller:
@@ -638,16 +612,14 @@ mod tests {
     fn entry_applies_the_coinbase_fingerprint_gate_by_subject() {
         let zero_commit = (G + amount_commitment(au(42))).compress().to_bytes();
         assert_eq!(
-            check_commitment_masks_for(&zero_commit, 1, MaskSubject::Coinbase { amounts: &[42] }),
+            check_commitment_masks(&zero_commit, 1, MaskSubject::Coinbase { amounts: &[42] }),
             Err(OutputPointsError::TrivialMask)
         );
-        assert!(check_commitment_masks_for(&zero_commit, 1, MaskSubject::Spend).is_ok());
-        assert!(check_commitment_masks_for(
-            &zero_commit,
-            1,
-            MaskSubject::Coinbase { amounts: &[43] }
-        )
-        .is_ok());
+        assert!(check_commitment_masks(&zero_commit, 1, MaskSubject::Spend).is_ok());
+        assert!(
+            check_commitment_masks(&zero_commit, 1, MaskSubject::Coinbase { amounts: &[43] })
+                .is_ok()
+        );
     }
 
     #[test]
