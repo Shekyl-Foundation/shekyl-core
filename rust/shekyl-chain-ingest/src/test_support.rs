@@ -37,16 +37,28 @@ pub const EPOCH: SettlementEpochBlocks = match SettlementEpochBlocks::new(10_000
 };
 
 /// A fresh temp path for a store.
+///
+/// A redb store is **one file**, so a stale one is removed with
+/// `remove_file`; `remove_dir_all` on a file fails with `NotADirectory`,
+/// which is how an earlier version of this helper left every store behind
+/// and would have handed a same-named test a *reopened* stale store rather
+/// than a fresh one (`ChainStore::create` reopens an existing path).
 pub fn tmp(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!("shekyl-ingest-{}-{name}", std::process::id()));
-    // A stale directory from an earlier run is not an error worth stopping for.
-    let _stale = std::fs::remove_dir_all(&p);
+    cleanup(&p);
+    assert!(
+        !p.exists(),
+        "stale store at {} could not be removed",
+        p.display()
+    );
     p
 }
 
+/// Remove the store at `p` (a file — or a directory, should a helper ever
+/// make one). Absence is not an error.
 pub fn cleanup(p: &std::path::Path) {
-    let _gone = std::fs::remove_dir_all(p);
+    let _gone = std::fs::remove_file(p).or_else(|_| std::fs::remove_dir_all(p));
 }
 
 pub fn h(n: u64) -> BlockHeight {
