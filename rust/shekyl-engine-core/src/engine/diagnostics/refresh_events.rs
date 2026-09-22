@@ -7,6 +7,8 @@
 
 use std::time::Duration;
 
+use shekyl_types::BlockHeight;
+
 /// Classification of a producer-side malformed-block detection.
 ///
 /// Maps to scanner-rejection causes today
@@ -274,7 +276,7 @@ pub enum RefreshDiagnostic {
     ReorgObserved {
         /// Block height where the fork was detected (relative to
         /// the snapshot tip). Not projected — see the F9 contract.
-        fork_height: u64,
+        fork_height: BlockHeight,
 
         /// Reorganization depth in blocks. Projected as a
         /// bucketed label.
@@ -288,7 +290,7 @@ pub enum RefreshDiagnostic {
     ScanProgress {
         /// Current scan height. Not projected — see the F9
         /// contract (wallet-activity correlation closure).
-        height: u64,
+        height: BlockHeight,
 
         /// Number of matched outputs observed at this height.
         /// Projected as a bucketed label.

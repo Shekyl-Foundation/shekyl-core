@@ -432,7 +432,8 @@ mod tests {
         ));
 
         let mut out_of_range = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
-        out_of_range.processed_height_range = shekyl_types::BlockHeight::from_raw(10)..shekyl_types::BlockHeight::from_raw(20);
+        out_of_range.processed_height_range =
+            shekyl_types::BlockHeight::from_raw(10)..shekyl_types::BlockHeight::from_raw(20);
         out_of_range.bond_sightings.push(sighting(0, 25));
         assert!(matches!(
             validate_bond_sightings(&out_of_range, &staking),
@@ -440,7 +441,8 @@ mod tests {
         ));
 
         let mut ok = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
-        ok.processed_height_range = shekyl_types::BlockHeight::from_raw(10)..shekyl_types::BlockHeight::from_raw(20);
+        ok.processed_height_range =
+            shekyl_types::BlockHeight::from_raw(10)..shekyl_types::BlockHeight::from_raw(20);
         ok.bond_sightings.push(sighting(0, 15));
         assert!(validate_bond_sightings(&ok, &staking).is_ok());
     }
@@ -454,7 +456,8 @@ mod tests {
     fn validate_bond_sightings_rejects_a_slot_not_in_the_probe_cache() {
         let staking = staking_with_cached_slots(&[0]);
         let mut unknown = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
-        unknown.processed_height_range = shekyl_types::BlockHeight::from_raw(10)..shekyl_types::BlockHeight::from_raw(20);
+        unknown.processed_height_range =
+            shekyl_types::BlockHeight::from_raw(10)..shekyl_types::BlockHeight::from_raw(20);
         unknown.bond_sightings.push(sighting(999, 15));
         let err = validate_bond_sightings(&unknown, &staking).expect_err("unknown slot");
         match err {

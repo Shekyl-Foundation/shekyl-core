@@ -300,7 +300,9 @@ mod tests {
                     change_amount: 0,
                     inputs: Vec::new(),
                     lock_baseline: None,
-                    state: SendState::Confirmed { height: shekyl_types::BlockHeight::from_raw(25) },
+                    state: SendState::Confirmed {
+                        height: shekyl_types::BlockHeight::from_raw(25),
+                    },
                 },
             );
         }
@@ -361,7 +363,9 @@ mod tests {
 
             assert_eq!(
                 wallet.send_journal.rows[&txid].state,
-                SendState::Confirmed { height: shekyl_types::BlockHeight::from_raw(30) },
+                SendState::Confirmed {
+                    height: shekyl_types::BlockHeight::from_raw(30)
+                },
                 "late confirmation un-abandons loudly"
             );
             assert!(

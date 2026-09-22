@@ -189,7 +189,7 @@ impl ConsumerHeldEntry {
         Self {
             created_at: Instant::now(),
             snapshot_id: SnapshotId([0u8; 16]),
-            built_at_height: 0,
+            built_at_height: shekyl_types::BlockHeight::ZERO,
             built_at_tip_hash: [0u8; 32],
             tx_bytes,
             request: TxRequest {

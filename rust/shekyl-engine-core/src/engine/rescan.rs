@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn reset_clears_scan_derived_and_preserves_retention() {
         let mut wallet = WalletLedger::empty();
-        wallet.sync_state.restore_from_height = 42;
+        wallet.sync_state.restore_from_height = shekyl_types::BlockHeight::from_raw(42);
         wallet.sync_state.creation_anchor_hash = Some([7u8; 32]);
         wallet.sync_state.pending_tx_hashes.push([9u8; 32]);
 
@@ -356,7 +356,10 @@ mod tests {
         reset_scan_derived_state(&mut wallet, &mut indexes);
 
         assert_unscanned(&wallet.ledger);
-        assert_eq!(wallet.sync_state.restore_from_height, 42);
+        assert_eq!(
+            wallet.sync_state.restore_from_height,
+            shekyl_types::BlockHeight::from_raw(42)
+        );
         assert_eq!(wallet.sync_state.creation_anchor_hash, Some([7u8; 32]));
         assert_eq!(wallet.sync_state.pending_tx_hashes, vec![[9u8; 32]]);
         assert!(wallet.tx_meta.tx_keys.contains_key(&txid));
@@ -405,7 +408,7 @@ mod tests {
         wallet.send_journal.rows.insert(
             [5u8; 32],
             SendRecord {
-                dispatched_at_height: 42,
+                dispatched_at_height: shekyl_types::BlockHeight::from_raw(42),
                 fee: 700,
                 recipients: vec![SendRecipient {
                     address: "shekyl1example".to_owned(),
@@ -474,13 +477,16 @@ mod tests {
     fn reset_is_idempotent_on_empty_ledger() {
         let mut wallet = WalletLedger::empty();
         wallet.sync_state = SyncStateBlock {
-            restore_from_height: 7,
+            restore_from_height: shekyl_types::BlockHeight::from_raw(7),
             ..SyncStateBlock::empty()
         };
         let mut indexes = LedgerIndexes::empty();
         reset_scan_derived_state(&mut wallet, &mut indexes);
         reset_scan_derived_state(&mut wallet, &mut indexes);
-        assert_eq!(wallet.sync_state.restore_from_height, 7);
+        assert_eq!(
+            wallet.sync_state.restore_from_height,
+            shekyl_types::BlockHeight::from_raw(7)
+        );
         assert_unscanned(&wallet.ledger);
     }
 }

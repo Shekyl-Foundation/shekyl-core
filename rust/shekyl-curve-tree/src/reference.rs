@@ -83,7 +83,10 @@ const _: () = assert!(
 /// (observed depth-6 reorg rate, or a `MIN_AGE` consensus change), not by
 /// preference (§5.1 reversion clause).
 pub const REF_ANCHOR_AGE: shekyl_types::BlockCount =
-    shekyl_types::BlockCount::from_raw(FCMP_REFERENCE_BLOCK_MIN_AGE + 1);
+    match REFERENCE_BLOCK_MIN_AGE.checked_add(shekyl_types::BlockCount::ONE) {
+        Some(age) => age,
+        None => panic!("REF_ANCHOR_AGE overflowed"),
+    };
 
 /// Submittable lifetime of a proof, in blocks past build time
 /// (§5.2): `MAX_AGE − REF_ANCHOR_AGE`. Built at `reference_height =
@@ -95,9 +98,11 @@ pub const REF_ANCHOR_AGE: shekyl_types::BlockCount =
 /// the daemon's acceptance window is inclusive at both ends. This is the
 /// proactive bound `PHASE_2A_SEND_PATH.md` §9 #5 left unbounded in
 /// Round 0.
-pub const PROOF_VALIDITY_HORIZON: shekyl_types::BlockCount = shekyl_types::BlockCount::from_raw(
-    FCMP_REFERENCE_BLOCK_MAX_AGE - (FCMP_REFERENCE_BLOCK_MIN_AGE + 1),
-);
+pub const PROOF_VALIDITY_HORIZON: shekyl_types::BlockCount =
+    match REFERENCE_BLOCK_MAX_AGE.checked_sub(REF_ANCHOR_AGE) {
+        Some(span) => span,
+        None => panic!("PROOF_VALIDITY_HORIZON underflowed"),
+    };
 
 /// Reference-block age at which the wallet proactively re-anchors an
 /// in-flight, still-unconfirmed proof rather than risk a too-stale
@@ -127,7 +132,9 @@ const _: () = assert!(REBUILD_AT.to_raw() == 50);
 /// always has a tip past this floor; the `None` is a total-function
 /// guard, not an expected runtime branch.
 #[must_use]
-pub fn select_reference_height(tip: shekyl_types::BlockHeight) -> Option<shekyl_types::BlockHeight> {
+pub fn select_reference_height(
+    tip: shekyl_types::BlockHeight,
+) -> Option<shekyl_types::BlockHeight> {
     tip.checked_sub_count(REF_ANCHOR_AGE)
 }
 
@@ -278,7 +285,10 @@ mod tests {
     fn select_reference_height_is_tip_minus_anchor() {
         assert_eq!(select_reference_height(h(1_000)), Some(h(994)));
         // Exactly at the floor: tip == REF_ANCHOR_AGE → reference height 0.
-        assert_eq!(select_reference_height(h(REF_ANCHOR_AGE.to_raw())), Some(h(0)));
+        assert_eq!(
+            select_reference_height(h(REF_ANCHOR_AGE.to_raw())),
+            Some(h(0))
+        );
     }
 
     #[test]

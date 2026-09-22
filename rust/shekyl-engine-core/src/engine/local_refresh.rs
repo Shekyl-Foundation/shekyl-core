@@ -313,7 +313,10 @@ impl LocalRefresh {
     /// per §5.4.7 R4 a-instance-scoped; on drop the embedded
     /// [`ViewMaterial`]'s [`ZeroizeOnDrop`](zeroize::ZeroizeOnDrop)
     /// chain wipes the secret bytes.
-    pub const fn new(view_material: ViewMaterial, scan_start_floor: shekyl_types::BlockHeight) -> Self {
+    pub const fn new(
+        view_material: ViewMaterial,
+        scan_start_floor: shekyl_types::BlockHeight,
+    ) -> Self {
         Self::with_bond_watch(view_material, scan_start_floor, BTreeMap::new())
     }
 
@@ -660,31 +663,30 @@ impl RefreshEngine for LocalRefresh {
             // a re-derivation could disagree with the anchored height if the
             // daemon advanced between the anchor's height read and this one,
             // breaking the merge gate. Caught up: `has_block` rejects the next ordinal.
-            let next_block = snapshot.synced_height.saturating_add(BlockCount::ONE);
-            let original_start = next_block.to_raw();
-            let end = chain_tip.to_raw();
-            if !chain_tip.has_block(next_block) {
-                let parent_hash = parent_hash_for_start(&snapshot, original_start);
-                return Ok(ScanResult::empty_at(
-                    BlockHeight::from_raw(original_start),
-                    parent_hash,
-                ));
+            let scan_start = snapshot.synced_height.saturating_add(BlockCount::ONE);
+            let scan_end = chain_tip.next_height();
+            if !chain_tip.has_block(scan_start) {
+                let parent_hash = parent_hash_for_start(&snapshot, scan_start);
+                return Ok(ScanResult::empty_at(scan_start, parent_hash));
             }
+
+            // Linkage starts above height 1; its parent is not a stored block hash.
+            let block_one = BlockHeight::ZERO.saturating_add(BlockCount::ONE);
 
             // Per-block scan loop with checkpoint-5 per-output
             // cancellation via Scanner::scan_with_cancel.
-            let mut effective_start = original_start;
-            let mut effective_parent_hash = parent_hash_for_start(&snapshot, original_start);
-            if original_start > 1 && effective_parent_hash.is_none() {
+            let mut effective_start = scan_start;
+            let mut effective_parent_hash = parent_hash_for_start(&snapshot, scan_start);
+            if scan_start > block_one && effective_parent_hash.is_none() {
                 // Boundary parent-hash fetch for a floored/birthday-anchored
                 // start: the snapshot's reorg window doesn't carry the hash
-                // at `original_start - 1`. Route through the same retry /
+                // one below `scan_start`. Route through the same retry /
                 // cancellation / diagnostic helper the per-block scan uses so
                 // a transient failure here is retried with backoff rather than
                 // terminating refresh as `Io` on the first error.
                 let parent = fetch_block_with_retry(
                     daemon,
-                    original_start - 1,
+                    scan_start.saturating_sub_count(BlockCount::ONE),
                     &cancel,
                     &mut emit_state,
                     diagnostics,
@@ -711,8 +713,8 @@ impl RefreshEngine for LocalRefresh {
             let mut block_leaves: Vec<(BlockHeight, Vec<OwnedTxLeaves>)> = Vec::new();
             let mut block_curve_tree_roots: Vec<(BlockHeight, CurveTreeRoot)> = Vec::new();
 
-            let mut h = original_start;
-            while h < end {
+            let mut h = scan_start;
+            while h < scan_end {
                 // Per-block boundary: clear per-block emission
                 // counters (F13-S latches remain set).
                 emit_state.reset_block();
@@ -755,11 +757,9 @@ impl RefreshEngine for LocalRefresh {
                 // check vouched for, which the bond watch's monotone
                 // sighting adoption cannot survive (a stale fork sighting
                 // would pass O5 and burn cursor slots permanently).
-                if h > 1 {
+                if h > block_one {
                     let expected_parent = match block_hashes.last() {
-                        Some(&(prev_h, prev_hash))
-                            if prev_h + BlockCount::ONE == BlockHeight::from_raw(h) =>
-                        {
+                        Some(&(prev_h, prev_hash)) if prev_h + BlockCount::ONE == h => {
                             Some(prev_hash)
                         }
                         _ => parent_hash_for_start(&snapshot, h).or(if h == effective_start {
@@ -776,7 +776,7 @@ impl RefreshEngine for LocalRefresh {
                             // no consumer sees the blind region.
                             if reorg_rewinds == MAX_REORG_REWINDS_PER_ATTEMPT {
                                 warn!(
-                                    height = h,
+                                    height = h.to_raw(),
                                     max = MAX_REORG_REWINDS_PER_ATTEMPT,
                                     "LocalRefresh: reorg detected after the rewind budget was \
                                      spent; aborting the attempt (reorg storm)",
@@ -784,7 +784,7 @@ impl RefreshEngine for LocalRefresh {
                                 return Err(LocalRefreshError::ReorgStorm);
                             }
                             warn!(
-                                height = h,
+                                height = h.to_raw(),
                                 "LocalRefresh: chain reorg detected at parent of {h}, walking fork point",
                             );
 
@@ -813,14 +813,14 @@ impl RefreshEngine for LocalRefresh {
                             let fork_height = find_fork_point(
                                 daemon,
                                 &snapshot,
-                                snapshot.synced_height.to_raw(),
+                                snapshot.synced_height,
                                 &cancel,
                                 &mut emit_state,
                                 diagnostics,
                             )
                             .await?;
-                            let depth =
-                                u32::try_from(h.saturating_sub(fork_height)).unwrap_or(u32::MAX);
+                            let depth = u32::try_from(h.saturating_sub(fork_height).to_raw())
+                                .unwrap_or(u32::MAX);
                             emit_state.try_emit(
                                 diagnostics,
                                 RefreshDiagnostic::ReorgObserved { fork_height, depth },
@@ -829,13 +829,11 @@ impl RefreshEngine for LocalRefresh {
                             // The latest fork wins: it is the current
                             // divergence-from-window, so it is the correct
                             // merge rewind target even after earlier reorgs.
-                            reorg_rewind = Some(ReorgRewind {
-                                fork_height: BlockHeight::from_raw(fork_height),
-                            });
+                            reorg_rewind = Some(ReorgRewind { fork_height });
                             reorg_rewinds += 1;
                             if reorg_rewinds == MAX_REORG_REWINDS_PER_ATTEMPT {
                                 warn!(
-                                    fork_height,
+                                    fork_height = fork_height.to_raw(),
                                     max = MAX_REORG_REWINDS_PER_ATTEMPT,
                                     "LocalRefresh: reorg-rewind budget spent; a further \
                                      divergence this attempt aborts as a reorg storm",
@@ -846,7 +844,7 @@ impl RefreshEngine for LocalRefresh {
 
                             // Discard every block accumulated this attempt and
                             // restart from the fork. On the first reorg
-                            // `fork_height <= original_start <= every accumulated
+                            // `fork_height <= scan_start <= every accumulated
                             // height`, so `clear()` matches the height-keyed
                             // `retain(< fork_height)` it replaces. It is also
                             // correct across a *second, shallower* reorg (a fork
@@ -912,7 +910,7 @@ impl RefreshEngine for LocalRefresh {
                 }
 
                 let block_hash = scannable.block.hash();
-                block_hashes.push((BlockHeight::from_raw(h), block_hash));
+                block_hashes.push((h, block_hash));
 
                 // Collect every input's key image unfiltered. The
                 // merge matches against the live wallet's
@@ -931,7 +929,7 @@ impl RefreshEngine for LocalRefresh {
                         let containing_tx_hash =
                             *miner_tx_hash.get_or_insert_with(|| miner_tx.hash());
                         spent_key_images.push(KeyImageObserved {
-                            block_height: BlockHeight::from_raw(h),
+                            block_height: h,
                             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                                 *key_image,
                             ),
@@ -950,7 +948,7 @@ impl RefreshEngine for LocalRefresh {
                     for input in &tx.prefix.inputs {
                         if let Input::ToKey { key_image, .. } = input {
                             spent_key_images.push(KeyImageObserved {
-                                block_height: BlockHeight::from_raw(h),
+                                block_height: h,
                                 key_image:
                                     shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                                         *key_image,
@@ -965,7 +963,7 @@ impl RefreshEngine for LocalRefresh {
                     // first occurrence is the earliest height — the one
                     // the merge's first-sighting semantics would keep —
                     // and duplicates stay off the channel.
-                    for sighting in sightings_in(tx, BlockHeight::from_raw(h), &self.bond_watch) {
+                    for sighting in sightings_in(tx, h, &self.bond_watch) {
                         if sighted_slots.insert(sighting.slot) {
                             bond_sightings.push(sighting);
                         }
@@ -989,11 +987,8 @@ impl RefreshEngine for LocalRefresh {
                     );
                     LocalRefreshError::Malformed
                 })?;
-                block_leaves.push((BlockHeight::from_raw(h), leaves));
-                block_curve_tree_roots.push((
-                    BlockHeight::from_raw(h),
-                    scannable.block.header.curve_tree_root,
-                ));
+                block_leaves.push((h, leaves));
+                block_curve_tree_roots.push((h, scannable.block.header.curve_tree_root));
 
                 // Per-output safe-point cancellation (checkpoint 5)
                 // via Scanner::scan_with_cancel. The closure reads
@@ -1012,7 +1007,7 @@ impl RefreshEngine for LocalRefresh {
                         // ExcessiveOutputs class is handled in the
                         // pre-pass above (the scanner gate is
                         // defense-in-depth).
-                        debug!(height = h, error = %source, "LocalRefresh: scanner rejected block");
+                        debug!(height = h.to_raw(), error = %source, "LocalRefresh: scanner rejected block");
                         emit_state.try_emit(
                             diagnostics,
                             RefreshDiagnostic::DaemonMalformed {
@@ -1031,7 +1026,7 @@ impl RefreshEngine for LocalRefresh {
                 let candidates_count = recovered.len();
                 for output in recovered {
                     new_transfers.push(DetectedTransfer {
-                                block_height: BlockHeight::from_raw(h),
+                        block_height: h,
                         output,
                     });
                 }
@@ -1056,18 +1051,17 @@ impl RefreshEngine for LocalRefresh {
                 // `ScanResult` (see `run_refresh_task`), so the streaming
                 // per-block frame carries the zeroed display fields.
                 _ = progress.send(RefreshProgress::phase_only(
-                    BlockHeight::from_raw(h),
+                    h,
                     block_hashes.len() as u64,
-                    end.saturating_sub(original_start),
+                    scan_end.saturating_sub(scan_start).to_raw(),
                     RefreshPhase::Scanning,
                 ));
 
-                h += 1;
+                h = h + BlockCount::ONE;
             }
 
             Ok(ScanResult {
-                processed_height_range: BlockHeight::from_raw(effective_start)
-                    ..BlockHeight::from_raw(end),
+                processed_height_range: effective_start..scan_end,
                 parent_hash: effective_parent_hash,
                 block_hashes,
                 new_transfers,
@@ -1081,22 +1075,15 @@ impl RefreshEngine for LocalRefresh {
     }
 }
 
-// ============================================================================
-// Inner helpers (mirror engine/refresh/ free helpers; kept local
-// to bound the C4 diff to a single new file. C5 collapses these
-// when the legacy free `produce_scan_result` is deleted.)
-// ============================================================================
-
-/// Parent hash of a scan whose `u64` range starts at `start`.
-/// `None` at genesis (`start <= 1`); otherwise the hash at `start - 1`.
-fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: u64) -> Option<BlockHash> {
-    if start <= 1 {
-        None
-    } else {
-        snapshot
-            .block_hash_at(BlockHeight::from_raw(start - 1))
-            .map(BlockHash::from_bytes)
-    }
+/// Parent hash of a scan that starts at `start`.
+///
+/// `None` for genesis and for height 1: that parent is the genesis
+/// previous-hash, which the snapshot does not store as a block hash.
+fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: BlockHeight) -> Option<BlockHash> {
+    let parent = start
+        .checked_sub_count(BlockCount::ONE)
+        .filter(|height| !height.is_zero())?;
+    snapshot.block_hash_at(parent).map(BlockHash::from_bytes)
 }
 
 /// Map a [`ScanError`] to the corresponding [`MalformedKind`]
@@ -1206,38 +1193,35 @@ const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
 async fn find_fork_point<R: DaemonEngine>(
     rpc: &R,
     snapshot: &LedgerSnapshot,
-    from_height: u64,
+    from_height: BlockHeight,
     cancel: &CancellationToken,
     emit_state: &mut EmitState,
     diagnostics: &dyn DiagnosticSink,
-) -> Result<u64, LocalRefreshError> {
+) -> Result<BlockHeight, LocalRefreshError> {
     let mut h = from_height;
     loop {
         if cancel.is_cancelled() {
             return Err(LocalRefreshError::Cancelled);
         }
 
-        if h == 0 {
-            return Ok(1);
+        if h.is_zero() {
+            return Ok(BlockHeight::ZERO.saturating_add(BlockCount::ONE));
         }
 
-        let Some(stored_hash) = snapshot
-            .block_hash_at(BlockHeight::from_raw(h))
-            .map(BlockHash::from_bytes)
-        else {
-            return Ok(h + 1);
+        let Some(stored_hash) = snapshot.block_hash_at(h).map(BlockHash::from_bytes) else {
+            return Ok(h.saturating_add(BlockCount::ONE));
         };
 
         let daemon_block = fetch_block_with_retry(rpc, h, cancel, emit_state, diagnostics).await?;
         if daemon_block.block.hash() == stored_hash {
-            return Ok(h + 1);
+            return Ok(h.saturating_add(BlockCount::ONE));
         }
 
         debug!(
-            height = h,
+            height = h.to_raw(),
             "LocalRefresh::find_fork_point: hash mismatch, walking back"
         );
-        h -= 1;
+        h = h.saturating_sub_count(BlockCount::ONE);
     }
 }
 
@@ -1254,13 +1238,13 @@ async fn find_fork_point<R: DaemonEngine>(
 /// many emissions in a single block window.
 async fn fetch_block_with_retry<R: DaemonEngine>(
     rpc: &R,
-    height: u64,
+    height: BlockHeight,
     cancel: &CancellationToken,
     emit_state: &mut EmitState,
     diagnostics: &dyn DiagnosticSink,
 ) -> Result<ScannableBlock, LocalRefreshError> {
     let height_usize =
-        usize::try_from(height).expect("block height fits in usize on 64-bit targets");
+        usize::try_from(height.to_raw()).expect("block height fits in usize on 64-bit targets");
 
     let mut delay = INITIAL_RETRY_DELAY;
     for attempt in 0..MAX_BLOCK_FETCH_RETRIES {
@@ -1272,7 +1256,7 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
             Ok(b) => return Ok(b),
             Err(e) if attempt + 1 < MAX_BLOCK_FETCH_RETRIES => {
                 warn!(
-                    height,
+                    height = height.to_raw(),
                     attempt = attempt + 1,
                     max = MAX_BLOCK_FETCH_RETRIES,
                     error = %e,
@@ -1292,7 +1276,7 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
             }
             Err(e) => {
                 error!(
-                    height,
+                    height = height.to_raw(),
                     error = %e,
                     "LocalRefresh::fetch_block_with_retry: block fetch failed after {} attempts",
                     MAX_BLOCK_FETCH_RETRIES,

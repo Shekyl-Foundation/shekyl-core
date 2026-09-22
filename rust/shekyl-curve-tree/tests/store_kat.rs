@@ -138,7 +138,7 @@ fn store_root_matches_oracle_and_header_tier_a() {
                 gindex,
                 &mut recon_entries,
             )
-                .expect("KAT chain has no bad published point");
+            .expect("KAT chain has no bad published point");
             let through = BlockHeight::from_raw(blk.height.saturating_sub(1));
             let oracle = CurveTreeRoot::from_bytes(root_from_scalars(&assemble_leaf_stream(
                 &recon_entries,
@@ -266,12 +266,7 @@ fn store_root_mixed_maturity_drain_order() {
             outputs: &identities_reg,
         },
     ];
-    collect_block_leaves(
-        BlockHeight::ZERO,
-        &recon_txs,
-        0,
-        &mut recon_entries,
-    )
+    collect_block_leaves(BlockHeight::ZERO, &recon_txs, 0, &mut recon_entries)
         .expect("fixture has no bad published point");
 
     let through = BlockHeight::from_raw(60);

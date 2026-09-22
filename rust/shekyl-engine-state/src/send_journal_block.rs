@@ -565,7 +565,10 @@ mod tests {
         assert!(SendState::Dispatched.holds_tx_key_retention());
         assert!(SendState::PresumedDead.holds_tx_key_retention());
         assert!(SendState::Abandoned.holds_tx_key_retention());
-        assert!(!SendState::Confirmed { height: BlockHeight::from_raw(1) }.holds_tx_key_retention());
+        assert!(!SendState::Confirmed {
+            height: BlockHeight::from_raw(1)
+        }
+        .holds_tx_key_retention());
         assert!(!SendState::TerminalRejected.holds_tx_key_retention());
 
         assert!(SendState::Dispatched.locks_carried_inputs());
@@ -574,12 +577,18 @@ mod tests {
             !SendState::PresumedDead.locks_carried_inputs(),
             "PresumedDead holds retention but never re-places locks"
         );
-        assert!(!SendState::Confirmed { height: BlockHeight::from_raw(1) }.locks_carried_inputs());
+        assert!(!SendState::Confirmed {
+            height: BlockHeight::from_raw(1)
+        }
+        .locks_carried_inputs());
 
         assert!(SendState::Dispatched.is_abandonable());
         assert!(SendState::PresumedDead.is_abandonable());
         assert!(!SendState::Abandoned.is_abandonable());
-        assert!(!SendState::Confirmed { height: BlockHeight::from_raw(1) }.is_abandonable());
+        assert!(!SendState::Confirmed {
+            height: BlockHeight::from_raw(1)
+        }
+        .is_abandonable());
         assert!(!SendState::TerminalRejected.is_abandonable());
     }
 
@@ -588,7 +597,9 @@ mod tests {
     fn postcard_round_trips_all_states() {
         for (i, state) in [
             SendState::Dispatched,
-            SendState::Confirmed { height: BlockHeight::from_raw(99) },
+            SendState::Confirmed {
+                height: BlockHeight::from_raw(99),
+            },
             SendState::TerminalRejected,
             SendState::PresumedDead,
             SendState::Abandoned,
@@ -617,7 +628,12 @@ mod tests {
         let pins: [(SendState, &[u8]); 5] = [
             (SendState::Dispatched, &[0]),
             // variant index 1, then height 99 as a varint
-            (SendState::Confirmed { height: BlockHeight::from_raw(99) }, &[1, 99]),
+            (
+                SendState::Confirmed {
+                    height: BlockHeight::from_raw(99),
+                },
+                &[1, 99],
+            ),
             (SendState::TerminalRejected, &[2]),
             (SendState::PresumedDead, &[3]),
             // PR-SJ-3: appended after the v1 tail — the four pins above
@@ -738,12 +754,19 @@ mod tests {
         let confirmed = [3u8; 32];
         block.rows.insert(
             confirmed,
-            sample_record(SendState::Confirmed { height: BlockHeight::from_raw(99) }, None),
+            sample_record(
+                SendState::Confirmed {
+                    height: BlockHeight::from_raw(99),
+                },
+                None,
+            ),
         );
         assert_eq!(
             block.mark_abandoned(&confirmed),
             AbandonEdge::Forbidden {
-                state: SendState::Confirmed { height: BlockHeight::from_raw(99) }
+                state: SendState::Confirmed {
+                    height: BlockHeight::from_raw(99)
+                }
             }
         );
         let rejected = [4u8; 32];
@@ -775,7 +798,9 @@ mod tests {
             ([3u8; 32], SendState::PresumedDead, Some(35), 102),
             (
                 [4u8; 32],
-                SendState::Confirmed { height: BlockHeight::from_raw(40) },
+                SendState::Confirmed {
+                    height: BlockHeight::from_raw(40),
+                },
                 Some(20),
                 103,
             ),

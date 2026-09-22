@@ -277,10 +277,7 @@ impl<
         // chain no longer carries. The re-scan's own sightings — adopted
         // next — re-insert every surviving post at its canonical height.
         if let Some(fork) = reorg_fork_height {
-            let dropped = state
-                .ledger
-                .staking
-                .discard_sightings_at_or_above(fork);
+            let dropped = state.ledger.staking.discard_sightings_at_or_above(fork);
             if !dropped.is_empty() {
                 tracing::info!(
                     dropped = dropped.len(),
@@ -584,10 +581,12 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         // but block heights are consensus-adjacent — never silently wrap.
         let next = match tip {
             None => BlockHeight::ZERO,
-            Some(t) => t.checked_add(BlockCount::ONE).ok_or(RefreshError::CurveTreeIngest {
-                context: "ingested tip height overflow",
-                recoverable_by_respawn: false,
-            })?,
+            Some(t) => t
+                .checked_add(BlockCount::ONE)
+                .ok_or(RefreshError::CurveTreeIngest {
+                    context: "ingested tip height overflow",
+                    recoverable_by_respawn: false,
+                })?,
         };
         if next >= range_end {
             break;
@@ -597,10 +596,11 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         // match. Both branches yield the pair so the verify below is uniform.
         let (leaves, expected_root) = if next < range_start {
             // Genesis/birthday backfill: tree-only daemon fetch + decode.
-            let number = usize::try_from(next.to_raw()).map_err(|_| RefreshError::CurveTreeIngest {
-                context: "backfill height exceeds usize",
-                recoverable_by_respawn: false,
-            })?;
+            let number =
+                usize::try_from(next.to_raw()).map_err(|_| RefreshError::CurveTreeIngest {
+                    context: "backfill height exceeds usize",
+                    recoverable_by_respawn: false,
+                })?;
             let block = daemon.fetch_scannable_block(number).await.map_err(|e| {
                 RefreshError::Io(IoError::Daemon {
                     detail: e.to_string(),
@@ -838,14 +838,14 @@ pub(crate) fn apply_scan_result_to_state(
     // (`start > end`) is a producer-contract violation, not a panic — a
     // hostile daemon must not be able to crash the merge with `start > end`
     // (X7). Treat it as `MalformedScanResult`, like the shape checks below.
-    let range_len_u64 = processed_height_range
+    let range_len = processed_height_range
         .end
         .checked_sub(processed_height_range.start)
         .ok_or(RefreshError::MalformedScanResult {
             reason: "processed_height_range end precedes start",
         })?;
     let expected_len =
-        usize::try_from(range_len_u64.to_raw()).map_err(|_| RefreshError::MalformedScanResult {
+        usize::try_from(range_len.to_raw()).map_err(|_| RefreshError::MalformedScanResult {
             reason: "processed_height_range length exceeds usize",
         })?;
     if block_hashes.len() != expected_len {
@@ -920,9 +920,8 @@ pub(crate) fn apply_scan_result_to_state(
 
         let outputs = transfers_by_height.remove(&h).unwrap_or_default();
         let timelocked = Timelocked::from_vec(outputs);
-        let height = h;
         let inserted_range =
-            indexes.process_scanned_outputs(ledger, height, block_hash.to_bytes(), timelocked);
+            indexes.process_scanned_outputs(ledger, h, block_hash.to_bytes(), timelocked);
         // Per-height ranges are contiguous suffixes of
         // `ledger.transfers`, monotonically advancing across the loop
         // (each iteration appends, never reorders). Flattening to a
@@ -930,7 +929,7 @@ pub(crate) fn apply_scan_result_to_state(
         inserted.extend(inserted_range);
 
         if let Some(kis) = key_images_by_height.remove(&h) {
-            let _spent = indexes.detect_spends(ledger, height, &kis);
+            let _spent = indexes.detect_spends(ledger, h, &kis);
         }
     }
 

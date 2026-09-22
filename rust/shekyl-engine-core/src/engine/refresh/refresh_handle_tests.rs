@@ -109,7 +109,8 @@ async fn progress_updates_propagate_to_subscribers() {
 
     let mut rx = handle.progress();
     progress_tx
-        .send(RefreshProgress::phase_only(shekyl_types::BlockHeight::from_raw(42),
+        .send(RefreshProgress::phase_only(
+            shekyl_types::BlockHeight::from_raw(42),
             7,
             100,
             RefreshPhase::Scanning,
@@ -152,7 +153,8 @@ async fn join_delivers_summary_from_completion_oneshot() {
         handle_with(RefreshOptions::default());
 
     let summary = RefreshSummary {
-        processed_height_range: shekyl_types::BlockHeight::from_raw(100)..shekyl_types::BlockHeight::from_raw(105),
+        processed_height_range: shekyl_types::BlockHeight::from_raw(100)
+            ..shekyl_types::BlockHeight::from_raw(105),
         blocks_processed: 5,
         transfers_detected: 0,
         key_images_observed: 0,
@@ -295,7 +297,8 @@ async fn cancel_during_scan_emits_terminal_cancelled_phase() {
     let mut rx = handle.progress();
 
     progress_tx
-        .send(RefreshProgress::phase_only(shekyl_types::BlockHeight::from_raw(100),
+        .send(RefreshProgress::phase_only(
+            shekyl_types::BlockHeight::from_raw(100),
             50,
             200,
             RefreshPhase::Scanning,

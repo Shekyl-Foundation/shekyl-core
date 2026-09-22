@@ -772,7 +772,7 @@ mod tests {
     fn sample_send_record(state: SendState) -> SendRecord {
         use shekyl_engine_state::{SendInputRef, SendRecipient};
         SendRecord {
-            dispatched_at_height: 100,
+            dispatched_at_height: shekyl_types::BlockHeight::from_raw(100),
             fee: 700,
             recipients: vec![
                 SendRecipient {
@@ -811,7 +811,9 @@ mod tests {
             TransferState::Dropped
         );
         assert_eq!(
-            outgoing_transfer_state(&sample_send_record(SendState::Confirmed { height: 200 })),
+            outgoing_transfer_state(&sample_send_record(SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(200)
+            })),
             TransferState::Confirmed
         );
         assert_eq!(
@@ -844,7 +846,9 @@ mod tests {
     #[test]
     fn only_confirmed_sends_have_an_inclusion_height() {
         assert_eq!(
-            outgoing_block_height(&sample_send_record(SendState::Confirmed { height: 250 })),
+            outgoing_block_height(&sample_send_record(SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250)
+            })),
             Some(250)
         );
         for unmined in [
@@ -870,7 +874,9 @@ mod tests {
 
         let view = outgoing_transfer_view(
             &txid,
-            &sample_send_record(SendState::Confirmed { height: 250 }),
+            &sample_send_record(SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250),
+            }),
             &notes,
         )
         .expect("project");

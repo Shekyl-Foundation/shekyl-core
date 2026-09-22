@@ -825,7 +825,9 @@ async fn e2e_refresh_scans_coinbase_balance() {
             let g = arc.read().await;
             let ledger = g.ledger();
             total_height = ledger.ledger.height().to_raw();
-            unlocked = ledger.balance_at(shekyl_types::BlockHeight::from_raw(total_height)).unlocked;
+            unlocked = ledger
+                .balance_at(shekyl_types::BlockHeight::from_raw(total_height))
+                .unlocked;
         }
         if unlocked > AtomicUnits::ZERO {
             break;

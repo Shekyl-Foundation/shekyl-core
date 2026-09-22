@@ -762,10 +762,19 @@ async fn output_not_yet_spendable_at_reference_block() {
             reference_block_height,
             wait_blocks,
         } => {
-            assert_eq!(eligible_height, shekyl_types::BlockHeight::from_raw(11), "block 1 + SPENDABLE_AGE");
-            assert_eq!(reference_block_height, shekyl_types::BlockHeight::from_raw(9), "synced 15 − REF_ANCHOR_AGE");
             assert_eq!(
-                wait_blocks, shekyl_types::BlockCount::from_raw(2),
+                eligible_height,
+                shekyl_types::BlockHeight::from_raw(11),
+                "block 1 + SPENDABLE_AGE"
+            );
+            assert_eq!(
+                reference_block_height,
+                shekyl_types::BlockHeight::from_raw(9),
+                "synced 15 − REF_ANCHOR_AGE"
+            );
+            assert_eq!(
+                wait_blocks,
+                shekyl_types::BlockCount::from_raw(2),
                 "spendable once the reference reaches 11 (tip 17)"
             );
         }
@@ -810,12 +819,20 @@ async fn output_not_yet_spendable_wait_covers_required_subset() {
             reference_block_height,
             wait_blocks,
         } => {
-            assert_eq!(reference_block_height, shekyl_types::BlockHeight::from_raw(9));
             assert_eq!(
-                eligible_height, shekyl_types::BlockHeight::from_raw(13),
+                reference_block_height,
+                shekyl_types::BlockHeight::from_raw(9)
+            );
+            assert_eq!(
+                eligible_height,
+                shekyl_types::BlockHeight::from_raw(13),
                 "the binding output is B (eligible 13), not the soonest A (11)"
             );
-            assert_eq!(wait_blocks, shekyl_types::BlockCount::from_raw(4), "wait until enough matures, not the soonest");
+            assert_eq!(
+                wait_blocks,
+                shekyl_types::BlockCount::from_raw(4),
+                "wait until enough matures, not the soonest"
+            );
         }
         other => panic!("expected OutputNotYetSpendable, got {other:?}"),
     }
@@ -957,7 +974,10 @@ async fn submit_reanchors_at_horizon_then_broadcasts() {
         .build(standard_request(7_000))
         .await
         .expect("build ok");
-    assert_eq!(built.reference_height, shekyl_types::BlockHeight::from_raw(14));
+    assert_eq!(
+        built.reference_height,
+        shekyl_types::BlockHeight::from_raw(14)
+    );
     assert_eq!(built.content_gen, 0, "fresh build is generation 0");
 
     // Advance BOTH the ledger and the tree well past the rebuild horizon:
@@ -3185,7 +3205,10 @@ async fn submit_carries_proof_across_benign_tip_advance() {
         .await
         .expect("build ok");
     // Reference anchored at tip(20) − REF_ANCHOR_AGE(6) = 14.
-    assert_eq!(built.reference_height, shekyl_types::BlockHeight::from_raw(14));
+    assert_eq!(
+        built.reference_height,
+        shekyl_types::BlockHeight::from_raw(14)
+    );
 
     // Advance the tip a few blocks with no reorg: reference age 25 − 14 = 11,
     // well within the daemon window and still canonical → not stale.

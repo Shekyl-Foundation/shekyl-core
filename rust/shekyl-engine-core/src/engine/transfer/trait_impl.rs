@@ -226,10 +226,8 @@ where
                             TreeSpendGate::Enforced { covered_through: Some(c) } if c >= rh
                         ) =>
                     {
-                        let (curve_tree_root, depth) = handle
-                            .reference_root_and_depth(rh)
-                            .await
-                            .map_err(|err| {
+                        let (curve_tree_root, depth) =
+                            handle.reference_root_and_depth(rh).await.map_err(|err| {
                                 fail_build_after_attempted(
                                     self.sink.as_ref(),
                                     map_curve_tree_handle_error_for_send(&err),
@@ -237,9 +235,7 @@ where
                             })?;
                         let block_hash = self
                             .ledger
-                            .with_ledger_block(|ledger| {
-                                ledger.block_hash_at(rh).copied()
-                            })
+                            .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
                             .ok_or_else(|| {
                                 fail_build_after_attempted(
                                     self.sink.as_ref(),
@@ -387,7 +383,7 @@ where
             ConsumerHeldEntry {
                 created_at: Instant::now(),
                 snapshot_id: SnapshotId([0u8; 16]),
-                built_at_height: 0,
+                built_at_height: shekyl_types::BlockHeight::ZERO,
                 built_at_tip_hash: [0u8; 32],
                 tx_bytes: Vec::new(),
                 request: TxRequest {

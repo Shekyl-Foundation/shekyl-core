@@ -817,12 +817,12 @@ fn refuted_sends(ledger: &LedgerBlock, send_journal: &SendJournalBlock) -> Vec<[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_types::BlockHeight;
     use crate::{
         bookkeeping_block::BOOKKEEPING_BLOCK_VERSION, ledger_block::LEDGER_BLOCK_VERSION,
         staking_block::STAKING_BLOCK_VERSION, sync_state_block::SYNC_STATE_BLOCK_VERSION,
         tx_meta_block::TX_META_BLOCK_VERSION,
     };
+    use shekyl_types::BlockHeight;
 
     #[test]
     fn empty_bundle_roundtrips_and_pins_versions() {
@@ -1668,7 +1668,9 @@ mod tests {
                     amount: 1,
                 }],
                 lock_baseline: None,
-                state: SendState::Confirmed { height: BlockHeight::from_raw(30) },
+                state: SendState::Confirmed {
+                    height: BlockHeight::from_raw(30),
+                },
             },
         );
 
@@ -1676,7 +1678,9 @@ mod tests {
 
         assert_eq!(
             w.send_journal.rows[&txid].state,
-            SendState::Confirmed { height: BlockHeight::from_raw(30) },
+            SendState::Confirmed {
+                height: BlockHeight::from_raw(30)
+            },
             "confirm must not be clobbered by a late unabandon"
         );
         assert!(
@@ -1778,7 +1782,9 @@ mod tests {
         w.reconcile_send_journal(None);
         assert_eq!(
             w.send_journal.rows[&txid].state,
-            SendState::Confirmed { height: BlockHeight::from_raw(19) },
+            SendState::Confirmed {
+                height: BlockHeight::from_raw(19)
+            },
             "late confirmation un-abandons the row"
         );
     }
@@ -1819,7 +1825,9 @@ mod tests {
         w.reconcile_send_journal(None);
         assert_eq!(
             w.send_journal.rows[&txid].state,
-            SendState::Confirmed { height: BlockHeight::from_raw(18) },
+            SendState::Confirmed {
+                height: BlockHeight::from_raw(18)
+            },
             "late confirmation un-presumes the row"
         );
 

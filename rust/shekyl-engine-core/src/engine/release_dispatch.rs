@@ -502,7 +502,7 @@ where
         let reference = anchored_reference_block(&curve_tree, chain_tip, block_hash_at)
             .await
             .map_err(StakeEngineError::from)?;
-        let reference_height = BlockHeight::from_raw(reference.height.to_raw());
+        let reference_height = reference.height;
         let required = AtomicUnits::from_raw(
             fee.to_raw()
                 .saturating_add(2)

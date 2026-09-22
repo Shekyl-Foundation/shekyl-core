@@ -117,10 +117,7 @@ impl SyncStateBlock {
     }
 
     /// Construct a sync-state block with an explicit restore anchor.
-    pub fn new(
-        restore_from_height: BlockHeight,
-        creation_anchor_hash: Option<[u8; 32]>,
-    ) -> Self {
+    pub fn new(restore_from_height: BlockHeight, creation_anchor_hash: Option<[u8; 32]>) -> Self {
         Self {
             block_version: SYNC_STATE_BLOCK_VERSION,
             restore_from_height,

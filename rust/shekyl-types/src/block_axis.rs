@@ -145,6 +145,31 @@ impl BlockCount {
     /// A one-block span. Consecutive-height and drain-cutoff arithmetic
     /// uses this instead of punching through to `u64`.
     pub const ONE: Self = Self(1);
+
+    /// Sum two spans, returning `None` on overflow.
+    ///
+    /// The panicking [`Add`](core::ops::Add) impl is not const. Derived
+    /// spans (`REF_ANCHOR_AGE`, and anything built from it) use this.
+    #[must_use]
+    pub const fn checked_add(self, rhs: Self) -> Option<Self> {
+        match self.0.checked_add(rhs.0) {
+            Some(v) => Some(Self(v)),
+            None => None,
+        }
+    }
+
+    /// Difference of two spans, returning `None` when `rhs` is larger.
+    ///
+    /// The panicking [`Sub`](core::ops::Sub) impl is not const. A derived
+    /// span such as the proof-validity horizon uses this so the constant
+    /// names the spans it is built from.
+    #[must_use]
+    pub const fn checked_sub(self, rhs: Self) -> Option<Self> {
+        match self.0.checked_sub(rhs.0) {
+            Some(v) => Some(Self(v)),
+            None => None,
+        }
+    }
 }
 
 impl Sub<BlockCount> for BlockCount {

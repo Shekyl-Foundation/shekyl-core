@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 use crate::engine::diagnostics::{AssertionSink, PanickingSink, PanickingSinkTrigger};
 use crate::engine::test_support::{make_synthetic_block, TestDaemon, DEFAULT_TEST_SEED};
 use crate::engine::view_material::ViewMaterial;
-use shekyl_types::{BlockHash, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 /// Real wallet master seed (64 bytes). Drives `rederive_account`
 /// against the same key-derivation path `Engine::create` uses
@@ -213,7 +213,10 @@ async fn bond_watch_emits_sightings_for_watched_ids_only() {
         result.bond_sightings[0].slot, 4,
         "slot-resolved from the watch"
     );
-    assert_eq!(result.bond_sightings[0].block_height, shekyl_types::BlockHeight::from_raw(1));
+    assert_eq!(
+        result.bond_sightings[0].block_height,
+        shekyl_types::BlockHeight::from_raw(1)
+    );
 }
 
 /// An intra-attempt reorg discards abandoned-fork bond sightings with the
@@ -406,10 +409,18 @@ async fn intra_attempt_reorg_is_detected_and_rewound() {
     // the fork survives — the pre-fix behavior (A6/A7 spliced
     // against B8..B11) is exactly what this rules out.
     let expected: Vec<(shekyl_types::BlockHeight, BlockHash)> = (SYNCED + 1..FORK)
-        .map(|h| (shekyl_types::BlockHeight::from_raw(h), chain_a[usize::try_from(h).unwrap()].block.hash()))
+        .map(|h| {
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                chain_a[usize::try_from(h).unwrap()].block.hash(),
+            )
+        })
         .chain((FORK..TIP).map(|h| {
             let idx = usize::try_from(h - FORK).unwrap();
-            (shekyl_types::BlockHeight::from_raw(h), tail_b[idx].block.hash())
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                tail_b[idx].block.hash(),
+            )
         }))
         .collect();
     assert_eq!(
@@ -488,7 +499,10 @@ async fn intra_attempt_reorg_at_exact_synced_height_rewinds_through_seam() {
     let expected: Vec<(shekyl_types::BlockHeight, BlockHash)> = (FORK..TIP)
         .map(|h| {
             let idx = usize::try_from(h - FORK).unwrap();
-            (shekyl_types::BlockHeight::from_raw(h), tail_b[idx].block.hash())
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                tail_b[idx].block.hash(),
+            )
         })
         .collect();
     assert_eq!(
@@ -584,14 +598,25 @@ async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
     // behavior — B8/B9 spliced against C10/C11 with a broken link at 10 — is
     // exactly what this rules out.
     let expected: Vec<(shekyl_types::BlockHeight, BlockHash)> = (SYNCED + 1..FORK1)
-        .map(|h| (shekyl_types::BlockHeight::from_raw(h), chain_a[usize::try_from(h).unwrap()].block.hash()))
+        .map(|h| {
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                chain_a[usize::try_from(h).unwrap()].block.hash(),
+            )
+        })
         .chain((FORK1..FORK2).map(|h| {
             let idx = usize::try_from(h - FORK1).unwrap();
-            (shekyl_types::BlockHeight::from_raw(h), tail_b[idx].block.hash())
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                tail_b[idx].block.hash(),
+            )
         }))
         .chain((FORK2..TIP).map(|h| {
             let idx = usize::try_from(h - FORK2).unwrap();
-            (shekyl_types::BlockHeight::from_raw(h), tail_c[idx].block.hash())
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                tail_c[idx].block.hash(),
+            )
         }))
         .collect();
     assert_eq!(
@@ -736,8 +761,14 @@ async fn produce_scan_respects_birthday_floor_when_ledger_anchored() {
         .await
         .expect("anchored birthday scan succeeds");
 
-    assert_eq!(result.processed_height_range.start, shekyl_types::BlockHeight::from_raw(FLOOR));
-    assert_eq!(result.processed_height_range.end, shekyl_types::BlockHeight::from_raw(TIP));
+    assert_eq!(
+        result.processed_height_range.start,
+        shekyl_types::BlockHeight::from_raw(FLOOR)
+    );
+    assert_eq!(
+        result.processed_height_range.end,
+        shekyl_types::BlockHeight::from_raw(TIP)
+    );
     assert_eq!(
         result.block_hashes.len(),
         usize::try_from(TIP - FLOOR).unwrap()
@@ -781,7 +812,10 @@ async fn produce_scan_floor_noop_when_synced_past_birthday() {
         .await
         .expect("incremental scan past floor succeeds");
 
-    assert_eq!(result.processed_height_range, shekyl_types::BlockHeight::from_raw(SYNCED + 1)..shekyl_types::BlockHeight::from_raw(TIP));
+    assert_eq!(
+        result.processed_height_range,
+        shekyl_types::BlockHeight::from_raw(SYNCED + 1)..shekyl_types::BlockHeight::from_raw(TIP)
+    );
 }
 
 // ── Coherence: clean path (Ok → no error-class events) ─────
@@ -1496,7 +1530,7 @@ fn is_daemon_malformed_classifies_event_correctly() {
     };
     assert!(is_daemon_malformed(&event));
     let non_malformed = RefreshDiagnostic::ScanProgress {
-        height: 1,
+        height: BlockHeight::from_raw(1),
         candidates: 0,
     };
     assert!(!is_daemon_malformed(&non_malformed));

@@ -21,7 +21,13 @@
 
 use std::time::Duration;
 
+use shekyl_types::BlockHeight;
+
 use super::*;
+
+fn ordinal(raw: u64) -> BlockHeight {
+    BlockHeight::from_raw(raw)
+}
 
 #[test]
 fn elapsed_bucket_thresholds_match_f9_contract() {
@@ -69,11 +75,11 @@ fn noop_sink_swallows_every_audited_variant() {
         kind: ProtocolErrorKind::ConnectionError,
     });
     sink.emit(RefreshDiagnostic::ReorgObserved {
-        fork_height: 12345,
+        fork_height: ordinal(12345),
         depth: 3,
     });
     sink.emit(RefreshDiagnostic::ScanProgress {
-        height: 99999,
+        height: ordinal(99999),
         candidates: 0,
     });
     sink.emit(RefreshDiagnostic::SuppressedRateLimit {
@@ -104,11 +110,11 @@ fn tracing_sink_does_not_panic_on_any_audited_variant() {
         kind: ProtocolErrorKind::InternalError,
     });
     sink.emit(RefreshDiagnostic::ReorgObserved {
-        fork_height: 1,
+        fork_height: ordinal(1),
         depth: 11,
     });
     sink.emit(RefreshDiagnostic::ScanProgress {
-        height: 0,
+        height: BlockHeight::ZERO,
         candidates: 50,
     });
     sink.emit(RefreshDiagnostic::SuppressedRateLimit {
@@ -139,7 +145,7 @@ fn assertion_sink_records_events_in_emission_order() {
         kind: MalformedKind::InvalidBlockStructure,
     });
     sink.emit(RefreshDiagnostic::ScanProgress {
-        height: 42,
+        height: ordinal(42),
         candidates: 3,
     });
     assert_eq!(sink.count(), 3);
@@ -159,9 +165,9 @@ fn assertion_sink_records_events_in_emission_order() {
     assert!(matches!(
         recorded[2],
         RefreshDiagnostic::ScanProgress {
-            height: 42,
+            height,
             candidates: 3
-        }
+        } if height == ordinal(42)
     ));
 }
 
@@ -169,7 +175,7 @@ fn assertion_sink_records_events_in_emission_order() {
 fn assertion_sink_recorded_clones_buffer_without_draining() {
     let sink = AssertionSink::new();
     sink.emit(RefreshDiagnostic::ScanProgress {
-        height: 1,
+        height: ordinal(1),
         candidates: 0,
     });
     let snap1 = sink.recorded();
@@ -184,7 +190,7 @@ fn panicking_sink_any_fires_on_first_emission() {
     let sink = PanickingSink::new(PanickingSinkTrigger::Any);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         sink.emit(RefreshDiagnostic::ScanProgress {
-            height: 1,
+            height: ordinal(1),
             candidates: 0,
         });
     }));
@@ -196,7 +202,7 @@ fn panicking_sink_on_daemon_malformed_only_fires_on_matched_class() {
     let sink = PanickingSink::new(PanickingSinkTrigger::OnDaemonMalformed);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         sink.emit(RefreshDiagnostic::ScanProgress {
-            height: 1,
+            height: ordinal(1),
             candidates: 0,
         });
         sink.emit(RefreshDiagnostic::DaemonProtocolError {
@@ -258,7 +264,7 @@ fn panicking_sink_on_scan_progress_only_fires_on_matched_class() {
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         sink.emit(RefreshDiagnostic::ScanProgress {
-            height: 7,
+            height: ordinal(7),
             candidates: 0,
         });
     }));

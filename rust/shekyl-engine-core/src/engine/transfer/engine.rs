@@ -1094,8 +1094,7 @@ where
             let covered_through = handle
                 .ingested_tip_height()
                 .await
-                .map_err(|err| map_handle_err_to_reanchor(&err))?
-                ;
+                .map_err(|err| map_handle_err_to_reanchor(&err))?;
             let ingested = covered_through.ok_or(ReanchorError::ReferenceResyncing {
                 detail: "curve tree has not ingested any block yet",
             })?;
@@ -1400,8 +1399,8 @@ where
 
         // Staleness decision — ledger reads only, no pending-tx lock held (F-J).
         let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
-        let stale = should_reanchor(current_tip, reference.height)
-            || self.reference_orphaned(&reference);
+        let stale =
+            should_reanchor(current_tip, reference.height) || self.reference_orphaned(&reference);
 
         // --- re-anchor if stale (three-phase, lock-free prover) ---
         if stale {

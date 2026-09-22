@@ -66,7 +66,9 @@ pub(super) enum TreeSpendGate {
     /// is tree-covered iff its `eligible_height <= covered_through`;
     /// `covered_through == None` means the tree is fresh/empty and covers
     /// nothing (the adopting-wallet pre-backfill state).
-    Enforced { covered_through: Option<shekyl_types::BlockHeight> },
+    Enforced {
+        covered_through: Option<shekyl_types::BlockHeight>,
+    },
 }
 
 impl TreeSpendGate {

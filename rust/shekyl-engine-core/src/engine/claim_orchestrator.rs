@@ -73,13 +73,13 @@
 use std::collections::BTreeSet;
 
 use shekyl_curve_tree::{
-    two_sided_reference_height, AssembleInput, BlockHash,
-    CurveTreeRoot, Gindex, ReferenceBlock, TwoSidedRefusal,
+    two_sided_reference_height, AssembleInput, BlockHash, CurveTreeRoot, Gindex, ReferenceBlock,
+    TwoSidedRefusal,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
-use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
 #[cfg(test)]
 use shekyl_types::BlockCount;
+use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
 use shekyl_units::AtomicUnits;
 
 use super::backing_set::{BackingSet, ClaimFundingError, InsufficientBacking, MembershipPath};

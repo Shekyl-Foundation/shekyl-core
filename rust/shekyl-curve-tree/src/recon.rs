@@ -434,10 +434,7 @@ mod tests {
     fn maturity_coinbase_is_plus_60() {
         let m = maturity_height(BlockHeight::from_raw(100), true, TargetKind::TaggedKey)
             .expect("coinbase matures");
-        assert_eq!(
-            m,
-            BlockHeight::from_raw(100 + COINBASE_LOCK_WINDOW as u64)
-        );
+        assert_eq!(m, BlockHeight::from_raw(100 + COINBASE_LOCK_WINDOW as u64));
     }
 
     #[test]
@@ -569,7 +566,8 @@ mod tests {
             outputs: &outputs,
         }];
         let mut leaves = Vec::new();
-        let next = collect_block_leaves(BlockHeight::from_raw(60), &txs, 0, &mut leaves).expect("no bad point");
+        let next = collect_block_leaves(BlockHeight::from_raw(60), &txs, 0, &mut leaves)
+            .expect("no bad point");
         assert_eq!(next, 2, "both vouts consume an index");
         assert_eq!(leaves.len(), 1, "only the valid output is a leaf");
         assert_eq!(

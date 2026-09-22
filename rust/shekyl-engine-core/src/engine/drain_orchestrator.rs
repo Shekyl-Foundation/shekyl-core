@@ -758,7 +758,7 @@ pub(crate) async fn orchestrate_drain(
         .map_err(|e| DrainOrchestrationError::ReferenceUnanchorable {
             detail: e.to_string(),
         })?;
-    let reference_height = BlockHeight::from_raw(reference.height.to_raw());
+    let reference_height = reference.height;
 
     // 2. Scope to the persona's own unreserved records, then plan per the
     //    intent: the F-D1 planner (project → amount → select) for a payment

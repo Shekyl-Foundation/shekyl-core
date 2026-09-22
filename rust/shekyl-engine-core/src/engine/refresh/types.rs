@@ -328,12 +328,10 @@ pub enum RefreshPhase {
 ///   `RefreshPhase::Retrying`.
 /// - `blocks_total`: the per-attempt scan range size — the count
 ///   of blocks the producer plans to fetch and scan during this
-///   attempt. Concretely, `blocks_total` is the daemon's chain
-///   **count** (`Rpc::get_height` → `ChainCount`) punched to raw at
-///   the range arithmetic:
-///   `tip.to_raw().saturating_sub(synced_height + 1)` at
-///   attempt start (one past the tip-block index). Saturates to `0`
-///   when the wallet is at-or-above the daemon tip. Updates on
+///   attempt. The producer holds the range as ordinals
+///   (`scan_start .. chain_tip.next_height()`) and records the span
+///   here as `scan_end.saturating_sub(scan_start).to_raw()`. Saturates
+///   to `0` when the wallet is at-or-above the daemon tip. Updates on
 ///   retry boundaries because each attempt re-fetches the tip;
 ///   static within an attempt.
 /// - `phase`: see [`RefreshPhase`].
@@ -416,7 +414,12 @@ impl RefreshProgress {
     /// blank starting value.
     #[cfg(test)]
     pub(crate) const fn initial() -> Self {
-        Self::phase_only(shekyl_types::BlockHeight::from_raw(0), 0, 0, RefreshPhase::Scanning)
+        Self::phase_only(
+            shekyl_types::BlockHeight::from_raw(0),
+            0,
+            0,
+            RefreshPhase::Scanning,
+        )
     }
 }
 

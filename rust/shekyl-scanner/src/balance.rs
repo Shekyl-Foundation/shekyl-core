@@ -243,7 +243,8 @@ mod tests {
             let mut td = make_td(1000, 50);
             td.unspendable = Some(reason);
             let transfers = vec![td];
-            let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
+            let summary =
+                BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
             assert_eq!(summary.total, AtomicUnits::from_raw(1000), "{reason:?}");
             assert_eq!(summary.unlocked, AtomicUnits::ZERO, "{reason:?}");
             assert_eq!(

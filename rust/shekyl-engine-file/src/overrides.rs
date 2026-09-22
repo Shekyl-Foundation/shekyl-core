@@ -102,9 +102,9 @@ impl SafetyOverrides {
     /// Resolve the effective `skip_to_height` against the given
     /// network's hardcoded default.
     pub fn effective_skip_to_height(&self, network: Network) -> BlockHeight {
-        self.skip_to_height.map(BlockHeight::from_raw).unwrap_or_else(|| {
-            NetworkSafetyConstants::for_network(network).default_skip_to_height
-        })
+        self.skip_to_height
+            .map(BlockHeight::from_raw)
+            .unwrap_or_else(|| NetworkSafetyConstants::for_network(network).default_skip_to_height)
     }
 
     /// Resolve the effective `refresh_from_block_height` against the

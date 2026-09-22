@@ -283,7 +283,7 @@ one family. **Unclear: none.**
 | Countersign / pass-anchor (`own_height`, `anchor_height`, `predecessor_height`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2d); wire punch at encode/decode (C1) |
 | Anchor depth / lag (`PASS_ANCHOR_DEPTH_BLOCKS`, `PASS_ANCHOR_LAG_BLOCKS`, `max_reorg_depth`, `BlockHeaderFacts.depth`) | DIFFERENCE | `BlockCount` | `BlockCount` | RULED 2026-09-21 (height-semantics Phase 2d); generated `u64` wrapped at the const def (C4) |
 | Curve-tree ingest / `block_at` / DAA timestamps | ORDINAL | `BlockHeight` (RTN-4 re-export) | `BlockHeight` | keep |
-| Scan result and its echoes (`ScanResult` heights, `RefreshSummary.processed_height_range`, `RefreshReorgEvent.fork_height`, `RefreshProgress.height`, `RefreshError::ConcurrentMutation`, `validate_reorg_fork_height`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2f); producer loop stays `u64` for the JSON block fetch and wraps once at the carrier; `LedgerSnapshot::block_hash_at_ordinal` deleted |
+| Scan result and its echoes (`ScanResult` heights, `RefreshSummary.processed_height_range`, `RefreshReorgEvent.fork_height`, `RefreshProgress.height`, `RefreshDiagnostic` scan/reorg heights, `RefreshError::ConcurrentMutation`, `validate_reorg_fork_height`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2f); the producer loop is `BlockHeight`; `usize` is the JSON `get_block` number inside `fetch_block_with_retry` / `fetch_block_hash_at`; the exclusive end is `ChainCount::next_height`; `LedgerSnapshot::block_hash_at_ordinal` deleted |
 | Build and journal clocks (`PendingTx` / `Reservation` / `ConsumerHeldEntry` / `BuiltPendingMeta` runtime; `SendRecord.dispatched_at_height`, `SendState::Confirmed::height` persisted) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2f); `SEND_JOURNAL_BLOCK_VERSION` 2 → 3 |
 | Birthday floor (`SyncStateBlock.restore_from_height`, `SafetyConstants` skip/refresh defaults, `scan_start_floor` / `effective_scan_floor`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2f); `SYNC_STATE_BLOCK_VERSION` 2 → 3; CLI `SafetyOverrides` stay `Option<u64>` and wrap inside the effective resolvers |
 | Balance clock (`BalanceSummary::compute`, `WalletLedgerExt::balance_at`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2f); same ordinal `is_spendable` already took |
@@ -377,8 +377,9 @@ quantity.
   paired `WALLET_LEDGER_FORMAT_VERSION` 19 → 20. Postcard bytes of the
   transparent `u64` are identical; the schema type-name change still
   bumps. Pre-genesis: a v2 send journal, a v2 sync-state block, or a
-  v19 wallet ledger is refused, not migrated. The scan producer's block
-  fetch stays `u64` and wraps at the `ScanResult` edge. FFI pods, the
+  v19 wallet ledger is refused, not migrated. The scan producer walks
+  `BlockHeight`; `ChainCount::next_height` is the exclusive end, and the
+  JSON block number is `usize` inside the fetch helpers. FFI pods, the
   snapshot-id preimage, the `get_version` wire `0`, and the gf7
   measurement hook stay raw. No numeric change.
 
