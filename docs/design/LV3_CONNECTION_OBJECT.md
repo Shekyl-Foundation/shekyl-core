@@ -1,11 +1,19 @@
 # LV-3 — the connection as a typed, owned Rust object (P2P-3 slice 1)
 
-**Status:** DESIGN ROUND OPEN 2026-09-21. Pinned to `dev` `059aca264`; every
-`file:line` was read at that SHA. **The deliverable of this round is a design,
-not code** — rule 20 is explicit that migrating a subsystem is a planning
-activity with its own design document, review cycle and test gates, never
-folded into feature work. Rule 26 cited explicitly. Owner:
+**Status: DESIGN ROUND CLOSED 2026-09-21** — Rounds 1, 2 and 3 answered; **the
+deliverable is the slice register at §6**, and implementation is deferred past
+the alpha.9 freeze (§6.4). Pinned to `dev` `059aca264` for the round's original
+anchors; **Rounds 2–3 and §2.10 are pinned to `f9e000f76`** and say so at each
+block. **The deliverable of this round is a design, not code** — rule 20 is
+explicit that migrating a subsystem is a planning activity with its own design
+document, review cycle and test gates, never folded into feature work. Rule 26
+cited explicitly. Owner:
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4, slice 1.
+
+**One part of this round's scope is NOT deferred:** E1 tier-1's diagnostic half
+and I8's remedy join the **alpha.9 cut** — see §2.10 and §2.9.4, and
+[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4 for the
+ruled scope.
 
 ---
 
@@ -897,6 +905,114 @@ prevent.
 **§1 and the index cell are corrected accordingly** — an index cell asserting an
 identity nothing reads is exactly the drift rule 94 exists to catch.
 
+## 2.10 E1 TIER-1 — taken into alpha.9, and it splits in half
+
+**Ruled 2026-09-21 (steering):** tier 1 joins the alpha.9 cut — *"no wire, no
+amplifier and no ruling owed,"* and it *"closes the operator-diagnostic gap that
+started the lane."* This section records what that commits us to, because **only
+one half of tier 1 as specified is actually ready.**
+
+### 2.10.1 It is E1, not E2, and the reason is structural
+
+[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4's candidate
+row labels this **"E2 tier-1 self-classification."** That label is wrong, and
+not by preference: **PWD-E2 is defined as *what verifies a candidate
+endpoint*.** Tier 1 has **no verifier** — no dial, no nonce, no hairpin, no
+round-trip of any kind. It reads the node's own state and reports it. **A
+mechanism with no verification step cannot be E2 by definition**, so it is E1's
+rung of the ladder. The register's label is corrected on that ground.
+
+### 2.10.2 The split: a report needs no threshold, an ACTION does
+
+The ladder specifies tier 1 as three things at once
+([`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) PWD-I8, *Sequencing*): a
+node with zero inbound in `T` **classifies itself** probably-unreachable,
+**stops advertising**, and **says so**. Those do not have the same readiness:
+
+| Half | Needs | Status |
+| --- | --- | --- |
+| **Diagnostic — *says so*** | nothing. §2.9.1's test applies: the operator's `P` is *"is anyone dialing me"*, which is **directly observable**, so there is no proxy and therefore **no threshold to pick** | **READY — this is what alpha.9 takes** |
+| **Action — *stops advertising*** | **`T`**, because an action with a consequence has to fire *somewhere* | **BLOCKED** |
+
+**`T`'s blocker is named and is not ours.** `T` is owed to **PWD-E8**, which is
+DEFERRED on an external blocker chain: *"the remaining links — fleet runs it,
+stressed, `T` measured admissibly — stay owed from the Q12-D6a rig"*
+([`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) §0.5 E8). So the action half
+is not deferred by preference; **it is blocked on a measurement another row
+owns**, which is what rule 22 requires a deferral to name.
+
+**Writing the report as a state rather than a classification is what removes the
+threshold.** *"Probably-unreachable"* is a verdict and needs a line to cross.
+*"Inbound connections: 0. Uptime: 6h. Advertising 203.0.113.9:11021"* is an
+observation, and the operator crosses the line. **The diagnostic half therefore
+owes no number at all** — which is the whole reason it can land in alpha.9 while
+the rest of tier 1 cannot.
+
+### 2.10.3 Do NOT "improve" tier 1 into §2.7.5's signal — it degenerates
+
+§2.7.5 argued that the peerlist-head port-match is a **better** signal than
+*zero inbound in `T`*, because it is grounded in somebody's successful dial
+rather than in our own absence of observation. **As an endpoint-verification
+signal that is right.** As a **standalone diagnostic it collapses**, and the
+reason is a constant:
+
+`P2P_DEFAULT_PORT` is **one compiled value per network** —
+[`11021` mainnet](../../src/cryptonote_config.h#L362),
+[`12021` testnet](../../src/cryptonote_config.h#L496). Essentially every node
+runs it. So *"our own port appears in a received peerlist head"* is **trivially
+true for every node**, because every peerlist head is full of entries carrying
+that port. The signal discriminates **only** for a node on a non-default port —
+which is not the population tier 1 exists to serve.
+
+**Recorded because the failure mode is a later reader following §2.7.5 and
+replacing a working signal with a non-discriminating one.** §2.7.5's proposal is
+sound where it was aimed: as a **proposal** whose **verifier is the hairpin**
+([`detect_self_handshake`](../../src/p2p/net_node.inl#L1411)), where the nonce
+resolves the ambiguity that port-matching cannot. It is not a diagnostic, and
+the two uses must not be conflated.
+
+### 2.10.4 The rule-82 shape already exists — and it belongs to the OTHER operator
+
+**Do not mint a shape.** PWD-I7 already proposes one
+([`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md), *"Proposed (not built): the
+rule-82 local diagnosis"*): *N* distinct public-zone peers each reaching
+connected-then-destroyed without a completed handshake and none returning a
+network-id mismatch → one warning naming the pattern and its two usual causes.
+
+**But that is a different operator's problem, and noticing so is what makes the
+two complementary rather than duplicative:**
+
+| | Whose node | What it observes | Answers |
+| --- | --- | --- | --- |
+| **PWD-I7's proposal** | the **dialing** node, being refused | connect succeeds, handshake never completes, across *N* distinct peers | *why can't I join?* |
+| **E1 tier 1** | the **unreachable** node, being nobody's peer | zero inbound, with a published endpoint | *why is nobody joining me?* |
+
+**And the cap deletion is what makes I7's side safe to build.** I7 declines to
+build it with an explicit reason — *"inferring a remote cause in a log line is
+how a wrong diagnosis becomes folklore"* — and that reason is **correct today**:
+the dominant cause of that signature is a per-host cap which §2.9.4 has just
+ruled defends nothing, so a warning naming it would point at a cause that is
+real but **wrong by design**. After the deletion, plus a measured `--in-peers`
+ceiling, the same signature means *that peer is genuinely full* — an honest
+thing to tell an operator, inferred from a legitimate cause. **Its blocker
+narrows from a folklore objection to a number (`N`)**, and it stays deferred on
+that.
+
+### 2.10.5 What the diagnostic half owes, as one row
+
+| | |
+| --- | --- |
+| **Operator's question** | *Is anyone able to reach me?* |
+| **Observation that answers it** | inbound connection count, alongside uptime and the endpoint actually being advertised — all three, because any one alone is unreadable |
+| **Where it surfaces** | the periodic operator log line is the **load-bearing** surface. `get_info` is *not* sufficient on its own: the fleet runs `restricted-rpc=1`, and the methods that report peer structure are refused under it (verified 2026-09-21 — `sync_info` returns `-32601`). A surface an operator cannot query on the deployment we actually run is not a surface |
+| **What the operator does next** | check port-forwarding / the advertised endpoint, or switch to the Tor bootstrap path — the same two remedies I7's proposal names, which is why they should read consistently |
+| **What it must NOT do** | classify, threshold, stop advertising, or infer anything about a remote peer. All four are the deferred half |
+
+**Falsifier (rule 21).** The diagnostic half is wrong, and should be re-cut, if
+**a node with healthy inbound reports the same state as an unreachable one** —
+which would mean the observation set is too small to discriminate and a
+threshold was doing the work after all.
+
 ## 3. Two adversarial questions the round must ANSWER, not assume
 
 > **BOTH CLOSED 2026-09-21 by §2.9.6 — dissolved with the admission→eviction
@@ -976,3 +1092,83 @@ This slice is **wrong as scoped**, and should be re-cut, if:
 any of the six consumers lands its own private connection state in the
 meantime. That is the missing noun being re-created in six places, which is
 the outcome this slice exists to prevent.
+
+---
+
+## 6. THE ROUND'S CLOSING DELIVERABLE — LV-3's own slice register
+
+**Added 2026-09-21 on steering's ruling.** LV-3's implementation is **deferred
+past the alpha.9 freeze**, and the round closes with **this register** rather
+than with a plan.
+
+### 6.1 Why a register, and why it has to be checkable
+
+Steering's reason, and it is the right one: *"if `pruning_seed` will be gone
+before LV-3 starts, that's a statement about LV-3's distance. It argues for the
+slice register being the round's deliverable rather than a plan — a round that
+can't start for a while should close with something checkable, so it doesn't
+decay into a document about intentions the way P2P-3 did."*
+
+**That failure mode is not hypothetical here — it is this round's own
+parent's.** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §0
+records it: P2P-3 was nominated, never opened, and eight PRs built parts of the
+round while the deliverable claimed nothing was implemented. **A round that
+closes on intentions is indistinguishable from a round that never closed.**
+
+So every row below carries **what it inherits** and **what greens when it
+lands** — a command that can be run against the tree, not a description. **The
+checkable part of this register is the ORDERING**, because that is the part that
+rots: a row whose inheritance has quietly stopped being true is a row that will
+be re-planned on arrival.
+
+### 6.2 The register
+
+Rule 26: a register records **what a slice is and what it flips.** It does not
+schedule slices that have not been designed.
+
+| # | Slice | Inherits (from the alpha.9 cut) | Flips | Greens when it lands |
+| --- | --- | --- | --- | --- |
+| **L1** | **The object, with no callers.** `Connection` in Rust: the endpoint with Round 2's claimed/observed provenance, direction, zone, established-at. No C++ caller, no FFI export | **a p2p tree with no `pruning_seed` read anywhere** (alpha.9 §7.2 arm 1), so L1 does not design around a claimed field it would then delete | nothing in §0.5 — deliberately. A type with no caller flips no decision | `rg -n 'pruning_seed' src/p2p/` returns **no read** at L1's open; the crate's round-trip test passes with `Claimed<T>`/`Observed<T>` distinct in the type, per §2.7.4 |
+| **L2** | **Ownership transfer.** The Rust object becomes authoritative for connection identity; `p2p_connection_context` becomes a handle | L1, and a `--in-peers` ceiling that is a **measured value rather than `UINT32_MAX`** (§2.9.4 arm 2), so the accept path L2 rewires already has a real bound | **I8's accounting half** — the category becomes readable as a projection | one owner: `rg -n 'm_pruning_seed\|m_is_income' src/p2p/` shows no *decision* reading a field the Rust object owns |
+| **L3** | **Per-peer state moves onto the object** — PWD-B1's bucket and PWD-B2's per-connection deadline, which are the two consumers with no other home | L2. **Neither B1 nor B2 has a landed mechanism**, so L3 is their first home rather than a migration | **B1, B2** | the four unguarded invoke handlers PWD-B1 names are guarded, and `rg -n 'm_connections_maker_interval' src/p2p/` no longer backs a fixed-interval timer B2 replaced |
+| **L4** | **The score and the floor** — PWD-B7's tri-state verdict remainder and PWC-E5's idle kick / score floor, which §0.5 records as *"owed to P2P-3"* | L3, because a score is per-peer state | **B7's remainder, PWC-E5** | `SHEKYL_P2P_PROTOCOL.md`'s two "owed to P2P-3" citations for B7 and E5 resolve to a landed mechanism rather than to this round |
+| **L5** | **The failure-class carry.** `record_addr_failed` takes an address and nothing else, so the failure *class* — known one line above — is discarded crossing the call | L2 | the failure-window FOLLOWUPS row | the call site passes a class; **still blocked on a number that is not owed** (rule 76), so L5 may land the carry with the window unruled |
+
+**E1/E2 are deliberately NOT rows here.** E1 tier-1's diagnostic half lands in
+alpha.9 (§2.10) and is not LV-3's; E2(b) is blocked on the amplifier analysis;
+E1's remainder and E2(a) are cluster E's own work and are **consumers** of L1's
+provenance type rather than slices of it. **A register that absorbs its
+consumers is how a slice becomes a subsystem**, which is the mistake §2.9.4
+just finished unwinding for I8.
+
+### 6.3 The register's own falsifier (rule 21)
+
+**This register is stale, and must be re-derived rather than followed, if any
+of the following is true when L1 opens:**
+
+1. **L1's inheritance has lapsed** — `rg -n 'pruning_seed' src/p2p/` returns a
+   read. That means the alpha.9 receiver deletion did not land, and L1 would be
+   designing around a claimed field instead of inheriting its absence.
+2. **L2's inheritance has lapsed** — `--in-peers` still resolves to
+   `UINT32_MAX` at the default. L2 would be rewiring an accept path with no real
+   bound, which is the state §2.9.5's deferral was predicated on ending.
+3. **Any consumer landed its own private connection state** — the §5 reopening
+   criterion, now with a register to check it against: the missing noun
+   re-created in one of six places means the ordering below it is wrong, not
+   just late.
+
+**Each of the three is a command, not a judgement.** That is the property this
+register exists to have.
+
+### 6.4 ROUND CLOSES
+
+> **LV-3's design round is CLOSED 2026-09-21.** Rounds 1, 2 and 3 are answered
+> (§2.6, §2.8.6 as amended by §2.8.7, §2.9). Identity is settled (§2.9.8): the
+> endpoint's provenance plus the per-peer state with nowhere else to live.
+> **Implementation is deferred past the alpha.9 freeze, and §6.2 is the
+> deliverable.** The first slice lands after the freeze.
+
+**What is NOT closed, and is named so it cannot be read as closed:** cluster
+T's sequencing against this seam (§4 and
+[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §5), which is
+P2P-3's to answer and not a slice's.
