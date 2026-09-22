@@ -206,7 +206,7 @@ Symmetric with the ceiling, the floor is not a point. It spans a **portable rele
 | **Time-to-restabilize** after the whale leaves | blocks/seconds until difficulty re-tracks honest hashrate | `lwma1.rs` window `N=90` |
 | **Seed-epoch rollover under load** | does an epoch boundary stall verification under whale pressure? | `shekyl-difficulty/src/seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048`, `LAG=64`; moved from the engine crate 2026-09-19); eager-derive `pow_randomx_ffi.rs:263`; regtest fast-epoch override guarded fakechain-only `blockchain.cpp:582-599` |
 
-Cross-check the block-arrival **stall detector** (`cryptonote_core.cpp:1781-1835`, calibration pinned by `tests/unit_tests/stall_detection_calibration.cpp:121`) is not falsely tripped by the whale's arrival/departure transients.
+Cross-check the block-arrival **stall detector** (`cryptonote_core.cpp:1653-1705`, calibration pinned by `tests/unit_tests/stall_detection_calibration.cpp:121`) is not falsely tripped by the whale's arrival/departure transients.
 
 **Optimistic-error guard (Phase 3):** the chain looks *safer than it is* if the whale is **under-injected** — i.e. if Phase 1 understated the ratio or Phase 2's tail was ignored. Guard: inject at the **pessimistic end** of the ceiling range (ASIC-tail-aware), not the software-reference end; and run the rollover-under-load case specifically, since a boundary stall is exactly where a marginal ratio becomes decisive.
 
