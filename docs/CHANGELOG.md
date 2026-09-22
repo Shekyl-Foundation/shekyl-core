@@ -48,6 +48,11 @@
   whose rows are not yet ported (F13, G2, I7) are pinned at today's
   behaviour with the census as the falsifier — a double spend today reaches
   the store and halts on SI-1 rather than being refused by the validator.
+  Each mutation also names the place that row points (`Block` for the six
+  live rows, an input for the double spend; F13 and G2 stay unnamed until
+  those slices site them). A timestamp mutation that cannot provoke its row
+  — genesis, where C1 and C2 do not judge, or a clock with no representable
+  instant past the future-time limit — is a fault, not a block that connects.
   Closes the replay driver's open FTL deviation (C1 is now exercised).
 - **DRS-E2 increment 2 — the replay driver runs, and the first real chains
   match.** `shekyl-chain-ingest` gains the pipeline (`form` workers → sequencer

@@ -11,21 +11,24 @@ use std::num::{NonZeroU128, NonZeroUsize};
 use std::sync::Arc;
 
 use shekyl_chain_rules::harness::{Faulted, MockSubstrate};
-use shekyl_chain_rules::{Candidate, CenRow, Locus, RowStatus};
+use shekyl_chain_rules::{seed_height, Candidate, CenRow, Locus, RowStatus};
 use shekyl_chain_store::store::{StoreError, StoreInvariant};
-use shekyl_difficulty::Difficulty;
-use shekyl_types::{BlockHash, PowHash};
+use shekyl_difficulty::{check_hash, Difficulty, FTL_SECONDS};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, Transaction};
 
 use crate::connector::RunFault;
 use crate::metrics::Metrics;
-use crate::mutation::{Environment, Mutated, Mutation, MutationFault, Pow, Unmutable};
+use crate::mutation::{
+    first_nonce, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Pow, Unmutable,
+    UNHELD_ROOT,
+};
 use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{
-    block_with_nonce, chain_listing, chain_listing_with, cleanup, h, key_image, open_store, spend,
-    tmp, trace_of, Family, Scripted,
+    block_with_nonce, chain_listing, chain_listing_with, cleanup, h, key_image, open_store,
+    root_at, spend, tmp, trace_of, Family, Scripted,
 };
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -34,6 +37,15 @@ const GENESIS_RULES: ChainRules = ChainRules::Regtest {
 
 /// D1's target for the mined chain: half of all hashes pass.
 const MINED_DIFFICULTY: u128 = 2;
+
+/// Nonces the fixture will try. At difficulty 2 a hash meets the target
+/// about half the time, so a valid block is a few tries; the wrong-seed
+/// nonce (pass one seed, fail the other) is about one in four.
+const NONCE_BUDGET: u32 = 1 << 16;
+
+/// A seed the chain does not hold. Distinct from the null hash (genesis's
+/// seed) and from any block id the fixture mines.
+const WRONG_SEED: [u8; 32] = [0xbb; 32];
 
 fn mined_rules() -> ChainRules {
     ChainRules::Regtest {
@@ -58,21 +70,42 @@ fn seeded_keccak_substrate(blob: &[u8], seed: &BlockHash) -> Result<PowHash, Fau
     Ok(seeded_keccak(blob, seed))
 }
 
-/// The seed the chain holds for `height` under D3's schedule on a short
-/// chain: the null hash for genesis, block 0's id after.
-fn true_seed(chain: &[(Block, Vec<Transaction>)], height: u64) -> BlockHash {
-    if height == 0 {
-        BlockHash::NULL
-    } else {
-        chain[0].0.hash()
+/// The seed CEN-D3 names for `height`, read from blocks already built.
+/// `hash_at` is the block id at a height the schedule selects; that height
+/// is below `height`, or absent at genesis.
+fn seed_for(height: u64, hash_at: impl Fn(u64) -> BlockHash) -> BlockHash {
+    match seed_height(h(height)) {
+        None => BlockHash::NULL,
+        Some(at) => hash_at(at.to_raw()),
     }
+}
+
+/// The first nonce in [`NONCE_BUDGET`] whose longhash under `seed` meets
+/// [`MINED_DIFFICULTY`].
+fn nonce_meeting_target(
+    seed: &BlockHash,
+    height: u64,
+    previous: BlockHash,
+    txs: &[Transaction],
+) -> u32 {
+    let difficulty = Difficulty::from_raw(MINED_DIFFICULTY);
+    first_nonce(NONCE_BUDGET, |nonce| {
+        let block = block_with_nonce(height, previous, txs, nonce);
+        check_hash(seeded_keccak(&block.pow_blob(), seed).as_bytes(), difficulty)
+    })
+    .unwrap_or_else(|| {
+        panic!(
+            "no nonce in 0..{NONCE_BUDGET} satisfies difficulty {MINED_DIFFICULTY} under the true seed"
+        )
+    })
 }
 
 /// A chain of `n` blocks mined against [`seeded_keccak`] at
 /// [`MINED_DIFFICULTY`]: every block's longhash under the true seed
-/// satisfies the target.
+/// satisfies the target. The seed is [`seed_height`]'s, the same function
+/// the pipeline claims with.
 fn mined_chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
-    let listed = (0..n)
+    let listed: Vec<Vec<Transaction>> = (0..n)
         .map(|hh| {
             if hh == 0 {
                 Vec::new()
@@ -81,28 +114,15 @@ fn mined_chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
             }
         })
         .collect();
-    let difficulty = Difficulty::from_raw(MINED_DIFFICULTY);
-    let mut genesis_hash = BlockHash::NULL;
+    let mut recorded: Vec<BlockHash> = Vec::with_capacity(listed.len());
     chain_listing_with(listed, |height, previous, txs| {
-        let seed = if height == 0 {
-            BlockHash::NULL
-        } else {
-            genesis_hash
-        };
-        let mut nonce = 0u32;
-        loop {
-            let block = block_with_nonce(height, previous, txs, nonce);
-            if shekyl_difficulty::check_hash(
-                seeded_keccak(&block.pow_blob(), &seed).as_bytes(),
-                difficulty,
-            ) {
-                if height == 0 {
-                    genesis_hash = block.hash();
-                }
-                return block;
-            }
-            nonce += 1;
-        }
+        let seed = seed_for(height, |at| {
+            recorded[usize::try_from(at).expect("seed height fits an index")]
+        });
+        let nonce = nonce_meeting_target(&seed, height, previous, txs);
+        let block = block_with_nonce(height, previous, txs, nonce);
+        recorded.push(block.hash());
+        block
     })
 }
 
@@ -184,7 +204,7 @@ fn assert_lands(mutation: Mutation, at: u64, outcome: &Outcome) {
                  violates fired, which is a finding on its own",
                 verdict.rule.as_str()
             );
-            assert_eq!(verdict.locus, Locus::Block, "{mutation}: locus");
+            assert_place(mutation, verdict.locus);
             assert_eq!(
                 report.connected.len(),
                 usize::try_from(at).expect("small"),
@@ -196,13 +216,36 @@ fn assert_lands(mutation: Mutation, at: u64, outcome: &Outcome) {
     }
 }
 
+/// The place [`Mutation::expected_place`] names. [`ExpectedPlace::Unnamed`]
+/// fails here on purpose: a port must name the locus, not inherit `Block`.
+fn assert_place(mutation: Mutation, locus: Locus) {
+    match mutation.expected_place() {
+        ExpectedPlace::Block => assert_eq!(locus, Locus::Block, "{mutation}: place"),
+        ExpectedPlace::Input => assert!(
+            matches!(locus, Locus::Input { .. }),
+            "{mutation}: §3.10 names an input, got {locus}"
+        ),
+        ExpectedPlace::Unnamed => panic!(
+            "{mutation}: {} is Implemented and expected_place is still Unnamed. \
+             Name the locus on the mutation when the row is ported.",
+            mutation.expected().as_str()
+        ),
+    }
+}
+
 /// §3.10's last column: what Rust does today with a violation whose row is
-/// not ported. Each arm is a pin with the census as its falsifier — when
-/// the row flips to `Implemented`, `assert_lands` takes the other branch
-/// and this arm is never reached again.
+/// not ported. The match is exhaustive over [`Mutation`], so a new variant
+/// names its pin at compile time. When a row flips to `Implemented`,
+/// `assert_lands` takes the other branch and this arm is never reached again.
 fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
-    match (mutation, outcome) {
-        (Mutation::WrongReward | Mutation::ReorderedBodies, Outcome::Report(report)) => {
+    match mutation {
+        Mutation::WrongReward | Mutation::ReorderedBodies => {
+            let Outcome::Report(report) = outcome else {
+                panic!(
+                    "{mutation}: the run faulted; {} is Pending and connects today",
+                    mutation.expected().as_str()
+                );
+            };
             assert_eq!(
                 report.refused,
                 None,
@@ -219,7 +262,10 @@ fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
         // The validator has no I7, so the double spend reaches `connect`,
         // where SI-1 is the belt: the run halts. C2-R8's taxonomy — a belt
         // firing is the validator's hole — observed, not accepted.
-        (Mutation::DoubleSpend, Outcome::Fault(fault)) => {
+        Mutation::DoubleSpend => {
+            let Outcome::Fault(fault) = outcome else {
+                panic!("{mutation}: expected the SI-1 halt while I7 is Pending");
+            };
             assert!(
                 matches!(
                     fault,
@@ -230,12 +276,16 @@ fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
                 "{mutation}: expected the SI-1 halt while I7 is Pending, got {fault}"
             );
         }
-        (_, Outcome::Report(report)) => {
-            panic!("{mutation}: unexpected report while its row is Pending: {report:?}")
-        }
-        (_, Outcome::Fault(fault)) => {
-            panic!("{mutation}: unexpected fault while its row is Pending: {fault}")
-        }
+        Mutation::HeaderVersion
+        | Mutation::Orphan
+        | Mutation::WrongRoot
+        | Mutation::FutureTimestamp
+        | Mutation::StaleTimestamp
+        | Mutation::PowUnderWrongSeed => panic!(
+            "{mutation}: the census says {} is pending, and the family has no pin for a row \
+             that was Implemented at the pin",
+            mutation.expected().as_str()
+        ),
     }
 }
 
@@ -248,32 +298,24 @@ async fn the_family_lands_on_its_named_rows() {
     // Every mutation runs; a mutation missing here is a compile error via
     // the exhaustive match in `setup`, and `Mutation::ALL` is the order.
     for mutation in Mutation::ALL {
-        let (at, outcome) = setup_and_judge(mutation).await;
-        assert_lands(mutation, at, &outcome);
+        let outcome = setup_and_judge(mutation).await;
+        assert_lands(mutation, AT, &outcome);
     }
 }
 
 /// Where a mutation lands: block 2, so blocks 0 and 1 are below it (a spend
-/// to reuse, a median to fall under). A mutation whose row is
-/// `Implemented` sits under block 3 as well, so the run's end is the
-/// refusal and not the chain's. A mutation whose row is `Pending`
-/// **connects**, and a connected block's hash is not the hash its successor
-/// was built on — so it sits at the tip, or block 3 would orphan on A2 and
-/// the pin would read a real gap as a refusal.
+/// to reuse, a median to fall under). The mutated block is the tip.
+///
+/// A pending row connects, and a successor built on the pre-mutation hash
+/// orphans on CEN-A2, so the pin would read a gap as a refusal. An
+/// implemented row stops the run at the refusal, so a successor would not
+/// be judged either. One length covers both.
 const AT: u64 = 2;
+const CHAIN_LEN: u64 = AT + 1;
 
-/// A four-block chain for refusals (block 3 above the mutation), three for
-/// pins (the mutation is the tip).
-fn chain_len(mutation: Mutation) -> u64 {
-    match mutation.expected().status() {
-        RowStatus::Pending => AT + 1,
-        _ => AT + 2,
-    }
-}
-
-async fn setup_and_judge(mutation: Mutation) -> (u64, Outcome) {
-    let n = chain_len(mutation);
-    let outcome = match mutation {
+async fn setup_and_judge(mutation: Mutation) -> Outcome {
+    let n = CHAIN_LEN;
+    match mutation {
         Mutation::PowUnderWrongSeed => {
             let chain = mined_chain(n);
             let substrate = MockSubstrate {
@@ -283,9 +325,13 @@ async fn setup_and_judge(mutation: Mutation) -> (u64, Outcome) {
             let pow = Pow {
                 longhash: &seeded_keccak,
                 difficulty: Difficulty::from_raw(MINED_DIFFICULTY),
-                true_seed: true_seed(&chain, AT),
-                wrong_seed: BlockHash::from_bytes([0xbb; 32]),
-                nonce_budget: 1 << 16,
+                true_seed: seed_for(AT, |at| {
+                    chain[usize::try_from(at).expect("seed height fits an index")]
+                        .0
+                        .hash()
+                }),
+                wrong_seed: BlockHash::from_bytes(WRONG_SEED),
+                nonce_budget: NONCE_BUDGET,
             };
             judge(
                 "pow-wrong-seed",
@@ -300,7 +346,7 @@ async fn setup_and_judge(mutation: Mutation) -> (u64, Outcome) {
         }
         Mutation::ReorderedBodies => {
             // Block 2 lists two bodies so there is something to swap.
-            let mut listed = vec![
+            let listed = vec![
                 Vec::new(),
                 vec![spend(key_image(Family::Main, 1))],
                 vec![
@@ -308,7 +354,7 @@ async fn setup_and_judge(mutation: Mutation) -> (u64, Outcome) {
                     spend(key_image(Family::Fork, 2)),
                 ],
             ];
-            listed.truncate(usize::try_from(n).expect("small"));
+            assert_eq!(listed.len() as u64, n, "the reordered block is the tip");
             let chain = chain_listing(listed);
             judge(
                 "reordered-bodies",
@@ -340,8 +386,7 @@ async fn setup_and_judge(mutation: Mutation) -> (u64, Outcome) {
             )
             .await
         }
-    };
-    (AT, outcome)
+    }
 }
 
 /// The mined chain itself replays clean under the seeded hasher — so a D1
@@ -433,6 +478,10 @@ fn a_rewind_from_the_inner_source_is_a_wrapper_fault() {
         Err(MutationFault::Rewind { to }) => assert_eq!(to, h(0)),
         other => panic!("{other:?}"),
     }
+    match source.next() {
+        Err(MutationFault::Stopped) => {}
+        other => panic!("a fault is not retryable: {other:?}"),
+    }
 }
 
 #[test]
@@ -440,8 +489,8 @@ fn a_mutation_height_the_chain_never_reaches_is_a_fault_not_a_clean_replay() {
     let chain = crate::test_support::chain(2);
     let mut source = Mutated::new(scripted(&chain), h(5), Mutation::Orphan, env());
     match drain(&mut source) {
-        Err(MutationFault::NeverReached { at, last }) => {
-            assert_eq!((at, last), (h(5), h(2)));
+        Err(MutationFault::NeverReached { at, next }) => {
+            assert_eq!((at, next), (h(5), Some(h(2))));
         }
         other => panic!("{other:?}"),
     }
@@ -498,4 +547,137 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_the_three_the_plan_lists(
             "{m}: Display names the row"
         );
     }
+    let places: Vec<(Mutation, ExpectedPlace)> = Mutation::ALL
+        .into_iter()
+        .map(|m| (m, m.expected_place()))
+        .collect();
+    assert_eq!(
+        places,
+        vec![
+            (Mutation::HeaderVersion, ExpectedPlace::Block),
+            (Mutation::Orphan, ExpectedPlace::Block),
+            (Mutation::WrongRoot, ExpectedPlace::Block),
+            (Mutation::FutureTimestamp, ExpectedPlace::Block),
+            (Mutation::StaleTimestamp, ExpectedPlace::Block),
+            (Mutation::PowUnderWrongSeed, ExpectedPlace::Block),
+            (Mutation::WrongReward, ExpectedPlace::Unnamed),
+            (Mutation::ReorderedBodies, ExpectedPlace::Unnamed),
+            (Mutation::DoubleSpend, ExpectedPlace::Input),
+        ]
+    );
+}
+
+#[test]
+fn a_timestamp_mutation_at_genesis_cannot_provoke_its_row() {
+    let chain = crate::test_support::chain(1);
+    for mutation in [Mutation::FutureTimestamp, Mutation::StaleTimestamp] {
+        let mut source = Mutated::new(scripted(&chain), h(0), mutation, env());
+        match source.next() {
+            Err(MutationFault::Unmutable {
+                cause: Unmutable::GenesisExempt(which),
+                at,
+                ..
+            }) => {
+                assert_eq!(which, mutation);
+                assert_eq!(at, h(0));
+            }
+            other => panic!("{mutation}: {other:?}"),
+        }
+        match source.next() {
+            Err(MutationFault::Stopped) => {}
+            other => panic!("{mutation}: a fault is not retryable: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_clock_with_no_representable_future_does_not_pretend_to_be_past_the_ftl() {
+    let chain = crate::test_support::chain(2);
+    // `clock + FTL + 1` is `u64::MAX + 1`. The saturating predicate would
+    // still accept `u64::MAX`, so emitting it would not be CEN-C1.
+    let env = Environment {
+        clock: Timestamp::from_raw(u64::MAX - FTL_SECONDS),
+        pow: None,
+    };
+    let mut source = Mutated::new(scripted(&chain), h(1), Mutation::FutureTimestamp, env);
+    source.next().expect("block 0 is not the mutation");
+    match source.next() {
+        Err(MutationFault::Unmutable {
+            cause: Unmutable::NoRepresentableFuture,
+            at,
+            ..
+        }) => assert_eq!(at, h(1)),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn an_amount_at_the_top_of_the_range_cannot_move_by_one() {
+    let chain = crate::test_support::chain(1);
+    let mut candidate = candidate(&chain[0].0, &chain[0].1);
+    candidate.block.miner_transaction.prefix.outputs[0].amount = u64::MAX;
+    let err = Mutation::WrongReward
+        .apply(candidate, &env(), &[], h(0))
+        .expect_err("u64::MAX + 1 does not fit");
+    assert_eq!(err, Unmutable::RewardSaturated);
+}
+
+#[test]
+fn the_unheld_root_is_not_a_fixture_root() {
+    let chain = crate::test_support::chain(CHAIN_LEN);
+    let mut source = Mutated::new(scripted(&chain), h(AT), Mutation::WrongRoot, env());
+    for _ in 0..AT {
+        source.next().expect("blocks below the mutation");
+    }
+    let ev = source.next().expect("the mutated block").expect("yielded");
+    let IngestEvent::Extend(candidate) = ev.event else {
+        panic!("Extend-only");
+    };
+    let root = candidate.block.header.curve_tree_root;
+    assert_eq!(root.as_bytes(), &UNHELD_ROOT);
+    assert_ne!(root, CurveTreeRoot::EMPTY);
+    assert_ne!(root, root_at(AT));
+}
+
+#[test]
+fn the_last_representable_height_is_yielded_and_another_event_is_a_fault() {
+    let chain = crate::test_support::chain(1);
+    let block = IngestEvent::Extend(Box::new(candidate(&chain[0].0, &chain[0].1)));
+    let ceiling = BlockHeight::from_raw(u64::MAX);
+    let mut source = Mutated::new(
+        Scripted::from(ceiling, vec![block.clone(), block]),
+        ceiling,
+        Mutation::Orphan,
+        env(),
+    );
+    let yielded = source
+        .next()
+        .expect("the block at u64::MAX is a real event")
+        .expect("yielded");
+    let IngestEvent::Extend(carried) = yielded.event else {
+        panic!("Extend-only");
+    };
+    assert_ne!(
+        carried.block.header.previous, chain[0].0.header.previous,
+        "the mutation landed on the last height"
+    );
+    match source.next() {
+        Err(MutationFault::HeightExhausted { after }) => assert_eq!(after, ceiling),
+        other => panic!("{other:?}"),
+    }
+    match source.next() {
+        Err(MutationFault::Stopped) => {}
+        other => panic!("a fault is not retryable: {other:?}"),
+    }
+
+    // The same height, with the source ending there, is a clean close.
+    let block = IngestEvent::Extend(Box::new(candidate(&chain[0].0, &chain[0].1)));
+    let mut source = Mutated::new(
+        Scripted::from(ceiling, vec![block]),
+        ceiling,
+        Mutation::Orphan,
+        env(),
+    );
+    assert!(source.next().expect("yielded").is_some());
+    assert!(source.next().expect("clean end").is_none());
 }
