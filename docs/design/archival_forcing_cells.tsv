@@ -21,9 +21,9 @@ archival_serve_credit	apply	FORCED-BY:tx-with-serve-credit-response-vin	blockcha
 archival_serve_credit	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:923	remove_archival_serve_credit_bit	remove_archival_serve_credit_bit
 archival_settlement	apply	EXCLUDED:no-production-caller	db_lmdb.cpp:7145	set_archival_settlement	held under writer-round 5.1 pending SO-D8; unit KAT exists, LMDB-bound
 archival_settlement	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:7231	delete_archival_settlement_for_epoch	delete runs but cannot discriminate; only write is mdb_cursor_del, no counter
-archival_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:5976	connect.attestation_witness	no emitter exists: tree says "Empty on local mine and until the Phase 2/3 template writer populates it"; FFI exposes verify + pass_p_ids only
+archival_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:5967	connect.attestation_witness	no emitter exists: tree says "Empty on local mine and until the Phase 2/3 template writer populates it"; FFI exposes verify + pass_p_ids only
 archival_attestation_witness	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:9471	remove_archival_attestation_witness_at_height	remove_archival_attestation_witness_at_height is a lone mdb_del, no counter, no side effect
-archival_alt_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:2380	store_archival_alt_attestation_witness	stores connect.attestation_witness, which no in-tree emitter ever populates; same blocker as the main-chain row
+archival_alt_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:2371	store_archival_alt_attestation_witness	stores connect.attestation_witness, which no in-tree emitter ever populates; same blocker as the main-chain row
 archival_alt_attestation_witness	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:9516	remove_archival_alt_attestation_witness	remove_archival_alt_attestation_witness is a lone mdb_del, no counter, no side effect
 archival_bond	apply	FORCED-BY:bond-post-JoinMarket	blockchain_db.cpp:309	put_archival_bond_record	put_archival_bond_record
 archival_bond	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:934	remove_archival_bond_record	remove_archival_bond_record
