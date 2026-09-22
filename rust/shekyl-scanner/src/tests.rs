@@ -48,7 +48,11 @@ pub(crate) mod ledger_ops {
     /// `WalletLedgerExt::balance` needs a `WalletLedger`, which these
     /// ingestion tests deliberately do not build.
     fn balance_of(ledger: &LedgerBlock, current_height: u64) -> BalanceSummary {
-        BalanceSummary::compute(ledger.transfers(), current_height, &no_locks())
+        BalanceSummary::compute(
+            ledger.transfers(),
+            shekyl_types::BlockHeight::from_raw(current_height),
+            &no_locks(),
+        )
     }
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
@@ -656,7 +660,11 @@ mod sync_bookkeeping {
     /// `WalletLedgerExt::balance` needs a `WalletLedger`, which these
     /// ingestion tests deliberately do not build.
     fn balance_of(ledger: &LedgerBlock, current_height: u64) -> BalanceSummary {
-        BalanceSummary::compute(ledger.transfers(), current_height, &no_locks())
+        BalanceSummary::compute(
+            ledger.transfers(),
+            shekyl_types::BlockHeight::from_raw(current_height),
+            &no_locks(),
+        )
     }
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {

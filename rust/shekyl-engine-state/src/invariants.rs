@@ -544,7 +544,7 @@ mod tests {
             StakingBlock::empty(),
         );
         let row = |state| SendRecord {
-            dispatched_at_height: 20,
+            dispatched_at_height: BlockHeight::from_raw(20),
             fee: 5,
             recipients: Vec::new(),
             change_amount: 0,
@@ -658,7 +658,7 @@ mod tests {
             w.send_journal.rows.insert(
                 txid,
                 SendRecord {
-                    dispatched_at_height: 20,
+                    dispatched_at_height: BlockHeight::from_raw(20),
                     fee: 5,
                     recipients: Vec::new(),
                     change_amount: 0,

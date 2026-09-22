@@ -151,7 +151,7 @@ fn empty_result_for(snapshot: &LedgerSnapshot) -> ScanResult {
     let parent_hash = snapshot
         .block_hash_at(snapshot.synced_height)
         .map(BlockHash::from_bytes);
-    ScanResult::empty_at(start, parent_hash)
+    ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(start), parent_hash)
 }
 
 /// A scan result that the merge will reject as
@@ -160,7 +160,7 @@ fn empty_result_for(snapshot: &LedgerSnapshot) -> ScanResult {
 /// fires the start-height check before parent-hash, so an
 /// arbitrary `bad_start != synced_height + 1` is sufficient.
 fn stale_snapshot_result(bad_start: u64) -> ScanResult {
-    ScanResult::empty_at(bad_start, None)
+    ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(bad_start), None)
 }
 
 /// A scan result the merge will reject as
@@ -172,7 +172,7 @@ fn stale_snapshot_result(bad_start: u64) -> ScanResult {
 fn malformed_result_for(snapshot: &LedgerSnapshot) -> ScanResult {
     let start = snapshot.synced_height.to_raw().saturating_add(1);
     let mut result = ScanResult::empty_at(
-        start,
+        shekyl_types::BlockHeight::from_raw(start),
         snapshot
             .block_hash_at(snapshot.synced_height)
             .map(BlockHash::from_bytes),
@@ -180,9 +180,10 @@ fn malformed_result_for(snapshot: &LedgerSnapshot) -> ScanResult {
     // Empty range + non-empty block_hashes is the
     // contract-violation shape `apply_scan_result_to_state`
     // gates against in its early-return branch.
-    result
-        .block_hashes
-        .push((start, BlockHash::from_bytes([0xAB; 32])));
+    result.block_hashes.push((
+        shekyl_types::BlockHeight::from_raw(start),
+        BlockHash::from_bytes([0xAB; 32]),
+    ));
     result
 }
 
@@ -275,8 +276,16 @@ fn retry_budget_exhausted_returns_last_concurrent_mutation() {
     assert_eq!(*observed_attempts.borrow(), vec![1, 2, 3]);
     match err {
         RefreshError::ConcurrentMutation { wallet, result } => {
-            assert_eq!(wallet, 0, "fresh wallet's synced_height");
-            assert_eq!(result, 103, "last attempt was attempt 3, bad_start = 103");
+            assert_eq!(
+                wallet,
+                shekyl_types::BlockHeight::ZERO,
+                "fresh wallet's synced_height"
+            );
+            assert_eq!(
+                result,
+                shekyl_types::BlockHeight::from_raw(103),
+                "last attempt was attempt 3, bad_start = 103"
+            );
         }
         other => panic!("expected ConcurrentMutation, got {other:?}"),
     }
@@ -486,36 +495,59 @@ fn production_refresh_against_unreachable_daemon_returns_io_daemon() {
 /// than a silent shape drift.
 #[test]
 fn summarize_records_every_field() {
-    let mut result = ScanResult::empty_at(5, Some(BlockHash::from_bytes([0x11; 32])));
-    result.processed_height_range = 5..8;
+    let mut result = ScanResult::empty_at(
+        shekyl_types::BlockHeight::from_raw(5),
+        Some(BlockHash::from_bytes([0x11; 32])),
+    );
+    result.processed_height_range =
+        shekyl_types::BlockHeight::from_raw(5)..shekyl_types::BlockHeight::from_raw(8);
     result.block_hashes = vec![
-        (5, BlockHash::from_bytes([1; 32])),
-        (6, BlockHash::from_bytes([2; 32])),
-        (7, BlockHash::from_bytes([3; 32])),
+        (
+            shekyl_types::BlockHeight::from_raw(5),
+            BlockHash::from_bytes([1; 32]),
+        ),
+        (
+            shekyl_types::BlockHeight::from_raw(6),
+            BlockHash::from_bytes([2; 32]),
+        ),
+        (
+            shekyl_types::BlockHeight::from_raw(7),
+            BlockHash::from_bytes([3; 32]),
+        ),
     ];
     // `new_transfers` and `spent_key_images` are exercised
     // structurally elsewhere; here we just record the count.
     result.spent_key_images = vec![
         crate::scan::KeyImageObserved {
-            block_height: 5,
+            block_height: shekyl_types::BlockHeight::from_raw(5),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([9; 32]),
             containing_tx_hash: shekyl_types::TxHash::from_bytes([0xD5; 32]),
         },
         crate::scan::KeyImageObserved {
-            block_height: 7,
+            block_height: shekyl_types::BlockHeight::from_raw(7),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([8; 32]),
             containing_tx_hash: shekyl_types::TxHash::from_bytes([0xD7; 32]),
         },
     ];
-    result.reorg_rewind = Some(crate::scan::ReorgRewind { fork_height: 5 });
+    result.reorg_rewind = Some(crate::scan::ReorgRewind {
+        fork_height: shekyl_types::BlockHeight::from_raw(5),
+    });
 
     let summary = summarize(&result, NonZeroU32::new(4).expect("fixture attempt"));
 
-    assert_eq!(summary.processed_height_range, 5..8);
+    assert_eq!(
+        summary.processed_height_range,
+        shekyl_types::BlockHeight::from_raw(5)..shekyl_types::BlockHeight::from_raw(8)
+    );
     assert_eq!(summary.blocks_processed, 3);
     assert_eq!(summary.transfers_detected, 0);
     assert_eq!(summary.key_images_observed, 2);
-    assert_eq!(summary.reorg, Some(RefreshReorgEvent { fork_height: 5 }));
+    assert_eq!(
+        summary.reorg,
+        Some(RefreshReorgEvent {
+            fork_height: shekyl_types::BlockHeight::from_raw(5)
+        })
+    );
     assert_eq!(summary.merge_attempts, 4);
 }
 

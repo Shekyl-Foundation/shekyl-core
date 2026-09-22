@@ -222,7 +222,7 @@ mod tests {
         wallet.send_journal.rows.insert(
             txid,
             SendRecord {
-                dispatched_at_height: 20,
+                dispatched_at_height: shekyl_types::BlockHeight::from_raw(20),
                 fee: 5,
                 recipients: Vec::new(),
                 change_amount: 0,
@@ -294,13 +294,15 @@ mod tests {
             guard.ledger.send_journal.rows.insert(
                 confirmed,
                 SendRecord {
-                    dispatched_at_height: 20,
+                    dispatched_at_height: shekyl_types::BlockHeight::from_raw(20),
                     fee: 5,
                     recipients: Vec::new(),
                     change_amount: 0,
                     inputs: Vec::new(),
                     lock_baseline: None,
-                    state: SendState::Confirmed { height: 25 },
+                    state: SendState::Confirmed {
+                        height: shekyl_types::BlockHeight::from_raw(25),
+                    },
                 },
             );
         }
@@ -311,8 +313,8 @@ mod tests {
         assert!(matches!(
             err,
             AbandonTxError::StateForbids {
-                state: SendState::Confirmed { height: 25 }
-            }
+                state: SendState::Confirmed { height },
+            } if height == shekyl_types::BlockHeight::from_raw(25)
         ));
     }
 
@@ -361,7 +363,9 @@ mod tests {
 
             assert_eq!(
                 wallet.send_journal.rows[&txid].state,
-                SendState::Confirmed { height: 30 },
+                SendState::Confirmed {
+                    height: shekyl_types::BlockHeight::from_raw(30)
+                },
                 "late confirmation un-abandons loudly"
             );
             assert!(
