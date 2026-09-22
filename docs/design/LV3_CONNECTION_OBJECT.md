@@ -26,7 +26,7 @@ have. *That is the case for this slice, and it is falsifiable — if a later
 measurement shows shipped C++ growing while the noun is still missing, this
 slice was scoped wrong.*
 
-*(The converging-rows argument in §1 reaches the same conclusion from seven
+*(The converging-rows argument in §1 reaches the same conclusion from six
 consumers. Two independent derivations, one empirical and one structural.)*
 
 ---
@@ -65,8 +65,10 @@ lambda and epee's context.
 
 **That absence is why the per-host cap became an address comparison inside a
 loop — there was no object to hang a category on.** The missing noun has
-**seven** consumers (`P2P_3_IMPLEMENTATION_ROUND.md` §2): PWD-I8, E1/E2, B1,
-B2, B7's score, PWC-E5, and the failure-window row.
+**six** consumers (`P2P_3_IMPLEMENTATION_ROUND.md` §2): PWD-E1/E2, B1, B2,
+B7's score, PWC-E5, and the failure-window row. *(Was seven — **PWD-I8 struck
+2026-09-21 by §2.9.4**, whose remedy is a deletion plus a measurement and reads
+no category. Counted from rows, not carried.)*
 
 So this is not the cheapest slice. **It is the one the others are waiting on.**
 
@@ -74,8 +76,14 @@ So this is not the cheapest slice. **It is the one the others are waiting on.**
 
 ## 2. The deliverable
 
-**A connection as a typed, owned Rust object whose identity is PWD-I8's
-category** — *what this endpoint **is***:
+**A connection as a typed, owned Rust object whose identity is — amended
+2026-09-21 by §2.9.8 — the ENDPOINT WITH ITS PROVENANCE (Round 2's
+claimed/observed split) plus the per-peer state that has nowhere else to
+live.** *Records-was, until 2026-09-21: "whose identity is PWD-I8's category."
+§2.9.4 struck I8 as a reader, so the category survives as **accounting** — a
+derived projection for the operator and the rule-82 surface — and no longer as
+the object's identity. The table below is therefore what the connection*
+**reports**, *not what any admission decision reads:*
 
 | Category | Meaning |
 | --- | --- |
@@ -280,7 +288,7 @@ in different states with an explicit rule for crossing between them.
 
 *(This is also the honest reason the category "needs naming, not inventing":
 the code has been making this distinction correctly in one place, without a
-name, and the unnamed version could not be reused by the seven consumers in
+name, and the unnamed version could not be reused by the six consumers in
 §1.)*
 
 ### 2.7.4 The invariant, verified exhaustively — WHITE *is* a verified dialability claim
@@ -665,7 +673,226 @@ declaration — *what is the quantity a proxy for?* Rounds 1 and 2 settled the
 where I8's original defect actually lives, and nothing established so far
 constrains it.
 
+## 2.9 ROUND 3 — the relevance axis, and the answer was already in another lane
+
+**Opened and answered 2026-09-21.** Anchors at `f9e000f76`, this document's pin.
+
+### 2.9.1 The question before the question
+
+*"Is Q relevant to P?"* presumes you need a proxy. The first thing each decision
+owes is **is P directly observable?** If it is, a proxy is not a bad choice, it
+is an **unnecessary** one.
+
+That bites immediately, because the per-host cap was doing **two** jobs:
+
+| Job | Target property `P` | Observable? |
+| --- | --- | --- |
+| **Resource bound** — don't exhaust descriptors, memory, sockets | connection count, memory, fds | **YES, directly.** No proxy is needed at all |
+| **Diversity** — don't let one party occupy enough of my peer set to determine what I see | **party identity** | **NO, by construction** — permissionless network, ephemeral identity, and PWD-I1 already deleted the only durable identifier |
+
+**One half needed no proxy; the other had no observable target.** Different
+failures, different fixes, and **the single quantity hid both.** That is why the
+resource half's fix is a real ceiling rather than a better key.
+
+### 2.9.2 When `P` is unobservable, the quantity is not a proxy for identity
+
+This is the reframing, and it is the part worth keeping past this round.
+
+You cannot measure *is this the same party*. You can measure **what it costs an
+adversary to span the axis**. Bitcoin's netgroup diversity does not claim a /16
+is one party — that claim would be **false**. It claims that requiring an
+adversary to occupy many /16s **costs money**. The quantity is not an identity
+proxy at all; it is a **cost-imposition axis**, which is a different thing with
+a different test:
+
+> **What does one unit of `Q` cost an adversary, and what does it cost an honest
+> node?**
+
+**The per-host cap, run through it:** an adversary buys a /24 for a few dollars a
+month — roughly three cents per address, and **PWD-E4 already ruled this**. A
+CGNAT subscriber **cannot obtain a second address at any price** — not
+expensive, *impossible*. So the ratio is not unfavourable, it is **inverted**:
+**the mechanism binds exactly the population that cannot evade it, and is free
+for the population it was aimed at.**
+
+**That is why no `k` works.** Tuning a constant cannot fix a ratio that points
+the wrong way. The cap was never mistuned.
+
+### 2.9.3 The measurement that settles it — the measured adversary is CAP-COMPLIANT AT 1
+
+The relevance question for inbound admission **was already answered in the relay
+lane**, and not as an argument — as a number.
+[`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §6.5's
+`simulate_transport_observation` measures the project's **primary** adversary: a
+supernode opening cheap **inbound** edges to a fraction of honest nodes, running
+the first-spy estimator at 512 nodes and 12 peers.
+
+| supernode reach | clearnet first-spy π₀ | Tor/I2P |
+| --- | --- | --- |
+| dials 5 % | 0.0978 | **0.0000** |
+| dials 10 % | 0.1760 | **0.0000** |
+| dials 30 % | 0.4228 | **0.0000** |
+
+**And the structural detail that decides I8 — verified in the simulation, not in
+its prose.** `watched` is **one boolean per honest node**
+([`transport.rs:118`](../../rust/shekyl-relay-privacy/src/conformance/transport.rs#L118),
+consumed at [`:145`](../../rust/shekyl-relay-privacy/src/conformance/transport.rs#L145)):
+the supernode opens **exactly one inbound edge per victim**. Each victim
+therefore sees **one** connection from the adversary's address.
+
+> **A per-host inbound cap of `1` admits that adversary in full.**
+
+So the cap provides **zero** protection against the only *measured* inbound
+adversary in the project. It is not weakly relevant to the diversity job — it is
+**orthogonal to it**. And the defence that does exist lives in another lane
+entirely: the transport gate
+([`FluffReach::OutboundOnly`](../../rust/shekyl-relay/src/zone/mod.rs#L216),
+enforced at [`zone/mod.rs:833`](../../rust/shekyl-relay/src/zone/mod.rs#L833))
+plus the embargo, **both designed on the assumption that the observer sees
+everything** — which is the correct posture, and one a door filter cannot
+contribute to.
+
+### 2.9.4 RULED 2026-09-21 — I8's remedy is a DELETION plus a MEASUREMENT, not a subsystem
+
+1. **Delete the per-host inbound cap** (or set its default non-binding and
+   deprecate). The justification is **three independent arms**: PWD-E4 ruled it
+   buys no Sybil resistance; §2.9.2's ratio shows no `k` works; §2.9.3 shows the
+   measured adversary is compliant at `1`. **It defends nothing.**
+2. **Give `--in-peers` a REACHABLE default — the mechanism already exists.**
+   `P` here is descriptors and memory — **directly observable**, so this is a
+   **measurement at the rule-76 floor (Pi 4)**, not a ruling and not a guess.
+   **No number is written here**, and it is not owed to the maintainer as a
+   decision.
+
+   **Verified while checking this arm, and it is the same defect PR 812 just
+   fixed one flag over.** `--in-peers` defaults to the sentinel `-1`
+   ([`net_node.cpp:181`](../../src/p2p/net_node.cpp#L181), an `int64_t`
+   descriptor), and `set_max_in_peers` assigns that `int64_t` **straight into a
+   `uint32_t`** ([`net_node.inl:3080`](../../src/p2p/net_node.inl#L3080) into
+   [`p2p_protocol_defs.h:109`](../../src/p2p/p2p_protocol_defs.h#L109)). So the
+   shipped default is not "no ceiling" — it is a ceiling of **`UINT32_MAX`**,
+   compared for real on every accept
+   ([`net_node.inl:235`](../../src/p2p/net_node.inl#L235)).
+
+   Three consequences, and they make this arm **smaller**, not larger:
+
+   - **No new mechanism is owed.** The ceiling is present, wired and checked.
+     What is owed is a **measured value replacing an unreachable sentinel** —
+     structurally the same cut PR 812 made for `max-connections-per-ip`, whose
+     `-1` is now an explicit sentinel resolved in Rust by
+     `shekyl_host_inbound_resolve_cap`. **`--in-peers` is that fix, unmade, one
+     descriptor away.**
+   - **It is an implicit narrowing of a sentinel**, which is the defect class
+     rule 18 names and PR 812 removed next door. It should be resolved the same
+     way — in Rust, explicitly — rather than patched in C++.
+   - **It is why §2.9.5's blocker holds.** Nobody has observed a node reaching
+     its inbound ceiling because **at the default no node can**. The estate is
+     the exception: all six seeds set `in-peers=128` explicitly (verified
+     2026-09-21), so they **do** have a reachable ceiling and are the place the
+     discharge trigger could first fire.
+3. **Do not build eviction.** See §2.9.5.
+4. **Build the connection object anyway — for LV-3, not for I8.** The Rust
+   migration needs it regardless. See §2.9.7, because this does change what the
+   object *is*.
+
+### 2.9.5 The eviction deferral, stated as rule 22 requires
+
+Rule 22 forbids lazy deferral and requires a **named blocker**, not a
+disposition.
+
+- **Named blocker:** eviction is only needed once the ceiling is actually
+  **reached**, and **no node has been observed reaching one** — at the shipped
+  default the ceiling is `UINT32_MAX` (arm 2), which no node can reach, so the
+  absence of observations is a property of the default rather than evidence
+  about load. Designing a protection set now means
+  designing it against an adversary nobody has seen, which is precisely the
+  inherited-defence error rule 16 names and §3.1 already warned about.
+- **Discharge trigger / falsifier:** **a node at its `--in-peers` ceiling
+  refusing an honest inbound peer.** Observable at the accept path, needs no new
+  instrument, and cannot be reached until item 2 above lands — so the trigger is
+  *created* by the measurement, in the right order.
+- **What this is not:** not "we will get to it." The trigger is specific, the
+  instrument exists, and the deferral **cannot rot** — it becomes reachable
+  exactly when the ceiling does.
+
+### 2.9.6 §3.1 and §3.2 CLOSE BY DISSOLUTION — and one constraint survives them
+
+Both §3 questions presupposed **the admission→eviction trade**. With the door
+keying on nothing and eviction unbuilt, the trade has no second term:
+
+- **§3.1 (the admission→eviction trade) — DISSOLVED.** Nothing is moved, so
+  there is no failure mode to relocate and no circularity to break. The
+  recovery-asymmetry argument is retained as the **record of why the trade
+  looked attractive**, not as a live claim.
+- **§3.2 (the NAT-sorting trap) — DISSOLVED AS A QUESTION, RETAINED AS A
+  CONSTRAINT.** With no protection set there is no ranking, so **there is
+  nothing to sort**. But the mission-priority-2 refusal is *not* dissolved: it
+  becomes a **standing constraint on any future eviction design**, recorded here
+  so it survives the question closing. **A design that sorts survival by
+  connectivity class is refused on priority 2, not traded against convenience** —
+  and §2.9.5's discharge trigger is the moment that constraint becomes live
+  again.
+
+### 2.9.7 The trap in the framework, and the honest consequence
+
+**Step 1 must come first and independently, or the whole framework is motivated
+reasoning.** If you pick the quantity first and write the objective afterwards,
+**any** quantity looks relevant — choose *"limit connections per address"* as
+the objective and the per-host cap scores perfectly. The objective must be a
+property you would defend **before** knowing what you will measure.
+
+**And the consequence that makes the framework a test rather than a
+ratification:** when no quantity has a favourable ratio, **the correct design is
+not to make the decision.** A total ceiling and nothing at the door beats a bad
+key at the door. Round 3 reached that answer for inbound admission — which is
+the evidence it was testing rather than confirming.
+
+**What the analysis bought over the CGNAT paragraph alone**, stated honestly
+because it is less than it looks: it **separated the half that is a measurement
+from the half that is a deletion**, so neither is mistaken for a ruling owed to
+the maintainer. That is one paragraph's worth. §2.9.2's ratio test is recorded
+for the decisions that still need it — as a tool, **not** as this round's
+product.
+
+### 2.9.8 What Round 3 does to LV-3's own identity — §5's first falsifier is PARTLY IN PLAY
+
+This is the consequence that must not be left implicit, because
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) and §1 both assert that the
+connection object's **identity IS PWD-I8's category**.
+
+**Round 3 removes I8 as a reader of that category at admission, and §2.9.5
+defers the only other reader.** So the assertion is now false as written.
+
+§5's first falsifier — *"the category turns out to be derivable from E1/E2's
+outputs alone, in which case LV-3 shrinks to wiring"* — is **partly**, not
+wholly, satisfied:
+
+| | Status after Round 3 |
+| --- | --- |
+| **The category as a decision input** | **gone** — no admission decision reads it, and eviction is deferred with a trigger |
+| **The category as accounting** | **survives** — it is what an operator and a rule-82 surface read, and it is largely an **E1/E2-derived projection** |
+| **Per-peer state (B1's bucket, B2's deadline, B7's score, PWC-E5's floor)** | **not E-derived at all.** A token bucket is not an endpoint fact |
+
+**So LV-3 does NOT shrink to wiring, and its identity changes rather than
+dissolving.** The object's identity is now **the endpoint with its provenance**
+(Round 2's claimed/observed split) **plus the per-peer state that has nowhere
+else to live**. The category rides along as a derived projection for accounting.
+
+**Consumer recount, from rows rather than from the prior figure** (I8 struck):
+PWD-E1/E2, PWD-B1, PWD-B2, PWD-B7's score, PWC-E5, the failure-window row —
+**six consumers, not seven.** The missing-noun argument is unaffected in kind:
+six places re-creating the same state is still the outcome the slice exists to
+prevent.
+
+**§1 and the index cell are corrected accordingly** — an index cell asserting an
+identity nothing reads is exactly the drift rule 94 exists to catch.
+
 ## 3. Two adversarial questions the round must ANSWER, not assume
+
+> **BOTH CLOSED 2026-09-21 by §2.9.6 — dissolved with the admission→eviction
+> trade, §3.2's priority-2 refusal retained as a standing constraint on any
+> future eviction design. Retained below as the record of the questions and why
+> they looked live.**
 
 ### 3.1 The admission→eviction trade
 
@@ -732,10 +959,10 @@ This slice is **wrong as scoped**, and should be re-cut, if:
   which case it is a consumer of cluster E rather than a noun of its own and
   LV-3 shrinks to wiring; or
 - **a connection object can be built that satisfies §2.1's three constraints
-  without any of the seven consumers needing it** — which would mean the
+  without any of the six consumers needing it** — which would mean the
   missing-noun argument in §1 is wrong and this is not slice 1.
 
 **Reopening criterion if the round closes without implementation:** reopen if
-any of the seven consumers lands its own private connection state in the
-meantime. That is the missing noun being re-created in seven places, which is
+any of the six consumers lands its own private connection state in the
+meantime. That is the missing noun being re-created in six places, which is
 the outcome this slice exists to prevent.
