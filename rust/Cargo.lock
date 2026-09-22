@@ -3807,6 +3807,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-crypto-hash",
  "shekyl-difficulty",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",

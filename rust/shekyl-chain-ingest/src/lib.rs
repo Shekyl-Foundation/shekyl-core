@@ -68,6 +68,10 @@ pub mod fetch;
 #[cfg(feature = "pipeline")]
 pub mod grader;
 pub mod metrics;
+pub mod mutation;
+#[cfg(all(test, feature = "pipeline"))]
+#[path = "mutation_tests.rs"]
+mod mutation_tests;
 #[cfg(feature = "pipeline")]
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
@@ -94,6 +98,7 @@ pub use fetch::{fetch_corpus, FetchFault};
 #[cfg(feature = "pipeline")]
 pub use grader::{grade_run, GradedRefusal, GradedRun, Observations, Register};
 pub use metrics::{Concurrency, Metrics, MetricsArtifact};
+pub use mutation::{Environment, Mutated, Mutation, MutationFault, Pow, Unmutable};
 #[cfg(feature = "pipeline")]
 pub use pipeline::{
     run, Checkpoint, Disagreement, PipelineConfig, PipelineFault, RunReport, Switch,

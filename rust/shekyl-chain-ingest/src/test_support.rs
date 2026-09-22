@@ -173,12 +173,21 @@ pub fn block(height: u64, previous: BlockHash, listed: &[Transaction]) -> Block 
 
 /// A chain listing `listed[h]` at height `h`, each block on the last.
 pub fn chain_listing(listed: Vec<Vec<Transaction>>) -> Vec<(Block, Vec<Transaction>)> {
+    chain_listing_with(listed, block)
+}
+
+/// [`chain_listing`] with the block builder supplied — a mined chain hands
+/// one that searches nonces (the mutation family's D1 case).
+pub fn chain_listing_with(
+    listed: Vec<Vec<Transaction>>,
+    mut make: impl FnMut(u64, BlockHash, &[Transaction]) -> Block,
+) -> Vec<(Block, Vec<Transaction>)> {
     let mut previous = BlockHash::NULL;
     listed
         .into_iter()
         .enumerate()
         .map(|(hh, txs)| {
-            let b = block(hh as u64, previous, &txs);
+            let b = make(hh as u64, previous, &txs);
             previous = b.hash();
             (b, txs)
         })
