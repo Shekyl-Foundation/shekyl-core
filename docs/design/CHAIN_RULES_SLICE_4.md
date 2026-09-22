@@ -1,9 +1,10 @@
 # `shekyl-chain-rules` slice 4 — census 4.F, the miner transaction (DRS-E6 increment 5)
 
 **Status:** OPEN — Round 0 pre-flight, written 2026-09-21 against `dev` @
-`ea140396b` (post-#814); **Round 0.5 (2026-09-21): the shim-layer sweep the
-review ordered before Round 1 — §3.1.** Nothing implemented; §8 is the
-question set, re-posed against the swept count.
+`ea140396b` (post-#814); Round 0.5 (2026-09-21): the shim-layer sweep — §3.1;
+**precursor P1–P4 LANDED 2026-09-22 (#819)**; **Round 1 (2026-09-22, `dev` @
+`7b9be6cd1`): the `dev` sweep — §3.2 — and §8 re-posed: Q1 asked, Q7 amended,
+Q8 added; rulings owed on Q1, Q3–Q8.** No rule implemented yet.
 Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessors
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md),
 [`CHAIN_RULES_SLICE_2.md`](../completed/CHAIN_RULES_SLICE_2.md),
@@ -292,6 +293,60 @@ ahead of the slice's rule commits and reviewable on its own.
   removed; the gate reports `validator-enforced 150 / enforced 152`; §3.1
   and Table 3 figures moved (`4.F 13/4/4/21`).
 
+### 3.2 Round 1 sweep (2026-09-22) — what moved on `dev` between the pre-flight pin and Round 1
+
+`ea140396b` → `7b9be6cd1` (#815–#823). Read at source, not from PR titles;
+the pre-flight's blockers and Q7's "no cross-lane edit" were re-checked
+rather than inherited (rule 22: a blocker's condition can expire and look
+exactly like pending).
+
+- **S-CURVE landed (#815/#818, DRS-E1 increment 7) — F17's blocker is not
+  what §2 named.** `ReadSnapshot::curve_tree() -> CurveTreeState { root,
+  depth, leaf_count }` (`store/read.rs:793`, `curve_reads.rs`) is the read
+  §2 said did not exist. It exists; **the writer does not**: the summary
+  row is `EMPTY`, written by the seal, until DRS-E3 populates the tree
+  (`curve_reads.rs` module docs: "SI-11 armed by the reads until E3
+  writes"). A `ChainView::curve_tree_leaf_count()` fed from it today would
+  return `0` on every replayed chain — a real read of a table nothing
+  writes, which is the passed-through-fact shape Q1 (c) rejected. F17's
+  operand `n = frozen_segment_count(leaf_count)` is therefore blocked on
+  **DRS-E3**, not S-CURVE. Falsify by: `curve_tree().leaf_count > 0` after
+  replaying a chain with at least one output. Recorded in §6.
+- **E2's mutation family landed (#822) and names 4.F rows.**
+  `shekyl-chain-ingest/src/mutation.rs`: `Mutation::WrongReward` (the
+  coinbase's first output amount `+ REWARD_OFF_BY`) expects **CEN-F13** at
+  `ExpectedPlace::Unnamed`, and the test's branch is chosen by
+  `CenRow::status` at every run — `Pending` pins "the block connects",
+  `Implemented` asserts `(height, InvalidBlock { rule: F13, locus: the
+  place })`, and an `Unnamed` place under `Implemented` "is a failed
+  assertion, not a guessed block locus" (`DRS_E2_REPLAY_DRIVER.md` §3.10
+  row `WrongReward`; `:470`: the place is Unnamed "until 4.F and 4.G name
+  their locus"). Two consequences this slice must answer, not discover
+  at CI:
+  1. **F13 is a definition row, not the predicate that refuses a wrong
+     amount.** F13 states the base subsidy (the D4 shape, carried on the
+     verdict); the row whose refusal a wrong coinbase amount trips is
+     **F18** (exact payout), which is blocked on G6 with F14/F14b/F16.
+     If this slice marks F13 `implemented` and lands F18 `pending`, the
+     `WrongReward` test flips to expecting a refusal by F13 and the block
+     connects — a red test that names the wrong row. The spec's row is
+     mis-keyed; **Q8**.
+  2. **Whatever place Q6 chooses for the coinbase must land in
+     `ExpectedPlace` and in §3.10 in the same PR** — a one-arm edit in
+     `shekyl-chain-ingest` and a spec row edit in a DRS-E2 document. Q7's
+     "no cross-lane edit is foreseen" is false; the edit is small, named,
+     and Q6 decides its content. Amended in §8.
+- **`BlockHeight` grew `checked_add` / `checked_sub` / `ordinals_until`
+  (#820).** F6's unlock-window arithmetic (`height + window` compared to
+  the coinbase's `unlock_time`) has a checked form to use; no blocker.
+- **#823 deleted the C++ tx-data prune; #821 the pruning-seed wire; #816
+  the WSS bench timing; #817 wallet ordinals.** None touches 4.F, the
+  view, or the rules crate.
+- **The precursor (#819) landed**, so Q1 is now asked, against sixteen
+  landable rows (F1–F11, F13, F15, F19, F20, F21) and five blocked (F14,
+  F14b, F16, F18 on G6; F17 on E3). No open PR touches
+  `shekyl-chain-rules`, the store's view, or `economics.h` (`gh pr list`:
+  none open).
 
 ---
 
@@ -333,7 +388,10 @@ pin against the C++ (the 81-vector emission KAT already pins
 ## 6. What this slice does not build
 
 - G6/G6b (the medians) unless Q1 pulls them in; F14/F14b/F18 with them.
-- The curve-tree leaf-count read (S-CURVE's); F17's *row* with it.
+- F17's *row*: its operand `n = frozen_segment_count(leaf_count)` reads a
+  tree DRS-E3 has not written (§3.2 — S-CURVE's read exists and returns
+  the seal's `EMPTY`). Falsify by `curve_tree().leaf_count > 0` after a
+  replay with outputs; the row lands with E3, not with a read of zero.
 - 4.H fee validity (slice 5); 4.G aggregation (slice 7).
 - The `coins_generated` / `burned` `ConnectFacts` deletions (owed to the
   landings of F14b and F17).
@@ -348,10 +406,17 @@ pin against the C++ (the 81-vector emission KAT already pins
   shim sites and one homeless constant (F5 had found two); F16 moves to the
   blocked set; "adopted" corrected to three rows; the precursor P1–P4 named
   and sequenced ahead of Round 1.
+- **Precursor landed (2026-09-22, #819 → `b2dd94405`).** P1–P4 as their own
+  PR; FL-R16c BUILT; CEN-F12 deleted (Q2 (a)); denominator 153 → 152.
+- **Round 1 (2026-09-22, `7b9be6cd1`).** The `dev` sweep (§3.2): F17's
+  blocker re-keyed S-CURVE → DRS-E3 (the read landed, the writer has not);
+  E2's mutation family names F13 as `WrongReward`'s refuser and needs the
+  coinbase's place — Q8 posed, Q7 amended; Q1 asked against the corrected
+  count. Rulings owed on Q1, Q3–Q8.
 
 ---
 
-## 8. Questions for the reviewer — Round 0
+## 8. Questions for the reviewer — Round 0, re-posed for Round 1 (2026-09-22)
 
 - **Q1 — the median (F4), re-posed against §3.1's count.** F14, F14b, F16
   and F18 need the effective median in force for the candidate, which is
@@ -374,7 +439,9 @@ pin against the C++ (the 81-vector emission KAT already pins
   coinbase slice would bury the divergence in the wrong PR. The cost is
   that F18 — the row that *is* "the coinbase is right" — waits one slice.
   **Q1 is not asked until the §3.1 precursor has landed** (the review's
-  ordering: the sweep changes what Round 1 rules on).
+  ordering: the sweep changes what Round 1 rules on). **Asked now
+  (2026-09-22): the precursor is on `dev` and the count is sixteen; F17 is
+  blocked on E3, not S-CURVE (§3.2), which does not change the arms.**
 - **Q2 — F12, the dead gate.** **(a)** census amendment: F12 → bucket 3
   (*"dead code; deleted"*) **and** delete the branch, `is_valid_decomposed_amount`
   and `valid_decomposed_outputs[]` in the same PR (rule 60's instruction;
@@ -426,8 +493,33 @@ pin against the C++ (the 81-vector emission KAT already pins
   (reusing the slot vocabulary) or does `Locus` grow a `Miner` arm?
   **Default: reuse `TxSlot::Miner`** — one vocabulary for "which transaction".
 - **Q7 — sequencing.** No in-flight PR touches `shekyl-chain-rules` or the
-  store's view today (`gh pr list`: #808 refactor, #810 wallet). The E2
-  driver calls `validate` and will pick up new coverage rows automatically;
-  no cross-lane edit is foreseen. **Default: land as one PR after Round 1**,
-  rules-crate commits first, view growth (store projection) after — the
-  store side is a projection edit, not a schema change.
+  store's view today (`gh pr list`: none open at Round 1). The E2 driver
+  calls `validate` and picks up new coverage rows automatically. **Amended
+  2026-09-22 (§3.2): one cross-lane edit is required, not foreseen-absent** —
+  E2's mutation family (`shekyl-chain-ingest/src/mutation.rs`) and
+  `DRS_E2_REPLAY_DRIVER.md` §3.10 hold `WrongReward → F13, Unnamed`, and
+  the family's branch is chosen by `CenRow::status`; this slice's landing
+  changes that branch, so the row key (Q8) and the place (Q6) land in the
+  same PR, as one commit touching the ingest crate and the E2 spec row.
+  **Default: land as one PR after Round 1**, rules-crate commits first,
+  view growth (store projection) after, the ingest/spec commit last so the
+  mutation test is green at every commit — the store side is a projection
+  edit, not a schema change.
+- **Q8 — `WrongReward`'s row is mis-keyed (§3.2).** E2's §3.10 names
+  **CEN-F13** as the row that refuses a coinbase whose output amount is off
+  by one. F13 is the *definition* of the base subsidy — a D4-shaped row
+  carried on the verdict, refusing nothing; the predicate a wrong amount
+  trips is **F18** (exact payout: outputs = paid reward + `miner_fee_income`),
+  blocked on G6. If F13 goes `implemented` here with F18 `pending`, the
+  family's test expects a refusal by F13 and the block connects. **(a)**
+  re-key the mutation to F18 in `mutation.rs` and §3.10 in this PR's
+  ingest commit (Q7): the `Pending` branch keeps pinning "connects" until
+  slice 7 lands F18, and flips to the right row then; F13's own coverage is
+  a value pin (the definition equals the C++'s), not a refusal. **(b)** land
+  F18 here — that is Q1 (b) by another door and is decided there. **(c)**
+  leave F13 as the key and mark F13 `implemented` — a red test naming the
+  wrong row, refused. **Default: (a)** — the census, not the family, is the
+  oracle (the family's own module docs), and the census says F18 is the
+  predicate. This is also the first instance of the family's contract
+  being exercised by a slice landing: worth the E2 lane confirming the
+  re-key reads §3.10's intent correctly.
