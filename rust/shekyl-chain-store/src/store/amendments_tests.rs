@@ -352,7 +352,11 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
 #[test]
 fn the_second_rust_only_table_is_catalogued_last_and_named() {
     let ordinal = schema::ordinal_of("txs_pqc_auth_hash").expect("catalogued");
-    let catalogue_len = schema::catalogue().len();
+    // The journal stores ordinals as `u32`. A catalogue that does not fit
+    // that width cannot be journaled, so the length check fails here
+    // rather than at the first pop.
+    let catalogue_len =
+        u32::try_from(schema::catalogue().len()).expect("catalogue length fits in a table ordinal");
     assert_eq!(
         ordinal.index() + 1,
         catalogue_len,
