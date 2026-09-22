@@ -877,7 +877,7 @@ impl LeafStore {
             let (id, _) = row?;
             let id = id.value();
             let start = u64::from(id.0) * e;
-            if leaves.get(TreePositionKey(start))?.is_none() {
+            if leaves.get(TreePositionKey::from_raw(start))?.is_none() {
                 pruned.push(u64::from(id.0));
             }
         }
@@ -1006,7 +1006,7 @@ impl LeafStore {
                 if !leaf_bytes_are_canonical(&entry.leaf) {
                     return Err(StoreError::InvalidLeafBytes { batch_index });
                 }
-                let pos = TreePositionKey(leaf_count);
+                let pos = TreePositionKey::from_raw(leaf_count);
                 leaves.insert(pos, &entry.leaf)?;
                 leaf_meta.insert(pos, &encode_leaf_meta(entry))?;
                 leaf_count += 1;
@@ -1307,7 +1307,7 @@ impl LeafStore {
                 let leaves = txn.open_table(LEAVES_TABLE)?;
                 let seg_start = ((pos - 1) / e) * e;
                 for p in seg_start..pos {
-                    if leaves.get(TreePositionKey(p))?.is_none() {
+                    if leaves.get(TreePositionKey::from_raw(p))?.is_none() {
                         return Err(StoreError::TruncatedIntoPrunedRange { pos: p });
                     }
                 }
@@ -1316,7 +1316,7 @@ impl LeafStore {
         {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
-            delete_pos_range_batched(&mut leaves, &mut leaf_meta, TreePositionKey(pos))?;
+            delete_pos_range_batched(&mut leaves, &mut leaf_meta, TreePositionKey::from_raw(pos))?;
         }
         {
             let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
@@ -1340,7 +1340,7 @@ impl LeafStore {
         }
         {
             let mut owned = txn.open_table(OWNED_IDENTITIES_TABLE)?;
-            delete_pos_keys_batched(&mut owned, TreePositionKey(pos))?;
+            delete_pos_keys_batched(&mut owned, TreePositionKey::from_raw(pos))?;
         }
         {
             let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
@@ -1400,12 +1400,15 @@ impl LeafStore {
         let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
         for row in frozen.iter()?.rev() {
             let seg_start = u64::from(row?.0.value().0) * e;
-            if leaf_meta.get(TreePositionKey(seg_start))?.is_none() {
+            if leaf_meta
+                .get(TreePositionKey::from_raw(seg_start))?
+                .is_none()
+            {
                 return Ok(seg_start + e);
             }
         }
         Ok(match leaf_meta.iter()?.next().transpose()? {
-            Some((key, _)) => key.value().0,
+            Some((key, _)) => key.value().to_raw(),
             None => leaf_count,
         })
     }
@@ -1473,11 +1476,9 @@ impl LeafStore {
             let leaves = txn.open_table(LEAVES_TABLE)?;
             let frontier = Self::present_suffix_start(&txn, &leaf_meta, leaf_count)?;
             let maturity_at = |pos: u64| -> Result<u64, StoreError> {
-                let row = leaf_meta
-                    .get(TreePositionKey(pos))?
-                    .ok_or(StoreError::CorruptMeta(
-                        "hole in present suffix during partition search",
-                    ))?;
+                let row = leaf_meta.get(TreePositionKey::from_raw(pos))?.ok_or(
+                    StoreError::CorruptMeta("hole in present suffix during partition search"),
+                )?;
                 Ok(decode_stored_leaf_meta(row.value())?.maturity.to_raw())
             };
             // partition_point over [frontier, leaf_count): first present
@@ -1506,7 +1507,7 @@ impl LeafStore {
             let mut migrated = Vec::with_capacity(
                 usize::try_from(leaf_count - partition).expect("suffix fits usize"),
             );
-            for pos in (partition..leaf_count).map(TreePositionKey) {
+            for pos in (partition..leaf_count).map(TreePositionKey::from_raw) {
                 let meta_row = leaf_meta
                     .get(pos)?
                     .ok_or(StoreError::CorruptMeta("missing leaf meta in suffix"))?;
@@ -1622,7 +1623,7 @@ impl LeafStore {
                     // transaction, so the first position is an exact
                     // pruned/present discriminant — no full-segment scan.
                     let start = u64::from(id.0) * leaves_per_segment() as u64;
-                    if leaves.get(TreePositionKey(start))?.is_none() {
+                    if leaves.get(TreePositionKey::from_raw(start))?.is_none() {
                         SegmentPin::AlreadyPruned
                     } else {
                         SegmentPin::PinnedServable
@@ -1829,7 +1830,7 @@ impl LeafStore {
                 }
                 let start = u64::from(seg_id.0) * e;
                 let end = start + e;
-                for pos in (start..end).map(TreePositionKey) {
+                for pos in (start..end).map(TreePositionKey::from_raw) {
                     let leaf_bytes = match leaves.get(pos)? {
                         Some(leaf) => *leaf.value(),
                         None => continue,
@@ -1893,7 +1894,7 @@ impl LeafStore {
             }
             let pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?.get(id)?.is_some();
             let leaves = txn.open_table(LEAVES_TABLE)?;
-            if leaves.get(TreePositionKey(start))?.is_none() {
+            if leaves.get(TreePositionKey::from_raw(start))?.is_none() {
                 return Err(if pinned {
                     StoreError::CorruptMeta("pinned frozen segment is missing leaf bytes")
                 } else {
@@ -2080,7 +2081,7 @@ fn leaf_bytes_are_canonical(leaf: &[u8; 128]) -> bool {
 fn read_drain_height(txn: &redb::WriteTransaction, tree_pos: u64) -> Result<u64, StoreError> {
     let meta = txn.open_table(LEAF_META_TABLE)?;
     let m = meta
-        .get(TreePositionKey(tree_pos))?
+        .get(TreePositionKey::from_raw(tree_pos))?
         .ok_or(StoreError::CorruptMeta("missing leaf meta"))?;
     let stored = decode_stored_leaf_meta(m.value())?;
     Ok(stored.maturity.to_raw().saturating_add(1))
@@ -2121,16 +2122,16 @@ fn scan_leaf_range(
     // expected names the missing position exactly, and a walk that ends
     // short names the first missing tail position.
     let mut expected = start;
-    for row in leaves.range(TreePositionKey(start)..TreePositionKey(end))? {
+    for row in leaves.range(TreePositionKey::from_raw(start)..TreePositionKey::from_raw(end))? {
         let (key, value) = row?;
-        if key.value().0 != expected {
-            return Err(missing(TreePositionKey(expected)));
+        if key.value().to_raw() != expected {
+            return Err(missing(TreePositionKey::from_raw(expected)));
         }
         take(value.value());
         expected += 1;
     }
     if expected != end {
-        return Err(missing(TreePositionKey(expected)));
+        return Err(missing(TreePositionKey::from_raw(expected)));
     }
     Ok(())
 }
@@ -2545,7 +2546,7 @@ mod tests {
             let txn = store.db.begin_write().unwrap();
             {
                 let mut meta = txn.open_table(LEAF_META_TABLE).unwrap();
-                meta.remove(TreePositionKey(1)).unwrap();
+                meta.remove(TreePositionKey::from_raw(1)).unwrap();
             }
             txn.commit().unwrap();
         }
@@ -3735,7 +3736,7 @@ mod tests {
         let txn = store.db.begin_write().unwrap();
         {
             let mut leaves = txn.open_table(LEAVES_TABLE).unwrap();
-            drop(leaves.remove(TreePositionKey(0)).unwrap());
+            drop(leaves.remove(TreePositionKey::from_raw(0)).unwrap());
         }
         txn.commit().unwrap();
 
@@ -3848,7 +3849,7 @@ mod tests {
         let txn = store.db.begin_read().unwrap();
         let leaves = txn.open_table(LEAVES_TABLE).unwrap();
         assert!(
-            leaves.get(TreePositionKey(0)).unwrap().is_none(),
+            leaves.get(TreePositionKey::from_raw(0)).unwrap().is_none(),
             "stale pin must not block prune"
         );
     }
@@ -3970,7 +3971,7 @@ mod tests {
             }
         }
 
-        check_u64::<TreePositionKey>(TreePositionKey);
+        check_u64::<TreePositionKey>(TreePositionKey::from_raw);
         check_u64::<GindexKey>(|v| GindexKey::from(Gindex::from_raw(v)));
 
         // SegmentId wraps u32; same parity properties against the u32 impl.

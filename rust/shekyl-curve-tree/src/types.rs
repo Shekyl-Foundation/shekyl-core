@@ -175,19 +175,36 @@ pub use shekyl_types::TreePosition;
 /// `impl redb::Key for shekyl_types::TreePosition`; this wrapper is
 /// store-local, as [`GindexKey`] is. `TypeName` is kept as
 /// `shekyl_curve_tree::TreePosition` so existing stores still open (layout
-/// identical to the retired struct: the bare `u64`).
+/// identical to the retired struct: the bare `u64`). The field is private,
+/// as `GindexKey`'s is: construct with [`Self::from_raw`] or [`From`], read
+/// with [`Self::to_raw`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub(crate) struct TreePositionKey(pub(crate) u64);
+pub(crate) struct TreePositionKey(u64);
+
+impl TreePositionKey {
+    /// Wrap a raw position. An edge constructor for a table scan that
+    /// already holds the key as `u64`.
+    #[must_use]
+    pub(crate) const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// The raw position. An edge accessor.
+    #[must_use]
+    pub(crate) const fn to_raw(self) -> u64 {
+        self.0
+    }
+}
 
 impl From<TreePosition> for TreePositionKey {
     fn from(p: TreePosition) -> Self {
-        Self(p.to_raw())
+        Self::from_raw(p.to_raw())
     }
 }
 
 impl From<TreePositionKey> for TreePosition {
     fn from(k: TreePositionKey) -> Self {
-        TreePosition::from_raw(k.0)
+        TreePosition::from_raw(k.to_raw())
     }
 }
 
