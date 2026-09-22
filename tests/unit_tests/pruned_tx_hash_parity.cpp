@@ -225,7 +225,7 @@ TEST(pruned_tx_hash_parity, pruned_spend_identity_matches_the_rust_oracle)
 
   // The bound surface: the pruned identity with the digest supplied is the
   // txid -- the recomputation the Rust engine performs against an untrusted
-  // daemon's pruned reply, and the derivation `prune_tx_data` preserves the
+  // daemon's pruned reply, and any discard preserves the
   // operands of (txs_prunable_hash / txs_pqc_auths, LMDB schema v11).
   EXPECT_EQ(epee::string_tools::pod_to_hex(get_pruned_transaction_hash(parsed, prunable_hash)),
             k.tx_hash_hex)
