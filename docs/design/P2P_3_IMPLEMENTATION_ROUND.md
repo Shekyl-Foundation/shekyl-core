@@ -269,7 +269,11 @@ from inside `PDM-Q7` and is not.
 
 ### 7.2 Three arms for the receiver — the gate makes one cheap
 
-1. **Delete the two receiver branches in C++ before the cut.** Smallest diff,
+1. **Delete the receiver branches in C++ before the cut** — the two live ones
+   (`should_drop_connection`'s seed-`0` and stripe-match arms, and the candidate
+   filter's `else if`); a third at `:1992` is gated on `--sync-pruned-blocks`,
+   **already deleted under `PDM-Q5`**, so it goes with that ruling rather than
+   this one. Smallest diff,
    and `PDM-Q-S0` does **not** govern it — S0 governs set-B discard and the
    engine row's *store* symbols, and neither `:1832` nor `should_drop_connection`
    is on that list. This is a rule-15/16 deletion question, not a sequencing one.
@@ -326,12 +330,21 @@ Slice 2 is a small diff with a **larger** ripple than its size suggests:
   **PWC-E11** as *the current inbound bound*. Both become false on deletion, and
   `:768`'s "anonymity zones have no inbound per-host cap at all" stops being an
   asymmetry to fix and becomes **the uniform state**.
-- **A flag six production hosts pass.** All six seeds carry
-  `max-connections-per-ip=8` (verified 2026-09-21). **Deleting the option makes
-  every one of those config files a startup failure**, so the cut is either a
-  coordinated config change or an accept-and-ignore deprecation window. **This
-  is a rule-82 surface**, and it is the half most likely to be missed because it
-  is not in the diff.
+- **A flag six production hosts pass — and the mechanism for retiring it
+  already exists.** All six seeds carry `max-connections-per-ip=8` (verified
+  2026-09-21). **Deleting the option would otherwise be a startup failure on
+  every one of them**, and that is confirmed rather than assumed: an
+  unregistered option in a config file raises `po::unknown_option`, which
+  [`daemon/main.cpp:186-202`](../../src/daemon/main.cpp#L186) catches and exits
+  `1` on. **But the same catch block first calls
+  [`shekyl::cli::handle_removed_flag`](../../src/daemon/main.cpp#L191)** — a **retired-flag registry**
+  (`REMOVED_FLAGS`, [`common/removed_flags.cpp:69`](../../src/common/removed_flags.cpp#L69),
+  23 entries today, with a `TODO(v3.2)` sunset) that refuses a deleted flag **by
+  name, with its reason**. So the ripple is **a registry row**, not a
+  coordinated config change and not an invented deprecation window. **This is
+  the rule-82 surface**, it is solved in this tree, and the only failure mode
+  left is forgetting the row — which is why it is enumerated here rather than in
+  the PR.
 - **PR 812's surface becomes dead**: seven `node_server` tests, `HostInboundCap`
   / `InboundZone` in `rust/shekyl-peer-policy/src/host_inbound.rs`, and four
   `shekyl_host_inbound_*` FFI exports. **Deleting them is the correct outcome,

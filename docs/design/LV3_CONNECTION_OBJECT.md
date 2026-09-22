@@ -559,7 +559,11 @@ branches on `context.m_pruning_seed` — handshake-supplied, validated for
 well-formedness only ([`:421-430`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl#L421)),
 **never observed**. Seed `0` → not dropped (`:1979`). Stripe equal to the needed
 one → **not dropped** (`:1986-1989`). So a claimed attribute *protects a peer
-from eviction*.
+from eviction*. *(A third branch at `:1992` also reads the seed but is gated on
+`m_sync_pruned_blocks`, whose descriptor supplies no default and is therefore
+`false` unless `--sync-pruned-blocks` is passed — and that flag is **already
+deleted under `PDM-Q5`'s rejection**. It is dead at the default and inherits a
+different ruling, so it is not counted among the live sites here.)*
 
 **Site 2 — outbound dial preference.** `try_to_connect_and_handshake_with_new_peer`'s
 candidate filter ([`net_node.inl:1832-1836`](../../src/p2p/net_node.inl#L1832))
@@ -764,32 +768,38 @@ contribute to.
    **No number is written here**, and it is not owed to the maintainer as a
    decision.
 
-   **Verified while checking this arm, and it is the same defect PR 812 just
-   fixed one flag over.** `--in-peers` defaults to the sentinel `-1`
-   ([`net_node.cpp:181`](../../src/p2p/net_node.cpp#L181), an `int64_t`
-   descriptor), and `set_max_in_peers` assigns that `int64_t` **straight into a
-   `uint32_t`** ([`net_node.inl:3080`](../../src/p2p/net_node.inl#L3080) into
-   [`p2p_protocol_defs.h:109`](../../src/p2p/p2p_protocol_defs.h#L109)). So the
-   shipped default is not "no ceiling" — it is a ceiling of **`UINT32_MAX`**,
-   compared for real on every accept
-   ([`net_node.inl:235`](../../src/p2p/net_node.inl#L235)).
+   **The mechanism's state is ALREADY RECORDED — cited, not rediscovered.**
+   [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) PWD-I7's *Pricing context*
+   already establishes it: `--in-peers` defaults to the sentinel `-1`
+   (`net_node.cpp:181`, an `int64_t`), `set_max_in_peers` assigns it straight
+   into a `uint32_t` (`p2p_protocol_defs.h:109`), it **resolves to
+   `0xFFFFFFFF`**, and the accept-path comparison is unsigned against an
+   unsigned counter. The same row already carries *"`--in-peers` does not
+   resolve to an effectively unbounded ceiling"* as one of **its own
+   falsifiers**. *(Recorded as a citation because I re-derived this from the
+   tree before checking the register — the second time in this round. The
+   register is the first place to look, not the last.)*
 
-   Three consequences, and they make this arm **smaller**, not larger:
+   **One measurement strengthens it:** the existing record names two hosts at
+   `in-peers=128`; **all six seeds** carry `in-peers=128` / `out-peers=64`
+   (verified 2026-09-21). The deployed ceiling is uniform.
+
+   **What is new here is the consequence, not the fact** — three of them, and
+   they make this arm **smaller**:
 
    - **No new mechanism is owed.** The ceiling is present, wired and checked.
-     What is owed is a **measured value replacing an unreachable sentinel** —
-     structurally the same cut PR 812 made for `max-connections-per-ip`, whose
-     `-1` is now an explicit sentinel resolved in Rust by
-     `shekyl_host_inbound_resolve_cap`. **`--in-peers` is that fix, unmade, one
-     descriptor away.**
-   - **It is an implicit narrowing of a sentinel**, which is the defect class
-     rule 18 names and PR 812 removed next door. It should be resolved the same
-     way — in Rust, explicitly — rather than patched in C++.
+     What is owed is a **measured value replacing an unreachable sentinel**.
+   - **It is structurally the cut PR 812 already made next door**, where
+     `max-connections-per-ip`'s `-1` became an explicit sentinel resolved in
+     Rust by `shekyl_host_inbound_resolve_cap`. An implicit narrowing of a
+     sentinel is the defect class rule 18 names, and **the Rust-side pattern
+     for fixing it now exists** — so this should be resolved the same way
+     rather than patched in C++. That pairing is the addition; the narrowing
+     itself was known.
    - **It is why §2.9.5's blocker holds.** Nobody has observed a node reaching
-     its inbound ceiling because **at the default no node can**. The estate is
-     the exception: all six seeds set `in-peers=128` explicitly (verified
-     2026-09-21), so they **do** have a reachable ceiling and are the place the
-     discharge trigger could first fire.
+     its inbound ceiling because **at the shipped default no node can**. The
+     estate is the exception, and is therefore the place the discharge trigger
+     could first fire.
 3. **Do not build eviction.** See §2.9.5.
 4. **Build the connection object anyway — for LV-3, not for I8.** The Rust
    migration needs it regardless. See §2.9.7, because this does change what the
