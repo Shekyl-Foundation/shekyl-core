@@ -100,7 +100,6 @@ namespace cryptonote
   extern const command_line::arg_descriptor<bool> arg_offline;
   extern const command_line::arg_descriptor<size_t> arg_block_download_max_size;
   extern const command_line::arg_descriptor<size_t> arg_span_limit;
-  extern const command_line::arg_descriptor<bool> arg_sync_pruned_blocks;
 
   /************************************************************************/
   /*                                                                      */
@@ -580,7 +579,7 @@ namespace cryptonote
       *
       * @note see Blockchain::find_blockchain_supplement(const std::list<crypto::hash>&, NOTIFY_RESPONSE_CHAIN_ENTRY::request&) const
       */
-     bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, bool clip_pruned, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const;
+     bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const;
 
 
      /**
@@ -787,36 +786,6 @@ namespace cryptonote
      bool offline() const { return m_offline; }
 
      /**
-      * @brief get the blockchain pruning seed
-      *
-      * @return the blockchain pruning seed
-      */
-     uint32_t get_blockchain_pruning_seed() const;
-
-     /**
-      * @brief prune the blockchain
-      *
-      * @param pruning_seed the seed to use to prune the chain (0 for default, highly recommended)
-      *
-      * @return true iff success
-      */
-     bool prune_blockchain(uint32_t pruning_seed = 0);
-
-     /**
-      * @brief incrementally prunes blockchain
-      *
-      * @return true on success, false otherwise
-      */
-     bool update_blockchain_pruning();
-
-     /**
-      * @brief checks the blockchain pruning if enabled
-      *
-      * @return true on success, false otherwise
-      */
-     bool check_blockchain_pruning();
-
-     /**
       * @brief flushes the invalid block cache
       */
      void flush_invalid_blocks();
@@ -994,7 +963,6 @@ namespace cryptonote
      epee::math_helper::once_a_time_seconds<60*60*2, true> m_fork_moaner; //!< interval for checking HardFork status
      epee::math_helper::once_a_time_seconds<60*10, true> m_check_disk_space_interval; //!< interval for checking for disk space
      epee::math_helper::once_a_time_seconds<90, false> m_block_rate_interval; //!< interval for checking block rate
-     epee::math_helper::once_a_time_seconds<60*60*5, true> m_blockchain_pruning_interval; //!< interval for incremental blockchain pruning
 
      std::atomic<bool> m_starter_message_showed; //!< has the "daemon will sync now" message been shown?
 

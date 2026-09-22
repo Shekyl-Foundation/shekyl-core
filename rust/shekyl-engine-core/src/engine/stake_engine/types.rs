@@ -32,7 +32,7 @@ use crate::engine::pscan::scan_step::DualExtractError;
 /// Persona-slot ordinal — re-exported from [`shekyl_types::PSlot`] so the
 /// stake-engine surface and the persisted pscan funding records share one
 /// domain type (WI-2 domain-newtype carrier).
-pub(crate) use shekyl_types::PSlot;
+pub(crate) use shekyl_types::{BlockCount, PSlot};
 
 /// How many slots past the current cursor `assemble()` pre-derives into the
 /// held set (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, Model D).

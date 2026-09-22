@@ -104,8 +104,6 @@ use std::time::{Duration, Instant};
 use shekyl_address::Network;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
-#[cfg(test)]
-use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 
 use crate::engine::{
@@ -388,7 +386,7 @@ pub(crate) struct Reservation {
     /// build. Sorted ascending so a debug print is deterministic.
     pub selected_transfer_indices: Vec<usize>,
     /// Engine's `synced_height` at the moment of the build.
-    pub built_at_height: u64,
+    pub built_at_height: shekyl_types::BlockHeight,
     /// Engine's recorded `block_hash_at(built_at_height)` at build
     /// time. The reorg-rewind invariant in
     /// [`PendingTxError::ChainStateChanged`] compares this against
@@ -455,7 +453,7 @@ pub struct PendingTx {
     /// [`Engine::submit_pending_tx`] / [`Engine::discard_pending_tx`].
     pub id: ReservationId,
     /// Engine's `synced_height` at build time.
-    pub built_at_height: u64,
+    pub built_at_height: shekyl_types::BlockHeight,
     /// Engine's recorded block hash at `built_at_height` at build
     /// time.
     pub built_at_tip_hash: [u8; 32],
@@ -493,7 +491,7 @@ pub struct PendingTx {
     /// CT-5d: the height of the reference block this proof is anchored to
     /// (`tip − REF_ANCHOR_AGE` at build). Diagnostics-only — lets a UI surface
     /// the anchor age without parsing `tx_bytes`.
-    pub reference_height: u64,
+    pub reference_height: shekyl_types::BlockHeight,
 }
 
 /// Default reservation TTL used by both
@@ -798,18 +796,17 @@ pub(crate) fn submit_pending_tx_in_state(
     let synced = ledger.height();
     let built = entry.built_at_height;
 
-    // Both heights are still raw ordinals on this helper (`TooOld` reports
-    // that same triple). The comparison is instant − instant against the span.
-    let age = BlockHeight::from_raw(synced).saturating_sub(BlockHeight::from_raw(built));
+    // `synced` is the inclusive tip. Age is instant − instant.
+    let age = synced.saturating_sub(built);
     if age > max_reorg {
         return Err(PendingTxError::TooOld {
             built,
             current: synced,
-            max_reorg: max_reorg.to_raw(),
+            max_reorg,
         });
     }
 
-    let stored = ledger.block_hash_at(entry.built_at_height).copied();
+    let stored = ledger.block_hash_at(built).copied();
     if stored != Some(entry.built_at_tip_hash) {
         return Err(PendingTxError::ChainStateChanged {
             height: entry.built_at_height,

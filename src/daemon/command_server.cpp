@@ -70,7 +70,7 @@ t_command_server::t_command_server(
   m_command_lookup.set_handler(
       "print_pl"
     , std::bind(&t_command_parser_executor::print_peer_list, &m_parser, p::_1)
-    , "print_pl [white] [gray] [pruned] [<limit>]"
+    , "print_pl [white] [gray] [<limit>]"
     , "Print the current peer list."
     );
   m_command_lookup.set_handler(
@@ -293,17 +293,6 @@ t_command_server::t_command_server(
       "version"
     , std::bind(&t_command_parser_executor::version, &m_parser, p::_1)
     , "Print version information."
-    );
-    m_command_lookup.set_handler(
-      "prune_blockchain"
-    , std::bind(&t_command_parser_executor::prune_blockchain, &m_parser, p::_1)
-    , "prune_blockchain [confirm]"
-    , "Prune the blockchain."
-    );
-    m_command_lookup.set_handler(
-      "check_blockchain_pruning"
-    , std::bind(&t_command_parser_executor::check_blockchain_pruning, &m_parser, p::_1)
-    , "Check the blockchain pruning."
     );
     m_command_lookup.set_handler(
       "flush_cache"

@@ -988,7 +988,6 @@ fn a_peer_never_seen_has_no_interval() {
         ip: 0x0700_200a,
         port: 18080,
         last_seen: 0,
-        pruning_seed: 0,
     };
     let line = render_peer("white", &peer, 1_750_000_000);
     assert!(line.contains("never"), "{line}");
@@ -1016,7 +1015,6 @@ fn a_peer_address_gains_a_port_only_when_it_has_one() {
         ip: 0,
         port,
         last_seen: 1_750_000_000,
-        pruning_seed: 0,
     };
     let line = |p: &shekyl_rpc_types::Peer| render_peer("white", p, 1_750_000_000);
 

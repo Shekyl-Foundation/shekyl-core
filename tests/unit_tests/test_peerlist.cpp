@@ -72,7 +72,8 @@ namespace boost
       // reader could not parse -- so the test passed with the version gate
       // removed, for the wrong reason. Verified by instrumenting the loader:
       // the fixture drives `serialize(peerlist_types, ver=7)` against
-      // CURRENT=8, which is the comparison under test.
+      // CURRENT (8 when written, 9 since the pruning_seed removal), which is
+      // the comparison under test.
       const uint64_t size = elem.peers.size();
       a & size;
       for (auto& p : elem.peers)
@@ -359,7 +360,7 @@ TEST(peerlist_storage, oversized_persisted_list_is_rejected)
   nodetool::peerlist_types types{};
   types.gray.reserve(nodetool::PEERLIST_STORE_LIST_CEILING + 1);
   for (std::uint64_t i = 0; i <= nodetool::PEERLIST_STORE_LIST_CEILING; ++i)
-    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55, 0});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55});
 
   std::ostringstream stream{};
   EXPECT_TRUE(peers.store(stream, types));
@@ -381,8 +382,8 @@ TEST(peerlist_storage, store_shape_and_version_move_together)
   // the constant in net_peerlist.h AND re-pin the digest, in the same
   // change.
   nodetool::peerlist_types types{};
-  types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55, 0});
-  types.gray.push_back({net::tor_address::unknown(), 88, 384});
+  types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55});
+  types.gray.push_back({net::tor_address::unknown(), 88});
 
   nodetool::peerlist_storage peers{};
   std::ostringstream stream{};
@@ -391,9 +392,11 @@ TEST(peerlist_storage, store_shape_and_version_move_together)
   const crypto::hash digest = crypto::cn_fast_hash(bytes.data(), bytes.size());
   const std::string digest_hex = epee::string_tools::pod_to_hex(digest);
 
-  // v8 store shape (id-less v5 entries), pinned 2026-09-06.
-  const char* pinned = "61787d1a71a8e63149cab08aafc45780f1f1ed064bbd0ca4aea365990f06f536";
-  EXPECT_EQ(8u, nodetool::CURRENT_PEERLIST_STORAGE_ARCHIVE_VER)
+  // v9 store shape (id-less, seed-less v6 entries), pinned 2026-09-21; the
+  // v8 pin (id-less v5 entries, 2026-09-06) was
+  // 61787d1a71a8e63149cab08aafc45780f1f1ed064bbd0ca4aea365990f06f536.
+  const char* pinned = "875deec70b0bc5cbe5b8ad32e9c22708dbfe39bd656e7c1408a5409c4ac0fe87";
+  EXPECT_EQ(9u, nodetool::CURRENT_PEERLIST_STORAGE_ARCHIVE_VER)
     << "store version moved to " << nodetool::CURRENT_PEERLIST_STORAGE_ARCHIVE_VER
     << ": re-pin the digest literal in this test in the same change";
   EXPECT_EQ(pinned, digest_hex)
@@ -415,7 +418,7 @@ TEST(peerlist_storage, a_v7_store_is_dropped_whole)
   std::string buffer{};
   {
     legacy_low_version_store legacy{};
-    legacy.peers.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
+    legacy.peers.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44});
 
     std::ostringstream stream{};
     {
@@ -466,10 +469,10 @@ TEST(peerlist_storage, store)
   std::string buffer{};
   {
     nodetool::peerlist_types types{};
-    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55, 0});
-    types.gray.push_back({epee::net_utils::ipv4_network_address{2000, 20}, 45, 0});
-    types.gray.push_back({net::tor_address::unknown(), 75, 0});
-    types.gray.push_back({net::tor_address::unknown(), 88, 0});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{2000, 20}, 45});
+    types.gray.push_back({net::tor_address::unknown(), 75});
+    types.gray.push_back({net::tor_address::unknown(), 88});
 
     std::ostringstream stream{};
     EXPECT_TRUE(peers.store(stream, types));

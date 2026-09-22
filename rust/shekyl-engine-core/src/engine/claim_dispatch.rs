@@ -64,6 +64,7 @@ use shekyl_engine_state::pending_post_block::{
     PendingEmissionClaim, PendingPostState, SealAdmission,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
@@ -282,7 +283,7 @@ where
                 g.ledger.snapshot(),
             )
         };
-        let block_hash_at = move |h: u64| snapshot.block_hash_at(h);
+        let block_hash_at = move |h: BlockHeight| snapshot.block_hash_at(h);
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate.clone());
 
         // Three independent reads, joined: the claimant identity (a pure

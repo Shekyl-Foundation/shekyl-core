@@ -248,7 +248,7 @@ fn advance_ledger_empty_blocks(ledger: &LocalLedger, from: u64, to: u64) {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             ledger_block,
-            h,
+            shekyl_types::BlockHeight::from_raw(h),
             hash,
             Timelocked::from_vec(Vec::new()),
         );
@@ -269,14 +269,18 @@ fn populate_ledger(
     let indexes = &mut state.indexes;
     let timelocked = Timelocked::from_vec(outputs);
     let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
-    let inserted_range =
-        indexes.process_scanned_outputs(ledger_block, block_height, block_hash, timelocked);
+    let inserted_range = indexes.process_scanned_outputs(
+        ledger_block,
+        shekyl_types::BlockHeight::from_raw(block_height),
+        block_hash,
+        timelocked,
+    );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
     for h in (block_height + 1)..=final_height {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             ledger_block,
-            h,
+            shekyl_types::BlockHeight::from_raw(h),
             hash,
             Timelocked::from_vec(Vec::new()),
         );
@@ -611,18 +615,18 @@ async fn funded_pending_tx_one() -> (TestPendingTx, Arc<LocalLedger>, TempDir) {
 /// eligibility `<= H` and excludes `H + 1`.
 #[test]
 fn tree_spend_gate_covers_boundary() {
-    assert!(TreeSpendGate::Unenforced.covers(0));
-    assert!(TreeSpendGate::Unenforced.covers(u64::MAX));
+    assert!(TreeSpendGate::Unenforced.covers(shekyl_types::BlockHeight::from_raw(0)));
+    assert!(TreeSpendGate::Unenforced.covers(shekyl_types::BlockHeight::from_raw(u64::MAX)));
     assert!(!TreeSpendGate::Enforced {
         covered_through: None,
     }
-    .covers(0));
+    .covers(shekyl_types::BlockHeight::from_raw(0)));
     let gate = TreeSpendGate::Enforced {
-        covered_through: Some(11),
+        covered_through: Some(shekyl_types::BlockHeight::from_raw(11)),
     };
-    assert!(gate.covers(0));
-    assert!(gate.covers(11));
-    assert!(!gate.covers(12));
+    assert!(gate.covers(shekyl_types::BlockHeight::from_raw(0)));
+    assert!(gate.covers(shekyl_types::BlockHeight::from_raw(11)));
+    assert!(!gate.covers(shekyl_types::BlockHeight::from_raw(12)));
 }
 
 /// D1/D3 core KAT — the adopting / first-run wallet. Matured balance is in
@@ -758,10 +762,19 @@ async fn output_not_yet_spendable_at_reference_block() {
             reference_block_height,
             wait_blocks,
         } => {
-            assert_eq!(eligible_height, 11, "block 1 + SPENDABLE_AGE");
-            assert_eq!(reference_block_height, 9, "synced 15 − REF_ANCHOR_AGE");
             assert_eq!(
-                wait_blocks, 2,
+                eligible_height,
+                shekyl_types::BlockHeight::from_raw(11),
+                "block 1 + SPENDABLE_AGE"
+            );
+            assert_eq!(
+                reference_block_height,
+                shekyl_types::BlockHeight::from_raw(9),
+                "synced 15 − REF_ANCHOR_AGE"
+            );
+            assert_eq!(
+                wait_blocks,
+                shekyl_types::BlockCount::from_raw(2),
                 "spendable once the reference reaches 11 (tip 17)"
             );
         }
@@ -806,12 +819,20 @@ async fn output_not_yet_spendable_wait_covers_required_subset() {
             reference_block_height,
             wait_blocks,
         } => {
-            assert_eq!(reference_block_height, 9);
             assert_eq!(
-                eligible_height, 13,
+                reference_block_height,
+                shekyl_types::BlockHeight::from_raw(9)
+            );
+            assert_eq!(
+                eligible_height,
+                shekyl_types::BlockHeight::from_raw(13),
                 "the binding output is B (eligible 13), not the soonest A (11)"
             );
-            assert_eq!(wait_blocks, 4, "wait until enough matures, not the soonest");
+            assert_eq!(
+                wait_blocks,
+                shekyl_types::BlockCount::from_raw(4),
+                "wait until enough matures, not the soonest"
+            );
         }
         other => panic!("expected OutputNotYetSpendable, got {other:?}"),
     }
@@ -842,7 +863,7 @@ async fn wallet_too_young_to_spend_before_reference_anchor() {
             synced_height,
             ref_anchor_age,
         } => {
-            assert_eq!(synced_height, 5);
+            assert_eq!(synced_height, shekyl_types::BlockHeight::from_raw(5));
             assert_eq!(ref_anchor_age, REF_ANCHOR_AGE);
         }
         other => panic!("expected WalletTooYoungToSpend, got {other:?}"),
@@ -953,7 +974,10 @@ async fn submit_reanchors_at_horizon_then_broadcasts() {
         .build(standard_request(7_000))
         .await
         .expect("build ok");
-    assert_eq!(built.reference_height, 14);
+    assert_eq!(
+        built.reference_height,
+        shekyl_types::BlockHeight::from_raw(14)
+    );
     assert_eq!(built.content_gen, 0, "fresh build is generation 0");
 
     // Advance BOTH the ledger and the tree well past the rebuild horizon:
@@ -2376,14 +2400,14 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let synced = ledger.with_ledger_block(LedgerBlock::height);
     let rh = select_reference_height(synced).expect("reference height resolves");
     let (curve_tree_root, ref_depth) = tree
-        .reference_root_and_depth(BlockHeight::from_raw(rh))
+        .reference_root_and_depth(rh)
         .await
         .expect("reference root+depth");
     let block_hash = ledger
         .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
         .expect("reference block hash present");
     let reference = ReferenceBlock {
-        height: BlockHeight::from_raw(rh),
+        height: rh,
         curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
         block_hash: BlockHash::from_bytes(block_hash),
     };
@@ -3181,7 +3205,10 @@ async fn submit_carries_proof_across_benign_tip_advance() {
         .await
         .expect("build ok");
     // Reference anchored at tip(20) − REF_ANCHOR_AGE(6) = 14.
-    assert_eq!(built.reference_height, 14);
+    assert_eq!(
+        built.reference_height,
+        shekyl_types::BlockHeight::from_raw(14)
+    );
 
     // Advance the tip a few blocks with no reorg: reference age 25 − 14 = 11,
     // well within the daemon window and still canonical → not stale.
@@ -3296,14 +3323,18 @@ fn populate_ledger_scan_only(
     let indexes = &mut state.indexes;
     let timelocked = Timelocked::from_vec(outputs);
     let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
-    let inserted_range =
-        indexes.process_scanned_outputs(ledger_block, block_height, block_hash, timelocked);
+    let inserted_range = indexes.process_scanned_outputs(
+        ledger_block,
+        shekyl_types::BlockHeight::from_raw(block_height),
+        block_hash,
+        timelocked,
+    );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
     for h in (block_height + 1)..=final_height {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             ledger_block,
-            h,
+            shekyl_types::BlockHeight::from_raw(h),
             hash,
             Timelocked::from_vec(Vec::new()),
         );

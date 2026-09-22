@@ -824,8 +824,10 @@ async fn e2e_refresh_scans_coinbase_balance() {
         {
             let g = arc.read().await;
             let ledger = g.ledger();
-            total_height = ledger.ledger.height();
-            unlocked = ledger.balance_at(total_height).unlocked;
+            total_height = ledger.ledger.height().to_raw();
+            unlocked = ledger
+                .balance_at(shekyl_types::BlockHeight::from_raw(total_height))
+                .unlocked;
         }
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -2572,7 +2574,8 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // Pinned geography: inject < referenceBlock < epoch_close < claim tip.
     // The wallet anchors at `synced_tip − REF_ANCHOR_AGE`; `tip_before_claim`
     // is the daemon height the successful attempt saw.
-    let reference_est = tip_before_claim - REF_ANCHOR_AGE;
+    let reference_est =
+        (shekyl_types::BlockHeight::from_raw(tip_before_claim) - REF_ANCHOR_AGE).to_raw();
     assert!(
         inject_height < reference_est,
         "inject ({inject_height}) must precede the claim reference (~{reference_est})"

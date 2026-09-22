@@ -114,9 +114,10 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, BlockInfo, Canonical, Coded, CoverageGaps, OutKey, OutTx, PassedThroughFacts,
-    ProbeCell, PropertyCell, RuleSetInForce, SchemaVersion, SettlementEpochBlocks, TxIndex,
-    TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, BlockInfo, Canonical, Coded, CoverageGaps, CurveTreeState, LayerHash, LeafCount,
+    OutKey, OutTx, PassedThroughFacts, ProbeCell, PropertyCell, RuleSetInForce, SchemaVersion,
+    SettlementEpochBlocks, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS,
+    SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -124,7 +125,8 @@ use shekyl_chain_rules::{CenRow, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
-    OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash, Timestamp, TxHash,
+    OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash, Timestamp, TreeLeaf, TreePosition,
+    TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -385,6 +387,61 @@ impl Fixtures for AtomicUnits {
             ("one", AtomicUnits::from_raw(1)),
             ("byte_order", AtomicUnits::from_raw(0x0102_0304_0506_0708)),
             ("max", AtomicUnits::from_raw(u64::MAX)),
+        ]
+    }
+}
+
+impl Fixtures for TreePosition {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", TreePosition::from_raw(0)),
+            ("byte_order", TreePosition::from_raw(0x0102_0304_0506_0708)),
+            ("max", TreePosition::from_raw(u64::MAX)),
+        ]
+    }
+}
+
+impl Fixtures for TreeLeaf {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", TreeLeaf::from_bytes([0; TreeLeaf::LEN])),
+            // Each scalar a distinct fill, so a scalar-order regression shows.
+            (
+                "four_scalars",
+                TreeLeaf::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(0x10 * (i / 32 + 1) + i % 32).expect("fits a byte")
+                })),
+            ),
+        ]
+    }
+}
+
+impl Fixtures for CurveTreeState {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("empty", CurveTreeState::EMPTY),
+            (
+                "grown",
+                CurveTreeState {
+                    root: CurveTreeRoot::from_bytes([0xc1; 32]),
+                    depth: TreeDepth::from_raw(3),
+                    leaf_count: LeafCount::from_raw(0x0102_0304_0506_0708),
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for LayerHash {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", LayerHash::from_bytes([0; 32])),
+            (
+                "ascending",
+                LayerHash::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i).expect("32 indices fit a byte")
+                })),
+            ),
         ]
     }
 }
@@ -910,6 +967,10 @@ snapshotted_codecs! {
     OutTx => codec_snapshot_out_tx,
     OutKey => codec_snapshot_out_key,
     TxOutputIndices => codec_snapshot_tx_output_indices,
+    TreePosition => codec_snapshot_tree_position,
+    TreeLeaf => codec_snapshot_tree_leaf,
+    CurveTreeState => codec_snapshot_curve_tree_state,
+    LayerHash => codec_snapshot_layer_hash,
 }
 
 /// The gate asserts its own arming state (rule 47). `UPDATE_SNAPSHOTS`

@@ -25,10 +25,10 @@ use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend, spe
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
-use crate::codec::{BlockInfo, Canonical};
+use crate::codec::{BlockInfo, Canonical, CurveTreeState};
 use crate::schema::{
-    self, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_LEAVES, TXS_PQC_AUTH_HASH, TXS_PRUNABLE_TIP,
-    UNDO_LOG,
+    self, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_CHECKPOINTS, CURVE_TREE_LEAVES,
+    CURVE_TREE_META, TXS_PQC_AUTH_HASH, TXS_PRUNABLE_TIP, UNDO_LOG,
 };
 
 fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
@@ -173,12 +173,29 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
             snap.open_table(TXS_PRUNABLE_TIP).is_err(),
         ),
         (
-            "curve_tree_leaves",
-            snap.open_table(CURVE_TREE_LEAVES).is_err(),
+            "curve_tree_checkpoints",
+            snap.open_table(CURVE_TREE_CHECKPOINTS).is_err(),
         ),
     ] {
         assert!(absent, "{name} is Unshaped and not sealed");
     }
+    // S-CURVE's shaped curve tables are sealed; the summary is a **written**
+    // row, not an empty table (`SCU-Q1`, SCU-1).
+    assert!(snap
+        .open_table(CURVE_TREE_LEAVES)
+        .expect("sealed")
+        .is_empty()
+        .expect("len"));
+    let meta = snap.open_table(CURVE_TREE_META).expect("sealed");
+    assert_eq!(meta.len().expect("len"), 1, "one summary row");
+    assert_eq!(
+        meta.get(())
+            .expect("get")
+            .expect("the seal wrote it")
+            .value()
+            .decode(),
+        Ok(CurveTreeState::EMPTY)
+    );
     // The set is the catalogue's own: exactly the non-`Unshaped` targets.
     let sealed = schema::UNDO_TARGETS.iter().filter(|t| t.sealed()).count();
     let unshaped = schema::catalogue()
@@ -186,7 +203,7 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
         .filter(|spec| spec.value == <crate::codec::Unshaped as redb::Value>::type_name())
         .count();
     assert_eq!(sealed + unshaped, schema::catalogue().len());
-    assert_eq!(unshaped, 33, "the §11.1(f) count at this layout");
+    assert_eq!(unshaped, 30, "the §11.1(f) count at this layout");
     cleanup(&path);
 }
 

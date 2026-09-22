@@ -221,6 +221,8 @@ use shekyl_engine_state::{
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
+#[cfg(feature = "bench-internals")]
+use shekyl_types::BlockHeight;
 
 /// Bench-fixture password. Bench-only; never written to disk outside
 /// the temp directory the fixture cleans up on drop.
@@ -479,10 +481,10 @@ pub fn build_engine_fixture_with_balance(
     for i in 0..n {
         transfers.push(sample_transfer(i as u64));
     }
-    let tip = BlockchainTip::new(1_000_000, [0xAA; 32]);
+    let tip = BlockchainTip::new(BlockHeight::from_raw(1_000_000), [0xAA; 32]);
     let reorg_blocks = ReorgBlocks {
         blocks: (999_990..=1_000_000)
-            .map(|h| (h, [(h & 0xff) as u8; 32]))
+            .map(|h| (BlockHeight::from_raw(h), [(h & 0xff) as u8; 32]))
             .collect(),
     };
     let ledger_block = LedgerBlock::new(transfers, tip, reorg_blocks);

@@ -55,7 +55,12 @@ fn hot_path_bench_scan_block_process_outputs(
     input: (LedgerBlock, LedgerIndexes, Timelocked),
 ) -> (LedgerBlock, LedgerIndexes) {
     let (mut ledger, mut indexes, outputs) = input;
-    let added = indexes.process_scanned_outputs(&mut ledger, 2_000, [0xAAu8; 32], outputs);
+    let added = indexes.process_scanned_outputs(
+        &mut ledger,
+        shekyl_types::BlockHeight::from_raw(2_000),
+        [0xAAu8; 32],
+        outputs,
+    );
     black_box(added);
     (ledger, indexes)
 }

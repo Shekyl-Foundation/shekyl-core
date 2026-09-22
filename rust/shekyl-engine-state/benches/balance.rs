@@ -90,7 +90,7 @@ fn hot_path_bench_balance_compute(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(BalanceSummary::compute(
                         black_box(transfers),
-                        current_height,
+                        shekyl_types::BlockHeight::from_raw(current_height),
                         black_box(&spend_locks),
                     ))
                 });

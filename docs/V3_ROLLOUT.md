@@ -33,8 +33,10 @@ With per-input `pqc_auths` (`pqc_auths.size() == vin.size()`), a typical
 2-in/2-out transaction is approximately **~23 KB** total (per-input pqc_auths
 at ~5.4 KB each dominate the size).
 
-Operators can achieve **~95% storage reduction** by running `--prune-blockchain`,
-which strips prunable transaction data while retaining headers and recent blocks.
+Storage reduction is not an operator choice: under archival pruning every
+daemon discards prunable transaction data past the same depth, uniformly
+(`docs/design/ARCHIVAL_PRUNED_DAEMON_MODE.md`); the Monero-era
+`--prune-blockchain` stripe engine was deleted 2026-09-21 (`PDM-Q7`).
 
 ### Multisig Size Impact (scheme_id = 2)
 

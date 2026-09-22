@@ -371,14 +371,13 @@ typedef struct shekyl_rpc_connection_facts {
     double       current_speed_up;
     uint64_t     height;               // the peer's claimed blockchain height
     uint32_t     support_flags;
-    uint32_t     pruning_seed;
     uint16_t     port;                 // `network_address::port()`, 0 if none
     uint8_t      state;                // cryptonote_connection_context::state
     uint8_t      address_type;         // epee type id: 1 ipv4, 2 ipv6, 4 tor…
     uint8_t      incoming;
     uint8_t      localhost;
     uint8_t      local_ip;
-    uint8_t      reserved[9];
+    uint8_t      reserved[5];
 } shekyl_rpc_connection_facts;
 
 // Fills a C++-owned view of the live connections and the instant they were
@@ -411,13 +410,9 @@ typedef struct shekyl_rpc_sync_span_facts {
 } shekyl_rpc_sync_span_facts;
 
 // The p2p facts `sync_info` needs that are not connections and not the chain
-// tip: the download queue and the stripe the node wants next. Release
-// `*out_owner` with `shekyl_rpc_sync_spans_free`.
-//
-// `next_needed_pruning_stripe` is a **stripe**, not a seed — the wire field
-// it feeds is named `next_needed_pruning_seed`, which is an inherited
-// misnomer the caller carries deliberately (see the cutover doc's §7).
-int shekyl_rpc_sync_spans(core_rpc_handle* h, uint32_t* out_next_needed_pruning_stripe,
+// tip: the download queue. Release `*out_owner` with
+// `shekyl_rpc_sync_spans_free`.
+int shekyl_rpc_sync_spans(core_rpc_handle* h,
     const shekyl_rpc_sync_span_facts** out, size_t* out_len, void** out_owner);
 void shekyl_rpc_sync_spans_free(void* owner);
 
@@ -432,7 +427,6 @@ typedef struct shekyl_rpc_peer_facts {
     size_t       host_len;
     uint64_t     last_seen;
     uint32_t     ip;                   // ipv4 only, octets in network order; else 0
-    uint32_t     pruning_seed;
     uint16_t     port;                 // 0 for the address arms that carry none
     uint8_t      white;                // 1 = white list, 0 = gray
     // Filled unconditionally, so the `include_blocked` policy is the caller's
@@ -440,7 +434,6 @@ typedef struct shekyl_rpc_peer_facts {
     // blocked peers; this takes the host-blocked lock once per entry either
     // way, which is the price of moving a request policy out of the facts.
     uint8_t      blocked;
-    uint8_t      reserved[4];
 } shekyl_rpc_peer_facts;
 
 // `public_only` selects `get_public_peerlist` over `get_peerlist`; it is a
@@ -531,14 +524,6 @@ uint64_t shekyl_rpc_fee_grace_blocks_max(void);
 
 // The two peerlist capacities `print_peer_list_stats` reports a fraction of.
 void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray);
-
-// The stripe label `sync_info` prints beside a span:
-// `tools::get_pruning_seed(start_block_height, UINT64_MAX, LOG_STRIPES)`.
-// `UINT64_MAX` is the sentinel the console has always passed — it means "not
-// in the tip window", so the answer is a pure function of the height. Behind
-// it are `make_pruning_seed`'s bit layout and three `cryptonote_config.h`
-// constants, none of which gets a second definition.
-uint32_t shekyl_rpc_span_pruning_seed(uint64_t start_block_height);
 
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 //

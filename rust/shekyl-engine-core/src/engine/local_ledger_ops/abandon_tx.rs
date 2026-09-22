@@ -222,7 +222,7 @@ mod tests {
         wallet.send_journal.rows.insert(
             txid,
             SendRecord {
-                dispatched_at_height: 20,
+                dispatched_at_height: shekyl_types::BlockHeight::from_raw(20),
                 fee: 5,
                 recipients: Vec::new(),
                 change_amount: 0,
@@ -294,13 +294,15 @@ mod tests {
             guard.ledger.send_journal.rows.insert(
                 confirmed,
                 SendRecord {
-                    dispatched_at_height: 20,
+                    dispatched_at_height: shekyl_types::BlockHeight::from_raw(20),
                     fee: 5,
                     recipients: Vec::new(),
                     change_amount: 0,
                     inputs: Vec::new(),
                     lock_baseline: None,
-                    state: SendState::Confirmed { height: 25 },
+                    state: SendState::Confirmed {
+                        height: shekyl_types::BlockHeight::from_raw(25),
+                    },
                 },
             );
         }
@@ -311,8 +313,8 @@ mod tests {
         assert!(matches!(
             err,
             AbandonTxError::StateForbids {
-                state: SendState::Confirmed { height: 25 }
-            }
+                state: SendState::Confirmed { height },
+            } if height == shekyl_types::BlockHeight::from_raw(25)
         ));
     }
 
@@ -355,13 +357,15 @@ mod tests {
             ));
             spent.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
             wallet.ledger.transfers.push(spent);
-            wallet.ledger.tip.synced_height = 40;
+            wallet.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(40);
 
             wallet.reconcile_after_scan_merge(None);
 
             assert_eq!(
                 wallet.send_journal.rows[&txid].state,
-                SendState::Confirmed { height: 30 },
+                SendState::Confirmed {
+                    height: shekyl_types::BlockHeight::from_raw(30)
+                },
                 "late confirmation un-abandons loudly"
             );
             assert!(
@@ -375,7 +379,10 @@ mod tests {
         }
         // The wallet still reports the height it was seeded at.
         let engine = arc.read().await;
-        assert_eq!(engine.ledger.synced_height(), 40);
+        assert_eq!(
+            engine.ledger.synced_height(),
+            shekyl_types::BlockHeight::from_raw(40)
+        );
     }
 
     /// Abandon-from-Dispatched keeps the carried-input locks alive
@@ -410,7 +417,7 @@ mod tests {
         crate::engine::rescan::reset_scan_derived_state(&mut state.ledger, &mut state.indexes);
         let wallet = &mut state.ledger;
         wallet.ledger.transfers.push(mk_row(0x11, 7));
-        wallet.ledger.tip.synced_height = 40;
+        wallet.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(40);
 
         wallet.reconcile_after_scan_merge(None);
 

@@ -1284,8 +1284,13 @@
                       {
                         "name": "synced_height",
                         "ty": {
-                          "name": "u64",
-                          "ty": "U64"
+                          "name": "BlockHeight",
+                          "ty": {
+                            "NewtypeStruct": {
+                              "name": "u64",
+                              "ty": "U64"
+                            }
+                          }
                         }
                       },
                       {
@@ -1451,8 +1456,13 @@
                               "ty": {
                                 "Tuple": [
                                   {
-                                    "name": "u64",
-                                    "ty": "U64"
+                                    "name": "BlockHeight",
+                                    "ty": {
+                                      "NewtypeStruct": {
+                                        "name": "u64",
+                                        "ty": "U64"
+                                      }
+                                    }
                                   },
                                   {
                                     "name": "[T; N]",
@@ -2471,8 +2481,13 @@
               {
                 "name": "restore_from_height",
                 "ty": {
-                  "name": "u64",
-                  "ty": "U64"
+                  "name": "BlockHeight",
+                  "ty": {
+                    "NewtypeStruct": {
+                      "name": "u64",
+                      "ty": "U64"
+                    }
+                  }
                 }
               },
               {
@@ -3146,8 +3161,13 @@
                             {
                               "name": "dispatched_at_height",
                               "ty": {
-                                "name": "u64",
-                                "ty": "U64"
+                                "name": "BlockHeight",
+                                "ty": {
+                                  "NewtypeStruct": {
+                                    "name": "u64",
+                                    "ty": "U64"
+                                  }
+                                }
                               }
                             },
                             {
@@ -3251,8 +3271,13 @@
                                           {
                                             "name": "height",
                                             "ty": {
-                                              "name": "u64",
-                                              "ty": "U64"
+                                              "name": "BlockHeight",
+                                              "ty": {
+                                                "NewtypeStruct": {
+                                                  "name": "u64",
+                                                  "ty": "U64"
+                                                }
+                                              }
                                             }
                                           }
                                         ]

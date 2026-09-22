@@ -86,7 +86,7 @@ fn hot_path_bench_scan_block(c: &mut Criterion) {
                     |(mut ledger, mut indexes, outputs)| {
                         let added = indexes.process_scanned_outputs(
                             &mut ledger,
-                            black_box(2_000),
+                            black_box(shekyl_types::BlockHeight::from_raw(2_000)),
                             black_box([0xAAu8; 32]),
                             outputs,
                         );

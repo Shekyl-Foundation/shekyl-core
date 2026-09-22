@@ -55,6 +55,7 @@
 //! owed: an encoding cannot move without the version moving in the same PR.
 
 mod chain;
+mod curve;
 mod evidence;
 mod primitives;
 mod property;
@@ -71,6 +72,7 @@ pub use chain::{
     BlockBody, BlockInfo, OutKey, OutTx, RuleSetInForce, TxIndex, TxOutputIndices,
     TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
+pub use curve::{CurveTreeState, LayerHash, LeafCount, TreeDepth};
 pub use evidence::{CoverageGaps, PassedThroughFacts, FACT_FIELDS};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;

@@ -505,7 +505,10 @@ mod tests {
     fn ledger_with(transfers: Vec<TransferDetails>) -> shekyl_engine_state::LedgerBlock {
         shekyl_engine_state::LedgerBlock::new(
             transfers,
-            shekyl_engine_state::BlockchainTip::new(5_000, [0xAA; 32]),
+            shekyl_engine_state::BlockchainTip::new(
+                shekyl_types::BlockHeight::from_raw(5_000),
+                [0xAA; 32],
+            ),
             shekyl_engine_state::ReorgBlocks::default(),
         )
     }
@@ -521,7 +524,7 @@ mod tests {
         wallet.send_journal.rows.insert(
             txid,
             shekyl_engine_state::SendRecord {
-                dispatched_at_height: 3_999,
+                dispatched_at_height: shekyl_types::BlockHeight::from_raw(3_999),
                 fee: 1,
                 recipients: Vec::new(),
                 change_amount: 0,
@@ -562,7 +565,9 @@ mod tests {
         journal_row(
             &mut wallet,
             [4; 32],
-            SendState::Confirmed { height: 9 },
+            SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(9),
+            },
             Some(3_800),
             vec![5],
         );
@@ -642,7 +647,7 @@ mod tests {
             wallet.send_journal.rows.insert(
                 txid.to_bytes(),
                 shekyl_engine_state::SendRecord {
-                    dispatched_at_height: 3_999,
+                    dispatched_at_height: shekyl_types::BlockHeight::from_raw(3_999),
                     fee: 1,
                     recipients: Vec::new(),
                     change_amount: 0,

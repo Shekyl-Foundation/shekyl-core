@@ -27,6 +27,7 @@ re-located rather than trusted:
 | #587 (`cf3b13c29`) | `rpc_port` + `rpc_credits_per_hash` deleted from `basic_node_data` and every peerlist entry; peerlist store `6 → 7`; `BOOST_CLASS_VERSION(peerlist_entry) 3 → 4` | PW-14's `rpc_port` half is **gone at the tree** — see PWC-D7 |
 | RK-5a (`d468625e0`) | `cryptonote::connection_info` and `t_cryptonote_protocol_handler::get_connections()` deleted | shifted every `cryptonote_protocol_handler.inl` line number the register cites — see PWC-E9 |
 | #580 (`63d543103`) | carrier producer; `levin_notify.cpp` reworked, `i_core_events::pool_has_tx` added | the D++ emit path is Rust-owned; bounds this census's `levin_notify` decision (§2.3) |
+| `feat/pruning-seed-wire-deletion` (2026-09-21, `PDM-Q7`) | `pruning_seed` deleted from `CORE_SYNC_DATA` and every peerlist entry, C++ and `shekyl-levin`; the ingest validator and stripe-aware peer selection with it; peerlist store `8 → 9`; `BOOST_CLASS_VERSION(peerlist_entry) 5 → 6` | PWC-C6's commitment is **gone at the tree** — see the UPDATE under §4.C; `net_node.inl` / `cryptonote_protocol_handler.inl` line numbers cited below shifted again |
 
 **Identifier family:** `PWC-` (P2P wire census), form
 `PWC-<letter><n>[letter]` following the registered `CEN-<letter><n>[letter]`
@@ -364,9 +365,22 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-C3 | `NOTIFY_NEW_BLOCK` (2001) still exists alongside `NOTIFY_NEW_FLUFFY_BLOCK` (2008) — two block-propagation paths that must agree on validation, on a chain with **no fluffy-block transition to justify the legacy one**. Both present at this pin; both dispatched (`cryptonote_protocol_handler.h:90`, `:96`) | `cryptonote_protocol_defs.h:115`, `:265`; handlers `.inl:519`, `:533` | `none` | 4 | PW-27 |
 | PWC-C4 | `block_complete_entry.attestation_witness` is bounded **at the codec**, not at callers, so no p2p ingress can bypass the cap; the Rust twin duplicates the constant `8 + 256*(32+8+3385) = 876_808` (v2 since `SF-D8` 2026-09-13 — per-pass nonce and anchor height; was `866_568`) with a `const _: () = assert!` and a test asserting equality with the retention crate's authority | `cryptonote_protocol_defs.h:97-105`; `rust/shekyl-levin/src/payload/block.rs:23-25`, `:73-82` | `spec` | 1 | — |
 | PWC-C5 | `CORE_SYNC_DATA` stores `cumulative_difficulty_top64` **unconditionally on store, OPT on load** — an asymmetry both stacks must reproduce exactly | `cryptonote_protocol_defs.h:205-208`; `rust/shekyl-levin/src/payload/types.rs:52`, `:91-95` | `KAT-port` | 4 | — |
-| PWC-C6 | `pruning_seed` rides `CORE_SYNC_DATA` and every peerlist entry, and is validated on ingest against the stripe range | `cryptonote_protocol_defs.h:200`; `net_node.inl:2105` | `none` | 4 | — |
+| PWC-C6 | ~~`pruning_seed` rides `CORE_SYNC_DATA` and every peerlist entry, and is validated on ingest against the stripe range~~ **DELETED 2026-09-21** (`PDM-Q7`; see UPDATE below) | `cryptonote_protocol_defs.h:200`; `net_node.inl:2105` (census pin) | `none` | 4 | — |
 | PWC-C7 | Per-command payload caps are a 13-entry switch; **unknown commands fall through to `size_t::max`**, leaving only the packet limit. **Three** entries are 128 MB and exceed the 100 MB packet limit by design, as their own comments note — `NOTIFY_NEW_BLOCK`, `NOTIFY_NEW_TRANSACTIONS` and `NOTIFY_RESPONSE_GET_OBJECTS`, i.e. the response path as well as the two announce paths | `connection_context.cpp:38-72`, the 128 MB arms at `:51`, `:53`, `:57` | `pinned-not-re-derived` | 4 | — |
 | PWC-C8 | `block_complete_entry` serializes `txs` two different ways — object array when `pruned`, blob array otherwise — and the unpruned load path fills `prunable_hash` with zeros | `cryptonote_protocol_defs.h:76-96`; `rust/shekyl-levin/src/payload/block.rs:92-125` | `KAT-port` | 4 | — |
+
+> **UPDATE 2026-09-21 — PWC-C6 deleted (`PDM-Q7`).** The census found the
+> field on both wire homes with a nine-valued ingest validator. It was a
+> durable, address-keyed, self-asserted attribute gossiped in every peerlist —
+> `PWD-I1`'s forbidden shape — and with a uniformly-zero fleet its eight
+> accepted non-zero values were free markers for topology tracing that the
+> C++ candidate selection acted on. Deleted from `CORE_SYNC_DATA`,
+> `peerlist_entry_base` (KV and VARINT maps) and `shekyl-levin` in one PR,
+> with the validator and the stripe-aware selection. Both homes were
+> `KV_SERIALIZE_OPT(…, 0)`, so a mixed fleet interoperates in either
+> direction — no framing change; a stale key decodes ignored (tested in
+> `payload_kats.rs`). Gate: `scripts/ci/check_no_stripe_engine.sh`. The row
+> above is the census reading, not the present.
 
 > **Ruled 2026-09-09 — `SHEKYL_P2P_PROTOCOL.md` PWD-B6: 2001 `NOTIFY_NEW_BLOCK` is deleted, so eight notify commands survive, not nine.** Both were one handler at this pin; the command id was the only distinction. Live identifiers: `NOTIFY_NEW_COMPACT_BLOCK` (2008) and `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009). `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS` (0x01) fell with 2001; 0x01 is unassigned.
 

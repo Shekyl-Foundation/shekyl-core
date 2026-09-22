@@ -943,7 +943,7 @@ Per-height curve-tree root hash for fast lookup without deserializing checkpoint
 | Key | `uint64_t` block height (8 bytes) — key *h* holds the tree state **at** height *h*: block *h−1*'s connect writes it as `prev_height + 1` (`blockchain_db.cpp:664`), so it is the anchor CEN-I12 reads for `ref_height = h` and the root block *h*'s header must carry (CEN-B5) |
 | Value | 32-byte root hash |
 | Writers | `store_curve_tree_root_at_height` (block connect, `src/blockchain_db/blockchain_db.cpp:663`–`:664`) — **on every connect**, whether or not the drain grew the tree: the call is inside the `blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` gate (`:493`, always true) and *outside* the `if (new_output_count > 0)` block that closes at `:650`. The table is therefore **dense from key 1**; **key 0 is never written** (no connect produces it). Deleted on `pop_block` |
-| Readers | `get_curve_tree_root_at_height` — returns an **all-zero** array silently on a missing key (`src/blockchain_db/lmdb/db_lmdb.cpp:9745`–`:9760`, `MDB_NOTFOUND`), which is reachable only for key 0 in a healthy file (`ref_height = 0` is age-selectable while `chain_height ≤ 100`); the zeros decode to the identity point, so a proof anchored at genesis is verified against *O* — consequence-free (the empty tree has no members; forging against *O* is a DL break). Walked and recorded on CEN-I12's CSR row 2026-09-15 (`docs/design/CONSENSUS_RULE_CENSUS.md` §7 #21; S-CHAIN-W SCW-19); the verdict stands |
+| Readers | `get_curve_tree_root_at_height` — returns an **all-zero** array silently on a missing key (`src/blockchain_db/lmdb/db_lmdb.cpp:9064`–`:9080`, `MDB_NOTFOUND`), which is reachable only for key 0 in a healthy file (`ref_height = 0` is age-selectable while `chain_height ≤ 100`); the zeros decode to the identity point, so a proof anchored at genesis is verified against *O* — consequence-free (the empty tree has no members; forging against *O* is a DL break). Walked and recorded on CEN-I12's CSR row 2026-09-15 (`docs/design/CONSENSUS_RULE_CENSUS.md` §7 #21; S-CHAIN-W SCW-19); the verdict stands |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
 
 ### `pending_tree_leaves`
@@ -1174,7 +1174,7 @@ General key-value store for database-level metadata.
 |---|---|---|
 | `"version"` (NUL-terminated) | `uint32_t` | Database schema version — tracks `#define VERSION` in `db_lmdb.cpp` (the header of this document names the current value; a third copy here just drifts) |
 | `"archival_prune_watermark_epoch"` | `uint64_t` | The retention prune's monotonic receipt (C2-R1b-Q1c, v12): highest `prune_below_epoch` ever applied, written in the prune's own txn before its deletions. The pop floor's source (`pop_target_allowed`). One writer, never lowered, **exempt from pop reversal** — unlike `archival_frozen_shard_count`, this key records destruction a pop cannot undo |
-| `"pruning_seed"` (NUL-terminated) | `uint32_t` | Blockchain pruning seed |
+| `"pruning_seed"` (NUL-terminated) | `uint32_t` | ~~Blockchain pruning seed~~ **RETIRED 2026-09-21** (`PDM-Q7`: the stripe engine is deleted; no writer, no reader — a key left in an old datadir is ignored). Not a layout change, so no version bump. |
 | `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | Next block height for tx pruning |
 | `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | Height of last pruned tx data |
 | `"total_bonded_atomic"` (no NUL) | `uint64_t` | Global audit scalar: sum of per-`P` `bonded_total_atomic` (gate-4 §4.5). Credited on JoinMarket `bond_credit`; debited on Unbond/slash connect paths |
@@ -1184,7 +1184,7 @@ General key-value store for database-level metadata.
 | Property | Value |
 |---|---|
 | Writers | Various — `set_total_bonded_atomic`, `set_total_burned`, pruning code (`migrate()` writes nothing — refuse-loudly since the Monero ladder deletion) |
-| Readers | Various — `get_total_bonded_atomic`, `get_total_burned`, `get_blockchain_pruning_seed`, etc. |
+| Readers | Various — `get_total_bonded_atomic`, `get_total_burned`, etc. (`get_blockchain_pruning_seed` deleted 2026-09-21) |
 | Introduced | Genesis (DB v0) |
 
 ---

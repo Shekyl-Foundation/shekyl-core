@@ -145,6 +145,63 @@ impl BlockCount {
     /// A one-block span. Consecutive-height and drain-cutoff arithmetic
     /// uses this instead of punching through to `u64`.
     pub const ONE: Self = Self(1);
+
+    /// Sum two spans, returning `None` on overflow.
+    ///
+    /// The panicking [`Add`](core::ops::Add) impl is not const. Derived
+    /// spans (`REF_ANCHOR_AGE`, and anything built from it) use this.
+    #[must_use]
+    pub const fn checked_add(self, rhs: Self) -> Option<Self> {
+        match self.0.checked_add(rhs.0) {
+            Some(v) => Some(Self(v)),
+            None => None,
+        }
+    }
+
+    /// Difference of two spans, returning `None` when `rhs` is larger.
+    ///
+    /// The panicking [`Sub`](core::ops::Sub) impl is not const. A derived
+    /// span such as the proof-validity horizon uses this so the constant
+    /// names the spans it is built from.
+    #[must_use]
+    pub const fn checked_sub(self, rhs: Self) -> Option<Self> {
+        match self.0.checked_sub(rhs.0) {
+            Some(v) => Some(Self(v)),
+            None => None,
+        }
+    }
+}
+
+impl Sub<BlockCount> for BlockCount {
+    type Output = BlockCount;
+
+    /// Difference of two spans. Panics if `rhs` is larger than `self`.
+    fn sub(self, rhs: BlockCount) -> BlockCount {
+        BlockCount(
+            self.0
+                .checked_sub(rhs.0)
+                .expect("BlockCount - BlockCount underflowed"),
+        )
+    }
+}
+
+impl BlockHeight {
+    /// Half-open ordinals `[self, exclusive_end)`.
+    ///
+    /// A scan window is stored as `Range<BlockHeight>`. That range does
+    /// not iterate: `core::iter::Step` is unstable. Walk it here.
+    pub fn ordinals_until(self, exclusive_end: Self) -> impl Iterator<Item = Self> {
+        let mut cur = self;
+        core::iter::from_fn(move || {
+            if cur < exclusive_end {
+                let here = cur;
+                cur = cur.saturating_add(BlockCount::ONE);
+                Some(here)
+            } else {
+                None
+            }
+        })
+    }
 }
 
 impl ChainCount {

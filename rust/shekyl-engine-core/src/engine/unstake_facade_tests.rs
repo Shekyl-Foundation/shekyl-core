@@ -19,7 +19,7 @@ use shekyl_engine_state::pscan_state::{
     BondPostRecord, MintLineageOutput, PFundingOutputRecord, RetiredPersonaRecord,
 };
 use shekyl_engine_state::{PendingBondPost, PendingPostState};
-use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, SettlementEpoch};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, SettlementEpoch};
 use tokio::sync::RwLock as TokioRwLock;
 
 use crate::engine::test_support::{dummy_daemon, fixed_seed};
@@ -172,7 +172,7 @@ fn in_progress_states_are_named_before_nothing_staked() {
                 p_slot: PSlot::from_raw(0),
                 persona: persona(9),
                 tx_bytes: vec![0xAB; 4],
-                bond_post_offset_blocks: 0,
+                bond_post_offset_blocks: BlockCount::ZERO,
                 anchor_t0: ChainCount::from_raw(1),
                 funding_gindexes: Vec::new(),
                 state: PendingPostState::Pending,

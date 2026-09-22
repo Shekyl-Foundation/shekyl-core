@@ -1199,7 +1199,6 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         // the encoder this file already uses four times over.
         connection_id: hex::encode(c.connection_id),
         height: c.height,
-        pruning_seed: c.pruning_seed,
         address_type: c.address_type,
     }
 }
@@ -1300,7 +1299,6 @@ pub fn get_peer_list(
             ip: e.ip,
             port: e.port,
             last_seen: e.last_seen,
-            pruning_seed: e.pruning_seed,
         };
         if e.white {
             white_list.push(peer);
@@ -1333,7 +1331,6 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
         // The same rule `get_version` applies, from the same uncollapsed
         // facts: the raw target survives the seam and is zeroed here.
         target_height: wire_target_height(&tip),
-        next_needed_pruning_seed: queue.next_needed_pruning_stripe,
         peers: connections
             .connections
             .iter()
@@ -1925,10 +1922,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v10` = 3.33). A bump that
+        // Head of the `get_version` chain (`_v12` = 3.35). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v11.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v12.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2810,10 +2807,7 @@ pub(crate) mod tests {
                     now: 0,
                     connections: Vec::new(),
                 }),
-                spans: Ok(SyncSpansSnapshot {
-                    next_needed_pruning_stripe: 1,
-                    spans: Vec::new(),
-                }),
+                spans: Ok(SyncSpansSnapshot { spans: Vec::new() }),
                 peers: Ok(Vec::new()),
                 asked_public_only: AtomicBool::new(false),
             }
@@ -2858,7 +2852,6 @@ pub(crate) mod tests {
             current_speed_up: 2048.0,
             height: 1_234_567,
             support_flags: 3,
-            pruning_seed: 384,
             port: 18080,
             state: 3,
             address_type: ADDRESS_TYPE_IPV4,
@@ -2992,7 +2985,6 @@ pub(crate) mod tests {
             host: format!("192.0.2.{n}"),
             last_seen: 1_750_000_000 + n,
             ip: 0,
-            pruning_seed: 0,
             port: 18080,
             white,
             blocked,
@@ -3140,7 +3132,6 @@ pub(crate) mod tests {
     fn sync_info_zeroes_the_target_only_when_synchronized() {
         let p2p = FakeP2p {
             spans: Ok(SyncSpansSnapshot {
-                next_needed_pruning_stripe: 7,
                 spans: vec![span(100, 10, true)],
             }),
             connections: Ok(ConnectionsSnapshot {
@@ -3154,7 +3145,6 @@ pub(crate) mod tests {
         let res = sync_info(&behind, &p2p).expect("sync info");
         assert_eq!(res.height, 1_234_567);
         assert_eq!(res.target_height, 1_234_600);
-        assert_eq!(res.next_needed_pruning_seed, 7);
         assert_eq!(
             res.peers.len(),
             1,

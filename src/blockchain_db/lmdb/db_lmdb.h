@@ -330,10 +330,6 @@ public:
   virtual bool get_txpool_tx_meta(const crypto::hash& txid, txpool_tx_meta_t &meta) const;
   virtual bool get_txpool_tx_blob(const crypto::hash& txid, cryptonote::blobdata& bd, relay_category tx_category) const;
   virtual cryptonote::blobdata get_txpool_tx_blob(const crypto::hash& txid, relay_category tx_category) const;
-  virtual uint32_t get_blockchain_pruning_seed() const;
-  virtual bool prune_blockchain(uint32_t pruning_seed = 0);
-  virtual bool update_pruning();
-  virtual bool check_pruning();
 
   virtual void add_alt_block(const crypto::hash &blkid, const cryptonote::alt_block_data_t &data, const cryptonote::blobdata_ref &blob);
   virtual bool get_alt_block(const crypto::hash &blkid, alt_block_data_t *data, cryptonote::blobdata *blob);
@@ -447,7 +443,6 @@ private:
 
   inline void check_open() const;
 
-  bool prune_worker(int mode, uint32_t pruning_seed);
 
   virtual bool is_read_only() const;
 

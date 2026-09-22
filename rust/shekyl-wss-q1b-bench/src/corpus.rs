@@ -54,7 +54,7 @@ pub const W: u64 = SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS;
 /// This is the **upper** bound of the window (a reference block chosen deeper
 /// than the minimum age replays fewer blocks), so it is the one a worst-case
 /// measurement uses.
-pub const REPLAY_WINDOW_BLOCKS: u64 = W - REFERENCE_BLOCK_MIN_AGE;
+pub const REPLAY_WINDOW_BLOCKS: u64 = W - REFERENCE_BLOCK_MIN_AGE.to_raw();
 
 /// The blocks the wallet holds, and refetches at open: `W + 60`.
 ///

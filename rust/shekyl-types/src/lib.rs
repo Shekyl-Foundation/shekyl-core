@@ -63,6 +63,19 @@
 //! change in a persisted field still bumps the owning block's version
 //! (`42-serialization-policy.mdc`); the schema snapshot is the identity.
 //!
+//! ## What lives here when two stores need it
+//!
+//! **A type both stores need lives in `shekyl-types`; the computation lives
+//! in the owning crate.** The daemon store (`shekyl-chain-store`) and the
+//! wallet-side store (`shekyl-curve-tree`) key and hold the same chain facts
+//! and neither may depend on the other's graph. [`KeyImage`],
+//! [`CurveTreeRoot`], [`TreePosition`] and [`TreeLeaf`] each reached this
+//! answer by the same argument (`18-type-placement.mdc`, "Where each shape
+//! lives"); the sentence is here so the next instance is a lookup, not a
+//! question. The arithmetic over those bytes — the Selene hash, path
+//! assembly, the drain order — stays in `shekyl-curve-tree` / `shekyl-fcmp`;
+//! this crate holds the word, never the computation.
+//!
 //! ## Exposure policy on the 32-byte identities
 //!
 //! Not every 32-byte chain fact may reach a string. The `hash32!` family has
@@ -668,6 +681,78 @@ hash32! {
     /// of outputs, not an identity, and one can never be passed where the other
     /// is expected. Public, non-correlating; full-hex `Debug`.
     CurveTreeRoot
+}
+
+scalar_u64! {
+    /// A leaf's **dense position in the FCMP++ curve tree** — the index in
+    /// drain order `(maturity, gindex)`, assigned when a matured output's
+    /// leaf enters the tree (`CT2_DRAIN_ORDER.md` §2.2).
+    ///
+    /// Not a [`GlobalOutputIndex`]: outputs are indexed in chain-scan order at
+    /// creation and enter the tree later in maturity order, so the two
+    /// diverge in the first block that carries both a coinbase and a
+    /// transaction output. Not a [`BlockHeight`]. A value of this type is
+    /// never a position in any other sequence.
+    ///
+    /// Both stores key their leaf tables by it — the daemon store's
+    /// `curve_tree_leaves` (DRS-E1 S-CURVE) and the wallet-side store's
+    /// `leaves` — which is why the word lives here (crate docs, *What lives
+    /// here when two stores need it*; ruled `SCU-Q2`). Each store wraps it in
+    /// its own redb key type; the drain-order arithmetic that *assigns* one
+    /// stays in `shekyl-curve-tree`.
+    TreePosition
+}
+
+/// One **curve-tree leaf as stored**: the four Selene scalars
+/// `{O.x, I.x, C.x, CM.x}` — the output key, its key-image generator, its
+/// amount commitment and the commitment-mask point, each as a 32-byte
+/// x-coordinate — in that order, 128 bytes (`CT_LEAF_SIZE`).
+///
+/// A *name* for bytes the tree crate builds from a public output identity
+/// and hashes into the layer above; this crate holds no field arithmetic.
+/// The x-coordinate form is what `build_layers` consumes and cannot be
+/// decompressed back to points — a path assembler keeps the output identity
+/// beside it (`shekyl_curve_tree::LeafEntry`). Both stores hold leaves in
+/// this shape (`SCU-Q2`); the daemon store's codec name is `tree_leaf`.
+///
+/// Public, non-correlating (every field is on-chain); `Debug` prints the
+/// first scalar's hex prefix and the length rather than 128 bytes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct TreeLeaf([u8; TreeLeaf::LEN]);
+
+impl TreeLeaf {
+    /// Width of a stored leaf: four 32-byte Selene scalars.
+    pub const LEN: usize = 4 * 32;
+
+    /// Wrap the 128 stored bytes. An *edge* constructor (store decode,
+    /// FFI); the tree crate builds leaves from identities, not from bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; Self::LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The 128 stored bytes.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; Self::LEN] {
+        self.0
+    }
+
+    /// Borrow the 128 stored bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; Self::LEN] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for TreeLeaf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TreeLeaf(")?;
+        for b in &self.0[..4] {
+            write!(f, "{b:02x}")?;
+        }
+        write!(f, "…; {} bytes)", Self::LEN)
+    }
 }
 
 impl CurveTreeRoot {
