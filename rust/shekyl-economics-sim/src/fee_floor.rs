@@ -69,7 +69,7 @@ use shekyl_economics::{
 };
 
 use crate::fee_ladder::{
-    advance_traced_state, age_state, correction_factor_ratio, AgeState, Rng, FULL_REWARD_ZONE_V5,
+    advance_traced_state, age_state, correction_factor_ratio, AgeState, Rng, FULL_REWARD_ZONE,
     REF_TX_WEIGHT,
 };
 
@@ -152,7 +152,7 @@ fn grace_sweep(floors: &[u128]) -> ([u64; 3], [u64; 3]) {
 /// atomic/byte (single digits at large `M`) would otherwise masquerade as
 /// slew.
 fn floor_rate(base_reward: u64, median: u64, c_scaled: u64) -> u128 {
-    let m = u128::from(median.max(FULL_REWARD_ZONE_V5));
+    let m = u128::from(median.max(FULL_REWARD_ZONE));
     u128::from(base_reward) * u128::from(REF_TX_WEIGHT) * u128::from(c_scaled) / (m * m)
 }
 
@@ -286,7 +286,7 @@ fn slew_scenario(
         let height = st.height + t;
         let base = base_block_reward(ag, params).expect("base along trace");
         let c = c_for(sum, 1, sma, ag, height, params);
-        floors.push(floor_rate(base, FULL_REWARD_ZONE_V5, c));
+        floors.push(floor_rate(base, FULL_REWARD_ZONE, c));
         c_min = c_min.min(c);
         c_max = c_max.max(c);
         if last_c.is_some_and(|p| p != c) {
@@ -455,7 +455,7 @@ pub struct FeeFloorReport {
 /// SMAs.
 pub fn report() -> FeeFloorReport {
     let params = EconomicParams::default();
-    let zone = FULL_REWARD_ZONE_V5;
+    let zone = FULL_REWARD_ZONE;
     let ages: [u64; 5] = [0, 1, 4, 12, 30];
     let states: Vec<AgeState> = ages.iter().map(|&a| age_state(a, &params)).collect();
 

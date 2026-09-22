@@ -520,7 +520,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
     // must thread the real parent leaf-derived n here or its coinbase will be
     // refused at connect — which is the loud failure we want.
     if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), /*max_outs=*/1, hf_ver ? *hf_ver : 1,
-        /*tx_volume=*/{}, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
+        /*tx_volume=*/{}, shekyl::supply_facts{already_generated_coins, /*total_burned: the generator tracks no burn fold; see the frozen_segment_count note*/0}, /*genesis_ng_height=*/0))
       return false;
 
     size_t actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
@@ -648,7 +648,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
     size_t current_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
     // TODO: This will work, until size of constructed block is less then CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE
     if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, current_block_weight, fees, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), max_outs, hf_version,
-        /*tx_volume=*/{}, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
+        /*tx_volume=*/{}, shekyl::supply_facts{already_generated_coins, /*total_burned: the generator tracks no burn fold; see the frozen_segment_count note*/0}, /*genesis_ng_height=*/0))
       return false;
   }
 
@@ -1515,7 +1515,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0);
     block_reward = em_split.miner_emission;
 
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, shekyl::tx_volume_window{}, 0, /*frozen_segment_count=*/0);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, shekyl::tx_volume_window{}, shekyl::supply_facts{}, /*frozen_segment_count=*/0);
     block_reward += burn.miner_fee_income;
 
     tx_extra_pqc_kem_ciphertext kem_field;

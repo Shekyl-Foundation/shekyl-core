@@ -61,11 +61,6 @@ use super::traits::FeeEstimates;
 /// formula folds in.
 const DYNAMIC_FEE_REFERENCE_TX_WEIGHT: u64 = 3_000;
 
-/// The penalty-free zone / minimum median (`Zm`), single-sourced from
-/// the wire crate's `MIN_BLOCK_WEIGHT`
-/// (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`).
-const PENALTY_FREE_ZONE: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
-
 /// Absolute cap (atomic units) on every named tier's — and `Custom`'s —
 /// **effective weight-1 charge**: the maximum fee an honest daemon can
 /// legitimately quote over the whole emission era.
@@ -97,7 +92,7 @@ const PENALTY_FREE_ZONE: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64
 ///         is an upper bound, loose in the safe direction.
 /// R   ≤ base_block_reward(0)                                (monotone in already_generated)
 /// Mfw ≥ Zm
-/// cap = corrected_fee_ladder(R₀, Zm, Zm, w_ref, C_q^max).priority
+/// cap = corrected_fee_ladder(R₀, Zm, w_ref, C_q^max).priority
 /// ```
 ///
 /// This is loose against the reachable maximum by design: a cap exists to
@@ -126,13 +121,12 @@ pub fn absolute_fee_rate_cap() -> u64 {
     let params = shekyl_economics::params::EconomicParams::default();
     let r0 = shekyl_economics::emission::base_block_reward(0, &params)
         .expect("genesis reward is defined for already_generated = 0");
-    let zm = PENALTY_FREE_ZONE;
     shekyl_economics::corrected_fee_ladder(
         r0,
-        zm,
-        zm,
+        params.full_reward_zone,
         DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
         shekyl_economics::FeeCorrection::from_scaled(structural_max_correction(&params)),
+        &params,
     )
     .priority
 }
@@ -595,7 +589,7 @@ mod tests {
     fn absolute_cap_bounds_the_swept_reachable_maximum() {
         use shekyl_economics::params::SCALE;
         let p = shekyl_economics::params::EconomicParams::default();
-        let zm = PENALTY_FREE_ZONE;
+        let zm = p.full_reward_zone;
         let cap = absolute_fee_rate_cap();
 
         // The accumulation extremes: a chain that has emitted as slowly
@@ -634,9 +628,9 @@ mod tests {
                         let prio = shekyl_economics::corrected_fee_ladder(
                             base,
                             zm,
-                            zm,
                             DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
                             c,
+                            &p,
                         )
                         .priority;
                         if prio > worst.0 {

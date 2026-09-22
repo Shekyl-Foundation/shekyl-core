@@ -1440,7 +1440,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
     return false;
   }
 
-  CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
+  CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
   // CEN-I19: the coinbase carries its outputs' 0x06 / 0x07 fields like every
   // other transaction (construct_miner_tx emits both); the shape rule runs
   // here because the coinbase never passes core::check_tx_semantic.
@@ -1502,7 +1502,7 @@ uint64_t Blockchain::parent_frozen_segment_count(uint64_t block_height) const
 }
 //------------------------------------------------------------------
 // This function validates the miner transaction reward
-bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count)
+bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count, uint64_t total_burned)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   const uint64_t block_height = std::get<txin_gen>(b.miner_tx.vin[0]).height;
@@ -1519,18 +1519,12 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     return true;
   }
 
-  if (version == 3) {
-    for (auto &o: b.miner_tx.vout) {
-      if (!is_valid_decomposed_amount(o.amount)) {
-        MERROR_VER("miner tx output " << print_money(o.amount) << " is not a valid decomposed amount");
-        return false;
-      }
-    }
-  }
-
   uint64_t median_weight = m_current_block_cumul_weight_median;
   const shekyl::tx_volume_window tx_volume = get_tx_volume_window(block_height);
-  const uint64_t circulating_supply = already_generated_coins;
+  // The supply operand is DERIVED in Rust from these two parent-state facts
+  // (FL-R16c: `= already_generated_coins`, gross of burn, was the
+  // definitional bug; E6 slice 4 §3.1 S15). C++ passes facts, defines nothing.
+  const shekyl::supply_facts supply{already_generated_coins, total_burned};
 
   if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, version, tx_volume))
   {
@@ -1547,7 +1541,7 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   // frozen_segment_count is the caller's parent-state read (the asserting
   // read-point above); the escalated share cannot reach miner_fee_income
   // (§12.11.1 Leg 1), so this stays the security-budget-preserving split.
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, circulating_supply, frozen_segment_count);
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, supply, frozen_segment_count);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -1817,14 +1811,16 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   uint8_t hf_version = b.major_version;
   size_t max_outs = 1;
   const shekyl::tx_volume_window tx_volume = get_tx_volume_window(height);
-  const uint64_t circulating_supply = already_generated_coins;
+  // Parent-state facts the supply is derived from in Rust (FL-R16c); the
+  // template and connect read the same two so they agree by construction.
+  const shekyl::supply_facts supply{already_generated_coins, m_db->get_total_burned()};
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
   // D2 escalation operand, computed ONCE and passed to BOTH construct_miner_tx
   // calls: the retry below re-prices the coinbase after the weight changes, and
   // a second read there could price against a different n than the first pass
   // (criterion #1 — template and connect must agree by construction).
   const uint64_t frozen_segment_count = parent_frozen_segment_count(height);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, circulating_supply, genesis_ng_height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1833,7 +1829,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, circulating_supply, genesis_ng_height);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -3215,49 +3211,47 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
 //
 // Coinbase fingerprint: C != zeroCommit(public_amount) = G + amount*H, the
 // trivially-computable commitment that would leak the confidential-coinbase
-// amount to any observer.
+// amount to any observer. Selected by the CT TYPE, in Rust (S27).
+//
+// Arity: one mask per output (outPk.size() == vout.size()), in Rust (S25).
 static bool check_commitment_mask_valid(const transaction& tx)
 {
+  // FACTS ONLY (E6 slice 4 §3.1 S25/S26/S27). This function used to decide
+  // three things before Rust ran: that outPk.size() must equal vout.size()
+  // (a rule the census never stated, and one CEN-L11's grading rests on),
+  // that an empty outPk passes (redundant: Rust accepts zero masks), and
+  // that the zeroCommit(amount) fingerprint gate applies iff the CT type is
+  // CTTypeNull. Every one of those is rule content; every one is
+  // shekyl_ct_balance::check_commitment_masks_for's now. What crosses here
+  // is the type byte, the two counts, the masks and the cleartext amounts.
   const auto& rv = tx.ct_signatures;
-
-  // Every tx shape carries exactly one outPk commitment per vout (0 == 0 for
-  // the no-output serve-credit shape). The wire serializer already pins this
-  // (serialize_ctsig_base sizes outPk to vout.size(), ct_types.h) and
-  // check_tx_semantic re-checks it for pool txs — but this gate must be
-  // locally sound rather than lean on a distant invariant, or an empty outPk
-  // beside a non-empty vout would skate through the empty fast-path below
-  // with no mask ever checked.
-  if (rv.outPk.size() != tx.vout.size())
-  {
-    MERROR("outPk count " << rv.outPk.size() << " != vout count " << tx.vout.size()
-      << ", tx " << get_transaction_hash(tx));
-    return false;
-  }
-  if (rv.outPk.empty())
-    return true;
-
   static_assert(sizeof(ct::key) == 32, "ct::key must be 32 bytes");
   std::vector<uint8_t> masks_flat;
   masks_flat.reserve(rv.outPk.size() * sizeof(ct::key));
   for (const auto& pk : rv.outPk)
     masks_flat.insert(masks_flat.end(), pk.mask.bytes, pk.mask.bytes + sizeof(ct::key));
-
-  std::vector<uint64_t> coinbase_amounts;
-  if (rv.type == ct::CTTypeNull)
-  {
-    coinbase_amounts.reserve(tx.vout.size());
-    for (const auto& o : tx.vout)
-      coinbase_amounts.push_back(o.amount);
-  }
+  std::vector<uint64_t> amounts;
+  amounts.reserve(tx.vout.size());
+  for (const auto& o : tx.vout)
+    amounts.push_back(o.amount);
 
   const uint8_t rc = shekyl_check_commitment_masks(
-    masks_flat.data(), rv.outPk.size(),
-    coinbase_amounts.empty() ? nullptr : coinbase_amounts.data(),
-    coinbase_amounts.size());
+    static_cast<uint8_t>(rv.type),
+    tx.vout.size(),
+    masks_flat.empty() ? nullptr : masks_flat.data(), rv.outPk.size(),
+    amounts.empty() ? nullptr : amounts.data());
   switch (rc)
   {
     case SHEKYL_OUTPUT_POINTS_OK:
       return true;
+    case SHEKYL_OUTPUT_POINTS_ERR_MASK_COUNT:
+      MERROR("outPk count " << rv.outPk.size() << " != vout count " << tx.vout.size()
+        << ", tx " << get_transaction_hash(tx));
+      return false;
+    case SHEKYL_OUTPUT_POINTS_ERR_CT_TYPE:
+      MERROR("CT type " << unsigned(rv.type) << " has no commitment-mask subject, tx "
+        << get_transaction_hash(tx));
+      return false;
     case SHEKYL_OUTPUT_POINTS_ERR_INVALID_MASK:
       MERROR("An output commitment mask is not a canonical prime-order point, tx "
         << get_transaction_hash(tx));
@@ -3322,7 +3316,7 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   }
 
   // require view tags on outputs
-  if (!check_output_types(tx, hf_version))
+  if (!check_output_types(tx))
   {
     tvc.m_invalid_output = true;
     return reject_form(tvc);
@@ -4305,7 +4299,6 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward
   const int32_t rc = shekyl_corrected_fee_ladder(
       base_reward,
       median,
-      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
       DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
       c,
       slots);
@@ -5819,7 +5812,12 @@ leave:
   // and the staker-inflow accrual — the same single-read discipline as
   // base_reward (F-B1c): verify's operand IS the accrual's operand.
   const uint64_t frozen_segment_count = parent_frozen_segment_count(blockchain_height);
-  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count))
+  // The destroyed-fee fold at PARENT state, read ONCE here and handed to both
+  // validate_miner_transaction and the accrual below (single-read discipline,
+  // as for frozen_segment_count): circulating_supply = already_generated_coins
+  // − total_burned is derived in Rust from this pair (FL-R16c).
+  const uint64_t total_burned = m_db->get_total_burned();
+  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count, total_burned))
   {
     MERROR_VER("Block with id: " << id << " has incorrect miner transaction");
     reject_block_form(bvc);
@@ -5898,8 +5896,8 @@ leave:
         base_reward, blockchain_height, genesis_ng_height);
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
-        fee_summary, get_tx_volume_window(blockchain_height), already_generated_coins,
-        frozen_segment_count);
+        fee_summary, get_tx_volume_window(blockchain_height),
+        shekyl::supply_facts{already_generated_coins, total_burned}, frozen_segment_count);
 
     archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;
     block_burn_amount = burn.actually_destroyed;

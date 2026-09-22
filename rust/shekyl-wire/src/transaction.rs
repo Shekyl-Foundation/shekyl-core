@@ -134,10 +134,16 @@ pub const MAX_TX_EXTRA: usize = 24_576;
 /// parse/DoS cap. The **binding** relay/consensus bound for a single tx is
 /// the (much tighter) [`TX_WEIGHT_LIMIT`].
 pub const MAX_TX_SIZE: usize = 1_000_000;
-/// Minimum block weight (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`,
-/// `src/cryptonote_config.h`) — the full-reward zone every block gets
-/// regardless of the dynamic median.
-pub const MIN_BLOCK_WEIGHT: usize = 300_000;
+include!(concat!(env!("OUT_DIR"), "/block_weight_generated.rs"));
+
+/// Minimum block weight: the penalty-free zone, generated from
+/// `config/consensus_constants.json` `block_weight_full_reward_zone_bytes`.
+///
+/// The same key generates `EconomicParams::full_reward_zone` and the C++
+/// macro `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`. This crate reads
+/// the JSON because the wire format cannot depend on `shekyl-economics`.
+/// [`TX_WEIGHT_LIMIT`] is half of this minus the coinbase reserve.
+pub const MIN_BLOCK_WEIGHT: usize = GENERATED_FULL_REWARD_ZONE_USIZE;
 /// Coinbase blob reserve (`CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE`)
 /// subtracted from the per-tx weight limit.
 pub const COINBASE_BLOB_RESERVED_SIZE: usize = 600;

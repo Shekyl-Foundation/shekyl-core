@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Canonical Shekyl genesis block/tx binary wire format (serializer). See docs/design/GENESIS_TX_WIRE_FORMAT.md."
+build = "build.rs"
+
+[build-dependencies]
+serde_json.workspace = true
 
 [dependencies]
 # Consensus original Keccak-256 (`shekyl_crypto_hash::keccak256`; 0x01 padding;

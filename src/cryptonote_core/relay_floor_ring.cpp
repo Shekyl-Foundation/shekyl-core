@@ -148,7 +148,6 @@ bool Blockchain::relay_floor_at(uint64_t height, uint64_t long_term_median,
   const int32_t rc = shekyl_relay_fee_floor(
       base_reward,
       long_term_median,
-      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
       DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
       c,
       &floor);

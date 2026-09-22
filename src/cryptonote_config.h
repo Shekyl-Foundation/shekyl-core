@@ -53,7 +53,11 @@
 #define CRYPTONOTE_REWARD_BLOCKS_WINDOW                 100
 #define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2    60000 //size of block (bytes) after which reward for block calculated using block size
 #define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V1    20000 //size of block (bytes) after which reward for block calculated using block size - before first fork
-#define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5    300000 //size of block (bytes) after which reward for block calculated using block size - second change, from v5
+// The penalty-free zone is generated from config/consensus_constants.json
+// (`block_weight_full_reward_zone_bytes`) so that C++ and Rust read one
+// value; the legacy name is kept for its call sites (rule 93: rename when
+// touched). Rust owner: shekyl-economics::EconomicParams::full_reward_zone.
+#define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5    SHEKYL_BLOCK_WEIGHT_FULL_REWARD_ZONE_BYTES //size of block (bytes) after which reward for block calculated using block size - second change, from v5
 #define CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE   100000 // size in blocks of the long term block weight median window
 #define CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE          600
 // Display precision and atomic-unit constant are generated from config/economics_params.json.

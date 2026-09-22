@@ -39,8 +39,8 @@
   per-operator pruning posture. The Monero stripe engine
   (`common/pruning.*`, `prune_worker`, `CRYPTONOTE_PRUNING_*`, the 5-hour
   prune timer) is deleted. Uniform discard is S-PRUNE
-  (`docs/design/DRS_E1_SPRUNE.md`), still an unfilled skeleton:
-  `prune_tx_data` remains in the C++ store with no production caller.
+  (`docs/design/DRS_E1_SPRUNE.md`), still an unfilled skeleton.
+  `prune_tx_data` went with the section above (LMDB v15).
 - **Daemon RPC 3.35:** `pruning_seed` leaves `get_peer_list`,
   `get_connections` and `sync_info.peers`; `next_needed_pruning_seed`
   leaves `sync_info`; the `prune_blockchain` JSON-RPC method and the
@@ -266,6 +266,43 @@
 
 ### Consensus
 
+- **Circulating supply is `coins_generated − total_burned`, and the fee-burn /
+  emission-split shims hold no rule content (DRS-E6 slice 4 precursor).**
+  FL-R16c's ruled definitional defect is closed: the burn ratio's supply
+  operand was `already_generated_coins` — gross emission ignoring burn —
+  assigned at two C++ call sites (validation and template); it is now derived
+  **once** in `shekyl-economics` (`CirculatingSupply::derive`, a checked
+  subtraction whose underflow is a store-invariant violation, never a zero)
+  from the two store facts, which every C++ caller now passes as
+  `shekyl::supply_facts`. **Consensus-visible:** a block whose fees burn
+  under the net operand pays a different `miner_fee_income` than under the
+  gross one once anything has been burned; pre-genesis, no chain carries the
+  old definition. The saturation of the ratio at 1.0 stays — it is the
+  perpetual tail's consequence, not the gross operand's, and a test
+  demonstrates the input that reaches it. The C++ `economics.h` helpers are
+  marshaling only: the zero-fee and zero-emission arms and the pct→split /
+  share→split compositions moved into `shekyl-economics::compute_fee_burn` /
+  `compute_emission_split` (new FFI `shekyl_compute_fee_burn`,
+  `shekyl_calc_burn_pct_at`, `shekyl_compute_emission_split`). The
+  penalty-free block-weight zone is a generated consensus constant
+  (`config/consensus_constants.json` `block_weight_full_reward_zone_bytes` →
+  `EconomicParams::full_reward_zone`; the C++ macro is defined from the same
+  header) and no longer an argument to `shekyl_block_reward` — a caller can
+  no longer pass a different zone. `EconomicParams` digest `0x02 → 0x03`;
+  `CONSENSUS_CONSTANTS_DIGEST` re-pinned (a key was added; a different value
+  is a different chain). **API:** `shekyl_check_commitment_masks` takes the
+  CT type byte and the output count and derives the subject — the
+  `outPk.size() == vout.size()` arity gate and the coinbase fingerprint
+  selection are Rust's (`shekyl_ct_balance::check_commitment_masks_for`,
+  `MaskSubject`); `validate_miner_transaction` gains `total_burned`. The
+  info RPC's `burn_pct` is over the derived supply. Census F10/F16/F17
+  amended; FL-R16a/b/c pins re-resolved, R16c BUILT. **Rule-60 deletions
+  (slice 4 Q2, ruled (a)):** CEN-F12's decomposed-denomination gate
+  (`if (version == 3)` on a hard-fork version that is always 1 — never ran),
+  `is_valid_decomposed_amount`, the CryptoNote denomination table and their
+  test; `check_output_types`' three dead Monero-era arms and its `hf_version`
+  parameter. Census F12 → bucket 3; the validator's denominator moves
+  153 → 152 (validator-enforced 150). No behaviour changes.
 - **The `Rebond` bond-post kind is renamed `Reinstate`, and lands with the
   immutable-bond ruling.** The wire discriminant stays `1` and every
   `SHEKYL_ARCHIVAL_*` FFI error-code **number** is unchanged. The old name was
