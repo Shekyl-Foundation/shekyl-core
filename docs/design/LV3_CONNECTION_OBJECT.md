@@ -513,6 +513,42 @@ derived entry enters GRAY (white is earned by an actual outbound dial)."*
 **The claimed port might be true; the observed source port is known not to be**
 — and the observed source port is never advertised.
 
+### 2.7.7a The claimed port is the ONLY field in the handshake whose truth value is resolved
+
+**A property of the protocol worth naming, because nothing else in it has this
+shape.** Everything else a peer asserts is **either taken on faith or never
+checked**. The claimed listen port is:
+
+**asserted** into gray → **tested** by an actual outbound dial → **promoted or
+evicted.**
+
+> **That is a complete claim-to-observation cycle, and it is the one place the
+> protocol performs one at all.** §2.7's requirement — *a claim proposes, an
+> observation decides* — is not an aspiration here. It is implemented, for
+> exactly one field.
+
+**What that makes port forwarding.** Not a special case the mechanism
+*tolerates* — it is **the configuration the mechanism was built to communicate,
+and the only one it can verify.** A port-forwarded node and a datacenter node
+are **indistinguishable** to it, **correctly**, because **reachability is all it
+claims to measure.** The white-list criterion is exactly *"there is a reachable
+peer operating at this address"* — and nothing else. No identity, no class, no
+quality.
+
+**The consequence to carry into E1/E2, and it reframes what E1 is missing.**
+
+> **The claimed port already has a working verifier. What E1 lacks is not
+> verification — it is a way for the node to know what to claim.**
+
+**One asymmetry to carry with it, because it is why §2.7.5's route degenerated.**
+The verifier is **one-directional**: it resolves claims **about others**, from
+our side, and **its verdict never returns to the claimant.** The network learns
+whether *you* are reachable; *you* do not. So E1 has **two** gaps, not one —
+**what to claim**, and **no feedback channel for the answer** — and §2.10.3
+showed that the obvious feedback route (spotting our own entry in a received
+peerlist head) collapses at the default port. **E2's verification is not the
+hard half. E1's proposal source is.**
+
 ### 2.7.8 THREE PORTS — the vocabulary, because conflating them is how this got muddled
 
 | Port | What it is | Who can use it | Advertised? |
@@ -1017,6 +1053,56 @@ a posture.** The first is what belongs in a ruling.
 the cap goes, the one thing genuinely unbounded is **resources** — which is the
 ceiling's job, and a **measurement** (§2.9.4 arm 2), not a judgement. There is
 no second residual.
+
+### 2.9.4c THE FOUR-JOB WALK — what the cap could be doing, and what it is
+
+**The closing disposition.** Rather than argue the cap is wrong, enumerate every
+job it could plausibly be doing and check each against what the round
+established. **Four jobs, and none of them survives.**
+
+| Job | Disposition |
+| --- | --- |
+| **Peerlist integrity** | **Handled at the promotion boundary, independently and completely** (§2.9.4a). Inbound connections cannot reach white **by any path**. The cap contributes nothing |
+| **Observation / first-spy** | **Orthogonal, not weak** (§2.9.3). The measured adversary opens **one inbound edge per victim**; a cap of `1` admits it in full |
+| **Resource exhaustion** | **The only live job — and the correct bound is already there and switched off.** See below |
+| **Crowd-out at capacity** | **Real, but cannot occur while the ceiling is unbounded** — there is nothing to fill. It becomes a question the moment a ceiling exists, and then the answer is a **margin policy, not a door refusal** — which is §2.9.5's deferred eviction row, with its blocker and trigger already named |
+
+**The resource row is the one that decides it, and the structure is the
+argument.** Verified at `dev` `fdf17b729`, `is_host_limit`
+([`net_node.inl:231`](../../src/p2p/net_node.inl#L231)) is **seventeen lines
+long and does exactly two things:**
+
+```
+line  4:  if (zone.m_current_number_of_in_peers >= …max_in_connection_count)   // the CEILING
+line 10:  if (has_too_many_connections(address))                               // the per-host CAP
+```
+
+**The total ceiling is checked six lines above the per-host call, in the same
+function, on the same inbound path** (`abstract_tcp_server2.inl:950`, guarded
+`is_income`), **already zone-scoped, already at the door** — and **disabled**,
+because `max_in_connection_count` is `UINT32_MAX` at the shipped default
+(§2.9.4 arm 2).
+
+> **So the per-host cap has been standing in for a check that exists, sits
+> directly above it, and is switched off.** That is not a mistuned mechanism or
+> a wrong key. It is a **redundant branch** substituting for a disabled correct
+> one — and the deletion is therefore a *simplification*, not a removal of
+> protection: **`is_host_limit` becomes the ceiling check and nothing else.**
+
+**The whole residual, priced.** The cap makes single-address slot exhaustion
+require **multiple addresses**. PWD-E4 prices that at a /24 — **about a dollar a
+month**. Not zero. But it is the difference between **one address and 256**,
+**paid for entirely by the population that cannot obtain a second address at any
+price** (§2.9.2's inverted ratio, stated as a final quantity rather than a
+principle).
+
+**Why the structure is self-correcting, which is what makes the deletion safe
+rather than merely justified.** An inbound flood **cannot promote** (§2.9.4a),
+**cannot be gossiped** (gray is never disclosed), and **cannot be dialed back**
+(we never dial an observed source port, §2.7.7). **Every connection it opens is
+a leaf that terminates at the attacker and propagates nowhere.** The only thing
+it can consume is **a slot** — and slots are a resource question with a resource
+answer sitting unused six lines above the call.
 
 ### 2.9.5 The eviction deferral, stated as rule 22 requires
 
