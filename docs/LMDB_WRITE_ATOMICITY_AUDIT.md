@@ -1118,7 +1118,6 @@ every row of the table that follows:
 | `hf_versions` | `set_hard_fork_version` (`TXN_BLOCK_PREFIX`); `drop_hard_fork_info`; not cleaned on pop (P0c wart) | §2/§5c | uncovered | small |
 | `leaf_to_output` | `add/remove_output_leaf_mapping` | §2/§3 | uncovered | set-shaped |
 | `output_amounts` | `add_output` / `remove_output` | §2/§3 | uncovered | set-shaped |
-| ~~`output_metadata`~~ **DELETED 2026-09-22** (LMDB v15 / redb v10; the C++ tx-data prune went with it) | was: `store_output_metadata`, sole caller inside `prune_tx_data` — written by the depth prune, not by connect | §5a | — | — |
 | `output_to_leaf` | `add/remove_output_leaf_mapping` | §2/§3 | uncovered | set-shaped |
 | `output_txs` | `add_output` / `remove_output` | §2/§3 | uncovered | set-shaped |
 | `pending_tree_drain` | `add_pending_tree_drain_entry`; `remove_pending_tree_drain_entries` | §2/§3 | uncovered | set-shaped |
@@ -1133,8 +1132,9 @@ every row of the table that follows:
 | `txs_pqc_auths` | `add_transaction_data` / `remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a | uncovered | append-mostly |
 | `txs_prunable` | `add/remove_transaction_data`; `prune_worker`, `prune_tx_data` (own txns) | §2/§3/§5a | uncovered | excluded |
 | `txs_prunable_hash` | `add/remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a | uncovered | append-mostly |
-| ~~`txs_prunable_tip`~~ **DELETED 2026-09-22** (LMDB v15 / redb v10; write-never since `PDM-Q7` deleted the stripe engine) | was: `add/remove_transaction_data`; `prune_worker` | §2/§3/§5a | — | — |
 | `txs_pruned` | `add_transaction_data` / `remove_transaction_data` | §2/§3 | uncovered | append-mostly |
+
+Two names left the X-macro on 2026-09-22 (LMDB v15 / redb v10), so they are not rows of the matrix. `output_metadata` — **DELETED 2026-09-22**: was `store_output_metadata`, sole caller inside `prune_tx_data`. `txs_prunable_tip` — **DELETED 2026-09-22**: was `add/remove_transaction_data` and `prune_worker`; write-never since `PDM-Q7`.
 
 Enumeration ground: 135 write call sites across 81 functions (79
 `BlockchainLMDB::` methods + the two anonymous-namespace journal template
