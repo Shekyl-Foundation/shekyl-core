@@ -635,7 +635,6 @@ pub struct ConnectionFactsFfi {
     /// The peer's claimed blockchain height.
     pub height: u64,
     pub support_flags: u32,
-    pub pruning_seed: u32,
     pub port: u16,
     /// `cryptonote_connection_context::state`.
     pub state: u8,
@@ -644,7 +643,7 @@ pub struct ConnectionFactsFfi {
     pub incoming: u8,
     pub localhost: u8,
     pub local_ip: u8,
-    pub reserved: [u8; 9],
+    pub reserved: [u8; 5],
 }
 
 /// Twin of `shekyl_rpc_sync_span_facts` (RK-5a). Pinned by layout.
@@ -681,14 +680,12 @@ pub struct PeerFactsFfi {
     /// The ipv4 address with its four octets in **network** order, as
     /// `ipv4_network_address::ip()` returns it; 0 for every other arm.
     pub ip: u32,
-    pub pruning_seed: u32,
     /// 0 for the address arms that carry none.
     pub port: u16,
     /// 1 = white list, 0 = gray.
     pub white: u8,
     /// Filled unconditionally; applying `include_blocked` is this side's job.
     pub blocked: u8,
-    pub reserved: [u8; 4],
 }
 
 // RK-5a layout pins. `ConnectionFactsFfi`, `SyncSpanFactsFfi` and
@@ -697,7 +694,7 @@ pub struct PeerFactsFfi {
 // `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` are the whole pin.
 const _: () = assert!(std::mem::size_of::<NetStatsFactsFfi>() == 40);
 
-const _: () = assert!(std::mem::size_of::<ConnectionFactsFfi>() == 136);
+const _: () = assert!(std::mem::size_of::<ConnectionFactsFfi>() == 128);
 const _: () = assert!(std::mem::align_of::<ConnectionFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address) == 0);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_len) == 8);
@@ -713,14 +710,13 @@ const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_dow
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_up) == 96);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, height) == 104);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, support_flags) == 112);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, pruning_seed) == 116);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, port) == 120);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, state) == 122);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 123);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 124);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 125);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 126);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 127);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, port) == 116);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, state) == 118);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 119);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 120);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 121);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 122);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 123);
 
 const _: () = assert!(std::mem::size_of::<SyncSpanFactsFfi>() == 72);
 const _: () = assert!(std::mem::align_of::<SyncSpanFactsFfi>() == 8);
@@ -735,17 +731,15 @@ const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, speed_fraction) == 
 const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, filled) == 64);
 const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, reserved) == 65);
 
-const _: () = assert!(std::mem::size_of::<PeerFactsFfi>() == 40);
+const _: () = assert!(std::mem::size_of::<PeerFactsFfi>() == 32);
 const _: () = assert!(std::mem::align_of::<PeerFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, host) == 0);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, host_len) == 8);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, last_seen) == 16);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, ip) == 24);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, pruning_seed) == 28);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, port) == 32);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 34);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 35);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, reserved) == 36);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, port) == 28);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 30);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 31);
 
 extern "C" {
     pub fn shekyl_rpc_hard_fork_info(
@@ -773,11 +767,10 @@ extern "C" {
         out_owner: *mut *mut std::ffi::c_void,
     ) -> i32;
     pub fn shekyl_rpc_connections_free(owner: *mut std::ffi::c_void);
-    /// The block-download queue plus the stripe this node wants next; release
-    /// the owner with `shekyl_rpc_sync_spans_free`.
+    /// The block-download queue; release the owner with
+    /// `shekyl_rpc_sync_spans_free`.
     pub fn shekyl_rpc_sync_spans(
         h: *mut CoreRpcHandle,
-        out_next_needed_pruning_stripe: *mut u32,
         out: *mut *const SyncSpanFactsFfi,
         out_len: *mut usize,
         out_owner: *mut *mut std::ffi::c_void,
@@ -796,9 +789,6 @@ extern "C" {
     /// The two compile-time p2p peerlist capacities. Takes no handle and
     /// cannot fail.
     pub fn shekyl_rpc_peerlist_limits(out_white: *mut u32, out_gray: *mut u32);
-    /// The stripe label for a span's start height. Takes no handle, so the
-    /// console can call it on the remote arm too.
-    pub fn shekyl_rpc_span_pruning_seed(start_block_height: u64) -> u32;
     pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
     /// Fills a C++-owned view of the hard-fork schedule; release the owner
     /// with `shekyl_rpc_hardforks_free`.
@@ -1098,10 +1088,6 @@ mod unit_test_link_stubs {
                 out_gray.write(0);
             }
         }
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_span_pruning_seed(_start_block_height: u64) -> u32 {
-        0
     }
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_create(_p: *mut std::ffi::c_void) -> *mut CoreRpcHandle {

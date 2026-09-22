@@ -892,36 +892,6 @@ bool t_command_parser_executor::version(const std::vector<std::string>& args)
   return m_executor.version();
 }
 
-bool t_command_parser_executor::prune_blockchain(const std::vector<std::string>& args)
-{
-  if (args.size() > 1)
-  {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  if (args.empty() || args[0] != "confirm")
-  {
-    std::cout << "Warning: pruning from within shekyld will not shrink the database file size." << std::endl;
-    std::cout << "Instead, parts of the file will be marked as free, so the file will not grow" << std::endl;
-    std::cout << "until that newly free space is used up. To prune, re-run this command with" << std::endl;
-    std::cout << "the \"confirm\" parameter. If you also want a smaller file size, wait for" << std::endl;
-    std::cout << "pruning to finish, then exit shekyld, create an empty destination directory," << std::endl;
-    std::cout << "and (as the user that owns the data directory) compact the database with:" << std::endl;
-    std::cout << "  shekyl-mdb-copy -c <data-dir>/lmdb <destination-dir>" << std::endl;
-    std::cout << "then replace the old lmdb directory with the copy (you will temporarily need" << std::endl;
-    std::cout << "disk space for both)." << std::endl;
-    return true;
-  }
-
-  return m_executor.prune_blockchain();
-}
-
-bool t_command_parser_executor::check_blockchain_pruning(const std::vector<std::string>& args)
-{
-  return m_executor.check_blockchain_pruning();
-}
-
 bool t_command_parser_executor::flush_cache(const std::vector<std::string>& args)
 {
   bool bad_blocks = false;

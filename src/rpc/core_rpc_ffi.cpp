@@ -274,7 +274,6 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("get_alternate_chains",   on_get_alternate_chains,       COMMAND_RPC_GET_ALTERNATE_CHAINS),
         DJRPC_WE("relay_tx",              on_relay_tx,                    COMMAND_RPC_RELAY_TX),
         DJRPC_WE("get_txpool_backlog",     on_get_txpool_backlog,         COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG),
-        DJRPC_WE("prune_blockchain",       on_prune_blockchain,           COMMAND_RPC_PRUNE_BLOCKCHAIN),
         DJRPC_WE("flush_cache",            on_flush_cache,                COMMAND_RPC_FLUSH_CACHE),
         DJRPC_WE("get_curve_tree_info",       on_get_curve_tree_info,        COMMAND_RPC_GET_CURVE_TREE_INFO),
         DJRPC_WE("get_curve_tree_checkpoint", on_get_curve_tree_checkpoint,  COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT),

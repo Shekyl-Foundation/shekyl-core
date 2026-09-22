@@ -295,17 +295,6 @@ t_command_server::t_command_server(
     , "Print version information."
     );
     m_command_lookup.set_handler(
-      "prune_blockchain"
-    , std::bind(&t_command_parser_executor::prune_blockchain, &m_parser, p::_1)
-    , "prune_blockchain [confirm]"
-    , "Prune the blockchain."
-    );
-    m_command_lookup.set_handler(
-      "check_blockchain_pruning"
-    , std::bind(&t_command_parser_executor::check_blockchain_pruning, &m_parser, p::_1)
-    , "Check the blockchain pruning."
-    );
-    m_command_lookup.set_handler(
       "flush_cache"
     , std::bind(&t_command_parser_executor::flush_cache, &m_parser, p::_1)
     , "flush_cache [bad-txs] [bad-blocks]"

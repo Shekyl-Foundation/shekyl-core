@@ -20,7 +20,6 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_core/tx_pool.h"
-#include "common/pruning.h"
 #include "cryptonote_protocol/block_queue.h"
 #include "net/net_utils_base.h"
 #include "p2p/net_node.h"
@@ -1259,7 +1258,6 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
       e.current_speed_up = ctx.m_current_speed_up;
       e.height = ctx.m_remote_blockchain_height;
       e.support_flags = support_flags;
-      e.pruning_seed = ctx.m_pruning_seed;
       e.port = ctx.m_remote_address.port();
       e.state = static_cast<uint8_t>(ctx.m_state);
       e.address_type = static_cast<uint8_t>(ctx.m_remote_address.get_type_id());
@@ -1300,23 +1298,20 @@ void shekyl_rpc_connections_free(void* owner)
   delete static_cast<daemon_rpc_facts::connections_owner*>(owner);
 }
 
-int shekyl_rpc_sync_spans(core_rpc_handle* h, uint32_t* out_next_needed_pruning_stripe,
+int shekyl_rpc_sync_spans(core_rpc_handle* h,
   const shekyl_rpc_sync_span_facts** out, size_t* out_len, void** out_owner)
 {
   if (out_owner)
     *out_owner = nullptr;
-  if (!h || !h->rpc || !out_next_needed_pruning_stripe || !out || !out_len || !out_owner)
+  if (!h || !h->rpc || !out || !out_len || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   *out = nullptr;
   *out_len = 0;
-  *out_next_needed_pruning_stripe = 0;
   std::unique_ptr<daemon_rpc_facts::sync_spans_owner> owned;
-  uint32_t stripe = 0;
   try
   {
     owned.reset(new daemon_rpc_facts::sync_spans_owner());
     auto& payload = h->rpc->get_p2p().get_payload_object();
-    stripe = payload.get_next_needed_pruning_stripe().second;
     const cryptonote::block_queue& queue = payload.get_block_queue();
     queue.foreach([&](const cryptonote::block_queue::span& span)
     {
@@ -1350,7 +1345,6 @@ int shekyl_rpc_sync_spans(core_rpc_handle* h, uint32_t* out_next_needed_pruning_
     MERROR("sync spans facts: unknown exception");
     return SHEKYL_RPC_FACTS_ERR_INTERNAL;
   }
-  *out_next_needed_pruning_stripe = stripe;
   *out = owned->entries.empty() ? nullptr : owned->entries.data();
   *out_len = owned->entries.size();
   *out_owner = owned.release();
@@ -1391,7 +1385,6 @@ int shekyl_rpc_peer_list(core_rpc_handle* h, uint8_t public_only,
         shekyl_rpc_peer_facts e;
         std::memset(&e, 0, sizeof(e));
         e.last_seen = static_cast<uint64_t>(entry.last_seen);
-        e.pruning_seed = entry.pruning_seed;
         e.white = white;
         // Unconditional: whether a blocked peer is reported is the request's
         // policy, and the request lives in Rust now.
@@ -1453,12 +1446,6 @@ void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray)
     *out_white = P2P_LOCAL_WHITE_PEERLIST_LIMIT;
   if (out_gray)
     *out_gray = P2P_LOCAL_GRAY_PEERLIST_LIMIT;
-}
-
-uint32_t shekyl_rpc_span_pruning_seed(uint64_t start_block_height)
-{
-  return tools::get_pruning_seed(start_block_height,
-    std::numeric_limits<uint64_t>::max(), CRYPTONOTE_PRUNING_LOG_STRIPES);
 }
 
 int shekyl_rpc_hardforks(core_rpc_handle* h,
