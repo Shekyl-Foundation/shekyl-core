@@ -39,7 +39,7 @@ use shekyl_types::TxHash;
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
-pub use super::invariant::{CellFault, StoreInvariant, UndoFault};
+pub use super::invariant::{CellFault, LeafDensity, StoreInvariant, UndoFault};
 
 /// Why a store operation failed, by class.
 ///
