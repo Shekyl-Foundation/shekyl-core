@@ -109,10 +109,11 @@ F19's horizon, through the one function this surface mints for it (§12).
 
 **The batch — the set is named by the epoch; nothing is searched.** The
 daemon has no holdings and no frontier of its own: it has bodies for every
-shard that has not reached its boundary, uniformly. At boundary `E`
-(`tip = E·SEB`, after that block connects; single-writer path —
-`shekyl-chain-ingest`'s connector is the natural site, the store exposes
-the op), for `E ≥ 2`, the set to discard is **named by `E`**:
+shard that has not reached its boundary, uniformly. The batch is a hook on
+**connect of the block at `E·SEB`** — not on "the tip reaching a boundary"
+— on the single-writer path (`shekyl-chain-ingest`'s connector is the
+natural site, the store exposes the op); for `E ≥ 2`, the set to discard is
+**named by `E`**:
 
 > `D(E) = { k : close_epoch(k) ∈ [E−3, E−2] }`
 
@@ -135,14 +136,17 @@ not be. Withdrawn.)*
 If the batch at `E` dies partway, the shards with `close_epoch = E−2` still
 have some bodies at `E+1`; widening the named set by one epoch catches a
 single missed boundary at the next one, and range-deleting an already-empty
-range is near-free in redb. **A node down two or more boundaries** keeps
-the bodies of every shard with `close_epoch ≤ E−4`, which `D(E)` never
-reaches — and stale bodies are a Q2 falsifier ("retained past the
-boundary") and Q9's disk fingerprint. So the daemon runs a **startup
-catch-up once per process start**: `{ k : close_epoch(k) ≤ E−2 }` at the
-`E` it boots into, the same named-set op over a longer range, still zero
-presence reads, near-free where empty. Its missing bodies it refetches
-through band 2 (Q4); its stale ones it deletes itself.
+range is near-free in redb. **A node down two or more boundaries needs
+nothing more — this is one mechanism, not two.** At its old tip in
+`E_old` it had already discarded every shard with `close_epoch ≤ E_old − 2`;
+returning, it *connects* every missed block, so it crosses the boundaries
+`E_old + 1 … E_now` in order and `D(E)` fires at each, covering
+`close_epoch` from `E_old − 2` to `E_now − 2` contiguously. Pruning
+backwards before the outage and forwards through the resync are the same
+hook on the same connect path; there is no startup sweep, and the bodies
+it lacks it refetches through band 2 (Q4). *(A startup catch-up sweep was
+added and withdrawn the same day: it solved a case the forward pass
+already covers.)*
 
 **`h_scarce`** (`PDM-Q5`'s band-2 edge, and §7's pop floor) is likewise
 named, not searched: **the `close_height` of the last shard with
@@ -241,8 +245,8 @@ segment (§11 — moot before the E3 cutover, and stated so the sequencing is
 the mechanism); **a stored discard watermark or frontier cell, or any batch
 read of segment presence that selects what to discard** — the set is named
 by the epoch (§4), and either would be a second, node-local source; and a
-node with a body for a shard whose `close_epoch ≤ current_epoch − 2` after
-its startup catch-up has run.
+node holding a body for a shard whose `close_epoch ≤ current_epoch − 2`
+once its connect path has crossed that shard's boundary.
 
 ## 9. Sequencing
 
