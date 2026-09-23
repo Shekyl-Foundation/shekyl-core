@@ -195,8 +195,11 @@ after the one it closed in. Shard `k` has its prunable regions and
 > `discard(k) ⇔ current_epoch ≥ close_epoch(k) + 2`, with
 > `current_epoch = settlement_epoch_at_height(tip)`
 
-— the same statement as `close_epoch(k) ≤ current_epoch − 2`, written in
-the branch form because the subtraction underflows in epochs 0 and 1.
+— the same statement as `close_epoch(k) ≤ current_epoch − 2`, **which is
+never written that way**: `settlement_epoch_at_height` returns a `u64` and
+the subtraction wraps in epochs 0 and 1, so every epoch comparison in this
+contract and the skeleton is additive (`+ 2 ≤`), and the batch's set is
+`{k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3}`.
 **The genesis guard is `current_epoch ≥ 2`**, a branch, never
 arithmetic — the discipline the 2026-09-18 text had for `tip − W`, kept
 (the store's `BlockHeight − BlockCount` panics on this boundary, and that
@@ -208,7 +211,8 @@ yet — has no `close_epoch` and is never a candidate.
 
 **Enforcement point** unchanged: asserted where the discard is decided —
 S-PRUNE's per-epoch batch, whose set at boundary `E` is **named by `E`** —
-`{k : close_epoch(k) ∈ [max(E−3, 0), E−2]}`, read off `cumulative_tx_count`;
+`{k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3}`, read off
+`cumulative_tx_count`;
 no frontier, no search over disk — and which runs **inside the boundary
 block's connect transaction**, so "connected past `E·SEB` with the batch
 un-run" is unrepresentable (skeleton §4) — never discovered downstream; a violated predicate is a
@@ -236,8 +240,9 @@ puts `SEB ≤ D_max`, not a supported one; the fakechain conforms, through
 one knob that moves both and preserves the ratio or a parse that refuses.
 There is no arm-time assertion and no nettype-specific story. (b) **Belt:**
 `pop` refuses the block at any height `≤ h_scarce` — `h_scarce` the
-`close_height` of the last shard with `close_epoch(k) ≤ current_epoch − 2`
-— as `StoreCannot::PopBelowFloor { floor: h_scarce + 1 }`, the floor being
+`close_height` of the last shard with `close_epoch(k) + 2 ≤ current_epoch`,
+defined only for `current_epoch ≥ 2` and none before any shard closes (then
+the floor is `1`) — as `StoreCannot::PopBelowFloor { floor: h_scarce + 1 }`, the floor being
 the lowest height whose block may be popped, chain-named from
 `close_height` only (skeleton §7). It is **unreachable by construction on
 every conformant nettype** — the `SCW-7` undo floor at `tip − D_max` sits
@@ -388,8 +393,8 @@ at source.
 checkpoint `C` on the `assumevalid` argument; three bands (`≤ C` skeleton,
 trusted with the binary; `(C, h_scarce]` filled from archivers, where
 `h_scarce` is the `close_height` of the last shard with
-`close_epoch(k) ≤ current_epoch − 2` (*re-keyed 2026-09-22 from
-`(C, tip − W]`*, second amendment below); above from
+`close_epoch(k) + 2 ≤ current_epoch`, none in epochs 0–1 (*re-keyed
+2026-09-22 from `(C, tip − W]`*, second amendment below); above from
 peers); the tip-relative trust horizon and the operator trust-below
 fallback **REJECTED**. The items it owed:
 
@@ -461,8 +466,8 @@ configuration.
 **AMENDMENT 2026-09-22 (second) — band 2 under the epoch horizon.** With
 Q2 re-ruled the same day, band 2's upper bound is no longer `tip − W` but
 **`h_scarce`, the `close_height` of the last shard with
-`close_epoch(k) ≤ current_epoch − 2`** — named by the epoch, not read off
-any disk (a band-1 node has never held a body and must get the same number);
+`close_epoch(k) + 2 ≤ current_epoch`** (additive, never `− 2` on a `u64`;
+none in epochs 0–1) — named by the epoch, not read off any disk (a band-1 node has never held a body and must get the same number);
 exact, identical on every node, and blurred only by shard granularity (a
 shard that closed in epoch `E−1` may hold transactions from `E−2`; those
 are held too, so `h_scarce` is the honest edge, not `(current_epoch − 1)·SEB`).

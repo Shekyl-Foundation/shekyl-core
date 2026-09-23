@@ -116,13 +116,17 @@ single-writer path (`shekyl-chain-ingest`'s connector is the natural site,
 the store exposes the op); for `E ≥ 2`, the set to discard is **named by
 `E`**:
 
-> `D(E) = { k : close_epoch(k) ∈ [max(E−3, 0), E−2] }`
+> `D(E) = { k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3 }`
 
-— the shards whose `close_height` falls in `[max(E−3, 0)·SEB, (E−1)·SEB)`,
-a contiguous range of `k` read off `cumulative_tx_count` and the `b_*`
-table. The lower bound is written with `max` because `E−3` underflows at
-`E = 2` — the same page's branch-not-arithmetic discipline, applied to
-itself. **One redb transaction per boundary connect**, holding the block's
+— the shards whose `close_height` falls in `[max(E−3, 0)·SEB, (E−1)·SEB)`
+(that interval is the *reading*; the predicate is the additive form), a
+contiguous range of `k` read off `cumulative_tx_count` and the `b_*`
+table. **Every epoch comparison in this document is written additively —
+`close_epoch(k) + 2 ≤ E`, never `close_epoch(k) ≤ E − 2` — because
+`settlement_epoch_at_height` returns a `u64` and `E − 2` wraps in epochs 0
+and 1** (Bugbot, 2026-09-23: the first draft's `E−3` wrapped at `E = 2`,
+and its `h_scarce` covered every closed shard for the whole free regime).
+The same page's branch-not-arithmetic discipline, applied to itself. **One redb transaction per boundary connect**, holding the block's
 write set, every `discard(k)` for `k ∈ D(E)` (delete every `txs_prunable`
 and `txs_pqc_auths` row in `[b_k, b_{k+1})`; not journaled in `undo_log` —
 a discard is not pop-reversible by design, §7) and the undo-row retirement
@@ -138,7 +142,7 @@ node — which never held bodies — every segment is absent, so that search
 names the newest shard and the answer is node-local exactly where it must
 not be. Withdrawn.)*
 
-**Why `[E−3, E−2]` and not `E−2` alone — belt, and said to be belt.** With
+**Why two epochs (`+ 3` as well as `+ 2`) and not one — belt, and said to be belt.** With
 `D(E)` inside the connect transaction there is no crash state for the
 widening to cover: a batch that dies takes its connect with it, and the
 block reconnects. The extra epoch is kept because range-deleting an
@@ -167,12 +171,15 @@ added and withdrawn the same day: it solved a case the forward pass
 already covers.)*
 
 **`h_scarce`** (`PDM-Q5`'s band-2 edge, and §7's pop floor) is likewise
-named, not searched: **the `close_height` of the last shard with
-`close_epoch(k) ≤ E−2`** — `max { close_height(k) : close_height(k) <
-(E−1)·SEB }`. Stated as `≤ E−2` rather than `= E−2` so an epoch in which
-no shard closed (low tx rate) still yields the honest edge. **Empty case:**
-before any shard has closed the set is empty, `h_scarce` is undefined, band
-2 is empty and the pop floor is `1` (genesis). **Block `h_scarce` is
+named, not searched: **defined only for `E ≥ 2`**, as **the `close_height`
+of the last shard with `close_epoch(k) + 2 ≤ E`** — equivalently
+`max { close_height(k) : close_height(k) + SEB < E·SEB }`. Stated as
+`+ 2 ≤ E` rather than `+ 2 = E` so an epoch in which no shard closed (low tx
+rate) still yields the honest edge. **Empty cases, both:** in epochs 0 and 1
+there is no `h_scarce` by definition (nothing can have discarded), and
+before any shard has closed the set is empty — in either case `h_scarce` is
+**none**, band 2 is empty and the pop floor is `1` (genesis). A subtractive
+`E − 2` would have wrapped here and named every closed shard. **Block `h_scarce` is
 mixed:** the shard boundary falls mid-block, so transactions at that height
 with `tx_id < b_{k_max+1}` are discarded and later ones in the same block
 are held — which is why the band-2 interval is `(C, h_scarce]` (inclusive)
@@ -239,8 +246,9 @@ bytes with no `CenRow`, or an S-PRUNE type imported by the rules crate
 
 **The pop check reads `close_height` only.** The **floor is the lowest
 height whose block may be popped**: `h_scarce + 1`, with `h_scarce` the
-`close_height` of the last shard with `close_epoch(k) ≤ current_epoch − 2`
-(§4); a `pop` of the block at any height `≤ h_scarce` is
+`close_height` of the last shard with `close_epoch(k) + 2 ≤ current_epoch`
+(§4; none in epochs 0–1 or before any shard closes, and then the floor is
+`1`); a `pop` of the block at any height `≤ h_scarce` is
 `StoreCannot::PopBelowFloor { floor: h_scarce + 1 }` (block `h_scarce`
 itself is mixed, §4, so it is not poppable). Chain-named — no stored
 frontier, no presence read; the floor is the same number on a node that
@@ -279,8 +287,10 @@ segment (§11 — moot before the E3 cutover, and stated so the sequencing is
 the mechanism); **a stored discard watermark or frontier cell, or any batch
 read of segment presence that selects what to discard** — the set is named
 by the epoch (§4), and either would be a second, node-local source; a
-node holding a body for a shard whose `close_epoch ≤ current_epoch − 2`
-once its connect path has crossed that shard's boundary; **a store whose
+node holding a body for a shard whose `close_epoch + 2 ≤ current_epoch`
+once its connect path has crossed that shard's boundary; **any epoch
+comparison written as a subtraction on a `u64`** (`E − 2`, `E − 3`) in the
+batch, the pop floor or `h_scarce`; **a store whose
 tip is `≥ E·SEB` with `D(E)` un-run** — the batch is inside the boundary
 block's connect transaction, so this state is unrepresentable and any
 instance is a transaction-boundary bug; **a nettype or override
@@ -341,7 +351,7 @@ have no Rust writer here); what this surface owes it is the function.
 
 | Input | Value / source | Status |
 | --- | --- | --- |
-| Body horizon | the epoch boundary after the shard's freeze epoch — `current_epoch ≥ close_epoch(k) + 2`; the batch's set at `E` is `{k : close_epoch(k) ∈ [E−3, E−2]}`; a rule, **no constant, no frontier** | ruled (`PDM-Q2`, 2026-09-22); `W` retired |
+| Body horizon | the epoch boundary after the shard's freeze epoch — `close_epoch(k) + 2 ≤ current_epoch`; the batch's set at `E` is `{k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3}` (additive on `u64`, never `E − 2`); a rule, **no constant, no frontier** | ruled (`PDM-Q2`, 2026-09-22); `W` retired |
 | `SEB` | `settlement_epoch_blocks = 10,000`; `settlement_epoch_at_height(h) = h / SEB` (`consensus_state.rs:27`) | pinned |
 | `D_max` | 720; **`SEB > D_max` const-asserted beside it, on the production constants — the only assertion.** The invariant holds on **every nettype** (rule 71: nettype selects data, the data satisfies the same invariant): the regtest `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override (`constants.rs:257`, today `2..=SETTLEMENT_EPOCH_BLOCKS` in isolation) must not admit `SEB ≤ D_max` — one knob that overrides both and preserves the ratio, or a parse that refuses. `SEB = 2` with `D_max = 720` is a rejected configuration, not a supported one | PROVISIONAL, Round-2 gate (`PDM-Q11`); **constant unbuilt — owed** at `CEN-E2`; **fakechain conformance owed with it** |
 | Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **owed**, minted by this surface's A4 commit, consumed by S-ARCH (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
