@@ -737,8 +737,9 @@ void shekyl_output_data_free(ShekylOutputData* data);
 // ─── Merged scan + key image (PR-wallet Phase 1b) ────────────────────────────
 
 /// Scan an output, recover all secrets, and compute the key image — all in one
-/// call.  All secret output pointers write directly into transfer_details fields
-/// (direct-write-to-destination pattern: no intermediate scratch buffers).
+/// call. Secret outputs are written into caller-provided buffers. Production
+/// scan does not use this export (`shekyl-scanner` calls the Rust functions);
+/// the remaining callers are tests. `transfer_details` left with the C++ wallet.
 ///
 /// persist_combined_ss: if false, Rust wipes combined_ss internally and
 ///   combined_ss_out is ignored (pass nullptr). If true, Rust writes directly

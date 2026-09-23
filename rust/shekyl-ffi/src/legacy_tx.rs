@@ -208,7 +208,8 @@ pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
         x_bytes.zeroize();
     }
 
-    // C++ wallet passes LMDB depth; convert to upstream layers (depth + 1).
+    // ABI `tree_depth` is the LMDB depth. The builder wants layers (depth + 1).
+    // The C++ wallet that used to pass this is gone; remaining callers are tests.
     let layers = tree_depth.saturating_add(1);
     let tree = shekyl_tx_builder::TreeContext {
         // The C ABI stays raw (rule 40); the typed world begins here.
@@ -450,10 +451,11 @@ pub unsafe extern "C" fn shekyl_pqc_auth_result_free(result: *mut ShekylPqcAuthR
 
 /// Merged scan + key image computation.
 ///
-/// Scans an output (KEM decap, HKDF derivation, amount decryption) and computes
-/// the key image in a single call. All secret outputs are written directly into
-/// caller-provided destination addresses (transfer_details fields). No
-/// intermediate scratch buffers are created on the C++ stack.
+/// Scans an output and writes the recovered secrets, including the key image,
+/// into caller-provided buffers. Production scan does not use this export:
+/// `shekyl-scanner` calls `scan_output_recover_with_ml_kem_dk` and
+/// `compute_output_key_image`. The remaining callers are tests. `transfer_details`
+/// is gone with the C++ wallet.
 ///
 /// # Safety
 /// - All pointer parameters must be valid for reads/writes of their documented sizes.
@@ -462,7 +464,7 @@ pub unsafe extern "C" fn shekyl_pqc_auth_result_free(result: *mut ShekylPqcAuthR
 /// - `recovered_spend_key_out`: 32 writable bytes.
 /// - `combined_ss_out`: 64 writable bytes if `persist_combined_ss` is true, or nullptr.
 /// - `spend_secret_key`: 32 bytes (wallet master spend key `b`).
-/// - `hp_of_O`: 32 bytes (hash_to_ec of the output key, precomputed by C++).
+/// - `hp_of_O`: 32 bytes (`Hp(O)`, supplied by the caller).
 #[no_mangle]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn shekyl_scan_and_recover(

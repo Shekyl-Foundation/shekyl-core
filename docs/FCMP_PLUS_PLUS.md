@@ -1400,8 +1400,8 @@ Do not reintroduce them. Archival emission is a different vin
 | Rust witness header assembly (`shekyl_fcmp_build_witness_header`) | **Done** | `shekyl-ffi/src/lib.rs` |
 | `construct_miner_tx` v3 → `shekyl_construct_output` | **Done** | `cryptonote_tx_utils.cpp` |
 | `construct_tx_with_tx_key` v3 → `shekyl_construct_output` | **Done** | `cryptonote_tx_utils.cpp` |
-| Wallet v3 scanner via `scan_output_recover` | **Done** | `wallet2.cpp` |
-| X25519-only view tag (sender + scanner) | **Done** | `output.rs`, `wallet2.cpp` |
+| Wallet v3 scanner via `scan_output_recover` | **Done — Rust; `wallet2.cpp` deleted** | `shekyl-scanner` `scan.rs` (`scan_output_recover_with_ml_kem_dk`) |
+| X25519-only view tag (sender + scanner) | **Done — Rust; `wallet2.cpp` deleted** | `output.rs`, `shekyl-scanner` `scan.rs` |
 | `additional_tx_keys` removed for v3 | **Done** | `cryptonote_tx_utils.cpp` |
 | `CTTypeNull` serializes `outPk` + `enc_amounts` | **Done** | `ct_types.h` |
 | On-chain `outPk` for v3+ coinbase | **Done** | `blockchain_db.cpp` |
