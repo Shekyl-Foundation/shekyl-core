@@ -22,6 +22,7 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
 };
+use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Transaction, TxPrefix};
 
 use crate::block::{Candidate, StructurallyValid};
@@ -431,6 +432,12 @@ pub mod fixture {
             hash: block.hash(),
             header: block.header,
             cumulative_difficulty,
+            // No emission recorded and no listed transactions: a chain
+            // whose fixtures are not about the coinbase reads the tail
+            // subsidy at every height and a zero volume window. A fixture
+            // that is about them sets both (`recorded_with_emission`).
+            coins_generated: AtomicUnits::ZERO,
+            cumulative_tx_count: 0,
         }
     }
 

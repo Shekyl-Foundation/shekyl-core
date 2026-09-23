@@ -3828,6 +3828,7 @@ dependencies = [
  "shekyl-address",
  "shekyl-difficulty",
  "shekyl-types",
+ "shekyl-units",
  "shekyl-wire",
 ]
 

@@ -23,6 +23,7 @@ license.workspace = true
 # Chain identities and the recorded facts a rule reads: BlockHeight,
 # BlockHash, TxHash, KeyImage, CurveTreeRoot.
 shekyl-types = { path = "../shekyl-types" }
+shekyl-units = { path = "../shekyl-units" }
 # The candidate's own shape — Block, BlockHeader, Transaction — and the
 # consensus hash identities (`Block::hash`, `Transaction::hash`) CEN-B6
 # defines. Deps: shekyl-crypto-hash, shekyl-curve-generators; no store.
