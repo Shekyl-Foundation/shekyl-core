@@ -96,18 +96,21 @@ ALLOWED: dict[str, Allow] = {
     "transaction.rs::Prunable.pseudo_outs": Allow(
         "per-input pseudo-out commitments (curve points)", "shekyl-tx-builder"
     ),
-    "tx_extra.rs::TxExtraField::PubKey.0": Allow(
+    # The codec is `tx_extra/mod.rs` (directory module, 2026-09-23). The
+    # rulings are unchanged: these are curve points and a KEM ciphertext,
+    # not chain identities.
+    "tx_extra/mod.rs::TxExtraField::PubKey.0": Allow(
         "the transaction public key R (curve point) in tx_extra 0x01 — the "
         "same class as Output.key; the scanner-side derivation is what would "
         "consume a newtype for it",
         "shekyl-tx-builder / shekyl-scanner",
     ),
-    "tx_extra.rs::TxExtraField::AdditionalPubKeys.0": Allow(
+    "tx_extra/mod.rs::TxExtraField::AdditionalPubKeys.0": Allow(
         "additional per-output tx public keys (curve points) in tx_extra 0x04; "
         "one class with PubKey",
         "shekyl-tx-builder / shekyl-scanner",
     ),
-    "tx_extra.rs::KemCiphertext.x25519": Allow(
+    "tx_extra/mod.rs::KemCiphertext.x25519": Allow(
         "ephemeral X25519 KEM ciphertext — a transform-shaped crypto object, "
         "not a chain identity",
         "shekyl-crypto-pq",

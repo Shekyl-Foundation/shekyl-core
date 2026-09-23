@@ -128,11 +128,11 @@ pub enum TxExtraField {
     /// `0x00` — `n` zero bytes (the run, including the tag byte).
     Padding(usize),
     /// `0x01` — transaction public key.
-    PubKey([u8; TX_EXTRA_PUBKEY_LEN]),
+    PubKey([u8; 32]),
     /// `0x02` — extra nonce.
     Nonce(Vec<u8>),
     /// `0x04` — additional per-output tx public keys.
-    AdditionalPubKeys(Vec<[u8; TX_EXTRA_PUBKEY_LEN]>),
+    AdditionalPubKeys(Vec<[u8; 32]>),
     /// `0x06` — per-output hybrid KEM ciphertexts, concatenated.
     PqcKemCiphertext(Vec<u8>),
     /// `0x07` — per-output PQC leaf entries (`CM ‖ record`), concatenated.
