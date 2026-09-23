@@ -10,9 +10,10 @@
 //! rather than per row.
 
 use super::*;
+use crate::census::RowStatus;
 use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{candidate_on, coinbase, listed, point, serve_credit_only, G, TWO_G};
-use crate::harness::{assert_refused, formed_on, judged, MockChain};
+use crate::harness::{assert_refused, credited_to_this_falsifier, formed_on, judged, MockChain};
 use crate::rule_set::RuleSet;
 use crate::rules::TxKind;
 use crate::trust::Trust;
@@ -889,6 +890,89 @@ fn h22_every_departure_from_the_emission_shape_or_balance_is_refused() {
     let mut wrong_reward = base();
     wrong_reward.prefix.outputs[0].amount = 6;
     refused_lone(&wrong_reward, CenRow::H22);
+}
+
+// ---- the rows that hold by construction (Q4, Q6, Q7) --------------------
+
+/// CEN-H8's falsifier: the wire reads exactly one commitment per output —
+/// `CtBase::read` takes the count from the prefix's `vout` and reads that
+/// many, so a transaction whose committed base has a different number of
+/// masks than outputs **cannot be parsed**: its serialization either leaves
+/// bytes the reader misinterprets or runs short. (`check_commitment_masks`'s
+/// arity gate, which H17 runs, holds the same for a hand-built value that
+/// never went through the parser.) If the wire ever carried its own count
+/// for the committed base, this would decode and H8 would need a rule.
+#[test]
+fn h8_the_wire_reads_one_commitment_per_output() {
+    credited_to_this_falsifier(&[CenRow::H8], "h8_the_wire_reads_one_commitment_per_output");
+    let mut two_masks = listed(KI);
+    if let Ct::Fcmp { base, .. } = &mut two_masks.ct {
+        base.commitments.push(TWO_G);
+        base.enc_amounts.push([0; 9]);
+        base.enc_labels.push([0; 9]);
+    }
+    assert_eq!(two_masks.prefix.outputs.len(), 1);
+    assert!(
+        Transaction::from_bytes(&two_masks.serialize()).is_err(),
+        "two masks over one output must not round-trip"
+    );
+    let mut no_masks = listed(KI);
+    if let Ct::Fcmp { base, .. } = &mut no_masks.ct {
+        base.commitments.clear();
+        base.enc_amounts.clear();
+        base.enc_labels.clear();
+    }
+    assert!(
+        Transaction::from_bytes(&no_masks.serialize()).is_err(),
+        "no mask over one output must not round-trip"
+    );
+    assert!(Transaction::from_bytes(&listed(KI).serialize()).is_ok());
+}
+
+/// CEN-H24's falsifier (slice 5 Q7): the ring-members residue check — no
+/// relative `key_offset` after the first may be `0` — **cannot fire**,
+/// because CEN-I6 forbids the input it reads: an FCMP++ spend carries no
+/// `key_offsets` at all. The property watched is **I6's exclusion**, not
+/// "H24 cannot fire" (that is the observation; I6 is the reason, and only
+/// the reason gives a falsifier something to watch).
+///
+/// What can be asserted today, and what cannot: the predicate is
+/// unsatisfiable on the input I6 admits, and satisfiable on the one it
+/// forbids — that much is logic. The *holder* of I6 on the Rust side is
+/// slice 6's row, still `pending`; the wire twin has an offsets arm, but it
+/// cannot be isolated as an oracle from here because the twin also refuses
+/// every 4.H fixture on 4.I grounds (CEN-I19's `extra` shape — TXE's
+/// subject). So this test pins the row I6 is registered under and is
+/// **armed at slice 6**: when `CenRow::I6` flips to `implemented`, the
+/// assertion that I6 refuses `with_offsets` is added here, and from then on
+/// I6 lapsing fails this test. H24 is a bucket-3 row (deletion residue,
+/// census §10 R5) with no registry entry to carry a status; this test is the
+/// falsifier its census row cites.
+#[test]
+fn h24_cannot_fire_on_an_input_i6_admits() {
+    // H24's predicate, stated so it can be asked of an input.
+    let h24_fires = |offsets: &[u64]| offsets.iter().skip(1).any(|&o| o == 0);
+    // On the input I6 admits — no offsets — the predicate has nothing to
+    // read; on the input I6 forbids, it fires. The two together are why H24
+    // is vacuous exactly when I6 holds.
+    assert!(!h24_fires(&[]));
+    assert!(h24_fires(&[7, 0]), "the shape H24 was written for");
+    let mut with_offsets = listed(KI);
+    if let Some(Input::ToKey { key_offsets, .. }) = with_offsets.prefix.inputs.get_mut(0) {
+        *key_offsets = vec![7, 0];
+    }
+    assert_ne!(with_offsets, listed(KI));
+    // I6 is a registered row; today it is pending, and this test grows its
+    // teeth the day that changes.
+    assert!(
+        CenRow::ALL.contains(&CenRow::I6),
+        "CEN-I6 is the row that holds H24 vacuous"
+    );
+    assert_eq!(
+        CenRow::I6.status(),
+        RowStatus::Pending,
+        "I6 has landed: add the assertion that it refuses `with_offsets` to this falsifier"
+    );
 }
 
 // ---- CEN-H4 -------------------------------------------------------------

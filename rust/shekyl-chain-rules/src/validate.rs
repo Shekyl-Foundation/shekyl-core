@@ -370,6 +370,19 @@ macro_rules! judge_tx {
 /// the pool's call site; no 4.H row reads it today — every 4.H limit is a
 /// frozen constant beside its rule (`rules::tx`, the F21 arrangement) — and
 /// the first row that varies by schedule step is its first reader.
+///
+/// **CEN-H23 holds by construction here** (`by_construction(shekyl_wire::Transaction,
+/// "doctest:tx_form")`): a transaction must deserialize before any rule
+/// judges it, and this function takes a parsed [`Transaction`], not bytes —
+/// an unparseable blob is `Transaction::from_bytes`'s `Err`, at the caller,
+/// and never reaches a rule. The falsifier is the program that must not
+/// compile — the bytes handed straight to the rules:
+///
+/// ```compile_fail
+/// use shekyl_chain_rules::{tx_form, RuleSet, TxSlot};
+/// let blob: &[u8] = &[0x03, 0x00];
+/// let _ = tx_form(blob, TxSlot::Lone, &RuleSet::GENESIS);
+/// ```
 pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<RuleCoverage> {
     let mut coverage = RuleCoverage::EMPTY;
     // H5 (the `gen` half) and H6 are judged as the class is derived — the

@@ -22,7 +22,8 @@ use crate::harness::fixture::{
     candidate, candidate_on, coinbase, recorded, recorded_with_work, G, TWO_G,
 };
 use crate::harness::{
-    assert_refused, expected_seed, formed_on, infallible, judged, Faulted, MockChain, MockSubstrate,
+    assert_refused, credited_to_this_falsifier, expected_seed, formed_on, infallible, judged,
+    Faulted, MockChain, MockSubstrate,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule};
@@ -533,12 +534,18 @@ fn shipped_parameters_price_the_tail() {
 
 // --- the rows that hold by construction (Q4) -------------------------------
 
-/// CEN-F2's falsifier: the wire admits exactly one transaction version.
-/// A coinbase re-encoded with version `2` — the C++ `version >= 3` rule's
-/// boundary — does not decode, so no `Transaction` with another version
-/// can reach a rule.
+/// CEN-F2's falsifier — and **CEN-H2's and CEN-H13's**, the same property
+/// stated at the non-coinbase sites (`ver_non_input_consensus` rules 2/3,
+/// `check_tx_outputs`): the wire admits exactly one transaction version. A
+/// transaction re-encoded with version `2` — the C++ `version >= 3` rule's
+/// boundary — does not decode, so no `Transaction` with another version can
+/// reach any rule, coinbase or not.
 #[test]
 fn f2_the_wire_admits_one_transaction_version() {
+    credited_to_this_falsifier(
+        &[CenRow::F2, CenRow::H2, CenRow::H13],
+        "f2_the_wire_admits_one_transaction_version",
+    );
     let tx = coinbase(1);
     let mut bytes = Vec::new();
     tx.write(&mut bytes).expect("serialize");
@@ -553,11 +560,16 @@ fn f2_the_wire_admits_one_transaction_version() {
     }
 }
 
-/// CEN-F8's falsifier: the wire admits exactly one output tag
-/// (`txout_to_tagged_key`). An output re-encoded under the legacy
-/// `txout_to_key` tag, or any other, does not decode.
+/// CEN-F8's falsifier — and **CEN-H12's**, the same property for a listed
+/// transaction's outputs (`check_output_types`): the wire admits exactly
+/// one output tag (`txout_to_tagged_key`). An output re-encoded under the
+/// legacy `txout_to_key` tag, or any other, does not decode.
 #[test]
 fn f8_the_wire_admits_one_output_tag() {
+    credited_to_this_falsifier(
+        &[CenRow::F8, CenRow::H12],
+        "f8_the_wire_admits_one_output_tag",
+    );
     let output = Output {
         amount: 0,
         key: G,

@@ -152,8 +152,20 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         .collect();
     assert_eq!(
         by_construction,
-        [CenRow::F2, CenRow::F8, CenRow::F19, CenRow::F21],
-        "slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter"
+        [
+            CenRow::F2,
+            CenRow::F8,
+            CenRow::F19,
+            CenRow::F21,
+            CenRow::H2,
+            CenRow::H8,
+            CenRow::H12,
+            CenRow::H13,
+            CenRow::H23,
+        ],
+        "slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter; \
+         slice 5 Q6: the same version (H2, H13) and tag (H12) for listed transactions, one \
+         commitment per output (H8), and a parsed transaction as `tx_form`'s input (H23)"
     );
     assert!(PolicyRow::ALL
         .iter()

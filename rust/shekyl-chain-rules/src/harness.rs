@@ -326,6 +326,25 @@ pub fn assert_refused<T: Debug>(result: Verdict<T>, rule: CenRow, locus: Locus) 
     }
 }
 
+/// A `by_construction` falsifier that serves several rows names every one of
+/// them, and this is what each served row must pass: it is registered
+/// `by_construction`. Slice 5 Q6's condition — one test credited to N rows
+/// is not N rows covered unless the test walks the list — so a falsifier
+/// calls this first with the rows it serves, and the coverage gate refuses
+/// a shared falsifier whose body does not name each of them. A row re-keyed
+/// to another status or another falsifier fails here until it is taken off
+/// the list.
+#[track_caller]
+pub fn credited_to_this_falsifier(rows: &[CenRow], falsifier: &str) {
+    for row in rows {
+        assert_eq!(
+            row.status(),
+            crate::census::RowStatus::ByConstruction,
+            "{row} is credited to `{falsifier}` but is not registered by_construction"
+        );
+    }
+}
+
 /// Assert `f` passes `last_ok` and refuses `first_bad` on `rule` at `locus`
 /// — the two sides of a boundary, so an off-by-one in the rule fails here.
 #[track_caller]
