@@ -372,10 +372,16 @@ pub mod fixture {
     /// not this fixture's concern — the exact-payout row (F18) is not
     /// landed — so a chain of these pays nothing and reads the tail subsidy
     /// at every height.
+    ///
+    /// The F6 claim holds at every height a chain can reach. Within the
+    /// window of `u64::MAX` no coinbase satisfies F6 — the rule's own sum
+    /// overflows and it refuses (`rules::miner::F6`) — so the fixture
+    /// saturates rather than panics there: the corpus tests build records
+    /// at `u64::MAX` to exercise height exhaustion in the *store*, and need
+    /// the bytes, not a verdict.
     pub fn coinbase(height: u64) -> Transaction {
-        let unlock_time = height
-            .checked_add(RuleSet::GENESIS.mined_money_unlock_window().to_raw())
-            .expect("fixture height + mined-money unlock window fits u64");
+        let unlock_time =
+            height.saturating_add(RuleSet::GENESIS.mined_money_unlock_window().to_raw());
         Transaction {
             prefix: TxPrefix {
                 unlock_time,
