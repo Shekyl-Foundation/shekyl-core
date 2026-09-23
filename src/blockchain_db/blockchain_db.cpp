@@ -506,25 +506,33 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     // leaves whose post-quantum binding was to nothing, invisibly. Everything
     // below is unreachable for an admitted transaction and aborts rather than
     // falling back (CEN-L11 pattern).
+    //
+    // One read: shekyl-wire parses the extra, applies the rule over its own
+    // parse and hands back the 0x07 blob (TX_EXTRA_RUST_CUTOVER.md §3) --
+    // there is no second parse for the shape check to disagree with, and the
+    // "accepted but absent" arm the three-pass form had to guard cannot occur.
     auto extract_leaf_entries = [](const transaction& tx) -> std::vector<uint8_t> {
-      std::string why;
-      if (!check_tx_extra_pqc_field_shape(tx, why))
+      char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
+      ShekylOwnedBuffer blob;
+      const int32_t rc = shekyl_tx_extra_leaf_entries(
+        tx.extra.empty() ? nullptr : tx.extra.data(), tx.extra.size(),
+        tx.vout.size(), &blob.buf, msg, sizeof(msg));
+      if (rc != SHEKYL_TX_EXTRA_OK)
+      {
+        msg[sizeof(msg) - 1] = '\0';
+        const std::string why = msg[0] != '\0'
+          ? std::string(msg)
+          : (rc == SHEKYL_TX_EXTRA_MALFORMED
+              ? std::string("tx_extra does not parse")
+              : "tx_extra leaf read failed with code " + std::to_string(rc));
         throw DB_ERROR(("curve-tree leaf: " + why + " at DB add for tx "
           + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
           + " (validated at admission?)").c_str());
-      // Rule-conformant and leafless: no outputs, therefore no fields, no leaf.
-      if (tx.vout.empty())
-        return {};
-      std::vector<tx_extra_field> fields;
-      if (!parse_tx_extra(tx.extra, fields))
-        throw DB_ERROR("curve-tree leaf: tx_extra parses for the shape check but not here (bug)");
-      tx_extra_pqc_leaf_entries lh;
-      if (!find_tx_extra_field_by_type(fields, lh))
-        throw DB_ERROR("curve-tree leaf: the shape check accepted a tx whose 0x07 field is absent (bug)");
+      }
       // Exactly one field of exactly PQC_LEAF_ENTRY_LEN * vout.size() bytes
       // whose every entry begins with an admissible commitment point, per the
-      // rule just applied -- so the first match IS the only match.
-      return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
+      // rule just applied; empty for a leafless (zero-output) transaction.
+      return std::vector<uint8_t>(blob.data(), blob.data() + blob.size());
     };
 
     // All outputs are deferred: compute leaf, determine maturity, add to pending.

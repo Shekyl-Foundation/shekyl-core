@@ -1459,6 +1459,12 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
 /// The writer's input exceeds a wire cap; nothing was built.
 #define SHEKYL_TX_EXTRA_UNSERIALIZABLE        103
 
+/// The tag bytes a C++ caller may name to shekyl_tx_extra_field. The table
+/// of record is `shekyl_wire::tx_extra::TX_EXTRA_TAG_*`; a value here that
+/// drifts from it is answered with SHEKYL_TX_EXTRA_UNKNOWN_TAG or the wrong
+/// field, which the archival_credit_wire round trip pins.
+#define SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION 0x0B
+
 /// The `index`th field of `tag` in `extra`, as its payload bytes, in `out`
 /// (free with shekyl_buffer_free). OK / ABSENT / MALFORMED / UNKNOWN_TAG;
 /// `out` holds the payload on OK and the null buffer otherwise. A present
@@ -4141,6 +4147,21 @@ int32_t shekyl_e2_trace_finish(struct ShekylE2TraceWriter* writer);
 void shekyl_e2_trace_abort(struct ShekylE2TraceWriter* writer);
 
 } // extern "C"
+
+/// Owns a Rust-allocated ShekylBuffer for one C++ scope and returns it to
+/// Rust with shekyl_buffer_free on exit. The null buffer (ptr == nullptr,
+/// len == 0) is the valid empty value every out-parameter starts as, so a
+/// call that refused leaves nothing to free. Not copyable: two owners of one
+/// allocation is the double free this type exists to make unwritable.
+struct ShekylOwnedBuffer {
+  ShekylBuffer buf{nullptr, 0};
+  ShekylOwnedBuffer() = default;
+  ShekylOwnedBuffer(const ShekylOwnedBuffer&) = delete;
+  ShekylOwnedBuffer& operator=(const ShekylOwnedBuffer&) = delete;
+  ~ShekylOwnedBuffer() { if (buf.ptr) shekyl_buffer_free(buf.ptr, buf.len); }
+  const uint8_t* data() const { return buf.ptr; }
+  size_t size() const { return buf.len; }
+};
 
 #define SHEKYL_E2_TRACE_OK               0
 #define SHEKYL_E2_TRACE_ERR_NULL_PTR    -1

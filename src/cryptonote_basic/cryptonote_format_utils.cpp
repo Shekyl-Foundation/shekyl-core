@@ -659,20 +659,22 @@ namespace cryptonote
   //---------------------------------------------------------------
   bool parse_archival_attestation_from_extra(const std::vector<uint8_t>& tx_extra, std::string& attestation_blob)
   {
-    // parse_* convention (same bool as parse_tx_extra): false ONLY on a tx_extra
-    // parse failure -- the headers are UNREADABLE. A successful parse with no
-    // attestation tag is true with an empty blob (the committed empty set), a
-    // distinction the get_*/find_* "found?" convention cannot carry. Collapsing
-    // the two would let a malformed coinbase extra pass for the empty attestation
-    // set at admission while the settlement scan later reads the same bytes.
+    // false ONLY when the extra does not parse -- the headers are UNREADABLE.
+    // A parsed extra with no attestation tag is true with an empty blob (the
+    // committed empty set). The codec carries the distinction as two codes
+    // (SHEKYL_TX_EXTRA_MALFORMED vs SHEKYL_TX_EXTRA_ABSENT); collapsing them
+    // would let a malformed coinbase extra pass for the empty attestation set
+    // at admission while the settlement scan later reads the same bytes.
     attestation_blob.clear();
-    std::vector<tx_extra_field> tx_extra_fields;
-    if (!parse_tx_extra(tx_extra, tx_extra_fields))
+    ShekylOwnedBuffer blob;
+    const int32_t rc = shekyl_tx_extra_field(
+      tx_extra.empty() ? nullptr : tx_extra.data(), tx_extra.size(),
+      SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, 0, &blob.buf);
+    if (rc == SHEKYL_TX_EXTRA_ABSENT)
+      return true;
+    if (rc != SHEKYL_TX_EXTRA_OK)
       return false;
-
-    tx_extra_archival_attestation field;
-    if (find_tx_extra_field_by_type(tx_extra_fields, field))
-      attestation_blob = field.blob;
+    attestation_blob.assign(reinterpret_cast<const char*>(blob.data()), blob.size());
     return true;
   }
   //---------------------------------------------------------------
@@ -953,39 +955,17 @@ namespace cryptonote
   //---------------------------------------------------------------
   bool check_tx_extra_pqc_field_shape(const transaction& tx, std::string& reason)
   {
-    std::vector<tx_extra_field> fields;
-    if (!parse_tx_extra(tx.extra, fields))
-    {
-      reason = "tx_extra does not parse; the PQC field shape cannot be established";
-      return false;
-    }
-    std::vector<size_t> kem_lens, leaf_lens;
-    // The 0x07 payload rides along for the content rule (PL-D3: every entry's
-    // commitment point must be admissible); the rule reads it only once the
-    // shape rule has admitted exactly one field.
-    const std::string* leaf_blob = nullptr;
-    for (const tx_extra_field& f : fields)
-    {
-      if (const auto* kem = std::get_if<tx_extra_pqc_kem_ciphertext>(&f))
-        kem_lens.push_back(kem->blob.size());
-      else if (const auto* leaf = std::get_if<tx_extra_pqc_leaf_entries>(&f))
-      {
-        leaf_lens.push_back(leaf->blob.size());
-        leaf_blob = &leaf->blob;
-      }
-    }
-    const bool one_leaf = leaf_lens.size() == 1 && leaf_blob != nullptr;
-    // The rule's verdict AND its sentence come from shekyl-wire: the daemon
-    // logs what the rule says rather than re-deriving a second wording from
-    // the code, which would be two formatters to keep in step forever.
+    // shekyl-wire parses the extra and applies CEN-I19 over its own parse
+    // (TX_EXTRA_RUST_CUTOVER.md §3): one parser of the grammar, so the
+    // fields the rule judges are the fields the codec found -- the daemon
+    // hands over bytes, never a second reading of them. The verdict AND its
+    // sentence come from the rule; the daemon logs what the rule says rather
+    // than keeping a second wording in step forever.
     char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
-    const int32_t rc = shekyl_tx_extra_pqc_field_shape(tx.vout.size(),
-      kem_lens.empty() ? nullptr : kem_lens.data(), kem_lens.size(),
-      leaf_lens.empty() ? nullptr : leaf_lens.data(), leaf_lens.size(),
-      one_leaf ? reinterpret_cast<const uint8_t*>(leaf_blob->data()) : nullptr,
-      one_leaf ? leaf_blob->size() : 0,
-      msg, sizeof(msg));
-    if (rc == SHEKYL_TX_EXTRA_PQC_SHAPE_OK)
+    const int32_t rc = shekyl_tx_extra_pqc_field_shape_of(
+      tx.extra.empty() ? nullptr : tx.extra.data(), tx.extra.size(),
+      tx.vout.size(), msg, sizeof(msg));
+    if (rc == SHEKYL_TX_EXTRA_OK)
       return true;
     msg[sizeof(msg) - 1] = '\0';
     reason = msg[0] != '\0'
