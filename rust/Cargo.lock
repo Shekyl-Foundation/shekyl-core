@@ -4915,6 +4915,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-tx-weight",
  "shekyl-wire",
+ "tempfile",
  "tokio",
 ]
 

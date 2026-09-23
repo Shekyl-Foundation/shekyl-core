@@ -42,11 +42,20 @@
 // They are not in the Shekyl genesis grammar (rule 60) and were shed; the byte
 // values stay retired so a future tag cannot silently reuse a meaning old
 // software would parse differently.
+// 0x05 was PQC_OWNERSHIP: a per-output (scheme_id, group_id) ownership entry
+// with no producer and no reader, superseded by the in-circuit leaf-commitment
+// binding (PL-D3; docs/FCMP_PLUS_PLUS.md "PQC ownership binding") and by the
+// address fingerprint as group identity (docs/PQC_MULTISIG.md §5.3). REJECTED
+// 2026-09-22; the byte stays retired for the same reason as 0x03.
+// 0x08 is RESERVED for the multisig group-rotation / migration transaction
+// (docs/PQC_MULTISIG.md §7.4, "Reserved tags"); a reserved slot lives in the
+// spec's table and has no code symbol until its producer is designed.
 #define TX_EXTRA_TAG_ADDITIONAL_PUBKEYS     0x04
-#define TX_EXTRA_TAG_PQC_OWNERSHIP          0x05
 #define TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT     0x06
 #define TX_EXTRA_TAG_PQC_LEAF_ENTRIES       0x07
-#define TX_EXTRA_TAG_MULTISIG_MIGRATION     0x08
+// 0x09 and 0x0A are STAGED: their producer is the multisig receive path
+// (docs/PQC_MULTISIG.md §7.4 — 0x0A REQUIRED on every multisig-recipient
+// output, 0x09 its view-tag hints; crate shekyl-multisig, MS-/MSW- rows).
 #define TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS     0x09
 #define TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS 0x0A
 #define TX_EXTRA_TAG_ARCHIVAL_ATTESTATION   0x0B
@@ -130,28 +139,6 @@ namespace cryptonote
   };
 
 
-  struct tx_extra_pqc_ownership_entry
-  {
-    uint8_t  output_index;
-    uint8_t  scheme_id;
-    crypto::hash group_id;   // 32 bytes; zero-hash for single-signer (scheme_id=1)
-
-    BEGIN_SERIALIZE()
-      FIELD(output_index)
-      FIELD(scheme_id)
-      FIELD(group_id)
-    END_SERIALIZE()
-  };
-
-  struct tx_extra_pqc_ownership
-  {
-    std::vector<tx_extra_pqc_ownership_entry> entries;
-
-    BEGIN_SERIALIZE()
-      FIELD(entries)
-    END_SERIALIZE()
-  };
-
   static constexpr size_t ML_KEM_768_CT_BYTES = 1088;
   static constexpr size_t X25519_CT_BYTES = 32;
   static constexpr size_t HYBRID_KEM_CT_BYTES = X25519_CT_BYTES + ML_KEM_768_CT_BYTES; // 1120
@@ -175,15 +162,6 @@ namespace cryptonote
   static constexpr size_t PQC_LEAF_ENTRY_LEN = 64;
 
   struct tx_extra_pqc_leaf_entries
-  {
-    std::string blob;
-
-    BEGIN_SERIALIZE()
-      FIELD(blob)
-    END_SERIALIZE()
-  };
-
-  struct tx_extra_multisig_migration
   {
     std::string blob;
 
@@ -227,17 +205,15 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_additional_pub_keys, tx_extra_pqc_ownership, tx_extra_pqc_kem_ciphertext, tx_extra_pqc_leaf_entries, tx_extra_multisig_migration, tx_extra_pqc_view_tag_hints, tx_extra_pqc_spend_auth_pubkeys, tx_extra_archival_attestation> tx_extra_field;
+  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_additional_pub_keys, tx_extra_pqc_kem_ciphertext, tx_extra_pqc_leaf_entries, tx_extra_pqc_view_tag_hints, tx_extra_pqc_spend_auth_pubkeys, tx_extra_archival_attestation> tx_extra_field;
 }
 
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_padding, TX_EXTRA_TAG_PADDING);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pub_key, TX_EXTRA_TAG_PUBKEY);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_nonce, TX_EXTRA_NONCE);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_additional_pub_keys, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS);
-VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_ownership, TX_EXTRA_TAG_PQC_OWNERSHIP);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_kem_ciphertext, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_leaf_entries, TX_EXTRA_TAG_PQC_LEAF_ENTRIES);
-VARIANT_TAG(binary_archive, cryptonote::tx_extra_multisig_migration, TX_EXTRA_TAG_MULTISIG_MIGRATION);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_view_tag_hints, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_spend_auth_pubkeys, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_archival_attestation, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION);

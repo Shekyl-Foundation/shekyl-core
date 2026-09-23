@@ -286,3 +286,66 @@ fn git(args: &[&str]) -> Option<String> {
         Some(s)
     }
 }
+
+/// The block target the cadence ratio is reported against, in seconds.
+///
+/// Informational only — see [`VerifyEdgeRecord::grading`]. Named here rather
+/// than inlined at the format site so a reader can see what the duty cycle is
+/// a fraction *of*.
+pub const BLOCK_TARGET_S: f64 = 120.0;
+
+/// A complete verify-edge run — the per-block `root_at_count` cost.
+///
+/// **Carries no [`Verdict`].** `CT-6 Q4` is pending as a derivation and grades
+/// the *amortized* advance in any case; this is the naive cost that form would
+/// replace. Reusing [`Verdict::Ungraded`], whose meaning is *"measured off the
+/// pinned rig"*, for *"no ruled threshold exists"* would put one value in front
+/// of two meanings — the defect [`SCHEMA_VERSION`] 2 exists to correct. The
+/// status is prose in [`VerifyEdgeRecord::grading`] instead, where it cannot be
+/// mistaken for a grade.
+#[derive(Clone, Debug, Serialize)]
+pub struct VerifyEdgeRecord {
+    /// [`SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// The measurement this record is of.
+    pub measurement: &'static str,
+    /// Why no verdict appears, in words a later reader can act on.
+    pub grading: &'static str,
+    /// The machine.
+    pub environment: Environment,
+    /// What was enforced and what was attested.
+    pub rig: RigVerdict,
+    /// The population the call read.
+    pub population: crate::verifyedge::Population,
+    /// Which density this run used, and why that one.
+    pub density: &'static str,
+    /// The leaf count `root_at_count` was asked for.
+    pub leaf_count: u64,
+    /// Per-call series with the population **unfrozen** — the production state
+    /// inside the burial window, and the quantity this measurement is of.
+    pub unfrozen: Series,
+    /// Per-call series after `maybe_freeze_segments` — the control.
+    pub frozen: Series,
+    /// `unfrozen.median_s / frozen.median_s`.
+    ///
+    /// The red-bite reads off this: removing the recompute must collapse the
+    /// cost. A ratio near 1 means the measurement never contained what it
+    /// claims to measure.
+    pub recompute_ratio: f64,
+    /// Whether the mixed-composition path ran, rather than the `full_build_root`
+    /// fallback.
+    ///
+    /// Determined **behaviourally**, not by restating the store's internal
+    /// decomposition: the fallback ignores frozen sub-roots, so a population
+    /// whose time collapses when frozen was on the mixed path.
+    pub mixed_path_confirmed: bool,
+    /// Whether both phases produced the same root. A control that changed the
+    /// answer would not be a control.
+    pub root_stable_across_freeze: bool,
+    /// Per-call seconds as a fraction of [`BLOCK_TARGET_S`] — the duty cycle
+    /// this cost imposes on refresh. **Informational.**
+    pub cadence_fraction: f64,
+    /// Where the cost is paid, by citation, so the record says why it is not
+    /// covered by rows 2 and 3.
+    pub call_site: &'static str,
+}

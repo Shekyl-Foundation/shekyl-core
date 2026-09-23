@@ -36,18 +36,30 @@ pub const TX_EXTRA_TAG_PUBKEY: u8 = 0x01;
 pub const TX_EXTRA_TAG_NONCE: u8 = 0x02;
 /// `0x04` — additional per-output tx public keys.
 pub const TX_EXTRA_TAG_ADDITIONAL_PUBKEYS: u8 = 0x04;
-/// `0x05` — PQC ownership entries.
-pub const TX_EXTRA_TAG_PQC_OWNERSHIP: u8 = 0x05;
+// `0x05` was PQC_OWNERSHIP — a per-output `(scheme_id, group_id)` ownership
+// entry with no producer and no reader, superseded by the in-circuit
+// leaf-commitment binding (`PL-D3`, `docs/FCMP_PLUS_PLUS.md` "PQC ownership
+// binding") and by the address fingerprint as group identity
+// (`docs/PQC_MULTISIG.md` §5.3). REJECTED 2026-09-22; the byte stays retired
+// like `0x03` / `0xDE` (`tx_extra.h`), so a later tag cannot reuse a meaning
+// old software parsed differently.
 /// `0x06` — per-output hybrid KEM ciphertexts.
 pub const TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT: u8 = 0x06;
 /// `0x07` — per-output PQC leaf entries (`CM ‖ record`, `PL-D3`; the
 /// constant keeps the tag's historical name).
 pub const TX_EXTRA_TAG_PQC_LEAF_ENTRIES: u8 = 0x07;
-/// `0x08` — multisig migration blob.
-pub const TX_EXTRA_TAG_MULTISIG_MIGRATION: u8 = 0x08;
-/// `0x09` — PQC view-tag hints blob.
+// `0x08` is RESERVED for the multisig group-rotation / migration transaction
+// (`docs/PQC_MULTISIG.md` §7.4, "Reserved tags"): a reserved slot lives in
+// the spec's table with no code symbol until its producer is designed
+// (rule 23).
+/// `0x09` — PQC view-tag hints blob: one byte per multisig-recipient output.
+/// **Staged**: the producer is the multisig receive path
+/// (`docs/PQC_MULTISIG.md` §7.4; crate `shekyl-multisig`, MS-/MSW- rows);
+/// until it lands, single-sig outputs never carry this tag.
 pub const TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS: u8 = 0x09;
-/// `0x0A` — PQC spend-auth pubkeys blob.
+/// `0x0A` — PQC spend-auth pubkeys blob: `spend_auth_version ‖ N × Y_i`,
+/// REQUIRED on every multisig-recipient output. **Staged** with the same
+/// producer as `0x09` (`docs/PQC_MULTISIG.md` §7.4).
 pub const TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS: u8 = 0x0A;
 
 /// `0x0B` — archival attestation blob. A present tag with an empty payload
@@ -97,17 +109,6 @@ pub const TX_EXTRA_PADDING_MAX_COUNT: usize = 255;
 /// Max extra-nonce payload in bytes (`TX_EXTRA_NONCE_MAX_COUNT`, `tx_extra.h`).
 pub const TX_EXTRA_NONCE_MAX_COUNT: usize = 255;
 
-/// A single `0x05` PQC ownership entry.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct PqcOwnershipEntry {
-    /// Output index this entry covers.
-    pub output_index: u8,
-    /// Scheme id (`1` single-signer, `2` multisig).
-    pub scheme_id: u8,
-    /// Group id (zero-hash for single-signer).
-    pub group_id: [u8; 32],
-}
-
 /// A parsed `tx_extra` field. The `0x06`/`0x07` payloads are kept as concatenated
 /// blobs (their on-wire form); use [`pqc_kem_per_output`] / [`pqc_leaf_entries_per_output`]
 /// to split them by output count.
@@ -121,14 +122,10 @@ pub enum TxExtraField {
     Nonce(Vec<u8>),
     /// `0x04` — additional per-output tx public keys.
     AdditionalPubKeys(Vec<[u8; 32]>),
-    /// `0x05` — PQC ownership entries.
-    PqcOwnership(Vec<PqcOwnershipEntry>),
     /// `0x06` — per-output hybrid KEM ciphertexts, concatenated.
     PqcKemCiphertext(Vec<u8>),
     /// `0x07` — per-output PQC leaf entries (`CM ‖ record`), concatenated.
     PqcLeafEntries(Vec<u8>),
-    /// `0x08` — multisig migration blob.
-    MultisigMigration(Vec<u8>),
     /// `0x09` — PQC view-tag hints blob.
     PqcViewTagHints(Vec<u8>),
     /// `0x0A` — PQC spend-auth pubkeys blob.
@@ -220,31 +217,11 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
                 }
                 TxExtraField::AdditionalPubKeys(keys)
             }
-            TX_EXTRA_TAG_PQC_OWNERSHIP => {
-                let count: usize = read_varint(&mut cur)?;
-                if count > READ_LEN_CAP {
-                    return Err(io::Error::other(format!(
-                        "tx_extra: pqc_ownership count {count} exceeds cap"
-                    )));
-                }
-                let mut entries = Vec::new();
-                for _ in 0..count {
-                    entries.push(PqcOwnershipEntry {
-                        output_index: read_byte(&mut cur)?,
-                        scheme_id: read_byte(&mut cur)?,
-                        group_id: read_array(&mut cur)?,
-                    });
-                }
-                TxExtraField::PqcOwnership(entries)
-            }
             TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT => {
                 TxExtraField::PqcKemCiphertext(read_blob(&mut cur, "pqc_kem")?)
             }
             TX_EXTRA_TAG_PQC_LEAF_ENTRIES => {
                 TxExtraField::PqcLeafEntries(read_blob(&mut cur, "pqc_leaf_hashes")?)
-            }
-            TX_EXTRA_TAG_MULTISIG_MIGRATION => {
-                TxExtraField::MultisigMigration(read_blob(&mut cur, "multisig_migration")?)
             }
             TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS => {
                 TxExtraField::PqcViewTagHints(read_blob(&mut cur, "pqc_view_tag_hints")?)
@@ -271,7 +248,7 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
 ///
 /// **Symmetric with [`parse`]** — it never emits bytes `parse` would reject. Each
 /// field's parse-cap is checked **up front, O(n)** — padding (`1..=255` + last), the
-/// nonce cap, the `AdditionalPubKeys`/`PqcOwnership` counts, and the length-prefixed
+/// nonce cap, the `AdditionalPubKeys` count, and the length-prefixed
 /// blobs (`0x06`/`0x07`/…) against `READ_LEN_CAP`. A `debug_assert!` round-trip backs
 /// this up in debug/test builds (free in release), so a future field kind that forgets
 /// its cap check is caught in CI rather than silently emitting a self-invalid blob.
@@ -306,15 +283,8 @@ pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
                     keys.len()
                 )));
             }
-            TxExtraField::PqcOwnership(entries) if entries.len() > READ_LEN_CAP => {
-                return Err(io::Error::other(format!(
-                    "tx_extra: pqc_ownership count {} exceeds cap {READ_LEN_CAP}",
-                    entries.len()
-                )));
-            }
             TxExtraField::PqcKemCiphertext(b)
             | TxExtraField::PqcLeafEntries(b)
-            | TxExtraField::MultisigMigration(b)
             | TxExtraField::PqcViewTagHints(b)
             | TxExtraField::PqcSpendAuthPubkeys(b)
             | TxExtraField::ArchivalAttestation(b)
@@ -366,22 +336,10 @@ fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
             }
             Ok(())
         }
-        TxExtraField::PqcOwnership(entries) => {
-            w.write_all(&[TX_EXTRA_TAG_PQC_OWNERSHIP])?;
-            write_varint(entries.len(), w)?;
-            for entry in entries {
-                w.write_all(&[entry.output_index, entry.scheme_id])?;
-                w.write_all(&entry.group_id)?;
-            }
-            Ok(())
-        }
         TxExtraField::PqcKemCiphertext(blob) => {
             write_blob(w, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, blob)
         }
         TxExtraField::PqcLeafEntries(blob) => write_blob(w, TX_EXTRA_TAG_PQC_LEAF_ENTRIES, blob),
-        TxExtraField::MultisigMigration(blob) => {
-            write_blob(w, TX_EXTRA_TAG_MULTISIG_MIGRATION, blob)
-        }
         TxExtraField::PqcViewTagHints(blob) => write_blob(w, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS, blob),
         TxExtraField::PqcSpendAuthPubkeys(blob) => {
             write_blob(w, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS, blob)

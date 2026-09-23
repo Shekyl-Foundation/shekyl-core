@@ -110,9 +110,7 @@ impl ExtraField {
             }
             TxExtraField::PqcKemCiphertext(data) => Some(ExtraField::PqcKemCiphertext(data)),
             TxExtraField::PqcLeafEntries(data) => Some(ExtraField::PqcLeafEntries(data)),
-            TxExtraField::PqcOwnership(_)
-            | TxExtraField::MultisigMigration(_)
-            | TxExtraField::PqcViewTagHints(_)
+            TxExtraField::PqcViewTagHints(_)
             | TxExtraField::PqcSpendAuthPubkeys(_)
             | TxExtraField::ArchivalAttestation(_) => None,
         }
