@@ -55,7 +55,9 @@ fn refused_listed(tx: &Transaction, row: CenRow) {
 
 /// The kind is the slot's, not the bytes': a coinbase-shaped transaction in
 /// a listed or lone slot is judged as a non-coinbase transaction (Q2 as
-/// amended), and the miner slot is the coinbase whatever it carries.
+/// amended), and the miner slot is the coinbase whatever it carries. This is
+/// the fixture for the principle on [`TxKind`]: the input does not select
+/// the rules it is judged under.
 #[test]
 fn the_kind_is_derived_from_the_slot_not_the_bytes() {
     assert_eq!(TxKind::of(TxSlot::Miner), TxKind::Coinbase);

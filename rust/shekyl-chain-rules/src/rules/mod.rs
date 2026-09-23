@@ -279,6 +279,17 @@ pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(
 /// one slot, [`TxSlot::Lone`](crate::verdict::TxSlot::Lone), so it cannot
 /// mis-declare; only `validate` names the miner, for the block's own miner
 /// field.
+///
+/// The principle, since it will recur (slice 5 Q2, ruled 2026-09-23): **a
+/// classification that selects which rules apply must come from outside
+/// the thing being classified.** Position in a block is a fact about the
+/// block; position in the pool is a fact about the pool; `is_coinbase()` is
+/// a fact the submitter controls, and an input that selects the rule set it
+/// is judged under is a self-exempting input. Same family as `ChainValid`
+/// being unforgeable and `held_by_cxx` needing a rejection test rather than
+/// a grep: authority sits with something the adversary does not author. The
+/// C++ has no such gap only because `ver_non_input_consensus` never sees a
+/// coinbase — an accident of call site, not a property of the rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TxKind {
     /// The block's miner transaction — whatever its bytes; CEN-F1 judges

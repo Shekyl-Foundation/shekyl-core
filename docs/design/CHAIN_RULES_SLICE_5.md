@@ -302,8 +302,8 @@ against the wire crate's constant (Q5 as ruled — a test, not a comment).
 
 | # | Commit | What |
 | --- | --- | --- |
-| 1 | `TxRule` / `TxContext` / `judge_tx!` | The third rule class; `TxKind::{Coinbase, Listed}` derived from `is_coinbase()` inside `tx_form` (Q2); scope on each rule (`All` / `NonCoinbase`), out-of-scope rows recorded vacuous. No rows yet |
-| 2 | `RuleSet` parameters (Q5) | `max_tx_size`, `unlock_time_sentinel`, and `max_tx_weight` **derived** from `min_block_weight / 2 − coinbase_blob_reserved` — never restated as 149 400; pins parse `cryptonote_config.h`; equality tests against `shekyl_wire::{MAX_TX_SIZE, UNLOCK_TIME_BLOCK_SENTINEL}` |
+| 1 | `TxRule` / `TxContext` / `judge_tx!` — **LANDED `b534f9959`** with H1, H3, H4, H16 | The third rule class; `TxKind::{Coinbase, Listed}` derived from the **slot** (`tx_form(tx, slot, rule_set)`; Q2 as amended); scope on each rule (`All` / `NonCoinbase`), out-of-scope rows recorded vacuous. Landed with the four rows whose operands are frozen constants so no item arrived without a consumer (rule 21): H1 size, H3 weight, H4 ≥ 1 input, H16 unlock sentinel |
+| 2 | The limits (Q5 as amended) — **LANDED in commit 1** | `MAX_TX_SIZE`, `UNLOCK_TIME_SENTINEL`, `COINBASE_BLOB_RESERVED` as `const`s in `rules/tx.rs`, `max_tx_weight()` **derived** from `FULL_REWARD_ZONE / 2 − COINBASE_BLOB_RESERVED` — never restated as 149 400; pins parse `cryptonote_config.h`; equality tests against `shekyl_wire::transaction::{MAX_TX_SIZE, UNLOCK_TIME_BLOCK_SENTINEL}`. Not `RuleSet` fields: F21's test |
 | 3 | `TxClass` (Q4) | Rule-side archival classification, derived once; refuses H6's mixings as it derives |
 | 4 | Structural rows | H1, H3, H4, H5 (`gen` half), H6, H9, H10, H14, H15 (Null half), H16, H19 (layout), H20–H22 (shapes) |
 | 5 | Adopted crypto rows | H7, H17 (listed txs; the coinbase half is F10), H18, the H20–H22 balances — all through `shekyl-ct-balance` |
@@ -367,7 +367,7 @@ decoupled from TXE's schedule by §1.2 item 3 as amended.
   and make the wallet call `tx_form` — the right end state, but a
   build-graph change to `shekyl-engine-core` this slice should not carry
   silently; if you want it, it is its own commit with the cost measured.
-- **Q2 — the coinbase under `tx_form` (§3.2). RULED default, 2026-09-23.** `validate` already runs
+- **Q2 — the coinbase under `tx_form` (§3.2). RULED default, 2026-09-23; AMENDED at commit 1 and the amendment RULED better than the default (2026-09-23): the kind derives from the SLOT, not from `is_coinbase()`. A sole-`gen` transaction submitted alone or listed in a block is coinbase-shaped; a bytes-derived kind would classify it `Coinbase` and exempt it from H5, the row whose job is refusing it — the input would select the rules it is judged under. The C++ has no gap only because `ver_non_input_consensus` never sees a coinbase, an accident of call site. Principle, recorded on `TxKind`: a classification that selects which rules apply must come from outside the thing being classified; authority sits with what the adversary does not author. `tx_form(tx, slot, rule_set)`; the pool holds only `Lone`.** `validate` already runs
   `tx_form` on `TxSlot::Miner`. Default: `TxContext::kind` is derived from
   `is_coinbase()`; each 4.H rule declares its scope (`All`, `NonCoinbase`);
   out-of-scope rows record as evaluated-vacuous (E1's precedent); the
@@ -401,7 +401,7 @@ decoupled from TXE's schedule by §1.2 item 3 as amended.
   `shekyl_wire::Transaction` — it fits the wire crate's "shape" vocabulary
   but makes the codec carry a consensus classification, which is the
   §3.1 error in miniature.
-- **Q5 — parameters. RULED default, 2026-09-23 — the wire-constant equality is a TEST, not a comment.** `max_tx_size` (1 000 000), `unlock_time_sentinel`
+- **Q5 — parameters. RULED default, 2026-09-23 — the wire-constant equality is a TEST, not a comment. AMENDED at commit 1 and RULED on reason one (2026-09-23): the limits are `const`s beside their rules, not `RuleSet` fields, by F21's test — a limit joins the set when a schedule step can name a different one, and no schedule step varies `max_tx_size`, the weight limit or the sentinel. Everything else ruled survives: parsed from `cryptonote_config.h`, `max_tx_weight()` derived and never restated, wire equality a test. Reason two as first written (Fault's width) was MISATTRIBUTED and is corrected in `fault.rs`: `Stale::Seed` carries two `BlockHash`es; it is `Stale::RuleSet` that carries `formed_under` / `in_force` by value, because slice 2 Q10's runtime-parameterised rule set made `RuleSetId` stop being a key. That is Q10's first presented cost; the honest statement is "`Fault` is large because `RuleSetId` is not a key", not "because limits would be fields", and the fix if it ever matters is boxing `Stale::RuleSet`'s payload, keeping the by-value comparison.** `max_tx_size` (1 000 000), `unlock_time_sentinel`
   (500 000 000) and the **derived** `max_tx_weight`
   (`min_block_weight / 2 − coinbase_blob_reserved` = 149 400) as `RuleSet`
   fields, pinned by parsing `cryptonote_config.h` and held equal to the wire
