@@ -22,7 +22,7 @@
 //!
 //! # Why memory does not appear in this calculation
 //!
-//! Measured on the rule-76 floor device (`skl-pi`, Pi 4 Model B) and on a
+//! Measured on the rule-76 floor device (Pi 4 Model B) and on a
 //! development host, same instrument, 2026-09-22
 //! (`shekyl-levin/tests/inbound_cost_bench.rs`): **119 live inbound
 //! connections cost 360 KiB of RSS on the floor device**, a marginal of
