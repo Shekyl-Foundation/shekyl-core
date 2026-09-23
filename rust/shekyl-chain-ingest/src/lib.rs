@@ -42,6 +42,8 @@
 //!   system clock. The only hasher any Shekyl validator runs (§1.3).
 //! - [`metrics`] — the RandomX measurement sink (RD-F11), shared by the
 //!   substrate and the pipeline.
+//! - [`mutation`] — one deliberate invalidation of one `Extend`, naming
+//!   the census row and the place that refuse it (§3.10).
 //!
 //! Form is `shekyl_chain_rules::form`. The sequencer, the validate+connect
 //! actor, the grader and the driver live behind `feature = "pipeline"`.
@@ -68,6 +70,10 @@ pub mod fetch;
 #[cfg(feature = "pipeline")]
 pub mod grader;
 pub mod metrics;
+pub mod mutation;
+#[cfg(all(test, feature = "pipeline"))]
+#[path = "mutation_tests.rs"]
+mod mutation_tests;
 #[cfg(feature = "pipeline")]
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
@@ -94,6 +100,7 @@ pub use fetch::{fetch_corpus, FetchFault};
 #[cfg(feature = "pipeline")]
 pub use grader::{grade_run, GradedRefusal, GradedRun, Observations, Register};
 pub use metrics::{Concurrency, Metrics, MetricsArtifact};
+pub use mutation::{Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Pow, Unmutable};
 #[cfg(feature = "pipeline")]
 pub use pipeline::{
     run, Checkpoint, Disagreement, PipelineConfig, PipelineFault, RunReport, Switch,

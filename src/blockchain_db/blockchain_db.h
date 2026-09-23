@@ -212,26 +212,6 @@ struct alt_block_data_t
   uint64_t already_generated_coins;
 };
 
-#pragma pack(push, 1)
-/**
- * @brief per-output metadata retained after transaction pruning.
- *
- * When a block is confirmed beyond CRYPTONOTE_TX_PRUNE_DEPTH (see prune_tx_data),
- * verification blobs can be discarded. This struct preserves the
- * data wallets need for scanning: public key, commitment, unlock time,
- * and the block height that confirmed the output.
- */
-struct output_pruning_metadata_t
-{
-  crypto::public_key pubkey;       //!< output one-time public key
-  ct::key           commitment;   //!< Pedersen commitment (amount commitment)
-  uint64_t           unlock_time;  //!< unlock time or height
-  uint64_t           height;       //!< block height containing this output
-  uint8_t            pruned;       //!< 1 if the parent tx's prunable data was removed
-  uint8_t            padding[7];   //!< alignment to 8-byte boundary
-};
-#pragma pack(pop)
-
 /**
  * @brief a struct containing txpool per transaction metadata
  */
@@ -1848,57 +1828,6 @@ public:
    * @return True if `tx_hash` latest relay status is in `category`.
    */
   bool txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category);
-
-  // ─── Output Metadata Pruning ──────────────────────────────────────────────
-
-  /**
-   * @brief store per-output metadata for post-pruning wallet scanning.
-   *
-   * Called before discarding a transaction's prunable data. The metadata
-   * preserves what wallets need (pubkey, commitment, height, unlock_time).
-   *
-   * @param global_output_index  the output's global index
-   * @param meta                 the metadata to persist
-   */
-  virtual void store_output_metadata(uint64_t global_output_index,
-                                     const output_pruning_metadata_t& meta) = 0;
-
-  /**
-   * @brief retrieve stored output metadata.
-   *
-   * @param global_output_index  the output's global index
-   * @param meta                 return-by-reference metadata
-   * @return true if metadata exists for this output
-   */
-  virtual bool get_output_metadata(uint64_t global_output_index,
-                                   output_pruning_metadata_t& meta) const = 0;
-
-  /**
-   * @brief check whether an output's parent transaction has been pruned.
-   *
-   * @param global_output_index  the output's global index
-   * @return true if prunable data has been removed for this output's tx
-   */
-  virtual bool is_output_pruned(uint64_t global_output_index) const = 0;
-
-  /**
-   * @brief prune confirmed transaction data beyond the reorg safety depth.
-   *
-   * For each transaction in blocks older than (tip - depth), stores output
-   * metadata in the output_metadata table and removes the prunable body
-   * (`txs_prunable`). The prunable hash and the `txs_pqc_auths` slice stay:
-   * both are operands of the transaction's identity, and the complete body
-   * is served from shard archival rather than from a pruned node.
-   *
-   * @param depth  confirmation depth; use 0 for CRYPTONOTE_TX_PRUNE_DEPTH
-   * @return true on success
-   */
-  virtual bool prune_tx_data(uint64_t depth = 0) = 0;
-
-  /**
-   * @brief last block height for which post-confirmation tx verification data was pruned (0 if none).
-   */
-  virtual uint64_t get_last_pruned_tx_data_height() const = 0;
 
   /**
    * @brief true if the tx still has prunable verification data in the db (Bulletproofs+/FCMP++/pseudoOuts).

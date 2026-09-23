@@ -491,9 +491,9 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
     // An `Inserted` entry has no `prior` for `well_formed` to refuse, so an
     // entry naming an `Unshaped` table must be refused on the shape alone —
     // before `remove` could reach the uninhabited `from_bytes`.
-    // `txs_prunable_tip` has no Rust writer at this layout.
+    // `curve_tree_checkpoints` has no Rust writer at this layout.
     let unshaped = UndoLog(vec![UndoEntry::Inserted {
-        table: ordinal_of("txs_prunable_tip").expect("catalogued"),
+        table: ordinal_of("curve_tree_checkpoints").expect("catalogued"),
         key: Box::new([0; 8]),
         post: post_image(&[0]),
     }]);

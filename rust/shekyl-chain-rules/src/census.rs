@@ -348,7 +348,6 @@ census_rows! {
         F9 pending,
         F10 pending,
         F11 pending,
-        F12 pending,
         F13 pending,
         F14 pending,
         F14b pending,

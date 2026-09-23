@@ -104,8 +104,10 @@ for control in \
 done
 
 # ---- Invariant 1: no stripe-engine identifier in code -----------------
-# Identifiers, not words: `prunable`, `pruned`, `prune_tx_data` and the
-# `prune` request flag are Q6's good and F28's skeleton wire, and stay.
+# Identifiers, not words: `prunable`, `pruned` and the `prune` request flag
+# are Q6's good and F28's skeleton wire, and stay. (`prune_tx_data`, the C++
+# tx-data discard, was deleted 2026-09-22 — a different mechanism from the
+# stripe engine, so it is not on this list either way.)
 ENGINE_IDENTS='\b(pruning_seed|m_pruning_seed|next_needed_pruning_seed|next_needed_pruning_stripe|get_pruning_stripe|get_pruning_seed|make_pruning_seed|get_random_stripe|has_unpruned_block|get_next_unpruned_block_height|get_next_pruned_block_height|get_pruning_log_stripes|prune_worker|prune_blockchain|update_blockchain_pruning|check_blockchain_pruning|get_blockchain_pruning_seed|sync_pruned_blocks|CRYPTONOTE_PRUNING_(LOG_STRIPES|STRIPE_SIZE|TIP_BLOCKS)|PRUNING_SEED_(LOG_STRIPES|STRIPE)_(SHIFT|MASK)|used_stripe_peer)\b'
 
 echo "[1/2] stripe-engine identifiers in code"

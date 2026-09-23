@@ -24,6 +24,7 @@ use shekyl_fcmp::tree::construct_leaf;
 use shekyl_ffi::ct_balance_ffi::{
     shekyl_check_commitment_masks, shekyl_check_output_keys, SHEKYL_OUTPUT_POINTS_OK,
 };
+use shekyl_wire::transaction::CT_TYPE_FCMP;
 
 /// Adversarial and benign 32-byte encodings, named by what they probe.
 fn probe_points() -> Vec<(&'static str, [u8; 32])> {
@@ -102,9 +103,9 @@ fn output_key_gate_accepts_only_what_the_leaf_builder_encodes() {
 fn commitment_mask_gate_accepts_only_what_the_leaf_builder_encodes() {
     let good = good_point();
     for (name, probe) in probe_points() {
-        let gate_ok =
-            unsafe { shekyl_check_commitment_masks(probe.as_ptr(), 1, std::ptr::null(), 0) }
-                == SHEKYL_OUTPUT_POINTS_OK;
+        let gate_ok = unsafe {
+            shekyl_check_commitment_masks(CT_TYPE_FCMP, 1, probe.as_ptr(), 1, [0u64].as_ptr())
+        } == SHEKYL_OUTPUT_POINTS_OK;
         let leaf_ok = construct_leaf(&good, &probe, &good).is_some();
         assert!(
             !gate_ok || leaf_ok,
@@ -136,8 +137,9 @@ fn probe_set_exercises_both_verdicts_for_each_gate() {
         } else {
             key_rejected += 1;
         }
-        if unsafe { shekyl_check_commitment_masks(probe.as_ptr(), 1, std::ptr::null(), 0) }
-            == SHEKYL_OUTPUT_POINTS_OK
+        if unsafe {
+            shekyl_check_commitment_masks(CT_TYPE_FCMP, 1, probe.as_ptr(), 1, [0u64].as_ptr())
+        } == SHEKYL_OUTPUT_POINTS_OK
         {
             mask_accepted += 1;
         } else {

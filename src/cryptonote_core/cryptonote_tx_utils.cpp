@@ -123,7 +123,7 @@ namespace cryptonote
     LOG_PRINT_L2("destinations include " << num_stdaddresses << " standard addresses and " << num_subaddresses << " subaddresses");
   }
   //---------------------------------------------------------------
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, shekyl::tx_volume_window tx_volume, uint64_t circulating_supply, uint64_t genesis_ng_height) {
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, shekyl::tx_volume_window tx_volume, shekyl::supply_facts supply, uint64_t genesis_ng_height) {
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
@@ -157,7 +157,7 @@ namespace cryptonote
     // Component 2: adaptive fee burn. frozen_segment_count must be the same
     // parent-state n connect-time validation will judge this coinbase against
     // (create_block_template computes it once for both construction passes).
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, circulating_supply, frozen_segment_count);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, supply, frozen_segment_count);
     block_reward += burn.miner_fee_income;
 
     // Single "dusty" output with identity-mask RCT (active from genesis on rebooted chain).

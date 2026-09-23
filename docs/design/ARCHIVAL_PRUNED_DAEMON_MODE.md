@@ -1,6 +1,6 @@
 # Pruned-daemon mode — set-B discard (PDM)
 
-**Status: LIVING CONTRACT** — last verified 2026-09-18 at `dev@20ebdf1e5`
+**Status: LIVING CONTRACT** — last verified 2026-09-22 at `dev@7b9be6cd1` (Q5 amended: `assumevalid = 0` is no anchor)
 with PR #774 and PR #775 read at their heads. **Every `PDM-Q*` question is
 RULED or CLOSED** (Q1–Q3, Q5–Q12 RULED; Q4 CLOSED; `PDM-Q-S0` RULED). This
 file is the contract: the rulings as they bind, the dispositions of the
@@ -284,7 +284,7 @@ exactly these); and TJ-F is re-bound to the per-tx verify: a body-fill
 read that does not hash to the retained rows fails loudly, never skipped.
 Closed as a record.
 
-### `PDM-Q5` RULED 2026-09-18 — The anchor, the bands, the launch window; `Trust::BelowAnchor` confirmed
+### `PDM-Q5` RULED 2026-09-18, AMENDED 2026-09-22 (`assumevalid = 0` is no anchor; genesis is in no band) — The anchor, the bands, the launch window; `Trust::BelowAnchor` confirmed
 
 **Grounded at** `dev@20ebdf1e5`; `connect.rs:281-329` and `error.rs:273` read
 at source.
@@ -301,8 +301,9 @@ fallback **REJECTED**. The items it owed:
   never falls more than `W` behind the tip.
 - **Release-gate full-verify step** — a process sentence: the release that
   carries `C` is built from a node that verified every proof to `C` with
-  `assumevalid = 0`; recorded in `SIGNING.md`'s release flow when the first
-  checkpoint ships.
+  `assumevalid = 0` — **no anchor, `Trust::Full` from height 0, band 1
+  empty** (amendment below); recorded in `SIGNING.md`'s release flow when
+  the first checkpoint ships.
 - **Band-2 egress** — a formula, not a decision: release gap × tx rate ×
   ~16.7 KB/tx (F24), bounded above by `W` × rate × 16.7 KB.
 - **The anchor check's home** — `CEN-E1` (Q11: the equality rule is the
@@ -319,6 +320,37 @@ fallback **REJECTED**. The items it owed:
   recorded in `RuleCoverage` and `connect`'s provenance (so a band-1 file is
   never parity evidence), and the `in_force` check is untouched. E6's, to
   land in slice 3 or 6 with the `CEN-E1`/`E2` re-key.
+
+**AMENDMENT 2026-09-22 — `assumevalid = 0` is "no anchor", not "genesis is
+the anchor"; genesis belongs to no trust band.** Asked by the E6 lane
+(`CHAIN_RULES_SLICE_3.md`, the `Trust` input): the two readings coincide in
+*verification work* — genesis is coinbase-only, `CTTypeNull`, so there are no
+proof rows for `BelowAnchor(0)` to skip — and diverge the moment anyone asks
+whether band 1 is empty at first release, or reads the store: under
+`BelowAnchor(0)` height 0 would be connected with its proof rows *not run*,
+their absence recorded in `RuleCoverage` and `connect`'s provenance, and the
+genesis file marked "never parity evidence". Ruled:
+
+1. **`assumevalid = 0` ≡ no anchor ≡ `Trust::Full` from height 0; band 1 is
+   `∅`.** This is the only reading under which the release-gate sentence
+   above is not circular: a node that "verified every proof to `C`" ran
+   `Full` at every height, including 0. First release ships in this state.
+2. **Genesis is in no band.** It is not *trusted with the binary* (band 1's
+   defining property); it is *defined by* the binary — a hash-pinned
+   constant checked by equality, never by assumption. The launch-window
+   bullet's `(0, tip − W]` reads accordingly: the excluded `0` is "height 0
+   is not in band 2", not "`C = 0`".
+3. **"Genesis is the anchor" is made unrepresentable, not merely
+   unintended:** `Trust::BelowAnchor(anchor)` carries `anchor ≥ 1` (a
+   non-zero height; the constructor refuses 0). `assumevalid = 0` can then
+   only map to `Full`, and the `Trust` input has exactly two constructible
+   states — E6 lands the refusal with `Trust` (slice 3 / slice 6, its
+   choice), and the first-release node is the one where `BelowAnchor` cannot
+   be built at all.
+
+Falsifier for item 3: a `BelowAnchor(0)` constructed anywhere in the tree —
+`rg 'BelowAnchor\(0\)' rust/` — is a regression of this ruling, not a
+configuration.
 
 **Reversion.** As restated 2026-09-13, plus: the `Trust` shape reverts if
 `connect`'s `in_force` check is shown to admit a second set per height —
@@ -655,7 +687,7 @@ holdings-advertisement sub-question closes as *none on the wire*.
 
 | Surface | What | Disposition |
 | --- | --- | --- |
-| C++ engine | `prune_worker`; `check_pruning`, `get_blockchain_pruning_seed`, `prune_blockchain`, `update_pruning`; `CRYPTONOTE_PRUNING_*`; `src/common/pruning.{h,cpp}`; `--prune-blockchain`; stripe-aware sync and peer selection | **DELETED 2026-09-21** (`feat/pruning-seed-wire-deletion`). The first draft scheduled this "at `DRS-E*` with the C++ store" citing `PDM-Q-S0`; S0 forbids *implementing* set-B discard in C++, not deleting the inherited engine, and the wire half (next row) does not die with the store — so it went now. Not ported: S-PRUNE is a *refusal* to port. **Left in place, disclosed:** `prune_tx_data` / `get_last_pruned_tx_data_height` / `CRYPTONOTE_TX_PRUNE_DEPTH` — Shekyl's C++ tx-data discard past the reorg depth, a different mechanism, reached only through the stripe path (`seed != 0`) so unreached in production before and after; it and the now write-never `txs_prunable_tip` table die with the C++ store (DRS `S-PRUNE` row). |
+| C++ engine | `prune_worker`; `check_pruning`, `get_blockchain_pruning_seed`, `prune_blockchain`, `update_pruning`; `CRYPTONOTE_PRUNING_*`; `src/common/pruning.{h,cpp}`; `--prune-blockchain`; stripe-aware sync and peer selection | **DELETED 2026-09-21** (`feat/pruning-seed-wire-deletion`). The first draft scheduled this "at `DRS-E*` with the C++ store" citing `PDM-Q-S0`; S0 forbids *implementing* set-B discard in C++, not deleting the inherited engine, and the wire half (next row) does not die with the store — so it went now. Not ported: S-PRUNE is a *refusal* to port. **Then the rest (2026-09-22, `feat/delete-cxx-tx-data-prune`):** `prune_tx_data` / `get_last_pruned_tx_data_height` / `CRYPTONOTE_TX_PRUNE_DEPTH` — Shekyl's C++ tx-data discard past the reorg depth, a different mechanism reached only through the stripe path and therefore a callee with no caller after #821 — deleted with its `output_metadata` cache, its watermark property, `get_info.tx_prune_height` (RPC 3.36) and the write-never `txs_prunable_tip` table: LMDB v15, redb `SCHEMA_VERSION` 10. S-PRUNE inherits no discard mechanism of either shape. |
 | C++ sync | `--sync-pruned-blocks` (`arg_sync_pruned_blocks`) | **DELETED 2026-09-21, under `PDM-Q5`'s rejection, not under this ruling's "engine"** — it is trust-the-txid-skip-the-proofs with *no anchor*: Q5 REJECTED trust-below-`D_max` as a posture *with* a reorg bound, and this flag is that posture with none — a live implementation of a rejected ruling. Band 1 under the anchor (Q5, F28) is the successor and the only skeleton-sync path the design admits. Recorded here so the reason survives the engine's deletion. |
 | P2P wire | `pruning_seed` on `CORE_SYNC_DATA` and every peerlist entry; Rust mirror `shekyl-levin/src/payload/types.rs` | **DELETED 2026-09-21, both languages** — superseding the first draft's *retire-by-zeroing* ("send `0`, ignore non-zero"). The finding that changed it (2026-09-21): the field was a durable, address-keyed, self-asserted attribute gossiped in every peerlist — the shape `PWD-I1` deleted `peer_id` for, two lines below the comment saying why — and with a uniformly-zero honest fleet (23/23 handshakes at `seedbrz`) the eight accepted non-zero values were free markers for topology tracing through `get_peerlist_head`, which `net_node.inl`'s candidate selection *acted on*. Zeroing keeps the slot and the nine-valued validator; deletion removes the class. Interop-safe: both homes were `KV_SERIALIZE_OPT(…, 0)` (absent reads as 0, unknown keys are skipped); the positional VARINT form had no caller. `shekyl-levin` decodes a stale key with the key ignored (tested). Peerlist store v8 → v9. Closes `PDM-Q8`'s residue: retention reaches no wire. CI: `scripts/ci/check_no_stripe_engine.sh`. |
 | RPC | `pruning_seed`, `next_needed_pruning_seed`; method `prune_blockchain` | **DELETED 2026-09-21** at `CORE_RPC_VERSION` 3.35 (`get_peer_list`, `get_connections`, `sync_info`; `_v3` vectors); **`prune_blockchain` REJECTED** in the daemon method registry (rule 23 namespace protection — a refused name stays in its table; `DAEMON_RPC_KV_CUTOVER.md` RK-8 marked). *Corrected 2026-09-18 on review:* `get_blockchain_pruning_seed` is **not** an RPC method — it is the core getter `on_prune_blockchain` calls to fill its response (`:1441`); it dies with the C++ engine row above, not as a registry entry. |
@@ -1330,7 +1362,7 @@ or the question block named). Grades as recorded there.
 | `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24); the free regime's market behaviour is **bootstrap** — the ruled staker emission share (`DESIGN_CONCEPTS.md` Component 4) favours early adopters by intent; the `bond_duration` vs `W` relation proposed by the §3 walk on 2026-09-17 is WITHDRAWN the same day, no gate entry | **RULED 2026-09-18 (shape; numeric PROVISIONAL)** — shard-granular predicate `b_{k+1} ≤ first_tx_id(tip − W) ∧ close_height(k) + SEB < tip` (the `k ∉ exceptions` conjunct struck on #775 / Q9 — no exceptions on any daemon; genesis guard: evaluated only for `tip ≥ W`), asserted at S-PRUNE's per-epoch batch; `W` set by coincidence with F19's journal floor (`CRB + n·SEB + D_max` ≈ 140,720 ≈ 195 days), honest downtime satisfied as a consequence, the day-195 no-scarce-byte cost stated as an argument; every shard has its own `≥ W` bondable-while-universal window; the two-`W` rollout is a bounded Q8 exception; pass records fall under the predicate; item 4 row 1 is a precondition of the first real discard. Numeric to the Round-2 gate with `n`, `D_max`, `W`, `w_launch` (four numerics) |
 | `PDM-Q3` | Residual consensus reads after TJ-A; **the instrument is `ChainView`'s surface (F29)** | **RULED 2026-09-18** — Rust: empty by construction (F29, `ChainView` has no body accessor; standing property in `CHAIN_RULES_CRATE.md` §13). C++: the one residual reader is the serve-credit verifier's leaf read (F8; `get_curve_tree_leaf_chunk`, `blockchain.cpp:5099` today) — Q6 item 4 row 1, dies at E4 / S-ARCH, not with the stripe engine |
 | `PDM-Q4` | Reconstruction path — collapsed: no chain-following read reaches an archiver for a node with downtime under `W`; the daemon's fetches (band-2 fill, own-exception recovery, history read-back) are all optional; TJ-F rebinds to the per-tx verify (a body-fill read that does not hash to the retained row fails loudly, never skipped) | **CLOSED 2026-09-18** — collapsed (F20/F23/F24); TJ-F re-bound to the per-tx verify; the daemon's fetches are episodic and optional (#775). A record |
-| `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering; **band 1 needs a below-anchor `RuleSet` (F27) and both txid components on the skeleton wire (F28)** | **RULED 2026-09-18** — anchor model stands; launch window = first checkpoint release before day ~195, cadence `≤ W` (band 2 empty until `tip ≥ W`); full-verify a release-flow sentence; band-2 egress a formula; anchor check at `CEN-E1`; Q11 ordering discharged; **`Trust::Full \| BelowAnchor(anchor)` CONFIRMED** — forced by `StoreCannot::RuleSetNotInForce` (`connect.rs:281-329`) |
+| `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering; **band 1 needs a below-anchor `RuleSet` (F27) and both txid components on the skeleton wire (F28)** | **RULED 2026-09-18** — anchor model stands; launch window = first checkpoint release before day ~195, cadence `≤ W` (band 2 empty until `tip ≥ W`); full-verify a release-flow sentence; band-2 egress a formula; anchor check at `CEN-E1`; Q11 ordering discharged; **`Trust::Full \| BelowAnchor(anchor)` CONFIRMED** — forced by `StoreCannot::RuleSetNotInForce` (`connect.rs:281-329`); **AMENDED 2026-09-22:** `assumevalid = 0` ≡ no anchor ≡ `Trust::Full`, band 1 `∅` at first release; genesis is in no band (defined by the binary, not trusted with it); `BelowAnchor(anchor)` carries `anchor ≥ 1` so "genesis is the anchor" is unrepresentable (E6 lands the refusal with `Trust`) |
 | `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22); **the store identity carries both occupants' hashes (F26)**; **item 3 names one unit for bond `holdings`, F17's wire echo and the challenge draw alike (§3 stripe/shard walk, 2026-09-17)** | **RULED 2026-09-17 (items 1–3)** — the good is the prunable region + `pqc_auths` for every tx below `W`, verified by `txs_prunable_hash` + `txs_pqc_auth_hash` (item 2 ratifies F26's landed default, #768 merged `398d85e7b`); a shard is a **byte-bounded `tx_id` range** `[b_k, b_{k+1})` closing at cumulative `SHARD_BYTES` over retained per-tx length rows (**item 3 AMENDED 2026-09-18, F32** — fixed `T` superseded; S-CHAIN-W A4 length row owed; discard is shard-granular at `b_{k+1} ≤ first_tx_id(tip − W)`), one unit for bond `holdings`, wire echo and draw; the credit-wire `transfer_digest` collision is **not reopened**. **Item 4 RULED 2026-09-18**: nine-row re-key/reopen table — the serve-credit admission verifier is **reopened as consensus** (the signed preimage derives `R_k` + leaf index today, `wire.rs:345`; lands at E4 / S-ARCH); `challenge_leaf_index` is retired by ruling, live in code, deleted at S-ARCH; `RF-D1`/`RF-D6`/`SF-D8` reopened, `SF-D7`/`SF-D1`/`CR-D2`/`TJ-D` re-keyed. Before DRS-E2's first writer, as F26 required. `TxIdentity` carries both occupants' hashes since #768 (`{ hash, pqc_auth_hash: Option<_>, prunable_hash }` from `Transaction::txid_parts()`, DRS §7.7 items 1–2); the `txs_pqc_auth_hash` **row** landed on PR #772 (S-CHAIN-W amendment A3, DRS §7.7 item 3); the A4 length rows are owed (FOLLOWUPS). Item 4 was OPEN by name until its ruling above |
 | `PDM-Q7` | Stripe engine / `--prune-blockchain`; unbonded retention exceptions | **RULED 2026-09-18** — removed completely; nothing of the engine survives as design (F17's "worth taking" refuted: assignment, advertisement and coverage are the bond, the bond, and price); **C++ engine, both flags, and the `pruning_seed` wire field DELETED 2026-09-21** (`feat/pruning-seed-wire-deletion`; the first draft's "dies at `DRS-E*`" misread `S0`, which forbids *implementing* in C++, not deleting — and the wire half did not die with the store; the "send `0`, ignore non-zero" retirement was superseded by deletion once the field was seen to be `PWD-I1`'s shape with eight free marker values against a uniformly-zero fleet), nothing ported into S-PRUNE; `--sync-pruned-blocks` deleted **under Q5's rejection** (trust-the-txid with no anchor); gated by `scripts/ci/check_no_stripe_engine.sh`; `prune_blockchain` REJECTED in the daemon RPC registry (`get_blockchain_pruning_seed` is a core getter, not a method — dies with the engine); RPC seed fields dropped at the cutover's `CORE_RPC_VERSION` bump. **Unbonded retention exceptions PERMITTED** — retention and serving are different acts; a floor, not a hazard |
 | `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **RULED 2026-09-18** — serve side as ruled 2026-09-13, strengthened by #775 (no serving state on any daemon; all daemons prune); fetch side closed by citation: Tor client with no address (`SF-D3`), test-is-a-read indistinguishability (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9; `SF-D5`/`SF-D8`; `SF-D10` draw), the persona never fetches — its daemon does, episodically; two-`W` rollout the one bounded exception |
@@ -1446,7 +1478,7 @@ is read at admission.
 | `tx_indices` (hash → id, height, unlock) | — | `tx_indices` | ~56 B/tx | consensus (tx lookup, reorg), RPC | rebuild from `blocks` | CACHE (kept; index) |
 | `tx_outputs` (tx → global output indices) | — | `tx_outputs` | 8 B/output | reorg pop (`remove_output`), RPC | rebuild | CACHE |
 | `txs` (inherited) | — | `txs` | 0 (unused at v3; `Excluded`, `class.rs`) | none | — | deletion target (rule 60), not this round's |
-| `txs_prunable_tip` | — | `txs_prunable_tip` | 8 B/tx in tip | inherited stripe engine only; write-never since Q7's deletion (2026-09-21) | — | LOCAL-BOUNDED (table dies with the C++ store) |
+| ~~`txs_prunable_tip`~~ | — | — | — | inherited stripe engine only; write-never after Q7 (2026-09-21), **table DELETED 2026-09-22** (LMDB v15 / redb v10) | — | — |
 
 Totals for the 2-in/2-out transaction, at the pin: **~20 KB on the
 wire; ~3 KB is KEEP-C/KEEP-W/KEEP-D (prefix + base + KEM ct + leaf
@@ -1459,7 +1491,7 @@ pending a hash row (F14).** A ruling that takes both GOOD rows retains
 | Table | Bytes/output | Post-admission readers | Derivable from | Class |
 | --- | ---: | --- | --- | --- |
 | `curve_tree_leaves` | 128 | serve-credit verify **today** (`blockchain.cpp:5327`, F8 — goes with TJ-A); `trim_curve_tree` boundary chunk on pop (`:9361`, F10); RPC `shekyl-fcmp::rpc_path` | `O`, `C`, `CM` → `shekyl_construct_curve_tree_leaf` (`blockchain_db.cpp:608`) | CACHE (F12) |
-| `output_metadata` (`output_data_t`: pk, unlock, height, commitment) | 80 | none in consensus — `scan_outputkeys_for_indexes` deleted with `check_tx_input` (`PDM-Q-F18`); RPC `chunk_outputs` via `shekyl-fcmp::rpc_path` | `vout` + `outPk` + block height | CACHE (`Excluded` in slice A, `class.rs:149`) |
+| ~~`output_metadata`~~ (**DELETED 2026-09-22**, LMDB v15 / redb v10 — the C++ tx-data prune's scan cache; the retained prefix carries what a scanner needs) | 80 | none in consensus — `scan_outputkeys_for_indexes` deleted with `check_tx_input` (`PDM-Q-F18`); RPC `chunk_outputs` via `shekyl-fcmp::rpc_path` | `vout` + `outPk` + block height | CACHE (`Excluded` in slice A, `class.rs:149`) |
 | `output_txs`, `output_amounts` | ~40, ~48 | reorg pop, RPC | rebuild | CACHE |
 | `output_to_leaf`, `leaf_to_output` | 16, 16 | leaf ↔ output mapping on pop and RPC | rebuild (insertion order) | CACHE |
 | `pending_tree_leaves`, `pending_tree_drain`, `block_pending_additions` | 128 + index, transient | maturity drain at unlock height (consensus) | rebuild from `unlock_time` | KEEP-C while pending; self-bounding (empties at maturity) |

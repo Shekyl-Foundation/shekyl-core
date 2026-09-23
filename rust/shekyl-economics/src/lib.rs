@@ -24,6 +24,7 @@ pub mod escalation;
 pub mod fee;
 pub mod params;
 pub mod release;
+pub mod supply;
 pub mod volume;
 
 pub use activity::{ActivityInvariantViolation, ActivityMetric};
@@ -31,8 +32,8 @@ pub use block_weight::{
     blocks_to_surge_saturation, effective_median, long_term_weight, BLOCK_WEIGHT_SURGE_FACTOR,
 };
 pub use burn::{
-    calc_burn_pct, calc_burn_pct_from_activity, compute_burn_split, compute_burn_split_at,
-    BurnSplit,
+    calc_burn_pct, calc_burn_pct_at, calc_burn_pct_from_activity, compute_burn_split,
+    compute_burn_split_at, compute_fee_burn, BurnSplit,
 };
 pub use digest::{params_digest, DIGEST_FORMAT_VERSION};
 pub use emission::{
@@ -40,7 +41,9 @@ pub use emission::{
     block_weight_limit, effective_emission, emission_speed_factor, paid_block_reward,
     projected_already_generated, tail_subsidy_per_block, EmissionError,
 };
-pub use emission_share::{calc_effective_emission_share, split_block_emission};
+pub use emission_share::{
+    calc_effective_emission_share, compute_emission_split, split_block_emission, EmissionSplit,
+};
 pub use escalation::{
     staker_pool_share_at, EscalationParams, EscalationShapeError, FrozenSegmentCount, ScaledShare,
 };
@@ -53,7 +56,8 @@ pub use fee::{
 };
 pub use params::{
     calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,
-    EMISSION_CURVE_ASYMPTOTE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    EMISSION_CURVE_ASYMPTOTE, FULL_REWARD_ZONE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 pub use release::calc_release_multiplier;
+pub use supply::{CirculatingSupply, SupplyInvariantViolation};
 pub use volume::TxVolume;

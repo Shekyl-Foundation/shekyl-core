@@ -5,9 +5,10 @@
 and commit 8's regtest leg) LANDED on the branch 2026-09-20 — ported from
 the parallel #806 onto #804's APIs (rule 95: code on `dev` wins) after the
 two lanes were found to have built the same increment 1 independently.
-Open: commit 8's testnet leg and LWMA-past-N run (§7 item 8, blockers
-named), the mutation family (§7 item 8d, increment 3), commit 9's archive.
-Increment 2's review round (2026-09-21, §9; RD-F21, RD-F22) is on the branch.** Round 1 RULED 2026-09-19 (RD-Q9–RD-Q12). Round 1 opened with the sweep of #785 as
+Increment 3 (§7 item 8d, the mutation family) LANDED on its branch
+2026-09-22 — §3.10 is its spec; §5's FTL row is closed. Open: commit 8's
+testnet leg and LWMA-past-N run (§7 item 8, blockers named), commit 9's
+archive. Increment 2's review round (2026-09-21, §9; RD-F21, RD-F22) landed.** Round 1 RULED 2026-09-19 (RD-Q9–RD-Q12). Round 1 opened with the sweep of #785 as
 merged (`dev` @ `93f91b0d4`; §3.7); ground re-pinned to `306af9bae` (§0.1). Round 0 REVIEWED and RULED 2026-09-19
 (maintainer). Round-0 text was written against `dev` @ `14f8dc739` with #785
 in flight; §3.7 records what the merged tree changed, and every citation
@@ -421,6 +422,91 @@ Tag `0x03` (**Verdict**, the mutation family's expected verdicts, §7 item 8d)
 is RESERVED: named here so the byte is not re-minted, no code until that PR
 (rule 23).
 
+### 3.10 The mutation family — spec-first expected verdicts (increment 3, §7 item 8d)
+
+**Written before the code (rule 05), 2026-09-22, at `dev` @ `0642d60cb`.**
+The family is a `Source` that wraps any Extend-only source and replaces the
+`Extend` at one height with a *systematically invalidated* candidate. Each
+mutation names, **from the census and not from the C++**, the row that
+refuses it. That named row is the whole of the family's oracle: a regtest
+daemon is secondary evidence (§1.3) and is item 8's regtest leg, not this
+increment's; trace tag `0x03` (Verdict) **stays RESERVED** — the expected
+verdict is code (`Mutation::expected`), not an artifact row.
+
+**What a mutation must be.** One block, one deliberate violation, everything
+else valid — so a refusal on any *other* row is itself a finding (the
+family's tests assert the row, not merely "refused"). The wrapper is
+Extend-only and keeps the source's numbering; heights are the pipeline's
+(`first_height + n`), never the mutation's to choose.
+
+**The table.** Status is the census's own (`CenRow::status`), read at the
+pin and re-read by the test at every run; **the test's branch is chosen by
+that status**, so an E6 slice that ports a pending row turns the family's
+"pinned today" assertion red and forces it onto the refusal branch — the
+falsifier is the census, not a date (rule 22).
+
+| Mutation | What changes | Expected row (spec) | Stage | Status at pin | What the family asserts while the row is `Pending` |
+|---|---|---|---|---|---|
+| `HeaderVersion` | `major_version` bumped past the set's admitted version | **CEN-B1** | `form` | Implemented | — |
+| `Orphan` | `previous` = a hash the chain never held | **CEN-A2** | `validate` | Implemented | — |
+| `WrongRoot` | `curve_tree_root` replaced by a root the tree never had | **CEN-B5** | `validate` | Implemented | — |
+| `FutureTimestamp` | `timestamp` = `clock + FTL + 1` — **closes §5's FTL row** | **CEN-C1** | `validate` | Implemented | — |
+| `StaleTimestamp` | `timestamp` = `0`, at or below every MTP median | **CEN-C2** | `validate` | Implemented | — |
+| `PowUnderWrongSeed` | nonce re-mined so the longhash **satisfies the target under a wrong seed and fails it under the true seed** (D1b's `check_hash`, both legs); the pipeline claims the true seed (RD-Q5), so D2 hashes under it and D1 refuses. The seed is not in the block — "bad seed" is a block *mined* against the wrong one | **CEN-D1** | `validate` | Implemented | — |
+| `WrongReward` | the coinbase's clear output amount off by one | **CEN-F13** | `validate` (4.F) | **Pending** | the block **connects** — Rust has no emission check yet; the family pins the acceptance so the gap is a red test the moment F13 lands, not a surprise in a security review |
+| `ReorderedBodies` | two listed bodies swapped; the header's `tx_hashes` untouched | **CEN-G2** (body ↔ hash agreement) | `validate` (4.G) | **Pending** | the block **connects**. The corpus *writer and reader* refuse this shape as a source fault (RD-F15) — that is artifact hygiene, not the verdict; the in-memory family reaches `validate` with it and shows the rule is absent |
+| `DoubleSpend` | a listed spend reuses a key image an earlier block spent | **CEN-I7** (+ CEN-L1 at connect) | `validate` (4.I) | **Pending** | `validate` accepts; `connect` arms **SI-1** `KeyImageNotFresh` and the run ends in a **halt** (`PipelineFault`, the writer `Over`) — exactly C2-R8's taxonomy: *a belt firing is the validator's hole*. Pinned as the observed shape; flips to a refusal at `Locus::Input` when I7 lands |
+
+**Environment a mutation needs**, supplied by the caller (`Environment`): the
+clock the substrate will report (C1's bound is computed from it, not
+guessed), and for `PowUnderWrongSeed` the longhash function, the target and
+the two seeds. Nothing else: `StaleTimestamp` needs no median (`0` is below
+any), `DoubleSpend` takes its key image from the `Extend`s the wrapper has
+already passed through, `Orphan`/`WrongRoot` use named constants no chain holds.
+
+**Place.** `Mutation::expected` is the row. `Mutation::expected_place` is
+where that row points: `Block` for the six rows implemented at the pin,
+`Input` for `DoubleSpend` (the I7 refusal this table names), and `Unnamed`
+for `WrongReward` and `ReorderedBodies` until 4.F and 4.G name their locus.
+The refusal branch asserts that place. It does not assume `Locus::Block`
+for a row the spec has not sited.
+
+**When a mutation cannot be carried.** `Unmutable`, not a candidate that
+connects. Timestamp mutations are `GenesisExempt` at height 0 — CEN-C1 and
+CEN-C2 return before reading the timestamp. `FutureTimestamp` is
+`NoRepresentableFuture` when `clock + FTL + 1` does not fit in a `u64`:
+the predicate's saturating subtract would still accept `u64::MAX`, and
+emitting it would be a block the named row does not refuse. The instant is
+`Timestamp::checked_add_secs`, one second past `FTL_SECONDS`. The coinbase
+amount moves by `checked_add` of one atomic unit, and is `Unmutable` at
+`u64::MAX`.
+
+**Fixture length.** Every mutation is the tip (height 2, a chain of three).
+A successor of a block that connects is an orphan on CEN-A2, so a pending
+pin would read the gap as a refusal. A successor of a block that is refused
+is never judged: the actor stops the batch at the first refusal. One length
+covers both; there is no status-dependent chain length.
+
+**The cursor.** Heights step by `BlockCount::ONE`. The event is built
+before the cursor moves. The block at `u64::MAX` is yielded; the event
+after it is `HeightExhausted` (the corpus's own ceiling, not an abort). A
+fault is not retryable — the inner event was consumed, and a second pull
+must not assign that height to a later event.
+
+**Fixture PoW.** `MockSubstrate::always_satisfies` makes D1 unfalsifiable,
+so the D1 case runs under a **seed-sensitive mock longhash** —
+`keccak256(pow_blob ‖ seed)` — at `fixed_difficulty = 2` (half of all
+hashes pass), with the valid chain **mined** against it. This is the first
+fixture in the crate where PoW can fail; the mock is a test fn, the target
+a `ChainRules::Regtest { fixed_difficulty }` the driver already supports
+(RD-Q7). Not RandomX: the family tests the *rule*, and RD-Q12's parity gate
+tests the hasher.
+
+**Out of this increment, named:** the reorg × mutation cross (a mutation on
+a fork block) — the wrapper is Extend-only by §3.8's own sentence, and a
+`Rewind`-aware wrapper is a second barrier rule with no consumer today; the
+regtest C++ leg (item 8); tag `0x03`.
+
 ## 4. Questions — Round 0 defaults, with the 2026-09-19 rulings in-line
 
 | Q | Question | Disposition | Why |
@@ -443,7 +529,7 @@ is RESERVED: named here so the byte is not re-minted, no code until that PR
 
 | Deviation | Reason | Reopen / falsify |
 | --- | --- | --- |
-| C1's FTL refusal is not exercised by corpus replay | historical blocks are always below `now + FTL` | **closed by the mutation corpus family's future-timestamp case** (§3.8, REVIEW INPUT) once that family lands; until then the row stands open |
+| ~~C1's FTL refusal is not exercised by corpus replay~~ — **CLOSED 2026-09-22** by the mutation family's `FutureTimestamp` case (§3.10): `timestamp = clock + FTL + 1`, refused on CEN-C1 through the real pipeline (`mutation_tests::the_family_lands_on_its_named_rows`) | historical blocks are always below `now + FTL`; a *mutated* one is not | falsify by that test's C1 arm going red |
 | `--fixed-difficulty` on regtest runs (RD-Q7) | the bench needs real RandomX cost at a reachable target | production nets refuse the flag by type (`for_network` cannot yield `Fixed`, pinned) |
 | `drs_bench.py`'s lowered target | benchmark reproducibility on the provisioning floor | the artifact records the target; `drs_artifact.py` refuses cross-condition ratios |
 | The redb file's `Provenance` is NOT-PARITY-EVIDENCE throughout E2 | six facts passed through; enforced rows unimplemented | `passed_through().count() == 0 && coverage_gaps().is_empty()` — the genesis gate |
@@ -733,7 +819,7 @@ by review size (rule 06), inside one ruled plan; every item keeps its slot.
 
     Recipe (regtest): start `shekyld --regtest --fixed-difficulty 1 --offline --no-igd --rpc-bind-port P --data-dir D` with no `SEEDHASH_EPOCH_*` in the environment; mine with `generateblocks` to a mineable address (the e2e harness's fixed-seed wallet prints one); `shekyl-chain-replay fetch --daemon http://127.0.0.1:P --chain regtest --to H --out corpus.bin`; `shekyl-e2-trace-export --regtest --data-dir D --out trace.bin` (built with `-DBUILD_E2_TRACE_EXPORT=ON`; build target `shekyl_rust` first — the Makefile generator's custom-command scope; it refuses to run with `SEEDHASH_EPOCH_*` in its own environment, RD-F19, and holds one LMDB snapshot for the whole walk, so the daemon may be up); `python3 scripts/ci/export_conformance_register.py --out register.json`; `shekyl-chain-replay replay --corpus corpus.bin --trace trace.bin --store S --chain regtest --fixed-difficulty 1 --register register.json --grade-out grade.json --metrics-out metrics.json`.
 8c. **LANDED (increment 2)** `ingest: Rewind — the reorg source family; pop + connect through the actor with the barrier rule; digest after each switch` (RD-Q13; §3.8): the corpus gains the `rewind` record (format v2, tag byte per record — writer and reader apply one law, `to ∈ [first_height, tip)`); `CorpusReader` emits `IngestEvent::Rewind`, so the family is corpus files, not a second `Source` type; `RunReport::switches` carries the post-pop digest (pop symmetry through the actor); fixture `test_support::reorg`. Checkpoints under reorgs: compared the first time a height is the tip, so a fixture's checkpoint sits beyond every pre-switch tip and a C++ trace is tip-only by RD-F18.
-8d. `ingest: the mutation family — systematic invalidations of a valid corpus with spec-first expected verdicts` (§3.8: header flips, wrong reward, reordered transactions, double spend, bad seed, future timestamp closing §5's FTL row). **Increment 3 — a split inside this ruled plan, not a deferral** (rule 22 §1: size and separability are split reasons; the same framing the status line uses for increments 1 and 2). The family is Extend-only and lands on the pipeline exactly as increment 2 left it; owner this plan, which stays in `design/` until it lands. Falsify by `rg 'mutation' rust/shekyl-chain-ingest/src/` finding a `Source`.
+8d. **LANDED (increment 3, 2026-09-22)** `ingest: the mutation family — systematic invalidations of a valid corpus with spec-first expected verdicts` (§3.10 is the spec, written before the code). `mutation.rs`: nine `Mutation`s each naming its census row (`expected()`) and the place that row points (`expected_place`: `Block` for the six live rows, `Input` for the double spend, `Unnamed` for F13 and G2 until those slices name a locus), `Mutated<S>` the Extend-only `Source` wrapper, `Environment`/`Pow` for the clock and the wrong-seed mining. Six rows `Implemented` (B1, A2, B5, C1, C2, D1) refuse exactly as named through the real pipeline; three `Pending` (F13, G2, I7) are **pinned at today's shape** — connects, connects, SI-1 halt — with the census's own `CenRow::status` choosing the test's branch, so an E6 port turns the pin red (the falsifier is the census, not a date). A provocation the named row cannot judge is `Unmutable` (a timestamp mutation at genesis; a future timestamp that does not fit). D1 runs under a seed-sensitive mock longhash at `fixed_difficulty = 2` with the chain mined against `seed_height`. Trace tag `0x03` stays RESERVED; the regtest C++ leg is item 8's. *Was: a split inside this ruled plan (rule 22 §1), Extend-only, on the pipeline as increment 2 left it.*
 8b. **LANDED (increment 2; forensics completed 2026-09-21)** `ci: randomx-v2-differential — header re-framed as the permanent verifier↔JIT parity gate; longhash fuzz across randomx-v2-sys with the rotation index logged and the mismatching blob + both PowHashes emitted in the failure artifact` (RD-Q12, RD-F12). "The RandomX lane" existed in no form (rule 22's owner test), so it landed here: the workflow's header states the permanent obligation; the fuzz job is the rotating lanes — their seedhashes and blobs are **derived from the logged day index** (reproducible from one integer; not the "pinned seeds" RD-Q12's default sketched — index-derived is the stronger hygiene, since a failure names its whole input set); `three_leg_verdict` compares `PowHash`es (the #785 type seam asserted across the gate). **The blob half of the hygiene ruling was not met as first landed** — the lanes' only failure artifact was the log, and the mismatch line carried the seedhash, the data length and the two hashes, not the data — so `mode_rotating` now emits the harness's structured failure record (`FailureOutput`: seedhash, the blob in hex, both hashes, both cache fingerprints, harness version, fork pin) plus the pair's position on stderr at the mismatch, which is the log the lane uploads.
 9. `docs` — DRS-E2 row, index, FOLLOWUPS sweep (items 1–7 of §2), this file to `completed/`. **Partial (increment 2):** index and FOLLOWUPS swept; this file stays in `design/` while 8d and item 8's open legs are owed.
 
@@ -778,6 +864,8 @@ code or a re-pointed FOLLOWUPS row with a live owner.
 | 2026-09-20 | **Increment 1 review (three commits by the maintainer, one CI failure, RD-F17).** `0476a22ab` made D4's window walk strict (equal adjacent work is Corrupt — SI-10 as written); `760e9a2d8` parses corpus blobs with `from_bytes` (exact consumption; a padded blob is `Malformed`); `f7326d9ab` names SI-10 as read-armed and the store's one `Corrupt` exception. The strict walk broke slice 2's zero-target fixture and exposed **RD-F17**: LWMA-1 has no floor, zero is reachable from a conforming slow chain, and filing it as `Corrupt` would have halted the writer where the C++ refuses a block. `Corrupt::ZeroTarget` deleted; `D6::mint` → the CEN-D6 verdict; census row amended; FOLLOWUPS row for the DAA owner. |
 | 2026-09-20 | **Two lanes built increment 1 independently; #804's stands.** PR #806 (`feat/drs-e2-ingest-spine`) carried §7 commits 0–8c as a second implementation of the same plan while #804 was in flight; neither saw the other. Reconciled per rule 95 (code on `dev` wins): #804's `source` / `corpus` / `substrate` / `refuse_corrupt` / digest read / `connect(in_force)` stand; #806's 4b, 5, 6b, 7, 7b, 8b, 8c and the RD-F20 fixes were **re-ported onto those APIs** as increment 2 on a fresh branch, and #806 was archive-tagged and closed. Two design deltas that port forced are stated rather than smuggled: the corpus `rewind` record (format v2, tag byte per record — 8c) and the trace checkpoint as the outer `digest_v0` only (the redb read returns no components — 4b). The identifier collision (both lanes minted RD-F16/RD-F17) is resolved by renumbering #806's findings RD-F18–RD-F20 here; rule 94 §6 names this failure and the fix is the plan's own banner saying which commits are in flight and where. |
 | 2026-09-20 | **Increment 2 LANDED on the branch** (§7 commits 4b, 5, 6b, 7, 7b, 8b, 8c, and commit 8's regtest leg): the trace + FFI + LMDB exporter (RD-F18: one checkpoint, at the tip); the pipeline with the no-restart actor, the barrier rule and heights assigned by the pipeline (RD-F19: the mainnet seed schedule at every nettype); `ChainRules`; the two-clause grader over the extractor's register; the metrics sink (RD-F20: derives counted at the source, the canonical epoch pinned); the parity-gate header; the `rewind` record and the reorg fixture. **First real runs:** a 301- and a 2301-block regtest chain (`--fixed-difficulty 1`, no `SEEDHASH_EPOCH_*`) fetched over RPC, traced from LMDB, replayed — **digest MATCH at the tip both times, 0 unadjudicated, 11 rows derived-and-conformant, 9 borrowed; the 2301-block run crossed the 2112 seed-epoch boundary (3 derives, 0 waits)**. RD-F11's number: 0.60 s CPU per hash, light mode, x86_64/16 threads. The FOLLOWUPS row *E2 comparator negative control* (one forced-red case per redb table) closed: its per-table premise was superseded by RD-F5's single digest, and the control in that form is one wrong checkpoint going DIVERGE and failing the grade — `a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass`. Open after this PR: the testnet leg and LWMA past N (one blocker: no testnet chain on this host), the mutation family (8d, next PR), commit 9's archive. |
+| 2026-09-22 | **Increment 3 LANDED on its branch** (§7 item 8d; §3.10 written first at `0642d60cb`). Nine mutations through the real pipeline: six land on exactly their named row; the three whose rows are `Pending` pin today's behaviour with the census as falsifier. Two things the implementation taught the spec: **(a)** a mutation whose row is pending *connects*, and a connected block's hash is not the one its successor was built on — a successor would orphan on A2 and the pin would read a gap as a refusal. Every mutation is the tip (height 2, three blocks). A refused block stops the run, so the same length serves the implemented rows; **(b)** `DoubleSpend` must re-list the changed body's hash in the header, or the mutation is *also* a G2 body↔hash mismatch and the wrong row would answer — the one-violation discipline is load-bearing where two pending rows overlap. `DoubleSpend`'s observed shape — `validate` accepts, `connect` arms SI-1, the run halts — is C2-R8's taxonomy seen live: a belt firing is the validator's hole (I7 pending). |
+| 2026-09-22 | **Increment 3 review.** The refusal's place is `Mutation::expected_place`: `Block` for the six live rows, `Input` for `DoubleSpend` (the I7 locus §3.10 already named), `Unnamed` for F13 and G2 until those slices name a locus — the refusal branch does not assume `Locus::Block`. A timestamp mutation that cannot provoke its row is `Unmutable`: genesis (C1 and C2 are exempt) and a clock for which `clock + FTL + 1` does not fit (`Timestamp::checked_add_secs`; the saturating predicate would still accept `u64::MAX`). The wrapper's cursor is `At` / `PastEnd` / `Faulted`: the height steps by `BlockCount::ONE`, the event is built before the cursor moves, the block at `u64::MAX` is yielded, and a fault is not retryable. The D1 fixture claims its seed through `seed_height` and bounds the nonce search. |
 | 2026-09-21 | **Increment 2 review round (55 candidates, 10 top findings, all confirmed ones fixed; `dev` merged).** Two findings minted: **RD-F21** (the seed ledger's window premise fails under a rewind across an epoch step — the store fallback now exists, through the connector) and **RD-F22** (a refusal reached the exit code through one path — graded once as its own field, open unless DIVERGENT; the binary exits non-zero on any ungraded disagreement). **Two readings of ruled text are the lane's, recorded here for the maintainer rather than folded into the fault table as settled:** (a) RD-Q5's "the loop lives in the pipeline" — as built, replay surfaces `Stale::Seed` on first occurrence (RD-Q5's second sentence) and the bounded re-`form` has no honest driver until E3's feed; §2 item 2 now says so, and the ruling row stands unchanged for the maintainer to narrow or hold; (b) §1.3's success condition applied to a refusal on an UNREVIEWED or unrecorded row — "observed-only" governs what a match grants, not whether a run that stopped on a refusal passes, so such a refusal is open (RD-F22). Also this round: one `seed_height` in `shekyl-chain-rules` replaces three spellings of the schedule (D3, the harness, the driver; the store's fixtures too); consecutive sequence numbers asserted at the event; `Source::first_height` asserted at run entry; the writer's latch structural; `window` (lookahead) and `hashers` (RandomX concurrency) separated, finished workers drained before each `Apply`; `Substrate::pin_seed` replaces the `EpochPin` trait and `CacheStore::pin_canonical` serves the daemon's FFI pin and the driver alike; `ProductionSubstrate::new(caches, metrics)` is the one constructor (no detached sink); the exporter under one LMDB snapshot with the daemon's own digest walker (families FFI deleted), `SHEKYL_*` macros, `--block-stop` by presence, zero-root refusal, own-environment `SEEDHASH_EPOCH_*` refusal; RD-F19's "refused by design" corrected; trace `HeightExhausted` / `TrailingBytes`; the corpus count is records, not a span (a rewind occupies no height), and a truncation anywhere in a record is `CountMismatch`; `--batch` non-zero by type; `CorpusNet` is the one chain enum (`--chain regtest` names its Fakechain arm); the register is preflighted and the metrics artifact written on a late fault; the store side of the negative control exists — one raw-redb mutation per digested family (`block_info.hash`, `spent_keys`, `curve_tree_roots[tip + 1]`) moves the digest off the checkpoint; fixtures encode the whole height in every key image; the extractor's selftest parses its serialized text and a committed fixture is held equal to it and parsed by the Rust grader; 8b's blob forensics; 8d re-framed as increment 3 (a split). Left as disclosed reopeners: the outer-only checkpoint (4b) and the corpus carrying no fixed target (RD-Q7's flag shape). Per-switch digests stay O(chain) by design (§3.8). |
 | 2026-09-20 | **Increment 1 review (code-quality).** Corpus reader parses the block first so the header bounds `tx_count` (wire's no-prealloc discipline); writer emits one record per `write_all` and `finish` consumes (no finished flag). Digest assembly is exhaustive over `AtHeight` with an `n_blocks == tip+1` belt. `SequenceNo::next` panics on exhaustion rather than saturating. SI-10 tests extracted from `connect_tests`. Register §1 records the validator-read enforcement site; RD-Q1 names `Corrupt` at `refuse_corrupt` as the one Fault payload the store takes. |
 | 2026-09-19 | **PR review (Copilot, nine threads) taken.** RD-F14: `VmStatePool` is `cfg(test)`/bench-only — the parallel-`form` stage now rests on `compute_hash` per worker, the pool's promotion the RandomX lane's measure-first call. **RD-Q13 posed and defaulted:** a height-ordered stream cannot represent a reorg; the `Source` yields `Extend`/`Rewind` under a barrier rule, or E3 needs a second ingest path — commit 8c. The register count is the gate's (131 recorded, 126/2/3), not a literal; bare slice-2 `Q…` tokens qualified (rule 94 §2); RD-Q1's boundary sentence corrected (the store names `ChainValid`, never `InvalidBlock`/`Fault`/RandomX); the RD-Q9 two-clause rule restored in the CSR §5.4.1 and DRS-E2 restatements; the index documents-row and stamp brought current. |

@@ -138,7 +138,7 @@ TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
   uint64_t expected = 0;
   uint64_t limit = 0;
   ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
-            shekyl_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, zone, 0, 0, &expected, &limit));
+            shekyl_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, 0, 0, &expected, &limit));
   ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, reward, version, {}));
   ASSERT_EQ(reward, expected);
 }
@@ -162,8 +162,7 @@ TEST(mining_parity, genesis_paid_reward_and_split_are_pinned)
   uint64_t paid = 0;
   uint64_t limit = 0;
   ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
-            shekyl_block_reward(0, 1, 0, CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
-                                /*tx_count_sum=*/0, /*window_blocks=*/0, &paid, &limit));
+            shekyl_block_reward(0, 1, 0, /*tx_count_sum=*/0, /*window_blocks=*/0, &paid, &limit));
   ASSERT_EQ(paid, UINT64_C(1638400000000));
 
   const shekyl::EmissionSplit em = shekyl::compute_emission_split(paid, 0, 0);

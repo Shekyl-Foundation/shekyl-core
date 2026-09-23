@@ -34,6 +34,7 @@ use shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS;
 
 use shekyl_ffi::ct_balance_ffi::shekyl_check_commitment_masks;
 use shekyl_ffi::shekyl_fcmp_verify;
+use shekyl_wire::transaction::CT_TYPE_FCMP;
 
 /// Both admission calls' status codes, kept apart.
 ///
@@ -355,8 +356,17 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
 /// callers' `assert_eq!(…, ADMISSION_OK)` is a real self-witness (see
 /// [`AdmissionStatus`]).
 pub fn admission_verify(f: &AdmissionFixture) -> AdmissionStatus {
+    // A spend's amounts are zero on the wire; the FFI takes them as facts and
+    // derives the subject from the CT type (E6 slice 4 §3.1 S27).
+    let amounts = vec![0u64; f.n_out];
     let masks_rc = unsafe {
-        shekyl_check_commitment_masks(f.masks_flat.as_ptr(), f.n_out, std::ptr::null(), 0)
+        shekyl_check_commitment_masks(
+            CT_TYPE_FCMP,
+            f.n_out,
+            f.masks_flat.as_ptr(),
+            f.n_out,
+            amounts.as_ptr(),
+        )
     };
 
     let verify_rc = unsafe {

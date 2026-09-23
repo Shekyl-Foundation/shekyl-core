@@ -555,8 +555,8 @@ Compacts a stopped daemon's LMDB database by copying it without its free
 pages (upstream LMDB's `mdb_copy`, built from the vendored source). The
 stripe engine that used to free those pages (`--prune-blockchain`) was
 deleted 2026-09-21 (`PDM-Q7`). No daemon path discards tx bodies today:
-`prune_tx_data` has no production caller, and the uniform discard is
-S-PRUNE, still a skeleton (`docs/design/DRS_E1_SPRUNE.md`). The tool
+the C++ depth-based discard was deleted 2026-09-22 as well, and the uniform
+discard is S-PRUNE, still a skeleton (`docs/design/DRS_E1_SPRUNE.md`). The tool
 reclaims whatever free pages the store already holds. You temporarily need
 disk space for both copies.
 

@@ -1922,10 +1922,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v12` = 3.35). A bump that
+        // Head of the `get_version` chain (`_v13` = 3.36). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v12.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v13.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {

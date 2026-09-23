@@ -87,7 +87,19 @@ use super::{Canonical, CodecError};
 ///   are unchanged; the layer key and the meta row are new layouts. Four
 ///   codec fixtures are born; the digest's root family (`curve_tree_roots`)
 ///   does not move.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(9);
+/// - `10` — two tables leave the catalogue with the C++ tx-data prune
+///   (`PDM-Q7`'s stripe engine went first, on #821; this is the rest):
+///   `txs_prunable_tip` (#8, the engine's tip index, write-never) and
+///   `output_metadata` (#48, the C++ prune's post-discard scan cache, whose
+///   read chain was dead two levels deep). **Zero stored bytes of any
+///   surviving table change**, but every ordinal after #8 shifts by one and
+///   `undo_log` by two — and the pop journal persists ordinals, so a v9
+///   journal names the wrong tables under v10. Layout bump; pre-genesis
+///   delete-and-resync. The uniform discard that replaces both is S-PRUNE
+///   (`DRS_E1_SPRUNE.md`), which will mint what it needs against the tx
+///   unit rather than inherit either row. LMDB moved `14 → 15` in the same
+///   PR (the X-macro is the bijection's other half).
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(10);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -144,10 +156,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(9));
-        assert_eq!(SCHEMA_VERSION.encode(), [9, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(10));
+        assert_eq!(SCHEMA_VERSION.encode(), [10, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[9, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[10, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }
