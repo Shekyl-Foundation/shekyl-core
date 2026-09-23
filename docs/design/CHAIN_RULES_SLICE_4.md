@@ -1,6 +1,6 @@
 # `shekyl-chain-rules` slice 4 — census 4.F, the miner transaction (DRS-E6 increment 5)
 
-**Status:** OPEN — **rules-crate commits 1–7 LANDED on the branch
+**Status:** OPEN — **rules-crate commits 1–9 LANDED on the branch
 2026-09-22** (§5: sixteen 4.F rows; `implemented 34 / validator-enforced
 150`, `by-construction 4`; genesis pinned, band 1 empty; `WrongReward → F18`). Round 0
 pre-flight written 2026-09-21 against `dev` @ `ea140396b`; Round 0.5 the
@@ -399,7 +399,9 @@ the ingest/spec re-key ahead of the row it protects):**
 | 4 | `chain-ingest`: `WrongReward → F18`, `ExpectedPlace::Miner` (Q6, Q8) | The one cross-lane edit, landed **before** F13 flips so the family is green at every commit; `DRS_E2_REPLAY_DRIVER.md` §3.10 row |
 | 5 | `rules/miner.rs` — sixteen rows (Q1 (a)) | F1/F3/F7/F9/F10 in `form`; F4/F5/F6 in `validate`; F11/F13/F15/F20 as `Emission` on the verdict; F2/F8/F19/F21 by construction. `Corrupt::TxCountNotMonotone` ↔ store `StoreInvariant::FoldNotMonotone` (SI-13, a new register row: a recorded fold never decreases, observed by the validator like SI-10). `fixture::coinbase(height)` becomes a valid coinbase; the store's and ingest's private copies delegate to it |
 | 6 | Genesis pinned (Q3) | `ReleaseAnchors` carries each public network's genesis identity — as a `genesis` pin apart from the checkpoints, per the PDM answer (§8 Q3): verified by equality (E1 at 0, E5 at open), in no trust band, `current()` `None`; derived in test from `cryptonote_config.h` through the genesis tool and held equal to `shekyl_rpc_types::genesis_hash_for` |
-| 7 | Docs | This section; census 4.F pins re-resolved with each row's Rust home; contract stamp; index; DRS row; FOLLOWUPS; CHANGELOG |
+| 7 | SI-13 | The store-invariant register is a bijection, so `FoldNotMonotone` could not ride SI-8's row: SI-13 (a recorded fold never *decreases*, observed by the validator — SI-8 guards the write, SI-13 the read), row 13 |
+| 8 | Docs | This section; census 4.F pins re-resolved with each row's Rust home; contract stamp; index; DRS row; FOLLOWUPS; CHANGELOG |
+| 9 | Genesis is a pin, not an anchor (Q3, the PDM answer) | Commit 6 amended: `genesis` a separate field, `Anchor`s at height `≥ 1` by the compile-time gate, `current()` `None` on every public network; charter glossed at `:304`; FOLLOWUPS row closed |
 
 **Figures at landing:** `consensus: implemented 34 / validator-enforced 150
 held-by-cxx 2 at-open 1 by-construction 4 enforced 152 ratified 126 /
@@ -457,7 +459,7 @@ E3). Coverage over a well-formed candidate: 29 rows.
   count. **Ruled the same day:** Q1 (a), Q3 (a) with one question for the
   PDM lane, Q4 (a), Q5 yes, Q6 reuse `TxSlot::Miner` — the `ExpectedPlace`
   landing being the important half, Q7 as amended, Q8 (a).
-- **Landed on the branch (2026-09-22).** Seven commits per §5. Sixteen rows;
+- **Landed on the branch (2026-09-22).** Nine commits per §5. Sixteen rows;
   `implemented 18 → 34`, `by-construction 0 → 4`. The 4.F census pins
   re-resolved with each row's Rust home.
 
