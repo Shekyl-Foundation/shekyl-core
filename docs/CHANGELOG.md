@@ -351,6 +351,35 @@
   and is unhittable. The Reinstate pop arm no longer calls
   `set_total_bonded_atomic` — connect does not move the counter.
 
+- **The Rust validator judges the miner transaction (DRS-E6 slice 4,
+  census 4.F: sixteen rows).** `shekyl-chain-rules` enforces CEN-F1, F3,
+  F4, F5, F6, F7, F9, F10 on the coinbase — one input of type `gen`, `Null`
+  CT, one output above genesis, the `gen` height equal to the connecting
+  height, `unlock_time = height + 60`, no amount overflow, canonical output
+  keys, non-trivial one-per-output commitment masks — refusing at
+  `Locus::Tx { slot: TxSlot::Miner }`, and derives F11/F13/F15/F20 (the
+  base subsidy at the parent's accumulator, the release-modulated emission,
+  the volume window from two recorded prefix sums; genesis takes its
+  configured emission) onto the verdict as `ValidatedBlock::emission()`.
+  F2, F8, F19 and F21 hold **by construction** (`RowStatus::ByConstruction`,
+  new: the wire admits one transaction version and one output tag; parent
+  state is the view's brand; the split epoch is rule-set data), each with a
+  falsifier the coverage gate asserts. `RuleSet` gains
+  `mined_money_unlock_window` (60) and `emission_split_epoch` (1), pinned to
+  `cryptonote_config.h` and the hardfork tables; `RecordedBlock` gains
+  `coins_generated` and `cumulative_tx_count`; a decreasing prefix sum is
+  `Corrupt::TxCountNotMonotone`, which the store halts on as SI-13's
+  `FoldNotMonotone`. **Genesis is the height-0 anchor** on every public
+  network (`ReleaseAnchors`; derived in test from `cryptonote_config.h`'s
+  pins and held equal to the client identity's `genesis_hash_for`), so a
+  public-network node refuses a foreign genesis at connect and at open.
+  Consensus figures: `implemented 34 / validator-enforced 150`,
+  `by-construction 4`, `enforced 152`. No C++ behaviour changes; the C++
+  remains the validator of record until cutover. The E2 mutation family
+  re-keys `WrongReward` from F13 (a definition, which refuses nothing) to
+  F18 (exact payout, pending on the median) and names the coinbase as its
+  place. Still pending: F14/F14b/F16/F18 (CEN-G6's median, slice 7), F17
+  (DRS-E3's curve-tree writer).
 - **The anchor model has a Rust home (DRS-E6 slice 3, census 4.E).**
   `shekyl-chain-rules` gains `ReleaseAnchors` — the release-carried
   `assumevalid` anchor table `PDM-Q5` ratified, as `const` data per network

@@ -56,9 +56,15 @@
 //! (`CHAIN_RULES_SLICE_3.md`) housed `PDM-Q5`'s anchor model — the
 //! release-carried [`ReleaseAnchors`], the [`Trust`] input to `validate`,
 //! CEN-E1 per block and CEN-E5 at writer open (the first `enforced_at` row;
-//! E2 waits on the alt view and `D_max`). Only complete
-//! coverage is parity evidence, so no verdict minted before the last slice
-//! can be read as one.
+//! E2 waits on the alt view and `D_max`); slice 4 (`CHAIN_RULES_SLICE_4.md`)
+//! landed 4.F's sixteen operand-complete rows — the coinbase's shape and
+//! height claims as predicates at [`TxSlot::Miner`], the emission
+//! definitions as [`Emission`] on the verdict, four rows `by_construction`
+//! (the first of that status), genesis as every public network's height-0
+//! anchor, and two `RuleSet` parameters; F14/F14b/F16/F18 wait on CEN-G6's
+//! median (slice 7) and F17 on the curve tree's writer (DRS-E3). Only
+//! complete coverage is parity evidence, so no verdict minted before the
+//! last slice can be read as one.
 //!
 //! # Consumers
 //!
