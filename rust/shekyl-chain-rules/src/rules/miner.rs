@@ -454,11 +454,36 @@ impl Emission {
     }
 }
 
-/// Unwrap an emission the resolved parameters price. The only `Err` the
-/// emission functions return is the tail subsidy's overflow
-/// (`emission.rs`: `tail_subsidy_per_block` is the sole `?`), and
-/// [`economics()`] refused a parameter set that produces it before any
-/// rule ran, so the arm is unreachable by construction of the call site.
+/// Unwrap an emission whose ONLY failure is priced out by [`economics()`].
+///
+/// # This is safe for two functions, and it is not a general unwrapper
+///
+/// `base_block_reward` and `effective_emission` each have exactly one `?` —
+/// `tail_subsidy_per_block(params)` — and everything else in them
+/// (`curve_emission`, `calc_release_multiplier`, `apply_release_multiplier`)
+/// is infallible. That failure is a function of the PARAMETERS alone, and
+/// [`economics()`] asserts it away before any rule runs, so no block a peer
+/// sends can reach the panic. Those are the only two call sites, and the
+/// property was checked at each rather than assumed of the module.
+///
+/// **`emission.rs` as a whole does NOT have that property, and passing one of
+/// the others here would make this `unreachable!` a panic a peer can trigger
+/// in the validator.** `block_reward_with_penalty` returns
+/// `EmissionError::BlockTooBig` from `current_block_weight` — a quantity read
+/// off the wire — and `projected_already_generated` / `base_emission_at`
+/// carry height-dependent `Overflow` arms. A validator that panics on a
+/// malformed block is a remote crash, not a rejection.
+///
+/// **So: adding a `priced(...)` call site means re-checking that the function
+/// passed has no data-dependent `Err`.** The stronger fix is a distinct
+/// params-only error type so the compiler enforces this instead of a comment;
+/// that changes `shekyl-economics`' public signatures and belongs to a round
+/// that owns that crate, not to a chain-rules slice.
+///
+/// *(An earlier revision of this comment said `tail_subsidy_per_block` was
+/// "the sole `?`" in `emission.rs`. That is true of these two callees and
+/// false of the module, and it is exactly the sentence that would license the
+/// unsafe call site above.)*
 fn priced(emission: Result<u64, shekyl_economics::EmissionError>) -> u64 {
     match emission {
         Ok(value) => value,
