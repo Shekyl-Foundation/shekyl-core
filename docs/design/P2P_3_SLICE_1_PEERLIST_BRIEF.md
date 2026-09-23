@@ -37,9 +37,22 @@ that **the C++ already holds the contract, by convention, at every site**:
 
 **The operator surface is enumerated, not sampled.** There are three ways an
 operator names a peer — `--add-peer`, `--add-exclusive-node`,
-`--add-priority-node` — and `grep -n 'm_exclusive_peers\|m_priority_peers\|m_command_line_peers' src/p2p/net_node.inl`
-accounts for every one. The first lands in gray as a candidate; the other two
-are dialed. **None asserts a fact.**
+`--add-priority-node`. The first lands in gray as a candidate; the other two
+are dialed through [`connect_to_peerlist`](../../src/p2p/net_node.inl#L3008).
+**None asserts a fact.**
+
+> **Method, because the list is the wrong thing to inherit.** That list was
+> reached by **correction, not by enumeration** — the first draft of this
+> section read `--add-peer`, generalised from it, and said "seven sites". The
+> other two have their own containers and their own reach into the peerlist,
+> and a reader who trusts the list rather than re-deriving it inherits the
+> error silently if a fourth is ever added.
+>
+> **Re-derive it, do not copy it:** `grep -n 'm_exclusive_peers\|m_priority_peers\|m_command_line_peers' src/p2p/net_node.inl`,
+> then read **every** hit — the containers are the subject, not the flag names,
+> because a flag can be renamed or aliased while the container it fills cannot.
+> The Rust side owes this check again at implementation time; the list above is
+> a result with a date on it, not a specification.
 
 Eight independent local decisions. **Every one of them is correct.** Slice 1 is
 therefore not repairing a defect, and the brief must not be written as though
@@ -208,7 +221,57 @@ is asserting about.
 a dial nor reducible to one.** Not "if promotion becomes inconvenient" — the
 inconvenience is the mechanism working.
 
-Where to expect a candidate, and why each is not one today:
+### The test, stated so a candidate this brief never imagined can be decided
+
+A future lane will arrive with a *legitimate-sounding* reason, not an obviously
+bad one. Three worked examples cannot answer a fourth, so the test comes first
+and the examples are only its application.
+
+**A candidate qualifies as a dial result only if BOTH hold.**
+
+**(a) Provenance — this node initiated a connection to this exact address, and
+the address answered.** Two halves, and both are load-bearing. *Initiated*
+rules out anything a peer brought to us, which is
+[`net_node.inl:1345`](../../src/p2p/net_node.inl#L1345)'s `!m_is_income`
+generalised. *This exact address* rules out an address learned **during** the
+exchange rather than dialed — the promotion records the address we dialed, not
+one the peer named, which is the difference between gossiping an address and
+adopting one.
+
+**(b) Entitlement — the policy grants promotion for this dial.** Separately
+necessary, and this is the half a naive `DialResult` type collapses. The seed
+path proves it: it satisfies (a) in full — we dialed, it answered, we completed
+a handshake — and the C++ still refuses promotion at both
+[`:1273`](../../src/p2p/net_node.inl#L1273) and
+[`:1588`](../../src/p2p/net_node.inl#L1588). So the type must be able to
+express **"this dial happened and confers nothing"**, or it will grant the seed
+path rights the C++ deliberately denies it while looking perfectly principled.
+
+**Checked against the eight sites it has to reproduce**, because a decision
+procedure nobody ran on the known cases is untested:
+
+| Path | (a) | (b) | Test says | C++ does |
+| --- | --- | --- | --- | --- |
+| [`:1588`](../../src/p2p/net_node.inl#L1588) outbound handshake | ✓ | ✓ | promote | promotes |
+| [`:1285`](../../src/p2p/net_node.inl#L1285) outbound `COMMAND_HANDSHAKE` | ✓ | ✓ | promote | promotes |
+| [`:1345`](../../src/p2p/net_node.inl#L1345) timed sync, `!m_is_income` | ✓ | ✓ | promote | promotes |
+| [`:3447`](../../src/p2p/net_node.inl#L3447) gray→white after a dial | ✓ | ✓ | promote | promotes |
+| seed probe, `just_take_peerlist` | ✓ | **✗** | **no promotion** | refuses |
+| `--add-peer` → [`append_operator_candidate`](../../src/p2p/net_peerlist.h#L419) | **✗** | — | gray | gray |
+| `--add-exclusive-node` / `--add-priority-node` | ✓ | ✓ | promote | promotes via `:1588` |
+| persisted entry at load | **✗** | — | gray | gray |
+
+**Eight for eight.** The row that earns the test its keep is the seed probe: it
+is the only one where (a) and (b) disagree, and a one-part test would have got
+it wrong in the permissive direction.
+
+**Applying it:** a candidate failing (a) is a hypothesis however strong its
+evidence, and belongs in gray. A candidate satisfying (a) but not (b) is a
+completed dial that does not promote — representable, not an exception. **Only
+a candidate that satisfies (a) and is argued to deserve (b) reopens this
+contract**, and that argument is steering's.
+
+Where to expect one, and why each named case is not one today:
 
 - **Cluster T's Noise handshake.** §4.4 names it as the example of something
   that *looks* like a dial result and is not: a transcript proves a session,
@@ -217,8 +280,9 @@ Where to expect a candidate, and why each is not one today:
   no exception — the clause fires only if a peer-initiated transcript is argued
   to establish reachability.
 - **A relay that succeeds.** §4.4's second row. Successful relay proves the
-  path carried bytes, is a different
-  claim from reachability on our own dial.
+  path carried bytes, which is a different claim from reachability on our own
+  dial — and over an **inbound** connection it fails (a) outright. Over an
+  outbound one it is already a dial and needs no exception.
 - **An operator assertion.** The strongest real candidate, and the C++ already
   rejected it at [`net_peerlist.h:419`](../../src/p2p/net_peerlist.h#L419).
   Reopening would mean ruling that an operator may assert reachability the node
