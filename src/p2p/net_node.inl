@@ -644,19 +644,34 @@ namespace nodetool
           // failed read is not a bound, so say so rather than substituting a
           // number: inventing one here is exactly what this derivation exists
           // to avoid, and a silent guess would be worse than a loud gap.
-          // Three cases behind this one message, and they are NOT the same
-          // disposition (FOLLOWUPS carries the row):
-          //   * macOS is a PORT -- `getrlimit` works there; only the
-          //     descriptor count needs a BSD equivalent (`proc_pidinfo`).
-          //   * Windows may be a correct UNKNOWN rather than a missing port:
-          //     it may expose no per-process SOCKET ceiling to read at all,
-          //     in which case what bounds inbound there is a rate, not a
-          //     count, and it belongs to PWD-B1's bucket instead.
-          //   * Anything else follows one of those once classified.
-          // Substituting a constant here is the one thing this derivation
-          // exists to avoid, so the gap is loud instead.
-          MWARNING("Cannot read this platform's descriptor limit, so the inbound "
-                   "ceiling is UNBOUNDED. Set --in-peers explicitly to bound it.");
+          //
+          // The message is platform-split because the two cases are NOT the
+          // same fact, and one message for both would be false on one of them:
+          //
+          //   * WINDOWS -- the quantity DOES NOT EXIST. Measured 2026-09-22 on
+          //     Win11 23H2: 200,000 sockets opened in one process with no
+          //     failure and no error, and `_setmaxstdio` moved nothing in
+          //     either direction (it bounds CRT `FILE*` streams, not Winsock).
+          //     So the read did not fail -- there is nothing to read, and
+          //     calling it a failed read would send the next maintainer
+          //     hunting for an API that does not exist. What bounds inbound
+          //     there is a RATE, not a count, which is PWD-B1's bucket.
+          //
+          //   * ANYWHERE ELSE -- a genuine unimplemented read. macOS in
+          //     particular is a straightforward port: `getrlimit` works, and
+          //     only the descriptor COUNT needs a BSD equivalent
+          //     (`proc_pidinfo` / `PROC_PIDLISTFDS`).
+          //
+          // FOLLOWUPS carries the row and the measurement.
+#ifdef _WIN32
+          MWARNING("This platform exposes no per-process descriptor limit to read, so the "
+                   "inbound ceiling is UNBOUNDED -- this node will accept inbound peers "
+                   "without limit. Set --in-peers explicitly to bound it.");
+#else
+          MWARNING("Cannot read this platform's descriptor limit, so the inbound ceiling "
+                   "is UNBOUNDED -- this node will accept inbound peers without limit. "
+                   "Set --in-peers explicitly to bound it.");
+#endif
         }
         else
         {
