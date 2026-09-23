@@ -942,14 +942,28 @@ fn h8_the_wire_reads_one_commitment_per_output() {
 /// slice 6's row, still `pending`; the wire twin has an offsets arm, but it
 /// cannot be isolated as an oracle from here because the twin also refuses
 /// every 4.H fixture on 4.I grounds (CEN-I19's `extra` shape — TXE's
-/// subject). So this test pins the row I6 is registered under and is
-/// **armed at slice 6**: when `CenRow::I6` flips to `implemented`, the
-/// assertion that I6 refuses `with_offsets` is added here, and from then on
-/// I6 lapsing fails this test. H24 is a bucket-3 row (deletion residue,
-/// census §10 R5) with no registry entry to carry a status; this test is the
-/// falsifier its census row cites.
+/// subject).
+///
+/// **What this test asserts today is a PROXY.** It watches `CenRow::I6 ==
+/// Pending`; the property it exists to watch is *whether the offsets fixture
+/// is refused*. Those are different properties, and the first stands in for
+/// the second only until slice 6 lands I6's holder. The pin is **armed**:
+/// the day `CenRow::I6` flips, the assertion below fails with the
+/// instruction to add `refused_*(&with_offsets, CenRow::I6)` here — and that
+/// instruction is the only thing stopping the pin from being satisfied by
+/// updating it. Updating the pin without adding the assertion turns the
+/// proxy into the thing itself and leaves H24 watched by nothing.
+///
+/// **Index, both directions.** H24 is a bucket-3 row (deletion residue,
+/// census §10 R5): not in the 153 denominator, not in the registry, not a
+/// coverage row — outside every counting instrument, by design. The census
+/// row `CEN-H24` (`docs/design/CONSENSUS_RULE_CENSUS.md`, §4.H table) cites
+/// this test by name, and this test names that row back, so a reader at
+/// either end reaches the other. Nothing else indexes it.
 #[test]
 fn h24_cannot_fire_on_an_input_i6_admits() {
+    // CEN-H24 — the census row this test is the falsifier for.
+    const ROW: &str = "CEN-H24";
     // H24's predicate, stated so it can be asked of an input.
     let h24_fires = |offsets: &[u64]| offsets.iter().skip(1).any(|&o| o == 0);
     // On the input I6 admits — no offsets — the predicate has nothing to
@@ -966,12 +980,17 @@ fn h24_cannot_fire_on_an_input_i6_admits() {
     // teeth the day that changes.
     assert!(
         CenRow::ALL.contains(&CenRow::I6),
-        "CEN-I6 is the row that holds H24 vacuous"
+        "CEN-I6 is the row that holds {ROW} vacuous"
     );
+    // PROXY (see the doc above): I6's status stands in for "I6 refuses
+    // `with_offsets`" until I6 has a holder. Do not satisfy this by changing
+    // the pinned status — add the assertion the message names.
     assert_eq!(
         CenRow::I6.status(),
         RowStatus::Pending,
-        "I6 has landed: add the assertion that it refuses `with_offsets` to this falsifier"
+        "CEN-I6 has landed: {ROW}'s falsifier must now assert that I6 refuses `with_offsets` \
+         (refused_lone/refused_listed with CenRow::I6) — add that assertion here, then update \
+         this pin; updating the pin alone leaves {ROW} watched by nothing"
     );
 }
 
