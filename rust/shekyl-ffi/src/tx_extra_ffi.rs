@@ -68,7 +68,9 @@ const MARSHALLING_MSG: &str = "FFI marshalling: leaf blob length disagrees with 
 /// that would not fit is truncated on a character boundary, never unterminated.
 pub const SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP: usize = 256;
 
-fn code(err: PqcFieldShapeError) -> i32 {
+/// The flattened code for a shape verdict; shared with the codec surface
+/// (`tx_extra_codec_ffi`), which returns these unchanged.
+pub(crate) fn shape_code(err: PqcFieldShapeError) -> i32 {
     use PqcFieldShapeError as E;
     const KEM: u8 = shekyl_wire::tx_extra::TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT;
     match err {
@@ -144,7 +146,7 @@ pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape(
     if let Err(err) = check_pqc_field_shape(n_outputs, kem, leaf) {
         // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
         unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
-        return code(err);
+        return shape_code(err);
     }
     if leaf.len() != 1 {
         // Only the `n_outputs == 0` arm admits no field; nothing to check.
@@ -167,7 +169,7 @@ pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape(
         Err(err) => {
             // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
             unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
-            code(err)
+            shape_code(err)
         }
     }
 }
@@ -184,7 +186,7 @@ unsafe fn byte_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
 
 /// Write `msg` NUL-terminated into a caller-owned buffer, truncating on a
 /// character boundary. A null buffer or a zero capacity writes nothing.
-unsafe fn write_msg(out: *mut c_char, cap: usize, msg: &str) {
+pub(crate) unsafe fn write_msg(out: *mut c_char, cap: usize, msg: &str) {
     if out.is_null() || cap == 0 {
         return;
     }

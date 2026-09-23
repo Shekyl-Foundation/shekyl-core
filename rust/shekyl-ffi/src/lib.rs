@@ -101,6 +101,12 @@ pub mod curve_tree_replica_ffi;
 // daemon's admission path hands over its own parse's field lengths.
 pub mod tx_extra_ffi;
 
+// tx_extra codec (TX_EXTRA_RUST_CUTOVER.md §3): shekyl-wire parses and
+// builds tx_extra; the daemon transports. Field/pubkey/leaf reads, the
+// bytes-taking I19 form, and the coinbase writer — the C++ parser's
+// replacement, one call per site.
+pub mod tx_extra_codec_ffi;
+
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
 // D3/R3 bond-admission viability (kept separate so archival_ffi does not keep
