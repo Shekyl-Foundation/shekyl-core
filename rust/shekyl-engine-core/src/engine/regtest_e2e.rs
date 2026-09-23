@@ -1072,6 +1072,14 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 /// or the Rust validator. Those census rows are still `pending`; this
 /// test is the holder they can cite, not their implementation.
 ///
+/// It also does not assert pool-spent *before* the first mine.
+/// `is_key_image_spent` reports a pool image only for
+/// `relay_category::broadcasted` (`tx_pool::check_for_key_images`). A
+/// wallet submit lands at `relay_method::local` until the fire-and-forget
+/// relay nudge promotes it, so that status races. A pop puts the spend
+/// back with `relay_method::block`, which is broadcast-visible, and that
+/// is the status this test checks.
+///
 /// The north-star test stops at "mined into a block". The disabled
 /// chaingen chain-switch / block-reward regime is what this replaces
 /// for one pop.
@@ -1199,11 +1207,6 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
 
     let (emission_before, fee_before) = daemon.coinbase_tx_sum().await;
     let height_before = daemon.height().await;
-    assert_eq!(
-        daemon.key_image_statuses(&key_images).await,
-        vec![KeyImageStatus::SpentInPool; key_images.len()],
-        "an accepted, unmined spend reserves its key images in the pool"
-    );
 
     let height_mined = assert_tx_confirmed(&daemon, &address, accepted).await;
     assert_eq!(height_mined, height_before + 1);
