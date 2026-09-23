@@ -129,18 +129,10 @@ ALLOWED: dict[str, Allow] = {
         "appears, or if any site can pass one where a txid component is expected",
         "shekyl-tx-builder (sign_pqc_auths consumes these as messages)",
     ),
-    # An identity with no newtype and no adjacency hazard (RTN-7 Q2's
-    # discriminator, written here so a later reviewer re-runs the test rather
-    # than re-deriving it).
-    "tx_extra.rs::PqcOwnershipEntry.group_id": Allow(
-        "multisig group id — adjacency test (could a path pass a txid, key "
-        "image or component hash where a group id belongs?): it is parsed into "
-        "a struct and consumed by group logic, and no site takes a bare "
-        "[u8; 32] that could be either, so: low. Zero-hash for single-signer. "
-        "Reopen when a second consumer appears, or when any site accepts it as "
-        "a bare array beside another 32-byte value",
-        "shekyl-multisig",
-    ),
+    # `tx_extra.rs::PqcOwnershipEntry.group_id` was allowlisted here (RTN-7
+    # Q2's adjacency discriminator); the cell was deleted with tag 0x05
+    # (REJECTED 2026-09-22, PQC_MULTISIG.md §7.4 "Retired tag"), and an
+    # allowlist may not outlive its subject.
 }
 
 RAW = re.compile(r"\[u8;\s*32\]")
