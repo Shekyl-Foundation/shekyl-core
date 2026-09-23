@@ -24,7 +24,9 @@ per input; reopens at mainnet scale); (b) store-backed / pruned-tree assembly
 §6.3: the proving state is not a store (a public frontier at `F`, a recent-block
 buffer, per-output paths), and the `WSS-13` unwind retires the leaf store in code
 under its own authorization. **(a) and (b) are both discharged by `CT-6`**
-([`CT6_PROVING_STATE.md`](CT6_PROVING_STATE.md), design round opened 2026-09-20),
+([`CT6_PROVING_STATE.md`](CT6_PROVING_STATE.md), design round opened 2026-09-20,
+**Round 1 disposed 2026-09-22** — `Q2`/`Q3` ruled, `Q5` closed by dissolution,
+`Q1`/`Q4` pending as derivations),
 which carries §6.3 as its design of record: (a) is that round's F3(b) and its
 increment 3, (b) its F3(a) and increment 4. Its Round-0 pre-flight **removed** the
 reference-height question from the round outright — `REF_ANCHOR_AGE` /
