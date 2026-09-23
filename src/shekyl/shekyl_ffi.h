@@ -1383,16 +1383,16 @@ bool shekyl_curve_tree_replica_next_block_root(
     uint8_t* out_root);
 
 // ---------------------------------------------------------------------------
-// tx_extra PQC field shape rule (rust/shekyl-ffi/src/tx_extra_ffi.rs;
-// GENESIS_TX_WIRE_FORMAT.md §9.6a as ruled 2026-09-05; census CEN-I19).
-//
-// With n = vout.size(): exactly one 0x06 KEM-ciphertext field of 1120·n bytes
-// and exactly one 0x07 leaf-entry field of 64·n bytes when n > 0; neither when
-// n == 0 -- and (PL-D3 content rule) every 0x07 entry's leading 32 bytes must
-// be a canonical prime-order non-identity Ed25519 point. The caller parses
-// tx_extra itself, passes the byte length of every 0x06 / 0x07 field it found,
-// in order, and the 0x07 payload when it found exactly one. Consensus: called
-// from core::check_tx_semantic and Blockchain::prevalidate_miner_transaction.
+// tx_extra shape rule codes (rust/shekyl-ffi/src/tx_extra_ffi.rs). CEN-I19
+// (GENESIS_TX_WIRE_FORMAT.md §9.6a as ruled 2026-09-05): with n = vout.size(),
+// exactly one 0x06 KEM-ciphertext field of 1120·n bytes and exactly one 0x07
+// leaf-entry field of 64·n bytes when n > 0, neither when n == 0, and (PL-D3
+// content rule) every 0x07 entry's leading 32 bytes a canonical prime-order
+// non-identity Ed25519 point. Returned by shekyl_tx_extra_shape_of and the
+// codec reads below, which parse the extra themselves; the daemon never
+// parses it (TX_EXTRA_RUST_CUTOVER.md). Consensus: applied from
+// core::check_tx_semantic, Blockchain::prevalidate_miner_transaction and the
+// DB collector through check_tx_extra_shape.
 // ---------------------------------------------------------------------------
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_OK                           0
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR                 1
@@ -1405,32 +1405,10 @@ bool shekyl_curve_tree_replica_next_block_root(
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE               8
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH                  9
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT                   10
-/// leaf_blob disagrees with the declared leaf_lens (null with a nonzero
-/// length, or a different byte count): an FFI marshalling bug in the CALLER,
-/// reported distinctly from every content verdict so the daemon never logs a
-/// "bad entry" diagnosis for a C++-side bug. Message: "FFI marshalling: leaf
-/// blob length disagrees with declared lengths". Fail-closed either way.
-#define SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING              11
+// 11 was ERR_MARSHALLING (the retired lengths-taking form's caller-bug
+// verdict); not re-minted.
 /// Buffer size for out_msg, NUL included.
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP                      256
-/// Returns SHEKYL_TX_EXTRA_PQC_SHAPE_OK or one of the codes above, and writes
-/// the rule's own sentence for that code into out_msg as a NUL-terminated
-/// string (empty on OK; truncated on a character boundary if it would not
-/// fit). The daemon LOGS THAT STRING rather than formatting a second one from
-/// the code: the rule's words belong to the crate that owns the rule, and two
-/// formatters agreeing is a promise nobody can keep. A null array pointer is
-/// accepted only with a zero count; out_msg may be null with out_msg_cap 0.
-int32_t shekyl_tx_extra_pqc_field_shape(
-    size_t n_outputs,
-    const size_t* kem_lens,
-    size_t kem_count,
-    const size_t* leaf_lens,
-    size_t leaf_count,
-    const uint8_t* leaf_blob,
-    size_t leaf_blob_len,
-    char* out_msg,
-    size_t out_msg_cap);
-
 /// Write the conforming 64-byte 0x07 leaf entry (shekyl-wire's
 /// conforming_pqc_leaf_entry: the compressed PQC_LEAF_COMMITMENT_J generator
 /// followed by the fixed opaque record) to out (64 bytes; null tolerated).
@@ -1455,6 +1433,12 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
  * (TXE-Q6', consensus): the extra is exactly [0x01 pubkey, 0x02 nonce of
  * SHEKYL_COINBASE_NONCE_BYTES, 0x06 KEM(1120*n), 0x07 leaf(64*n)] in that
  * order and nothing else; off the coinbase, no 0x02 at all. */
+/// Per-output widths of the two PQC fields (shekyl_wire::tx_extra::
+/// HYBRID_KEM_CT_BYTES = X25519 ct(32) + ML-KEM-768 ct(1088), and
+/// PQC_LEAF_ENTRY_LEN = CM(32) ‖ record(32)); a 0x06 field is 1120·n bytes
+/// and a 0x07 field 64·n for n outputs (CEN-I19).
+#define SHEKYL_HYBRID_KEM_CT_BYTES            1120
+#define SHEKYL_PQC_LEAF_ENTRY_BYTES           64
 /// Fixed width of the coinbase 0x02 nonce. 2^32 / 120 s ~= 36 MH/s exhausts
 /// the header nonce in one interval; each byte here multiplies that by 256,
 /// so 8 never binds and matches the pool convention (reserve_size: 8).

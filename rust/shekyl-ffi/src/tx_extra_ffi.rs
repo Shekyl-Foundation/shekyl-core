@@ -3,28 +3,36 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! FFI surface for the `tx_extra` PQC field shape rule
-//! ([`shekyl_wire::tx_extra::check_pqc_field_shape`]; `GENESIS_TX_WIRE_FORMAT.md`
-//! §9.6a as ruled 2026-09-05, census CEN-I19).
+//! The `tx_extra` shape rule's FFI code table and message helpers
+//! ([`shekyl_wire::tx_extra::check_tx_extra_shape`]: CEN-I19 —
+//! `GENESIS_TX_WIRE_FORMAT.md` §9.6a as ruled 2026-09-05 — plus the coinbase
+//! grammar, `TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′), shared with the codec
+//! surface in `tx_extra_codec_ffi`, which is where the daemon calls in
+//! (`shekyl_tx_extra_shape_of`, `shekyl_tx_extra_leaf_entries`,
+//! `shekyl_coinbase_extra`).
 //!
-//! The daemon parses `tx_extra` with its own parser and hands over only the
-//! facts the rule needs — the output count, the byte length of every
-//! `0x06` and `0x07` field found, and the `0x07` payload bytes for the leaf
-//! commitment content rule (`PL-D3`) — so the rule has one home (the wire crate,
-//! where the port applies it to its own parse) and the C++ admission path is
-//! an adapter. Called from `core::check_tx_semantic` (relay and block) and
-//! `Blockchain::prevalidate_miner_transaction` (coinbase).
+//! History, because the codes' numbering shows it: this file first exported
+//! a lengths-taking form, `shekyl_tx_extra_pqc_field_shape`, to which the
+//! daemon's own C++ parser handed the byte length of every `0x06` / `0x07`
+//! it had found. Two parsers over one consensus grammar was the divergence
+//! class CEN-I19 had been routed through Rust to close (TXE-F3); the codec
+//! cutover deleted the C++ parser and with it that form. Codes `1..=10` are
+//! the verdicts it minted and are returned unchanged by the bytes-taking
+//! successor; `11` (`ERR_MARSHALLING`, a lengths/blob disagreement that can
+//! no longer occur) is retired and not re-minted; `12..=17` are the coinbase
+//! grammar's.
 //!
-//! The call returns the error enum flattened to a code (`0` is conformant) and
-//! writes the error's own sentence into a caller-owned buffer. The daemon logs
-//! that sentence verbatim rather than formatting a second one from the code:
-//! two formatters producing "the same message" is a synchronisation promise
-//! nobody can keep, and the rule's words belong to the crate that owns the
-//! rule. The code is what the daemon branches on; the string is what it prints.
+//! The daemon receives the error enum flattened to a code (`0` is
+//! conformant) and the error's own sentence in a caller-owned buffer, and
+//! logs that sentence verbatim rather than formatting a second one from the
+//! code: two formatters producing "the same message" is a synchronisation
+//! promise nobody can keep, and the rule's words belong to the crate that
+//! owns the rule. The code is what the daemon branches on; the string is
+//! what it prints.
 
 use std::os::raw::c_char;
 
-use shekyl_wire::tx_extra::{check_pqc_field_shape, check_pqc_leaf_entries, ExtraShapeError};
+use shekyl_wire::tx_extra::ExtraShapeError;
 
 /// Conformant.
 pub const SHEKYL_TX_EXTRA_PQC_SHAPE_OK: i32 = 0;
@@ -49,14 +57,10 @@ pub const SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH: i32 = 9;
 /// A `0x07` entry's leaf commitment is not a canonical prime-order point
 /// (`PL-D3` content rule).
 pub const SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT: i32 = 10;
-/// The caller's `leaf_blob` disagrees with its declared `leaf_lens` (null
-/// with a nonzero length, or a byte count other than the single declared
-/// field's length). This is an FFI marshalling bug in the caller — a fact
-/// about the call, not a verdict about the transaction's content — and it is
-/// reported as such so the daemon never logs a content diagnosis (e.g. "leaf
-/// commitment is not a canonical prime-order point") for a C++-side bug.
-/// Fail-closed: the transaction is refused either way.
-pub const SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING: i32 = 11;
+// 11 was ERR_MARSHALLING — the lengths-taking form's "declared leaf length
+// disagrees with the handed-over blob". Retired with that form (the codec
+// parses the extra itself, so there is no declared length to disagree with);
+// not re-minted, so an old log line is never misread as a new verdict.
 /// Coinbase grammar (`TXE-Q6′`): no `0x02` nonce in a coinbase extra.
 pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING: i32 = 12;
 /// Coinbase grammar: the `0x02` nonce is not exactly `COINBASE_NONCE_BYTES`.
@@ -70,11 +74,6 @@ pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG: i32 = 15;
 pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT: i32 = 16;
 /// A `0x02` nonce on a non-coinbase transaction.
 pub const SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE: i32 = 17;
-
-/// The sentence written for [`SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING`].
-/// Owned here (not in `shekyl-wire`): the wire crate rules on transaction
-/// bytes; a blob/length disagreement never reaches it.
-const MARSHALLING_MSG: &str = "FFI marshalling: leaf blob length disagrees with declared lengths";
 
 /// Buffer size the caller must provide for the message, NUL included. The
 /// longest sentence this type produces is well under half of it; a message
@@ -121,94 +120,6 @@ pub(crate) fn shape_code(err: ExtraShapeError) -> i32 {
     }
 }
 
-/// Apply the shape rule, then the `0x07` content rule. `kem_lens` /
-/// `leaf_lens` point to `kem_count` / `leaf_count` byte lengths, one per
-/// `0x06` / `0x07` field the caller's parser found, in order (a null pointer
-/// is accepted only with count 0). `leaf_blob` / `leaf_blob_len` are the bytes
-/// of the `0x07` field when the parser found exactly one (null with length 0
-/// otherwise); once the shape rule has admitted a single correctly-sized
-/// field, every entry's commitment point is checked
-/// ([`check_pqc_leaf_entries`], `PL-D3`). A `leaf_blob` that disagrees with
-/// the declared `leaf_lens` (null with a nonzero length, or a different byte
-/// count) is refused with [`SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING`] —
-/// a caller bug, reported distinctly from any content verdict.
-///
-/// On a non-conformant shape the error's sentence is written to `out_msg` as a
-/// NUL-terminated string (at most `out_msg_cap` bytes including the NUL,
-/// truncated on a character boundary if it would not fit); on
-/// [`SHEKYL_TX_EXTRA_PQC_SHAPE_OK`] the buffer is set to the empty string.
-/// `out_msg` may be null with `out_msg_cap` 0 for a caller that wants only the
-/// code.
-///
-/// # Safety
-/// The arrays are valid for their counts, `leaf_blob` is readable for
-/// `leaf_blob_len` bytes, and `out_msg` is writable for `out_msg_cap` bytes,
-/// for the duration of the call.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape(
-    n_outputs: usize,
-    kem_lens: *const usize,
-    kem_count: usize,
-    leaf_lens: *const usize,
-    leaf_count: usize,
-    leaf_blob: *const u8,
-    leaf_blob_len: usize,
-    out_msg: *mut c_char,
-    out_msg_cap: usize,
-) -> i32 {
-    // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
-    unsafe { write_msg(out_msg, out_msg_cap, "") };
-    // SAFETY: caller contract on both arrays.
-    let (kem, leaf) = unsafe {
-        let Some(kem) = usize_slice(kem_lens, kem_count) else {
-            return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
-        };
-        let Some(leaf) = usize_slice(leaf_lens, leaf_count) else {
-            return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
-        };
-        (kem, leaf)
-    };
-    if let Err(err) = check_pqc_field_shape(n_outputs, kem, leaf) {
-        // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
-        unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
-        return shape_code(err);
-    }
-    if leaf.len() != 1 {
-        // Only the `n_outputs == 0` arm admits no field; nothing to check.
-        return SHEKYL_TX_EXTRA_PQC_SHAPE_OK;
-    }
-    // SAFETY: caller contract on `leaf_blob` / `leaf_blob_len`.
-    let blob = unsafe { byte_slice(leaf_blob, leaf_blob_len) };
-    // The caller said one field of `leaf[0]` bytes but handed over something
-    // else (a null blob with a nonzero length, or a different byte count).
-    // That is a marshalling bug in the caller, not a fact about the
-    // transaction: refuse with the marshalling code — never "conformant",
-    // and never a content verdict the daemon would log as a bad entry.
-    let (Some(blob), true) = (blob, leaf_blob_len == leaf[0]) else {
-        // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
-        unsafe { write_msg(out_msg, out_msg_cap, MARSHALLING_MSG) };
-        return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING;
-    };
-    match check_pqc_leaf_entries(blob) {
-        Ok(()) => SHEKYL_TX_EXTRA_PQC_SHAPE_OK,
-        Err(err) => {
-            // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
-            unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
-            shape_code(err)
-        }
-    }
-}
-
-/// Borrow `len` bytes; a null pointer is accepted only with length 0.
-/// Routed through the crate's one byte-slice seam (`slice_from_ptr`) so this
-/// file adds no raw site of its own (SA-R-7 boundary ratchet).
-unsafe fn byte_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
-    // SAFETY: the caller's contract — `len` readable bytes behind a non-null
-    // `ptr` — is exactly the seam helper's precondition; the borrow does not
-    // outlive the FFI call.
-    unsafe { crate::legacy_util::slice_from_ptr(ptr, len) }
-}
-
 /// Write `msg` NUL-terminated into a caller-owned buffer, truncating on a
 /// character boundary. A null buffer or a zero capacity writes nothing.
 pub(crate) unsafe fn write_msg(out: *mut c_char, cap: usize, msg: &str) {
@@ -249,68 +160,40 @@ pub unsafe extern "C" fn shekyl_test_conforming_pqc_leaf_entry(out: *mut u8) {
     unsafe { std::ptr::copy_nonoverlapping(entry.as_ptr(), out, entry.len()) };
 }
 
-/// Borrow `count` `usize`s; a null pointer is accepted only with count 0.
-/// The file's one typed-slice raw site (pinned in the boundary ratchet); it
-/// re-owns the `isize::MAX` byte bound the language requires.
-unsafe fn usize_slice<'a>(ptr: *const usize, count: usize) -> Option<&'a [usize]> {
-    if count == 0 {
-        return Some(&[]);
-    }
-    if ptr.is_null() || count > isize::MAX as usize / std::mem::size_of::<usize>() {
-        return None;
-    }
-    // SAFETY: non-null, `count` initialized elements per the caller's
-    // contract, byte length bounded above; the borrow does not outlive the
-    // FFI call.
-    Some(unsafe { std::slice::from_raw_parts(ptr, count) })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tx_extra_codec_ffi::{shekyl_tx_extra_shape_of, SHEKYL_TX_EXTRA_OK};
+    use shekyl_wire::tx_extra::{
+        conforming_pqc_leaf_blob, serialize, TxExtraField, HYBRID_KEM_CT_BYTES, PQC_LEAF_ENTRY_LEN,
+    };
 
-    /// Shape-only call: with exactly one `0x07` length the content rule
-    /// needs bytes, so a conforming blob of that length is supplied.
-    fn call(n: usize, kem: &[usize], leaf: &[usize], msg: &mut [c_char]) -> i32 {
-        let blob = match leaf {
-            [len] => shekyl_wire::tx_extra::conforming_pqc_leaf_blob(len / 64),
-            _ => Vec::new(),
-        };
-        call_with_blob(n, kem, leaf, &blob, msg)
-    }
-
-    fn call_with_blob(
-        n: usize,
-        kem: &[usize],
-        leaf: &[usize],
-        blob: &[u8],
-        msg: &mut [c_char],
-    ) -> i32 {
+    /// Judge `fields` as a non-coinbase transaction with `n` outputs through
+    /// the bytes-taking form, the only one the daemon has.
+    fn call(n: usize, fields: &[TxExtraField], msg: &mut [c_char]) -> i32 {
+        let extra = serialize(fields).expect("test fields serialize");
         unsafe {
-            shekyl_tx_extra_pqc_field_shape(
+            shekyl_tx_extra_shape_of(
+                if extra.is_empty() {
+                    std::ptr::null()
+                } else {
+                    extra.as_ptr()
+                },
+                extra.len(),
                 n,
-                if kem.is_empty() {
-                    std::ptr::null()
-                } else {
-                    kem.as_ptr()
-                },
-                kem.len(),
-                if leaf.is_empty() {
-                    std::ptr::null()
-                } else {
-                    leaf.as_ptr()
-                },
-                leaf.len(),
-                if blob.is_empty() {
-                    std::ptr::null()
-                } else {
-                    blob.as_ptr()
-                },
-                blob.len(),
+                false,
                 msg.as_mut_ptr(),
                 msg.len(),
             )
         }
+    }
+
+    fn kem(n: usize) -> TxExtraField {
+        TxExtraField::PqcKemCiphertext(vec![0x44; HYBRID_KEM_CT_BYTES * n])
+    }
+
+    fn leaf(n: usize) -> TxExtraField {
+        TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n))
     }
 
     /// The message the call wrote, as the daemon would read it. `CStr` keeps
@@ -324,62 +207,72 @@ mod tests {
             .to_owned()
     }
 
+    /// Every CEN-I19 code has a case, and each carries the rule's own
+    /// sentence — the KATs the census cites for the code table.
     #[test]
     fn codes_follow_the_rule() {
-        const K: usize = 1120;
-        const L: usize = 64;
         let mut msg = [0 as c_char; SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP];
-
-        assert_eq!(call(1, &[K], &[L], &mut msg), SHEKYL_TX_EXTRA_PQC_SHAPE_OK);
-        assert_eq!(text(&msg), "", "a conformant shape leaves no message");
-        assert_eq!(call(0, &[], &[], &mut msg), SHEKYL_TX_EXTRA_PQC_SHAPE_OK);
+        let pk = TxExtraField::PubKey([0x11; 32]);
 
         assert_eq!(
-            call(1, &[K], &[L, L], &mut msg),
+            call(1, &[pk.clone(), kem(1), leaf(1)], &mut msg),
+            SHEKYL_TX_EXTRA_OK
+        );
+        assert_eq!(text(&msg), "", "a conformant shape leaves no message");
+        assert_eq!(call(0, &[], &mut msg), SHEKYL_TX_EXTRA_OK);
+
+        assert_eq!(
+            call(1, &[pk.clone(), kem(1), leaf(1), leaf(1)], &mut msg),
             SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE
         );
         assert_eq!(
             text(&msg),
             "tx_extra 0x07 appears 2 times; exactly one is admitted"
         );
+        assert_eq!(
+            call(1, &[pk.clone(), kem(1), kem(1), leaf(1)], &mut msg),
+            SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_DUPLICATE
+        );
 
         assert_eq!(
-            call(1, &[], &[L], &mut msg),
+            call(1, &[pk.clone(), leaf(1)], &mut msg),
             SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_MISSING
         );
         assert_eq!(
             text(&msg),
             "tx_extra 0x06 missing on a transaction with outputs; 1120 bytes required"
         );
+        assert_eq!(
+            call(1, &[pk.clone(), kem(1)], &mut msg),
+            SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING
+        );
 
         assert_eq!(
-            call(2, &[K], &[L], &mut msg),
+            call(2, &[pk.clone(), kem(1), leaf(2)], &mut msg),
             SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_LENGTH
         );
         assert_eq!(
             text(&msg),
             "tx_extra 0x06 is 1120 bytes; 2240 required for this output count"
         );
-
         assert_eq!(
-            call(0, &[K], &[], &mut msg),
-            SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_PRESENT_WITHOUT_OUTPUTS
+            call(2, &[pk.clone(), kem(2), leaf(1)], &mut msg),
+            SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH
         );
 
-        // A null array with a non-zero count is refused, not dereferenced.
+        assert_eq!(
+            call(0, &[pk.clone(), kem(1)], &mut msg),
+            SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_PRESENT_WITHOUT_OUTPUTS
+        );
+        assert_eq!(
+            call(0, &[pk.clone(), leaf(1)], &mut msg),
+            SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_PRESENT_WITHOUT_OUTPUTS
+        );
+
+        // A null extra with a nonzero length is refused, not dereferenced.
         assert_eq!(
             unsafe {
-                shekyl_tx_extra_pqc_field_shape(
-                    1,
-                    std::ptr::null(),
-                    1,
-                    [L].as_ptr(),
-                    1,
-                    std::ptr::null(),
-                    0,
-                    msg.as_mut_ptr(),
-                    msg.len(),
-                )
+                shekyl_tx_extra_shape_of(std::ptr::null(), 4, 1, false, msg.as_mut_ptr(), msg.len())
             },
             SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR
         );
@@ -388,20 +281,18 @@ mod tests {
         // tolerated for a caller that wants only the code.
         let mut small = [0 as c_char; 8];
         assert_eq!(
-            call(1, &[K], &[L, L], &mut small),
+            call(1, &[pk.clone(), kem(1), leaf(1), leaf(1)], &mut small),
             SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE
         );
         assert_eq!(text(&small), "tx_extr");
+        let extra = serialize(&[pk, kem(1)]).unwrap();
         assert_eq!(
             unsafe {
-                shekyl_tx_extra_pqc_field_shape(
+                shekyl_tx_extra_shape_of(
+                    extra.as_ptr(),
+                    extra.len(),
                     1,
-                    [K].as_ptr(),
-                    1,
-                    std::ptr::null(),
-                    0,
-                    std::ptr::null(),
-                    0,
+                    false,
                     std::ptr::null_mut(),
                     0,
                 )
@@ -411,22 +302,33 @@ mod tests {
     }
 
     /// The `0x07` content rule (PL-D3) runs after the shape rule admits a
-    /// single correctly-sized field: a zero-filled entry, a small-order
-    /// point, and a blob shorter than the declared length are all refused
-    /// with the point code; a valid blob passes.
+    /// single correctly-sized field: a zero-filled entry and a small-order
+    /// point are refused with the point code, naming the entry; a valid blob
+    /// passes; a wrong length is the shape rule's verdict first.
     #[test]
     fn leaf_point_content_rule() {
-        const K: usize = 1120;
-        const L: usize = 64;
         let mut msg = [0 as c_char; SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP];
-        let good = shekyl_wire::tx_extra::conforming_pqc_leaf_blob(2);
+        let pk = TxExtraField::PubKey([0x11; 32]);
+        let good = conforming_pqc_leaf_blob(2);
         assert_eq!(
-            call_with_blob(2, &[2 * K], &[2 * L], &good, &mut msg),
-            SHEKYL_TX_EXTRA_PQC_SHAPE_OK
+            call(
+                2,
+                &[
+                    pk.clone(),
+                    kem(2),
+                    TxExtraField::PqcLeafEntries(good.clone())
+                ],
+                &mut msg
+            ),
+            SHEKYL_TX_EXTRA_OK
         );
-        let zeros = vec![0u8; 2 * L];
+        let zeros = vec![0u8; 2 * PQC_LEAF_ENTRY_LEN];
         assert_eq!(
-            call_with_blob(2, &[2 * K], &[2 * L], &zeros, &mut msg),
+            call(
+                2,
+                &[pk.clone(), kem(2), TxExtraField::PqcLeafEntries(zeros)],
+                &mut msg
+            ),
             SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT
         );
         assert_eq!(
@@ -434,46 +336,26 @@ mod tests {
             "tx_extra 0x07 entry 0: leaf commitment is not a canonical prime-order point"
         );
         let mut torsion = good.clone();
-        torsion[L..L + 32].copy_from_slice(&[0u8; 32]);
+        torsion[PQC_LEAF_ENTRY_LEN..PQC_LEAF_ENTRY_LEN + 32].copy_from_slice(&[0u8; 32]);
         assert_eq!(
-            call_with_blob(2, &[2 * K], &[2 * L], &torsion, &mut msg),
+            call(
+                2,
+                &[pk.clone(), kem(2), TxExtraField::PqcLeafEntries(torsion)],
+                &mut msg
+            ),
             SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT
         );
         assert_eq!(
             text(&msg),
             "tx_extra 0x07 entry 1: leaf commitment is not a canonical prime-order point"
         );
-        // Declared length and handed-over bytes disagree: refused as an FFI
-        // marshalling bug — distinct from a content verdict, so the daemon
-        // never logs "bad entry" for a C++-side blob/length mismatch.
-        assert_eq!(
-            call_with_blob(2, &[2 * K], &[2 * L], &good[..L], &mut msg),
-            SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING
-        );
-        assert_eq!(
-            text(&msg),
-            "FFI marshalling: leaf blob length disagrees with declared lengths"
-        );
-        // A null blob with a nonzero declared length is the same caller bug.
-        assert_eq!(
-            unsafe {
-                shekyl_tx_extra_pqc_field_shape(
-                    2,
-                    [2 * K].as_ptr(),
-                    1,
-                    [2 * L].as_ptr(),
-                    1,
-                    std::ptr::null(),
-                    2 * L,
-                    msg.as_mut_ptr(),
-                    msg.len(),
-                )
-            },
-            SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING
-        );
         // The shape rule still fires first on a wrong length.
         assert_eq!(
-            call_with_blob(1, &[K], &[2 * L], &good, &mut msg),
+            call(
+                1,
+                &[pk, kem(1), TxExtraField::PqcLeafEntries(good)],
+                &mut msg
+            ),
             SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH
         );
     }

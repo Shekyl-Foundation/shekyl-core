@@ -318,8 +318,8 @@ TEST(mining_parity, coinbase_writer_reproduces_the_genesis_extra_byte_for_byte)
     ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_leaf_entries(extra.data(), extra.size(),
         n_outputs, /*is_coinbase=*/true, &leaf.buf, msg, sizeof(msg)))
       << nc.name << ": genesis extra fails the coinbase grammar: " << msg;
-    EXPECT_EQ(n_outputs * cryptonote::HYBRID_KEM_CT_BYTES, kem.size()) << nc.name;
-    EXPECT_EQ(n_outputs * cryptonote::PQC_LEAF_ENTRY_LEN, leaf.size()) << nc.name;
+    EXPECT_EQ(n_outputs * SHEKYL_HYBRID_KEM_CT_BYTES, kem.size()) << nc.name;
+    EXPECT_EQ(n_outputs * SHEKYL_PQC_LEAF_ENTRY_BYTES, leaf.size()) << nc.name;
     // Exactly the three fields: a second 0x01 / 0x06 / 0x07 or any other tag
     // would survive the round trip below only by being dropped, so ask.
     ShekylOwnedBuffer none;

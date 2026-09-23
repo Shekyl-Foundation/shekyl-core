@@ -323,6 +323,7 @@ members = [
 # commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
 exclude = [
     "shekyl-archival-retention/fuzz",
+    "shekyl-wire/fuzz",
     "shekyl-engine-state/fuzz",
     # FCMP++ research crypto, vendored from the monero-oxide fork (pinned by
     # UPSTREAM_MONERO_OXIDE_COMMIT). The clean upstream-formatted mirror lives on

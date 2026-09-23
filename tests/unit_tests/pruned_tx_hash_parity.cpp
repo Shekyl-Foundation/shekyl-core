@@ -187,8 +187,8 @@ transaction build_kat_tx()
   // transaction and the pin asserts their bytes are identical, so both must
   // build the transaction the network would accept; before this rule the pin
   // fixed agreement on a shape no builder can produce.
-  shekyl_test_fixtures::append_pqc_kem_field(tx, cryptonote::HYBRID_KEM_CT_BYTES * tx.vout.size());
-  shekyl_test_fixtures::append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_ENTRY_LEN * tx.vout.size());
+  shekyl_test_fixtures::append_pqc_kem_field(tx, SHEKYL_HYBRID_KEM_CT_BYTES * tx.vout.size());
+  shekyl_test_fixtures::append_pqc_leaf_field(tx, SHEKYL_PQC_LEAF_ENTRY_BYTES * tx.vout.size());
   return tx;
 }
 

@@ -52,7 +52,6 @@ using namespace epee;
 #include "tx_pqc_verify.h"
 #include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/miner.h"
-#include "cryptonote_basic/tx_extra.h"
 #include "shekyl/economics.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
@@ -139,9 +138,9 @@ namespace cryptonote
       const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
       std::vector<uint8_t> kem_blob;
-      kem_blob.reserve(out_amounts.size() * HYBRID_KEM_CT_BYTES);
+      kem_blob.reserve(out_amounts.size() * SHEKYL_HYBRID_KEM_CT_BYTES);
       std::vector<uint8_t> leaf_blob;
-      leaf_blob.reserve(out_amounts.size() * PQC_LEAF_ENTRY_LEN);
+      leaf_blob.reserve(out_amounts.size() * SHEKYL_PQC_LEAF_ENTRY_BYTES);
 
       tx.ct_signatures.outPk.resize(out_amounts.size());
       tx.ct_signatures.enc_amounts.resize(out_amounts.size());
@@ -178,7 +177,7 @@ namespace cryptonote
           kem_blob.insert(kem_blob.end(), od.kem_ciphertext_ml_kem.ptr,
             od.kem_ciphertext_ml_kem.ptr + od.kem_ciphertext_ml_kem.len);
 
-        leaf_blob.insert(leaf_blob.end(), od.pqc_leaf, od.pqc_leaf + PQC_LEAF_ENTRY_LEN);
+        leaf_blob.insert(leaf_blob.end(), od.pqc_leaf, od.pqc_leaf + SHEKYL_PQC_LEAF_ENTRY_BYTES);
 
         summary_amounts += out_amounts[i];
         ShekylOutputData tmp = od;

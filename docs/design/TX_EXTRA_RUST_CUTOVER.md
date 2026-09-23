@@ -326,9 +326,47 @@ C++ it describes:
   | `test_ge_tobytes`, `test_ge_frombytes_vartime` (`performance_tests`) | point (de)compression timing — built a tx only to obtain a point | n/a | **kept**, re-pointed at a fresh account's spend key |
   | chaingen scaffolding (`construct_tx_to_key`, `construct_tx_with_fee`, `construct_tx_rct`, `fill_tx_sources*`, `fill_tx_destinations`, `block_tracker`, `output_index`, `get_balance`, `MAKE_TX*`) | fed the rows above | 2026-05-05 | deleted with them; `construct_miner_tx_manually` / `append_v3_output_to_miner_tx` (live, 36 block-validation tests) **kept**, moved onto `shekyl_coinbase_extra` in §7 commit 3 |
   | `construct_tx_with_tx_key` / `construct_tx_and_get_tx_key` / `construct_tx` / `tx_source_entry` / `tx_destination_entry` / `fill_construct_tx_rct_stub` (`src/`) | the builder itself — zero production callers | — | the one builder is `shekyl-tx-builder`. Three FFI exports lose their only C++ caller with it (`shekyl_construct_output_labeled`, `shekyl_label_plaintext_for_payment_uri`, `shekyl_compute_output_key_image_from_ho`, `legacy_tx.rs`); left in place — `legacy_tx.rs` is wallet-era surface whose sweep is one job, not three lines here (FOLLOWUPS "callerless FFI exports in legacy_tx.rs") |
-- **9.2 C++ parser `TEST`s → `shekyl-wire` twins** (TXE-Q5a): one row per
-  `test_tx_utils.cpp` case — its twin's name in `tests/tx_extra_roundtrip.rs`,
-  or *added in this commit*.
+- **9.2 C++ parser `TEST`s → `shekyl-wire` twins** (TXE-Q5a, filled by §7
+  commit 4b, 2026-09-23). Every retired C++ case, its twin in
+  `rust/shekyl-wire/tests/tx_extra_roundtrip.rs` unless another file is named,
+  or the reason none is owed. The census said 27 cases in `test_tx_utils.cpp`;
+  the deleting commit found 31 across it, `cryptonote_format_utils.cpp` (4) and
+  the two `tx_extra_pqc_field_shape` parse-arm fixtures that used the parser.
+  `validate_parse_amount` is not a parser test and stays. The **sorter**
+  (`sort_tx_extra`) and the **field remover** (`remove_field_from_tx_extra`)
+  have no successor by design: canonical order is produced by construction
+  (`shekyl_coinbase_extra`) and judged by `check_coinbase_extra_shape`, and
+  nothing rewrites an extra in place; their *refusal* cases are parser
+  refusals and have twins.
+
+  | C++ `TEST` | Twin | Note |
+  |---|---|---|
+  | `parse_tx_extra.handles_empty_extra` | `empty_extra_parses_to_no_fields` (added) | |
+  | `parse_tx_extra.handles_padding_only_size_1` | `padding_only_parses_with_its_length_up_to_the_cap` (added) | one test, sizes 1 / 2 / 255 |
+  | `parse_tx_extra.handles_padding_only_size_2` | same | |
+  | `parse_tx_extra.handles_padding_only_max_size` | same | |
+  | `parse_tx_extra.handles_padding_only_exceed_max_size` | `padding_past_the_cap_is_refused_on_parse` (added) | |
+  | `parse_tx_extra.handles_invalid_padding_only` | `a_nonzero_byte_inside_padding_is_refused` (added) | |
+  | `parse_tx_extra.handles_pub_key_only` | `pubkey_only_parses` (added) | the C++ case's 33 bytes |
+  | `parse_tx_extra.handles_extra_nonce_only` | `nonce_only_parses` (added) | `{2, 1, 42}` |
+  | `parse_tx_extra.handles_pub_key_and_padding` | `pubkey_then_padding_parses_as_two_fields` (added) | |
+  | `parse_and_validate_tx_extra.is_valid_tx_extra_parsed` | `tx_extra_codec_ffi::tests::the_coinbase_writer_lays_out_pubkey_nonce_kem_leaf_and_the_reads_find_each`; `mining_parity.coinbase_writer_reproduces_the_genesis_extra_byte_for_byte` (C++) | a built coinbase's pubkey reads back |
+  | `parse_and_validate_tx_extra.fails_on_big_extra_nonce` | `test_tx_utils` **kept and re-pointed** in §7 commit 3: `construct_miner_tx` refuses a 9-byte nonce (the width is fixed at 8) | then deleted in 4b with the file's parser tests; its subject is now `tx_extra_codec_ffi::tests::the_coinbase_grammar_is_judged_on_both_reads_and_off_the_coinbase_the_nonce_is_refused` (7-byte nonce refused) and `coinbase_grammar::the_nonce_is_exactly_eight_bytes_and_exactly_one` (`src/tx_extra.rs`) |
+  | `parse_and_validate_tx_extra.fails_on_wrong_size_in_extra_nonce` | `a_nonce_length_past_the_bytes_is_refused` (added) | |
+  | `sort_tx_extra.empty` / `pubkey` / `two_pubkeys` / `keep_order` / `switch_order` | none owed — no sorter | order is constructed and judged; `coinbase_grammar::the_order_is_part_of_the_grammar` covers the judgement |
+  | `sort_tx_extra.invalid` | `a_truncated_pubkey_field_is_refused_alone_and_as_a_suffix` (added) | `{1}` |
+  | `sort_tx_extra.invalid_suffix_strict` | same | valid nonce field then a lone `1` |
+  | `sort_tx_extra.invalid_suffix_partial` | none owed — REJECTED behaviour | returning the parsed prefix of a bad extra is the fail-open the codec refuses |
+  | `remove_field_from_tx_extra.remove_first` / `remove_last` / `remove_middle` | none owed — no in-place rewrite | the parse half of each is `pubkey_then_padding_parses_as_two_fields` / `nonce_only_parses` |
+  | `remove_field_from_tx_extra.invalid_varint` | `a_non_canonical_varint_length_is_refused` (added) | `0x80 0x00` refused on both sides, verified |
+  | `tx_extra_pqc_round_trip.kem_and_leaf_entries_survive_sort` | `tx_extra_pqc_round_trip_vector_cases_hold_without_a_sorter` (added), case 1, reading `docs/test_vectors/TX_EXTRA_PQC_ROUND_TRIP.json` | the vector is promoted to the pinned record; "double sort idempotent" is serialize∘parse identity |
+  | `tx_extra_pqc_round_trip.kem_and_leaf_entries_reverse_order` | same, case 2 | contents survive a non-canonical order on parse; the grammar refuses the order — what "sort reorders" became |
+  | `cn_format_utils.add_extra_nonce_to_tx_extra` | `every_nonce_length_up_to_the_cap_round_trips_and_the_cap_plus_one_is_refused` (added) | 0..=255 with and without a pubkey prefix; 256 refused |
+  | `cn_format_utils.rejects_the_inherited_merge_mining_tag` | `retired_and_reserved_tags_parse_as_unknown` (existing) | `0x03` |
+  | `cn_format_utils.rejects_the_inherited_minergate_tag` | same | `0xDE` |
+  | `cn_format_utils.still_accepts_the_tags_that_remain` | `every_nonce_length_…` (pubkey + 8-byte nonce) and `synthetic_tx_extra_field_kinds_round_trip` (existing) | |
+  | `tx_extra_pqc_field_shape.*` parse-arm fixtures (`parse_tx_extra` used to assert "the fixture must actually be unparseable") | kept; assert through `shekyl_tx_extra_field(…) == SHEKYL_TX_EXTRA_MALFORMED` | the 17 I19 tests are unchanged in subject |
+  | `tests/fuzz/tx-extra.cpp` (TXE-Q5b) | `rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_extra_parse.rs`, seeds moved from `tests/data/fuzz/tx-extra/` to `fuzz/seeds/fuzz_tx_extra_parse/`, registered in `rust-audit-test.yml` `REQUIRED_TARGETS` | same crash oracle plus parse∘serialize identity and totality of both shape arms |
 
 ## 10. Decision log
 

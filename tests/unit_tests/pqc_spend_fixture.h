@@ -20,8 +20,6 @@
 #include "crypto/crypto.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_basic/tx_extra.h"
-#include "serialization/binary_archive.h"
 #include "shekyl/shekyl_ffi.h"
 
 namespace shekyl_test_fixtures
@@ -44,23 +42,31 @@ inline crypto::public_key basepoint_multiple(unsigned n)
   return pk;
 }
 
-inline std::string serialize_tx_extra_field(const cryptonote::tx_extra_field& f)
+/// One length-prefixed tx_extra field, laid out by hand: tag, varint length,
+/// payload. These fixtures are the *negative* side of the shape rule -- a
+/// field one output long, one output short, duplicated, on a transaction
+/// with no outputs -- and the writer (shekyl_coinbase_extra) refuses to build
+/// any of those, so the bytes are written here, where the bytes are the
+/// subject. The layout is the wire's (GENESIS_TX_WIRE_FORMAT.md §9.6a);
+/// `pruned_tx_hash_parity` pins that a fixture built this way hashes
+/// identically to the Rust-built twin.
+inline void append_raw_tx_extra_field(cryptonote::transaction& tx, uint8_t tag, const std::string& payload)
 {
-  std::ostringstream oss;
-  binary_archive<true> oar(oss);
-  cryptonote::tx_extra_field v = f;
-  if (!::do_serialize(oar, v))
-    throw std::runtime_error("serialize_tx_extra_field failed");
-  return oss.str();
+  tx.extra.push_back(tag);
+  size_t n = payload.size();
+  while (n >= 0x80)
+  {
+    tx.extra.push_back(static_cast<uint8_t>((n & 0x7f) | 0x80));
+    n >>= 7;
+  }
+  tx.extra.push_back(static_cast<uint8_t>(n));
+  tx.extra.insert(tx.extra.end(), payload.begin(), payload.end());
 }
 
 /// Append a 0x06 KEM-ciphertext field of `bytes` bytes (arbitrary payload).
 inline void append_pqc_kem_field(cryptonote::transaction& tx, size_t bytes)
 {
-  cryptonote::tx_extra_pqc_kem_ciphertext f;
-  f.blob.assign(bytes, '\x6a');
-  const std::string b = serialize_tx_extra_field(f);
-  tx.extra.insert(tx.extra.end(), b.begin(), b.end());
+  append_raw_tx_extra_field(tx, SHEKYL_TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, std::string(bytes, '\x6a'));
 }
 
 /// One conforming 0x07 entry (PL-D3): a valid commitment point -- the
@@ -71,7 +77,7 @@ inline void append_pqc_kem_field(cryptonote::transaction& tx, size_t bytes)
 /// same transaction on both sides), so the bytes cannot drift.
 inline std::string conforming_pqc_leaf_entry()
 {
-  uint8_t entry[cryptonote::PQC_LEAF_ENTRY_LEN] = {0};
+  uint8_t entry[SHEKYL_PQC_LEAF_ENTRY_BYTES] = {0};
   shekyl_test_conforming_pqc_leaf_entry(entry);
   return std::string(reinterpret_cast<const char*>(entry), sizeof(entry));
 }
@@ -81,13 +87,12 @@ inline std::string conforming_pqc_leaf_entry()
 /// only, and a right-length one passes the content rule too).
 inline void append_pqc_leaf_field(cryptonote::transaction& tx, size_t bytes)
 {
-  cryptonote::tx_extra_pqc_leaf_entries f;
+  std::string blob;
   const std::string entry = conforming_pqc_leaf_entry();
-  while (f.blob.size() < bytes)
-    f.blob += entry;
-  f.blob.resize(bytes);
-  const std::string b = serialize_tx_extra_field(f);
-  tx.extra.insert(tx.extra.end(), b.begin(), b.end());
+  while (blob.size() < bytes)
+    blob += entry;
+  blob.resize(bytes);
+  append_raw_tx_extra_field(tx, SHEKYL_TX_EXTRA_TAG_PQC_LEAF_ENTRIES, blob);
 }
 
 /// The conforming shape for `tx.vout.size()` outputs: one field of each — and
@@ -100,18 +105,15 @@ inline void append_pqc_fields(cryptonote::transaction& tx)
   const size_t n = tx.vout.size();
   if (n == 0)
     return;
-  append_pqc_kem_field(tx, cryptonote::HYBRID_KEM_CT_BYTES * n);
-  append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_ENTRY_LEN * n);
+  append_pqc_kem_field(tx, SHEKYL_HYBRID_KEM_CT_BYTES * n);
+  append_pqc_leaf_field(tx, SHEKYL_PQC_LEAF_ENTRY_BYTES * n);
 }
 
-/// Strip both PQC fields (the pre-rule shape every red-first vector starts from).
-inline void strip_pqc_fields(cryptonote::transaction& tx)
-{
-  cryptonote::remove_field_from_tx_extra(tx.extra, typeid(cryptonote::tx_extra_pqc_kem_ciphertext));
-  cryptonote::remove_field_from_tx_extra(tx.extra, typeid(cryptonote::tx_extra_pqc_leaf_entries));
-}
-
-inline cryptonote::transaction make_pqc_spend()
+/// The spend fixture. `with_pqc_fields = false` is the pre-rule shape every
+/// red-first vector starts from (it used to be produced by stripping the two
+/// fields back out of a conforming extra; nothing rewrites an extra in place
+/// any more, so the fixture is built without them instead).
+inline cryptonote::transaction make_pqc_spend(bool with_pqc_fields = true)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
@@ -181,7 +183,8 @@ inline cryptonote::transaction make_pqc_spend()
   // commitment point (PL-D3 content rule); the rest of the payloads are
   // arbitrary. Without the fields the DB collector aborts (it used to
   // zero-fill h_pqc silently).
-  append_pqc_fields(tx);
+  if (with_pqc_fields)
+    append_pqc_fields(tx);
 
   return tx;
 }

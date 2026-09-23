@@ -529,7 +529,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
           + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
           + " (validated at admission?)").c_str());
       }
-      // Exactly one field of exactly PQC_LEAF_ENTRY_LEN * vout.size() bytes
+      // Exactly one field of exactly SHEKYL_PQC_LEAF_ENTRY_BYTES * vout.size() bytes
       // whose every entry begins with an admissible commitment point, per the
       // rule just applied; empty for a leafless (zero-output) transaction.
       return std::vector<uint8_t>(blob.data(), blob.data() + blob.size());
@@ -546,7 +546,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         // extract_leaf_entries pinned the blob to exactly one 64-byte entry per
         // output; the leaf constructor takes the commitment point at its front
         // (PL-D3) and extracts the x-coordinate itself.
-        const uint8_t* leaf_entry = leaf_entry_blob.data() + i * PQC_LEAF_ENTRY_LEN;
+        const uint8_t* leaf_entry = leaf_entry_blob.data() + i * SHEKYL_PQC_LEAF_ENTRY_BYTES;
 
         crypto::public_key output_key;
         uint64_t maturity_raw;
@@ -597,7 +597,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         // via check_outs_valid; shekyl_check_commitment_masks via
         // check_commitment_mask_valid, with the coinbase legs in
         // prevalidate_miner_transaction; CM by the PL-D3 content rule in
-        // shekyl_tx_extra_pqc_field_shape, code 10, at relay and connect).
+        // shekyl_tx_extra_shape_of, code 10, at relay and connect).
         // So this is unreachable, and it aborts rather than silently omitting
         // the output.
         if (!shekyl_construct_curve_tree_leaf(

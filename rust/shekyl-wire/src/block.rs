@@ -37,9 +37,13 @@ use crate::READ_LEN_CAP;
 ///
 /// * header — fixed fields with varint slack (`< 128` bytes);
 /// * the coinbase [`Transaction`] — `≤ MAX_TX_SIZE` (a vast over-estimate: a
-///   coinbase is one `gen` input, `≤ MAX_OUTPUTS` outputs, `≤ MAX_TX_EXTRA`
-///   extra, and a `Null` base, i.e. tens of KiB — but `MAX_TX_SIZE` is the
-///   simplest safe ceiling and `Block::read` does not separately bound it);
+///   coinbase is one `gen` input, `≤ MAX_OUTPUTS` outputs, an extra the
+///   coinbase grammar fixes at `1184·n` bytes of payload plus four tagged
+///   lengths for `n` outputs (18 994 at `n = 16`) —
+///   `MAX_TX_EXTRA` is the *non-coinbase* relay cap and does not apply to a
+///   coinbase, CEN-M4 — and a `Null` base, i.e. tens of KiB; `MAX_TX_SIZE`
+///   is the simplest safe ceiling and `Block::read` does not separately
+///   bound it);
 /// * the `n_tx` varint + `n_tx × 32`-byte hashes — `≤ READ_LEN_CAP × 32`.
 ///
 /// Because the sum is `≥` the largest blob `Block::read` can accept, the guard

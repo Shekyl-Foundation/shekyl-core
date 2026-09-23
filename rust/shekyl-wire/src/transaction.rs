@@ -47,7 +47,7 @@ use shekyl_crypto_hash::keccak256;
 use shekyl_types::{BlockHash, PCanonicalId, PrefixHash};
 
 use crate::bytes::{read_array, read_byte};
-use crate::tx_extra::{check_pqc_field_shape_of, parse as parse_tx_extra};
+use crate::tx_extra::{check_tx_extra_shape, parse as parse_tx_extra};
 use crate::varint::{read_varint, write_varint};
 use crate::READ_LEN_CAP;
 
@@ -1804,24 +1804,31 @@ impl Transaction {
                 "shekyl-wire: emission must not mix with a bond_post input (§2.5)",
             ));
         }
-        // tx_extra bound (the coinbase extra is unbounded in C++; cap non-coinbase).
+        // tx_extra size bound on a non-coinbase transaction (the relay cap,
+        // CEN-M4). A coinbase extra has no size cap here or in C++; it is
+        // bounded by the coinbase grammar below instead — exactly four fields
+        // of fixed or `n`-proportional width, so its size is a function of
+        // the output count, not a miner's choice.
         if !is_coinbase && self.prefix.extra.len() > MAX_TX_EXTRA {
             return Err(io::Error::other(format!(
                 "shekyl-wire: tx_extra {} exceeds {MAX_TX_EXTRA}",
                 self.prefix.extra.len()
             )));
         }
-        // CEN-I19 (`GENESIS_TX_WIRE_FORMAT.md` §9.6a): exactly one `0x06` of
-        // `1120·n` and one `0x07` of `64·n` when the transaction has `n > 0`
-        // outputs, neither when `n == 0`. The daemon enforces this at admission
-        // through the same [`check_pqc_field_shape_of`]; enforcing it here is
-        // what makes that one rule, rather than one rule and a claim.
+        // The tx_extra shape rule: CEN-I19 (`GENESIS_TX_WIRE_FORMAT.md`
+        // §9.6a — exactly one `0x06` of `1120·n` and one `0x07` of `64·n`
+        // when the transaction has `n > 0` outputs, neither when `n == 0`)
+        // plus, on a coinbase, the closed grammar `[0x01, 0x02(8), 0x06,
+        // 0x07]` (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′), and no `0x02` off it.
+        // The daemon enforces this at admission through the same
+        // [`check_tx_extra_shape`]; enforcing it here is what makes that one
+        // rule, rather than one rule and a claim.
         //
         // An unparseable `extra` is refused. This crate owns the genesis tag
         // set; skipping the shape check on parse failure would diverge from
         // admission.
         let fields = parse_tx_extra(&self.prefix.extra).map_err(io::Error::other)?;
-        check_pqc_field_shape_of(&fields, n_out).map_err(io::Error::other)?;
+        check_tx_extra_shape(&fields, n_out, is_coinbase).map_err(io::Error::other)?;
         let size = self.serialized_len();
         if size > MAX_TX_SIZE {
             return Err(io::Error::other(format!(

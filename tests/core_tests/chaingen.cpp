@@ -316,12 +316,16 @@ namespace
   {
     replica_tx_buffers out;
     out.is_miner = is_miner;
-    std::vector<cryptonote::tx_extra_field> fields;
-    cryptonote::tx_extra_pqc_leaf_entries lh;
-    if (cryptonote::parse_tx_extra(tx.extra, fields) && cryptonote::find_tx_extra_field_by_type(fields, lh))
+    // The replica mirrors the daemon's read: the 0x07 blob as the codec
+    // finds it (first 0x07 field), absent when the extra carries none or
+    // does not parse -- the replica is an oracle for the *tree*, and what
+    // the daemon does with a bad extra is the shape rule's business.
+    ShekylOwnedBuffer leaf;
+    if (shekyl_tx_extra_field(tx.extra.empty() ? nullptr : tx.extra.data(), tx.extra.size(),
+          SHEKYL_TX_EXTRA_TAG_PQC_LEAF_ENTRIES, 0, &leaf.buf) == SHEKYL_TX_EXTRA_OK)
     {
       out.has_blob = true;
-      out.blob.assign(lh.blob.begin(), lh.blob.end());
+      out.blob.assign(leaf.data(), leaf.data() + leaf.size());
     }
     out.outputs.reserve(tx.vout.size());
     for (size_t i = 0; i < tx.vout.size(); ++i)
@@ -794,7 +798,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
       kem_blob.insert(kem_blob.end(), od.kem_ciphertext_ml_kem.ptr,
         od.kem_ciphertext_ml_kem.ptr + od.kem_ciphertext_ml_kem.len);
-    leaf_blob.insert(leaf_blob.end(), od.pqc_leaf, od.pqc_leaf + PQC_LEAF_ENTRY_LEN);
+    leaf_blob.insert(leaf_blob.end(), od.pqc_leaf, od.pqc_leaf + SHEKYL_PQC_LEAF_ENTRY_BYTES);
 
     ShekylOutputData tmp = od;
     shekyl_output_data_free(&tmp);
@@ -878,7 +882,7 @@ bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txk
     kem_blob.insert(kem_blob.end(), od.kem_ciphertext_ml_kem.ptr,
       od.kem_ciphertext_ml_kem.ptr + od.kem_ciphertext_ml_kem.len);
   std::vector<uint8_t> leaf_blob(leaf_buf.data(), leaf_buf.data() + leaf_buf.size());
-  leaf_blob.insert(leaf_blob.end(), od.pqc_leaf, od.pqc_leaf + PQC_LEAF_ENTRY_LEN);
+  leaf_blob.insert(leaf_blob.end(), od.pqc_leaf, od.pqc_leaf + SHEKYL_PQC_LEAF_ENTRY_BYTES);
 
   ShekylOutputData tmp = od;
   shekyl_output_data_free(&tmp);

@@ -211,6 +211,7 @@ jobs:
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
             rust/shekyl-archival-retention/fuzz/fuzz_targets/fuzz_serve_credit_gate.rs
             rust/shekyl-archival-retention/fuzz/fuzz_targets/fuzz_serve_credit_block_unique.rs
+            rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_extra_parse.rs
           )
           MISSING=0
           for target in "${REQUIRED_TARGETS[@]}"; do
