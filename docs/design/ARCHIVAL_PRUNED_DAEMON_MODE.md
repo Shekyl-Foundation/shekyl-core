@@ -298,11 +298,27 @@ fallback **REJECTED**. The items it owed:
 - **Launch window** — narrowed by Q2: band 2 is empty until the chain is
   `W` old (`(0, tip − W]` is empty while `tip < W`), so the item is *first
   checkpoint release before day ~195, then release cadence `≤ W`* so `C`
-  never falls more than `W` behind the tip.
+  never falls more than `W` behind the tip. The `0` in `(0, tip − W]` says
+  height 0 is not in band 2, not that `C = 0`: genesis is hash-pinned by the
+  binary and verified by equality (CEN-E1 at height 0, CEN-E5 at open), not
+  by assumption; it belongs to no trust band (2026-09-22, E6 slice 4 Q3).
 - **Release-gate full-verify step** — a process sentence: the release that
   carries `C` is built from a node that verified every proof to `C` with
   `assumevalid = 0`; recorded in `SIGNING.md`'s release flow when the first
-  checkpoint ships.
+  checkpoint ships. **Gloss (2026-09-22, answering E6 slice 4 Q3):**
+  `assumevalid = 0` ≡ *no anchor* ≡ `Trust::Full`; band 1 is empty. It is
+  **not** "genesis is the anchor": the verifying node here must connect
+  height 0 under `Full` — under `BelowAnchor(0)` it would record the proof
+  rows' absence in coverage and `connect`'s provenance and mark its own file
+  "never parity evidence", and the gate would rest on a file this charter
+  says is not evidence. Genesis has no proofs to skip, so the two postures do
+  the same work at height 0 and leave different stores; the divergence is in
+  the persisted state, not only in whether band 1 is empty. Made
+  unrepresentable rather than merely unintended: `Trust::BelowAnchor(anchor)`
+  carries `anchor ≥ 1` — `ReleaseAnchors` holds genesis as a separate pin,
+  its `Anchor`s are checkpoints at height `≥ 1` by the compile-time gate, and
+  `current()` (the value `below_anchor` is minted from) is `None` until a
+  checkpoint ships (`rust/shekyl-chain-rules/src/anchors.rs`).
 - **Band-2 egress** — a formula, not a decision: release gap × tx rate ×
   ~16.7 KB/tx (F24), bounded above by `W` × rate × 16.7 KB.
 - **The anchor check's home** — `CEN-E1` (Q11: the equality rule is the

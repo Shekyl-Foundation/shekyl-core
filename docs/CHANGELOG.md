@@ -369,10 +369,13 @@
   `cryptonote_config.h` and the hardfork tables; `RecordedBlock` gains
   `coins_generated` and `cumulative_tx_count`; a decreasing prefix sum is
   `Corrupt::TxCountNotMonotone`, which the store halts on as SI-13's
-  `FoldNotMonotone`. **Genesis is the height-0 anchor** on every public
-  network (`ReleaseAnchors`; derived in test from `cryptonote_config.h`'s
-  pins and held equal to the client identity's `genesis_hash_for`), so a
-  public-network node refuses a foreign genesis at connect and at open.
+  `FoldNotMonotone`. **Every public network's genesis is pinned** in
+  `ReleaseAnchors` (derived in test from `cryptonote_config.h`'s pins and
+  held equal to the client identity's `genesis_hash_for`), so a
+  public-network node refuses a foreign genesis at connect (CEN-E1) and at
+  open (CEN-E5) — by equality, not by trust: genesis is not an anchor and
+  sits in no trust band, `Anchor`s are checkpoints at height ≥ 1, and
+  `assumevalid = 0` means no anchor at all (the PDM lane's ruling).
   Consensus figures: `implemented 34 / validator-enforced 150`,
   `by-construction 4`, `enforced 152`. No C++ behaviour changes; the C++
   remains the validator of record until cutover. The E2 mutation family

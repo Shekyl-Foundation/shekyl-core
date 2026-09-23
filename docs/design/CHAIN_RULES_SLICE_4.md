@@ -2,12 +2,13 @@
 
 **Status:** OPEN — **rules-crate commits 1–7 LANDED on the branch
 2026-09-22** (§5: sixteen 4.F rows; `implemented 34 / validator-enforced
-150`, `by-construction 4`; genesis anchored; `WrongReward → F18`). Round 0
+150`, `by-construction 4`; genesis pinned, band 1 empty; `WrongReward → F18`). Round 0
 pre-flight written 2026-09-21 against `dev` @ `ea140396b`; Round 0.5 the
 shim-layer sweep (§3.1); precursor P1–P4 landed as #819; Round 1
 (2026-09-22, `dev` @ `7b9be6cd1`): the `dev` sweep (§3.2), §8 ruled. Open
-residue: F14/F14b/F16/F18 on G6 (slice 7), F17 on E3, the PDM question
-(Q3), the fee-ladder zone argument (§3.1 P1a).
+residue: F14/F14b/F16/F18 on G6 (slice 7), F17 on E3, the fee-ladder zone
+argument (§3.1 P1a). The PDM question (Q3) was answered the same day and
+absorbed.
 Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessors
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md),
 [`CHAIN_RULES_SLICE_2.md`](../completed/CHAIN_RULES_SLICE_2.md),
@@ -397,7 +398,7 @@ the ingest/spec re-key ahead of the row it protects):**
 | 3 | `RecordedBlock` grows | `coins_generated`, `cumulative_tx_count` — store projection, harness, mock-vs-store conformance |
 | 4 | `chain-ingest`: `WrongReward → F18`, `ExpectedPlace::Miner` (Q6, Q8) | The one cross-lane edit, landed **before** F13 flips so the family is green at every commit; `DRS_E2_REPLAY_DRIVER.md` §3.10 row |
 | 5 | `rules/miner.rs` — sixteen rows (Q1 (a)) | F1/F3/F7/F9/F10 in `form`; F4/F5/F6 in `validate`; F11/F13/F15/F20 as `Emission` on the verdict; F2/F8/F19/F21 by construction. `Corrupt::TxCountNotMonotone` ↔ store `StoreInvariant::FoldNotMonotone` (SI-13, a new register row: a recorded fold never decreases, observed by the validator like SI-10). `fixture::coinbase(height)` becomes a valid coinbase; the store's and ingest's private copies delegate to it |
-| 6 | Genesis anchors (Q3) | `ReleaseAnchors` carries `(0, genesis)` per public network; derived in test from `cryptonote_config.h` through the genesis tool and held equal to `shekyl_rpc_types::genesis_hash_for` |
+| 6 | Genesis pinned (Q3) | `ReleaseAnchors` carries each public network's genesis identity — as a `genesis` pin apart from the checkpoints, per the PDM answer (§8 Q3): verified by equality (E1 at 0, E5 at open), in no trust band, `current()` `None`; derived in test from `cryptonote_config.h` through the genesis tool and held equal to `shekyl_rpc_types::genesis_hash_for` |
 | 7 | Docs | This section; census 4.F pins re-resolved with each row's Rust home; contract stamp; index; DRS row; FOLLOWUPS; CHANGELOG |
 
 **Figures at landing:** `consensus: implemented 34 / validator-enforced 150
@@ -498,15 +499,16 @@ E3). Coverage over a well-formed candidate: 29 rows.
   moves the denominator honestly (153 → 152, `validator-enforced` 151 →
   150) rather than counting a rule that never ran as ported.
   **RULED (a), 2026-09-21. Landed as P4 (§3.1).**
-- **Q3 — genesis as the height-0 anchor (F6). RULED (a), 2026-09-22; landed. The question for the PDM lane, in the form ruled: PDM `:304` ships the first release with `assumevalid = 0` — is that state "genesis is the anchor" or "no anchor at all"? The two coincide behaviourally today and diverge the moment anyone asks whether band 1 is empty at first release. Filed in FOLLOWUPS, owner `ARCHIVAL_PRUNED_DAEMON_MODE.md`.** F11's "as configured" is a
+- **Q3 — genesis as the height-0 anchor (F6). RULED (a), 2026-09-22; landed — and amended the same day by the PDM lane's answer: `assumevalid = 0` is *no anchor at all* (`Trust::Full`, band 1 empty); genesis is not trusted with the binary, it is *defined* by it — verified by equality, in no trust band. So (a)'s mechanism stands and (a)'s framing does not: `ReleaseAnchors` carries the genesis identity as a separate `genesis` pin, `Anchor`s are the checkpoints at height `≥ 1` (compile-time gate; `for_tests` refuses 0), `current()`/`covers()` — what `Trust::below_anchor` is minted from — see checkpoints only, and one equality accessor (`expected_at`) serves E1 at height 0 and at anchored heights alike; E5 walks `pins()`, genesis first. The reading was ruled on the release gate: PDM `:304`'s verifying node runs `assumevalid = 0`; under "genesis is the anchor" it would connect height 0 as `BelowAnchor(0)`, record the proof rows' absence in coverage and provenance, and rest the release on a file the charter calls "never parity evidence" — circular. Behaviourally the two coincide at height 0 (genesis has no proofs to skip); the persisted state differs. Recorded: `anchors.rs` module docs, `trust.rs`, `band_one_is_empty_until_the_first_checkpoint_release`, `for_tests_refuses_an_anchor_at_genesis`; the charter glossed at `:304` and in `PDM-Q5`. The FOLLOWUPS row is closed.** F11's "as configured" is a
   per-network block identity the binary carries — the definition of an
   anchor. **(a)** put `(0, genesis_hash)` into `ReleaseAnchors::for_network`
   for the three public networks: E1 then judges genesis, E5 refuses a
   wrong-network file at open, both already fixtured; the slice-3 test
   `no_release_has_shipped_an_anchor_yet` is refuted *by design* and replaced
-  by `the_only_anchor_is_genesis_until_the_first_checkpoint_release`; PDM-Q5's
-  "`C`" becomes "the last anchor above genesis" where the distinction
-  matters (band 1 = `≤ C` still reads correctly: below genesis is nothing).
+  by `band_one_is_empty_until_the_first_checkpoint_release`; PDM-Q5's "`C`"
+  stays the last *checkpoint* — SUPERSEDED as first written ("the last
+  anchor above genesis"), by the PDM answer above: genesis is not an anchor
+  of any rank, so `C` needs no re-reading.
   **(b)** a separate `GenesisBlock::for_network(net) -> BlockHash` beside
   `RuleSchedule`, consumed by an F11 rule at `connecting.is_zero()`, leaving
   the anchor table for checkpoints only. **Default: (a)** — one mechanism
@@ -514,8 +516,10 @@ E3). Coverage over a well-formed candidate: 29 rows.
   behaviours F11 asks for are exactly E1 and E5. The genesis hashes come
   from `GENESIS_TX` + the genesis header per network; the Rust side derives
   them once (the genesis tool's pins or a KAT against `cryptonote_config.h`)
-  and the table holds the result as data. PDM lane to confirm the reading of
-  `C`.
+  and the table holds the result as data. *"One kind of fact" was the part
+  the PDM answer refuted: the landed shape is (a)'s one table and one
+  equality read with (b)'s separation of genesis from the checkpoints
+  inside it.*
 - **Q4 — a status for a row true by construction (F9). RULED (a), 2026-09-22; landed with four instances (F2, F8, F19, F21).** F19 is enforced by
   the view brand and the transaction boundary, falsified by a
   `compile_fail` doctest, with no runtime site and no per-block coverage.
