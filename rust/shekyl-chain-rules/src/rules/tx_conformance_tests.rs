@@ -69,7 +69,10 @@ use shekyl_wire::transaction::{
     MAX_TX_EXTRA, MAX_TX_SIZE, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
     TAG_INPUT_SERVE_CREDIT, UNLOCK_TIME_BLOCK_SENTINEL,
 };
-use shekyl_wire::tx_extra::{self, conforming_pqc_leaf_blob, TxExtraField, HYBRID_KEM_CT_BYTES};
+use shekyl_wire::tx_extra::{
+    self, build_coinbase_extra, conforming_pqc_leaf_blob, TxExtraField, COINBASE_NONCE_BYTES,
+    HYBRID_KEM_CT_BYTES,
+};
 use shekyl_wire::{BondPost, BondPostKind, Ct, Holdings, Input, Output, Transaction};
 
 /// The twin's source, read at compile time: the table below is checked
@@ -666,9 +669,26 @@ fn serve_credit_ok() -> Transaction {
     tx
 }
 
-/// The fixture coinbase with I19's `extra`.
+/// The fixture coinbase with the `extra` CEN-I20 requires of a coinbase
+/// (`TX_EXTRA_RUST_CUTOVER.md`, landed on `dev` at `50256487f`): the one
+/// grammar — a `0x01` pubkey, an 8-byte `0x02` nonce, then I19's two PQC
+/// fields sized to the outputs. Built by the wire's own builder, so a
+/// grammar change moves this fixture with it.
 fn coinbase_ok(height: u64) -> Transaction {
-    with_pqc_extra(coinbase(height))
+    let mut cb = coinbase(height);
+    cb.prefix.extra = coinbase_extra_for(cb.prefix.outputs.len());
+    cb
+}
+
+fn coinbase_extra_for(n: usize) -> Vec<u8> {
+    build_coinbase_extra(
+        [0x71; 32],
+        &[0x4E; COINBASE_NONCE_BYTES],
+        n,
+        &vec![0x5A; HYBRID_KEM_CT_BYTES * n],
+        &conforming_pqc_leaf_blob(n),
+    )
+    .expect("the grammar's one layout builds")
 }
 
 /// A bond-post input with a canonical hybrid key and `kind`; the type's
@@ -889,7 +909,8 @@ fn h15_null_ct_on_a_spend() -> Transaction {
 
 fn f4_no_outputs(cb: &mut Transaction) {
     cb.prefix.outputs.clear();
-    cb.prefix.extra.clear();
+    // A leafless coinbase still carries pubkey and nonce (I20).
+    cb.prefix.extra = coinbase_extra_for(0);
     if let Ct::Null(base) = &mut cb.ct {
         base.enc_amounts.clear();
         base.enc_labels.clear();

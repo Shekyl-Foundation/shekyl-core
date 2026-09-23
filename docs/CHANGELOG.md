@@ -101,9 +101,12 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   `tx_extra` over the **relay** cap (`CEN-M4`, policy) that consensus
   accepts; and two of its arms guard a value (`prunable: None` on a
   non-serve-credit) the C++ cannot hold. One arm is dead by ordering.
-- CSR-3a: `CEN-H15` (`CTTypeNull` re-rejected for non-coinbase) is graded
-  **DIVERGENT** — the Rust refuses unconditionally, the C++ gates the
-  re-rejection on `m_nettype != FAKECHAIN`. Ruled: unconditional stands.
+- CSR-3a: `CEN-H15` (`CTTypeNull` re-rejected for non-coinbase) stays
+  **CHECKED-CONFORMANT**. A same-day DIVERGENT grading (the C++ was read as
+  gating the re-rejection on `m_nettype != FAKECHAIN`) was refuted at
+  source: that gate is CEN-I2's; H15's own sites refuse unconditionally on
+  every nettype, as the Rust does. Census 4.H site pins re-resolved at
+  `d8ebfd18c` (sixteen cells re-pinned to function anchors).
 - Test fixtures across `shekyl-chain-rules`, `shekyl-chain-store` and
   `shekyl-chain-ingest` are now curve points from one derived table (`k·G`),
   carry per-input PQC auth slots and a canonical BP+ layout, and a

@@ -76,7 +76,18 @@ second shim, with two differences: this shim is Rust, and it is
   a tentative categorization (`CPP_INHERITANCE_INVENTORY.md:190`). H19's
   verification half is a crypto cutover, not an adoption — Q3.
 
-### 1.2 In flight — the TXE boundary
+### 1.2 In flight — the TXE boundary — **LANDED under this slice, 2026-09-23**
+
+**UPDATE 2026-09-23 (rebase onto `d8ebfd18c`, #837):** TXE merged to `dev`
+(`50256487f` *tx_extra: one constructor for the coinbase grammar*,
+`3ab84bab6`; **CEN-I20** minted — the coinbase `extra` grammar). The
+boundary held: no TXE file was edited by this slice, and the only place the
+landing reached the slice was the conformance test's coinbase baseline,
+which the twin now refuses without a `0x01` pubkey — fixed by building
+that fixture's `extra` with the wire's own `build_coinbase_extra`, so the
+grammar carries the fixture from here. Consequence 2 fired as predicted:
+the 4.H pins moved (§5 row 9 has the re-resolution). The rest of this
+section is the pre-flight's record of the boundary as it was.
 
 `feat/tx-extra-rust-cutover` (4 commits at `fa94d7f43`, unmerged) touches:
 `shekyl-wire/src/tx_extra.rs`, `shekyl-ffi` (`tx_extra_ffi.rs`,
@@ -393,7 +404,7 @@ against the wire crate's constant (Q5 as ruled — a test, not a comment).
 | 6 | H11 | KI domain: prime-order, ≠ identity — new Rust body on the crate's point primitives, DSV M8's vectors re-derived and pinned |
 | 7 | By-construction entries (Q6, Q7) — **LANDED `83d4e6204` + `12a77fb73`** | Registered: H2 and H13 (F2's falsifier), H8 (`h8_the_wire_reads_one_commitment_per_output`), H12 (F8's), H23 (`doctest:tx_form`); `by-construction 4 → 9`. **Not registered, as planned here, and the plan was wrong:** H5's script half and H15's type half are halves of rows already `implemented` — a row has one status; H24 is **bucket 3** and the registry excludes bucket-3 rows by design, so it has no `CenRow` to carry any status (Q7's amendment, §8). **Q6's condition landed as a MECHANISM:** a shared falsifier calls `credited_to_this_falsifier(&[rows…])` and the coverage gate refuses a shared falsifier whose body does not name every served row as `CenRow::<id>` (`check_chain_rules_coverage.py`, selftest green + red) |
 | 8 | The §3.1 conformance test (Q1 as ruled) — **LANDED (this commit)** | `rules/tx_conformance_tests.rs`. **Enumerated:** all **59** `Err(` sites in `shekyl-wire/src/transaction.rs` are rows of one table, checked against the file itself (`include_str!`: the count, and each fragment found as many times as listed). **Four arms, pinned `(parse 15, rule 38, policy 1, invariant 5)`** — the review asked for a third arm so an assertion-shaped site is never forced into the nearer bucket; the classification needed a fourth, because one site (`MAX_TX_EXTRA`) is **CEN-M4**, a policy row: the crate already keeps policy rows in their own enum so one is never counted as consensus, and forcing it into `Rule` would be the mis-keying the third arm exists to prevent. Every in-memory rule arm carries the transaction that trips **it** (the twin's message is matched, placeholder-aware, so an earlier arm firing is a failure); the crate is then held to the row **by the row's registry status** — implemented → refused on that row; by construction → the value does not round-trip the wire; pending → nothing yet, and the assertion **arms itself** when the row flips (no pin to update — the shape H24's proxy could not have). Read-face rule arms must be by-construction rows or mirrored by an in-memory arm keyed to the same row (checked). The baseline (coinbase, two-output spend, serve-credit) passes **both** copies. **Findings the table surfaced** (§3.1.1) |
-| 9 | Docs — **LANDED (this commit)** | **Landing figures** (coverage gate at head): `implemented 34 → 56` of 153 census rows; `by-construction 4 → 9`; `enforced 145 → 140` per-block rows; 4.H: 17 `implemented`, 5 `by_construction`, H19 `pending` with its layout half running, H24 bucket 3 (no row). Tests: `shekyl-chain-rules` 193 + 15 doctests, `shekyl-chain-store` 292, `shekyl-chain-ingest` 74, all green; coverage-gate selftest 63 refusals. **Census 4.H pins re-resolved:** `git diff --stat 387fa84a9 origin/dev -- rust/shekyl-wire src/cryptonote_core/{tx_verification_utils,blockchain,cryptonote_core}.cpp` is **empty** at `f17fba8e6` — no 4.H C++ site and no wire file moved; TXE has **not** landed (its `dev` commits are docs); the pins stand as written at Round 0. `CHAIN_RULES_CRATE.md` §4.6 (the `TxRule` class, the slot-derived kind, the landed rows, the twin's demotion) and §8.5 (the fixture-sanity gate; the conformance table and **why it has arms for unimplemented rows**); index row; FOLLOWUPS (the skeleton row's first measured consequence; the shim-sweep row's second instance and the `shekyl-wire`-constants question for the census lane); CHANGELOG |
+| 9 | Docs — **LANDED (this commit)** | **Landing figures** (coverage gate at head): `implemented 34 → 56` of 153 census rows; `by-construction 4 → 9`; `enforced 145 → 140` per-block rows; 4.H: 17 `implemented`, 5 `by_construction`, H19 `pending` with its layout half running, H24 bucket 3 (no row). Tests: `shekyl-chain-rules` 193 + 15 doctests, `shekyl-chain-store` 292, `shekyl-chain-ingest` 74, all green; coverage-gate selftest 63 refusals. **Census 4.H pins re-resolved — twice.** At `f17fba8e6` the window diff over the wire crate and the three 4.H C++ files was empty and I wrote "the pins stand" — an inference from *the files did not move in the window* to *the pins are right*, which does not follow. Re-run at `d8ebfd18c` (#837, after rebase): TXE **had landed** (`50256487f`, `3ab84bab6`; CEN-I20 minted), moving `cryptonote_format_utils.cpp` by −260/−280 lines and `blockchain.cpp` by −2 — and reading the pinned lines showed the `blockchain.cpp` and `cryptonote_core.cpp` pins were **already stale before the window** (H13's `3348–3353` pointed at `have_tx_keyimges_as_spent`; H5's `3162–3168` at a FIXME comment; H8's `797–805` at the tx_extra shape check). **Sixteen 4.H site cells re-pinned to function anchors at `d8ebfd18c`**, each cell carrying its era; the eight whose files did not move (H2, H3, H10, H11, H18, H19, H22, H23) verified at their anchors and left. The re-read also refuted Q9's DIVERGENT grading of CEN-H15 (§8 Q9). The twin's `Err(` count at `d8ebfd18c` is still 59 (the conformance table holds). `CHAIN_RULES_CRATE.md` §4.6 (the `TxRule` class, the slot-derived kind, the landed rows, the twin's demotion) and §8.5 (the fixture-sanity gate; the conformance table and **why it has arms for unimplemented rows**); index row; FOLLOWUPS (the skeleton row's first measured consequence; the shim-sweep row's second instance and the `shekyl-wire`-constants question for the census lane); CHANGELOG |
 
 **H19's verification half** stays `pending` in the registry (Q3 (b)),
 with the layout half's fixture landed under it and the blocker named:
@@ -556,20 +567,31 @@ failure text names the mechanism so the red is read as a finding.
   Round 1 waits on its merge — the code commits do not depend on it either
   way.
 - **Q9 — the Fakechain `Null` exemption (found at commit 3, `cf9985aa2`).
-  RULED unconditional, 2026-09-23.** The C++ re-rejects `CTTypeNull` for a
+  RULED unconditional, 2026-09-23; its DIVERGENT grading REFUTED the same
+  day (below).** *As posed:* the C++ re-rejects `CTTypeNull` for a
   non-coinbase transaction only when `m_nettype != FAKECHAIN`
   (`blockchain.cpp:3398`) — nettype selecting control flow on the consensus
   surface, rule 71's prohibition verbatim, inherited so C++ tests could
   build spends without proofs: the stub builder TXE-Q1 deletes. The regtest
-  e2e builds real FCMP spends and never needed it. `H15` is unconditional;
-  a Fakechain node running this validator refuses `Null`-CT spends. **Arm
+  e2e builds real FCMP spends and never needed it. `H15` is unconditional.
+  *(The "only when" was the error — see the refutation.)* **Arm
   (d)** — data on the Fakechain rule set, the slice-2 fixed-difficulty
   shape — was rejected: it would make H15 the first 4.H rule to read
   rule-set data for a carve-out whose only consumer is a builder being
   deleted, inheriting a workaround into the design built to escape it, and
   putting a Fakechain-only branch into the crate that just spent a slice
-  removing one. **Recorded as a divergence:** the CSR-3a row for CEN-H15 is
-  `DIVERGENT`, Rust canonical — on Fakechain the Rust validator refuses
-  what the C++ accepts, and identity with the C++ there is the failure, not
-  the pass (`CONSENSUS_STORE_RECONCILIATION.md` §5.4.1; the census H15 row
-  carries the same).
+  removing one. **The divergence claim is REFUTED (row 9's pin
+  re-resolution at `d8ebfd18c`, 2026-09-23) — the ruling stands, its
+  grading does not.** The CSR-3a row was set `DIVERGENT` on the claim that
+  the C++ accepts a `Null`-CT spend on Fakechain. It does not: the gate at
+  `blockchain.cpp:3396–3402` is CEN-I2's *earlier* refusal, and below it
+  H15's own pinned site `ver_non_input_consensus`
+  (`tx_verification_utils.cpp:223`), `check_tx_inputs`'s `switch`
+  (`:3550–3554`) and the `else` at `:3539–3544` each refuse `Null` for a
+  non-coinbase on every nettype. I read the gate and not the belt under it
+  — rule 16's corollary, *"true of the design and false of the
+  implementation"*, committed by the lane that quotes it. `H15` stays
+  unconditional; the C++ is too; CSR-3a is `CHECKED-CONFORMANT` with the
+  mis-grading recorded as records-was, and the census H15 note corrected.
+  The Fakechain gate remains rule 71's prohibition verbatim — owned by
+  CEN-I2/I3/I4's "FAKECHAIN exempt", where slice 6 meets it.
