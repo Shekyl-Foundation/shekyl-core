@@ -18,10 +18,11 @@
 
 use super::fixture::{candidate, candidate_on, coinbase, recorded, root, TxShape};
 use super::{formed, formed_on, judged, MockChain};
+use crate::census::{CenRow, RowStatus};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{tx_form, validate};
-use crate::verdict::TxSlot;
+use crate::verdict::{InvalidBlock, TxSlot};
 use shekyl_wire::Transaction;
 
 /// A five-block chain to build candidates on, so the fixtures are exercised
@@ -37,9 +38,8 @@ fn five_blocks() -> MockChain {
 /// the shape as the block's one body; for the miner slot, through
 /// `validate` on a candidate whose coinbase it is.
 fn judge_at(shape: TxShape, slot: TxSlot, tx: &Transaction) {
-    tx_form(tx, slot, &RuleSet::GENESIS).unwrap_or_else(|refused| {
-        panic!("{shape:?} is labelled valid at {slot:?} but tx_form refused it: {refused}")
-    });
+    tx_form(tx, slot, &RuleSet::GENESIS)
+        .unwrap_or_else(|refused| panic!("{}", refused_message(shape, slot, "tx_form", &refused)));
     let chain = five_blocks();
     chain.with_view(|view| {
         let mut candidate = candidate_on(&chain, Vec::new());
@@ -54,10 +54,28 @@ fn judge_at(shape: TxShape, slot: TxSlot, tx: &Transaction) {
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,
         ))
-        .unwrap_or_else(|refused| {
-            panic!("{shape:?} is labelled valid at {slot:?} but validate refused it: {refused}")
-        });
+        .unwrap_or_else(|refused| panic!("{}", refused_message(shape, slot, "validate", &refused)));
     });
+}
+
+/// The failure text for a fixture the current rules refuse. A fixture is
+/// blessed only against the rows that exist, so when a new row lands and an
+/// untouched fixture goes red here, that is the row finding a fixture that
+/// was always wrong — not a regression, and not a reason to weaken either
+/// the fixture or the rule. Says so, with the count, so the reader does not
+/// have to work it out under time pressure.
+fn refused_message(shape: TxShape, slot: TxSlot, site: &str, refused: &InvalidBlock) -> String {
+    let implemented = CenRow::ALL
+        .iter()
+        .filter(|row| row.status() == RowStatus::Implemented)
+        .count();
+    format!(
+        "{shape:?} is labelled valid at {slot:?} but {site} refused it on {row}.\n\
+         Fixtures are judged against the {implemented} rows implemented today. If {row} just \
+         landed, this fixture was ALWAYS invalid under it and nothing regressed: fix the fixture \
+         to what the rule accepts — never the rule, and never by weakening the fixture's claim.",
+        row = refused.rule
+    )
 }
 
 /// The gate: every shape in the chain, at every slot it names.

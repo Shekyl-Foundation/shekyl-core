@@ -320,6 +320,48 @@ decoupled from TXE's schedule by §1.2 item 3 as amended.
 
 ---
 
+## 5.1 The slice-6 cascade, scoped now (2026-09-23)
+
+Every spend fixture in the three crates carries **filler** proof material —
+`fixture::bp_plus_layout_for` (canonical layout, filler scalars),
+`fcmp_proof: [0xF0]`, `pqc_auth_filler()` (empty blobs), a `TWO_G`
+pseudo-out. Nothing landed verifies any of it, and that is stated on each
+builder. **Slice 6's verification bodies will refuse every one of them at
+once**, and the fix is not a constant: a real proof is needed, and proving
+is expensive, so per-test generation is not the answer. The answer is
+**capture** — generate once through the production Engine (the capability
+exists: `e2e_fcmp_spend_accepted_by_daemon`, `regtest_e2e.rs:865`, builds a
+spend a live daemon accepts), commit the bytes as test data, have the
+fixtures load them — the `TX_EXTRA_PQC_ROUND_TRIP.json` shape: derive
+once, commit the result, never make the test depend on a deriver.
+
+**The capture surface, from what the fixtures actually use** (grep at
+`e275c42a7`): the store's `spend(ki, outputs)` is called with `outputs = 1`
+thirty-three times and `outputs = 2` four times; the ingest's `spend` and
+the harness's `listed` are 1-in/1-out; every spend has **one** input. So
+the verification-era fixture set is **three shapes**: 1-in/1-out,
+1-in/2-out, and — for H21/H22 — one bond-post and one emission with one fee
+spend each; plus one **tree-depth** variant (the depth-3 mine exists,
+`regtest_e2e.rs:1064`) so a proof is not only ever verified against a
+depth-2 tree. Five captured transactions, each a `.tx` blob under
+`rust/shekyl-chain-rules/tests/vectors/` with the block context the proof
+is against (reference block, tree root, membership set) beside it. That is
+cheap and permanent. What would make it a design problem is a fixture that
+needs its own shape — H19's layout tests up to 16 outputs are *layout*
+tests and stay filler; the 16-output *verified* spend is not a shape any
+fixture needs.
+
+The key images the captured spends consume are theirs, so the store's
+`spend(key_image: u8, …)` API — which fills the image — cannot survive
+capture as it stands: a captured spend has one key image, and a test that
+needs "the same body with a different image" needs a different capture or
+must accept SI-1's view. That is the API change the H11 note in §5 commit 5
+already forecasts, arriving from a second direction.
+
+Filed as a FOLLOWUPS row owned by `CHAIN_RULES_CRATE.md` (the harness
+contract) with slice 6's pre-flight as the consumer; the sanity gate's
+failure text names the mechanism so the red is read as a finding.
+
 ## 6. What this slice does not build
 
 - **The pool** (DRS-E5). `tx_form` stays callable on its own; the pool's
