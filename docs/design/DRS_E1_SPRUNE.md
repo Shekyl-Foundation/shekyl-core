@@ -373,9 +373,10 @@ none of which binds a *length*; `b_*` is a prefix sum of those lengths
 from genesis and admission validates `shard_id` against it, so a peer
 supplying one wrong length below `C` forks that node at admission. **The
 lengths must be consensus-committed.** The default disposition (item 5 (a),
-awaiting the maintainer's ruling) puts them in `CtSigBase` as `VARINT`
-fields for `CTTypeFcmpPlusPlusPqc`, validated against the bytes at connect
-by a node that holds them; then **the A4 rows are an index over retained
+awaiting the maintainer's ruling) puts them in the committed base as
+varints for the FCMP++ spend type — **in `shekyl-wire`, Rust only; the C++
+`CtSigBase` is a deletion target and never learns them (S0)** — validated
+against the bytes at connect by a node that holds them; then **the A4 rows are an index over retained
 base fields, not original state**, `b_*` is derivable from the skeleton by
 construction, and **F28's wire needs no length growth** (the pruned blob
 already carries the base). Until item 5 is ruled, A4 is not writable and

@@ -842,10 +842,18 @@ length.
 *Dispositions considered:*
 
 - **(a) — the default this item proposes: the two lengths become consensus
-  fields of `CtSigBase`.** `prunable_len` and `pqc_auths_len` as
-  `VARINT_FIELD`s in the base, serialized for `CTTypeFcmpPlusPlusPqc` only
-  (coinbase carries neither), so `H(base)` binds them and the checkpoint
-  reaches them through the txid. A node holding the body validates the
+  fields of the committed base.** `prunable_len` and `pqc_auths_len` as
+  varints in the base, serialized for the FCMP++ spend type only (coinbase
+  carries neither), so `H(base)` binds them and the checkpoint reaches them
+  through the txid. **Rust only.** The format's home is
+  `rust/shekyl-wire/src/transaction.rs` (the `Ct` base that `txid.rs`
+  hashes); nothing is serialized into C++ — `src/fcmp/ct_types.h`'s
+  `CtSigBase` is a deletion target that dies with the C++ daemon at
+  `DRS-E3` and never learns the field (`PDM-Q-S0`, rule 20). Genesis does
+  not precede the cutover (S0's launch sequencing), so no C++ validator
+  ever parses a genesis-era transaction; the pre-cutover harnesses that
+  drive Rust-built transactions into the C++ daemon are why this lands
+  **at E3 with S-PRUNE's substrate**, not today against two parsers. A node holding the body validates the
   declared lengths against the bytes at connect (one new rule row, 4.I's
   neighbour: a mismatch is an invalid transaction); a band-1 node takes
   them from the base it already holds. Consequences, each a simplification:
@@ -854,9 +862,9 @@ length.
   reversion criterion (b) satisfied by construction rather than by trust;
   **F28's wire needs no length growth** — the pruned blob already carries
   the base; and the skeleton §12 paragraph is retracted. Cost: two varints
-  per spend (2–4 bytes), a pre-genesis tx-format change in C++ and Rust
-  serialization with fixture regeneration (rule 42 fires: the persisted
-  block blob moves). Rule 16's shape — structural now, pre-genesis, rather
+  per spend (2–4 bytes) in **one Rust crate**, the Rust fixtures
+  regenerated (rule 42 fires: the persisted block blob moves), one rule
+  row; **zero C++**. Rule 16's shape — structural now, pre-genesis, rather
   than a trust assumption forever.
 - **(b) measure shards over retained bytes** (prefix + base sizes, which
   every node has) — **rejected**: the good is the prunable region, and
