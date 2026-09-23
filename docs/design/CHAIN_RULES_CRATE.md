@@ -830,8 +830,15 @@ that slice). **After the slice-4 precursor (2026-09-21):** `consensus:
 implemented 18 / validator-enforced 150   held-by-cxx 2   at-open 1   enforced
 152   ratified 126 / enforced 152` — the denominator moved for the first
 time: CEN-F12, the dead decomposed-denomination gate, went to bucket 3 and
-was deleted with its C++ (Q2 (a)); nothing was ported. The figure moves
-with each slice and the landing PR quotes its own.
+was deleted with its C++ (Q2 (a)); nothing was ported. **After the tx_extra
+cutover (2026-09-23):** `consensus: implemented 18 / validator-enforced 151
+held-by-cxx 2   at-open 1   enforced 153   ratified 127 / enforced 153` —
+the denominator moved up: CEN-I20, the coinbase extra grammar
+(`TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′), minted with its implementation in
+`shekyl-wire` and registered pending here beside CEN-I19; slice 4 wires
+`shekyl_wire::tx_extra::check_tx_extra_shape` (I19 + I20 in one function)
+rather than minting either. The figure moves with each slice and the landing
+PR quotes its own.
 
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.

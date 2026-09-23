@@ -1,6 +1,14 @@
 # `SO-D8` — ruling-round proposal: cross-epoch admission and the settlement writer's production caller
 
-**Status:** OPEN — **PROPOSAL; direction RATIFIED.** Rick ratified shape
+**Status:** OPEN — **PROPOSAL; direction RATIFIED.** *UPDATE 2026-09-23
+(`TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′, census `CEN-I20`): the coinbase extra
+is now a closed consensus grammar — exactly `[0x01, 0x02(8), 0x06, 0x07]` —
+so a coinbase `0x0C` (or `0x0B`) field is a **grammar amendment ruled in the
+census and the wire spec §9.6b**, not a tag allocation; the nonce bound this
+file budgets at 255 B is 8 B fixed; and the C++ `tx_extra.h` /
+`find_tx_extra_field_by_type` it cites are deleted — the one codec is
+`shekyl-wire`'s (`shekyl_tx_extra_field` is likewise first-match by index,
+but duplicates cannot occur in a grammar-valid coinbase).* Rick ratified shape
 **R-B** (post-issuance window, §2) on 2026-09-13. **RULED 2026-09-16:**
 Q3, Q8 (incl. P1/P2), Q9, Q10, Q12, Q13, Q15; Q14 closed by Q15;
 `SO-D8a`, `SO-D8b`, `SO-D8c` (transcriptions of R-B / PC-D4 / SO-D7);

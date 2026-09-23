@@ -499,7 +499,13 @@ level-0/1 segment. **This is the Round-1 KAT and the TDD oracle.**
   leaf mix.
 - **seam-parity: scanner `Extra` `0x07` extraction == daemon `parse_tx_extra`**
   on adversarial `tx_extra` — duplicate `0x07` tags, malformed/truncated tags,
-  and tag ordering. The lean-crate split (CT-1) is faithful to the daemon's own
+  and tag ordering. **CLOSED by construction 2026-09-23** (`TX_EXTRA_RUST_CUTOVER.md`):
+  the daemon's `parse_tx_extra` is deleted and `blockchain_db.cpp` reads the
+  `0x07` blob through `shekyl_tx_extra_leaf_entries` → `shekyl_wire::tx_extra::parse`,
+  the same function scanner `Extra::read` calls, so there is one parser and no
+  seam to keep in parity; duplicates and malformed tags are refused by the
+  shape rule on both sides (`check_tx_extra_shape`). The paragraph below is the
+  obligation as it stood. The lean-crate split (CT-1) is faithful to the daemon's own
   two-stage structure: scanner `Extra` owns the **parse** stage (find the `0x07`
   blob), `shekyl-curve-tree::recon::extract_leaf_hashes` owns the **validate**
   stage (absent / `len % 32 != 0` → empty, slice). The validate half is mirrored

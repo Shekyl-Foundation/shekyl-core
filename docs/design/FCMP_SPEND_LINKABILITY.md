@@ -145,7 +145,7 @@ verifier implementations, for every spend arm.
 ### 2.3 What is known by every node
 
 The lookup table is not derived data; every node already holds it. The
-`0x07` blob is parsed at admission (`check_tx_extra_pqc_field_shape`) and the
+`0x07` blob is parsed at admission (`check_tx_extra_shape`) and the
 leaf bytes `[96..128]` are stored per output in the curve-tree store
 (`LEAVES_TABLE`, `segment.rs` `LEAF_BYTES`). `tx_extra` is part of the non-prunable
 transaction prefix, so a pruned node holds the `0x07` table too. No
@@ -465,7 +465,7 @@ relay-admitted, mined, and then rejected at connect — `blockchain.cpp:6061–6
 catches the throw, `reject_block_internal`, `return_txs_to_pool` — and every
 block that includes it dies after its PoW: mempool poisoning. So the `0x07`
 shape rule (`check_pqc_field_shape`, `shekyl-wire` `tx_extra.rs:478–512`;
-its C++ adapter `check_tx_extra_pqc_field_shape`,
+its C++ adapter `check_tx_extra_shape` (over the codec's own parse since 2026-09-23),
 `cryptonote_format_utils.cpp:978–995`) is extended from length to
 **content**: per output, decompress, canonical encoding, prime order,
 non-identity — on the relay path (`cryptonote_core.cpp:818–829`,

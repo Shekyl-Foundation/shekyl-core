@@ -416,6 +416,7 @@ census_rows! {
         I17 pending,
         I18 pending,
         I19 pending,
+        I20 pending,
         // 4.J Archival transaction families (all verdicts Rust-side; C++ marshals)
         J1 pending,
         J2 pending,
