@@ -3517,34 +3517,43 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! substitute one for the other.
 std::uint32_t shekyl_p2p_default_out_peers();
 
-//! Per-host INBOUND admission (PWD-I7). Rust-owned (rule 20); replaces the
-//! `1` literals at `net_node.cpp`'s `--max-connections-per-ip` descriptor and
-//! the `node_server` constructor, and the comparison `has_too_many_connections`
-//! wrote twice. **`..._default_cap` must stay a constant return with no
-//! Rust-side global or lazy state** -- the constructor calls it, and the
-//! C++ zero state is `0`, which refuses every inbound connection. The
-//! descriptor carries the sentinel `-1` rather than calling this, so no
-//! `extern const` is dynamically initialised. NOT PWD-I1's same-host cap, which is outbound-only by
-//! construction (`net_node.h`) -- separate rules, separate reasons.
+//! Inbound safety-bound decision (PWD-I7). Rust observes the process and
+//! decides. C++ passes `reserved` — descriptors it has promised but not
+//! opened — and stores the result. Kind 0 is unused, so a zeroed struct is
+//! not a bounded ceiling of zero.
 //!
-//! `..._zone_is_capped` is TRUE FOR THE PUBLIC ZONE ONLY, and the exemption is
-//! a necessity, not a leniency: an anonymity zone's inbound peers all present
-//! as `tor_address::unknown()`, so a cap of 1 there would bound the whole tor
-//! inbound population rather than one host. Unknown bytes are exempt, matching
-//! the inherited `!= public_` test.
-//!
-//! `..._admits` does NOT count the candidate in `existing_same_host_inbound` --
-//! the caller asks before its connection list is updated. No nettype input, by
-//! construction (rule 71).
-std::uint32_t shekyl_host_inbound_default_cap();
-//! Resolve `--max-connections-per-ip` from the command line. Signed because
-//! `0` is a legal choice (refuse every inbound connection) and cannot double
-//! as "unset"; negative is the sentinel. Saturates above UINT32_MAX rather
-//! than wrapping. C++ passes the parsed argument through and stores the
-//! result -- it does not test the sign, pick the default, or clamp.
-std::uint32_t shekyl_host_inbound_resolve_cap(std::int64_t configured);
-bool shekyl_host_inbound_zone_is_capped(std::uint8_t zone);
-bool shekyl_host_inbound_admits(std::uint32_t existing_same_host_inbound, std::uint32_t cap);
+//! `soft_limit` is set when the OS returned a finite soft limit. `held` is
+//! set when the open-descriptor count was taken. `ceiling` is set only for
+//! `SHEKYL_INBOUND_CEILING_BOUNDED`.
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_BOUNDED = 1;
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_NO_PER_PROCESS_LIMIT = 2;
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_UNLIMITED = 3;
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_LIMIT_UNREADABLE = 4;
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_COUNT_UNREADABLE = 5;
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_EXCEEDS_COUNTER = 6;
+
+struct shekyl_inbound_ceiling {
+  std::uint32_t kind;
+  std::uint32_t ceiling;
+  std::uint64_t soft_limit;
+  std::uint64_t held;
+};
+static_assert(offsetof(shekyl_inbound_ceiling, kind) == 0, "kind at 0");
+static_assert(offsetof(shekyl_inbound_ceiling, ceiling) == 4, "ceiling at 4");
+static_assert(offsetof(shekyl_inbound_ceiling, soft_limit) == 8, "soft_limit at 8");
+static_assert(offsetof(shekyl_inbound_ceiling, held) == 16, "held at 16");
+static_assert(sizeof(shekyl_inbound_ceiling) == 24, "inbound ceiling is 24 bytes");
+
+//! Write the decision for `reserved` promised-but-unopened descriptors.
+//! The probe describes the process at the call. `out` must be non-null.
+//! `inbound_held` is the descriptors this process currently spends on
+//! ACCEPTED inbound connections. They are excluded from the observed count
+//! because this bound measures inbound -- leaving them in charges them twice
+//! and makes the ceiling depend on how loaded the node was when it was
+//! derived. Pass 0 before anything is connected.
+void shekyl_inbound_ceiling_resolve(std::uint64_t reserved,
+                                    std::uint64_t inbound_held,
+                                    shekyl_inbound_ceiling* out);
 
 //! Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12,
 //! 18), moved from `cryptonote_protocol/enums.h` under rule 20. Bytes cross

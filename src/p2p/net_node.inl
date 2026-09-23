@@ -131,7 +131,6 @@ namespace nodetool
     command_line::add_arg(desc, arg_limit_rate_down);
     command_line::add_arg(desc, arg_limit_rate);
     command_line::add_arg(desc, arg_pad_transactions);
-    command_line::add_arg(desc, arg_max_connections_per_ip);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -230,19 +229,24 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_host_limit(const epee::net_utils::network_address &address)
   {
+    // Live walk, same reason `get_outgoing_connections_count` refreshes its
+    // counter itself: `m_current_number_of_in_peers` is rewritten once a
+    // second and is not incremented on accept. The candidate is not in the
+    // list yet — this runs before the connection is inserted.
+    const inbound_census census = census_inbound(address.get_zone());
     const network_zone& zone = m_network_zones.at(address.get_zone());
-    if (zone.m_current_number_of_in_peers >= zone.m_config.m_net_config.max_in_connection_count) // in peers limit
+    if (zone.m_inbound_cap_explicit
+        && census.zone >= zone.m_config.m_net_config.max_in_connection_count)
     {
       MWARNING("Exceeded max incoming connections, so dropping this one.");
       return true;
     }
-
-    if(has_too_many_connections(address))
+    if (m_process_inbound_ceiling && census.process >= *m_process_inbound_ceiling)
     {
-      MWARNING("CONNECTION FROM " << address.host_str() << " REFUSED, too many connections from the same address");
+      MWARNING("Exceeded the inbound descriptor ceiling (" << *m_process_inbound_ceiling
+               << "), so dropping this one.");
       return true;
     }
-
     return false;
   }
 
@@ -583,7 +587,10 @@ namespace nodetool
       m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, public_zone.m_config.m_net_config.max_out_connection_count);
 
 
-    if ( !set_max_in_peers(public_zone, command_line::get_arg(vm, arg_in_peers) ) )
+    // Negative is unset. The ceiling is derived in `apply_inbound_ceiling`
+    // after the listeners exist; storing the sentinel here would narrow it
+    // into `uint32_t` and rebuild the unbounded interval.
+    if ( !set_max_in_peers(public_zone, command_line::get_arg(vm, arg_in_peers)) )
       return false;
 
     if ( !set_tos_flag(vm, command_line::get_arg(vm, arg_tos_flag) ) )
@@ -673,12 +680,6 @@ namespace nodetool
       if (!set_max_in_peers(zone, inbound.max_connections))
         return false;
     }
-
-    // PWD-I7: pure marshaling. The descriptor carries the SENTINEL `-1`, and
-    // what a negative means, what `0` means, and what happens above u32::MAX
-    // are RULES -- so they live in Rust with the rest of the policy, not here.
-    // C++ passes the parsed argument through and stores the result.
-    max_connections = shekyl_host_inbound_resolve_cap(command_line::get_arg(vm, arg_max_connections_per_ip));
 
     return true;
   }
@@ -1013,6 +1014,7 @@ namespace nodetool
     // from here onwards, it's online stuff
     if (m_offline)
     {
+      apply_inbound_ceiling(0);
       ephemeral_tor_guard.armed = false;
       return res;
     }
@@ -1071,6 +1073,7 @@ namespace nodetool
       }
     }
 
+    apply_inbound_ceiling(0);
     ephemeral_tor_guard.armed = false;
     return res;
   }
@@ -2097,6 +2100,12 @@ namespace nodetool
         ++count;
       return true;
     });
+    // Same reason as `get_outgoing_connections_count`: the once-a-second
+    // thread is not what admission reads. Keep the cache coherent for readers
+    // that still look at it.
+    zone.m_current_number_of_in_peers = count > std::numeric_limits<unsigned int>::max()
+      ? std::numeric_limits<unsigned int>::max()
+      : static_cast<unsigned int>(count);
     return count;
   }
   //-----------------------------------------------------------------------------------
@@ -2221,7 +2230,33 @@ namespace nodetool
       return true;
 
     const auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
-    if (public_zone != m_network_zones.end() && get_incoming_connections_count(public_zone->second) == 0)
+    if (public_zone == m_network_zones.end())
+      return true;
+
+    // PWD-E1 tier 1, DIAGNOSTIC HALF ONLY. Report the STATE; the operator
+    // draws the line, the daemon does not. A verdict ("probably unreachable")
+    // would need a threshold, and that threshold is PWD-E8's, deferred on its
+    // own measurement -- so stating the observation is what lets this land
+    // without inventing one.
+    //
+    // Three operands, because no one of them is readable alone: a count with
+    // no window does not distinguish "unreachable" from "just started", and
+    // neither tells an operator whether the port they forwarded is the port
+    // this node actually advertises. That last one is the whole of the
+    // PWD-I7 incident's diagnosis, in a line.
+    //
+    // This does NOT stop advertising, classify, or infer anything about a
+    // remote peer -- all three are the deferred action half.
+    const size_t inbound_now = get_incoming_connections_count(public_zone->second);
+    const uint32_t announced = get_announced_port(epee::net_utils::zone::public_);
+    const auto uptime_min = std::chrono::duration_cast<std::chrono::minutes>(
+        std::chrono::steady_clock::now() - m_started_at).count();
+    MGINFO("p2p inbound state: " << inbound_now << " connection(s) held, over "
+        << uptime_min << " min of uptime; advertising "
+        << (announced ? "port " + std::to_string(announced) : std::string("NO port"))
+        << ", listening on " << m_listening_port);
+
+    if (inbound_now == 0)
     {
       if (public_zone->second.m_config.m_net_config.max_in_connection_count == 0)
       {
@@ -3047,8 +3082,167 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_max_in_peers(network_zone& zone, int64_t max)
   {
-    zone.m_config.m_net_config.max_in_connection_count = max;
+    // Negative is unset. It is not stored: assigning it to `uint32_t` is the
+    // narrowing that made an unset `--in-peers` into `UINT32_MAX`.
+    if (max < 0)
+    {
+      zone.m_inbound_cap_explicit = false;
+      zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+      return true;
+    }
+    zone.m_inbound_cap_explicit = true;
+    if (static_cast<uint64_t>(max) > std::numeric_limits<uint32_t>::max())
+    {
+      MWARNING("Inbound cap " << max << " exceeds the admission counter; storing the counter's maximum.");
+      zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+      return true;
+    }
+    zone.m_config.m_net_config.max_in_connection_count = static_cast<uint32_t>(max);
     return true;
+  }
+
+  template<class t_payload_net_handler>
+  std::uint64_t node_server<t_payload_net_handler>::descriptor_reservations(std::uint64_t reserved_beyond_p2p) const
+  {
+    std::uint64_t reserved = reserved_beyond_p2p;
+    const auto add = [&reserved](std::uint64_t n)
+    {
+      if (reserved > std::numeric_limits<std::uint64_t>::max() - n)
+        reserved = std::numeric_limits<std::uint64_t>::max();
+      else
+        reserved += n;
+    };
+    // RESERVE WHAT CANNOT BE COUNTED; COUNT WHAT CAN.
+    //
+    // Outbound sockets are promised but not yet open, and `census_inbound`
+    // never sees them, so the only way to keep descriptors for them is to
+    // subtract them here.
+    //
+    // Inbound on a non-public zone is the opposite case and must NOT be
+    // reserved: `census_inbound` walks every zone, so those connections are
+    // already charged against the ceiling as they are accepted. Reserving
+    // them too would subtract the same descriptors twice -- an
+    // `--anonymous-inbound` cap of N would cost the process N descriptors of
+    // headroom AND still consume N as the connections arrived, squeezing
+    // public inbound by 2N. Each zone with an explicit cap is bounded by that
+    // cap in `is_host_limit`; the ceiling bounds the pool they all draw from.
+    for (const auto& entry : m_network_zones)
+      add(entry.second.m_config.m_net_config.max_out_connection_count);
+    return reserved;
+  }
+
+  template<class t_payload_net_handler>
+  auto node_server<t_payload_net_handler>::census_inbound(epee::net_utils::zone which) -> inbound_census
+  {
+    inbound_census census{};
+    for (auto& entry : m_network_zones)
+    {
+      std::size_t count = 0;
+      entry.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
+      {
+        if (cntxt.m_is_income)
+          ++count;
+        return true;
+      });
+      entry.second.m_current_number_of_in_peers = count > std::numeric_limits<unsigned int>::max()
+        ? std::numeric_limits<unsigned int>::max()
+        : static_cast<unsigned int>(count);
+      census.process += count;
+      if (entry.first == which)
+        census.zone = count;
+    }
+    return census;
+  }
+
+  template<class t_payload_net_handler>
+  void node_server<t_payload_net_handler>::apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p)
+  {
+    const auto found = m_network_zones.find(epee::net_utils::zone::public_);
+    if (found == m_network_zones.end())
+      return;
+    network_zone& public_zone = found->second;
+    if (public_zone.m_inbound_cap_explicit)
+    {
+      m_process_inbound_ceiling.reset();
+      return;
+    }
+
+    // Remembered so a later re-derive (an `out_peers` change, say) does not
+    // need to know what the daemon reserved beyond p2p.
+    m_reserved_beyond_p2p = reserved_beyond_p2p;
+    const std::uint64_t reserved = descriptor_reservations(reserved_beyond_p2p);
+    // Descriptors already spent on ACCEPTED inbound connections are excluded
+    // from the observation, because this ceiling is what measures them. At
+    // startup the count is zero and it made no difference; a runtime
+    // re-derive (an `out_peers` change) runs with peers connected, and
+    // leaving them inside the observed count would subtract each one from the
+    // headroom AND then compare it against the smaller result — the ceiling
+    // would fall as the node filled, so a routine outbound change on a busy
+    // node could start refusing every new peer.
+    const std::uint64_t inbound_held = census_inbound(epee::net_utils::zone::public_).process;
+    shekyl_inbound_ceiling decision{};
+    shekyl_inbound_ceiling_resolve(reserved, inbound_held, &decision);
+    const bool announce = decision.kind != m_applied_ceiling_kind
+      || decision.ceiling != m_applied_ceiling_value;
+    m_applied_ceiling_kind = decision.kind;
+    m_applied_ceiling_value = decision.ceiling;
+    switch (decision.kind)
+    {
+      case SHEKYL_INBOUND_CEILING_BOUNDED:
+        public_zone.m_config.m_net_config.max_in_connection_count = decision.ceiling;
+        m_process_inbound_ceiling = decision.ceiling;
+        if (announce)
+        {
+          MGINFO("Inbound ceiling derived from the descriptor limit: " << decision.ceiling
+                 << " (limit " << decision.soft_limit << ", " << decision.held
+                 << " already held, " << reserved << " reserved)");
+          if (decision.ceiling == 0)
+            MWARNING("No descriptor headroom for inbound connections. Raise LimitNOFILE, "
+                     "lower --out-peers, or lower --rpc-max-connections; this node will accept no inbound peers.");
+        }
+        break;
+      case SHEKYL_INBOUND_CEILING_NO_PER_PROCESS_LIMIT:
+        public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+        m_process_inbound_ceiling.reset();
+        if (announce)
+          MWARNING("This platform exposes no per-process descriptor limit, so the "
+                   "inbound ceiling is unbounded. Set --in-peers explicitly to bound it.");
+        break;
+      case SHEKYL_INBOUND_CEILING_UNLIMITED:
+        public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+        m_process_inbound_ceiling.reset();
+        if (announce)
+          MWARNING("RLIMIT_NOFILE is unlimited, so no descriptor ceiling can be derived. "
+                   "Set --in-peers explicitly to bound inbound.");
+        break;
+      case SHEKYL_INBOUND_CEILING_LIMIT_UNREADABLE:
+        public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+        m_process_inbound_ceiling.reset();
+        if (announce)
+          MWARNING("Cannot read this platform's descriptor limit, so the inbound ceiling "
+                   "is unbounded. Set --in-peers explicitly to bound it.");
+        break;
+      case SHEKYL_INBOUND_CEILING_COUNT_UNREADABLE:
+        public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+        m_process_inbound_ceiling.reset();
+        if (announce)
+          MWARNING("Cannot count this process's open descriptors, so the inbound ceiling "
+                   "is unbounded. Set --in-peers explicitly to bound it.");
+        break;
+      case SHEKYL_INBOUND_CEILING_EXCEEDS_COUNTER:
+        public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+        m_process_inbound_ceiling.reset();
+        if (announce)
+          MWARNING("Descriptor headroom does not fit the inbound counter, so a derived "
+                   "ceiling would never fire. Set --in-peers explicitly to bound it.");
+        break;
+      default:
+        public_zone.m_config.m_net_config.max_in_connection_count = 0;
+        m_process_inbound_ceiling = 0;
+        if (announce)
+          MERROR("Unrecognized inbound ceiling kind " << decision.kind << "; refusing inbound.");
+        break;
+    }
   }
 
   template<class t_payload_net_handler>
@@ -3075,6 +3269,15 @@ namespace nodetool
       if(current > count)
         public_zone->second.m_net_server.get_config_object().del_out_connections(current - count);
       m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, count);
+      // The outbound cap is a term in the inbound ceiling's reservation, so
+      // changing it at runtime invalidates a ceiling derived against the old
+      // one. Raising `out_peers` without this leaves inbound reserved against
+      // a smaller outbound budget, and live outbound plus inbound can then
+      // exceed the descriptor limit -- the exact exhaustion the ceiling
+      // exists to prevent. Re-derives against the same non-p2p reservation
+      // the last call used, so a caller that never knew the RPC budget does
+      // not have to learn it.
+      apply_inbound_ceiling(m_reserved_beyond_p2p);
     }
   }
 
@@ -3125,10 +3328,17 @@ namespace nodetool
     auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
     if (public_zone != m_network_zones.end())
     {
+      const uint32_t cap = count > std::numeric_limits<uint32_t>::max()
+        ? std::numeric_limits<uint32_t>::max()
+        : static_cast<uint32_t>(count);
+      // A runtime change is an explicit cap. The derived process backstop
+      // stops applying, matching an explicit `--in-peers` at startup.
+      public_zone->second.m_inbound_cap_explicit = true;
+      m_process_inbound_ceiling.reset();
       const auto current = public_zone->second.m_net_server.get_config_object().get_in_connections_count();
-      public_zone->second.m_config.m_net_config.max_in_connection_count = count;
-      if(current > count)
-        public_zone->second.m_net_server.get_config_object().del_in_connections(current - count);
+      public_zone->second.m_config.m_net_config.max_in_connection_count = cap;
+      if(current > cap)
+        public_zone->second.m_net_server.get_config_object().del_in_connections(current - cap);
     }
   }
 
@@ -3204,52 +3414,6 @@ namespace nodetool
     }
 
     return true;
-  }
-
-  // PWD-I7: marshaling shim. This function owns the connection WALK -- the
-  // list is C++'s -- and nothing else. Which zones are host-capped, and
-  // whether a count exceeds the cap, are Rust's
-  // (`shekyl_host_inbound_zone_is_capped` / `shekyl_host_inbound_admits`).
-  // The comparison used to be written twice here, in the language whose
-  // default the forward cut exists to remove.
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::has_too_many_connections(const epee::net_utils::network_address &address)
-  {
-    // The zone byte crosses raw, so pin the mapping Rust's `InboundZone`
-    // assumes -- the same pins the zone-route family asserts in `send_txs`.
-    static_assert(std::is_same<std::underlying_type<epee::net_utils::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
-    static_assert(unsigned(epee::net_utils::zone::invalid) == 0, "invalid expected to be 0");
-    static_assert(unsigned(epee::net_utils::zone::public_) == 1, "public_ expected to be 1");
-    static_assert(unsigned(epee::net_utils::zone::i2p) == 2, "i2p expected to be 2");
-    static_assert(unsigned(epee::net_utils::zone::tor) == 3, "tor expected to be 3");
-
-    // Public-zone only, and the exemption is a NECESSITY. An anonymity zone's
-    // inbound peers all present as `tor_address::unknown()`, so a cap of 1
-    // there would bound the whole tor inbound population at one connection
-    // rather than one host. Read the Rust predicate's doc comment before
-    // reading this early return as a gap.
-    if (!shekyl_host_inbound_zone_is_capped(static_cast<std::uint8_t>(address.get_zone())))
-      return false; // Unable to determine how many connections from host
-
-    uint32_t count = 0;
-
-    m_network_zones.at(epee::net_utils::zone::public_).m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      if (cntxt.m_is_income && cntxt.m_remote_address.is_same_host(address)) {
-        count++;
-
-        // the only call location happens BEFORE foreach_connection list is
-        // updated, so the candidate is NOT in `count` -- which is what
-        // `shekyl_host_inbound_admits` documents and asserts.
-        if (!shekyl_host_inbound_admits(count, max_connections)) {
-          return false;
-        }
-      }
-
-      return true;
-    });
-    // the only call location happens BEFORE foreach_connection list is updated
-    return !shekyl_host_inbound_admits(count, max_connections);
   }
 
   template<class t_payload_net_handler>

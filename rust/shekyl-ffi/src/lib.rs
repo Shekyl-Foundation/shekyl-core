@@ -128,6 +128,10 @@ pub mod relay_zone_ffi;
 // the Rust-pinned libzstd is the single zstd implementation in the binary.
 pub mod levin_ffi;
 
+// Inbound descriptor ceiling (PWD-I7). One call: Rust probes the process
+// and returns the admission decision. C++ passes reservations only.
+pub mod inbound_ceiling_ffi;
+
 // Peer-attribution drop rule FFI — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`). The
 // classification is recorded by C++ as an opaque byte on the verification
 // context; whether that byte severs a connection is decided only here.

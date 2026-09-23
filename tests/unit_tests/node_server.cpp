@@ -2738,36 +2738,36 @@ TEST(node_server, announced_port_is_derived_from_listener_and_zone)
 }
 
 // ---------------------------------------------------------------------------
-// PWD-I7 — per-host INBOUND admission
+// PWD-I7 — the inbound SAFETY bound
 //
-// The rule itself is Rust's (`shekyl-peer-policy::host_inbound`, exhaustively
-// tested there against the whole zone-byte domain). These tests pin the SEAM:
-// that the production init path resolves the default from Rust rather than a
-// C++ literal, that the shipped `is_host_limit` reaches the Rust verdict, and
-// that neither depends on nettype (rule 71).
+// `--in-peers` used to narrow its `-1` sentinel straight into a `uint32_t`,
+// so an unset flag meant a ceiling of UINT32_MAX and the check never fired.
+// That became the only inbound bound when the per-host cap was deleted.
 //
-// NOT PWD-I1's same-host cap -- that one is outbound-only by construction and
-// has its own test above (`same_host_outbound_cap_matches_host_and_only_outbound`).
+// The replacement is a decision Rust returns from a descriptor probe.
+// These tests pin the C++ half: an unset `--in-peers` stores that decision,
+// and an explicit value — including `0` — is stored as given. `0` is a legal
+// operator choice meaning "refuse every inbound connection" and cannot
+// double as "unset", which is why the descriptor is signed.
 // ---------------------------------------------------------------------------
 
 namespace
 {
-  struct host_inbound_fixture
+  struct in_peers_fixture
   {
     test_core pr_core;
     cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
     std::unique_ptr<Server> server;
 
-    host_inbound_fixture(): cprotocol(pr_core, NULL)
+    in_peers_fixture(): cprotocol(pr_core, NULL)
     {
       server.reset(new Server(cprotocol));
       cprotocol.set_p2p_endpoint(server.get());
     }
 
-    // The PRODUCTION init path: the real option descriptor (whose default is
-    // now `shekyl_host_inbound_default_cap()`) parsed by the real parser.
-    // `per_ip < 0` leaves the flag unset so the descriptor's default stands.
-    bool init(const char* port, const int per_ip, const cryptonote::network_type nettype)
+    // The PRODUCTION init path: the real descriptor through the real parser.
+    // `in_peers < 0` leaves the flag unset, so the sentinel stands.
+    bool init(const char* port, const int in_peers)
     {
       boost::program_options::options_description desc_options("Command line options");
       cryptonote::core::init_options(desc_options);
@@ -2783,19 +2783,9 @@ namespace
         boost::program_options::variable_value(std::string("127.0.0.2"), false);
       vm.find(nodetool::arg_p2p_bind_port.name)->second =
         boost::program_options::variable_value(std::string(port), false);
-      if (per_ip >= 0)
-        vm.find(nodetool::arg_max_connections_per_ip.name)->second =
-          boost::program_options::variable_value(static_cast<std::int64_t>(per_ip), false);
-
-      // Nettype is set the way the daemon sets it: the real flags, through
-      // `handle_command_line`. There is no setter, and reaching around init
-      // would be testing a state the daemon never constructs.
-      if (nettype == cryptonote::TESTNET)
-        vm.find(cryptonote::arg_testnet_on.name)->second =
-          boost::program_options::variable_value(true, false);
-      else if (nettype == cryptonote::STAGENET)
-        vm.find(cryptonote::arg_stagenet_on.name)->second =
-          boost::program_options::variable_value(true, false);
+      if (in_peers >= 0)
+        vm.find(nodetool::arg_in_peers.name)->second =
+          boost::program_options::variable_value(static_cast<std::int64_t>(in_peers), false);
 
       boost::program_options::notify(vm);
       return server->init(vm);
@@ -2803,197 +2793,69 @@ namespace
   };
 }
 
-TEST(node_server, host_inbound_default_cap_comes_from_rust_not_a_cpp_literal)
+TEST(node_server, in_peers_sentinel_resolves_to_a_bounded_ceiling)
 {
-  // The forward cut's whole point: the number has ONE owner. It used to be a
-  // `1` at the option descriptor and a second `1` in the `node_server`
-  // constructor, with nothing tying them together or to the rule.
-  //
-  // Red edit: a literal that DISAGREES -- `2` in `arg_max_connections_per_ip`'s
-  // descriptor (net_node.cpp) or in the constructor's `max_connections(...)`
-  // init. Restoring a literal `1` does NOT redden this: both sides still read
-  // 1, because what this pins is that the two AGREE and that the agreed value
-  // is the inherited one. Ownership itself is not observable from a test --
-  // it is observable from the absence of a second literal to disagree with,
-  // which is what the deletion in net_node.cpp/.h accomplishes.
-  // The VALUE is pinned once, in Rust (`the_default_cap_is_the_inherited_one`).
-  // Restating `1` here would make a ruling that moves the number edit three
-  // files while the commit claims it has one place to land -- so this side
-  // asserts only AGREEMENT, which is what it can see and what it is for.
-  host_inbound_fixture d;
-  ASSERT_TRUE(d.init("48091", -1, cryptonote::TESTNET));
-  EXPECT_EQ(shekyl_host_inbound_default_cap(), d.server->get_max_connections_per_ip())
-    << "the daemon's resolved default did not come from the Rust owner";
+  // Red edit: make `apply_inbound_ceiling` return before storing a bounded
+  // decision, so the unset sentinel stays at the counter maximum. This fails.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48090", -1));
+
+  const uint32_t ceiling = d.server->get_max_in_public_peers();
+  EXPECT_NE(std::numeric_limits<uint32_t>::max(), ceiling)
+    << "an unset --in-peers must not resolve to an unbounded interval";
+  EXPECT_GT(ceiling, 0u)
+    << "a machine with a normal descriptor limit has inbound headroom";
 }
 
-TEST(node_server, host_inbound_cap_still_takes_an_explicit_operator_value)
+TEST(node_server, in_peers_explicit_value_bypasses_the_derivation)
 {
-  // Control for the test above: if the descriptor ignored the command line and
-  // always reported the Rust default, that test would still pass. This one
-  // fails in that case.
-  //
-  // Red edit: hard-code `max_connections = shekyl_host_inbound_default_cap()`
-  // in `init`, discarding the parsed argument.
-  host_inbound_fixture d;
-  ASSERT_TRUE(d.init("48092", 2, cryptonote::TESTNET));
-  EXPECT_EQ(2u, d.server->get_max_connections_per_ip());
-  EXPECT_NE(shekyl_host_inbound_default_cap(), d.server->get_max_connections_per_ip());
+  // The operator's number is not a starting point for the bound -- it IS the
+  // bound. A derivation that overrode it would silently discard the one
+  // input that is a choice rather than a reading.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48091", 50));
+  EXPECT_EQ(50u, d.server->get_max_in_public_peers());
 }
 
-TEST(node_server, host_inbound_cap_sentinel_resolves_and_zero_is_not_the_sentinel)
+TEST(node_server, in_peers_zero_is_a_choice_and_not_the_sentinel)
 {
-  // `--max-connections-per-ip` carries the SENTINEL -1, never a value, so the
-  // default lives only in Rust. The trap this pins: `0` is a legal operator
-  // choice meaning "refuse every inbound connection", so it must NOT be
-  // treated as unset. A sentinel that swallowed 0 would silently hand the
-  // operator the default when they asked for a total inbound stop.
-  //
-  // Red edit: make the resolution `configured <= 0 ? default : configured`
-  // in handle_command_line.
-  {
-    host_inbound_fixture d;
-    ASSERT_TRUE(d.init("48101", -1, cryptonote::TESTNET));
-    EXPECT_EQ(shekyl_host_inbound_default_cap(), d.server->get_max_connections_per_ip())
-      << "the sentinel must resolve to the Rust-owned default";
-  }
-  {
-    host_inbound_fixture d;
-    ASSERT_TRUE(d.init("48102", 0, cryptonote::TESTNET));
-    EXPECT_EQ(0u, d.server->get_max_connections_per_ip())
-      << "--max-connections-per-ip 0 is a real choice, not an unset value";
-  }
+  // The reason the descriptor is SIGNED. `0` means "refuse every inbound
+  // connection", which is legal and distinct from "unset"; an unsigned type
+  // could not carry both and the sentinel would have to steal a real value.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48092", 0));
+  EXPECT_EQ(0u, d.server->get_max_in_public_peers())
+    << "--in-peers 0 must survive as itself, not be re-derived";
 }
 
-TEST(node_server, host_inbound_admission_runs_through_the_shipped_limit_interface)
+TEST(node_server, in_peers_ceiling_re_derives_when_the_outbound_reserve_changes)
 {
-  // The production pathway, not a copy of it: `abstract_tcp_server2` refuses an
-  // accepted socket by calling `i_connection_limit::is_host_limit`, and
-  // `node_server` IS that interface. This walks the shipped
-  // `is_host_limit` -> `has_too_many_connections` -> Rust verdict chain.
+  // The outbound cap is a TERM in the inbound ceiling's reservation, so a
+  // runtime `out_peers` change invalidates a ceiling derived against the old
+  // one. Without the re-derive, raising out_peers leaves inbound reserved
+  // against a smaller outbound budget and live outbound plus inbound can
+  // exceed the descriptor limit — the exhaustion the ceiling exists to stop.
   //
-  // The cap is driven to 0 rather than driving two real sockets in, because
-  // the count and the cap meet at one comparison: `admits(count, cap)`. At
-  // cap 0 the boundary is crossed with zero connections, deterministically and
-  // without a listener thread. The count side (a host's SECOND connection at
-  // cap 1) is the Rust test
-  // `a_second_inbound_from_one_host_is_refused_at_one_and_admitted_at_two`,
-  // which owns the rule.
-  //
-  // Red edit: `!shekyl_host_inbound_admits(count, max_connections)` ->
-  // `count > max_connections` at the tail of `has_too_many_connections`.
-  const epee::net_utils::network_address host{MAKE_IPV4_ADDRESS_PORT(203, 0, 113, 7, 12021)};
+  // Red edit: drop the `apply_inbound_ceiling` call at the end of
+  // `change_max_out_public_peers`. The ceiling then does not move and the
+  // first expectation fails.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48093", -1));
 
-  {
-    host_inbound_fixture d;
-    ASSERT_TRUE(d.init("48093", 1, cryptonote::TESTNET));
-    epee::net_utils::i_connection_limit& limit = *d.server;
-    EXPECT_FALSE(limit.is_host_limit(host))
-      << "a host holding no inbound connections must be admitted at cap 1";
-  }
+  const uint32_t before = d.server->get_max_in_public_peers();
+  ASSERT_GT(before, 0u) << "the derivation must have produced a real ceiling";
 
-  {
-    host_inbound_fixture d;
-    ASSERT_TRUE(d.init("48094", 0, cryptonote::TESTNET));
-    epee::net_utils::i_connection_limit& limit = *d.server;
-    EXPECT_TRUE(limit.is_host_limit(host))
-      << "--max-connections-per-ip 0 must refuse every inbound connection; "
-         "if this passes at cap 0 the comparison is off by one and the FIRST "
-         "connection from every host is refused at the default cap of 1";
-  }
-}
+  // Raise the outbound reserve. Every extra promised outbound descriptor is
+  // one fewer the process may spend on inbound.
+  const size_t raised = 256;
+  d.server->change_max_out_public_peers(raised);
+  const uint32_t after = d.server->get_max_in_public_peers();
 
-TEST(node_server, host_inbound_admission_is_nettype_uniform)
-{
-  // Rule 71: nettype selects DATA, never control flow, on this surface. The
-  // admission decision takes `(zone, count, cap)` and has no nettype input at
-  // all -- `shekyl_host_inbound_*` cannot be handed one. This test is what
-  // notices if someone adds the branch anyway, on either side of the FFI.
-  //
-  // Red edit: insert `if (m_nettype == cryptonote::TESTNET) return false;` at
-  // the top of `has_too_many_connections`, or make the descriptor default
-  // nettype-dependent.
-  const epee::net_utils::network_address host{MAKE_IPV4_ADDRESS_PORT(203, 0, 113, 7, 12021)};
-  const cryptonote::network_type nettypes[] = {
-    cryptonote::MAINNET, cryptonote::TESTNET, cryptonote::STAGENET
-  };
+  EXPECT_LT(after, before)
+    << "raising the outbound reserve must lower the inbound ceiling";
 
-  uint16_t port = 48095;
-  for (const cryptonote::network_type nettype : nettypes)
-  {
-    {
-      host_inbound_fixture d;
-      ASSERT_TRUE(d.init(std::to_string(port++).c_str(), -1, nettype));
-      EXPECT_EQ(shekyl_host_inbound_default_cap(), d.server->get_max_connections_per_ip())
-        << "the default cap diverged by nettype (nettype=" << nettype << ")";
-
-      epee::net_utils::i_connection_limit& limit = *d.server;
-      EXPECT_FALSE(limit.is_host_limit(host))
-        << "admission of an unconnected host diverged by nettype (nettype=" << nettype << ")";
-    }
-
-    {
-      host_inbound_fixture d;
-      ASSERT_TRUE(d.init(std::to_string(port++).c_str(), 0, nettype));
-      epee::net_utils::i_connection_limit& limit = *d.server;
-      EXPECT_TRUE(limit.is_host_limit(host))
-        << "refusal at cap 0 diverged by nettype (nettype=" << nettype << ")";
-    }
-  }
-}
-
-TEST(host_inbound_admission, the_anonymity_zones_are_exempt_and_the_exemption_is_load_bearing)
-{
-  // A future reader will meet the early return in `has_too_many_connections`
-  // and read it as a gap. It is not. The tor zone calls
-  // `set_default_remote(net::tor_address::unknown())`, so EVERY inbound onion
-  // peer presents as the same address, and `tor_address::is_same_host` is a
-  // `strcmp` of those host strings -- an applied cap of 1 would bound the whole
-  // tor inbound population at one connection rather than bounding one host.
-  //
-  // Asked of the shipped predicate over the whole byte domain rather than by
-  // restating the discriminants.
-  //
-  // Red edit: add `| Self::Tor` to `InboundZone::is_host_capped` in
-  // rust/shekyl-peer-policy/src/host_inbound.rs.
-  static_assert(unsigned(epee::net_utils::zone::public_) == 1, "public_ expected to be 1");
-  static_assert(unsigned(epee::net_utils::zone::i2p) == 2, "i2p expected to be 2");
-  static_assert(unsigned(epee::net_utils::zone::tor) == 3, "tor expected to be 3");
-
-  unsigned capped = 0;
-  for (unsigned byte = 0; byte <= 0xffu; ++byte)
-  {
-    if (shekyl_host_inbound_zone_is_capped(static_cast<std::uint8_t>(byte)))
-    {
-      ++capped;
-      EXPECT_EQ(unsigned(epee::net_utils::zone::public_), byte)
-        << "a zone other than public_ is host-capped";
-    }
-  }
-  EXPECT_EQ(1u, capped) << "exactly one zone byte may be host-capped";
-
-  EXPECT_FALSE(shekyl_host_inbound_zone_is_capped(
-    static_cast<std::uint8_t>(epee::net_utils::zone::tor)));
-  EXPECT_FALSE(shekyl_host_inbound_zone_is_capped(
-    static_cast<std::uint8_t>(epee::net_utils::zone::i2p)));
-  EXPECT_FALSE(shekyl_host_inbound_zone_is_capped(
-    static_cast<std::uint8_t>(epee::net_utils::zone::invalid)))
-    << "an undeterminable zone must stay exempt: a cap keyed on a host "
-       "identity we could not establish is keyed on nothing";
-}
-
-TEST(host_inbound_admission, the_candidate_is_not_counted_in_the_existing_total)
-{
-  // The load-bearing off-by-one. `has_too_many_connections` asks BEFORE its
-  // connection list is updated -- the call site says so twice -- so the
-  // candidate is not in the count. Counting it would refuse the FIRST
-  // connection from every host at the default cap of 1, which is a total
-  // inbound outage rather than PWD-I7's NAT failure.
-  //
-  // Red edit: `existing_same_host_inbound < self.0` -> `<=` in
-  // rust/shekyl-peer-policy/src/host_inbound.rs.
-  EXPECT_TRUE(shekyl_host_inbound_admits(0, 1)) << "the first connection from a host";
-  EXPECT_FALSE(shekyl_host_inbound_admits(1, 1)) << "the PWD-I7 observation";
-  EXPECT_TRUE(shekyl_host_inbound_admits(1, 2)) << "raising the cap admits the second daemon";
-  EXPECT_FALSE(shekyl_host_inbound_admits(2, 2));
-  EXPECT_FALSE(shekyl_host_inbound_admits(0, 0)) << "a zero cap admits nothing";
+  // And back down again: the reserve is recomputed, not ratcheted.
+  d.server->change_max_out_public_peers(8);
+  EXPECT_GT(d.server->get_max_in_public_peers(), after)
+    << "lowering the outbound reserve must return the headroom";
 }

@@ -53,13 +53,16 @@
 //! those two slots. C++ writes through named constructors and asks
 //! predicates. It never switches on a classification byte, and it does not
 //! compose "record outcome then classify drop" — that pairing lives here.
+//! The same crate owns the inbound safety bound ([`InboundCeiling`]): a
+//! tagged descriptor observation in, a bounded ceiling or a named reason
+//! out. The operating-system probe stays at the FFI boundary.
 
 mod block_ingest;
 mod block_peer;
 mod drop_verdict;
-mod host_inbound;
+mod inbound_ceiling;
 
 pub use block_ingest::BlockIngest;
 pub use block_peer::{BlockAnnounceAction, BlockSyncAction};
 pub use drop_verdict::DropVerdict;
-pub use host_inbound::{HostInboundCap, InboundZone};
+pub use inbound_ceiling::{DescriptorLimit, DescriptorSnapshot, InboundCeiling, UnboundedReason};
