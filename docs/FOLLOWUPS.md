@@ -675,6 +675,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Rust replacements for chaingen-deleted validation invariants.**
+  The chain-switch / fee / key-image arm on the live daemon is `e2e_fcmp_spend_reorg_restores_pool_and_fee` (`rust/shekyl-engine-core/src/engine/regtest_e2e.rs`), armed in `scripts/ci/run_live_daemon_gates.sh`. It covers one tx-conserving pop: key image 1 → 2 → 1, and `get_coinbase_tx_sum`'s fee leg moves by the spend's fee and back. Integer overflow and an alt-chain split remain. Falsify the discharged arm by that test missing from the gate list.
   - Target: pre-genesis
 
 - **Coordinated `TestLedgerBuilder` test-infrastructure substrate [`LocalLedger::from_test_blocks(blocks: Vec<Block>) -> Self`](../rust/shekyl-engine-core/src/engine/local_ledger.rs)**
