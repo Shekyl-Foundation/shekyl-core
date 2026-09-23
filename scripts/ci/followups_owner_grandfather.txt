@@ -12,7 +12,6 @@ The `shekyl-fcmp` fuzz crate is built nowhere in CI.
 `ARCHIVAL_P_DERIVE_V1`'s regenerator is not citation-gated
 DRS-BENCH redb arm: add when a redb-backed `shekyld` build target exists that reports its backend.
 DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.
-Delete or justify `tx_extra` 0x0A (`PQC_SPEND_AUTH_PUBKEYS`) — it has no producer.
 `tx_extra` `0x0B` (archival attestation) has a consensus reader and no producer.
 Attestation verify must move behind PoW before credit-wire population activates.
 Dead hard-fork version dispatch survives from genesis (rule 60).

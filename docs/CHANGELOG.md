@@ -281,6 +281,17 @@
 
 ### Consensus
 
+- **`tx_extra` tags `0x05` and `0x08` are deleted; a transaction carrying
+  either is unparseable.** `0x05` (`PQC_OWNERSHIP`, a per-output
+  `(scheme_id, group_id)` entry) had no producer and no reader — the
+  ownership binding it predates is `PL-D3`'s in-circuit leaf commitment, and
+  group identity is the address fingerprint (`PQC_MULTISIG.md` §5.3) —
+  REJECTED, byte retired beside `0x03`/`0xDE`. `0x08` (`MULTISIG_MIGRATION`)
+  is RESERVED in the spec's table only; its constant, struct and variant are
+  gone until the migration transaction is designed. `0x09` / `0x0A` (multisig
+  view-tag hints and spend-auth pubkeys) stay, with their producer named at
+  the declaration: the multisig receive path (`PQC_MULTISIG.md` §7.4). No
+  genesis or existing-block bytes change — nothing ever emitted the two tags.
 - **Circulating supply is `coins_generated − total_burned`, and the fee-burn /
   emission-split shims hold no rule content (DRS-E6 slice 4 precursor).**
   FL-R16c's ruled definitional defect is closed: the burn ratio's supply
