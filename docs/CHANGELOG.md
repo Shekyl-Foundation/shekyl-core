@@ -31,10 +31,22 @@
   previously visible only on the refusing node, which is what made a one-line
   cause take an afternoon to find. It does not classify, threshold, or stop
   advertising — that half needs `PWD-E8`'s measurement.
-- **Known residual:** `--in-peers` still resolves to `UINT32_MAX` at the
-  shipped default, so the remaining ceiling does not fire. Its value is a
-  **measurement** at the rule-76 floor, not a ruling, and is tracked in
-  `FOLLOWUPS.md`.
+- **`--in-peers` now resolves through a derived SAFETY bound instead of the
+  `UINT32_MAX` it used to narrow into.** Unset, the ceiling is read from the
+  machine at startup: `RLIMIT_NOFILE`'s soft limit, minus the descriptors the
+  process already holds, minus what it reserves for outbound. It therefore
+  differs per deployment, which is correct — it states a fact about one
+  machine rather than a network policy — and **no value is chosen anywhere in
+  it**. An explicit `--in-peers` bypasses the derivation, so `0` remains a
+  legal choice meaning *refuse every inbound connection*, distinct from
+  *unset*. On a platform that cannot report its descriptor limit the daemon
+  **warns and leaves the ceiling unbounded** rather than substituting a
+  number.
+- **Why memory does not appear in that bound.** Measured on the rule-76 floor
+  device and a development host with the same instrument: **119 live inbound
+  connections cost 360 KiB of RSS on the floor**, against a ~539 MiB startup
+  peak that does not move with connection count. A quiescent inbound
+  connection is free in memory; descriptors are what it consumes.
 
 ### P2P wire, daemon RPC, CLI — the stripe engine is gone (`PDM-Q7`)
 

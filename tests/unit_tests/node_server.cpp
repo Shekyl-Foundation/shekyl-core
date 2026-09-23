@@ -2736,3 +2736,99 @@ TEST(node_server, announced_port_is_derived_from_listener_and_zone)
     << "a node that refuses every inbound connection must not announce a port "
        "for peers to attract themselves to";
 }
+
+// ---------------------------------------------------------------------------
+// PWD-I7 — the inbound SAFETY bound
+//
+// `--in-peers` used to narrow its `-1` sentinel straight into a `uint32_t`,
+// so an unset flag meant a ceiling of UINT32_MAX and the check never fired.
+// That became the only inbound bound when the per-host cap was deleted.
+//
+// The replacement is READ, not picked: the descriptor limit minus what the
+// process holds minus what it reserves for outbound. The arithmetic and its
+// saturation are Rust's (`shekyl-peer-policy::InboundCeiling`, unit-tested
+// there, including that the subtraction saturates rather than wrapping back
+// into an unbounded ceiling). What these tests pin is the C++ half: that the
+// SENTINEL routes to the derivation and an EXPLICIT value does not -- the
+// distinction a signed type exists to preserve, since `0` is a legal operator
+// choice meaning "refuse every inbound connection" and cannot double as
+// "unset".
+// ---------------------------------------------------------------------------
+
+namespace
+{
+  struct in_peers_fixture
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+
+    in_peers_fixture(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+
+    // The PRODUCTION init path: the real descriptor through the real parser.
+    // `in_peers < 0` leaves the flag unset, so the sentinel stands.
+    bool init(const char* port, const int in_peers)
+    {
+      boost::program_options::options_description desc_options("Command line options");
+      cryptonote::core::init_options(desc_options);
+      Server::init_options(desc_options);
+
+      const char* argv[2] = {nullptr, nullptr};
+      boost::program_options::variables_map vm;
+      boost::program_options::store(
+        boost::program_options::parse_command_line(1, argv, desc_options), vm);
+
+      // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
+      vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+        boost::program_options::variable_value(std::string("127.0.0.2"), false);
+      vm.find(nodetool::arg_p2p_bind_port.name)->second =
+        boost::program_options::variable_value(std::string(port), false);
+      if (in_peers >= 0)
+        vm.find(nodetool::arg_in_peers.name)->second =
+          boost::program_options::variable_value(static_cast<std::int64_t>(in_peers), false);
+
+      boost::program_options::notify(vm);
+      return server->init(vm);
+    }
+  };
+}
+
+TEST(node_server, in_peers_sentinel_resolves_to_a_bounded_ceiling)
+{
+  // Red edit: drop the `configured_in_peers < 0` branch in `handle_command_line`
+  // so the sentinel narrows straight through again. The ceiling returns to
+  // UINT32_MAX and this fails -- which is the defect, restored.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48090", -1));
+
+  const uint32_t ceiling = d.server->get_max_in_public_peers();
+  EXPECT_NE(std::numeric_limits<uint32_t>::max(), ceiling)
+    << "an unset --in-peers must not resolve to an unbounded interval";
+  EXPECT_GT(ceiling, 0u)
+    << "a machine with a normal descriptor limit has inbound headroom";
+}
+
+TEST(node_server, in_peers_explicit_value_bypasses_the_derivation)
+{
+  // The operator's number is not a starting point for the bound -- it IS the
+  // bound. A derivation that overrode it would silently discard the one
+  // input that is a choice rather than a reading.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48091", 50));
+  EXPECT_EQ(50u, d.server->get_max_in_public_peers());
+}
+
+TEST(node_server, in_peers_zero_is_a_choice_and_not_the_sentinel)
+{
+  // The reason the descriptor is SIGNED. `0` means "refuse every inbound
+  // connection", which is legal and distinct from "unset"; an unsigned type
+  // could not carry both and the sentinel would have to steal a real value.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48092", 0));
+  EXPECT_EQ(0u, d.server->get_max_in_public_peers())
+    << "--in-peers 0 must survive as itself, not be re-derived";
+}

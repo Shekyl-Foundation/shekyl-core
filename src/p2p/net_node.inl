@@ -612,8 +612,59 @@ namespace nodetool
       m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, public_zone.m_config.m_net_config.max_out_connection_count);
 
 
-    if ( !set_max_in_peers(public_zone, command_line::get_arg(vm, arg_in_peers) ) )
-      return false;
+    // `--in-peers` resolves through the SAFETY bound, not a default.
+    //
+    // The sentinel used to narrow straight into a `uint32_t`, so an unset
+    // `--in-peers` meant a ceiling of UINT32_MAX and the check at
+    // `is_host_limit` never fired. That was not a policy choice; it was an
+    // unbounded interval nobody had noticed, and it became the only inbound
+    // bound when the per-host cap was deleted (PWD-I7).
+    //
+    // What replaces it is READ, not picked: the descriptor limit this machine
+    // actually has, minus what this process already holds, minus what it has
+    // promised to outbound. It therefore differs per deployment, which is
+    // correct -- it is a statement about one machine, not about the network.
+    // Rust owns the arithmetic and the saturation (rule 20).
+    //
+    // NOT a policy ceiling. How much inbound service a node CHOOSES to
+    // provide, below this bound, is a separate question with a separate row;
+    // memory cannot answer it, because a quiescent inbound connection was
+    // measured free in RSS on the rule-76 floor device.
+    {
+      const int64_t configured_in_peers = command_line::get_arg(vm, arg_in_peers);
+      int64_t resolved_in_peers = configured_in_peers;
+      if (configured_in_peers < 0)
+      {
+        const uint64_t soft_limit = tools::get_open_file_limit();
+        const uint64_t in_use = tools::count_open_file_descriptors();
+        if (soft_limit == 0 || in_use == 0)
+        {
+          // Both report 0 for UNKNOWN, never for "none" -- a live process
+          // always holds at least three descriptors. A bound derived from a
+          // failed read is not a bound, so say so rather than substituting a
+          // number: inventing one here is exactly what this derivation exists
+          // to avoid, and a silent guess would be worse than a loud gap.
+          MWARNING("Cannot read this platform's descriptor limit, so the inbound "
+                   "ceiling is UNBOUNDED. Set --in-peers explicitly to bound it.");
+        }
+        else
+        {
+          const uint64_t reserved_outbound =
+            static_cast<uint64_t>(public_zone.m_config.m_net_config.max_out_connection_count);
+          const uint32_t ceiling =
+            shekyl_inbound_ceiling_resolve(soft_limit, in_use, reserved_outbound);
+          resolved_in_peers = static_cast<int64_t>(ceiling);
+          MGINFO("Inbound ceiling derived from the descriptor limit: " << ceiling
+                 << " (limit " << soft_limit << ", " << in_use << " already held, "
+                 << reserved_outbound << " reserved for outbound)");
+          if (ceiling == 0)
+            MWARNING("No descriptor headroom for inbound connections. Raise LimitNOFILE "
+                     "or lower --out-peers; this node will accept no inbound peers.");
+        }
+      }
+      if ( !set_max_in_peers(public_zone, resolved_in_peers ) )
+        return false;
+    }
 
     if ( !set_tos_flag(vm, command_line::get_arg(vm, arg_tos_flag) ) )
       return false;

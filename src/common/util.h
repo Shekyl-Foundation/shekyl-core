@@ -227,6 +227,21 @@ namespace tools
 
   ssize_t get_lockable_memory();
 
+  //! `RLIMIT_NOFILE`'s soft limit, or 0 when it cannot be read.
+  //!
+  //! Zero means UNKNOWN, never "no descriptors". The caller must not treat it
+  //! as a value -- a bound derived from a failed read is not a bound.
+  uint64_t get_open_file_limit();
+
+  //! Descriptors this process currently holds, or 0 when it cannot be counted.
+  //!
+  //! Counted from `/proc/self/fd`, which is readable from inside the process
+  //! even where `/proc/<pid>/fd` is not (that needs `PTRACE_MODE_READ`, which
+  //! a hardened `/proc` refuses even for one's own child). Zero means UNKNOWN
+  //! for the same reason as above: a live process always holds at least
+  //! stdin/stdout/stderr.
+  uint64_t count_open_file_descriptors();
+
   void set_max_concurrency(unsigned n);
   unsigned get_max_concurrency();
 

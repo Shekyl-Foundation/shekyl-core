@@ -3517,6 +3517,17 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! substitute one for the other.
 std::uint32_t shekyl_p2p_default_out_peers();
 
+//! The inbound SAFETY bound (PWD-I7). Not a policy ceiling: C++ reads the
+//! operating system -- `RLIMIT_NOFILE`'s soft limit and this process's own
+//! descriptor count after init -- and Rust owns the arithmetic. `in_use` is
+//! sampled AFTER initialisation so the steady set (store, listeners, log) is
+//! already inside it; `reserved_outbound` is configured. Saturates at zero
+//! rather than wrapping: an unsigned wrap would rebuild the `UINT32_MAX`
+//! unbounded interval this bound closes, by another route.
+std::uint32_t shekyl_inbound_ceiling_resolve(std::uint64_t soft_limit,
+                                             std::uint64_t in_use,
+                                             std::uint64_t reserved_outbound);
+
 //! Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12,
 //! 18), moved from `cryptonote_protocol/enums.h` under rule 20. Bytes cross
 //! raw; the C++ wrappers in enums.h static_assert `relay_method`,
