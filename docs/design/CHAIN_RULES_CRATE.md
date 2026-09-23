@@ -846,8 +846,14 @@ at-open 1   by-construction 4   enforced 153   ratified 127 / enforced 153`
 `shekyl-wire` and registered pending here beside CEN-I19; the 4.I slice
 (slice 6) applies `shekyl_wire::tx_extra::check_tx_extra_shape` (I19 + I20
 in one function) rather than minting either — slice 4 landed without it
-(`CHAIN_RULES_SLICE_4.md` S21). The figure moves with each slice and the
-landing PR quotes its own.
+(`CHAIN_RULES_SLICE_4.md` S21). **After S-ARCH's pre-flight (2026-09-23,
+PR #840):** `consensus: implemented 34 / validator-enforced 152   held-by-cxx 2
+at-open 1   by-construction 4   enforced 154   ratified 128 / enforced 154` —
+CEN-L16, an R8-class placement row (the as-of-height holds-shard predicate
+evaluated inside the store, `DRS_E1_SARCH.md` SAR-2 / SAR-7), registered
+pending; its fold moves to `shekyl-archival-retention` with E4 and slice 8
+judges through it. The figure moves with each slice and the landing PR
+quotes its own.
 
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.
