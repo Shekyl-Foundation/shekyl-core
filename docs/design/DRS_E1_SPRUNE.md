@@ -305,7 +305,9 @@ once** — idempotence is the property, and it is cheap to test.
 retained set is known and the plan **may open**. Its Round-0 pre-flight
 owes Q1's one implementation item first or alongside: the journal horizon
 asserted at the journals' retirement site (F19's "the check"). Its first increment cannot land before: `#772` (A3, the second
-hash row, `cumulative_tx_count` — landed); **A4 (the length rows — owed;
+hash row, `cumulative_tx_count` — landed); **`PDM-Q6` item 5 ruled** (the
+lengths must be consensus-committed before any node derives `b_*`; OPEN
+2026-09-23); **A4 (the length rows — owed;
 the plan's commit 1 or a precursor PR, with `SHARD_BYTES`'s production
 home and the `D_max` / journal-horizon function of §12)**; and §11's
 precondition, which the E3 cutover ordering discharges. *Corrected
@@ -356,22 +358,29 @@ have no Rust writer here); what this surface owes it is the function.
 | `D_max` | 720; **`SEB > D_max` const-asserted beside it, on the production constants — the only assertion.** The invariant holds on **every nettype** (rule 71: nettype selects data, the data satisfies the same invariant): the regtest `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override (`constants.rs:257`, today `2..=SETTLEMENT_EPOCH_BLOCKS` in isolation) must not admit `SEB ≤ D_max` — one knob that overrides both and preserves the ratio, or a parse that refuses. `SEB = 2` with `D_max = 720` is a rejected configuration, not a supported one | PROVISIONAL, Round-2 gate (`PDM-Q11`); **constant unbuilt — owed** at `CEN-E2`; **fakechain conformance owed with it** |
 | Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **owed**, minted by this surface's A4 commit, consumed by S-ARCH (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
 | `SHARD_BYTES` | 3.33 MB (`RF-D6`'s, as the boundary metric) | ruled (`PDM-Q-F32`); production home minted with A4 (FOLLOWUPS `:71`) |
-| Length rows (A4) | two `u32` per tx, sparse — **original state**, not derived: ingest-time facts of the body; `b_*` derives from them | **owed** to S-CHAIN-W; on a band-1 skeleton they arrive on F28's wire (below) |
+| Length rows (A4) | two lengths per spend; ~~**original state**~~ **RETRACTED 2026-09-23** — under `PDM-Q6` item 5 (a) they are consensus fields of `CtSigBase`, and the rows are an **index over retained base fields**, derivable from the skeleton; `b_*` derives from them | **owed** to S-CHAIN-W, **gated on item 5's ruling**; no band-1 wire growth under (a) |
 | `b_*` | derived from the length rows, binary-searched | derived, never received |
 | `first_tx_id(h)`, `cumulative_tx_count` | `BlockInfo.cumulative_tx_count`; `first_tx_id(0) = 0`; the primitive under `close_height`, and so under `close_epoch` | landed on #772 — **kept** (the horizon expression `first_tx_id(tip − W)` is gone; the primitive is not) |
 | `w_launch` | flat in-window commitment weight through epochs 0–1; superseded by the derived scarce-set median at the first `discard(k)` | **reward leg's** (Q6 item 3 amendment) — on the Round-2 gate with `n`, `D_max`; S-PRUNE's `discard(k)` event defines the scarce set |
 
-**The length rows on the skeleton wire (F28) are unverifiable without the
-body — and that is safe for exactly one reason.** `txs_prunable_hash`
-commits to the prunable *bytes*, not separately to their length, so a
-band-1 receiver of `TxBlobEntry` cannot check `prunable_len` against
-anything it holds. It does not need to: band 1 is **trusted with the
-binary** (`Trust::BelowAnchor`, `PDM-Q5` / `CHAIN_RULES_SLICE_3.md`), and
-every band above it has the bodies and derives the lengths itself. Do not
-"fix" this by verifying lengths in band 1 — there is nothing to verify them
-against, by construction. F28's `TxBlobEntry` therefore grows **two
-`u32`s** beside `pqc_auth_hash`; that is `LV-`/`PWC-`'s row (FOLLOWUPS
-`:1046`, amended 2026-09-22), not this surface's.
+**The length rows are bound by nothing below `C` — RETRACTED 2026-09-23
+(`PDM-Q6` item 5, OPEN).** This paragraph said on 2026-09-22 that
+`prunable_len` / `pqc_auths_len` on F28's skeleton wire were unverifiable
+in band 1 *and that this was safe* because band 1 is trusted with the
+binary. Bugbot (#832, high) refuted the second half: the checkpoint binds
+block hashes → txids → `H(prefix) · H(base) · prunable_hash · pqc_auth_hash`,
+none of which binds a *length*; `b_*` is a prefix sum of those lengths
+from genesis and admission validates `shard_id` against it, so a peer
+supplying one wrong length below `C` forks that node at admission. **The
+lengths must be consensus-committed.** The default disposition (item 5 (a),
+awaiting the maintainer's ruling) puts them in `CtSigBase` as `VARINT`
+fields for `CTTypeFcmpPlusPlusPqc`, validated against the bytes at connect
+by a node that holds them; then **the A4 rows are an index over retained
+base fields, not original state**, `b_*` is derivable from the skeleton by
+construction, and **F28's wire needs no length growth** (the pruned blob
+already carries the base). Until item 5 is ruled, A4 is not writable and
+this surface's first increment waits (§9). The `LV-`/`PWC-` row (FOLLOWUPS
+`:1046`) is amended to contingent.
 
 ## 13. C++ deletions and their timing
 

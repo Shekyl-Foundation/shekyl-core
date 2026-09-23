@@ -520,7 +520,7 @@ because the node claims nothing it has not earned.
 falsifier: `RuleSetNotInForce` removed or widened. The second amendment
 reverts with Q2's shape.
 
-### `PDM-Q6` RULED 2026-09-17 (items 1–3), item 3 AMENDED and item 4 RULED 2026-09-18 — The prunable region and `pqc_auths` are the archival good; a shard is a byte-bounded `tx_id` range, discarded whole
+### `PDM-Q6` RULED 2026-09-17 (items 1–3), item 3 AMENDED and item 4 RULED 2026-09-18, **item 5 OPEN 2026-09-23 (the length rows must be consensus-committed)** — The prunable region and `pqc_auths` are the archival good; a shard is a byte-bounded `tx_id` range, discarded whole
 
 **Grounded at** `dev@4bc378d68` (2026-09-17); `#768` (E6 slice 1 —
 `TxIdentity.pqc_auth_hash` and the wire's txid module; read at head
@@ -821,6 +821,60 @@ type-check against the unit — falsifier: an `SF-D7` or `RF-D6`
 constant still named in bytes-of-leaves after the edit. Row 1 reverts
 to "no change" only if `wire.rs`'s preimage is shown not to include the
 two derived terms — falsifier: `wire.rs:345` read again.
+
+**Item 5 — OPEN 2026-09-23: the length rows are bound by nothing below
+`C`, and `b_*` is consensus.** Surfaced by Bugbot on #832 (high; the
+thread was auto-resolved by a later push, the finding was not). Item 3
+(F32) makes shard boundaries `b_*` a prefix sum of every transaction's
+`prunable_len + pqc_auths_len` from genesis, and bond admission validates
+`shard_id` against closed shards — so **`b_*` is consensus**. The A4 rows
+were ruled "original state", and the skeleton's §12 (2026-09-22) said a
+band-1 node could take them from F28's wire because band 1 is trusted with
+the binary. **Refuted.** The checkpoint binds block hashes → txids →
+`H(prefix) · H(base) · prunable_hash · pqc_auth_hash` (`txid.rs:55`); a hash
+of bytes does not bind their *length*, and no length appears in any
+committed field. A peer serving the skeleton below `C` can state any
+`prunable_len`; one wrong value shifts every later `b_*` on that node, and
+it forks at the next admission it validates. "Trusted with the binary"
+covers what the binary's checkpoint reaches, and it does not reach a
+length.
+
+*Dispositions considered:*
+
+- **(a) — the default this item proposes: the two lengths become consensus
+  fields of `CtSigBase`.** `prunable_len` and `pqc_auths_len` as
+  `VARINT_FIELD`s in the base, serialized for `CTTypeFcmpPlusPlusPqc` only
+  (coinbase carries neither), so `H(base)` binds them and the checkpoint
+  reaches them through the txid. A node holding the body validates the
+  declared lengths against the bytes at connect (one new rule row, 4.I's
+  neighbour: a mismatch is an invalid transaction); a band-1 node takes
+  them from the base it already holds. Consequences, each a simplification:
+  **the A4 rows become an index over retained base fields, not original
+  state** — derivable by replay from the skeleton, which is Q6's own
+  reversion criterion (b) satisfied by construction rather than by trust;
+  **F28's wire needs no length growth** — the pruned blob already carries
+  the base; and the skeleton §12 paragraph is retracted. Cost: two varints
+  per spend (2–4 bytes), a pre-genesis tx-format change in C++ and Rust
+  serialization with fixture regeneration (rule 42 fires: the persisted
+  block blob moves). Rule 16's shape — structural now, pre-genesis, rather
+  than a trust assumption forever.
+- **(b) measure shards over retained bytes** (prefix + base sizes, which
+  every node has) — **rejected**: the good is the prunable region, and
+  `SHARD_BYTES` bounds the *body* egress a serve moves (`RF-D6`); a
+  retained-byte proxy bounds nothing that is served.
+- **(c) commit `b_*` on chain at shard close** (a coinbase-extra field, a
+  consensus object) — **rejected as heavier than (a)** for the same
+  guarantee: it commits a derived value where (a) commits the inputs.
+- **(d) accept band-1 trust of lengths** — **rejected**: a consensus
+  partition cannot rest on an unbound wire field on any band.
+
+*Ruling owed by the maintainer — a tx-format change is not this lane's to
+take by default.* Until ruled, A4 is **not** writable as original state,
+F28's row is contingent, and S-PRUNE's first increment waits on the
+answer (the skeleton's §9 preconditions carry it). *Reopen:* this item
+closes when (a) or a named alternative lands with the rule row and the
+fixtures; it reverts to OPEN if any node's `b_*` is ever derived from a
+value the txid does not bind.
 
 **Reversion criteria (rule 21).** This ruling reverts to OPEN if any
 of: (a) a consensus reader of the prunable region or `pqc_auths`
