@@ -29,7 +29,8 @@
 #               census-derived rather than editorial;
 #   grammar   — one `census_rows!` per flag, a parseable header, every entry
 #               `Var pending,`, `Var implemented(rust::path),`,
-#               `Var enforced_at(rust::path, "test_fn"),` or
+#               `Var enforced_at(rust::path, "test_fn"),`,
+#               `Var by_construction(rust::path, "falsifier"),` or
 #               `Var held_by_cxx("tests/….cpp", "gen_test"),`, no attribute
 #               on an entry (a `#[cfg]` the gate cannot evaluate would let the
 #               compiled enum and the counted enum differ);
@@ -125,6 +126,7 @@ ENTRY_RE = re.compile(
     r"(?:(?P<pending>pending)"
     rf"|(?P<implemented>implemented)\(\s*(?P<impl_path>{_RUST_PATH})\s*\)"
     rf'|(?P<enforced_at>enforced_at)\(\s*(?P<site>{_RUST_PATH})\s*,\s*"(?P<proof>[A-Za-z_]\w*)"\s*\)'
+    rf'|(?P<by_construction>by_construction)\(\s*(?P<property>{_RUST_PATH})\s*,\s*"(?P<falsifier>(?:doctest:)?[A-Za-z_]\w*)"\s*\)'
     r'|(?P<held>held_by_cxx)\(\s*"(?P<file>[^"\s]+)"\s*,\s*"(?P<test>[A-Za-z_]\w*)"\s*\))'
     r"\s*,$"
 )
@@ -166,9 +168,9 @@ DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 @dataclass(frozen=True)
 class Entry:
     variant: str  # "A1"
-    status: str  # "pending" | "implemented" | "enforced_at" | "held_by_cxx"
-    path: str | None  # implemented / enforced_at: the rule type's Rust path
-    proof: str | None  # enforced_at: the `#[test]` in this crate that proves the site refuses
+    status: str  # "pending" | "implemented" | "enforced_at" | "by_construction" | "held_by_cxx"
+    path: str | None  # implemented / enforced_at: the rule type's Rust path; by_construction: the property's
+    proof: str | None  # enforced_at: the `#[test]` that proves the site refuses; by_construction: the falsifier
     holder: tuple[str, str] | None  # held_by_cxx: (repo-relative file, test name)
     line: int  # 1-based, in the registry file
 
@@ -178,12 +180,16 @@ class Entry:
 
     @property
     def implemented(self) -> bool:
-        """Rust enforces the row — per block or at another site."""
-        return self.status in ("implemented", "enforced_at")
+        """Rust enforces the row — per block, at another site, or by construction."""
+        return self.status in ("implemented", "enforced_at", "by_construction")
 
     @property
     def at_open(self) -> bool:
         return self.status == "enforced_at"
+
+    @property
+    def by_construction(self) -> bool:
+        return self.status == "by_construction"
 
     @property
     def held(self) -> bool:
@@ -220,12 +226,14 @@ class Figures:
     implemented: int  # rows Rust enforces: per block, plus the at-open rows
     held: int  # rows the C++ ingest driver holds until cutover
     at_open: int  # rows this crate enforces outside the per-block stages
-    enforced: int  # the census denominator; never moves for a hold or an at-open row
+    by_construction: int  # rows that hold by construction (type system / parser), with a falsifier
+    enforced: int  # the census denominator; never moves for a hold, an at-open or a by-construction row
     ratified: int
     by_subsystem: dict[str, tuple[int, int, int]]  # subsystem -> (implemented, held, enforced)
     implemented_ids: tuple[str, ...]
     held_rows: tuple[tuple[str, str, str], ...]  # (id, file, test)
     at_open_rows: tuple[tuple[str, str, str], ...]  # (id, site, proof test)
+    by_construction_rows: tuple[tuple[str, str, str], ...]  # (id, property, falsifier)
 
     @property
     def validator_enforced(self) -> int:
@@ -233,8 +241,8 @@ class Figures:
 
     @property
     def per_block(self) -> int:
-        """What `Coverage::is_complete_for` measures against: `E − H − O`."""
-        return self.validator_enforced - self.at_open
+        """What `Coverage::is_complete_for` measures against: `E − H − O − B`."""
+        return self.validator_enforced - self.at_open - self.by_construction
 
 
 # --------------------------------------------------------------------------
@@ -320,6 +328,8 @@ def _parse_one(start_line: int, body: str) -> Registry:
             status, path, proof, holder = "implemented", em.group("impl_path"), None, None
         elif em.group("enforced_at"):
             status, path, proof, holder = "enforced_at", em.group("site"), em.group("proof"), None
+        elif em.group("by_construction"):
+            status, path, proof, holder = "by_construction", em.group("property"), em.group("falsifier"), None
         else:
             status, path, proof, holder = "held_by_cxx", None, None, (em.group("file"), em.group("test"))
         entries.append(Entry(variant=em.group("var"), status=status, path=path, proof=proof, holder=holder, line=n))
@@ -400,6 +410,7 @@ def figures(rows: list[Row], reg: Registry) -> Figures:
     implemented = [e for e in reg.entries if e.implemented and e.id in subsystem_of]
     held = [e for e in reg.entries if e.held and e.id in subsystem_of]
     at_open = [e for e in implemented if e.at_open]
+    by_construction = [e for e in implemented if e.by_construction]
     by_sub: dict[str, list[int]] = {}
     for r in enforced:
         by_sub.setdefault(r.subsystem, [0, 0, 0])[2] += 1
@@ -413,12 +424,14 @@ def figures(rows: list[Row], reg: Registry) -> Figures:
         implemented=len(implemented),
         held=len(held),
         at_open=len(at_open),
+        by_construction=len(by_construction),
         enforced=len(enforced),
         ratified=sum(1 for r in enforced if r.bucket in RATIFIED_BUCKETS),
         by_subsystem={k: (v[0], v[1], v[2]) for k, v in by_sub.items()},
         implemented_ids=tuple(e.id for e in implemented),
         held_rows=tuple((e.id, e.holder[0], e.holder[1]) for e in held if e.holder),
         at_open_rows=tuple((e.id, e.path or "", e.proof or "") for e in at_open),
+        by_construction_rows=tuple((e.id, e.path or "", e.proof or "") for e in by_construction),
     )
 
 
@@ -445,6 +458,66 @@ def check_at_open(entries: list[Entry], crate_src: str | None, errors: list[str]
                 f"enforced_at entry {e.id} (line {e.line}): proof test {e.proof!r} is not a "
                 "`#[test] fn` defined in the crate — an at-open row names the test that proves "
                 "its site refuses"
+            )
+
+
+# A `compile_fail` doctest attached to `fn <item>`: the contiguous `///` block
+# immediately above the definition contains a ```` ```compile_fail ```` fence.
+# Doc comments are NOT stripped for this check — the doctest *is* the comment.
+def _compile_fail_doctest_on(src: str, item: str) -> bool:
+    for m in re.finditer(rf"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?fn\s+{re.escape(item)}\b", src, re.M):
+        # Walk back over the doc block above the definition.
+        lines = src[: m.start()].splitlines()
+        block: list[str] = []
+        for line in reversed(lines):
+            stripped = line.strip()
+            if stripped.startswith("///") or stripped.startswith("#["):
+                block.append(stripped)
+            elif stripped == "":
+                break
+            else:
+                break
+        if any("```compile_fail" in line for line in block):
+            return True
+    return False
+
+
+def check_by_construction(entries: list[Entry], crate_src: str | None, errors: list[str]) -> None:
+    """Every `by_construction` entry names a falsifier defined in this crate.
+
+    The compiler pins the property's home (`use path as _`); the falsifier is
+    the gate's to assert (rule 47): either a `#[test] fn <name>` that would
+    fail if the property lapsed, or `doctest:<item>` — a `compile_fail`
+    doctest on `fn <item>`, the shape a type-system property is falsified
+    by (CEN-F19: a verdict judged against one view cannot connect under
+    another). A row true by construction with no way to fail is a claim,
+    not a row (CHAIN_RULES_SLICE_4.md Q4).
+    """
+    rows = [e for e in entries if e.by_construction and e.proof]
+    if not rows:
+        return
+    if crate_src is None:
+        errors.append(
+            "by_construction entries present but the crate's sources could not be read — "
+            "cannot show any falsifier exists"
+        )
+        return
+    stripped_src = strip_comments(crate_src, rust=True)
+    for e in rows:
+        falsifier = e.proof or ""
+        if falsifier.startswith("doctest:"):
+            item = falsifier[len("doctest:"):]
+            if not _compile_fail_doctest_on(crate_src, item):
+                errors.append(
+                    f"by_construction entry {e.id} (line {e.line}): falsifier {falsifier!r} names no "
+                    f"`fn {item}` in the crate carrying a ```compile_fail doctest — a type-system "
+                    "property is falsified by the program that must not compile"
+                )
+        elif not _test_def_re(falsifier).search(stripped_src):
+            errors.append(
+                f"by_construction entry {e.id} (line {e.line}): falsifier {falsifier!r} is not a "
+                "`#[test] fn` defined in the crate — a by-construction row names the test that "
+                "would fail if the property lapsed"
             )
 
 
@@ -561,6 +634,7 @@ def check(inputs: Inputs) -> tuple[list[str], dict[str, Figures]]:
     check_manifest(inputs.manifest, errors)
     check_held(all_entries, rows, inputs.cxx, errors)
     check_at_open(all_entries, inputs.crate_src, errors)
+    check_by_construction(all_entries, inputs.crate_src, errors)
     return errors, {flag: figures(rows, reg) for flag, reg in registries.items()}
 
 
@@ -573,7 +647,7 @@ def summary(figs: dict[str, Figures]) -> str:
     w = max(
         len(str(n))
         for f in figs.values()
-        for n in (f.implemented, f.enforced, f.ratified, f.held, f.at_open)
+        for n in (f.implemented, f.enforced, f.ratified, f.held, f.at_open, f.by_construction)
     )
     out = []
     for flag in sorted(figs, key=lambda f: list(FLAG_OF.values()).index(f)):
@@ -581,10 +655,11 @@ def summary(figs: dict[str, Figures]) -> str:
         out.append(
             f"{LABEL[flag] + ':':<11}"
             f"implemented {f.implemented:>{w}} / validator-enforced {f.validator_enforced:<{w}}   "
-            f"held-by-cxx {f.held:>{w}}   at-open {f.at_open:>{w}}   enforced {f.enforced:<{w}}   "
+            f"held-by-cxx {f.held:>{w}}   at-open {f.at_open:>{w}}   by-construction {f.by_construction:>{w}}   "
+            f"enforced {f.enforced:<{w}}   "
             f"ratified {f.ratified:>{w}} / enforced {f.enforced:<{w}}   "
             f"(E = {flag}-rows − bucket 3; validator-enforced = E − held; "
-            "per-block completeness over E − held − at-open)"
+            "per-block completeness over E − held − at-open − by-construction)"
         )
     return "\n".join(out)
 
@@ -607,6 +682,10 @@ def describe(figs: dict[str, Figures]) -> str:
             out.append("  enforced at open (Rust-enforced, outside per-block coverage):")
             for rid, site, proof in f.at_open_rows:
                 out.append(f"    {rid}: {site} :: {proof}")
+        if f.by_construction_rows:
+            out.append("  by construction (Rust-enforced by the type system / parser; falsifier named):")
+            for rid, prop, falsifier in f.by_construction_rows:
+                out.append(f"    {rid}: {prop} :: {falsifier}")
     return "\n".join(out)
 
 
@@ -834,6 +913,26 @@ def selftest() -> None:
     _expect_ok(_inputs(registry=at_open_reg, crate_src="#[test]\n#[should_panic(expected = \"x\")]\nfn e5_refuses() {}\n"), "an attribute between #[test] and fn is allowed")
     _expect_refusal(_reg("        L1 pending,\n", "        L1 enforced_at(crate::anchors::E5),\n"), "unparseable entry at line 12", "enforced_at without a proof test")
     _expect_refusal(_reg("        L1 pending,\n", "        L1 enforced_at(crate::anchors::E5, e5_refuses),\n"), "unparseable entry at line 12", "enforced_at proof unquoted")
+
+    # by_construction — a falsifier is a `#[test] fn` or a compile_fail doctest on a named item
+    bc_reg = _REGISTRY_OK.replace("        L1 pending,\n", '        L1 by_construction(crate::view::ChainView, "l1_falsifier"),\n')
+    figs3 = _expect_ok(_inputs(registry=bc_reg, crate_src="#[test]\nfn l1_falsifier() {}\n"), "a by-construction row with a #[test] falsifier")
+    if (figs3["C"].implemented, figs3["C"].by_construction, figs3["C"].at_open, figs3["C"].validator_enforced, figs3["C"].per_block) != (2, 1, 0, 4, 3):
+        raise SystemExit(f"selftest by-construction figures: {figs3['C']}")
+    if figs3["C"].by_construction_rows != (("CEN-L1", "crate::view::ChainView", "l1_falsifier"),):
+        raise SystemExit(f"selftest by-construction rows: {figs3['C'].by_construction_rows}")
+    if "CEN-L1: crate::view::ChainView :: l1_falsifier" not in describe(figs3):
+        raise SystemExit("selftest describe lacks the by-construction citation")
+    if "at-open 0   by-construction 1   enforced 5" not in summary(figs3):
+        raise SystemExit(f"selftest by-construction summary:\n{summary(figs3)}")
+    _expect_refusal(_inputs(registry=bc_reg, crate_src="fn l1_falsifier() {}\n"), "falsifier 'l1_falsifier' is not a `#[test] fn`", "by-construction falsifier without #[test]")
+    _expect_refusal(_inputs(registry=bc_reg, crate_src=None), "crate's sources could not be read", "by-construction row but no crate sources")
+    bc_doc_reg = _REGISTRY_OK.replace("        L1 pending,\n", '        L1 by_construction(crate::view::ChainView, "doctest:validate"),\n')
+    doc_src = "/// Judged against one view, cannot connect under another:\n///\n/// ```compile_fail\n/// let x: () = 1u8;\n/// ```\npub fn validate() {}\n"
+    _expect_ok(_inputs(registry=bc_doc_reg, crate_src=doc_src), "a by-construction row with a compile_fail doctest falsifier")
+    _expect_refusal(_inputs(registry=bc_doc_reg, crate_src="/// ```\n/// let x = 1;\n/// ```\npub fn validate() {}\n"), "names no `fn validate` in the crate carrying a ```compile_fail doctest", "doctest falsifier whose doctest is not compile_fail")
+    _expect_refusal(_inputs(registry=bc_doc_reg, crate_src="/// ```compile_fail\n/// x\n/// ```\npub fn other() {}\n\npub fn validate() {}\n"), "names no `fn validate` in the crate carrying a ```compile_fail doctest", "doctest falsifier on a different item")
+    _expect_refusal(_reg("        L1 pending,\n", "        L1 by_construction(crate::view::ChainView),\n"), "unparseable entry at line 12", "by_construction without a falsifier")
     _expect_refusal(_reg("        L1 pending,\n", '        L1 enforced_at("crate::anchors::E5", "e5_refuses"),\n'), "unparseable entry at line 12", "enforced_at site quoted")
 
     # a held row is still a registered row: the bijection sees it

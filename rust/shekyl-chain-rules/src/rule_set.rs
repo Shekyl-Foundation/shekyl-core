@@ -177,15 +177,19 @@ impl RuleSet {
     /// per-block stages can evaluate**, in census order. Excluded: rows
     /// held by the C++ ingest driver ([`RowStatus::HeldByCxx`]), which are
     /// not the validator's; and rows this crate enforces at another site
-    /// ([`RowStatus::EnforcedAt`] — CEN-E5 at writer open), which no
-    /// per-block coverage could contain. So `Coverage::is_complete_for`
-    /// measures `enforced − held − at-open` — the census denominator itself
-    /// never moves for either (the gate prints the subtractions beside it).
+    /// ([`RowStatus::EnforcedAt`] — CEN-E5 at writer open) or holds by
+    /// construction ([`RowStatus::ByConstruction`] — CEN-F2, F8, F19), which
+    /// no per-block coverage could contain. So `Coverage::is_complete_for`
+    /// measures `enforced − held − at-open − by-construction` — the census
+    /// denominator itself never moves for any of them (the gate prints the
+    /// subtractions beside it).
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_ {
-        self.enforced
-            .iter()
-            .copied()
-            .filter(|row| !matches!(row.status(), RowStatus::HeldByCxx | RowStatus::EnforcedAt))
+        self.enforced.iter().copied().filter(|row| {
+            !matches!(
+                row.status(),
+                RowStatus::HeldByCxx | RowStatus::EnforcedAt | RowStatus::ByConstruction
+            )
+        })
     }
 
     /// A rule set that admits `header_major_version`, for the version-rule
