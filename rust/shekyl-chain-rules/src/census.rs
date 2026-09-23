@@ -392,7 +392,7 @@ census_rows! {
         F18 pending,
         F19 by_construction(crate::view::ChainView, "doctest:validate"),
         F20 implemented(crate::rules::miner::F20),
-        F21 by_construction(crate::rule_set::RuleSet, "the_emission_split_epoch_is_the_hardfork_tables_first_row"),
+        F21 by_construction(crate::rules::miner::EMISSION_SPLIT_EPOCH, "the_emission_split_epoch_is_the_hardfork_tables_first_row"),
         // 4.G Block body (per-tx and block-level, main-chain connect)
         G1 pending,
         G2 pending,

@@ -62,10 +62,11 @@
 # assertion), so this gate does not run cargo and does not need to.
 #
 # The held figure is a SUBTRACTION, not a third denominator: the line prints
-# `implemented I / validator-enforced (E − H)   held-by-cxx H   at-open O   enforced E`
+# `implemented I / validator-enforced (E − H)   held-by-cxx H   at-open O   by-construction B   enforced E`
 # with E fixed, so coverage cannot improve by moving rows out of scope. `I`
-# includes the at-open rows (Rust enforces them); `O` is printed so the
-# per-block completeness denominator, `E − H − O`, can be read off the line.
+# includes the at-open and by-construction rows (Rust enforces them); `O`
+# and `B` are printed so the per-block completeness denominator,
+# `E − H − O − B`, can be read off the line.
 #
 # Rule 47: the gate asserts its own subject. A missing registry file, a
 # registry `lib.rs` does not compile (`mod census;` absent), a flag with no
@@ -845,9 +846,9 @@ def selftest() -> None:
         raise SystemExit(f"selftest held rows: got {figs['C'].held_rows}")
     text = summary(figs)
     # E stays 5 on the line while validator-enforced reads 4: a subtraction, not a smaller denominator.
-    if "consensus: implemented 1 / validator-enforced 4   held-by-cxx 1   at-open 0   enforced 5   ratified 4 / enforced 5" not in text:
+    if "consensus: implemented 1 / validator-enforced 4   held-by-cxx 1   at-open 0   by-construction 0   enforced 5   ratified 4 / enforced 5" not in text:
         raise SystemExit(f"selftest summary shape:\n{text}")
-    if "policy:    implemented 0 / validator-enforced 1   held-by-cxx 0   at-open 0   enforced 1   ratified 1 / enforced 1" not in text:
+    if "policy:    implemented 0 / validator-enforced 1   held-by-cxx 0   at-open 0   by-construction 0   enforced 1   ratified 1 / enforced 1" not in text:
         raise SystemExit(f"selftest summary shape (policy):\n{text}")
     desc = describe(figs)
     if "4.A: implemented 1 / enforced 3 (held-by-cxx 1)" not in desc:
@@ -903,7 +904,7 @@ def selftest() -> None:
         raise SystemExit(f"selftest at-open rows: {figs2['C'].at_open_rows}")
     if "CEN-L1: crate::anchors::E5 :: e5_refuses" not in describe(figs2):
         raise SystemExit("selftest describe lacks the at-open citation")
-    if "held-by-cxx 1   at-open 1   enforced 5" not in summary(figs2):
+    if "held-by-cxx 1   at-open 1   by-construction 0   enforced 5" not in summary(figs2):
         raise SystemExit(f"selftest at-open summary:\n{summary(figs2)}")
     _expect_refusal(_inputs(registry=at_open_reg, crate_src="fn e5_refuses() {}\n"), "proof test 'e5_refuses' is not a `#[test] fn` defined in the crate", "at-open proof fn without #[test]")
     _expect_refusal(_inputs(registry=at_open_reg, crate_src="#[test]\nfn other() { e5_refuses(); }\n"), "proof test 'e5_refuses' is not a `#[test] fn`", "at-open proof only called, not defined")

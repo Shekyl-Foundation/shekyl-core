@@ -368,13 +368,17 @@ pub mod fixture {
     /// A coinbase that satisfies every structural 4.F row for a block at
     /// `height`: one `Input::Gen(height)` (F1, F5), `Ct::Null` (F3), one
     /// output (F4) paying `0` with key `G` (F9) and mask `2·G` (F10),
-    /// `unlock_time = height + 60` (F6). Amounts are not this fixture's
-    /// concern — the exact-payout row (F18) is not landed — so a chain of
-    /// these pays nothing and reads the tail subsidy at every height.
+    /// `unlock_time = height + mined_money_unlock_window` (F6). Amounts are
+    /// not this fixture's concern — the exact-payout row (F18) is not
+    /// landed — so a chain of these pays nothing and reads the tail subsidy
+    /// at every height.
     pub fn coinbase(height: u64) -> Transaction {
+        let unlock_time = height
+            .checked_add(RuleSet::GENESIS.mined_money_unlock_window().to_raw())
+            .expect("fixture height + mined-money unlock window fits u64");
         Transaction {
             prefix: TxPrefix {
-                unlock_time: height.saturating_add(60),
+                unlock_time,
                 inputs: vec![Input::Gen(height)],
                 outputs: vec![Output {
                     amount: 0,

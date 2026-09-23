@@ -6,7 +6,8 @@
 //! Negative fixtures for census 4.F (`CHAIN_RULES_SLICE_4.md` §5): one
 //! refusal per predicate row, at [`TxSlot::Miner`] (Q6); a value pin per
 //! definition row against `shekyl-economics` (the body the C++ marshals
-//! to); the falsifiers of the three rows that hold by construction (Q4);
+//! to); the falsifiers of the by-construction rows (F2, F8, F21; F19's is
+//! the `validate` doctest) (Q4);
 //! and the pins on the fixture points the whole file leans on. Each test
 //! names its row and asserts **the row**, not merely a refusal — the
 //! discipline slice 2 adopted, and the one Q8 found missing from the E2
@@ -15,6 +16,7 @@
 use super::*;
 use crate::block::Candidate;
 use crate::census::CenRow;
+use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault, FormAttempt};
 use crate::harness::fixture::{
     candidate, candidate_on, coinbase, recorded, recorded_with_work, G, TWO_G,
@@ -27,10 +29,10 @@ use crate::rules::{BlockContext, BlockRule, FormContext, FormRule};
 use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
-use crate::view::RecordedBlock;
+use crate::view::{RecordedBlock, Tip};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{base_block_reward, effective_emission, TxVolume};
-use shekyl_types::BlockHash;
+use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Output, Transaction};
 
@@ -328,20 +330,10 @@ fn recorded_with_emission(
 }
 
 fn emission_on(chain: &MockChain) -> Emission {
-    let candidate = candidate_on(chain, Vec::new());
-    let formed = formed_on(chain, candidate);
-    // The verdict carries the view's brand and cannot leave the closure
-    // (CEN-F19's property); the emission is a plain value and can.
+    let connecting = Tip::connecting_height(chain.tip().as_ref());
     chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("the fixture passes")
-        .block()
-        .emission()
+        let mut coverage = RuleCoverage::EMPTY;
+        Emission::derive(&view, connecting, &mut coverage).expect("the fixture view answers")
     })
 }
 
@@ -351,8 +343,8 @@ fn emission_on(chain: &MockChain) -> Emission {
 #[test]
 fn cen_f11_genesis_takes_the_configured_emission_and_recomputes_nothing() {
     let emission = emission_on(&MockChain::default());
-    assert_eq!(emission.subsidy(), Subsidy::Configured);
-    assert_eq!(emission.tx_volume(), TxVolume::window(0, 0));
+    assert_eq!(emission.subsidy, Subsidy::Configured);
+    assert_eq!(emission.tx_volume, TxVolume::window(0, 0));
     let formed = formed_on(&MockChain::default(), candidate(Vec::new()));
     let coverage = MockChain::default().with_view(|view| {
         *judged(validate(
@@ -383,8 +375,8 @@ fn cen_f13_f15_price_the_parents_accumulator() {
     );
     let emission = emission_on(&chain);
     // Height 1: window is min(1, W) = 1 block, the parent's 40 listed txs.
-    assert_eq!(emission.tx_volume(), TxVolume::window(40, 1));
-    let Subsidy::Derived { base, effective } = emission.subsidy() else {
+    assert_eq!(emission.tx_volume, TxVolume::window(40, 1));
+    let Subsidy::Derived { base, effective } = emission.subsidy else {
         panic!("height 1 derives, it does not take the configured amount");
     };
     assert_eq!(
@@ -410,7 +402,7 @@ fn cen_f13_past_the_asymptote_is_the_tail() {
         recorded_with_emission(1_000, params.emission_curve_asymptote + 1, 0),
         crate::harness::fixture::root(1),
     );
-    let Subsidy::Derived { base, .. } = emission_on(&chain).subsidy() else {
+    let Subsidy::Derived { base, .. } = emission_on(&chain).subsidy else {
         panic!("derived");
     };
     assert_eq!(
@@ -435,7 +427,7 @@ fn cen_f20_window_is_two_prefix_sums() {
         );
     }
     // Connecting at 4: window = min(4, 720) = 4 blocks [0, 3], sum 36.
-    assert_eq!(emission_on(&chain).tx_volume(), TxVolume::window(36, 4));
+    assert_eq!(emission_on(&chain).tx_volume, TxVolume::window(36, 4));
 }
 
 /// F20 past the window: with `W + 2` blocks recorded the window drops the
@@ -452,7 +444,7 @@ fn cen_f20_window_slides_past_w() {
         );
     }
     // Connecting at W + 2: blocks [2, W + 1], W of them, W listed txs.
-    assert_eq!(emission_on(&chain).tx_volume(), TxVolume::window(w, w));
+    assert_eq!(emission_on(&chain).tx_volume, TxVolume::window(w, w));
 }
 
 /// F20's fault: a prefix sum that decreases is a store that does not hold
@@ -484,9 +476,9 @@ fn cen_f20_a_decreasing_prefix_sum_is_a_corrupt_view() {
     });
 }
 
-/// The shipped parameter set prices the tail — the one way the emission
-/// derivations could fault, pinned so `Corrupt::EmissionUnpriceable` is an
-/// arm no shipped node reaches.
+/// The shipped parameter set prices the tail. That overflow is the only
+/// `Err` the emission functions return, and [`economics`] refuses a
+/// parameter set that produces it before a block is priced.
 #[test]
 fn shipped_parameters_price_the_tail() {
     assert!(shekyl_economics::tail_subsidy_per_block(economics()).is_ok());
@@ -537,6 +529,49 @@ fn f8_the_wire_admits_one_output_tag() {
         assert!(
             Output::read(&mut bytes.as_slice()).is_err(),
             "output tag {other:#04x} must not decode"
+        );
+    }
+}
+
+/// CEN-F21's epoch is the one-row hardfork table's height: `{ 1, 1, 0, … }`
+/// on every public network (`hardforks.cpp`), which
+/// `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` returns.
+/// Read from the table, not restated beside [`EMISSION_SPLIT_EPOCH`].
+#[test]
+fn the_emission_split_epoch_is_the_hardfork_tables_first_row() {
+    let hardforks_cpp = include_str!("../../../../src/hardforks/hardforks.cpp");
+    for table in [
+        "mainnet_hard_forks",
+        "testnet_hard_forks",
+        "stagenet_hard_forks",
+    ] {
+        let start = hardforks_cpp
+            .find(&format!("const hardfork_t {table}[] = {{"))
+            .unwrap_or_else(|| panic!("hardforks.cpp defines {table}"));
+        let body = &hardforks_cpp[start..];
+        let end = body.find("};").expect("the table closes");
+        let rows: Vec<&str> = body[..end]
+            .lines()
+            .skip(1)
+            .map(str::trim)
+            .filter(|l| l.starts_with('{'))
+            .collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "{table} has one row (all features from genesis)"
+        );
+        // `{ version, height, threshold, time }`
+        let fields: Vec<&str> = rows[0]
+            .trim_matches(|c| c == '{' || c == '}' || c == ',')
+            .split(',')
+            .map(str::trim)
+            .collect();
+        let height: u64 = fields[1].parse().expect("the row's height is an integer");
+        assert_eq!(
+            EMISSION_SPLIT_EPOCH,
+            BlockHeight::from_raw(height),
+            "{table}"
         );
     }
 }

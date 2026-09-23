@@ -21,18 +21,22 @@
 //!
 //! **Definitions** — F13 (the base subsidy), F15 (the release-modulated
 //! emission), F20 (the volume window) and F11 (genesis accepts its
-//! configured emission; nothing is recomputed) are derivations the verdict
-//! carries ([`Emission`]), not checks: the CEN-D4 shape. They record their
-//! rows at the derivation site — [`Emission::derive`] — and run at every
-//! height, so coverage is complete at genesis too: at height `0` the
-//! derivation is the *observation* that the amount is configured (F11),
-//! which is what the C++ does (`validate_miner_transaction`: `base_reward
-//! = money_in_use; return true`).
+//! configured emission; nothing is recomputed) are derivations
+//! [`Emission::derive`] prices, not checks: the CEN-D4 shape. They record
+//! their rows at the derivation site and run at every height, so coverage
+//! is complete at genesis too: at height `0` the derivation is the
+//! *observation* that the amount is configured (F11), which is what the
+//! C++ does (`validate_miner_transaction`: `base_reward = money_in_use;
+//! return true`). The priced value stays local. F14b reads it inside
+//! `validate` when the median exists, and the amount `connect` persists
+//! is the paid reward that row produces — so [`Emission`] does not ride
+//! on the verdict until then.
 //!
-//! Three rows hold **by construction** and have no type here: F2 (the wire
-//! admits one transaction version), F8 (one output tag) and F19 (parent
-//! state is the view's brand). Their falsifiers are in `miner_tests`
-//! (`RowStatus::ByConstruction`, Q4).
+//! Four rows hold **by construction** (`RowStatus::ByConstruction`, Q4).
+//! F2 (the wire admits one transaction version) and F8 (one output tag)
+//! are falsified in `miner_tests`. F19 (parent state is the view's brand)
+//! is falsified by the `compile_fail` doctests on `validate`. F21 is
+//! [`EMISSION_SPLIT_EPOCH`].
 //!
 //! # What is not here
 //!
@@ -67,7 +71,6 @@ use shekyl_wire::{Ct, Input, Transaction};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault};
-use crate::rule_set::RuleSet;
 use crate::rules::{recorded, BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::ChainView;
@@ -95,6 +98,25 @@ pub(crate) fn economics() -> &'static EconomicParams {
         params
     })
 }
+
+/// CEN-F21: the height the staker share's decay is measured from
+/// (`genesis_ng_height`). One on every issued chain — the C++ returns the
+/// one-row hardfork table's height, and
+/// `the_emission_split_epoch_is_the_hardfork_tables_first_row` pins this
+/// constant to those three tables.
+///
+/// CEN-F16 passes it to `shekyl_economics::compute_emission_split` when the
+/// split lands (slice 7; the row is `pending` on CEN-G6's median). It
+/// becomes a [`crate::RuleSet`] field when a schedule step names a different
+/// epoch. Until then a field would be copied into every rule-set mismatch
+/// and no row would read it.
+pub(crate) const EMISSION_SPLIT_EPOCH: BlockHeight = BlockHeight::from_raw(1);
+
+// The census pin is `use EMISSION_SPLIT_EPOCH as _`, and an unused import
+// does not count as a read. F16 is the reader. Until that call exists, the
+// lib holds the value so deleting the constant fails this crate, not only
+// its tests.
+const _: BlockHeight = EMISSION_SPLIT_EPOCH;
 
 // ---------------------------------------------------------------------------
 // Stateless predicates (form)
@@ -317,7 +339,7 @@ impl BlockRule for F6 {
 }
 
 // ---------------------------------------------------------------------------
-// Definitions (carried on the verdict)
+// Definitions (priced here, recorded in coverage)
 // ---------------------------------------------------------------------------
 
 /// CEN-F11: genesis (height 0) is accepted with its configured emission —
@@ -360,12 +382,12 @@ impl Rule for F20 {
 }
 
 /// What the 4.F derivations established for the candidate: the emission it
-/// is priced at, carried on the verdict for the rows that consume it
-/// (F14b/F16/F18 in slice 7; `connect`'s `coins_generated` derivation,
-/// which deletes a passed-through `ConnectFacts` field when the paid reward
-/// exists — `CHAIN_RULES_SLICE_4.md` §4).
+/// is priced at. F14b reads this inside `validate` when the median exists
+/// and produces the paid reward `connect` persists; until that row lands
+/// the value stays here, recorded in coverage, and off the verdict
+/// (`CHAIN_RULES_SLICE_4.md` §4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Emission {
+pub(crate) struct Emission {
     /// The volume window the release multiplier read (CEN-F20).
     tx_volume: TxVolume,
     /// The subsidy for this height.
@@ -374,7 +396,7 @@ pub struct Emission {
 
 /// The subsidy a candidate is priced at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Subsidy {
+pub(crate) enum Subsidy {
     /// Genesis: the configured emission stands; nothing is recomputed
     /// (CEN-F11).
     Configured,
@@ -401,13 +423,8 @@ impl Emission {
     pub(crate) fn derive<'id, V: ChainView<'id>>(
         view: &V,
         connecting: BlockHeight,
-        rule_set: &RuleSet,
         coverage: &mut RuleCoverage,
     ) -> Result<Self, Fault<V::Fault>> {
-        // The rule set is what a later slice will price with once the
-        // parameter set is lifted onto it (module docs); it is taken now
-        // so the signature does not move then.
-        let _ = rule_set;
         let params = economics();
         let tx_volume = F20::window(view, connecting, coverage)?;
         let subsidy = match connecting.to_raw().checked_sub(1) {
@@ -434,18 +451,6 @@ impl Emission {
             }
         };
         Ok(Self { tx_volume, subsidy })
-    }
-
-    /// The volume window (CEN-F20).
-    #[must_use]
-    pub const fn tx_volume(&self) -> TxVolume {
-        self.tx_volume
-    }
-
-    /// The subsidy (CEN-F11 / F13 / F15).
-    #[must_use]
-    pub const fn subsidy(&self) -> Subsidy {
-        self.subsidy
     }
 }
 

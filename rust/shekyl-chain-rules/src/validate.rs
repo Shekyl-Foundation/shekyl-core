@@ -305,12 +305,12 @@ pub fn validate<'id, V: ChainView<'id>>(
     let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
     judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1, F4, F5, F6);
 
-    // The 4.F definitions (F11, F13, F15, F20), derived once from the
-    // parent's recorded facts and carried on the verdict: what the paid
-    // reward (F14b), the split (F16) and the exact payout (F18) price
-    // against when slice 7 lands them, and what `connect` derives
-    // `coins_generated` from. Nothing here refuses; a fault is the view's.
-    let emission = Emission::derive(view, connecting, rule_set, &mut coverage)?;
+    // The 4.F definitions (F11, F13, F15, F20). Recording them is what
+    // `covers_landed` holds this stage to. F14b reads the priced value
+    // here when the median exists; `connect` persists that row's paid
+    // reward, so the value does not ride on the verdict yet. Nothing here
+    // refuses; a fault is the view's.
+    Emission::derive(view, connecting, &mut coverage)?;
 
     let candidate = cx.candidate();
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);
@@ -333,7 +333,7 @@ pub fn validate<'id, V: ChainView<'id>>(
 
     let hash = formed.hash();
     let (candidate, _stateless) = formed.into_parts();
-    let block = ValidatedBlock::derive(candidate, hash, target, cumulative_difficulty, emission);
+    let block = ValidatedBlock::derive(candidate, hash, target, cumulative_difficulty);
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }
 

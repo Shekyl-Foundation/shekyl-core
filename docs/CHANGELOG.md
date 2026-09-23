@@ -360,13 +360,18 @@
   `Locus::Tx { slot: TxSlot::Miner }`, and derives F11/F13/F15/F20 (the
   base subsidy at the parent's accumulator, the release-modulated emission,
   the volume window from two recorded prefix sums; genesis takes its
-  configured emission) onto the verdict as `ValidatedBlock::emission()`.
+  configured emission) in `Emission::derive`, recorded in coverage. The
+  priced value stays off `ValidatedBlock` until F14b produces the paid
+  reward `connect` persists.
   F2, F8, F19 and F21 hold **by construction** (`RowStatus::ByConstruction`,
   new: the wire admits one transaction version and one output tag; parent
-  state is the view's brand; the split epoch is rule-set data), each with a
+  state is the view's brand; the split epoch is
+  `rules::miner::EMISSION_SPLIT_EPOCH`), each with a
   falsifier the coverage gate asserts. `RuleSet` gains
-  `mined_money_unlock_window` (60) and `emission_split_epoch` (1), pinned to
-  `cryptonote_config.h` and the hardfork tables; `RecordedBlock` gains
+  `mined_money_unlock_window` (60), pinned to
+  `cryptonote_config.h`; the split epoch stays a constant until a schedule
+  step names a different one, so it is not copied into every rule-set
+  mismatch. `RecordedBlock` gains
   `coins_generated` and `cumulative_tx_count`; a decreasing prefix sum is
   `Corrupt::TxCountNotMonotone`, which the store halts on as SI-13's
   `FoldNotMonotone`. **Every public network's genesis is pinned** in

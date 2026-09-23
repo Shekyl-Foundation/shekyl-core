@@ -83,11 +83,12 @@ impl RuleSetId {
 /// `BlockHeader.major_version` this rule set admits (CEN-B1; the vote
 /// floor of CEN-B2), landed with slice 1. The third is `difficulty` — how
 /// CEN-D4 derives the target — landed with slice 2 and the reason one
-/// non-issued constructor exists ([`RuleSet::fakechain`]). The fourth and
-/// fifth — `mined_money_unlock_window` (CEN-F6) and `emission_split_epoch`
-/// (CEN-F21) — landed with slice 4 (`CHAIN_RULES_SLICE_4.md` Q5): both are
-/// data the C++ derives from a `#define` and the one-row hardfork table;
-/// Rust states them, and a fixture pins each to the C++ value.
+/// non-issued constructor exists ([`RuleSet::fakechain`]). The fourth —
+/// `mined_money_unlock_window` (CEN-F6) — landed with slice 4
+/// (`CHAIN_RULES_SLICE_4.md` Q5): the C++ `#define`
+/// `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`, stated here because F6 reads it.
+/// CEN-F21's split epoch is `rules::miner::EMISSION_SPLIT_EPOCH`, not a
+/// field: it joins this set when a schedule step names a different epoch.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,
@@ -95,7 +96,6 @@ pub struct RuleSet {
     header_major_version: u8,
     difficulty: DifficultyRule,
     mined_money_unlock_window: BlockCount,
-    emission_split_epoch: BlockHeight,
 }
 
 /// How a rule set derives the next-block target (CEN-D4 reads this).
@@ -135,7 +135,6 @@ impl RuleSet {
         header_major_version: 1,
         difficulty: DifficultyRule::Lwma1,
         mined_money_unlock_window: BlockCount::from_raw(60),
-        emission_split_epoch: BlockHeight::from_raw(1),
     };
 
     /// Every rule set a schedule may name, in id order. A schedule step that
@@ -224,17 +223,6 @@ impl RuleSet {
         self.mined_money_unlock_window
     }
 
-    /// The height the staker emission share's decay is measured from
-    /// (CEN-F21: `genesis_ng_height`). `1` on every issued rule set — the
-    /// C++ derives it from `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)`
-    /// over the one-row hardfork table (`hardforks.cpp:35`), which returns
-    /// the row's height `1`, not `0`; Rust states the value and
-    /// `rule_set_tests` pins it to that table.
-    #[must_use]
-    pub const fn emission_split_epoch(&self) -> BlockHeight {
-        self.emission_split_epoch
-    }
-
     /// The `BlockHeader.major_version` this rule set admits (CEN-B1), and
     /// the floor a header's version vote must reach (CEN-B2).
     ///
@@ -264,7 +252,6 @@ impl fmt::Debug for RuleSet {
             .field("header_major_version", &self.header_major_version)
             .field("difficulty", &self.difficulty)
             .field("mined_money_unlock_window", &self.mined_money_unlock_window)
-            .field("emission_split_epoch", &self.emission_split_epoch)
             .finish()
     }
 }

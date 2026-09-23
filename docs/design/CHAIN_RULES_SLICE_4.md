@@ -1,8 +1,10 @@
 # `shekyl-chain-rules` slice 4 — census 4.F, the miner transaction (DRS-E6 increment 5)
 
 **Status:** OPEN — **rules-crate commits 1–9 LANDED on the branch
-2026-09-22** (§5: sixteen 4.F rows; `implemented 34 / validator-enforced
-150`, `by-construction 4`; genesis pinned, band 1 empty; `WrongReward → F18`). Round 0
+2026-09-22, amended 2026-09-23** (§5: sixteen 4.F rows; `implemented 34 / validator-enforced
+150`, `by-construction 4`; genesis pinned, band 1 empty; `WrongReward → F18`;
+the split epoch is `rules::miner::EMISSION_SPLIT_EPOCH`, not a `RuleSet` field;
+`Emission` is derived and recorded in coverage, not stored on `ValidatedBlock`). Round 0
 pre-flight written 2026-09-21 against `dev` @ `ea140396b`; Round 0.5 the
 shim-layer sweep (§3.1); precursor P1–P4 landed as #819; Round 1
 (2026-09-22, `dev` @ `7b9be6cd1`): the `dev` sweep (§3.2), §8 ruled. Open
@@ -99,7 +101,7 @@ The census pins its C++ lines at `02c086f4b`; every 4.F pin has drifted
 | F10 | 1 | commitment masks canonical, ≠ identity, ≠ G, ≠ `zeroCommit(amount)` | `shekyl_ct_balance::check_commitment_masks` | `form` | **Land as adopted** |
 | F11 | 1 | genesis (height 0) emission accepted as configured (`GENESIS_TX` per nettype); structure validated, amount not recomputed | none in Rust (`GENESIS_TX` lives in `cryptonote_config.h:367`/`:501`/`:512`) | `validate` | **Two halves** — (a) *amount not recomputed*: the genesis arm of F13–F18, a `connecting.is_zero()` short-circuit, lands here; (b) *as configured*: the genesis block per network is release-carried data of `ReleaseAnchors`' kind — **§8 Q3** |
 | F12 | **3** (was 4) | decomposed-denomination gate was **dead code** (`version == 3` where `version` is the HF version, always 1) | — | — | **RULED Q2 (a), 2026-09-21; DELETED (P4).** Branch, predicate, table, header declaration and `canonical_amounts.cpp` gone; census row → bucket 3; registry variant removed; denominator 153 → 152 |
-| F13 | 1 | base subsidy `(MONEY_SUPPLY − already_generated) >> 21`, tail floor | `emission::base_block_reward` | `validate` | **Land** — a definition row (like D4): operand `block_at(tip).coins_generated` (view grows), value carried on the verdict |
+| F13 | 1 | base subsidy `(MONEY_SUPPLY − already_generated) >> 21`, tail floor | `emission::base_block_reward` | `validate` | **Land** — a definition row (like D4): operand `block_at(tip).coins_generated` (view grows). **Amended 2026-09-23:** derived and recorded in coverage; stored on the verdict when F14b's paid reward is what `connect` persists |
 | F14 | 1 | weight `> 2·median` rejects; `== 2·median` accepted at zero subsidy (recorded divergence) | `emission::paid_block_reward` (`apply_weight_penalty`) | `validate` | **Blocked on G6** (the median) — or pulled forward, §8 Q1 |
 | F14b | 2 | the penalty curve | same | `validate` | **Blocked on G6** |
 | F15 | 1 | release-rate multiplier over the exact window, capped to remaining supply | `release::calc_release_multiplier`, `TxVolume::window` | `validate` | **Land** — operand from F20 |
@@ -108,7 +110,7 @@ The census pins its C++ lines at `02c086f4b`; every 4.F pin has drifted
 | F18 | 1 | coinbase pays **exactly** `miner_emission + miner_fee_income` | — | `validate` | **Blocked** (F14b, F17) |
 | F19 | 1 | `frozen_segment_count` read at **parent state** or the node halts; single-read discipline | — | — | **True by construction in Rust**: `validate` runs inside the write transaction over a view branded `'id` that *is* the parent state; the reorder the C++ guards against (`m_db->height() != block_height`) is unrepresentable. Needs a status (§8 Q4) |
 | F20 | 1 | volume operand `(tx_count_sum, blocks)` over the prior `min(h, 720)` blocks; `(0, 0)` at height 0 | `TxVolume::window(sum, blocks)`; sum = `cumulative_tx_count(tip) − cumulative_tx_count(tip − 720)` | `validate` | **Land** — a definition row; two view reads (`RecordedBlock.cumulative_tx_count`) |
-| F21 | 1 | `genesis_ng_height` is **1** (the emission-split epoch operand) | — (`hardfork.cpp:383`–`:394`) | data | **Land as a `RuleSet` parameter** (`emission_split_epoch: BlockHeight::from_raw(1)`), consumed by F16; the C++ derives it from the one-row hardfork table, Rust states it |
+| F21 | 1 | `genesis_ng_height` is **1** (the emission-split epoch operand) | — (`hardfork.cpp:383`–`:394`) | data | **Land by construction** as `rules::miner::EMISSION_SPLIT_EPOCH`, pinned to the hardfork tables, consumed by F16. **Amended 2026-09-23:** a `RuleSet` field when a schedule step names a different epoch, not before |
 
 Row-count check: 22 = the `pending` entries `F1`–`F21` + `F14b`.
 
@@ -359,17 +361,20 @@ exactly like pending).
 - **`RecordedBlock` grows `coins_generated: AtomicUnits` and
   `cumulative_tx_count: u64`** (projection edits in `BatchView::block_at` and
   the mock; the F11 conformance harness of slice 2 covers both sides).
-- **`RuleSet` grows two parameters:** `mined_money_unlock_window: BlockCount`
-  (60; F6) and `emission_split_epoch: BlockHeight` (1; F21). Both are data the
-  C++ derives from constants / the one-row hardfork table; Rust states them.
-- **Definition rows carried on the verdict** (the D4 shape): `base_subsidy`
-  (F13), `tx_volume` (F20), and — when their operands exist — the paid
-  reward (F14b/F15), the split (F16) and the burn (F17), which is what
-  `connect` needs to derive `coins_generated` and `burned` (S-CHAIN-W's
-  `DELETED_BY`) and drop two more passed-through facts. **This slice can
-  delete neither**: `coins_generated` needs the *paid* reward (F14b), and
-  `burned` needs F17's operand. The record at close states `passed_through`
-  6 → 6, with the deletions owed to the increments that land F14b and F17.
+- **`RuleSet` grows one parameter:** `mined_money_unlock_window: BlockCount`
+  (60; F6), the C++ `#define`, because F6 reads it. CEN-F21's epoch is
+  `rules::miner::EMISSION_SPLIT_EPOCH` (1, pinned to the hardfork tables) —
+  **amended 2026-09-23:** a `RuleSet` field with no reader was copied into
+  every rule-set mismatch. It joins `RuleSet` when a schedule step names a
+  different epoch.
+- **Definition rows derived and recorded** (the D4 shape, amended
+  2026-09-23): F11/F13/F15/F20 run in `Emission::derive` and stamp coverage.
+  The priced value stays off `ValidatedBlock` until F14b produces the paid
+  reward `connect` persists as `coins_generated`. **This slice can delete
+  neither** passed-through fact: `coins_generated` needs that paid reward,
+  and `burned` needs F17's operand. The record at close states
+  `passed_through` 6 → 6, with the deletions owed to the increments that
+  land F14b and F17.
 - **A miner-transaction rule class.** F1–F10 judge `block.miner_transaction`
   with `Locus::Miner`-shaped refusals; `tx_form` is the per-listed-tx path
   the pool shares and the coinbase "never passes the H path" (census F8
@@ -394,14 +399,15 @@ the ingest/spec re-key ahead of the row it protects):**
 | # | Commit | What |
 | --- | --- | --- |
 | 1 | `RowStatus::ByConstruction` (Q4) | The fourth status; `by_construction(property, "falsifier")`; the gate's `#[test]`-or-`doctest:<item>` falsifier check; excluded from per-block completeness like `EnforcedAt`. No row takes it yet |
-| 2 | `RuleSet` parameters (Q5) | `mined_money_unlock_window` (60), `emission_split_epoch` (1); pins parse `cryptonote_config.h` and the three `hardforks.cpp` tables rather than restate the numbers. `rust/clippy.toml`: `large-error-threshold = 256` — the two consensus faults carry a `RuleSet` pair by value, now 144 bytes |
+| 2 | `RuleSet` parameters (Q5) | `mined_money_unlock_window` (60), pinned to `cryptonote_config.h` rather than restated. The split epoch landed here as a field and was moved off `RuleSet` by #10 |
 | 3 | `RecordedBlock` grows | `coins_generated`, `cumulative_tx_count` — store projection, harness, mock-vs-store conformance |
 | 4 | `chain-ingest`: `WrongReward → F18`, `ExpectedPlace::Miner` (Q6, Q8) | The one cross-lane edit, landed **before** F13 flips so the family is green at every commit; `DRS_E2_REPLAY_DRIVER.md` §3.10 row |
-| 5 | `rules/miner.rs` — sixteen rows (Q1 (a)) | F1/F3/F7/F9/F10 in `form`; F4/F5/F6 in `validate`; F11/F13/F15/F20 as `Emission` on the verdict; F2/F8/F19/F21 by construction. `Corrupt::TxCountNotMonotone` ↔ store `StoreInvariant::FoldNotMonotone` (SI-13, a new register row: a recorded fold never decreases, observed by the validator like SI-10). `fixture::coinbase(height)` becomes a valid coinbase; the store's and ingest's private copies delegate to it |
+| 5 | `rules/miner.rs` — sixteen rows (Q1 (a)) | F1/F3/F7/F9/F10 in `form`; F4/F5/F6 in `validate`; F11/F13/F15/F20 derived by `Emission::derive` and recorded in coverage (not stored on the verdict — #10); F2/F8/F19/F21 by construction. `Corrupt::TxCountNotMonotone` ↔ store `StoreInvariant::FoldNotMonotone` (SI-13, a new register row: a recorded fold never decreases, observed by the validator like SI-10). `fixture::coinbase(height)` becomes a valid coinbase; the store's and ingest's private copies delegate to it. The fixture's unlock time reads `RuleSet::mined_money_unlock_window` (#10) |
 | 6 | Genesis pinned (Q3) | `ReleaseAnchors` carries each public network's genesis identity — as a `genesis` pin apart from the checkpoints, per the PDM answer (§8 Q3): verified by equality (E1 at 0, E5 at open), in no trust band, `current()` `None`; derived in test from `cryptonote_config.h` through the genesis tool and held equal to `shekyl_rpc_types::genesis_hash_for` |
 | 7 | SI-13 | The store-invariant register is a bijection, so `FoldNotMonotone` could not ride SI-8's row: SI-13 (a recorded fold never *decreases*, observed by the validator — SI-8 guards the write, SI-13 the read), row 13 |
 | 8 | Docs | This section; census 4.F pins re-resolved with each row's Rust home; contract stamp; index; DRS row; FOLLOWUPS; CHANGELOG |
 | 9 | Genesis is a pin, not an anchor (Q3, the PDM answer) | Commit 6 amended: `genesis` a separate field, `Anchor`s at height `≥ 1` by the compile-time gate, `current()` `None` on every public network; charter glossed at `:304`; FOLLOWUPS row closed |
+| 10 | Review: unread consensus state leaves the copied types | `EMISSION_SPLIT_EPOCH` is the F21 constant F16 will pass to `compute_emission_split`; it is not a `RuleSet` field until a schedule step names a different epoch. `rust/clippy.toml` (the workspace `large-error-threshold`) is deleted with the field. `Emission::derive` still records F11/F13/F15/F20; the priced value stays off `ValidatedBlock` until F14b's paid reward. `fixture::coinbase` builds `unlock_time` from the rule set's window |
 
 **Figures at landing:** `consensus: implemented 34 / validator-enforced 150
 held-by-cxx 2 at-open 1 by-construction 4 enforced 152 ratified 126 /
@@ -534,11 +540,7 @@ E3). Coverage over a well-formed candidate: 29 rows.
   that a mis-ordered read cannot be written> }` — stretches "site" past a
   function; **(c)** `implemented` with a rule whose check is a no-op —
   a fixture that cannot fire. **Default: (a).**
-- **Q5 — constants as `RuleSet` parameters. RULED yes, 2026-09-22; landed.** F6's unlock window (60) and
-  F21's split epoch (1) become `RuleSet` fields with a fixture each,
-  following `header_major_version` and `difficulty`. F6's constant lives in
-  `cryptonote_config.h`, not `config/` (the census says so); the parameter
-  is pinned by test to the C++ value. **Default: yes, both.**
+- **Q5 — constants as `RuleSet` parameters. RULED yes, 2026-09-22; the window landed; the epoch amended 2026-09-23.** F6's unlock window (60) is a `RuleSet` field because F6 reads it, pinned by test to `cryptonote_config.h` (not a `config/` key). F21's split epoch (1) was ruled onto `RuleSet` the same day and **amended on review:** it is `rules::miner::EMISSION_SPLIT_EPOCH`, pinned to the three hardfork tables, and joins `RuleSet` when a schedule step names a different epoch. A field no row read was part of rule-set equality and was copied into `Stale::RuleSet` and `StoreCannot::RuleSetNotInForce` (the pair at 144 bytes), which is why `rust/clippy.toml` raised the workspace `large-error-threshold`; that file is deleted with the field. The same review keeps `Emission` off `ValidatedBlock`: `derive` records F11/F13/F15/F20, and the priced value is what F14b reads inside `validate`. `connect` persists F14b's paid reward, which this value is not. **Default was: yes, both.**
 - **Q6 — the coinbase's locus. RULED reuse `TxSlot::Miner`, 2026-09-22; landed, with `ExpectedPlace::Miner` in E2's family — the half that closes the gap Q8's mis-key slipped through.** Refusals on F1–F10 point at the miner
   transaction; `Locus::Block` is imprecise, `TxSlot::Miner` exists for the
   per-tx path. Does the block-level miner rule refuse at `Locus::Tx(TxSlot::Miner)`

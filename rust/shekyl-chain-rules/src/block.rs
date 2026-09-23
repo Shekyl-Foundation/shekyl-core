@@ -17,7 +17,6 @@ use crate::coverage::RuleCoverage;
 use crate::fault::FormAttempt;
 use crate::rule_set::{RuleSet, RuleSetId};
 use crate::rules::difficulty::Target;
-use crate::rules::miner::Emission;
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
 ///
@@ -312,7 +311,6 @@ impl fmt::Debug for StructurallyValid {
 ///     transactions: todo!(),
 ///     target: todo!(),
 ///     cumulative_difficulty: todo!(),
-///     emission: todo!(),
 /// };
 /// ```
 #[derive(Debug, PartialEq, Eq)]
@@ -323,7 +321,6 @@ pub struct ValidatedBlock {
     transactions: Vec<(TxIdentity, Transaction)>,
     target: Target,
     cumulative_difficulty: CumulativeDifficulty,
-    emission: Emission,
 }
 
 impl ValidatedBlock {
@@ -336,14 +333,14 @@ impl ValidatedBlock {
     /// that no rule reads the identity; E1 refuted the premise
     /// (`CHAIN_RULES_SLICE_3.md` F8, Q7). The transaction identities are
     /// derived here, once; the target and the cumulative work are CEN-D4's
-    /// derivation, recorded where it ran; the emission is 4.F's
-    /// (`Emission::derive`), likewise.
+    /// derivation, recorded where it ran. The 4.F emission is derived in
+    /// `validate` and recorded in coverage; it stays off this type until
+    /// F14b produces the paid reward `connect` persists.
     pub(crate) fn derive(
         candidate: Candidate,
         hash: BlockHash,
         target: Target,
         cumulative_difficulty: CumulativeDifficulty,
-        emission: Emission,
     ) -> Self {
         let Candidate {
             block,
@@ -359,17 +356,7 @@ impl ValidatedBlock {
                 .collect(),
             target,
             cumulative_difficulty,
-            emission,
         }
-    }
-
-    /// The emission this block was priced at (CEN-F11 / F13 / F15 / F20):
-    /// the volume window and the subsidy — configured at genesis, derived
-    /// from the parent's accumulator above it. What slice 7's paid-reward
-    /// rows and `connect`'s `coins_generated` derivation consume.
-    #[must_use]
-    pub const fn emission(&self) -> Emission {
-        self.emission
     }
 
     /// The difficulty this block was judged against (CEN-D4, D6).

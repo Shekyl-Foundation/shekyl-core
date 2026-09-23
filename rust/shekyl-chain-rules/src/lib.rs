@@ -59,10 +59,13 @@
 //! E2 waits on the alt view and `D_max`); slice 4 (`CHAIN_RULES_SLICE_4.md`)
 //! landed 4.F's sixteen operand-complete rows — the coinbase's shape and
 //! height claims as predicates at [`TxSlot::Miner`], the emission
-//! definitions as [`Emission`] on the verdict, four rows `by_construction`
+//! definitions derived and recorded in coverage (the priced value stays
+//! off the verdict until F14b's paid reward), four rows `by_construction`
 //! (the first of that status), every public network's genesis pinned in
-//! [`ReleaseAnchors`] — verified by equality, in no trust band — and two
-//! `RuleSet` parameters; F14/F14b/F16/F18 wait on CEN-G6's
+//! [`ReleaseAnchors`] — verified by equality, in no trust band — and
+//! `RuleSet::mined_money_unlock_window` (the split epoch is
+//! `rules::miner::EMISSION_SPLIT_EPOCH` until a schedule step names
+//! another); F14/F14b/F16/F18 wait on CEN-G6's
 //! median (slice 7) and F17 on the curve tree's writer (DRS-E3). Only
 //! complete coverage is parity evidence, so no verdict minted before the
 //! last slice can be read as one.
@@ -145,7 +148,6 @@ pub use rule_set::{
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::difficulty::Target;
-pub use rules::miner::{Emission, Subsidy};
 pub use rules::seed_height;
 pub use substrate::Substrate;
 pub use trust::Trust;
