@@ -144,7 +144,14 @@ returning, it *connects* every missed block, so it crosses the boundaries
 `close_epoch` from `E_old − 2` to `E_now − 2` contiguously. Pruning
 backwards before the outage and forwards through the resync are the same
 hook on the same connect path; there is no startup sweep, and the bodies
-it lacks it refetches through band 2 (Q4). *(A startup catch-up sweep was
+it lacks it refetches through band 2 (Q4). **The hook can fire twice for
+one `E` in exactly one way:** a reorg that pops back across the boundary
+block and reconnects it, or replaces it with a different block at
+`E·SEB`. Either reconnects *some* block at that height, the hook fires,
+and `D(E)` runs again. Idempotence covers it — the ranges are already
+empty, and undo-row retirement below `tip − D_max` is monotone in `tip`, so
+re-running it deletes nothing new. Nothing to special-case; §8 makes it a
+test. *(A startup catch-up sweep was
 added and withdrawn the same day: it solved a case the forward pass
 already covers.)*
 
@@ -244,9 +251,12 @@ while the serve-credit admission verifier still derives `R_k` from a frozen
 segment (§11 — moot before the E3 cutover, and stated so the sequencing is
 the mechanism); **a stored discard watermark or frontier cell, or any batch
 read of segment presence that selects what to discard** — the set is named
-by the epoch (§4), and either would be a second, node-local source; and a
+by the epoch (§4), and either would be a second, node-local source; a
 node holding a body for a shard whose `close_epoch ≤ current_epoch − 2`
-once its connect path has crossed that shard's boundary.
+once its connect path has crossed that shard's boundary; and **the hook
+firing twice for one `E` (a reorg across the boundary block) producing a
+different store than firing once** — idempotence is the property, and it
+is cheap to test.
 
 ## 9. Sequencing
 
