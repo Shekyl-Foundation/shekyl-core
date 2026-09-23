@@ -2,8 +2,13 @@
 
 **Status:** OPEN — **Round 0 executed 2026-09-22** against `dev` @
 `7b9be6cd1` (with PR #825, the producerless-tag disposition, in flight on
-its own branch). Round 1 questions `TXE-Q1…TXE-Q5` posed with defaults (§6).
-No code until the maintainer rules. Governing rule:
+its own branch). **Round 1 RULED 2026-09-22** (maintainer, on PR #826; §6,
+each row line-local): **TXE-Q1 delete `construct_tx*`, on the condition
+that every migrated test demonstrably exercises the same case; TXE-Q2/Q3/Q4
+defaults; TXE-Q5 delete the 27 parity tests against a per-case twin table —
+and the fuzzer is NOT deleted: it is re-pointed at `shekyl-wire` as
+`fuzz_tx_extra_parse`, seeded from the C++ corpus.** Implementation may
+begin on §7 when this document merges. Governing rule:
 [`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
 §*Migration is a planning activity* — this document is that plan's first
 round. FFI shape per
@@ -62,7 +67,7 @@ line numbers are the pin's.
 | `add_archival_attestation_to_tx_extra` | none in `src/` — only `tests/unit_tests/archival_credit_wire.cpp` | — | **delete**; the test builds its blob through the shim or a Rust fixture (TXE-Q5) |
 | `set_/get_(encrypted_)payment_id_*_tx_extra_nonce` (4) | `cryptonote_tx_utils.cpp:330–381` — **all inside `construct_tx_with_tx_key`** (test-only) | — | **delete with TXE-Q1** |
 | `check_tx_extra_pqc_field_shape` | `cryptonote_core.cpp:799`, `blockchain.cpp:1449`, `blockchain_db.cpp:511` | CEN-I19 | **keep the C++ name as a shim**, but its body stops parsing: it hands Rust the raw `extra` and `vout.size()` (TXE-F3) |
-| the `tx_extra_field` variant, its structs, `VARIANT_TAG`s (`tx_extra.h:59–243`) | all of the above | — | **delete** with the last parser |
+| the `tx_extra_field` variant, its structs, `VARIANT_TAG`s (`tx_extra.h:126–240`) | all of the above | — | **delete** with the last parser |
 
 ### 1.2 The one production writer: `construct_miner_tx` (`cryptonote_tx_utils.cpp:126–266`)
 
@@ -119,8 +124,10 @@ form (TXE-Q5).
   `core_rpc_server.cpp`'s pubkey read go through the shim.
 - `check_tx_extra_pqc_field_shape` stops parsing (TXE-F3).
 - Deletion of everything in §1.1 marked *delete*, the variant and its
-  structs, and `tests/fuzz/tx-extra.cpp` (a fuzzer of a parser that no longer
-  exists; `shekyl-wire` owns the fuzz target).
+  structs, and `tests/fuzz/tx-extra.cpp` — **replaced in the same commit**
+  by `rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_extra_parse.rs`, seeded
+  from `tests/data/fuzz/tx-extra/` (TXE-Q5b: the fuzzer follows the
+  grammar's surviving implementation; it is not retired with the oracle).
 - The C++ tests of §1.3, per TXE-Q5.
 
 ### 2.2 Out (named, so it is not scope shed by omission)
@@ -141,10 +148,6 @@ form (TXE-Q5).
   test-only surface.
 - The wallet-side `ExtraField` (`shekyl-scanner/src/extra.rs`) — already
   Rust over the same codec; untouched.
-- **Genesis.** `generate_genesis_block` (`cryptonote_tx_utils.cpp:726`)
-  parses the pinned coinbase blob (`parse_and_validate_tx_from_blob`); it
-  builds no extra and calls none of §1.1. Genesis bytes are the Rust genesis
-  tool's and do not move.
 
 ---
 
@@ -211,26 +214,26 @@ callers' construction path.
 
 | Id | Finding | Verified at |
 |---|---|---|
-| **TXE-F1** | **Two parsers on the block path.** The C++ daemon parses `extra` with `parse_tx_extra` (`blockchain_db.cpp:519`) and Rust parses it with `shekyl-wire` (`Transaction::from_bytes`, ingest, wallet). Both implement one grammar; the C++ is the consensus one on testnet until cutover. | `tx_extra.h:59–243`, `cryptonote_format_utils.cpp:491`, `transaction.rs:1824` |
+| **TXE-F1** | **Two parsers on the block path.** The C++ daemon parses `extra` with `parse_tx_extra` (`blockchain_db.cpp:519`) and Rust parses it with `shekyl-wire` (`Transaction::from_bytes`, ingest, wallet). Both implement one grammar; the C++ is the consensus one on testnet until cutover. | `tx_extra.h:126–240`, `cryptonote_format_utils.cpp:491`, `transaction.rs:1824` |
 | **TXE-F2** | **`construct_tx*` has zero production callers.** `construct_tx`, `construct_tx_with_tx_key`, `construct_tx_and_get_tx_key` (`cryptonote_tx_utils.cpp:301–725`) are called only from `tests/`. They are the wallet-era C++ transaction builder — every `remove_field_from_tx_extra`, every payment-id nonce helper, and one of the three `sort_tx_extra`s exist for them alone. The Rust tx-builder is the producer. | `rg 'construct_tx\(' src` → 0 outside the definition |
 | **TXE-F3** | **CEN-I19's Rust rule judges C++-parsed lengths.** `shekyl_tx_extra_pqc_field_shape` takes `kem_lens` / `leaf_lens` the C++ parser produced; the shape is Rust's, the parse is not. `blockchain_db.cpp:511–522` then parses **again** to extract the blob, with a comment that names the second parse failing as "(bug)". One coarse call removes both the dependency and the double parse. | `shekyl_ffi.h:1423`, `blockchain_db.cpp:505–528` |
 | **TXE-F4** | **The `0x0B` payload has a C++ record parser behind the read.** `parse_archival_attestation_from_extra` returns the blob; `verify_block_attestation` reads records out of it. Out of this cutover's scope (§2.2) and named as the next boundary. | `blockchain.cpp:5133–5197` |
 | **TXE-F5** | **The C++ parser's tests are tests of the C++ parser.** 27 `TEST`s in `test_tx_utils.cpp` assert padding edge cases, sort order and field removal of a codec that would no longer exist. `shekyl-wire`'s round-trip tests already pin the same cases as "oracle parity". | `test_tx_utils.cpp:46–437` |
-| **TXE-F6** | `get_additional_tx_pub_keys_from_extra` is two inline stubs returning `{}` ("removed in V3"); nothing calls them. Dead by inspection. | `cryptonote_format_utils.h:89–90` |
+| **TXE-F6** | `get_additional_tx_pub_keys_from_extra` is two inline stubs returning `{}` ("removed in V3"); nothing calls them. Dead by inspection. | `cryptonote_format_utils.h:88–90` |
 | **TXE-F7** | The C++ still serializes Rust-produced bytes: `construct_miner_tx` takes KEM ciphertexts and leaf entries from `shekyl_construct_output` and lays them out through the C++ variant serializer (`:255–260`). Rule 40's "C++ never parses Rust-emitted bytes; Rust never parses C++-emitted bytes" is violated in the *serialize* direction. | `cryptonote_tx_utils.cpp:186–262` |
 | **TXE-F8** | **The block template has no Rust owner.** E6 slice 4 lands the coinbase judge (`CHAIN_RULES_SLICE_4.md` §4: F1–F10 as a miner-transaction rule class); no DRS plan, index row or FOLLOWUPS row owns the builder. This cutover moves the coinbase *extra* into Rust and leaves the template where it is. | `rg -i 'block template\|construct_miner_tx' docs/design` → no owner |
 
 ---
 
-## 6. Round-1 questions, with defaults
+## 6. Round-1 questions — RULED 2026-09-22 (maintainer, on PR #826; each row line-local)
 
 | Q | Question | Default | Why |
 |---|---|---|---|
-| **TXE-Q1** | Delete `construct_tx*` (TXE-F2) in this cutover and migrate its ~20 test callers, or leave the test-only builder and mint the sorter/nonce helpers it needs? | **Delete.** Test callers get transactions from a Rust-built fixture blob through the FFI or from the `shekyl-tx-builder` test support; `core_tests/chaingen.cpp` is the C++ consensus suite and dies with the C++ daemon. | Rule 15: code with no live caller goes. Keeping it means keeping a second *writer* beside the Rust tx-builder, plus the sorter and the nonce helpers, for tests of a validator that is being replaced. The cost is the test migration; the alternative is carrying ~400 lines of wallet-era construction into alpha.9. |
-| **TXE-Q2** | Is the coinbase extra one coarse call (`shekyl_coinbase_extra`) or three primitives (`add pubkey`, `add nonce`, `append pqc`) plus a sort? | **One call.** | Rule 40 §*Coarse calls*: orchestration in C++ is where contract mismatches live, and a coinbase extra that is built and I19-checked in one place cannot be assembled out of order. The primitives would exist only to reproduce `construct_miner_tx`'s current sequence. |
-| **TXE-Q3** | Land before or after the DRS cutover? Three of the four readers live in `blockchain.cpp` / `blockchain_db.cpp`, which the cutover retires. | **Before**, on the grounds of §0 — the C++ daemon is consensus on the alpha.9 testnet. **Falsifier:** if the cutover's deletion of `blockchain_db.cpp`'s DB-add path lands first, TXE's scope shrinks to the coinbase writer and the RPC read; re-scope at Round 2 rather than build shims for dead readers. | The value of closing a parser-divergence class is proportional to how long the C++ path is consensus; alpha.9 makes that long enough to matter. |
-| **TXE-Q4** | Does the `0x0B` record parser (TXE-F4) come in? | **No.** Named as the next boundary; its owner is `ARCHIVAL_CREDIT_WIRE.md`, whose producer is itself blocked. | Rule 15: scope is the tx_extra grammar; the attestation grammar is a second one with a different owner and a live blocker. |
-| **TXE-Q5** | The 27 C++ parser tests and the fuzzer (TXE-F5): port or delete? | **Delete**, after confirming each case has a `shekyl-wire` twin; add any that lacks one to `tests/tx_extra_roundtrip.rs` in the same commit, and promote `TX_EXTRA_PQC_ROUND_TRIP.json` to the pinned vector for the cases that were "oracle parity" against the C++. | Once the oracle is gone, "parity with the oracle" tests have no subject; the cases they encode are the grammar's and belong with the grammar's one implementation. |
+| **TXE-Q1** | Delete `construct_tx*` (TXE-F2) in this cutover and migrate its ~20 test callers, or leave the test-only builder and mint the sorter/nonce helpers it needs? | **RULED: delete — with one condition on the migration.** Premise re-verified by the maintainer: the only `src/` hit outside `cryptonote_tx_utils` is `fill_construct_tx_rct_stub` (`src/fcmp/ct_semantics.cpp:86`), which *supports* `construct_tx_with_tx_key` (`:644`) rather than calling it. **The condition:** the ~20 migrated callers must keep **exercising the same cases**, not merely compile and pass — demonstrated **per test**, in a table (C++ case → what the Rust-built fixture produces for it and why that is the same case), the same shape and for the same reason as the `nm` symbol-list gate. If Rust-built fixtures quietly produce different transactions, the C++ consensus suite's coverage changes at exactly the moment C++ is consensus. | A second writer beside the Rust tx-builder is the two-sources problem on a wire grammar — the worst place to keep one. **The distinction that decides what goes is parser-versus-scaffolding, not dies-later:** §0 argues the cutover lands *before* alpha.9 because the C++ path is consensus there, and `chaingen.cpp` is as much a part of that C++ path as `blockchain.cpp` is — so "dies with the C++ daemon" cannot be the reason its coverage may change. `construct_tx*` goes because it is a second *parser/writer* of the grammar; the suite it fed stays whole because it is the consensus suite's *scaffolding*. |
+| **TXE-Q2** | Is the coinbase extra one coarse call (`shekyl_coinbase_extra`) or three primitives (`add pubkey`, `add nonce`, `append pqc`) plus a sort? | **RULED: one call** (default held). | Rule 40 §*Coarse calls*: orchestration in C++ is where contract mismatches live, and a coinbase extra that is built and I19-checked in one place cannot be assembled out of order. The primitives would exist only to reproduce `construct_miner_tx`'s current sequence. |
+| **TXE-Q3** | Land before or after the DRS cutover? Three of the four readers live in `blockchain.cpp` / `blockchain_db.cpp`, which the cutover retires. | **RULED: before** (default held; the falsifier stands as written), on the grounds of §0 — the C++ daemon is consensus on the alpha.9 testnet. **Falsifier:** if the cutover's deletion of `blockchain_db.cpp`'s DB-add path lands first, TXE's scope shrinks to the coinbase writer and the RPC read; re-scope at Round 2 rather than build shims for dead readers. | The value of closing a parser-divergence class is proportional to how long the C++ path is consensus; alpha.9 makes that long enough to matter. |
+| **TXE-Q4** | Does the `0x0B` record parser (TXE-F4) come in? | **RULED: no** (default held). Named as the next boundary; its owner is `ARCHIVAL_CREDIT_WIRE.md`, whose producer is itself blocked. | Rule 15: scope is the tx_extra grammar; the attestation grammar is a second one with a different owner and a live blocker. |
+| **TXE-Q5** | The 27 C++ parser tests and the fuzzer (TXE-F5): port or delete? | **RULED: the two are different objects. (a) The 27 parity tests — delete**, against a **table** in the deleting commit: one row per C++ `TEST` → its `shekyl-wire` twin by name, or "added in this commit" — not a sentence saying the confirmation was done (twenty-seven is exactly the size where reading the list feels sufficient and isn't); promote `TX_EXTRA_PQC_ROUND_TRIP.json` to the pinned vector for the cases that were "oracle parity". **(b) The fuzzer — NOT deleted.** `tests/fuzz/tx-extra.cpp` fuzzes *the grammar*; its oracle is "doesn't crash", which survives the C++ parser's removal intact. It is **re-pointed at the surviving implementation**: a `fuzz_tx_extra_parse` target under `rust/shekyl-wire/fuzz/` (the crate has no `fuzz/` today; eight workspace crates do), **seeded from the C++ corpus** (`tests/data/fuzz/tx-extra/`, two seeds), registered in `rust-audit-test.yml`'s fuzz-inventory smoke gate so it is not "built nowhere in CI" (the `shekyl-fcmp` FOLLOWUPS finding). Same commit as the deletion. | (a) Once the oracle is gone, "parity with the oracle" tests have no subject; the cases belong with the grammar's one implementation. (b) Deleting the fuzzer would take adversarial coverage of the `tx_extra` grammar from one target to **zero**, on the codec that is about to become the single implementation parsing untrusted bytes on the block path — the opposite of this plan's stated purpose. |
 
 ---
 
@@ -243,7 +246,14 @@ callers' construction path.
    `core_rpc_server.cpp`, `check_tx_extra_pqc_field_shape`'s body.
 3. **Writer on the shim.** `construct_miner_tx` builds its extra through
    `shekyl_coinbase_extra`; `mining_parity.cpp` re-pointed.
-4. **Deletion.** §4, the test migration per TXE-Q1/Q5, `fuzz/tx-extra.cpp`.
+4. **Deletion, with its two tables and the fuzz target.** §4; the
+   `construct_tx*` test migration with the **per-test case-equivalence
+   table** (TXE-Q1's condition); the 27 parity tests with the **per-case
+   twin table** (TXE-Q5a); `tests/fuzz/tx-extra.cpp` and its CMake target
+   deleted **in the same commit that adds** `rust/shekyl-wire/fuzz/` with
+   `fuzz_tx_extra_parse`, seeded from `tests/data/fuzz/tx-extra/`, and
+   registers it in the fuzz-inventory gate (TXE-Q5b). Both tables live in
+   this document's §9 so they are grep-visible after the C++ is gone.
 5. **Docs** (rule 91): this file's status, index rows, `FCMP_PLUS_PLUS.md` /
    `POST_QUANTUM_CRYPTOGRAPHY.md` where they cite the C++ parser, CHANGELOG
    (API-relevant: the C++ `tx_extra` API is gone), FOLLOWUPS sweep (the
@@ -253,8 +263,12 @@ callers' construction path.
 
 ## 8. Denominator
 
-- `check_test_only_features.py`, the FFI symbol gates, `rust-audit-test`,
-  the C++ unit/core tests as migrated.
+- `check_test_only_features.py`, the FFI symbol gates, `rust-audit-test`
+  (including its fuzz-inventory smoke gate, which gains
+  `fuzz_tx_extra_parse`), the C++ unit/core tests as migrated.
+- **Adversarial coverage of the grammar is ≥ 1 target before and after**
+  (TXE-Q5b): the C++ fuzzer is removed only in the commit that lands its
+  Rust successor.
 - `TX_EXTRA_PQC_ROUND_TRIP.json` must not move (no bytes change).
 - `mining_parity.cpp`: a block template's coinbase extra before and after the
   cutover is **byte-identical** for the same inputs — the one test that
@@ -262,8 +276,22 @@ callers' construction path.
 
 ---
 
-## 9. Decision log
+## 9. Equivalence tables (owed by §7 commit 4; empty until then by design)
+
+Two tables the deleting commit fills, kept here so the evidence outlives the
+C++ it describes:
+
+- **9.1 `construct_tx*` callers → Rust-built fixtures** (TXE-Q1's condition):
+  one row per migrated test — the C++ case it exercised, the fixture that
+  replaces it, and why that is the same case (same inputs' shape, same
+  refusal or acceptance, same rule reached).
+- **9.2 C++ parser `TEST`s → `shekyl-wire` twins** (TXE-Q5a): one row per
+  `test_tx_utils.cpp` case — its twin's name in `tests/tx_extra_roundtrip.rs`,
+  or *added in this commit*.
+
+## 10. Decision log
 
 | Date | Entry |
 |---|---|
+| 2026-09-22 | **Round 1 RULED** (maintainer, PR #826). Q1 delete with the per-test equivalence condition, and the reasoning corrected: what decides deletion is *parser-versus-scaffolding*, not *dies-later* — `chaingen.cpp` is part of the C++ consensus path §0 says must stay whole through alpha.9, so its coverage may not silently change while `construct_tx*`, a second writer of the grammar, goes. Q2/Q3/Q4 defaults held. Q5 split: the 27 parity tests go against a per-case twin table; the fuzzer does **not** go with them — it fuzzes the grammar with a crash oracle that survives the C++'s removal, `shekyl-wire` has no `fuzz/` at all, and deleting it would take grammar fuzz coverage from one to zero on the codec becoming the single parser of untrusted block-path bytes. Re-pointed as `fuzz_tx_extra_parse`, seeded from the C++ corpus, registered in the inventory gate. §9 added to hold both tables. |
 | 2026-09-22 | **Round 0 executed** at `7b9be6cd1`. Eight findings (TXE-F1…F8); five questions posed with defaults (TXE-Q1…Q5). The daemon's production need from the C++ `tx_extra` machinery is one writer (the coinbase) and three reads (leaf blob, attestation blob, tx pubkey); everything else serves `construct_tx*`, which has no production caller. Adjacent-lane check: E6 slice 4 (`feat/chain-rules-slice-4`) lands the coinbase *judge* and touches none of these files; the block-template *builder* is unowned (TXE-F8). PR #825 (the producerless-tag disposition) is the precursor: four fewer variants for the shim to carry. |
