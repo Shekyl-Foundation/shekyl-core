@@ -41,6 +41,34 @@
 //!     one, so it is reported separately and never folded into the memory
 //!     figure.
 //!
+//! # This rig measures per-connection COST, not inbound CAPACITY — and it
+//! # cannot be made to measure capacity, because it runs over loopback
+//!
+//! **An accepted socket's uniqueness comes from the REMOTE endpoint.** A
+//! listener's connections are distinguished by `(remote_ip, remote_port)`, so
+//! accepting consumes no local ephemeral port — inbound capacity is not
+//! bounded by the source-port range. But when both sides share `127.0.0.1`,
+//! every connection burns a *client* source port, and **the client's
+//! ephemeral range becomes the binding constraint long before anything about
+//! accepting is exercised.**
+//!
+//! That is not a theoretical hazard. Measured on Windows 2026-09-22 while
+//! answering a different question: a loopback run failed at **15,306
+//! connections with `WSAENOBUFS`** — an error whose documented meaning is
+//! buffer/pool exhaustion — and instrumenting showed non-paged pool had moved
+//! **8.5 MB with 35 GB free**, while **15,422 of 16,384 ephemeral ports** were
+//! gone. The error code named one mechanism and the measurement found
+//! another. Reading the cause off the error would have filed *"system pool
+//! bounds connections at ~15k"*, which is an artifact of the instrument and
+//! says nothing about inbound.
+//!
+//! **So: never sweep this rig toward the ephemeral-port range and read the
+//! stall as a property of the daemon.** The ranges are roughly 28k on Linux
+//! (`net.ipv4.ip_local_port_range`) and 16k on Windows. `STEPS` stays orders
+//! of magnitude below that deliberately, which is what keeps the *cost*
+//! measurement valid; a capacity measurement needs multiple source addresses
+//! and is a different instrument.
+//!
 //! Each simulated peer completes a real `COMMAND_HANDSHAKE` and then services
 //! its socket, because a connection the daemon has dropped costs nothing and
 //! would measure as a free peer.
