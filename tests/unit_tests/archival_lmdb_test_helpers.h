@@ -21,6 +21,9 @@
 #include "blockchain_db/shekyl_types.h"
 #include "shekyl/shekyl_ffi.h"
 
+#include <stdexcept>
+#include <string>
+
 namespace archival_test {
 
 // PC-D4: serve-credit rows are keyed by the block they rode in. These
@@ -83,6 +86,32 @@ using TempLMDB = TempArchivalLMDB<cryptonote::BlockchainLMDB>;
 /// `accrual_per_block` rides into add_block as the redirected staker inflow
 /// (F-B1a): the DB layer writes the accrual row before the epoch-close hook,
 /// so the epoch-boundary KAT below can assert the close sums it.
+// A minimal coinbase for the DB-level scaffolds below: no outputs, so its
+// extra is the coinbase grammar's leafless layout [0x01 pubkey, 0x02 nonce(8)]
+// (TXE-Q6'). The DB collector applies the same shape rule admission applies,
+// so an empty extra -- which passed while the rule was only CEN-I19's
+// "no fields without outputs" -- is now refused below admission too. Built by
+// the one writer, never by hand, so this scaffold cannot drift from the rule.
+inline cryptonote::transaction minimal_coinbase(uint64_t height)
+{
+  cryptonote::transaction miner_tx{};
+  miner_tx.version = 1;
+  miner_tx.unlock_time = height + 60;
+  cryptonote::txin_gen gen{};
+  gen.height = height;
+  miner_tx.vin.push_back(gen);
+  const uint8_t pubkey[32] = {0x5C};
+  const uint8_t nonce[SHEKYL_COINBASE_NONCE_BYTES] = {0};
+  char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
+  ShekylOwnedBuffer extra;
+  const int32_t rc = shekyl_coinbase_extra(pubkey, nonce, nullptr, 0, nullptr, 0, 0,
+    &extra.buf, msg, sizeof(msg));
+  if (rc != SHEKYL_TX_EXTRA_OK)
+    throw std::runtime_error(std::string("minimal_coinbase: writer refused: ") + msg);
+  miner_tx.extra.assign(extra.data(), extra.data() + extra.size());
+  return miner_tx;
+}
+
 inline void append_minimal_blocks(cryptonote::BlockchainDB& db, uint64_t count, uint64_t accrual_per_block = 0)
 {
   crypto::hash prev = db.height() == 0
@@ -97,14 +126,7 @@ inline void append_minimal_blocks(cryptonote::BlockchainDB& db, uint64_t count, 
     blk.prev_id = prev;
     blk.curve_tree_root = crypto::null_hash;
     blk.nonce = 0;
-
-    cryptonote::transaction miner_tx{};
-    miner_tx.version = 1;
-    miner_tx.unlock_time = height + 60;
-    cryptonote::txin_gen gen{};
-    gen.height = height;
-    miner_tx.vin.push_back(gen);
-    blk.miner_tx = std::move(miner_tx);
+    blk.miner_tx = minimal_coinbase(height);
 
     db.add_block(std::make_pair(blk, cryptonote::block_to_blob(blk)), 100, 100,
       height + 1, 0, accrual_per_block, {}, {});
@@ -130,13 +152,7 @@ inline uint64_t connect_block_with_txs(cryptonote::BlockchainDB& db, const std::
     ? crypto::null_hash : db.get_block_hash_from_height(connect_height - 1);
   blk.curve_tree_root = crypto::null_hash;
   blk.nonce = 0;
-  cryptonote::transaction miner_tx{};
-  miner_tx.version = 1;
-  miner_tx.unlock_time = connect_height + 60;
-  cryptonote::txin_gen gen{};
-  gen.height = connect_height;
-  miner_tx.vin.push_back(gen);
-  blk.miner_tx = std::move(miner_tx);
+  blk.miner_tx = minimal_coinbase(connect_height);
 
   std::vector<std::pair<cryptonote::transaction, cryptonote::blobdata>> tx_blobs;
   tx_blobs.reserve(txs.size());

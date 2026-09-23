@@ -109,7 +109,7 @@ namespace cryptonote
   /// coinbase); the rule itself lives in shekyl-wire and is applied through
   /// shekyl_tx_extra_pqc_field_shape on this parser's field lengths. On
   /// failure `reason` says which field and what was found.
-  bool check_tx_extra_pqc_field_shape(const transaction& tx, std::string& reason);
+  bool check_tx_extra_shape(const transaction& tx, std::string& reason);
   struct subaddress_receive_info
   {
     subaddress_index index;

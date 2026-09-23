@@ -576,6 +576,11 @@ namespace cryptonote
       LOG_ERROR("Failed to create block template");
       return false;
     }
+    // The coinbase nonce is always present and always SHEKYL_COINBASE_NONCE_BYTES
+    // wide (the coinbase grammar, TXE-Q6'), so reserved_offset is always
+    // meaningful: the grammar fixes the layout [0x01 pubkey(32), 0x02 len(1)
+    // nonce(8), ...], so the nonce begins 34 bytes after the first pubkey
+    // byte. The pubkey is fresh per template and locates the extra in the blob.
     blobdata block_blob = t_serializable_object_to_blob(b);
     crypto::public_key tx_pub_key;
     if (shekyl_tx_extra_tx_pubkey(
@@ -587,21 +592,6 @@ namespace cryptonote
       LOG_ERROR("Failed to get tx pub key in coinbase extra");
       return false;
     }
-
-    // seed_height was already filled by get_block_template above (same
-    // height, same schedule); only the pre-announce needs computing.
-    const uint64_t next_height = shekyl_pow_randomx_v2_next_seedheight(height);
-    if (next_height != seed_height)
-      next_seed_hash = m_core.get_block_id_by_height(next_height);
-    else
-      next_seed_hash = seed_hash;
-
-    if (extra_nonce.empty())
-    {
-      reserved_offset = 0;
-      return true;
-    }
-
     reserved_offset = slow_memmem((void*)block_blob.data(), block_blob.size(), &tx_pub_key, sizeof(tx_pub_key));
     if(!reserved_offset)
     {
@@ -610,14 +600,22 @@ namespace cryptonote
       LOG_ERROR("Failed to find tx pub key in blockblob");
       return false;
     }
-    reserved_offset += sizeof(tx_pub_key) + 2; //2 bytes: tag for TX_EXTRA_NONCE(1 byte), counter in TX_EXTRA_NONCE(1 byte)
-    if(reserved_offset + extra_nonce.size() > block_blob.size())
+    reserved_offset += sizeof(tx_pub_key) + 2; // 0x02 tag byte, then the length byte (8)
+    if(reserved_offset + SHEKYL_COINBASE_NONCE_BYTES > block_blob.size())
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Internal error: failed to create block template";
-      LOG_ERROR("Failed to calculate offset for ");
+      LOG_ERROR("Coinbase nonce offset past the end of the block blob");
       return false;
     }
+
+    // seed_height was already filled by get_block_template above (same
+    // height, same schedule); only the pre-announce needs computing.
+    const uint64_t next_height = shekyl_pow_randomx_v2_next_seedheight(height);
+    if (next_height != seed_height)
+      next_seed_hash = m_core.get_block_id_by_height(next_height);
+    else
+      next_seed_hash = seed_hash;
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
@@ -632,10 +630,18 @@ namespace cryptonote
       return false;
     }
 
-    if(req.reserve_size > 255)
+    // The coinbase nonce is a fixed SHEKYL_COINBASE_NONCE_BYTES (the coinbase
+    // grammar, TXE-Q6'): the daemon always reserves exactly that many bytes,
+    // so `reserve_size` is accepted only up to it and `extra_nonce` only up
+    // to that many bytes (zero-padded). More is a bound violation -- it was
+    // the 0..255 free-text region that made the field a covert channel and a
+    // length signal -- and is refused with its own code so a pool stack sees
+    // the cause rather than a generic parameter error.
+    if (req.reserve_size > SHEKYL_COINBASE_NONCE_BYTES || req.extra_nonce.size() > 2 * SHEKYL_COINBASE_NONCE_BYTES)
     {
-      error_resp.code = CORE_RPC_ERROR_CODE_TOO_BIG_RESERVE_SIZE;
-      error_resp.message = "Too big reserved size, maximum 255";
+      error_resp.code = CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND;
+      error_resp.message = "reserve_size / extra_nonce exceed the coinbase nonce width of "
+        + std::to_string(SHEKYL_COINBASE_NONCE_BYTES) + " bytes";
       return false;
     }
 
@@ -643,13 +649,6 @@ namespace cryptonote
     {
       error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
       error_resp.message = "Cannot specify both a reserve_size and an extra_nonce";
-      return false;
-    }
-
-    if(req.extra_nonce.size() > 510)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_TOO_BIG_RESERVE_SIZE;
-      error_resp.message = "Too big extra_nonce size, maximum 510 hex chars";
       return false;
     }
 
@@ -680,8 +679,6 @@ namespace cryptonote
         return false;
       }
     }
-    else
-      blob_reserve.resize(req.reserve_size, 0);
     cryptonote::difficulty_type wdiff;
     // `prev_block` is RESERVED / NOT SUPPORTED. The field is kept in the request
     // definition deliberately: epee ignores unknown fields, so REMOVING it would
@@ -875,7 +872,6 @@ namespace cryptonote
     COMMAND_RPC_SUBMITBLOCK::request submit_req;
     COMMAND_RPC_SUBMITBLOCK::response submit_res;
 
-    template_req.reserve_size = 1;
     template_req.wallet_address = req.wallet_address;
     submit_req.push_back(std::string{});
     res.height = m_core.get_blockchain_storage().get_current_blockchain_height();

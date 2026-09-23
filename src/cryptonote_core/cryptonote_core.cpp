@@ -796,7 +796,7 @@ namespace cryptonote
     // on the same shape rather than zero-filling (blockchain_db.cpp).
     {
       std::string why;
-      if (!check_tx_extra_pqc_field_shape(tx, why))
+      if (!check_tx_extra_shape(tx, why))
       {
         MERROR_VER(why << ", rejected for tx id= " << get_transaction_hash(tx));
         tvc.m_verifivation_failed = true;

@@ -926,7 +926,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 12] = [
+    let links: [(&str, &str); 13] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -975,6 +975,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v12.json"),
             include_str!("vectors/rpc/get_version_synced_v13.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v13.json"),
+            include_str!("vectors/rpc/get_version_synced_v14.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -993,7 +997,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 12] = [
+    const ADDED_AT_LINK: [&[&str]; 13] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1006,6 +1010,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.34 (get_curve_tree_path removed, SOK-10 Q7 → A; get_version gains nothing)
         &[], // 3.35 (pruning_seed deleted from the p2p readouts, PDM-Q7; get_version gains nothing)
         &[], // 3.36 (get_info drops tx_prune_height with the C++ tx-data prune; get_version gains nothing)
+        &[], // 3.37 (get_block_template bounds reserve_size / extra_nonce to the fixed 8-byte coinbase nonce, TXE-Q6′; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),

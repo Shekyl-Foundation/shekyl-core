@@ -128,13 +128,18 @@ namespace cryptonote
     tx.vout.clear();
     tx.extra.clear();
 
+    // The extra is built once, at the end, by shekyl_coinbase_extra: the
+    // codec lays out [0x01 pubkey, 0x02 nonce(8), 0x06 KEM, 0x07 leaf
+    // entries] and judges it by the coinbase grammar before handing the bytes
+    // back (TX_EXTRA_RUST_CUTOVER.md §3, TXE-Q2, TXE-Q6'). The nonce is a
+    // fixed SHEKYL_COINBASE_NONCE_BYTES: a miner's shorter request is
+    // zero-padded and a longer one refused here, not at connect.
+    CHECK_AND_ASSERT_MES(extra_nonce.size() <= SHEKYL_COINBASE_NONCE_BYTES, false,
+      "coinbase extra_nonce is " << extra_nonce.size() << " bytes; at most "
+      << SHEKYL_COINBASE_NONCE_BYTES << " (the field is fixed at that width)");
+    uint8_t nonce[SHEKYL_COINBASE_NONCE_BYTES] = {0};
+    std::copy(extra_nonce.begin(), extra_nonce.end(), nonce);
     keypair txkey = keypair::generate(hw::get_device("default"));
-    add_tx_pub_key_to_extra(tx, txkey.pub);
-    if(!extra_nonce.empty())
-      if(!add_extra_nonce_to_tx_extra(tx.extra, extra_nonce))
-        return false;
-    if (!sort_tx_extra(tx.extra, tx.extra))
-      return false;
 
     txin_gen in;
     in.height = height;
@@ -193,10 +198,10 @@ namespace cryptonote
       const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
       const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
-      tx_extra_pqc_kem_ciphertext kem_field;
-      kem_field.blob.reserve(out_amounts.size() * HYBRID_KEM_CT_BYTES);
-      tx_extra_pqc_leaf_entries leaf_entry_field;
-      leaf_entry_field.blob.reserve(out_amounts.size() * PQC_LEAF_ENTRY_LEN);
+      std::vector<uint8_t> kem_blob;
+      kem_blob.reserve(out_amounts.size() * HYBRID_KEM_CT_BYTES);
+      std::vector<uint8_t> leaf_blob;
+      leaf_blob.reserve(out_amounts.size() * PQC_LEAF_ENTRY_LEN);
 
       tx.ct_signatures.outPk.resize(out_amounts.size());
       tx.ct_signatures.enc_amounts.resize(out_amounts.size());
@@ -228,39 +233,29 @@ namespace cryptonote
         memcpy(tx.ct_signatures.enc_labels[i].data(), od.enc_label, 8);
         tx.ct_signatures.enc_labels[i][8] = od.label_tag;
 
-        kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
+        kem_blob.insert(kem_blob.end(), od.kem_ciphertext_x25519, od.kem_ciphertext_x25519 + 32);
         if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
-          kem_field.blob.append(
-            reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
-            od.kem_ciphertext_ml_kem.len);
+          kem_blob.insert(kem_blob.end(), od.kem_ciphertext_ml_kem.ptr,
+            od.kem_ciphertext_ml_kem.ptr + od.kem_ciphertext_ml_kem.len);
 
-        leaf_entry_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
+        leaf_blob.insert(leaf_blob.end(), od.pqc_leaf, od.pqc_leaf + PQC_LEAF_ENTRY_LEN);
 
         summary_amounts += out_amounts[i];
         ShekylOutputData tmp = od;
         shekyl_output_data_free(&tmp);
       }
 
-      {
-        std::ostringstream oss;
-        binary_archive<true> oar(oss);
-        tx_extra_field variant_field = kem_field;
-        bool r = ::do_serialize(oar, variant_field);
-        CHECK_AND_ASSERT_MES(r, false, "Failed to serialize KEM ciphertexts for coinbase tx_extra");
-        std::string blob = oss.str();
-        tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
-      }
-      {
-        std::ostringstream oss;
-        binary_archive<true> oar(oss);
-        tx_extra_field variant_field = leaf_entry_field;
-        bool r = ::do_serialize(oar, variant_field);
-        CHECK_AND_ASSERT_MES(r, false, "Failed to serialize PQC leaf hashes for coinbase tx_extra");
-        std::string blob = oss.str();
-        tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
-      }
-      if (!sort_tx_extra(tx.extra, tx.extra))
-        return false;
+      char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
+      ShekylOwnedBuffer extra;
+      const int32_t rc = shekyl_coinbase_extra(
+        reinterpret_cast<const uint8_t*>(&txkey.pub), nonce,
+        kem_blob.empty() ? nullptr : kem_blob.data(), kem_blob.size(),
+        leaf_blob.empty() ? nullptr : leaf_blob.data(), leaf_blob.size(),
+        out_amounts.size(), &extra.buf, msg, sizeof(msg));
+      msg[sizeof(msg) - 1] = '\0';
+      CHECK_AND_ASSERT_MES(rc == SHEKYL_TX_EXTRA_OK, false,
+        "coinbase tx_extra refused at construction (code " << rc << "): " << msg);
+      tx.extra.assign(extra.data(), extra.data() + extra.size());
     }
 
     tx.version = 3;

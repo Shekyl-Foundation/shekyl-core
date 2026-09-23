@@ -23,25 +23,29 @@
 //!   `parse_archival_attestation_from_extra` carried is the return type here.
 //! - [`shekyl_tx_extra_tx_pubkey`] — the `0x01` key, written directly into
 //!   the caller's 32 bytes (fixed size → raw pointer, rule 40).
-//! - [`shekyl_tx_extra_leaf_entries`] — parse, apply CEN-I19 over that
-//!   parse, return the `0x07` blob. One call where `blockchain_db.cpp` had
-//!   three passes (shape check, re-parse, find).
-//! - [`shekyl_coinbase_extra`] — the coinbase writer: `[PubKey, KEM,
-//!   Leaf]` built, I19-checked, serialized. **No nonce** (`TXE-Q6`, ruled
-//!   2026-09-22: `0x02` is shed from the genesis grammar — a permanent
-//!   miner-controlled free-text field in every coinbase is a covert channel
-//!   and a pool fingerprint). A template that could not pass admission is
+//! - [`shekyl_tx_extra_leaf_entries`] — parse, apply the shape rule over
+//!   that parse, return the `0x07` blob. One call where `blockchain_db.cpp`
+//!   had three passes (shape check, re-parse, find).
+//! - [`shekyl_coinbase_extra`] — the coinbase writer: `[PubKey, Nonce(8),
+//!   KEM, Leaf]` built in the grammar's one layout, judged by the grammar,
+//!   serialized. The nonce is **fixed at `COINBASE_NONCE_BYTES`** (`TXE-Q6′`,
+//!   ruled 2026-09-23): a 32-bit header nonce exhausts a template at
+//!   ≈ 36 MH/s, each nonce byte multiplies that by 256, and a fixed width
+//!   carries no length signal. A template that could not pass admission is
 //!   refused here, not at the miner.
 //!
-//! [`shekyl_tx_extra_pqc_field_shape_of`] is CEN-I19 over bytes — the form
-//! `check_tx_extra_pqc_field_shape` keeps its C++ name for; the
-//! lengths-taking form goes with the C++ parser that fed it.
+//! [`shekyl_tx_extra_shape_of`] is the shape rule over bytes —
+//! `check_tx_extra_shape` in the daemon is a one-line adapter over it; the
+//! lengths-taking I19 form goes with the C++ parser that fed it. The rule is
+//! `shekyl_wire::tx_extra::check_tx_extra_shape`: CEN-I19 on every
+//! transaction, the closed coinbase grammar on a coinbase, no `0x02` off it.
 //!
 //! # Codes
 //!
-//! CEN-I19's verdicts keep their `SHEKYL_TX_EXTRA_PQC_SHAPE_*` values
-//! (`0` OK, `1..=11`), since [`shekyl_tx_extra_leaf_entries`] and
-//! [`shekyl_coinbase_extra`] return them unchanged when the rule refuses.
+//! Shape verdicts keep their `SHEKYL_TX_EXTRA_PQC_SHAPE_*` /
+//! `SHEKYL_TX_EXTRA_SHAPE_*` values (`0` OK, `1..=17`), since
+//! [`shekyl_tx_extra_leaf_entries`] and [`shekyl_coinbase_extra`] return
+//! them unchanged when the rule refuses.
 //! This module's own outcomes start at `100` so the two families cannot
 //! collide: a caller branching on `rc < 100` is looking at a shape verdict.
 //! A null pointer is the shape family's `ERR_NULL_PTR` everywhere.
@@ -55,7 +59,9 @@
 
 use std::os::raw::c_char;
 
-use shekyl_wire::tx_extra::{check_pqc_field_shape_of, parse, serialize, TxExtraField};
+use shekyl_wire::tx_extra::{
+    check_tx_extra_shape, parse, serialize, TxExtraField, COINBASE_NONCE_BYTES,
+};
 
 use crate::legacy_types::ShekylBuffer;
 use crate::tx_extra_ffi::{
@@ -235,11 +241,12 @@ pub unsafe extern "C" fn shekyl_tx_extra_tx_pubkey(
     SHEKYL_TX_EXTRA_OK
 }
 
-/// CEN-I19 over `extra`'s own parse, then the `0x07` blob.
+/// The shape rule over `extra`'s own parse (`is_coinbase` selects the
+/// coinbase grammar), then the `0x07` blob.
 ///
 /// Returns [`SHEKYL_TX_EXTRA_OK`] with the blob in `out` (a zero-length
 /// buffer when `n_outputs == 0`, the rule's leafless case); a
-/// `SHEKYL_TX_EXTRA_PQC_SHAPE_*` code with the rule's own sentence in
+/// `SHEKYL_TX_EXTRA_*SHAPE_*` code with the rule's own sentence in
 /// `out_msg` when the shape or the leaf content is refused;
 /// [`SHEKYL_TX_EXTRA_MALFORMED`] when the extra does not parse. Replaces
 /// `blockchain_db.cpp`'s shape-check / re-parse / find with one read.
@@ -253,6 +260,7 @@ pub unsafe extern "C" fn shekyl_tx_extra_leaf_entries(
     extra: *const u8,
     extra_len: usize,
     n_outputs: usize,
+    is_coinbase: bool,
     out: *mut ShekylBuffer,
     out_msg: *mut c_char,
     out_msg_cap: usize,
@@ -271,7 +279,7 @@ pub unsafe extern "C" fn shekyl_tx_extra_leaf_entries(
     let Ok(fields) = parse(extra) else {
         return SHEKYL_TX_EXTRA_MALFORMED;
     };
-    if let Err(err) = check_pqc_field_shape_of(&fields, n_outputs) {
+    if let Err(err) = check_tx_extra_shape(&fields, n_outputs, is_coinbase) {
         // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
         unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
         return shape_code(err);
@@ -290,21 +298,23 @@ pub unsafe extern "C" fn shekyl_tx_extra_leaf_entries(
     SHEKYL_TX_EXTRA_OK
 }
 
-/// CEN-I19 over `extra`'s own parse — the verdict and the rule's sentence,
-/// nothing handed back. The bytes-taking form of
-/// `tx_extra_ffi::shekyl_tx_extra_pqc_field_shape`, for
-/// `check_tx_extra_pqc_field_shape`'s three C++ callers. An extra that does
-/// not parse is [`SHEKYL_TX_EXTRA_MALFORMED`] — the rule's own
-/// precondition, stated as a code rather than a C++ sentence.
+/// The shape rule over `extra`'s own parse — the verdict and the rule's
+/// sentence, nothing handed back. `is_coinbase` selects the closed coinbase
+/// grammar; off the coinbase the rule is CEN-I19 plus "no `0x02`". The
+/// bytes-taking successor of `tx_extra_ffi::shekyl_tx_extra_pqc_field_shape`,
+/// for `check_tx_extra_shape`'s three C++ callers. An extra that does not
+/// parse is [`SHEKYL_TX_EXTRA_MALFORMED`] — the rule's own precondition,
+/// stated as a code rather than a C++ sentence.
 ///
 /// # Safety
 /// `extra` is readable for `extra_len` bytes (null only with 0); `out_msg`
 /// is writable for `out_msg_cap` bytes (null with 0).
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape_of(
+pub unsafe extern "C" fn shekyl_tx_extra_shape_of(
     extra: *const u8,
     extra_len: usize,
     n_outputs: usize,
+    is_coinbase: bool,
     out_msg: *mut c_char,
     out_msg_cap: usize,
 ) -> i32 {
@@ -319,7 +329,7 @@ pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape_of(
         unsafe { write_msg(out_msg, out_msg_cap, MALFORMED_MSG) };
         return SHEKYL_TX_EXTRA_MALFORMED;
     };
-    match check_pqc_field_shape_of(&fields, n_outputs) {
+    match check_tx_extra_shape(&fields, n_outputs, is_coinbase) {
         Ok(()) => SHEKYL_TX_EXTRA_OK,
         Err(err) => {
             // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
@@ -329,25 +339,30 @@ pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape_of(
     }
 }
 
-/// Build the coinbase's `extra`: `[PubKey(tx_pubkey), PqcKemCiphertext(kem),
-/// PqcLeafEntries(leaf)]` — or `[PubKey]` alone when `n_outputs == 0` — in
-/// the canonical order, I19-checked before it is handed back.
+/// Build the coinbase's `extra` in the grammar's one layout:
+/// `[PubKey(tx_pubkey), Nonce(nonce, 8 bytes), PqcKemCiphertext(kem),
+/// PqcLeafEntries(leaf)]` — `[PubKey, Nonce]` when `n_outputs == 0` — judged
+/// by `check_coinbase_extra_shape` before it is handed back.
 ///
-/// No nonce parameter (`TXE-Q6`). The KEM blob is `1120 · n_outputs` bytes
-/// and the leaf blob `64 · n_outputs`, exactly as `shekyl_construct_output`
-/// produced them; anything else is refused with the I19 code that names the
-/// field (a template that cannot pass admission is refused at construction,
-/// not at the miner), and a blob past the wire cap is
-/// [`SHEKYL_TX_EXTRA_UNSERIALIZABLE`]. `out` holds the extra on `OK` and
-/// the null buffer otherwise.
+/// `nonce` is exactly [`COINBASE_NONCE_BYTES`] bytes, the miner's template
+/// search space beyond the 32-bit header nonce (`TXE-Q6′`); the daemon
+/// zero-fills it when no miner asked. The KEM blob is `1120 · n_outputs`
+/// bytes and the leaf blob `64 · n_outputs`, exactly as
+/// `shekyl_construct_output` produced them; anything else is refused with
+/// the shape code that names the field (a template that cannot pass
+/// admission is refused at construction, not at the miner), and a blob past
+/// the wire cap is [`SHEKYL_TX_EXTRA_UNSERIALIZABLE`]. `out` holds the extra
+/// on `OK` and the null buffer otherwise.
 ///
 /// # Safety
-/// `tx_pubkey` is readable for 32 bytes; `kem` / `leaf` are readable for
-/// their lengths (null only with 0); `out` is a writable `ShekylBuffer`;
-/// `out_msg` is writable for `out_msg_cap` bytes (null with 0).
+/// `tx_pubkey` is readable for 32 bytes and `nonce` for
+/// `COINBASE_NONCE_BYTES`; `kem` / `leaf` are readable for their lengths
+/// (null only with 0); `out` is a writable `ShekylBuffer`; `out_msg` is
+/// writable for `out_msg_cap` bytes (null with 0).
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_coinbase_extra(
     tx_pubkey: *const u8,
+    nonce: *const u8,
     kem: *const u8,
     kem_len: usize,
     leaf: *const u8,
@@ -359,31 +374,37 @@ pub unsafe extern "C" fn shekyl_coinbase_extra(
 ) -> i32 {
     // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
     unsafe { write_msg(out_msg, out_msg_cap, "") };
-    if out.is_null() || tx_pubkey.is_null() {
+    if out.is_null() || tx_pubkey.is_null() || nonce.is_null() {
         return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
     }
     // SAFETY: caller contract on `out`.
     unsafe { out.write(ShekylBuffer::null()) };
-    // SAFETY: caller contracts on the three inputs.
-    let (key, kem, leaf) = unsafe {
-        let Some(key) = bytes(tx_pubkey, PUBKEY_LEN) else {
+    // SAFETY: caller contracts on the four inputs.
+    let (key, nonce, kem, leaf) = unsafe {
+        let (Some(key), Some(nonce)) = (
+            bytes(tx_pubkey, PUBKEY_LEN),
+            bytes(nonce, COINBASE_NONCE_BYTES),
+        ) else {
             return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
         };
         let (Some(kem), Some(leaf)) = (bytes(kem, kem_len), bytes(leaf, leaf_len)) else {
             return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
         };
-        (key, kem, leaf)
+        (key, nonce, kem, leaf)
     };
     let mut pubkey = [0u8; PUBKEY_LEN];
     pubkey.copy_from_slice(key);
-    let mut fields = vec![TxExtraField::PubKey(pubkey)];
+    let mut fields = vec![
+        TxExtraField::PubKey(pubkey),
+        TxExtraField::Nonce(nonce.to_vec()),
+    ];
     if n_outputs > 0 || !kem.is_empty() || !leaf.is_empty() {
         // Present fields are judged by the rule below; a leafless coinbase
         // that was handed bytes anyway is refused there, not dropped here.
         fields.push(TxExtraField::PqcKemCiphertext(kem.to_vec()));
         fields.push(TxExtraField::PqcLeafEntries(leaf.to_vec()));
     }
-    if let Err(err) = check_pqc_field_shape_of(&fields, n_outputs) {
+    if let Err(err) = check_tx_extra_shape(&fields, n_outputs, true) {
         // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
         unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
         return shape_code(err);
@@ -411,7 +432,9 @@ mod tests {
             return Vec::new();
         }
         // SAFETY: the pair came from `ShekylBuffer::from_vec` in this process.
-        let v = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len).to_vec() };
+        let v = unsafe { crate::legacy_util::slice_from_ptr(buf.ptr, buf.len) }
+            .expect("a non-null buffer")
+            .to_vec();
         unsafe { shekyl_buffer_free(buf.ptr, buf.len) };
         v
     }
@@ -423,12 +446,15 @@ mod tests {
         (rc, take(&out))
     }
 
+    const NONCE: [u8; COINBASE_NONCE_BYTES] = [0xC0, 0x1D, 0xBE, 0xEF, 0, 0, 0, 1];
+
     fn coinbase(key: [u8; 32], n: usize, kem: &[u8], leaf: &[u8]) -> (i32, Vec<u8>, String) {
         let mut out = ShekylBuffer::null();
         let mut msg = [0 as c_char; 256];
         let rc = unsafe {
             shekyl_coinbase_extra(
                 key.as_ptr(),
+                NONCE.as_ptr(),
                 if kem.is_empty() {
                     std::ptr::null()
                 } else {
@@ -462,20 +488,30 @@ mod tests {
     }
 
     #[test]
-    fn the_coinbase_writer_lays_out_pubkey_kem_leaf_and_the_reads_find_each() {
+    fn the_coinbase_writer_lays_out_pubkey_nonce_kem_leaf_and_the_reads_find_each() {
         let (extra, kem, leaf) = valid_extra(2);
-        // Canonical order is the parse order: 0x01, 0x06, 0x07 — and it is
-        // byte-identical to serializing the same three fields by hand.
+        // The grammar's one layout: 0x01, 0x02(8), 0x06, 0x07 — byte-identical
+        // to serializing the same four fields by hand, and admitted by the
+        // rule a validator applies to a coinbase.
         let by_hand = serialize(&[
             TxExtraField::PubKey([0x11; 32]),
+            TxExtraField::Nonce(NONCE.to_vec()),
             TxExtraField::PqcKemCiphertext(kem.clone()),
             TxExtraField::PqcLeafEntries(leaf.clone()),
         ])
         .expect("serializes");
         assert_eq!(extra, by_hand);
         assert_eq!(
+            shekyl_wire::tx_extra::check_coinbase_extra_shape(&parse(&extra).unwrap(), 2),
+            Ok(())
+        );
+        assert_eq!(
             field(&extra, TX_EXTRA_TAG_PUBKEY, 0),
             (SHEKYL_TX_EXTRA_OK, vec![0x11; 32])
+        );
+        assert_eq!(
+            field(&extra, TX_EXTRA_TAG_NONCE, 0),
+            (SHEKYL_TX_EXTRA_OK, NONCE.to_vec())
         );
         assert_eq!(
             field(&extra, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, 0),
@@ -497,6 +533,7 @@ mod tests {
                 extra.as_ptr(),
                 extra.len(),
                 2,
+                true,
                 &raw mut out,
                 std::ptr::null_mut(),
                 0,
@@ -539,10 +576,11 @@ mod tests {
         let mut msg = [0 as c_char; 256];
         assert_eq!(
             unsafe {
-                shekyl_tx_extra_pqc_field_shape_of(
+                shekyl_tx_extra_shape_of(
                     malformed.as_ptr(),
                     malformed.len(),
                     1,
+                    false,
                     msg.as_mut_ptr(),
                     msg.len(),
                 )
@@ -628,12 +666,16 @@ mod tests {
             rc,
             crate::tx_extra_ffi::SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT
         );
-        // Leafless coinbase: pubkey only, and bytes handed in anyway are refused.
+        // Leafless coinbase: pubkey and nonce only, and bytes handed in
+        // anyway are refused.
         let (rc, blob, _) = coinbase([0x22; 32], 0, &[], &[]);
         assert_eq!(rc, SHEKYL_TX_EXTRA_OK);
         assert_eq!(
             parse(&blob).expect("parses"),
-            vec![TxExtraField::PubKey([0x22; 32])]
+            vec![
+                TxExtraField::PubKey([0x22; 32]),
+                TxExtraField::Nonce(NONCE.to_vec())
+            ]
         );
         let (rc, _, _) = coinbase([0x22; 32], 0, &kem, &conforming_pqc_leaf_blob(1));
         assert_eq!(
@@ -653,6 +695,7 @@ mod tests {
                 extra.as_ptr(),
                 extra.len(),
                 3,
+                true,
                 &raw mut out,
                 msg.as_mut_ptr(),
                 msg.len(),
@@ -663,29 +706,129 @@ mod tests {
             crate::tx_extra_ffi::SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_LENGTH
         );
         assert!(out.ptr.is_null());
-        // Leafless: OK, empty.
+        // Leafless, non-coinbase (a serve-credit shape): OK, empty.
         let pubkey_only = serialize(&[TxExtraField::PubKey([0x11; 32])]).expect("serializes");
         let rc = unsafe {
             shekyl_tx_extra_leaf_entries(
                 pubkey_only.as_ptr(),
                 pubkey_only.len(),
                 0,
+                false,
                 &raw mut out,
                 msg.as_mut_ptr(),
                 msg.len(),
             )
         };
         assert_eq!((rc, take(&out)), (SHEKYL_TX_EXTRA_OK, Vec::new()));
-        // A nonce present on a coinbase is not this rule's business; it is the
-        // grammar's (TXE-Q6 sheds it at the writer, the reads still parse it).
-        let with_nonce = serialize(&[
+    }
+
+    #[test]
+    fn the_coinbase_grammar_is_judged_on_both_reads_and_off_the_coinbase_the_nonce_is_refused() {
+        use crate::tx_extra_ffi::{
+            SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG, SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT,
+            SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH,
+            SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING,
+            SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE,
+        };
+        let shape = |extra: &[u8], n: usize, coinbase: bool| -> (i32, String) {
+            let mut msg = [0 as c_char; 256];
+            let rc = unsafe {
+                shekyl_tx_extra_shape_of(
+                    extra.as_ptr(),
+                    extra.len(),
+                    n,
+                    coinbase,
+                    msg.as_mut_ptr(),
+                    msg.len(),
+                )
+            };
+            let text = unsafe { std::ffi::CStr::from_ptr(msg.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
+            (rc, text)
+        };
+        let (extra, kem, leaf) = valid_extra(1);
+        assert_eq!(shape(&extra, 1, true).0, SHEKYL_TX_EXTRA_OK);
+        // The same bytes are not a valid non-coinbase extra: the nonce.
+        let (rc, msg) = shape(&extra, 1, false);
+        assert_eq!(rc, SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE);
+        assert!(msg.contains("coinbase-only"), "{msg}");
+        // No nonce: a valid non-coinbase extra, an invalid coinbase one.
+        let no_nonce = serialize(&[
             TxExtraField::PubKey([0x11; 32]),
-            TxExtraField::Nonce(vec![1, 2, 3]),
+            TxExtraField::PqcKemCiphertext(kem.clone()),
+            TxExtraField::PqcLeafEntries(leaf.clone()),
         ])
-        .expect("serializes");
+        .unwrap();
+        assert_eq!(shape(&no_nonce, 1, false).0, SHEKYL_TX_EXTRA_OK);
         assert_eq!(
-            field(&with_nonce, TX_EXTRA_TAG_NONCE, 0),
-            (SHEKYL_TX_EXTRA_OK, vec![1, 2, 3])
+            shape(&no_nonce, 1, true).0,
+            SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING
         );
+        // Seven bytes: the width is fixed.
+        let short = serialize(&[
+            TxExtraField::PubKey([0x11; 32]),
+            TxExtraField::Nonce(vec![0; 7]),
+            TxExtraField::PqcKemCiphertext(kem.clone()),
+            TxExtraField::PqcLeafEntries(leaf.clone()),
+        ])
+        .unwrap();
+        let (rc, msg) = shape(&short, 1, true);
+        assert_eq!(rc, SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH);
+        assert!(msg.contains("exactly 8"), "{msg}");
+        // Padding — or any tag off the whitelist — in a coinbase.
+        let mut padded = extra.clone();
+        padded.push(0x00);
+        assert_eq!(
+            shape(&padded, 1, true).0,
+            SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG
+        );
+        // Out of order.
+        let swapped = serialize(&[
+            TxExtraField::Nonce(NONCE.to_vec()),
+            TxExtraField::PubKey([0x11; 32]),
+            TxExtraField::PqcKemCiphertext(kem),
+            TxExtraField::PqcLeafEntries(leaf),
+        ])
+        .unwrap();
+        assert_eq!(
+            shape(&swapped, 1, true).0,
+            SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT
+        );
+        // The leaf read applies the same grammar.
+        let mut out = ShekylBuffer::null();
+        let rc = unsafe {
+            shekyl_tx_extra_leaf_entries(
+                short.as_ptr(),
+                short.len(),
+                1,
+                true,
+                &raw mut out,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        assert_eq!(rc, SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH);
+        assert!(out.ptr.is_null());
+        // The writer refuses a short nonce before anything is built: the
+        // pointer contract is 8 bytes, so the only way to hand it fewer is
+        // through the rule — exercised via `shape` above; here the null
+        // nonce is a pointer fault.
+        let mut msg = [0 as c_char; 256];
+        let rc = unsafe {
+            shekyl_coinbase_extra(
+                [0x11u8; 32].as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                &raw mut out,
+                msg.as_mut_ptr(),
+                msg.len(),
+            )
+        };
+        assert_eq!(rc, SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR);
     }
 }

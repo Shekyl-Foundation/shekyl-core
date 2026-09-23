@@ -83,8 +83,8 @@ set(unit_tests_sources
   scaling_2021.cpp
   seed_epoch.cpp
   serialization.cpp
-  sha256.cpp
   slow_memmem.cpp
+  sha256.cpp
   stall_detection_calibration.cpp
   stack_trace.cpp
   test_tx_utils.cpp

@@ -24,7 +24,7 @@
 
 use std::os::raw::c_char;
 
-use shekyl_wire::tx_extra::{check_pqc_field_shape, check_pqc_leaf_entries, PqcFieldShapeError};
+use shekyl_wire::tx_extra::{check_pqc_field_shape, check_pqc_leaf_entries, ExtraShapeError};
 
 /// Conformant.
 pub const SHEKYL_TX_EXTRA_PQC_SHAPE_OK: i32 = 0;
@@ -57,6 +57,19 @@ pub const SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT: i32 = 10;
 /// commitment is not a canonical prime-order point") for a C++-side bug.
 /// Fail-closed: the transaction is refused either way.
 pub const SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING: i32 = 11;
+/// Coinbase grammar (`TXE-Q6′`): no `0x02` nonce in a coinbase extra.
+pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING: i32 = 12;
+/// Coinbase grammar: the `0x02` nonce is not exactly `COINBASE_NONCE_BYTES`.
+pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH: i32 = 13;
+/// Coinbase grammar: more than one `0x02` nonce.
+pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_DUPLICATE: i32 = 14;
+/// Coinbase grammar: a tag outside `[0x01, 0x02, 0x06, 0x07]`.
+pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG: i32 = 15;
+/// Coinbase grammar: the fields are out of canonical order, or the `0x01`
+/// pubkey is missing or duplicated.
+pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT: i32 = 16;
+/// A `0x02` nonce on a non-coinbase transaction.
+pub const SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE: i32 = 17;
 
 /// The sentence written for [`SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING`].
 /// Owned here (not in `shekyl-wire`): the wire crate rules on transaction
@@ -70,10 +83,22 @@ pub const SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP: usize = 256;
 
 /// The flattened code for a shape verdict; shared with the codec surface
 /// (`tx_extra_codec_ffi`), which returns these unchanged.
-pub(crate) fn shape_code(err: PqcFieldShapeError) -> i32 {
-    use PqcFieldShapeError as E;
+pub(crate) fn shape_code(err: ExtraShapeError) -> i32 {
+    use ExtraShapeError as E;
     const KEM: u8 = shekyl_wire::tx_extra::TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT;
+    const PUBKEY: u8 = shekyl_wire::tx_extra::TX_EXTRA_TAG_PUBKEY;
+    const NONCE: u8 = shekyl_wire::tx_extra::TX_EXTRA_TAG_NONCE;
     match err {
+        // Coinbase grammar arms first: `Missing` / `Duplicate` on the pubkey
+        // and nonce tags are grammar verdicts, not PQC ones.
+        E::Missing { tag, .. } if tag == PUBKEY => SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT,
+        E::Duplicate { tag, .. } if tag == PUBKEY => SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT,
+        E::Duplicate { tag, .. } if tag == NONCE => SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_DUPLICATE,
+        E::CoinbaseNonceMissing => SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING,
+        E::CoinbaseNonceLength { .. } => SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH,
+        E::CoinbaseForeignTag { .. } => SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG,
+        E::CoinbaseFieldOrder { .. } => SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT,
+        E::NonceOutsideCoinbase => SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE,
         E::PresentWithoutOutputs { tag } if tag == KEM => {
             SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_PRESENT_WITHOUT_OUTPUTS
         }

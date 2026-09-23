@@ -953,24 +953,26 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
-  bool check_tx_extra_pqc_field_shape(const transaction& tx, std::string& reason)
+  bool check_tx_extra_shape(const transaction& tx, std::string& reason)
   {
-    // shekyl-wire parses the extra and applies CEN-I19 over its own parse
-    // (TX_EXTRA_RUST_CUTOVER.md §3): one parser of the grammar, so the
-    // fields the rule judges are the fields the codec found -- the daemon
-    // hands over bytes, never a second reading of them. The verdict AND its
+    // shekyl-wire parses the extra and applies the shape rule over its own
+    // parse (TX_EXTRA_RUST_CUTOVER.md §3): CEN-I19 on every transaction, the
+    // closed coinbase grammar (TXE-Q6') on a coinbase, no 0x02 off it. One
+    // parser of the grammar, so the fields the rule judges are the fields the
+    // codec found -- the daemon hands over bytes and whether the transaction
+    // is a coinbase, never a second reading of them. The verdict AND its
     // sentence come from the rule; the daemon logs what the rule says rather
     // than keeping a second wording in step forever.
     char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
-    const int32_t rc = shekyl_tx_extra_pqc_field_shape_of(
+    const int32_t rc = shekyl_tx_extra_shape_of(
       tx.extra.empty() ? nullptr : tx.extra.data(), tx.extra.size(),
-      tx.vout.size(), msg, sizeof(msg));
+      tx.vout.size(), is_coinbase(tx), msg, sizeof(msg));
     if (rc == SHEKYL_TX_EXTRA_OK)
       return true;
     msg[sizeof(msg) - 1] = '\0';
     reason = msg[0] != '\0'
       ? std::string(msg)
-      : ("tx_extra PQC field shape check failed with code " + std::to_string(rc));
+      : ("tx_extra shape check failed with code " + std::to_string(rc));
     return false;
   }
   //---------------------------------------------------------------

@@ -482,3 +482,27 @@ pub fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
     ])
     .expect("conforming PQC tx_extra serializes")
 }
+
+/// The `tx_extra` a coinbase with `n` outputs must carry (CEN-I20,
+/// `GENESIS_TX_WIRE_FORMAT.md` §9.6b): exactly `[0x01 pubkey, 0x02 nonce(8),
+/// 0x06 KEM(1120·n), 0x07 leaf(64·n)]` in that order, the PQC pair absent when
+/// `n == 0`. A coinbase fixture that carries only the I19 pair fails the wire
+/// validator on the grammar before it reaches the refusal under test.
+pub fn conforming_coinbase_extra(n_outputs: usize) -> Vec<u8> {
+    use shekyl_wire::tx_extra::{self, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES};
+    let mut fields = vec![
+        TxExtraField::PubKey([0x11; 32]),
+        TxExtraField::Nonce(vec![0; COINBASE_NONCE_BYTES]),
+    ];
+    if n_outputs > 0 {
+        fields.push(TxExtraField::PqcKemCiphertext(vec![
+            0x6a;
+            HYBRID_KEM_CT_BYTES
+                * n_outputs
+        ]));
+        fields.push(TxExtraField::PqcLeafEntries(
+            tx_extra::conforming_pqc_leaf_blob(n_outputs),
+        ));
+    }
+    tx_extra::serialize(&fields).expect("conforming coinbase tx_extra serializes")
+}

@@ -1444,11 +1444,28 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
  * below receives a fixed-size value or an opaque payload; C++ never reads
  * inside an `extra` again.
  *
- * Codes: CEN-I19's verdicts keep their SHEKYL_TX_EXTRA_PQC_SHAPE_* values
- * (0 OK, 1..=11) and are returned unchanged by the leaf read and the
- * coinbase writer when the rule refuses; this family's own outcomes start
- * at 100 so the two cannot collide. A null pointer is
- * SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR everywhere. */
+ * Codes: shape verdicts keep their SHEKYL_TX_EXTRA_PQC_SHAPE_* /
+ * SHEKYL_TX_EXTRA_SHAPE_* values (0 OK, 1..=17) and are returned unchanged
+ * by the leaf read and the coinbase writer when the rule refuses; this
+ * family's own outcomes start at 100 so the two cannot collide. A null
+ * pointer is SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR everywhere.
+ *
+ * The shape rule (shekyl_wire::tx_extra::check_tx_extra_shape) is CEN-I19 on
+ * every transaction plus, on a coinbase, the closed coinbase grammar
+ * (TXE-Q6', consensus): the extra is exactly [0x01 pubkey, 0x02 nonce of
+ * SHEKYL_COINBASE_NONCE_BYTES, 0x06 KEM(1120*n), 0x07 leaf(64*n)] in that
+ * order and nothing else; off the coinbase, no 0x02 at all. */
+/// Fixed width of the coinbase 0x02 nonce. 2^32 / 120 s ~= 36 MH/s exhausts
+/// the header nonce in one interval; each byte here multiplies that by 256,
+/// so 8 never binds and matches the pool convention (reserve_size: 8).
+#define SHEKYL_COINBASE_NONCE_BYTES           8
+/// Coinbase grammar refusals (12..=17), beside the CEN-I19 codes (1..=11).
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING   12
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH    13
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_DUPLICATE 14
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG     15
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT          16
+#define SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE   17
 #define SHEKYL_TX_EXTRA_OK                    0
 /// The extra parsed and holds no such field — the committed empty set.
 #define SHEKYL_TX_EXTRA_ABSENT                100
@@ -1462,7 +1479,11 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
 /// The tag bytes a C++ caller may name to shekyl_tx_extra_field. The table
 /// of record is `shekyl_wire::tx_extra::TX_EXTRA_TAG_*`; a value here that
 /// drifts from it is answered with SHEKYL_TX_EXTRA_UNKNOWN_TAG or the wrong
-/// field, which the archival_credit_wire round trip pins.
+/// field, which the archival_credit_wire and mining_parity round trips pin.
+#define SHEKYL_TX_EXTRA_TAG_PUBKEY               0x01
+#define SHEKYL_TX_EXTRA_TAG_NONCE                0x02
+#define SHEKYL_TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT   0x06
+#define SHEKYL_TX_EXTRA_TAG_PQC_LEAF_ENTRIES     0x07
 #define SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION 0x0B
 
 /// The `index`th field of `tag` in `extra`, as its payload bytes, in `out`
@@ -1484,37 +1505,43 @@ int32_t shekyl_tx_extra_tx_pubkey(
     size_t extra_len,
     uint8_t* out32);
 
-/// CEN-I19 over the extra's own parse, then the 0x07 blob in `out` (len 0
-/// when n_outputs == 0). A SHEKYL_TX_EXTRA_PQC_SHAPE_* code with the rule's
-/// sentence in out_msg on refusal; MALFORMED when the extra does not parse.
-/// One read where the DB add path had three passes.
+/// The shape rule over the extra's own parse (is_coinbase selects the
+/// coinbase grammar), then the 0x07 blob in `out` (len 0 when n_outputs ==
+/// 0). A shape code with the rule's sentence in out_msg on refusal;
+/// MALFORMED when the extra does not parse. One read where the DB add path
+/// had three passes.
 int32_t shekyl_tx_extra_leaf_entries(
     const uint8_t* extra,
     size_t extra_len,
     size_t n_outputs,
+    bool is_coinbase,
     ShekylBuffer* out,
     char* out_msg,
     size_t out_msg_cap);
 
-/// CEN-I19 over the extra's own parse — verdict and sentence only. The
-/// bytes-taking form check_tx_extra_pqc_field_shape adapts; MALFORMED when
-/// the extra does not parse (out_msg carries the admission sentence).
-int32_t shekyl_tx_extra_pqc_field_shape_of(
+/// The shape rule over the extra's own parse — verdict and sentence only;
+/// is_coinbase selects the coinbase grammar. check_tx_extra_shape adapts it;
+/// MALFORMED when the extra does not parse (out_msg carries the admission
+/// sentence).
+int32_t shekyl_tx_extra_shape_of(
     const uint8_t* extra,
     size_t extra_len,
     size_t n_outputs,
+    bool is_coinbase,
     char* out_msg,
     size_t out_msg_cap);
 
-/// Build the coinbase extra: [PubKey(tx_pubkey[32]), PqcKemCiphertext(kem),
-/// PqcLeafEntries(leaf)] — [PubKey] alone when n_outputs == 0 — in canonical
-/// order, I19-checked before it is handed back in `out`. No nonce (TXE-Q6:
-/// 0x02 is shed from the genesis grammar). kem is 1120·n_outputs bytes and
-/// leaf 64·n_outputs, as shekyl_construct_output produced them; anything
-/// else is refused with the I19 code naming the field, so a template that
-/// could not pass admission is refused at construction, not at the miner.
+/// Build the coinbase extra in the grammar's one layout: [PubKey(tx_pubkey
+/// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), PqcKemCiphertext(kem),
+/// PqcLeafEntries(leaf)] — [PubKey, Nonce] when n_outputs == 0 — judged by
+/// the coinbase grammar before it is handed back in `out`. kem is
+/// 1120·n_outputs bytes and leaf 64·n_outputs, as shekyl_construct_output
+/// produced them; anything else is refused with the shape code naming the
+/// field, so a template that could not pass admission is refused at
+/// construction, not at the miner.
 int32_t shekyl_coinbase_extra(
     const uint8_t* tx_pubkey,
+    const uint8_t* nonce,
     const uint8_t* kem,
     size_t kem_len,
     const uint8_t* leaf,

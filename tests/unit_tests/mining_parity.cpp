@@ -28,6 +28,7 @@
 
 #include "gtest/gtest.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -37,7 +38,6 @@
 
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_basic/tx_extra.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "crypto/pow_randomx.h"
 #include "cryptonote_config.h"
@@ -241,9 +241,9 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
     const char* frozen_id;
   };
   const NetCase nets[] = {
-    { cryptonote::MAINNET,  "mainnet",  "b6293d3ec814d4b7acdcba7d79d2d22b035eaae52bb35cb3f862adac16c14031" },
-    { cryptonote::TESTNET,  "testnet",  "b0b2a63aa91c4e23bcf686095c2fccb27760cb9ec1928cca3bf17e17f8112a7c" },
-    { cryptonote::STAGENET, "stagenet", "ad101a4d8b47a8c9a3fa4ff625b6c7176d0bf95f686150e944c2c778dee52396" },
+    { cryptonote::MAINNET,  "mainnet",  "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3" },
+    { cryptonote::TESTNET,  "testnet",  "52425d8da3a90e41ff54780129bdbe9897aa28c3d0a9c80b04b4b5ea35c911d8" },
+    { cryptonote::STAGENET, "stagenet", "65173901b049468133e5f821f668772f13936b1abdff0e2add80ff3b03ccf5f0" },
   };
 
   for (const NetCase& nc : nets)
@@ -266,14 +266,17 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
   }
 }
 
-// geblock (rust/shekyl-genesis-tool) emits genesis tx_extra in canonical order
-// rather than porting sort_tx_extra. This test makes that claim fully
-// executable against the C++ sorter and field parser:
-//   1. fixed point of sort_tx_extra (input already canonical), and
-//   2. explicit field sequence pubkey → KEM ciphertext → leaf hashes
-//      (the pick order sort_tx_extra uses for the genesis field subset).
+// The coinbase extra has one writer, shekyl_coinbase_extra, and one layout:
+// [0x01 pubkey, 0x02 nonce(8), 0x06 KEM ciphertexts, 0x07 leaf entries] --
+// the coinbase grammar (TXE-Q6'), which geblock (rust/shekyl-genesis-tool)
+// emits for genesis with an all-zero nonce. This test is the cutover's
+// byte-identity proof (TX_EXTRA_RUST_CUTOVER.md §8): read the four fields out
+// of each network's genesis extra through the codec, hand them back to the
+// writer, and require the bytes that come out to be the bytes that went in.
+// A layout drift in either direction -- the writer, or geblock -- fails here,
+// and so does a genesis that the grammar itself would refuse at connect.
 // Complements rust/shekyl-genesis-tool/tests/golden_kat.rs::extra_is_canonical_fixed_point.
-TEST(mining_parity, genesis_tx_extra_is_sort_tx_extra_fixed_point)
+TEST(mining_parity, coinbase_writer_reproduces_the_genesis_extra_byte_for_byte)
 {
   struct NetCase
   {
@@ -292,26 +295,47 @@ TEST(mining_parity, genesis_tx_extra_is_sort_tx_extra_fixed_point)
     cryptonote::block bl{};
     ASSERT_TRUE(cryptonote::generate_genesis_block(bl, cfg.GENESIS_TX, cfg.GENESIS_NONCE))
       << nc.name << ": generate_genesis_block failed";
+    const std::vector<uint8_t>& extra = bl.miner_tx.extra;
+    const size_t n_outputs = bl.miner_tx.vout.size();
+    ASSERT_GT(n_outputs, 0u) << nc.name << ": genesis pays at least one output";
 
-    std::vector<uint8_t> sorted_extra;
-    ASSERT_TRUE(cryptonote::sort_tx_extra(bl.miner_tx.extra, sorted_extra))
-      << nc.name << ": sort_tx_extra failed on the genesis extra";
-    EXPECT_EQ(bl.miner_tx.extra, sorted_extra)
-      << nc.name << ": genesis tx_extra is not a fixed point of sort_tx_extra "
-                    "(geblock emit order vs C++ canonicalizer drift)";
+    uint8_t pubkey[32];
+    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_tx_pubkey(extra.data(), extra.size(), pubkey))
+      << nc.name << ": genesis extra carries no 0x01 pubkey";
+    ShekylOwnedBuffer nonce;
+    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_field(extra.data(), extra.size(),
+        SHEKYL_TX_EXTRA_TAG_NONCE, 0, &nonce.buf))
+      << nc.name << ": genesis extra carries no 0x02 nonce";
+    ASSERT_EQ(size_t(SHEKYL_COINBASE_NONCE_BYTES), nonce.size()) << nc.name;
+    EXPECT_TRUE(std::all_of(nonce.data(), nonce.data() + nonce.size(), [](uint8_t b) { return b == 0; }))
+      << nc.name << ": genesis was not nonce-searched; its nonce is zero";
+    ShekylOwnedBuffer kem;
+    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_field(extra.data(), extra.size(),
+        SHEKYL_TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, 0, &kem.buf))
+      << nc.name << ": genesis extra carries no 0x06 KEM field";
+    char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
+    ShekylOwnedBuffer leaf;
+    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_leaf_entries(extra.data(), extra.size(),
+        n_outputs, /*is_coinbase=*/true, &leaf.buf, msg, sizeof(msg)))
+      << nc.name << ": genesis extra fails the coinbase grammar: " << msg;
+    EXPECT_EQ(n_outputs * cryptonote::HYBRID_KEM_CT_BYTES, kem.size()) << nc.name;
+    EXPECT_EQ(n_outputs * cryptonote::PQC_LEAF_ENTRY_LEN, leaf.size()) << nc.name;
+    // Exactly the three fields: a second 0x01 / 0x06 / 0x07 or any other tag
+    // would survive the round trip below only by being dropped, so ask.
+    ShekylOwnedBuffer none;
+    EXPECT_EQ(SHEKYL_TX_EXTRA_ABSENT, shekyl_tx_extra_field(extra.data(), extra.size(),
+        SHEKYL_TX_EXTRA_TAG_PUBKEY, 1, &none.buf)) << nc.name << ": a second 0x01";
+    EXPECT_EQ(SHEKYL_TX_EXTRA_ABSENT, shekyl_tx_extra_field(extra.data(), extra.size(),
+        SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, 0, &none.buf)) << nc.name << ": a 0x0B";
 
-    std::vector<cryptonote::tx_extra_field> fields;
-    ASSERT_TRUE(cryptonote::parse_tx_extra(bl.miner_tx.extra, fields))
-      << nc.name << ": parse_tx_extra failed on the genesis extra";
-    ASSERT_EQ(3u, fields.size())
-      << nc.name << ": genesis extra must carry exactly three fields "
-                    "(0x01 pubkey, 0x06 KEM, 0x07 leaf hashes)";
-    EXPECT_TRUE(std::holds_alternative<cryptonote::tx_extra_pub_key>(fields[0]))
-      << nc.name << ": field 0 must be TX_EXTRA_TAG_PUBKEY (0x01)";
-    EXPECT_TRUE(std::holds_alternative<cryptonote::tx_extra_pqc_kem_ciphertext>(fields[1]))
-      << nc.name << ": field 1 must be TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT (0x06)";
-    EXPECT_TRUE(std::holds_alternative<cryptonote::tx_extra_pqc_leaf_entries>(fields[2]))
-      << nc.name << ": field 2 must be TX_EXTRA_TAG_PQC_LEAF_ENTRIES (0x07)";
+    ShekylOwnedBuffer rebuilt;
+    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_coinbase_extra(pubkey, nonce.data(), kem.data(), kem.size(),
+        leaf.data(), leaf.size(), n_outputs, &rebuilt.buf, msg, sizeof(msg)))
+      << nc.name << ": the writer refused the genesis fields: " << msg;
+    const std::vector<uint8_t> got(rebuilt.data(), rebuilt.data() + rebuilt.size());
+    EXPECT_EQ(extra, got)
+      << nc.name << ": shekyl_coinbase_extra does not reproduce the genesis extra "
+                    "(writer layout vs geblock emit order drift)";
   }
 }
 

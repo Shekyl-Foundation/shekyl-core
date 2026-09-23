@@ -45,7 +45,7 @@ class Daemon(object):
             'params': {
                 'client': client,
                 'wallet_address': address,
-                'reserve_size' : 1,
+                'reserve_size' : 8,
                 'prev_block' : prev_block,
             },
             'jsonrpc': '2.0', 
@@ -208,7 +208,6 @@ class Daemon(object):
             'method': 'generateblocks',
             'params': {
                 'amount_of_blocks' : blocks,
-                'reserve_size' : 20,
                 'wallet_address': address,
                 'prev_block': prev_block,
                 'starting_nonce': starting_nonce,

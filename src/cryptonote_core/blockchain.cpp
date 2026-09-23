@@ -1446,7 +1446,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   // here because the coinbase never passes core::check_tx_semantic.
   {
     std::string why;
-    CHECK_AND_ASSERT_MES(check_tx_extra_pqc_field_shape(b.miner_tx, why), false,
+    CHECK_AND_ASSERT_MES(check_tx_extra_shape(b.miner_tx, why), false,
       "miner transaction: " << why << " (block " << get_block_hash(b) << ")");
   }
 

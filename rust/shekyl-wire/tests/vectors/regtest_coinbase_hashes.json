@@ -1,14 +1,14 @@
 {
   "0": {
-    "block_hash": "b6293d3ec814d4b7acdcba7d79d2d22b035eaae52bb35cb3f862adac16c14031",
-    "miner_tx_hash": "2382d899d4d746e0ad2dba8a0b27d9fcb174d2a06a208112082cd12d20b91077"
+    "block_hash": "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3",
+    "miner_tx_hash": "7b3b02dd6fd3a4fd9aebfe17703f1b5261bc8a19d22812aa8e9a7726056bd8c0"
   },
   "1": {
-    "block_hash": "03426ad353a4b87d54308f8ca051e09f3292e82f9828458f47721b5a5252f9bb",
-    "miner_tx_hash": "97e22afe01b92e8aa2e08902f22b538a80adc6ef0b940e077aee92e4ec2955e6"
+    "block_hash": "0d35d08490f2fb7860fa1ac4d19a7521080c65772f6be0da044c434b705d5bde",
+    "miner_tx_hash": "45c431774933021ac5b82cc423a30071999950df8ddfb8f8a14a37c7347de335"
   },
   "2": {
-    "block_hash": "efeefb4a0e27f4ccd1b14a173bb4bcb3582d18901203e92fe7adb7b4cf361d49",
-    "miner_tx_hash": "52cc0b69f6c82b11c342b1f30832e3e994f0ea0cf0bbe8c32e89937996de8d67"
+    "block_hash": "be8648f129639d0d117ed71dc340f7f4cea568b444c1cc41b0e79889107011a0",
+    "miner_tx_hash": "3a5c9f4fcb2b967bb5335de8f8f292a604ac3c67d6e1c2d201cc52f6d14d5714"
   }
 }

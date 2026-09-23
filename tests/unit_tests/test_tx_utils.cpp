@@ -141,17 +141,19 @@ TEST(parse_and_validate_tx_extra, is_valid_tx_extra_parsed)
   cryptonote::transaction tx = AUTO_VAL_INIT(tx);
   cryptonote::account_base acc;
   acc.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
-  cryptonote::blobdata b = "dsdsdfsdfsf";
+  cryptonote::blobdata b = "dsdsdfsd"; // exactly SHEKYL_COINBASE_NONCE_BYTES
   ASSERT_TRUE(cryptonote::construct_miner_tx(0, 0, 10000000000000, 1000, TEST_FEE, /*frozen_segment_count=*/0, acc.get_keys().m_account_address, tx, b, 1));
   crypto::public_key tx_pub_key = cryptonote::get_tx_pub_key_from_extra(tx);
   ASSERT_NE(tx_pub_key, crypto::null_pkey);
 }
 TEST(parse_and_validate_tx_extra, fails_on_big_extra_nonce)
 {
+  // The coinbase nonce is a fixed SHEKYL_COINBASE_NONCE_BYTES (TXE-Q6'); one
+  // byte more is refused at construction, not padded or truncated.
   cryptonote::transaction tx = AUTO_VAL_INIT(tx);
   cryptonote::account_base acc;
   acc.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
-  cryptonote::blobdata b(TX_EXTRA_NONCE_MAX_COUNT + 1, 0);
+  cryptonote::blobdata b(SHEKYL_COINBASE_NONCE_BYTES + 1, 0);
   ASSERT_FALSE(cryptonote::construct_miner_tx(0, 0, 10000000000000, 1000, TEST_FEE, /*frozen_segment_count=*/0, acc.get_keys().m_account_address, tx, b, 1));
 }
 TEST(parse_and_validate_tx_extra, fails_on_wrong_size_in_extra_nonce)

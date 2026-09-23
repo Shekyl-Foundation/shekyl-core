@@ -33,7 +33,9 @@
 
 #define CORE_RPC_ERROR_CODE_WRONG_PARAM           -1
 #define CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT        -2
-#define CORE_RPC_ERROR_CODE_TOO_BIG_RESERVE_SIZE  -3
+// -3 was TOO_BIG_RESERVE_SIZE (bound 255). RETIRED when the coinbase nonce
+// became a fixed 8 bytes (TXE-Q6'); the new bound has its own code (-23) so
+// an old client's error is never misread as the new rule.
 #define CORE_RPC_ERROR_CODE_WRONG_WALLET_ADDRESS  -4
 #define CORE_RPC_ERROR_CODE_INTERNAL_ERROR        -5
 #define CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB       -6
@@ -51,6 +53,10 @@
 #define CORE_RPC_ERROR_CODE_RESTRICTED            -19
 #define CORE_RPC_ERROR_CODE_PAYMENTS_NOT_ENABLED  -21
 #define CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE  -22
+// get_block_template was sent reserve_size > 8 or an extra_nonce longer than
+// 8 bytes; the coinbase nonce is fixed at SHEKYL_COINBASE_NONCE_BYTES
+// (TXE-Q6'). Distinct so a pool stack sees the cause.
+#define CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND  -23
 
 static inline const char *get_rpc_server_error_message(int64_t code)
 {
@@ -58,7 +64,6 @@ static inline const char *get_rpc_server_error_message(int64_t code)
   {
     case CORE_RPC_ERROR_CODE_WRONG_PARAM: return "Invalid parameter";
     case CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT: return "Height is too large";
-    case CORE_RPC_ERROR_CODE_TOO_BIG_RESERVE_SIZE: return "Reserve size is too large";
     case CORE_RPC_ERROR_CODE_WRONG_WALLET_ADDRESS: return "Wrong wallet address";
     case CORE_RPC_ERROR_CODE_INTERNAL_ERROR: return "Internal error";
     case CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB: return "Wrong block blob";
@@ -76,6 +81,7 @@ static inline const char *get_rpc_server_error_message(int64_t code)
     case CORE_RPC_ERROR_CODE_RESTRICTED: return "Parameters beyond restricted allowance";
     case CORE_RPC_ERROR_CODE_PAYMENTS_NOT_ENABLED: return "Payments not enabled";
     case CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE: return "Archive unavailable";
+    case CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND: return "reserve_size / extra_nonce exceed the 8-byte coinbase nonce";
     default: MERROR("Unknown error: " << code); return "Unknown error";
   }
 }

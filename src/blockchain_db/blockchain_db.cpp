@@ -490,7 +490,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     uint64_t next_output_seq = get_num_outputs(0) - this_block_output_count;
 
     // CEN-I19: the store applies the SAME shape rule admission applies -- one
-    // rule, one implementation (`check_tx_extra_pqc_field_shape`, over
+    // rule, one implementation (`check_tx_extra_shape`, over
     // shekyl-wire's `check_pqc_field_shape`), so any path reaching add_block
     // without admission fails closed instead of storing a leaf the rule
     // forbids. Re-deriving parts of the rule here is what went wrong before:
@@ -516,7 +516,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       ShekylOwnedBuffer blob;
       const int32_t rc = shekyl_tx_extra_leaf_entries(
         tx.extra.empty() ? nullptr : tx.extra.data(), tx.extra.size(),
-        tx.vout.size(), &blob.buf, msg, sizeof(msg));
+        tx.vout.size(), is_coinbase(tx), &blob.buf, msg, sizeof(msg));
       if (rc != SHEKYL_TX_EXTRA_OK)
       {
         msg[sizeof(msg) - 1] = '\0';

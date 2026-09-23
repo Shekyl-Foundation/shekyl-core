@@ -1476,6 +1476,29 @@ namespace {
   }
 } // anonymous namespace
 
+// The coinbase extra through the one writer (shekyl_coinbase_extra), zero
+// nonce: [0x01 pubkey, 0x02 nonce(8), 0x06 KEM, 0x07 leaf entries] for
+// tx.vout.size() outputs, judged by the coinbase grammar before it is handed
+// back. Every block_validation coinbase is built here, so a test that expects
+// a block to be refused is refused for the reason it is about, never for a
+// scaffold that fell out of the grammar.
+static bool write_coinbase_extra(transaction& tx, const crypto::public_key& tx_pub,
+                                 const std::vector<uint8_t>& kem_blob, const std::vector<uint8_t>& leaf_blob)
+{
+  const uint8_t nonce[SHEKYL_COINBASE_NONCE_BYTES] = {0};
+  char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
+  ShekylOwnedBuffer extra;
+  const int32_t rc = shekyl_coinbase_extra(
+    reinterpret_cast<const uint8_t*>(&tx_pub), nonce,
+    kem_blob.empty() ? nullptr : kem_blob.data(), kem_blob.size(),
+    leaf_blob.empty() ? nullptr : leaf_blob.data(), leaf_blob.size(),
+    tx.vout.size(), &extra.buf, msg, sizeof(msg));
+  CHECK_AND_ASSERT_MES(rc == SHEKYL_TX_EXTRA_OK, false,
+    "coinbase extra refused by the grammar (code " << rc << "): " << msg);
+  tx.extra.assign(extra.data(), extra.data() + extra.size());
+  return true;
+}
+
 bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins,
                                  const account_public_address& miner_address, transaction& tx, uint64_t fee,
                                  uint8_t hf_version/* = 1*/, keypair* p_txkey/* = 0*/,
@@ -1493,23 +1516,26 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
   const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
   const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
-  size_t target_block_weight = txs_weight;
-  while (true)
+  // The extra is built once, at the end, by the one coinbase writer
+  // (shekyl_coinbase_extra, zero nonce): this scaffold produces what the
+  // coinbase grammar admits, so a block_validation test that expects
+  // acceptance gets it, and one that expects rejection gets it for the
+  // reason it is about. (The former weight-padding arm -- 0x00 bytes appended
+  // to hit a target block weight -- built a coinbase the grammar forbids;
+  // every caller passed txs_weight = 0 and never reached it.)
+  CHECK_AND_ASSERT_MES(txs_weight == 0, false,
+    "construct_miner_tx_manually: weight padding is not a coinbase the grammar admits");
   {
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
     tx.ct_signatures = {};
 
-    add_tx_pub_key_to_extra(tx, txkey.pub);
-    if (!sort_tx_extra(tx.extra, tx.extra))
-      return false;
-
     txin_gen in;
     in.height = height;
 
     uint64_t block_reward;
-    if (!get_block_reward(median_block_weight, target_block_weight, already_generated_coins, block_reward, hf_version, /*tx_volume=*/{}))
+    if (!get_block_reward(median_block_weight, /*current_block_weight=*/0, already_generated_coins, block_reward, hf_version, /*tx_volume=*/{}))
       return false;
 
     shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0);
@@ -1518,10 +1544,8 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, shekyl::tx_volume_window{}, shekyl::supply_facts{}, /*frozen_segment_count=*/0);
     block_reward += burn.miner_fee_income;
 
-    tx_extra_pqc_kem_ciphertext kem_field;
-    kem_field.blob.reserve(HYBRID_KEM_CT_BYTES);
-    tx_extra_pqc_leaf_entries leaf_entry_field;
-    leaf_entry_field.blob.reserve(PQC_LEAF_ENTRY_LEN);
+    std::vector<uint8_t> kem_blob;
+    std::vector<uint8_t> leaf_blob;
 
     tx.ct_signatures.outPk.resize(1);
     tx.ct_signatures.enc_amounts.resize(1);
@@ -1549,55 +1573,22 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     memcpy(tx.ct_signatures.enc_labels[0].data(), od.enc_label, 8);
     tx.ct_signatures.enc_labels[0][8] = od.label_tag;
 
-    kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
+    kem_blob.insert(kem_blob.end(), od.kem_ciphertext_x25519, od.kem_ciphertext_x25519 + 32);
     if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
-      kem_field.blob.append(
-        reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
-        od.kem_ciphertext_ml_kem.len);
-    leaf_entry_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
+      kem_blob.insert(kem_blob.end(), od.kem_ciphertext_ml_kem.ptr,
+        od.kem_ciphertext_ml_kem.ptr + od.kem_ciphertext_ml_kem.len);
+    leaf_blob.insert(leaf_blob.end(), od.pqc_leaf, od.pqc_leaf + PQC_LEAF_ENTRY_LEN);
 
     ShekylOutputData tmp = od;
     shekyl_output_data_free(&tmp);
 
-    {
-      std::ostringstream oss;
-      binary_archive<true> oar(oss);
-      tx_extra_field variant_field = kem_field;
-      if (!::do_serialize(oar, variant_field)) return false;
-      std::string blob = oss.str();
-      tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
-    }
-    {
-      std::ostringstream oss;
-      binary_archive<true> oar(oss);
-      tx_extra_field variant_field = leaf_entry_field;
-      if (!::do_serialize(oar, variant_field)) return false;
-      std::string blob = oss.str();
-      tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
-    }
-    if (!sort_tx_extra(tx.extra, tx.extra))
+    if (!write_coinbase_extra(tx, txkey.pub, kem_blob, leaf_blob))
       return false;
 
     tx.version = 3;
     tx.unlock_time = height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
     tx.vin.push_back(in);
     tx.invalidate_hashes();
-
-    const size_t actual_block_weight = txs_weight + get_transaction_weight(tx);
-    if (target_block_weight < actual_block_weight)
-      target_block_weight = actual_block_weight;
-    else if (actual_block_weight < target_block_weight)
-    {
-      const size_t delta = target_block_weight - actual_block_weight;
-      tx.extra.resize(tx.extra.size() + delta, 0);
-      const size_t adjusted = txs_weight + get_transaction_weight(tx);
-      if (adjusted == target_block_weight)
-        break;
-      CHECK_AND_ASSERT_MES(target_block_weight < adjusted, false, "Unexpected block size");
-      target_block_weight += adjusted - target_block_weight;
-    }
-    else
-      break;
   }
 
   return true;
@@ -1646,39 +1637,36 @@ bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txk
   enc_label[8] = od.label_tag;
   tx.ct_signatures.enc_labels.push_back(enc_label);
 
-  std::vector<tx_extra_field> extra_fields;
-  CHECK_AND_ASSERT_MES(parse_tx_extra(tx.extra, extra_fields), false, "failed to parse tx.extra");
+  // Read the coinbase's pubkey, 0x06 and 0x07 back through the codec, extend
+  // the two blobs by this output, and rebuild the extra with the one writer.
+  crypto::public_key tx_pub;
+  CHECK_AND_ASSERT_MES(shekyl_tx_extra_tx_pubkey(tx.extra.data(), tx.extra.size(),
+      reinterpret_cast<uint8_t*>(&tx_pub)) == SHEKYL_TX_EXTRA_OK, false,
+    "append_v3_output: coinbase extra carries no 0x01 pubkey");
+  ShekylOwnedBuffer kem_buf, leaf_buf;
+  // A leafless coinbase (no outputs yet) has neither field: ABSENT is the
+  // empty blob here, MALFORMED is a real failure.
+  const int32_t kem_rc = shekyl_tx_extra_field(tx.extra.data(), tx.extra.size(),
+    SHEKYL_TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, 0, &kem_buf.buf);
+  CHECK_AND_ASSERT_MES(kem_rc == SHEKYL_TX_EXTRA_OK || kem_rc == SHEKYL_TX_EXTRA_ABSENT, false,
+    "append_v3_output: coinbase extra 0x06 read failed with code " << kem_rc);
+  const int32_t leaf_rc = shekyl_tx_extra_field(tx.extra.data(), tx.extra.size(),
+    SHEKYL_TX_EXTRA_TAG_PQC_LEAF_ENTRIES, 0, &leaf_buf.buf);
+  CHECK_AND_ASSERT_MES(leaf_rc == SHEKYL_TX_EXTRA_OK || leaf_rc == SHEKYL_TX_EXTRA_ABSENT, false,
+    "append_v3_output: coinbase extra 0x07 read failed with code " << leaf_rc);
 
-  tx_extra_pqc_kem_ciphertext kem_field;
-  find_tx_extra_field_by_type(extra_fields, kem_field);
-  kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
+  std::vector<uint8_t> kem_blob(kem_buf.data(), kem_buf.data() + kem_buf.size());
+  kem_blob.insert(kem_blob.end(), od.kem_ciphertext_x25519, od.kem_ciphertext_x25519 + 32);
   if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
-    kem_field.blob.append(
-      reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
-      od.kem_ciphertext_ml_kem.len);
-
-  tx_extra_pqc_leaf_entries leaf_entry_field;
-  find_tx_extra_field_by_type(extra_fields, leaf_entry_field);
-  leaf_entry_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
+    kem_blob.insert(kem_blob.end(), od.kem_ciphertext_ml_kem.ptr,
+      od.kem_ciphertext_ml_kem.ptr + od.kem_ciphertext_ml_kem.len);
+  std::vector<uint8_t> leaf_blob(leaf_buf.data(), leaf_buf.data() + leaf_buf.size());
+  leaf_blob.insert(leaf_blob.end(), od.pqc_leaf, od.pqc_leaf + PQC_LEAF_ENTRY_LEN);
 
   ShekylOutputData tmp = od;
   shekyl_output_data_free(&tmp);
 
-  tx.extra.clear();
-  for (auto& f : extra_fields)
-  {
-    if (std::holds_alternative<tx_extra_pqc_kem_ciphertext>(f))
-      f = kem_field;
-    else if (std::holds_alternative<tx_extra_pqc_leaf_entries>(f))
-      f = leaf_entry_field;
-
-    std::ostringstream oss;
-    binary_archive<true> oar(oss);
-    CHECK_AND_ASSERT_MES(::do_serialize(oar, f), false, "failed to re-serialize extra field");
-    std::string blob = oss.str();
-    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
-  }
-  if (!sort_tx_extra(tx.extra, tx.extra))
+  if (!write_coinbase_extra(tx, tx_pub, kem_blob, leaf_blob))
     return false;
 
   tx.invalidate_hashes();
