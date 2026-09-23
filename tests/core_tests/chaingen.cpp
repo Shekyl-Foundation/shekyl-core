@@ -504,7 +504,13 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
 
   blk.miner_tx = AUTO_VAL_INIT(blk.miner_tx);
   size_t target_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
-  while (true)
+  // The same fixed point Blockchain::create_block_template seeks: the weight
+  // the reward is priced at must equal the weight the block has (connect
+  // requires the coinbase to claim exactly the reward). Re-price at the actual
+  // weight until they agree; padding `extra` to the estimate is not available
+  // under the closed coinbase grammar (CEN-I20). Bounded so a reward sitting
+  // on a varint boundary fails the generator rather than spinning.
+  for (size_t try_count = 0; try_count != 10; ++try_count)
   {
     // frozen_segment_count = 0: the generator builds blocks offline and tracks
     // no curve tree, and the shipped genesis-neutral parameterization makes
@@ -516,42 +522,11 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
         /*tx_volume=*/{}, shekyl::supply_facts{already_generated_coins, /*total_burned: the generator tracks no burn fold; see the frozen_segment_count note*/0}, /*genesis_ng_height=*/0))
       return false;
 
-    size_t actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
-    if (target_block_weight < actual_block_weight)
-    {
-      target_block_weight = actual_block_weight;
-    }
-    else if (actual_block_weight < target_block_weight)
-    {
-      size_t delta = target_block_weight - actual_block_weight;
-      blk.miner_tx.extra.resize(blk.miner_tx.extra.size() + delta, 0);
-      actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
-      if (actual_block_weight == target_block_weight)
-      {
-        break;
-      }
-      else
-      {
-        CHECK_AND_ASSERT_MES(target_block_weight < actual_block_weight, false, "Unexpected block size");
-        delta = actual_block_weight - target_block_weight;
-        blk.miner_tx.extra.resize(blk.miner_tx.extra.size() - delta);
-        actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
-        if (actual_block_weight == target_block_weight)
-        {
-          break;
-        }
-        else
-        {
-          CHECK_AND_ASSERT_MES(actual_block_weight < target_block_weight, false, "Unexpected block size");
-          blk.miner_tx.extra.resize(blk.miner_tx.extra.size() + delta, 0);
-          target_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
-        }
-      }
-    }
-    else
-    {
+    const size_t actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
+    if (actual_block_weight == target_block_weight)
       break;
-    }
+    target_block_weight = actual_block_weight;
+    CHECK_AND_ASSERT_MES(try_count + 1 != 10, false, "construct_block: coinbase weight and reward did not settle in 10 passes");
   }
 
   //blk.tree_root_hash = get_tx_tree_hash(blk);
