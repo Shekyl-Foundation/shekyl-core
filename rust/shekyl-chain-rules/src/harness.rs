@@ -453,17 +453,29 @@ pub mod fixture {
     /// never a point). Ceiling **16** = the wire's `MAX_OUTPUTS`; key images
     /// draw at other indices.
     ///
-    /// **Derived once, pinned, never re-derived in-crate** (this crate
-    /// intentionally has no curve dependency). The gate
-    /// `fixture_points_are_what_they_claim` asserts what a fixture needs —
-    /// every entry is a canonical prime-order point (`shekyl-ct-balance`)
-    /// and the entries are pairwise distinct — and that entries 0 and 1 are
-    /// `G` and `TWO_G`. The multiplicity claim is provenance, checkable by
-    /// re-running the deriver: RFC 8032 arithmetic over `2^255 − 19`,
+    /// **The contiguity is load-bearing.** Because `POINTS[k−1] = k·G`,
+    /// multiples add: masks `2·G ‥ (N+1)·G` balance against one pseudo-out
+    /// of `(Σk)·G` with zero fee, and that identity — an arithmetic fact
+    /// about how the table was *constructed*, not anything the code under
+    /// test computes — is what makes the store's `spend(_, N)`
+    /// (`connect_fixtures.rs`), the ingest's `spend`, and [`listed`] pass
+    /// CEN-H18. Renumber the table, skip an entry, or take a non-contiguous
+    /// subset and those fixtures stop balancing for a reason that has
+    /// nothing to do with the rule. `fixture_points_are_what_they_claim`
+    /// therefore asserts `POINTS[k−1] == k·G` for every `k`, with test-only
+    /// curve arithmetic — the identity is a gate, not a convention.
+    ///
+    /// **Derived once, pinned, never re-derived in production code** (the
+    /// crate's production surface has no curve dependency; the test surface
+    /// has `curve25519-dalek`). The gate asserts what a fixture needs —
+    /// every entry a canonical prime-order point (`shekyl-ct-balance`),
+    /// pairwise distinct, entries 0 and 1 the named constants — and the
+    /// multiplicity above. Provenance for the record: the values were first
+    /// produced by RFC 8032 arithmetic over `2^255 − 19`,
     /// `d = −121665/121666`, `G = (x(4/5), 4/5)`, repeated affine addition,
     /// compressed as `y ‖ sign(x) << 7` little-endian — thirty lines of
     /// Python with no dependencies, which reproduced `G` and `TWO_G` before
-    /// the other fourteen were taken.
+    /// the other fourteen were taken; the gate now says the same.
     pub const POINTS: [[u8; 32]; 16] = [
         G,
         TWO_G,

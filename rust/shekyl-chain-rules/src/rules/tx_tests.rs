@@ -338,8 +338,13 @@ fn h14_loud_amounts_are_refused_except_on_an_emission() {
     refused_lone(&loud(listed(KI)), CenRow::H14);
     refused_listed(&loud(listed(KI)), CenRow::H14);
     refused_lone(&loud(with_inputs(vec![bond_post(), spend(1)])), CenRow::H14);
-    // A loud emission passes H14 — asserted on the rule, since the whole
-    // form also needs H22's balance (its own fixture, below).
+    // A loud emission passes H14 — asserted on the rule alone, since the
+    // whole form also needs H22's balance. **Coupled to
+    // `balanced_bond_post_and_emission_fixtures_pass`**, which is what
+    // shows H14 is *wired* for an emission through `tx_form` (the loud case
+    // differs only in amount visibility, not in dispatch); narrow or delete
+    // that test and this one silently becomes a unit test on `H14::check`
+    // with no evidence the rule runs.
     let emission_tx = loud(with_inputs(vec![emission()]));
     let mut coverage = RuleCoverage::EMPTY;
     let cx = TxContext::derive(&emission_tx, TxSlot::Lone, &mut coverage).expect("an emission");
@@ -558,7 +563,11 @@ fn emission_tx(reward: u64) -> Transaction {
 /// The balanced archival fixtures pass every landed row at both sites —
 /// the positive controls for H21 and H22, and a check that `mask_committing`
 /// is doing what it claims (a balance that holds is the only witness a
-/// test can have for it).
+/// test can have for it). **`h14_loud_amounts_are_refused_except_on_an_emission`
+/// depends on this test** for the evidence that H14 is reached through
+/// `tx_form` on an emission: it asserts its loud case on `H14::check`
+/// alone because the whole form needs the balance fixtured here. Narrowing
+/// this test narrows that one.
 #[test]
 fn balanced_bond_post_and_emission_fixtures_pass() {
     for tx in [bond_post_tx(1_000), emission_tx(5)] {
@@ -676,6 +685,54 @@ fn h18_an_unbalanced_spend_is_refused() {
     )
     .expect("a serve credit")
     .contains(CenRow::H18));
+}
+
+/// The balance is over the **amounts**, not only the blindings. Every other
+/// H18 fixture has pure `k·G` masks — zero hidden amounts — so an
+/// implementation that summed only the `G` components of the commitments
+/// and dropped each `amount·H` would balance them exactly and pass. Here
+/// two masks commit to distinct non-zero hidden amounts (`3` and `4`) under
+/// blindings `2·G` and `3·G`, and the one pseudo-out must carry `5·G + 7·H`;
+/// with a fee of `2` it must carry `5·G + 9·H`. A pseudo-out carrying the
+/// blindings alone (`5·G`) is refused, as is one off by one amount.
+#[test]
+fn h18_the_balance_is_over_the_hidden_amounts_not_only_the_blindings() {
+    let with_pseudo_out = |fee: u64, pseudo_out: [u8; 32]| {
+        let mut tx = listed(KI);
+        tx.prefix.outputs.push(shekyl_wire::Output {
+            amount: 0,
+            key: TWO_G,
+            view_tag: 3,
+        });
+        if let Ct::Fcmp {
+            fee: f,
+            base,
+            prunable: Some(p),
+            ..
+        } = &mut tx.ct
+        {
+            *f = fee;
+            base.commitments = vec![mask_committing(2, 3), mask_committing(3, 4)];
+            base.enc_amounts.push([0x33; 9]);
+            base.enc_labels.push([0x44; 9]);
+            p.bulletproofs = vec![crate::harness::fixture::bp_plus_layout_for(2)];
+            p.pseudo_outs = vec![pseudo_out];
+        }
+        tx
+    };
+    let balanced = with_pseudo_out(0, mask_committing(5, 7));
+    assert!(tx_form(&balanced, TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("the amounts sum")
+        .contains(CenRow::H18));
+    refused_listed_never(&balanced);
+    let with_fee = with_pseudo_out(2, mask_committing(5, 9));
+    assert!(tx_form(&with_fee, TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("the amounts and the fee sum")
+        .contains(CenRow::H18));
+    // Blindings alone: what a G-only sum would accept.
+    refused_lone(&with_pseudo_out(0, mask_committing(5, 0)), CenRow::H18);
+    // The amounts summed wrong by one.
+    refused_lone(&with_pseudo_out(0, mask_committing(5, 8)), CenRow::H18);
 }
 
 // ---- CEN-H21 ------------------------------------------------------------

@@ -113,10 +113,25 @@ fn fixture_points_are_what_they_claim() {
     assert!(check_commitment_masks(&TWO_G, 1, MaskSubject::Coinbase { amounts: &[0] }).is_ok());
     // The table (slice 5): every entry a canonical prime-order point, all
     // sixteen pairwise distinct, the first two the named constants, and
-    // `point(k)` the k-th from 1. Pointness is what the fixtures need;
-    // multiplicity is provenance (the deriver is quoted on `POINTS`).
+    // `point(k)` the k-th from 1. Pointness is what the fixtures need.
     assert_eq!(POINTS[0], G);
     assert_eq!(POINTS[1], TWO_G);
+    // Multiplicity — `POINTS[k−1] == k·G` for every k — is what the balance
+    // fixtures rely on (the table's contiguity, see its doc). Test-only
+    // curve arithmetic makes it a gate rather than quoted provenance: a
+    // renumbered or non-contiguous table fails here, not in a store test
+    // three crates away.
+    {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+        use curve25519_dalek::scalar::Scalar;
+        for (i, p) in POINTS.iter().enumerate() {
+            let k = u64::try_from(i + 1).expect("small");
+            let expected = (ED25519_BASEPOINT_POINT * Scalar::from(k))
+                .compress()
+                .to_bytes();
+            assert_eq!(*p, expected, "POINTS[{i}] is {k}·G");
+        }
+    }
     assert_eq!(point(1), G);
     assert_eq!(point(16), POINTS[15]);
     let flat: Vec<u8> = POINTS.iter().flatten().copied().collect();
