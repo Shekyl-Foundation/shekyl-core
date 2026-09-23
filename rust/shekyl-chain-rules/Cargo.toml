@@ -38,6 +38,13 @@ shekyl-address = { path = "../shekyl-address" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-economics = { path = "../shekyl-economics" }
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
+# CEN-H21/H22's balances (slice 5): the bond-post / emission CT balance with
+# its credit-xor-debit rigidity is single-sourced in this crate's
+# `bond_ct_balance` — the body the C++ reaches through
+# `shekyl_archival_verify_bond_post_ct_balance` — and a second copy of the
+# term rule here would be the two-sources class the slice exists to close.
+# Slice 8 (4.J) adopts the rest of it.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 
 [features]
 # The negative-fixture harness (`harness.rs`: `MockChain`, `MockSubstrate`,
@@ -60,6 +67,13 @@ serde_json = "1"
 # with the table. Both workspace members; test-only.
 shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# The balance rows' positive fixtures (H21, H22, slice 5) need a mask of the
+# form `k·G + a·H`, which is curve arithmetic the crate itself never does —
+# the production rules only *verify*, through `shekyl-ct-balance`. Test-only;
+# `a·H` comes from `shekyl_ct_balance::amount_commitment` so the fixture uses
+# the crate's own `H`, and this dependency contributes `k·G` and the sum.
+# Already a workspace dependency (ct-balance pins the same major).
+curve25519-dalek = "4"
 
 [lints]
 workspace = true

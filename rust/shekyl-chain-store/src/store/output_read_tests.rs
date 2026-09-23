@@ -186,12 +186,16 @@ fn output_is_recorded_at_every_index_below_the_count_and_beyond_count_from_it() 
             height: h(0),
         })
     );
-    // Index 3: the spend's second vout, recorded at height 1.
+    // Index 3: the spend's second vout, recorded at height 1. The expected
+    // key and mask are the fixture's by name — `spend(_, 2)` keys its
+    // outputs `point(1), point(2)` and masks them `point(2), point(3)` — so
+    // this pins the store's read to the fixture's construction, never to a
+    // literal that would follow whatever the code produced.
     assert_eq!(
         snap.output(gi(3)).expect("read"),
         AtIndex::Recorded(RecordedOutput {
-            pubkey: shekyl_types::OneTimePubkey::from_bytes([0x81; 32]),
-            commitment: shekyl_types::CommitmentBytes::from_bytes([0xa1; 32]),
+            pubkey: shekyl_types::OneTimePubkey::from_bytes(fixture::point(2)),
+            commitment: shekyl_types::CommitmentBytes::from_bytes(fixture::point(3)),
             height: h(1),
         })
     );

@@ -54,24 +54,31 @@ pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
                 key_offsets: Vec::new(),
                 key_image: [key_image; 32],
             }],
-            outputs: (0..outputs)
-                .map(|i| Output {
+            // Keys and masks are entries of the harness's point table —
+            // canonical prime-order points (H7, H17), never a filled byte
+            // pattern (which was here until E6 slice 5 commit 5, and is a
+            // shape the production path cannot produce). Keys take
+            // `point(1..)`; masks take `point(2..)` because `G` is
+            // `zeroCommit(0)` and refused as a mask.
+            outputs: (1..=outputs)
+                .map(|k| Output {
                     amount: 0,
-                    key: [0x80 + u8::try_from(i).expect("small"); 32],
+                    key: fixture::point(k),
                     view_tag: 2,
                 })
                 .collect(),
             extra: Vec::new(),
         },
         ct: Ct::Fcmp {
-            fee: 7,
+            // Zero fee, so the one pseudo-out balances the masks exactly:
+            // multiples of `G` add, and the masks are `2·G ‥ (N+1)·G`, so the
+            // pseudo-out is `(Σ k)·G` for `k in 2..=N+1` (H18).
+            fee: 0,
             reference_block: BlockHash::from_bytes([0x99; 32]),
             base: CtBase {
                 enc_amounts: vec![[0x11; 9]; outputs],
                 enc_labels: vec![[0x22; 9]; outputs],
-                commitments: (0..outputs)
-                    .map(|i| [0xa0 + u8::try_from(i).expect("small"); 32])
-                    .collect(),
+                commitments: (2..=outputs + 1).map(fixture::point).collect(),
             },
             // One per input: the wire reads `nvin` of them, and a spend with
             // none parses as the storage-pruned form.
@@ -85,7 +92,7 @@ pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
                 bulletproofs: vec![fixture::bp_plus_layout_for(outputs)],
                 tree_depth: 0,
                 fcmp_proof: vec![0xF0],
-                pseudo_outs: vec![fixture::TWO_G],
+                pseudo_outs: vec![fixture::point((2..=outputs + 1).sum())],
                 serve_credit_pruned: Vec::new(),
             }),
         },

@@ -105,11 +105,36 @@ fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Ver
 /// coinbase output.
 #[test]
 fn fixture_points_are_what_they_claim() {
+    use crate::harness::fixture::{point, POINTS};
     use shekyl_ct_balance::{check_commitment_masks, check_output_keys, MaskSubject};
     assert!(check_output_keys(&G).is_ok());
     assert!(check_output_keys(&TWO_G).is_ok());
     assert!(check_commitment_masks(&G, 1, MaskSubject::Coinbase { amounts: &[0] }).is_err());
     assert!(check_commitment_masks(&TWO_G, 1, MaskSubject::Coinbase { amounts: &[0] }).is_ok());
+    // The table (slice 5): every entry a canonical prime-order point, all
+    // sixteen pairwise distinct, the first two the named constants, and
+    // `point(k)` the k-th from 1. Pointness is what the fixtures need;
+    // multiplicity is provenance (the deriver is quoted on `POINTS`).
+    assert_eq!(POINTS[0], G);
+    assert_eq!(POINTS[1], TWO_G);
+    assert_eq!(point(1), G);
+    assert_eq!(point(16), POINTS[15]);
+    let flat: Vec<u8> = POINTS.iter().flatten().copied().collect();
+    assert!(
+        check_output_keys(&flat).is_ok(),
+        "every entry is a canonical prime-order point"
+    );
+    let distinct: std::collections::BTreeSet<[u8; 32]> = POINTS.iter().copied().collect();
+    assert_eq!(distinct.len(), POINTS.len(), "pairwise distinct");
+    // Every entry also serves as a non-trivial mask for a zero-amount
+    // output except `G` itself (`zeroCommit(0) = G`), which is the one entry
+    // a fixture must not use as a coinbase mask.
+    for (i, p) in POINTS.iter().enumerate().skip(1) {
+        assert!(
+            check_commitment_masks(p, 1, MaskSubject::Coinbase { amounts: &[0] }).is_ok(),
+            "entry {i} is a usable mask"
+        );
+    }
 }
 
 /// The fixture coinbase passes every 4.F row at genesis and at height 1.

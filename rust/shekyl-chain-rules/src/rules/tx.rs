@@ -48,6 +48,7 @@ use crate::coverage::RuleCoverage;
 use crate::rules::{Rule, TxContext, TxKind, TxRule, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use shekyl_economics::FULL_REWARD_ZONE;
+use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
 // ---- the classification -------------------------------------------------
@@ -526,6 +527,252 @@ impl TxRule for H20 {
             if !p.bulletproofs.is_empty() || !p.fcmp_proof.is_empty() || !p.pseudo_outs.is_empty() {
                 return refuse();
             }
+        }
+        Ok(())
+    }
+}
+
+// ---- the adopted crypto rows -------------------------------------------
+//
+// H7, H17, H18, H21, H22 call the Rust bodies the C++ already marshals to —
+// `shekyl-ct-balance` for points, masks and the plain balance,
+// `shekyl-archival-retention` for the bond-post / emission balance with
+// its credit-xor-debit term — so a divergence between what the pool and
+// the connect path accept and what these rows accept is not possible: it
+// is one function.
+
+/// The output keys as one `N × 32` buffer, the shape `check_output_keys`
+/// takes. (The miner module has its own; a shared helper would couple two
+/// families for eight lines.)
+fn flat_keys(tx: &Transaction) -> Vec<u8> {
+    tx.prefix.outputs.iter().flat_map(|o| o.key).collect()
+}
+
+/// The commitment masks as one `N × 32` buffer, and the fee, for either CT
+/// form.
+fn flat_masks(tx: &Transaction) -> Vec<u8> {
+    let (Ct::Null(base) | Ct::Fcmp { base, .. }) = &tx.ct;
+    base.commitments.iter().flatten().copied().collect()
+}
+
+/// The pseudo-outs as one `N × 32` buffer; empty when there is no prunable
+/// region.
+fn flat_pseudo_outs(tx: &Transaction) -> Vec<u8> {
+    match &tx.ct {
+        Ct::Fcmp {
+            prunable: Some(p), ..
+        } => p.pseudo_outs.iter().flatten().copied().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// CEN-H7: every output key is a canonical, prime-order, non-identity point
+/// (`check_outs_valid` → `shekyl_check_output_keys`; run on the coinbase
+/// from `prevalidate_miner_transaction`, where CEN-F9 judges the same keys
+/// under its own row). Every transaction.
+pub(crate) struct H7;
+
+impl Rule for H7 {
+    const ROW: CenRow = CenRow::H7;
+}
+
+impl TxRule for H7 {
+    const SCOPE: TxScope = TxScope::All;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        if shekyl_ct_balance::check_output_keys(&flat_keys(cx.tx)).is_err() {
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+}
+
+/// CEN-H17: every commitment mask is a canonical prime-order point and
+/// non-trivial — never the identity, never `G` — and a coinbase's mask
+/// additionally differs from `zeroCommit(amount)`
+/// (`check_commitment_mask_valid` → `shekyl-ct-balance`; run on the
+/// coinbase from `prevalidate_miner_transaction`, where CEN-F10 judges the
+/// same masks). One mask per output (the arity clause CEN-L11's grading
+/// depends on). Every transaction; the subject follows the CT form.
+pub(crate) struct H17;
+
+impl Rule for H17 {
+    const ROW: CenRow = CenRow::H17;
+}
+
+impl TxRule for H17 {
+    const SCOPE: TxScope = TxScope::All;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        use shekyl_ct_balance::{check_commitment_masks, MaskSubject};
+        let masks = flat_masks(cx.tx);
+        let n_out = cx.tx.prefix.outputs.len();
+        let amounts: Vec<u64>;
+        let subject = match &cx.tx.ct {
+            Ct::Null(_) => {
+                amounts = cx.tx.prefix.outputs.iter().map(|o| o.amount).collect();
+                MaskSubject::Coinbase { amounts: &amounts }
+            }
+            Ct::Fcmp { .. } => MaskSubject::Spend,
+        };
+        if check_commitment_masks(&masks, n_out, subject).is_err() {
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+}
+
+/// CEN-H18: the plain spend's cleartext balance —
+/// `Σ pseudoOuts = Σ masks + fee·H`, canonical points
+/// (`verCtSemanticsSimple` → `shekyl_verify_ct_balance`). Applies to the
+/// spend class; the archival shapes carry their own balance (H20–H22) and
+/// record this row vacuous.
+pub(crate) struct H18;
+
+impl Rule for H18 {
+    const ROW: CenRow = CenRow::H18;
+}
+
+impl TxRule for H18 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        if !matches!(cx.class, TxClass::Spend { .. }) {
+            return Ok(());
+        }
+        let Ct::Fcmp { fee, .. } = &cx.tx.ct else {
+            // H15 refused a `Null` spend before this ran.
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        };
+        let balanced = shekyl_ct_balance::verify_ct_balance(
+            &flat_pseudo_outs(cx.tx),
+            &flat_masks(cx.tx),
+            AtomicUnits::from_raw(*fee),
+            &[],
+            &[],
+        );
+        if balanced.is_err() {
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+}
+
+/// The archival balance body both H21 and H22 reach — `Σ pseudoOuts +
+/// debit·H = Σ masks + fee·H + credit·H` with the credit-xor-debit term
+/// (`verArchivalCtBalanceAndRange` → `shekyl_archival_verify_bond_post_ct_balance`).
+/// `Err` is the row's refusal, whichever clause failed: an invalid point, a
+/// sum mismatch, or both terms set.
+fn archival_balance(tx: &Transaction, credit: u64, debit: u64) -> Result<(), ()> {
+    use shekyl_archival_retention::bond_ct_balance::{verify_bond_post_ct_balance, BondTerm};
+    let Ct::Fcmp { fee, .. } = &tx.ct else {
+        return Err(());
+    };
+    let term = BondTerm::from_credit_debit(credit, debit).map_err(|_| ())?;
+    verify_bond_post_ct_balance(&flat_pseudo_outs(tx), &flat_masks(tx), *fee, term).map_err(|_| ())
+}
+
+/// CEN-H21: the bond-post shape and balance (`ver_non_input_consensus`'s
+/// bond-post arm + `verCtSemanticsBondPost`): `pqc_auths == vin count`,
+/// at least one funding spend, `pseudoOuts == spend count`, a non-empty
+/// FCMP++ proof, `CTTypeFcmpPlusPlusPqc`, and the balance with
+/// `(credit, debit) = (bond_credit, bond_debit)`. Applies to the bond-post
+/// class. **The funding-input half** — empty offsets, unspent images, the
+/// FCMP++ proof over the spend subset — is 4.I's (I10–I15).
+pub(crate) struct H21;
+
+impl Rule for H21 {
+    const ROW: CenRow = CenRow::H21;
+}
+
+impl TxRule for H21 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        let TxClass::BondPost { post, spends } = cx.class else {
+            return Ok(());
+        };
+        let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        let Ct::Fcmp {
+            pqc_auths,
+            prunable: Some(prunable),
+            ..
+        } = &cx.tx.ct
+        else {
+            return refuse();
+        };
+        // The class names the index it derived from these very inputs, so
+        // this is always the bond post; a refusal, not a panic, if it ever
+        // is not (a validator does not `unreachable!` on its input).
+        let Some(Input::BondPost(bond)) = cx.tx.prefix.inputs.get(post) else {
+            return refuse();
+        };
+        if pqc_auths.len() != cx.tx.prefix.inputs.len()
+            || spends == 0
+            || prunable.pseudo_outs.len() != spends
+            || prunable.fcmp_proof.is_empty()
+        {
+            return refuse();
+        }
+        if archival_balance(cx.tx, bond.bond_credit, bond.bond_debit).is_err() {
+            return refuse();
+        }
+        Ok(())
+    }
+}
+
+/// CEN-H22: the emission shape and balance (`ver_non_input_consensus`'s
+/// emission arm + `verCtSemanticsEmission`): the reward total is the checked
+/// sum of the loud vout amounts and is positive; `pqc_auths == vin count`;
+/// `pseudoOuts == fee-input count`; the FCMP++ proof is present iff fee
+/// inputs are; `CTTypeFcmpPlusPlusPqc`; and the balance with the mint on the
+/// debit slot — `Σ pseudoOuts + total_reward·H = Σ masks + fee·H`. The
+/// checked sum is the one CEN-J24 uses (`shekyl_checked_sum_amounts`'s
+/// body); H9 has already refused an overflowing sum. Applies to the emission
+/// class.
+pub(crate) struct H22;
+
+impl Rule for H22 {
+    const ROW: CenRow = CenRow::H22;
+}
+
+impl TxRule for H22 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        let TxClass::Emission { spends, .. } = cx.class else {
+            return Ok(());
+        };
+        let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        let Ct::Fcmp {
+            pqc_auths,
+            prunable,
+            ..
+        } = &cx.tx.ct
+        else {
+            return refuse();
+        };
+        let total_reward = cx
+            .tx
+            .prefix
+            .outputs
+            .iter()
+            .try_fold(0u64, |acc, o| acc.checked_add(o.amount));
+        let Some(total_reward) = total_reward.filter(|t| *t > 0) else {
+            return refuse();
+        };
+        let (pseudo_outs, proof_present) = match prunable {
+            Some(p) => (p.pseudo_outs.len(), !p.fcmp_proof.is_empty()),
+            None => (0, false),
+        };
+        if pqc_auths.len() != cx.tx.prefix.inputs.len()
+            || pseudo_outs != spends
+            || proof_present != (spends > 0)
+        {
+            return refuse();
+        }
+        if archival_balance(cx.tx, 0, total_reward).is_err() {
+            return refuse();
         }
         Ok(())
     }

@@ -445,6 +445,71 @@ pub mod fixture {
         0x60, 0x22,
     ];
 
+    /// Sixteen distinct canonical prime-order points — `k·G` for `k = 1..=16`,
+    /// so [`POINTS[0]`](Self) is [`G`] and `POINTS[1]` is [`TWO_G`] — the
+    /// **one** table every fixture draws its output keys, commitment masks
+    /// and key images from (slice 5, ruled 2026-09-23: one table, not three;
+    /// no 4.H rule links the three uses, and a filled byte pattern is almost
+    /// never a point). Ceiling **16** = the wire's `MAX_OUTPUTS`; key images
+    /// draw at other indices.
+    ///
+    /// **Derived once, pinned, never re-derived in-crate** (this crate
+    /// intentionally has no curve dependency). The gate
+    /// `fixture_points_are_what_they_claim` asserts what a fixture needs —
+    /// every entry is a canonical prime-order point (`shekyl-ct-balance`)
+    /// and the entries are pairwise distinct — and that entries 0 and 1 are
+    /// `G` and `TWO_G`. The multiplicity claim is provenance, checkable by
+    /// re-running the deriver: RFC 8032 arithmetic over `2^255 − 19`,
+    /// `d = −121665/121666`, `G = (x(4/5), 4/5)`, repeated affine addition,
+    /// compressed as `y ‖ sign(x) << 7` little-endian — thirty lines of
+    /// Python with no dependencies, which reproduced `G` and `TWO_G` before
+    /// the other fourteen were taken.
+    pub const POINTS: [[u8; 32]; 16] = [
+        G,
+        TWO_G,
+        hex32(*b"d4b4f5784868c3020403246717ec169ff79e26608ea126a1ab69ee77d1b16712"),
+        hex32(*b"2f1132ca61ab38dff00f2fea3228f24c6c71d58085b80e47e19515cb27e8d047"),
+        hex32(*b"edc876d6831fd2105d0b4389ca2e283166469289146e2ce06faefe98b22548df"),
+        hex32(*b"f47e49f9d07ad2c1606b4d94067c41f9777d4ffda709b71da1d88628fce34d85"),
+        hex32(*b"b862409fb5c4c4123df2abf7462b88f041ad36dd6864ce872fd5472be363c5b1"),
+        hex32(*b"b4b937fca95b2f1e93e41e62fc3c78818ff38a66096fad6e7973e5c90006d321"),
+        hex32(*b"c0f1225584444ec730446e231390781ffdd2f256e9fcbeb2f40dddc2c2233d7f"),
+        hex32(*b"2c7be86ab07488ba43e8e03d85a67625cfbf98c8544de4c877241b7aaafc7fe3"),
+        hex32(*b"1337036ac32d8f30d4589c3c1c595812ce0fff40e37c6f5a97ab213f318290ad"),
+        hex32(*b"f9e42d2edc81d23367967352b47e4856b82578634e6c1de72280ce8b60ce70c0"),
+        hex32(*b"801f40eaaee1ef8723279a28b2cf4037b889dad222604678748b53ed0db0db92"),
+        hex32(*b"39289c8998fd69835c26b619e89848a7bf02b7cb7ad1ba1581cbc4506f2550ce"),
+        hex32(*b"df5c2eadc44c6d94a19a9aa118afe5ac3193d26401f76251f522ff042dfbcb92"),
+        hex32(*b"eb2767c137ab7ad8279c078eff116ab0786ead3a2e0f989f72c37f82f2969670"),
+    ];
+
+    /// The `k`-th point of [`POINTS`], `k` from 1: a distinct canonical
+    /// point for the `k`-th output, mask or key image of a fixture. Panics
+    /// past the ceiling — a fixture wanting more than sixteen distinct
+    /// points wants more than the wire allows outputs.
+    pub const fn point(k: usize) -> [u8; 32] {
+        POINTS[k - 1]
+    }
+
+    /// Thirty-two bytes from sixty-four lowercase hex digits, at compile
+    /// time — so the table above reads as the deriver printed it.
+    const fn hex32(hex: [u8; 64]) -> [u8; 32] {
+        const fn nibble(c: u8) -> u8 {
+            match c {
+                b'0'..=b'9' => c - b'0',
+                b'a'..=b'f' => c - b'a' + 10,
+                _ => panic!("hex digit"),
+            }
+        }
+        let mut out = [0u8; 32];
+        let mut i = 0;
+        while i < 32 {
+            out[i] = (nibble(hex[2 * i]) << 4) | nibble(hex[2 * i + 1]);
+            i += 1;
+        }
+        out
+    }
+
     /// A coinbase that satisfies every structural 4.F row for a block at
     /// `height`: one `Input::Gen(height)` (F1, F5), `Ct::Null` (F3), one
     /// output (F4) paying `0` with key `G` (F9) and mask `2·G` (F10),
@@ -485,10 +550,13 @@ pub mod fixture {
     /// to pass every structural 4.H row that has landed: one `ToKey` input
     /// with empty offsets (CEN-I6), one zero-amount output keyed `G` with a
     /// `2·G` mask (H7, H17), `Ct::Fcmp` with the committed base sized to the
-    /// outputs (H8), `unlock_time` below the sentinel (H16), and a prunable
+    /// outputs (H8), `unlock_time` below the sentinel (H16), a prunable
     /// region whose one BP+ has the canonical **layout** for one output
     /// (H19's layout half: `|L| = |R| = 6`) with one pseudo-out for its one
-    /// spend. The proof *bytes* are filler: H19's verification and the 4.I
+    /// spend, and a **fee of zero** so that pseudo-out (`2·G`) balances the
+    /// one mask (`2·G`) exactly (H18 — multiples of `G` add, which is what
+    /// makes [`POINTS`] a balance fixture as well as a point table). The
+    /// proof *bytes* are filler: H19's verification and the 4.I
     /// membership rows are not landed, and when they land this fixture is
     /// theirs to refuse — the sanity gate will say so, and the fix is a
     /// tx-builder-produced proof, not a longer filler. Mutate one field to
@@ -510,7 +578,7 @@ pub mod fixture {
                 extra: Vec::new(),
             },
             ct: Ct::Fcmp {
-                fee: 7,
+                fee: 0,
                 reference_block: BlockHash::from_bytes([0x99; 32]),
                 base: CtBase {
                     enc_amounts: vec![[0x11; 9]],

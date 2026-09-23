@@ -126,20 +126,24 @@ pub fn spend(key_image: [u8; 32]) -> Transaction {
                 key_offsets: Vec::new(),
                 key_image,
             }],
+            // Key and mask from the harness's point table — canonical
+            // prime-order points (H7, H17), not filled bytes; `2·G` as the
+            // mask because `G` is `zeroCommit(0)` and refused.
             outputs: vec![Output {
                 amount: 0,
-                key: [0x80; 32],
+                key: fixture::G,
                 view_tag: 2,
             }],
             extra: Vec::new(),
         },
         ct: Ct::Fcmp {
-            fee: 7,
+            // Zero fee: the one pseudo-out (`2·G`) balances the one mask (H18).
+            fee: 0,
             reference_block: BlockHash::from_bytes([0x99; 32]),
             base: CtBase {
                 enc_amounts: vec![[0x11; 9]],
                 enc_labels: vec![[0x22; 9]],
-                commitments: vec![[0xa0; 32]],
+                commitments: vec![fixture::TWO_G],
             },
             // One per input: the wire reads `nvin` of them, and a spend with
             // none parses as the storage-pruned form.

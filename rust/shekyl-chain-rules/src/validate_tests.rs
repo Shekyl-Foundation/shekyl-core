@@ -71,12 +71,17 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::H4,
                 CenRow::H5,
                 CenRow::H6,
+                CenRow::H7,
                 CenRow::H9,
                 CenRow::H10,
                 CenRow::H14,
                 CenRow::H15,
                 CenRow::H16,
+                CenRow::H17,
+                CenRow::H18,
                 CenRow::H20,
+                CenRow::H21,
+                CenRow::H22,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
@@ -174,12 +179,17 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::H4,
             CenRow::H5,
             CenRow::H6,
+            CenRow::H7,
             CenRow::H9,
             CenRow::H10,
             CenRow::H14,
             CenRow::H15,
             CenRow::H16,
-            CenRow::H20
+            CenRow::H17,
+            CenRow::H18,
+            CenRow::H20,
+            CenRow::H21,
+            CenRow::H22
         ]
     );
     MockChain::default().with_view(|view| {
