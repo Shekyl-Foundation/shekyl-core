@@ -153,9 +153,9 @@ row graded CACHE (this is also Q6's reversion (b)).
 `[E·SEB, (E+1)·SEB)`), `rust/shekyl-chain-store/src/store/pop.rs:17-27`
 (the undo floor is `1` until a prune deletes undo rows),
 `rust/shekyl-archival-retention/src/bond_wire.rs:47-51` (`BondPostKind` is
-`JoinMarket | Reinstate | Release`). Q6 items 1–4 and F32 (byte-bounded
-shards `[b_k, b_{k+1})`, discarded whole) and Q11 (`D_max`) stand
-unchanged beneath this ruling.
+`JoinMarket | Reinstate | Release`). Q6 items 1–4 and item 5 (shards
+`[k·T, (k+1)·T)` — fixed cardinality since 2026-09-23, F32's byte bound
+superseded — discarded whole) and Q11 (`D_max`) stand beneath this ruling.
 
 **Why a re-ruling and not an amendment.** The 2026-09-18 ruling fixed the
 shape as `b_{k+1} ≤ first_tx_id(tip − W) ∧ close_height(k) + SEB < tip` — a
@@ -183,8 +183,9 @@ surviving text (rule 16):
    other returning node; band-2 egress includes every casual return and
    is the reward leg's to price, not this ruling's to prevent.
 
-**The predicate.** `close_height(k) = height(b_{k+1} − 1)` as before — the
-shard's last **included** transaction, found by binary search over
+**The predicate.** `close_height(k) = height((k+1)·T − 1)` (Q6 item 5;
+written `height(b_{k+1} − 1)` under F32) — the shard's last **included**
+transaction, found by binary search over
 `BlockInfo.cumulative_tx_count` (`first_tx_id(h) = block_info[h−1].cumulative_tx_count`
 for `h ≥ 1`, `first_tx_id(0) = 0`; landed on #772; no new state). Let
 `close_epoch(k) = settlement_epoch_at_height(close_height(k))`. The
@@ -206,8 +207,8 @@ arithmetic — the discipline the 2026-09-18 text had for `tip − W`, kept
 stays correct: a launch-window discard is a bug, not a zero). Bodies
 retire **at the epoch boundary after the freeze epoch**: at the first
 block of `close_epoch(k) + 2`, every daemon discards `k`. There is no
-per-daemon input (Q9: no exceptions). The frontier shard — no `b_{k+1}`
-yet — has no `close_epoch` and is never a candidate.
+per-daemon input (Q9: no exceptions). The frontier shard — tx `(k+1)·T`
+not yet recorded — has no `close_epoch` and is never a candidate.
 
 **Enforcement point** unchanged: asserted where the discard is decided —
 S-PRUNE's per-epoch batch, whose set at boundary `E` is **named by `E`** —
@@ -267,7 +268,7 @@ body-horizon *constant* appearing in any crate is a falsifier — the
 horizon is the epoch calendar and there is nothing to name.
 
 **The freeze epoch is the pull window** (Q9, amended today). Shard `k`
-closes at `b_{k+1}` during `close_epoch(k)`; for the whole of
+closes at tx `(k+1)·T` during `close_epoch(k)`; for the whole of
 `close_epoch(k) + 1` every daemon still holds its bodies, and the
 archiver's wallet pulls them over the operator leg through the ordinary
 split read (Q10) — **pull before bond**. At the boundary into
@@ -295,8 +296,9 @@ constant, so there is nothing to ship as a coordinated release, and the
 — there is no `W` to roll. The horizon decides no verdict and is not
 consensus; every daemon evaluates it identically (Q8).
 
-**Round-2 gate.** `n`, `D_max`, `w_launch` — **three** numerics. `W`
-leaves the gate with the constant.
+**Round-2 gate.** `n`, `D_max`, `w_launch` — and, from Q6 item 5
+(2026-09-23), `T`. `W` leaves the gate with the constant; `T` takes its
+seat, so the gate is four numerics.
 
 **Closed rulings touched.** `RF-D6` (reopened per Q6 item 4, unchanged);
 the seven window-retired journals keep F19 — now explicitly a second
@@ -520,7 +522,7 @@ because the node claims nothing it has not earned.
 falsifier: `RuleSetNotInForce` removed or widened. The second amendment
 reverts with Q2's shape.
 
-### `PDM-Q6` RULED 2026-09-17 (items 1–3), item 3 AMENDED and item 4 RULED 2026-09-18, **item 5 OPEN 2026-09-23 (the length rows must be consensus-committed)** — The prunable region and `pqc_auths` are the archival good; a shard is a byte-bounded `tx_id` range, discarded whole
+### `PDM-Q6` RULED 2026-09-17 (items 1–3), item 3 AMENDED and item 4 RULED 2026-09-18, **item 5 RULED 2026-09-23 — shards are fixed-cardinality `T`; no byte accounting anywhere; F32's byte bound is superseded** — The prunable region and `pqc_auths` are the archival good; a shard is a byte-bounded `tx_id` range, discarded whole
 
 **Grounded at** `dev@4bc378d68` (2026-09-17); `#768` (E6 slice 1 —
 `TxIdentity.pqc_auth_hash` and the wire's txid module; read at head
@@ -568,8 +570,12 @@ item discharges on that identity and reopens if any of the three names
 a different unit.
 
 **Item 3 AMENDED 2026-09-18 (`PDM-Q-F32`) — boundaries by bytes, from
-a retained length row; discard is shard-granular.** The fixed
-cardinality `T` above is **superseded** (kept for the record). It was
+a retained length row; discard is shard-granular. THE BYTE BOUND IS
+SUPERSEDED IN TURN by item 5 (RULED 2026-09-23): shards return to fixed
+cardinality `T`, and each of the four reasons below is dispositioned
+there. Shard-granular discard stands.** The fixed
+cardinality `T` above was **superseded** here on 2026-09-18 (kept for the
+record; item 5 restores it). It was
 chosen because it was derivable for free, and that was the wrong
 property to fix: `T` was never given a value, `T × MAX_TX_SIZE`
 (`MAX_TX_SIZE = 1_000_000`, `rust/shekyl-wire/src/transaction.rs:135`)
@@ -744,9 +750,9 @@ a discarded shard's true size is unrecoverable. So:
   the other three — and it lands in `shekyl-chain-rules` under DRS-D12 /
   SO-D8 Q15, never in the C++ path.
 - **The preimage terms** (item 4's consensus row): the serve-credit
-  signature signs `shard_id` and `(b_k, b_{k+1})`, each **read by the
-  verifier** from the retained length rows and `cumulative_tx_count`,
-  never carried — the discipline `wire.rs:345-360` states today for the
+  signature signs `shard_id` and `(k·T, (k+1)·T)`, each **read by the
+  verifier** from `cumulative_tx_count` and `T` (*re-keyed 2026-09-23,
+  item 5: no length rows*), never carried — the discipline `wire.rs:345-360` states today for the
   leaf terms, so nobody re-argues whether the prover could have chosen
   them.
 
@@ -773,8 +779,9 @@ problem returns with it, and that is the credit wire's round to rule.
   retires; `LeafStore` is a deletion target).
 - `SF` sub-PR 2 is unblocked: frame codec and `ContentVerify` are
   per-tx against the two hash rows; `recompute_segment_r_k` does not
-  survive (`PDM-Q-F25`). `SHARD_BYTES` **does** — as the boundary
-  metric (F32), no longer as a fixed body size.
+  survive (`PDM-Q-F25`). ~~`SHARD_BYTES` **does** — as the boundary
+  metric (F32)~~ **retired as consensus 2026-09-23 (item 5)** — 3.33 MB is
+  now only `T`'s sizing heuristic.
 - `PDM-Q-F28` (skeleton wire carries `pqc_auth_hash`) is no longer
   gated on this question.
 - `DAEMON_REDB_STORE.md` §7.7's three-leg invariant is the store's
@@ -800,10 +807,10 @@ different states and the table says which.**
 | --- | --- | --- |
 | **Serve-credit admission verifier** — `CEN-J*` / `CEN-L7–L10`; `shekyl_archival_verify_serve_credit_vin`; C++ site `src/cryptonote_core/blockchain.cpp:5085-5125` | **Reopened — consensus.** The hybrid-signature preimage signs two *verifier-derived* leaf terms, `segment_subroot_rk` and `leaf_index_in_segment` (`rust/shekyl-archival-retention/src/wire.rs:345-360`): `RF-D6` took them off the wire *because* the verifier rebuilds them from `LeafStore::frozen_segment` and `challenge_leaf_index`, and the C++ site does exactly that today (reads the leaf chunk, fills `ctx.registry_segment_subroot_rk` / `segment_leaf_count`). Under the tx unit neither exists. So the signed message of every pass record changes, and the admission rule changes with it. **"The wire sees no change" was true of bytes and false of the signed message, and the signed message is the rule.** | Preimage restated over `shard_id` and `(b_k, b_{k+1})`, each read by the verifier from the length rows + `cumulative_tx_count` (item 3 amendment); FFI contract (`registry_segment_subroot_rk`, `segment_leaf_count`, `leaf_layer_scalars_*`) replaced. **Landing site: E4 / S-ARCH in `shekyl-chain-rules`** — never `blockchain.cpp` (`S0`; SO-D8 Q14). No record signed under the leaf preimage verifies under the tx preimage; a genesis-frozen rule written before genesis, not migrated. CEN rows re-keyed in that PR. |
 | `RF-D1` — `leaf_bytes`, 128 B on the kept vin (`ARCHIVAL_RESPONSE_FORMAT.md` §3.5) | **Reopened.** The claim was *one leaf*; under a whole-shard read there is no claimed transaction and no `tx_id` to claim — the identifier is `shard_id`, already on the vin. Kept side loses 128 B. | `RF-D1` re-prices the kept side (~230 B → ~100 B). The pruned half is the pass record's own `CtSigPrunable`, unchanged in kind. |
-| `RF-D6` — `SHARD_BYTES = 25,992 × 128`; `segment_subroot_rk`/`leaf_index_in_segment` off the wire | **Reopened, and half survives.** The fixed byte *size* survives as the boundary metric (F32: `b_*` closes at cumulative `SHARD_BYTES`); the "leaves × 128" derivation and the two off-wire leaf terms do not. | `RF-D6` restates: `SHARD_BYTES` is the boundary metric, body size bounded by `SHARD_BYTES + MAX_TX_SIZE`; the off-wire terms become `(b_k, b_{k+1})`, verifier-derived on the same argument. |
+| `RF-D6` — `SHARD_BYTES = 25,992 × 128`; `segment_subroot_rk`/`leaf_index_in_segment` off the wire | **Reopened, and half survives** — ~~the fixed byte *size* survives as the boundary metric (F32)~~ **retired entirely 2026-09-23 (item 5: fixed cardinality `T`; 3.33 MB is `T`'s sizing heuristic only)**; the "leaves × 128" derivation and the two off-wire leaf terms do not. | `RF-D6` restates: `SHARD_BYTES` is the boundary metric, body size bounded by `SHARD_BYTES + MAX_TX_SIZE`; the off-wire terms become `(b_k, b_{k+1})`, verifier-derived on the same argument. |
 | `challenge_leaf_index` + fire schedule; `c1_layers`/`c2_layers` path in the pruned record | **Retired by ruling (`RF-D8` (i) retracted 2026-08-26) — live in code.** `challenge.rs`, `path.rs`, `segment_freeze.rs`, `serve_credit_decisions.rs`, `wire.rs` (the `c1_layers` write at `:90`), the fuzz target, and the consensus call site all carry it. | **Deleted at E4 / S-ARCH** with the verifier row above. Not "no action". |
 | `LeafStore::frozen_segment` + the freeze pipeline | **Retired → Q12; the store itself is rebuilt, not deleted** (amended on #775). | Derivable membership (item 3, F32); a body store keyed by shard over `[b_k, b_{k+1})`. |
-| `SF-D7` — memory floor `N × SHARD_BYTES` | **Re-keyed.** The floor is a cap on in-flight bytes; `SHARD_BYTES` survives as the metric, so `N × (SHARD_BYTES + MAX_TX_SIZE)`. `N = 8` and the `L` candidate were measured at 3.33 MB and **stand** — the F32 amendment exists so they do. | Line-local in `ARCHIVAL_SHARD_FETCH.md`. |
+| `SF-D7` — memory floor `N × SHARD_BYTES` | **Re-keyed, then re-keyed again 2026-09-23 (item 5).** The floor is a cap on in-flight bytes; with per-tx streaming verification nothing materialises a shard, so the floor is **`N × MAX_TX_SIZE`** — one transaction per in-flight fetch. `N = 8` and the `L` candidate were measured at 3.33 MB and **stand as approximate** under `T`; re-measurement is the spike lane's. | Line-local in `ARCHIVAL_SHARD_FETCH.md`. |
 | `SF-D8` — verify seam "local `R_k` + countersignature" | **Reopened (content half); re-keyed (countersignature half).** Content-verify is per-tx via `Transaction::txid_parts()` against the two hash rows, plus membership against `(b_k, b_{k+1})`; the `SF-D8` request countersignature (72-byte anchor header ‖ `shard_id`) is unchanged and lives in sub-PR 1 (`PDM-Q-F25`). | Sub-PR 2's `ContentVerify`, `expected = (txs_prunable_hash, Option<txs_pqc_auth_hash>)` per `tx_id` in `[b_k, b_{k+1})`. |
 | `SF-D1` — addressing clause ("no leaf addressing; materialise the segment") | **Re-keyed.** No per-tx addressing on the route either; the read is still whole-shard. The clause's *reason* (`R_k` needs the whole segment) is gone; its *conclusion* (one resource, one path) stands on `RF-R1` alone. | Line-local. |
 | `CR-D2` — carrier (pass-record partition) | **Re-keyed, kept side re-priced by `RF-D1`'s row** (~230 B → ~100 B). The partition itself is unchanged; the pruned half is inside the good (`PDM-Q-F15`). | Pointer, plus the re-price. |
@@ -822,67 +829,108 @@ constant still named in bytes-of-leaves after the edit. Row 1 reverts
 to "no change" only if `wire.rs`'s preimage is shown not to include the
 two derived terms — falsifier: `wire.rs:345` read again.
 
-**Item 5 — OPEN 2026-09-23: the length rows are bound by nothing below
-`C`, and `b_*` is consensus.** Surfaced by Bugbot on #832 (high; the
-thread was auto-resolved by a later push, the finding was not). Item 3
-(F32) makes shard boundaries `b_*` a prefix sum of every transaction's
-`prunable_len + pqc_auths_len` from genesis, and bond admission validates
-`shard_id` against closed shards — so **`b_*` is consensus**. The A4 rows
-were ruled "original state", and the skeleton's §12 (2026-09-22) said a
-band-1 node could take them from F28's wire because band 1 is trusted with
-the binary. **Refuted.** The checkpoint binds block hashes → txids →
-`H(prefix) · H(base) · prunable_hash · pqc_auth_hash` (`txid.rs:55`); a hash
-of bytes does not bind their *length*, and no length appears in any
-committed field. A peer serving the skeleton below `C` can state any
-`prunable_len`; one wrong value shifts every later `b_*` on that node, and
-it forks at the next admission it validates. "Trusted with the binary"
-covers what the binary's checkpoint reaches, and it does not reach a
-length.
+**Item 5 — RULED 2026-09-23: shards are fixed-cardinality `T`; no byte
+accounting anywhere; the byte bound (F32) is superseded.** Surfaced by
+Bugbot on #832 (high; the thread was auto-resolved by a later push, the
+finding was not): item 3's byte-bounded `b_*` is a prefix sum of every
+transaction's `prunable_len + pqc_auths_len` from genesis, bond admission
+validates `shard_id` against closed shards — so **`b_*` is consensus** —
+and nothing the checkpoint reaches binds a *length*: `C` → block hashes →
+txids → `H(prefix) · H(base) · prunable_hash · pqc_auth_hash`
+(`txid.rs:55`). A peer serving the skeleton below `C` can state any
+length; one wrong value shifts every later boundary on that node and it
+forks at admission. The A4 rows' "original state" and the skeleton §12's
+"safe because band 1 is trusted" (2026-09-22) are **refuted**.
 
-*Dispositions considered:*
+*The question the binary skipped: what is the byte count **for**?*
+Byte-bounded shards existed for two consumers, and under a per-tx verifier
+neither remains:
 
-- **(a) — the default this item proposes: the two lengths become consensus
-  fields of the committed base.** `prunable_len` and `pqc_auths_len` as
-  varints in the base, serialized for the FCMP++ spend type only (coinbase
-  carries neither), so `H(base)` binds them and the checkpoint reaches them
-  through the txid. **Rust only.** The format's home is
-  `rust/shekyl-wire/src/transaction.rs` (the `Ct` base that `txid.rs`
-  hashes); nothing is serialized into C++ — `src/fcmp/ct_types.h`'s
-  `CtSigBase` is a deletion target that dies with the C++ daemon at
-  `DRS-E3` and never learns the field (`PDM-Q-S0`, rule 20). Genesis does
-  not precede the cutover (S0's launch sequencing), so no C++ validator
-  ever parses a genesis-era transaction; the pre-cutover harnesses that
-  drive Rust-built transactions into the C++ daemon are why this lands
-  **at E3 with S-PRUNE's substrate**, not today against two parsers. A node holding the body validates the
-  declared lengths against the bytes at connect (one new rule row, 4.I's
-  neighbour: a mismatch is an invalid transaction); a band-1 node takes
-  them from the base it already holds. Consequences, each a simplification:
-  **the A4 rows become an index over retained base fields, not original
-  state** — derivable by replay from the skeleton, which is Q6's own
-  reversion criterion (b) satisfied by construction rather than by trust;
-  **F28's wire needs no length growth** — the pruned blob already carries
-  the base; and the skeleton §12 paragraph is retracted. Cost: two varints
-  per spend (2–4 bytes) in **one Rust crate**, the Rust fixtures
-  regenerated (rule 42 fires: the persisted block blob moves), one rule
-  row; **zero C++**. Rule 16's shape — structural now, pre-genesis, rather
-  than a trust assumption forever.
-- **(b) measure shards over retained bytes** (prefix + base sizes, which
-  every node has) — **rejected**: the good is the prunable region, and
-  `SHARD_BYTES` bounds the *body* egress a serve moves (`RF-D6`); a
-  retained-byte proxy bounds nothing that is served.
-- **(c) commit `b_*` on chain at shard close** (a coinbase-extra field, a
-  consensus object) — **rejected as heavier than (a)** for the same
-  guarantee: it commits a derived value where (a) commits the inputs.
-- **(d) accept band-1 trust of lengths** — **rejected**: a consensus
-  partition cannot rest on an unbound wire field on any band.
+- **SF's memory ceiling** (`SF-D7`, `max_body_bytes`, `N × …`) was a
+  property of `R_k`, which needed the whole segment in hand. `R_k` is gone
+  (item 4). A fetch client verifies **each transaction against its retained
+  hash row and aborts on the first miss**; its buffer is one transaction —
+  `MAX_TX_SIZE`, 1 MB — regardless of shard size. Nothing materialises a
+  shard.
+- **Per-shard pricing** (`REWARD_EMISSION_LEG.md` channel 1,
+  `scarcity = g(age) / R_market(s)`) is already not byte-proportional. A
+  large shard costs more egress for the same weight; archivers avoid it;
+  `R_market` falls; weight rises. The curve absorbs size variance as it
+  absorbs everything else.
 
-*Ruling owed by the maintainer — a tx-format change is not this lane's to
-take by default.* Until ruled, A4 is **not** writable as original state,
-F28's row is contingent, and S-PRUNE's first increment waits on the
-answer (the skeleton's §9 preconditions carry it). *Reopen:* this item
-closes when (a) or a named alternative lands with the rule row and the
-fixtures; it reverts to OPEN if any node's `b_*` is ever derived from a
-value the txid does not bind.
+The settlement writer prices by weight, the fetcher streams, the wallet
+store knows what it holds. **No one in consensus needs the count.**
+
+*Ruling — (e).* A shard is **`T` transactions by `tx_id`**:
+`k = ⌊tx_id / T⌋`, `[k·T, (k+1)·T)` — item 3's original 2026-09-17 shape,
+restored. Membership and `close_height(k) = height((k+1)·T − 1)` derive
+from `cumulative_tx_count` on every node with **zero new data**: no length
+in the base, no length on the wire, no A4 rows, no `CtSigBase` change, no
+`SHARD_BYTES` constant, no prefix sum. The Bugbot finding has nothing to
+bind because nothing is claimed. **`T` is the one consensus constant of
+the partition**, with the one-home discipline `SHARD_BYTES` carried
+(FOLLOWUPS `:72`, re-keyed): **`T = 200`, PROVISIONAL**, chosen so a
+typical shard at ~16.7 KB/tx lands near `RF-D6`'s 3.33 MB and `SF`'s
+measurements stay approximately right; pinned at the Round-2 gate with
+`n`, `D_max`, `w_launch` (four numerics again, `T` in `W`'s old seat).
+The worst case is bounded **per transaction by streaming**, not per shard
+by a constant.
+
+*F32's four reasons, each dispositioned (rule 16 — refuted or answered,
+not superseded in silence):*
+
+1. *"`T` was never given a value."* **Answered:** `T = 200`, PROVISIONAL,
+   Round-2 gate.
+2. *"`T × MAX_TX_SIZE` makes `max_body_bytes()` a multi-gigabyte in-flight
+   ceiling at `SF-D7`'s `N = 8`."* **Refuted:** the ceiling was `R_k`'s;
+   per-tx streaming verification holds one transaction; `SF-D7` re-keys
+   to `N × MAX_TX_SIZE` (the SF lane's, item 4's row).
+3. *"`SF`'s `N` and `L` were measured against a fixed 3.33 MB."*
+   **Answered:** they stand as approximate under `T`; re-measurement is the
+   spike lane's own, as F33 (i) already says of model constants.
+4. *"Cardinality pricing mis-prices shard compositions by up to ~60×
+   while a discarded shard's true size is unrecoverable."* **Answered:**
+   the 60× is a lottery over which shards are cheap to hold, and the
+   weight curve is the mechanism that turns a lottery into a market; no
+   consumer needs the discarded shard's true size. The possession-test
+   read still reads the whole shard, and its egress varies with the shard
+   — an honest holder's real cost, self-selected at bond, priced
+   correctly.
+
+*Alternatives, for the record:* **(a)** lengths as base fields — solves
+the binding, but on the strength of a memory ceiling that no longer
+exists, at the cost of a spend-format change every wallet and serializer
+carries; **rejected** as the wrong fix for a need that dissolved.
+**(b)** shards over retained bytes — rejected (bounds nothing served).
+**(c)** `b_*` committed on chain — rejected (commits a derived value where
+the inputs are unbound). **(d)** trust the wire — rejected (a consensus
+partition on an unbound field). **(g) — the named alternative:** if the
+reward leg establishes a byte-proportional term, commit
+`cumulative_prunable_bytes` **once per block in the coinbase `tx_extra`**
+under a new tag — the coinbase txid commits it, the merkle root the
+coinbase, the block hash the root, the anchor the block; body-holding
+nodes recompute at connect and reject a wrong value (one rule row);
+skeleton nodes read it. ~4 bytes per *block* against (a)'s per
+*transaction*; a derived scalar in the place the chain already puts those
+(`attestation_root` is the precedent), not a new consensus structure.
+
+*Consequences:* **A4 is not owed** — its FOLLOWUPS row closes; §7.7 gains
+no fourth leg. **F28 grows one field** (`pqc_auth_hash`), as first ruled.
+`SHARD_BYTES` is retired as consensus; 3.33 MB survives only as `T`'s
+sizing heuristic. `RF-D6`'s fixed byte size is retired entirely; `SF-D1`'s
+whole-shard *read* stands (the possession test), its whole-shard
+*materialise* does not. The skeleton's §2, §4, §5, §12 re-key; the
+wallet-side store keys by `k` over `[k·T, (k+1)·T)`.
+
+*Reopen (rule 21):* to **(g)** if `REWARD_EMISSION_LEG.md` establishes a
+byte-proportional weight term — that is the one question that decides
+between them and it is the reward leg's; falsifier: a channel-1 term
+taking a byte count as an operand. To OPEN if any consensus consumer of a
+shard's byte size is found that neither streaming nor the weight curve
+serves. **Falsifiers now:** any shipped Rust deriving a shard boundary
+from a byte length; a second `T` in any crate or in
+`consensus_constants.json`; a fetch client materialising more than one
+transaction to verify.
 
 **Reversion criteria (rule 21).** This ruling reverts to OPEN if any
 of: (a) a consensus reader of the prunable region or `pqc_auths`
@@ -1068,8 +1116,9 @@ wire; #775's criterion looks at the disk, and is the stronger one.
 
 **The one sentence Q9 still owed — the specified-to-scarce window is
 when the wallet fills its store from the local daemon.** Shard `k`
-closes at `b_{k+1}`; the archiver's wallet pulls `k`'s bodies over the
-operator leg while its daemon still holds them in-window; the daemon
+closes at tx `(k+1)·T` (item 5; `b_{k+1}` under F32); the archiver's
+wallet pulls `k`'s bodies over the operator leg while its daemon still
+holds them in-window; the daemon
 then discards `k` at the boundary after its freeze epoch like every other
 daemon (*re-keyed 2026-09-22 from "at `W`"*). After the window,
 acquisition is a fetch from another archiver (recovery, above). That is
@@ -1089,8 +1138,9 @@ immutable):
   Every daemon holds `k` for the whole of it; the wallet pulls over the
   operator leg through the ordinary split read (Q10) and verifies against
   the txid (`WSS-Q5`). **Pull before bond**: a `JoinMarket` naming `k` is
-  posted only once `k` is **final** (`close_height(k) + D_max ≤ tip`; `b_*`
-  for the frontier can move under a reorg, and admission is consensus —
+  posted only once `k` is **final** (`close_height(k) + D_max ≤ tip`; the
+  frontier's closing transaction can move under a reorg, and admission is
+  consensus —
   FOLLOWUPS `:74`'s "valid, closed, final") **and** in the wallet-side
   store. The pull can start at finality, at most `D_max` blocks into the
   freeze epoch, leaving `≥ SEB − D_max` blocks of window. (This supersedes
@@ -1137,9 +1187,11 @@ exception falsifiers go.
 **`PDM-Q-F33` — #775 is written against the leaf unit, and re-keys
 under Q6 / Q12.** Its *architecture* (two stores by obligation; the
 partition is consensus) is unit-independent and stands. Its
-*consequences* re-key: the partition is `b_*` from the retained length
-rows (consensus by the same argument — admission validates `shard_id`
-against closed shards, a divergent partition forks at admission);
+*consequences* re-key: the partition is `⌊tx_id / T⌋` from
+`cumulative_tx_count` (*re-keyed 2026-09-23, item 5; was `b_*` from
+retained length rows* — consensus by the same argument: admission
+validates `shard_id` against closed shards, a divergent partition forks at
+admission, which is why nothing unbound may feed it);
 `R_k` becomes the two hash rows on the daemon's skeleton; the served
 frame is **whole-shard** (`WSS-Q7`: `SF-D1` keeps the read whole-shard —
 it is *verification* that is per-tx); hash rows and `b_*` on the daemon (consensus,
@@ -1651,7 +1703,7 @@ or the question block named). Grades as recorded there.
 | F29 | Q3's instrument is `ChainView`'s surface — no body accessor | record §6; Q3 |
 | F30 | Q11's home is `CEN-E2`; F27 fires both census rows' reopening trigger. **Fired 2026-09-20: E6 slice 3 moved checkpoint state into Rust (`ReleaseAnchors`) and re-keyed CEN-E1, E2 and E5 in the census** — E1 landed (the anchor's rule), E2 subsumed behind the alt view *and* `D_max`'s numeric (slice 9), E5 at writer open | record §6; Q11 |
 | F31 | S-PRUNE had no plan doc — skeleton `DRS_E1_SPRUNE.md` | record §6 |
-| F32 | Byte-bounded shards over retained length rows; shard-granular discard (Q6 item 3 amendment) | Q6 |
+| F32 | Byte-bounded shards over retained length rows — **byte bound SUPERSEDED 2026-09-23 by Q6 item 5 (fixed cardinality `T`; no length rows)**; shard-granular discard stands (Q6 item 3 amendment) | Q6 |
 | F33 | PR #775 draws the daemon line; the Q9 candidate rejected; #775's leaf-shaped rows re-key — **discharged 2026-09-18** (#775 landed first; PDM re-keyed its partition row, CT-1 row, route paragraph, decision-log amendment on `docs/pdm-f33-rekey-775`) | record §6; Q9 |
 
 

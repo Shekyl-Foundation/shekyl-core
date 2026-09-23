@@ -52,8 +52,9 @@ contracts (§5 below) with no home; this document is the home.
 > `current_epoch = settlement_epoch_at_height(tip)` and
 > `close_epoch(k) = settlement_epoch_at_height(close_height(k))`.
 
-Shard `k` — a byte-bounded `tx_id` range `[b_k, b_{k+1})` (`PDM-Q-F32`) —
-has its prunable regions and `pqc_auths` discarded **atomically, as a
+Shard `k` — **`T` transactions by `tx_id`, `[k·T, (k+1)·T)`, `k = ⌊tx_id / T⌋`**
+(`PDM-Q6` item 5, RULED 2026-09-23; F32's byte bound superseded) — has its
+prunable regions and `pqc_auths` discarded **atomically, as a
 whole**, at the epoch boundary after its **freeze epoch**
 `close_epoch(k) + 1`. There is no per-daemon input (`PDM-Q9`: all daemons
 prune uniformly; the `k ∉ exceptions` conjunct of the first draft was
@@ -68,8 +69,8 @@ epoch boundary may move `current_epoch` back by one after a discard, and
 that shard is not "wrongly discarded" (Q2; pops are §7's business).
 `first_tx_id(h)` is `block_info[h−1].cumulative_tx_count` for `h ≥ 1` and
 **`first_tx_id(0) = 0`** (FL-R3-STORE, `BlockInfo`, landed on #772);
-`close_height(k)` is `height(b_{k+1} − 1)` — the last **included**
-transaction's height, since `b_{k+1}` is the first of `k+1` and need not
+`close_height(k)` is `height((k+1)·T − 1)` — the last **included**
+transaction's height, since `(k+1)·T` is the first of `k+1` and need not
 exist yet — a binary search over the same running total. **Both primitives
 stay** (the first draft of this re-key struck `first_tx_id`; it is how
 `close_height`, and so `close_epoch`, is found). No new state for either.
@@ -120,15 +121,15 @@ the store exposes the op); for `E ≥ 2`, the set to discard is **named by
 
 — the shards whose `close_height` falls in `[max(E−3, 0)·SEB, (E−1)·SEB)`
 (that interval is the *reading*; the predicate is the additive form), a
-contiguous range of `k` read off `cumulative_tx_count` and the `b_*`
-table. **Every epoch comparison in this document is written additively —
+contiguous range of `k` read off `cumulative_tx_count` alone (item 5: no
+`b_*` table, no length rows). **Every epoch comparison in this document is written additively —
 `close_epoch(k) + 2 ≤ E`, never `close_epoch(k) ≤ E − 2` — because
 `settlement_epoch_at_height` returns a `u64` and `E − 2` wraps in epochs 0
 and 1** (Bugbot, 2026-09-23: the first draft's `E−3` wrapped at `E = 2`,
 and its `h_scarce` covered every closed shard for the whole free regime).
 The same page's branch-not-arithmetic discipline, applied to itself. **One redb transaction per boundary connect**, holding the block's
 write set, every `discard(k)` for `k ∈ D(E)` (delete every `txs_prunable`
-and `txs_pqc_auths` row in `[b_k, b_{k+1})`; not journaled in `undo_log` —
+and `txs_pqc_auths` row in `[k·T, (k+1)·T)`; not journaled in `undo_log` —
 a discard is not pop-reversible by design, §7) and the undo-row retirement
 below `tip − D_max` (§3), **or the connect rolls back**. So "connected past
 `E·SEB` with `D(E)` un-run" is **unrepresentable** — a structural property,
@@ -216,14 +217,12 @@ the daemon.
   (i) hash row ⇔ 4-part txid, permanent, written at connect, never deleted;
   (ii) segment present ⇒ hash row present; (iii) hash row ∧ segment absent ⇔
   *discarded* — the shard's boundary has passed, or never held (band 1) —
-  one store state with one meaning. **Owed with S-CHAIN-W amendment A4 (`PDM-Q-F32`), not yet
-  in §7.7:** (iv) the length rows, **pairwise** — prunable-length row
-  present ⇔ `txs_prunable_hash` row present; `pqc_auths`-length row
-  present ⇔ `txs_pqc_auth_hash` row present. The plan may not present
-  (iv) as in force until A4 lands.
-- **Hash rows and length rows are outside every prune surface**, permanent.
-  `txs_prunable_hash` (exists), `txs_pqc_auth_hash` (A3, #772), the two
-  `u32` length rows (A4, owed).
+  one store state with one meaning. ~~Owed with S-CHAIN-W amendment A4:
+  (iv) the length rows, pairwise~~ **WITHDRAWN 2026-09-23 — `PDM-Q6` item 5:
+  shards are fixed-cardinality `T`, there are no length rows, A4 is not
+  owed, and §7.7 has three legs.**
+- **Hash rows are outside every prune surface**, permanent.
+  `txs_prunable_hash` (exists), `txs_pqc_auth_hash` (A3, #772).
 - **`StoreCannot::PopBelowFloor`** as the pop refusal; the undo-log
   watermark `≥ D_max` (SCW-7, landed).
 - **Body-absent is one state** for discarded and never-held; S-PRUNE writes
@@ -265,7 +264,7 @@ fires. One posture, not "belt on mainnet, binding on regtest" (§12).
 Together with the const-assert it replaces the 2026-09-18 inequality
 `W ≥ D_max`, which was argued and asserted nowhere.
 
-**What S-PRUNE does not do.** Never touches `spent_keys`. Never touches a hash row or a length row.
+**What S-PRUNE does not do.** Never touches `spent_keys`. Never touches a hash row. Never reads a byte length to place a boundary (item 5).
 **Never varies per node** — inside or outside `W` (`PDM-Q7`/`Q8`/`Q9`,
 #775's corollary: all daemons prune uniformly; there are no exceptions on
 any daemon). Never advertises: what a node retains reaches no wire (`PDM-Q8`, serve-side
@@ -305,11 +304,11 @@ once** — idempotence is the property, and it is cheap to test.
 retained set is known and the plan **may open**. Its Round-0 pre-flight
 owes Q1's one implementation item first or alongside: the journal horizon
 asserted at the journals' retirement site (F19's "the check"). Its first increment cannot land before: `#772` (A3, the second
-hash row, `cumulative_tx_count` — landed); **`PDM-Q6` item 5 ruled** (the
-lengths must be consensus-committed before any node derives `b_*`; OPEN
-2026-09-23); **A4 (the length rows — owed;
-the plan's commit 1 or a precursor PR, with `SHARD_BYTES`'s production
-home and the `D_max` / journal-horizon function of §12)**; and §11's
+hash row, `cumulative_tx_count` — landed); `PDM-Q6` item 5 — **RULED
+2026-09-23 (e): no A4, no length rows; the partition is `⌊tx_id / T⌋`**;
+**the constants commit — `T`'s production home, `D_MAX` at `CEN-E2` with
+`SEB > D_MAX`, and the journal-horizon function of §12 — the plan's
+commit 1 or a precursor PR**; and §11's
 precondition, which the E3 cutover ordering discharges. *Corrected
 2026-09-22:* Q1's journal-horizon assertion is **S-ARCH's** (the journals
 have no Rust writer here); what this surface owes it is the function.
@@ -357,31 +356,25 @@ have no Rust writer here); what this surface owes it is the function.
 | `SEB` | `settlement_epoch_blocks = 10,000`; `settlement_epoch_at_height(h) = h / SEB` (`consensus_state.rs:27`) | pinned |
 | `D_max` | 720; **`SEB > D_max` const-asserted beside it, on the production constants — the only assertion.** The invariant holds on **every nettype** (rule 71: nettype selects data, the data satisfies the same invariant): the regtest `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override (`constants.rs:257`, today `2..=SETTLEMENT_EPOCH_BLOCKS` in isolation) must not admit `SEB ≤ D_max` — one knob that overrides both and preserves the ratio, or a parse that refuses. `SEB = 2` with `D_max = 720` is a rejected configuration, not a supported one | PROVISIONAL, Round-2 gate (`PDM-Q11`); **constant unbuilt — owed** at `CEN-E2`; **fakechain conformance owed with it** |
 | Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **owed**, minted by this surface's A4 commit, consumed by S-ARCH (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
-| `SHARD_BYTES` | 3.33 MB (`RF-D6`'s, as the boundary metric) | ruled (`PDM-Q-F32`); production home minted with A4 (FOLLOWUPS `:71`) |
-| Length rows (A4) | two lengths per spend; ~~**original state**~~ **RETRACTED 2026-09-23** — under `PDM-Q6` item 5 (a) they are consensus fields of `CtSigBase`, and the rows are an **index over retained base fields**, derivable from the skeleton; `b_*` derives from them | **owed** to S-CHAIN-W, **gated on item 5's ruling**; no band-1 wire growth under (a) |
-| `b_*` | derived from the length rows, binary-searched | derived, never received |
+| `T` | **200 transactions per shard, PROVISIONAL** — the one consensus constant of the partition, one const-asserted home (the discipline `SHARD_BYTES` carried, FOLLOWUPS `:72`); chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB | ruled (`PDM-Q6` item 5, 2026-09-23); Round-2 gate with `n`, `D_max`, `w_launch` |
+| Shard boundaries | `k·T` — no table, no rows, no prefix sum; `close_height(k) = height((k+1)·T − 1)` by binary search over `cumulative_tx_count` | derived, never received (item 5) |
 | `first_tx_id(h)`, `cumulative_tx_count` | `BlockInfo.cumulative_tx_count`; `first_tx_id(0) = 0`; the primitive under `close_height`, and so under `close_epoch` | landed on #772 — **kept** (the horizon expression `first_tx_id(tip − W)` is gone; the primitive is not) |
 | `w_launch` | flat in-window commitment weight through epochs 0–1; superseded by the derived scarce-set median at the first `discard(k)` | **reward leg's** (Q6 item 3 amendment) — on the Round-2 gate with `n`, `D_max`; S-PRUNE's `discard(k)` event defines the scarce set |
 
-**The length rows are bound by nothing below `C` — RETRACTED 2026-09-23
-(`PDM-Q6` item 5, OPEN).** This paragraph said on 2026-09-22 that
-`prunable_len` / `pqc_auths_len` on F28's skeleton wire were unverifiable
-in band 1 *and that this was safe* because band 1 is trusted with the
-binary. Bugbot (#832, high) refuted the second half: the checkpoint binds
-block hashes → txids → `H(prefix) · H(base) · prunable_hash · pqc_auth_hash`,
-none of which binds a *length*; `b_*` is a prefix sum of those lengths
-from genesis and admission validates `shard_id` against it, so a peer
-supplying one wrong length below `C` forks that node at admission. **The
-lengths must be consensus-committed.** The default disposition (item 5 (a),
-awaiting the maintainer's ruling) puts them in the committed base as
-varints for the FCMP++ spend type — **in `shekyl-wire`, Rust only; the C++
-`CtSigBase` is a deletion target and never learns them (S0)** — validated
-against the bytes at connect by a node that holds them; then **the A4 rows are an index over retained
-base fields, not original state**, `b_*` is derivable from the skeleton by
-construction, and **F28's wire needs no length growth** (the pruned blob
-already carries the base). Until item 5 is ruled, A4 is not writable and
-this surface's first increment waits (§9). The `LV-`/`PWC-` row (FOLLOWUPS
-`:1046`) is amended to contingent.
+**No byte length is read anywhere in this surface (`PDM-Q6` item 5, RULED
+2026-09-23).** The 2026-09-22 draft of this paragraph put per-tx lengths on
+F28's skeleton wire and called them safe under band-1 trust; Bugbot
+(#832, high) refuted the safety — nothing the checkpoint reaches binds a
+length, and `b_*` was consensus — and item 5 then asked what the count was
+*for*: SF's memory ceiling (dissolved by per-tx streaming verification;
+the buffer is `MAX_TX_SIZE`) and per-shard pricing (already weight-based,
+not byte-based). Neither survives, so the partition is `⌊tx_id / T⌋` with
+zero new data: no A4, no `CtSigBase` change, no `SHARD_BYTES`, no wire
+growth on F28. If the reward leg ever names a byte-proportional term, the
+named alternative is (g) — one `cumulative_prunable_bytes` varint per
+block in the coinbase `tx_extra` — not per-tx lengths. **Falsifier for
+this surface:** any read of a segment's byte length to place, find or
+discard a shard.
 
 ## 13. C++ deletions and their timing
 

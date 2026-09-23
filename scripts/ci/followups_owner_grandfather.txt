@@ -15,7 +15,6 @@ DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.
 `tx_extra` `0x0B` (archival attestation) has a consensus reader and no producer.
 Attestation verify must move behind PoW before credit-wire population activates.
 Dead hard-fork version dispatch survives from genesis (rule 60).
-Shard partition: production `SHARD_BYTES` gets one const-asserted home (with A4, DRS-E); the verifier reads `(b_k, b_{k+1})` from the retained rows (S-ARCH); the leaf partition's tie is LANDED (#780) — not an interim assert: one home in `shekyl_fcmp::tree` (`SEGMENT_LAYER_J`, `leaves_per_segment`), consensus-side `SEGMENT_LEAF_COUNT == leaves_per_segment()` compile-time in `shekyl-archival-retention`'s production lib, red-checked by `segment_leaf_count = 26030` (alignment-preserving, so it clears the chunk assert) failing at that pin — and lives until E4 / S-ARCH deletes the freeze (wallet lane; the CT-1 row closed with #780's dedup).
 Bond admission's shard predicate — RULED, unbuilt; three design questions owed to E4 / S-ARCH.
 `PDM` propagation sweep — DISCHARGED 2026-09-19, four PRs in the ruled order, one per document: `docs/pdm-sweep-psl` (PRINCIPAL_STAKE_LIFECYCLE → LIVING CONTRACT), `docs/pdm-sweep-acm` (ARCHIVAL_CHALLENGE_MECHANISM on the tx unit), `docs/pdm-sweep-v3sa` (V3_STAKER_ARCHIVAL contracted, 1,546 → 1,000 lines), `docs/pdm-sweep-ctc` (CURVE_TREE_CLIENT §7 resolved in two halves); PRs #795, #796, #797, #798 in that order (#798 merges last; it carries this line). Each carries `PDM-Q6` / `PDM-Q12` in its current-tense body, not as an appended banner; `grep -c PDM` at the closing pin: PSL 9, ACM 24, V3SA 25, CTC 21. The row's original text follows as the record of what was found.
 `PRINCIPAL_STAKE_LIFECYCLE.md` §4a PR-row table: the dated UPDATE / Corrected chains accrete instead of resolving; PR-P4's row is the extreme case.
@@ -322,7 +321,6 @@ E6 shaping under `PDM-Q5` / `PDM-Q3`: a below-anchor `RuleSet`, and `ChainView` 
 S-PRUNE needs a rule-26 plan doc before its first increment
 Skeleton block payload grows `pqc_auth_hash`
 Journal horizon asserted at the journals' retirement site
-S-CHAIN-W amendment A4 — the two per-tx length rows
 The archiver serving-store rebuild — a wallet-lane design round, unbuilt by design
 Hardware-offload wallet capability.
 PQC multisig hardware-wallet integration / BIP-39 derivation parity.
