@@ -1916,15 +1916,16 @@ and `None` is "the txid has no such component" — a different fact from
 "the component exists and the bytes do not", which is a store state, and
 the two never share a representation. **The store invariant has three
 legs (F26, on `TxIdentity`'s doc comment), because under Q6 a hash row
-*without* its segment is the steady state of every 4-part tx below the
-universal window `W`, not a fault:** (1) hash row present ⇔ txid 4-part —
+*without* its segment is the steady state of every 4-part tx whose shard's
+boundary has passed (the body horizon, `PDM-Q2` re-ruled 2026-09-22; was
+"below the universal window `W`"), not a fault:** (1) hash row present ⇔ txid 4-part —
 permanent, written at connect, never deleted (`validate` rejects the
 shapes — gen-first or no-input with auths — that could split "4-part"
 from "segment non-empty"; the oracle predicate is `!vin.empty() &&
 vin[0] != gen`, `cryptonote_format_utils.cpp:1290`); (2) segment present ⇒ hash row present — a body the store
 cannot verify is the violation; (3) hash row present ∧ segment absent ⇔
-**discarded** — below `W` and not a retention exception, or never held (a
-band-1 skeleton, F28). One store state, one meaning, however the node
+**discarded** — its shard's boundary passed (there are no retention
+exceptions, Q9), or never held (a band-1 skeleton, F28). One store state, one meaning, however the node
 arrived at it. This section is what DRS **owes** against F26 and where
 each piece lands.
 

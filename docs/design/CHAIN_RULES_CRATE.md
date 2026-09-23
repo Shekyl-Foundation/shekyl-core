@@ -1407,7 +1407,10 @@ Neither is a rule to port; both are properties of the surface.**
   slice that consumes `RuleSetId` from the store lands, with only
   `GENESIS` issued and no recorded below-anchor decision.
 - **`ChainView` exposes no recorded transaction bytes without a row and
-  an above-`W` marking** (`F29`; `PDM-Q3`'s instrument). At `645d09dc3`
+  an above-horizon marking** (`F29`; `PDM-Q3`'s instrument; written
+  "above-`W`" — `PDM-Q2` retired `W` on 2026-09-22, the horizon is the epoch
+  boundary after a shard's freeze epoch, and the marking's meaning is
+  unchanged: a rule that reads a body a discarding node may not hold). At `645d09dc3`
   the trait's surface is `has_key_image`, `block_at` (hash + header),
   `root_at` — no body accessor — and round-1 Q3 (§3.3) already makes a
   view field conditional on a named `CenRow`. So the residual set of
@@ -1416,10 +1419,10 @@ Neither is a rule to port; both are properties of the surface.**
   surface held as a standing property: a recorded-body accessor, if one
   ever arrives, returns the discarded case as a variant (the `AtHeight`
   discipline — absence is matched, never `?`'d away), and every rule
-  that takes the recorded arm is by construction an above-`W` rule and
+  that takes the recorded arm is by construction an above-horizon rule and
   says so in its row. *Falsifier:* a `ChainView` method returning
   recorded tx bytes with no `CenRow` justifying it, or a rule matching
-  its recorded arm without an above-`W` marking. This is compile-shaped,
+  its recorded arm without an above-horizon marking. This is compile-shaped,
   not a grep; it does not discharge `PDM-Q-F8` (the C++ path still reads
   leaves at `blockchain.cpp:5327`), it says where the instrument lives
   once the validator is this crate.

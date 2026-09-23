@@ -67,8 +67,9 @@ its own output's path plus the public root, so **spending never needs a pruned
 region** ([`design/WALLET_SIDE_STORE.md`](design/WALLET_SIDE_STORE.md) §6.3;
 `PDM-Q-F11`). What every daemon *does* discard, uniformly, is the bulk of each
 old transaction: its prunable body (`CtSigPrunable`) and its `pqc_auths` — ~95 %
-of transaction bytes — for every shard below the universal window `W`
-(`PDM-Q2`, `PDM-Q6`). The txid components that commit to those bytes
+of transaction bytes — for every shard whose freeze epoch has passed
+(`PDM-Q2`, re-ruled 2026-09-22: a shard closed in epoch `E` is held by every
+daemon through epoch `E+1` and discarded at the boundary into `E+2`; `PDM-Q6`). The txid components that commit to those bytes
 (`txs_prunable_hash`, `txs_pqc_auth_hash`) are kept forever on every node, so
 anyone who holds a body can prove it is the right one; but the body itself has
 to be held by *someone* or it is gone. Rescan from seed, audit, and dispute all
@@ -158,7 +159,8 @@ are conflated:
   (`PDM-Q6` item 3). There is no leaf-shaped shard, no shard root `R_k`, and no
   segment freeze (`PDM-Q12`).
 
-**Who holds what.** Every daemon prunes uniformly at `W` and holds no serving
+**Who holds what.** Every daemon prunes uniformly at the epoch boundary after
+a shard's freeze epoch (`PDM-Q2`) and holds no serving
 state (`PDM-Q9`). Market archivers hold the bodies of their bonded shards in
 `P`'s serving store ([`design/WALLET_SIDE_STORE.md`](design/WALLET_SIDE_STORE.md)),
 filled from their own daemon while the shard is still universally held and
@@ -422,8 +424,10 @@ Chain history is partitioned into **shards** — consecutive `tx_id` ranges of
 transactions' prunable bodies and `pqc_auths`, each closed when its cumulative
 bytes cross `SHARD_BYTES` (`PDM-Q-F32`; the unit and its boundaries are
 `PDM`'s, §*Archival data scope*). A shard becomes bondable when it closes and
-scarce only when every daemon discards it at `W` (`PDM-Q6` item 3); between
-the two, the archiver's wallet fills its store from its own daemon.
+scarce only when every daemon discards it at the boundary after its freeze
+epoch (`PDM-Q2`, `PDM-Q6` item 3); between the two — the whole freeze epoch,
+never less than one full epoch — the archiver's wallet fills its store from
+its own daemon, pull before bond (`PDM-Q9`).
 Stakers archive shards. The archival commitment is **part of the staking
 protocol itself**, not a separate service layer. The staking software
 *is* the archival client. There's no "run an archival node alongside your
@@ -561,7 +565,8 @@ Enumerating every candidate, the others are not services staking renders:
   reason.
 The enumeration bottoms out at archival: the one genuine, growing, structural
 network need staking fills — complete transactions kept retrievable after every
-daemon discards their bodies below `W` (§*The problem this solves*; `PDM-Q6`)
+daemon discards their bodies at the boundary after their shard's freeze epoch
+(§*The problem this solves*; `PDM-Q2`, `PDM-Q6`)
 — as the chain outgrows full
 retention. So the staking reward **is** payment for the archival service, and
 "stake without archiving" is being paid for nothing — the exact *Problem 1*
@@ -910,8 +915,10 @@ three paths above are the design rationale that produced it.
 
 **The archival problem does not exist at chain launch, and the design does not
 need it to.** Nothing is scarce until the first shard is discarded, which
-happens only once the chain is older than the universal window `W`
-(`PDM-Q2`: while `tip < W` nothing discards). Until then every daemon holds
+happens at the boundary into epoch 2 at the earliest (`PDM-Q2`, re-ruled
+2026-09-22: in epochs 0 and 1 nothing discards — about four weeks at genesis
+parameters, not the ~195 days the 2026-09-18 `W` gave — and later still on a
+chain too quiet to close a shard in epoch 0). Until then every daemon holds
 every shard, and the economics run in a **launch free regime** — bonds are
 posted on shards everyone still has, so that scarcity arrives with holders
 already committed rather than with the Foundation `CompleteTree` as the first
@@ -921,7 +928,8 @@ Every later shard has the same window: closed and bondable while universally
 held, scarce `≥ W` blocks later. So the mechanism ships at genesis and carries
 weight only when the chain is large enough to need it — no "it has to work at
 launch" pressure, and no cold-start allocation problem, because by the time
-coverage matters the staker population has had `W` blocks to form. The
+coverage matters the staker population has had two epochs to form, and every
+later shard gives it a full freeze epoch more. The
 Foundation floor stays complete throughout (§*Service promise*); it never sheds.
 
 ---
@@ -1026,7 +1034,7 @@ question:
 6. **Every daemon prunes uniformly and holds no serving state**; archivers hold
    bodies in the wallet; the Foundation `CompleteTree` is a permanent,
    reward-invisible floor.
-7. **Bootstrap-aligned**: nothing is scarce until the chain is older than `W`,
+7. **Bootstrap-aligned**: nothing is scarce until the boundary into epoch 2,
    so the mechanism ships at genesis and carries weight when the chain needs it.
 
 ---

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Design — the daemon's body horizon is the epoch calendar (`PDM-Q2` re-ruled)
+
+- Every daemon discards a shard's prunable bodies at the epoch boundary after
+  the shard's freeze epoch (`current_epoch ≥ close_epoch(k) + 2`), about four
+  weeks after it closes at genesis parameters — not after the ~195-day
+  `W` window the 2026-09-18 ruling set. `W` is retired; bodies and the
+  archival journals are two horizons by design. Downtime tolerance is one
+  epoch; a node down longer refetches bodies from archivers (band 2). No
+  code moves in this PR (`PDM-Q-S0`); S-PRUNE's skeleton is re-keyed.
+
 ### `WSS-Q1(b)` bench — a third measurement for the axis nothing grades
 
 - **New `verify_edge` binary: `root_at_count` on an unfrozen population.**
