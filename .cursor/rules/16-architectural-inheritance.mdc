@@ -89,6 +89,24 @@ Worked instances, all verified at source:
   decision, find the decision: a ratified question, a dated ruling, a
   reversion clause. A line that only says what *is* has recorded a state,
   and a state is an input to a decision, not one.
+- **`CONSENSUS_STORE_RECONCILIATION.md` CEN-H15** (E6 slice 5 Q9, 2026-09-23,
+  refuted the same day). `blockchain.cpp:3396` gates a refusal on
+  `m_nettype != FAKECHAIN`; the question read that as *"the C++ accepts a
+  `Null`-CT spend on Fakechain"*, the ruling inherited it, and the row was
+  graded DIVERGENT. Two unconditional belts sat beneath the gate —
+  `ver_non_input_consensus`'s `case CTTypeNull` and `check_tx_inputs`'s
+  own `switch` — and an `else` refused the transaction before either. No
+  path accepted it on any nettype. This is the family's **guard** variant:
+  *a conditional guard read as evidence that the guarded behaviour is
+  conditional.* A nettype-conditional check says nothing about whether the
+  behaviour it guards varies by nettype; "found a rule-71 violation"
+  requires showing the *behaviour* varies, not that some check does. The
+  gate itself was still rule 71's prohibition verbatim and its deletion
+  stayed the right disposition — which is exactly why the misreading was
+  comfortable: every part of the claim that was convenient to verify was
+  true. The reviewer's own account: *"I confirmed the parts of the claim
+  that were convenient to confirm and inherited the part that carried the
+  verdict."*
 
 So, when a claim is load-bearing for a security property:
 
