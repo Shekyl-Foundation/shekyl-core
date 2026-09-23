@@ -740,13 +740,14 @@ fn coinbase_with_outputs(n: usize) -> Transaction {
     let TxExtraField::PubKey(pk) = fields[0] else {
         panic!("genesis extra starts with the pubkey")
     };
-    tx.prefix.extra = tx_extra::serialize(&[
-        TxExtraField::PubKey(pk),
-        TxExtraField::Nonce(vec![0; COINBASE_NONCE_BYTES]),
-        TxExtraField::PqcKemCiphertext(vec![0x6a; HYBRID_KEM_CT_BYTES * n]),
-        TxExtraField::PqcLeafEntries(tx_extra::conforming_pqc_leaf_blob(n)),
-    ])
-    .unwrap();
+    tx.prefix.extra = tx_extra::build_coinbase_extra(
+        pk,
+        &[0u8; COINBASE_NONCE_BYTES],
+        n,
+        &vec![0x6a; HYBRID_KEM_CT_BYTES * n],
+        &tx_extra::conforming_pqc_leaf_blob(n),
+    )
+    .expect("the grammar admits this coinbase extra");
     tx
 }
 

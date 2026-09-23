@@ -60,7 +60,9 @@
 use std::os::raw::c_char;
 
 use shekyl_wire::tx_extra::{
-    check_tx_extra_shape, parse, serialize, TxExtraField, COINBASE_NONCE_BYTES,
+    admitted_leaf_blob, build_coinbase_extra, check_tx_extra_shape, parse, tag_carries_payload,
+    CoinbaseBuildError, ExtraShapeError, ExtraSubject, TxExtraField, COINBASE_NONCE_BYTES,
+    COINBASE_NONCE_OFFSET_FROM_PUBKEY, TX_EXTRA_PUBKEY_LEN,
 };
 
 use crate::legacy_types::ShekylBuffer;
@@ -91,56 +93,12 @@ pub const SHEKYL_TX_EXTRA_UNSERIALIZABLE: i32 = 103;
 /// the admission sentence.
 const MALFORMED_MSG: &str = "tx_extra does not parse; the PQC field shape cannot be established";
 
-/// Bytes of a tx public key.
-const PUBKEY_LEN: usize = 32;
-
-/// The payload bytes a field carries under [`shekyl_tx_extra_field`]'s
-/// contract, or `None` for a field that has none to hand over as bytes
-/// (padding is a length, not a payload).
-fn payload(field: &TxExtraField) -> Option<Vec<u8>> {
-    match field {
-        TxExtraField::Padding(_) => None,
-        TxExtraField::PubKey(key) => Some(key.to_vec()),
-        TxExtraField::AdditionalPubKeys(keys) => Some(keys.concat()),
-        TxExtraField::Nonce(b)
-        | TxExtraField::PqcKemCiphertext(b)
-        | TxExtraField::PqcLeafEntries(b)
-        | TxExtraField::PqcViewTagHints(b)
-        | TxExtraField::PqcSpendAuthPubkeys(b)
-        | TxExtraField::ArchivalAttestation(b) => Some(b.clone()),
+fn subject(is_coinbase: bool) -> ExtraSubject {
+    if is_coinbase {
+        ExtraSubject::Coinbase
+    } else {
+        ExtraSubject::General
     }
-}
-
-/// The tag byte a parsed field carries.
-fn tag_of(field: &TxExtraField) -> u8 {
-    use shekyl_wire::tx_extra as t;
-    match field {
-        TxExtraField::Padding(_) => t::TX_EXTRA_TAG_PADDING,
-        TxExtraField::PubKey(_) => t::TX_EXTRA_TAG_PUBKEY,
-        TxExtraField::Nonce(_) => t::TX_EXTRA_TAG_NONCE,
-        TxExtraField::AdditionalPubKeys(_) => t::TX_EXTRA_TAG_ADDITIONAL_PUBKEYS,
-        TxExtraField::PqcKemCiphertext(_) => t::TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
-        TxExtraField::PqcLeafEntries(_) => t::TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
-        TxExtraField::PqcViewTagHints(_) => t::TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
-        TxExtraField::PqcSpendAuthPubkeys(_) => t::TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS,
-        TxExtraField::ArchivalAttestation(_) => t::TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
-    }
-}
-
-/// Whether `tag` names a field with a payload this surface hands over.
-fn tag_has_payload(tag: u8) -> bool {
-    use shekyl_wire::tx_extra as t;
-    matches!(
-        tag,
-        t::TX_EXTRA_TAG_PUBKEY
-            | t::TX_EXTRA_TAG_NONCE
-            | t::TX_EXTRA_TAG_ADDITIONAL_PUBKEYS
-            | t::TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT
-            | t::TX_EXTRA_TAG_PQC_LEAF_ENTRIES
-            | t::TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS
-            | t::TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS
-            | t::TX_EXTRA_TAG_ARCHIVAL_ATTESTATION
-    )
 }
 
 /// Borrow `len` bytes; a null pointer is accepted only with length 0.
@@ -183,7 +141,7 @@ pub unsafe extern "C" fn shekyl_tx_extra_field(
     }
     // SAFETY: caller contract on `out`.
     unsafe { out.write(ShekylBuffer::null()) };
-    if !tag_has_payload(tag) {
+    if !tag_carries_payload(tag) {
         return SHEKYL_TX_EXTRA_UNKNOWN_TAG;
     }
     // SAFETY: caller contract on `extra` / `extra_len`.
@@ -193,16 +151,17 @@ pub unsafe extern "C" fn shekyl_tx_extra_field(
     let Ok(fields) = parse(extra) else {
         return SHEKYL_TX_EXTRA_MALFORMED;
     };
-    let Some(found) = fields.iter().filter(|f| tag_of(f) == tag).nth(index) else {
+    let Some(found) = fields.iter().filter(|f| f.tag() == tag).nth(index) else {
         return SHEKYL_TX_EXTRA_ABSENT;
     };
-    let Some(data) = payload(found) else {
-        // Unreachable — `tag_has_payload` admitted the tag — but the arm is
-        // the honest code, never a silent empty buffer.
+    let Some(data) = found.payload() else {
+        // `tag_carries_payload` admitted the tag. A field of that tag with
+        // no payload is a codec bug; refuse it rather than hand over nothing
+        // and call it success.
         return SHEKYL_TX_EXTRA_UNKNOWN_TAG;
     };
     // SAFETY: `out` checked above.
-    unsafe { give(out, data) };
+    unsafe { give(out, data.into_owned()) };
     SHEKYL_TX_EXTRA_OK
 }
 
@@ -237,7 +196,7 @@ pub unsafe extern "C" fn shekyl_tx_extra_tx_pubkey(
     };
     // SAFETY: `out32` is writable for 32 bytes per the caller's contract;
     // `key` is Rust-owned, so the regions cannot overlap.
-    unsafe { std::ptr::copy_nonoverlapping(key.as_ptr(), out32, PUBKEY_LEN) };
+    unsafe { std::ptr::copy_nonoverlapping(key.as_ptr(), out32, TX_EXTRA_PUBKEY_LEN) };
     SHEKYL_TX_EXTRA_OK
 }
 
@@ -279,20 +238,22 @@ pub unsafe extern "C" fn shekyl_tx_extra_leaf_entries(
     let Ok(fields) = parse(extra) else {
         return SHEKYL_TX_EXTRA_MALFORMED;
     };
-    if let Err(err) = check_tx_extra_shape(&fields, n_outputs, is_coinbase) {
+    if let Err(err) = check_tx_extra_shape(&fields, n_outputs, subject(is_coinbase)) {
         // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
         unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
         return shape_code(err);
     }
-    // The rule admitted exactly one 0x07 field when n_outputs > 0 and none
-    // otherwise; the leafless case hands over an empty buffer.
-    let blob = fields
-        .iter()
-        .find_map(|f| match f {
-            TxExtraField::PqcLeafEntries(b) => Some(b.clone()),
-            _ => None,
-        })
-        .unwrap_or_default();
+    // The rule admitted the blob. A disagreement here is a refusal, not an
+    // empty buffer the curve-tree collector would zero-fill from.
+    let blob = match admitted_leaf_blob(&fields, n_outputs) {
+        Ok(blob) => blob,
+        Err(err) => {
+            let err = ExtraShapeError::from(err);
+            // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
+            unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
+            return shape_code(err);
+        }
+    };
     // SAFETY: `out` checked above.
     unsafe { give(out, blob) };
     SHEKYL_TX_EXTRA_OK
@@ -329,7 +290,7 @@ pub unsafe extern "C" fn shekyl_tx_extra_shape_of(
         unsafe { write_msg(out_msg, out_msg_cap, MALFORMED_MSG) };
         return SHEKYL_TX_EXTRA_MALFORMED;
     };
-    match check_tx_extra_shape(&fields, n_outputs, is_coinbase) {
+    match check_tx_extra_shape(&fields, n_outputs, subject(is_coinbase)) {
         Ok(()) => SHEKYL_TX_EXTRA_OK,
         Err(err) => {
             // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
@@ -339,10 +300,16 @@ pub unsafe extern "C" fn shekyl_tx_extra_shape_of(
     }
 }
 
-/// Build the coinbase's `extra` in the grammar's one layout:
-/// `[PubKey(tx_pubkey), Nonce(nonce, 8 bytes), PqcKemCiphertext(kem),
-/// PqcLeafEntries(leaf)]` — `[PubKey, Nonce]` when `n_outputs == 0` — judged
-/// by `check_coinbase_extra_shape` before it is handed back.
+/// Bytes from the first byte of the coinbase tx pubkey to the nonce payload.
+/// The grammar fixes the distance ([`COINBASE_NONCE_OFFSET_FROM_PUBKEY`]);
+/// the block template adds it to wherever the pubkey sits in the block blob.
+#[no_mangle]
+pub extern "C" fn shekyl_coinbase_nonce_offset_from_pubkey() -> usize {
+    COINBASE_NONCE_OFFSET_FROM_PUBKEY
+}
+
+/// Build the coinbase's `extra` by [`build_coinbase_extra`]: the grammar's
+/// one layout, judged before it is handed back.
 ///
 /// `nonce` is exactly [`COINBASE_NONCE_BYTES`] bytes, the miner's template
 /// search space beyond the 32-bit header nonce (`TXE-Q6′`); the daemon
@@ -355,7 +322,7 @@ pub unsafe extern "C" fn shekyl_tx_extra_shape_of(
 /// on `OK` and the null buffer otherwise.
 ///
 /// # Safety
-/// `tx_pubkey` is readable for 32 bytes and `nonce` for
+/// `tx_pubkey` is readable for [`TX_EXTRA_PUBKEY_LEN`] bytes and `nonce` for
 /// `COINBASE_NONCE_BYTES`; `kem` / `leaf` are readable for their lengths
 /// (null only with 0); `out` is a writable `ShekylBuffer`; `out_msg` is
 /// writable for `out_msg_cap` bytes (null with 0).
@@ -382,7 +349,7 @@ pub unsafe extern "C" fn shekyl_coinbase_extra(
     // SAFETY: caller contracts on the four inputs.
     let (key, nonce, kem, leaf) = unsafe {
         let (Some(key), Some(nonce)) = (
-            bytes(tx_pubkey, PUBKEY_LEN),
+            bytes(tx_pubkey, TX_EXTRA_PUBKEY_LEN),
             bytes(nonce, COINBASE_NONCE_BYTES),
         ) else {
             return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
@@ -392,29 +359,23 @@ pub unsafe extern "C" fn shekyl_coinbase_extra(
         };
         (key, nonce, kem, leaf)
     };
-    let mut pubkey = [0u8; PUBKEY_LEN];
+    let mut pubkey = [0u8; TX_EXTRA_PUBKEY_LEN];
     pubkey.copy_from_slice(key);
-    let mut fields = vec![
-        TxExtraField::PubKey(pubkey),
-        TxExtraField::Nonce(nonce.to_vec()),
-    ];
-    if n_outputs > 0 || !kem.is_empty() || !leaf.is_empty() {
-        // Present fields are judged by the rule below; a leafless coinbase
-        // that was handed bytes anyway is refused there, not dropped here.
-        fields.push(TxExtraField::PqcKemCiphertext(kem.to_vec()));
-        fields.push(TxExtraField::PqcLeafEntries(leaf.to_vec()));
+    let mut nonce_bytes = [0u8; COINBASE_NONCE_BYTES];
+    nonce_bytes.copy_from_slice(nonce);
+    match build_coinbase_extra(pubkey, &nonce_bytes, n_outputs, kem, leaf) {
+        Ok(blob) => {
+            // SAFETY: `out` checked above.
+            unsafe { give(out, blob) };
+            SHEKYL_TX_EXTRA_OK
+        }
+        Err(CoinbaseBuildError::Shape(err)) => {
+            // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
+            unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
+            shape_code(err)
+        }
+        Err(CoinbaseBuildError::Unserializable) => SHEKYL_TX_EXTRA_UNSERIALIZABLE,
     }
-    if let Err(err) = check_tx_extra_shape(&fields, n_outputs, true) {
-        // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
-        unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
-        return shape_code(err);
-    }
-    let Ok(blob) = serialize(&fields) else {
-        return SHEKYL_TX_EXTRA_UNSERIALIZABLE;
-    };
-    // SAFETY: `out` checked above.
-    unsafe { give(out, blob) };
-    SHEKYL_TX_EXTRA_OK
 }
 
 #[cfg(test)]
@@ -422,7 +383,7 @@ mod tests {
     use super::*;
     use crate::legacy_util::shekyl_buffer_free;
     use shekyl_wire::tx_extra::{
-        conforming_pqc_leaf_blob, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, TX_EXTRA_TAG_NONCE,
+        conforming_pqc_leaf_blob, serialize, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, TX_EXTRA_TAG_NONCE,
         TX_EXTRA_TAG_PADDING, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
         TX_EXTRA_TAG_PUBKEY,
     };

@@ -1443,6 +1443,11 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
 /// the header nonce in one interval; each byte here multiplies that by 256,
 /// so 8 never binds and matches the pool convention (reserve_size: 8).
 #define SHEKYL_COINBASE_NONCE_BYTES           8
+/// Bytes from the first byte of the coinbase tx pubkey to the nonce payload.
+/// The grammar fixes the distance (shekyl_wire::tx_extra::COINBASE_NONCE_OFFSET_FROM_PUBKEY);
+/// the template adds it to the pubkey's offset in the block blob rather than
+/// re-encoding the 0x02 tag and the length byte.
+size_t shekyl_coinbase_nonce_offset_from_pubkey(void);
 /// Coinbase grammar refusals (12..=17), beside the CEN-I19 codes (1..=11).
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING   12
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH    13

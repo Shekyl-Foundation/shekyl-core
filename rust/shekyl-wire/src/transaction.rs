@@ -47,7 +47,7 @@ use shekyl_crypto_hash::keccak256;
 use shekyl_types::{BlockHash, PCanonicalId, PrefixHash};
 
 use crate::bytes::{read_array, read_byte};
-use crate::tx_extra::{check_tx_extra_shape, parse as parse_tx_extra};
+use crate::tx_extra::{check_tx_extra_shape, parse as parse_tx_extra, ExtraSubject};
 use crate::varint::{read_varint, write_varint};
 use crate::READ_LEN_CAP;
 
@@ -1828,7 +1828,12 @@ impl Transaction {
         // set; skipping the shape check on parse failure would diverge from
         // admission.
         let fields = parse_tx_extra(&self.prefix.extra).map_err(io::Error::other)?;
-        check_tx_extra_shape(&fields, n_out, is_coinbase).map_err(io::Error::other)?;
+        let subject = if is_coinbase {
+            ExtraSubject::Coinbase
+        } else {
+            ExtraSubject::General
+        };
+        check_tx_extra_shape(&fields, n_out, subject).map_err(io::Error::other)?;
         let size = self.serialized_len();
         if size > MAX_TX_SIZE {
             return Err(io::Error::other(format!(

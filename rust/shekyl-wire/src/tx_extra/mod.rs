@@ -14,24 +14,34 @@
 //!
 //! This crate owns the **Shekyl genesis `tx_extra` tag set**
 //! (`GENESIS_TX_WIRE_FORMAT.md` §9.6a). Tag grammars: most tags are
-//! `tag · V(len) · blob`; `0x01` is a bare 32-byte key; `0x04` is
-//! `V(count) · count×32`; `0x05` is `V(count) · count×{u8,u8,[32]}`; `0x00` padding
-//! is a run of zero bytes (≤ `TX_EXTRA_PADDING_MAX_COUNT`). Inherited Monero tags that
-//! are **not** part of the genesis grammar — merge-mining (`0x03`) and the "mysterious
-//! minergate" (`0xDE`) — are **rejected** (rule 60). The byte values stay retired.
-//! The C++ variant is an adapter that must admit this same set until that parser
-//! is deleted.
+//! `tag · V(len) · blob`; `0x01` is a bare [`TX_EXTRA_PUBKEY_LEN`]-byte key;
+//! `0x04` is `V(count) · count×32`; `0x00` padding is a run of zero bytes
+//! (≤ [`TX_EXTRA_PADDING_MAX_COUNT`]). Inherited Monero tags that are **not**
+//! part of the genesis grammar — merge-mining (`0x03`) and the "mysterious
+//! minergate" (`0xDE`) — are **rejected** (rule 60). The byte values stay
+//! retired. The coinbase admission grammar (CEN-I20) is [`coinbase`]: one
+//! constructor and one slice match. This file is the codec those call.
 
+use std::borrow::Cow;
 use std::io::{self, Read, Write};
 
 use crate::bytes::{read_array, read_byte};
 use crate::varint::{read_varint, write_varint};
 use crate::READ_LEN_CAP;
 
+mod coinbase;
+
+pub use coinbase::{
+    build_coinbase_extra, check_coinbase_extra_shape, check_tx_extra_shape, CoinbaseBuildError,
+    CoinbaseGrammarError, ExtraSubject, COINBASE_NONCE_BYTES, COINBASE_NONCE_OFFSET_FROM_PUBKEY,
+};
+
 /// `0x00` — padding (a run of zero bytes to the end of `extra`).
 pub const TX_EXTRA_TAG_PADDING: u8 = 0x00;
 /// `0x01` — transaction public key.
 pub const TX_EXTRA_TAG_PUBKEY: u8 = 0x01;
+/// Byte length of a [`TxExtraField::PubKey`].
+pub const TX_EXTRA_PUBKEY_LEN: usize = 32;
 /// `0x02` — extra nonce.
 pub const TX_EXTRA_TAG_NONCE: u8 = 0x02;
 /// `0x04` — additional per-output tx public keys.
@@ -41,7 +51,7 @@ pub const TX_EXTRA_TAG_ADDITIONAL_PUBKEYS: u8 = 0x04;
 // leaf-commitment binding (`PL-D3`, `docs/FCMP_PLUS_PLUS.md` "PQC ownership
 // binding") and by the address fingerprint as group identity
 // (`docs/PQC_MULTISIG.md` §5.3). REJECTED 2026-09-22; the byte stays retired
-// like `0x03` / `0xDE` (`tx_extra.h`), so a later tag cannot reuse a meaning
+// like `0x03` / `0xDE`, so a later tag cannot reuse a meaning
 // old software parsed differently.
 /// `0x06` — per-output hybrid KEM ciphertexts.
 pub const TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT: u8 = 0x06;
@@ -68,9 +78,9 @@ pub const TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS: u8 = 0x0A;
 /// present-empty and absent both yield an empty blob at that API.
 pub const TX_EXTRA_TAG_ARCHIVAL_ATTESTATION: u8 = 0x0B;
 
-/// X25519 ciphertext bytes per output (`tx_extra.h`).
+/// X25519 ciphertext bytes per output.
 pub const X25519_CT_BYTES: usize = 32;
-/// ML-KEM-768 ciphertext bytes per output (`tx_extra.h`).
+/// ML-KEM-768 ciphertext bytes per output.
 pub const ML_KEM_768_CT_BYTES: usize = 1088;
 /// Hybrid KEM ciphertext bytes per output (`32 + 1088`).
 pub const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_BYTES;
@@ -103,10 +113,11 @@ mod kem_layout_pins {
     );
 }
 
-/// Max padding run in bytes, **including** the tag byte (`TX_EXTRA_PADDING_MAX_COUNT`,
-/// `tx_extra.h`). The C++ oracle rejects longer padding; matched here for parity.
+/// Max padding run in bytes, **including** the tag byte. Longer padding does
+/// not parse.
 pub const TX_EXTRA_PADDING_MAX_COUNT: usize = 255;
-/// Max extra-nonce payload in bytes (`TX_EXTRA_NONCE_MAX_COUNT`, `tx_extra.h`).
+/// Max extra-nonce payload in bytes. The coinbase nonce is not this cap; it
+/// is [`COINBASE_NONCE_BYTES`], fixed.
 pub const TX_EXTRA_NONCE_MAX_COUNT: usize = 255;
 
 /// A parsed `tx_extra` field. The `0x06`/`0x07` payloads are kept as concatenated
@@ -117,11 +128,11 @@ pub enum TxExtraField {
     /// `0x00` — `n` zero bytes (the run, including the tag byte).
     Padding(usize),
     /// `0x01` — transaction public key.
-    PubKey([u8; 32]),
+    PubKey([u8; TX_EXTRA_PUBKEY_LEN]),
     /// `0x02` — extra nonce.
     Nonce(Vec<u8>),
     /// `0x04` — additional per-output tx public keys.
-    AdditionalPubKeys(Vec<[u8; 32]>),
+    AdditionalPubKeys(Vec<[u8; TX_EXTRA_PUBKEY_LEN]>),
     /// `0x06` — per-output hybrid KEM ciphertexts, concatenated.
     PqcKemCiphertext(Vec<u8>),
     /// `0x07` — per-output PQC leaf entries (`CM ‖ record`), concatenated.
@@ -132,6 +143,68 @@ pub enum TxExtraField {
     PqcSpendAuthPubkeys(Vec<u8>),
     /// `0x0B` — archival attestation blob.
     ArchivalAttestation(Vec<u8>),
+}
+
+impl TxExtraField {
+    /// The tag byte this field serializes as.
+    #[must_use]
+    pub const fn tag(&self) -> u8 {
+        match self {
+            Self::Padding(_) => TX_EXTRA_TAG_PADDING,
+            Self::PubKey(_) => TX_EXTRA_TAG_PUBKEY,
+            Self::Nonce(_) => TX_EXTRA_TAG_NONCE,
+            Self::AdditionalPubKeys(_) => TX_EXTRA_TAG_ADDITIONAL_PUBKEYS,
+            Self::PqcKemCiphertext(_) => TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
+            Self::PqcLeafEntries(_) => TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
+            Self::PqcViewTagHints(_) => TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
+            Self::PqcSpendAuthPubkeys(_) => TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS,
+            Self::ArchivalAttestation(_) => TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
+        }
+    }
+
+    /// The payload a reader of this field is handed.
+    ///
+    /// Padding is a length, not a payload, and returns `None`. Additional
+    /// pubkeys are owned because the enum stores them as separate keys; every
+    /// other payload is borrowed from the field.
+    #[must_use]
+    pub fn payload(&self) -> Option<Cow<'_, [u8]>> {
+        match self {
+            Self::Padding(_) => None,
+            Self::PubKey(key) => Some(Cow::Borrowed(key)),
+            Self::AdditionalPubKeys(keys) => {
+                let mut bytes = Vec::with_capacity(keys.len() * TX_EXTRA_PUBKEY_LEN);
+                for key in keys {
+                    bytes.extend_from_slice(key);
+                }
+                Some(Cow::Owned(bytes))
+            }
+            Self::Nonce(bytes)
+            | Self::PqcKemCiphertext(bytes)
+            | Self::PqcLeafEntries(bytes)
+            | Self::PqcViewTagHints(bytes)
+            | Self::PqcSpendAuthPubkeys(bytes)
+            | Self::ArchivalAttestation(bytes) => Some(Cow::Borrowed(bytes)),
+        }
+    }
+}
+
+/// Whether `tag` names a field [`TxExtraField::payload`] can hand over.
+/// Padding and any byte the grammar does not model return `false` — asking
+/// for one is a caller bug, not a verdict about the bytes.
+#[must_use]
+pub fn tag_carries_payload(tag: u8) -> bool {
+    matches!(
+        tag,
+        TX_EXTRA_TAG_PUBKEY
+            | TX_EXTRA_TAG_NONCE
+            | TX_EXTRA_TAG_ADDITIONAL_PUBKEYS
+            | TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT
+            | TX_EXTRA_TAG_PQC_LEAF_ENTRIES
+            | TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS
+            | TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS
+            | TX_EXTRA_TAG_ARCHIVAL_ATTESTATION
+    )
 }
 
 /// A per-output hybrid KEM ciphertext from a `0x06` field.
@@ -391,34 +464,84 @@ pub fn pqc_leaf_entries_per_output(blob: &[u8]) -> io::Result<Vec<[u8; PQC_LEAF_
         .collect())
 }
 
-/// Why a `tx_extra` is refused at admission by the shape rules: the PQC field
-/// rule (§9.6a as ruled 2026-09-05; CEN-I19) and the coinbase grammar
-/// ([`check_coinbase_extra_shape`], `TXE-Q6′`). Every variant names its tag,
-/// and every variant whose defect is a count or a length names those numbers
-/// — a rejected transaction says what was expected, not merely that something
-/// was wrong. The daemon logs this type's `Display` verbatim across the FFI
-/// (`shekyl_tx_extra_pqc_field_shape_of`), so its log line and a port's error
-/// are the same sentence by construction rather than by two formatters
-/// agreeing.
+/// Which of the two CEN-I19 fields a shape verdict is about.
+///
+/// The verdict names the field, not a raw tag, so the FFI code table is a
+/// total match on this enum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExtraShapeError {
+pub enum PqcExtraField {
+    /// `0x06`, [`HYBRID_KEM_CT_BYTES`] bytes per output.
+    Kem,
+    /// `0x07`, [`PQC_LEAF_ENTRY_LEN`] bytes per output.
+    Leaf,
+}
+
+impl PqcExtraField {
+    /// The tag byte of this field.
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::Kem => TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
+            Self::Leaf => TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
+        }
+    }
+
+    /// Payload bytes of one output's field.
+    #[must_use]
+    pub const fn stride(self) -> usize {
+        match self {
+            Self::Kem => HYBRID_KEM_CT_BYTES,
+            Self::Leaf => PQC_LEAF_ENTRY_LEN,
+        }
+    }
+}
+
+/// Why a `0x06` / `0x07` field is refused (§9.6a as ruled 2026-09-05; CEN-I19).
+///
+/// Every variant names its field, and every variant whose defect is a count
+/// or a length names those numbers — a rejected transaction says what was
+/// expected. The daemon logs this type's [`Display`] verbatim across the FFI
+/// (`shekyl_tx_extra_shape_of`), so the log line and a port's error are the
+/// same sentence. The coinbase grammar is [`CoinbaseGrammarError`], not a
+/// reuse of these variants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PqcFieldShapeError {
     /// A tagged field is present on a transaction with no outputs.
-    PresentWithoutOutputs { tag: u8 },
-    /// The transaction has outputs but no field carrying this tag;
+    PresentWithoutOutputs {
+        /// Which field.
+        field: PqcExtraField,
+    },
+    /// The transaction has outputs but no field carrying this tag.
     /// `expected` is the length the single field would have had.
-    Missing { tag: u8, expected: usize },
+    Missing {
+        /// Which field.
+        field: PqcExtraField,
+        /// `stride · n_outputs`.
+        expected: usize,
+    },
     /// More than one field carries this tag: the bytes admit two readings
     /// (first-match, last-match, reject) and a port may pick a different one.
-    Duplicate { tag: u8, count: usize },
+    Duplicate {
+        /// Which field.
+        field: PqcExtraField,
+        /// How many times it appeared.
+        count: usize,
+    },
     /// The single field's length is not `stride · n_outputs`.
     Length {
-        tag: u8,
+        /// Which field.
+        field: PqcExtraField,
+        /// The length that was present.
         got: usize,
+        /// `stride · n_outputs`.
         expected: usize,
     },
     /// The `0x07` entry at `index` does not begin with a canonical, prime-order,
     /// non-identity Ed25519 point — the leaf commitment content rule (`PL-D3`).
-    LeafPointInvalid { index: usize },
+    LeafPointInvalid {
+        /// Index of the entry that failed.
+        index: usize,
+    },
     /// The `0x07` blob handed to the content rule is not a whole, non-zero
     /// number of `PQC_LEAF_ENTRY_LEN`-byte entries. The content rule enforces
     /// its own precondition rather than trusting the caller to have run the
@@ -426,53 +549,42 @@ pub enum ExtraShapeError {
     /// (`chunks_exact` silently drops it), and an empty blob would pass
     /// vacuously — no conforming field is empty (the shape rule admits a
     /// `0x07` field only with `n_outputs > 0`).
-    LeafBlobLength { got: usize },
-    /// A coinbase extra has no `0x02` field; the grammar requires exactly one
-    /// of [`COINBASE_NONCE_BYTES`] bytes.
-    CoinbaseNonceMissing,
-    /// The coinbase `0x02` field is not exactly [`COINBASE_NONCE_BYTES`]
-    /// bytes. Fixed width is the point: a variable length is itself a
-    /// miner-controlled signal on top of the content.
-    CoinbaseNonceLength { got: usize },
-    /// A coinbase extra carries a tag outside the closed grammar
-    /// `[0x01, 0x02, 0x06, 0x07]`. The whitelist is the consensus rule;
-    /// admitting a tag to it is a consensus amendment, never a producer's
-    /// implementation detail.
-    CoinbaseForeignTag { tag: u8 },
-    /// The coinbase's fields are the right set but not in the canonical
-    /// order `0x01, 0x02, 0x06, 0x07`; `position` is the first index that
-    /// disagrees and `tag` what was found there. Order is part of the
-    /// grammar so that a coinbase extra has exactly one byte layout.
-    CoinbaseFieldOrder { position: usize, tag: u8 },
-    /// A non-coinbase transaction carries a `0x02` field. The nonce exists
-    /// for template search, which only the coinbase does; elsewhere it is
-    /// the free-text channel FA-10 closed in favour of the uniform
-    /// `enc_label`.
-    NonceOutsideCoinbase,
+    LeafBlobLength {
+        /// The blob length that was handed over.
+        got: usize,
+    },
 }
 
-impl std::fmt::Display for ExtraShapeError {
+impl std::fmt::Display for PqcFieldShapeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PresentWithoutOutputs { tag } => {
+            Self::PresentWithoutOutputs { field } => {
                 write!(
                     f,
-                    "tx_extra {tag:#04x} present on a transaction with no outputs"
+                    "tx_extra {:#04x} present on a transaction with no outputs",
+                    field.tag()
                 )
             }
-            Self::Missing { tag, expected } => write!(
+            Self::Missing { field, expected } => write!(
                 f,
-                "tx_extra {tag:#04x} missing on a transaction with outputs; {expected} bytes required"
+                "tx_extra {:#04x} missing on a transaction with outputs; {expected} bytes required",
+                field.tag()
             ),
-            Self::Duplicate { tag, count } => {
+            Self::Duplicate { field, count } => {
                 write!(
                     f,
-                    "tx_extra {tag:#04x} appears {count} times; exactly one is admitted"
+                    "tx_extra {:#04x} appears {count} times; exactly one is admitted",
+                    field.tag()
                 )
             }
-            Self::Length { tag, got, expected } => write!(
+            Self::Length {
+                field,
+                got,
+                expected,
+            } => write!(
                 f,
-                "tx_extra {tag:#04x} is {got} bytes; {expected} required for this output count"
+                "tx_extra {:#04x} is {got} bytes; {expected} required for this output count",
+                field.tag()
             ),
             Self::LeafPointInvalid { index } => write!(
                 f,
@@ -483,22 +595,34 @@ impl std::fmt::Display for ExtraShapeError {
                 "tx_extra 0x07 content check: blob is {got} bytes; a whole, non-zero \
                  multiple of {PQC_LEAF_ENTRY_LEN} required"
             ),
-            Self::CoinbaseNonceMissing => write!(
-                f,
-                "coinbase tx_extra has no 0x02 nonce; exactly one of {COINBASE_NONCE_BYTES} bytes required"
-            ),
-            Self::CoinbaseNonceLength { got } => write!(
-                f,
-                "coinbase tx_extra 0x02 nonce is {got} bytes; exactly {COINBASE_NONCE_BYTES} required"
-            ),
-            Self::CoinbaseForeignTag { tag } => write!(
-                f,
-                "coinbase tx_extra carries {tag:#04x}; only 0x01, 0x02, 0x06, 0x07 are admitted"
-            ),
-            Self::CoinbaseFieldOrder { position, tag } => write!(
-                f,
-                "coinbase tx_extra field {position} is {tag:#04x}; the order is 0x01, 0x02, 0x06, 0x07"
-            ),
+        }
+    }
+}
+
+impl std::error::Error for PqcFieldShapeError {}
+
+/// Why a parsed `extra` is refused at admission: CEN-I19, the coinbase
+/// grammar, or a `0x02` on a transaction that is not a coinbase.
+///
+/// One type so the daemon logs one [`Display`] and the FFI flattens one
+/// match. The variants do not overlap: a missing pubkey is
+/// [`CoinbaseGrammarError::PubkeyMissing`], never [`PqcFieldShapeError::Missing`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtraShapeError {
+    /// CEN-I19, including the leaf-point content rule.
+    Pqc(PqcFieldShapeError),
+    /// The closed coinbase grammar.
+    Coinbase(CoinbaseGrammarError),
+    /// A `0x02` nonce on a non-coinbase transaction. The nonce exists for
+    /// template search, which only the coinbase does.
+    NonceOutsideCoinbase,
+}
+
+impl std::fmt::Display for ExtraShapeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pqc(err) => write!(f, "{err}"),
+            Self::Coinbase(err) => write!(f, "{err}"),
             Self::NonceOutsideCoinbase => write!(
                 f,
                 "tx_extra 0x02 nonce on a non-coinbase transaction; the nonce is coinbase-only"
@@ -509,17 +633,18 @@ impl std::fmt::Display for ExtraShapeError {
 
 impl std::error::Error for ExtraShapeError {}
 
-/// The PQC field shape rule, on the facts either parser extracts: with
-/// `n = n_outputs`, a transaction carries **exactly one** `0x06` of
-/// `HYBRID_KEM_CT_BYTES · n` and **exactly one** `0x07` of
-/// `PQC_LEAF_ENTRY_LEN · n` when `n > 0`, and **neither** when `n == 0`.
+/// The PQC field shape rule: with `n = n_outputs`, a transaction carries
+/// **exactly one** `0x06` of `HYBRID_KEM_CT_BYTES · n` and **exactly one**
+/// `0x07` of `PQC_LEAF_ENTRY_LEN · n` when `n > 0`, and **neither** when
+/// `n == 0`.
 ///
 /// `kem_lens` / `leaf_lens` are the byte lengths of every `0x06` / `0x07`
-/// field found, in order. The daemon feeds these from its own `tx_extra`
-/// parse (over the FFI twin `shekyl_tx_extra_pqc_field_shape`) and the port
-/// feeds them from [`parse`] via [`check_pqc_field_shape_of`], so the rule has
-/// one home. The zero-output arm is what keeps serve-credit transactions
-/// (no outputs, empty `extra`) admissible: they are the must-accept control.
+/// field [`parse`] found, in order. [`check_pqc_field_shape_of`] is that
+/// extraction. The daemon does not parse `extra` and does not hand lengths
+/// across the FFI; `shekyl_tx_extra_shape_of` parses and calls
+/// [`check_tx_extra_shape`]. The zero-output arm is what keeps serve-credit
+/// transactions (no outputs, empty `extra`) admissible: they are the
+/// must-accept control.
 ///
 /// Consensus, not policy (Rick, 2026-09-05): `0x07` carries the commitment
 /// whose x-coordinate is the fourth scalar of every leaf these outputs become
@@ -530,53 +655,42 @@ impl std::error::Error for ExtraShapeError {}
 ///
 /// Shape only. The content rule on the same field — every entry's commitment
 /// point must be admissible — is [`check_pqc_leaf_entries`]; both run at
-/// admission through [`check_pqc_field_shape_of`] and the FFI twin.
+/// admission through [`check_pqc_field_shape_of`].
 pub fn check_pqc_field_shape(
     n_outputs: usize,
     kem_lens: &[usize],
     leaf_lens: &[usize],
-) -> Result<(), ExtraShapeError> {
-    check_one(
-        TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
-        HYBRID_KEM_CT_BYTES,
-        n_outputs,
-        kem_lens,
-    )?;
-    check_one(
-        TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
-        PQC_LEAF_ENTRY_LEN,
-        n_outputs,
-        leaf_lens,
-    )
+) -> Result<(), PqcFieldShapeError> {
+    check_one(PqcExtraField::Kem, n_outputs, kem_lens)?;
+    check_one(PqcExtraField::Leaf, n_outputs, leaf_lens)
 }
 
 fn check_one(
-    tag: u8,
-    stride: usize,
+    field: PqcExtraField,
     n_outputs: usize,
     lens: &[usize],
-) -> Result<(), ExtraShapeError> {
+) -> Result<(), PqcFieldShapeError> {
     if n_outputs == 0 {
         return if lens.is_empty() {
             Ok(())
         } else {
-            Err(ExtraShapeError::PresentWithoutOutputs { tag })
+            Err(PqcFieldShapeError::PresentWithoutOutputs { field })
         };
     }
     // `n_outputs` is a vout count the caller already parsed, so this product
     // cannot overflow in practice; saturating keeps the arithmetic total
     // without inventing a variant for a state no transaction can reach.
-    let expected = stride.saturating_mul(n_outputs);
+    let expected = field.stride().saturating_mul(n_outputs);
     match lens {
-        [] => Err(ExtraShapeError::Missing { tag, expected }),
+        [] => Err(PqcFieldShapeError::Missing { field, expected }),
         [got] if *got == expected => Ok(()),
-        [got] => Err(ExtraShapeError::Length {
-            tag,
+        [got] => Err(PqcFieldShapeError::Length {
+            field,
             got: *got,
             expected,
         }),
-        many => Err(ExtraShapeError::Duplicate {
-            tag,
+        many => Err(PqcFieldShapeError::Duplicate {
+            field,
             count: many.len(),
         }),
     }
@@ -589,18 +703,18 @@ fn check_one(
 /// record half is opaque here (checked by nothing live).
 ///
 /// The blob must be a whole, non-zero number of entries
-/// ([`ExtraShapeError::LeafBlobLength`] otherwise) — enforced here, not
+/// ([`PqcFieldShapeError::LeafBlobLength`] otherwise) — enforced here, not
 /// assumed from the shape rule, so a caller that skips the shape rule cannot
 /// get a vacuous pass on a trailing remainder or an empty blob.
-pub fn check_pqc_leaf_entries(blob: &[u8]) -> Result<(), ExtraShapeError> {
+pub fn check_pqc_leaf_entries(blob: &[u8]) -> Result<(), PqcFieldShapeError> {
     if blob.is_empty() || !blob.len().is_multiple_of(PQC_LEAF_ENTRY_LEN) {
-        return Err(ExtraShapeError::LeafBlobLength { got: blob.len() });
+        return Err(PqcFieldShapeError::LeafBlobLength { got: blob.len() });
     }
     for (index, entry) in blob.chunks_exact(PQC_LEAF_ENTRY_LEN).enumerate() {
         let mut point = [0u8; PQC_LEAF_POINT_BYTES];
         point.copy_from_slice(&entry[..PQC_LEAF_POINT_BYTES]);
         if shekyl_curve_generators::pqc_leaf_point_valid(&point).is_none() {
-            return Err(ExtraShapeError::LeafPointInvalid { index });
+            return Err(PqcFieldShapeError::LeafPointInvalid { index });
         }
     }
     Ok(())
@@ -610,7 +724,7 @@ pub fn check_pqc_leaf_entries(blob: &[u8]) -> Result<(), ExtraShapeError> {
 pub fn check_pqc_field_shape_of(
     fields: &[TxExtraField],
     n_outputs: usize,
-) -> Result<(), ExtraShapeError> {
+) -> Result<(), PqcFieldShapeError> {
     let kem: Vec<usize> = fields
         .iter()
         .filter_map(|f| match f {
@@ -634,146 +748,39 @@ pub fn check_pqc_field_shape_of(
     }
 }
 
-/// Fixed width of the coinbase `0x02` nonce, in bytes (`TXE-Q6′`, ruled
-/// 2026-09-23). The header nonce is 32 bits: `2^32 / 120 s ≈ 36 MH/s`
-/// exhausts a template inside one target interval, which is why an extra
-/// nonce exists at all. Each byte here multiplies that by 256 — 9.2 GH/s at
-/// one byte, 2.3 TH/s at two, `1.5 × 10^17 H/s` at four — so 8 never binds;
-/// 8 is the width the pool convention (`reserve_size: 8`) already uses. Fixed
-/// rather than bounded because a chosen length is itself a signal: at exactly
-/// 8 the size carries nothing, and the capacity of the field is
-/// `8 · 720 ≈ 5.8 KB/day`, down from `255 · 720 ≈ 184 KB/day`. Genesis
-/// carries it as eight zero bytes — genesis was not nonce-searched, and zero
-/// says so.
-pub const COINBASE_NONCE_BYTES: usize = 8;
-
-/// The tag a parsed field carries.
-fn tag_of(field: &TxExtraField) -> u8 {
-    match field {
-        TxExtraField::Padding(_) => TX_EXTRA_TAG_PADDING,
-        TxExtraField::PubKey(_) => TX_EXTRA_TAG_PUBKEY,
-        TxExtraField::Nonce(_) => TX_EXTRA_TAG_NONCE,
-        TxExtraField::AdditionalPubKeys(_) => TX_EXTRA_TAG_ADDITIONAL_PUBKEYS,
-        TxExtraField::PqcKemCiphertext(_) => TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
-        TxExtraField::PqcLeafEntries(_) => TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
-        TxExtraField::PqcViewTagHints(_) => TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
-        TxExtraField::PqcSpendAuthPubkeys(_) => TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS,
-        TxExtraField::ArchivalAttestation(_) => TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
-    }
-}
-
-/// The coinbase extra grammar (`TXE-Q6′`, consensus): a coinbase's `extra` is
-/// **exactly** `[0x01 pubkey, 0x02 nonce(8), 0x06 KEM(1120·n), 0x07 leaf(64·n)]`
-/// in that order — `[0x01, 0x02]` when `n_outputs == 0` — and nothing else:
-/// no padding, no additional pubkeys, no staged or attestation tags. The PQC
-/// half is CEN-I19 ([`check_pqc_field_shape_of`], content rule included); the
-/// rest is what makes the coinbase extra one byte layout with one 8-byte
-/// miner-controlled field.
+/// The `0x07` blob a passing [`check_tx_extra_shape`] admitted.
 ///
-/// **The whitelist is the consensus rule, so an addition to it is a consensus
-/// amendment.** When the `0x0B` attestation producer lands it changes this
-/// grammar, and that arrives as a ruled amendment to this function and its
-/// spec row, not as a line in the producer's PR.
-///
-/// Why a closed grammar rather than a bound on one tag: bounding `0x02` while
-/// `0x00` padding (255 bytes, length-signalling), `0x04` and the staged tags
-/// stay admissible in a coinbase bounds the one door somebody noticed. The
-/// relay cap (CEN-M4, 24 576 bytes) exempts `kept_by_block`, so before this
-/// rule the consensus side had **no** bound on a coinbase extra at all.
-pub fn check_coinbase_extra_shape(
+/// Empty when `n_outputs == 0` and no leaf field is present. Any other
+/// disagreement — a leaf on a leafless transaction, none where one is
+/// required, more than one — is the shape error, not an empty buffer. An
+/// empty buffer is what the curve-tree collector used to zero-fill from.
+pub fn admitted_leaf_blob(
     fields: &[TxExtraField],
     n_outputs: usize,
-) -> Result<(), ExtraShapeError> {
-    check_pqc_field_shape_of(fields, n_outputs)?;
-    for f in fields {
-        let tag = tag_of(f);
-        if !matches!(
-            tag,
-            TX_EXTRA_TAG_PUBKEY
-                | TX_EXTRA_TAG_NONCE
-                | TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT
-                | TX_EXTRA_TAG_PQC_LEAF_ENTRIES
-        ) {
-            return Err(ExtraShapeError::CoinbaseForeignTag { tag });
+) -> Result<Vec<u8>, PqcFieldShapeError> {
+    let mut found: Option<&[u8]> = None;
+    let mut count = 0usize;
+    for field in fields {
+        if let TxExtraField::PqcLeafEntries(bytes) = field {
+            count += 1;
+            found = Some(bytes);
         }
     }
-    let pubkeys = fields
-        .iter()
-        .filter(|f| matches!(f, TxExtraField::PubKey(_)))
-        .count();
-    match pubkeys {
-        1 => {}
-        0 => {
-            return Err(ExtraShapeError::Missing {
-                tag: TX_EXTRA_TAG_PUBKEY,
-                expected: 32,
-            })
-        }
-        count => {
-            return Err(ExtraShapeError::Duplicate {
-                tag: TX_EXTRA_TAG_PUBKEY,
-                count,
-            })
-        }
+    match (n_outputs == 0, count, found) {
+        (true, 0, _) => Ok(Vec::new()),
+        (false, 1, Some(bytes)) => Ok(bytes.to_vec()),
+        (true, _, _) => Err(PqcFieldShapeError::PresentWithoutOutputs {
+            field: PqcExtraField::Leaf,
+        }),
+        (false, 0, _) => Err(PqcFieldShapeError::Missing {
+            field: PqcExtraField::Leaf,
+            expected: PqcExtraField::Leaf.stride().saturating_mul(n_outputs),
+        }),
+        (false, count, _) => Err(PqcFieldShapeError::Duplicate {
+            field: PqcExtraField::Leaf,
+            count,
+        }),
     }
-    let nonces: Vec<usize> = fields
-        .iter()
-        .filter_map(|f| match f {
-            TxExtraField::Nonce(b) => Some(b.len()),
-            _ => None,
-        })
-        .collect();
-    match nonces.as_slice() {
-        [] => return Err(ExtraShapeError::CoinbaseNonceMissing),
-        [got] if *got != COINBASE_NONCE_BYTES => {
-            return Err(ExtraShapeError::CoinbaseNonceLength { got: *got })
-        }
-        [_] => {}
-        many => {
-            return Err(ExtraShapeError::Duplicate {
-                tag: TX_EXTRA_TAG_NONCE,
-                count: many.len(),
-            })
-        }
-    }
-    // The multiset is now exactly the grammar's; only the order can differ.
-    let canonical: &[u8] = if n_outputs == 0 {
-        &[TX_EXTRA_TAG_PUBKEY, TX_EXTRA_TAG_NONCE]
-    } else {
-        &[
-            TX_EXTRA_TAG_PUBKEY,
-            TX_EXTRA_TAG_NONCE,
-            TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
-            TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
-        ]
-    };
-    for (position, (f, want)) in fields.iter().zip(canonical).enumerate() {
-        let tag = tag_of(f);
-        if tag != *want {
-            return Err(ExtraShapeError::CoinbaseFieldOrder { position, tag });
-        }
-    }
-    Ok(())
-}
-
-/// The shape rule a validator applies to any transaction's parsed `extra`:
-/// the coinbase grammar ([`check_coinbase_extra_shape`]) for a coinbase, and
-/// for everything else CEN-I19 plus "no `0x02`" — the nonce is coinbase-only.
-/// One entry point so the C++ daemon (over the FFI) and the Rust judge apply
-/// the same function, not two rules that agree today.
-pub fn check_tx_extra_shape(
-    fields: &[TxExtraField],
-    n_outputs: usize,
-    is_coinbase: bool,
-) -> Result<(), ExtraShapeError> {
-    if is_coinbase {
-        return check_coinbase_extra_shape(fields, n_outputs);
-    }
-    check_pqc_field_shape_of(fields, n_outputs)?;
-    if fields.iter().any(|f| matches!(f, TxExtraField::Nonce(_))) {
-        return Err(ExtraShapeError::NonceOutsideCoinbase);
-    }
-    Ok(())
 }
 
 /// A conforming `0x07` entry for fixtures and tests: a valid commitment point
@@ -814,25 +821,25 @@ mod pqc_field_shape {
 
     #[test]
     fn rick_s_vectors_are_refused() {
-        use ExtraShapeError as E;
+        use PqcFieldShapeError as E;
         assert_eq!(
             check_pqc_field_shape(1, &[K], &[L, L]),
             Err(E::Duplicate {
-                tag: 0x07,
+                field: PqcExtraField::Leaf,
                 count: 2
             })
         );
         assert_eq!(
             check_pqc_field_shape(1, &[K, K], &[L]),
             Err(E::Duplicate {
-                tag: 0x06,
+                field: PqcExtraField::Kem,
                 count: 2
             })
         );
         assert_eq!(
             check_pqc_field_shape(1, &[K], &[2 * L]),
             Err(E::Length {
-                tag: 0x07,
+                field: PqcExtraField::Leaf,
                 got: 2 * L,
                 expected: L
             })
@@ -840,7 +847,7 @@ mod pqc_field_shape {
         assert_eq!(
             check_pqc_field_shape(1, &[K], &[0]),
             Err(E::Length {
-                tag: 0x07,
+                field: PqcExtraField::Leaf,
                 got: 0,
                 expected: L
             })
@@ -848,7 +855,7 @@ mod pqc_field_shape {
         assert_eq!(
             check_pqc_field_shape(1, &[2 * K], &[L]),
             Err(E::Length {
-                tag: 0x06,
+                field: PqcExtraField::Kem,
                 got: 2 * K,
                 expected: K
             })
@@ -856,7 +863,7 @@ mod pqc_field_shape {
         assert_eq!(
             check_pqc_field_shape(1, &[0], &[L]),
             Err(E::Length {
-                tag: 0x06,
+                field: PqcExtraField::Kem,
                 got: 0,
                 expected: K
             })
@@ -864,14 +871,14 @@ mod pqc_field_shape {
         assert_eq!(
             check_pqc_field_shape(1, &[], &[]),
             Err(E::Missing {
-                tag: 0x06,
+                field: PqcExtraField::Kem,
                 expected: K
             })
         );
         assert_eq!(
             check_pqc_field_shape(2, &[2 * K], &[]),
             Err(E::Missing {
-                tag: 0x07,
+                field: PqcExtraField::Leaf,
                 expected: 2 * L
             })
         );
@@ -891,11 +898,15 @@ mod pqc_field_shape {
         );
         assert_eq!(
             check_pqc_field_shape(0, &[], &[L]),
-            Err(E::PresentWithoutOutputs { tag: 0x07 })
+            Err(E::PresentWithoutOutputs {
+                field: PqcExtraField::Leaf
+            })
         );
         assert_eq!(
             check_pqc_field_shape(0, &[K], &[]),
-            Err(E::PresentWithoutOutputs { tag: 0x06 })
+            Err(E::PresentWithoutOutputs {
+                field: PqcExtraField::Kem
+            })
         );
     }
 
@@ -906,7 +917,7 @@ mod pqc_field_shape {
     /// previously `Ok`.
     #[test]
     fn content_rule_rejects_partial_and_empty_blobs() {
-        use ExtraShapeError as E;
+        use PqcFieldShapeError as E;
         assert_eq!(
             check_pqc_leaf_entries(&[0x7bu8; 63]),
             Err(E::LeafBlobLength { got: 63 })
@@ -945,7 +956,7 @@ mod pqc_field_shape {
         ];
         assert_eq!(
             check_pqc_field_shape_of(&zeros, 2),
-            Err(ExtraShapeError::LeafPointInvalid { index: 0 })
+            Err(PqcFieldShapeError::LeafPointInvalid { index: 0 })
         );
         // Content: the second entry carries a small-order point.
         let mut torsion = conforming_pqc_leaf_blob(2);
@@ -956,7 +967,7 @@ mod pqc_field_shape {
         ];
         assert_eq!(
             check_pqc_field_shape_of(&bad, 2),
-            Err(ExtraShapeError::LeafPointInvalid { index: 1 })
+            Err(PqcFieldShapeError::LeafPointInvalid { index: 1 })
         );
         let dup = [
             TxExtraField::PqcKemCiphertext(vec![0; K]),
@@ -965,191 +976,10 @@ mod pqc_field_shape {
         ];
         assert_eq!(
             check_pqc_field_shape_of(&dup, 1),
-            Err(ExtraShapeError::Duplicate {
-                tag: 0x07,
+            Err(PqcFieldShapeError::Duplicate {
+                field: PqcExtraField::Leaf,
                 count: 2
             })
-        );
-    }
-}
-
-#[cfg(test)]
-mod coinbase_grammar {
-    use super::*;
-
-    fn conforming(n: usize) -> Vec<TxExtraField> {
-        let mut f = vec![
-            TxExtraField::PubKey([0x11; 32]),
-            TxExtraField::Nonce(vec![0; COINBASE_NONCE_BYTES]),
-        ];
-        if n > 0 {
-            f.push(TxExtraField::PqcKemCiphertext(vec![
-                0x44;
-                HYBRID_KEM_CT_BYTES * n
-            ]));
-            f.push(TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n)));
-        }
-        f
-    }
-
-    #[test]
-    fn the_canonical_layout_is_admitted_for_every_output_count() {
-        for n in [0usize, 1, 2, 7] {
-            assert_eq!(
-                check_coinbase_extra_shape(&conforming(n), n),
-                Ok(()),
-                "n = {n}"
-            );
-            assert_eq!(
-                check_tx_extra_shape(&conforming(n), n, true),
-                Ok(()),
-                "n = {n}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_nonce_is_exactly_eight_bytes_and_exactly_one() {
-        let mut f = conforming(1);
-        f.remove(1);
-        assert_eq!(
-            check_coinbase_extra_shape(&f, 1),
-            Err(ExtraShapeError::CoinbaseNonceMissing)
-        );
-        for got in [0usize, 7, 9, 255] {
-            let mut f = conforming(1);
-            f[1] = TxExtraField::Nonce(vec![0xAB; got]);
-            assert_eq!(
-                check_coinbase_extra_shape(&f, 1),
-                Err(ExtraShapeError::CoinbaseNonceLength { got }),
-                "got = {got}"
-            );
-        }
-        let mut f = conforming(1);
-        f.insert(2, TxExtraField::Nonce(vec![0; COINBASE_NONCE_BYTES]));
-        assert_eq!(
-            check_coinbase_extra_shape(&f, 1),
-            Err(ExtraShapeError::Duplicate {
-                tag: TX_EXTRA_TAG_NONCE,
-                count: 2
-            })
-        );
-    }
-
-    #[test]
-    fn every_tag_outside_the_whitelist_is_refused() {
-        let foreign = [
-            (TxExtraField::Padding(1), TX_EXTRA_TAG_PADDING),
-            (
-                TxExtraField::AdditionalPubKeys(vec![[0x22; 32]]),
-                TX_EXTRA_TAG_ADDITIONAL_PUBKEYS,
-            ),
-            (
-                TxExtraField::PqcViewTagHints(vec![1]),
-                TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
-            ),
-            (
-                TxExtraField::PqcSpendAuthPubkeys(vec![1]),
-                TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS,
-            ),
-            (
-                TxExtraField::ArchivalAttestation(Vec::new()),
-                TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
-            ),
-        ];
-        for (field, tag) in foreign {
-            let mut f = conforming(1);
-            f.push(field);
-            assert_eq!(
-                check_coinbase_extra_shape(&f, 1),
-                Err(ExtraShapeError::CoinbaseForeignTag { tag }),
-                "tag {tag:#04x}"
-            );
-        }
-    }
-
-    #[test]
-    fn exactly_one_pubkey() {
-        let mut f = conforming(1);
-        f.remove(0);
-        assert_eq!(
-            check_coinbase_extra_shape(&f, 1),
-            Err(ExtraShapeError::Missing {
-                tag: TX_EXTRA_TAG_PUBKEY,
-                expected: 32
-            })
-        );
-        let mut f = conforming(1);
-        f.push(TxExtraField::PubKey([0x12; 32]));
-        assert_eq!(
-            check_coinbase_extra_shape(&f, 1),
-            Err(ExtraShapeError::Duplicate {
-                tag: TX_EXTRA_TAG_PUBKEY,
-                count: 2
-            })
-        );
-    }
-
-    #[test]
-    fn the_order_is_part_of_the_grammar() {
-        let mut f = conforming(1);
-        f.swap(0, 1);
-        assert_eq!(
-            check_coinbase_extra_shape(&f, 1),
-            Err(ExtraShapeError::CoinbaseFieldOrder {
-                position: 0,
-                tag: TX_EXTRA_TAG_NONCE
-            })
-        );
-        let mut f = conforming(2);
-        f.swap(2, 3);
-        assert_eq!(
-            check_coinbase_extra_shape(&f, 2),
-            Err(ExtraShapeError::CoinbaseFieldOrder {
-                position: 2,
-                tag: TX_EXTRA_TAG_PQC_LEAF_ENTRIES
-            })
-        );
-    }
-
-    #[test]
-    fn the_pqc_rule_is_applied_first_and_unchanged() {
-        let mut f = conforming(2);
-        f[2] = TxExtraField::PqcKemCiphertext(vec![0x44; HYBRID_KEM_CT_BYTES]);
-        assert_eq!(
-            check_coinbase_extra_shape(&f, 2),
-            Err(ExtraShapeError::Length {
-                tag: TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
-                got: HYBRID_KEM_CT_BYTES,
-                expected: 2 * HYBRID_KEM_CT_BYTES
-            })
-        );
-    }
-
-    #[test]
-    fn a_non_coinbase_transaction_carries_no_nonce() {
-        let mut f = conforming(1);
-        f.remove(1);
-        assert_eq!(check_tx_extra_shape(&f, 1, false), Ok(()));
-        let f = conforming(1);
-        assert_eq!(
-            check_tx_extra_shape(&f, 1, false),
-            Err(ExtraShapeError::NonceOutsideCoinbase)
-        );
-        // A serve-credit transaction: no outputs, empty extra — the
-        // must-accept control on both arms.
-        assert_eq!(check_tx_extra_shape(&[], 0, false), Ok(()));
-    }
-
-    #[test]
-    fn the_sentences_name_the_width_and_the_whitelist() {
-        assert_eq!(
-            ExtraShapeError::CoinbaseNonceLength { got: 3 }.to_string(),
-            "coinbase tx_extra 0x02 nonce is 3 bytes; exactly 8 required"
-        );
-        assert_eq!(
-            ExtraShapeError::CoinbaseForeignTag { tag: 0x0B }.to_string(),
-            "coinbase tx_extra carries 0x0b; only 0x01, 0x02, 0x06, 0x07 are admitted"
         );
     }
 }

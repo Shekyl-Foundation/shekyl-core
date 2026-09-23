@@ -600,7 +600,9 @@ namespace cryptonote
       LOG_ERROR("Failed to find tx pub key in blockblob");
       return false;
     }
-    reserved_offset += sizeof(tx_pub_key) + 2; // 0x02 tag byte, then the length byte (8)
+    // The grammar's distance from the pubkey byte to the nonce payload
+    // (key, 0x02 tag, one-byte length). One source, in shekyl-wire.
+    reserved_offset += shekyl_coinbase_nonce_offset_from_pubkey();
     if(reserved_offset + SHEKYL_COINBASE_NONCE_BYTES > block_blob.size())
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
@@ -637,7 +639,10 @@ namespace cryptonote
     // the 0..255 free-text region that made the field a covert channel and a
     // length signal -- and is refused with its own code so a pool stack sees
     // the cause rather than a generic parameter error.
-    if (req.reserve_size > SHEKYL_COINBASE_NONCE_BYTES || req.extra_nonce.size() > 2 * SHEKYL_COINBASE_NONCE_BYTES)
+    // `extra_nonce` is hex: two digits per payload byte.
+    constexpr size_t hex_digits_per_byte = 2;
+    if (req.reserve_size > SHEKYL_COINBASE_NONCE_BYTES
+        || req.extra_nonce.size() > hex_digits_per_byte * SHEKYL_COINBASE_NONCE_BYTES)
     {
       error_resp.code = CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND;
       error_resp.message = "reserve_size / extra_nonce exceed the coinbase nonce width of "

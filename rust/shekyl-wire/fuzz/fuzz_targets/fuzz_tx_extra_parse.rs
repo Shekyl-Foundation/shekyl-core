@@ -24,7 +24,7 @@ fuzz_target!(|data: &[u8]| {
     // The output count is not in the extra; try a few, including the
     // leafless case, and both admission arms.
     for n in [0usize, 1, 2, 3] {
-        let _ = tx_extra::check_tx_extra_shape(&fields, n, true);
-        let _ = tx_extra::check_tx_extra_shape(&fields, n, false);
+        let _ = tx_extra::check_tx_extra_shape(&fields, n, tx_extra::ExtraSubject::Coinbase);
+        let _ = tx_extra::check_tx_extra_shape(&fields, n, tx_extra::ExtraSubject::General);
     }
 });

@@ -32,7 +32,9 @@
 
 use std::os::raw::c_char;
 
-use shekyl_wire::tx_extra::ExtraShapeError;
+use shekyl_wire::tx_extra::{
+    CoinbaseGrammarError, ExtraShapeError, PqcExtraField, PqcFieldShapeError,
+};
 
 /// Conformant.
 pub const SHEKYL_TX_EXTRA_PQC_SHAPE_OK: i32 = 0;
@@ -83,40 +85,56 @@ pub const SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP: usize = 256;
 /// The flattened code for a shape verdict; shared with the codec surface
 /// (`tx_extra_codec_ffi`), which returns these unchanged.
 pub(crate) fn shape_code(err: ExtraShapeError) -> i32 {
-    use ExtraShapeError as E;
-    const KEM: u8 = shekyl_wire::tx_extra::TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT;
-    const PUBKEY: u8 = shekyl_wire::tx_extra::TX_EXTRA_TAG_PUBKEY;
-    const NONCE: u8 = shekyl_wire::tx_extra::TX_EXTRA_TAG_NONCE;
+    use CoinbaseGrammarError as Grammar;
+    use ExtraShapeError as Shape;
+    use PqcExtraField as Field;
+    use PqcFieldShapeError as Pqc;
     match err {
-        // Coinbase grammar arms first: `Missing` / `Duplicate` on the pubkey
-        // and nonce tags are grammar verdicts, not PQC ones.
-        E::Missing { tag, .. } if tag == PUBKEY => SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT,
-        E::Duplicate { tag, .. } if tag == PUBKEY => SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT,
-        E::Duplicate { tag, .. } if tag == NONCE => SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_DUPLICATE,
-        E::CoinbaseNonceMissing => SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING,
-        E::CoinbaseNonceLength { .. } => SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH,
-        E::CoinbaseForeignTag { .. } => SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG,
-        E::CoinbaseFieldOrder { .. } => SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT,
-        E::NonceOutsideCoinbase => SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE,
-        E::PresentWithoutOutputs { tag } if tag == KEM => {
+        Shape::Pqc(Pqc::PresentWithoutOutputs { field: Field::Kem }) => {
             SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_PRESENT_WITHOUT_OUTPUTS
         }
-        E::PresentWithoutOutputs { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_PRESENT_WITHOUT_OUTPUTS,
-        E::Missing { tag, .. } if tag == KEM => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_MISSING,
-        E::Missing { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING,
-        E::Duplicate { tag, .. } if tag == KEM => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_DUPLICATE,
-        E::Duplicate { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE,
-        E::Length { tag, .. } if tag == KEM => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_LENGTH,
+        Shape::Pqc(Pqc::PresentWithoutOutputs { field: Field::Leaf }) => {
+            SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_PRESENT_WITHOUT_OUTPUTS
+        }
+        Shape::Pqc(Pqc::Missing {
+            field: Field::Kem, ..
+        }) => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_MISSING,
+        Shape::Pqc(Pqc::Missing {
+            field: Field::Leaf, ..
+        }) => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING,
+        Shape::Pqc(Pqc::Duplicate {
+            field: Field::Kem, ..
+        }) => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_DUPLICATE,
+        Shape::Pqc(Pqc::Duplicate {
+            field: Field::Leaf, ..
+        }) => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE,
+        Shape::Pqc(Pqc::Length {
+            field: Field::Kem, ..
+        }) => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_LENGTH,
         // `LeafBlobLength` is the content rule's own precondition
         // (`check_pqc_leaf_entries` on a blob that is not a whole, non-zero
         // number of 64-byte entries). Unreachable through this FFI — the
         // shape rule has already pinned the single field to `64 · n_outputs`
-        // bytes and the marshalling check has pinned the handed-over blob to
-        // that declared length — but mapped to the length-family code
-        // (fail-closed) rather than dropped, so a future reordering can
-        // never turn it into an "OK".
-        E::Length { .. } | E::LeafBlobLength { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH,
-        E::LeafPointInvalid { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT,
+        // before the content rule runs — but mapped to the length-family
+        // code (fail-closed) rather than dropped, so a future reordering
+        // can never turn it into an "OK".
+        Shape::Pqc(
+            Pqc::Length {
+                field: Field::Leaf, ..
+            }
+            | Pqc::LeafBlobLength { .. },
+        ) => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH,
+        Shape::Pqc(Pqc::LeafPointInvalid { .. }) => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT,
+        Shape::Coinbase(
+            Grammar::PubkeyMissing | Grammar::PubkeyDuplicate { .. } | Grammar::FieldOrder { .. },
+        ) => SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT,
+        Shape::Coinbase(Grammar::NonceMissing) => SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING,
+        Shape::Coinbase(Grammar::NonceLength { .. }) => SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH,
+        Shape::Coinbase(Grammar::NonceDuplicate { .. }) => {
+            SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_DUPLICATE
+        }
+        Shape::Coinbase(Grammar::ForeignTag { .. }) => SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG,
+        Shape::NonceOutsideCoinbase => SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE,
     }
 }
 
