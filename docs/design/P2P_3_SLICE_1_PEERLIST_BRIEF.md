@@ -32,17 +32,24 @@ that **the C++ already holds the contract, by convention, at every site**:
 | [`net_node.inl:1345`](../../src/p2p/net_node.inl#L1345) | guarded `if(!context.m_is_income)` — **an inbound peer is never promoted** |
 | [`net_node.inl:3447`](../../src/p2p/net_node.inl#L3447) | promotes only after `check_connection_and_handshake_with_peer` succeeds — a dial |
 | [`net_peerlist.h:419`](../../src/p2p/net_peerlist.h#L419) | `append_operator_candidate` puts `--add-peer` in **gray**, and refuses to write a synthetic `last_seen` because *"recording an observation it never made is the exact category error this change exists to remove"* |
+| [`net_node.inl:3008`](../../src/p2p/net_node.inl#L3008) | `connect_to_peerlist` — the `--add-exclusive-node` / `--add-priority-node` path ([`:1991`](../../src/p2p/net_node.inl#L1991), [`:2006`](../../src/p2p/net_node.inl#L2006)) — **dials** rather than asserting, so those operator peers reach white only through [`:1588`](../../src/p2p/net_node.inl#L1588) and only on success |
 | [`net_peerlist.cpp:306`](../../src/p2p/net_peerlist.cpp#L306) | the save path has **no white member to write even by accident**, so *"a file cannot carry a trust assertion its loader is required to ignore"* |
 
-Seven independent local decisions. **Every one of them is correct.** Slice 1 is
+**The operator surface is enumerated, not sampled.** There are three ways an
+operator names a peer — `--add-peer`, `--add-exclusive-node`,
+`--add-priority-node` — and `grep -n 'm_exclusive_peers\|m_priority_peers\|m_command_line_peers' src/p2p/net_node.inl`
+accounts for every one. The first lands in gray as a candidate; the other two
+are dialed. **None asserts a fact.**
+
+Eight independent local decisions. **Every one of them is correct.** Slice 1 is
 therefore not repairing a defect, and the brief must not be written as though
 it were — a lane that believes it is fixing broken code ports differently, and
 worse, than one that knows it is preserving a working invariant.
 
-> **The contract exists because seven correct decisions do not make the eighth
+> **The contract exists because eight correct decisions do not make the ninth
 > correct.** Each site above states the rule again, in its own words, and each
 > one could have been written the other way by someone with no access to the
-> other six. The type is what removes the requirement that the eighth author
+> other seven. The type is what removes the requirement that the ninth author
 > reach the same conclusion unaided.
 
 Two of those sites, [`:419`](../../src/p2p/net_peerlist.h#L419) and
@@ -160,7 +167,7 @@ author will be working.
 
 | # | Content | Greens when |
 | --- | --- | --- |
-| 1 | The two types, the dial-result constructor, the gray store and its format. No FFI | the crate builds and its own tests pass; **no** C++ behaviour change |
+| 1 | The two types, the dial-result constructor, the gray store and its format. No FFI | the crate builds and its own tests pass, **and** `git diff dev..HEAD --stat -- src/ contrib/` is empty — the row asserts the C++ is untouched rather than assuming it (rule 47) |
 | 2 | The differential harness: both implementations over one input sequence, compared on gray/white membership | the harness agrees on a generated sequence including promotions, demotions, trims and a save/load round trip |
 | 3 | The FFI seam and the C++ call-through, provenance named on both sides | `append_with_peer_white` has no remaining C++ caller |
 
@@ -192,6 +199,34 @@ falsifier 1 carries increment 2.
 **Rule 47:** both gates assert their own subject. The harness fails if it finds
 no sequence to run; the type check fails if it cannot locate the constructor it
 is asserting about.
+
+---
+
+## 5a. Reversion clause
+
+**The contract reopens if a legitimate promotion path is found that is neither
+a dial nor reducible to one.** Not "if promotion becomes inconvenient" — the
+inconvenience is the mechanism working.
+
+Where to expect a candidate, and why each is not one today:
+
+- **Cluster T's Noise handshake.** §4.4 names it as the example of something
+  that *looks* like a dial result and is not: a transcript proves a session,
+  not that this node reached that address on its own initiative. If cluster T
+  lands a handshake the **dialer** completes, that is already a dial and needs
+  no exception — the clause fires only if a peer-initiated transcript is argued
+  to establish reachability.
+- **A relay that succeeds.** §4.4's second row. Successful relay proves the
+  path carried bytes, is a different
+  claim from reachability on our own dial.
+- **An operator assertion.** The strongest real candidate, and the C++ already
+  rejected it at [`net_peerlist.h:419`](../../src/p2p/net_peerlist.h#L419).
+  Reopening would mean ruling that an operator may assert reachability the node
+  has not observed — a ruling, not a convenience, and it belongs to steering.
+
+**Falsify this clause** by a promotion path that is dial-backed in substance
+but cannot be expressed through the constructor. That is a defect in the
+constructor's signature, not grounds to widen the type — fix the signature.
 
 ---
 
