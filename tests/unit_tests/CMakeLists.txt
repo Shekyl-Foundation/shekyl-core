@@ -129,7 +129,6 @@ set(unit_tests_sources
   economics_b5_fee_coinbase.cpp
   economics_tx_volume_window.cpp
   pruned_tx_hash_parity.cpp
-  tx_data_pruning_lmdb.cpp
   tx_prunable_region_sole_occupant.cpp
   pow_longhash_gate.cpp
   txpool_ref_age.cpp

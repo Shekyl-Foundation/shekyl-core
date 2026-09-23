@@ -100,8 +100,11 @@ SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
 # commit retired the one multimap value rule (`output_amounts` now fires one
 # key constraint, the tuple, where it fired a key and a member rule). A parse
 # that yields fewer is a broken extractor, not a smaller schema — the floor
-# moves only with a rule, never to make a run pass.
-MIN_CONSTRAINTS = 29
+# moves only with a rule, never to make a run pass. 27 since LMDB v15 / redb
+# v10 dropped two INTEGERKEY tables (`txs_prunable_tip`, `output_metadata`)
+# with the C++ tx-data prune: two key constraints fewer because two tables
+# fewer, re-derived by counting, not by subtracting.
+MIN_CONSTRAINTS = 27
 
 # Tables the C++ no longer writes at all, with the put shape they carried
 # when they were last written. The classifying fact for a uint64-dupsort
@@ -113,12 +116,9 @@ MIN_CONSTRAINTS = 29
 # the X-macro (the entry is stale), so the declaration cannot outlive either
 # of the facts it stands in for.
 WRITE_NEVER: dict[str, tuple[str, str]] = {
-    # `txs_prunable_tip`: only a stripe-pruned node ever wrote it, and the
-    # stripe engine is deleted (PDM-Q7, 2026-09-21). The delete in
-    # `remove_transaction_data` still addresses it by real tx_id key, as the
-    # deleted put did. The table stays in the X-macro until a layout bump
-    # drops it (DAEMON_REDB_STORE.md, S-PRUNE row).
-    "txs_prunable_tip": ("real", "PDM-Q7: the stripe engine's write is deleted; table dies at the next layout bump"),
+    # (empty since LMDB v15 dropped `txs_prunable_tip`, the entry that
+    # motivated this map — it expired the way the mechanism says: the table
+    # left the X-macro and the gate went red until the entry followed.)
 }
 
 # The value type may itself be generic — `Coded<BlockInfo>`, `Blob<BlockBody>`

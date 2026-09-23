@@ -321,10 +321,6 @@ tables! {
     pub const TXS_PRUNABLE_HASH: TableDefinition<u64, Coded<PrunableHash>> =
         TableDefinition::new("txs_prunable_hash");
 
-    /// `txs_prunable_tip` — INTEGERKEY; 1:1 height value. Node-local. No
-    /// Rust writer yet (E1 does not prune).
-    pub const TXS_PRUNABLE_TIP: TableDefinition<u64, Unshaped> = TableDefinition::new("txs_prunable_tip");
-
     /// `tx_indices` — zerokval collapse: dup tx hash (`compare_hash32`) becomes the key.
     pub const TX_INDICES: TableDefinition<LmdbHashKey, Coded<TxIndex>> = TableDefinition::new("tx_indices");
 
@@ -485,9 +481,6 @@ tables! {
     /// `curve_tree_roots` — INTEGERKEY.
     pub const CURVE_TREE_ROOTS: TableDefinition<u64, Coded<CurveTreeRoot>> = TableDefinition::new("curve_tree_roots");
 
-    /// `output_metadata` — INTEGERKEY. Node-local; excluded from the accumulator.
-    pub const OUTPUT_METADATA: TableDefinition<u64, Unshaped> = TableDefinition::new("output_metadata");
-
     /// `undo_log` — **Rust-only** ([`RUST_ONLY_TABLES`]); height → the
     /// [`UndoLog`](crate::codec::UndoLog) of pre-images `connect` recorded
     /// at that height, replayed in reverse by `pop` (C2-R8 Q5; register row
@@ -545,15 +538,14 @@ mod tests {
             ("blocks", 0),
             ("block_heights", 1),
             ("block_info", 2),
-            ("tx_indices", 9),
-            ("output_amounts", 12),
-            ("spent_keys", 13),
-            ("hf_versions", 18),
-            ("properties", 19),
-            ("block_burn", 20),
-            ("curve_tree_roots", 47),
-            ("output_metadata", 48),
-            ("undo_log", 49),
+            ("tx_indices", 8),
+            ("output_amounts", 11),
+            ("spent_keys", 12),
+            ("hf_versions", 17),
+            ("properties", 18),
+            ("block_burn", 19),
+            ("curve_tree_roots", 46),
+            ("undo_log", 47),
         ];
         for &(name, index) in pinned {
             assert_eq!(

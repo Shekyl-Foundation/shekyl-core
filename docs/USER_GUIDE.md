@@ -990,9 +990,9 @@ Export the blockchain to a portable file:
 ### `shekyl-mdb-copy`
 
 The stripe engine (`--prune-blockchain`) was deleted 2026-09-21 (`PDM-Q7`).
-No daemon path discards tx bodies today: `prune_tx_data` has no production
-caller, and uniform discard is the unbuilt S-PRUNE skeleton
-(`docs/design/DRS_E1_SPRUNE.md`). `shekyl-mdb-copy` reclaims free pages the
+No daemon path discards tx bodies today: the C++ depth-based discard was
+deleted 2026-09-22 as well, and the uniform discard is the unbuilt S-PRUNE
+skeleton (`docs/design/DRS_E1_SPRUNE.md`). `shekyl-mdb-copy` reclaims free pages the
 store already holds. Stop `shekyld` and compact the database:
 
 ```bash

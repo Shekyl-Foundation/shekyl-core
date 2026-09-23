@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Daemon store — the C++ tx-data prune is gone; S-PRUNE starts clean
+
+- **`prune_tx_data` and everything it owned are deleted.** The depth-based
+  C++ discard (`CRYPTONOTE_TX_PRUNE_DEPTH = 5000`) was reachable only
+  through the stripe engine removed the day before; with no caller it goes,
+  with its `output_metadata` scan cache, its `tx_prune_next_block` /
+  `last_pruned_tx_data_height` watermark, and the write-never
+  `txs_prunable_tip` table. **LMDB `VERSION 14 → 15`** (two tables leave the
+  X-macro; a v14 datadir is refused at open — pre-genesis: delete and
+  resync). **redb `SCHEMA_VERSION 9 → 10`** (the two twin definitions leave
+  the catalogue; every ordinal after #8 shifts, and the pop journal persists
+  ordinals). The uniform, shard-granular discard is S-PRUNE, Rust, on the
+  redb store (`docs/design/DRS_E1_SPRUNE.md`); nothing of the C++ shape —
+  per-tx depth, side-table scan cache, stored watermark — is carried into it.
+- **Daemon RPC 3.36:** `get_info` drops `tx_prune_height`.
+- CI: the redb key-type gate's constraint floor moves 29 → 27 with the two
+  tables; its `WRITE_NEVER` declaration for `txs_prunable_tip` expired as
+  designed (table gone → entry gone).
+
 ### P2P inbound admission — the per-host cap is deleted (`PWD-I7` / `PWD-I8`)
 
 - **`--max-connections-per-ip` is removed**, and with it
@@ -66,8 +85,8 @@
   per-operator pruning posture. The Monero stripe engine
   (`common/pruning.*`, `prune_worker`, `CRYPTONOTE_PRUNING_*`, the 5-hour
   prune timer) is deleted. Uniform discard is S-PRUNE
-  (`docs/design/DRS_E1_SPRUNE.md`), still an unfilled skeleton:
-  `prune_tx_data` remains in the C++ store with no production caller.
+  (`docs/design/DRS_E1_SPRUNE.md`), still an unfilled skeleton.
+  `prune_tx_data` went with the section above (LMDB v15).
 - **Daemon RPC 3.35:** `pruning_seed` leaves `get_peer_list`,
   `get_connections` and `sync_info.peers`; `next_needed_pruning_seed`
   leaves `sync_info`; the `prune_blockchain` JSON-RPC method and the
@@ -114,6 +133,21 @@
   `StoreCannot::RuleSetUnknown` deleted). Process: every FOLLOWUPS row
   carries a gated `Owner:` (`check_followups_owners.py`).
 
+- **DRS-E2 increment 3 — the mutation family.** `shekyl-chain-ingest` gains
+  `Mutated<S>`, a source wrapper that invalidates one block of a valid chain
+  nine systematic ways (header version, orphan, wrong root, future and stale
+  timestamps, PoW mined under a wrong seed, wrong reward, reordered bodies,
+  double spend), each naming from the consensus census the row that refuses
+  it. Six refuse on exactly that row through the real pipeline; the three
+  whose rows are not yet ported (F13, G2, I7) are pinned at today's
+  behaviour with the census as the falsifier — a double spend today reaches
+  the store and halts on SI-1 rather than being refused by the validator.
+  Each mutation also names the place that row points (`Block` for the six
+  live rows, an input for the double spend; F13 and G2 stay unnamed until
+  those slices site them). A timestamp mutation that cannot provoke its row
+  — genesis, where C1 and C2 do not judge, or a clock with no representable
+  instant past the future-time limit — is a fault, not a block that connects.
+  Closes the replay driver's open FTL deviation (C1 is now exercised).
 - **DRS-E2 increment 2 — the replay driver runs, and the first real chains
   match.** `shekyl-chain-ingest` gains the pipeline (`form` workers → sequencer
   → a single validate+connect actor that does not restart after a halt), the

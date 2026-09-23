@@ -97,13 +97,13 @@ DRS-D12 — no store handle by construction).
 
 | Fact | Measurement |
 | --- | --- |
-| Live `MDB_dbi` table handles in `db_lmdb.h` | **49** (1:1 with opens; was 46 at the Round-2 pin — the three births are in the P0a registry below) |
-| `lmdb_db_open(` **call** sites (macro path) | **49** — the 50th `rg` hit is the **function definition**, not an open (the pin-era shape R2-3 ruled on: N calls + 1 definition; was 46+1) |
-| `docs/LMDB_SCHEMA.md` claimed total | **49** — **current and gate-pinned** (`check_lmdb_schema_coverage.py`; claimed 41 at the Round-2 pin) |
+| Live `MDB_dbi` table handles in `db_lmdb.h` | **47** (1:1 with opens; was 46 at the Round-2 pin — the three births are in the P0a registry below; `output_metadata` and `txs_prunable_tip` left on 2026-09-22, LMDB v15) |
+| `lmdb_db_open(` **call** sites (macro path) | **47** — the 48th `rg` hit is the **function definition**, not an open (the pin-era shape R2-3 ruled on: N calls + 1 definition; was 46+1) |
+| `docs/LMDB_SCHEMA.md` claimed total | **47** — **current and gate-pinned** (`check_lmdb_schema_coverage.py`; claimed 41 at the Round-2 pin) |
 | Tables in code, **0 hits** in schema doc | **none** (P0a, 2026-09-05). At the Round-2 pin these **seven** had zero hits: `block_burn`, `archival_budget`, `archival_budget_accrual`, `archival_bond_unbond_log`, `archival_bond_reinstate_log`, `archival_bond_holdings_update_log`, **`archival_emission_claim_log`** — all documented since (`2572e6f5b`, 2026-08-25 — the commit that landed all seven sections and the coverage gate; the gate's header dates its census 2026-08-26, the same moment in UTC, and counts **nine** = these seven + the two witness tables born 2026-08-04) |
 | Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
-| Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 48), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
+| Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 46), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
 | Hardfork pop | `HardFork::on_block_popped` **reads** `get_hard_fork_version(height)` for heights **above** new tip (`hardfork.cpp:286–302`); interface has **set/get only**, no delete (`blockchain_db.h:1938,1947`) |
 
 ### Oracles of record — status
@@ -131,6 +131,10 @@ so "no deaths" is a measurement, not an unstated conjunct of
 `4 births − 1 death`). The registry key is the on-disk name string — what
 a deployed datadir contains; the `db_lmdb.h` handle set was separately
 verified `m_<name>` 1:1 against it at HEAD (49/49).
+
+**UPDATE 2026-09-22.** `output_metadata` and `txs_prunable_tip` left the
+X-macro (LMDB v15). Declared tables and handles are 47/47. The census
+above is the measurement at `9742ec4f6` (births 3, deaths ∅).
 
 **Birth provenance.** The independent witness is the schema version
 ladder (`LMDB_SCHEMA.md` header): the pin defines `VERSION 8`, HEAD
@@ -172,10 +176,10 @@ born 2026-08-04 (between pin and census) and undocumented at birth.
 Phantoms at HEAD: **0** — both lost their sections with the claim-era
 wire deletion, and the gate's ghost leg refuses their return.
 
-**49 rows**, one per **declared** table (declared, not runtime — a writable
-`open()` drops `hf_starting_heights`, leaving 48; DRS-W5); dispositions
-count 39 documented-at-pin
-+ 7 since-documented + 3 born-since:
+**47 rows**, one per **declared** table (declared, not runtime — a writable
+`open()` drops `hf_starting_heights`, leaving 46; DRS-W5). The 2026-09-05
+census was 49 (39 documented-at-pin + 7 since-documented + 3 born-since);
+the two 2026-09-22 deaths leave 47. Dispositions:
 
 | Table | Disposition (pin `3247fe3b6` → `9742ec4f6`) |
 | --- | --- |
@@ -211,7 +215,7 @@ count 39 documented-at-pin
 | `hf_versions` | in code at pin, documented at pin |
 | `leaf_to_output` | in code at pin, documented at pin |
 | `output_amounts` | in code at pin, documented at pin |
-| `output_metadata` | in code at pin, documented at pin |
+| ~~`output_metadata`~~ | in code at pin, documented at pin; **DELETED 2026-09-22** (LMDB v15 / redb v10) with the C++ tx-data prune |
 | `output_to_leaf` | in code at pin, documented at pin |
 | `output_txs` | in code at pin, documented at pin |
 | `pending_tree_drain` | in code at pin, documented at pin |
@@ -226,7 +230,7 @@ count 39 documented-at-pin
 | `txs_pqc_auths` | in code at pin, documented at pin |
 | `txs_prunable` | in code at pin, documented at pin |
 | `txs_prunable_hash` | in code at pin, documented at pin |
-| `txs_prunable_tip` | in code at pin, documented at pin |
+| ~~`txs_prunable_tip`~~ | in code at pin, documented at pin; **DELETED 2026-09-22** (LMDB v15 / redb v10) — write-never since `PDM-Q7` |
 | `txs_pruned` | in code at pin, documented at pin |
 
 This registry is CI-pinned: `scripts/ci/check_lmdb_schema_coverage.py`
@@ -256,7 +260,7 @@ store, don't patch blind.
 
 ## 0. Problem statement
 
-Durable state lives in C++ LMDB (**49** declared tables, 48 at runtime —
+Durable state lives in C++ LMDB (**47** declared tables, 46 at runtime —
 DRS-W5). Orchestration tangle is
 **`blockchain.cpp`** (261 store call sites, 95 store methods), not the
 storage class alone.
@@ -507,7 +511,7 @@ cannot — and the failure mode is “wallet can’t spend.”
 
 ### 3.1 Today
 
-`blockchain.cpp` (95 store methods) → `BlockchainLMDB` (49 tables) + FFI gather
+`blockchain.cpp` (95 store methods) → `BlockchainLMDB` (47 tables since v15) + FFI gather
 shells.
 
 ### 3.2 After DRS-C (+ LMDB digest)
@@ -632,7 +636,7 @@ below is written out so the partition is a set, not a description of one.
 | **S-ARCH** | Archival reads/writes reached from `blockchain.cpp` | 18 | `archival_bond_all_last_served_epochs` `archival_bond_good_through` `archival_bond_holds_shard` `archival_bond_join_epoch` `archival_bond_last_served_epochs` `archival_serve_credit_pass_count` `archival_shard_freeze_height` `gather_archival_emission_epoch_snapshot` `get_archival_alt_attestation_witness` `get_archival_attestation_witness_at_height` `get_archival_bond_hybrid_pubkey` `get_archival_bond_value` `get_archival_last_slash_epoch` `get_archival_prune_watermark_epoch` `get_archival_r_market` `get_archival_shard_segment_at_height` `set_archival_serve_credit_bit` `store_archival_alt_attestation_witness` | **7** — Largest surface (18) and **gated on the P0b journal audit** — its write paths are the ones whose atomicity is still being characterised. Extracting before that audit ports an unaudited contract. | Cursor surface for retention (E4) |
 | **S-POOL** | Tx pool | 8 | `add_txpool_tx` `for_all_txpool_txes` `get_txpool_tx_blob` `get_txpool_tx_count` `get_txpool_tx_meta` `remove_txpool_tx` `txpool_tx_matches_category` `update_txpool_tx` | **8** — No consensus state and no dependency on the chain surfaces, so it can parallelize with 4–7 if there is capacity. Ordered here rather than earlier because it is privacy-sensitive (Dandelion++) and deserves attention that is not competing with the consensus path. | Privacy-sensitive (Dandelion++) |
 | **S-ALT** | Alt chain | 6 | `add_alt_block` `drop_alt_blocks` `for_all_alt_blocks` `get_alt_block` `get_alt_block_count` `remove_alt_block` | **9** — Alt-chain storage depends on both chain surfaces being settled; its reorg path is the one place both are exercised together. |  |
-| **S-PRUNE** | Pruning | 1 | `pop_target_allowed` (was 6: check_pruning, get_blockchain_pruning_seed, prune_blockchain, update_pruning **DELETED from C++ 2026-09-21**, `PDM-Q7`; prune_tx_data **unreached from `blockchain.cpp`** since the same day — its only callers were the engine — and not in this map until something calls it again) | **NOT EXTRACTED** — four of the original six were the Monero-era stripe engine, superseded before they could be ported and now gone (see the PDM note below and its 2026-09-21 update); prune_tx_data is Shekyl's tx-data discard, now a callee with no caller, and dies with the C++ store. `pop_target_allowed` **dissolved 2026-09-15 (S-CHAIN-W SCW-7)**: pop-ability is "does `undo_log[h]` exist", so the retention prune that eventually lives here inherits a contract before it has a home — **it deletes `undo_log` rows below its watermark in its own transaction, and the watermark may not go shallower than `D_max` blocks below the tip** (`ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q11, **RULED 2026-09-18** — `D_max = 720` PROVISIONAL): undo-log retention ≥ `D_max`, or a legal reorg returns `StoreCannot::PopBelowFloor`. Until this surface lands the floor is genesis and that refusal is unreachable — which is why the constraint is written on this row now rather than discovered by the implementation that picks the watermark. [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) §5.4. **Plan doc owed before the first increment (`PDM-Q-F31`, 2026-09-17, rule 26):** this row now carries two contracts (SCW-7's floor; `PDM-Q-F26`'s three-leg hash-row invariant) and is the landing surface for the **store-side** items of [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §8 — discard predicate, ~~retention exceptions~~ (struck 2026-09-18: Q9 ruled no daemon holds any), undo-log floor, `pqc_auths` discard, `W` in D11; **not** F27's below-anchor mode (E6) or F28's wire field (`LV-`/`PWC-`) — with — until 2026-09-18 — no `DRS_E*_SPRUNE.md`. E1 got its plan before its writers; so does this. **Skeleton landed 2026-09-18 (a skeleton, `Status: SKELETON, not a plan` — the plan itself is still owed):** [`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md) — predicate (Q2, no exceptions — Q9 RULED on #775: no daemon holds retention exceptions, all daemons prune uniformly), horizons, the store invariant (three legs landed, A4's fourth owed), Q3's instrument, D10/D11, the serve-credit precondition, named inputs, C++ deletion timing; filename provisional until DRS numbers the increment. The plan itself is still DRS-E's; its `PDM-Q1` gate cleared 2026-09-18 (Q1 RULED), so it may open. FOLLOWUPS row carries the falsifier. | Bootstrap / prune tools |
+| **S-PRUNE** | Pruning | 1 | `pop_target_allowed` (was 6: check_pruning, get_blockchain_pruning_seed, prune_blockchain, update_pruning **DELETED from C++ 2026-09-21**, `PDM-Q7`; prune_tx_data unreached from blockchain.cpp since the same day and **DELETED 2026-09-22** with the output_metadata and txs_prunable_tip tables and its watermark, LMDB v15) | **NOT EXTRACTED** — four of the original six were the Monero-era stripe engine, superseded before they could be ported and gone 2026-09-21; the fifth, prune_tx_data (Shekyl's C++ depth-based tx-data discard), went 2026-09-22 once it had no caller. Nothing of either is carried into S-PRUNE (see the PDM note below and its two dated updates). `pop_target_allowed` **dissolved 2026-09-15 (S-CHAIN-W SCW-7)**: pop-ability is "does `undo_log[h]` exist", so the retention prune that eventually lives here inherits a contract before it has a home — **it deletes `undo_log` rows below its watermark in its own transaction, and the watermark may not go shallower than `D_max` blocks below the tip** (`ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q11, **RULED 2026-09-18** — `D_max = 720` PROVISIONAL): undo-log retention ≥ `D_max`, or a legal reorg returns `StoreCannot::PopBelowFloor`. Until this surface lands the floor is genesis and that refusal is unreachable — which is why the constraint is written on this row now rather than discovered by the implementation that picks the watermark. [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) §5.4. **Plan doc owed before the first increment (`PDM-Q-F31`, 2026-09-17, rule 26):** this row now carries two contracts (SCW-7's floor; `PDM-Q-F26`'s three-leg hash-row invariant) and is the landing surface for the **store-side** items of [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §8 — discard predicate, ~~retention exceptions~~ (struck 2026-09-18: Q9 ruled no daemon holds any), undo-log floor, `pqc_auths` discard, `W` in D11; **not** F27's below-anchor mode (E6) or F28's wire field (`LV-`/`PWC-`) — with — until 2026-09-18 — no `DRS_E*_SPRUNE.md`. E1 got its plan before its writers; so does this. **Skeleton landed 2026-09-18 (a skeleton, `Status: SKELETON, not a plan` — the plan itself is still owed):** [`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md) — predicate (Q2, no exceptions — Q9 RULED on #775: no daemon holds retention exceptions, all daemons prune uniformly), horizons, the store invariant (three legs landed, A4's fourth owed), Q3's instrument, D10/D11, the serve-credit precondition, named inputs, C++ deletion timing; filename provisional until DRS numbers the increment. The plan itself is still DRS-E's; its `PDM-Q1` gate cleared 2026-09-18 (Q1 RULED), so it may open. FOLLOWUPS row carries the falsifier. | Bootstrap / prune tools |
 
 **This is analysis, and it stops here (CSR-4, ruled 2026-09-01, status line
 §0).** DRS-C does not ship as C++ refactor PRs. The partition is the scoping
@@ -670,8 +674,16 @@ ported it into `shekyl-levin`. Deleted on `feat/pruning-seed-wire-deletion`:
 `prune_worker`, the four engine methods, `common/pruning.{h,cpp}`,
 `CRYPTONOTE_PRUNING_*`, both CLI flags, stripe-aware sync and peer
 selection, the wire field in both languages, the RPC readouts (3.35).
-`prune_tx_data` and the now write-never `txs_prunable_tip` table stay and
-die with the C++ store. Gate: `scripts/ci/check_no_stripe_engine.sh`.
+Gate: `scripts/ci/check_no_stripe_engine.sh`.
+
+**UPDATE 2026-09-22 — the rest went too.** `prune_tx_data` (a callee with no
+caller once the engine was gone), its `output_metadata` cache and
+`tx_prune_next_block` watermark, and the write-never `txs_prunable_tip`
+table were deleted on `feat/delete-cxx-tx-data-prune`: LMDB `14 → 15`,
+redb `SCHEMA_VERSION 9 → 10` (the two twin definitions leave the
+catalogue; every ordinal after #8 shifts), `get_info.tx_prune_height`
+removed (RPC 3.36). S-PRUNE starts from a store with no inherited discard
+mechanism of either shape.
 
 **Grounding, stated because it changes how much this is worth relying on:**
 `PDM-Q-S0` and `PDM-Q7` are ruled, but **PR #723 is OPEN and unmerged as of
@@ -683,7 +695,7 @@ round's own text on `docs/pruned-daemon-mode-round`, not from a relayed summary.
 scoping problem this note creates rather than solves.** Four methods
 (`check_pruning`, `get_blockchain_pruning_seed`, `prune_blockchain`,
 `update_pruning`) were stripe-era and are deleted (2026-09-21);
-`prune_tx_data` is Shekyl's own and dies with the store.
+`prune_tx_data`, Shekyl's own, followed on 2026-09-22.
 `pop_target_allowed` is **not** — it answers a question about Shekyl's own
 archival prune watermark (C2-R1b-Q1c), which PDM does not retire. Parked in a
 surface that is never extracted, it becomes a method the pop path needs and no
@@ -695,7 +707,8 @@ this sharpens it — if E1 cannot extract the pop path without
 outcome likelier rather than less.
 
 **The three tables ruled not-to-port do not touch this vocabulary — derived,
-not assumed.** `txs_prunable_tip`, `txs` and `hf_starting_heights` are ruled out
+not assumed.** `txs_prunable_tip` (deleted from both stores 2026-09-22, v15/v10),
+`txs` and `hf_starting_heights` are ruled out
 of the Rust store (E1's target is 46 tables, not 49). **Zero** of the 102
 methods names any of them: they are reached only through
 `BlockchainLMDB::add_transaction_data`, `remove_transaction_data`,
@@ -1170,8 +1183,8 @@ pressure. **DRS-0 freezes accumulator design** (constrains codecs):
 Total coverage = every table in inventory contributes to some accumulator or
 named exclusion. **No silent sampling.**
 
-**Frozen 2026-09-12 by DRS-0 slice A.** The per-table assignment for all
-**49** inventory tables is the `Accumulator class` column of
+**Frozen 2026-09-12 by DRS-0 slice A.** The per-table assignment for every
+declared table is the `Accumulator class` column of
 [`LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) §10,
 with the five tokens, the `set-shaped` delete-path falsifier, the named
 exclusion reasons and the gate's stated limitation defined in that
@@ -2077,8 +2090,8 @@ name-derived `m_<name>`, verified 1:1 by P0a):
 4. After digest exists: every `MDB_dbi` in digest set **or** named exclusion
    row
 
-**Seed count: 49/49** (46/46 at the Round-2 pin — R2-3's "no phantom 47"
-ruled the definition-site `rg` hit; the same N+1 shape reads 49+1 today).
+**Seed count: 47/47** (46/46 at the Round-2 pin — R2-3's "no phantom 47"
+ruled the definition-site `rg` hit; the same N+1 shape reads 47+1 today).
 Gate must not cry wolf on day one — it has run green on `dev` since
 its landing (`2572e6f5b`, 2026-08-25).
 
@@ -2394,7 +2407,7 @@ reasons row for row** — two instruments, one field, cross-checked:
 | Group | Tables | Why replay cannot produce them |
 | --- | --- | --- |
 | **Not chain state** | `txpool_meta`, `txpool_blob`, `alt_blocks`, `archival_alt_attestation_witness` | Replaying **main-chain** blocks produces the main chain. The pool is unconfirmed by definition and the alt surface is by definition what the chain did not take; two honest nodes at one height legitimately differ. Slice A excludes these from **all future digests** on the same ground. Slice C's §5.1 pick moves the pool out of the consensus store file entirely, which makes this a boundary rather than an exception |
-| **Node-local by prune policy** | `txs_prunable`, `txs_prunable_tip`, `output_metadata` | Rebuildable **only from bytes a pruning node has deliberately discarded**. Replay cannot recreate what the local corpus no longer holds, and D10's own premise is *local* blocks |
+| **Node-local by prune policy** | `txs_prunable` (`txs_prunable_tip` and `output_metadata` were in this class until their deletion, 2026-09-22) | Rebuildable **only from bytes a pruning node has deliberately discarded**. Replay cannot recreate what the local corpus no longer holds, and D10's own premise is *local* blocks |
 | **Dead** | `txs` (never written, DRS-W4), `hf_starting_heights` (dropped at every writable `open()`, DRS-W5) | Empty domain. Trivially satisfied and trivially uninteresting |
 
 > **AMENDED at `edb35dbb1` (2026-09-12, same day): the middle group's rationale

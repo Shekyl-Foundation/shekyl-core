@@ -62,7 +62,6 @@ typedef struct mdb_txn_cursors
   MDB_cursor *m_txc_txs_pqc_auths;
   MDB_cursor *m_txc_txs_prunable;
   MDB_cursor *m_txc_txs_prunable_hash;
-  MDB_cursor *m_txc_txs_prunable_tip;
   MDB_cursor *m_txc_tx_indices;
   MDB_cursor *m_txc_tx_outputs;
 
@@ -92,7 +91,6 @@ typedef struct mdb_txn_cursors
 #define m_cur_txs_pqc_auths	m_cursors->m_txc_txs_pqc_auths
 #define m_cur_txs_prunable	m_cursors->m_txc_txs_prunable
 #define m_cur_txs_prunable_hash	m_cursors->m_txc_txs_prunable_hash
-#define m_cur_txs_prunable_tip	m_cursors->m_txc_txs_prunable_tip
 #define m_cur_tx_indices	m_cursors->m_txc_tx_indices
 #define m_cur_tx_outputs	m_cursors->m_txc_tx_outputs
 #define m_cur_spent_keys	m_cursors->m_txc_spent_keys
@@ -118,7 +116,6 @@ typedef struct mdb_rflags
   bool m_rf_txs_pqc_auths;
   bool m_rf_txs_prunable;
   bool m_rf_txs_prunable_hash;
-  bool m_rf_txs_prunable_tip;
   bool m_rf_tx_indices;
   bool m_rf_tx_outputs;
   bool m_rf_spent_keys;
@@ -130,7 +127,6 @@ typedef struct mdb_rflags
   bool m_rf_curve_tree_leaves;
   bool m_rf_curve_tree_layers;
   bool m_rf_curve_tree_checkpoints;
-  bool m_rf_output_metadata;
 } mdb_rflags;
 
 typedef struct mdb_threadinfo
@@ -577,12 +573,6 @@ private:
   virtual uint64_t get_latest_curve_tree_checkpoint_height() const override;
   virtual void prune_curve_tree_intermediate_layers(uint64_t checkpoint_height) override;
 
-  // Output metadata pruning
-  virtual void store_output_metadata(uint64_t global_output_index, const output_pruning_metadata_t& meta) override;
-  virtual bool get_output_metadata(uint64_t global_output_index, output_pruning_metadata_t& meta) const override;
-  virtual bool is_output_pruned(uint64_t global_output_index) const override;
-  virtual bool prune_tx_data(uint64_t depth = 0) override;
-  virtual uint64_t get_last_pruned_tx_data_height() const override;
   virtual bool tx_has_verification_data(const crypto::hash& tx_hash) const override;
 
   // migrate from older DB version to current (pre-V8 DBs are refused loudly;
@@ -594,9 +584,6 @@ private:
   /** LMDB tx_id for a canonical tx hash (throws TX_DNE if missing). */
   uint64_t get_tx_id(const crypto::hash& h) const;
 
-  /** First block height not yet processed for tx-data pruning (legacy key migrates to +1). */
-  uint64_t read_tx_prune_next_block_height() const;
-  void write_tx_prune_next_block_height(MDB_txn* wtxn, uint64_t next_block);
 
   bool load_archival_bond_value(const crypto::hash& p_id,
     shekyl::db::ArchivalBondValue& out) const;
@@ -850,7 +837,6 @@ private:
   MDB_dbi m_txs_pqc_auths;
   MDB_dbi m_txs_prunable;
   MDB_dbi m_txs_prunable_hash;
-  MDB_dbi m_txs_prunable_tip;
   MDB_dbi m_tx_indices;
   MDB_dbi m_tx_outputs;
 
@@ -913,7 +899,6 @@ private:
   MDB_dbi m_curve_tree_checkpoints; // block_height -> serialized checkpoint (root + depth + leaf_count)
   MDB_dbi m_curve_tree_roots;       // block_height -> 32-byte curve tree root (one entry per block)
 
-  MDB_dbi m_output_metadata;      // global_output_index -> output_pruning_metadata_t
 
   mutable uint64_t m_cum_size;	// used in batch size estimation
   mutable unsigned int m_cum_count;
