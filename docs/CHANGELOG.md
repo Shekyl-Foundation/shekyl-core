@@ -50,17 +50,18 @@
   previously visible only on the refusing node, which is what made a one-line
   cause take an afternoon to find. It does not classify, threshold, or stop
   advertising — that half needs `PWD-E8`'s measurement.
-- **`--in-peers` now resolves through a derived SAFETY bound instead of the
-  `UINT32_MAX` it used to narrow into.** Unset, the ceiling is read from the
-  machine at startup: `RLIMIT_NOFILE`'s soft limit, minus the descriptors the
-  process already holds, minus what it reserves for outbound. It therefore
-  differs per deployment, which is correct — it states a fact about one
-  machine rather than a network policy — and **no value is chosen anywhere in
-  it**. An explicit `--in-peers` bypasses the derivation, so `0` remains a
-  legal choice meaning *refuse every inbound connection*, distinct from
-  *unset*. On a platform that cannot report its descriptor limit the daemon
-  **warns and leaves the ceiling unbounded** rather than substituting a
-  number.
+- **`--in-peers` unset resolves through a derived safety bound.** Rust
+  observes the process — `getrlimit` on POSIX, the open-descriptor count
+  from `/proc/self/fd` on Linux, and a named "no per-process ceiling" on
+  Windows — and returns a decision: a finite ceiling, or unbounded with a
+  reason. A soft limit of zero is a real ceiling of zero. A failed probe is
+  not stored as zero and is not narrowed from a negative sentinel into
+  `UINT32_MAX`. C++ passes the descriptors it has already promised (outbound
+  caps, explicit anonymity-zone inbound caps, and, once RPC is listening,
+  the RPC connection budget) and stores the decision. An explicit
+  `--in-peers`, including `0`, is stored as given. Admission counts **live**
+  connections — across zones when the ceiling was derived — because the
+  once-a-second counter is not the check.
 - **Why memory does not appear in that bound.** Measured on the rule-76 floor
   device and a development host with the same instrument: **119 live inbound
   connections cost 360 KiB of RSS on the floor**, against a ~539 MiB startup

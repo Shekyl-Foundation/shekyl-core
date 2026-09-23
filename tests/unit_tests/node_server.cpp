@@ -2744,15 +2744,11 @@ TEST(node_server, announced_port_is_derived_from_listener_and_zone)
 // so an unset flag meant a ceiling of UINT32_MAX and the check never fired.
 // That became the only inbound bound when the per-host cap was deleted.
 //
-// The replacement is READ, not picked: the descriptor limit minus what the
-// process holds minus what it reserves for outbound. The arithmetic and its
-// saturation are Rust's (`shekyl-peer-policy::InboundCeiling`, unit-tested
-// there, including that the subtraction saturates rather than wrapping back
-// into an unbounded ceiling). What these tests pin is the C++ half: that the
-// SENTINEL routes to the derivation and an EXPLICIT value does not -- the
-// distinction a signed type exists to preserve, since `0` is a legal operator
-// choice meaning "refuse every inbound connection" and cannot double as
-// "unset".
+// The replacement is a decision Rust returns from a descriptor probe.
+// These tests pin the C++ half: an unset `--in-peers` stores that decision,
+// and an explicit value — including `0` — is stored as given. `0` is a legal
+// operator choice meaning "refuse every inbound connection" and cannot
+// double as "unset", which is why the descriptor is signed.
 // ---------------------------------------------------------------------------
 
 namespace
@@ -2799,9 +2795,8 @@ namespace
 
 TEST(node_server, in_peers_sentinel_resolves_to_a_bounded_ceiling)
 {
-  // Red edit: drop the `configured_in_peers < 0` branch in `handle_command_line`
-  // so the sentinel narrows straight through again. The ceiling returns to
-  // UINT32_MAX and this fails -- which is the defect, restored.
+  // Red edit: make `apply_inbound_ceiling` return before storing a bounded
+  // decision, so the unset sentinel stays at the counter maximum. This fails.
   in_peers_fixture d;
   ASSERT_TRUE(d.init("48090", -1));
 

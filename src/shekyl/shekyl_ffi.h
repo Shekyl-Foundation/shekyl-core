@@ -3517,16 +3517,36 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! substitute one for the other.
 std::uint32_t shekyl_p2p_default_out_peers();
 
-//! The inbound SAFETY bound (PWD-I7). Not a policy ceiling: C++ reads the
-//! operating system -- `RLIMIT_NOFILE`'s soft limit and this process's own
-//! descriptor count after init -- and Rust owns the arithmetic. `in_use` is
-//! sampled AFTER initialisation so the steady set (store, listeners, log) is
-//! already inside it; `reserved_outbound` is configured. Saturates at zero
-//! rather than wrapping: an unsigned wrap would rebuild the `UINT32_MAX`
-//! unbounded interval this bound closes, by another route.
-std::uint32_t shekyl_inbound_ceiling_resolve(std::uint64_t soft_limit,
-                                             std::uint64_t in_use,
-                                             std::uint64_t reserved_outbound);
+//! Inbound safety-bound decision (PWD-I7). Rust observes the process and
+//! decides. C++ passes `reserved` — descriptors it has promised but not
+//! opened — and stores the result. Kind 0 is unused, so a zeroed struct is
+//! not a bounded ceiling of zero.
+//!
+//! `soft_limit` is set when the OS returned a finite soft limit. `held` is
+//! set when the open-descriptor count was taken. `ceiling` is set only for
+//! `SHEKYL_INBOUND_CEILING_BOUNDED`.
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_BOUNDED = 1;
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_NO_PER_PROCESS_LIMIT = 2;
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_UNLIMITED = 3;
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_LIMIT_UNREADABLE = 4;
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_COUNT_UNREADABLE = 5;
+constexpr std::uint32_t SHEKYL_INBOUND_CEILING_EXCEEDS_COUNTER = 6;
+
+struct shekyl_inbound_ceiling {
+  std::uint32_t kind;
+  std::uint32_t ceiling;
+  std::uint64_t soft_limit;
+  std::uint64_t held;
+};
+static_assert(offsetof(shekyl_inbound_ceiling, kind) == 0, "kind at 0");
+static_assert(offsetof(shekyl_inbound_ceiling, ceiling) == 4, "ceiling at 4");
+static_assert(offsetof(shekyl_inbound_ceiling, soft_limit) == 8, "soft_limit at 8");
+static_assert(offsetof(shekyl_inbound_ceiling, held) == 16, "held at 16");
+static_assert(sizeof(shekyl_inbound_ceiling) == 24, "inbound ceiling is 24 bytes");
+
+//! Write the decision for `reserved` promised-but-unopened descriptors.
+//! The probe describes the process at the call. `out` must be non-null.
+void shekyl_inbound_ceiling_resolve(std::uint64_t reserved, shekyl_inbound_ceiling* out);
 
 //! Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12,
 //! 18), moved from `cryptonote_protocol/enums.h` under rule 20. Bytes cross

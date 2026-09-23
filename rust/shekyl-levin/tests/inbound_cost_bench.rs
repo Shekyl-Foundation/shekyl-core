@@ -3,21 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! What one INBOUND connection costs a node — the rig for `--in-peers`'
-//! shipped default (`PWD-I7`, rule 76).
+//! What one INBOUND connection costs a node (`PWD-I7`, rule 76).
 //!
-//! The per-host inbound cap was deleted 2026-09-22, which left the total
-//! ceiling as the only inbound bound — and that ceiling resolves to
-//! `UINT32_MAX` at the shipped default, so it never fires. Its replacement is
-//! a **measurement**, not a ruling: the target property is descriptors and
-//! memory, which are directly observable, so nothing here is a judgement call.
+//! The per-host inbound cap was deleted 2026-09-22. The ceiling that replaced
+//! it is derived from the process descriptor limit (`InboundCeiling`), not
+//! from a memory constant. This rig is why: memory does not bind. A quiescent
+//! inbound connection was free in RSS on the floor device, so the safety
+//! bound counts descriptors.
 //!
-//! **This is the instrument, not the answer.** It prints a table; the value
-//! that ships is derived from a run ON THE FLOOR DEVICE (rule 76 item 4:
-//! values and increments for the floor are measured on it, never
-//! extrapolated). Rule 76 also expects the floor to move, and every constant
-//! provisioned against it to be re-derived — which is why this lands as a
-//! re-runnable bench rather than as a number in a commit message.
+//! **This is the instrument, not a number that ships.** It prints a table.
+//! Rule 76 expects the floor to move; the rig stays re-runnable so a later
+//! measurement can be compared with the one that selected descriptors.
 //!
 //! **Two arms** (`DAEMON_RELAY_PRIVACY.md` §80.4, rule 76 item 3): run it on
 //! the floor device and on a development machine, and record the ratio.
@@ -28,7 +24,8 @@
 //!   cargo test -p shekyl-levin --test inbound_cost_bench -- --ignored --nocapture
 //! ```
 //!
-//! Three costs, because the ceiling is bounded by whichever binds first:
+//! Three costs the table records. Memory was measured and does not bind;
+//! descriptors are what the safety bound uses:
 //!
 //!   * **`VmRSS`** — steady-state resident set, the term a ceiling is usually
 //!     derived against.

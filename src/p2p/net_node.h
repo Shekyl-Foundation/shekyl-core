@@ -409,6 +409,10 @@ namespace nodetool
       // the flag's surviving job is the announcement itself.
       bool m_can_announce;
       bool m_seed_nodes_initialized;
+      //! True when an operator set this zone's inbound cap, including zero.
+      //! False leaves public inbound to `apply_inbound_ceiling` and leaves
+      //! an anonymity zone with no zone cap of its own.
+      bool m_inbound_cap_explicit = false;
 
     private:
       void set_config_defaults() noexcept
@@ -519,6 +523,12 @@ namespace nodetool
     uint32_t get_max_out_public_peers() const;
     void change_max_in_public_peers(size_t count);
     uint32_t get_max_in_public_peers() const;
+    //! When `--in-peers` was left unset, derive the public inbound ceiling
+    //! from the process descriptor budget and store it. `reserved_beyond_p2p`
+    //! is descriptors another subsystem has promised but not opened. An
+    //! explicit cap is left as stored. The probe counts descriptors open at
+    //! the call, so the daemon calls this again after RPC listeners bind.
+    void apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p);
     virtual bool block_host(epee::net_utils::network_address address, time_t seconds = P2P_IP_BLOCKTIME, bool add_only = false);
     virtual bool unblock_host(const epee::net_utils::network_address &address);
     virtual bool block_subnet(const epee::net_utils::ipv4_network_subnet &subnet, time_t seconds = P2P_IP_BLOCKTIME);
@@ -638,6 +648,17 @@ namespace nodetool
 
     bool set_max_out_peers(network_zone& zone, int64_t max);
     bool set_max_in_peers(network_zone& zone, int64_t max);
+    //! Outbound caps on every zone, plus explicit inbound caps on zones
+    //! other than public, plus `reserved_beyond_p2p`.
+    std::uint64_t descriptor_reservations(std::uint64_t reserved_beyond_p2p) const;
+    struct inbound_census
+    {
+      std::size_t zone;
+      std::size_t process;
+    };
+    //! Live inbound counts for `which` and for the whole process. Refreshes
+    //! each zone's cached counter. Admission reads the census, not the cache.
+    inbound_census census_inbound(epee::net_utils::zone which);
     bool set_tos_flag(const boost::program_options::variables_map& vm, int limit);
 
     bool set_rate_up_limit(const boost::program_options::variables_map& vm, int64_t limit);
@@ -746,6 +767,14 @@ namespace nodetool
     //! An inbound count is unreadable without the window it was observed over:
     //! zero inbound after 40 seconds says nothing, zero after six hours does.
     std::chrono::steady_clock::time_point m_started_at;
+    //! Set when public inbound was derived. Admission then refuses once the
+    //! live inbound count across every zone reaches it. Empty when the
+    //! operator set `--in-peers`: that cap is the zone cap.
+    std::optional<std::uint32_t> m_process_inbound_ceiling;
+    //! Last decision `apply_inbound_ceiling` announced, so a second call
+    //! with the same result does not repeat the warning. Zero is not a kind.
+    std::uint32_t m_applied_ceiling_kind = 0;
+    std::uint32_t m_applied_ceiling_value = 0;
     cryptonote::network_type m_nettype;
 
     epee::net_utils::ssl_support_t m_ssl_support;

@@ -40,9 +40,7 @@
 //! binary predates, fails safe rather than severing a peer it cannot
 //! classify.
 
-use shekyl_peer_policy::{
-    BlockAnnounceAction, BlockIngest, BlockSyncAction, DropVerdict, InboundCeiling,
-};
+use shekyl_peer_policy::{BlockAnnounceAction, BlockIngest, BlockSyncAction, DropVerdict};
 
 /// Does a rejection carrying this verdict justify dropping the connection that
 /// delivered it?
@@ -298,32 +296,6 @@ pub extern "C" fn shekyl_block_sync_heavier_score(action: u8) -> bool {
 #[no_mangle]
 pub extern "C" fn shekyl_block_sync_orphan_resync(action: u8) -> bool {
     BlockSyncAction::from_byte(action).orphan_resync()
-}
-
-// ---------------------------------------------------------------------------
-// The inbound SAFETY bound (PWD-I7)
-//
-// Not a policy ceiling. C++ reads the operating system -- the descriptor
-// limit and this process's own usage -- and Rust owns the arithmetic and the
-// saturation rule. Nothing here picks a number: every input is read or
-// configured, which is what lets this land without the ruling `--in-peers`
-// would otherwise owe.
-// ---------------------------------------------------------------------------
-
-/// Resolve the inbound descriptor ceiling from `RLIMIT_NOFILE`.
-///
-/// `in_use` is counted after initialisation, so the steady descriptor set is
-/// already inside it; `reserved_outbound` is configured. Saturates at zero
-/// rather than wrapping — an unsigned wrap here would reproduce the
-/// `UINT32_MAX` unbounded interval this bound exists to close, by a different
-/// route.
-#[no_mangle]
-pub extern "C" fn shekyl_inbound_ceiling_resolve(
-    soft_limit: u64,
-    in_use: u64,
-    reserved_outbound: u64,
-) -> u32 {
-    InboundCeiling::resolve(soft_limit, in_use, reserved_outbound).get()
 }
 
 #[cfg(test)]

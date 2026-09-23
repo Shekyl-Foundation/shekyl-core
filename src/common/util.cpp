@@ -35,7 +35,6 @@
 #endif
 #include <cstdint>
 #include <cstdio>
-#include <limits>
 #include <wchar.h>
 
 #ifdef __GLIBC__
@@ -748,56 +747,6 @@ std::string get_nix_version_display_string()
     }
 #endif
     return true;
-  }
-
-  uint64_t get_open_file_limit()
-  {
-#ifdef __GLIBC__
-    struct rlimit rlim;
-    if (getrlimit(RLIMIT_NOFILE, &rlim) < 0)
-    {
-      MWARNING("Failed to read the open-file limit");
-      return 0;
-    }
-    if (rlim.rlim_cur == RLIM_INFINITY)
-      return std::numeric_limits<uint64_t>::max();
-    return static_cast<uint64_t>(rlim.rlim_cur);
-#else
-    // Not an estimate and not a default: this platform cannot report the
-    // limit, so the caller is told UNKNOWN and decides what to do about it.
-    // Substituting a number here would be inventing the constant the whole
-    // derivation exists to avoid.
-    return 0;
-#endif
-  }
-
-  uint64_t count_open_file_descriptors()
-  {
-#if defined(__linux__) && defined(__GLIBC__)
-    // `/proc/self/fd`, not `/proc/<pid>/fd`: the latter needs
-    // PTRACE_MODE_READ, and a hardened /proc refuses it even for one's own
-    // child -- observed on both machines this bound was measured against. A
-    // process reading its OWN descriptor table needs no such permission.
-    DIR *d = opendir("/proc/self/fd");
-    if (!d)
-    {
-      MWARNING("Failed to open /proc/self/fd to count descriptors");
-      return 0;
-    }
-    uint64_t n = 0;
-    while (const struct dirent *e = readdir(d))
-    {
-      if (e->d_name[0] == '.')
-        continue; // "." and ".."
-      ++n;
-    }
-    closedir(d);
-    // The directory handle itself was one of them and is now closed, so do
-    // not charge the bound for a descriptor that no longer exists.
-    return n > 0 ? n - 1 : 0;
-#else
-    return 0; // UNKNOWN -- see the header.
-#endif
   }
 
   ssize_t get_lockable_memory()

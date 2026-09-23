@@ -3,121 +3,216 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! How many inbound connections a node may hold — the **safety** bound.
+//! The inbound **safety** bound: how many inbound connections this process
+//! can hold without exhausting its descriptors.
 //!
-//! # Two ceilings, and conflating them is what produced the defect this replaces
+//! This is not a policy ceiling. A policy ceiling would be a network-wide
+//! choice about how much service to offer below the safety bound; nothing
+//! here makes that choice. The inputs are a descriptor observation and the
+//! count of descriptors the process has already promised elsewhere.
 //!
-//! * **The safety bound (here).** *Do not exhaust the process.* It is
-//!   **read from the operating system**, not chosen: the descriptor limit
-//!   minus what this daemon is already using and what it has promised to
-//!   outbound. It differs per deployment, and that is **correct** — it is a
-//!   statement about one machine's actual limit, not about policy.
-//! * **A policy ceiling.** *How much service we choose to provide*, below the
-//!   safety bound. That would be a network-wide default, and **nothing here
-//!   sets one.**
+//! # The observation is tagged
 //!
-//! `--in-peers` shipped as the sentinel `-1` narrowed into a `uint32_t`, so
-//! the effective ceiling was `UINT32_MAX` and never fired. That was not a
-//! policy choice, it was an unbounded interval nobody had noticed.
-//!
-//! # Why memory does not appear in this calculation
-//!
-//! Measured on the rule-76 floor device (Pi 4 Model B) and on a
-//! development host, same instrument, 2026-09-22
-//! (`shekyl-levin/tests/inbound_cost_bench.rs`): **119 live inbound
-//! connections cost 360 KiB of RSS on the floor device**, a marginal of
-//! 0.2 KiB by the top of the sweep, against a ~539 MiB startup peak that does
-//! not move with connection count at all. A quiescent inbound connection is
-//! free in memory; descriptors are what it actually consumes.
-//!
-//! *(The development host read ~91 KiB per connection for the same sweep.
-//! That figure does not reproduce on the floor — baseline and peak agree
-//! across the two machines within 12% and 0.2% — so it was measuring
-//! something that scales with the host rather than with connection state.
-//! Provisioning against it would have set a bound from an artifact of the
-//! measuring machine.)*
+//! A soft limit of zero is a real limit: the process may open nothing more,
+//! and the ceiling is zero. A failed probe is a different value, and so is
+//! "this platform has no per-process ceiling". Collapsing those into one
+//! sentinel is what turns "cannot read" and "limit is zero" into the same
+//! unbounded admission.
 
-/// The inbound descriptor ceiling, resolved from the operating system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct InboundCeiling(u32);
+/// What the operating system reported about this process's descriptor limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DescriptorLimit {
+    /// `RLIMIT_NOFILE`'s soft limit. Zero means the process may open nothing.
+    Soft(u64),
+    /// The soft limit is `RLIM_INFINITY`.
+    Unlimited,
+    /// The platform has no per-process descriptor ceiling to read.
+    NoPerProcessLimit,
+    /// `getrlimit` failed, or this platform cannot answer it.
+    LimitUnreadable,
+}
+
+/// One probe: the limit, and how many descriptors were open when it was taken.
+///
+/// `held` is `None` when the open-descriptor count could not be taken. A
+/// missing count is not zero — zero would be a process holding nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DescriptorSnapshot {
+    pub limit: DescriptorLimit,
+    /// Descriptors open at probe time, excluding the probe's own directory
+    /// handle once that handle has been closed.
+    pub held: Option<u64>,
+}
+
+/// Why no enforceable ceiling could be produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnboundedReason {
+    /// See [`DescriptorLimit::NoPerProcessLimit`].
+    NoPerProcessLimit,
+    /// See [`DescriptorLimit::Unlimited`].
+    Unlimited,
+    /// See [`DescriptorLimit::LimitUnreadable`].
+    LimitUnreadable,
+    /// The limit was read and the open-descriptor count was not.
+    CountUnreadable,
+    /// Headroom does not fit the 32-bit admission counter, so every value
+    /// that counter can store would still admit.
+    ExceedsCounter,
+}
+
+/// The admission decision for public inbound, and the process-wide backstop
+/// when the operator left `--in-peers` unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundCeiling {
+    /// Admit at most this many inbound connections. Zero admits none.
+    Bounded(u32),
+    /// No finite ceiling. The caller says which reason, and does not invent
+    /// a number.
+    Unbounded(UnboundedReason),
+}
 
 impl InboundCeiling {
-    /// Resolve the safety bound from what the OS and the configuration say.
+    /// `reserved` is descriptors promised but not yet open: outbound caps,
+    /// explicit inbound caps on zones other than the one being resolved, and
+    /// any budget another subsystem has already claimed.
     ///
-    /// * `soft_limit` — `RLIMIT_NOFILE`'s soft limit, the descriptor count
-    ///   this process may actually reach.
-    /// * `in_use` — descriptors already held after initialisation: the store,
-    ///   the listeners, the log, the RPC surface. Counted, not estimated.
-    /// * `reserved_outbound` — descriptors this node has promised to outbound
-    ///   connections it may open later. Configured, so it is known rather
-    ///   than guessed.
-    ///
-    /// **No transient margin is subtracted, and that is deliberate.**
-    /// `in_use` is sampled *after* initialisation, so the steady descriptor
-    /// set — store, listeners, log — is already inside it. What is left over
-    /// is per-operation churn, and the store maps its file once at open
-    /// rather than per transaction. Inventing a margin here would be exactly
-    /// the picked number this whole derivation exists to avoid; if churn ever
-    /// proves to matter, it is measurable and the reserve becomes measured
-    /// too.
-    ///
-    /// Saturates at zero rather than wrapping. **Zero is a real answer** — a
-    /// node with no descriptor headroom cannot serve inbound, and reporting
-    /// that honestly is better than admitting connections it cannot keep.
+    /// Headroom is `soft - held - reserved`, saturating at zero. A result
+    /// that does not fit `u32` is [`UnboundedReason::ExceedsCounter`], because
+    /// storing `u32::MAX` in the admission counter would never refuse.
     #[must_use]
-    pub fn resolve(soft_limit: u64, in_use: u64, reserved_outbound: u64) -> Self {
-        let committed = in_use.saturating_add(reserved_outbound);
-        let headroom = soft_limit.saturating_sub(committed);
-        Self(u32::try_from(headroom).unwrap_or(u32::MAX))
-    }
-
-    /// The resolved ceiling.
-    #[must_use]
-    pub const fn get(self) -> u32 {
-        self.0
-    }
-
-    /// Does this node have descriptor headroom for inbound service at all?
-    #[must_use]
-    pub const fn serves_inbound(self) -> bool {
-        self.0 > 0
+    pub fn resolve(snapshot: DescriptorSnapshot, reserved: u64) -> Self {
+        let limit = match snapshot.limit {
+            DescriptorLimit::NoPerProcessLimit => {
+                return Self::Unbounded(UnboundedReason::NoPerProcessLimit);
+            }
+            DescriptorLimit::Unlimited => {
+                return Self::Unbounded(UnboundedReason::Unlimited);
+            }
+            DescriptorLimit::LimitUnreadable => {
+                return Self::Unbounded(UnboundedReason::LimitUnreadable);
+            }
+            DescriptorLimit::Soft(limit) => limit,
+        };
+        let Some(held) = snapshot.held else {
+            return Self::Unbounded(UnboundedReason::CountUnreadable);
+        };
+        let headroom = limit.saturating_sub(held.saturating_add(reserved));
+        match u32::try_from(headroom) {
+            Ok(ceiling) => Self::Bounded(ceiling),
+            Err(_) => Self::Unbounded(UnboundedReason::ExceedsCounter),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::InboundCeiling;
+    use super::{DescriptorLimit, DescriptorSnapshot, InboundCeiling, UnboundedReason};
 
-    #[test]
-    fn headroom_is_the_limit_minus_what_is_committed() {
-        assert_eq!(InboundCeiling::resolve(1024, 64, 12).get(), 948);
+    fn soft(limit: u64, held: u64) -> DescriptorSnapshot {
+        DescriptorSnapshot {
+            limit: DescriptorLimit::Soft(limit),
+            held: Some(held),
+        }
     }
 
     #[test]
-    fn a_node_with_no_headroom_serves_no_inbound_rather_than_wrapping() {
-        // The subtraction must not wrap into a huge ceiling: that is the
-        // failure mode `--in-peers -1` had, arriving by a different route.
-        let c = InboundCeiling::resolve(64, 64, 32);
-        assert_eq!(c.get(), 0);
-        assert!(!c.serves_inbound());
+    fn headroom_is_the_limit_minus_what_is_open_and_promised() {
+        assert_eq!(
+            InboundCeiling::resolve(soft(1024, 64), 12),
+            InboundCeiling::Bounded(948)
+        );
     }
 
     #[test]
-    fn a_raised_hard_limit_is_honoured_rather_than_clamped() {
-        // An operator who raises LimitNOFILE gets the headroom they asked
-        // for; this bound reads the machine, it does not impose a policy.
-        assert_eq!(InboundCeiling::resolve(524_288, 64, 12).get(), 524_212);
+    fn a_soft_limit_of_zero_admits_nothing() {
+        // Distinct from a failed probe: the OS answered, and the answer is none.
+        assert_eq!(
+            InboundCeiling::resolve(soft(0, 0), 0),
+            InboundCeiling::Bounded(0)
+        );
     }
 
     #[test]
-    fn an_absurd_limit_saturates_instead_of_truncating() {
-        assert_eq!(InboundCeiling::resolve(u64::MAX, 0, 0).get(), u32::MAX);
+    fn commitments_past_the_limit_saturate_at_zero() {
+        assert_eq!(
+            InboundCeiling::resolve(soft(64, 64), 32),
+            InboundCeiling::Bounded(0)
+        );
     }
 
     #[test]
-    fn outbound_is_reserved_before_inbound_is_offered() {
-        let without = InboundCeiling::resolve(1024, 64, 0).get();
-        let with = InboundCeiling::resolve(1024, 64, 64).get();
-        assert_eq!(without - with, 64, "every promised outbound slot costs one");
+    fn every_promised_descriptor_costs_one_slot() {
+        let without = InboundCeiling::resolve(soft(1024, 64), 0);
+        let with = InboundCeiling::resolve(soft(1024, 64), 64);
+        assert_eq!(without, InboundCeiling::Bounded(960));
+        assert_eq!(with, InboundCeiling::Bounded(896));
+    }
+
+    #[test]
+    fn a_raised_finite_limit_is_honoured() {
+        assert_eq!(
+            InboundCeiling::resolve(soft(524_288, 64), 12),
+            InboundCeiling::Bounded(524_212)
+        );
+    }
+
+    #[test]
+    fn headroom_past_the_admission_counter_is_not_stored_as_u32_max() {
+        let snapshot = DescriptorSnapshot {
+            limit: DescriptorLimit::Soft(u64::MAX),
+            held: Some(0),
+        };
+        assert_eq!(
+            InboundCeiling::resolve(snapshot, 0),
+            InboundCeiling::Unbounded(UnboundedReason::ExceedsCounter)
+        );
+    }
+
+    #[test]
+    fn an_unlimited_rlimit_is_unbounded() {
+        let snapshot = DescriptorSnapshot {
+            limit: DescriptorLimit::Unlimited,
+            held: Some(12),
+        };
+        assert_eq!(
+            InboundCeiling::resolve(snapshot, 0),
+            InboundCeiling::Unbounded(UnboundedReason::Unlimited)
+        );
+    }
+
+    #[test]
+    fn a_platform_with_no_per_process_ceiling_is_unbounded() {
+        let snapshot = DescriptorSnapshot {
+            limit: DescriptorLimit::NoPerProcessLimit,
+            held: None,
+        };
+        assert_eq!(
+            InboundCeiling::resolve(snapshot, 0),
+            InboundCeiling::Unbounded(UnboundedReason::NoPerProcessLimit)
+        );
+    }
+
+    #[test]
+    fn a_failed_limit_read_is_unbounded() {
+        let snapshot = DescriptorSnapshot {
+            limit: DescriptorLimit::LimitUnreadable,
+            held: Some(4),
+        };
+        assert_eq!(
+            InboundCeiling::resolve(snapshot, 0),
+            InboundCeiling::Unbounded(UnboundedReason::LimitUnreadable)
+        );
+    }
+
+    #[test]
+    fn a_missing_descriptor_count_is_not_zero_held() {
+        let snapshot = DescriptorSnapshot {
+            limit: DescriptorLimit::Soft(4096),
+            held: None,
+        };
+        assert_eq!(
+            InboundCeiling::resolve(snapshot, 0),
+            InboundCeiling::Unbounded(UnboundedReason::CountUnreadable)
+        );
     }
 }
