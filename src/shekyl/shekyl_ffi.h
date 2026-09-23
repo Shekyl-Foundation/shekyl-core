@@ -3546,7 +3546,14 @@ static_assert(sizeof(shekyl_inbound_ceiling) == 24, "inbound ceiling is 24 bytes
 
 //! Write the decision for `reserved` promised-but-unopened descriptors.
 //! The probe describes the process at the call. `out` must be non-null.
-void shekyl_inbound_ceiling_resolve(std::uint64_t reserved, shekyl_inbound_ceiling* out);
+//! `inbound_held` is the descriptors this process currently spends on
+//! ACCEPTED inbound connections. They are excluded from the observed count
+//! because this bound measures inbound -- leaving them in charges them twice
+//! and makes the ceiling depend on how loaded the node was when it was
+//! derived. Pass 0 before anything is connected.
+void shekyl_inbound_ceiling_resolve(std::uint64_t reserved,
+                                    std::uint64_t inbound_held,
+                                    shekyl_inbound_ceiling* out);
 
 //! Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12,
 //! 18), moved from `cryptonote_protocol/enums.h` under rule 20. Bytes cross

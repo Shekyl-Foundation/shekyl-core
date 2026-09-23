@@ -3171,8 +3171,17 @@ namespace nodetool
     // need to know what the daemon reserved beyond p2p.
     m_reserved_beyond_p2p = reserved_beyond_p2p;
     const std::uint64_t reserved = descriptor_reservations(reserved_beyond_p2p);
+    // Descriptors already spent on ACCEPTED inbound connections are excluded
+    // from the observation, because this ceiling is what measures them. At
+    // startup the count is zero and it made no difference; a runtime
+    // re-derive (an `out_peers` change) runs with peers connected, and
+    // leaving them inside the observed count would subtract each one from the
+    // headroom AND then compare it against the smaller result — the ceiling
+    // would fall as the node filled, so a routine outbound change on a busy
+    // node could start refusing every new peer.
+    const std::uint64_t inbound_held = census_inbound(epee::net_utils::zone::public_).process;
     shekyl_inbound_ceiling decision{};
-    shekyl_inbound_ceiling_resolve(reserved, &decision);
+    shekyl_inbound_ceiling_resolve(reserved, inbound_held, &decision);
     const bool announce = decision.kind != m_applied_ceiling_kind
       || decision.ceiling != m_applied_ceiling_value;
     m_applied_ceiling_kind = decision.kind;

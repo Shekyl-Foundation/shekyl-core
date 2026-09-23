@@ -43,6 +43,12 @@ pub struct ShekylInboundCeiling {
 ///
 /// `reserved` is descriptors the caller has promised but not opened.
 ///
+/// `inbound_held` is how many descriptors this process currently spends on
+/// inbound connections it has already accepted. They are excluded from the
+/// observed count, because this bound MEASURES inbound: leaving them in would
+/// charge them twice and make the answer depend on how loaded the node was
+/// when the call happened. Pass `0` when nothing is connected yet.
+///
 /// # Safety
 ///
 /// `out` must be non-null and point at a writable [`ShekylInboundCeiling`]
@@ -50,13 +56,14 @@ pub struct ShekylInboundCeiling {
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_inbound_ceiling_resolve(
     reserved: u64,
+    inbound_held: u64,
     out: *mut ShekylInboundCeiling,
 ) {
     if out.is_null() {
         return;
     }
     let snapshot = observe_descriptors();
-    let ceiling = InboundCeiling::resolve(snapshot, reserved);
+    let ceiling = InboundCeiling::resolve(snapshot, reserved, inbound_held);
     // SAFETY: `out` is non-null and the caller guarantees it is writable
     // for one `ShekylInboundCeiling`.
     unsafe {
@@ -206,7 +213,7 @@ mod tests {
             held: 0,
         };
         // SAFETY: `out` is a live local.
-        unsafe { super::shekyl_inbound_ceiling_resolve(0, &raw mut out) };
+        unsafe { super::shekyl_inbound_ceiling_resolve(0, 0, &raw mut out) };
         assert_eq!(out.kind, SHEKYL_INBOUND_CEILING_BOUNDED);
         assert!(out.soft_limit > 0);
         assert!(out.held > 0);

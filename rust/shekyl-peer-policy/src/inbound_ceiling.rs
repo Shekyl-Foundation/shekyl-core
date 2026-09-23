@@ -80,7 +80,22 @@ impl InboundCeiling {
     /// that does not fit `u32` is [`UnboundedReason::ExceedsCounter`], because
     /// storing `u32::MAX` in the admission counter would never refuse.
     #[must_use]
-    pub fn resolve(snapshot: DescriptorSnapshot, reserved: u64) -> Self {
+    /// `inbound_held` is how many of `snapshot.held` are sockets belonging to
+    /// inbound connections this node has already accepted.
+    ///
+    /// **They are added back before the subtraction, and that is what makes
+    /// this derivation independent of load.** The ceiling bounds *inbound*,
+    /// and the caller compares live inbound against it — so leaving those
+    /// descriptors inside `held` would charge them on both sides: once as
+    /// consumed headroom, once as connections measured against the reduced
+    /// result. The ceiling would then depend on how many peers happened to be
+    /// connected at the moment it was derived, halving as the node filled,
+    /// and a re-derive on a busy node could refuse every further peer.
+    ///
+    /// Deriving at startup hid this, because nothing was connected yet. It
+    /// stopped being hidden when a runtime `out_peers` change began
+    /// re-deriving under load.
+    pub fn resolve(snapshot: DescriptorSnapshot, reserved: u64, inbound_held: u64) -> Self {
         let limit = match snapshot.limit {
             DescriptorLimit::NoPerProcessLimit => {
                 return Self::Unbounded(UnboundedReason::NoPerProcessLimit);
@@ -96,7 +111,10 @@ impl InboundCeiling {
         let Some(held) = snapshot.held else {
             return Self::Unbounded(UnboundedReason::CountUnreadable);
         };
-        let headroom = limit.saturating_sub(held.saturating_add(reserved));
+        // Inbound sockets are not spent headroom from this bound's point of
+        // view -- they are what it measures.
+        let held_excluding_inbound = held.saturating_sub(inbound_held);
+        let headroom = limit.saturating_sub(held_excluding_inbound.saturating_add(reserved));
         match u32::try_from(headroom) {
             Ok(ceiling) => Self::Bounded(ceiling),
             Err(_) => Self::Unbounded(UnboundedReason::ExceedsCounter),
@@ -118,7 +136,7 @@ mod tests {
     #[test]
     fn headroom_is_the_limit_minus_what_is_open_and_promised() {
         assert_eq!(
-            InboundCeiling::resolve(soft(1024, 64), 12),
+            InboundCeiling::resolve(soft(1024, 64), 12, 0),
             InboundCeiling::Bounded(948)
         );
     }
@@ -127,7 +145,7 @@ mod tests {
     fn a_soft_limit_of_zero_admits_nothing() {
         // Distinct from a failed probe: the OS answered, and the answer is none.
         assert_eq!(
-            InboundCeiling::resolve(soft(0, 0), 0),
+            InboundCeiling::resolve(soft(0, 0), 0, 0),
             InboundCeiling::Bounded(0)
         );
     }
@@ -135,15 +153,15 @@ mod tests {
     #[test]
     fn commitments_past_the_limit_saturate_at_zero() {
         assert_eq!(
-            InboundCeiling::resolve(soft(64, 64), 32),
+            InboundCeiling::resolve(soft(64, 64), 32, 0),
             InboundCeiling::Bounded(0)
         );
     }
 
     #[test]
     fn every_promised_descriptor_costs_one_slot() {
-        let without = InboundCeiling::resolve(soft(1024, 64), 0);
-        let with = InboundCeiling::resolve(soft(1024, 64), 64);
+        let without = InboundCeiling::resolve(soft(1024, 64), 0, 0);
+        let with = InboundCeiling::resolve(soft(1024, 64), 64, 0);
         assert_eq!(without, InboundCeiling::Bounded(960));
         assert_eq!(with, InboundCeiling::Bounded(896));
     }
@@ -151,7 +169,7 @@ mod tests {
     #[test]
     fn a_raised_finite_limit_is_honoured() {
         assert_eq!(
-            InboundCeiling::resolve(soft(524_288, 64), 12),
+            InboundCeiling::resolve(soft(524_288, 64), 12, 0),
             InboundCeiling::Bounded(524_212)
         );
     }
@@ -163,7 +181,7 @@ mod tests {
             held: Some(0),
         };
         assert_eq!(
-            InboundCeiling::resolve(snapshot, 0),
+            InboundCeiling::resolve(snapshot, 0, 0),
             InboundCeiling::Unbounded(UnboundedReason::ExceedsCounter)
         );
     }
@@ -175,7 +193,7 @@ mod tests {
             held: Some(12),
         };
         assert_eq!(
-            InboundCeiling::resolve(snapshot, 0),
+            InboundCeiling::resolve(snapshot, 0, 0),
             InboundCeiling::Unbounded(UnboundedReason::Unlimited)
         );
     }
@@ -187,7 +205,7 @@ mod tests {
             held: None,
         };
         assert_eq!(
-            InboundCeiling::resolve(snapshot, 0),
+            InboundCeiling::resolve(snapshot, 0, 0),
             InboundCeiling::Unbounded(UnboundedReason::NoPerProcessLimit)
         );
     }
@@ -199,7 +217,7 @@ mod tests {
             held: Some(4),
         };
         assert_eq!(
-            InboundCeiling::resolve(snapshot, 0),
+            InboundCeiling::resolve(snapshot, 0, 0),
             InboundCeiling::Unbounded(UnboundedReason::LimitUnreadable)
         );
     }
@@ -211,8 +229,32 @@ mod tests {
             held: None,
         };
         assert_eq!(
-            InboundCeiling::resolve(snapshot, 0),
+            InboundCeiling::resolve(snapshot, 0, 0),
             InboundCeiling::Unbounded(UnboundedReason::CountUnreadable)
         );
+    }
+
+    #[test]
+    fn live_inbound_does_not_shrink_the_ceiling_that_measures_it() {
+        // The property the runtime re-derive needs: deriving under load must
+        // give the same answer as deriving at rest. An inbound socket sits
+        // inside `held`, so without excluding it the ceiling would fall by one
+        // for every peer already connected -- charged as spent headroom AND
+        // measured against the smaller result.
+        let at_rest = InboundCeiling::resolve(soft(1024, 64), 12, 0);
+        let under_load = InboundCeiling::resolve(soft(1024, 64 + 300), 12, 300);
+        assert_eq!(
+            at_rest, under_load,
+            "the ceiling must not depend on how many peers were connected when it was derived"
+        );
+    }
+
+    #[test]
+    fn excluding_inbound_never_underflows_or_inflates() {
+        // A count larger than `held` cannot mint headroom: saturating
+        // subtraction floors it, so the worst case is the whole held set
+        // excluded, never a negative that wraps into a huge ceiling.
+        let absurd = InboundCeiling::resolve(soft(1024, 64), 12, u64::MAX);
+        assert_eq!(absurd, InboundCeiling::Bounded(1024 - 12));
     }
 }
