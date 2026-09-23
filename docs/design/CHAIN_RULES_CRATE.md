@@ -229,15 +229,19 @@ pub enum Flag { Consensus, Policy }
 
 /// How a row is held: not yet; by a rule type the per-block stages run; by a
 /// rule type this crate enforces at another site (slice 3 Q4 — CEN-E5 at
-/// writer open; A1/A4 take it at cutover); by the C++ ingest driver until
-/// cutover (slice 1 Q2). `EnforcedAt` and `HeldByCxx` both leave
-/// `RuleSet::enforced()` (no per-block coverage can contain them); only
-/// `EnforcedAt` counts as implemented — the enforcement is Rust's.
+/// writer open; A1/A4 take it at cutover); by construction — the type system
+/// or the wire's parser makes the violation unrepresentable, with a falsifier
+/// the gate asserts (slice 4 Q4 — CEN-F2, F8, F19, F21); by the C++ ingest
+/// driver until cutover (slice 1 Q2). `EnforcedAt`, `ByConstruction` and
+/// `HeldByCxx` all leave `RuleSet::enforced()` (no per-block coverage can
+/// contain them); the first two count as implemented — the enforcement is
+/// Rust's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RowStatus {
     Pending,
     Implemented,
-    EnforcedAt, // unit: the path and the proof test stay on the registry entry
+    EnforcedAt,     // unit: the path and the proof test stay on the registry entry
+    ByConstruction, // unit: the property path and the falsifier stay on the entry
     HeldByCxx,
 }
 
@@ -830,15 +834,20 @@ that slice). **After the slice-4 precursor (2026-09-21):** `consensus:
 implemented 18 / validator-enforced 150   held-by-cxx 2   at-open 1   enforced
 152   ratified 126 / enforced 152` — the denominator moved for the first
 time: CEN-F12, the dead decomposed-denomination gate, went to bucket 3 and
-was deleted with its C++ (Q2 (a)); nothing was ported. **After the tx_extra
-cutover (2026-09-23):** `consensus: implemented 18 / validator-enforced 151
-held-by-cxx 2   at-open 1   enforced 153   ratified 127 / enforced 153` —
-the denominator moved up: CEN-I20, the coinbase extra grammar
+was deleted with its C++ (Q2 (a)); nothing was ported. **After slice 4
+(2026-09-22):** `consensus: implemented 34 / validator-enforced 150
+held-by-cxx 2   at-open 1   by-construction 4   enforced 152   ratified 126 /
+enforced 152` (sixteen 4.F rows; the `by-construction` term added by that
+slice — F2, F8, F19, F21). **After the tx_extra cutover (2026-09-23):**
+`consensus: implemented 34 / validator-enforced 151   held-by-cxx 2
+at-open 1   by-construction 4   enforced 153   ratified 127 / enforced 153`
+— the denominator moved up: CEN-I20, the coinbase extra grammar
 (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′), minted with its implementation in
-`shekyl-wire` and registered pending here beside CEN-I19; slice 4 wires
-`shekyl_wire::tx_extra::check_tx_extra_shape` (I19 + I20 in one function)
-rather than minting either. The figure moves with each slice and the landing
-PR quotes its own.
+`shekyl-wire` and registered pending here beside CEN-I19; the 4.I slice
+(slice 6) applies `shekyl_wire::tx_extra::check_tx_extra_shape` (I19 + I20
+in one function) rather than minting either — slice 4 landed without it
+(`CHAIN_RULES_SLICE_4.md` S21). The figure moves with each slice and the
+landing PR quotes its own.
 
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.
@@ -1406,7 +1415,10 @@ Neither is a rule to port; both are properties of the surface.**
   slice that consumes `RuleSetId` from the store lands, with only
   `GENESIS` issued and no recorded below-anchor decision.
 - **`ChainView` exposes no recorded transaction bytes without a row and
-  an above-`W` marking** (`F29`; `PDM-Q3`'s instrument). At `645d09dc3`
+  an above-horizon marking** (`F29`; `PDM-Q3`'s instrument; written
+  "above-`W`" — `PDM-Q2` retired `W` on 2026-09-22, the horizon is the epoch
+  boundary after a shard's freeze epoch, and the marking's meaning is
+  unchanged: a rule that reads a body a discarding node may not hold). At `645d09dc3`
   the trait's surface is `has_key_image`, `block_at` (hash + header),
   `root_at` — no body accessor — and round-1 Q3 (§3.3) already makes a
   view field conditional on a named `CenRow`. So the residual set of
@@ -1415,10 +1427,10 @@ Neither is a rule to port; both are properties of the surface.**
   surface held as a standing property: a recorded-body accessor, if one
   ever arrives, returns the discarded case as a variant (the `AtHeight`
   discipline — absence is matched, never `?`'d away), and every rule
-  that takes the recorded arm is by construction an above-`W` rule and
+  that takes the recorded arm is by construction an above-horizon rule and
   says so in its row. *Falsifier:* a `ChainView` method returning
   recorded tx bytes with no `CenRow` justifying it, or a rule matching
-  its recorded arm without an above-`W` marking. This is compile-shaped,
+  its recorded arm without an above-horizon marking. This is compile-shaped,
   not a grep; it does not discharge `PDM-Q-F8` (the C++ path still reads
   leaves at `blockchain.cpp:5327`), it says where the instrument lives
   once the validator is this crate.

@@ -112,7 +112,7 @@ greped-and-assumed. Line numbers are against `e63701676`.
 | File:line | Function | Disposition |
 |-----------|----------|-------------|
 | `src/crypto/pow_randomx.cpp:16` | `RandomXPowSchema::hash` | swap → FFI hash |
-| `src/cryptonote_basic/cryptonote_format_utils.cpp:1488` | `get_block_longhash` (blobdata overload) | swap → FFI hash |
+| `src/cryptonote_core/cryptonote_tx_utils.cpp:257` (was `cryptonote_format_utils.cpp:1488` at plan time; re-anchored 2026-09-23) | `get_block_longhash` (blobdata overload) | swap → FFI hash |
 | `src/cryptonote_core/cryptonote_tx_utils.cpp` (line 869 at pin `e63701676`; now `:755`) | `get_altblock_longhash` | swap → FFI hash |
 
 Dead (RPC-payment, **left untouched** per §1.2 #1):

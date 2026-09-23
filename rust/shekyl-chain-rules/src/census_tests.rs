@@ -86,6 +86,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
     // change here rather than a quiet numerator move. Slice 1: the six
     // predicate rows of 4.A/4.B (`CHAIN_RULES_SLICE_1.md` §3). Slice 2: 4.C
     // (`CHAIN_RULES_SLICE_2.md` §2, commit 4), then 4.D by its commits.
+    // Slice 3: E1 (E5 is at-open, not here). Slice 4: the 4.F predicates
+    // and definitions (`CHAIN_RULES_SLICE_4.md` Q1 (a)); F2/F8/F19/F21 hold
+    // by construction and are not `Implemented` either.
     let implemented: Vec<CenRow> = CenRow::ALL
         .iter()
         .copied()
@@ -111,7 +114,29 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::D6,
             CenRow::D7,
             CenRow::E1,
+            CenRow::F1,
+            CenRow::F3,
+            CenRow::F4,
+            CenRow::F5,
+            CenRow::F6,
+            CenRow::F7,
+            CenRow::F9,
+            CenRow::F10,
+            CenRow::F11,
+            CenRow::F13,
+            CenRow::F15,
+            CenRow::F20,
         ]
+    );
+    let by_construction: Vec<CenRow> = CenRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::ByConstruction)
+        .collect();
+    assert_eq!(
+        by_construction,
+        [CenRow::F2, CenRow::F8, CenRow::F19, CenRow::F21],
+        "slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter"
     );
     assert!(PolicyRow::ALL
         .iter()
@@ -151,7 +176,9 @@ fn registries_are_the_expected_size_at_this_increment() {
     // to bucket 3 and was deleted with its C++ in the same PR (E6 slice 4
     // Q2 (a)). 152 → 153 on 2026-09-23: CEN-I20 (the coinbase extra
     // grammar, TXE-Q6′) minted with its implementation in shekyl-wire —
-    // pending here, like I19, until slice 4 wires `check_tx_extra_shape`.
+    // pending here, like I19, until the 4.I slice (slice 6) wires
+    // `check_tx_extra_shape` — I19 + I20 in one function; slice 4 (4.F)
+    // landed 2026-09-22 without either, as CHAIN_RULES_SLICE_4.md S21 records.
     assert_eq!(CenRow::ALL.len(), 153);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }

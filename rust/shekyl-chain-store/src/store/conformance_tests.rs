@@ -201,6 +201,11 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
                 hash: cand.block.hash(),
                 header: cand.block.header.clone(),
                 cumulative_difficulty: work,
+                // What the store records for this chain: the passed-through
+                // emission fact, and a tx count that stays zero because no
+                // fixture block lists a transaction.
+                coins_generated: facts(h, 0).coins_generated.value,
+                cumulative_tx_count: 0,
             },
             facts(h, 0).root_after.value,
         );
@@ -331,6 +336,8 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
                 hash: b.block.hash(),
                 header: b.block.header.clone(),
                 cumulative_difficulty: work,
+                coins_generated: facts(h, 0).coins_generated.value,
+                cumulative_tx_count: 0,
             },
             late_root,
         );

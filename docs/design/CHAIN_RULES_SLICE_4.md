@@ -1,9 +1,16 @@
 # `shekyl-chain-rules` slice 4 — census 4.F, the miner transaction (DRS-E6 increment 5)
 
-**Status:** OPEN — Round 0 pre-flight, written 2026-09-21 against `dev` @
-`ea140396b` (post-#814); **Round 0.5 (2026-09-21): the shim-layer sweep the
-review ordered before Round 1 — §3.1.** Nothing implemented; §8 is the
-question set, re-posed against the swept count.
+**Status:** OPEN — **rules-crate commits 1–9 LANDED on the branch
+2026-09-22, amended 2026-09-23** (§5: sixteen 4.F rows; `implemented 34 / validator-enforced
+150`, `by-construction 4`; genesis pinned, band 1 empty; `WrongReward → F18`;
+the split epoch is `rules::miner::EMISSION_SPLIT_EPOCH`, not a `RuleSet` field;
+`Emission` is derived and recorded in coverage, not stored on `ValidatedBlock`). Round 0
+pre-flight written 2026-09-21 against `dev` @ `ea140396b`; Round 0.5 the
+shim-layer sweep (§3.1); precursor P1–P4 landed as #819; Round 1
+(2026-09-22, `dev` @ `7b9be6cd1`): the `dev` sweep (§3.2), §8 ruled. Open
+residue: F14/F14b/F16/F18 on G6 (slice 7), F17 on E3, the fee-ladder zone
+argument (§3.1 P1a). The PDM question (Q3) was answered the same day and
+absorbed.
 Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessors
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md),
 [`CHAIN_RULES_SLICE_2.md`](../completed/CHAIN_RULES_SLICE_2.md),
@@ -94,7 +101,7 @@ The census pins its C++ lines at `02c086f4b`; every 4.F pin has drifted
 | F10 | 1 | commitment masks canonical, ≠ identity, ≠ G, ≠ `zeroCommit(amount)` | `shekyl_ct_balance::check_commitment_masks` | `form` | **Land as adopted** |
 | F11 | 1 | genesis (height 0) emission accepted as configured (`GENESIS_TX` per nettype); structure validated, amount not recomputed | none in Rust (`GENESIS_TX` lives in `cryptonote_config.h:367`/`:501`/`:512`) | `validate` | **Two halves** — (a) *amount not recomputed*: the genesis arm of F13–F18, a `connecting.is_zero()` short-circuit, lands here; (b) *as configured*: the genesis block per network is release-carried data of `ReleaseAnchors`' kind — **§8 Q3** |
 | F12 | **3** (was 4) | decomposed-denomination gate was **dead code** (`version == 3` where `version` is the HF version, always 1) | — | — | **RULED Q2 (a), 2026-09-21; DELETED (P4).** Branch, predicate, table, header declaration and `canonical_amounts.cpp` gone; census row → bucket 3; registry variant removed; denominator 153 → 152 |
-| F13 | 1 | base subsidy `(MONEY_SUPPLY − already_generated) >> 21`, tail floor | `emission::base_block_reward` | `validate` | **Land** — a definition row (like D4): operand `block_at(tip).coins_generated` (view grows), value carried on the verdict |
+| F13 | 1 | base subsidy `(MONEY_SUPPLY − already_generated) >> 21`, tail floor | `emission::base_block_reward` | `validate` | **Land** — a definition row (like D4): operand `block_at(tip).coins_generated` (view grows). **Amended 2026-09-23:** derived and recorded in coverage; stored on the verdict when F14b's paid reward is what `connect` persists |
 | F14 | 1 | weight `> 2·median` rejects; `== 2·median` accepted at zero subsidy (recorded divergence) | `emission::paid_block_reward` (`apply_weight_penalty`) | `validate` | **Blocked on G6** (the median) — or pulled forward, §8 Q1 |
 | F14b | 2 | the penalty curve | same | `validate` | **Blocked on G6** |
 | F15 | 1 | release-rate multiplier over the exact window, capped to remaining supply | `release::calc_release_multiplier`, `TxVolume::window` | `validate` | **Land** — operand from F20 |
@@ -103,7 +110,7 @@ The census pins its C++ lines at `02c086f4b`; every 4.F pin has drifted
 | F18 | 1 | coinbase pays **exactly** `miner_emission + miner_fee_income` | — | `validate` | **Blocked** (F14b, F17) |
 | F19 | 1 | `frozen_segment_count` read at **parent state** or the node halts; single-read discipline | — | — | **True by construction in Rust**: `validate` runs inside the write transaction over a view branded `'id` that *is* the parent state; the reorder the C++ guards against (`m_db->height() != block_height`) is unrepresentable. Needs a status (§8 Q4) |
 | F20 | 1 | volume operand `(tx_count_sum, blocks)` over the prior `min(h, 720)` blocks; `(0, 0)` at height 0 | `TxVolume::window(sum, blocks)`; sum = `cumulative_tx_count(tip) − cumulative_tx_count(tip − 720)` | `validate` | **Land** — a definition row; two view reads (`RecordedBlock.cumulative_tx_count`) |
-| F21 | 1 | `genesis_ng_height` is **1** (the emission-split epoch operand) | — (`hardfork.cpp:383`–`:394`) | data | **Land as a `RuleSet` parameter** (`emission_split_epoch: BlockHeight::from_raw(1)`), consumed by F16; the C++ derives it from the one-row hardfork table, Rust states it |
+| F21 | 1 | `genesis_ng_height` is **1** (the emission-split epoch operand) | — (`hardfork.cpp:383`–`:394`) | data | **Land by construction** as `rules::miner::EMISSION_SPLIT_EPOCH`, pinned to the hardfork tables, consumed by F16. **Amended 2026-09-23:** a `RuleSet` field when a schedule step names a different epoch, not before |
 
 Row-count check: 22 = the `pending` entries `F1`–`F21` + `F14b`.
 
@@ -292,6 +299,60 @@ ahead of the slice's rule commits and reviewable on its own.
   removed; the gate reports `validator-enforced 150 / enforced 152`; §3.1
   and Table 3 figures moved (`4.F 13/4/4/21`).
 
+### 3.2 Round 1 sweep (2026-09-22) — what moved on `dev` between the pre-flight pin and Round 1
+
+`ea140396b` → `7b9be6cd1` (#815–#823). Read at source, not from PR titles;
+the pre-flight's blockers and Q7's "no cross-lane edit" were re-checked
+rather than inherited (rule 22: a blocker's condition can expire and look
+exactly like pending).
+
+- **S-CURVE landed (#815/#818, DRS-E1 increment 7) — F17's blocker is not
+  what §2 named.** `ReadSnapshot::curve_tree() -> CurveTreeState { root,
+  depth, leaf_count }` (`store/read.rs:793`, `curve_reads.rs`) is the read
+  §2 said did not exist. It exists; **the writer does not**: the summary
+  row is `EMPTY`, written by the seal, until DRS-E3 populates the tree
+  (`curve_reads.rs` module docs: "SI-11 armed by the reads until E3
+  writes"). A `ChainView::curve_tree_leaf_count()` fed from it today would
+  return `0` on every replayed chain — a real read of a table nothing
+  writes, which is the passed-through-fact shape Q1 (c) rejected. F17's
+  operand `n = frozen_segment_count(leaf_count)` is therefore blocked on
+  **DRS-E3**, not S-CURVE. Falsify by: `curve_tree().leaf_count > 0` after
+  replaying a chain with at least one output. Recorded in §6.
+- **E2's mutation family landed (#822) and names 4.F rows.**
+  `shekyl-chain-ingest/src/mutation.rs`: `Mutation::WrongReward` (the
+  coinbase's first output amount `+ REWARD_OFF_BY`) expects **CEN-F13** at
+  `ExpectedPlace::Unnamed`, and the test's branch is chosen by
+  `CenRow::status` at every run — `Pending` pins "the block connects",
+  `Implemented` asserts `(height, InvalidBlock { rule: F13, locus: the
+  place })`, and an `Unnamed` place under `Implemented` "is a failed
+  assertion, not a guessed block locus" (`DRS_E2_REPLAY_DRIVER.md` §3.10
+  row `WrongReward`; `:470`: the place is Unnamed "until 4.F and 4.G name
+  their locus"). Two consequences this slice must answer, not discover
+  at CI:
+  1. **F13 is a definition row, not the predicate that refuses a wrong
+     amount.** F13 states the base subsidy (the D4 shape, carried on the
+     verdict); the row whose refusal a wrong coinbase amount trips is
+     **F18** (exact payout), which is blocked on G6 with F14/F14b/F16.
+     If this slice marks F13 `implemented` and lands F18 `pending`, the
+     `WrongReward` test flips to expecting a refusal by F13 and the block
+     connects — a red test that names the wrong row. The spec's row is
+     mis-keyed; **Q8**.
+  2. **Whatever place Q6 chooses for the coinbase must land in
+     `ExpectedPlace` and in §3.10 in the same PR** — a one-arm edit in
+     `shekyl-chain-ingest` and a spec row edit in a DRS-E2 document. Q7's
+     "no cross-lane edit is foreseen" is false; the edit is small, named,
+     and Q6 decides its content. Amended in §8.
+- **`BlockHeight` grew `checked_add` / `checked_sub` / `ordinals_until`
+  (#820).** F6's unlock-window arithmetic (`height + window` compared to
+  the coinbase's `unlock_time`) has a checked form to use; no blocker.
+- **#823 deleted the C++ tx-data prune; #821 the pruning-seed wire; #816
+  the WSS bench timing; #817 wallet ordinals.** None touches 4.F, the
+  view, or the rules crate.
+- **The precursor (#819) landed**, so Q1 is now asked, against sixteen
+  landable rows (F1–F11, F13, F15, F19, F20, F21) and five blocked (F14,
+  F14b, F16, F18 on G6; F17 on E3). No open PR touches
+  `shekyl-chain-rules`, the store's view, or `economics.h` (`gh pr list`:
+  none open).
 
 ---
 
@@ -300,17 +361,20 @@ ahead of the slice's rule commits and reviewable on its own.
 - **`RecordedBlock` grows `coins_generated: AtomicUnits` and
   `cumulative_tx_count: u64`** (projection edits in `BatchView::block_at` and
   the mock; the F11 conformance harness of slice 2 covers both sides).
-- **`RuleSet` grows two parameters:** `mined_money_unlock_window: BlockCount`
-  (60; F6) and `emission_split_epoch: BlockHeight` (1; F21). Both are data the
-  C++ derives from constants / the one-row hardfork table; Rust states them.
-- **Definition rows carried on the verdict** (the D4 shape): `base_subsidy`
-  (F13), `tx_volume` (F20), and — when their operands exist — the paid
-  reward (F14b/F15), the split (F16) and the burn (F17), which is what
-  `connect` needs to derive `coins_generated` and `burned` (S-CHAIN-W's
-  `DELETED_BY`) and drop two more passed-through facts. **This slice can
-  delete neither**: `coins_generated` needs the *paid* reward (F14b), and
-  `burned` needs F17's operand. The record at close states `passed_through`
-  6 → 6, with the deletions owed to the increments that land F14b and F17.
+- **`RuleSet` grows one parameter:** `mined_money_unlock_window: BlockCount`
+  (60; F6), the C++ `#define`, because F6 reads it. CEN-F21's epoch is
+  `rules::miner::EMISSION_SPLIT_EPOCH` (1, pinned to the hardfork tables) —
+  **amended 2026-09-23:** a `RuleSet` field with no reader was copied into
+  every rule-set mismatch. It joins `RuleSet` when a schedule step names a
+  different epoch.
+- **Definition rows derived and recorded** (the D4 shape, amended
+  2026-09-23): F11/F13/F15/F20 run in `Emission::derive` and stamp coverage.
+  The priced value stays off `ValidatedBlock` until F14b produces the paid
+  reward `connect` persists as `coins_generated`. **This slice can delete
+  neither** passed-through fact: `coins_generated` needs that paid reward,
+  and `burned` needs F17's operand. The record at close states
+  `passed_through` 6 → 6, with the deletions owed to the increments that
+  land F14b and F17.
 - **A miner-transaction rule class.** F1–F10 judge `block.miner_transaction`
   with `Locus::Miner`-shaped refusals; `tx_form` is the per-listed-tx path
   the pool shares and the coinbase "never passes the H path" (census F8
@@ -321,19 +385,63 @@ ahead of the slice's rule commits and reviewable on its own.
 
 ---
 
-## 5. Fixtures per row and commit plan — deferred to Round 1
+## 5. Fixtures per row and commit plan — LANDED on the branch 2026-09-22
 
-Written once §8 settles which rows land in this slice. Every landed
-predicate row gets its negative fixture first; every definition row a value
-pin against the C++ (the 81-vector emission KAT already pins
-`block_reward_with_penalty`; F15/F16/F17 need KATs at the shim boundary).
+Written once §8 settled (Round 1 rulings, 2026-09-22). Every landed
+predicate row has its negative fixture asserting **the row at the miner
+place**; every definition row a value pin against `shekyl-economics`
+called with the same operands (the body the C++ marshals to); every
+by-construction row a falsifier the gate asserts (`rules/miner_tests.rs`).
+
+**Commits, in Q7's order (rules first; view growth where the rules need it;
+the ingest/spec re-key ahead of the row it protects):**
+
+| # | Commit | What |
+| --- | --- | --- |
+| 1 | `RowStatus::ByConstruction` (Q4) | The fourth status; `by_construction(property, "falsifier")`; the gate's `#[test]`-or-`doctest:<item>` falsifier check; excluded from per-block completeness like `EnforcedAt`. No row takes it yet |
+| 2 | `RuleSet` parameters (Q5) | `mined_money_unlock_window` (60), pinned to `cryptonote_config.h` rather than restated. The split epoch landed here as a field and was moved off `RuleSet` by #10 |
+| 3 | `RecordedBlock` grows | `coins_generated`, `cumulative_tx_count` — store projection, harness, mock-vs-store conformance |
+| 4 | `chain-ingest`: `WrongReward → F18`, `ExpectedPlace::Miner` (Q6, Q8) | The one cross-lane edit, landed **before** F13 flips so the family is green at every commit; `DRS_E2_REPLAY_DRIVER.md` §3.10 row |
+| 5 | `rules/miner.rs` — sixteen rows (Q1 (a)) | F1/F3/F7/F9/F10 in `form`; F4/F5/F6 in `validate`; F11/F13/F15/F20 derived by `Emission::derive` and recorded in coverage (not stored on the verdict — #10); F2/F8/F19/F21 by construction. `Corrupt::TxCountNotMonotone` ↔ store `StoreInvariant::FoldNotMonotone` (SI-13, a new register row: a recorded fold never decreases, observed by the validator like SI-10). `fixture::coinbase(height)` becomes a valid coinbase; the store's and ingest's private copies delegate to it. The fixture's unlock time reads `RuleSet::mined_money_unlock_window` (#10) |
+| 6 | Genesis pinned (Q3) | `ReleaseAnchors` carries each public network's genesis identity — as a `genesis` pin apart from the checkpoints, per the PDM answer (§8 Q3): verified by equality (E1 at 0, E5 at open), in no trust band, `current()` `None`; derived in test from `cryptonote_config.h` through the genesis tool and held equal to `shekyl_rpc_types::genesis_hash_for` |
+| 7 | SI-13 | The store-invariant register is a bijection, so `FoldNotMonotone` could not ride SI-8's row: SI-13 (a recorded fold never *decreases*, observed by the validator — SI-8 guards the write, SI-13 the read), row 13 |
+| 8 | Docs | This section; census 4.F pins re-resolved with each row's Rust home; contract stamp; index; DRS row; FOLLOWUPS; CHANGELOG |
+| 9 | Genesis is a pin, not an anchor (Q3, the PDM answer) | Commit 6 amended: `genesis` a separate field, `Anchor`s at height `≥ 1` by the compile-time gate, `current()` `None` on every public network; the charter's record is `PDM-Q5`'s own amendment (#824); FOLLOWUPS row closed |
+| 10 | Review: unread consensus state leaves the copied types | `EMISSION_SPLIT_EPOCH` is the F21 constant F16 will pass to `compute_emission_split`; it is not a `RuleSet` field until a schedule step names a different epoch. `rust/clippy.toml` (the workspace `large-error-threshold`) is deleted with the field. `Emission::derive` still records F11/F13/F15/F20; the priced value stays off `ValidatedBlock` until F14b's paid reward. `fixture::coinbase` builds `unlock_time` from the rule set's window |
+
+**Figures at landing:** `consensus: implemented 34 / validator-enforced 150
+held-by-cxx 2 at-open 1 by-construction 4 enforced 152 ratified 126 /
+enforced 152`; `4.F 16 / 21` (F14, F14b, F16, F18 pending on G6; F17 on
+E3). Coverage over a well-formed candidate: 29 rows.
+
+**What the fixtures found while landing:**
+
+- The harness's `fixture::coinbase` had no inputs and no outputs; the
+  store's and the ingest's private coinbases had keys that were not
+  points. Three fixtures, none a coinbase the rules accept — the
+  `RD-F16` divergence made concrete. One definition now
+  (`fixture::coinbase(height)`: `G` as key, `2·G` as mask, both pinned
+  through `shekyl-ct-balance`), and the other two delegate.
+- A long-chain fixture for F20 (`W + 2` blocks) tripped SI-10 before it
+  reached F20: `recorded()` blocks carry zero work. `recorded_with_emission`
+  gives them work that grows with the timestamp — D4's window is not the
+  fixture's subject, but it reads what is there.
+- The only `Err` the emission functions return is the tail subsidy's own
+  overflow, a parameter-set fact independent of any chain read. Reporting
+  it per block as a `Fault::Corrupt` would have handed the store a fault
+  it maps to no invariant; `economics()` prices the tail once when the
+  parameters resolve and stops the node there, and the per-block path is
+  total (`priced`, with the pin `shipped_parameters_price_the_tail`).
 
 ---
 
 ## 6. What this slice does not build
 
-- G6/G6b (the medians) unless Q1 pulls them in; F14/F14b/F18 with them.
-- The curve-tree leaf-count read (S-CURVE's); F17's *row* with it.
+- G6/G6b (the medians) — Q1 ruled (a); F14/F14b/F16/F18 with them, in slice 7 (registry `pending`; `WrongReward` in E2's family keys to F18 and pins "connects" until then).
+- F17's *row*: its operand `n = frozen_segment_count(leaf_count)` reads a
+  tree DRS-E3 has not written (§3.2 — S-CURVE's read exists and returns
+  the seal's `EMPTY`). Falsify by `curve_tree().leaf_count > 0` after a
+  replay with outputs; the row lands with E3, not with a read of zero.
 - 4.H fee validity (slice 5); 4.G aggregation (slice 7).
 - The `coins_generated` / `burned` `ConnectFacts` deletions (owed to the
   landings of F14b and F17).
@@ -348,12 +456,24 @@ pin against the C++ (the 81-vector emission KAT already pins
   shim sites and one homeless constant (F5 had found two); F16 moves to the
   blocked set; "adopted" corrected to three rows; the precursor P1–P4 named
   and sequenced ahead of Round 1.
+- **Precursor landed (2026-09-22, #819 → `b2dd94405`).** P1–P4 as their own
+  PR; FL-R16c BUILT; CEN-F12 deleted (Q2 (a)); denominator 153 → 152.
+- **Round 1 (2026-09-22, `7b9be6cd1`).** The `dev` sweep (§3.2): F17's
+  blocker re-keyed S-CURVE → DRS-E3 (the read landed, the writer has not);
+  E2's mutation family names F13 as `WrongReward`'s refuser and needs the
+  coinbase's place — Q8 posed, Q7 amended; Q1 asked against the corrected
+  count. **Ruled the same day:** Q1 (a), Q3 (a) with one question for the
+  PDM lane, Q4 (a), Q5 yes, Q6 reuse `TxSlot::Miner` — the `ExpectedPlace`
+  landing being the important half, Q7 as amended, Q8 (a).
+- **Landed on the branch (2026-09-22).** Nine commits per §5. Sixteen rows;
+  `implemented 18 → 34`, `by-construction 0 → 4`. The 4.F census pins
+  re-resolved with each row's Rust home.
 
 ---
 
-## 8. Questions for the reviewer — Round 0
+## 8. Questions for the reviewer — Round 0, re-posed for Round 1 (2026-09-22)
 
-- **Q1 — the median (F4), re-posed against §3.1's count.** F14, F14b, F16
+- **Q1 — the median (F4), re-posed against §3.1's count. RULED (a), 2026-09-22; landed.** F14, F14b, F16
   and F18 need the effective median in force for the candidate, which is
   CEN-G6/G6b's derivation and exists nowhere in Rust (F16 joined the blocked
   set in the sweep: its operand is the *paid* reward). Three arms: **(a)**
@@ -374,7 +494,9 @@ pin against the C++ (the 81-vector emission KAT already pins
   coinbase slice would bury the divergence in the wrong PR. The cost is
   that F18 — the row that *is* "the coinbase is right" — waits one slice.
   **Q1 is not asked until the §3.1 precursor has landed** (the review's
-  ordering: the sweep changes what Round 1 rules on).
+  ordering: the sweep changes what Round 1 rules on). **Asked now
+  (2026-09-22): the precursor is on `dev` and the count is sixteen; F17 is
+  blocked on E3, not S-CURVE (§3.2), which does not change the arms.**
 - **Q2 — F12, the dead gate.** **(a)** census amendment: F12 → bucket 3
   (*"dead code; deleted"*) **and** delete the branch, `is_valid_decomposed_amount`
   and `valid_decomposed_outputs[]` in the same PR (rule 60's instruction;
@@ -385,15 +507,16 @@ pin against the C++ (the 81-vector emission KAT already pins
   moves the denominator honestly (153 → 152, `validator-enforced` 151 →
   150) rather than counting a rule that never ran as ported.
   **RULED (a), 2026-09-21. Landed as P4 (§3.1).**
-- **Q3 — genesis as the height-0 anchor (F6).** F11's "as configured" is a
+- **Q3 — genesis as the height-0 anchor (F6). RULED (a), 2026-09-22; landed — and amended the same day by the PDM lane's answer: `assumevalid = 0` is *no anchor at all* (`Trust::Full`, band 1 empty); genesis is not trusted with the binary, it is *defined* by it — verified by equality, in no trust band. So (a)'s mechanism stands and (a)'s framing does not: `ReleaseAnchors` carries the genesis identity as a separate `genesis` pin, `Anchor`s are the checkpoints at height `≥ 1` (compile-time gate; `for_tests` refuses 0), `current()`/`covers()` — what `Trust::below_anchor` is minted from — see checkpoints only, and one equality accessor (`expected_at`) serves E1 at height 0 and at anchored heights alike; E5 walks `pins()`, genesis first. The reading was ruled on the release gate: PDM `:304`'s verifying node runs `assumevalid = 0`; under "genesis is the anchor" it would connect height 0 as `BelowAnchor(0)`, record the proof rows' absence in coverage and provenance, and rest the release on a file the charter calls "never parity evidence" — circular. Behaviourally the two coincide at height 0 (genesis has no proofs to skip); the persisted state differs. Recorded: `anchors.rs` module docs, `trust.rs`, `band_one_is_empty_until_the_first_checkpoint_release`, `for_tests_refuses_an_anchor_at_genesis`; the charter's own record is `ARCHIVAL_PRUNED_DAEMON_MODE.md` `PDM-Q5`'s amendment of 2026-09-22 (#824), which supersedes the gloss this branch had written there. The FOLLOWUPS row is closed.** F11's "as configured" is a
   per-network block identity the binary carries — the definition of an
   anchor. **(a)** put `(0, genesis_hash)` into `ReleaseAnchors::for_network`
   for the three public networks: E1 then judges genesis, E5 refuses a
   wrong-network file at open, both already fixtured; the slice-3 test
   `no_release_has_shipped_an_anchor_yet` is refuted *by design* and replaced
-  by `the_only_anchor_is_genesis_until_the_first_checkpoint_release`; PDM-Q5's
-  "`C`" becomes "the last anchor above genesis" where the distinction
-  matters (band 1 = `≤ C` still reads correctly: below genesis is nothing).
+  by `band_one_is_empty_until_the_first_checkpoint_release`; PDM-Q5's "`C`"
+  stays the last *checkpoint* — SUPERSEDED as first written ("the last
+  anchor above genesis"), by the PDM answer above: genesis is not an anchor
+  of any rank, so `C` needs no re-reading.
   **(b)** a separate `GenesisBlock::for_network(net) -> BlockHash` beside
   `RuleSchedule`, consumed by an F11 rule at `connecting.is_zero()`, leaving
   the anchor table for checkpoints only. **Default: (a)** — one mechanism
@@ -401,9 +524,11 @@ pin against the C++ (the 81-vector emission KAT already pins
   behaviours F11 asks for are exactly E1 and E5. The genesis hashes come
   from `GENESIS_TX` + the genesis header per network; the Rust side derives
   them once (the genesis tool's pins or a KAT against `cryptonote_config.h`)
-  and the table holds the result as data. PDM lane to confirm the reading of
-  `C`.
-- **Q4 — a status for a row true by construction (F9).** F19 is enforced by
+  and the table holds the result as data. *"One kind of fact" was the part
+  the PDM answer refuted: the landed shape is (a)'s one table and one
+  equality read with (b)'s separation of genesis from the checkpoints
+  inside it.*
+- **Q4 — a status for a row true by construction (F9). RULED (a), 2026-09-22; landed with four instances (F2, F8, F19, F21).** F19 is enforced by
   the view brand and the transaction boundary, falsified by a
   `compile_fail` doctest, with no runtime site and no per-block coverage.
   **(a)** `RowStatus::ByConstruction { property, falsifier }` — like
@@ -415,19 +540,40 @@ pin against the C++ (the 81-vector emission KAT already pins
   that a mis-ordered read cannot be written> }` — stretches "site" past a
   function; **(c)** `implemented` with a rule whose check is a no-op —
   a fixture that cannot fire. **Default: (a).**
-- **Q5 — constants as `RuleSet` parameters.** F6's unlock window (60) and
-  F21's split epoch (1) become `RuleSet` fields with a fixture each,
-  following `header_major_version` and `difficulty`. F6's constant lives in
-  `cryptonote_config.h`, not `config/` (the census says so); the parameter
-  is pinned by test to the C++ value. **Default: yes, both.**
-- **Q6 — the coinbase's locus.** Refusals on F1–F10 point at the miner
+- **Q5 — constants as `RuleSet` parameters. RULED yes, 2026-09-22; the window landed; the epoch amended 2026-09-23.** F6's unlock window (60) is a `RuleSet` field because F6 reads it, pinned by test to `cryptonote_config.h` (not a `config/` key). F21's split epoch (1) was ruled onto `RuleSet` the same day and **amended on review:** it is `rules::miner::EMISSION_SPLIT_EPOCH`, pinned to the three hardfork tables, and joins `RuleSet` when a schedule step names a different epoch. A field no row read was part of rule-set equality and was copied into `Stale::RuleSet` and `StoreCannot::RuleSetNotInForce` (the pair at 144 bytes), which is why `rust/clippy.toml` raised the workspace `large-error-threshold`; that file is deleted with the field. The same review keeps `Emission` off `ValidatedBlock`: `derive` records F11/F13/F15/F20, and the priced value is what F14b reads inside `validate`. `connect` persists F14b's paid reward, which this value is not. **Default was: yes, both.**
+- **Q6 — the coinbase's locus. RULED reuse `TxSlot::Miner`, 2026-09-22; landed, with `ExpectedPlace::Miner` in E2's family — the half that closes the gap Q8's mis-key slipped through.** Refusals on F1–F10 point at the miner
   transaction; `Locus::Block` is imprecise, `TxSlot::Miner` exists for the
   per-tx path. Does the block-level miner rule refuse at `Locus::Tx(TxSlot::Miner)`
   (reusing the slot vocabulary) or does `Locus` grow a `Miner` arm?
   **Default: reuse `TxSlot::Miner`** — one vocabulary for "which transaction".
-- **Q7 — sequencing.** No in-flight PR touches `shekyl-chain-rules` or the
-  store's view today (`gh pr list`: #808 refactor, #810 wallet). The E2
-  driver calls `validate` and will pick up new coverage rows automatically;
-  no cross-lane edit is foreseen. **Default: land as one PR after Round 1**,
-  rules-crate commits first, view growth (store projection) after — the
-  store side is a projection edit, not a schema change.
+- **Q7 — sequencing. RULED as amended, 2026-09-22; followed (§5).** No in-flight PR touches `shekyl-chain-rules` or the
+  store's view today (`gh pr list`: none open at Round 1). The E2 driver
+  calls `validate` and picks up new coverage rows automatically. **Amended
+  2026-09-22 (§3.2): one cross-lane edit is required, not foreseen-absent** —
+  E2's mutation family (`shekyl-chain-ingest/src/mutation.rs`) and
+  `DRS_E2_REPLAY_DRIVER.md` §3.10 hold `WrongReward → F13, Unnamed`, and
+  the family's branch is chosen by `CenRow::status`; this slice's landing
+  changes that branch, so the row key (Q8) and the place (Q6) land in the
+  same PR, as one commit touching the ingest crate and the E2 spec row.
+  **Default: land as one PR after Round 1**, rules-crate commits first,
+  view growth (store projection) after, the ingest/spec commit last so the
+  mutation test is green at every commit — the store side is a projection
+  edit, not a schema change.
+- **Q8 — `WrongReward`'s row is mis-keyed (§3.2). RULED (a), 2026-09-22; landed. The residual the ruling named: `CenRow::status` catches "marked implemented but does not refuse"; it cannot catch "keyed to a row that was never going to refuse" — the keying is the one part the status can't check, which is why naming the place (Q6) matters more than the re-key.** E2's §3.10 names
+  **CEN-F13** as the row that refuses a coinbase whose output amount is off
+  by one. F13 is the *definition* of the base subsidy — a D4-shaped row
+  carried on the verdict, refusing nothing; the predicate a wrong amount
+  trips is **F18** (exact payout: outputs = paid reward + `miner_fee_income`),
+  blocked on G6. If F13 goes `implemented` here with F18 `pending`, the
+  family's test expects a refusal by F13 and the block connects. **(a)**
+  re-key the mutation to F18 in `mutation.rs` and §3.10 in this PR's
+  ingest commit (Q7): the `Pending` branch keeps pinning "connects" until
+  slice 7 lands F18, and flips to the right row then; F13's own coverage is
+  a value pin (the definition equals the C++'s), not a refusal. **(b)** land
+  F18 here — that is Q1 (b) by another door and is decided there. **(c)**
+  leave F13 as the key and mark F13 `implemented` — a red test naming the
+  wrong row, refused. **Default: (a)** — the census, not the family, is the
+  oracle (the family's own module docs), and the census says F18 is the
+  predicate. This is also the first instance of the family's contract
+  being exercised by a slice landing: worth the E2 lane confirming the
+  re-key reads §3.10's intent correctly.

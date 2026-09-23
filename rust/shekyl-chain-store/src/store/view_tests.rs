@@ -10,9 +10,10 @@
 //! visibility across two blocks (SCW-13), and the corrupt-read → SI-7 →
 //! poison path.
 
+use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, Fault, RuleSet, Trust};
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
+use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use super::connect_fixtures::formed;
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
@@ -31,28 +32,12 @@ fn view_fault(fault: Fault<StoreError>) -> StoreError {
     }
 }
 
-/// A coinbase the block parser accepts back (§2.5: a sole `gen` input and
-/// a `Null` ct), with one output so the per-output base arrays are
-/// non-empty. `block_at` parses the recorded blob, so the fixture must
-/// round-trip — the rules crate's inputless fixture would not.
+/// The rules harness's coinbase: round-trips through the block parser
+/// (§2.5: a sole `gen` input and a `Null` ct) and satisfies every landed
+/// 4.F row. Since slice 4 the harness fixture is the valid one; this
+/// file's private copy (keys that were not points) went with it.
 fn coinbase(height: u64) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: height + 60,
-            inputs: vec![Input::Gen(height)],
-            outputs: vec![Output {
-                amount: 0,
-                key: [0x44; 32],
-                view_tag: 1,
-            }],
-            extra: Vec::new(),
-        },
-        ct: Ct::Null(CtBase {
-            enc_amounts: vec![[0x55; 9]],
-            enc_labels: vec![[0x66; 9]],
-            commitments: vec![[0x77; 32]],
-        }),
-    }
+    fixture::coinbase(height)
 }
 
 fn block(height: u64, timestamp: u64) -> Block {
@@ -574,6 +559,8 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
                     hash: info.hash,
                     header: body.header,
                     cumulative_difficulty: info.cumulative_difficulty,
+                    coins_generated: info.coins_generated,
+                    cumulative_tx_count: info.cumulative_tx_count,
                 }),
                 "the batch view is the same body wrapped, with the row's work"
             );

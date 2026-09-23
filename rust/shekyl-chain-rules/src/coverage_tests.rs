@@ -117,20 +117,40 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
         .iter()
         .filter(|row| row.status() == RowStatus::EnforcedAt)
         .count();
+    let by_construction = CenRow::ALL
+        .iter()
+        .filter(|row| row.status() == RowStatus::ByConstruction)
+        .count();
     let mut coverage = RuleCoverage::EMPTY;
     for row in RuleSet::GENESIS.enforced() {
         coverage.insert(row);
     }
     assert!(coverage.is_complete_for(&RuleSet::GENESIS));
-    // Complete is `enforced − held − at-open`: the rows the C++ ingest
-    // driver holds (A1, A4 after slice 1) are not the validator's to
-    // evaluate, and the rows this crate enforces at another site (E5 at
-    // writer open, slice 3) can never be in a per-block coverage. The
-    // census denominator itself moves for neither.
-    assert_eq!(coverage.len(), CenRow::ALL.len() - held - at_open);
+    // Complete is `enforced − held − at-open − by-construction`: the rows
+    // the C++ ingest driver holds (A1, A4 after slice 1) are not the
+    // validator's to evaluate; the rows this crate enforces at another site
+    // (E5 at writer open, slice 3) and the rows that hold by construction
+    // (F2, F8, F19, slice 4) can never be in a per-block coverage. The
+    // census denominator itself moves for none of them.
+    assert_eq!(
+        coverage.len(),
+        CenRow::ALL.len() - held - at_open - by_construction
+    );
     assert_eq!(held, 2, "slice 1 holds exactly A1 and A4");
     assert_eq!(at_open, 1, "slice 3 enforces exactly E5 at open");
-    for row in [CenRow::A1, CenRow::A4, CenRow::E5] {
+    assert_eq!(
+        by_construction, 4,
+        "slice 4: F2, F8, F19, F21 hold by construction"
+    );
+    for row in [
+        CenRow::A1,
+        CenRow::A4,
+        CenRow::E5,
+        CenRow::F2,
+        CenRow::F8,
+        CenRow::F19,
+        CenRow::F21,
+    ] {
         assert!(!coverage.contains(row));
         assert!(!RuleSet::GENESIS.enforced().any(|r| r == row));
     }
@@ -144,7 +164,10 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
     for row in RuleSet::GENESIS.enforced().skip(1) {
         short.insert(row);
     }
-    assert_eq!(short.len(), CenRow::ALL.len() - held - at_open - 1);
+    assert_eq!(
+        short.len(),
+        CenRow::ALL.len() - held - at_open - by_construction - 1
+    );
     assert!(!short.is_complete_for(&RuleSet::GENESIS));
 }
 

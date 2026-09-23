@@ -78,7 +78,15 @@
 # Lowered 49 -> 47 on 2026-09-16 (PR #758 review): STRUCTURAL_TODO no
 # longer cites deleted tests/hash/main.cpp:192 as a live target;
 # F.C++-3 census dropped deleted wallet2.cpp path:line claims.
-dead-citations: 47
+# Lowered 47 -> 45 on 2026-09-23 (tx_extra cutover, PR #837): the PL blast-radius
+# census, which declares every file:line a records-was claim at a pinned sha
+# and forbids re-anchoring in place, moved from docs/design/ to
+# docs/audit_trail/ — the directory this gate reads as records-was — taking
+# its two already-dead rows out of the live count. The cutover's own six
+# breakages (CEN-D2's longhash anchors, the RandomX phase-3 swap table, and
+# four census rows citing the deleted C++ codec/builder/tests) were
+# re-anchored or travelled with that move; none was absorbed into the figure.
+dead-citations: 45
 
 # ── declares ──────────────────────────────────────────────────────────────────
 # Documents that have opted a leg in cannot quietly opt back out: dropping a

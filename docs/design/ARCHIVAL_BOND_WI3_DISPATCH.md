@@ -2,17 +2,19 @@
 
 
 **Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
-> **Status: implemented — in review (2026-07-05, `feat/wi3-dispatch-driver`,
-> stacked on `feat/bond-assembly`).** Gates 1–11 landed: the driver + locked
+> **Status: LANDED (2026-07-06, PR #260, `69af41a5a`).** The
+> "implemented — in review (2026-07-05, `feat/wi3-dispatch-driver`)"
+> line was the pre-merge state. Gates 1–11 landed: the driver + locked
 > seal path (`pscan/dispatch.rs`), schema v11 live (`PENDING_POST_VERSION` 11;
 > WI-3 2026-07 minted v2 for the Dispatched arm; v1 still fails closed),
 > the sweep wiring (`DispatchTick` seam in `pscan/task.rs`,
 > production store/broadcast in `pscan/start.rs`), the per-submit
 > `BondPostDispatched` emission test, and the gate-11 grep gate
 > (`scripts/ci/check_pending_post_write_path.sh` +
-> `ci/pending-post-write-path` workflow). **GF-7 acceptance stays open** per
-> the §5 reconvergence gate until WI-4's threshold artifact + live-emission
-> re-run exist. Design record below is rounds 1–2, spec-first per rule
+> `ci/pending-post-write-path` workflow). GF-7 acceptance is not an open
+> remainder: WI-4 was withdrawn in full 2026-07-23. At landing it was
+> recorded open per the §5 reconvergence gate until WI-4's threshold
+> artifact + live-emission re-run existed. Design record below is rounds 1–2, spec-first per rule
 > `05-system-thinking` (process shape per
 > `26-sub-pr-design-discipline` — this slice touches a broadcast-privacy
 > surface and a persisted-schema bump, so it gets explicit rounds). Round 2

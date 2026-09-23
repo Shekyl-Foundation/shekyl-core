@@ -88,9 +88,10 @@ impl Rule for E5 {
 }
 
 impl E5 {
-    /// The first anchor the recorded chain contradicts, if any, in height
-    /// order. Anchors above the tip are not yet checkable and are skipped,
-    /// as the C++ `continue`s past `pt.first >= blockchain_height`.
+    /// The first pin the recorded chain contradicts, if any, in height
+    /// order — the genesis identity at 0, then the anchors. Pins above the
+    /// tip are not yet checkable and are skipped, as the C++ `continue`s
+    /// past `pt.first >= blockchain_height`.
     ///
     /// `Err` is the view failing to answer — a fault, not a conflict.
     pub(crate) fn conflict_with<'id, V: ChainView<'id>>(
@@ -103,22 +104,22 @@ impl E5 {
             // above height 0 when the DB is empty).
             return Ok(None);
         };
-        for anchor in anchors.entries() {
-            if anchor.height > tip.height {
+        for (height, expected) in anchors.pins() {
+            if height > tip.height {
                 break;
             }
-            let recorded = match view.block_at(anchor.height)? {
+            let recorded = match view.block_at(height)? {
                 AtHeight::Recorded(block) => Some(block.hash),
                 // Heights at or below the tip are dense (the store's
-                // invariant); a hole at an anchored height is the file
+                // invariant); a hole at a pinned height is the file
                 // missing a block it claims to have — a conflict, with
                 // nothing recorded to name.
                 AtHeight::AboveTip => None,
             };
-            if recorded != Some(anchor.hash) {
+            if recorded != Some(expected) {
                 return Ok(Some(AnchorConflict {
-                    height: anchor.height,
-                    expected: anchor.hash,
+                    height,
+                    expected,
                     recorded,
                 }));
             }

@@ -809,7 +809,7 @@ severity-ordered; the enumeration a rule-07 criterion-3 PR pastes at
 function or passage, not per grep hit).
 
 The full census is the companion record
-[`FCMP_SPEND_LINKABILITY_CENSUS.md`](FCMP_SPEND_LINKABILITY_CENSUS.md)
+[`FCMP_SPEND_LINKABILITY_CENSUS.md`](../audit_trail/FCMP_SPEND_LINKABILITY_CENSUS.md)
 (158 rows, 256 distinct file references, produced by a subagent sweep and
 spot-checked at source: the genesis golden KAT constants, the `R1-F-2`
 retraction row, the emission leaf gate, the stale fuzz target, the

@@ -34,6 +34,7 @@ use crate::schema::{
     OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES,
     TX_OUTPUTS, UNDO_LOG,
 };
+use shekyl_chain_rules::harness::fixture;
 
 // ---------------------------------------------------------------- rows
 
@@ -222,10 +223,10 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             (0, 0),
             OutKey {
                 output_id: crate::ids::OutputStorageId::from_raw(0),
-                pubkey: shekyl_types::OneTimePubkey::from_bytes([0x40; 32]),
+                pubkey: shekyl_types::OneTimePubkey::from_bytes(fixture::G),
                 unlock_time: stored_timelock(60),
                 height: BlockHeight::from_raw(0),
-                commitment: shekyl_types::CommitmentBytes::from_bytes([0x70; 32]),
+                commitment: shekyl_types::CommitmentBytes::from_bytes(fixture::TWO_G),
             }
         )],
         "keyed (amount 0, amount_index 0) with the ct-base commitment; the key carries the index"
@@ -659,7 +660,7 @@ fn the_same_transaction_in_two_blocks_is_si3() {
     // A spend with a fresh key image each time but the SAME body cannot be
     // built (the key image is in the body), so reuse a coinbase-shaped body
     // as a listed tx: listed twice across blocks, same hash, no key image.
-    let dup = coinbase(77, 1);
+    let dup = coinbase(77);
     let b1 = candidate(1, genesis.hash(), vec![dup.clone()]);
     let b1_hash = b1.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {

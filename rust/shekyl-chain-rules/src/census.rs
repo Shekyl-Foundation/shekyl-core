@@ -85,6 +85,30 @@ pub enum RowStatus {
     /// by the gate: `held_by_cxx` would be false here — the enforcement is
     /// not the C++'s.
     EnforcedAt,
+    /// The row holds **by construction**: no runtime site evaluates it
+    /// because the type system (or the wire's parser) makes the violation
+    /// unrepresentable, and a per-block check would be a fixture that
+    /// cannot fire (`CHAIN_RULES_SLICE_4.md` Q4, ruled (a)). Three
+    /// instances at mint: CEN-F19 (`validate` runs inside the write
+    /// transaction over a view branded `'id` that *is* parent state, so
+    /// the read-point drift the C++ asserts against has no expression),
+    /// CEN-F2 (`shekyl_wire::Transaction::read` admits one version) and
+    /// CEN-F8 (`Output::read` admits one output tag). The `PDM-Q3`
+    /// instrument is the same class.
+    ///
+    /// The registry entry carries `by_construction(property, "falsifier")`:
+    /// `property` is the Rust path whose existence is compile-pinned (the
+    /// type or item that holds the property — not a rule type, so no
+    /// `ROW` assertion applies), and `falsifier` names the test in this
+    /// crate that would fail if the property lapsed — a `#[test]` that
+    /// exercises the parser, or `doctest:<item>` for a `compile_fail`
+    /// doctest on `<item>` (F19's). The gate asserts the falsifier is
+    /// defined (rule 47: a property with no way to fail is a claim).
+    ///
+    /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced), as
+    /// [`EnforcedAt`](Self::EnforcedAt) is, and counted as Rust-enforced by
+    /// the gate; unlike `EnforcedAt` there is no site that *runs*.
+    ByConstruction,
     /// Acceptance topology the C++ ingest driver decides — where a block
     /// *goes* (`ALREADY_EXISTS`, `ORPHANED`), not whether it is valid — and
     /// so not a predicate `validate` can evaluate (`CHAIN_RULES_SLICE_1.md`
@@ -126,8 +150,9 @@ pub trait Row:
 }
 
 /// `RowStatus` from an entry's status token. A status other than `pending`,
-/// `implemented(path)`, `enforced_at(path, "test")` or
-/// `held_by_cxx("file", "test")` is a macro error at the entry.
+/// `implemented(path)`, `enforced_at(path, "test")`,
+/// `by_construction(path, "falsifier")` or `held_by_cxx("file", "test")` is
+/// a macro error at the entry.
 macro_rules! census_status {
     (pending) => {
         $crate::census::RowStatus::Pending
@@ -137,6 +162,9 @@ macro_rules! census_status {
     };
     (enforced_at($path:path, $test:literal)) => {
         $crate::census::RowStatus::EnforcedAt
+    };
+    (by_construction($path:path, $falsifier:literal)) => {
+        $crate::census::RowStatus::ByConstruction
     };
     (held_by_cxx($file:literal, $test:literal)) => {
         $crate::census::RowStatus::HeldByCxx
@@ -165,6 +193,12 @@ macro_rules! census_pin {
     (enforced_at($path:path, $test:literal), $name:ident, $var:ident) => {
         census_pin!(implemented($path), $name, $var);
     };
+    // One pin: the property's home exists (G9). It is not a rule type, so
+    // there is no `ROW` to assert; the falsifier is the gate's to assert.
+    (by_construction($path:path, $falsifier:literal), $name:ident, $var:ident) => {
+        #[allow(unused_imports)]
+        use $path as _;
+    };
     (implemented($path:path), $name:ident, $var:ident) => {
         #[allow(unused_imports)]
         use $path as _;
@@ -182,7 +216,8 @@ macro_rules! census_pin {
 /// Defines one census registry enum: `pub enum Name: Flag { Var status, … }`.
 ///
 /// Per entry, `status` is `pending`, `implemented(rust::path::to::RuleType)`,
-/// `enforced_at(rust::path::to::RuleType, "test_fn_in_this_crate")` or
+/// `enforced_at(rust::path::to::RuleType, "test_fn_in_this_crate")`,
+/// `by_construction(rust::path::to::Property, "falsifier_test")` or
 /// `held_by_cxx("tests/…​.cpp", "gen_test_name")`.
 /// Entries must be listed in census §4 order restricted to the flag; the gate
 /// asserts this so `index()` is census-derived. The variant name is the census
@@ -337,27 +372,27 @@ census_rows! {
         // (slice 3 Q4 (a)); the test named is the refusal fixture.
         E5 enforced_at(crate::rules::anchors::E5, "a_recorded_block_that_is_not_the_anchor_is_the_conflict"),
         // 4.F Miner transaction (structure and emission)
-        F1 pending,
-        F2 pending,
-        F3 pending,
-        F4 pending,
-        F5 pending,
-        F6 pending,
-        F7 pending,
-        F8 pending,
-        F9 pending,
-        F10 pending,
-        F11 pending,
-        F13 pending,
+        F1 implemented(crate::rules::miner::F1),
+        F2 by_construction(shekyl_wire::transaction::TX_VERSION, "f2_the_wire_admits_one_transaction_version"),
+        F3 implemented(crate::rules::miner::F3),
+        F4 implemented(crate::rules::miner::F4),
+        F5 implemented(crate::rules::miner::F5),
+        F6 implemented(crate::rules::miner::F6),
+        F7 implemented(crate::rules::miner::F7),
+        F8 by_construction(shekyl_wire::Output, "f8_the_wire_admits_one_output_tag"),
+        F9 implemented(crate::rules::miner::F9),
+        F10 implemented(crate::rules::miner::F10),
+        F11 implemented(crate::rules::miner::F11),
+        F13 implemented(crate::rules::miner::F13),
         F14 pending,
         F14b pending,
-        F15 pending,
+        F15 implemented(crate::rules::miner::F15),
         F16 pending,
         F17 pending,
         F18 pending,
-        F19 pending,
-        F20 pending,
-        F21 pending,
+        F19 by_construction(crate::view::ChainView, "doctest:validate"),
+        F20 implemented(crate::rules::miner::F20),
+        F21 by_construction(crate::rules::miner::EMISSION_SPLIT_EPOCH, "the_emission_split_epoch_is_the_hardfork_tables_first_row"),
         // 4.G Block body (per-tx and block-level, main-chain connect)
         G1 pending,
         G2 pending,

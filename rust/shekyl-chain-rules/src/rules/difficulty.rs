@@ -66,9 +66,9 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault};
 use crate::rule_set::{DifficultyRule, RuleSet};
-use crate::rules::Rule;
+use crate::rules::{recorded, Rule};
 use crate::verdict::{InvalidBlock, Locus, Verdict};
-use crate::view::{AtHeight, ChainView, RecordedBlock};
+use crate::view::ChainView;
 
 /// The difficulty a candidate must satisfy, **non-zero by construction**
 /// (CEN-D6). The inner type is [`NonZeroU128`]: a zero target cannot be
@@ -308,19 +308,6 @@ impl D7 {
             DifficultyRule::Fixed(fixed) => Some(fixed),
         }
     }
-}
-
-/// The recorded block at `height`, which is below the connecting height
-/// and therefore present on a conforming view (a hole is the store's SI-7,
-/// reported as its fault before this arm).
-fn recorded<'id, V: ChainView<'id>>(
-    view: &V,
-    height: BlockHeight,
-) -> Result<RecordedBlock, V::Fault> {
-    Ok(match view.block_at(height)? {
-        AtHeight::Recorded(block) => block,
-        AtHeight::AboveTip => unreachable!("heights below the connecting height are recorded"),
-    })
 }
 
 /// LWMA-1's two input slices, oldest first.

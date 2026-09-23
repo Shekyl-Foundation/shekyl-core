@@ -16,6 +16,7 @@
 
 use std::collections::VecDeque;
 
+use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
@@ -82,28 +83,17 @@ pub fn root_after(height: u64) -> CurveTreeRoot {
     CurveTreeRoot::from_bytes(bytes)
 }
 
-/// A wire-valid miner transaction for `height`: the sole `Input::Gen` the
-/// wire demands (the rules harness's `fixture::coinbase` has no inputs and
-/// does not survive `Block::read`; RD-F16). Saturating, so a fixture at
-/// `u64::MAX` still serializes.
+/// The miner transaction for `height`: the rules harness's, which since
+/// slice 4 is the one definition of a coinbase every landed 4.F row
+/// accepts (sole `Input::Gen(height)`, `Null` ct, one output with a
+/// canonical key and a non-trivial mask, `unlock_time = height + 60`) and
+/// which round-trips through `Block::read`. This crate's private copy
+/// (RD-F16, minted when the harness fixture had no inputs) carried a key
+/// that was not a point and stopped connecting the day F9 landed — the
+/// coupling Q7 of that slice named: a test's fixture is cross-lane through
+/// the rules it must satisfy. Saturating at `u64::MAX` as before.
 pub fn coinbase(height: u64) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: height.saturating_add(60),
-            inputs: vec![Input::Gen(height)],
-            outputs: vec![Output {
-                amount: 0,
-                key: [0x40; 32],
-                view_tag: 1,
-            }],
-            extra: Vec::new(),
-        },
-        ct: Ct::Null(CtBase {
-            enc_amounts: vec![[0x55; 9]],
-            enc_labels: vec![[0x66; 9]],
-            commitments: vec![[0x70; 32]],
-        }),
-    }
+    fixture::coinbase(height)
 }
 
 /// Which chain a key image belongs to, so a fork's spends never collide

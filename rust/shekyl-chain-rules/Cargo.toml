@@ -23,6 +23,7 @@ license.workspace = true
 # Chain identities and the recorded facts a rule reads: BlockHeight,
 # BlockHash, TxHash, KeyImage, CurveTreeRoot.
 shekyl-types = { path = "../shekyl-types" }
+shekyl-units = { path = "../shekyl-units" }
 # The candidate's own shape — Block, BlockHeader, Transaction — and the
 # consensus hash identities (`Block::hash`, `Transaction::hash`) CEN-B6
 # defines. Deps: shekyl-crypto-hash, shekyl-curve-generators; no store.
@@ -35,6 +36,8 @@ shekyl-address = { path = "../shekyl-address" }
 # newtypes — adopted, not re-derived (slice 2, Q2). Depends on shekyl-types
 # alone; the G1 belt's closure grows by exactly this crate.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+shekyl-economics = { path = "../shekyl-economics" }
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 
 [features]
 # The negative-fixture harness (`harness.rs`: `MockChain`, `MockSubstrate`,
@@ -51,6 +54,12 @@ harness = []
 # are driven through the 4.C rules as well as through `shekyl-difficulty`.
 # Already pinned in the workspace lockfile; test-only.
 serde_json = "1"
+# The genesis pins are derived in test, not restated (slice 4 Q3): the
+# genesis tool rebuilds each network's block from cryptonote_config.h's
+# pins, and the client identity's copy of the hashes (VC-D18) must agree
+# with the table. Both workspace members; test-only.
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 
 [lints]
 workspace = true

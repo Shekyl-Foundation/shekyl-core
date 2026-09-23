@@ -453,7 +453,7 @@ falsifier is the census, not a date (rule 22).
 | `FutureTimestamp` | `timestamp` = `clock + FTL + 1` — **closes §5's FTL row** | **CEN-C1** | `validate` | Implemented | — |
 | `StaleTimestamp` | `timestamp` = `0`, at or below every MTP median | **CEN-C2** | `validate` | Implemented | — |
 | `PowUnderWrongSeed` | nonce re-mined so the longhash **satisfies the target under a wrong seed and fails it under the true seed** (D1b's `check_hash`, both legs); the pipeline claims the true seed (RD-Q5), so D2 hashes under it and D1 refuses. The seed is not in the block — "bad seed" is a block *mined* against the wrong one | **CEN-D1** | `validate` | Implemented | — |
-| `WrongReward` | the coinbase's clear output amount off by one | **CEN-F13** | `validate` (4.F) | **Pending** | the block **connects** — Rust has no emission check yet; the family pins the acceptance so the gap is a red test the moment F13 lands, not a surprise in a security review |
+| `WrongReward` | the coinbase's clear output amount off by one | **CEN-F18** *(re-keyed 2026-09-22 from F13 — E6 slice 4 Q8: F13 is the base-subsidy **definition**, a value pin that refuses nothing; the predicate a wrong amount trips is F18, exact payout. The family's branch is chosen by `CenRow::status`, so with F13 `Implemented` and the key unchanged the test would have expected a refusal F13 cannot produce.)* | `validate` (4.F) | **Pending** (blocked on CEN-G6's median, slice 7) | the block **connects** — Rust has the emission *definitions* (F13, F15, F20) but not the exact-payout check; the family pins the acceptance so the gap is a red test the moment F18 lands, not a surprise in a security review |
 | `ReorderedBodies` | two listed bodies swapped; the header's `tx_hashes` untouched | **CEN-G2** (body ↔ hash agreement) | `validate` (4.G) | **Pending** | the block **connects**. The corpus *writer and reader* refuse this shape as a source fault (RD-F15) — that is artifact hygiene, not the verdict; the in-memory family reaches `validate` with it and shows the rule is absent |
 | `DoubleSpend` | a listed spend reuses a key image an earlier block spent | **CEN-I7** (+ CEN-L1 at connect) | `validate` (4.I) | **Pending** | `validate` accepts; `connect` arms **SI-1** `KeyImageNotFresh` and the run ends in a **halt** (`PipelineFault`, the writer `Over`) — exactly C2-R8's taxonomy: *a belt firing is the validator's hole*. Pinned as the observed shape; flips to a refusal at `Locus::Input` when I7 lands |
 
@@ -466,10 +466,15 @@ already passed through, `Orphan`/`WrongRoot` use named constants no chain holds.
 
 **Place.** `Mutation::expected` is the row. `Mutation::expected_place` is
 where that row points: `Block` for the six rows implemented at the pin,
-`Input` for `DoubleSpend` (the I7 refusal this table names), and `Unnamed`
-for `WrongReward` and `ReorderedBodies` until 4.F and 4.G name their locus.
-The refusal branch asserts that place. It does not assume `Locus::Block`
-for a row the spec has not sited.
+`Input` for `DoubleSpend` (the I7 refusal this table names), `Miner` for
+`WrongReward` (4.F named its locus with slice 4, Q6: every coinbase row
+refuses at `Locus::Tx { slot: TxSlot::Miner }`), and `Unnamed` for
+`ReorderedBodies` until 4.G names its locus. The refusal branch asserts
+that place. It does not assume `Locus::Block` for a row the spec has not
+sited — and, as Q8 showed, a place is only as good as the row it is keyed
+to: `CenRow::status` catches "marked implemented but does not refuse"; it
+cannot catch "keyed to a row that was never going to refuse". Naming the
+place is what makes the second visible.
 
 **When a mutation cannot be carried.** `Unmutable`, not a candidate that
 connects. Timestamp mutations are `GenesisExempt` at height 0 — CEN-C1 and

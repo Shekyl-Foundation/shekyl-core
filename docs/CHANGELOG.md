@@ -17,7 +17,9 @@ consensus for the first time (≤ 18 994 bytes at 16 outputs, under the 24 576
 relay cap CEN-M4 had left as the only bound). **Genesis regenerated** on all
 three networks to carry the field as eight zero bytes (mainnet id
 `16c616a5…`, testnet `52425d8d…`, stagenet `65173901…`; `GENESIS_TX` pins in
-`cryptonote_config.h`, `GENESIS_ALLOCATIONS.md`). Existing testnet data
+`cryptonote_config.h`, `GENESIS_ALLOCATIONS.md`, the client identity's
+`genesis_hash_for`, and `shekyl-chain-rules`' `ReleaseAnchors` genesis pins
+that E6 slice 4 had just minted against the old ids). Existing testnet data
 dirs are not valid under this grammar — this is part of the alpha.9
 regenesis.
 
@@ -43,6 +45,52 @@ variant and `shekyl-wire`) become one; CEN-I19 is judged over the codec's own
 parse everywhere it applies, and the wallet's context-free validator applies
 the same `check_tx_extra_shape`. Grammar fuzzing moves to
 `rust/shekyl-wire/fuzz/fuzz_tx_extra_parse` (seeded from the C++ corpus).
+
+### `WSS-Q1(b)` — first Cortex-A72 session, and the one flag that cost a run
+
+- **FCMP++ proving on a Cortex-A72 is `6.133 s`** (converged; 2-in/2-out, depth
+  6) — **5.55× the x86 figure** of 1.105 s. This is the rule-80 number the
+  project has never had, and it is storage-independent, so the session's unmet
+  pin does not touch it.
+- **Recorded as `WSS_Q1B_BENCH_SPEC.md` §7.2, and explicitly ungraded.** The
+  board matches every rule-76 pin *except storage*: root is microSD and the only
+  USB disk is a rotational HDD. §6.3.4 requires USB-SSD and says why — *"microSD
+  and SSD differ by more than the thresholds do."* `--grade` was never passed,
+  every record carries `"grading": false`, and **nothing here discharges
+  anything**.
+- **The verify edge got its first measurement, and it is large.** At worst-case
+  density one per-block `root_at_count` costs **394 s against a 120 s block** —
+  3.3× the block interval, for a check nobody waits on. The frozen control
+  collapsed it **45×** (and **91×** at nominal), which is both the red-bite and
+  the proof the mixed-composition path ran rather than the `full_build_root`
+  fallback; both phases returned the same root. So `CT-6` increment 4 now rests
+  on a measurement on its own axis, and increment 6 has a baseline.
+- **The 2 s absolute floor binds on both machines measured.** At a 6.133 s
+  denominator, 15 % is 0.920 s — still under the floor. The relative arm has now
+  failed to bind six-fold apart in speed, which is why §6.3.4 asks for seconds
+  beside the ratio.
+- **Two phases stopped at `"wall-clock cap"`, not convergence** — the worst-case
+  verify and the spend replay. `SCHEMA_VERSION` 2's value domain is what makes
+  that readable: under `v1` the same exit said `"iteration cap"` and pointed at
+  raising a cap, where the truth is *the work is too slow to settle inside 30
+  minutes*. Those medians are lower bounds, not precise figures.
+- **`emit` is lifted into `report.rs`, one home for three copies.** `spend_edge`
+  had it, `open_edge` inlined the same match, and `verify_edge` shipped a third
+  copy whose `--json` was a **bool** rather than a path — a divergence that cost
+  a run on this session before anything was measured. All three now share one
+  helper and one spelling; a write failure stays an error rather than a warning,
+  because a requested artifact that silently fails to appear leaves a
+  measurement with no evidence behind it.
+
+### Design — the daemon's body horizon is the epoch calendar (`PDM-Q2` re-ruled)
+
+- Every daemon discards a shard's prunable bodies at the epoch boundary after
+  the shard's freeze epoch (`current_epoch ≥ close_epoch(k) + 2`), about four
+  weeks after it closes at genesis parameters — not after the ~195-day
+  `W` window the 2026-09-18 ruling set. `W` is retired; bodies and the
+  archival journals are two horizons by design. Downtime tolerance is one
+  epoch; a node down longer refetches bodies from archivers (band 2). No
+  code moves in this PR (`PDM-Q-S0`); S-PRUNE's skeleton is re-keyed.
 
 ### `WSS-Q1(b)` bench — a third measurement for the axis nothing grades
 
@@ -135,6 +183,53 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
 - CI: the redb key-type gate's constraint floor moves 29 → 27 with the two
   tables; its `WRITE_NEVER` declaration for `txs_prunable_tip` expired as
   designed (table gone → entry gone).
+
+### P2P inbound admission — the per-host cap is deleted (`PWD-I7` / `PWD-I8`)
+
+- **`--max-connections-per-ip` is removed**, and with it
+  `has_too_many_connections`, the `max_connections` member, the
+  `HostInboundCap` / `InboundZone` policy in `shekyl-peer-policy`, and the four
+  `shekyl_host_inbound_*` FFI exports. `is_host_limit` is now the total inbound
+  ceiling check and nothing else. The flag is **retired by name** through
+  `REMOVED_FLAGS`, so a config file carrying it exits with a named message
+  explaining the replacement rather than a parse error.
+- **Why it went rather than changed value.** A host is not an operator: under
+  CGNAT one address is hundreds of unrelated subscribers, so a small cap is
+  broken for them and a large one bounds nothing — **no value works**. It was
+  measured partitioning honest co-residents on testnet: two daemons behind one
+  address held **disjoint** seed sets (4 and 2 of six, zero overlap), and one
+  starved entirely when the reachable set fell below what the partition needed.
+  Damage scales with nodes-per-address over reachable peers, not with
+  adversarial behaviour.
+- **What it was not doing.** Peerlist integrity is defended at the **promotion
+  boundary** — gossip lands in gray, gray is never disclosed, and every
+  white-list promotion follows an outbound dial this node made — so an inbound
+  flood can neither promote, nor be gossiped onward, nor be dialed back. The
+  only thing it consumes is a connection slot, and the bound for that is the
+  total ceiling six lines above the deleted call.
+- **Operator diagnostic (`PWD-E1` tier 1, diagnostic half).** The hourly
+  inbound check now reports a **state** rather than only a verdict: connections
+  held, uptime, and the port actually being advertised. A per-IP refusal was
+  previously visible only on the refusing node, which is what made a one-line
+  cause take an afternoon to find. It does not classify, threshold, or stop
+  advertising — that half needs `PWD-E8`'s measurement.
+- **`--in-peers` unset resolves through a derived safety bound.** Rust
+  observes the process — `getrlimit` on POSIX, the open-descriptor count
+  from `/proc/self/fd` on Linux, and a named "no per-process ceiling" on
+  Windows — and returns a decision: a finite ceiling, or unbounded with a
+  reason. A soft limit of zero is a real ceiling of zero. A failed probe is
+  not stored as zero and is not narrowed from a negative sentinel into
+  `UINT32_MAX`. C++ passes the descriptors it has already promised (outbound
+  caps, explicit anonymity-zone inbound caps, and, once RPC is listening,
+  the RPC connection budget) and stores the decision. An explicit
+  `--in-peers`, including `0`, is stored as given. Admission counts **live**
+  connections — across zones when the ceiling was derived — because the
+  once-a-second counter is not the check.
+- **Why memory does not appear in that bound.** Measured on the rule-76 floor
+  device and a development host with the same instrument: **119 live inbound
+  connections cost 360 KiB of RSS on the floor**, against a ~539 MiB startup
+  peak that does not move with connection count. A quiescent inbound
+  connection is free in memory; descriptors are what it consumes.
 
 ### P2P wire, daemon RPC, CLI — the stripe engine is gone (`PDM-Q7`)
 
@@ -477,6 +572,43 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   and is unhittable. The Reinstate pop arm no longer calls
   `set_total_bonded_atomic` — connect does not move the counter.
 
+- **The Rust validator judges the miner transaction (DRS-E6 slice 4,
+  census 4.F: sixteen rows).** `shekyl-chain-rules` enforces CEN-F1, F3,
+  F4, F5, F6, F7, F9, F10 on the coinbase — one input of type `gen`, `Null`
+  CT, one output above genesis, the `gen` height equal to the connecting
+  height, `unlock_time = height + 60`, no amount overflow, canonical output
+  keys, non-trivial one-per-output commitment masks — refusing at
+  `Locus::Tx { slot: TxSlot::Miner }`, and derives F11/F13/F15/F20 (the
+  base subsidy at the parent's accumulator, the release-modulated emission,
+  the volume window from two recorded prefix sums; genesis takes its
+  configured emission) in `Emission::derive`, recorded in coverage. The
+  priced value stays off `ValidatedBlock` until F14b produces the paid
+  reward `connect` persists.
+  F2, F8, F19 and F21 hold **by construction** (`RowStatus::ByConstruction`,
+  new: the wire admits one transaction version and one output tag; parent
+  state is the view's brand; the split epoch is
+  `rules::miner::EMISSION_SPLIT_EPOCH`), each with a
+  falsifier the coverage gate asserts. `RuleSet` gains
+  `mined_money_unlock_window` (60), pinned to
+  `cryptonote_config.h`; the split epoch stays a constant until a schedule
+  step names a different one, so it is not copied into every rule-set
+  mismatch. `RecordedBlock` gains
+  `coins_generated` and `cumulative_tx_count`; a decreasing prefix sum is
+  `Corrupt::TxCountNotMonotone`, which the store halts on as SI-13's
+  `FoldNotMonotone`. **Every public network's genesis is pinned** in
+  `ReleaseAnchors` (derived in test from `cryptonote_config.h`'s pins and
+  held equal to the client identity's `genesis_hash_for`), so a
+  public-network node refuses a foreign genesis at connect (CEN-E1) and at
+  open (CEN-E5) — by equality, not by trust: genesis is not an anchor and
+  sits in no trust band, `Anchor`s are checkpoints at height ≥ 1, and
+  `assumevalid = 0` means no anchor at all (the PDM lane's ruling).
+  Consensus figures: `implemented 34 / validator-enforced 150`,
+  `by-construction 4`, `enforced 152`. No C++ behaviour changes; the C++
+  remains the validator of record until cutover. The E2 mutation family
+  re-keys `WrongReward` from F13 (a definition, which refuses nothing) to
+  F18 (exact payout, pending on the median) and names the coinbase as its
+  place. Still pending: F14/F14b/F16/F18 (CEN-G6's median, slice 7), F17
+  (DRS-E3's curve-tree writer).
 - **The anchor model has a Rust home (DRS-E6 slice 3, census 4.E).**
   `shekyl-chain-rules` gains `ReleaseAnchors` — the release-carried
   `assumevalid` anchor table `PDM-Q5` ratified, as `const` data per network

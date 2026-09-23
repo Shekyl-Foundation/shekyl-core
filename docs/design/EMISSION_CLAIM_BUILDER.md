@@ -13,12 +13,13 @@ verification (the §2 low-boundary anchor) resolved clean-for-a-structural-reaso
 the low end anchors to `epoch_is_claim_expired`, which is single-sourced
 through `claim_window_floor` (§7.2 bottom-boundary record), and the
 builder is pinned to consume the predicate functions rather than
-re-derive boundary arithmetic. Implementation is underway on the §8
-chain: PR 1 (daemon RPC), PR 2 (pure assembly module), and PR 3
+re-derive boundary arithmetic. The §8 chain is on `dev`: PR 1 (daemon RPC), PR 2 (pure assembly module), and PR 3
 (StakeEngine handler + Engine-side claim orchestrator; see the §8
 PR-3 status) are implemented — the production path assembles a signed
-emission claim end-to-end; PR 4 (regtest e2e + blob-boundary arm) is
-the chain's only open item, gated on #281. PR-2 review produced one
+emission claim end-to-end; PR 4c (regtest e2e) landed as
+`e2e_emission_claim_accepted_and_applied` (§8). The round-close text
+that called PR 4 the chain's only open item, gated on #281, was true
+then and is not the current state. PR-2 review produced one
 post-closure sharpening, the
 §2 step-1 **fourth boundary** (strict finalization at the earliest
 inclusion height; the connect window admits the youngest epoch one
@@ -34,13 +35,15 @@ KAT strengthened to production operand functions + E3/rationale doc fixes
 done in-PR; blob-boundary arm homed to §8 PR-4); CB-5 (cause-blind
 refusal, `SelfCheckFailed`-blind pin). Round 2 (§7) is the CB-1
 ratification residue — the RPC field enumeration + gate-6 linkability
-review — plus the implementation-plan PR chain (§8). Implementation is
-held until round 2 closes.
+review — plus the implementation-plan PR chain (§8). At round close,
+implementation was held until round 2 closed; that hold lifted with the
+close, and the chain has since landed (paragraph above).
 
 **Provenance.** C-1 (the emission activating cut) merged to `dev` 2026-07-09
 via PR #277 (`13c368707`); consensus now accepts authed
-`txin_archival_reward_emission` transactions — but **no production path can
-build one**. This doc is the spec-first round for that builder, the first
+`txin_archival_reward_emission` transactions. When this provenance was
+written, no production path could build one; that path has since landed
+(`orchestrate_emission_claim`, §8). This doc is the spec-first round for that builder, the first
 half of the E4 merge gate:
 
 > E4 merges only on **emission accepted-and-applied on a regtest chain
@@ -48,12 +51,14 @@ half of the E4 merge gate:
 > ([`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) §3.0)
 
 The regtest e2e (part 2, [`REWARD_EMISSION_E3_GATING_ROUND.md`](../completed/REWARD_EMISSION_E3_GATING_ROUND.md)
-§9.5 item 8) is **blocked on this builder** because a hand-rolled test
-builder would exercise a parallel path — the opposite of what the e2e
-exists to prove (`docs/FOLLOWUPS.md`, V3.0 queue, "Emission regtest
-end-to-end — the E4/E5 gate").
+§9.5 item 8) was **blocked on this builder** until the builder landed,
+because a hand-rolled test builder would have exercised a parallel path.
+It has since landed on this path (`e2e_emission_claim_accepted_and_applied`,
+§8 PR-4c). The FOLLOWUPS item "Emission regtest end-to-end — the E4/E5
+gate" closed with that landing.
 
-**Timeframes (rule 05).** Now: unblocks E4/E5 and the Track-2 e2e.
+**Timeframes (rule 05).** Now: the builder and the Track-2 e2e have
+landed, which is what the E4/E5 precondition waited on.
 Mining-era end: the claim path is the staker-reward payout rail for the
 fee-transition era — the recompute-sourcing decision (CB-1) must not bake
 in a genesis-only data path. V4: signing rides `HybridSignature`

@@ -9,6 +9,7 @@
 
 use core::convert::Infallible;
 
+use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt, RuleSet,
     StructurallyValid, Substrate, Trust,
@@ -24,28 +25,14 @@ use super::store_tests::TestErr;
 use super::view::BatchView;
 use super::*;
 
-pub(super) fn coinbase(height: u64, outputs: usize) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: height + 60,
-            inputs: vec![Input::Gen(height)],
-            outputs: (0..outputs)
-                .map(|i| Output {
-                    amount: 0,
-                    key: [0x40 + u8::try_from(i).expect("small"); 32],
-                    view_tag: 1,
-                })
-                .collect(),
-            extra: Vec::new(),
-        },
-        ct: Ct::Null(CtBase {
-            enc_amounts: vec![[0x55; 9]; outputs],
-            enc_labels: vec![[0x66; 9]; outputs],
-            commitments: (0..outputs)
-                .map(|i| [0x70 + u8::try_from(i).expect("small"); 32])
-                .collect(),
-        }),
-    }
+/// The coinbase for `height`: the rules harness's, which satisfies every
+/// landed 4.F row (a sole `Input::Gen(height)`, `Null` ct, one output with
+/// a canonical key and a non-trivial mask, `unlock_time = height + 60`).
+/// One definition of "a valid coinbase" for every crate that judges one —
+/// a private copy here drifted from the rules the moment slice 4 landed
+/// F9/F10 (its keys were not points).
+pub(super) fn coinbase(height: u64) -> Transaction {
+    fixture::coinbase(height)
 }
 
 /// A spend-shaped listed transaction in the storage-pruned form (no
@@ -129,7 +116,7 @@ pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transactio
             curve_tree_root: root_at_height(height),
             attestation_root: AttestationRoot::from_bytes([0x33; 32]),
         },
-        miner_transaction: coinbase(height, 1),
+        miner_transaction: coinbase(height),
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),
     };
     Candidate::new(block, listed)

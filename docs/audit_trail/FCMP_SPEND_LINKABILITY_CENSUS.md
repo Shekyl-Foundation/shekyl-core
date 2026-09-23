@@ -1,13 +1,16 @@
 # PL — blast-radius census of the curve-tree leaf's 4th scalar (`h_pqc`)
 
 **Status:** RECORD — the rule-07 criterion-3 enumeration for the `PL-` round
-([`FCMP_SPEND_LINKABILITY.md`](FCMP_SPEND_LINKABILITY.md) §9), produced
+([`FCMP_SPEND_LINKABILITY.md`](../design/FCMP_SPEND_LINKABILITY.md) §9), produced
 2026-09-13 at `dev` = `42333d34f`. Every `file:line` is a *records-was* claim
 at that sha: read at source, not inferred from a grep line. An implementation
 PR re-runs the sweep against its own `Base commit` and pastes the delta; this
 file is not re-anchored in place. Companion to the round document, in the
-rule-26 sibling-audit-trail shape.
-**Identifier family:** `PL-` (registered in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2).
+rule-26 sibling-audit-trail shape — and filed under `docs/audit_trail/` since
+2026-09-23 (moved from `docs/design/` by the tx_extra cutover, which deleted
+the C++ `tx_extra` codec, `construct_tx*` and `test_tx_utils.cpp` rows S0/S1/S5
+cite: a records-was register lives where the doc-claims gate reads one).
+**Identifier family:** `PL-` (registered in [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2).
 **Owner:** the `PL-` round; findings in §6 are dispositioned in the round
 document's §9, not here.
 

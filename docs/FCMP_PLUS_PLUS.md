@@ -1041,9 +1041,9 @@ its watermark and `get_info.tx_prune_height` (RPC 3.36).
 What replaces it is not a port. Under archival pruning
 (`docs/design/ARCHIVAL_PRUNED_DAEMON_MODE.md`) **every** daemon discards the
 same good — the prunable region + `pqc_auths` — **shard-granularly** at
-`[b_k, b_{k+1})` once `b_{k+1} ≤ first_tx_id(tip − W)` and the epoch floor
-has passed, never a transaction at a time and never at an operator-chosen
-depth. The prunable **hash** and `txs_pqc_auth_hash` stay on every node as
+`[b_k, b_{k+1})` at the epoch boundary after the shard's freeze epoch
+(`current_epoch ≥ close_epoch(k) + 2`; `PDM-Q2`, re-ruled 2026-09-22), never
+a transaction at a time and never at an operator-chosen depth. The prunable **hash** and `txs_pqc_auth_hash` stay on every node as
 the txid's operands; the bodies are served from the bonded archivers'
 wallet-side stores and the Foundation floor. That discard is **S-PRUNE**,
 Rust, on the redb store (`docs/design/DRS_E1_SPRUNE.md`), and its frontier is

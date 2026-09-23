@@ -115,6 +115,15 @@ pub enum Corrupt {
     /// slow chain derives it — so it is CEN-D6's *refusal*, a verdict, and
     /// no longer a fault: `rules::difficulty` module docs, DRS-E2 RD-F17.)
     CumulativeDifficultyOverflow,
+    /// The recorded `cumulative_tx_count` **decreased** between two heights
+    /// the volume window spans (CEN-F20). A prefix sum the store folds
+    /// under SI-8 cannot go backwards (SI-13, the read-side form) on a conforming store; read as a
+    /// window it would price a dormant chain, so it is a fault, not a
+    /// smaller number.
+    TxCountNotMonotone {
+        /// The upper height of the pair whose prefix sum is below the lower's.
+        at: BlockHeight,
+    },
 }
 
 /// The bound on redoing `form` after a [`Stale`] fault.
@@ -223,6 +232,10 @@ impl fmt::Display for Corrupt {
             Self::CumulativeDifficultyOverflow => {
                 f.write_str("cumulative difficulty overflows past the parent")
             }
+            Self::TxCountNotMonotone { at } => write!(
+                f,
+                "cumulative transaction count decreases at height {at:?} (SI-13)"
+            ),
         }
     }
 }

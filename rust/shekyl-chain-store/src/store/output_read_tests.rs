@@ -18,6 +18,7 @@ use super::*;
 use crate::codec::Canonical;
 use crate::ids::OutputSlot;
 use crate::schema::OUTPUT_AMOUNTS;
+use shekyl_chain_rules::harness::fixture;
 
 fn h(raw: u64) -> BlockHeight {
     BlockHeight::from_raw(raw)
@@ -180,8 +181,8 @@ fn output_is_recorded_at_every_index_below_the_count_and_beyond_count_from_it() 
     assert_eq!(
         snap.output(gi(0)).expect("read"),
         AtIndex::Recorded(RecordedOutput {
-            pubkey: shekyl_types::OneTimePubkey::from_bytes([0x40; 32]),
-            commitment: shekyl_types::CommitmentBytes::from_bytes([0x70; 32]),
+            pubkey: shekyl_types::OneTimePubkey::from_bytes(fixture::G),
+            commitment: shekyl_types::CommitmentBytes::from_bytes(fixture::TWO_G),
             height: h(0),
         })
     );
