@@ -771,6 +771,10 @@ namespace nodetool
     //! live inbound count across every zone reaches it. Empty when the
     //! operator set `--in-peers`: that cap is the zone cap.
     std::optional<std::uint32_t> m_process_inbound_ceiling;
+    //! What the last `apply_inbound_ceiling` reserved beyond p2p's own
+    //! sockets (the RPC connection budget). Kept so a re-derive triggered by
+    //! a p2p-side change does not have to rediscover it.
+    std::uint64_t m_reserved_beyond_p2p = 0;
     //! Last decision `apply_inbound_ceiling` announced, so a second call
     //! with the same result does not repeat the warning. Zero is not a kind.
     std::uint32_t m_applied_ceiling_kind = 0;

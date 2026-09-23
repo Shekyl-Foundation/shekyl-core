@@ -3112,15 +3112,22 @@ namespace nodetool
       else
         reserved += n;
     };
+    // RESERVE WHAT CANNOT BE COUNTED; COUNT WHAT CAN.
+    //
+    // Outbound sockets are promised but not yet open, and `census_inbound`
+    // never sees them, so the only way to keep descriptors for them is to
+    // subtract them here.
+    //
+    // Inbound on a non-public zone is the opposite case and must NOT be
+    // reserved: `census_inbound` walks every zone, so those connections are
+    // already charged against the ceiling as they are accepted. Reserving
+    // them too would subtract the same descriptors twice -- an
+    // `--anonymous-inbound` cap of N would cost the process N descriptors of
+    // headroom AND still consume N as the connections arrived, squeezing
+    // public inbound by 2N. Each zone with an explicit cap is bounded by that
+    // cap in `is_host_limit`; the ceiling bounds the pool they all draw from.
     for (const auto& entry : m_network_zones)
-    {
       add(entry.second.m_config.m_net_config.max_out_connection_count);
-      if (entry.first == epee::net_utils::zone::public_)
-        continue;
-      if (!entry.second.m_inbound_cap_explicit)
-        continue;
-      add(entry.second.m_config.m_net_config.max_in_connection_count);
-    }
     return reserved;
   }
 
@@ -3160,6 +3167,9 @@ namespace nodetool
       return;
     }
 
+    // Remembered so a later re-derive (an `out_peers` change, say) does not
+    // need to know what the daemon reserved beyond p2p.
+    m_reserved_beyond_p2p = reserved_beyond_p2p;
     const std::uint64_t reserved = descriptor_reservations(reserved_beyond_p2p);
     shekyl_inbound_ceiling decision{};
     shekyl_inbound_ceiling_resolve(reserved, &decision);
@@ -3250,6 +3260,15 @@ namespace nodetool
       if(current > count)
         public_zone->second.m_net_server.get_config_object().del_out_connections(current - count);
       m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, count);
+      // The outbound cap is a term in the inbound ceiling's reservation, so
+      // changing it at runtime invalidates a ceiling derived against the old
+      // one. Raising `out_peers` without this leaves inbound reserved against
+      // a smaller outbound budget, and live outbound plus inbound can then
+      // exceed the descriptor limit -- the exact exhaustion the ceiling
+      // exists to prevent. Re-derives against the same non-p2p reservation
+      // the last call used, so a caller that never knew the RPC budget does
+      // not have to learn it.
+      apply_inbound_ceiling(m_reserved_beyond_p2p);
     }
   }
 

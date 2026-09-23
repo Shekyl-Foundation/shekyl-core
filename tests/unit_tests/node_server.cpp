@@ -2827,3 +2827,35 @@ TEST(node_server, in_peers_zero_is_a_choice_and_not_the_sentinel)
   EXPECT_EQ(0u, d.server->get_max_in_public_peers())
     << "--in-peers 0 must survive as itself, not be re-derived";
 }
+
+TEST(node_server, in_peers_ceiling_re_derives_when_the_outbound_reserve_changes)
+{
+  // The outbound cap is a TERM in the inbound ceiling's reservation, so a
+  // runtime `out_peers` change invalidates a ceiling derived against the old
+  // one. Without the re-derive, raising out_peers leaves inbound reserved
+  // against a smaller outbound budget and live outbound plus inbound can
+  // exceed the descriptor limit — the exhaustion the ceiling exists to stop.
+  //
+  // Red edit: drop the `apply_inbound_ceiling` call at the end of
+  // `change_max_out_public_peers`. The ceiling then does not move and the
+  // first expectation fails.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48093", -1));
+
+  const uint32_t before = d.server->get_max_in_public_peers();
+  ASSERT_GT(before, 0u) << "the derivation must have produced a real ceiling";
+
+  // Raise the outbound reserve. Every extra promised outbound descriptor is
+  // one fewer the process may spend on inbound.
+  const size_t raised = 256;
+  d.server->change_max_out_public_peers(raised);
+  const uint32_t after = d.server->get_max_in_public_peers();
+
+  EXPECT_LT(after, before)
+    << "raising the outbound reserve must lower the inbound ceiling";
+
+  // And back down again: the reserve is recomputed, not ratcheted.
+  d.server->change_max_out_public_peers(8);
+  EXPECT_GT(d.server->get_max_in_public_peers(), after)
+    << "lowering the outbound reserve must return the headroom";
+}
