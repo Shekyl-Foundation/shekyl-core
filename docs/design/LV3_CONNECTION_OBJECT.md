@@ -757,9 +757,11 @@ rather than proposes.**
 derives the needed stripe from **heights only** —
 `get_pruning_stripe(want_height, blockchain_height, LOG_STRIPES)` returns `0`
 **only** when `want_height + CRYPTONOTE_PRUNING_TIP_BLOCKS >= blockchain_height`
-(`src/common/pruning.cpp:55-60` and `CRYPTONOTE_PRUNING_TIP_BLOCKS` = 5500 at
-`cryptonote_config.h:344`, **both at `f9e000f76`; PR #821 deleted the file and
-the constant, so these are historical and deliberately unlinked**). A node more
+(in `common/pruning.cpp`'s three-argument `get_pruning_stripe`, with
+`CRYPTONOTE_PRUNING_TIP_BLOCKS` = 5500 — **read at `f9e000f76`, before PR #821
+deleted both the file and the constant**; named without `file:line` on purpose,
+because a line reference into deleted code is a dead citation and the
+`doc-claims` ratchet is right to count it as one). A node more
 than 5500 blocks behind the tip computes a non-zero needed stripe **regardless of
 its own seed**. Every node syncing from genesis on a chain longer than 5500
 blocks is in that state for the whole sync — so the surface is live for every
