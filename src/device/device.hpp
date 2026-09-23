@@ -55,7 +55,6 @@ namespace cryptonote
     struct account_public_address;
     struct account_keys;
     struct subaddress_index;
-    struct tx_destination_entry;
     struct keypair;
     class transaction_prefix;
 }

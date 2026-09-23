@@ -46,78 +46,6 @@ namespace cryptonote
   // state its n; production reads it via Blockchain::parent_frozen_segment_count.
   bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce = blobdata(), size_t max_outs = 999, uint8_t hard_fork_version = 1, shekyl::tx_volume_window tx_volume = {}, shekyl::supply_facts supply = {}, uint64_t genesis_ng_height = 0);
 
-  struct tx_source_entry
-  {
-    typedef std::pair<uint64_t, ct::ctkey> output_entry;
-
-    std::vector<output_entry> outputs;  //index + key + optional commitment
-    uint64_t real_output;               //index in outputs vector of real output_entry
-    crypto::public_key real_out_tx_key; //incoming real tx public key
-    uint64_t real_output_in_tx_index;   //index in transaction outputs vector
-    uint64_t amount;                    //money
-    bool rct;                           //true if the output is rct
-    ct::key mask;                      //amount mask
-    crypto::secret_key ho{};            // v3: HKDF-derived output secret scalar; wiped on destruction
-    bool v3_ho_valid = false;           // true when ho was populated from shekyl_scan_and_recover
-
-    ~tx_source_entry() { memwipe(ho.data, sizeof(ho.data)); }
-
-    void push_output(uint64_t idx, const crypto::public_key &k, uint64_t amount) { outputs.push_back(std::make_pair(idx, ct::ctkey({ct::pk2rct(k), ct::zeroCommit(amount)}))); }
-
-    BEGIN_SERIALIZE_OBJECT()
-      FIELD(outputs)
-      FIELD(real_output)
-      FIELD(real_out_tx_key)
-      FIELD(real_output_in_tx_index)
-      FIELD(amount)
-      FIELD(rct)
-      FIELD(mask)
-      FIELD(ho)
-      FIELD(v3_ho_valid)
-
-      if (real_output >= outputs.size())
-        return false;
-    END_SERIALIZE()
-  };
-
-  struct tx_destination_entry
-  {
-    std::string original;
-    uint64_t amount;                    //money
-    account_public_address addr;        //destination address
-    bool is_subaddress;
-    bool is_integrated;
-
-    tx_destination_entry() : amount(0), addr(AUTO_VAL_INIT(addr)), is_subaddress(false), is_integrated(false) { }
-    tx_destination_entry(uint64_t a, const account_public_address &ad, bool is_subaddress) : amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false) { }
-    tx_destination_entry(const std::string &o, uint64_t a, const account_public_address &ad, bool is_subaddress) : original(o), amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false) { }
-
-    std::string address(network_type nettype, const crypto::hash &payment_id) const
-    {
-      if (!original.empty())
-      {
-        return original;
-      }
-
-      if (is_integrated)
-      {
-        return get_account_integrated_address_as_str(nettype, addr, reinterpret_cast<const crypto::hash8 &>(payment_id));
-      }
-
-      return get_account_address_as_str(nettype, is_subaddress, addr);
-    }
-
-    BEGIN_SERIALIZE_OBJECT()
-      FIELD(original)
-      VARINT_FIELD(amount)
-      FIELD(addr)
-      FIELD(is_subaddress)
-      FIELD(is_integrated)
-    END_SERIALIZE()
-  };
-
-  //---------------------------------------------------------------
-
   struct tx_block_template_backlog_entry
   {
     crypto::hash id;
@@ -126,10 +54,6 @@ namespace cryptonote
   };
 
   //---------------------------------------------------------------
-  crypto::public_key get_destination_view_key_pub(const std::vector<tx_destination_entry> &destinations, const std::optional<cryptonote::account_public_address>& change_addr);
-  bool construct_tx(const account_keys& sender_account_keys, std::vector<tx_source_entry> &sources, const std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx);
-  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, bool rct = false, bool shuffle_outs = true, bool use_view_tags = false, uint8_t hf_version = 0, ct::keyV *out_commitment_masks = nullptr);
-  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, bool rct = false, bool use_view_tags = false, uint8_t hf_version = 0, ct::keyV *out_commitment_masks = nullptr);
   bool generate_genesis_block(
       block& bl
     , std::string const & genesis_tx
@@ -144,45 +68,4 @@ namespace cryptonote
   crypto::hash get_block_longhash(const Blockchain *pb, const block& b, const uint64_t height, const crypto::hash *seed_hash = nullptr);
   bool get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash);
 
-}
-
-BOOST_CLASS_VERSION(cryptonote::tx_source_entry, 3)
-BOOST_CLASS_VERSION(cryptonote::tx_destination_entry, 4)
-
-namespace boost
-{
-  namespace serialization
-  {
-    template <class Archive>
-    inline void serialize(Archive &a, cryptonote::tx_source_entry &x, const boost::serialization::version_type ver)
-    {
-      a & x.outputs;
-      a & x.real_output;
-      a & x.real_out_tx_key;
-      a & x.real_output_in_tx_index;
-      a & x.amount;
-      a & x.rct;
-      a & x.mask;
-    }
-
-    template <class Archive>
-    inline void serialize(Archive& a, cryptonote::tx_destination_entry& x, const boost::serialization::version_type ver)
-    {
-      a & x.amount;
-      a & x.addr;
-      if (ver < 1)
-        return;
-      a & x.is_subaddress;
-      if (ver < 2)
-      {
-        x.is_integrated = false;
-        return;
-      }
-      a & x.original;
-      a & x.is_integrated;
-      // ver 4 dropped the claim-era is_staking/stake_tier pair. No pending_tx /
-      // unsigned_tx_set artifact is persisted across a version change (nothing
-      // to migrate pre-genesis), so no version-specific handling is carried.
-    }
-  }
 }

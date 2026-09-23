@@ -295,10 +295,37 @@ callers' construction path.
 Two tables the deleting commit fills, kept here so the evidence outlives the
 C++ it describes:
 
-- **9.1 `construct_tx*` callers → Rust-built fixtures** (TXE-Q1's condition):
-  one row per migrated test — the C++ case it exercised, the fixture that
-  replaces it, and why that is the same case (same inputs' shape, same
-  refusal or acceptance, same rule reached).
+- **9.1 `construct_tx*` callers → where the case lives now** (TXE-Q1's
+  condition, filled by §7 commit 4a, 2026-09-23). **Verified premise
+  correction first:** every `construct_tx*` caller was a test that had been
+  *disabled* since 2026-05-05 (`chaingen_main.cpp`: the builder "produces
+  CTTypeFcmpPlusPlusPqc stubs with empty pqc_auths; check_tx_inputs rejects
+  them"), a `--test_transactions` mode no CTest or CI invoked, or a benchmark.
+  The 41 enabled core tests build blocks and coinbases only and call none of
+  it, so deleting the builder changes zero *live* coverage. What went dark in
+  May was a C++ capability gap — the transaction format moved to FCMP++/PQC
+  and the C++ builder was never taught it — not a handoff to a finished Rust
+  path. The Rust side *does* build a validating user transaction
+  (`regtest_e2e.rs:865` `e2e_fcmp_spend_accepted_by_daemon`: Engine-built
+  spend, accepted into a block by a live `shekyld`, armed per PR in
+  `build.yml`'s live-daemon gates); what no test does yet is put one **into a
+  chain and reorg or re-derive rewards around it**. That gap is a DEFERRED
+  with an owner (FOLLOWUPS "user-transaction chain cases", E2 corpus), not a
+  deletion note.
+
+  | C++ case (deleted) | What it exercised | Dark since | Where the case lives now |
+  |---|---|---|---|
+  | `gen_simple_chain_001` (`chaingen001.cpp`) | user txs across rewinds and a side block | 2026-05-05 | **no test**; buildable on `regtest_e2e` (Engine spend + `generateblocks`); owner E2 corpus |
+  | `gen_simple_chain_split_1` (`chain_split_1`) | reorg with user txs in the switched-out branch | 2026-05-05 | **no test**; same home |
+  | `gen_chain_switch_1` (`chain_switch_1`) | chain switch with txs in both branches, txpool return | 2026-05-05 | **no test**; same home |
+  | `gen_block_reward` (`block_reward`) | reward with fee-paying txs in the block | 2026-05-05 | **no test** with user txs; coinbase-only reward is `economics_c2a_prime_layer3_pop_replay` (enabled) |
+  | `gen_uint_overflow_1/2` (`integer_overflow`) | input/output amount overflow in a user tx | 2026-05-05 | **no C++ test**; amount arithmetic is checked in Rust (`shekyl-wire` validation, `shekyl-ct-balance`); a chain-level case is the E2 corpus's |
+  | `test_transaction_generation_and_ring_signature`, `test_block_creation` (`transaction_tests.cpp`, `--test_transactions`) | serialize → parse round trip of a built tx / block | never run by CTest or CI | `shekyl-wire` `coinbase_roundtrip.rs`, `fcmp_spend_roundtrip.rs`, `coinbase_hash.rs` (daemon-oracle hashes) |
+  | 16 `gen_bpp_*` (`bulletproof_plus`) | Monero BP+ hard-fork ladder (`HF_VERSION_BULLETPROOF_PLUS - 1`, proof counts, wrong amount) | never enabled; rule 60 | BP+ verification with no fork ladder: `shekyl-bulletproofs` tests; `fcmp_spend_e2e.rs` (Bp+ + CT balance on a real spend) |
+  | `test_construct_tx`, `test_check_tx_signature{,_aggregated_bulletproofs}` (`performance_tests`) | timing of a builder whose output no validator accepted | n/a (benchmark) | none owed; spend-path timing lives with `shekyl-tx-builder` |
+  | `test_ge_tobytes`, `test_ge_frombytes_vartime` (`performance_tests`) | point (de)compression timing — built a tx only to obtain a point | n/a | **kept**, re-pointed at a fresh account's spend key |
+  | chaingen scaffolding (`construct_tx_to_key`, `construct_tx_with_fee`, `construct_tx_rct`, `fill_tx_sources*`, `fill_tx_destinations`, `block_tracker`, `output_index`, `get_balance`, `MAKE_TX*`) | fed the rows above | 2026-05-05 | deleted with them; `construct_miner_tx_manually` / `append_v3_output_to_miner_tx` (live, 36 block-validation tests) **kept**, moved onto `shekyl_coinbase_extra` in §7 commit 3 |
+  | `construct_tx_with_tx_key` / `construct_tx_and_get_tx_key` / `construct_tx` / `tx_source_entry` / `tx_destination_entry` / `fill_construct_tx_rct_stub` (`src/`) | the builder itself — zero production callers | — | the one builder is `shekyl-tx-builder`. Three FFI exports lose their only C++ caller with it (`shekyl_construct_output_labeled`, `shekyl_label_plaintext_for_payment_uri`, `shekyl_compute_output_key_image_from_ho`, `legacy_tx.rs`); left in place — `legacy_tx.rs` is wallet-era surface whose sweep is one job, not three lines here (FOLLOWUPS "callerless FFI exports in legacy_tx.rs") |
 - **9.2 C++ parser `TEST`s → `shekyl-wire` twins** (TXE-Q5a): one row per
   `test_tx_utils.cpp` case — its twin's name in `tests/tx_extra_roundtrip.rs`,
   or *added in this commit*.

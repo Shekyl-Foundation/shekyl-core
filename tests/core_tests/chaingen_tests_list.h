@@ -32,27 +32,13 @@
 
 #include "chaingen.h"
 #include "archival_budget_conservation.h"
-#include "block_reward.h"
 #include "block_validation.h"
-#include "chain_split_1.h"
-#include "chain_switch_1.h"
 #include "reorg_watermark_degraded.h"
 #include "checkpoint_conflict_rollback.h"
-#include "integer_overflow.h"
-#include "bulletproof_plus.h"
 #include "economics_c2a_prime.h"
 /************************************************************************/
 /*                                                                      */
 /************************************************************************/
-class gen_simple_chain_001: public test_chain_unit_base 
-{
-public: 
-  gen_simple_chain_001();
-  bool generate(std::vector<test_event_entry> &events);
-  bool verify_callback_1(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry> &events); 
-  bool verify_callback_2(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry> &events); 
-};
-
 class one_block: public test_chain_unit_base
 {
   cryptonote::account_base alice;
