@@ -66,6 +66,10 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::F13,
                 CenRow::F15,
                 CenRow::F20,
+                CenRow::H1,
+                CenRow::H3,
+                CenRow::H4,
+                CenRow::H16,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
@@ -146,10 +150,18 @@ fn a_block_with_no_listed_transactions_passes() {
     });
 }
 
+/// `tx_form` judges the landed 4.H rows at the slot it is given (slice 5);
+/// `tx_against` still records nothing (4.I is slice 6). At the miner slot a
+/// well-formed coinbase records H1/H3/H4 vacuous and H16 passed — every
+/// landed row was evaluated.
 #[test]
-fn tx_entry_points_pass_with_empty_coverage() {
+fn tx_entry_points_record_the_landed_rows() {
     let tx = coinbase(1);
-    assert_eq!(tx_form(&tx, &RuleSet::GENESIS), Ok(RuleCoverage::EMPTY));
+    let form = tx_form(&tx, TxSlot::Miner, &RuleSet::GENESIS).expect("a coinbase passes");
+    assert_eq!(
+        form.iter().collect::<Vec<_>>(),
+        [CenRow::H1, CenRow::H3, CenRow::H4, CenRow::H16]
+    );
     MockChain::default().with_view(|view| {
         assert_eq!(
             tx_against(&tx, &view, &RuleSet::GENESIS),

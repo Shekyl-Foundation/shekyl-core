@@ -401,6 +401,44 @@ pub mod fixture {
         }
     }
 
+    /// A **listed** (non-coinbase) transaction spending `key_image`, shaped
+    /// to pass every structural 4.H row that has landed: one `ToKey` input
+    /// with empty offsets (CEN-I6), one zero-amount output keyed `G` with a
+    /// `2·G` mask (H7, H17), `Ct::Fcmp` with the committed base sized to the
+    /// outputs (H8), `unlock_time` below the sentinel (H16). No prunable
+    /// region: the proof rows (H19's verification, 4.I) are not landed, and
+    /// a fixture that carried an unverifiable proof would be a lie about
+    /// what the rules accept. Mutate one field to build a negative fixture.
+    pub fn listed(key_image: [u8; 32]) -> Transaction {
+        Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::ToKey {
+                    amount: 0,
+                    key_offsets: Vec::new(),
+                    key_image,
+                }],
+                outputs: vec![Output {
+                    amount: 0,
+                    key: G,
+                    view_tag: 2,
+                }],
+                extra: Vec::new(),
+            },
+            ct: Ct::Fcmp {
+                fee: 7,
+                reference_block: BlockHash::from_bytes([0x99; 32]),
+                base: CtBase {
+                    enc_amounts: vec![[0x11; 9]],
+                    enc_labels: vec![[0x22; 9]],
+                    commitments: vec![TWO_G],
+                },
+                pqc_auths: Vec::new(),
+                prunable: None,
+            },
+        }
+    }
+
     /// A header with every field set to a recognisable non-zero value —
     /// the shape of a *recorded* block. A candidate takes its `previous` and
     /// `curve_tree_root` from the chain it is built on ([`candidate_on`]).

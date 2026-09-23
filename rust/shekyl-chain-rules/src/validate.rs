@@ -54,6 +54,7 @@ use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
 use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
+use crate::rules::tx::{H1, H16, H3, H4};
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
@@ -160,8 +161,9 @@ pub fn form<S: Substrate>(
 ///   stateless stage's included.
 ///
 /// The miner transaction and each listed transaction are judged by
-/// [`tx_form`] then [`tx_against`]; a refusal from either is re-homed from
-/// [`TxSlot::Lone`] to the slot the transaction occupies.
+/// [`tx_form`] (at their slot) then [`tx_against`]; a refusal from the
+/// latter is re-homed from [`TxSlot::Lone`] to the slot the transaction
+/// occupies.
 ///
 /// The verdict inherits the view's brand *and* its type. Judged against one
 /// view, it cannot be connected under another — the store's `connect` takes
@@ -320,8 +322,10 @@ pub fn validate<'id, V: ChainView<'id>>(
         .enumerate()
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
     for (slot, tx) in core::iter::once(miner).chain(listed) {
-        match judge_tx(tx, view, rule_set).map_err(Fault::View)? {
+        match judge_tx(tx, slot, view, rule_set).map_err(Fault::View)? {
             Ok(tx_coverage) => coverage.union(&tx_coverage),
+            // `tx_form` refuses at the slot it was given; `tx_against` still
+            // writes `Lone` (slice 6 adopts the slot), so the re-home stays.
             Err(refused) => {
                 return Ok(Err(InvalidBlock::new(
                     refused.rule,
@@ -337,16 +341,38 @@ pub fn validate<'id, V: ChainView<'id>>(
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }
 
+/// Run the listed per-transaction rules in order; the first refusal is the
+/// verdict (`tx_form` returns a `Verdict` directly, so `?` is that return).
+/// Out-of-scope rows are recorded vacuous by [`rules::run_tx`].
+macro_rules! judge_tx {
+    ($cx:expr, $coverage:expr; $($rule:ty),+ $(,)?) => {
+        $(
+            rules::run_tx::<$rule>(&$cx, &mut $coverage)?;
+        )+
+    };
+}
+
 /// Stateless per-transaction rules (census 4.H): everything decidable from
 /// the transaction's bytes alone. Shared verbatim by block connect and pool
-/// admission.
+/// admission — the C++ `ver_non_input_consensus`'s two sites, one function.
 ///
-/// A refusal's locus is [`TxSlot::Lone`]; `validate` re-homes it.
-pub fn tx_form(tx: &Transaction, rule_set: &RuleSet) -> Verdict<RuleCoverage> {
-    // 4.H rules land with their slice (DRS-D12); nothing reads the
-    // transaction or the rule set yet.
-    let _ = (tx, rule_set);
-    Ok(RuleCoverage::EMPTY)
+/// `slot` is where the transaction sits — the pool passes [`TxSlot::Lone`],
+/// `validate` the block's own `Miner` / `Listed(n)` — and is where a refusal
+/// points. The transaction's kind (coinbase position or not) is derived from
+/// the slot, never from its bytes (slice 5 Q2 as amended: a sole-`gen`
+/// transaction outside the miner slot is judged as a non-coinbase
+/// transaction); rules scoped to non-coinbase transactions are recorded
+/// vacuous at the miner slot.
+///
+/// `_rule_set` is the contract's parameter (`CHAIN_RULES_CRATE.md` §4.6) and
+/// the pool's call site; no 4.H row reads it today — every 4.H limit is a
+/// frozen constant beside its rule (`rules::tx`, the F21 arrangement) — and
+/// the first row that varies by schedule step is its first reader.
+pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<RuleCoverage> {
+    let cx = rules::TxContext::new(tx, slot);
+    let mut coverage = RuleCoverage::EMPTY;
+    judge_tx!(cx, coverage; H1, H3, H4, H16);
+    Ok(coverage)
 }
 
 /// Stateful per-transaction rules (census 4.I): everything that needs the
@@ -369,10 +395,11 @@ pub fn tx_against<'id, V: ChainView<'id>>(
 /// refusal is left as the callee wrote it.
 fn judge_tx<'id, V: ChainView<'id>>(
     tx: &Transaction,
+    slot: TxSlot,
     view: &V,
     rule_set: &RuleSet,
 ) -> Result<Verdict<RuleCoverage>, V::Fault> {
-    let mut coverage = match tx_form(tx, rule_set) {
+    let mut coverage = match tx_form(tx, slot, rule_set) {
         Ok(coverage) => coverage,
         Err(refused) => return Ok(Err(refused)),
     };

@@ -5,11 +5,14 @@
 
 //! Census 4.F — the miner transaction (`CHAIN_RULES_SLICE_4.md`).
 //!
-//! The coinbase is judged as **one field of the block**, not through the
-//! per-transaction path: it never passes the 4.H rows (census F8 note —
-//! the coinbase "never passes the H path"), so these are block-level rules
-//! reading `block.miner_transaction`, and a refusal points at
-//! [`TxSlot::Miner`] (Q6, ruled: one vocabulary for "which transaction").
+//! The coinbase is judged as **one field of the block**: these are
+//! block-level rules reading `block.miner_transaction`, and a refusal points
+//! at [`TxSlot::Miner`] (Q6, ruled: one vocabulary for "which transaction").
+//! It *also* passes `tx_form` at that slot (slice 5 Q2): the 4.H rows the
+//! C++ states for every transaction (H16, H17, …) run on it under their own
+//! row, and the non-coinbase rows are recorded vacuous there — so where a
+//! 4.F row and a 4.H row judge the same bytes (F9/H7, F10/H17), both are
+//! recorded, and neither reasons from the other having run.
 //!
 //! # Two kinds of row
 //!
