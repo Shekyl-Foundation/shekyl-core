@@ -132,8 +132,11 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::H5,
             CenRow::H6,
             CenRow::H9,
+            CenRow::H10,
             CenRow::H14,
+            CenRow::H15,
             CenRow::H16,
+            CenRow::H20,
         ]
     );
     let by_construction: Vec<CenRow> = CenRow::ALL

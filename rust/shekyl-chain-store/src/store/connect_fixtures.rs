@@ -19,7 +19,7 @@ use shekyl_types::{
     Timestamp,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, PqcAuth, Transaction, TxPrefix};
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
 use super::store_tests::TestErr;
 use super::view::BatchView;
@@ -35,10 +35,16 @@ pub(super) fn coinbase(height: u64) -> Transaction {
     fixture::coinbase(height)
 }
 
-/// A spend-shaped listed transaction in the storage-pruned form (no
-/// prunable, no pqc_auths): one key image in, `outputs` outputs. No landed
-/// rule reads a transaction yet (4.H/4.I are later slices), so it is
-/// admitted; what it exercises is the write set, not consensus.
+/// A spend-shaped listed transaction: one key image in, `outputs` outputs,
+/// one per-input PQC auth (so its txid is **4-part**, `pqc_auth_hash:
+/// Some(_)`, the shape that writes a `txs_pqc_auth_hash` row — amendment
+/// A3, `PDM-Q-F26` leg 1), and a prunable region with the canonical BP+
+/// layout for its outputs (CEN-H19). The auth and the proof are the
+/// harness's filler: no landed rule verifies either, and what the store
+/// records is the auth's count-prefixed digest, not its validity. The
+/// output keys and masks are filled bytes, not points — H7/H17 (E6 slice 5
+/// commit 5) refuse them, and that commit gives them the harness's point
+/// table.
 pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
     Transaction {
         prefix: TxPrefix {
@@ -67,31 +73,23 @@ pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
                     .map(|i| [0xa0 + u8::try_from(i).expect("small"); 32])
                     .collect(),
             },
-            pqc_auths: Vec::new(),
-            prunable: None,
+            // One per input: the wire reads `nvin` of them, and a spend with
+            // none parses as the storage-pruned form.
+            pqc_auths: vec![fixture::pqc_auth_filler()],
+            // A spend without a prunable region is the post-genesis
+            // storage-pruned form, not a consensus-valid body: CEN-H19's
+            // layout half (E6 slice 5) refuses it. The proof bytes are the
+            // harness's filler, sized to the outputs; one pseudo-out for the
+            // one spend.
+            prunable: (outputs > 0).then(|| Prunable {
+                bulletproofs: vec![fixture::bp_plus_layout_for(outputs)],
+                tree_depth: 0,
+                fcmp_proof: vec![0xF0],
+                pseudo_outs: vec![fixture::TWO_G],
+                serve_credit_pruned: Vec::new(),
+            }),
         },
     }
-}
-
-/// [`spend`] with one `pqc_auths` entry, so its txid is **4-part** and its
-/// identity carries `pqc_auth_hash: Some(_)` — the shape that writes a
-/// `txs_pqc_auth_hash` row (amendment A3, `PDM-Q-F26` leg 1). The auth is
-/// the minimal well-formed header (`auth_version 1`, `scheme_id 1`, empty
-/// blobs): no landed rule verifies it, and what the store records is its
-/// count-prefixed digest, not its validity.
-pub(super) fn spend_with_pqc_auth(key_image: u8, outputs: usize) -> Transaction {
-    let mut tx = spend(key_image, outputs);
-    let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct else {
-        unreachable!("spend() builds Ct::Fcmp");
-    };
-    pqc_auths.push(PqcAuth {
-        auth_version: 1,
-        scheme_id: 1,
-        flags: 0,
-        hybrid_public_key: Vec::new(),
-        hybrid_signature: Vec::new(),
-    });
-    tx
 }
 
 /// The root the header at `height` must carry under CEN-B5: the tree state

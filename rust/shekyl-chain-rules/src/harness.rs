@@ -23,7 +23,9 @@ use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
+use shekyl_wire::{
+    Block, BlockHeader, BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
+};
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
@@ -483,10 +485,14 @@ pub mod fixture {
     /// to pass every structural 4.H row that has landed: one `ToKey` input
     /// with empty offsets (CEN-I6), one zero-amount output keyed `G` with a
     /// `2·G` mask (H7, H17), `Ct::Fcmp` with the committed base sized to the
-    /// outputs (H8), `unlock_time` below the sentinel (H16). No prunable
-    /// region: the proof rows (H19's verification, 4.I) are not landed, and
-    /// a fixture that carried an unverifiable proof would be a lie about
-    /// what the rules accept. Mutate one field to build a negative fixture.
+    /// outputs (H8), `unlock_time` below the sentinel (H16), and a prunable
+    /// region whose one BP+ has the canonical **layout** for one output
+    /// (H19's layout half: `|L| = |R| = 6`) with one pseudo-out for its one
+    /// spend. The proof *bytes* are filler: H19's verification and the 4.I
+    /// membership rows are not landed, and when they land this fixture is
+    /// theirs to refuse — the sanity gate will say so, and the fix is a
+    /// tx-builder-produced proof, not a longer filler. Mutate one field to
+    /// build a negative fixture.
     pub fn listed(key_image: [u8; 32]) -> Transaction {
         Transaction {
             prefix: TxPrefix {
@@ -511,9 +517,48 @@ pub mod fixture {
                     enc_labels: vec![[0x22; 9]],
                     commitments: vec![TWO_G],
                 },
-                pqc_auths: Vec::new(),
-                prunable: None,
+                pqc_auths: vec![pqc_auth_filler()],
+                prunable: Some(Prunable {
+                    bulletproofs: vec![bp_plus_layout_for(1)],
+                    tree_depth: 0,
+                    fcmp_proof: vec![0xF0],
+                    pseudo_outs: vec![TWO_G],
+                    serve_credit_pruned: Vec::new(),
+                }),
             },
+        }
+    }
+
+    /// A per-input PQC authentication with **empty** key and signature
+    /// blobs: what the wire needs to round-trip a non-serve-credit `Fcmp`
+    /// transaction (`pqc_auths.len() == nvin`, no length prefix — a spend
+    /// with none parses as the storage-pruned form), and nothing the
+    /// signature rows (4.I) would accept. Filler, like [`bp_plus_layout_for`].
+    pub fn pqc_auth_filler() -> PqcAuth {
+        PqcAuth {
+            auth_version: 1,
+            scheme_id: 1,
+            flags: 0,
+            hybrid_public_key: Vec::new(),
+            hybrid_signature: Vec::new(),
+        }
+    }
+
+    /// A BP+ with the **canonical layout** for `outputs` outputs — `|L| = |R|
+    /// = 6 + ⌈log₂ outputs⌉` (CEN-H19's layout half) — and filler scalars.
+    /// It proves nothing; it is the shape the layout rule accepts, for
+    /// fixtures whose subject is not the proof.
+    pub fn bp_plus_layout_for(outputs: usize) -> BpPlus {
+        let rounds = 6 + outputs.next_power_of_two().trailing_zeros() as usize;
+        BpPlus {
+            a: [0xA0; 32],
+            a1: [0xA1; 32],
+            b: [0xB0; 32],
+            r1: [0xC1; 32],
+            s1: [0xD1; 32],
+            d1: [0xE1; 32],
+            l: vec![[0x1F; 32]; rounds],
+            r: vec![[0x2F; 32]; rounds],
         }
     }
 

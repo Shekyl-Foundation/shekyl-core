@@ -11,14 +11,14 @@
 
 use super::*;
 use crate::coverage::RuleCoverage;
-use crate::harness::fixture::{candidate_on, coinbase, listed};
+use crate::harness::fixture::{candidate_on, coinbase, listed, serve_credit_only, G, TWO_G};
 use crate::harness::{assert_refused, formed_on, judged, MockChain};
 use crate::rule_set::RuleSet;
 use crate::rules::TxKind;
 use crate::trust::Trust;
 use crate::validate::{tx_form, validate};
 use crate::verdict::{Locus, TxSlot};
-use shekyl_wire::{Input, Transaction};
+use shekyl_wire::{Ct, CtBase, Input, Transaction};
 
 const KI: [u8; 32] = [0xC1; 32];
 
@@ -513,8 +513,221 @@ fn a_well_formed_listed_transaction_records_every_landed_row() {
             CenRow::H5,
             CenRow::H6,
             CenRow::H9,
+            CenRow::H10,
             CenRow::H14,
-            CenRow::H16
+            CenRow::H15,
+            CenRow::H16,
+            CenRow::H20
         ]
     );
+}
+
+// ---- CEN-H10 ------------------------------------------------------------
+
+/// Two `ToKey` inputs with the same key image are refused on H10; two
+/// distinct ones pass. (I5's ordering — slice 6 — would refuse the same
+/// pair; this is the inherited belt on its own.)
+#[test]
+fn h10_a_repeated_key_image_within_one_transaction_is_refused() {
+    let dup = with_inputs(vec![spend(0x33), spend(0x33)]);
+    refused_lone(&dup, CenRow::H10);
+    refused_listed(&dup, CenRow::H10);
+    // Two pseudo-outs for two spends, so the layout/pseudo-out shapes are
+    // not what refuses here.
+    let mut distinct = with_inputs(vec![spend(0x44), spend(0x33)]);
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut distinct.ct
+    {
+        p.pseudo_outs.push(TWO_G);
+    }
+    assert!(tx_form(&distinct, TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("distinct key images pass")
+        .contains(CenRow::H10));
+}
+
+// ---- CEN-H15 (the Null half) --------------------------------------------
+
+/// A non-coinbase transaction with a `Null` CT is refused on H15 at both
+/// sites — including on what would be a Fakechain node (Q9: unconditional,
+/// where the C++ gates the check on `m_nettype != FAKECHAIN`). At the miner
+/// slot `Null` is the coinbase's CT (F3) and the row is vacuous.
+#[test]
+fn h15_a_null_ct_outside_the_coinbase_is_refused() {
+    let mut tx = listed(KI);
+    tx.ct = Ct::Null(CtBase {
+        enc_amounts: vec![[0x11; 9]],
+        enc_labels: vec![[0x22; 9]],
+        commitments: vec![TWO_G],
+    });
+    refused_lone(&tx, CenRow::H15);
+    refused_listed(&tx, CenRow::H15);
+    let form = tx_form(&coinbase(1), TxSlot::Miner, &RuleSet::GENESIS).expect("the coinbase");
+    assert!(form.contains(CenRow::H15));
+}
+
+// ---- CEN-H19 (the layout half) ------------------------------------------
+
+/// The layout predicate on its own: one proof with `|L| = |R|` rounds
+/// where `2^(|L|−6)` is the smallest power of two at or above the output
+/// count; no proof only for no outputs; never two proofs; rounds within
+/// `6..=10`.
+#[test]
+fn h19_the_canonical_layout_is_one_proof_sized_to_the_outputs() {
+    use crate::harness::fixture::bp_plus_layout_for;
+    use shekyl_wire::Prunable;
+    let with = |proofs: Vec<shekyl_wire::BpPlus>| Prunable {
+        bulletproofs: proofs,
+        tree_depth: 0,
+        fcmp_proof: vec![0xF0],
+        pseudo_outs: vec![TWO_G],
+        serve_credit_pruned: Vec::new(),
+    };
+    // Exact fits and the padded ranges: 1 → 6 rounds; 2 → 7; 3, 4 → 8;
+    // 5..=8 → 9; 9..=16 → 10.
+    for (n_out, rounds) in [
+        (1, 6),
+        (2, 7),
+        (3, 8),
+        (4, 8),
+        (5, 9),
+        (8, 9),
+        (9, 10),
+        (16, 10),
+    ] {
+        let bp = bp_plus_layout_for(n_out);
+        assert_eq!(bp.l.len(), rounds, "{n_out} outputs");
+        assert!(H19Layout::canonical(Some(&with(vec![bp])), n_out));
+    }
+    // Too many rounds for the count (a 2-output proof for 1 output), too few
+    // (a 1-output proof for 2), rounds out of range, two proofs, `|L| != |R|`.
+    assert!(!H19Layout::canonical(
+        Some(&with(vec![bp_plus_layout_for(2)])),
+        1
+    ));
+    assert!(!H19Layout::canonical(
+        Some(&with(vec![bp_plus_layout_for(1)])),
+        2
+    ));
+    let mut eleven = bp_plus_layout_for(16);
+    eleven.l.push([0; 32]);
+    eleven.r.push([0; 32]);
+    assert!(!H19Layout::canonical(Some(&with(vec![eleven])), 16));
+    let mut five = bp_plus_layout_for(1);
+    five.l.pop();
+    five.r.pop();
+    assert!(!H19Layout::canonical(Some(&with(vec![five])), 1));
+    assert!(!H19Layout::canonical(
+        Some(&with(vec![bp_plus_layout_for(1), bp_plus_layout_for(1)])),
+        1
+    ));
+    let mut lopsided = bp_plus_layout_for(1);
+    lopsided.r.push([0; 32]);
+    assert!(!H19Layout::canonical(Some(&with(vec![lopsided])), 1));
+    // No proof: canonical only for no outputs.
+    assert!(H19Layout::canonical(None, 0));
+    assert!(!H19Layout::canonical(None, 1));
+    assert!(H19Layout::canonical(Some(&with(Vec::new())), 0));
+}
+
+/// Through `tx_form`: a spend whose proof is sized for two outputs but
+/// carries one is refused under H19 — a refusal on a row the registry still
+/// holds `pending` (its verification half is slice 6's), so the row is not
+/// in any passing coverage.
+#[test]
+fn h19_a_non_canonical_layout_is_refused_and_the_row_is_not_yet_recorded() {
+    use crate::harness::fixture::bp_plus_layout_for;
+    let mut tx = listed(KI);
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut tx.ct
+    {
+        p.bulletproofs = vec![bp_plus_layout_for(2)];
+    }
+    refused_lone(&tx, CenRow::H19);
+    refused_listed(&tx, CenRow::H19);
+    assert!(!tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("the fixture")
+        .contains(CenRow::H19));
+}
+
+// ---- CEN-H20 ------------------------------------------------------------
+
+/// Each departure from the serve-credit-only shape is refused on H20: a fee,
+/// a `pqc_auth`, an output (with its mask), spend material in the prunable
+/// region, a `Null` CT (that one is H15's first — the class is derived from
+/// the inputs, the CT type is H15's). The fixture shape passes and the row
+/// is vacuous on a spend.
+#[test]
+fn h20_every_departure_from_the_serve_credit_shape_is_refused() {
+    use shekyl_wire::{PqcAuth, Prunable};
+    let base = || serve_credit_only([0x77; 32]);
+    let mutate = |f: &dyn Fn(&mut Transaction)| {
+        let mut tx = base();
+        f(&mut tx);
+        tx
+    };
+    let fee = mutate(&|tx| {
+        if let Ct::Fcmp { fee, .. } = &mut tx.ct {
+            *fee = 1;
+        }
+    });
+    refused_lone(&fee, CenRow::H20);
+    refused_listed(&fee, CenRow::H20);
+    let auth = mutate(&|tx| {
+        if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+            pqc_auths.push(PqcAuth {
+                auth_version: 1,
+                scheme_id: 1,
+                flags: 0,
+                hybrid_public_key: Vec::new(),
+                hybrid_signature: Vec::new(),
+            });
+        }
+    });
+    refused_lone(&auth, CenRow::H20);
+    let output = mutate(&|tx| {
+        tx.prefix.outputs.push(shekyl_wire::Output {
+            amount: 0,
+            key: G,
+            view_tag: 1,
+        });
+        if let Ct::Fcmp { base, .. } = &mut tx.ct {
+            base.commitments.push(TWO_G);
+            base.enc_amounts.push([0; 9]);
+            base.enc_labels.push([0; 9]);
+        }
+    });
+    refused_lone(&output, CenRow::H20);
+    let spend_material = mutate(&|tx| {
+        if let Ct::Fcmp { prunable, .. } = &mut tx.ct {
+            *prunable = Some(Prunable {
+                bulletproofs: Vec::new(),
+                tree_depth: 0,
+                fcmp_proof: vec![0xF0],
+                pseudo_outs: Vec::new(),
+                serve_credit_pruned: Vec::new(),
+            });
+        }
+    });
+    refused_lone(&spend_material, CenRow::H20);
+    // A prunable region holding only pass records (RF-D1's shape) is not
+    // spend material.
+    let pass_records = mutate(&|tx| {
+        if let Ct::Fcmp { prunable, .. } = &mut tx.ct {
+            *prunable = Some(Prunable {
+                bulletproofs: Vec::new(),
+                tree_depth: 0,
+                fcmp_proof: Vec::new(),
+                pseudo_outs: Vec::new(),
+                serve_credit_pruned: vec![vec![0x01, 0x02]],
+            });
+        }
+    });
+    assert!(tx_form(&pass_records, TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("pass records are not spend material")
+        .contains(CenRow::H20));
+    assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("a spend")
+        .contains(CenRow::H20));
 }

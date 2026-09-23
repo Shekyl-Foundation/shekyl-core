@@ -281,11 +281,12 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     assert_eq!(c0.height, BlockHeight::ZERO);
     assert_eq!(c1.height, BlockHeight::from_raw(1));
     // block 1: miner tx 7 (tx_indices, txs_pruned, txs_prunable,
-    // txs_prunable_hash, output_txs, member, tx_outputs) + spend 10 (1 key
-    // image + the same 4 tx rows + 2 outputs × (output_txs + member) +
+    // txs_prunable_hash, output_txs, member, tx_outputs) + spend 12 (1 key
+    // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
+    // and txs_pqc_auth_hash row + 2 outputs × (output_txs + member) +
     // tx_outputs) + root 1 + block 3 + hf 1 + block_burn 1 + total_burned 1
-    // = 24.
-    assert_eq!(c1.journaled, 24);
+    // = 26.
+    assert_eq!(c1.journaled, 26);
 
     let snap = store.begin_read().expect("read");
     assert_eq!(snap.open_table(BLOCKS).expect("t").len().expect("len"), 2);
@@ -375,15 +376,20 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
         snap.get_property::<TotalBurnedCell>().expect("cell"),
         Some(AtomicUnits::from_raw(25))
     );
-    // The spend's prunable row is empty (storage-pruned form) and its
-    // prunable hash is keccak256("") — the same value a coinbase carries.
+    // The spend's prunable row is its prunable segment, byte-for-byte — the
+    // wire's `pruned ‖ pqc_auths ‖ prunable` split (STX-8), derived from the
+    // fixture rather than pinned as a length. (Until E6 slice 5 the fixture
+    // was the storage-pruned form and this row was empty; CEN-H19 refuses
+    // that form at consensus.)
+    let expected_prunable = spend(0x5e, 2).write_segments().expect("segments").prunable;
+    assert!(!expected_prunable.is_empty());
     assert_eq!(
         snap.open_table(TXS_PRUNABLE)
             .expect("t")
             .get(2)
             .expect("g")
-            .map(|g| g.value().bytes().len()),
-        Some(0)
+            .map(|g| g.value().bytes().to_vec()),
+        Some(expected_prunable)
     );
     cleanup(&path);
 }

@@ -25,7 +25,7 @@ use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage, LongTermWeight,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
 use crate::corpus::{CorpusNet, CorpusWriter};
 use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
@@ -141,8 +141,20 @@ pub fn spend(key_image: [u8; 32]) -> Transaction {
                 enc_labels: vec![[0x22; 9]],
                 commitments: vec![[0xa0; 32]],
             },
-            pqc_auths: Vec::new(),
-            prunable: None,
+            // One per input: the wire reads `nvin` of them, and a spend with
+            // none parses as the storage-pruned form.
+            pqc_auths: vec![fixture::pqc_auth_filler()],
+            // A spend without a prunable region is the post-genesis
+            // storage-pruned form, not a consensus-valid body: CEN-H19's
+            // layout half (E6 slice 5) refuses it. The harness's filler
+            // proof, sized to the one output; one pseudo-out for the spend.
+            prunable: Some(Prunable {
+                bulletproofs: vec![fixture::bp_plus_layout_for(1)],
+                tree_depth: 0,
+                fcmp_proof: vec![0xF0],
+                pseudo_outs: vec![fixture::TWO_G],
+                serve_credit_pruned: Vec::new(),
+            }),
         },
     }
 }

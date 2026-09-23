@@ -54,7 +54,7 @@ use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
 use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
-use crate::rules::tx::{H1, H14, H16, H3, H4, H9};
+use crate::rules::tx::{H19Layout, H1, H10, H14, H15, H16, H20, H3, H4, H9};
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
@@ -376,7 +376,14 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     // is both oversized and mixed is refused on H6 here and on H1 there —
     // one refusal either way, the row differs.
     let cx = rules::TxContext::derive(tx, slot, &mut coverage)?;
-    judge_tx!(cx, coverage; H1, H3, H4, H9, H14, H16);
+    judge_tx!(cx, coverage; H1, H3, H4, H9, H10, H14, H15, H16, H20);
+    // CEN-H19's layout half refuses a non-canonical BP+ layout today; the
+    // row is recorded only when its verification half lands (slice 6, Q3
+    // (b)), so this is a refusal without a coverage entry — half a row
+    // refusing is honest, half a row claiming coverage is not.
+    if cx.kind == rules::TxKind::Listed {
+        H19Layout::check(&cx)?;
+    }
     Ok(coverage)
 }
 

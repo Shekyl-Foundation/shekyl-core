@@ -48,7 +48,7 @@ use crate::coverage::RuleCoverage;
 use crate::rules::{Rule, TxContext, TxKind, TxRule, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use shekyl_economics::FULL_REWARD_ZONE;
-use shekyl_wire::{Input, Transaction};
+use shekyl_wire::{Ct, Input, Transaction};
 
 // ---- the classification -------------------------------------------------
 
@@ -363,6 +363,169 @@ impl TxRule for H14 {
         }
         if cx.tx.prefix.outputs.iter().any(|out| out.amount != 0) {
             return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+}
+
+/// CEN-H10: no key image repeats within one transaction
+/// (`check_tx_inputs_keyimages_diff`); archival vins carry none and are
+/// skipped. CEN-I5's strictly-descending order (slice 6) forbids the same
+/// thing; this is the inherited belt, its own cheap predicate until slice 6
+/// decides whether it collapses (Q6). Non-coinbase.
+pub(crate) struct H10;
+
+impl Rule for H10 {
+    const ROW: CenRow = CenRow::H10;
+}
+
+impl TxRule for H10 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        let mut seen = std::collections::BTreeSet::new();
+        for input in &cx.tx.prefix.inputs {
+            if let Input::ToKey { key_image, .. } = input {
+                if !seen.insert(*key_image) {
+                    return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// CEN-H15, the `Null` half: a non-coinbase transaction's CT is
+/// `CTTypeFcmpPlusPlusPqc`, never `CTTypeNull` (`check_tx_inputs`,
+/// `blockchain.cpp`: *"CTTypeNull is only allowed for coinbase"*). The type
+/// *set* — nothing but those two — is unrepresentable in `shekyl_wire::Ct`
+/// and holds by construction (registry).
+///
+/// **Unconditional here.** The C++ site is gated `m_nettype != FAKECHAIN`,
+/// so a Fakechain node admits `Null`-CT spends — nettype selecting control
+/// flow on the consensus surface (rule 71), inherited for the convenience
+/// of C++ tests that built no proofs. A Fakechain node running this
+/// validator refuses them, as the regtest e2e (which builds real FCMP
+/// spends) never needed it not to. Slice 5 Q9, posed for ruling; the
+/// alternative is data on the Fakechain rule set, arm (d), which would be
+/// the first 4.H rule to read one.
+pub(crate) struct H15;
+
+impl Rule for H15 {
+    const ROW: CenRow = CenRow::H15;
+}
+
+impl TxRule for H15 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        if matches!(cx.tx.ct, Ct::Null(_)) {
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+}
+
+/// The bound on a BP+'s round count: `6 + log₂(MAX_OUTPUTS)`
+/// (`n_bulletproof_amounts_base`: `L_size <= 6 + extra_bits`, with
+/// `1 << extra_bits == max_outputs` asserted in the C++).
+const BP_PLUS_MAX_ROUNDS: usize = 6 + shekyl_wire::transaction::MAX_OUTPUTS.ilog2() as usize;
+
+/// CEN-H19, the **layout** half: the aggregate BP+ is canonical for the
+/// output count — exactly one proof when there are outputs and none when
+/// there are none (`outPk.size() == n_bulletproof_plus_amounts(...)`, which
+/// is `0` for no proof); `|L| = |R|`, `6 ≤ |L| ≤ 6 + log₂ MAX_OUTPUTS`;
+/// and the padded amount count `2^(|L|−6)` lies in `[n_out, 2·n_out)`
+/// (`n_bulletproof_amounts_base`; `V` is reconstructed from the masks, so
+/// `V_size = n_out` by construction). Every non-coinbase shape, the
+/// archival ones included (`verArchivalCtBalanceAndRange` runs the same
+/// layout check when a proof is present).
+///
+/// The **verification** half — the range proof itself, batched across the
+/// block — is a crypto cutover (`shekyl-bulletproofs` becoming the verifier
+/// of record) and lands with slice 6's proof bodies (Q3 (b)); until then
+/// the row stays `pending` in the registry with this half's fixtures under
+/// it, and this struct records nothing.
+pub(crate) struct H19Layout;
+
+impl H19Layout {
+    /// The layout predicate, on a prunable region (or none) and the output
+    /// count. `true` is "canonical"; it decides nothing about the proof.
+    pub(crate) fn canonical(prunable: Option<&shekyl_wire::Prunable>, n_out: usize) -> bool {
+        let proofs = prunable.map_or(&[][..], |p| p.bulletproofs.as_slice());
+        match proofs {
+            [] => n_out == 0,
+            [bp] => {
+                let rounds = bp.l.len();
+                if bp.r.len() != rounds || !(6..=BP_PLUS_MAX_ROUNDS).contains(&rounds) {
+                    return false;
+                }
+                let padded = 1usize << (rounds - 6);
+                n_out > 0 && n_out <= padded && padded < 2 * n_out
+            }
+            _ => false,
+        }
+    }
+
+    /// Judge a transaction's layout at its locus. Called from `tx_form` for
+    /// every non-coinbase transaction; refuses under H19 and records nothing
+    /// (the row is not registered `implemented` until its verification half
+    /// lands).
+    pub(crate) fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        let prunable = match &cx.tx.ct {
+            Ct::Fcmp { prunable, .. } => prunable.as_ref(),
+            Ct::Null(_) => None,
+        };
+        if !Self::canonical(prunable, cx.tx.prefix.outputs.len()) {
+            return Err(InvalidBlock::new(CenRow::H19, cx.locus()));
+        }
+        Ok(())
+    }
+}
+
+/// CEN-H20: the serve-credit-only CT shape (`ver_non_input_consensus`'s
+/// serve-credit arm + `verCtSemanticsFeeOnly`): no `pqc_auths`, no outputs,
+/// zero fee, `CTTypeFcmpPlusPlusPqc`, no spend material (no BP+, no FCMP++
+/// proof, no pseudo-outs). The fee-only balance `Σ masks + fee·H = identity`
+/// is then **vacuous** — no masks, `fee = 0` — which is what the C++'s call
+/// into `shekyl_verify_ct_balance` with empty masks and zero fee computes,
+/// so the row is complete without a curve operation. Applies to the
+/// serve-credit-only class; recorded vacuous on every other class.
+pub(crate) struct H20;
+
+impl Rule for H20 {
+    const ROW: CenRow = CenRow::H20;
+}
+
+impl TxRule for H20 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        if !matches!(cx.class, TxClass::ServeCreditOnly { .. }) {
+            return Ok(());
+        }
+        let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        let Ct::Fcmp {
+            fee,
+            pqc_auths,
+            prunable,
+            base,
+            ..
+        } = &cx.tx.ct
+        else {
+            return refuse();
+        };
+        if *fee != 0
+            || !pqc_auths.is_empty()
+            || !cx.tx.prefix.outputs.is_empty()
+            || !base.commitments.is_empty()
+        {
+            return refuse();
+        }
+        if let Some(p) = prunable {
+            if !p.bulletproofs.is_empty() || !p.fcmp_proof.is_empty() || !p.pseudo_outs.is_empty() {
+                return refuse();
+            }
         }
         Ok(())
     }

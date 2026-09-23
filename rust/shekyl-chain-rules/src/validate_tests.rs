@@ -72,8 +72,11 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::H5,
                 CenRow::H6,
                 CenRow::H9,
+                CenRow::H10,
                 CenRow::H14,
+                CenRow::H15,
                 CenRow::H16,
+                CenRow::H20,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
@@ -114,10 +117,11 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     assert_ne!(expected_miner.prunable_hash.as_bytes(), &[0u8; 32]);
     // A coinbase txid is 3-part: there is no third component to record
     // (PDM-Q-F26) — `None` is the identity's arity, not a discarded value.
-    // The listed spends carry no `pqc_auths` either, so theirs is `None` too.
+    // A spend carries one `pqc_auth` per input, so its txid is 4-part and
+    // the component is `Some`.
     assert_eq!(expected_miner.pqc_auth_hash, None);
     for (id, _) in &expected_listed {
-        assert_eq!(id.pqc_auth_hash, None);
+        assert!(id.pqc_auth_hash.is_some(), "a spend's txid is 4-part");
     }
 
     MockChain::default().with_view(|view| {
@@ -171,8 +175,11 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::H5,
             CenRow::H6,
             CenRow::H9,
+            CenRow::H10,
             CenRow::H14,
-            CenRow::H16
+            CenRow::H15,
+            CenRow::H16,
+            CenRow::H20
         ]
     );
     MockChain::default().with_view(|view| {
