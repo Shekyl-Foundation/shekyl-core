@@ -587,6 +587,45 @@ impl TxRule for H7 {
     }
 }
 
+/// CEN-H11: every key image is in the prime-order subgroup and is not the
+/// identity (`check_tx_inputs_keyimages_domain`: `ki ≠ identity`,
+/// `order·ki == identity`; archival vins carry no image and are skipped).
+/// The predicate is `check_output_keys`'s — valid point, canonical
+/// encoding, torsion-free, non-identity — which is the same set the C++
+/// accepts: its decode refuses a non-canonical encoding before the order
+/// check runs, and a non-canonical encoding of a spent image would
+/// otherwise be a second byte string for one spend, the double-spend the
+/// census's §3.4 y-normalization question circles. Non-coinbase. At 4.H
+/// this is all a key image is held to; CEN-I15's proof binds it to the
+/// spent output (slice 6).
+pub(crate) struct H11;
+
+impl Rule for H11 {
+    const ROW: CenRow = CenRow::H11;
+}
+
+impl TxRule for H11 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        let images: Vec<u8> = cx
+            .tx
+            .prefix
+            .inputs
+            .iter()
+            .filter_map(|input| match input {
+                Input::ToKey { key_image, .. } => Some(*key_image),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        if shekyl_ct_balance::check_output_keys(&images).is_err() {
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+}
+
 /// CEN-H17: every commitment mask is a canonical prime-order point and
 /// non-trivial — never the identity, never `G` — and a coinbase's mask
 /// additionally differs from `zeroCommit(amount)`

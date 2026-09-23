@@ -397,7 +397,7 @@ pub mod fixture {
         pub fn build(self) -> Transaction {
             match self {
                 Self::Coinbase => coinbase(1),
-                Self::Listed => listed([0xC1; 32]),
+                Self::Listed => listed(point(9)),
                 Self::ServeCreditOnly => serve_credit_only([0x77; 32]),
             }
         }
@@ -498,9 +498,29 @@ pub mod fixture {
     /// The `k`-th point of [`POINTS`], `k` from 1: a distinct canonical
     /// point for the `k`-th output, mask or key image of a fixture. Panics
     /// past the ceiling — a fixture wanting more than sixteen distinct
-    /// points wants more than the wire allows outputs.
+    /// points from the *pinned* table wants more than the wire allows
+    /// outputs; a fixture that needs an unbounded supply (a key image per
+    /// block over a long chain) uses [`point_at`].
     pub const fn point(k: usize) -> [u8; 32] {
         POINTS[k - 1]
+    }
+
+    /// `k·G`, compressed, for any `k ≥ 1` — the **computed** form of
+    /// [`POINTS`], for fixtures whose need is unbounded: the ingest's
+    /// seed-epoch chains spend a fresh key image per block for two thousand
+    /// blocks, which no pinned table should grow to. Same derivation home
+    /// as the table (the harness derives; production only verifies), and
+    /// `fixture_points_are_what_they_claim` holds `point_at(k) == point(k)`
+    /// for the pinned sixteen. Panics on `0`: `0·G` is the identity, which
+    /// no rule accepts anywhere and no fixture should be able to ask for by
+    /// accident.
+    pub fn point_at(k: u64) -> [u8; 32] {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+        use curve25519_dalek::scalar::Scalar;
+        assert!(k >= 1, "0·G is the identity; a fixture never wants it");
+        (ED25519_BASEPOINT_POINT * Scalar::from(k))
+            .compress()
+            .to_bytes()
     }
 
     /// Thirty-two bytes from sixty-four lowercase hex digits, at compile

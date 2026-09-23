@@ -140,8 +140,8 @@ fn two_listed_fixtures_make_a_valid_block() {
             candidate_on(
                 &chain,
                 vec![
-                    super::fixture::listed([0xC1; 32]),
-                    super::fixture::listed([0xC2; 32]),
+                    super::fixture::listed(super::fixture::point(9)),
+                    super::fixture::listed(super::fixture::point(10)),
                 ],
             ),
         );

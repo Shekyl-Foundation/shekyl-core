@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::coverage::RuleCoverage;
-use crate::harness::fixture::{candidate_on, coinbase, listed, serve_credit_only, G, TWO_G};
+use crate::harness::fixture::{candidate_on, coinbase, listed, point, serve_credit_only, G, TWO_G};
 use crate::harness::{assert_refused, formed_on, judged, MockChain};
 use crate::rule_set::RuleSet;
 use crate::rules::TxKind;
@@ -20,7 +20,9 @@ use crate::validate::{tx_form, validate};
 use crate::verdict::{Locus, TxSlot};
 use shekyl_wire::{Ct, CtBase, Input, Transaction};
 
-const KI: [u8; 32] = [0xC1; 32];
+/// The fixture spend's key image: a table point (CEN-H11 holds an image
+/// to pointness) at an index the keys and masks do not use.
+const KI: [u8; 32] = point(9);
 
 /// A refusal through `tx_form` at the pool's slot names the row and `Lone`.
 fn refused_lone(tx: &Transaction, row: CenRow) {
@@ -105,7 +107,7 @@ fn tx_form_coverage_is_unioned_per_slot_by_validate() {
     chain.with_view(|view| {
         let formed = formed_on(
             &chain,
-            candidate_on(&chain, vec![listed(KI), listed([0xC2; 32])]),
+            candidate_on(&chain, vec![listed(KI), listed(point(10))]),
         );
         let valid = judged(validate(
             formed,
@@ -337,7 +339,10 @@ fn h14_loud_amounts_are_refused_except_on_an_emission() {
     };
     refused_lone(&loud(listed(KI)), CenRow::H14);
     refused_listed(&loud(listed(KI)), CenRow::H14);
-    refused_lone(&loud(with_inputs(vec![bond_post(), spend(1)])), CenRow::H14);
+    refused_lone(
+        &loud(with_inputs(vec![bond_post(), spend(11)])),
+        CenRow::H14,
+    );
     // A loud emission passes H14 — asserted on the rule alone, since the
     // whole form also needs H22's balance. **Coupled to
     // `balanced_bond_post_and_emission_fixtures_pass`**, which is what
@@ -382,11 +387,12 @@ fn bond_post() -> Input {
     }))
 }
 
-fn spend(fill: u8) -> Input {
+/// A spend input whose key image is the `k`-th table point.
+fn spend(k: usize) -> Input {
     Input::ToKey {
         amount: 0,
         key_offsets: Vec::new(),
-        key_image: [fill; 32],
+        key_image: point(k),
     }
 }
 
@@ -408,7 +414,7 @@ fn class_of(inputs: Vec<Input>) -> Verdict<TxClass> {
 #[test]
 fn the_classification_names_the_four_shapes_and_the_coinbase() {
     assert_eq!(
-        class_of(vec![spend(1), spend(2)]),
+        class_of(vec![spend(11), spend(12)]),
         Ok(TxClass::Spend { spends: 2 })
     );
     assert_eq!(class_of(Vec::new()), Ok(TxClass::Spend { spends: 0 }));
@@ -417,7 +423,7 @@ fn the_classification_names_the_four_shapes_and_the_coinbase() {
         Ok(TxClass::ServeCreditOnly { credits: 2 })
     );
     assert_eq!(
-        class_of(vec![spend(1), bond_post(), spend(2)]),
+        class_of(vec![spend(11), bond_post(), spend(12)]),
         Ok(TxClass::BondPost { post: 1, spends: 2 })
     );
     assert_eq!(
@@ -425,7 +431,7 @@ fn the_classification_names_the_four_shapes_and_the_coinbase() {
         Ok(TxClass::Emission { at: 0, spends: 0 })
     );
     assert_eq!(
-        class_of(vec![spend(1), emission()]),
+        class_of(vec![spend(11), emission()]),
         Ok(TxClass::Emission { at: 1, spends: 1 })
     );
     let mut coverage = RuleCoverage::EMPTY;
@@ -446,7 +452,7 @@ fn h5_gen_is_refused_outside_the_coinbase_position() {
         Locus::Tx { slot: TxSlot::Lone },
     );
     assert_refused(
-        class_of(vec![spend(1), Input::Gen(1)]),
+        class_of(vec![spend(11), Input::Gen(1)]),
         CenRow::H5,
         Locus::Tx { slot: TxSlot::Lone },
     );
@@ -457,7 +463,7 @@ fn h5_gen_is_refused_outside_the_coinbase_position() {
     // A `gen` mixed into the miner slot is not a coinbase either; F1 refuses
     // it in `form`, and were it to reach here it is H5's, totally.
     let mut coverage = RuleCoverage::EMPTY;
-    let mixed_miner = with_inputs(vec![Input::Gen(1), spend(1)]);
+    let mixed_miner = with_inputs(vec![Input::Gen(1), spend(11)]);
     assert_refused(
         TxContext::derive(&mixed_miner, TxSlot::Miner, &mut coverage).map(|cx| cx.class),
         CenRow::H5,
@@ -474,7 +480,7 @@ fn h5_gen_is_refused_outside_the_coinbase_position() {
 fn h6_the_archival_mixings_are_refused_and_the_permitted_ones_pass() {
     let lone = Locus::Tx { slot: TxSlot::Lone };
     // Serve credits mix with nothing.
-    assert_refused(class_of(vec![serve_credit(), spend(1)]), CenRow::H6, lone);
+    assert_refused(class_of(vec![serve_credit(), spend(11)]), CenRow::H6, lone);
     assert_refused(
         class_of(vec![serve_credit(), bond_post()]),
         CenRow::H6,
@@ -487,11 +493,11 @@ fn h6_the_archival_mixings_are_refused_and_the_permitted_ones_pass() {
     // Emission and bond post never co-reside.
     assert_refused(class_of(vec![emission(), bond_post()]), CenRow::H6, lone);
     // Through both sites.
-    refused_lone(&with_inputs(vec![serve_credit(), spend(1)]), CenRow::H6);
-    refused_listed(&with_inputs(vec![serve_credit(), spend(1)]), CenRow::H6);
+    refused_lone(&with_inputs(vec![serve_credit(), spend(11)]), CenRow::H6);
+    refused_listed(&with_inputs(vec![serve_credit(), spend(11)]), CenRow::H6);
     // Permitted.
-    assert!(class_of(vec![bond_post(), spend(1), spend(2)]).is_ok());
-    assert!(class_of(vec![emission(), spend(1)]).is_ok());
+    assert!(class_of(vec![bond_post(), spend(11), spend(12)]).is_ok());
+    assert!(class_of(vec![emission(), spend(11)]).is_ok());
 }
 
 // ---- the adopted crypto rows: H7, H17, H18, H21, H22 --------------------
@@ -544,7 +550,7 @@ fn bond_post_tx(credit: u64) -> Transaction {
 /// Σ masks + fee·H` — a pseudo-out of `2·G` against a mask of `2·G +
 /// reward·H`, zero fee.
 fn emission_tx(reward: u64) -> Transaction {
-    let mut tx = with_inputs(vec![spend(0x55), emission()]);
+    let mut tx = with_inputs(vec![spend(13), emission()]);
     tx.prefix.outputs[0].amount = reward;
     if let Ct::Fcmp {
         pqc_auths,
@@ -616,6 +622,45 @@ fn h7_a_non_point_output_key_is_refused_everywhere() {
             slot: TxSlot::Miner,
         },
     );
+}
+
+// ---- CEN-H11 ------------------------------------------------------------
+
+/// A key image that is not a point, the identity, and a small-order point
+/// are each refused on H11 (at both sites for the first); a table point
+/// passes; archival vins carry no image and a serve credit records the row
+/// vacuously satisfied.
+#[test]
+fn h11_a_non_point_identity_or_torsion_key_image_is_refused() {
+    let with_image = |image: [u8; 32]| {
+        with_inputs(vec![Input::ToKey {
+            amount: 0,
+            key_offsets: Vec::new(),
+            key_image: image,
+        }])
+    };
+    refused_lone(&with_image([0xC1; 32]), CenRow::H11);
+    refused_listed(&with_image([0xC1; 32]), CenRow::H11);
+    // The identity: `y = 1`, `x = 0`.
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    refused_lone(&with_image(identity), CenRow::H11);
+    // The order-2 point `(0, −1)`: `y = p − 1`, a valid canonical encoding
+    // that is not in the prime-order subgroup — `order·ki ≠ identity`.
+    let mut order_two = [0xFFu8; 32];
+    order_two[0] = 0xEC;
+    order_two[31] = 0x7F;
+    refused_lone(&with_image(order_two), CenRow::H11);
+    assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("a table point is a valid image")
+        .contains(CenRow::H11));
+    assert!(tx_form(
+        &serve_credit_only([0x77; 32]),
+        TxSlot::Lone,
+        &RuleSet::GENESIS
+    )
+    .expect("no image to hold")
+    .contains(CenRow::H11));
 }
 
 // ---- CEN-H17 ------------------------------------------------------------
@@ -874,6 +919,7 @@ fn a_well_formed_listed_transaction_records_every_landed_row() {
             CenRow::H7,
             CenRow::H9,
             CenRow::H10,
+            CenRow::H11,
             CenRow::H14,
             CenRow::H15,
             CenRow::H16,
@@ -893,14 +939,14 @@ fn a_well_formed_listed_transaction_records_every_landed_row() {
 /// pair; this is the inherited belt on its own.)
 #[test]
 fn h10_a_repeated_key_image_within_one_transaction_is_refused() {
-    let dup = with_inputs(vec![spend(0x33), spend(0x33)]);
+    let dup = with_inputs(vec![spend(11), spend(11)]);
     refused_lone(&dup, CenRow::H10);
     refused_listed(&dup, CenRow::H10);
     // Two pseudo-outs for two spends, so the layout/pseudo-out shapes are
     // not what refuses here.
     // Two pseudo-outs for two spends — `G + G = 2·G`, the one mask — so the
     // layout, pseudo-out and balance rows are not what decides here.
-    let mut distinct = with_inputs(vec![spend(0x44), spend(0x33)]);
+    let mut distinct = with_inputs(vec![spend(12), spend(11)]);
     if let Ct::Fcmp {
         prunable: Some(p), ..
     } = &mut distinct.ct

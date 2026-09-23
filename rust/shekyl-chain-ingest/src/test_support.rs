@@ -107,13 +107,22 @@ pub enum Family {
     Fork = 0xB0,
 }
 
-/// The key image block `height` of `family` spends: the family tag, then
-/// the height's eight little-endian bytes, then a fill byte.
+/// The key image block `height` of `family` spends: `k·G` for a `k` that
+/// is distinct per `(family, height)` — a canonical prime-order point
+/// (CEN-H11), which a family tag over height bytes was not. Computed, not
+/// pinned (`fixture::point_at`): the seed-epoch tests spend a fresh image
+/// per block for two thousand blocks, past any table. The family offsets
+/// (`1_000` main, `2_000_000` fork) keep the two chains' images apart and
+/// clear of the pinned table's range, which the same fixtures use for keys
+/// and masks. At 4.H an image is held to pointness only; when CEN-I15 binds
+/// it to the spent output (slice 6) these become captured spends' own
+/// images.
 pub fn key_image(family: Family, height: u64) -> [u8; 32] {
-    let mut bytes = [0x11u8; 32];
-    bytes[0] = family as u8;
-    bytes[1..9].copy_from_slice(&height.to_le_bytes());
-    bytes
+    let offset = match family {
+        Family::Main => 1_000,
+        Family::Fork => 2_000_000,
+    };
+    fixture::point_at(offset + height)
 }
 
 /// A spend of `key_image`.

@@ -265,7 +265,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let g = candidate(0, BlockHash::NULL, Vec::new());
     let g_hash = g.block.hash();
-    let b1 = candidate(1, g_hash, vec![spend(0x5e, 2)]);
+    let b1 = candidate(1, g_hash, vec![spend(9, 2)]);
     let b1_hash = b1.block.hash();
     let spend_hash = b1.transactions[0].hash();
 
@@ -293,7 +293,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     assert!(
         snap.open_table(SPENT_KEYS)
             .expect("t")
-            .get(LmdbHashKey::from_bytes([0x5e; 32]))
+            .get(LmdbHashKey::from_bytes(fixture::point(9)))
             .expect("g")
             .is_some(),
         "the spend's key image is recorded"
@@ -381,7 +381,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     // fixture rather than pinned as a length. (Until E6 slice 5 the fixture
     // was the storage-pruned form and this row was empty; CEN-H19 refuses
     // that form at consensus.)
-    let expected_prunable = spend(0x5e, 2).write_segments().expect("segments").prunable;
+    let expected_prunable = spend(9, 2).write_segments().expect("segments").prunable;
     assert!(!expected_prunable.is_empty());
     assert_eq!(
         snap.open_table(TXS_PRUNABLE)
@@ -425,7 +425,7 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
     // there is no `total_burned` cell yet.
     assert_eq!(after_genesis, (1, 1, 1, 1, 0, None));
 
-    let b1 = candidate(1, genesis.hash(), vec![spend(0x5e, 1)]);
+    let b1 = candidate(1, genesis.hash(), vec![spend(9, 1)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, b1)?, facts(1, 4), RuleSet::GENESIS)?)
@@ -633,7 +633,7 @@ fn a_key_image_spent_in_an_earlier_block_is_si1() {
     let path = tmp("connect-ki");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let (_, genesis) = connect_genesis(&store, 0);
-    let b1 = candidate(1, genesis.hash(), vec![spend(0x5e, 1)]);
+    let b1 = candidate(1, genesis.hash(), vec![spend(9, 1)]);
     let b1_hash = b1.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
@@ -643,7 +643,7 @@ fn a_key_image_spent_in_an_earlier_block_is_si1() {
     // No landed rule checks key images yet (CEN-I7 is slice 6), so the
     // double spend reaches the store — and the belt beneath the rule catches
     // it as a fatal.
-    let b2 = candidate(2, b1_hash, vec![spend(0x5e, 1)]);
+    let b2 = candidate(2, b1_hash, vec![spend(9, 1)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)

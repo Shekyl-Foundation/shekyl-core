@@ -37,7 +37,7 @@ fn hash_of(tx: &Transaction) -> TxHash {
 fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
     let store = ChainStore::create(path, EPOCH).expect("create");
     let plain = shekyl_chain_rules::harness::fixture::serve_credit_only([0x5e; 32]);
-    let with_pqc = spend(0x6f, 1);
+    let with_pqc = spend(15, 1);
     let hashes = connect_chain(
         &store,
         &[vec![], vec![plain.clone()], vec![with_pqc.clone()]],

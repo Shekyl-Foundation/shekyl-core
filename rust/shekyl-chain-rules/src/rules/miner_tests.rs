@@ -117,11 +117,13 @@ fn fixture_points_are_what_they_claim() {
     assert_eq!(POINTS[0], G);
     assert_eq!(POINTS[1], TWO_G);
     // Multiplicity — `POINTS[k−1] == k·G` for every k — is what the balance
-    // fixtures rely on (the table's contiguity, see its doc). Test-only
-    // curve arithmetic makes it a gate rather than quoted provenance: a
-    // renumbered or non-contiguous table fails here, not in a store test
-    // three crates away.
+    // fixtures rely on (the table's contiguity, see its doc). Curve
+    // arithmetic makes it a gate rather than quoted provenance: a renumbered
+    // or non-contiguous table fails here, not in a store test three crates
+    // away. The same loop holds the pinned table equal to its computed form,
+    // `point_at`, so the two never disagree about what `k·G` is.
     {
+        use crate::harness::fixture::point_at;
         use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
         use curve25519_dalek::scalar::Scalar;
         for (i, p) in POINTS.iter().enumerate() {
@@ -130,7 +132,12 @@ fn fixture_points_are_what_they_claim() {
                 .compress()
                 .to_bytes();
             assert_eq!(*p, expected, "POINTS[{i}] is {k}·G");
+            assert_eq!(point_at(k), *p, "point_at({k}) is the pinned entry");
         }
+        assert!(
+            check_output_keys(&point_at(2_113)).is_ok(),
+            "a far entry is a canonical prime-order point too"
+        );
     }
     assert_eq!(point(1), G);
     assert_eq!(point(16), POINTS[15]);

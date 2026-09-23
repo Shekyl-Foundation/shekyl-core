@@ -6,7 +6,7 @@
 use super::*;
 use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, Retry, Stale};
-use crate::harness::fixture::{candidate, coinbase, listed};
+use crate::harness::fixture::{candidate, coinbase, listed, point};
 use crate::harness::{formed, formed_under, judged, Faulted, MockChain, MockSubstrate};
 use crate::rule_set::RuleSetId;
 use crate::substrate::Substrate;
@@ -16,7 +16,7 @@ use crate::TxIdentity;
 #[test]
 fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
     MockChain::default().with_view(|view| {
-        let input = candidate(vec![listed([0xC1; 32]), listed([0xC2; 32])]);
+        let input = candidate(vec![listed(point(9)), listed(point(10))]);
         let valid = judged(validate(
             formed(input),
             &view,
@@ -74,6 +74,7 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::H7,
                 CenRow::H9,
                 CenRow::H10,
+                CenRow::H11,
                 CenRow::H14,
                 CenRow::H15,
                 CenRow::H16,
@@ -92,7 +93,7 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
 
 #[test]
 fn the_validated_block_is_the_candidate_with_identities_derived_once() {
-    let input = candidate(vec![listed([0xC1; 32]), listed([0xC2; 32])]);
+    let input = candidate(vec![listed(point(9)), listed(point(10))]);
     let expected_hash = input.block.hash();
     let identity = |tx: &Transaction| {
         let parts = tx.txid_parts();
@@ -182,6 +183,7 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::H7,
             CenRow::H9,
             CenRow::H10,
+            CenRow::H11,
             CenRow::H14,
             CenRow::H15,
             CenRow::H16,

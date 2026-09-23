@@ -45,14 +45,21 @@ pub(super) fn coinbase(height: u64) -> Transaction {
 /// output keys and masks are filled bytes, not points — H7/H17 (E6 slice 5
 /// commit 5) refuse them, and that commit gives them the harness's point
 /// table.
-pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
+pub(super) fn spend(key_image: usize, outputs: usize) -> Transaction {
     Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
             inputs: vec![Input::ToKey {
                 amount: 0,
                 key_offsets: Vec::new(),
-                key_image: [key_image; 32],
+                // The `key_image`-th table point: a canonical prime-order
+                // point (CEN-H11), distinct per index — which is all the call
+                // sites ever asked of it. Indices 9..=16, clear of the keys
+                // (1..) and masks (2..) the same fixture draws. At 4.H an
+                // image is held to pointness only; when CEN-I15 binds it to
+                // the spent output (slice 6) these become captured spends'
+                // own images, and this parameter goes with them.
+                key_image: fixture::point(key_image),
             }],
             // Keys and masks are entries of the harness's point table —
             // canonical prime-order points (H7, H17), never a filled byte
