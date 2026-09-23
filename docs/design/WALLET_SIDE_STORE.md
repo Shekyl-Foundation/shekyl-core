@@ -770,7 +770,14 @@ remove, relocated rather than fixed.
 
 **The answer is available and should be built in rather than left to
 discipline:** the **frontier advance is public and identity-free**, and **path
-capture is a per-identity filter over the same public stream**. One public
+capture is a per-identity filter over the same public stream**.
+
+**`identity-free` is a claim about the bytes, never about access** (clarified
+2026-09-22, `CT-6` C6). That the frontier's content reveals no ownership does
+not make the *file* carrying it shared: a design that reads public content out
+of another identity's sealed file is `WSS-13` relocated, not this discipline
+satisfied. The distinction is load-bearing wherever persistence is decided —
+see `CT-6 Q3`, whose unscoped default blurred exactly this line. One public
 ingest; two private capture sides, each seeing only its own outputs, each
 writing into its own sealed file. The shared part is then public data only —
 the frontier and the buffer — and the path sets split by identity, which is
