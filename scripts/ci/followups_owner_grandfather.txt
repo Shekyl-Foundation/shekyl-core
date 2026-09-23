@@ -12,7 +12,6 @@ The `shekyl-fcmp` fuzz crate is built nowhere in CI.
 `ARCHIVAL_P_DERIVE_V1`'s regenerator is not citation-gated
 DRS-BENCH redb arm: add when a redb-backed `shekyld` build target exists that reports its backend.
 DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.
-Delete or justify `tx_extra` 0x0A (`PQC_SPEND_AUTH_PUBKEYS`) — it has no producer.
 `tx_extra` `0x0B` (archival attestation) has a consensus reader and no producer.
 Attestation verify must move behind PoW before credit-wire population activates.
 Dead hard-fork version dispatch survives from genesis (rule 60).
@@ -137,8 +136,6 @@ Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression
 Stage 2 — `KeyEngine` migration to actor.
 Subaddress mechanism under PQC — dedicated design round (2026-05-31, [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112)
 FA-6 — PQ-safe view-tag pre-filter (T6 closure, genesis).
-FA-6b — v31 multisig `tx_extra_pqc_view_tag_hints` ().
-`tx_extra` `0x02` Nonce: shed from the genesis grammar — FA-10 is
 Phase 2a send path — engine substrate (closed 2026-06).
 Phase 2b planning session — stake state-machine shape (gate for [`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md)
 Stage 3 — `StakeEngine` native actor build.

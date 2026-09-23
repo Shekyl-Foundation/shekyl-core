@@ -393,7 +393,17 @@ def commit(t: pathlib.Path, branch: str) -> None:
         subprocess.run(["git", "init", "-q", "-b", branch], cwd=t, check=True,
                        capture_output=True)
         for k, v in (("user.email", "matrix@example.invalid"),
-                     ("user.name", "matrix")):
+                     ("user.name", "matrix"),
+                     # A fixture repo is written once and deleted; it has no
+                     # use for background maintenance, and maintenance is what
+                     # writes `.git/maintenance.lock`. Left on, `git commit`
+                     # below can spawn a maintenance run whose lock file is
+                     # created and removed underneath a concurrent `rmtree`
+                     # (see `no_git_repo`). Both knobs are set because the
+                     # legacy auto-gc and the newer auto-maintenance are
+                     # separate triggers across the git versions CI may carry.
+                     ("maintenance.auto", "false"),
+                     ("gc.auto", "0")):
             subprocess.run(["git", "config", k, v], cwd=t, check=True,
                            capture_output=True)
     subprocess.run(["git", "add", "-A"], cwd=t, check=True, capture_output=True)
@@ -634,12 +644,39 @@ def real_submodule(state: str):
     return f
 
 
+def _remove_tree(p: pathlib.Path) -> None:
+    """Remove `p`, tolerating an entry that vanishes mid-walk — and only that.
+
+    `shutil.rmtree` enumerates a directory and then unlinks what it found, so
+    anything deleting a file in between raises `FileNotFoundError` from a tree
+    that is otherwise going away anyway. `commit()` disables the background
+    maintenance that used to do exactly that, so this is the belt to those
+    braces rather than the fix.
+
+    Deliberately **not** `ignore_errors=True`: that would swallow a permission
+    failure too and leave a live `.git` behind, and the case this serves would
+    then run against a tree that still has git — a pass proving nothing. The
+    post-condition is the point (rule 47): the subject must actually be absent,
+    and if it survives, say so loudly instead of testing a lookalike.
+    """
+    for _ in range(3):
+        try:
+            shutil.rmtree(p)
+        except FileNotFoundError:
+            pass  # an entry went first; the retry walks a smaller tree
+        if not p.exists():
+            return
+    raise RuntimeError(
+        f"{p} survived removal — the no-git case would test a tree that "
+        f"still has git, so it is failed here rather than passed vacuously")
+
+
 def no_git_repo(t: pathlib.Path) -> None:
     """A tree with submodules declared but no git to report on them."""
     (t / ".gitmodules").write_text(
         '[submodule "external/sub"]\n\tpath = external/sub\n'
         "\turl = ./external/sub\n", encoding="utf-8")
-    shutil.rmtree(t / ".git")
+    _remove_tree(t / ".git")
 
 
 def drop_object(kind: str):

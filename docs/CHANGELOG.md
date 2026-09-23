@@ -12,6 +12,40 @@
   epoch; a node down longer refetches bodies from archivers (band 2). No
   code moves in this PR (`PDM-Q-S0`); S-PRUNE's skeleton is re-keyed.
 
+### `WSS-Q1(b)` bench — a third measurement for the axis nothing grades
+
+- **New `verify_edge` binary: `root_at_count` on an unfrozen population.**
+  §6.3.4's two timed rows grade the edges a *human waits at* — the pause at
+  spend time and the pause at wallet open. Neither touches the cost `CT-6`
+  F3(a) priced, because that one is paid **per block inside refresh**:
+  `root_at` is *"the §3.3 verify hot path"* and `merge.rs:661` calls
+  `verify_root` in the ingest loop, where freeze's 730-block burial means every
+  call recomputes `R_k` over ~29 complete-but-unfrozen segments. `CT-6`
+  increment 4 exists to remove that cost and increment 6 says **re-grade** — so
+  it needed a baseline, and §7's first-run table had no row for it.
+- **It reports no verdict, and that is the output.** `CT-6 Q4` is pending as a
+  derivation and grades the *amortized* advance; this is the naive cost that
+  form replaces. The record states its status as prose rather than reusing
+  `Verdict::Ungraded`, whose meaning is *"measured off the pinned rig"* — one
+  value in front of two meanings is the defect `SCHEMA_VERSION` 2 was bumped to
+  correct. The per-call cost is reported as a **cadence fraction**,
+  informational, so the duty cycle is visible without implying a budget.
+  `SCHEMA_VERSION` is **not** bumped: a new record type under its own
+  `measurement` value removes no field and changes no meaning.
+- **The frozen control does two jobs.** It is the red-bite — removing the
+  recompute must collapse the cost — and it identifies which branch ran:
+  `root_at_count`'s `full_build_root` fallback ignores frozen sub-roots
+  entirely, so a time that collapses when frozen was on the mixed-composition
+  path. Determined behaviourally because `store::ops` is private and a harness
+  restating its branch condition would be a second copy of it. Both phases must
+  also return the same root.
+- **Rule 47 before any timing:** zero frozen segments at the start, a leaf count
+  equal to the derived rate, and at least one complete segment — a population
+  that froze by accident makes every number cheap and green. Ingest goes
+  through `append_block_deltas`, the production path, because `append_drained`
+  is a `#[cfg(test)]` wrapper and a baseline taken through a test-only door
+  would not describe refresh.
+
 ### `CT-6` Round 1 disposed — the proving-state round's questions get terminal statuses, per row
 
 - **`CT-6 Q2` RULED — two mechanisms, one reader.** CT-1's segments keep the
@@ -330,6 +364,17 @@
 
 ### Consensus
 
+- **`tx_extra` tags `0x05` and `0x08` are deleted; a transaction carrying
+  either is unparseable.** `0x05` (`PQC_OWNERSHIP`, a per-output
+  `(scheme_id, group_id)` entry) had no producer and no reader — the
+  ownership binding it predates is `PL-D3`'s in-circuit leaf commitment, and
+  group identity is the address fingerprint (`PQC_MULTISIG.md` §5.3) —
+  REJECTED, byte retired beside `0x03`/`0xDE`. `0x08` (`MULTISIG_MIGRATION`)
+  is RESERVED in the spec's table only; its constant, struct and variant are
+  gone until the migration transaction is designed. `0x09` / `0x0A` (multisig
+  view-tag hints and spend-auth pubkeys) stay, with their producer named at
+  the declaration: the multisig receive path (`PQC_MULTISIG.md` §7.4). No
+  genesis or existing-block bytes change — nothing ever emitted the two tags.
 - **Circulating supply is `coins_generated − total_burned`, and the fee-burn /
   emission-split shims hold no rule content (DRS-E6 slice 4 precursor).**
   FL-R16c's ruled definitional defect is closed: the burn ratio's supply
