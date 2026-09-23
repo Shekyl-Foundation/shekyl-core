@@ -450,7 +450,14 @@ fn height_keyed_read_matches_oracle_at_every_height() {
                 want_n, shifted_n,
                 "height {height}: equal roots hid a leaf-count change"
             );
-            shift_same_root += 1;
+            // Count this as witnessing the invisible case **only where leaves
+            // exist**. Before the first drain both cutoffs see the empty tree,
+            // so equal roots there are guaranteed by the fixture's start and
+            // say nothing about a zero-output block inside the drained window —
+            // which is the only thing the assertion below claims.
+            if want_n > 0 {
+                shift_same_root += 1;
+            }
         } else {
             shift_changes_root += 1;
         }
@@ -464,8 +471,9 @@ fn height_keyed_read_matches_oracle_at_every_height() {
     );
     assert!(
         shift_same_root > 0,
-        "a one-block cutoff shift changed every root; the fixture has no zero-output block \
-         in the drained window"
+        "a one-block cutoff shift changed every root at a height that had leaves; the \
+         fixture has no zero-output block inside the drained window, so the case where a \
+         wrong cutoff is invisible in the count went untested"
     );
 }
 
