@@ -542,6 +542,74 @@ impl RegtestDaemon {
             .await
             .expect("pop_blocks");
     }
+
+    /// Whole-chain emission and fee legs of `get_coinbase_tx_sum`.
+    ///
+    /// The low 64 bits are the assertion. `fee_amount_top64` /
+    /// `emission_amount_top64` must be zero on a regtest chain this short;
+    /// a non-zero top half would mean the number being compared is not the
+    /// sum.
+    pub(super) async fn coinbase_tx_sum(&self) -> (u64, u64) {
+        let count = self.height().await;
+        let res: CoinbaseTxSumResp = self
+            .rpc
+            .json_rpc_call(
+                "get_coinbase_tx_sum",
+                Some(json!({ "height": 0u64, "count": count })),
+            )
+            .await
+            .expect("get_coinbase_tx_sum");
+        assert_eq!(
+            res.emission_amount_top64, 0,
+            "emission sum must fit the low 64 bits on this chain"
+        );
+        assert_eq!(
+            res.fee_amount_top64, 0,
+            "fee sum must fit the low 64 bits on this chain"
+        );
+        (res.emission_amount, res.fee_amount)
+    }
+
+    /// `is_key_image_spent`, one status per image, in request order.
+    ///
+    /// 0 unspent, 1 spent in a block, 2 spent by a broadcast pool
+    /// transaction. A popped spend that returned to the pool is 2, not 0.
+    pub(super) async fn key_image_statuses(
+        &self,
+        key_images: &[[u8; 32]],
+    ) -> Vec<shekyl_rpc_types::KeyImageStatus> {
+        use shekyl_rpc_types::{IsKeyImageSpentRequest, IsKeyImageSpentResponse};
+        let req = IsKeyImageSpentRequest {
+            key_images: key_images.iter().map(hex::encode).collect(),
+        };
+        let res: IsKeyImageSpentResponse = self
+            .rpc
+            .rpc_call(
+                "is_key_image_spent",
+                Some(serde_json::to_value(&req).expect("encode is_key_image_spent")),
+            )
+            .await
+            .expect("is_key_image_spent");
+        assert!(
+            res.status.is_ok(),
+            "is_key_image_spent refused: {}",
+            res.status.0
+        );
+        assert_eq!(
+            res.spent_status.len(),
+            key_images.len(),
+            "spent_status is positional; a short reply is unreadable"
+        );
+        res.spent_status
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CoinbaseTxSumResp {
+    emission_amount: u64,
+    emission_amount_top64: u64,
+    fee_amount: u64,
+    fee_amount_top64: u64,
 }
 
 impl Drop for RegtestDaemon {
@@ -992,6 +1060,213 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 
     let after = assert_tx_confirmed(&daemon, &address, accepted).await;
     maybe_capture_live_oracle(&daemon, &pending.tx_bytes, accepted, after).await;
+}
+
+/// A daemon-accepted user spend, mined, popped, and mined again.
+///
+/// This bites the live daemon across one tx-conserving pop: the spend's
+/// key images go 1 (in a block) → 2 (back in the pool) → 1, and
+/// `get_coinbase_tx_sum`'s fee leg moves by the spend's `txnFee` and
+/// back. It does NOT cover the image going free (that needs a pool
+/// flush), an integer-overflow amount, an alt-chain split, E2 grading,
+/// or the Rust validator. Those census rows are still `pending`; this
+/// test is the holder they can cite, not their implementation.
+///
+/// It also does not assert pool-spent *before* the first mine.
+/// `is_key_image_spent` reports a pool image only for
+/// `relay_category::broadcasted` (`tx_pool::check_for_key_images`). A
+/// wallet submit lands at `relay_method::local` until the fire-and-forget
+/// relay nudge promotes it, so that status races. A pop puts the spend
+/// back with `relay_method::block`, which is broadcast-visible, and that
+/// is the status this test checks.
+///
+/// The north-star test stops at "mined into a block". The disabled
+/// chaingen chain-switch / block-reward regime is what this replaces
+/// for one pop.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
+    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::refresh::RefreshOptions;
+    use super::{DaemonClient, Engine, SoloSigner};
+    use shekyl_rpc_types::KeyImageStatus;
+    use shekyl_scanner::WalletLedgerExt;
+    use shekyl_units::AtomicUnits;
+    use shekyl_wire::{Input, Transaction};
+
+    let daemon = RegtestDaemon::start().await;
+
+    let seed = [0x35u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let creds = super::lifecycle::Credentials::password_only(b"track2-spend-reorg");
+    let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend-reorg").await;
+    let wallet_path = tmp.path().join("wallet");
+    created.close(&creds).expect("close created wallet");
+
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("wallet rpc (reopen)");
+    let wallet = Engine::<SoloSigner>::open_full(
+        &wallet_path,
+        &creds,
+        shekyl_address::Network::Mainnet,
+        DaemonClient::verifying(rpc, regtest_expectation()),
+        shekyl_engine_file::SafetyOverrides::none(),
+    )
+    .expect("reopen wallet from disk")
+    .into_wallet();
+    let address = wallet.primary_address().encode().expect("encode address");
+
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24;
+
+    let arc = Arc::new(RwLock::new(wallet));
+    let mut unlocked = AtomicUnits::ZERO;
+    for _ in 0..MAX_MINE_BATCHES {
+        daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+        Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh")
+            .join()
+            .await
+            .expect("refresh joins");
+        unlocked = {
+            let g = arc.read().await;
+            let ledger = g.ledger();
+            ledger.balance().unlocked
+        };
+        if unlocked > AtomicUnits::ZERO {
+            break;
+        }
+    }
+    assert!(
+        unlocked > AtomicUnits::ZERO,
+        "a matured coinbase must be spendable after mining + refresh; got {unlocked:?}"
+    );
+
+    let request = TxRequest {
+        recipients: vec![TxRecipient {
+            address: address.clone(),
+            amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
+        }],
+        priority: FeePriority::Standard,
+    };
+
+    let mut pending = None;
+    for _ in 0..MAX_MINE_BATCHES {
+        let attempt = {
+            let g = arc.read().await;
+            g.build_pending_tx_async(&request).await
+        };
+        match attempt {
+            Ok(p) => {
+                pending = Some(p);
+                break;
+            }
+            Err(super::error::SendError::OutputNotYetSpendable { wait_blocks, .. }) => {
+                eprintln!("output not reference-spendable yet ({wait_blocks} blocks); mining more");
+                daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+                Engine::start_refresh(arc.clone(), RefreshOptions::default())
+                    .await
+                    .expect("start_refresh")
+                    .join()
+                    .await
+                    .expect("refresh joins");
+            }
+            Err(e) => panic!("build pending FCMP++ spend: {e:?}"),
+        }
+    }
+    let pending = pending.expect("FCMP++ spend must build once the output is reference-spendable");
+
+    let txn_fee = pending.fee_atomic_units.to_raw();
+    assert!(
+        txn_fee > 0,
+        "a zero fee cannot move the fee leg, so this test would be green by construction"
+    );
+    let key_images: Vec<[u8; 32]> = Transaction::from_bytes(&pending.tx_bytes)
+        .expect("the built spend must parse")
+        .prefix
+        .inputs
+        .iter()
+        .filter_map(|input| match input {
+            Input::ToKey { key_image, .. } => Some(*key_image),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !key_images.is_empty(),
+        "the spend must publish a key image; without one the status checks have no subject"
+    );
+
+    let outcome = {
+        let g = arc.read().await;
+        g.submit_pending_tx_async(pending.id, pending.content_gen)
+            .await
+            .expect("daemon must accept the FCMP++ spend")
+    };
+    let accepted = require_fresh_accept(outcome, "the FCMP++ spend");
+
+    let (emission_before, fee_before) = daemon.coinbase_tx_sum().await;
+    let height_before = daemon.height().await;
+
+    let height_mined = assert_tx_confirmed(&daemon, &address, accepted).await;
+    assert_eq!(height_mined, height_before + 1);
+    assert_eq!(
+        daemon.key_image_statuses(&key_images).await,
+        vec![KeyImageStatus::SpentInBlockchain; key_images.len()],
+        "mining the spend must move its key images from the pool into the chain"
+    );
+    let (emission_mined, fee_mined) = daemon.coinbase_tx_sum().await;
+    assert_eq!(
+        fee_mined,
+        fee_before + txn_fee,
+        "the mined block's fee leg must grow by the spend's txnFee"
+    );
+    assert_ne!(
+        emission_mined, emission_before,
+        "connecting a block must move the emission leg; a sum that ignores the new coinbase is not this check"
+    );
+
+    daemon.pop_blocks(1).await;
+    assert_eq!(
+        daemon.height().await,
+        height_before,
+        "popping the spend's block must return the chain to the pre-mine height"
+    );
+    assert_eq!(
+        daemon.tx_pool_size().await,
+        1,
+        "a tx-conserving pop must return the spend to the pool"
+    );
+    assert_eq!(
+        daemon.key_image_statuses(&key_images).await,
+        vec![KeyImageStatus::SpentInPool; key_images.len()],
+        "the popped spend is back in the pool, so its key images stay reserved (status 2, not free)"
+    );
+    let (emission_popped, fee_popped) = daemon.coinbase_tx_sum().await;
+    assert_eq!(
+        (emission_popped, fee_popped),
+        (emission_before, fee_before),
+        "popping the spend's block must restore both coinbase-sum legs"
+    );
+
+    daemon.generate_blocks(1, &address).await;
+    assert_eq!(daemon.height().await, height_mined);
+    assert_eq!(
+        daemon.tx_pool_size().await,
+        0,
+        "re-mining must take the spend back out of the pool"
+    );
+    assert_eq!(
+        daemon.key_image_statuses(&key_images).await,
+        vec![KeyImageStatus::SpentInBlockchain; key_images.len()],
+        "re-mining the spend must mark its key images spent in the chain again"
+    );
+    let (emission_remined, fee_remined) = daemon.coinbase_tx_sum().await;
+    assert_eq!(
+        (emission_remined, fee_remined),
+        (emission_mined, fee_mined),
+        "re-mining the same spend must restore both coinbase-sum legs"
+    );
 }
 
 /// Mainnet [`EngineCreateParams`](super::lifecycle::EngineCreateParams) for the
