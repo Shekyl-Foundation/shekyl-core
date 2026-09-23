@@ -54,6 +54,12 @@ harness = []
 # are driven through the 4.C rules as well as through `shekyl-difficulty`.
 # Already pinned in the workspace lockfile; test-only.
 serde_json = "1"
+# The genesis anchors are derived in test, not restated (slice 4 Q3): the
+# genesis tool rebuilds each network's block from cryptonote_config.h's
+# pins, and the client identity's copy of the hashes (VC-D18) must agree
+# with the table. Both workspace members; test-only.
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 
 [lints]
 workspace = true

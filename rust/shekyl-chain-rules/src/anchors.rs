@@ -35,14 +35,36 @@
 //!   entry (`PDM-Q-F27`), so `D_max` never has to defend a node below its
 //!   anchor.
 //!
-//! # Every table is empty today
+//! # The only anchor is genesis, until the first checkpoint release
 //!
-//! No release has shipped an anchor: `PDM-Q5`'s launch-window item puts the
-//! first checkpoint release before day ~195, then one per `≤ W`. That is an
+//! Every public network's table holds one entry: `(0, genesis_hash)` —
+//! CEN-F11's "as configured" half (`CHAIN_RULES_SLICE_4.md` Q3, ruled (a)
+//! 2026-09-22). The genesis block's identity is a per-network fact the
+//! binary carries — `GENESIS_TX` and `GENESIS_NONCE` in
+//! `cryptonote_config.h`, the block `generate_genesis_block` assembles from
+//! them — which is exactly the definition of an anchor: a block the binary
+//! vouches for. One mechanism for one kind of fact, and the two behaviours
+//! F11 asks for are the two this table already has: CEN-E1 judges a
+//! height-0 candidate against it, and CEN-E5 refuses a file whose genesis is
+//! another network's at open (`Remedy::RefuseToRun`). The hashes are
+//! **derived**, not restated: `anchors_tests` rebuilds each network's genesis
+//! block from `cryptonote_config.h`'s pins through the genesis tool and
+//! asserts the table equals it, and asserts the table equals the client
+//! identity's copy (`shekyl_rpc_types::genesis_hash_for`, `VC-D18`) so the
+//! two Rust homes cannot drift.
+//!
+//! No release has shipped a *checkpoint* anchor: `PDM-Q5`'s launch-window
+//! item puts the first before day ~195, then one per `≤ W`. That is an
 //! observation about the release calendar, not about this type — the C++
-//! `init_default_checkpoints` is the same empty table (`checkpoints.cpp:136`),
-//! and `no_release_has_shipped_an_anchor_yet` pins the fact so the first
-//! entry is a deliberate edit that fails a test, never a quiet one.
+//! `init_default_checkpoints` is the same empty table (`checkpoints.cpp:136`).
+//! `the_only_anchor_is_genesis_until_the_first_checkpoint_release` pins the
+//! fact so the first checkpoint entry is a deliberate edit that fails a
+//! test, never a quiet one. Where `PDM-Q5` says "`C`", read "the last anchor
+//! above genesis" when the distinction matters; band 1 (`≤ C`) still reads
+//! correctly, since below genesis there is nothing. `PDM :304` ships the
+//! first release with `assumevalid = 0`; whether that state is "genesis is
+//! the anchor" or "no anchor at all" is the one question this slice put to
+//! the PDM lane (`CHAIN_RULES_SLICE_4.md` Q3).
 
 use core::fmt;
 
@@ -74,16 +96,35 @@ pub struct ReleaseAnchors {
 }
 
 impl ReleaseAnchors {
-    /// No anchors: what every network's table is today, and what a
-    /// Fakechain always has — no release vouches for a regtest chain.
+    /// No anchors: what a Fakechain always has — no release vouches for a
+    /// regtest chain, not even for its genesis (`Trust::UNANCHORED`).
     pub const EMPTY: Self = Self { entries: &[] };
 
-    /// Mainnet's anchors.
-    const MAINNET: Self = Self::EMPTY;
-    /// Testnet's anchors.
-    const TESTNET: Self = Self::EMPTY;
-    /// Stagenet's anchors.
-    const STAGENET: Self = Self::EMPTY;
+    /// Mainnet's anchors: genesis (`geblock block-id --network mainnet`;
+    /// derived from `cryptonote_config.h` in `anchors_tests`).
+    const MAINNET: Self = Self {
+        entries: &[genesis_anchor([
+            0xb6, 0x29, 0x3d, 0x3e, 0xc8, 0x14, 0xd4, 0xb7, 0xac, 0xdc, 0xba, 0x7d, 0x79, 0xd2,
+            0xd2, 0x2b, 0x03, 0x5e, 0xaa, 0xe5, 0x2b, 0xb3, 0x5c, 0xb3, 0xf8, 0x62, 0xad, 0xac,
+            0x16, 0xc1, 0x40, 0x31,
+        ])],
+    };
+    /// Testnet's anchors: genesis.
+    const TESTNET: Self = Self {
+        entries: &[genesis_anchor([
+            0xb0, 0xb2, 0xa6, 0x3a, 0xa9, 0x1c, 0x4e, 0x23, 0xbc, 0xf6, 0x86, 0x09, 0x5c, 0x2f,
+            0xcc, 0xb2, 0x77, 0x60, 0xcb, 0x9e, 0xc1, 0x92, 0x8c, 0xca, 0x3b, 0xf1, 0x7e, 0x17,
+            0xf8, 0x11, 0x2a, 0x7c,
+        ])],
+    };
+    /// Stagenet's anchors: genesis.
+    const STAGENET: Self = Self {
+        entries: &[genesis_anchor([
+            0xad, 0x10, 0x1a, 0x4d, 0x8b, 0x47, 0xa8, 0xc9, 0xa3, 0xfa, 0x4f, 0xf6, 0x25, 0xb6,
+            0xc7, 0x17, 0x6d, 0x0b, 0xf9, 0x5f, 0x68, 0x61, 0x50, 0xe9, 0x44, 0xc2, 0xc7, 0x78,
+            0xde, 0xe5, 0x23, 0x96,
+        ])],
+    };
 
     /// The anchors the release carries for `network`. Three values, one
     /// lookup.
@@ -176,6 +217,14 @@ impl fmt::Debug for ReleaseAnchors {
 /// The table invariant: strictly ascending by height. Two anchors at one
 /// height would make [`ReleaseAnchors::expected_at`] ambiguous and the
 /// last-entry-is-current reading of [`ReleaseAnchors::current`] false.
+/// The height-0 anchor for a network's genesis block.
+const fn genesis_anchor(hash: [u8; 32]) -> Anchor {
+    Anchor {
+        height: BlockHeight::ZERO,
+        hash: BlockHash::from_bytes(hash),
+    }
+}
+
 const fn well_formed(table: &ReleaseAnchors) -> bool {
     let mut i = 1;
     while i < table.entries.len() {

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `anchors.rs` — the release-carried table: empty on every network today,
+//! `anchors.rs` — the release-carried table: genesis on every public network,
 //! ascending by construction, read through three named accessors
 //! (`CHAIN_RULES_SLICE_3.md` §4.1, §5).
 
@@ -32,19 +32,93 @@ const fn anchor(raw: u64, fill: u8) -> Anchor {
 /// A two-anchor fixture table: heights 3 and 10.
 const TWO: ReleaseAnchors = ReleaseAnchors::for_tests(&[anchor(3, 0xA3), anchor(10, 0xB0)]);
 
-/// No release has shipped an anchor (PDM-Q5's launch-window item is
-/// open). Bites the day the first entry lands: that edit is deliberate,
-/// and this test is what makes it fail loudly rather than pass quietly.
-/// Rule 71 rides along: the three tables are identical *as data*.
+/// The only anchor is genesis (`CHAIN_RULES_SLICE_4.md` Q3 (a); replaces
+/// `no_release_has_shipped_an_anchor_yet`, refuted by design). No release
+/// has shipped a *checkpoint* anchor (PDM-Q5's launch-window item is open):
+/// this bites the day the first one lands — that edit is deliberate, and
+/// this test is what makes it fail loudly rather than pass quietly. Rule 71
+/// rides along: the three tables have the same shape, and differ only in
+/// the datum a network is (its genesis).
 #[test]
-fn no_release_has_shipped_an_anchor_yet() {
+fn the_only_anchor_is_genesis_until_the_first_checkpoint_release() {
+    let mut seen = std::collections::BTreeSet::new();
     for network in NETWORKS {
         let table = ReleaseAnchors::for_network(network);
-        assert_eq!(table, ReleaseAnchors::EMPTY, "{network:?}");
-        assert_eq!(table.current(), None);
-        assert!(!table.covers(height(0)));
-        assert_eq!(table.expected_at(height(0)), None);
+        assert_ne!(table, ReleaseAnchors::EMPTY, "{network:?}");
+        let genesis = table.current().expect("genesis is anchored");
+        assert_eq!(
+            genesis.height,
+            height(0),
+            "{network:?}: the one anchor is at 0"
+        );
+        assert!(table.covers(height(0)));
+        assert!(
+            !table.covers(height(1)),
+            "{network:?}: nothing above genesis"
+        );
+        assert_eq!(table.expected_at(height(0)), Some(genesis.hash));
+        assert_eq!(table.expected_at(height(1)), None);
+        assert!(
+            seen.insert(genesis.hash),
+            "{network:?}: each network has its own genesis"
+        );
     }
+}
+
+/// The genesis hashes are **derived**, not restated: rebuild each network's
+/// genesis block from `cryptonote_config.h`'s `GENESIS_TX` / `GENESIS_NONCE`
+/// pins the way `generate_genesis_block` does (the genesis tool's builder,
+/// which `geblock verify` holds byte-equal to the pins) and assert the
+/// table carries that block's identity. A remint of genesis fails here
+/// until the table follows.
+#[test]
+fn the_genesis_anchor_is_the_configured_genesis_block() {
+    use shekyl_genesis_tool::builder::genesis_block;
+    use shekyl_genesis_tool::config_pin::parse_config_genesis;
+    let config_h = include_str!("../../../src/cryptonote_config.h");
+    let pins = parse_config_genesis(config_h).expect("cryptonote_config.h carries the pins");
+    for network in NETWORKS {
+        let pin = pins.for_network(network);
+        let tx_bytes = unhex(&pin.genesis_tx_hex);
+        let tx = shekyl_wire::Transaction::from_bytes(&tx_bytes).expect("GENESIS_TX decodes");
+        let block = genesis_block(tx, pin.genesis_nonce).expect("genesis block assembles");
+        assert_eq!(
+            ReleaseAnchors::for_network(network).expected_at(height(0)),
+            Some(block.hash()),
+            "{network:?}: the anchor is the block cryptonote_config.h configures"
+        );
+    }
+}
+
+/// The client identity's genesis pins (`shekyl_rpc_types::genesis_hash_for`,
+/// `VC-D18`) and this table are two Rust homes of one fact; they cannot
+/// drift.
+#[test]
+fn the_genesis_anchor_agrees_with_the_client_identity_pins() {
+    use shekyl_rpc_types::DaemonNetwork;
+    for (network, daemon) in [
+        (Network::Mainnet, DaemonNetwork::Mainnet),
+        (Network::Testnet, DaemonNetwork::Testnet),
+        (Network::Stagenet, DaemonNetwork::Stagenet),
+    ] {
+        assert_eq!(
+            ReleaseAnchors::for_network(network).expected_at(height(0)),
+            Some(BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(
+                daemon
+            ))),
+            "{network:?}"
+        );
+    }
+}
+
+/// Lowercase hex to bytes, for the `GENESIS_TX` pin. Local so the crate does
+/// not take a hex dependency for one test.
+fn unhex(hex: &str) -> Vec<u8> {
+    assert!(hex.len().is_multiple_of(2), "even-length hex");
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex digit"))
+        .collect()
 }
 
 /// `expected_at` answers at exactly the anchored heights and nowhere else.
