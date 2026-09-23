@@ -342,7 +342,7 @@ breath as ruling it defective. The digest **survives with changed status**:
 
 #### 5.4.1 The conformance-exception register (CSR-3a)
 
-<!-- conformance-tally: 126 CHECKED-CONFORMANT, 2 DIVERGENT, 4 UNREVIEWED -->
+<!-- conformance-tally: 125 CHECKED-CONFORMANT, 3 DIVERGENT, 4 UNREVIEWED -->
 
 **Adjudication semantics (RULED 2026-09-19, E2 direction —
 [`DRS_E2_REPLAY_DRIVER.md`](DRS_E2_REPLAY_DRIVER.md) §0):** the C++ trace is
@@ -560,7 +560,7 @@ Reviewed at **`4b9807c5e`** (2026-09-02). Walks: **W-TO** =
 | CEN-H12 | **CHECKED-CONFORMANT** | W-FU. `txout_to_tagged_key` asserted per output on the always-taken `hf_version >= SHEKYL_NG` arm (`:975–984`). **REWRITE-NOTE:** the VIEW_TAGS-era `else` arms below it are dead from genesis — rule-60 deletion residue for R5; the rewrite carries only the one live arm |
 | CEN-H13 | **CHECKED-CONFORMANT** | W-TO. `tx.version < 3` rejects (`:3407`). **REWRITE-NOTE:** this is the version rule's *third* site (with H2's table and its other site) — census §6 finding 6's two-site-drift class; the rewrite collapses to one |
 | CEN-H14 | **CHECKED-CONFORMANT** | W-TO. Zero-amount ban with the emission exemption keyed on `classify_archival_tx(tx.vin).kind` — **the same classifier `check_tx_inputs` uses**, with the in-code note explaining why a bare vin count would leak the ban on malformed pairings. **REWRITE-NOTE (positive):** single-classifier-both-sites is the anti-drift structure to keep |
-| CEN-H15 | **CHECKED-CONFORMANT** | W-TO `:3433–3439` + W-VU's per-shape `rv.type` checks — Null or FcmpPlusPlusPqc only, everything else rejects |
+| CEN-H15 | **DIVERGENT** — deliberate; Rust canonical (RULED 2026-09-23, E6 slice 5 Q9) | Type set: W-TO `:3433–3439` + W-VU's per-shape `rv.type` checks — Null or FcmpPlusPlusPqc only, everything else rejects — **conformant**. **The `Null`-for-non-coinbase half diverges by design:** the C++ re-rejects `CTTypeNull` outside the coinbase only when `m_nettype != FAKECHAIN` (`blockchain.cpp:3398`, read at `cf9985aa2`) — nettype selecting control flow on the consensus surface, rule 71's prohibition verbatim, inherited so C++ tests could build spends without proofs (the stub builder TXE-Q1 deletes). `shekyl-chain-rules` `H15` refuses unconditionally (`rules/tx.rs`, `cf9985aa2`); the regtest e2e builds real FCMP spends and never needed the exemption. **Pass condition:** on Fakechain the Rust validator refuses a `Null`-CT non-coinbase transaction the C++ accepts; identity with the C++ there is the failure, not the pass. Arm (d) — data on the Fakechain rule set — was rejected: it would inherit a workaround into the design built to escape it, for a consumer being deleted |
 | CEN-H16 | **CHECKED-CONFORMANT** | W-TO. `unlock_time >= 500 000 000` sentinel rejects (`:3441–3447`) — the consensus leg of the unlock_time triple-divergence, exactly as the census composition finding describes |
 | CEN-H17 | **CHECKED-CONFORMANT** | W-TO `:3458+` → the same three-way-discriminated `shekyl_check_commitment_masks` verified under CEN-F10 |
 | CEN-H18 | **CHECKED-CONFORMANT** | W-CT. Cleartext balance **single-sourced in Rust** (`shekyl-ct-balance::verify_ct_balance`), rc-checked reject (`:222–231`), then BP+ verification |
