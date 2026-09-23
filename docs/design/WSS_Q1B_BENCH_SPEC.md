@@ -745,6 +745,119 @@ round-trip term alone reached 5 s.
 | 2026-09-20 | **A wall-clock stop added beside the iteration cap**, found by running the harness rather than by reading it: the first worst-case run made plain that 60 unconverged iterations of a multi-minute replay is hours on the rig. The count bounds a fast noisy workload; only the clock bounds a slow one |
 
 
+### 7.2 First `Cortex-A72` session — 2026-09-23, **ungraded: the storage pin is unmet**
+
+**Read the pin failure first, because it bounds everything below.** The board
+matches every rule-76 pin *except storage*: root is `/dev/mmcblk0p2`, a
+**microSD**, and the only USB disk present is a rotational WD HDD that is not
+mounted. §6.3.4's rig table requires **USB-SSD** and states why — *"buffer
+refetch and replay are I/O-bound; microSD and SSD differ by more than the
+thresholds do."* So `--grade` was never passed, every record carries
+`"grading": false`, and **nothing here discharges anything**. The session was
+run anyway because the denominator is CPU-bound and the project did not have it.
+
+| Rig pin | Required | This session |
+| --- | --- | --- |
+| Device | Pi 4 Model B, Cortex-A72 | **Pi 4 Model B Rev 1.4** ✓ |
+| Userland | aarch64, 64-bit | **aarch64, 64-bit** ✓ |
+| RAM | 8 GB | **8 175 489 024 B** ✓ |
+| Storage | **USB-SSD, not microSD** | **microSD** ✗ |
+| Thermals | sustained, to steady state | 120 s idle-settle after an 18 min release build; load ≤ 0.16 at each start ✓ |
+
+Kernel `7.0.0-1019-raspi`; revision `c3f33583e-dirty`. **The dirt is four
+untracked benchmark files already on that box, not code** — the binaries match
+`c3f33583e` — and the pin is recorded as the harness emitted it rather than
+tidied, because a revision that says clean when the tree was not is the failure
+that field exists to prevent.
+
+#### 7.2.1 The byproduct §6.3.4 asked for
+
+**FCMP++ proving time on a Cortex-A72 is `6.133 s`** — converged, 2-in/2-out
+(`FCMP_PLUS_PLUS.md` §13), depth 6. Against §7.1's x86 figure of 1.105 s the
+floor device is **5.55× slower**.
+
+This is the number rule-80 progress-indication decisions have been waiting on,
+and it is **storage-independent**: proving neither reads nor writes the store,
+so the unmet pin does not touch it. It is the one figure from this session that
+a later reader may use as-is.
+
+#### 7.2.2 Spend edge — the same verdict as x86, five times further out
+
+| Term | A72 | x86 (§7.1) |
+| --- | --- | --- |
+| Replay | **389.406 s**, `stopped_because: "wall-clock cap"` | 73.9 s, converged |
+| Path read-off + construction | 0.007 s | 0.001 s |
+| **Delta** | **389.413 s** | 73.9 s |
+| Denominator | **6.133 s**, converged | 1.105 s |
+| Threshold | **2.000 s** | 2.000 s |
+| Binding arm | **absolute floor (2 s)** | absolute floor (2 s) |
+| Ratio | 6 349 % | 6 694 % |
+
+**The 2 s floor binds even at a 6.133 s denominator** — 15 % of it is 0.920 s,
+still under the floor. So the relative arm has now failed to bind on *both*
+machines measured, six-fold apart in speed. §6.3.4's insistence on the seconds
+beside the ratio is doing exactly the work it was written for: a ratio-only
+record would report "6 349 % of proving" and hide that the budget being missed
+is an absolute one.
+
+**The sparse-path control is the tightest result in the session:** dense versus
+sparse diverges by **+0.08 %** at depth 4 and **−0.03 %** at depth 5, and
+`paths_verified` is **true**. The graded path is real and the sparse stand-in is
+licensed one rung above the deepest control arm, per §3.5.
+
+#### 7.2.3 Verify edge — the first measurement of this axis, and it is the finding
+
+| | Worst case | Nominal |
+| --- | --- | --- |
+| Population | 770 880 leaves / 730 blocks | 105 120 leaves / 730 blocks |
+| Complete **unfrozen** segments | **29** | 4 |
+| **Unfrozen, per call** | **394.238 s**, `"wall-clock cap"` | **53.676 s**, converged |
+| Frozen control | 8.738 s, converged | 0.591 s, converged |
+| **Collapse** | **45.1×** | **90.8×** |
+| `mixed_path_confirmed` | true | true |
+| `root_stable_across_freeze` | true | true |
+| Cadence fraction | **328.5 %** | 44.7 % |
+
+**At worst-case density one per-block verify costs 394 s against a 120 s block.**
+That is 3.3× the block interval, for a check nobody waits on: a wallet paying it
+falls behind the chain faster than blocks arrive. At nominal density it is still
+45 % of every block interval.
+
+**The instrument reports that it measured what it names.** The frozen control
+collapsed the cost 45× and 91×, which is the red-bite; and because
+`full_build_root` ignores frozen sub-roots entirely, that collapse also
+establishes the **mixed-composition path** ran rather than the fallback. Both
+phases returned the same root.
+
+**Two phases stopped at `"wall-clock cap"`, not convergence** — the worst-case
+verify and the spend replay. Under `SCHEMA_VERSION` 1 that exit would have read
+`"iteration cap"` and pointed a reader at raising a cap; `v2` names it *limits
+met, never settled*, which here means **the work is too slow to settle inside
+30 minutes**. The unconverged figures are medians over few samples and should be
+read as *at least this large*, not as precise. That is not a defect of the run —
+it is the measurement being too big for the harness's wall, which is itself the
+result.
+
+#### 7.2.4 What this licenses, and what it does not
+
+**Licensed.** `CT-6` increment 4's snapshot tier now rests on a **measurement on
+its own axis** rather than on inference from F3(a)'s count. And it settles a
+question the round asked: a pass on row 2 would **not** have shown increment 4
+unnecessary, because rows 2 and 3 never look at the per-block path. Increment 6
+now has a baseline to re-grade against.
+
+**Not licensed.** Nothing here grades, and `CT-6 Q1`'s derivation is **not**
+performed from these numbers. The terms now exist — budget `2.000 s`, per-block
+replay `537 ms` at worst-case density — and the arithmetic they yield
+(`s ≤ 3.7` blocks at worst case, ~27 at nominal) is **indicative only**: it
+rests on an unconverged replay, on microSD, and on an assumption the memo must
+state and defend rather than inherit — that a rewind's per-block cost equals the
+replay's. The derivation memo is owed against a **graded** session.
+
+**The graded session remains owed**, and the verify figure is the reason to
+expect movement: 394 s contains an I/O term over 770 880 leaves, and microSD
+versus USB-SSD is precisely the axis the pin was written about.
+
 ---
 
 ## 8. The verify edge — the axis rows 2 and 3 do not cover

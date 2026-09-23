@@ -15,6 +15,54 @@
 
 use serde::Serialize;
 
+/// Write a run record to `path`, or to stdout when no path is given.
+///
+/// **One home, because there were three.** `spend_edge` carried an `emit`,
+/// `open_edge` inlined the same match, and `verify_edge` arrived with a third
+/// copy that spelled its flag `--json` as a *bool* rather than a path — a
+/// divergence that cost a run on the first A72 session (§7.2). Three copies of
+/// one behaviour is how the spellings drift apart in the first place, so the
+/// behaviour lives here and the binaries share it.
+///
+/// An explicitly requested artifact that silently fails to appear leaves a
+/// measurement with no evidence behind it, which is worse than no run — so a
+/// write failure is an error, never a warning.
+///
+/// **That applies to the stdout arm too, which is why it is an explicit
+/// stream write rather than `println!`.** `println!` *panics* on an I/O
+/// failure, so piping a run into `head` aborted it mid-measurement instead of
+/// reporting a write that did not land — the stdout arm was breaking the rule
+/// the path arm above states. Both arms now return the same `Err`.
+///
+/// The `flush` is part of that, not politeness: stdout is block-buffered when
+/// redirected, so a failure on the final flush is exactly the "silently fails
+/// to appear" case, and dropping the handle would swallow it.
+///
+/// *(This is also why the production-Rust debug-macro lint was right to fire.
+/// `report.rs` is library code shared by three binaries; the lint excludes
+/// `main.rs` and `src/bin/*` because a CLI's contract is to print, and this
+/// file is neither.)*
+///
+/// # Errors
+///
+/// Serialization failure, or a write that does not land.
+pub fn emit<T: Serialize>(record: &T, path: Option<&str>) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(record).map_err(|e| format!("serialize: {e}"))?;
+    match path {
+        Some(p) => std::fs::write(p, &json).map_err(|e| format!("could not write {p}: {e}")),
+        None => {
+            use std::io::Write as _;
+            let stdout = std::io::stdout();
+            let mut handle = stdout.lock();
+            handle
+                .write_all(json.as_bytes())
+                .and_then(|()| handle.write_all(b"\n"))
+                .and_then(|()| handle.flush())
+                .map_err(|e| format!("could not write the record to stdout: {e}"))
+        }
+    }
+}
+
 use crate::corpus::LeafRate;
 use crate::rig::{Environment, RigVerdict};
 use crate::timing::Series;
@@ -349,3 +397,7 @@ pub struct VerifyEdgeRecord {
     /// covered by rows 2 and 3.
     pub call_site: &'static str,
 }
+
+#[cfg(test)]
+#[path = "report_tests.rs"]
+mod tests;

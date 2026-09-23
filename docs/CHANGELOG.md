@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+### `WSS-Q1(b)` — first Cortex-A72 session, and the one flag that cost a run
+
+- **FCMP++ proving on a Cortex-A72 is `6.133 s`** (converged; 2-in/2-out, depth
+  6) — **5.55× the x86 figure** of 1.105 s. This is the rule-80 number the
+  project has never had, and it is storage-independent, so the session's unmet
+  pin does not touch it.
+- **Recorded as `WSS_Q1B_BENCH_SPEC.md` §7.2, and explicitly ungraded.** The
+  board matches every rule-76 pin *except storage*: root is microSD and the only
+  USB disk is a rotational HDD. §6.3.4 requires USB-SSD and says why — *"microSD
+  and SSD differ by more than the thresholds do."* `--grade` was never passed,
+  every record carries `"grading": false`, and **nothing here discharges
+  anything**.
+- **The verify edge got its first measurement, and it is large.** At worst-case
+  density one per-block `root_at_count` costs **394 s against a 120 s block** —
+  3.3× the block interval, for a check nobody waits on. The frozen control
+  collapsed it **45×** (and **91×** at nominal), which is both the red-bite and
+  the proof the mixed-composition path ran rather than the `full_build_root`
+  fallback; both phases returned the same root. So `CT-6` increment 4 now rests
+  on a measurement on its own axis, and increment 6 has a baseline.
+- **The 2 s absolute floor binds on both machines measured.** At a 6.133 s
+  denominator, 15 % is 0.920 s — still under the floor. The relative arm has now
+  failed to bind six-fold apart in speed, which is why §6.3.4 asks for seconds
+  beside the ratio.
+- **Two phases stopped at `"wall-clock cap"`, not convergence** — the worst-case
+  verify and the spend replay. `SCHEMA_VERSION` 2's value domain is what makes
+  that readable: under `v1` the same exit said `"iteration cap"` and pointed at
+  raising a cap, where the truth is *the work is too slow to settle inside 30
+  minutes*. Those medians are lower bounds, not precise figures.
+- **`emit` is lifted into `report.rs`, one home for three copies.** `spend_edge`
+  had it, `open_edge` inlined the same match, and `verify_edge` shipped a third
+  copy whose `--json` was a **bool** rather than a path — a divergence that cost
+  a run on this session before anything was measured. All three now share one
+  helper and one spelling; a write failure stays an error rather than a warning,
+  because a requested artifact that silently fails to appear leaves a
+  measurement with no evidence behind it.
+
 ### Design — the daemon's body horizon is the epoch calendar (`PDM-Q2` re-ruled)
 
 - Every daemon discards a shard's prunable bodies at the epoch boundary after
