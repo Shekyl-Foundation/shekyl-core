@@ -347,13 +347,80 @@ pub fn boundary_pair<T: Debug, V>(
 /// illegal in ways nobody checks — and each latent illegality surfaces one
 /// rule at a time, as a mid-commit surprise, when the rule that refuses it
 /// lands (slice 5 commit 2: three fixtures listed coinbase-shaped bodies,
-/// and CEN-H5 refused them). `fixture_sanity_tests` holds every fixture
-/// here to `validate` / `tx_form` under **current** coverage, at every slot
-/// it is meant for, so a bad fixture fails the moment it is written. A new
-/// valid fixture is added there too; the negative fixtures live with their
-/// rows and are labelled by the row they refuse on.
+/// and CEN-H5 refused them). `fixture_sanity_tests` holds every
+/// transaction shape here to `validate` / `tx_form` under **current**
+/// coverage, at every slot it is meant for, so a bad fixture fails the
+/// moment it is written — and the set it walks is [`TxShape`], a closed
+/// enum: a new shape that the gate does not know is a **compile error**
+/// (three non-exhaustive matches), not a doc line nobody re-reads. The
+/// negative fixtures live with their rows and are labelled by the row they
+/// refuse on.
 pub mod fixture {
     use super::*;
+    use crate::verdict::TxSlot;
+
+    /// The well-formed **transaction** shapes this module builds, as a
+    /// closed set. The sanity gate walks the chain from [`FIRST`](Self::FIRST)
+    /// through [`next`](Self::next) and judges each shape at every slot
+    /// [`valid_at`](Self::valid_at) names; adding a shape means adding a
+    /// variant, and the three `match`es below refuse to compile until it is
+    /// built, placed in the chain, and given its slots — the
+    /// `FormAttempt::next` arrangement, applied to fixtures.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum TxShape {
+        /// [`coinbase`].
+        Coinbase,
+        /// [`listed`] — the ordinary spend.
+        Listed,
+        /// [`serve_credit_only`].
+        ServeCreditOnly,
+    }
+
+    impl TxShape {
+        /// Where the chain starts.
+        pub const FIRST: Self = Self::Coinbase;
+
+        /// The shape after this one; `None` closes the chain. A variant
+        /// left out of this chain is unreachable from `FIRST` and the gate
+        /// never sees it — so a new variant is *placed*, deliberately, here.
+        pub const fn next(self) -> Option<Self> {
+            match self {
+                Self::Coinbase => Some(Self::Listed),
+                Self::Listed => Some(Self::ServeCreditOnly),
+                Self::ServeCreditOnly => None,
+            }
+        }
+
+        /// A representative instance of the shape.
+        pub fn build(self) -> Transaction {
+            match self {
+                Self::Coinbase => coinbase(1),
+                Self::Listed => listed([0xC1; 32]),
+                Self::ServeCreditOnly => serve_credit_only([0x77; 32]),
+            }
+        }
+
+        /// The slots at which the shape is a valid transaction. The coinbase
+        /// is valid at the miner slot only; every other shape at the pool's
+        /// slot and listed.
+        pub const fn valid_at(self) -> &'static [TxSlot] {
+            match self {
+                Self::Coinbase => &[TxSlot::Miner],
+                Self::Listed | Self::ServeCreditOnly => &[TxSlot::Lone, TxSlot::Listed(0)],
+            }
+        }
+
+        /// Every shape, walking the chain from `FIRST`.
+        pub fn all() -> Vec<Self> {
+            let mut shapes = Vec::new();
+            let mut shape = Some(Self::FIRST);
+            while let Some(current) = shape {
+                shapes.push(current);
+                shape = current.next();
+            }
+            shapes
+        }
+    }
 
     /// The compressed Ed25519 basepoint `G`: canonical, prime-order,
     /// non-identity — an output key CEN-F9 accepts. As a **mask** it is the
