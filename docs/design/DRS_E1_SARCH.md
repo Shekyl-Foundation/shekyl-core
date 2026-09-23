@@ -446,7 +446,18 @@ layout are not inherited (§3.5).
    `properties` cell typed; tests: empty store, planted rows, each `Option`
    arm, the SI-14 decode refusal, a `BondRecord` round trip at every cap
    (`MAX_BOND_BAD_INTERVALS`, the claimed-epoch cap), A3's reverse seek
-   against a planted multi-epoch persona, A10's two absences.
+   against a planted multi-epoch persona, A10's two absences — **and the
+   cross-check that the round trip cannot give (ruled on PR #840):** a
+   round trip of the new codec against itself proves it self-consistent;
+   only a comparison against what LMDB actually holds proves it is the
+   *same record*. Commit 1 captures a small corpus of real `ArchivalBondValue`
+   v7 blobs (from `archival_substrate_lmdb.cpp`'s fixtures: compact and
+   complete-tree holdings, an open bad interval, a clean-close marker, a
+   full claimed-epoch set) as checked-in bytes with their C++-decoded field
+   values beside them, and commit 2 asserts the Rust `BondRecord` decoded
+   from each equals those fields. Cheap now, impossible once E4 deletes the
+   C++ decoder — which is why the corpus is captured in this increment and
+   not E4's.
 3. **The fold.** `good_through` already takes `(join, epoch, &[BadInterval])`;
    a `BondRecord`-taking form beside it is one line. `holds_shard_at(&BondRecord,
    ShardId, BlockHeight, &[SlashLogEntry])` ported from `db_lmdb.cpp:4889–4950`
@@ -464,7 +475,16 @@ layout are not inherited (§3.5).
 
 - `check_chain_rules_no_store.sh` (the rules crate reaches no store).
 - Rule-42 schema snapshot: **must move**, and only by the seven tables +
-  version (the gate's diff is the review).
+  version (the gate's diff is the review). **Arming checked 2026-09-23:**
+  layout 10 is this lane's fourth bump (6 → 7 at slice 2's commit 9, the tx
+  side's, S-CURVE's 8 → 9), and a gate whose subject exists only on bump
+  commits decays quietly between them — so it was checked in the failing
+  direction rather than assumed: `ci/schema-snapshot`'s *Assert committed
+  schema snapshots* leg went red on 2026-09-22 (`feat/delete-cxx-tx-data-prune`)
+  and its *Enforce paired block_version bump* leg on 2026-09-21
+  (`refactor/rebond-to-reinstate`), both on real bump commits. Fresh, not
+  hypothetical; re-check at the next bump the same way (`gh run list
+  --workflow schema-snapshot.yml --status failure`).
 - `check_conformance_coverage.py`: no register row is touched — the archival
   reads are storage; the rules stay where they are (4.J, slice 8).
 - `check_lmdb_schema_coverage.py`, `check_archival_forcing_cells.py`: the
@@ -519,5 +539,6 @@ layout are not inherited (§3.5).
 
 | Date | Entry |
 |---|---|
+| 2026-09-23 | **Three carries into the increment** (maintainer, PR #840, after the rulings): **(1)** the v7 cross-check corpus — real `ArchivalBondValue` blobs decoded by the C++ reader, asserted equal to the Rust `BondRecord` (§7 commit 1/2), because a self round trip proves self-consistency and not identity, and the C++ decoder E4 deletes is the only oracle; **(2)** the schema gate's arming verified in the failing direction, not assumed (§8); **(3)** S-PRUNE's dependency on `PDM-Q11`'s provisional `D_max` moved onto that skeleton's banner (`DRS_E1_SPRUNE.md`), because a watermark fixed before the constant is confirmed is picked by implementation convenience — R8's shape. |
 | 2026-09-23 | **Round 1 RULED** (maintainer, PR #840). Q1, Q2, Q4, Q5 held (Q2 an application of rule 18, not a ruling; Q4 because `EmissionEpochSource` already exists and composition is the caller's). Q3 approved with the word checked: same *semantics*, not byte-compatible. Q6 approved, with why the `Option` is load-bearing regardless of slice 8's answer. **Q7 amended: defer the port, not the row** — CEN-L16 minted in this PR; the R8 sweep gap and its two siblings (slice 4 S25, slice 5 shard-set bound) folded into one census-lane question on the existing FOLLOWUPS row. **Process note acted on:** the §5 row's eighteen-day stale gate is the `DEFERRED_DOCS` self-expiry shape applied to plan-row blockers; measured over `docs/design/*.md` table rows — 119 blockers, 45 naming an identifier a gate could resolve, 74 prose — so it is a wish until blockers take rule 22's `blocked on <ID> — falsify by <check>` form; a FOLLOWUPS row proposes the lint (owner `DAEMON_REDB_STORE.md` §5). |
 | 2026-09-23 | **Round 0 executed** at `d8ebfd18c`. Eleven findings (SAR-1 … SAR-11); seven questions posed with defaults (SAR-Q1 … Q7). The surface's eighteen methods map to ten Rust reads: two are dead by ruling (SAR-5), one is a log operand and S-PRUNE's (SAR-6), two are E5 S-ALT's (`SAR-Q5`), one is E4's test hook, one is the gather shell §3.4 rule 3 said to delete (SAR-4), one wraps a fold that is already Rust behind an FFI shim, and one is a C++ consensus fold in the DB layer that reads the slash log as history (SAR-2, SAR-7) — its port travels with E4's journal ruling by default (`SAR-Q7`). The substrate fact that sizes the increment is SAR-9: the persisted bond record has no Rust type. The §5 row's gate was found lifted eighteen days before this read (rule 22). |
