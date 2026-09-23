@@ -29,7 +29,7 @@ use shekyl_wss_q1b_bench::corpus::nominal_block_weight;
 use shekyl_wss_q1b_bench::openedge::{
     judge_density, project, Attribution, BlockSample, CorpusDensity, Projection, RoundTripFloor,
 };
-use shekyl_wss_q1b_bench::report::{ProverPin, Verdict, OPEN_EDGE_BUDGET_S, SCHEMA_VERSION};
+use shekyl_wss_q1b_bench::report::{emit, ProverPin, Verdict, OPEN_EDGE_BUDGET_S, SCHEMA_VERSION};
 use shekyl_wss_q1b_bench::rig::{self, Environment, RigVerdict, StorageAttestation};
 use shekyl_wss_q1b_bench::timing::duration_s;
 
@@ -307,23 +307,12 @@ async fn main() -> ExitCode {
                                 sequentially awaited in block_fetch.rs",
     };
 
-    // An explicitly requested artifact that silently fails to appear leaves a
-    // pass or miss with no evidence behind it, which is worse than no run.
-    let write_failed = match serde_json::to_string_pretty(&record) {
-        Ok(json) => match args.json.as_deref() {
-            Some(p) => std::fs::write(p, &json)
-                .map_err(|e| eprintln!("could not write {p}: {e}"))
-                .is_err(),
-            None => {
-                println!("{json}");
-                false
-            }
-        },
-        Err(e) => {
-            eprintln!("could not serialize the record: {e}");
-            true
-        }
-    };
+    // The write failure is an error, not a warning: an explicitly requested
+    // artifact that silently fails to appear leaves a pass or miss with no
+    // evidence behind it. `emit` is the one home for that rule (report.rs).
+    let write_failed = emit(&record, args.json.as_deref())
+        .map_err(|e| eprintln!("{e}"))
+        .is_err();
     summarize(&record);
     if write_failed {
         return ExitCode::from(5);

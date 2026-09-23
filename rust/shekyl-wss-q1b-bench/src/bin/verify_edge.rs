@@ -21,7 +21,7 @@ use shekyl_wss_q1b_bench::corpus::{
     GRADED_TREE_DEPTH, W,
 };
 use shekyl_wss_q1b_bench::fixture::build_corpus;
-use shekyl_wss_q1b_bench::report::{VerifyEdgeRecord, BLOCK_TARGET_S, SCHEMA_VERSION};
+use shekyl_wss_q1b_bench::report::{emit, VerifyEdgeRecord, BLOCK_TARGET_S, SCHEMA_VERSION};
 use shekyl_wss_q1b_bench::rig::{self, Environment};
 use shekyl_wss_q1b_bench::timing::{DEFAULT_TOLERANCE_PCT, MAX_WALL_SECONDS};
 use shekyl_wss_q1b_bench::verifyedge::{build_population, frozen_count, time_root_at};
@@ -60,9 +60,13 @@ struct Args {
     #[arg(long)]
     store: Option<String>,
 
-    /// Emit the JSON record on stdout.
-    #[arg(long, default_value_t = false)]
-    json: bool,
+    /// Write the JSON record here instead of stdout.
+    ///
+    /// Same spelling as `spend_edge` and `open_edge`, deliberately: this
+    /// binary first shipped it as a bare bool, and one harness with two
+    /// spellings of one flag cost a run on the first A72 session (§7.2).
+    #[arg(long)]
+    json: Option<String>,
 }
 
 fn run(args: &Args, density: &'static str) -> Result<VerifyEdgeRecord, String> {
@@ -251,14 +255,9 @@ fn main() -> ExitCode {
             }
         }
     }
-    if args.json {
-        match serde_json::to_string_pretty(&records) {
-            Ok(j) => println!("{j}"),
-            Err(e) => {
-                eprintln!("serialize: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
+    if let Err(e) = emit(&records, args.json.as_deref()) {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }

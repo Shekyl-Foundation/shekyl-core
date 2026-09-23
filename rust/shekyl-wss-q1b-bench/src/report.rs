@@ -15,6 +15,33 @@
 
 use serde::Serialize;
 
+/// Write a run record to `path`, or to stdout when no path is given.
+///
+/// **One home, because there were three.** `spend_edge` carried an `emit`,
+/// `open_edge` inlined the same match, and `verify_edge` arrived with a third
+/// copy that spelled its flag `--json` as a *bool* rather than a path — a
+/// divergence that cost a run on the first A72 session (§7.2). Three copies of
+/// one behaviour is how the spellings drift apart in the first place, so the
+/// behaviour lives here and the binaries share it.
+///
+/// An explicitly requested artifact that silently fails to appear leaves a
+/// measurement with no evidence behind it, which is worse than no run — so a
+/// write failure is an error, never a warning.
+///
+/// # Errors
+///
+/// Serialization failure, or a write that does not land.
+pub fn emit<T: Serialize>(record: &T, path: Option<&str>) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(record).map_err(|e| format!("serialize: {e}"))?;
+    match path {
+        Some(p) => std::fs::write(p, &json).map_err(|e| format!("could not write {p}: {e}")),
+        None => {
+            println!("{json}");
+            Ok(())
+        }
+    }
+}
+
 use crate::corpus::LeafRate;
 use crate::rig::{Environment, RigVerdict};
 use crate::timing::Series;

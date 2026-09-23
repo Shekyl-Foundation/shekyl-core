@@ -28,7 +28,7 @@ use shekyl_wss_q1b_bench::fixture::{
     synth_sparse_path, ControlExperiment, Path,
 };
 use shekyl_wss_q1b_bench::report::{
-    ProverPin, SpendBudget, SpendCorpus, SpendEdgeRecord, Verdict, SCHEMA_VERSION,
+    emit, ProverPin, SpendBudget, SpendCorpus, SpendEdgeRecord, Verdict, SCHEMA_VERSION,
 };
 use shekyl_wss_q1b_bench::rig::{self, Environment, StorageAttestation};
 use shekyl_wss_q1b_bench::timing::{
@@ -473,17 +473,6 @@ fn run_control(depth: u8, min_conditioning_s: f64) -> ControlExperiment {
 ///
 /// An explicitly requested artifact that silently fails to appear leaves a
 /// pass or miss with no evidence behind it, which is worse than no run.
-fn emit(record: &SpendEdgeRecord, path: Option<&str>) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(record).map_err(|e| format!("serialize: {e}"))?;
-    match path {
-        Some(p) => std::fs::write(p, &json).map_err(|e| format!("could not write {p}: {e}")),
-        None => {
-            println!("{json}");
-            Ok(())
-        }
-    }
-}
-
 fn summarize(record: &SpendEdgeRecord, controls: &[ControlExperiment]) {
     let b = &record.budget;
     eprintln!();
