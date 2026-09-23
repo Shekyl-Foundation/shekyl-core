@@ -1370,59 +1370,79 @@ mod tests {
             );
         }
 
-        /// The depth boundary, asserted where it actually moves.
+        /// The depth boundary, asserted **on** it rather than around it.
         ///
-        /// `layer_count_for_leaves` is flat almost everywhere: between `1` and
-        /// `684` it is 2, and it only steps at `0 -> 1` and `684 -> 685`
-        /// (`SELENE_CHUNK_WIDTH` = 38, `HELIOS_CHUNK_WIDTH` = 18, so 38 x 18 =
-        /// 684 leaves is the last count that roots at two layers). A depth
-        /// assertion taken anywhere else is green against a wrong `n` as well
-        /// as a right one.
+        /// `layer_count_for_leaves` is flat almost everywhere. In reach it
+        /// steps at exactly two counts — `0 -> 1` (1 to 2 layers) and
+        /// `684 -> 685` (2 to 3; `SELENE_CHUNK_WIDTH` 38 x `HELIOS_CHUNK_WIDTH`
+        /// 18 is the last count that roots at two layers). Everywhere else
+        /// `depth(n) == depth(n + 1)`, so a depth assertion taken there is
+        /// green against a wrong `n` as well as a right one.
         ///
-        /// This is the second of the two boundaries, and it is the one a small
-        /// fixture would never reach by accident, so the blocks here are wide
-        /// rather than many.
+        /// **The first version of this test straddled the boundary without
+        /// landing on it** — wide blocks advanced the count 600, 700, so it
+        /// visited neither 684 nor 685, and its failure under a
+        /// depth-from-`n + 1` mutation came from the empty-tree heights it
+        /// shares with the sweep above, not from the step it was written for.
+        /// `saw_below && saw_above` was true and meant nothing. The schedule
+        /// below therefore lands the drained count **exactly** on 684 and 685,
+        /// and the fixture asserts that it did.
+        ///
+        /// The sweep starts once leaves exist, so a red here is attributable to
+        /// the step rather than to the `0 -> 1` edge.
         #[test]
         fn depth_steps_where_the_layer_count_steps_and_the_root_follows_n() {
-            const WIDE: usize = 100;
             let boundary = (SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH) as u64; // 684
-            assert_eq!(
-                shekyl_fcmp::tree::layer_count_for_leaves(boundary),
-                shekyl_fcmp::tree::layer_count_for_leaves(boundary - 1),
-                "fixture premise: the count below the boundary is flat"
-            );
             assert_ne!(
                 shekyl_fcmp::tree::layer_count_for_leaves(boundary),
                 shekyl_fcmp::tree::layer_count_for_leaves(boundary + 1),
-                "fixture premise: the boundary is where the depth actually steps"
+                "fixture premise: {boundary} is where the depth actually steps"
             );
 
-            // Enough wide blocks to carry the drained count past `boundary + 1`.
-            let blocks_needed = (boundary + 1).div_ceil(WIDE as u64) + 1;
-            let tip = blocks_needed + COINBASE_LOCK_WINDOW as u64 + 1;
+            // Wide blocks to get near, then an exact remainder onto the
+            // boundary, then single outputs to step across it one leaf at a
+            // time. Cumulative creations: 600, then `boundary`, then + 1 each.
+            const WIDE: usize = 100;
+            let boundary_usize =
+                usize::try_from(boundary).expect("SELENE x HELIOS chunk widths fit usize");
+            let wide_blocks = (boundary_usize - 1) / WIDE; // 6 -> 600
+            let remainder = boundary_usize - wide_blocks * WIDE; // 84 -> 684
+            let singles = 4usize;
+
+            let mut per_block: Vec<usize> = vec![WIDE; wide_blocks];
+            per_block.push(remainder);
+            per_block.extend(std::iter::repeat_n(1, singles));
+
+            let created_blocks = per_block.len() as u64;
+            let tip = created_blocks + COINBASE_LOCK_WINDOW as u64 + 1;
             let mut client = CurveTreeClient::new();
             for height in 0..=tip {
-                if height < blocks_needed {
-                    let outs = vec![coinbase_raw(); WIDE];
-                    ingest_outputs_at(&mut client, height, &outs);
-                } else {
-                    let txs: Vec<TxLeafInputs> = Vec::new();
-                    client
-                        .ingest_block(BlockLeaves {
-                            height: BlockHeight::from_raw(height),
-                            txs: &txs,
-                        })
-                        .unwrap();
+                let idx = usize::try_from(height).expect("fixture height fits usize");
+                match per_block.get(idx) {
+                    Some(&n) if n > 0 => {
+                        let outs = vec![coinbase_raw(); n];
+                        ingest_outputs_at(&mut client, height, &outs);
+                    }
+                    _ => {
+                        let txs: Vec<TxLeafInputs> = Vec::new();
+                        client
+                            .ingest_block(BlockLeaves {
+                                height: BlockHeight::from_raw(height),
+                                txs: &txs,
+                            })
+                            .unwrap();
+                    }
                 }
             }
 
-            // Walk heights and assert at each; record whether both sides of the
-            // boundary were actually visited, because a fixture that stops short
-            // would make this test green without testing anything.
-            let mut saw_below = false;
-            let mut saw_above = false;
+            let mut visited: Vec<u64> = Vec::new();
             for h in 1..=tip {
                 let (want_root, want_n) = oracle_root_and_count(&client, h - 1);
+                // Attribute a red to the step, not to the `0 -> 1` edge the
+                // sweep above already owns.
+                if want_n == 0 {
+                    continue;
+                }
                 let (got_root, got_depth) = client
                     .root_and_depth_at(BlockHeight::from_raw(h))
                     .unwrap_or_else(|e| panic!("height {h}: {e:?}"));
@@ -1432,17 +1452,22 @@ mod tests {
                     shekyl_fcmp::tree::layer_count_for_leaves(want_n),
                     "height {h}: depth not pinned to n={want_n}"
                 );
-                if want_n > 0 && want_n <= boundary {
-                    saw_below = true;
-                }
-                if want_n > boundary {
-                    saw_above = true;
-                }
+                visited.push(want_n);
             }
+
+            // Rule 47 on the fixture: the only counts that can fail this
+            // assertion must actually have been reached. Straddling is not
+            // landing.
             assert!(
-                saw_below && saw_above,
-                "the fixture did not land on both sides of n={boundary} \
-                 (below={saw_below}, above={saw_above}); the depth step was never crossed"
+                visited.contains(&boundary),
+                "n={boundary} was never visited (reached {visited:?}); the depth \
+                 step was straddled, not tested"
+            );
+            assert!(
+                visited.contains(&(boundary + 1)),
+                "n={} was never visited (reached {visited:?}); the far side of \
+                 the step was not tested",
+                boundary + 1
             );
         }
 
