@@ -19,7 +19,7 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{candidate, coinbase, connect_genesis, facts, judge, spend};
+use super::connect_fixtures::{candidate, connect_genesis, facts, judge, spend};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
@@ -658,9 +658,13 @@ fn the_same_transaction_in_two_blocks_is_si3() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let (_, genesis) = connect_genesis(&store, 0);
     // A spend with a fresh key image each time but the SAME body cannot be
-    // built (the key image is in the body), so reuse a coinbase-shaped body
-    // as a listed tx: listed twice across blocks, same hash, no key image.
-    let dup = coinbase(77);
+    // built (the key image is in the body). The one legal listed shape with
+    // no key image is a serve-credit-only transaction: listed twice across
+    // blocks, same hash, nothing for SI-1 to see. (A coinbase-shaped body
+    // served here until E6 slice 5 landed CEN-H5, which refuses `gen`
+    // outside the miner slot — the fixture was the input the row exists to
+    // refuse.)
+    let dup = fixture::serve_credit_only([0x77; 32]);
     let b1 = candidate(1, genesis.hash(), vec![dup.clone()]);
     let b1_hash = b1.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {

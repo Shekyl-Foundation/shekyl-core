@@ -341,6 +341,17 @@ pub fn boundary_pair<T: Debug, V>(
 }
 
 /// Fixtures: well-formed values to mutate one field of.
+///
+/// **"Well-formed" is a gated claim, not a label.** A fixture is built by
+/// test code and never passes through a production builder, so it can be
+/// illegal in ways nobody checks — and each latent illegality surfaces one
+/// rule at a time, as a mid-commit surprise, when the rule that refuses it
+/// lands (slice 5 commit 2: three fixtures listed coinbase-shaped bodies,
+/// and CEN-H5 refused them). `fixture_sanity_tests` holds every fixture
+/// here to `validate` / `tx_form` under **current** coverage, at every slot
+/// it is meant for, so a bad fixture fails the moment it is written. A new
+/// valid fixture is added there too; the negative fixtures live with their
+/// rows and are labelled by the row they refuse on.
 pub mod fixture {
     use super::*;
 
@@ -432,6 +443,37 @@ pub mod fixture {
                     enc_amounts: vec![[0x11; 9]],
                     enc_labels: vec![[0x22; 9]],
                     commitments: vec![TWO_G],
+                },
+                pqc_auths: Vec::new(),
+                prunable: None,
+            },
+        }
+    }
+
+    /// A **serve-credit-only** transaction (CEN-H20's shape: serve-credit
+    /// inputs and nothing else, no outputs, zero fee, no spend material),
+    /// carrying `record` as its one pass record. The one legal non-coinbase
+    /// shape with **no key image** — what a test needs when it must list the
+    /// same body twice (SI-3) without tripping the spent-key-image set. The
+    /// record's bytes are the wire's minimum (tag byte, then payload); the
+    /// serving-credit rules that read them are 4.J's, not this crate's yet.
+    pub fn serve_credit_only(record: [u8; 32]) -> Transaction {
+        let mut canonical_bytes = vec![shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT];
+        canonical_bytes.extend_from_slice(&record);
+        Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::ServeCredit { canonical_bytes }],
+                outputs: Vec::new(),
+                extra: Vec::new(),
+            },
+            ct: Ct::Fcmp {
+                fee: 0,
+                reference_block: BlockHash::from_bytes([0x99; 32]),
+                base: CtBase {
+                    enc_amounts: Vec::new(),
+                    enc_labels: Vec::new(),
+                    commitments: Vec::new(),
                 },
                 pqc_auths: Vec::new(),
                 prunable: None,
@@ -532,3 +574,7 @@ pub mod fixture {
 #[cfg(test)]
 #[path = "harness_probe_tests.rs"]
 mod harness_probe_tests;
+
+#[cfg(test)]
+#[path = "fixture_sanity_tests.rs"]
+mod fixture_sanity_tests;
