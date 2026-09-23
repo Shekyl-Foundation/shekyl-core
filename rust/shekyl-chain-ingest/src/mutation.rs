@@ -72,7 +72,7 @@ const STALE_TIMESTAMP: u64 = 0;
 const VERSION_STEP: u8 = 1;
 
 /// How far the coinbase's clear output amount moves. One atomic unit is
-/// CEN-F13's inequality.
+/// CEN-F18's inequality (exact payout).
 const REWARD_OFF_BY: u64 = 1;
 
 /// `previous` no chain holds. Not [`BlockHash::NULL`]: that value is
@@ -108,7 +108,12 @@ pub enum Mutation {
     /// "Bad seed" is a block *mined* against the wrong seed — the seed is
     /// not in the block.
     PowUnderWrongSeed,
-    /// The coinbase's clear output amount off by one.
+    /// The coinbase's clear output amount off by one. Expects **CEN-F18**,
+    /// the exact-payout predicate — not F13, the base-subsidy *definition*,
+    /// which the family named until E6 slice 4 landed F13 as a value pin
+    /// and showed the key was wrong (`CHAIN_RULES_SLICE_4.md` Q8: a
+    /// definition row refuses nothing, so a mutation keyed to it flips to
+    /// expecting a refusal that never comes the day the row is ported).
     WrongReward,
     /// Two listed bodies swapped; the header's `tx_hashes` untouched.
     ReorderedBodies,
@@ -127,6 +132,9 @@ pub enum Mutation {
 pub enum ExpectedPlace {
     /// The refusal points at the block.
     Block,
+    /// The refusal points at the miner transaction — every 4.F row's place
+    /// (`Locus::Tx { slot: TxSlot::Miner }`, `CHAIN_RULES_SLICE_4.md` Q6).
+    Miner,
     /// The refusal points at an input (CEN-I7, §3.10).
     Input,
     /// The spec has not named the place. Not a guessed block locus.
@@ -158,7 +166,7 @@ impl Mutation {
             Self::FutureTimestamp => CenRow::C1,
             Self::StaleTimestamp => CenRow::C2,
             Self::PowUnderWrongSeed => CenRow::D1,
-            Self::WrongReward => CenRow::F13,
+            Self::WrongReward => CenRow::F18,
             Self::ReorderedBodies => CenRow::G2,
             Self::DoubleSpend => CenRow::I7,
         }
@@ -176,9 +184,11 @@ impl Mutation {
             | Self::StaleTimestamp
             | Self::PowUnderWrongSeed => ExpectedPlace::Block,
             Self::DoubleSpend => ExpectedPlace::Input,
-            // 4.F and 4.G have not named a locus. Guessing `Block` would
-            // make the port go red for the test's assumption.
-            Self::WrongReward | Self::ReorderedBodies => ExpectedPlace::Unnamed,
+            // 4.F named its locus with slice 4 (Q6): the miner transaction.
+            Self::WrongReward => ExpectedPlace::Miner,
+            // 4.G has not named a locus. Guessing `Block` would make the
+            // port go red for the test's assumption.
+            Self::ReorderedBodies => ExpectedPlace::Unnamed,
         }
     }
 
