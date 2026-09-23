@@ -119,8 +119,8 @@ fn a_cumulative_difficulty_overflow_is_the_fold_belt_not_a_new_row() {
 }
 
 /// CEN-F20's fault — a `cumulative_tx_count` prefix sum that decreases — is
-/// SI-8's backwards-fold form, armed by the validator's read and halting
-/// the writer at the connecting height like the work belt does.
+/// SI-13, armed by the validator's read and halting the writer at the
+/// connecting height like the work belt (SI-10) does.
 #[test]
 fn a_decreasing_tx_count_is_the_fold_belt_observed_by_the_validator() {
     let path = tmp("connect-refuse-corrupt-tx-count");
@@ -139,7 +139,7 @@ fn a_decreasing_tx_count_is_the_fold_belt_observed_by_the_validator() {
         height: 0,
     };
     expect_row(&out, row);
-    assert_eq!(row.row(), 8);
+    assert_eq!(row.row(), 13);
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {

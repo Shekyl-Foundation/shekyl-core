@@ -90,12 +90,12 @@ pub enum StoreInvariant {
         /// The `properties` key of the cell whose fold overflowed.
         cell: &'static str,
     },
-    /// **SI-8, observed by the validator** — a recorded fold went
-    /// *backwards*: a prefix sum the store only ever adds to
-    /// (`block_info.cumulative_tx_count`, S-CHAIN-W) is smaller at a later
-    /// height than at an earlier one. Like [`WorkNotIncreasing`](Self::WorkNotIncreasing)
-    /// this is not armed by a write site — the fold is checked at connect —
-    /// but by a rule reading the store: CEN-F20's volume window is the
+    /// **SI-13** — a recorded fold never *decreases*: a prefix sum the
+    /// store only ever adds to (`block_info.cumulative_tx_count`, S-CHAIN-R)
+    /// is never smaller at a later height than at an earlier one. SI-8
+    /// guards the write (no wrap); this is the read-side form. Like
+    /// [`WorkNotIncreasing`](Self::WorkNotIncreasing) it is not armed by a
+    /// write site but by a rule reading the store: CEN-F20's volume window is the
     /// difference of two prefix sums, and a negative difference is
     /// `Corrupt::TxCountNotMonotone { at }`, which the ingest pipeline hands
     /// to [`WriteBatch::refuse_corrupt`](super::WriteBatch::refuse_corrupt)
@@ -197,7 +197,8 @@ impl StoreInvariant {
             Self::LeavesNotDense { .. } => 11,
             Self::SummaryRootDiverged => 12,
             Self::CellCorrupt { .. } => 7,
-            Self::FoldOverflow { .. } | Self::FoldNotMonotone { .. } => 8,
+            Self::FoldOverflow { .. } => 8,
+            Self::FoldNotMonotone { .. } => 13,
             Self::IdNotFresh => 9,
         }
     }

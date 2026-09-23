@@ -117,7 +117,7 @@ pub enum Corrupt {
     CumulativeDifficultyOverflow,
     /// The recorded `cumulative_tx_count` **decreased** between two heights
     /// the volume window spans (CEN-F20). A prefix sum the store folds
-    /// under SI-8 cannot go backwards on a conforming store; read as a
+    /// under SI-8 cannot go backwards (SI-13, the read-side form) on a conforming store; read as a
     /// window it would price a dormant chain, so it is a fault, not a
     /// smaller number.
     TxCountNotMonotone {
@@ -234,7 +234,7 @@ impl fmt::Display for Corrupt {
             }
             Self::TxCountNotMonotone { at } => write!(
                 f,
-                "cumulative transaction count decreases at height {at:?} (SI-8)"
+                "cumulative transaction count decreases at height {at:?} (SI-13)"
             ),
         }
     }
