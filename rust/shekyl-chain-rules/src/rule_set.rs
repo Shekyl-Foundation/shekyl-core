@@ -30,7 +30,7 @@
 use core::fmt;
 
 use shekyl_address::Network;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::census::{CenRow, RowStatus};
 use crate::rules::difficulty::Target;
@@ -83,13 +83,19 @@ impl RuleSetId {
 /// `BlockHeader.major_version` this rule set admits (CEN-B1; the vote
 /// floor of CEN-B2), landed with slice 1. The third is `difficulty` — how
 /// CEN-D4 derives the target — landed with slice 2 and the reason one
-/// non-issued constructor exists ([`RuleSet::fakechain`]).
+/// non-issued constructor exists ([`RuleSet::fakechain`]). The fourth and
+/// fifth — `mined_money_unlock_window` (CEN-F6) and `emission_split_epoch`
+/// (CEN-F21) — landed with slice 4 (`CHAIN_RULES_SLICE_4.md` Q5): both are
+/// data the C++ derives from a `#define` and the one-row hardfork table;
+/// Rust states them, and a fixture pins each to the C++ value.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,
     enforced: &'static [CenRow],
     header_major_version: u8,
     difficulty: DifficultyRule,
+    mined_money_unlock_window: BlockCount,
+    emission_split_epoch: BlockHeight,
 }
 
 /// How a rule set derives the next-block target (CEN-D4 reads this).
@@ -128,6 +134,8 @@ impl RuleSet {
         enforced: CenRow::ALL,
         header_major_version: 1,
         difficulty: DifficultyRule::Lwma1,
+        mined_money_unlock_window: BlockCount::from_raw(60),
+        emission_split_epoch: BlockHeight::from_raw(1),
     };
 
     /// Every rule set a schedule may name, in id order. A schedule step that
@@ -202,8 +210,29 @@ impl RuleSet {
             id: RuleSetId::from_raw(u8::MAX),
             enforced: CenRow::ALL,
             header_major_version,
-            difficulty: DifficultyRule::Lwma1,
+            ..Self::GENESIS
         }
+    }
+
+    /// How many blocks after its height a coinbase's outputs stay locked
+    /// (CEN-F6: `unlock_time == height + window`). `60` on every issued
+    /// rule set — the C++ `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`, a
+    /// `#define` in `cryptonote_config.h` rather than a `config/` key (the
+    /// census notes the asymmetry); `rule_set_tests` pins the two equal.
+    #[must_use]
+    pub const fn mined_money_unlock_window(&self) -> BlockCount {
+        self.mined_money_unlock_window
+    }
+
+    /// The height the staker emission share's decay is measured from
+    /// (CEN-F21: `genesis_ng_height`). `1` on every issued rule set — the
+    /// C++ derives it from `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)`
+    /// over the one-row hardfork table (`hardforks.cpp:35`), which returns
+    /// the row's height `1`, not `0`; Rust states the value and
+    /// `rule_set_tests` pins it to that table.
+    #[must_use]
+    pub const fn emission_split_epoch(&self) -> BlockHeight {
+        self.emission_split_epoch
     }
 
     /// The `BlockHeader.major_version` this rule set admits (CEN-B1), and
@@ -227,13 +256,15 @@ impl fmt::Debug for RuleSet {
             .field(
                 "enforced",
                 &format_args!(
-                    "{} of {} rows (per-block; held and at-open rows excluded)",
+                    "{} of {} rows (per-block; held, at-open and by-construction rows excluded)",
                     self.enforced().count(),
                     CenRow::ALL.len()
                 ),
             )
             .field("header_major_version", &self.header_major_version)
             .field("difficulty", &self.difficulty)
+            .field("mined_money_unlock_window", &self.mined_money_unlock_window)
+            .field("emission_split_epoch", &self.emission_split_epoch)
             .finish()
     }
 }

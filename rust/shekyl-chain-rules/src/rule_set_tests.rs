@@ -8,7 +8,7 @@
 //! (`CHAIN_RULES_CRATE.md` §8.4).
 
 use shekyl_address::Network;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockCount, BlockHeight};
 
 use super::{well_formed, AdmissionPolicy, AdmissionPolicyId, RuleSchedule, RuleSet, RuleSetId};
 use crate::census::{CenRow, RowStatus};
@@ -145,7 +145,7 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
     assert_eq!(
         format!("{genesis:?}"),
         format!(
-            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held and at-open rows excluded), header_major_version: 1, difficulty: Lwma1 }}",
+            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held, at-open and by-construction rows excluded), header_major_version: 1, difficulty: Lwma1, mined_money_unlock_window: BlockCount(60), emission_split_epoch: BlockHeight(1) }}",
             v = CenRow::ALL.len() - 3,
             n = CenRow::ALL.len()
         )
@@ -155,4 +155,76 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
 #[test]
 fn admission_policy_is_the_staged_identity() {
     assert_eq!(AdmissionPolicy::GENESIS.id(), AdmissionPolicyId::GENESIS);
+}
+
+// ---- slice 4 Q5: the two coinbase parameters are data pinned to the C++ ----
+
+/// CEN-F6's window is the C++ `#define` — read from `cryptonote_config.h`
+/// itself, not from a copy of the number, so a C++ edit that moves the
+/// window fails here rather than diverging silently.
+#[test]
+fn the_unlock_window_is_the_cxx_define() {
+    let config_h = include_str!("../../../src/cryptonote_config.h");
+    let line = config_h
+        .lines()
+        .find(|l| l.contains("#define CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW"))
+        .expect("cryptonote_config.h defines CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW");
+    let value: u64 = line
+        .split_whitespace()
+        .nth(2)
+        .expect("the define carries a value")
+        .parse()
+        .expect("the value is an integer");
+    assert_eq!(
+        RuleSet::GENESIS.mined_money_unlock_window(),
+        BlockCount::from_raw(value)
+    );
+    assert_eq!(value, 60, "the shipped window");
+}
+
+/// CEN-F21's epoch is the one-row hardfork table's height: `{ 1, 1, 0, … }`
+/// on every public network (`hardforks.cpp`), which
+/// `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` returns as
+/// `1`. Read from the table, not restated.
+#[test]
+fn the_emission_split_epoch_is_the_hardfork_tables_first_row() {
+    let hardforks_cpp = include_str!("../../../src/hardforks/hardforks.cpp");
+    for table in [
+        "mainnet_hard_forks",
+        "testnet_hard_forks",
+        "stagenet_hard_forks",
+    ] {
+        let start = hardforks_cpp
+            .find(&format!("const hardfork_t {table}[] = {{"))
+            .unwrap_or_else(|| panic!("hardforks.cpp defines {table}"));
+        let body = &hardforks_cpp[start..];
+        let end = body.find("};").expect("the table closes");
+        let rows: Vec<&str> = body[..end]
+            .lines()
+            .skip(1)
+            .map(str::trim)
+            .filter(|l| l.starts_with('{'))
+            .collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "{table} has one row (all features from genesis)"
+        );
+        // `{ version, height, threshold, time }`
+        let fields: Vec<&str> = rows[0]
+            .trim_matches(|c| c == '{' || c == '}' || c == ',')
+            .split(',')
+            .map(str::trim)
+            .collect();
+        let height: u64 = fields[1].parse().expect("the row's height is an integer");
+        assert_eq!(
+            RuleSet::GENESIS.emission_split_epoch(),
+            BlockHeight::from_raw(height),
+            "{table}"
+        );
+    }
+    assert_eq!(
+        RuleSet::GENESIS.emission_split_epoch(),
+        BlockHeight::from_raw(1)
+    );
 }
