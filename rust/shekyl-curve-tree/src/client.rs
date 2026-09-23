@@ -1510,6 +1510,183 @@ mod tests {
                  the invisible case is the one worth covering"
             );
         }
+
+        // ---------------------------------------------------------------
+        // `CT-6 Q2` — the agreement examiner, armed here, graded at
+        // increment 4.
+        // ---------------------------------------------------------------
+
+        /// The one interface a height-keyed tier can have: **height in, root
+        /// out**, `None` where the tier does not answer.
+        ///
+        /// C1 pins this shape, which is what lets the examiner below be
+        /// written before the second tier exists. A tier that cannot be
+        /// expressed through this seam is a tier `CT-6` did not describe.
+        trait HeightKeyedTier {
+            fn root_at_height(&self, h: BlockHeight) -> Option<[u8; 32]>;
+        }
+
+        /// What an agreement failure was: the two ways `Q2`'s property can
+        /// break, kept apart because they have different causes and different
+        /// fixes.
+        #[derive(Debug, PartialEq, Eq)]
+        enum TierFault {
+            /// A height no tier answered. The readers do not cover the range
+            /// between them.
+            Uncovered { height: u64 },
+            /// Both tiers answered and disagreed.
+            Disagree { height: u64 },
+        }
+
+        /// `Q2`'s property: the tiers are **total, and identical where both
+        /// answer**.
+        ///
+        /// Not *non-overlapping*. The freeze boundary is a burial condition
+        /// that advances as blocks arrive, joining leaf-count-aligned segments
+        /// to height-keyed snapshots; demanding non-overlap would force
+        /// eviction to track burial in lockstep and re-weld the two mechanisms
+        /// the ruling separates. Overlap is free redundancy — checked here
+        /// rather than forbidden.
+        fn examine_tiers<A: HeightKeyedTier, B: HeightKeyedTier>(
+            a: &A,
+            b: &B,
+            heights: std::ops::RangeInclusive<u64>,
+        ) -> Result<(), TierFault> {
+            for h in heights {
+                let bh = BlockHeight::from_raw(h);
+                match (a.root_at_height(bh), b.root_at_height(bh)) {
+                    (None, None) => return Err(TierFault::Uncovered { height: h }),
+                    (Some(x), Some(y)) if x != y => return Err(TierFault::Disagree { height: h }),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+
+        /// The production reader as a tier.
+        struct LiveTier<'a>(&'a CurveTreeClient);
+        impl HeightKeyedTier for LiveTier<'_> {
+            fn root_at_height(&self, h: BlockHeight) -> Option<[u8; 32]> {
+                self.0.root_and_depth_at(h).ok().map(|(r, _)| r.to_bytes())
+            }
+        }
+
+        /// A tier that answers every height, agreeing with `inner` except at
+        /// `wrong_at`, where it flips one byte.
+        ///
+        /// **This is the injected wrong subject.** The examiner is being
+        /// written before the tier it will grade, so the only way to show it
+        /// discriminates is to hand it something that genuinely disagrees and
+        /// require it to say so. Without this, a Q2 test written today would
+        /// be green by construction and stay green whatever increment 4 does.
+        struct DisagreeingTier<'a> {
+            inner: LiveTier<'a>,
+            wrong_at: u64,
+        }
+        impl HeightKeyedTier for DisagreeingTier<'_> {
+            fn root_at_height(&self, h: BlockHeight) -> Option<[u8; 32]> {
+                self.inner.root_at_height(h).map(|mut r| {
+                    if h.to_raw() == self.wrong_at {
+                        r[0] ^= 0x01;
+                    }
+                    r
+                })
+            }
+        }
+
+        /// A tier with a hole, for the other fault.
+        struct HolePunchedTier<'a> {
+            inner: LiveTier<'a>,
+            silent_at: u64,
+        }
+        impl HeightKeyedTier for HolePunchedTier<'_> {
+            fn root_at_height(&self, h: BlockHeight) -> Option<[u8; 32]> {
+                if h.to_raw() == self.silent_at {
+                    return None;
+                }
+                self.inner.root_at_height(h)
+            }
+        }
+
+        /// A tier that answers nothing — the other half of an uncovered height.
+        struct SilentTier;
+        impl HeightKeyedTier for SilentTier {
+            fn root_at_height(&self, _h: BlockHeight) -> Option<[u8; 32]> {
+                None
+            }
+        }
+
+        fn armed_fixture() -> (CurveTreeClient, u64) {
+            let tip = 96;
+            let mut client = CurveTreeClient::new();
+            ingest_varying(&mut client, tip);
+            (client, tip)
+        }
+
+        /// The control: a tier compared against itself must pass, or a red
+        /// below would mean nothing.
+        #[test]
+        fn q2_examiner_passes_when_the_tiers_agree() {
+            let (client, tip) = armed_fixture();
+            let live = LiveTier(&client);
+            let same = LiveTier(&client);
+            assert_eq!(examine_tiers(&live, &same, 1..=tip), Ok(()));
+        }
+
+        /// **The Q2 red-bite.** The examiner must detect a disagreement, and
+        /// name where.
+        ///
+        /// This is what arms the property ahead of its subject: increment 4
+        /// arrives to an examiner it did not write, already shown to
+        /// discriminate, and plugs in as the real instantiation.
+        #[test]
+        fn q2_examiner_reds_on_a_tier_that_disagrees() {
+            let (client, tip) = armed_fixture();
+            let wrong_at = tip - 3;
+            let live = LiveTier(&client);
+            let wrong = DisagreeingTier {
+                inner: LiveTier(&client),
+                wrong_at,
+            };
+            assert_eq!(
+                examine_tiers(&live, &wrong, 1..=tip),
+                Err(TierFault::Disagree { height: wrong_at }),
+                "the examiner did not detect a tier disagreeing at {wrong_at}; \
+                 armed-but-blind is worse than unarmed"
+            );
+        }
+
+        /// The other fault: totality. A height neither tier answers is a hole,
+        /// and the examiner must not read it as agreement.
+        #[test]
+        fn q2_examiner_reds_on_a_height_no_tier_covers() {
+            let (client, tip) = armed_fixture();
+            let hole_at = tip - 5;
+            let punched = HolePunchedTier {
+                inner: LiveTier(&client),
+                silent_at: hole_at,
+            };
+            assert_eq!(
+                examine_tiers(&punched, &SilentTier, 1..=tip),
+                Err(TierFault::Uncovered { height: hole_at }),
+                "a height no tier answered was read as agreement"
+            );
+        }
+
+        /// Overlap is permitted, and the examiner must not punish it.
+        ///
+        /// Guards the ruling itself: were the invariant ever tightened to
+        /// *non-overlapping*, this test would have to be deleted, which makes
+        /// the deletion the visible cost of that change.
+        #[test]
+        fn q2_examiner_permits_agreeing_overlap() {
+            let (client, tip) = armed_fixture();
+            let a = LiveTier(&client);
+            let b = LiveTier(&client);
+            // Both answer at every height, identically: total, overlapping,
+            // agreeing. The property holds.
+            assert_eq!(examine_tiers(&a, &b, 1..=tip), Ok(()));
+        }
     }
 
     fn ingest_coinbase_blocks(client: &mut CurveTreeClient, from: u64, to: u64) {
