@@ -83,6 +83,7 @@ use crate::coverage::RuleCoverage;
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::Target;
 use crate::rules::timestamps::MtpWindow;
+use crate::rules::tx::TxClass;
 use crate::trust::Trust;
 use crate::verdict::{Locus, TxSlot, Verdict};
 use crate::view::{AtHeight, ChainView, RecordedBlock, Tip};
@@ -347,15 +348,29 @@ pub(crate) struct TxContext<'a> {
     pub(crate) slot: TxSlot,
     /// Derived from `slot`, never declared.
     pub(crate) kind: TxKind,
+    /// What kind of transaction the inputs make this — derived once
+    /// ([`TxClass::derive`]), judging CEN-H5 and CEN-H6 as it goes, and read
+    /// by every rule whose shape depends on it (H14, H20–H22).
+    pub(crate) class: TxClass,
 }
 
 impl<'a> TxContext<'a> {
-    pub(crate) const fn new(tx: &'a Transaction, slot: TxSlot) -> Self {
-        Self {
+    /// Build the context, deriving the class. A refusal here is H5's or
+    /// H6's, at `slot`; both rows are recorded in `coverage` when they pass
+    /// — at their derivation site, the CEN-B6 arrangement.
+    pub(crate) fn derive(
+        tx: &'a Transaction,
+        slot: TxSlot,
+        coverage: &mut RuleCoverage,
+    ) -> Verdict<Self> {
+        let kind = TxKind::of(slot);
+        let class = TxClass::derive(tx, slot, kind, coverage)?;
+        Ok(Self {
             tx,
             slot,
-            kind: TxKind::of(slot),
-        }
+            kind,
+            class,
+        })
     }
 
     /// Where this transaction's refusals point.

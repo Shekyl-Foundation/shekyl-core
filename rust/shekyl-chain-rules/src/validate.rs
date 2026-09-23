@@ -54,7 +54,7 @@ use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
 use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
-use crate::rules::tx::{H1, H16, H3, H4};
+use crate::rules::tx::{H1, H14, H16, H3, H4, H9};
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
@@ -369,9 +369,14 @@ macro_rules! judge_tx {
 /// frozen constant beside its rule (`rules::tx`, the F21 arrangement) — and
 /// the first row that varies by schedule step is its first reader.
 pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<RuleCoverage> {
-    let cx = rules::TxContext::new(tx, slot);
     let mut coverage = RuleCoverage::EMPTY;
-    judge_tx!(cx, coverage; H1, H3, H4, H16);
+    // H5 (the `gen` half) and H6 are judged as the class is derived — the
+    // C++ single-sources them in `classify_archival_tx` too. Order against
+    // the C++: it runs H1–H3 before `check_tx_semantic`; a transaction that
+    // is both oversized and mixed is refused on H6 here and on H1 there —
+    // one refusal either way, the row differs.
+    let cx = rules::TxContext::derive(tx, slot, &mut coverage)?;
+    judge_tx!(cx, coverage; H1, H3, H4, H9, H14, H16);
     Ok(coverage)
 }
 

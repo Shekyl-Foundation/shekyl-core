@@ -129,6 +129,10 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::H1,
             CenRow::H3,
             CenRow::H4,
+            CenRow::H5,
+            CenRow::H6,
+            CenRow::H9,
+            CenRow::H14,
             CenRow::H16,
         ]
     );

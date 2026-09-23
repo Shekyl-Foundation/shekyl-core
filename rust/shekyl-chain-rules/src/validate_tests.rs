@@ -6,7 +6,7 @@
 use super::*;
 use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, Retry, Stale};
-use crate::harness::fixture::{candidate, coinbase};
+use crate::harness::fixture::{candidate, coinbase, listed};
 use crate::harness::{formed, formed_under, judged, Faulted, MockChain, MockSubstrate};
 use crate::rule_set::RuleSetId;
 use crate::substrate::Substrate;
@@ -16,7 +16,7 @@ use crate::TxIdentity;
 #[test]
 fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
     MockChain::default().with_view(|view| {
-        let input = candidate(vec![coinbase(1), coinbase(2)]);
+        let input = candidate(vec![listed([0xC1; 32]), listed([0xC2; 32])]);
         let valid = judged(validate(
             formed(input),
             &view,
@@ -69,6 +69,10 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::H1,
                 CenRow::H3,
                 CenRow::H4,
+                CenRow::H5,
+                CenRow::H6,
+                CenRow::H9,
+                CenRow::H14,
                 CenRow::H16,
             ]
         );
@@ -80,7 +84,7 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
 
 #[test]
 fn the_validated_block_is_the_candidate_with_identities_derived_once() {
-    let input = candidate(vec![coinbase(1), coinbase(2)]);
+    let input = candidate(vec![listed([0xC1; 32]), listed([0xC2; 32])]);
     let expected_hash = input.block.hash();
     let identity = |tx: &Transaction| {
         let parts = tx.txid_parts();
@@ -110,7 +114,7 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     assert_ne!(expected_miner.prunable_hash.as_bytes(), &[0u8; 32]);
     // A coinbase txid is 3-part: there is no third component to record
     // (PDM-Q-F26) — `None` is the identity's arity, not a discarded value.
-    // The listed bodies in this fixture are also coinbases.
+    // The listed spends carry no `pqc_auths` either, so theirs is `None` too.
     assert_eq!(expected_miner.pqc_auth_hash, None);
     for (id, _) in &expected_listed {
         assert_eq!(id.pqc_auth_hash, None);
@@ -160,7 +164,16 @@ fn tx_entry_points_record_the_landed_rows() {
     let form = tx_form(&tx, TxSlot::Miner, &RuleSet::GENESIS).expect("a coinbase passes");
     assert_eq!(
         form.iter().collect::<Vec<_>>(),
-        [CenRow::H1, CenRow::H3, CenRow::H4, CenRow::H16]
+        [
+            CenRow::H1,
+            CenRow::H3,
+            CenRow::H4,
+            CenRow::H5,
+            CenRow::H6,
+            CenRow::H9,
+            CenRow::H14,
+            CenRow::H16
+        ]
     );
     MockChain::default().with_view(|view| {
         assert_eq!(

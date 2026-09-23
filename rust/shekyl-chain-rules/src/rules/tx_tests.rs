@@ -10,6 +10,7 @@
 //! rather than per row.
 
 use super::*;
+use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{candidate_on, coinbase, listed};
 use crate::harness::{assert_refused, formed_on, judged, MockChain};
 use crate::rule_set::RuleSet;
@@ -17,7 +18,7 @@ use crate::rules::TxKind;
 use crate::trust::Trust;
 use crate::validate::{tx_form, validate};
 use crate::verdict::{Locus, TxSlot};
-use shekyl_wire::Transaction;
+use shekyl_wire::{Input, Transaction};
 
 const KI: [u8; 32] = [0xC1; 32];
 
@@ -65,7 +66,16 @@ fn the_kind_is_derived_from_the_slot_not_the_bytes() {
     assert_eq!(TxKind::of(TxSlot::Listed(3)), TxKind::Listed);
     let coinbase_shaped = coinbase(1);
     assert!(coinbase_shaped.is_coinbase());
-    let cx = TxContext::new(&coinbase_shaped, TxSlot::Lone);
+    // And judged as one: a lone sole-`gen` transaction is H5's refusal, not
+    // a coinbase.
+    let mut coverage = RuleCoverage::EMPTY;
+    assert_refused(
+        TxContext::derive(&coinbase_shaped, TxSlot::Lone, &mut coverage).map(|cx| cx.kind),
+        CenRow::H5,
+        Locus::Tx { slot: TxSlot::Lone },
+    );
+    let spend_tx = listed(KI);
+    let cx = TxContext::derive(&spend_tx, TxSlot::Lone, &mut coverage).expect("a spend");
     assert_eq!(cx.kind, TxKind::Listed);
     assert_eq!(cx.locus(), Locus::Tx { slot: TxSlot::Lone });
 }
@@ -215,7 +225,11 @@ fn h1_the_size_limit_is_inclusive() {
         listed_serialized_to(MAX_TX_SIZE + 1),
         CenRow::H1,
         Locus::Tx { slot: TxSlot::Lone },
-        |tx| H1::check(&TxContext::new(&tx, TxSlot::Lone)),
+        |tx| {
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)?;
+            H1::check(&cx)
+        },
     );
     refused_lone(&listed_serialized_to(MAX_TX_SIZE + 1), CenRow::H1);
     refused_listed(&listed_serialized_to(MAX_TX_SIZE + 1), CenRow::H1);
@@ -255,10 +269,11 @@ fn h1_and_h3_are_vacuous_at_the_miner_slot() {
 
 /// Boundary: `unlock_time` one below the sentinel is a height and passes;
 /// the sentinel itself is a timestamp and is refused on H16 — at the pool's
-/// slot, listed, **and at the miner slot**, since the C++ runs
-/// `check_tx_outputs` on the coinbase too.
+/// slot and listed. At the miner slot the row is vacuous: the C++ reaches
+/// `check_tx_outputs` from the non-input path only, and the coinbase's
+/// unlock time is F6's.
 #[test]
-fn h16_the_sentinel_is_the_first_refused_unlock_time_everywhere() {
+fn h16_the_sentinel_is_the_first_refused_unlock_time() {
     let unlocking_at = |t: u64| {
         let mut tx = listed(KI);
         tx.prefix.unlock_time = t;
@@ -274,13 +289,202 @@ fn h16_the_sentinel_is_the_first_refused_unlock_time_everywhere() {
     refused_listed(&unlocking_at(UNLOCK_TIME_SENTINEL), CenRow::H16);
     let mut miner = coinbase(1);
     miner.prefix.unlock_time = UNLOCK_TIME_SENTINEL;
+    let form = tx_form(&miner, TxSlot::Miner, &RuleSet::GENESIS).expect("vacuous on the coinbase");
+    assert!(form.contains(CenRow::H16));
+}
+
+// ---- CEN-H9 -------------------------------------------------------------
+
+/// Two outputs whose amounts sum past `u64::MAX` are refused on H9 — as a
+/// listed transaction at both sites, and at the miner slot (the C++ runs
+/// `check_outs_overflow` on the coinbase; F7 judges the same sum under its
+/// own row in `form`, so the miner-slot case is asserted on the rule alone).
+#[test]
+fn h9_output_amounts_that_overflow_are_refused_everywhere() {
+    let overflowing = |mut tx: Transaction| {
+        let second = tx.prefix.outputs[0].clone();
+        tx.prefix.outputs.push(second);
+        tx.prefix.outputs[0].amount = u64::MAX;
+        tx.prefix.outputs[1].amount = 1;
+        tx
+    };
+    // A listed emission, so H14 does not refuse the loud amounts first.
+    let emission_tx = overflowing(with_inputs(vec![emission()]));
+    refused_lone(&emission_tx, CenRow::H9);
+    refused_listed(&emission_tx, CenRow::H9);
+    let miner = overflowing(coinbase(1));
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = TxContext::derive(&miner, TxSlot::Miner, &mut coverage).expect("the coinbase");
     assert_refused(
-        tx_form(&miner, TxSlot::Miner, &RuleSet::GENESIS),
-        CenRow::H16,
+        H9::check(&cx),
+        CenRow::H9,
         Locus::Tx {
             slot: TxSlot::Miner,
         },
     );
+}
+
+// ---- CEN-H14 ------------------------------------------------------------
+
+/// A non-zero output amount is refused on H14 for every non-coinbase shape
+/// but the emission, whose loud vouts pass; the coinbase's amounts are
+/// 4.F's (vacuous at the miner slot).
+#[test]
+fn h14_loud_amounts_are_refused_except_on_an_emission() {
+    let loud = |mut tx: Transaction| {
+        tx.prefix.outputs[0].amount = 5;
+        tx
+    };
+    refused_lone(&loud(listed(KI)), CenRow::H14);
+    refused_listed(&loud(listed(KI)), CenRow::H14);
+    refused_lone(&loud(with_inputs(vec![bond_post(), spend(1)])), CenRow::H14);
+    let emission_tx = loud(with_inputs(vec![emission()]));
+    assert!(tx_form(&emission_tx, TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("a loud emission passes H14")
+        .contains(CenRow::H14));
+    let form = tx_form(&loud(coinbase(1)), TxSlot::Miner, &RuleSet::GENESIS).expect("vacuous");
+    assert!(form.contains(CenRow::H14));
+}
+
+// ---- the classification, CEN-H5 and CEN-H6 -----------------------------
+
+/// Archival input fixtures. The class reads the variant, never the
+/// contents, so these carry the minimum the type requires.
+fn serve_credit() -> Input {
+    Input::ServeCredit {
+        canonical_bytes: Vec::new(),
+    }
+}
+
+fn emission() -> Input {
+    Input::ArchivalRewardEmission {
+        canonical_bytes: Vec::new(),
+    }
+}
+
+fn bond_post() -> Input {
+    use shekyl_wire::{BondPost, BondPostKind, Holdings};
+    Input::BondPost(Box::new(BondPost {
+        hybrid_public_key: Vec::new(),
+        p_canonical_id: shekyl_types::PCanonicalId::from_bytes([0xB0; 32]),
+        kind: BondPostKind::Other(2),
+        holdings: Holdings::CompleteTree,
+        bonded_total_atomic: 0,
+        bond_credit: 0,
+        bond_debit: 0,
+    }))
+}
+
+fn spend(fill: u8) -> Input {
+    Input::ToKey {
+        amount: 0,
+        key_offsets: Vec::new(),
+        key_image: [fill; 32],
+    }
+}
+
+/// `listed(KI)` with its inputs replaced.
+fn with_inputs(inputs: Vec<Input>) -> Transaction {
+    let mut tx = listed(KI);
+    tx.prefix.inputs = inputs;
+    tx
+}
+
+/// The class a lone transaction with `inputs` derives to, or the refusal.
+fn class_of(inputs: Vec<Input>) -> Verdict<TxClass> {
+    let mut coverage = RuleCoverage::EMPTY;
+    TxContext::derive(&with_inputs(inputs), TxSlot::Lone, &mut coverage).map(|cx| cx.class)
+}
+
+/// The four non-coinbase shapes, each with its indices and counts, and the
+/// empty vector (H4's, classified totally as a spend of nothing).
+#[test]
+fn the_classification_names_the_four_shapes_and_the_coinbase() {
+    assert_eq!(
+        class_of(vec![spend(1), spend(2)]),
+        Ok(TxClass::Spend { spends: 2 })
+    );
+    assert_eq!(class_of(Vec::new()), Ok(TxClass::Spend { spends: 0 }));
+    assert_eq!(
+        class_of(vec![serve_credit(), serve_credit()]),
+        Ok(TxClass::ServeCreditOnly { credits: 2 })
+    );
+    assert_eq!(
+        class_of(vec![spend(1), bond_post(), spend(2)]),
+        Ok(TxClass::BondPost { post: 1, spends: 2 })
+    );
+    assert_eq!(
+        class_of(vec![emission()]),
+        Ok(TxClass::Emission { at: 0, spends: 0 })
+    );
+    assert_eq!(
+        class_of(vec![spend(1), emission()]),
+        Ok(TxClass::Emission { at: 1, spends: 1 })
+    );
+    let mut coverage = RuleCoverage::EMPTY;
+    let miner = coinbase(1);
+    let cx = TxContext::derive(&miner, TxSlot::Miner, &mut coverage).expect("the coinbase");
+    assert_eq!(cx.class, TxClass::Coinbase);
+    assert!(coverage.contains(CenRow::H5) && coverage.contains(CenRow::H6));
+}
+
+/// CEN-H5, the `gen` half: a `gen` input anywhere but the coinbase position
+/// is refused — alone, mixed, listed — and the coinbase position accepts
+/// its own.
+#[test]
+fn h5_gen_is_refused_outside_the_coinbase_position() {
+    assert_refused(
+        class_of(vec![Input::Gen(1)]),
+        CenRow::H5,
+        Locus::Tx { slot: TxSlot::Lone },
+    );
+    assert_refused(
+        class_of(vec![spend(1), Input::Gen(1)]),
+        CenRow::H5,
+        Locus::Tx { slot: TxSlot::Lone },
+    );
+    refused_lone(&with_inputs(vec![Input::Gen(1)]), CenRow::H5);
+    // A coinbase-shaped transaction *listed in a block* is refused as H5 at
+    // its listed slot: the fixture for the slot-derived kind.
+    refused_listed(&coinbase(1), CenRow::H5);
+    // A `gen` mixed into the miner slot is not a coinbase either; F1 refuses
+    // it in `form`, and were it to reach here it is H5's, totally.
+    let mut coverage = RuleCoverage::EMPTY;
+    let mixed_miner = with_inputs(vec![Input::Gen(1), spend(1)]);
+    assert_refused(
+        TxContext::derive(&mixed_miner, TxSlot::Miner, &mut coverage).map(|cx| cx.class),
+        CenRow::H5,
+        Locus::Tx {
+            slot: TxSlot::Miner,
+        },
+    );
+}
+
+/// CEN-H6: each of the C++'s four mixings, refused; and the permitted
+/// co-residencies (spends beside a bond post, spends beside an emission)
+/// pass.
+#[test]
+fn h6_the_archival_mixings_are_refused_and_the_permitted_ones_pass() {
+    let lone = Locus::Tx { slot: TxSlot::Lone };
+    // Serve credits mix with nothing.
+    assert_refused(class_of(vec![serve_credit(), spend(1)]), CenRow::H6, lone);
+    assert_refused(
+        class_of(vec![serve_credit(), bond_post()]),
+        CenRow::H6,
+        lone,
+    );
+    assert_refused(class_of(vec![serve_credit(), emission()]), CenRow::H6, lone);
+    // At most one bond post; at most one emission.
+    assert_refused(class_of(vec![bond_post(), bond_post()]), CenRow::H6, lone);
+    assert_refused(class_of(vec![emission(), emission()]), CenRow::H6, lone);
+    // Emission and bond post never co-reside.
+    assert_refused(class_of(vec![emission(), bond_post()]), CenRow::H6, lone);
+    // Through both sites.
+    refused_lone(&with_inputs(vec![serve_credit(), spend(1)]), CenRow::H6);
+    refused_listed(&with_inputs(vec![serve_credit(), spend(1)]), CenRow::H6);
+    // Permitted.
+    assert!(class_of(vec![bond_post(), spend(1), spend(2)]).is_ok());
+    assert!(class_of(vec![emission(), spend(1)]).is_ok());
 }
 
 // ---- CEN-H4 -------------------------------------------------------------
@@ -302,6 +506,15 @@ fn a_well_formed_listed_transaction_records_every_landed_row() {
     let form = tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS).expect("passes");
     assert_eq!(
         form.iter().collect::<Vec<_>>(),
-        [CenRow::H1, CenRow::H3, CenRow::H4, CenRow::H16]
+        [
+            CenRow::H1,
+            CenRow::H3,
+            CenRow::H4,
+            CenRow::H5,
+            CenRow::H6,
+            CenRow::H9,
+            CenRow::H14,
+            CenRow::H16
+        ]
     );
 }
