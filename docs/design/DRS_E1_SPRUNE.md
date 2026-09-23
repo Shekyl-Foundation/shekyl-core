@@ -109,20 +109,26 @@ F19's horizon, through the one function this surface mints for it (§12).
 
 **The batch — the set is named by the epoch; nothing is searched.** The
 daemon has no holdings and no frontier of its own: it has bodies for every
-shard that has not reached its boundary, uniformly. The batch is a hook on
-**connect of the block at `E·SEB`** — not on "the tip reaching a boundary"
-— on the single-writer path (`shekyl-chain-ingest`'s connector is the
-natural site, the store exposes the op); for `E ≥ 2`, the set to discard is
-**named by `E`**:
+shard that has not reached its boundary, uniformly. The batch runs **inside
+the connect transaction of the block at `E·SEB`** — not on "the tip
+reaching a boundary", and not after the connect commits — on the
+single-writer path (`shekyl-chain-ingest`'s connector is the natural site,
+the store exposes the op); for `E ≥ 2`, the set to discard is **named by
+`E`**:
 
-> `D(E) = { k : close_epoch(k) ∈ [E−3, E−2] }`
+> `D(E) = { k : close_epoch(k) ∈ [max(E−3, 0), E−2] }`
 
-— the shards whose `close_height` falls in `[(E−3)·SEB, (E−1)·SEB)`, a
-contiguous range of `k` read off `cumulative_tx_count` and the `b_*` table.
-For each `k ∈ D(E)`, `discard(k)`: delete every `txs_prunable` and
-`txs_pqc_auths` row in `[b_k, b_{k+1})` in **one** redb transaction, not
-journaled in `undo_log` (a discard is not pop-reversible by design, §7).
-Then retire undo rows below `tip − D_max` (§3). Stop. **No frontier, no
+— the shards whose `close_height` falls in `[max(E−3, 0)·SEB, (E−1)·SEB)`,
+a contiguous range of `k` read off `cumulative_tx_count` and the `b_*`
+table. The lower bound is written with `max` because `E−3` underflows at
+`E = 2` — the same page's branch-not-arithmetic discipline, applied to
+itself. **One redb transaction per boundary connect**, holding the block's
+write set, every `discard(k)` for `k ∈ D(E)` (delete every `txs_prunable`
+and `txs_pqc_auths` row in `[b_k, b_{k+1})`; not journaled in `undo_log` —
+a discard is not pop-reversible by design, §7) and the undo-row retirement
+below `tip − D_max` (§3), **or the connect rolls back**. So "connected past
+`E·SEB` with `D(E)` un-run" is **unrepresentable** — a structural property,
+not a belt over a race (rule 16). Stop. **No frontier, no
 `k*`, no search over presence, no search over anything on disk** — the
 epoch already states the boundary, and the same `D(E)` is computed on
 every node whether it discarded last epoch, skeleton-synced, or just
@@ -132,11 +138,16 @@ node — which never held bodies — every segment is absent, so that search
 names the newest shard and the answer is node-local exactly where it must
 not be. Withdrawn.)*
 
-**Why `[E−3, E−2]` and not `E−2` alone — crash safety without a search.**
-If the batch at `E` dies partway, the shards with `close_epoch = E−2` still
-have some bodies at `E+1`; widening the named set by one epoch catches a
-single missed boundary at the next one, and range-deleting an already-empty
-range is near-free in redb. **A node down two or more boundaries needs
+**Why `[E−3, E−2]` and not `E−2` alone — belt, and said to be belt.** With
+`D(E)` inside the connect transaction there is no crash state for the
+widening to cover: a batch that dies takes its connect with it, and the
+block reconnects. The extra epoch is kept because range-deleting an
+already-empty range is near-free in redb and it costs nothing to say
+`D(E)` twice; it is **not** what makes the mechanism safe. (The reason it
+mattered before the transaction pin, for the record: a node that missed
+**two** consecutive boundaries would carry a body set no other node has —
+exactly the disk fingerprint #775 forbids — and the widening covered only
+one.) **A node down two or more boundaries needs
 nothing more — this is one mechanism, not two.** At its old tip in
 `E_old` it had already discarded every shard with `close_epoch ≤ E_old − 2`;
 returning, it *connects* every missed block, so it crosses the boundaries
@@ -159,8 +170,14 @@ already covers.)*
 named, not searched: **the `close_height` of the last shard with
 `close_epoch(k) ≤ E−2`** — `max { close_height(k) : close_height(k) <
 (E−1)·SEB }`. Stated as `≤ E−2` rather than `= E−2` so an epoch in which
-no shard closed (low tx rate) still yields the honest edge. Chain-derived,
-identical on every node, zero disk reads.
+no shard closed (low tx rate) still yields the honest edge. **Empty case:**
+before any shard has closed the set is empty, `h_scarce` is undefined, band
+2 is empty and the pop floor is `1` (genesis). **Block `h_scarce` is
+mixed:** the shard boundary falls mid-block, so transactions at that height
+with `tx_id < b_{k_max+1}` are discarded and later ones in the same block
+are held — which is why the band-2 interval is `(C, h_scarce]` (inclusive)
+and the pop floor is `h_scarce + 1`. Chain-derived, identical on every
+node, zero disk reads.
 
 **No retention exceptions — the archiver's store is the wallet's.**
 
@@ -220,15 +237,25 @@ bytes with no `CenRow`, or an S-PRUNE type imported by the rules crate
 
 ## 7. Pops — the check, and what S-PRUNE does not do
 
-**The pop check reads `close_height` only.** `pop` refuses any target at
-or below `h_scarce`, the `close_height` of the last shard with
-`close_epoch(k) ≤ current_epoch − 2` (§4):
-`StoreCannot::PopBelowFloor { floor: h_scarce + 1 }`. Chain-named — no
-stored frontier, no presence read; the floor is the same number on a node
-that has discarded and on one that never held a body. `PDM-Q2` (2026-09-22) makes this the checked half of "pops are
-unaffected"; the argued half is `SEB > D_max`, const-asserted at `D_max`'s
-home (§3). Together they replace the 2026-09-18 inequality `W ≥ D_max`,
-which was argued and asserted nowhere.
+**The pop check reads `close_height` only.** The **floor is the lowest
+height whose block may be popped**: `h_scarce + 1`, with `h_scarce` the
+`close_height` of the last shard with `close_epoch(k) ≤ current_epoch − 2`
+(§4); a `pop` of the block at any height `≤ h_scarce` is
+`StoreCannot::PopBelowFloor { floor: h_scarce + 1 }` (block `h_scarce`
+itself is mixed, §4, so it is not poppable). Chain-named — no stored
+frontier, no presence read; the floor is the same number on a node that
+has discarded and on one that never held a body. **It is belt, on every
+nettype.** The guarantee is `SEB > D_max`, const-asserted on the production
+constants (§3, §12) and an invariant of every valid configuration; and
+undo rows are retired at `tip − D_max` each boundary while
+`h_scarce < (E−1)·SEB ≤ tip − SEB`, so the `SCW-7` undo floor sits
+**strictly above** `h_scarce + 1` and this arm is unreachable by
+construction. It stays because a check that can fail is worth one that
+cannot (rule 16); its test constructs the unreachable case artificially —
+a store with a discarded shard above the undo floor — and proves the arm
+fires. One posture, not "belt on mainnet, binding on regtest" (§12).
+Together with the const-assert it replaces the 2026-09-18 inequality
+`W ≥ D_max`, which was argued and asserted nowhere.
 
 **What S-PRUNE does not do.** Never touches `spent_keys`. Never touches a hash row or a length row.
 **Never varies per node** — inside or outside `W` (`PDM-Q7`/`Q8`/`Q9`,
@@ -253,10 +280,14 @@ the mechanism); **a stored discard watermark or frontier cell, or any batch
 read of segment presence that selects what to discard** — the set is named
 by the epoch (§4), and either would be a second, node-local source; a
 node holding a body for a shard whose `close_epoch ≤ current_epoch − 2`
-once its connect path has crossed that shard's boundary; and **the hook
-firing twice for one `E` (a reorg across the boundary block) producing a
-different store than firing once** — idempotence is the property, and it
-is cheap to test.
+once its connect path has crossed that shard's boundary; **a store whose
+tip is `≥ E·SEB` with `D(E)` un-run** — the batch is inside the boundary
+block's connect transaction, so this state is unrepresentable and any
+instance is a transaction-boundary bug; **a nettype or override
+configuration with `SEB ≤ D_max`** — not a valid Shekyl configuration on
+any nettype (rule 71; §12); and **the hook firing twice for one `E` (a
+reorg across the boundary block) producing a different store than firing
+once** — idempotence is the property, and it is cheap to test.
 
 ## 9. Sequencing
 
@@ -312,7 +343,7 @@ have no Rust writer here); what this surface owes it is the function.
 | --- | --- | --- |
 | Body horizon | the epoch boundary after the shard's freeze epoch — `current_epoch ≥ close_epoch(k) + 2`; the batch's set at `E` is `{k : close_epoch(k) ∈ [E−3, E−2]}`; a rule, **no constant, no frontier** | ruled (`PDM-Q2`, 2026-09-22); `W` retired |
 | `SEB` | `settlement_epoch_blocks = 10,000`; `settlement_epoch_at_height(h) = h / SEB` (`consensus_state.rs:27`) | pinned |
-| `D_max` | 720; **`SEB > D_max` const-asserted beside it** | PROVISIONAL, Round-2 gate (`PDM-Q11`); **constant unbuilt — owed** at `CEN-E2` |
+| `D_max` | 720; **`SEB > D_max` const-asserted beside it, on the production constants — the only assertion.** The invariant holds on **every nettype** (rule 71: nettype selects data, the data satisfies the same invariant): the regtest `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override (`constants.rs:257`, today `2..=SETTLEMENT_EPOCH_BLOCKS` in isolation) must not admit `SEB ≤ D_max` — one knob that overrides both and preserves the ratio, or a parse that refuses. `SEB = 2` with `D_max = 720` is a rejected configuration, not a supported one | PROVISIONAL, Round-2 gate (`PDM-Q11`); **constant unbuilt — owed** at `CEN-E2`; **fakechain conformance owed with it** |
 | Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **owed**, minted by this surface's A4 commit, consumed by S-ARCH (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
 | `SHARD_BYTES` | 3.33 MB (`RF-D6`'s, as the boundary metric) | ruled (`PDM-Q-F32`); production home minted with A4 (FOLLOWUPS `:71`) |
 | Length rows (A4) | two `u32` per tx, sparse — **original state**, not derived: ingest-time facts of the body; `b_*` derives from them | **owed** to S-CHAIN-W; on a band-1 skeleton they arrive on F28's wire (below) |

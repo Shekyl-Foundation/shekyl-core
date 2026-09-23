@@ -915,9 +915,10 @@ three paths above are the design rationale that produced it.
 
 **The archival problem does not exist at chain launch, and the design does not
 need it to.** Nothing is scarce until the first shard is discarded, which
-happens at the boundary into epoch 2 (`PDM-Q2`, re-ruled 2026-09-22: in
-epochs 0 and 1 nothing discards — about four weeks at genesis parameters, not
-the ~195 days the 2026-09-18 `W` gave). Until then every daemon holds
+happens at the boundary into epoch 2 at the earliest (`PDM-Q2`, re-ruled
+2026-09-22: in epochs 0 and 1 nothing discards — about four weeks at genesis
+parameters, not the ~195 days the 2026-09-18 `W` gave — and later still on a
+chain too quiet to close a shard in epoch 0). Until then every daemon holds
 every shard, and the economics run in a **launch free regime** — bonds are
 posted on shards everyone still has, so that scarcity arrives with holders
 already committed rather than with the Foundation `CompleteTree` as the first

@@ -208,8 +208,10 @@ yet — has no `close_epoch` and is never a candidate.
 
 **Enforcement point** unchanged: asserted where the discard is decided —
 S-PRUNE's per-epoch batch, whose set at boundary `E` is **named by `E`** —
-`{k : close_epoch(k) ∈ [E−3, E−2]}`, read off `cumulative_tx_count`; no
-frontier, no search over disk (skeleton §4) — never discovered downstream; a violated predicate is a
+`{k : close_epoch(k) ∈ [max(E−3, 0), E−2]}`, read off `cumulative_tx_count`;
+no frontier, no search over disk — and which runs **inside the boundary
+block's connect transaction**, so "connected past `E·SEB` with the batch
+un-run" is unrepresentable (skeleton §4) — never discovered downstream; a violated predicate is a
 refused discard, not a corrupted write. **The predicate is evaluated at
 discard time and the discard is irreversible.** A reorg across an epoch
 boundary (`≤ D_max` blocks) can move `current_epoch` back by one after a
@@ -223,15 +225,24 @@ by their own check, next.
 `SEB + 1` blocks old**, and `SEB = 10,000 > D_max = 720`. The 2026-09-18
 text argued the corresponding `W ≥ D_max` and asserted nothing (rule 16's
 corollary: a guarantee with no gate that can fail). This ruling asserts
-both halves: (a) **`SEB > D_max` is const-asserted at `D_max`'s home**
-(`CEN-E2`, Q11 — the constant is unbuilt, so the assertion is owed with
-it; FOLLOWUPS); (b) **`pop` refuses a target at or below `h_scarce`**, the
+it, and names the belt: (a) **`SEB > D_max` is const-asserted at `D_max`'s
+home, on the production constants** (`CEN-E2`, Q11 — the constant is
+unbuilt, so the assertion is owed with it; FOLLOWUPS) **and is an invariant
+of every valid configuration on every nettype** (rule 71: nettype selects
+data; the data satisfies the same invariant). The regtest
+`SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override admits `2..=SEB` in isolation
+today (`constants.rs:257`) — that is a **rejected configuration** when it
+puts `SEB ≤ D_max`, not a supported one; the fakechain conforms, through
+one knob that moves both and preserves the ratio or a parse that refuses.
+There is no arm-time assertion and no nettype-specific story. (b) **Belt:**
+`pop` refuses the block at any height `≤ h_scarce` — `h_scarce` the
 `close_height` of the last shard with `close_epoch(k) ≤ current_epoch − 2`
-— `StoreCannot::PopBelowFloor { floor: h_scarce + 1 }`, chain-named from
-`close_height` only, never from a stored frontier or a presence read
-(skeleton §7). A legal reorg that reaches a
-discarded body is then a loud refusal, and the inequality that says it
-cannot happen is checked every time it could.
+— as `StoreCannot::PopBelowFloor { floor: h_scarce + 1 }`, the floor being
+the lowest height whose block may be popped, chain-named from
+`close_height` only (skeleton §7). It is **unreachable by construction on
+every conformant nettype** — the `SCW-7` undo floor at `tip − D_max` sits
+strictly above it — and is kept because a check that can fail is worth one
+that cannot; its test constructs the case artificially.
 
 **Two horizons and a floor, by design.** Bodies and journals are the two
 horizons; the undo journal's `D_max` is a floor both clear, not a third
@@ -262,12 +273,13 @@ therefore between one and two epochs long depending on where in its epoch
 `k` closed, and **never less than one full epoch**.
 
 **The free regime.** In epochs 0 and 1 nothing is scarce; the first
-discard is at the boundary into epoch 2 — about four weeks at genesis
-parameters, not ~195 days. Bonds, challenges and the possession test are
+discard is at the boundary into epoch 2 **at the earliest** — about four
+weeks at genesis parameters, not ~195 days — and later on a chain too quiet
+to close a shard (~200 transactions at 3.33 MB) in epoch 0. Bonds, challenges and the possession test are
 live from block 1 and answerable by any synced node — the ruled bootstrap
 subsidy (§3), not a defect. `w_launch` (Q6 item 3's routing note) governs
-exactly those two epochs and is superseded by the derived scarce-set
-median at the first `discard(k)`. Beyond launch this is every shard's
+until the first `discard(k)` — at least those two epochs — and is
+superseded by the derived scarce-set median then. Beyond launch this is every shard's
 own: bondable from `close_height(k)`, universally held through its freeze
 epoch, scarce from the boundary after — the window in which the
 archiver's wallet pulls it.
@@ -456,13 +468,47 @@ shard that closed in epoch `E−1` may hold transactions from `E−2`; those
 are held too, so `h_scarce` is the honest edge, not `(current_epoch − 1)·SEB`).
 Consequences, each already re-keyed in the bullets above: (i) band 2 is
 non-empty from the boundary into epoch 2, so the launch-window item is
-superseded and the checkpoint cadence becomes a cost knob; (ii) the
-egress formula loses its `W` bound and gains a term for every casual
-return — **downtime tolerance is one epoch** (Q4), beyond which a node
-fills through band 2 by accepted posture; (iii) nothing about the anchor,
-the `Trust` input or the first amendment moves — band 1 was never about
-bodies. The two-horizon table in Q2 is the reference; this ruling names
-no horizon of its own.
+superseded and the checkpoint cadence becomes a **posture** knob (below);
+(ii) the egress formula loses its `W` bound and gains a term for every
+casual return — **downtime tolerance is one epoch** (Q4), beyond which a
+node fills through band 2 by accepted posture; (iii) nothing about the
+anchor, the `Trust` input or the first amendment moves — band 1 was never
+about bodies. `h_scarce` has an empty case (no shard closed yet: band 2
+empty) and block `h_scarce` is mixed (the shard boundary falls mid-block),
+which is why the interval is inclusive. The two-horizon table in Q2 is the
+reference; this ruling names no horizon of its own.
+
+**Follow, then verify backward, report synced at `C`.** The chain
+**validates as a skeleton** (F20(c), this ruling's decomposition): every
+node holds the headers, every tx prefix (`vin` key images, `vout` keys),
+`CtSigBase` (`outPk`, `enc_amounts`, `txnFee`, `referenceBlock`;
+`ct_types.h:172-179`) and both hash rows, so a fresh node validates PoW and
+difficulty, the txid chain, no-double-spend, fee and emission accounting,
+and every state transition — and rebuilds every derived table — to tip
+with **zero** archiver contact. What it cannot do without bodies is
+**re-run the proof rows** (4.I: FCMP++ membership, BP+ range, `pseudoOuts`
+balance, PQC authorisation, serve-credit pass verification —
+`CtSigPrunable`, `ct_types.h:298-309`, plus `pqc_auths`), which is
+precisely what `Trust::BelowAnchor` already names as not run. So: **full
+verification of `(C, h_scarce]` depends on archivers; chain-following does
+not.** Fill runs **backward from `h_scarce` toward `C`** — the newest
+proofs first, the region nearest `D_max` and the only one a running node
+could be asked to revert into; each block's proofs verify against
+skeleton-derived state at its `referenceBlock`, so blocks are independent
+and the fill parallelises across shards. At every moment the node can
+state "everything above `X` is fully verified" for a descending `X`.
+**Two states, not one:** the node **follows** from the moment its skeleton
+validates, but it does not **report synced** — and does not act as a
+validator for anyone else — until fill reaches `C`. Until then it is on
+PoW alone for `(C, X]`, the trust-below posture this ruling rejected as a
+*permanent* state; the heavier-invalid-chain attack lives exactly in that
+gap, and only backward fill finds the invalid proof. Under
+`assumevalid = 0` (first amendment) the same mechanism runs with `C = 0`:
+fill to genesis before reporting synced. The **checkpoint cadence** is
+therefore a posture knob with its consequence named — a longer gap is a
+longer following-but-not-synced window for a fresh node and a larger
+region it verifies on trust until fill closes it — not a security floor,
+because the node claims nothing it has not earned.
 
 **Reversion.** As restated 2026-09-13, plus: the `Trust` shape reverts if
 `connect`'s `in_force` check is shown to admit a second set per height —
@@ -976,7 +1022,11 @@ immutable):
   Every daemon holds `k` for the whole of it; the wallet pulls over the
   operator leg through the ordinary split read (Q10) and verifies against
   the txid (`WSS-Q5`). **Pull before bond**: a `JoinMarket` naming `k` is
-  posted only once `k` is in the wallet-side store. (This supersedes
+  posted only once `k` is **final** (`close_height(k) + D_max ≤ tip`; `b_*`
+  for the frontier can move under a reorg, and admission is consensus —
+  FOLLOWUPS `:74`'s "valid, closed, final") **and** in the wallet-side
+  store. The pull can start at finality, at most `D_max` blocks into the
+  freeze epoch, leaving `≥ SEB − D_max` blocks of window. (This supersedes
   `WSS-Q4`'s deadline — *"the next epoch's open, which may be one block
   away"* — the window is the whole freeze epoch; the wallet lane re-keys
   §6.5.)
@@ -985,6 +1035,11 @@ immutable):
   end of their freeze epoch (or earlier, once pulled); **`holdings` are
   frozen at post** — there is no in-place update, that mechanism is
   rejected — and the next epoch's closed shards are the next post.
+  **Named consequence, not implied:** an archiver's bond count grows by one
+  per epoch for the life of its tenure, and capital per bond, the
+  settlement writer's per-bond work and the `Release` tail per batch scale
+  with it. This ruling fixes the lifecycle; pricing it is the reward leg's
+  and `ARCHIVAL_BOND_CONSTRUCTION.md`'s.
 - **A new persona per batch.** Each `JoinMarket` carries its own
   `bond_spend_pk` and serving `endpoint` (`EU-D3`); the persona is the
   bond's, so a batch is a persona and personas are not linked across
