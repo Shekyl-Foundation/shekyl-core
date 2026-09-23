@@ -81,16 +81,21 @@ pub(crate) enum TxClass {
         credits: usize,
     },
     /// One bond post, with its funding spends (E3 Q3 arity 1).
+    ///
+    /// `credit` and `debit` are that post's terms, copied at derivation.
+    /// The class does not store an index back into the input vector: H6 has
+    /// already required exactly one post, and a later lookup that failed
+    /// would be a bug in this function reported as the transaction's refusal.
     BondPost {
-        /// The bond post's input index.
-        post: usize,
         /// The co-resident `ToKey` spends.
         spends: usize,
+        /// `bond_credit` of the one post.
+        credit: u64,
+        /// `bond_debit` of the one post.
+        debit: u64,
     },
     /// One reward emission, with its optional fee spends (C-1 Q11).
     Emission {
-        /// The emission's input index.
-        at: usize,
         /// The co-resident `ToKey` spends.
         spends: usize,
     },
@@ -104,8 +109,8 @@ struct Counts {
     credits: usize,
     bond_posts: usize,
     emissions: usize,
-    bond_post_at: usize,
-    emission_at: usize,
+    credit: u64,
+    debit: u64,
 }
 
 impl TxClass {
@@ -127,19 +132,17 @@ impl TxClass {
             return Ok(Self::Coinbase);
         }
         let mut n = Counts::default();
-        for (i, input) in inputs.iter().enumerate() {
+        for input in inputs {
             match input {
                 Input::Gen(_) => n.gen += 1,
                 Input::ToKey { .. } => n.spends += 1,
                 Input::ServeCredit { .. } => n.credits += 1,
-                Input::BondPost(_) => {
+                Input::BondPost(bond) => {
                     n.bond_posts += 1;
-                    n.bond_post_at = i;
+                    n.credit = bond.bond_credit;
+                    n.debit = bond.bond_debit;
                 }
-                Input::ArchivalRewardEmission { .. } => {
-                    n.emissions += 1;
-                    n.emission_at = i;
-                }
+                Input::ArchivalRewardEmission { .. } => n.emissions += 1,
             }
         }
         // CEN-H5, the `gen` half: `txin_gen` is forbidden outside the
@@ -166,14 +169,12 @@ impl TxClass {
             Self::ServeCreditOnly { credits: n.credits }
         } else if n.bond_posts == 1 {
             Self::BondPost {
-                post: n.bond_post_at,
                 spends: n.spends,
+                credit: n.credit,
+                debit: n.debit,
             }
         } else if n.emissions == 1 {
-            Self::Emission {
-                at: n.emission_at,
-                spends: n.spends,
-            }
+            Self::Emission { spends: n.spends }
         } else {
             Self::Spend { spends: n.spends }
         })
@@ -448,15 +449,35 @@ const BP_PLUS_MAX_ROUNDS: usize = 6 + shekyl_wire::transaction::MAX_OUTPUTS.ilog
 /// layout check when a proof is present).
 ///
 /// The **verification** half — the range proof itself, batched across the
-/// block — is a crypto cutover (`shekyl-bulletproofs` becoming the verifier
-/// of record) and lands with slice 6's proof bodies (Q3 (b)); until then
-/// the row stays `pending` in the registry with this half's fixtures under
-/// it, and this struct records nothing.
-pub(crate) struct H19Layout;
+/// block — lands with slice 6's proof bodies (Q3 (b)). Until then the row
+/// stays `pending`, and `tx_form` runs this rule through
+/// [`crate::rules::run_tx_unrecorded`]: a refusal is H19's, a pass is not
+/// coverage. Slice 6 switches that call to [`crate::rules::run_tx`] and
+/// flips the registry entry.
+pub(crate) struct H19;
 
-impl H19Layout {
+impl Rule for H19 {
+    const ROW: CenRow = CenRow::H19;
+}
+
+impl TxRule for H19 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        let prunable = match &cx.tx.ct {
+            Ct::Fcmp { prunable, .. } => prunable.as_ref(),
+            Ct::Null(_) => None,
+        };
+        if !Self::canonical(prunable, cx.tx.prefix.outputs.len()) {
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+}
+
+impl H19 {
     /// The layout predicate, on a prunable region (or none) and the output
-    /// count. `true` is "canonical"; it decides nothing about the proof.
+    /// count. `true` is canonical; it decides nothing about the proof.
     pub(crate) fn canonical(prunable: Option<&shekyl_wire::Prunable>, n_out: usize) -> bool {
         let proofs = prunable.map_or(&[][..], |p| p.bulletproofs.as_slice());
         match proofs {
@@ -471,21 +492,6 @@ impl H19Layout {
             }
             _ => false,
         }
-    }
-
-    /// Judge a transaction's layout at its locus. Called from `tx_form` for
-    /// every non-coinbase transaction; refuses under H19 and records nothing
-    /// (the row is not registered `implemented` until its verification half
-    /// lands).
-    pub(crate) fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        let prunable = match &cx.tx.ct {
-            Ct::Fcmp { prunable, .. } => prunable.as_ref(),
-            Ct::Null(_) => None,
-        };
-        if !Self::canonical(prunable, cx.tx.prefix.outputs.len()) {
-            return Err(InvalidBlock::new(CenRow::H19, cx.locus()));
-        }
-        Ok(())
     }
 }
 
@@ -733,7 +739,12 @@ impl TxRule for H21 {
     const SCOPE: TxScope = TxScope::NonCoinbase;
 
     fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        let TxClass::BondPost { post, spends } = cx.class else {
+        let TxClass::BondPost {
+            spends,
+            credit,
+            debit,
+        } = cx.class
+        else {
             return Ok(());
         };
         let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
@@ -745,12 +756,6 @@ impl TxRule for H21 {
         else {
             return refuse();
         };
-        // The class names the index it derived from these very inputs, so
-        // this is always the bond post; a refusal, not a panic, if it ever
-        // is not (a validator does not `unreachable!` on its input).
-        let Some(Input::BondPost(bond)) = cx.tx.prefix.inputs.get(post) else {
-            return refuse();
-        };
         if pqc_auths.len() != cx.tx.prefix.inputs.len()
             || spends == 0
             || prunable.pseudo_outs.len() != spends
@@ -758,7 +763,7 @@ impl TxRule for H21 {
         {
             return refuse();
         }
-        if archival_balance(cx.tx, bond.bond_credit, bond.bond_debit).is_err() {
+        if archival_balance(cx.tx, credit, debit).is_err() {
             return refuse();
         }
         Ok(())

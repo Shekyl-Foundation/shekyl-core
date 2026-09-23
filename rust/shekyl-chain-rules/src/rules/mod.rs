@@ -409,6 +409,18 @@ pub(crate) fn run_tx<R: TxRule>(cx: &TxContext<'_>, coverage: &mut RuleCoverage)
     verdict
 }
 
+/// Run one per-transaction rule whose census row is not yet `implemented`.
+///
+/// Scope applies, as in [`run_tx`]: an out-of-scope kind is not judged.
+/// A pass is not coverage. Recording a half-landed row would claim it.
+/// The caller switches to [`run_tx`] in the commit that flips the row.
+pub(crate) fn run_tx_unrecorded<R: TxRule>(cx: &TxContext<'_>) -> Verdict<()> {
+    if !R::SCOPE.applies_to(cx.kind) {
+        return Ok(());
+    }
+    R::check(cx)
+}
+
 /// The recorded block at `height`, which is below the connecting height
 /// and therefore present on a conforming view (a hole is the store's SI-7,
 /// reported as its fault before this arm). Shared by every rule that reads

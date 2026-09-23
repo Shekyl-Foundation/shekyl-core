@@ -129,6 +129,24 @@ fn the_coinbase_fixture_is_valid_at_genesis() {
     });
 }
 
+/// [`super::fixture::spend`] at two widths. One output is [`TxShape::Listed`];
+/// two is what the store connects, and five is the first width whose
+/// pseudo-out scalar leaves the pinned table (`multiple_of_g` → `point_at`).
+/// Both have to pass, or the shared builder is only checked at N = 1.
+#[test]
+fn a_wider_spend_passes_including_past_the_point_table() {
+    use super::fixture::{point, spend};
+    for outputs in [2usize, 5] {
+        let tx = spend(point(9), outputs);
+        tx_form(&tx, TxSlot::Lone, &RuleSet::GENESIS).unwrap_or_else(|refused| {
+            panic!(
+                "spend(point(9), {outputs}) is the shared builder but tx_form refused it on {}",
+                refused.rule
+            )
+        });
+    }
+}
+
 /// Two distinct listed fixtures in one block: the shape most tests reach
 /// for when they need "some bodies".
 #[test]

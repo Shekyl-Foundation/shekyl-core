@@ -10,7 +10,6 @@
 //! rather than per row.
 
 use super::*;
-use crate::census::RowStatus;
 use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{candidate_on, coinbase, listed, point, serve_credit_only, G, TWO_G};
 use crate::harness::{assert_refused, credited_to_this_falsifier, formed_on, judged, MockChain};
@@ -20,6 +19,9 @@ use crate::trust::Trust;
 use crate::validate::{tx_form, validate};
 use crate::verdict::{Locus, TxSlot};
 use shekyl_wire::{Ct, CtBase, Input, Transaction};
+
+#[path = "tx_balance_tests.rs"]
+mod tx_balance_tests;
 
 /// The fixture spend's key image: a table point (CEN-H11 holds an image
 /// to pointness) at an index the keys and masks do not use.
@@ -425,15 +427,31 @@ fn the_classification_names_the_four_shapes_and_the_coinbase() {
     );
     assert_eq!(
         class_of(vec![spend(11), bond_post(), spend(12)]),
-        Ok(TxClass::BondPost { post: 1, spends: 2 })
+        Ok(TxClass::BondPost {
+            spends: 2,
+            credit: 0,
+            debit: 0
+        })
+    );
+    let mut credited = bond_post();
+    if let Input::BondPost(bond) = &mut credited {
+        bond.bond_credit = 7;
+    }
+    assert_eq!(
+        class_of(vec![spend(11), credited]),
+        Ok(TxClass::BondPost {
+            spends: 1,
+            credit: 7,
+            debit: 0
+        })
     );
     assert_eq!(
         class_of(vec![emission()]),
-        Ok(TxClass::Emission { at: 0, spends: 0 })
+        Ok(TxClass::Emission { spends: 0 })
     );
     assert_eq!(
         class_of(vec![spend(11), emission()]),
-        Ok(TxClass::Emission { at: 1, spends: 1 })
+        Ok(TxClass::Emission { spends: 1 })
     );
     let mut coverage = RuleCoverage::EMPTY;
     let miner = coinbase(1);
@@ -501,397 +519,6 @@ fn h6_the_archival_mixings_are_refused_and_the_permitted_ones_pass() {
     assert!(class_of(vec![emission(), spend(11)]).is_ok());
 }
 
-// ---- the adopted crypto rows: H7, H17, H18, H21, H22 --------------------
-
-/// `k·G + amount·H`, compressed: a mask that commits to `amount` under the
-/// crate's own `H` (`shekyl_ct_balance::amount_commitment`) with `k·G` as
-/// its blinding — what a balanced archival fixture needs and what the
-/// production rules only ever *verify*. Test-only curve arithmetic.
-fn mask_committing(k: u64, amount: u64) -> [u8; 32] {
-    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
-    use curve25519_dalek::scalar::Scalar;
-    let blinding = ED25519_BASEPOINT_POINT * Scalar::from(k);
-    let value = shekyl_ct_balance::amount_commitment(shekyl_units::AtomicUnits::from_raw(amount));
-    (blinding + value).compress().to_bytes()
-}
-
-/// A **balanced bond post**: one funding spend, one output with a `2·G`
-/// mask, zero fee, one auth per input, a non-empty proof, and a pseudo-out
-/// of `2·G + credit·H` — so `Σ pseudoOuts + debit·H = Σ masks + fee·H +
-/// credit·H` holds with `(credit, debit) = (credit, 0)`. The bond's own
-/// bytes are the type's minimum.
-fn bond_post_tx(credit: u64) -> Transaction {
-    use shekyl_wire::{BondPost, BondPostKind, Holdings};
-    let mut tx = listed(KI);
-    tx.prefix.inputs.push(Input::BondPost(Box::new(BondPost {
-        hybrid_public_key: Vec::new(),
-        p_canonical_id: shekyl_types::PCanonicalId::from_bytes([0xB0; 32]),
-        kind: BondPostKind::Other(2),
-        holdings: Holdings::CompleteTree,
-        bonded_total_atomic: 0,
-        bond_credit: credit,
-        bond_debit: 0,
-    })));
-    // The credit lands on the mask side of the balance, so the pseudo-out
-    // carries it: `2·G + credit·H` against the `2·G` mask.
-    if let Ct::Fcmp {
-        pqc_auths,
-        prunable: Some(p),
-        ..
-    } = &mut tx.ct
-    {
-        pqc_auths.push(crate::harness::fixture::pqc_auth_filler());
-        p.pseudo_outs = vec![mask_committing(2, credit)];
-    }
-    tx
-}
-
-/// A **balanced emission** with one fee spend: the loud vouts sum to
-/// `reward`; the mint rides the debit slot, so `Σ pseudoOuts + reward·H =
-/// Σ masks + fee·H` — a pseudo-out of `2·G` against a mask of `2·G +
-/// reward·H`, zero fee.
-fn emission_tx(reward: u64) -> Transaction {
-    let mut tx = with_inputs(vec![spend(13), emission()]);
-    tx.prefix.outputs[0].amount = reward;
-    if let Ct::Fcmp {
-        pqc_auths,
-        base,
-        prunable: Some(p),
-        ..
-    } = &mut tx.ct
-    {
-        pqc_auths.push(crate::harness::fixture::pqc_auth_filler());
-        base.commitments = vec![mask_committing(2, reward)];
-        p.pseudo_outs = vec![TWO_G];
-    }
-    tx
-}
-
-/// The balanced archival fixtures pass every landed row at both sites —
-/// the positive controls for H21 and H22, and a check that `mask_committing`
-/// is doing what it claims (a balance that holds is the only witness a
-/// test can have for it). **`h14_loud_amounts_are_refused_except_on_an_emission`
-/// depends on this test** for the evidence that H14 is reached through
-/// `tx_form` on an emission: it asserts its loud case on `H14::check`
-/// alone because the whole form needs the balance fixtured here. Narrowing
-/// this test narrows that one.
-#[test]
-fn balanced_bond_post_and_emission_fixtures_pass() {
-    for tx in [bond_post_tx(1_000), emission_tx(5)] {
-        let form = tx_form(&tx, TxSlot::Lone, &RuleSet::GENESIS)
-            .unwrap_or_else(|r| panic!("the balanced fixture passes: {r}"));
-        assert!(form.contains(CenRow::H21) && form.contains(CenRow::H22));
-        refused_listed_never(&tx);
-    }
-}
-
-/// The transaction, listed first, connects.
-fn refused_listed_never(tx: &Transaction) {
-    let chain = MockChain::default();
-    chain.with_view(|view| {
-        let formed = formed_on(&chain, candidate_on(&chain, vec![tx.clone()]));
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .unwrap_or_else(|r| panic!("the fixture connects: {r}"));
-    });
-}
-
-// ---- CEN-H7 -------------------------------------------------------------
-
-/// An output key that is not a point is refused on H7 — listed at both
-/// sites, and at the miner slot too (the C++ runs `check_outs_valid` on
-/// the coinbase; F9 judges the same key under its own row in `form`, so
-/// the miner case is asserted on the rule alone).
-#[test]
-fn h7_a_non_point_output_key_is_refused_everywhere() {
-    let mut tx = listed(KI);
-    tx.prefix.outputs[0].key = [0x80; 32];
-    refused_lone(&tx, CenRow::H7);
-    refused_listed(&tx, CenRow::H7);
-    let mut miner = coinbase(1);
-    miner.prefix.outputs[0].key = [0x80; 32];
-    let mut coverage = RuleCoverage::EMPTY;
-    let cx = TxContext::derive(&miner, TxSlot::Miner, &mut coverage).expect("the coinbase");
-    assert_refused(
-        H7::check(&cx),
-        CenRow::H7,
-        Locus::Tx {
-            slot: TxSlot::Miner,
-        },
-    );
-}
-
-// ---- CEN-H11 ------------------------------------------------------------
-
-/// A key image that is not a point, the identity, and a small-order point
-/// are each refused on H11 (at both sites for the first); a table point
-/// passes; archival vins carry no image and a serve credit records the row
-/// vacuously satisfied.
-#[test]
-fn h11_a_non_point_identity_or_torsion_key_image_is_refused() {
-    let with_image = |image: [u8; 32]| {
-        with_inputs(vec![Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image: image,
-        }])
-    };
-    refused_lone(&with_image([0xC1; 32]), CenRow::H11);
-    refused_listed(&with_image([0xC1; 32]), CenRow::H11);
-    // The identity: `y = 1`, `x = 0`.
-    let mut identity = [0u8; 32];
-    identity[0] = 1;
-    refused_lone(&with_image(identity), CenRow::H11);
-    // The order-2 point `(0, −1)`: `y = p − 1`, a valid canonical encoding
-    // that is not in the prime-order subgroup — `order·ki ≠ identity`.
-    let mut order_two = [0xFFu8; 32];
-    order_two[0] = 0xEC;
-    order_two[31] = 0x7F;
-    refused_lone(&with_image(order_two), CenRow::H11);
-    assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
-        .expect("a table point is a valid image")
-        .contains(CenRow::H11));
-    assert!(tx_form(
-        &serve_credit_only([0x77; 32]),
-        TxSlot::Lone,
-        &RuleSet::GENESIS
-    )
-    .expect("no image to hold")
-    .contains(CenRow::H11));
-}
-
-// ---- CEN-H17 ------------------------------------------------------------
-
-/// A mask that is `G` (the trivial mask), a non-point mask, and a mask
-/// count that differs from the output count are each refused on H17 for a
-/// spend; and on the coinbase, `zeroCommit(amount)` — `G` for a zero
-/// amount — is refused where F10 refuses it too (asserted on the rule).
-#[test]
-fn h17_trivial_or_invalid_or_miscounted_masks_are_refused() {
-    let with_mask = |mask: [u8; 32]| {
-        let mut tx = listed(KI);
-        if let Ct::Fcmp { base, .. } = &mut tx.ct {
-            base.commitments = vec![mask];
-        }
-        tx
-    };
-    refused_lone(&with_mask(G), CenRow::H17);
-    refused_listed(&with_mask(G), CenRow::H17);
-    refused_lone(&with_mask([0xa0; 32]), CenRow::H17);
-    let mut two_masks = listed(KI);
-    if let Ct::Fcmp { base, .. } = &mut two_masks.ct {
-        base.commitments.push(TWO_G);
-    }
-    refused_lone(&two_masks, CenRow::H17);
-    let mut miner = coinbase(1);
-    if let Ct::Null(base) = &mut miner.ct {
-        base.commitments = vec![G];
-    }
-    let mut coverage = RuleCoverage::EMPTY;
-    let cx = TxContext::derive(&miner, TxSlot::Miner, &mut coverage).expect("the coinbase");
-    assert_refused(
-        H17::check(&cx),
-        CenRow::H17,
-        Locus::Tx {
-            slot: TxSlot::Miner,
-        },
-    );
-}
-
-// ---- CEN-H18 ------------------------------------------------------------
-
-/// A spend whose pseudo-out does not equal its mask plus the fee is refused
-/// on H18: a non-zero fee against an otherwise balanced pair, and a
-/// pseudo-out of `G` against a mask of `2·G`. The archival shapes record
-/// H18 vacuous.
-#[test]
-fn h18_an_unbalanced_spend_is_refused() {
-    let mut fee = listed(KI);
-    if let Ct::Fcmp { fee: f, .. } = &mut fee.ct {
-        *f = 1;
-    }
-    refused_lone(&fee, CenRow::H18);
-    refused_listed(&fee, CenRow::H18);
-    let mut short = listed(KI);
-    if let Ct::Fcmp {
-        prunable: Some(p), ..
-    } = &mut short.ct
-    {
-        p.pseudo_outs = vec![G];
-    }
-    refused_lone(&short, CenRow::H18);
-    assert!(tx_form(
-        &serve_credit_only([0x77; 32]),
-        TxSlot::Lone,
-        &RuleSet::GENESIS
-    )
-    .expect("a serve credit")
-    .contains(CenRow::H18));
-}
-
-/// The balance is over the **amounts**, not only the blindings. Every other
-/// H18 fixture has pure `k·G` masks — zero hidden amounts — so an
-/// implementation that summed only the `G` components of the commitments
-/// and dropped each `amount·H` would balance them exactly and pass. Here
-/// two masks commit to distinct non-zero hidden amounts (`3` and `4`) under
-/// blindings `2·G` and `3·G`, and the one pseudo-out must carry `5·G + 7·H`;
-/// with a fee of `2` it must carry `5·G + 9·H`. A pseudo-out carrying the
-/// blindings alone (`5·G`) is refused, as is one off by one amount.
-#[test]
-fn h18_the_balance_is_over_the_hidden_amounts_not_only_the_blindings() {
-    let with_pseudo_out = |fee: u64, pseudo_out: [u8; 32]| {
-        let mut tx = listed(KI);
-        tx.prefix.outputs.push(shekyl_wire::Output {
-            amount: 0,
-            key: TWO_G,
-            view_tag: 3,
-        });
-        if let Ct::Fcmp {
-            fee: f,
-            base,
-            prunable: Some(p),
-            ..
-        } = &mut tx.ct
-        {
-            *f = fee;
-            base.commitments = vec![mask_committing(2, 3), mask_committing(3, 4)];
-            base.enc_amounts.push([0x33; 9]);
-            base.enc_labels.push([0x44; 9]);
-            p.bulletproofs = vec![crate::harness::fixture::bp_plus_layout_for(2)];
-            p.pseudo_outs = vec![pseudo_out];
-        }
-        tx
-    };
-    let balanced = with_pseudo_out(0, mask_committing(5, 7));
-    assert!(tx_form(&balanced, TxSlot::Lone, &RuleSet::GENESIS)
-        .expect("the amounts sum")
-        .contains(CenRow::H18));
-    refused_listed_never(&balanced);
-    let with_fee = with_pseudo_out(2, mask_committing(5, 9));
-    assert!(tx_form(&with_fee, TxSlot::Lone, &RuleSet::GENESIS)
-        .expect("the amounts and the fee sum")
-        .contains(CenRow::H18));
-    // Blindings alone: what a G-only sum would accept.
-    refused_lone(&with_pseudo_out(0, mask_committing(5, 0)), CenRow::H18);
-    // The amounts summed wrong by one.
-    refused_lone(&with_pseudo_out(0, mask_committing(5, 8)), CenRow::H18);
-}
-
-// ---- CEN-H21 ------------------------------------------------------------
-
-/// Each departure from the bond-post shape, and an unbalanced credit, is
-/// refused on H21: an auth count off by one, no funding spend, a pseudo-out
-/// count off, an empty proof, both credit and debit set, a credit the
-/// pseudo-out does not cover.
-#[test]
-fn h21_every_departure_from_the_bond_post_shape_or_balance_is_refused() {
-    let base = || bond_post_tx(1_000);
-    let mut one_auth = base();
-    if let Ct::Fcmp { pqc_auths, .. } = &mut one_auth.ct {
-        pqc_auths.pop();
-    }
-    refused_lone(&one_auth, CenRow::H21);
-    refused_listed(&one_auth, CenRow::H21);
-    // No funding spend: a bond post alone — the class is BondPost{spends: 0}.
-    let mut alone = base();
-    alone.prefix.inputs.remove(0);
-    if let Ct::Fcmp {
-        pqc_auths,
-        prunable: Some(p),
-        ..
-    } = &mut alone.ct
-    {
-        pqc_auths.pop();
-        p.pseudo_outs.clear();
-    }
-    refused_lone(&alone, CenRow::H21);
-    let mut two_pseudo = base();
-    if let Ct::Fcmp {
-        prunable: Some(p), ..
-    } = &mut two_pseudo.ct
-    {
-        p.pseudo_outs.push(TWO_G);
-    }
-    refused_lone(&two_pseudo, CenRow::H21);
-    let mut no_proof = base();
-    if let Ct::Fcmp {
-        prunable: Some(p), ..
-    } = &mut no_proof.ct
-    {
-        p.fcmp_proof.clear();
-    }
-    refused_lone(&no_proof, CenRow::H21);
-    let mut both_terms = base();
-    if let Input::BondPost(bond) = &mut both_terms.prefix.inputs[1] {
-        bond.bond_debit = 1;
-    }
-    refused_lone(&both_terms, CenRow::H21);
-    let mut wrong_credit = base();
-    if let Input::BondPost(bond) = &mut wrong_credit.prefix.inputs[1] {
-        bond.bond_credit = 999;
-    }
-    refused_lone(&wrong_credit, CenRow::H21);
-}
-
-// ---- CEN-H22 ------------------------------------------------------------
-
-/// Each departure from the emission shape, and an unbalanced reward, is
-/// refused on H22: a zero reward, an auth count off, a pseudo-out count
-/// off, a proof present with no fee spend (and absent with one), and a
-/// reward the mask does not commit to. An overflowing reward is H9's first.
-#[test]
-fn h22_every_departure_from_the_emission_shape_or_balance_is_refused() {
-    let base = || emission_tx(5);
-    let mut zero = base();
-    zero.prefix.outputs[0].amount = 0;
-    if let Ct::Fcmp { base: b, .. } = &mut zero.ct {
-        b.commitments = vec![TWO_G];
-    }
-    refused_lone(&zero, CenRow::H22);
-    refused_listed(&zero, CenRow::H22);
-    let mut one_auth = base();
-    if let Ct::Fcmp { pqc_auths, .. } = &mut one_auth.ct {
-        pqc_auths.pop();
-    }
-    refused_lone(&one_auth, CenRow::H22);
-    let mut two_pseudo = base();
-    if let Ct::Fcmp {
-        prunable: Some(p), ..
-    } = &mut two_pseudo.ct
-    {
-        p.pseudo_outs.push(TWO_G);
-    }
-    refused_lone(&two_pseudo, CenRow::H22);
-    // No fee spend, but a proof present: the class is Emission{spends: 0}.
-    let mut no_spend_with_proof = with_inputs(vec![emission()]);
-    no_spend_with_proof.prefix.outputs[0].amount = 5;
-    if let Ct::Fcmp {
-        base: b,
-        prunable: Some(p),
-        ..
-    } = &mut no_spend_with_proof.ct
-    {
-        b.commitments = vec![mask_committing(2, 5)];
-        p.pseudo_outs.clear();
-    }
-    refused_lone(&no_spend_with_proof, CenRow::H22);
-    let mut spend_without_proof = base();
-    if let Ct::Fcmp {
-        prunable: Some(p), ..
-    } = &mut spend_without_proof.ct
-    {
-        p.fcmp_proof.clear();
-    }
-    refused_lone(&spend_without_proof, CenRow::H22);
-    let mut wrong_reward = base();
-    wrong_reward.prefix.outputs[0].amount = 6;
-    refused_lone(&wrong_reward, CenRow::H22);
-}
-
 // ---- the rows that hold by construction (Q4, Q6, Q7) --------------------
 
 /// CEN-H8's falsifier: the wire reads exactly one commitment per output —
@@ -929,68 +556,32 @@ fn h8_the_wire_reads_one_commitment_per_output() {
     assert!(Transaction::from_bytes(&listed(KI).serialize()).is_ok());
 }
 
-/// CEN-H24's falsifier (slice 5 Q7): the ring-members residue check — no
-/// relative `key_offset` after the first may be `0` — **cannot fire**,
-/// because CEN-I6 forbids the input it reads: an FCMP++ spend carries no
-/// `key_offsets` at all. The property watched is **I6's exclusion**, not
-/// "H24 cannot fire" (that is the observation; I6 is the reason, and only
-/// the reason gives a falsifier something to watch).
+/// CEN-H24's falsifier (slice 5 Q7). The residue check — a relative
+/// `key_offset` after the first must not be `0` — has nothing to read on
+/// the empty offset list CEN-I6 admits, and it fires on the list I6 forbids.
 ///
-/// What can be asserted today, and what cannot: the predicate is
-/// unsatisfiable on the input I6 admits, and satisfiable on the one it
-/// forbids — that much is logic. The *holder* of I6 on the Rust side is
-/// slice 6's row, still `pending`; the wire twin has an offsets arm, but it
-/// cannot be isolated as an oracle from here because the twin also refuses
-/// every 4.H fixture on 4.I grounds (CEN-I19's `extra` shape — TXE's
-/// subject).
-///
-/// **What this test asserts today is a PROXY.** It watches `CenRow::I6 ==
-/// Pending`; the property it exists to watch is *whether the offsets fixture
-/// is refused*. Those are different properties, and the first stands in for
-/// the second only until slice 6 lands I6's holder. The pin is **armed**:
-/// the day `CenRow::I6` flips, the assertion below fails with the
-/// instruction to add `refused_*(&with_offsets, CenRow::I6)` here — and that
-/// instruction is the only thing stopping the pin from being satisfied by
-/// updating it. Updating the pin without adding the assertion turns the
-/// proxy into the thing itself and leaves H24 watched by nothing.
-///
-/// **Index, both directions.** H24 is a bucket-3 row (deletion residue,
-/// census §10 R5): not in the 153 denominator, not in the registry, not a
-/// coverage row — outside every counting instrument, by design. The census
-/// row `CEN-H24` (`docs/design/CONSENSUS_RULE_CENSUS.md`, §4.H table) cites
-/// this test by name, and this test names that row back, so a reader at
-/// either end reaches the other. Nothing else indexes it.
+/// H24 is bucket 3: no registry row, no coverage. The census cell and this
+/// test are what index it. `tx_form` still accepts the offsets fixture,
+/// which is the gap. The day a row refuses that fixture, this `expect`
+/// fails and the assertion becomes that row's refusal.
 #[test]
 fn h24_cannot_fire_on_an_input_i6_admits() {
-    // CEN-H24 — the census row this test is the falsifier for.
-    const ROW: &str = "CEN-H24";
-    // H24's predicate, stated so it can be asked of an input.
-    let h24_fires = |offsets: &[u64]| offsets.iter().skip(1).any(|&o| o == 0);
-    // On the input I6 admits — no offsets — the predicate has nothing to
-    // read; on the input I6 forbids, it fires. The two together are why H24
-    // is vacuous exactly when I6 holds.
-    assert!(!h24_fires(&[]));
-    assert!(h24_fires(&[7, 0]), "the shape H24 was written for");
+    let residue_fires = |offsets: &[u64]| offsets.iter().skip(1).any(|&o| o == 0);
+    assert!(
+        !residue_fires(&[]),
+        "CEN-H24 has nothing to read on empty offsets"
+    );
+    assert!(
+        residue_fires(&[7, 0]),
+        "CEN-H24 fires on a zero relative offset"
+    );
     let mut with_offsets = listed(KI);
     if let Some(Input::ToKey { key_offsets, .. }) = with_offsets.prefix.inputs.get_mut(0) {
         *key_offsets = vec![7, 0];
     }
-    assert_ne!(with_offsets, listed(KI));
-    // I6 is a registered row; today it is pending, and this test grows its
-    // teeth the day that changes.
-    assert!(
-        CenRow::ALL.contains(&CenRow::I6),
-        "CEN-I6 is the row that holds {ROW} vacuous"
-    );
-    // PROXY (see the doc above): I6's status stands in for "I6 refuses
-    // `with_offsets`" until I6 has a holder. Do not satisfy this by changing
-    // the pinned status — add the assertion the message names.
-    assert_eq!(
-        CenRow::I6.status(),
-        RowStatus::Pending,
-        "CEN-I6 has landed: {ROW}'s falsifier must now assert that I6 refuses `with_offsets` \
-         (refused_lone/refused_listed with CenRow::I6) — add that assertion here, then update \
-         this pin; updating the pin alone leaves {ROW} watched by nothing"
+    tx_form(&with_offsets, TxSlot::Lone, &RuleSet::GENESIS).expect(
+        "CEN-H24: key offsets are not a 4.H refusal; the day a row refuses this fixture, \
+         that refusal is what this test asserts",
     );
 }
 
@@ -1045,10 +636,8 @@ fn h10_a_repeated_key_image_within_one_transaction_is_refused() {
     let dup = with_inputs(vec![spend(11), spend(11)]);
     refused_lone(&dup, CenRow::H10);
     refused_listed(&dup, CenRow::H10);
-    // Two pseudo-outs for two spends, so the layout/pseudo-out shapes are
-    // not what refuses here.
-    // Two pseudo-outs for two spends — `G + G = 2·G`, the one mask — so the
-    // layout, pseudo-out and balance rows are not what decides here.
+    // Two pseudo-outs, `G + G = 2·G`, against the one mask — so layout and
+    // balance are not what decides here.
     let mut distinct = with_inputs(vec![spend(12), spend(11)]);
     if let Ct::Fcmp {
         prunable: Some(p), ..
@@ -1112,37 +701,31 @@ fn h19_the_canonical_layout_is_one_proof_sized_to_the_outputs() {
     ] {
         let bp = bp_plus_layout_for(n_out);
         assert_eq!(bp.l.len(), rounds, "{n_out} outputs");
-        assert!(H19Layout::canonical(Some(&with(vec![bp])), n_out));
+        assert!(H19::canonical(Some(&with(vec![bp])), n_out));
     }
     // Too many rounds for the count (a 2-output proof for 1 output), too few
     // (a 1-output proof for 2), rounds out of range, two proofs, `|L| != |R|`.
-    assert!(!H19Layout::canonical(
-        Some(&with(vec![bp_plus_layout_for(2)])),
-        1
-    ));
-    assert!(!H19Layout::canonical(
-        Some(&with(vec![bp_plus_layout_for(1)])),
-        2
-    ));
+    assert!(!H19::canonical(Some(&with(vec![bp_plus_layout_for(2)])), 1));
+    assert!(!H19::canonical(Some(&with(vec![bp_plus_layout_for(1)])), 2));
     let mut eleven = bp_plus_layout_for(16);
     eleven.l.push([0; 32]);
     eleven.r.push([0; 32]);
-    assert!(!H19Layout::canonical(Some(&with(vec![eleven])), 16));
+    assert!(!H19::canonical(Some(&with(vec![eleven])), 16));
     let mut five = bp_plus_layout_for(1);
     five.l.pop();
     five.r.pop();
-    assert!(!H19Layout::canonical(Some(&with(vec![five])), 1));
-    assert!(!H19Layout::canonical(
+    assert!(!H19::canonical(Some(&with(vec![five])), 1));
+    assert!(!H19::canonical(
         Some(&with(vec![bp_plus_layout_for(1), bp_plus_layout_for(1)])),
         1
     ));
     let mut lopsided = bp_plus_layout_for(1);
     lopsided.r.push([0; 32]);
-    assert!(!H19Layout::canonical(Some(&with(vec![lopsided])), 1));
+    assert!(!H19::canonical(Some(&with(vec![lopsided])), 1));
     // No proof: canonical only for no outputs.
-    assert!(H19Layout::canonical(None, 0));
-    assert!(!H19Layout::canonical(None, 1));
-    assert!(H19Layout::canonical(Some(&with(Vec::new())), 0));
+    assert!(H19::canonical(None, 0));
+    assert!(!H19::canonical(None, 1));
+    assert!(H19::canonical(Some(&with(Vec::new())), 0));
 }
 
 /// Through `tx_form`: a spend whose proof is sized for two outputs but

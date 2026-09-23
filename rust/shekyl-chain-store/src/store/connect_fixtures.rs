@@ -19,7 +19,7 @@ use shekyl_types::{
     Timestamp,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
+use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use super::store_tests::TestErr;
 use super::view::BatchView;
@@ -35,75 +35,17 @@ pub(super) fn coinbase(height: u64) -> Transaction {
     fixture::coinbase(height)
 }
 
-/// A spend-shaped listed transaction: one key image in, `outputs` outputs,
-/// one per-input PQC auth (so its txid is **4-part**, `pqc_auth_hash:
-/// Some(_)`, the shape that writes a `txs_pqc_auth_hash` row — amendment
-/// A3, `PDM-Q-F26` leg 1), and a prunable region with the canonical BP+
-/// layout for its outputs (CEN-H19). The auth and the proof are the
-/// harness's filler: no landed rule verifies either, and what the store
-/// records is the auth's count-prefixed digest, not its validity. The
-/// output keys and masks are filled bytes, not points — H7/H17 (E6 slice 5
-/// commit 5) refuse them, and that commit gives them the harness's point
-/// table.
+/// A spend-shaped listed transaction: the `key_image`-th table point in,
+/// `outputs` outputs out. The body is [`fixture::spend`] — one definition,
+/// shared with the rules harness and the ingest, so a point rule cannot
+/// refuse this crate's fixtures alone. Indices `9..=16` stay clear of the
+/// keys (`1..`) and masks (`2..`) that body draws. One per-input PQC auth
+/// makes the txid 4-part (`pqc_auth_hash: Some(_)`), the shape that writes
+/// a `txs_pqc_auth_hash` row (amendment A3, `PDM-Q-F26` leg 1). The auth
+/// and the proof are the harness's filler: no landed rule verifies either,
+/// and what the store records is the auth's count-prefixed digest.
 pub(super) fn spend(key_image: usize, outputs: usize) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                // The `key_image`-th table point: a canonical prime-order
-                // point (CEN-H11), distinct per index — which is all the call
-                // sites ever asked of it. Indices 9..=16, clear of the keys
-                // (1..) and masks (2..) the same fixture draws. At 4.H an
-                // image is held to pointness only; when CEN-I15 binds it to
-                // the spent output (slice 6) these become captured spends'
-                // own images, and this parameter goes with them.
-                key_image: fixture::point(key_image),
-            }],
-            // Keys and masks are entries of the harness's point table —
-            // canonical prime-order points (H7, H17), never a filled byte
-            // pattern (which was here until E6 slice 5 commit 5, and is a
-            // shape the production path cannot produce). Keys take
-            // `point(1..)`; masks take `point(2..)` because `G` is
-            // `zeroCommit(0)` and refused as a mask.
-            outputs: (1..=outputs)
-                .map(|k| Output {
-                    amount: 0,
-                    key: fixture::point(k),
-                    view_tag: 2,
-                })
-                .collect(),
-            extra: Vec::new(),
-        },
-        ct: Ct::Fcmp {
-            // Zero fee, so the one pseudo-out balances the masks exactly:
-            // multiples of `G` add, and the masks are `2·G ‥ (N+1)·G`, so the
-            // pseudo-out is `(Σ k)·G` for `k in 2..=N+1` (H18).
-            fee: 0,
-            reference_block: BlockHash::from_bytes([0x99; 32]),
-            base: CtBase {
-                enc_amounts: vec![[0x11; 9]; outputs],
-                enc_labels: vec![[0x22; 9]; outputs],
-                commitments: (2..=outputs + 1).map(fixture::point).collect(),
-            },
-            // One per input: the wire reads `nvin` of them, and a spend with
-            // none parses as the storage-pruned form.
-            pqc_auths: vec![fixture::pqc_auth_filler()],
-            // A spend without a prunable region is the post-genesis
-            // storage-pruned form, not a consensus-valid body: CEN-H19's
-            // layout half (E6 slice 5) refuses it. The proof bytes are the
-            // harness's filler, sized to the outputs; one pseudo-out for the
-            // one spend.
-            prunable: (outputs > 0).then(|| Prunable {
-                bulletproofs: vec![fixture::bp_plus_layout_for(outputs)],
-                tree_depth: 0,
-                fcmp_proof: vec![0xF0],
-                pseudo_outs: vec![fixture::point((2..=outputs + 1).sum())],
-                serve_credit_pruned: Vec::new(),
-            }),
-        },
-    }
+    fixture::spend(fixture::point(key_image), outputs)
 }
 
 /// The root the header at `height` must carry under CEN-B5: the tree state

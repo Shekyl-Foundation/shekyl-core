@@ -366,10 +366,11 @@ set only. Landing 4.H moves the ratchet; it does not need a new gate.
   where `TxKind` is `Coinbase | Listed` (Q2) — derived in `tx_form` from
   `tx.is_coinbase()`, never passed by the caller, so the pool cannot
   mis-declare it.
-- **`Archival` classification** (Q4): `enum TxClass { Spend, ServeCreditOnly, BondPost { post: usize, spends: usize }, Emission { spends: usize }, Coinbase }`
+- **`Archival` classification** (Q4, amended): `enum TxClass { Spend, ServeCreditOnly, BondPost { spends, credit, debit }, Emission { spends }, Coinbase }`
   derived once per transaction, consumed by H6/H14/H20–H22; refuses the
   mixings H6 names as it derives (the C++'s `classify_archival_tx` does
-  both jobs too).
+  both jobs too). `credit` and `debit` are the one post's terms, copied
+  at derivation. The class does not store an input index.
 - **`RuleSet` parameters** (Q5): `max_tx_size`, `max_tx_weight` (derived:
   `min_block_weight / 2 − coinbase_blob_reserved`), `unlock_time_sentinel`
   — pinned by parsing `cryptonote_config.h` as slice 4's two were, and
@@ -531,7 +532,7 @@ failure text names the mechanism so the red is read as a finding.
   verification half's blocker named (*falsify by: `shekyl-bulletproofs`
   KAT equals C++ over the pinned corpus*). If (a), the KAT provenance
   question above is yours to rule.
-- **Q4 — one archival classification (§3.3). RULED default, 2026-09-23.** Default: a rule-side
+- **Q4 — one archival classification (§3.3). RULED default, 2026-09-23. AMENDED after review: `BondPost` carries `{ spends, credit, debit }` copied from the one post at derivation, not an index back into the inputs — a failed re-lookup was a classifier bug reported as CEN-H21. `Emission` is `{ spends }`; its index was unread.** Default: a rule-side
   `TxClass` in `shekyl-chain-rules`, derived once, consumed by H6, H14,
   H20–H22; refuses H6's mixings as it derives. Alternative: put it on
   `shekyl_wire::Transaction` — it fits the wire crate's "shape" vocabulary
@@ -551,7 +552,7 @@ failure text names the mechanism so the red is read as a finding.
   falsifier)`; the gate already accepts a repeated falsifier. H10 is
   implemented in slice 5 as its own predicate (cheap, row-keyed) and slice
   6 decides at I5 whether it collapses.
-- **Q7 — H24's status. OVERRIDDEN 2026-09-23: `by_construction`, property = CEN-I6's exclusion of the input H24 checks, not `held_by_cxx` — `held_by_cxx` requires a test showing the holder REJECTS (the condition that found A1/A4 untested), and a rule that cannot fire has no rejection to show; the entry would fail its own condition on arrival. AMENDED at commit 7 and the amendment TAKEN AS LANDED (review, 2026-09-23): H24 is BUCKET 3 and the registry excludes bucket-3 rows by design, so there is no `CenRow::H24` to carry `by_construction` or any status — that is the bucket working, not a gap in it; re-bucketing so an instrument could hold a status would be fitting the subject to the instrument. The FALSIFIER exists anyway (`h24_cannot_fire_on_an_input_i6_admits`), is a LABELLED PROXY (it watches `I6 == Pending` in place of "the offsets fixture is refused", with the failure instruction the only thing stopping the pin being updated instead of the assertion added), and is indexed from BOTH ends: the census cell cites the test, the test names `CEN-H24` — H24 is outside every counting instrument, and those two are the only things that index it (`d87cc3871`).** It is deletion residue with a named disposition
+- **Q7 — H24's status. OVERRIDDEN 2026-09-23: `by_construction`, property = CEN-I6's exclusion of the input H24 checks, not `held_by_cxx` — `held_by_cxx` requires a test showing the holder REJECTS (the condition that found A1/A4 untested), and a rule that cannot fire has no rejection to show; the entry would fail its own condition on arrival. AMENDED at commit 7 and the amendment TAKEN AS LANDED (review, 2026-09-23): H24 is BUCKET 3 and the registry excludes bucket-3 rows by design, so there is no `CenRow::H24` to carry `by_construction` or any status — that is the bucket working, not a gap in it; re-bucketing so an instrument could hold a status would be fitting the subject to the instrument. The FALSIFIER exists anyway (`h24_cannot_fire_on_an_input_i6_admits`), was a labelled proxy and is no longer one (review, 2026-09-23): it asserts the residue predicate on an empty offset list and on `[7, 0]`, and that `tx_form` still accepts the offsets fixture — the acceptance is the gap, and the `expect` fails on its own the day a row refuses that fixture, and is indexed from BOTH ends: the census cell cites the test, the test names `CEN-H24` — H24 is outside every counting instrument, and those two are the only things that index it (`d87cc3871`).** It is deletion residue with a named disposition
   (census §10 R5) and can never fire under CEN-I6. The registry today has
   `pending`, `implemented`, `enforced_at`, `by_construction`, `held_by_cxx`.
   Default: **`held_by_cxx`** until cutover deletes the C++ body, with the

@@ -679,7 +679,9 @@ principle on the type: a classification that selects which rules apply
 comes from outside the thing classified). Each rule declares
 `SCOPE: TxScope::{All, NonCoinbase}`; an out-of-scope row records as
 evaluated-vacuous. `TxClass::{Coinbase, Spend, ServeCreditOnly, BondPost,
-Emission}` is derived once at `TxContext::derive`, and CEN-H5 (the `gen`
+Emission}` is derived once at `TxContext::derive`. `BondPost` carries
+`spends` and the post's `credit`/`debit` — the terms H21 reads — not an
+index back into the inputs. `Emission` carries `spends`. CEN-H5 (the `gen`
 half) and CEN-H6 are judged **at the derivation** — the C++ single-sources
 them in `classify_archival_tx` the same way. The limits are `const`s beside
 the rules (`MAX_TX_SIZE`, `max_tx_weight()` derived from
@@ -687,10 +689,12 @@ the rules (`MAX_TX_SIZE`, `max_tx_weight()` derived from
 pinned to `cryptonote_config.h` by parsing it and to `shekyl-wire`'s
 constants by equality — **tests, not comments** (Q5). Landed rows: H1, H3,
 H4, H5, H6, H7, H9, H10, H11, H14, H15, H16, H17, H18, H20, H21, H22
-(`implemented`); H2, H8, H12, H13, H23 (`by_construction`); H19's
-**layout** half runs and refuses without recording until slice 6 lands the
-BP+ verification (`H19Layout`); H24 is bucket 3 — no registry row, a
-labelled-proxy falsifier indexed from the census cell. The crypto rows call
+(`implemented`); H2, H8, H12, H13, H23 (`by_construction`); H19 is a
+`TxRule` whose **layout** half runs through `run_tx_unrecorded` (scope
+applies, a pass is not coverage) until slice 6 lands the BP+ verification
+and switches the call to `run_tx`; H24 is bucket 3 — no registry row. Its
+falsifier asserts the residue predicate and that `tx_form` still accepts
+the offsets fixture, indexed from the census cell. The crypto rows call
 the bodies the C++ already marshals to (`shekyl-ct-balance`,
 `shekyl-archival-retention`), so pool and connect cannot diverge from them:
 it is one function. **The wire twin** (`shekyl_wire::Transaction::validate`,

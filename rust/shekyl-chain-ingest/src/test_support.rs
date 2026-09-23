@@ -25,7 +25,7 @@ use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage, LongTermWeight,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
+use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 use crate::corpus::{CorpusNet, CorpusWriter};
 use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
@@ -125,51 +125,11 @@ pub fn key_image(family: Family, height: u64) -> [u8; 32] {
     fixture::point_at(offset + height)
 }
 
-/// A spend of `key_image`.
+/// A spend of `key_image`: the rules harness's one-output [`fixture::listed`].
+/// The same body the store connects, so a point rule cannot refuse this
+/// crate's chains alone.
 pub fn spend(key_image: [u8; 32]) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                key_image,
-            }],
-            // Key and mask from the harness's point table — canonical
-            // prime-order points (H7, H17), not filled bytes; `2·G` as the
-            // mask because `G` is `zeroCommit(0)` and refused.
-            outputs: vec![Output {
-                amount: 0,
-                key: fixture::G,
-                view_tag: 2,
-            }],
-            extra: Vec::new(),
-        },
-        ct: Ct::Fcmp {
-            // Zero fee: the one pseudo-out (`2·G`) balances the one mask (H18).
-            fee: 0,
-            reference_block: BlockHash::from_bytes([0x99; 32]),
-            base: CtBase {
-                enc_amounts: vec![[0x11; 9]],
-                enc_labels: vec![[0x22; 9]],
-                commitments: vec![fixture::TWO_G],
-            },
-            // One per input: the wire reads `nvin` of them, and a spend with
-            // none parses as the storage-pruned form.
-            pqc_auths: vec![fixture::pqc_auth_filler()],
-            // A spend without a prunable region is the post-genesis
-            // storage-pruned form, not a consensus-valid body: CEN-H19's
-            // layout half (E6 slice 5) refuses it. The harness's filler
-            // proof, sized to the one output; one pseudo-out for the spend.
-            prunable: Some(Prunable {
-                bulletproofs: vec![fixture::bp_plus_layout_for(1)],
-                tree_depth: 0,
-                fcmp_proof: vec![0xF0],
-                pseudo_outs: vec![fixture::TWO_G],
-                serve_credit_pruned: Vec::new(),
-            }),
-        },
-    }
+    fixture::listed(key_image)
 }
 
 /// A block at `height` on `previous`, listing `listed`, with `nonce`.

@@ -473,16 +473,15 @@ pub mod fixture {
     /// draw at other indices.
     ///
     /// **The contiguity is load-bearing.** Because `POINTS[k−1] = k·G`,
-    /// multiples add: masks `2·G ‥ (N+1)·G` balance against one pseudo-out
-    /// of `(Σk)·G` with zero fee, and that identity — an arithmetic fact
-    /// about how the table was *constructed*, not anything the code under
-    /// test computes — is what makes the store's `spend(_, N)`
-    /// (`connect_fixtures.rs`), the ingest's `spend`, and [`listed`] pass
-    /// CEN-H18. Renumber the table, skip an entry, or take a non-contiguous
-    /// subset and those fixtures stop balancing for a reason that has
-    /// nothing to do with the rule. `fixture_points_are_what_they_claim`
-    /// therefore asserts `POINTS[k−1] == k·G` for every `k`, with test-only
-    /// curve arithmetic — the identity is a gate, not a convention.
+    /// multiples add: [`spend`]'s masks are `2·G ‥ (N+1)·G` and its one
+    /// pseudo-out is their sum, so CEN-H18 holds by the table's construction
+    /// and not by anything the rule computes. The store and the ingest call
+    /// that one function — a private copy is how a fixture drifted the last
+    /// time a point rule landed. A scalar past 16 (the sum leaves the table
+    /// at five outputs) is [`multiple_of_g`], which is [`point_at`] outside
+    /// the table and the pinned entry inside it. `fixture_points_are_what_
+    /// they_claim` holds `POINTS[k−1] == k·G` for every `k`, so the two
+    /// cannot disagree.
     ///
     /// **Derived once, pinned, never re-derived in production code** (the
     /// crate's production surface has no curve dependency; the test surface
@@ -542,6 +541,43 @@ pub mod fixture {
             .to_bytes()
     }
 
+    /// `k·G` for `k ≥ 1`, from the pinned table when `k` is in range and
+    /// from [`point_at`] past it. [`spend`]'s pseudo-out scalar is the sum
+    /// of its mask scalars, which exceeds [`POINTS`]'s ceiling before the
+    /// wire's output cap does; callers that already know `k` is in
+    /// `1..=16` keep using [`point`].
+    pub fn multiple_of_g(k: u64) -> [u8; 32] {
+        if let Ok(index) = usize::try_from(k) {
+            if (1..=POINTS.len()).contains(&index) {
+                return point(index);
+            }
+        }
+        point_at(k)
+    }
+
+    /// Masks start at `2·G`. `1·G` is `zeroCommit(0)`, and CEN-H17 refuses it.
+    const FIRST_MASK_SCALAR: u64 = 2;
+
+    /// Sum of the mask scalars `FIRST_MASK_SCALAR ..= FIRST_MASK_SCALAR + N - 1`.
+    /// Zero when there are no outputs, so a zero-output spend asks for no point.
+    ///
+    /// `Σ = N · (first + last) / 2`. One of `N` and `(first + last)` is even,
+    /// so the division is exact; which one is divided first is what keeps the
+    /// product inside `u64`.
+    fn mask_scalar_sum(outputs: usize) -> u64 {
+        let n = u64::try_from(outputs).expect("an output count fits in u64");
+        if n == 0 {
+            return 0;
+        }
+        let last = FIRST_MASK_SCALAR + n - 1;
+        let pair = FIRST_MASK_SCALAR + last;
+        if n % 2 == 0 {
+            (n / 2).checked_mul(pair).expect("mask scalar sum fits")
+        } else {
+            n.checked_mul(pair / 2).expect("mask scalar sum fits")
+        }
+    }
+
     /// Thirty-two bytes from sixty-four lowercase hex digits, at compile
     /// time — so the table above reads as the deriver printed it.
     const fn hex32(hex: [u8; 64]) -> [u8; 32] {
@@ -597,22 +633,29 @@ pub mod fixture {
         }
     }
 
-    /// A **listed** (non-coinbase) transaction spending `key_image`, shaped
-    /// to pass every structural 4.H row that has landed: one `ToKey` input
-    /// with empty offsets (CEN-I6), one zero-amount output keyed `G` with a
-    /// `2·G` mask (H7, H17), `Ct::Fcmp` with the committed base sized to the
-    /// outputs (H8), `unlock_time` below the sentinel (H16), a prunable
-    /// region whose one BP+ has the canonical **layout** for one output
-    /// (H19's layout half: `|L| = |R| = 6`) with one pseudo-out for its one
-    /// spend, and a **fee of zero** so that pseudo-out (`2·G`) balances the
-    /// one mask (`2·G`) exactly (H18 — multiples of `G` add, which is what
-    /// makes [`POINTS`] a balance fixture as well as a point table). The
-    /// proof *bytes* are filler: H19's verification and the 4.I
-    /// membership rows are not landed, and when they land this fixture is
-    /// theirs to refuse — the sanity gate will say so, and the fix is a
-    /// tx-builder-produced proof, not a longer filler. Mutate one field to
-    /// build a negative fixture.
-    pub fn listed(key_image: [u8; 32]) -> Transaction {
+    /// A spend of `key_image` with `outputs` zero-amount outputs, shaped to
+    /// pass every structural 4.H row that has landed.
+    ///
+    /// One `ToKey` input with empty offsets. Output `k` (from 1) is keyed
+    /// `k·G`; its mask is `(k+1)·G`, so the masks are `2·G ‥ (N+1)·G` and
+    /// `G` — `zeroCommit(0)`, which CEN-H17 refuses — is never a mask. Fee
+    /// is zero and the one pseudo-out is the sum of those scalars, which is
+    /// CEN-H18 by construction of [`multiple_of_g`]. The committed base is
+    /// sized to the outputs (H8). A prunable region is present exactly when
+    /// there are outputs, and its one BP+ has the canonical layout for that
+    /// count (H19's layout half). One [`pqc_auth_filler`] per input, so the
+    /// txid is 4-part. The proof bytes are filler: H19's verification and
+    /// the 4.I membership rows are not landed, and when they land this
+    /// fixture is theirs to refuse. [`listed`] is the one-output case.
+    pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
+        let n = u64::try_from(outputs).expect("an output count fits in u64");
+        let prunable = (outputs > 0).then(|| Prunable {
+            bulletproofs: vec![bp_plus_layout_for(outputs)],
+            tree_depth: 0,
+            fcmp_proof: vec![0xF0],
+            pseudo_outs: vec![multiple_of_g(mask_scalar_sum(outputs))],
+            serve_credit_pruned: Vec::new(),
+        });
         Transaction {
             prefix: TxPrefix {
                 unlock_time: 0,
@@ -621,31 +664,35 @@ pub mod fixture {
                     key_offsets: Vec::new(),
                     key_image,
                 }],
-                outputs: vec![Output {
-                    amount: 0,
-                    key: G,
-                    view_tag: 2,
-                }],
+                outputs: (1..=n)
+                    .map(|k| Output {
+                        amount: 0,
+                        key: multiple_of_g(k),
+                        view_tag: 2,
+                    })
+                    .collect(),
                 extra: Vec::new(),
             },
             ct: Ct::Fcmp {
                 fee: 0,
                 reference_block: BlockHash::from_bytes([0x99; 32]),
                 base: CtBase {
-                    enc_amounts: vec![[0x11; 9]],
-                    enc_labels: vec![[0x22; 9]],
-                    commitments: vec![TWO_G],
+                    enc_amounts: vec![[0x11; 9]; outputs],
+                    enc_labels: vec![[0x22; 9]; outputs],
+                    commitments: (0..n)
+                        .map(|i| multiple_of_g(FIRST_MASK_SCALAR + i))
+                        .collect(),
                 },
                 pqc_auths: vec![pqc_auth_filler()],
-                prunable: Some(Prunable {
-                    bulletproofs: vec![bp_plus_layout_for(1)],
-                    tree_depth: 0,
-                    fcmp_proof: vec![0xF0],
-                    pseudo_outs: vec![TWO_G],
-                    serve_credit_pruned: Vec::new(),
-                }),
+                prunable,
             },
         }
+    }
+
+    /// [`spend`] with one output. The shape most call sites mean by "a
+    /// listed transaction".
+    pub fn listed(key_image: [u8; 32]) -> Transaction {
+        spend(key_image, 1)
     }
 
     /// A per-input PQC authentication with **empty** key and signature
