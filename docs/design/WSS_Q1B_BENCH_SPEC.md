@@ -6,6 +6,13 @@ for the two **timed** measurements [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md
 the grading run on the pinned rig has not happened**, so `WSS-Q1`(b) remains
 adopted-subject-to.
 
+**Amended 2026-09-22 — a third measurement, ungraded (§8).** The verify edge
+measures `root_at_count` on an unfrozen population. It is **not** a §6.3.4 row
+and carries **no budget**; it exists because rows 2 and 3 grade the two edges a
+*human waits at*, while `CT-6`'s F3(a) priced a cost paid **per block during
+refresh**, which neither covers. `CT-6` increment 6 is written to *re-grade*,
+and a re-grade needs a baseline.
+
 **Ground:** `dev` = `5becc110b8`. Every code citation below was resolved at that
 tree.
 
@@ -736,3 +743,108 @@ round-trip term alone reached 5 s.
 | 2026-09-20 | **`per_block_advance_worst_case_s` added to the record**: the replay term over the blocks it covers. It is what decides whether a spend-edge miss kills the design or moves the work, and a reader should not need a calculator to see it |
 | 2026-09-21 | **`stopped_because` could not separate the two states it named, and the record published the wrong one.** Found when a concurrent workspace run on a loaded box (load 10.40) failed `a_fast_series_is_not_truncated_by_the_iteration_cap_before_conditioning` — the test asserted `converged`, which asserts the box is quiet, not anything about the loop. Chasing it surfaced the real defect: the `"iteration cap"` break was the exact negation of the loop guard, so only the initialiser ever produced that string, on the **normal** exit. An unconverged graded record therefore announced itself as truncated by a cap when it had met both limits and never settled — opposite remedies, and the distinction the field exists to draw. The unreachable break is deleted, the normal exit is named `"limits met, unconverged"`, and `schema_version` bumps 1 → 2 because a value domain changed meaning. An existing test asserting `== "iteration cap"` had been **passing because of** the defect; it now asserts the new value and is its reachability witness |
 | 2026-09-20 | **A wall-clock stop added beside the iteration cap**, found by running the harness rather than by reading it: the first worst-case run made plain that 60 unconverged iterations of a multi-minute replay is hours on the rig. The count bounds a fast noisy workload; only the clock bounds a slow one |
+
+
+---
+
+## 8. The verify edge — the axis rows 2 and 3 do not cover
+
+**Amended into this spec 2026-09-22.** Ungraded by construction; see §8.3.
+
+### 8.1 Why a third measurement
+
+§6.3.4's two timed rows are both **human-facing waits**: row 2 is the pause at
+spend time, row 3 the pause at wallet open. Between them they do not touch the
+cost `CT-6`'s F3(a) priced, because nobody waits at it — it is paid **once per
+block, inside refresh**:
+
+- `CurveTreeClient::root_at`'s own doc calls itself *"the §3.3 verify hot
+  path"*;
+- `shekyl-engine-core/src/engine/merge.rs:661` calls `verify_root` **inside the
+  per-block ingest loop**, as the CT-5b lying-daemon defence (*"the root the
+  tree reconstructs for `next` must byte-equal the consensus header-committed
+  root"*);
+- freeze requires 730-block burial (`segment.rs:69`), so the whole reference
+  window lies inside the **unfrozen** zone, and every call recomputes `R_k`
+  over each complete-but-unfrozen segment — **~29 of them** at the worst-case
+  leaf rate.
+
+`CT-6` increment 4's snapshot tier exists to remove exactly that cost, and
+increment 6 says **re-grade**. A re-grade with no prior grade is not a
+comparison. §7's first-run table has **no verify-edge row**, which is the gap
+this closes.
+
+### 8.2 What it measures, and how it proves it measured it
+
+One population, two timed phases of the same call:
+
+| Phase | State | What it contains |
+| --- | --- | --- |
+| **Unfrozen** | as production is inside the burial window | segment recompute + tail promotion |
+| **Frozen** (control) | after `maybe_freeze_segments` | stored `R_k` reads + tail promotion |
+
+The contrast does **two** jobs, which is why the control is not optional:
+
+1. **It is the red-bite.** Removing the recompute must collapse the cost. A
+   ratio near 1 means the measurement never contained the thing it names.
+2. **It identifies the branch.** `root_at_count` has a `full_build_root`
+   fallback when the tail is too short to promote to layer `j`, and timing the
+   fallback while reporting it as the recompute cost would be the
+   narrower-question instrument. The fallback **ignores frozen sub-roots
+   entirely**, so a population whose time collapses when frozen was on the
+   mixed-composition path. This is determined **behaviourally** rather than by
+   restating the store's internal decomposition — `store::ops` is a private
+   module, and a harness that re-derived its branch condition would be a second
+   copy of it.
+
+Both phases must also return the **same root**: a control that changed the
+answer would not be a control.
+
+**Rule 47, asserted before any timing:** zero frozen segments at the start (a
+population that froze by accident makes every number cheap and green); the leaf
+count equal to `blocks × leaves_per_block` from the derived rate; and at least
+one complete segment, or there is no recompute to measure. The freeze control
+then asserts it froze **every** complete segment, since a partial freeze would
+understate the very cost it is removing.
+
+**Ingest goes through `append_block_deltas`, the production path.**
+`append_drained` is a `#[cfg(test)]` wrapper; a baseline taken through a
+test-only door would not describe what refresh does.
+
+### 8.3 No threshold, and why that is the correct output
+
+`CT-6 Q4` is **PENDING AS DERIVATION**, and in any case it grades the
+**amortized** form's advance. This is the **naive** cost that form would
+replace. So the record carries **no `Verdict`** and states its status as prose
+in `grading`.
+
+It deliberately does **not** reuse `Verdict::Ungraded`, whose meaning is
+*"measured off the pinned rig"*. Putting one value in front of two meanings is
+the defect `SCHEMA_VERSION` 2 was bumped to correct — a later reader of
+`"ungraded"` could not tell whether the rig was wrong or the threshold absent.
+
+The per-call cost is reported against the 120 s block target as a **cadence
+fraction, informational only**, so the duty cycle is visible without a budget
+being implied.
+
+`SCHEMA_VERSION` is **not** bumped: this is a new record type under its own
+`measurement` value, and no existing field is removed or has its meaning
+changed.
+
+### 8.4 Both densities, consumed not restated
+
+Two populations, each `W` blocks deep: the **worst case** (row 2's sustained
+ceiling) and the **nominal** (row 3's full-reward zone, `MIN_BLOCK_WEIGHT`).
+Both rates come from `corpus.rs`'s existing derivations. The asymmetry between
+rows 2 and 3 on density is a *grading* decision (§4.4); an ungraded baseline has
+no reason to choose, and reporting both is what lets the eventual re-grade pick
+either without a second run.
+
+### 8.5 What this does not claim
+
+It does not grade, does not discharge anything, and does not price `CT-6`
+increment 4's benefit — only the cost that increment proposes to remove. The
+production call adds the client's height-to-count lookup above
+`root_at_count`, which this does not include: the harness calls the store
+directly, which is where F3(a) located the cost and what `client.rs:1049`
+reaches.
