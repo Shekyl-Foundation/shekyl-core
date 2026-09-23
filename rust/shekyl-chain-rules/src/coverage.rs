@@ -23,11 +23,14 @@
 //! every consensus row of bucket ≠ 3, fixed by the census and moved by
 //! nothing in this crate. **validator-enforced** `E − H` excludes the rows
 //! the C++ ingest driver holds until cutover (`RowStatus::HeldByCxx`).
-//! **per-block** `E − H − O` also excludes rows this crate enforces outside
-//! the per-block stages (`RowStatus::EnforcedAt` — CEN-E5 at writer open).
-//! [`RuleSet::enforced`](crate::RuleSet::enforced) is that per-block reading.
-//! Completeness is measured against it. `E` is printed beside it so a hold
-//! or an at-open row reads as a subtraction, never as a smaller denominator.
+//! **per-block** `E − H − O − B` also excludes rows this crate enforces
+//! outside the per-block stages (`RowStatus::EnforcedAt` — CEN-E5 at writer
+//! open) and rows that hold by construction (`RowStatus::ByConstruction` —
+//! CEN-F2, F8, F19: the type system or the wire's parser, with a falsifier
+//! the gate asserts). [`RuleSet::enforced`](crate::RuleSet::enforced) is
+//! that per-block reading. Completeness is measured against it. `E` is
+//! printed beside it so a hold, an at-open row or a by-construction row
+//! reads as a subtraction, never as a smaller denominator.
 //! The live figures are the gate's, not this comment's.
 
 use core::fmt;
@@ -136,8 +139,9 @@ impl Coverage<CenRow> {
 
     /// `true` iff every row `rule_set` holds the per-block stages to was
     /// evaluated — `RuleSet::enforced()`, which excludes C++-held rows
-    /// (`RowStatus::HeldByCxx`) and rows enforced at another site
-    /// (`RowStatus::EnforcedAt`). See the module docs for the three
+    /// (`RowStatus::HeldByCxx`), rows enforced at another site
+    /// (`RowStatus::EnforcedAt`) and rows that hold by construction
+    /// (`RowStatus::ByConstruction`). See the module docs for the four
     /// readings.
     ///
     /// Empty coverage is never complete — not even against a rule set that

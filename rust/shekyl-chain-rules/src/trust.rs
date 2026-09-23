@@ -18,7 +18,13 @@
 //! already ruled, not slice 6's to derive: `PDM-Q5` `:293` — *"`≤ C`
 //! skeleton, trusted with the binary"* — band 1's skeleton, not an ad-hoc
 //! skip list; and it is mintable only from the table's current anchor
-//! (`F27`), so `D_max` never has to defend a node below its anchor.
+//! (`F27`), so `D_max` never has to defend a node below its anchor. That
+//! anchor is a **checkpoint, at height `≥ 1`** — never genesis, which the
+//! binary defines rather than trusts and which sits in no band
+//! (`CHAIN_RULES_SLICE_4.md` Q3, the PDM lane's answer 2026-09-22). So
+//! `assumevalid = 0`, the first release's setting (`PDM :304`), has one
+//! constructible meaning: `Full` — [`ReleaseAnchors::current`] is `None`
+//! and there is nothing for `below_anchor` to be minted from.
 //!
 //! # Why a separate input
 //!
@@ -56,14 +62,16 @@ pub struct Trust {
 }
 
 impl Trust {
-    /// Verify everything, with no anchors: what every public-network node
-    /// is today (`ReleaseAnchors` is empty on every network) and what a
-    /// Fakechain node always is. `Trust::full(ReleaseAnchors::EMPTY)`.
+    /// Verify everything, with nothing pinned — not even a genesis: what a
+    /// Fakechain node always is. `Trust::full(ReleaseAnchors::EMPTY)`. A
+    /// public-network node is `Trust::full(ReleaseAnchors::for_network(_))`:
+    /// its genesis pinned, no anchor (band 1 empty) until the first
+    /// checkpoint release.
     pub const UNANCHORED: Self = Self::full(ReleaseAnchors::EMPTY);
 
-    /// Verify everything; consult `anchors` where a rule reads them
-    /// (CEN-E1 at anchored heights, CEN-E5 at open). What every node does
-    /// today, and what a Fakechain node does with
+    /// Verify everything; consult the table where a rule reads it (CEN-E1
+    /// at pinned heights, CEN-E5 at open). What every node does today —
+    /// `assumevalid = 0` — and what a Fakechain node does with
     /// [`ReleaseAnchors::EMPTY`].
     #[must_use]
     pub const fn full(anchors: ReleaseAnchors) -> Self {

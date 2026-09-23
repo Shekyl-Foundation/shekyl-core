@@ -30,7 +30,7 @@
 use core::fmt;
 
 use shekyl_address::Network;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::census::{CenRow, RowStatus};
 use crate::rules::difficulty::Target;
@@ -83,13 +83,19 @@ impl RuleSetId {
 /// `BlockHeader.major_version` this rule set admits (CEN-B1; the vote
 /// floor of CEN-B2), landed with slice 1. The third is `difficulty` — how
 /// CEN-D4 derives the target — landed with slice 2 and the reason one
-/// non-issued constructor exists ([`RuleSet::fakechain`]).
+/// non-issued constructor exists ([`RuleSet::fakechain`]). The fourth —
+/// `mined_money_unlock_window` (CEN-F6) — landed with slice 4
+/// (`CHAIN_RULES_SLICE_4.md` Q5): the C++ `#define`
+/// `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`, stated here because F6 reads it.
+/// CEN-F21's split epoch is `rules::miner::EMISSION_SPLIT_EPOCH`, not a
+/// field: it joins this set when a schedule step names a different epoch.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,
     enforced: &'static [CenRow],
     header_major_version: u8,
     difficulty: DifficultyRule,
+    mined_money_unlock_window: BlockCount,
 }
 
 /// How a rule set derives the next-block target (CEN-D4 reads this).
@@ -128,6 +134,7 @@ impl RuleSet {
         enforced: CenRow::ALL,
         header_major_version: 1,
         difficulty: DifficultyRule::Lwma1,
+        mined_money_unlock_window: BlockCount::from_raw(60),
     };
 
     /// Every rule set a schedule may name, in id order. A schedule step that
@@ -177,15 +184,19 @@ impl RuleSet {
     /// per-block stages can evaluate**, in census order. Excluded: rows
     /// held by the C++ ingest driver ([`RowStatus::HeldByCxx`]), which are
     /// not the validator's; and rows this crate enforces at another site
-    /// ([`RowStatus::EnforcedAt`] — CEN-E5 at writer open), which no
-    /// per-block coverage could contain. So `Coverage::is_complete_for`
-    /// measures `enforced − held − at-open` — the census denominator itself
-    /// never moves for either (the gate prints the subtractions beside it).
+    /// ([`RowStatus::EnforcedAt`] — CEN-E5 at writer open) or holds by
+    /// construction ([`RowStatus::ByConstruction`] — CEN-F2, F8, F19), which
+    /// no per-block coverage could contain. So `Coverage::is_complete_for`
+    /// measures `enforced − held − at-open − by-construction` — the census
+    /// denominator itself never moves for any of them (the gate prints the
+    /// subtractions beside it).
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_ {
-        self.enforced
-            .iter()
-            .copied()
-            .filter(|row| !matches!(row.status(), RowStatus::HeldByCxx | RowStatus::EnforcedAt))
+        self.enforced.iter().copied().filter(|row| {
+            !matches!(
+                row.status(),
+                RowStatus::HeldByCxx | RowStatus::EnforcedAt | RowStatus::ByConstruction
+            )
+        })
     }
 
     /// A rule set that admits `header_major_version`, for the version-rule
@@ -198,8 +209,18 @@ impl RuleSet {
             id: RuleSetId::from_raw(u8::MAX),
             enforced: CenRow::ALL,
             header_major_version,
-            difficulty: DifficultyRule::Lwma1,
+            ..Self::GENESIS
         }
+    }
+
+    /// How many blocks after its height a coinbase's outputs stay locked
+    /// (CEN-F6: `unlock_time == height + window`). `60` on every issued
+    /// rule set — the C++ `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`, a
+    /// `#define` in `cryptonote_config.h` rather than a `config/` key (the
+    /// census notes the asymmetry); `rule_set_tests` pins the two equal.
+    #[must_use]
+    pub const fn mined_money_unlock_window(&self) -> BlockCount {
+        self.mined_money_unlock_window
     }
 
     /// The `BlockHeader.major_version` this rule set admits (CEN-B1), and
@@ -223,13 +244,14 @@ impl fmt::Debug for RuleSet {
             .field(
                 "enforced",
                 &format_args!(
-                    "{} of {} rows (per-block; held and at-open rows excluded)",
+                    "{} of {} rows (per-block; held, at-open and by-construction rows excluded)",
                     self.enforced().count(),
                     CenRow::ALL.len()
                 ),
             )
             .field("header_major_version", &self.header_major_version)
             .field("difficulty", &self.difficulty)
+            .field("mined_money_unlock_window", &self.mined_money_unlock_window)
             .finish()
     }
 }

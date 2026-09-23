@@ -117,3 +117,35 @@ fn a_cumulative_difficulty_overflow_is_the_fold_belt_not_a_new_row() {
     );
     cleanup(&path);
 }
+
+/// CEN-F20's fault — a `cumulative_tx_count` prefix sum that decreases — is
+/// SI-13, armed by the validator's read and halting the writer at the
+/// connecting height like the work belt (SI-10) does.
+#[test]
+fn a_decreasing_tx_count_is_the_fold_belt_observed_by_the_validator() {
+    let path = tmp("connect-refuse-corrupt-tx-count");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new()]);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::TxCountNotMonotone {
+                at: BlockHeight::from_raw(0),
+            })
+            .into())
+    });
+    let row = StoreInvariant::FoldNotMonotone {
+        cell: "block_info.cumulative_tx_count",
+        height: 0,
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 13);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row,
+        }
+    );
+    cleanup(&path);
+}

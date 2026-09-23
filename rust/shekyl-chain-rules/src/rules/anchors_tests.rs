@@ -18,12 +18,29 @@ use shekyl_types::BlockHash;
 
 // ---- CEN-E1: the anchor's equality, per block, through `validate` -------
 
-/// A one-entry table anchoring `height` at `hash`.
+/// A one-entry table anchoring `height` (`≥ 1`) at `hash`, no genesis pin.
 fn anchoring(height: u64, hash: BlockHash) -> ReleaseAnchors {
-    ReleaseAnchors::for_tests(Box::leak(Box::new([Anchor {
-        height: BlockHeight::from_raw(height),
-        hash,
-    }])))
+    ReleaseAnchors::for_tests(None, checkpoints(&[(height, hash)]))
+}
+
+/// A table pinning genesis at `hash` and anchoring nothing — a public
+/// network's shape before its first checkpoint release.
+fn pinning_genesis(hash: BlockHash) -> ReleaseAnchors {
+    ReleaseAnchors::for_tests(Some(hash), &[])
+}
+
+/// Leaked checkpoint entries for a fixture table.
+fn checkpoints(entries: &[(u64, BlockHash)]) -> &'static [Anchor] {
+    Box::leak(
+        entries
+            .iter()
+            .map(|&(height, hash)| Anchor {
+                height: BlockHeight::from_raw(height),
+                hash,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    )
 }
 
 /// Refusal fixture: a valid candidate connecting at an anchored height whose
@@ -73,11 +90,14 @@ fn an_unanchored_height_passes_vacuously_and_is_recorded() {
     }
 }
 
-/// E1 at genesis: an anchor at height 0 judges the genesis candidate.
+/// E1 at genesis: the genesis pin judges the height-0 candidate by
+/// equality — a foreign genesis is refused on E1 — with no anchor in the
+/// table at all (`current()` is `None`; genesis is in no trust band).
 #[test]
-fn a_genesis_anchor_judges_the_genesis_candidate() {
+fn the_genesis_pin_judges_the_genesis_candidate() {
     let chain = MockChain::default();
-    let wrong = Trust::full(anchoring(0, OTHER));
+    let wrong = Trust::full(pinning_genesis(OTHER));
+    assert_eq!(wrong.anchors().current(), None);
     chain.with_view(|view| {
         let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
         assert_refused(
@@ -118,10 +138,7 @@ fn conflict(chain: &MockChain, anchors: &ReleaseAnchors) -> Option<AnchorConflic
 #[test]
 fn a_recorded_block_that_is_not_the_anchor_is_the_conflict() {
     let chain = five_blocks();
-    let anchors = ReleaseAnchors::for_tests(Box::leak(Box::new([Anchor {
-        height: BlockHeight::from_raw(3),
-        hash: OTHER,
-    }])));
+    let anchors = anchoring(3, OTHER);
     assert_eq!(
         conflict(&chain, &anchors),
         Some(AnchorConflict {
@@ -132,21 +149,33 @@ fn a_recorded_block_that_is_not_the_anchor_is_the_conflict() {
     );
 }
 
-/// A chain that carries the anchor agrees — at height 3 and at genesis.
+/// A chain that carries its pins agrees — the genesis pin at 0 and the
+/// anchor at height 3.
 #[test]
-fn a_chain_that_carries_its_anchors_has_no_conflict() {
+fn a_chain_that_carries_its_pins_has_no_conflict() {
     let chain = five_blocks();
-    let anchors = ReleaseAnchors::for_tests(Box::leak(Box::new([
-        Anchor {
-            height: BlockHeight::from_raw(0),
-            hash: hash_at(&chain, 0),
-        },
-        Anchor {
-            height: BlockHeight::from_raw(3),
-            hash: hash_at(&chain, 3),
-        },
-    ])));
+    let anchors = ReleaseAnchors::for_tests(
+        Some(hash_at(&chain, 0)),
+        checkpoints(&[(3, hash_at(&chain, 3))]),
+    );
     assert_eq!(conflict(&chain, &anchors), None);
+}
+
+/// A file whose genesis is not the pinned one is the conflict at height 0
+/// — another network's file, or a remint — before any anchor is consulted.
+/// This is F11's "as configured" half at open (slice 4 Q3).
+#[test]
+fn a_foreign_genesis_is_the_conflict_at_height_zero() {
+    let chain = five_blocks();
+    let anchors = ReleaseAnchors::for_tests(Some(OTHER), checkpoints(&[(3, OTHER)]));
+    assert_eq!(
+        conflict(&chain, &anchors),
+        Some(AnchorConflict {
+            height: BlockHeight::ZERO,
+            expected: OTHER,
+            recorded: Some(hash_at(&chain, 0)),
+        })
+    );
 }
 
 /// An anchor above the tip is not yet checkable: skipped, not a conflict
@@ -154,42 +183,28 @@ fn a_chain_that_carries_its_anchors_has_no_conflict() {
 #[test]
 fn an_anchor_above_the_tip_is_not_yet_checkable() {
     let chain = five_blocks();
-    let anchors = ReleaseAnchors::for_tests(Box::leak(Box::new([Anchor {
-        height: BlockHeight::from_raw(9),
-        hash: OTHER,
-    }])));
-    assert_eq!(conflict(&chain, &anchors), None);
+    assert_eq!(conflict(&chain, &anchoring(9, OTHER)), None);
 }
 
 /// The first conflict in height order is reported, not the last.
 #[test]
 fn the_first_conflict_in_height_order_is_reported() {
     let chain = five_blocks();
-    let anchors = ReleaseAnchors::for_tests(Box::leak(Box::new([
-        Anchor {
-            height: BlockHeight::from_raw(1),
-            hash: OTHER,
-        },
-        Anchor {
-            height: BlockHeight::from_raw(4),
-            hash: OTHER,
-        },
-    ])));
+    let anchors = ReleaseAnchors::for_tests(None, checkpoints(&[(1, OTHER), (4, OTHER)]));
     assert_eq!(
         conflict(&chain, &anchors).map(|c| c.height),
         Some(BlockHeight::from_raw(1))
     );
 }
 
-/// An empty file contradicts nothing, and an empty table contradicts
-/// nothing — what every node is today.
+/// An empty file contradicts nothing — not even a genesis pin — and an
+/// empty table contradicts nothing.
 #[test]
 fn an_empty_chain_or_an_empty_table_has_no_conflict() {
-    let anchors = ReleaseAnchors::for_tests(Box::leak(Box::new([Anchor {
-        height: BlockHeight::from_raw(0),
-        hash: OTHER,
-    }])));
-    assert_eq!(conflict(&MockChain::default(), &anchors), None);
+    assert_eq!(
+        conflict(&MockChain::default(), &pinning_genesis(OTHER)),
+        None
+    );
     assert_eq!(conflict(&five_blocks(), &ReleaseAnchors::EMPTY), None);
 }
 

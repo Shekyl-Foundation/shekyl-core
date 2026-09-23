@@ -11,7 +11,7 @@ use std::num::{NonZeroU128, NonZeroUsize};
 use std::sync::Arc;
 
 use shekyl_chain_rules::harness::{Faulted, MockSubstrate};
-use shekyl_chain_rules::{seed_height, Candidate, CenRow, Locus, RowStatus};
+use shekyl_chain_rules::{seed_height, Candidate, CenRow, Locus, RowStatus, TxSlot};
 use shekyl_chain_store::store::{StoreError, StoreInvariant};
 use shekyl_difficulty::{check_hash, Difficulty, FTL_SECONDS};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
@@ -221,6 +221,13 @@ fn assert_lands(mutation: Mutation, at: u64, outcome: &Outcome) {
 fn assert_place(mutation: Mutation, locus: Locus) {
     match mutation.expected_place() {
         ExpectedPlace::Block => assert_eq!(locus, Locus::Block, "{mutation}: place"),
+        ExpectedPlace::Miner => assert_eq!(
+            locus,
+            Locus::Tx {
+                slot: TxSlot::Miner
+            },
+            "{mutation}: §3.10 names the miner transaction"
+        ),
         ExpectedPlace::Input => assert!(
             matches!(locus, Locus::Input { .. }),
             "{mutation}: §3.10 names an input, got {locus}"
@@ -539,8 +546,10 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_the_three_the_plan_lists(
         .collect();
     // §3.10's table at the pin. When an E6 slice ports one of these, this
     // line and the family's pinned-gap arm both go red together — the plan's
-    // table is then updated with the row, not the test loosened.
-    assert_eq!(pending, vec![CenRow::F13, CenRow::G2, CenRow::I7]);
+    // table is then updated with the row, not the test loosened. (Slice 4
+    // re-keyed WrongReward F13 → F18, Q8: F13 landed as a definition, and
+    // the predicate a wrong amount trips is F18, blocked on G6.)
+    assert_eq!(pending, vec![CenRow::F18, CenRow::G2, CenRow::I7]);
     for m in Mutation::ALL {
         assert!(
             m.to_string().contains(m.expected().as_str()),
@@ -560,7 +569,7 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_the_three_the_plan_lists(
             (Mutation::FutureTimestamp, ExpectedPlace::Block),
             (Mutation::StaleTimestamp, ExpectedPlace::Block),
             (Mutation::PowUnderWrongSeed, ExpectedPlace::Block),
-            (Mutation::WrongReward, ExpectedPlace::Unnamed),
+            (Mutation::WrongReward, ExpectedPlace::Miner),
             (Mutation::ReorderedBodies, ExpectedPlace::Unnamed),
             (Mutation::DoubleSpend, ExpectedPlace::Input),
         ]

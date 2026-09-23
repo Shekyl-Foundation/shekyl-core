@@ -333,7 +333,9 @@ impl ValidatedBlock {
     /// that no rule reads the identity; E1 refuted the premise
     /// (`CHAIN_RULES_SLICE_3.md` F8, Q7). The transaction identities are
     /// derived here, once; the target and the cumulative work are CEN-D4's
-    /// derivation, recorded where it ran.
+    /// derivation, recorded where it ran. The 4.F emission is derived in
+    /// `validate` and recorded in coverage; it stays off this type until
+    /// F14b produces the paid reward `connect` persists.
     pub(crate) fn derive(
         candidate: Candidate,
         hash: BlockHash,

@@ -60,6 +60,7 @@
 pub(crate) mod anchors;
 pub(crate) mod difficulty;
 pub(crate) mod header;
+pub(crate) mod miner;
 pub(crate) mod pow;
 pub use pow::seed_height;
 pub(crate) mod timestamps;
@@ -73,7 +74,7 @@ use crate::rules::difficulty::Target;
 use crate::rules::timestamps::MtpWindow;
 use crate::trust::Trust;
 use crate::verdict::Verdict;
-use crate::view::{ChainView, Tip};
+use crate::view::{AtHeight, ChainView, RecordedBlock, Tip};
 use shekyl_types::BlockHeight;
 
 /// A consensus rule, bound to the census row it implements.
@@ -254,4 +255,19 @@ pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(
         coverage.insert(R::ROW);
     }
     Ok(verdict)
+}
+
+/// The recorded block at `height`, which is below the connecting height
+/// and therefore present on a conforming view (a hole is the store's SI-7,
+/// reported as its fault before this arm). Shared by every rule that reads
+/// a parent-side fact (D4's window and work, F13's accumulator, F20's
+/// prefix sums).
+pub(crate) fn recorded<'id, V: ChainView<'id>>(
+    view: &V,
+    height: BlockHeight,
+) -> Result<RecordedBlock, V::Fault> {
+    Ok(match view.block_at(height)? {
+        AtHeight::Recorded(block) => block,
+        AtHeight::AboveTip => unreachable!("heights below the connecting height are recorded"),
+    })
 }

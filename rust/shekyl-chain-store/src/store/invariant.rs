@@ -90,6 +90,23 @@ pub enum StoreInvariant {
         /// The `properties` key of the cell whose fold overflowed.
         cell: &'static str,
     },
+    /// **SI-13** — a recorded fold never *decreases*: a prefix sum the
+    /// store only ever adds to (`block_info.cumulative_tx_count`, S-CHAIN-R)
+    /// is never smaller at a later height than at an earlier one. SI-8
+    /// guards the write (no wrap); this is the read-side form. Like
+    /// [`WorkNotIncreasing`](Self::WorkNotIncreasing) it is not armed by a
+    /// write site but by a rule reading the store: CEN-F20's volume window is the
+    /// difference of two prefix sums, and a negative difference is
+    /// `Corrupt::TxCountNotMonotone { at }`, which the ingest pipeline hands
+    /// to [`WriteBatch::refuse_corrupt`](super::WriteBatch::refuse_corrupt)
+    /// to arm this row. Never a saturated zero: a zero window would price
+    /// the chain as dormant, a wrong answer that looks valid.
+    FoldNotMonotone {
+        /// The `block_info` cell whose fold decreased.
+        cell: &'static str,
+        /// The later height, whose value is below an earlier one's.
+        height: u64,
+    },
     /// **SI-10** — recorded cumulative work strictly increases with height:
     /// `block_info[h].cumulative_difficulty > block_info[h−1].cumulative_difficulty`
     /// for every recorded `h ≥ 1`, because every block's target is at least
@@ -181,6 +198,7 @@ impl StoreInvariant {
             Self::SummaryRootDiverged => 12,
             Self::CellCorrupt { .. } => 7,
             Self::FoldOverflow { .. } => 8,
+            Self::FoldNotMonotone { .. } => 13,
             Self::IdNotFresh => 9,
         }
     }
@@ -219,6 +237,12 @@ impl core::fmt::Display for StoreInvariant {
                 "recorded cumulative work does not increase at height {height}; the validator \
                  read a store whose block_info rows contradict CEN-D4/D6, rebuild from the \
                  block corpus"
+            ),
+            Self::FoldNotMonotone { cell, height } => write!(
+                f,
+                "the `{cell}` fold decreases at height {height}; a prefix sum the store only \
+                 adds to went backwards — the validator read a store that does not hold what it \
+                 claims, rebuild from the block corpus"
             ),
             Self::UndoLogIncoherent { height, fault } => write!(
                 f,
@@ -263,6 +287,7 @@ impl core::error::Error for StoreInvariant {
             }
             | Self::KeyImageNotFresh
             | Self::WorkNotIncreasing { .. }
+            | Self::FoldNotMonotone { .. }
             | Self::TipMismatch
             | Self::TxHashNotFresh
             | Self::RootRewritten

@@ -39,6 +39,7 @@
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::BlockHeader;
 
 /// A by-height lookup against the recorded chain.
@@ -126,8 +127,10 @@ impl Tip {
 /// known block), CEN-D3 (the seed block's identity); `header` — CEN-C2,
 /// CEN-C3 (the timestamps of the eleven preceding blocks), CEN-D4 (the
 /// LWMA-1 window's timestamps); `cumulative_difficulty` — CEN-D4 (the
-/// window's work). Weight arrives with 4.G; fields grow with rows, never
-/// ahead of them.
+/// window's work); `coins_generated` — CEN-F13 (the parent's accumulator
+/// is the subsidy curve's operand); `cumulative_tx_count` — CEN-F20 (two
+/// prefix sums make the volume window). Weight arrives with 4.G; fields
+/// grow with rows, never ahead of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordedBlock {
     /// The block's identity, derived once when it was recorded (CEN-B6).
@@ -140,6 +143,18 @@ pub struct RecordedBlock {
     /// reports
     /// [`Corrupt::CumulativeDifficultyNotMonotone`](crate::Corrupt::CumulativeDifficultyNotMonotone).
     pub cumulative_difficulty: CumulativeDifficulty,
+    /// Gross emission through this block (`block_info.coins_generated`):
+    /// the parent's plus this block's paid reward. CEN-F13's operand — the
+    /// subsidy curve reads the **parent's** value for a candidate at
+    /// `parent + 1`. Gross, not net of burn: the curve is a function of
+    /// what was issued (FL-R16c's net operand is the *burn ratio's*, a
+    /// different quantity).
+    pub coins_generated: AtomicUnits,
+    /// Transactions listed in blocks `0..=this`, a prefix sum
+    /// (`block_info.cumulative_tx_count`, S-CHAIN-W). CEN-F20's operand:
+    /// `Σ tx_hashes.len()` over the prior `min(h, W)` blocks is the
+    /// difference of two of these.
+    pub cumulative_tx_count: u64,
 }
 
 /// The narrow, read-only view a rule consumes.
