@@ -1,8 +1,8 @@
 # `shekyl-chain-rules` slice 5 — census 4.H, the transaction on its own (DRS-E6 increment 6)
 
-**Status:** OPEN — **Round 0 pre-flight, written 2026-09-23 against `dev` @
-`387fa84a9` (post-#834, slice 4 landed).** No rule implemented yet; §8's
-questions are owed rulings before Round 1. **The TXE lane
+**Status:** OPEN — **Round 1 RULED 2026-09-23 (Q1–Q8, §8, each line-local);
+implementation begins on §5.** Round 0 pre-flight written 2026-09-23 against
+`dev` @ `387fa84a9` (post-#834, slice 4 landed). **The TXE lane
 (`feat/tx-extra-rust-cutover`, `TX_EXTRA_RUST_CUTOVER.md`) is in flight on
 an adjacent worktree and is this slice's boundary — §1.2.**
 
@@ -102,12 +102,13 @@ Consequences for this slice, stated so they are checkable at each commit:
    docs commit owns the shift. Either order is fine because neither lane
    edits the other's pins in the same commit.
 3. **The BP+ `core_tests` TXE deletes were H19's differential oracle on
-   the C++ side.** If Q3 adopts `shekyl-bulletproofs` as the verifier of
-   record for range proofs, its KATs cannot be "the same vectors the C++
-   tests used" once those tests are gone; the vectors have to be pinned in
-   Rust before TXE's deletion merges, or regenerated from the tx-builder
-   with the C++ verifier consulted once through the existing FFI. Q3 asks
-   which.
+   the C++ side.** **Q3 RULED (b) and decoupled (2026-09-23):** the
+   vectors are captured as committed data **in the same TXE commit that
+   deletes the tests** — cheap, reversible, and it removes the artificial
+   deadline; and BP+ has standard vectors independent of this tree, so the
+   C++ tests were never the only oracle. The request is with the TXE lane
+   (a FOLLOWUPS row carries it until that commit lands); slice 6's cutover
+   KAT reads the captured data.
 4. **`docs/FOLLOWUPS.md`** is the one shared textual surface (both lanes
    add rows). Resolve at merge by keeping both; no row is shared.
 
@@ -290,17 +291,32 @@ set only. Landing 4.H moves the ratchet; it does not need a new gate.
 
 ---
 
-## 5. Fixtures per row and commit plan — deferred to Round 1
+## 5. Fixtures per row and commit plan — Round 1 (2026-09-23)
 
-Written once §8 settles. Sketch of the order, on Q7's rule from slice 4
-(rules first; shared substrate where the rules need it; anything cross-lane
-last): (1) `TxRule` + `TxContext` + `judge_tx!`, no rows; (2) `RuleSet`
-parameters; (3) the classification; (4) the structural rows (H1, H3, H4,
-H5-gen, H6, H9, H14, H15-Null, H16, H20–H22 shapes, H19 layout) with
-fixtures; (5) the adopted crypto rows (H7, H17, H18, the three balances);
-(6) H11 with vectors; (7) the by-construction entries (H2/H13, H5-script,
-H8, H12, H15-type, H23) with falsifiers; (8) the §3.1 conformance test;
-(9) docs, census pins re-resolved after TXE.
+On slice 4 Q7's rule (rules first; shared substrate where the rules need
+it; anything cross-lane last). Every implemented row gets a negative
+fixture asserting **the row at `TxSlot::Lone`** and, through `validate`,
+at `TxSlot::Listed(n)`; every by-construction entry a falsifier; every
+parameter a pin that parses `cryptonote_config.h` and an **equality test**
+against the wire crate's constant (Q5 as ruled — a test, not a comment).
+
+| # | Commit | What |
+| --- | --- | --- |
+| 1 | `TxRule` / `TxContext` / `judge_tx!` | The third rule class; `TxKind::{Coinbase, Listed}` derived from `is_coinbase()` inside `tx_form` (Q2); scope on each rule (`All` / `NonCoinbase`), out-of-scope rows recorded vacuous. No rows yet |
+| 2 | `RuleSet` parameters (Q5) | `max_tx_size`, `unlock_time_sentinel`, and `max_tx_weight` **derived** from `min_block_weight / 2 − coinbase_blob_reserved` — never restated as 149 400; pins parse `cryptonote_config.h`; equality tests against `shekyl_wire::{MAX_TX_SIZE, UNLOCK_TIME_BLOCK_SENTINEL}` |
+| 3 | `TxClass` (Q4) | Rule-side archival classification, derived once; refuses H6's mixings as it derives |
+| 4 | Structural rows | H1, H3, H4, H5 (`gen` half), H6, H9, H10, H14, H15 (Null half), H16, H19 (layout), H20–H22 (shapes) |
+| 5 | Adopted crypto rows | H7, H17 (listed txs; the coinbase half is F10), H18, the H20–H22 balances — all through `shekyl-ct-balance` |
+| 6 | H11 | KI domain: prime-order, ≠ identity — new Rust body on the crate's point primitives, DSV M8's vectors re-derived and pinned |
+| 7 | By-construction entries (Q6, Q7) | H2/H13 (one entry, `TX_VERSION`), H5 script half (`shekyl_wire::Input`), H8, H12 (F8's ground), H15 type half (`shekyl_wire::Ct`), H23 (`from_bytes`), **H24** (I6's exclusion of the input H24 checks). **Q6's condition:** an entry serving N rows names every row in its falsifier's doc and the falsifier has one assertion per distinct vacuity claim, so it fails when *any* served row stops being vacuous; the registry carries the same `(property, falsifier)` on each row |
+| 8 | The §3.1 conformance test (Q1 as ruled) | **Enumerated, not sampled:** every `Err(` site in `shekyl-wire/src/transaction.rs` (59 at `387fa84a9`) is listed in a table in the test module, each classified **parse/IO** (would survive a consensus-rule change — short read, trailing bytes, varint overflow) or **rule → CEN row**; for every rule-classified site the test builds the transaction that trips it and asserts `tx_form` refuses **on that row**. A gate-shaped self-check counts the `Err(` sites in the file and fails when the table's count differs, so a new arm cannot arrive unclassified |
+| 9 | Docs | This section's landing figures; census 4.H pins re-resolved against `dev` (after TXE if it has landed); `CHAIN_RULES_CRATE.md` §4.6; index; DRS-E6 row; FOLLOWUPS; CHANGELOG |
+
+**H19's verification half** stays `pending` in the registry (Q3 (b)),
+with the layout half's fixture landed under it and the blocker named:
+*blocked on slice 6's proof-body cutover — falsify by `shekyl-bulletproofs`
+KAT equal to the C++ verifier over the pinned corpus.* The corpus is
+decoupled from TXE's schedule by §1.2 item 3 as amended.
 
 ---
 
@@ -327,12 +343,19 @@ H8, H12, H15-type, H23) with falsifiers; (8) the §3.1 conformance test;
   audited by symbol against live C++ and against the Rust that exists.
   The headline finding is §3.1: fourteen rows already run in Rust, in the
   wire crate, for the wallet only. Rulings owed on Q1–Q8.
+- **Round 1 (2026-09-23).** The headline verified independently at source
+  (`:1984`, `:1673`, an inner `validate` at `:714`, 59 `Err(` sites;
+  production caller `block_fetch.rs:200`). Q1 (a) with the enumerated
+  subject; Q2 default; Q3 (b), decoupled from TXE by capturing the vectors
+  in the deletion commit; Q4/Q5 default, the constant equality a test;
+  Q6 yes on the any-row-stops-being-vacuous condition; **Q7 overridden to
+  `by_construction`** on I6's exclusion; Q8 proceed. §5 is the plan.
 
 ---
 
 ## 8. Questions for the reviewer — Round 0
 
-- **Q1 — the wire twin (§3.1).** Default **(a)**: `tx_form` is the rule of
+- **Q1 — the wire twin (§3.1). RULED (a), 2026-09-23 — with the conformance test's subject ENUMERATED, not sampled: all 59 `Err(` sites classified parse/IO or rule→row (§5 commit 8). The finding's weight, as ruled: ~fourteen consensus predicates have two implementations — the wallet's Rust twin and the daemon's C++ — and nothing reconciles them; a transaction one accepts and the other rejects is undetectable today.** Default **(a)**: `tx_form` is the rule of
   record; every row lands row-keyed in `rules/tx.rs`; a conformance test
   in the crate holds the wire twin's refusal arms to named rows; the wire
   twin keeps its wallet callers and a header naming the tie; the wallet →
@@ -344,7 +367,7 @@ H8, H12, H15-type, H23) with falsifiers; (8) the §3.1 conformance test;
   and make the wallet call `tx_form` — the right end state, but a
   build-graph change to `shekyl-engine-core` this slice should not carry
   silently; if you want it, it is its own commit with the cost measured.
-- **Q2 — the coinbase under `tx_form` (§3.2).** `validate` already runs
+- **Q2 — the coinbase under `tx_form` (§3.2). RULED default, 2026-09-23.** `validate` already runs
   `tx_form` on `TxSlot::Miner`. Default: `TxContext::kind` is derived from
   `is_coinbase()`; each 4.H rule declares its scope (`All`, `NonCoinbase`);
   out-of-scope rows record as evaluated-vacuous (E1's precedent); the
@@ -356,7 +379,7 @@ H8, H12, H15-type, H23) with falsifiers; (8) the §3.1 conformance test;
   from the C++'s three coinbase-side 4.H calls and from the contract's
   "`validate` calls `tx_form` … for the miner tx and each listed tx"
   (`CHAIN_RULES_CRATE.md:645`).
-- **Q3 — H19's verification half (§3.4).** The BP+ range-proof check is a
+- **Q3 — H19's verification half (§3.4). RULED (b), 2026-09-23, decoupled from TXE's schedule: vectors captured as committed data in TXE's deletion commit (§1.2 item 3).** The BP+ range-proof check is a
   **crypto cutover**: `shekyl-bulletproofs` would become the verifier of
   record for the daemon where `bulletproofs_plus.cc` is today. **(a)** land
   layout in slice 5 (row-keyed, `tx_form`), and the batched verification in
@@ -372,27 +395,27 @@ H8, H12, H15-type, H23) with falsifiers; (8) the §3.1 conformance test;
   verification half's blocker named (*falsify by: `shekyl-bulletproofs`
   KAT equals C++ over the pinned corpus*). If (a), the KAT provenance
   question above is yours to rule.
-- **Q4 — one archival classification (§3.3).** Default: a rule-side
+- **Q4 — one archival classification (§3.3). RULED default, 2026-09-23.** Default: a rule-side
   `TxClass` in `shekyl-chain-rules`, derived once, consumed by H6, H14,
   H20–H22; refuses H6's mixings as it derives. Alternative: put it on
   `shekyl_wire::Transaction` — it fits the wire crate's "shape" vocabulary
   but makes the codec carry a consensus classification, which is the
   §3.1 error in miniature.
-- **Q5 — parameters.** `max_tx_size` (1 000 000), `unlock_time_sentinel`
+- **Q5 — parameters. RULED default, 2026-09-23 — the wire-constant equality is a TEST, not a comment.** `max_tx_size` (1 000 000), `unlock_time_sentinel`
   (500 000 000) and the **derived** `max_tx_weight`
   (`min_block_weight / 2 − coinbase_blob_reserved` = 149 400) as `RuleSet`
   fields, pinned by parsing `cryptonote_config.h` and held equal to the wire
   crate's `MAX_TX_SIZE` / `UNLOCK_TIME_BLOCK_SENTINEL` by test. `MAX_OUTPUTS`
   (16) and `MAX_FCMP_INPUTS` (8) are **not** 4.H rows (they are §10 wire
   caps and 4.I's input cap) and stay where they are.
-- **Q6 — duplicate and redundant rows.** H13 is H2's third site; H12 is
+- **Q6 — duplicate and redundant rows. RULED yes, 2026-09-23, on one condition: an entry serving N rows names every row it serves, and its falsifier fails when ANY of them stops being vacuous — otherwise it is one test counted N times.** H13 is H2's third site; H12 is
   F8's ground on a listed tx; H5's script half and H15's type half are
   enum-arm facts. Default: **one `by_construction` entry may serve several
   rows** — the registry lists each row with the same `(property,
   falsifier)`; the gate already accepts a repeated falsifier. H10 is
   implemented in slice 5 as its own predicate (cheap, row-keyed) and slice
   6 decides at I5 whether it collapses.
-- **Q7 — H24's status.** It is deletion residue with a named disposition
+- **Q7 — H24's status. OVERRIDDEN 2026-09-23: `by_construction`, property = CEN-I6's exclusion of the input H24 checks, not `held_by_cxx` — `held_by_cxx` requires a test showing the holder REJECTS (the condition that found A1/A4 untested), and a rule that cannot fire has no rejection to show; the entry would fail its own condition on arrival.** It is deletion residue with a named disposition
   (census §10 R5) and can never fire under CEN-I6. The registry today has
   `pending`, `implemented`, `enforced_at`, `by_construction`, `held_by_cxx`.
   Default: **`held_by_cxx`** until cutover deletes the C++ body, with the
@@ -401,7 +424,7 @@ H8, H12, H15-type, H23) with falsifiers; (8) the §3.1 conformance test;
   it". Alternative: a new `RowStatus::Retired` — rejected in advance (rule
   23: a retired row is REJECTED's shape, and the census row is its record;
   no code symbol).
-- **Q8 — sequencing against TXE (§1.2).** Default: slice 5 proceeds now on
+- **Q8 — sequencing against TXE (§1.2). RULED proceed now, 2026-09-23.** Default: slice 5 proceeds now on
   the boundary stated in §1.2; the docs commit re-resolves 4.H pins against
   `dev` at landing; whichever lane lands second owns any pin shift. If you
   would rather TXE land first so the pins are resolved once, say so and
