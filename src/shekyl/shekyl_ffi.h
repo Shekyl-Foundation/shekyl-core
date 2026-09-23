@@ -731,83 +731,8 @@ ShekylOutputData shekyl_construct_output(
     uint64_t amount,
     uint64_t output_index);
 
-/// Construct output with explicit 8-byte label plaintext (FA-8 cooperative send).
-ShekylOutputData shekyl_construct_output_labeled(
-    const uint8_t* tx_key_secret,
-    const uint8_t* x25519_pk,
-    const uint8_t* ml_kem_ek,
-    size_t ml_kem_ek_len,
-    const uint8_t* spend_key,
-    uint64_t amount,
-    uint64_t output_index,
-    const uint8_t* label_plaintext);
-
-/// Label plaintext for a payment URI (ungated; see SUBADDRESS_UNDER_PQC.md
-/// §5.7.10). Parses `shekyl:…?rid=…` and returns 0 on success (REQUEST
-/// plaintext if a valid u48-encodable `rid` is present, else sentinel — a
-/// missing or out-of-range `rid` also yields the sentinel with rc 0). On -3
-/// (parse/UTF-8 failure) the output is still the sentinel plaintext. -4 is
-/// returned on null pointer without writing `out_plaintext`.
-int32_t shekyl_label_plaintext_for_payment_uri(
-    const char* uri,
-    uint8_t* out_plaintext);
-
 /// Free heap-allocated fields in ShekylOutputData.
 void shekyl_output_data_free(ShekylOutputData* data);
-
-/// Scan an output: KEM decap + HKDF + verification.
-/// y_out, z_out, k_amount_out: caller-owned 32-byte buffers for secrets.
-/// Caller is responsible for wiping these after use.
-bool shekyl_scan_output(
-    const uint8_t* x25519_sk,
-    const uint8_t* ml_kem_dk,
-    size_t ml_kem_dk_len,
-    const uint8_t* kem_ct_x25519,
-    const uint8_t* kem_ct_ml_kem,
-    size_t kem_ct_ml_kem_len,
-    const uint8_t* output_key,
-    const uint8_t* commitment,
-    const uint8_t* enc_amount,
-    uint8_t amount_tag_on_chain,
-    const uint8_t* enc_label,
-    uint8_t label_tag_on_chain,
-    uint8_t view_tag_on_chain,
-    const uint8_t* spend_key,
-    uint64_t output_index,
-    uint8_t* y_out,
-    uint8_t* z_out,
-    uint8_t* k_amount_out,
-    uint64_t* amount_out,
-    ShekylBuffer* pqc_pk_out,
-    ShekylBuffer* pqc_sk_out,
-    uint8_t* leaf_entry_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
-
-/// Scan an output recovering the spend key B' = O - ho*G - y*T.
-/// Caller looks up B' in subaddress table to determine ownership.
-bool shekyl_scan_output_recover(
-    const uint8_t* x25519_sk,
-    const uint8_t* ml_kem_dk,
-    size_t ml_kem_dk_len,
-    const uint8_t* kem_ct_x25519,
-    const uint8_t* kem_ct_ml_kem,
-    size_t kem_ct_ml_kem_len,
-    const uint8_t* output_key,
-    const uint8_t* commitment,
-    const uint8_t* enc_amount,
-    uint8_t amount_tag_on_chain,
-    const uint8_t* enc_label,
-    uint8_t label_tag_on_chain,
-    uint8_t view_tag_on_chain,
-    uint64_t output_index,
-    uint8_t* ho_out,
-    uint8_t* y_out,
-    uint8_t* z_out,
-    uint8_t* k_amount_out,
-    uint64_t* amount_out,
-    uint8_t* recovered_spend_key_out,
-    ShekylBuffer* pqc_pk_out,
-    ShekylBuffer* pqc_sk_out,
-    uint8_t* leaf_entry_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
 // ─── Merged scan + key image (PR-wallet Phase 1b) ────────────────────────────
 
@@ -849,41 +774,6 @@ bool shekyl_scan_and_recover(
     ShekylBuffer* pqc_pk_out,
     ShekylBuffer* pqc_sk_out,
     uint8_t* leaf_entry_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
-
-// ─── Key image computation (2 remaining sites) ──────────────────────────────
-
-/// Compute key image from persisted combined_ss + output_index.
-/// Used at stake claim (1 site). Derives ho from HKDF, computes KI = (ho+b)*Hp(O).
-/// out_ki: 32 writable bytes for the key image.
-bool shekyl_compute_output_key_image(
-    const uint8_t* combined_ss,
-    uint64_t output_index,
-    const uint8_t* spend_secret_key,
-    const uint8_t* hp_of_O,
-    uint8_t* out_ki);
-
-/// Compute key image from pre-derived ho scalar.
-/// Used at tx_source_entry boundary (1 site). Computes KI = (ho+b)*Hp(O).
-/// ho: 32-byte HKDF-derived secret scalar.
-/// out_ki: 32 writable bytes for the key image.
-bool shekyl_compute_output_key_image_from_ho(
-    const uint8_t* ho,
-    const uint8_t* spend_secret_key,
-    const uint8_t* hp_of_O,
-    uint8_t* out_ki);
-
-// ─── Proof secrets helper ────────────────────────────────────────────────────
-
-/// Derive the ProofSecrets projection from combined_ss.
-/// out_ho, out_y, out_z, out_k_amount: each 32 writable bytes.
-/// Callers pass destination addresses directly (no scratch buffers).
-bool shekyl_derive_proof_secrets(
-    const uint8_t* combined_ss,
-    uint64_t output_index,
-    uint8_t* out_ho,
-    uint8_t* out_y,
-    uint8_t* out_z,
-    uint8_t* out_k_amount);
 
 // ─── Wallet proofs (6 exports) ───────────────────────────────────────────────
 ///
@@ -936,7 +826,7 @@ bool shekyl_verify_tx_proof_outbound(
 
 /// Generate inbound transaction proof (recipient proves receipt).
 /// proof_secrets: output_count * 128 bytes — packed (ho[32]+y[32]+z[32]+k_amount[32])
-///   per output, derived via shekyl_derive_proof_secrets.
+///   per output, derived via shekyl_crypto_pq::output::derive_proof_secrets.
 /// output_indices: output_count u32 vout indices, strictly increasing, entry i
 ///   pairing with proof-secrets entry i (carried in the proof wire format).
 bool shekyl_generate_tx_proof_inbound(
@@ -1004,35 +894,6 @@ bool shekyl_verify_reserve_proof(
     const uint8_t* enc_amounts,            // output_count * 8 bytes
     uint32_t output_count,
     uint64_t* total_amount_out);
-
-// ─── Wallet cache encryption (AEAD with AAD binding) ─────────────────────────
-
-/// Encrypt wallet cache plaintext with XChaCha20-Poly1305 AEAD.
-/// cache_format_version is bound into the Poly1305 AAD — version changes
-/// invalidate existing ciphertext.
-/// password_derived_key: 32 bytes.
-/// Returns encrypted blob via out_buf. Caller frees with shekyl_buffer_free.
-bool shekyl_encrypt_wallet_cache(
-    const uint8_t* plaintext,
-    size_t plaintext_len,
-    uint8_t cache_format_version,
-    const uint8_t* password_derived_key,
-    ShekylBuffer* out_buf);
-
-/// Decrypt wallet cache ciphertext.
-/// expected_version: asserted before decryption — returns distinct error for
-///   version mismatch vs auth failure vs corruption.
-/// Returns 0 on success, negative on error:
-///   -1: version mismatch
-///   -2: authentication failure (AAD/tag mismatch)
-///   -3: invalid format / too short
-///   -4: null pointer argument
-int32_t shekyl_decrypt_wallet_cache(
-    const uint8_t* ciphertext,
-    size_t ciphertext_len,
-    uint8_t expected_version,
-    const uint8_t* password_derived_key,
-    ShekylBuffer* out_buf);
 
 /// PQC auth result (hybrid pk + signature).
 struct ShekylPqcAuthResult {
@@ -1597,7 +1458,7 @@ bool shekyl_construct_curve_tree_leaf(
 /// Single-call FCMP++ proof generation: BP+, membership proof, pseudo-outs.
 /// Rust owns all witness assembly. C++ never touches ephemeral spend secrets.
 
-/// Result of shekyl_sign_transaction.
+/// Result of shekyl_sign_fcmp_transaction.
 /// On success: proofs_json contains JSON-encoded SignedProofs; error_code == 0.
 /// On failure: proofs_json is null; error_code < 0; error_message describes the failure.
 /// The caller must free proofs_json and error_message via shekyl_buffer_free.
@@ -1635,30 +1496,6 @@ struct ShekylSignResult {
 ///              -10..-29 TxBuilderError variants.
 ShekylSignResult shekyl_sign_fcmp_transaction(
     const uint8_t* spend_secret_ptr,
-    const uint8_t* tx_prefix_hash_ptr,
-    const uint8_t* inputs_json_ptr, size_t inputs_json_len,
-    const uint8_t* outputs_json_ptr, size_t outputs_json_len,
-    uint64_t fee,
-    const uint8_t* reference_block_ptr,
-    const uint8_t* tree_root_ptr,
-    uint8_t tree_depth);
-
-/// Generate FCMP++ transaction proofs (BP+, membership proof, ECDH, pseudo-outs).
-///
-/// @param tx_prefix_hash_ptr  32-byte Keccak-256 hash of the serialized tx prefix.
-/// @param inputs_json_ptr     JSON array of SpendInput objects (see shekyl-tx-builder docs).
-/// @param inputs_json_len     Length of inputs JSON.
-/// @param outputs_json_ptr    JSON array of OutputInfo objects.
-/// @param outputs_json_len    Length of outputs JSON.
-/// @param fee                 Transaction fee in atomic units.
-/// @param reference_block_ptr 32-byte block hash of the reference block.
-/// @param tree_root_ptr       32-byte Selene curve tree root from the block header.
-///                            This is NOT the block hash — passing the wrong value
-///                            produces an invalid proof.
-/// @param tree_depth          Number of curve tree layers (>= 1).
-///
-/// Error codes: -1 null pointer, -2 JSON parse, -10..-29 TxBuilderError variants.
-ShekylSignResult shekyl_sign_transaction(
     const uint8_t* tx_prefix_hash_ptr,
     const uint8_t* inputs_json_ptr, size_t inputs_json_len,
     const uint8_t* outputs_json_ptr, size_t outputs_json_len,
