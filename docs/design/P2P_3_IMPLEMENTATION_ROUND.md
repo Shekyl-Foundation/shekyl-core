@@ -428,7 +428,18 @@ Owed to the maintainer, and **not** to be decided inside a slice:
 
 ## 7. The alpha.9 gate — re-ratification, not a schedule
 
-**Added 2026-09-21 on steering's note:** alpha.9 cuts **as soon as the redb
+**SEQUENCING AMENDED 2026-09-22 (steering): alpha.9 lands AFTER the p2p fix,
+not as the container for it.** This section was written when the four take-now
+items were understood as *alpha.9's scope*, gated on the redb cutover. They are
+not: they land first, in their own PR
+([#829](https://github.com/Shekyl-Foundation/shekyl-core/pull/829) — the cap
+deletion, the OS-derived `--in-peers` bound, and E1 tier-1's diagnostic half),
+and **alpha.9 follows them.** Everything below about *what* the items are and
+*why* each qualifies stands unchanged; only the container was wrong. §7.4.1's
+named-PR gate is kept as the record of a constraint that resolved by an event
+rather than by a decision, which was its point.
+
+*Records-was, the original framing:* alpha.9 cuts **as soon as the redb
 conversion (`DRS-E*`) is done**, and p2p work "should be a part of it."
 
 **Why this section is a re-ratification and not a plan.** The alpha.9 deferral
