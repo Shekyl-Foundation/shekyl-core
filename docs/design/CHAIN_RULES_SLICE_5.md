@@ -212,6 +212,62 @@ tie; (d) the question of the wallet calling `tx_form` directly is filed
 with a falsifier (the build-graph cost measured), owner
 `WALLET_REWRITE_PLAN.md` or the engine's contract, not decided here.
 
+### 3.1.1 What the enumeration found — LANDED with commit 8, 2026-09-23
+
+Classifying all 59 sites, rather than sampling the fourteen predicates,
+turned up things a sample would not have. Each is recorded in the table
+row's `note` and here; none is this slice's to fix beyond recording.
+
+- **The twin refuses a policy cap as if it were consensus.** `MAX_TX_EXTRA`
+  (24 576) is `CEN-M4`, flag P: *"consensus side has no tx_extra bound
+  beyond CEN-H1."* The twin refuses a 24 577-byte `extra`; `tx_form`
+  accepts it (H1 and H3 both pass). Recorded as a **divergence with
+  `Outcome::Accepted`**, keyed to `PolicyRow::M4` — the fourth arm. A
+  wallet pre-check saying what the pool will refuse is legitimate; the
+  census row it answers to is the policy one, and the E5 admission policy
+  is where the Rust holder of M4 will live.
+- **Two arms are reachable only by the storage-pruned form.** The twin's
+  fee-only arm (`prunable: None` ⇒ no outputs, empty `pqc_auths`) asserts
+  H20's shape on *any* transaction without a prunable region. Since `RF-D1`
+  the serve-credit carries one, and its own shape arm fires first — so the
+  fee-only arm is reachable only by a `prunable: None` **non**-serve-credit
+  transaction, which the C++ has no value for (its prunable is always a
+  struct) and which `Option<Prunable>` admits. The crate classifies by the
+  vin and refuses the same values on **H21** (a bond post with no funding
+  spend). Recorded as divergences with `Outcome::RefusedOn(H21)`; the owner
+  is the FOLLOWUPS row for `Transaction::full/pruned` (the pruned form made
+  unrepresentable at the boundary, not refused twice for two reasons).
+- **One arm is dead.** `{n_ki} key-image input(s) but no prunable proof`
+  cannot fire: a key image forces `n_out >= 2` at the context-free `>= 2`
+  arm, and `n_out != 0` fires the fee-only arm's *outputs* check first.
+  Classified **invariant** with the argument in its note. The proof's
+  non-emptiness is `CEN-I14`'s, held elsewhere.
+- **The holdings shard-set bound has no census row.** `MAX_HOLDINGS_SHARDS`
+  (4 096) and duplicate-freeness are `ShardSet::new`'s (`bond_wire.rs`),
+  which `ARCHIVAL_BOND_ADD_ADMISSION.md` names as *the one fallible
+  constructor*; the wire mirrors it so two decoders cannot diverge, and the
+  wire's own doc calls it a *consensus bound*. No `CEN-` row names it.
+  Classified **parse** (a codec's well-formedness, owned by the codec's own
+  gate) rather than keyed to the nearest J-row — the Q8 mis-keying this
+  slice's review named. Whether the census owes a row is the census's
+  question; recorded here so it is asked, not assumed.
+- **The signature-blob cap has no census owner either.** `CEN-I16` names
+  `PQC_MAX_PUBLIC_KEY_BLOB` as the multisig key blob's bound (→ `Rule(I16)`);
+  nothing names `PQC_MAX_SIGNATURE_BLOB`. The wire's doc calls both DoS
+  ceilings *decoupled from correctness*. Classified **parse**, note says
+  why; same disposition as the shard bound.
+- **`CEN-I5` subsumes `CEN-H10` on the wire.** The twin has one arm
+  (*strictly descending*), which refuses a repeat as a non-descent. Keyed
+  to I5 (pending); H10 is landed in the crate and refuses the repeat on its
+  own row. When I5 lands the arm's row asserts the crate refuses the
+  ascending pair on I5 — the self-arming form.
+- **`CEN-I6`'s arm is the one H24's proxy waits on.** The table row for
+  *non-empty key_offsets* is `Rule(I6)`, pending; when I6 flips, this row
+  demands that `tx_form` refuse the offsets fixture on I6 — the assertion
+  §8 Q7's proxy says must be added by hand to `h24_…`. The conformance row
+  arms itself; the H24 test still carries its instruction because its
+  subject is H24's vacuity, which is a different sentence.
+
 ### 3.2 `validate` runs `tx_form` on the coinbase
 
 `validate.rs:315–327` judges `TxSlot::Miner` through `judge_tx` (→
@@ -308,8 +364,8 @@ against the wire crate's constant (Q5 as ruled — a test, not a comment).
 | 4 | Structural rows — **LANDED `cf9985aa2`**: H10, H15 (Null half; Q9), H20, H19's layout half (refuses under `H19`, records nothing; the row stays `pending` for slice 6's verification half) | H21/H22 are shape *and* balance in one row each and land whole in commit 5. What the layout rule found: every spend fixture in all three crates was the storage-pruned form (outputs, no prunable region, no `pqc_auths`) — the skeleton a pruned node keeps, not a wire transaction — and round-tripped only because the codec must accept skeletons. Fixed with per-input filler auths, a canonical-layout filler BP+, one pseudo-out per spend; a spend is therefore 4-part, the store's `spend_with_pqc_auth` deleted, the 3-part non-coinbase body in A3/T3/T4 is the serve-credit fixture. Root cause filed in FOLLOWUPS: `Transaction` conflates the wire form and the pruned form |
 | 5 | Adopted crypto rows | H7, H17 (listed txs; the coinbase half is F10), H18, the H20–H22 balances — all through `shekyl-ct-balance`. **Fixture pass (2026-09-23), fixed in this commit, not ahead of it — the rule's landing is what shows it catching something real:** the other crates' fixtures fill *structure*-typed values with byte patterns, which a hash or a root tolerates (a bag of bytes) and a curve point does not: `chain-ingest/src/test_support.rs:131` `key: [0x80; 32]` and `:142` `commitments: vec![[0xa0; 32]]`; `chain-store/src/store/connect_fixtures.rs:54` `key: [0x80 + i; 32]` and `:66` `commitments: [0xa0 + i; 32]` (N distinct per output); `chain-store/src/store/output_read_tests.rs:193–194` the recorded `[0x81; 32]` / `[0xa1; 32]` pins that follow from them. H7 refuses the keys, H17 the masks; and **H11 (commit 6) refuses every store spend fixture's key image** — `connect_fixtures.rs:42` `spend(key_image: u8, …)` writes `[fill; 32]` by its *signature*, so that fix changes an API used across the store's connect and pop tests, not a handful of literals. **One table, not three** (ruled 2026-09-23): output keys, commitments and key images all want distinct canonical points and no 4.H rule links them, so a single pinned table `fixture::POINTS` serves all three; ceiling **16** (the wire's `MAX_OUTPUTS`; the widest store fixture has 2; key images draw from the same table at other indices). The extension point is `harness::fixture`'s `G`/`2·G`, pinned by `miner_tests::fixture_points_are_what_they_claim` through `shekyl_ct_balance::check_output_keys` / `check_commitment_masks` — the table's gate asserts pointness and pairwise distinctness, which is all a fixture needs of it. **The `output_read_tests.rs:193–194` pins are derived from the table by name, never re-pinned as literals** — an expected-value change is where a pin quietly becomes "the code does what the code does". `reference_block` / roots / hashes stay as they are: bags |
 | 6 | H11 | KI domain: prime-order, ≠ identity — new Rust body on the crate's point primitives, DSV M8's vectors re-derived and pinned |
-| 7 | By-construction entries (Q6, Q7) | H2/H13 (one entry, `TX_VERSION`), H5 script half (`shekyl_wire::Input`), H8, H12 (F8's ground), H15 type half (`shekyl_wire::Ct`), H23 (`from_bytes`), **H24** (I6's exclusion of the input H24 checks). **Q6's condition:** an entry serving N rows names every row in its falsifier's doc and the falsifier has one assertion per distinct vacuity claim, so it fails when *any* served row stops being vacuous; the registry carries the same `(property, falsifier)` on each row |
-| 8 | The §3.1 conformance test (Q1 as ruled) | **Enumerated, not sampled:** every `Err(` site in `shekyl-wire/src/transaction.rs` (59 at `387fa84a9`) is listed in a table in the test module, each classified **parse/IO** (would survive a consensus-rule change — short read, trailing bytes, varint overflow) or **rule → CEN row**; for every rule-classified site the test builds the transaction that trips it and asserts `tx_form` refuses **on that row**. A gate-shaped self-check counts the `Err(` sites in the file and fails when the table's count differs, so a new arm cannot arrive unclassified |
+| 7 | By-construction entries (Q6, Q7) — **LANDED `83d4e6204` + `12a77fb73`** | Registered: H2 and H13 (F2's falsifier), H8 (`h8_the_wire_reads_one_commitment_per_output`), H12 (F8's), H23 (`doctest:tx_form`); `by-construction 4 → 9`. **Not registered, as planned here, and the plan was wrong:** H5's script half and H15's type half are halves of rows already `implemented` — a row has one status; H24 is **bucket 3** and the registry excludes bucket-3 rows by design, so it has no `CenRow` to carry any status (Q7's amendment, §8). **Q6's condition landed as a MECHANISM:** a shared falsifier calls `credited_to_this_falsifier(&[rows…])` and the coverage gate refuses a shared falsifier whose body does not name every served row as `CenRow::<id>` (`check_chain_rules_coverage.py`, selftest green + red) |
+| 8 | The §3.1 conformance test (Q1 as ruled) — **LANDED (this commit)** | `rules/tx_conformance_tests.rs`. **Enumerated:** all **59** `Err(` sites in `shekyl-wire/src/transaction.rs` are rows of one table, checked against the file itself (`include_str!`: the count, and each fragment found as many times as listed). **Four arms, pinned `(parse 15, rule 38, policy 1, invariant 5)`** — the review asked for a third arm so an assertion-shaped site is never forced into the nearer bucket; the classification needed a fourth, because one site (`MAX_TX_EXTRA`) is **CEN-M4**, a policy row: the crate already keeps policy rows in their own enum so one is never counted as consensus, and forcing it into `Rule` would be the mis-keying the third arm exists to prevent. Every in-memory rule arm carries the transaction that trips **it** (the twin's message is matched, placeholder-aware, so an earlier arm firing is a failure); the crate is then held to the row **by the row's registry status** — implemented → refused on that row; by construction → the value does not round-trip the wire; pending → nothing yet, and the assertion **arms itself** when the row flips (no pin to update — the shape H24's proxy could not have). Read-face rule arms must be by-construction rows or mirrored by an in-memory arm keyed to the same row (checked). The baseline (coinbase, two-output spend, serve-credit) passes **both** copies. **Findings the table surfaced** (§3.1.1) |
 | 9 | Docs | This section's landing figures; census 4.H pins re-resolved against `dev` (after TXE if it has landed); `CHAIN_RULES_CRATE.md` §4.6; index; DRS-E6 row; FOLLOWUPS; CHANGELOG |
 
 **H19's verification half** stays `pending` in the registry (Q3 (b)),
@@ -397,7 +453,7 @@ failure text names the mechanism so the red is read as a finding.
 
 ## 8. Questions for the reviewer — Round 0
 
-- **Q1 — the wire twin (§3.1). RULED (a), 2026-09-23 — with the conformance test's subject ENUMERATED, not sampled: all 59 `Err(` sites classified parse/IO or rule→row (§5 commit 8). The finding's weight, as ruled: ~fourteen consensus predicates have two implementations — the wallet's Rust twin and the daemon's C++ — and nothing reconciles them; a transaction one accepts and the other rejects is undetectable today.** Default **(a)**: `tx_form` is the rule of
+- **Q1 — the wire twin (§3.1). RULED (a), 2026-09-23 — with the conformance test's subject ENUMERATED, not sampled: all 59 `Err(` sites classified (§5 commit 8). AMENDED at review before commit 8 (2026-09-23): THREE arms, not two — parse / rule → row / "neither: an invariant" — so an assertion-shaped site is never forced into the nearer bucket and keyed to a row that does not exist (the Q8 mis-keying, 59 times); the count reported as three numbers. LANDED with FOUR: one site is `CEN-M4`, a POLICY row, and the crate keeps policy rows in a separate enum precisely so one is never counted as consensus — `Arm::Policy(PolicyRow)`; pinned `(15, 38, 1, 5)`. Findings: §3.1.1. The finding's weight, as ruled: ~fourteen consensus predicates have two implementations — the wallet's Rust twin and the daemon's C++ — and nothing reconciles them; a transaction one accepts and the other rejects is undetectable today.** Default **(a)**: `tx_form` is the rule of
   record; every row lands row-keyed in `rules/tx.rs`; a conformance test
   in the crate holds the wire twin's refusal arms to named rows; the wire
   twin keeps its wallet callers and a header naming the tie; the wallet →
@@ -457,7 +513,7 @@ failure text names the mechanism so the red is read as a finding.
   falsifier)`; the gate already accepts a repeated falsifier. H10 is
   implemented in slice 5 as its own predicate (cheap, row-keyed) and slice
   6 decides at I5 whether it collapses.
-- **Q7 — H24's status. OVERRIDDEN 2026-09-23: `by_construction`, property = CEN-I6's exclusion of the input H24 checks, not `held_by_cxx` — `held_by_cxx` requires a test showing the holder REJECTS (the condition that found A1/A4 untested), and a rule that cannot fire has no rejection to show; the entry would fail its own condition on arrival.** It is deletion residue with a named disposition
+- **Q7 — H24's status. OVERRIDDEN 2026-09-23: `by_construction`, property = CEN-I6's exclusion of the input H24 checks, not `held_by_cxx` — `held_by_cxx` requires a test showing the holder REJECTS (the condition that found A1/A4 untested), and a rule that cannot fire has no rejection to show; the entry would fail its own condition on arrival. AMENDED at commit 7 and the amendment TAKEN AS LANDED (review, 2026-09-23): H24 is BUCKET 3 and the registry excludes bucket-3 rows by design, so there is no `CenRow::H24` to carry `by_construction` or any status — that is the bucket working, not a gap in it; re-bucketing so an instrument could hold a status would be fitting the subject to the instrument. The FALSIFIER exists anyway (`h24_cannot_fire_on_an_input_i6_admits`), is a LABELLED PROXY (it watches `I6 == Pending` in place of "the offsets fixture is refused", with the failure instruction the only thing stopping the pin being updated instead of the assertion added), and is indexed from BOTH ends: the census cell cites the test, the test names `CEN-H24` — H24 is outside every counting instrument, and those two are the only things that index it (`12a77fb73`).** It is deletion residue with a named disposition
   (census §10 R5) and can never fire under CEN-I6. The registry today has
   `pending`, `implemented`, `enforced_at`, `by_construction`, `held_by_cxx`.
   Default: **`held_by_cxx`** until cutover deletes the C++ body, with the

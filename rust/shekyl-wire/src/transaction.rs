@@ -1993,6 +1993,19 @@ impl Transaction {
     /// forward obligation) is **pinned exactly** here: `pseudo_outs.len()` must
     /// equal the `ToKey` input count for every shape, bond-post included
     /// (`GENESIS_TX_WIRE_FORMAT.md` §1.1 coupling closure, 2026-07-05).
+    ///
+    /// **Not the rule of record.** The consensus predicates this and
+    /// [`Self::validate_context_free_pruned`] evaluate are owned by
+    /// `shekyl_chain_rules::tx_form`, row-keyed to `CONSENSUS_RULE_CENSUS.md`
+    /// §4.H (`CHAIN_RULES_SLICE_5.md` §3.1, Q1 ruled (a), 2026-09-23). This is
+    /// the wallet's pre-check — what the pool will refuse, said before the
+    /// submit — and it is held to the rule of record by an **enumerated**
+    /// conformance test in that crate
+    /// (`shekyl-chain-rules/src/rules/tx_conformance_tests.rs`): every
+    /// error-returning site in this file is classified parse / rule → census row / policy →
+    /// policy row / invariant, and every rule arm's tripping transaction is
+    /// asserted to reach it and to be refused by `tx_form` on the named row.
+    /// Adding a refusal arm here without a row there fails that test.
     pub fn validate(&self) -> io::Result<()> {
         self.validate_context_free_pruned()?;
         // Prunable-coupled checks: spend-proof completeness that needs the full,

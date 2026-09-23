@@ -820,3 +820,7 @@ impl TxRule for H22 {
 #[cfg(test)]
 #[path = "tx_tests.rs"]
 mod tx_tests;
+
+#[cfg(test)]
+#[path = "tx_conformance_tests.rs"]
+mod tx_conformance_tests;
