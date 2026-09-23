@@ -107,21 +107,49 @@ F19's horizon, through the one function this surface mints for it (§12).
 
 ## 4. The batch — an enumeration from `close_height`; no retention exceptions
 
-**The batch.** Once per epoch boundary (`tip % SEB == 0`, after that block
-connects), on the single-writer path (`shekyl-chain-ingest`'s connector is
-the natural site; the store exposes the op), and only when
-`current_epoch ≥ 2`: enumerate closed shards upward from the **frontier**
-`k*` — the highest `k` whose `b_k` segment is already absent, found by
-binary search over segment *presence* (§6: presence, never bytes; no stored
-watermark, nothing to drift) — and for each `k > k*` with
-`current_epoch ≥ close_epoch(k) + 2`, `discard(k)`: delete every
-`txs_prunable` and `txs_pqc_auths` row in `[b_k, b_{k+1})` in **one** redb
-transaction. The op is **not journaled** in `undo_log` — a discard is not
-pop-reversible by design (§7). Then retire undo rows below `tip − D_max`
-(§3). Enumeration stops at the first `k` the predicate refuses; shards are
-discarded in order, so "the highest discarded shard" is always
-well-defined and `h_scarce = close_height(k*)` is chain-derivable on every
-node (`PDM-Q5`'s band-2 edge).
+**The batch — the set is named by the epoch; nothing is searched.** The
+daemon has no holdings and no frontier of its own: it has bodies for every
+shard that has not reached its boundary, uniformly. At boundary `E`
+(`tip = E·SEB`, after that block connects; single-writer path —
+`shekyl-chain-ingest`'s connector is the natural site, the store exposes
+the op), for `E ≥ 2`, the set to discard is **named by `E`**:
+
+> `D(E) = { k : close_epoch(k) ∈ [E−3, E−2] }`
+
+— the shards whose `close_height` falls in `[(E−3)·SEB, (E−1)·SEB)`, a
+contiguous range of `k` read off `cumulative_tx_count` and the `b_*` table.
+For each `k ∈ D(E)`, `discard(k)`: delete every `txs_prunable` and
+`txs_pqc_auths` row in `[b_k, b_{k+1})` in **one** redb transaction, not
+journaled in `undo_log` (a discard is not pop-reversible by design, §7).
+Then retire undo rows below `tip − D_max` (§3). Stop. **No frontier, no
+`k*`, no search over presence, no search over anything on disk** — the
+epoch already states the boundary, and the same `D(E)` is computed on
+every node whether it discarded last epoch, skeleton-synced, or just
+booted. *(Superseded 2026-09-22, same day: a first draft enumerated from a
+frontier `k*` found by binary search over segment presence. On a band-1
+node — which never held bodies — every segment is absent, so that search
+names the newest shard and the answer is node-local exactly where it must
+not be. Withdrawn.)*
+
+**Why `[E−3, E−2]` and not `E−2` alone — crash safety without a search.**
+If the batch at `E` dies partway, the shards with `close_epoch = E−2` still
+have some bodies at `E+1`; widening the named set by one epoch catches a
+single missed boundary at the next one, and range-deleting an already-empty
+range is near-free in redb. **A node down two or more boundaries** keeps
+the bodies of every shard with `close_epoch ≤ E−4`, which `D(E)` never
+reaches — and stale bodies are a Q2 falsifier ("retained past the
+boundary") and Q9's disk fingerprint. So the daemon runs a **startup
+catch-up once per process start**: `{ k : close_epoch(k) ≤ E−2 }` at the
+`E` it boots into, the same named-set op over a longer range, still zero
+presence reads, near-free where empty. Its missing bodies it refetches
+through band 2 (Q4); its stale ones it deletes itself.
+
+**`h_scarce`** (`PDM-Q5`'s band-2 edge, and §7's pop floor) is likewise
+named, not searched: **the `close_height` of the last shard with
+`close_epoch(k) ≤ E−2`** — `max { close_height(k) : close_height(k) <
+(E−1)·SEB }`. Stated as `≤ E−2` rather than `= E−2` so an epoch in which
+no shard closed (low tx rate) still yields the honest edge. Chain-derived,
+identical on every node, zero disk reads.
 
 **No retention exceptions — the archiver's store is the wallet's.**
 
@@ -170,8 +198,10 @@ the daemon.
 
 `ChainView` exposes no recorded-body accessor (`PDM-Q-F29`;
 [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §13). **S-PRUNE adds none.**
-Any body read S-PRUNE itself needs (the batch reads segment presence, not
-bytes) is on its own trait, marked above-horizon (F29 wrote "above-`W`"; the
+Any body read S-PRUNE itself needs is on its own trait (the batch currently
+needs **none** — it deletes named ranges; "presence, never bytes" states
+what it *may* read if it ever must, and §8 makes a presence read that
+*selects* what to discard red), marked above-horizon (F29 wrote "above-`W`"; the
 horizon is now the body horizon), and never reachable from
 `shekyl-chain-rules`. Falsifier: a `ChainView` method returning recorded tx
 bytes with no `CenRow`, or an S-PRUNE type imported by the rules crate
@@ -180,10 +210,11 @@ bytes with no `CenRow`, or an S-PRUNE type imported by the rules crate
 ## 7. Pops — the check, and what S-PRUNE does not do
 
 **The pop check reads `close_height` only.** `pop` refuses any target at
-or below the highest discarded shard's `close_height`:
-`StoreCannot::PopBelowFloor { floor: close_height(k*) + 1 }`. It needs no
-epoch arithmetic and no stored frontier — `k*` is §4's binary search over
-presence. `PDM-Q2` (2026-09-22) makes this the checked half of "pops are
+or below `h_scarce`, the `close_height` of the last shard with
+`close_epoch(k) ≤ current_epoch − 2` (§4):
+`StoreCannot::PopBelowFloor { floor: h_scarce + 1 }`. Chain-named — no
+stored frontier, no presence read; the floor is the same number on a node
+that has discarded and on one that never held a body. `PDM-Q2` (2026-09-22) makes this the checked half of "pops are
 unaffected"; the argued half is `SEB > D_max`, const-asserted at `D_max`'s
 home (§3). Together they replace the 2026-09-18 inequality `W ≥ D_max`,
 which was argued and asserted nowhere.
@@ -207,8 +238,11 @@ durable archival serving state on a daemon — a body past its shard's
 boundary, a persona id, a retention list (#775 / Q9); a discard that runs
 while the serve-credit admission verifier still derives `R_k` from a frozen
 segment (§11 — moot before the E3 cutover, and stated so the sequencing is
-the mechanism); and a stored discard watermark or frontier cell — the
-frontier is derived (§4), a cell would be a second source.
+the mechanism); **a stored discard watermark or frontier cell, or any batch
+read of segment presence that selects what to discard** — the set is named
+by the epoch (§4), and either would be a second, node-local source; and a
+node with a body for a shard whose `close_epoch ≤ current_epoch − 2` after
+its startup catch-up has run.
 
 ## 9. Sequencing
 
@@ -262,7 +296,7 @@ have no Rust writer here); what this surface owes it is the function.
 
 | Input | Value / source | Status |
 | --- | --- | --- |
-| Body horizon | the epoch boundary after the shard's freeze epoch — `current_epoch ≥ close_epoch(k) + 2`; a rule, **no constant** | ruled (`PDM-Q2`, 2026-09-22); `W` retired |
+| Body horizon | the epoch boundary after the shard's freeze epoch — `current_epoch ≥ close_epoch(k) + 2`; the batch's set at `E` is `{k : close_epoch(k) ∈ [E−3, E−2]}`; a rule, **no constant, no frontier** | ruled (`PDM-Q2`, 2026-09-22); `W` retired |
 | `SEB` | `settlement_epoch_blocks = 10,000`; `settlement_epoch_at_height(h) = h / SEB` (`consensus_state.rs:27`) | pinned |
 | `D_max` | 720; **`SEB > D_max` const-asserted beside it** | PROVISIONAL, Round-2 gate (`PDM-Q11`); **constant unbuilt — owed** at `CEN-E2` |
 | Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **owed**, minted by this surface's A4 commit, consumed by S-ARCH (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |

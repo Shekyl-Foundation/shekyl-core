@@ -207,8 +207,9 @@ per-daemon input (Q9: no exceptions). The frontier shard — no `b_{k+1}`
 yet — has no `close_epoch` and is never a candidate.
 
 **Enforcement point** unchanged: asserted where the discard is decided —
-S-PRUNE's per-epoch batch, which enumerates the closed shards from
-`close_height` — never discovered downstream; a violated predicate is a
+S-PRUNE's per-epoch batch, whose set at boundary `E` is **named by `E`** —
+`{k : close_epoch(k) ∈ [E−3, E−2]}`, read off `cumulative_tx_count`; no
+frontier, no search over disk (skeleton §4) — never discovered downstream; a violated predicate is a
 refused discard, not a corrupted write. **The predicate is evaluated at
 discard time and the discard is irreversible.** A reorg across an epoch
 boundary (`≤ D_max` blocks) can move `current_epoch` back by one after a
@@ -224,10 +225,11 @@ text argued the corresponding `W ≥ D_max` and asserted nothing (rule 16's
 corollary: a guarantee with no gate that can fail). This ruling asserts
 both halves: (a) **`SEB > D_max` is const-asserted at `D_max`'s home**
 (`CEN-E2`, Q11 — the constant is unbuilt, so the assertion is owed with
-it; FOLLOWUPS); (b) **`pop` refuses a target at or below the highest
-discarded shard's `close_height`** — `StoreCannot::PopBelowFloor
-{ floor: close_height(k*) + 1 }` for the highest discarded `k*`, read
-from `close_height` only (skeleton §7). A legal reorg that reaches a
+it; FOLLOWUPS); (b) **`pop` refuses a target at or below `h_scarce`**, the
+`close_height` of the last shard with `close_epoch(k) ≤ current_epoch − 2`
+— `StoreCannot::PopBelowFloor { floor: h_scarce + 1 }`, chain-named from
+`close_height` only, never from a stored frontier or a presence read
+(skeleton §7). A legal reorg that reaches a
 discarded body is then a loud refusal, and the inequality that says it
 cannot happen is checked every time it could.
 
@@ -373,8 +375,9 @@ at source.
 **Ruling.** The anchor model as restated 2026-09-13 stands: a release-carried
 checkpoint `C` on the `assumevalid` argument; three bands (`≤ C` skeleton,
 trusted with the binary; `(C, h_scarce]` filled from archivers, where
-`h_scarce` is the `close_height` of the highest discarded shard (*re-keyed
-2026-09-22 from `(C, tip − W]`*, second amendment below); above from
+`h_scarce` is the `close_height` of the last shard with
+`close_epoch(k) ≤ current_epoch − 2` (*re-keyed 2026-09-22 from
+`(C, tip − W]`*, second amendment below); above from
 peers); the tip-relative trust horizon and the operator trust-below
 fallback **REJECTED**. The items it owed:
 
@@ -445,8 +448,10 @@ configuration.
 
 **AMENDMENT 2026-09-22 (second) — band 2 under the epoch horizon.** With
 Q2 re-ruled the same day, band 2's upper bound is no longer `tip − W` but
-**`h_scarce`, the `close_height` of the highest discarded shard** — exact,
-chain-derivable on every node, and blurred only by shard granularity (a
+**`h_scarce`, the `close_height` of the last shard with
+`close_epoch(k) ≤ current_epoch − 2`** — named by the epoch, not read off
+any disk (a band-1 node has never held a body and must get the same number);
+exact, identical on every node, and blurred only by shard granularity (a
 shard that closed in epoch `E−1` may hold transactions from `E−2`; those
 are held too, so `h_scarce` is the honest edge, not `(current_epoch − 1)·SEB`).
 Consequences, each already re-keyed in the bullets above: (i) band 2 is
