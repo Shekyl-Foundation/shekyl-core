@@ -316,11 +316,19 @@ impl TxRule for H16 {
     }
 }
 
-/// CEN-H9: the output amounts sum without overflow (`check_outs_overflow`
-/// → `check_money_overflow`; run on the coinbase from
-/// `prevalidate_miner_transaction`, where CEN-F7 judges the same sum under
-/// its own row). Every transaction. `checked_add`, never saturating: an
-/// overflow is a refusal, not a smaller number.
+/// CEN-H9: the amounts sum without overflow on **both** sides
+/// (`check_money_overflow` = `check_inputs_overflow && check_outs_overflow`,
+/// `cryptonote_format_utils.cpp:593–632`). The input side sums only
+/// `txin_to_key.amount` — `gen` and the three archival vins are skipped,
+/// their value being CT-side or opaque — exactly as the census row states.
+/// Run on the coinbase too (`prevalidate_miner_transaction`, where CEN-F7
+/// judges the output sum under its own row). `checked_add`, never
+/// saturating: an overflow is a refusal, not a smaller number.
+///
+/// The input half was missing at first landing and found in review (#839):
+/// `ToKey.amount` is an arbitrary parsed `u64` the wire admits — FCMP++
+/// gives it no meaning, which is precisely why nothing else bounds it — so
+/// two inputs carrying `u64::MAX` and `1` passed here while the C++ refused.
 pub(crate) struct H9;
 
 impl Rule for H9 {
@@ -331,14 +339,30 @@ impl TxRule for H9 {
     const SCOPE: TxScope = TxScope::All;
 
     fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        let sum = cx
+        let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        let inputs = cx
+            .tx
+            .prefix
+            .inputs
+            .iter()
+            .try_fold(0u64, |acc, input| match input {
+                Input::ToKey { amount, .. } => acc.checked_add(*amount),
+                Input::Gen(_)
+                | Input::ServeCredit { .. }
+                | Input::BondPost(_)
+                | Input::ArchivalRewardEmission { .. } => Some(acc),
+            });
+        if inputs.is_none() {
+            return refuse();
+        }
+        let outputs = cx
             .tx
             .prefix
             .outputs
             .iter()
             .try_fold(0u64, |acc, out| acc.checked_add(out.amount));
-        if sum.is_none() {
-            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        if outputs.is_none() {
+            return refuse();
         }
         Ok(())
     }

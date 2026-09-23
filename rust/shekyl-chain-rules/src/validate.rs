@@ -371,10 +371,23 @@ macro_rules! judge_tx {
 ///
 /// **CEN-H23 holds by construction here** (`by_construction(shekyl_wire::Transaction,
 /// "doctest:tx_form")`): a transaction must deserialize before any rule
-/// judges it, and this function takes a parsed [`Transaction`], not bytes —
-/// an unparseable blob is `Transaction::from_bytes`'s `Err`, at the caller,
-/// and never reaches a rule. The falsifier is the program that must not
-/// compile — the bytes handed straight to the rules:
+/// judges it, and this function takes a [`Transaction`], not bytes — an
+/// unparseable blob is `Transaction::from_bytes`'s `Err`, at the caller,
+/// and never reaches a rule.
+///
+/// **What that does and does not hold.** It holds that *bytes* cannot reach
+/// the rules unparsed. It does **not** hold that the value *was* parsed:
+/// [`Transaction`] is a public struct with public fields, so a caller can
+/// hand-build one the parser would refuse — a `BondPostKind::Other` carrying
+/// the JoinMarket tag, a PQC blob over the wire's cap — and every production
+/// caller today (the ingest driver, the pool) parses bytes, so none does.
+/// On such a value the wire's `serialize()` / `serialized_len()` `.expect`
+/// the writer's refusal and **panic**, which H1 reaches first (#839 review).
+/// The structural close is the wire's: a parsed-witness constructor
+/// (`Transaction::full` / `pruned`, FOLLOWUPS) so nothing constructs an
+/// unparseable value without naming it — not a second copy of the writer's
+/// invariant here. The falsifier is the program that must not compile —
+/// the bytes handed straight to the rules:
 ///
 /// ```compile_fail
 /// use shekyl_chain_rules::{tx_form, RuleSet, TxSlot};

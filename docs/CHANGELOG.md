@@ -96,7 +96,9 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   `34 → 56` of 153 census rows.
 - The wallet's `shekyl_wire::Transaction::validate` is **not the rule of
   record**: it is a pre-check, held to `tx_form` by a conformance test over
-  all 59 of its refusal arms (parse 15 / rule 38 / policy 1 / invariant 5).
+  all 62 of its refusal arms (parse 16 / rule 40 / policy 1 / invariant 5).
+  Review found H9 summing only the output side; the input side
+  (`check_inputs_overflow`, `ToKey.amount`) now sums too, with its boundary.
   Two divergences recorded, neither changed here: the twin refuses a
   `tx_extra` over the **relay** cap (`CEN-M4`, policy) that consensus
   accepts; and two of its arms guard a value (`prunable: None` on a

@@ -329,6 +329,41 @@ fn h9_output_amounts_that_overflow_are_refused_everywhere() {
     );
 }
 
+/// The input side of H9 (`check_inputs_overflow`): two `ToKey` inputs whose
+/// `amount`s sum past `u64::MAX` are refused at both sites, and only the
+/// `ToKey` amounts count — a boundary pair at exactly `u64::MAX` passes the
+/// rule, and an emission vin beside a `u64::MAX` spend adds nothing to the
+/// sum. `ToKey.amount` carries no meaning under FCMP++, which is why the wire
+/// admits any value in it and why the C++ still sums it (review of #839).
+#[test]
+fn h9_input_amounts_that_overflow_are_refused_everywhere() {
+    let with_amounts = |amounts: &[u64]| {
+        let mut tx = with_inputs(vec![spend(9), spend(10)]);
+        for (input, amount) in tx.prefix.inputs.iter_mut().zip(amounts) {
+            if let Input::ToKey { amount: a, .. } = input {
+                *a = *amount;
+            }
+        }
+        tx
+    };
+    let overflowing = with_amounts(&[u64::MAX, 1]);
+    refused_lone(&overflowing, CenRow::H9);
+    refused_listed(&overflowing, CenRow::H9);
+    // The boundary and the exemption, on the rule alone: H9 is the only
+    // subject here, and the fixture's second input has no auth or pseudo-out.
+    let mut coverage = RuleCoverage::EMPTY;
+    let at_max = with_amounts(&[u64::MAX, 0]);
+    let cx = TxContext::derive(&at_max, TxSlot::Lone, &mut coverage).expect("a spend");
+    H9::check(&cx).expect("u64::MAX exactly is not an overflow");
+    let mut beside_an_emission = with_inputs(vec![spend(9), emission()]);
+    if let Some(Input::ToKey { amount, .. }) = beside_an_emission.prefix.inputs.get_mut(0) {
+        *amount = u64::MAX;
+    }
+    let cx = TxContext::derive(&beside_an_emission, TxSlot::Lone, &mut coverage)
+        .expect("an emission with one fee spend");
+    H9::check(&cx).expect("an archival vin adds nothing to the input sum");
+}
+
 // ---- CEN-H14 ------------------------------------------------------------
 
 /// A non-zero output amount is refused on H14 for every non-coinbase shape

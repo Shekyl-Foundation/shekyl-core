@@ -269,9 +269,27 @@ pub(super) fn h6_emission_beside_a_bond_post() -> Transaction {
     tx
 }
 
+/// Two outputs whose amounts sum past `u64::MAX`. Reaches the twin's
+/// overflow arm before the `gen`/archival classification (it is the third
+/// check), and `tx_form`'s H9 before H14 would see the loud amounts.
+pub(super) fn h9_output_amounts_overflow() -> Transaction {
+    let mut tx = spend2();
+    tx.prefix.outputs[0].amount = u64::MAX;
+    tx.prefix.outputs[1].amount = 1;
+    tx
+}
+
 pub(super) fn m4_extra_over_the_relay_cap() -> Transaction {
     let mut tx = spend2();
     tx.prefix.extra = vec![0xEE; MAX_TX_EXTRA + 1];
+    tx
+}
+
+/// The baseline spend with its `extra` emptied: two outputs and no `0x06`
+/// / `0x07` fields, which CEN-I19 refuses as `Missing`.
+pub(super) fn i19_no_pqc_fields() -> Transaction {
+    let mut tx = spend2();
+    tx.prefix.extra.clear();
     tx
 }
 

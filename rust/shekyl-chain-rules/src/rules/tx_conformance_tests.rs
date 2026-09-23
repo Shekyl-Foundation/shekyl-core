@@ -11,10 +11,13 @@
 //! reconciled with nothing: a transaction one copy accepts and the other
 //! refuses was undetectable. Q1 made `tx_form` the rule of record and
 //! demoted the twin to a conformance-tested pre-check. This module is the
-//! test — **enumerated, not sampled**: every `Err(` site in
-//! `shekyl-wire/src/transaction.rs` is a row of [`SITES`], classified, and
-//! the table's shape is checked against the file itself (`include_str!`),
-//! so an arm cannot arrive unclassified.
+//! test — **enumerated, not sampled**: every refusal site in
+//! `shekyl-wire/src/transaction.rs` — every `io::Error::other` construction,
+//! however spelled, and every `Err(PrunedError)` — is a row of [`SITES`],
+//! classified, and the table's shape is checked against the file itself
+//! (`include_str!`), so an arm cannot arrive unclassified. (The first
+//! landing keyed the population on `Err(` and missed three arms spelled
+//! `.map_err(..)?` and `.ok_or_else(..)?`; see the shape test.)
 //!
 //! # Four arms, not three
 //!
@@ -141,9 +144,14 @@ enum Trip {
 }
 
 struct Site {
-    /// A literal fragment of the arm's message — the site's identity in the
-    /// source, and what the twin's refusal is matched against.
+    /// A literal fragment of the arm's SOURCE — its identity in the file.
+    /// For an arm that carries its message inline this is the message, and
+    /// the twin's refusal is matched against it; for an arm that borrows an
+    /// error's `Display` (`.map_err(io::Error::other)?`, `.ok_or_else(..)`)
+    /// it is the source line, and `renders` carries what the refusal says.
     fragment: &'static str,
+    /// What the twin's refusal renders, when that is not `fragment`.
+    renders: Option<&'static str>,
     face: Face,
     arm: Arm,
     trip: Trip,
@@ -155,6 +163,7 @@ struct Site {
 const fn parse(fragment: &'static str, face: Face, note: &'static str) -> Site {
     Site {
         fragment,
+        renders: None,
         face,
         arm: Arm::Parse,
         trip: Trip::None,
@@ -165,6 +174,7 @@ const fn parse(fragment: &'static str, face: Face, note: &'static str) -> Site {
 const fn invariant(fragment: &'static str, face: Face, note: &'static str) -> Site {
     Site {
         fragment,
+        renders: None,
         face,
         arm: Arm::Invariant,
         trip: Trip::None,
@@ -175,6 +185,7 @@ const fn invariant(fragment: &'static str, face: Face, note: &'static str) -> Si
 const fn read_rule(fragment: &'static str, row: CenRow, note: &'static str) -> Site {
     Site {
         fragment,
+        renders: None,
         face: Face::Read,
         arm: Arm::Rule(row),
         trip: Trip::None,
@@ -191,6 +202,27 @@ const fn rule(
 ) -> Site {
     Site {
         fragment,
+        renders: None,
+        face,
+        arm: Arm::Rule(row),
+        trip: Trip::Lone(trip, Expect::FromRegistry),
+        note,
+    }
+}
+
+/// A rule arm whose refusal borrows another error's `Display`: `fragment`
+/// is the source line, `renders` the text the refusal carries.
+const fn rule_rendering(
+    fragment: &'static str,
+    renders: &'static str,
+    face: Face,
+    row: CenRow,
+    trip: fn() -> Transaction,
+    note: &'static str,
+) -> Site {
+    Site {
+        fragment,
+        renders: Some(renders),
         face,
         arm: Arm::Rule(row),
         trip: Trip::Lone(trip, Expect::FromRegistry),
@@ -206,6 +238,7 @@ const fn coinbase_rule(
 ) -> Site {
     Site {
         fragment,
+        renders: None,
         face: Face::Memory,
         arm: Arm::Rule(row),
         trip: Trip::Coinbase(trip, Expect::FromRegistry),
@@ -222,6 +255,7 @@ const fn diverges(
 ) -> Site {
     Site {
         fragment,
+        renders: None,
         face: Face::Memory,
         arm,
         trip: Trip::Lone(trip, Expect::Diverges { note, outcome }),
@@ -229,7 +263,7 @@ const fn diverges(
     }
 }
 
-/// Every `Err(` site in `shekyl-wire/src/transaction.rs`, in file order.
+/// Every refusal site in `shekyl-wire/src/transaction.rs`, in file order.
 /// The count is checked against the file; a new arm fails the shape test
 /// until it has a row here.
 const SITES: &[Site] = &[
@@ -299,7 +333,7 @@ const SITES: &[Site] = &[
     invariant(
         "BondPostKind::Other must not use the JoinMarket tag \\",
         Face::Read,
-        "`write`'s guard against emitting a blob `read` would mis-parse: a construction the wire cannot carry, refused at the writer",
+        "`write`'s guard against emitting a blob `read` would mis-parse: a construction the wire cannot carry, refused at the writer. NOTE `serialize()` / `serialized_len()` `.expect` this refusal, so a hand-built value reaching `tx_form`'s H1 panics — the parsed-witness constructor (FOLLOWUPS `Transaction::full/pruned`) is what closes it; no production caller hand-builds",
     ),
     rule(
         "bond_post hybrid_public_key {} != canonical",
@@ -396,6 +430,13 @@ const SITES: &[Site] = &[
         "the in-memory face of the max-amounts clause",
     ),
     rule(
+        "output amounts overflow u64 (check_money_overflow parity)",
+        Face::Memory,
+        CenRow::H9,
+        h9_output_amounts_overflow,
+        "spelled `.ok_or_else(..)?`, not `Err(`: the arm the first population key missed (#839 review). The output half of H9; the twin has no input-side arm — the C++ `check_inputs_overflow` is the crate's alone",
+    ),
+    rule(
         "gen input must be the sole input",
         Face::Memory,
         CenRow::H5,
@@ -443,6 +484,19 @@ const SITES: &[Site] = &[
         m4_extra_over_the_relay_cap,
         Outcome::Accepted,
         "CEN-M4 is a relay cap (tx_pool.cpp), flagged P: `consensus side has no tx_extra bound beyond CEN-H1`. The twin refuses what consensus accepts; a wallet pre-check may, and the census row it answers to is the policy one",
+    ),
+    parse(
+        "parse_tx_extra(&self.prefix.extra).map_err(io::Error::other)?",
+        Face::Memory,
+        "spelled `.map_err(io::Error::other)?`, not `Err(` (#839 review). An `extra` that does not parse — an unknown tag, a truncated field — has no decoding under any rule set; the wire owns the tag set",
+    ),
+    rule_rendering(
+        "check_tx_extra_shape(&fields, n_out, subject).map_err(io::Error::other)?",
+        "tx_extra {} missing on a transaction with outputs",
+        Face::Memory,
+        CenRow::I19,
+        i19_no_pqc_fields,
+        "spelled `.map_err(io::Error::other)?`, not `Err(` (#839 review). One site, two rows: CEN-I19's PQC field shape on every transaction, and — with `ExtraSubject::Coinbase` — CEN-I20's coinbase grammar (TXE, `50256487f`). Keyed to I19, the arm every transaction reaches; I20's coinbase face is the same call",
     ),
     rule(
         "tx size {size} exceeds {MAX_TX_SIZE}",
@@ -663,8 +717,9 @@ fn twin_refuses_on(site: &Site, tx: &Transaction) {
         .validate()
         .expect_err("the twin refuses the tripping transaction");
     let msg = err.to_string();
+    let expected = site.renders.unwrap_or(site.fragment);
     assert!(
-        rendered_from(site.fragment, &msg),
+        rendered_from(expected, &msg),
         "the twin refused {:?} on another arm: {msg}",
         site.fragment
     );
@@ -739,19 +794,34 @@ fn run(site: &Site) {
 
 // ---- the tests --------------------------------------------------------------
 
-/// The table is the file: one row per `Err(` site, each fragment found as
+/// The table is the file: one row per refusal site, each fragment found as
 /// many times as it is listed, and the four counts pinned. A new arm in the
 /// twin fails here until it has a row.
+///
+/// **The population key is the error's construction, not the `Err(`
+/// keyword.** Every refusal in the twin builds an `io::Error::other` — as
+/// `return Err(io::Error::other(..))`, as `.map_err(io::Error::other)?`, or
+/// as `.ok_or_else(|| io::Error::other(..))?` — or returns `PrunedError`.
+/// The first landing counted `Err(` and found 59; three arms spelled the
+/// other two ways were outside the count, and the table matched the count
+/// because both sides used the same key — the query narrower than the
+/// subject, invisible because it succeeded (#839 review). Counting the
+/// construction finds 62.
 #[test]
 fn every_refusal_arm_of_the_twin_is_classified() {
-    let err_sites = TWIN_SOURCE.matches("Err(").count();
+    let constructions = TWIN_SOURCE.matches("io::Error::other").count();
+    let pruned = TWIN_SOURCE.matches("Err(PrunedError)").count();
+    let refusal_sites = constructions + pruned;
     assert_eq!(
-        err_sites,
+        refusal_sites,
         SITES.len(),
-        "shekyl-wire/src/transaction.rs has {err_sites} `Err(` sites and the table has {} rows: \
-         classify the new arm (parse / rule → row / policy → row / invariant)",
+        "shekyl-wire/src/transaction.rs has {refusal_sites} refusal sites ({constructions} \
+         `io::Error::other` constructions + {pruned} `Err(PrunedError)`) and the table has {} \
+         rows: classify the new arm (parse / rule → row / policy → row / invariant)",
         SITES.len()
     );
+    // The old key, kept as a floor: every `Err(` is still one of the above.
+    assert!(TWIN_SOURCE.matches("Err(").count() <= refusal_sites);
     for site in SITES {
         let listed = SITES.iter().filter(|s| s.fragment == site.fragment).count();
         let found = TWIN_SOURCE.matches(site.fragment).count();
@@ -768,10 +838,11 @@ fn every_refusal_arm_of_the_twin_is_classified() {
     let invariant = count(|a| matches!(a, Arm::Invariant));
     assert_eq!(
         (parse, rule, policy, invariant),
-        (15, 38, 1, 5),
-        "the four counts (parse, rule, policy, invariant) moved — re-derive them, do not re-pin"
+        (16, 40, 1, 5),
+        "the four counts (parse, rule, policy, invariant) moved — re-derive them, do not re-pin \
+         (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened)"
     );
-    assert_eq!(parse + rule + policy + invariant, 59);
+    assert_eq!(parse + rule + policy + invariant, 62);
 }
 
 /// Shape: a trip is a rule or a policy arm's; a rule arm without one is a

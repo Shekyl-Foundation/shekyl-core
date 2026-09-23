@@ -1105,9 +1105,11 @@ second lines behind the belt and the type shapes, not gates.
   fixture labelled valid passes under current coverage, and a red on an
   untouched fixture is a finding, not a fixture error.
 - **the wire twin's conformance** (`rules/tx_conformance_tests.rs`, slice 5
-  Q1): every `Err(` site of `shekyl-wire/src/transaction.rs` is a row of one
-  table checked against the file itself; four arms pinned
-  `(parse 15, rule 38, policy 1, invariant 5)`. An in-memory rule arm carries
+  Q1): every refusal site of `shekyl-wire/src/transaction.rs` — every
+  `io::Error::other` construction however spelled, plus `Err(PrunedError)`
+  — is a row of one table checked against the file itself; four arms pinned
+  `(parse 16, rule 40, policy 1, invariant 5)` over 62 sites (records-was:
+  `(15, 38, 1, 5)` over the 59 `Err(` sites the first key found). An in-memory rule arm carries
   the transaction that trips **it** and the crate is held to the row by the
   row's registry status — implemented → refused on the row; by construction
   → the value does not round-trip; pending → nothing yet, and the assertion
