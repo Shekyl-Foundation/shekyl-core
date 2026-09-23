@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+### `CT-6` Round 1 disposed — the proving-state round's questions get terminal statuses, per row
+
+- **`CT-6 Q2` RULED — two mechanisms, one reader.** CT-1's segments keep the
+  frozen tier; height-keyed snapshots cover the unfrozen tail; `root_at_count`
+  reads whichever covers the height. Subsuming one into the other would rewrite
+  a landed consensus-adjacent boundary to fix a cache. **The invariant is
+  `total, and identical where both answer`, not `total and non-overlapping`** —
+  the freeze boundary is a *burial condition* joining leaf-count-aligned
+  segments to height-keyed snapshots, and demanding non-overlap would force
+  eviction to track burial in lockstep, re-welding the two mechanisms the
+  ruling separates. Increment 2's red-bite states it in that form.
+- **`CT-6 Q3` RULED, scoped to the wallet's single proving state.** The scope is
+  part of the ruling, because **`identity-free` is a claim about the bytes,
+  never about access**: public content does not make the file carrying it
+  shared. Unscoped, the default would have forced either a read of another
+  identity's sealed file — `WSS-13` relocated — or a duplicate of the public
+  state. The clarification lands on `CT-6` C6 and on `WALLET_SIDE_STORE.md`
+  §6.3.3 together.
+- **`CT-6 Q5` CLOSED by dissolution.** `P` proves nothing as a distinct actor,
+  the proving state is identity-blind, and no second capture side exists — so
+  the question has no subject. Recorded as a *dissolution* rather than a
+  negative ruling because nothing was weighed, with the rule-21 reopener
+  attached to the dissolution itself rather than left as a live question.
+  Increment 5's gate drops with it, and the **`Q3`←`Q5` graph inversion** — a
+  question scheduled after the one that depended on it — is recorded as a graph
+  defect rather than quietly re-ordered.
+- **`Q1` and `Q4` are PENDING AS DERIVATIONS, and the banner says so per row.**
+  `s` is not a stated judgment: it is the largest spacing whose worst-case
+  rewind fits the budget already ruled at `WSS` §6.3.4 row 2, and two of its
+  three terms fall out of the bench's per-iteration series. `Q4`'s threshold is
+  pre-registered but its field measures a **quotient of the spend replay**
+  (`spend_edge.rs:386`), a legitimate pre-build estimate and an illegitimate
+  grade afterwards — so the pre-registration carries its own condition that
+  increment 4 re-derives the field from the built advance first. **A banner
+  reading "ruled" over either row would put the map ahead of the territory.**
+- **Index:** the `CT-1…CT-5` family row is **amended** to `CT-1…CT-6` (rule 94
+  §1) rather than added beside — `check_index_prefix_uniqueness` holds one row
+  per prefix and would read a separate row as a `CT` collision.
+
 ### Daemon store — the C++ tx-data prune is gone; S-PRUNE starts clean
 
 - **`prune_tx_data` and everything it owned are deleted.** The depth-based
@@ -281,6 +320,17 @@
 
 ### Consensus
 
+- **`tx_extra` tags `0x05` and `0x08` are deleted; a transaction carrying
+  either is unparseable.** `0x05` (`PQC_OWNERSHIP`, a per-output
+  `(scheme_id, group_id)` entry) had no producer and no reader — the
+  ownership binding it predates is `PL-D3`'s in-circuit leaf commitment, and
+  group identity is the address fingerprint (`PQC_MULTISIG.md` §5.3) —
+  REJECTED, byte retired beside `0x03`/`0xDE`. `0x08` (`MULTISIG_MIGRATION`)
+  is RESERVED in the spec's table only; its constant, struct and variant are
+  gone until the migration transaction is designed. `0x09` / `0x0A` (multisig
+  view-tag hints and spend-auth pubkeys) stay, with their producer named at
+  the declaration: the multisig receive path (`PQC_MULTISIG.md` §7.4). No
+  genesis or existing-block bytes change — nothing ever emitted the two tags.
 - **Circulating supply is `coins_generated − total_burned`, and the fee-burn /
   emission-split shims hold no rule content (DRS-E6 slice 4 precursor).**
   FL-R16c's ruled definitional defect is closed: the burn ratio's supply

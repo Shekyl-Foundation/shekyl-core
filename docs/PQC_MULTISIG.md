@@ -643,11 +643,17 @@ in design §0.5 — `B` + `Y_group` + N×KEM once MSW-8 lands).
 outputs. Wallets MUST reject any single-sig-shaped output that contains
 this tag.
 
-**Reserved tags (do not use in V3.1):**
+**Reserved tags (do not use):**
 
 | Tag | Reserved for |
 |---|---|
-| 0x08 | `TX_EXTRA_TAG_MULTISIG_MIGRATION` (V3.2 group rotation / migration tx) |
+| 0x08 | `TX_EXTRA_TAG_MULTISIG_MIGRATION` — the group-rotation / migration transaction, producer undesigned. **RESERVED in this table only** (rule 23, 2026-09-22): the code constant, struct and variant are deleted, and the byte parses as unknown until the producer's design mints them. |
+
+**Retired tag:** `0x05` (`TX_EXTRA_TAG_PQC_OWNERSHIP`, a per-output
+`(scheme_id, group_id)` entry) is **REJECTED 2026-09-22** — no producer, no
+reader; superseded by `PL-D3`'s in-circuit leaf-commitment binding (§7.5) and
+by the address fingerprint as group identity (§5.3). The byte stays retired
+in `tx_extra.h` beside `0x03` / `0xDE`.
 
 ### 7.5 Spend-time consensus binding
 
@@ -676,8 +682,10 @@ scheme_id=1 against multisig-shaped blobs.
 **Defense-in-depth wiring fixes** (no consensus rule change, but explicit
 enforcement of rules already implicitly guaranteed):
 
-- `blockchain.cpp:3768` SHOULD pass `expected_scheme_id` derived from
-  the output's `tx_extra_pqc_ownership` to `verify_transaction_pqc_auth`
+- ~~`blockchain.cpp:3768` SHOULD pass `expected_scheme_id` derived from
+  the output's `tx_extra_pqc_ownership` to `verify_transaction_pqc_auth`~~ —
+  **retired 2026-09-22:** tag `0x05` is deleted (§7.4, *Retired tag*); the
+  scheme is bound by the leaf commitment, not by a per-output entry.
 - ~~`rust/shekyl-ffi/src/lib.rs` SHOULD pass `expected_group_id` to
   `verify_multisig` when `scheme_id == 2`~~ — **retired (§5.3):** the
   `expected_group_id` parameter and check 9 are deleted; group identity
@@ -1730,7 +1738,7 @@ stream**, not as "same privacy as solo at small volume."
 | `group_version = 0x01` | V3.1; higher values for future rotated groups |
 | `spend_auth_version = 0x02` | **Option E′** (15.4a threshold classical SAL on `y`). **`0x01` never issued.** Higher values only for a later mutually-distrusting / lattice-auth path — do not overload `0x02`. |
 | HRP `shekyl1n...` | Rotated-key multisig (V3.2+) |
-| `TX_EXTRA_TAG_MULTISIG_MIGRATION (0x08)` | V3.2 migration transactions |
+| `TX_EXTRA_TAG_MULTISIG_MIGRATION (0x08)` | migration transactions — reserved slot in §7.4's table, no code symbol until designed |
 | Message type `0x0A` (RotationIntent) | V3.2 full rotation protocol |
 
 > **Superseded by group_id deletion (2026-07-18, MS-5 PR-B).** Items 1–3
@@ -2017,7 +2025,7 @@ rust/shekyl-crypto-pq/src/multisig_receiving.rs
 `src/cryptonote_basic/tx_extra.h`:
 - `TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS = 0x09`
 - `TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS = 0x0A`
-- Reserved: `TX_EXTRA_TAG_MULTISIG_MIGRATION = 0x08`
+- Reserved (spec table only, no code symbol — §7.4): `0x08`
 
 ### 16.3 Defense-in-depth wiring fixes
 

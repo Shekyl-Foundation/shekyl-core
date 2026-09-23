@@ -10,8 +10,8 @@
 //! output count). A synthetic case exercises the other field kinds.
 
 use shekyl_wire::tx_extra::{
-    self, PqcOwnershipEntry, TxExtraField, HYBRID_KEM_CT_BYTES, ML_KEM_768_CT_BYTES,
-    PQC_LEAF_ENTRY_LEN, TX_EXTRA_TAG_NONCE,
+    self, TxExtraField, HYBRID_KEM_CT_BYTES, ML_KEM_768_CT_BYTES, PQC_LEAF_ENTRY_LEN,
+    TX_EXTRA_TAG_NONCE,
 };
 use shekyl_wire::Block;
 
@@ -65,11 +65,6 @@ fn synthetic_tx_extra_field_kinds_round_trip() {
     let fields = vec![
         TxExtraField::PubKey([0x11; 32]),
         TxExtraField::AdditionalPubKeys(vec![[0x22; 32], [0x23; 32]]),
-        TxExtraField::PqcOwnership(vec![PqcOwnershipEntry {
-            output_index: 0,
-            scheme_id: 1,
-            group_id: [0u8; 32],
-        }]),
         TxExtraField::Nonce(vec![0xAB, 0xCD, 0xEF]),
         // two outputs' worth of 0x06 / 0x07 payloads
         TxExtraField::PqcKemCiphertext(vec![0x44; HYBRID_KEM_CT_BYTES * 2]),
@@ -94,6 +89,26 @@ fn synthetic_tx_extra_field_kinds_round_trip() {
 fn unknown_tag_is_rejected() {
     let err = tx_extra::parse(&[0xFE, 0x01, 0x02]).expect_err("unknown tag must be rejected");
     assert!(err.to_string().contains("unknown tag"), "unexpected: {err}");
+}
+
+/// The retired bytes stay retired: the inherited merge-mining (`0x03`) and
+/// minergate (`0xDE`) tags, the rejected PQC-ownership entry (`0x05`) and the
+/// reserved multisig-migration slot (`0x08`) all parse as unknown. There is
+/// no generic skip, so a blob carrying one is unparseable — a later tag
+/// cannot reuse a byte old software gave a meaning to (`tx_extra.h`).
+#[test]
+fn retired_and_reserved_tags_parse_as_unknown() {
+    for tag in [0x03u8, 0x05, 0x08, 0xDE] {
+        // A plausible length-prefixed payload after the tag, so the refusal
+        // is the tag's and not a truncation's.
+        let Err(err) = tx_extra::parse(&[tag, 0x02, 0xAA, 0xBB]) else {
+            panic!("tag {tag:#04x} must not parse");
+        };
+        assert!(
+            err.to_string().contains("unknown tag"),
+            "tag {tag:#04x}: unexpected: {err}"
+        );
+    }
 }
 
 #[test]

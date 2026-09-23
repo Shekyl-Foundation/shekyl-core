@@ -1,9 +1,16 @@
 # CT-6 — the proving-state discharge
 
-**Status:** DESIGN ROUND — **open**, awaiting ruling on `CT-6 Q1…Q6` (§5).
-Pinned at `dev@91705e5882` (2026-09-20). **Product of this round is a contract
-plus a work breakdown; it authorizes no implementation.** Each increment in §6
-is separately authorized.
+**Status:** DESIGN ROUND — **Round 1 disposed 2026-09-22**. Every question in
+§5 carries a terminal status *in its own row*; the round holds no blanket
+"ruled". **`Q2` and `Q3` RULED; `Q5` CLOSED by dissolution; `Q6` a named
+dependency; `Q1` and `Q4` PENDING AS DERIVATIONS with their inputs named** —
+`Q1` on the bench's per-iteration series, `Q4` on the re-pointed advance field.
+A derivation whose inputs are named and unmeasured is not a ruling, and the
+banner says so rather than letting the map run ahead of the territory.
+Opened and pinned at `dev@91705e5882` (2026-09-20); disposed against
+`dev@5b2d4c6d6`. **Product of this round is a contract plus a work breakdown;
+it authorizes no implementation.** Each increment in §6 is separately
+authorized.
 
 **Design of record:** [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.3 —
 *the principal's proving state is not a store* (`WSS-Q1`(b), RULED 2026-09-19,
@@ -205,9 +212,12 @@ This does **not** dissolve the concern, it relocates it: §6.3.3 states the
 identity-split discipline (*"the frontier advance is public and identity-free;
 path capture is a per-identity filter over the same public stream"*) as the
 answer to `WSS-13`-in-a-new-location. That discipline stands and this round
-inherits it. What is **open** is narrower and is carried as **CT-6 Q5**:
-whether `P` proves its own outputs at all, and therefore whether a second
-capture side exists to build.
+inherits it. What F5 left narrower — whether `P` proves its own outputs at
+all, and therefore whether a second capture side exists to build — was carried
+as **CT-6 Q5** and is **CLOSED by dissolution (2026-09-22, §5)**: `P` proves
+nothing as a distinct actor, so there is no second capture side and the
+question has no subject. F5's reading is unchanged; what changed is that the
+narrower question it opened has since been answered in the negative.
 
 **Already recorded; not re-minted here:** `WSS-12` — `entries` is RAM-resident
 and grows with the chain, *"a device-floor question at the Pi-4 provisioning
@@ -244,25 +254,30 @@ round's fixed points, each inherited from a verified source.
 | **C3** | A snapshot at `h` reproduces `drained_leaf_count_at(drained_through(h))`; root and depth stay pinned to that one `n` | F4; CT-5c Q1 |
 | **C4** | Every horizon **is** `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` read from the JSON authority. No second literal | F2 |
 | **C5** | Reference-height selection is `select_reference_height` / `two_sided_reference_height`, unchanged | F1 |
-| **C6** | The frontier advance is **public and identity-free**; path capture is a per-identity filter over it. No component sees two identities' ownership | §6.3.3 |
+| **C6** | The frontier advance is **public and identity-free**; path capture is a per-identity filter over it. No component sees two identities' ownership. **`identity-free` is a claim about the bytes, never about access**: that the content reveals no ownership does not make the file carrying it shared, and a design that reads public content out of another identity's sealed file is `WSS-13` relocated, not C6 satisfied | §6.3.3 |
 | **C7** | A reorg deeper than the horizon **refuses**; it never silently produces a wrong tree, and it says so as a rule-82 failure mode (the remedy is a full resync) | §6.3.4 row 1 |
 | **C8** | Everything here is derived-from-canon: recovery is **refuse-and-resync**, never a migration. Persistence is a cache | `WSS` R3 |
 | **C9** | The graded quantity is §6.3.4 rows 2 and 3, on rule 76's floor, by the landed `shekyl-wss-q1b-bench` harness | §6.3.4; `WSS_Q1B_BENCH_SPEC.md` |
 
 ---
 
-## 5. Open questions
+## 5. The question list — Round 1's disposition
 
-Each carries a default. **None is ruled.**
+**No blanket status.** Each row carries its own terminal word, because two of
+the six are **derivations whose inputs are named and not yet measured**, and a
+table headed "ruled" would assert a judgment where an arithmetic is owed. The
+statuses in use: **RULED** (decided), **CLOSED** (no subject), **NAMED
+DEPENDENCY** (owned elsewhere, not scheduled here), **PENDING AS DERIVATION**
+(its terms are named; it resolves by computation, not preference).
 
-| # | Question | Default proposed |
+| # | Question | Disposition |
 | --- | --- | --- |
-| **CT-6 Q1** | **Snapshot geometry.** Dense span, sparse spacing `s`, eviction. `s` bounds the worst rewind | Dense over the reference window plus margin; sparse beyond, to `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`. Constants as **stated judgments** with rule-21 reopeners and the cost model written out — the class §6.3.4's 2 s and 15 % budgets are in |
-| **CT-6 Q2** | **Alignment.** CT-1 segments are leaf-count-aligned and freeze on burial; snapshots are height-keyed. Do they stay two mechanisms, or does the snapshot subsume the unfrozen-segment recompute (F3a)? | **Two mechanisms, one reader.** Segments keep the frozen tier; snapshots cover the unfrozen tail; `root_at_count` reads whichever covers the height. Subsuming would rewrite a landed consensus-adjacent boundary to fix a cache |
-| **CT-6 Q3** | **Persistence.** What rides which file, and at which save points | Snapshots and buffer ride the **ledger** (public, C6); path sets ride each identity's **sealed** file, at existing save points. Crash ⇒ rebuild from last save + refetch (C8) |
-| **CT-6 Q4** | **The advance budget** — the amortized form's own graded quantity: worst-case per-block advance as a fraction of block cadence, on the floor | **≤ 10 % of cadence.** The harness field already exists (`per_block_advance_worst_case_s`). Needs a ruled threshold; this is a proposal, not a ruling |
-| **CT-6 Q5** | **Does `P` prove its own outputs?** F5 shows the two-consumer advance is assumed, not established. If no, C6's second capture side is not built | **Open — no default.** This is a firewall question, not a tuning one, and it is `WSS-Q1`-adjacent. Ruling it here without the P-store lane's input would be the wrong seat |
-| **CT-6 Q6** | **`.curvetree` retirement sequencing.** The end state deletes the file (`WSS-18`'s closure), but `P`'s pins move out via the Tier-2 P-store lane | **Name the dependency, do not race it.** CT-6's last increment is gated on the P-store lane's unwind of `WSS-13`; it does not schedule it |
+| **CT-6 Q1** | **Snapshot geometry.** Dense span, sparse spacing `s`, eviction. `s` bounds the worst rewind | **PENDING AS DERIVATION.** `s` is **not a stated judgment**: it is the largest spacing whose worst-case rewind fits the budget already ruled at §6.3.4 row 2 (`delta ≤ max(2 s, 15 % of proving time)`, RULED 2026-09-19). Rewind cost is `s × leaf-rate × per-leaf`; the leaf rate is already derived (`worst_case_leaves_per_block`, depth-parameterised), and the remaining two terms — the proving denominator and the per-leaf replay cost — fall out of the bench's per-iteration series. **Minting `s` as a fresh judgment would risk an `s` inconsistent with a ruling that already exists, and would forfeit the reopener it inherits for free:** `s` re-derives when the budget or the leaf rate moves, never by preference. Dense over the reference window plus margin, sparse beyond to `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` (C4), remains the **shape**; the constants wait on the rig |
+| **CT-6 Q2** | **Alignment.** CT-1 segments are leaf-count-aligned and freeze on burial; snapshots are height-keyed. Do they stay two mechanisms, or does the snapshot subsume the unfrozen-segment recompute (F3a)? | **RULED 2026-09-22 — two mechanisms, one reader**, as proposed. Segments keep the frozen tier; snapshots cover the unfrozen tail; `root_at_count` reads whichever covers the height. Subsuming would rewrite a landed consensus-adjacent boundary to fix a cache, and C4 already forbids the second literal. **The invariant is `total, and identical where both answer` — not `total and non-overlapping`.** The freeze boundary is a *burial condition* (`SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, `segment.rs:69`) that advances as blocks arrive, and it joins two coordinate systems — leaf-count-aligned segments against height-keyed snapshots. **Demanding non-overlap would force eviction (Q1's subject) to track freezing (this row's boundary) in lockstep, re-welding the two mechanisms this ruling separates.** Permitting overlap and requiring agreement keeps them independent, and C1's oracle already supplies the agreement test. Increment 2's red-bite states it in this form |
+| **CT-6 Q3** | **Persistence.** What rides which file, and at which save points | **RULED 2026-09-22, scoped.** Snapshots and the buffer ride the **ledger**; path sets ride the sealed file at existing save points; crash ⇒ rebuild from last save + refetch (C8). **The scope is part of the ruling:** it governs the wallet's **single proving state**, which is what Q5's dissolution establishes there is. **The reason the scope is stated rather than assumed:** C6's `identity-free` is a claim about *bytes*, not *access* (C6 as amended). Public content does not make the file it rides shared, so under a second proving consumer this default would have forced either a read of another identity's sealed file — `WSS-13` relocated, the defect §6.3.3 exists to foreclose — or a duplicate of the public state. Neither was stated, and the default read as though C6 licensed the first. Q5's dissolution removes the second consumer, so the question does not arise; **this row records why the scope is load-bearing rather than incidental** |
+| **CT-6 Q4** | **The advance budget** — the amortized form's own graded quantity: worst-case per-block advance as a fraction of block cadence, on the floor | **PENDING AS DERIVATION — pre-registered at ≤ 10 % of cadence, gated on a re-point.** Pre-registration ahead of the cost is methodologically what §6.3.4 rows 2 and 3 already are, and it carries their rule-21 reopener. **But the field it pre-registers against does not yet measure the quantity it names.** `per_block_advance_worst_case_s` is computed as `replay_median / REPLAY_WINDOW_BLOCKS` (`spend_edge.rs:386`) — a **quotient of the spend replay**, which is a legitimate *pre-build model estimate* (uniform hashing over the window) and an **illegitimate grade afterwards**, because the built advance does work the replay never did: snapshot writes and path capture. **So the pre-registration carries its own condition: increment 4 re-derives the field from the actual advance before anything is graded against this threshold**, rather than inheriting the quotient. A name that matches with a derivation that does not is the defect this catches one increment before it ships |
+| **CT-6 Q5** | **Does `P` prove its own outputs?** F5 shows the two-consumer advance is assumed, not established | **CLOSED 2026-09-22 — by dissolution, not by ruling.** `P` proves nothing as a distinct actor; the proving state is **identity-blind**; there is **no second capture side**. The question therefore has **no subject**, and C6's second capture side is not built. **This is recorded as a dissolution rather than a negative ruling** because nothing was weighed: the premise F5 flagged as *assumed* is simply absent. **Rule-21 reopener, attached here to the dissolution itself rather than left as a live question:** this reopens only if a design gives `P` membership paths for proving — a substrate change, not a preference. Until then increment 5 builds one capture side and §6's graph carries no gate on this row |
+| **CT-6 Q6** | **`.curvetree` retirement sequencing.** The end state deletes the file (`WSS-18`'s closure), but `P`'s pins move out via the Tier-2 P-store lane | **NAMED DEPENDENCY.** Unchanged: name the dependency, do not race it. CT-6's last increment is gated on the P-store lane's unwind of `WSS-13`; this round does not schedule it. **That lane is itself daemon-gated** (the `b_*` partition on S-PRUNE's forward pass, and `WSS-22`'s bond-add answer), which is why increment 7 sits outside this round's daemon-independent envelope while increments 1–6 sit inside it |
 
 ---
 
@@ -271,13 +286,22 @@ Each carries a default. **None is ruled.**
 Each increment separately authorized (rule 06). Ordered by what the next one
 needs, not by size.
 
+**The Q3←Q5 inversion is resolved, and it is worth recording as a graph
+defect rather than a wording one.** Q3 fed increment 4 while Q5 gated
+increment 5, yet Q3's *answer* depended on Q5's — a question scheduled after
+the one that needed it. Q5's dissolution removes the dependency rather than
+re-ordering around it; had Q5 stayed live, the correct repair was to scope Q3
+to the principal and name Q5 as its reopener, **not** to wait on Q5, because
+Q5's seat is the P-store lane and that lane is daemon-gated — waiting would
+have re-imported the dependency this round exists outside of.
+
 | # | Increment | Discharges | Gated on |
 | --- | --- | --- | --- |
-| **1** | **Registration + this document.** `CT-6` index row; `CURVE_TREE_CLIENT.md` re-point | — | This round's ruling |
-| **2** | **The C1 oracle, height-keyed.** Property tests: snapshot-derived root vs `build_layers` across every layer-finalization edge. **Red-bite first** — it must be able to fail before anything is built to pass it | §6.3.4 row 4 | Q1, Q2 |
+| **1** | **Registration + this document.** The `CT-1…CT-5` family row is **amended to `CT-1…CT-6`** (rule 94 §1) — not a new row, per §1.1; `CURVE_TREE_CLIENT.md` re-point | — | **Tripped 2026-09-22** by Q2 and Q3's rulings together with Q5's dissolution and Q6's named dependency: a complete Round-1 disposition, with Q1 and Q4 pending **as derivations with named inputs** rather than as open judgments |
+| **2** | **The C1 oracle, height-keyed.** Property tests: snapshot-derived root vs `build_layers` across every layer-finalization edge. **Red-bite first** — it must be able to fail before anything is built to pass it. **Second red-bite, from Q2:** the two tiers are **total, and identical where both answer**, across the moving freeze boundary — a height no tier answers is the defect, and a height both answer disagreeing on is the other one | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
-| **4** | **The snapshot tier + advance.** Frontier advance inside ingest; snapshot ring; `root_at_count` reads it for unfrozen heights | **Closeout (b)** — F3a | 2, 3; Q1–Q4 |
-| **5** | **Path capture per identity**, and the reorg refusal path (C7) with its rule-82 copy | §6.3.3; C7 | 4; **Q5** |
+| **4** | **The snapshot tier + advance.** Frontier advance inside ingest; snapshot ring; `root_at_count` reads it for unfrozen heights. **Re-derives `per_block_advance_worst_case_s` from the actual advance** before anything is graded against Q4's threshold (Q4) | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **Q1 and Q4 as derivations — this increment cannot start until the rig run supplies their terms** |
+| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy | §6.3.3; C7 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
 | **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig | §6.3.4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
@@ -292,3 +316,8 @@ needs, not by size.
 | 2026-09-20 | **The reorg horizon is consumed as a constant, never restated** | F2 — `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` is `ARCHIVAL_REORG_DEPTH_BLOCKS` from one JSON authority |
 | 2026-09-20 | **The round's subject is the unfrozen tail, not "root-at-`h` is unsolved"** | F3 — `root_at_count` amortizes past the freeze horizon and recomputes ~29 segments per call inside it |
 | 2026-09-20 | **Item 5 becomes `CT-6 Q5` rather than a design task** | F5 — `WSS-Q1`(a) ruled `P`'s store is serving-only; a second proving consumer is assumed, not established |
+| 2026-09-22 | **`Q2` RULED — two mechanisms, one reader; invariant is `total, and identical where both answer`** | The freeze boundary is a burial condition joining two coordinate systems; non-overlap would couple eviction to burial and re-weld the mechanisms the ruling separates. C1's oracle supplies the agreement test |
+| 2026-09-22 | **`Q3` RULED, scoped to the wallet's single proving state** | C6's `identity-free` is a claim about bytes, not access. The unscoped default would have forced a read of another identity's sealed file (`WSS-13` relocated) or a duplicate of the public state |
+| 2026-09-22 | **`Q5` CLOSED by dissolution; the rule-21 reopener attaches to the dissolution, not to a live question** | `P` proves nothing as a distinct actor; the proving state is identity-blind; no second capture side exists, so the question has no subject. Recorded as a dissolution because nothing was weighed |
+| 2026-09-22 | **`Q1` and `Q4` are PENDING AS DERIVATIONS, and the banner says so per row** | `s` is derivable from §6.3.4 row 2's already-ruled budget once the rig supplies two terms; `Q4`'s threshold needs its field re-pointed from the replay quotient to the built advance. A banner reading "ruled" over either would put the map ahead of the territory |
+| 2026-09-22 | **The `Q3`←`Q5` graph inversion is recorded, not merely fixed** | Q3 fed increment 4 while Q5 gated increment 5, yet Q3's answer depended on Q5's. Waiting on Q5 would have re-imported the daemon dependency this round sits outside of |
