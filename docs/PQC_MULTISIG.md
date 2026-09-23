@@ -653,7 +653,8 @@ this tag.
 `(scheme_id, group_id)` entry) is **REJECTED 2026-09-22** — no producer, no
 reader; superseded by `PL-D3`'s in-circuit leaf-commitment binding (§7.5) and
 by the address fingerprint as group identity (§5.3). The byte stays retired
-in `tx_extra.h` beside `0x03` / `0xDE`.
+in `shekyl-wire/src/tx_extra.rs` (the one codec since 2026-09-23) beside
+`0x03` / `0xDE`.
 
 ### 7.5 Spend-time consensus binding
 
@@ -2022,7 +2023,10 @@ rust/shekyl-crypto-pq/src/multisig_receiving.rs
 
 ### 16.2 New tx_extra tags
 
-`src/cryptonote_basic/tx_extra.h`:
+`rust/shekyl-wire/src/tx_extra.rs` (the C++ `tx_extra.h` mirror was deleted
+2026-09-23 with the C++ parser, `TX_EXTRA_RUST_CUTOVER.md`; both tags are
+STAGED with the multisig receive path as producer, and are **not** in the
+coinbase grammar `CEN-I20`):
 - `TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS = 0x09`
 - `TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS = 0x0A`
 - Reserved (spec table only, no code symbol — §7.4): `0x08`

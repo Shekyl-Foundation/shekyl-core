@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+### `tx_extra` Rust cutover — one codec, and the coinbase extra gets a consensus grammar
+
+**Consensus.** A new rule, census `CEN-I20` (`GENESIS_TX_WIRE_FORMAT.md`
+§9.6b, `TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′): a coinbase's `tx_extra` is
+**exactly** `[0x01 pubkey, 0x02 nonce(8 bytes), 0x06 KEM(1120·n), 0x07
+leaf(64·n)]` in that order for `n` outputs — the first two fields alone when
+`n == 0` — and nothing else; off the coinbase, `0x02` is refused. The nonce
+is a **fixed 8 bytes** (was 0..255 free text): the 32-bit header nonce
+exhausts a template at ≈ 36 MH/s, each nonce byte multiplies that by 256, so
+8 never binds; fixed so the length carries no signal. Field capacity falls
+from ≈ 184 KB/day to ≈ 5.8 KB/day and the coinbase extra is bounded by
+consensus for the first time (≤ 18 994 bytes at 16 outputs, under the 24 576
+relay cap CEN-M4 had left as the only bound). **Genesis regenerated** on all
+three networks to carry the field as eight zero bytes (mainnet id
+`16c616a5…`, testnet `52425d8d…`, stagenet `65173901…`; `GENESIS_TX` pins in
+`cryptonote_config.h`, `GENESIS_ALLOCATIONS.md`, the client identity's
+`genesis_hash_for`, and `shekyl-chain-rules`' `ReleaseAnchors` genesis pins
+that E6 slice 4 had just minted against the old ids). Existing testnet data
+dirs are not valid under this grammar — this is part of the alpha.9
+regenesis.
+
+**API.** `CORE_RPC_VERSION` 3.36 → 3.37: `get_block_template` bounds
+`reserve_size` to 8 and `extra_nonce` to 8 bytes (zero-padded; the daemon
+always reserves exactly 8), refusing more with the new
+`CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND` (-23); `-3 TOO_BIG_RESERVE_SIZE`
+is retired. `reserved_offset` is always returned. The built-in miner's
+`--extra-messages-file` and `miner_conf.json` are removed (a free-text
+coinbase rotation with no mining purpose). The C++ `tx_extra` API is gone:
+`tx_extra.h`, `parse_tx_extra`, `sort_tx_extra`, `remove_field_from_tx_extra`,
+`add_tx_pub_key_to_extra`, the nonce/payment-id helpers, the lengths-taking
+FFI `shekyl_tx_extra_pqc_field_shape`; the daemon reads and writes an extra
+only through `shekyl-wire` over `shekyl_tx_extra_field`,
+`shekyl_tx_extra_tx_pubkey`, `shekyl_tx_extra_leaf_entries`,
+`shekyl_tx_extra_shape_of` and `shekyl_coinbase_extra`. The C++ test-only
+transaction builder (`construct_tx*`) and the core tests that had been
+disabled since May with it are deleted; `cn_deserialize` no longer
+pretty-prints `tx_extra` fields.
+
+**Security-relevant.** Two parsers over one consensus grammar (the C++
+variant and `shekyl-wire`) become one; CEN-I19 is judged over the codec's own
+parse everywhere it applies, and the wallet's context-free validator applies
+the same `check_tx_extra_shape`. Grammar fuzzing moves to
+`rust/shekyl-wire/fuzz/fuzz_tx_extra_parse` (seeded from the C++ corpus).
+
 ### `WSS-Q1(b)` — first Cortex-A72 session, and the one flag that cost a run
 
 - **FCMP++ proving on a Cortex-A72 is `6.133 s`** (converged; 2-in/2-out, depth

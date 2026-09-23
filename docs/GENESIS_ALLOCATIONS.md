@@ -51,8 +51,8 @@ Genesis identity:
 
 ```text
 GENESIS_NONCE  10000
-tx hash        2382d899d4d746e0ad2dba8a0b27d9fcb174d2a06a208112082cd12d20b91077
-block id       b6293d3ec814d4b7acdcba7d79d2d22b035eaae52bb35cb3f862adac16c14031
+tx hash        7b3b02dd6fd3a4fd9aebfe17703f1b5261bc8a19d22812aa8e9a7726056bd8c0
+block id       16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3
 ```
 
 ### stagenet
@@ -71,8 +71,8 @@ Genesis identity:
 
 ```text
 GENESIS_NONCE  10002
-tx hash        c5a71627f9ab3a7290215f3ff8aa3996751753f7a1287fecd6b377480651ba93
-block id       ad101a4d8b47a8c9a3fa4ff625b6c7176d0bf95f686150e944c2c778dee52396
+tx hash        6ba2809b09554f4e6240ef9b971927a6c42cd4ed80be99d4ce0602e68a27eaab
+block id       65173901b049468133e5f821f668772f13936b1abdff0e2add80ff3b03ccf5f0
 ```
 
 ### testnet
@@ -91,8 +91,8 @@ Genesis identity:
 
 ```text
 GENESIS_NONCE  10101
-tx hash        3911679ad3e40129884eb47320e22060836a688da1ec53faa6082fd52fda739c
-block id       b0b2a63aa91c4e23bcf686095c2fccb27760cb9ec1928cca3bf17e17f8112a7c
+tx hash        fc41d1169933f70ec58f0547250de6432f67c110e2aefd4dbf9037ab1b0ba452
+block id       52425d8da3a90e41ff54780129bdbe9897aa28c3d0a9c80b04b4b5ea35c911d8
 ```
 
 Addresses are truncated above for readability only — the full strings are

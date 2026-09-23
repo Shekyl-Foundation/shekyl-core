@@ -455,8 +455,12 @@ namespace test
             tx.vout.push_back(txout);
         }
 
-        // Extra: tx public key
-        cryptonote::add_tx_pub_key_to_extra(tx, tx_pk);
+        // Extra: tx public key, laid out by hand (0x01 ‖ key) — this is a
+        // serialization round-trip fixture, not a transaction the shape rule
+        // is asked about.
+        tx.extra.push_back(SHEKYL_TX_EXTRA_TAG_PUBKEY);
+        tx.extra.insert(tx.extra.end(), reinterpret_cast<const uint8_t*>(&tx_pk),
+          reinterpret_cast<const uint8_t*>(&tx_pk) + 32);
 
         // RCT base fields
         tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;

@@ -416,7 +416,11 @@ namespace cryptonote
   {
     struct request_t: public rpc_request_base
     {
-      uint64_t reserve_size;       //max 255 bytes
+      // The coinbase nonce is fixed at SHEKYL_COINBASE_NONCE_BYTES (8): the
+      // daemon always reserves exactly that many; reserve_size <= 8 and an
+      // extra_nonce of <= 8 bytes (zero-padded) are accepted, more is refused
+      // with CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND (TXE-Q6').
+      uint64_t reserve_size;
       std::string wallet_address;
       std::string prev_block;
       std::string extra_nonce;

@@ -1446,7 +1446,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   // here because the coinbase never passes core::check_tx_semantic.
   {
     std::string why;
-    CHECK_AND_ASSERT_MES(check_tx_extra_pqc_field_shape(b.miner_tx, why), false,
+    CHECK_AND_ASSERT_MES(check_tx_extra_shape(b.miner_tx, why), false,
       "miner transaction: " << why << " (block " << get_block_hash(b) << ")");
   }
 
@@ -1832,46 +1832,44 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
     r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
-    size_t coinbase_weight = get_transaction_weight(b.miner_tx);
-    if (coinbase_weight > cumulative_weight - txs_weight)
+    const size_t coinbase_weight = get_transaction_weight(b.miner_tx);
+    if (coinbase_weight != cumulative_weight - txs_weight)
     {
-      cumulative_weight = txs_weight + coinbase_weight;
-#if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
-      MDEBUG("Creating block template: miner tx weight " << coinbase_weight <<
-          ", cumulative weight " << cumulative_weight << " is greater than before");
-#endif
-      continue;
-    }
-
-    if (coinbase_weight < cumulative_weight - txs_weight)
-    {
-      size_t delta = cumulative_weight - txs_weight - coinbase_weight;
+      // The coinbase priced at `cumulative_weight` came out a different
+      // weight (its amount varint crossed a byte boundary as the penalty
+      // re-priced it — CEN-F14b), so the weight the reward was computed at
+      // and the weight the block has disagree, and connect requires them to
+      // agree exactly (validate_miner_transaction rejects `!=`). Re-price at
+      // the weight the block actually has, heavier or lighter, until the two
+      // meet. The inherited answer for the lighter case — pad `extra` with
+      // zero bytes back up to the estimate — is not available: the coinbase
+      // extra is a closed grammar (CEN-I20) and padding is a foreign tag.
+      // Below the effective median the reward is weight-independent, so this
+      // settles on the second pass; in the penalty zone it settles unless the
+      // reward sits exactly on a varint boundary and the two weights trade
+      // places; then the try budget runs out and the template fails loudly
+      // (LOG_ERROR below) rather than emit one connect refuses.
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
       MDEBUG("Creating block template: miner tx weight " << coinbase_weight <<
           ", cumulative weight " << txs_weight + coinbase_weight <<
-          " is less than before, adding " << delta << " zero bytes");
+          (coinbase_weight > cumulative_weight - txs_weight ? " is greater" : " is less") <<
+          " than before; re-pricing");
 #endif
-      b.miner_tx.extra.insert(b.miner_tx.extra.end(), delta, 0);
-      //here  could be 1 byte difference, because of extra field counter is varint, and it can become from 1-byte len to 2-bytes len.
-      if (cumulative_weight != txs_weight + get_transaction_weight(b.miner_tx))
-      {
-        CHECK_AND_ASSERT_MES(cumulative_weight + 1 == txs_weight + get_transaction_weight(b.miner_tx), false, "unexpected case: cumulative_weight=" << cumulative_weight << " + 1 is not equal txs_cumulative_weight=" << txs_weight << " + get_transaction_weight(b.miner_tx)=" << get_transaction_weight(b.miner_tx));
-        b.miner_tx.extra.resize(b.miner_tx.extra.size() - 1);
-        if (cumulative_weight != txs_weight + get_transaction_weight(b.miner_tx))
-        {
-          //fuck, not lucky, -1 makes varint-counter size smaller, in that case we continue to grow with cumulative_weight
-          MDEBUG("Miner tx creation has no luck with delta_extra size = " << delta << " and " << delta - 1);
-          cumulative_weight += delta - 1;
-          continue;
-        }
-        MDEBUG("Setting extra for block: " << b.miner_tx.extra.size() << ", try_count=" << try_count);
-      }
+      cumulative_weight = txs_weight + coinbase_weight;
+      continue;
     }
-    CHECK_AND_ASSERT_MES(cumulative_weight == txs_weight + get_transaction_weight(b.miner_tx), false, "unexpected case: cumulative_weight=" << cumulative_weight << " is not equal txs_cumulative_weight=" << txs_weight << " + get_transaction_weight(b.miner_tx)=" << get_transaction_weight(b.miner_tx));
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
     MDEBUG("Creating block template: miner tx weight " << coinbase_weight <<
         ", cumulative weight " << cumulative_weight << " is now good");
 #endif
+    // The template's coinbase must already satisfy what connect will judge
+    // (CEN-I19 + CEN-I20, the same check at :1449): a grammar-invalid extra
+    // here is a template the miner spends work on and the chain refuses.
+    {
+      std::string extra_reason;
+      CHECK_AND_ASSERT_MES(check_tx_extra_shape(b.miner_tx, extra_reason), false,
+          "Creating block template: coinbase extra violates the grammar: " << extra_reason);
+    }
 
     {
       const auto root_bytes = m_db->get_curve_tree_root();

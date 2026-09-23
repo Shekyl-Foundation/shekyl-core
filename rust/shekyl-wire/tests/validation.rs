@@ -336,7 +336,10 @@ fn null_ct_on_non_coinbase_rejected() {
 #[test]
 fn fcmp_ct_on_coinbase_rejected() {
     // §2.5 dual: a coinbase (gen input) must carry a Null ct, never Fcmp.
-    let tx = spend(vec![Input::Gen(0)], vec![out()], 0, 1); // gen input + Fcmp ct
+    // The extra is the coinbase grammar's (a gen input makes this a coinbase
+    // for the shape rule too), so the refusal is the ct's.
+    let mut tx = spend(vec![Input::Gen(0)], vec![out()], 0, 1); // gen input + Fcmp ct
+    tx.prefix.extra = coinbase_with_outputs(1).prefix.extra;
     let err = tx.validate().unwrap_err();
     assert!(err.to_string().contains("Null ct"), "{err}");
 }
@@ -718,3 +721,102 @@ fn validator_rejects_a_kem_field_of_the_wrong_length() {
 // wiring at all. The arm is covered where it is reachable: at C++ admission
 // (`tx_extra_pqc_field_shape.cpp`, which drives the real serve-credit parity
 // transaction) and by the rule's own KAT in `shekyl-wire::tx_extra`.
+
+/// A coinbase with `n` outputs in the grammar's one layout, built from the
+/// real genesis coinbase so everything but the outputs and the extra is a
+/// shape the validator already accepts.
+fn coinbase_with_outputs(n: usize) -> Transaction {
+    use shekyl_wire::tx_extra::{self, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES};
+    let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
+    let mut tx = blk.miner_transaction;
+    let out = tx.prefix.outputs[0].clone();
+    tx.prefix.outputs = vec![out; n];
+    if let Ct::Null(base) = &mut tx.ct {
+        base.enc_amounts = vec![[0u8; 9]; n];
+        base.enc_labels = vec![[0u8; 9]; n];
+        base.commitments = vec![base.commitments[0]; n];
+    }
+    let fields = tx_extra::parse(&tx.prefix.extra).unwrap();
+    let TxExtraField::PubKey(pk) = fields[0] else {
+        panic!("genesis extra starts with the pubkey")
+    };
+    tx.prefix.extra = tx_extra::build_coinbase_extra(
+        pk,
+        &[0u8; COINBASE_NONCE_BYTES],
+        n,
+        &vec![0x6a; HYBRID_KEM_CT_BYTES * n],
+        &tx_extra::conforming_pqc_leaf_blob(n),
+    )
+    .expect("the grammar admits this coinbase extra");
+    tx
+}
+
+/// CEN-M4 with the tx_extra cutover (`TX_EXTRA_RUST_CUTOVER.md` §8,
+/// TXE-F9). `MAX_TX_EXTRA` (24 576) is the *non-coinbase* relay cap, and
+/// stays so: a non-coinbase extra past it is refused, a coinbase extra is
+/// not size-capped here or in C++. What the cutover changed is that the
+/// coinbase extra now has a consensus bound of its own — the grammar — and
+/// that bound is tighter than the relay cap ever was: the largest grammar-
+/// valid coinbase extra is the `MAX_OUTPUTS`-output one — four tags, four
+/// varint lengths, `32 + 8 + 1184·16` bytes of payload, 18 994 in all —
+/// below 24 576. The "unbounded coinbase extra" M4 named is closed, not
+/// moved; one byte of padding on that largest coinbase is refused.
+#[test]
+fn cen_m4_coinbase_extra_is_bounded_by_the_grammar_below_the_relay_cap() {
+    use shekyl_wire::transaction::{MAX_OUTPUTS, MAX_TX_EXTRA};
+    let largest = coinbase_with_outputs(MAX_OUTPUTS);
+    let varint_len = |n: usize| {
+        if n < 0x80 {
+            1
+        } else if n < 0x4000 {
+            2
+        } else {
+            3
+        }
+    };
+    let kem = 1120 * MAX_OUTPUTS;
+    let leaf = 64 * MAX_OUTPUTS;
+    assert_eq!(
+        largest.prefix.extra.len(),
+        (1 + 32) + (1 + 1 + 8) + (1 + varint_len(kem) + kem) + (1 + varint_len(leaf) + leaf)
+    );
+    assert_eq!(largest.prefix.extra.len(), 18_994);
+    assert!(largest.prefix.extra.len() < MAX_TX_EXTRA);
+    largest
+        .validate()
+        .expect("the largest grammar-valid coinbase extra is accepted");
+
+    let mut padded = largest.clone();
+    padded.prefix.extra.push(0x00);
+    assert!(
+        padded.validate().is_err(),
+        "one byte of padding is off the coinbase grammar"
+    );
+
+    // A non-coinbase extra past the cap is the relay cap's business, unchanged.
+    let mut tx = spend(vec![ki(1)], vec![out()], 0, 1);
+    let mut extra = tx.prefix.extra.clone();
+    extra.extend(std::iter::repeat_n(0u8, MAX_TX_EXTRA)); // padding to the end
+    tx.prefix.extra = extra;
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("exceeds"), "{err}");
+}
+
+/// The genesis coinbase (h0, regtest = mainnet) satisfies the coinbase grammar
+/// through the validator, and the same bytes with the nonce removed do not:
+/// the pins were regenerated *because* the grammar requires the field.
+#[test]
+fn genesis_coinbase_carries_the_nonce_the_grammar_requires() {
+    use shekyl_wire::tx_extra::{self, TxExtraField};
+    let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
+    let fields = tx_extra::parse(&blk.miner_transaction.prefix.extra).unwrap();
+    assert!(matches!(fields[1], TxExtraField::Nonce(ref n) if n.iter().all(|b| *b == 0)));
+    let mut without = blk.miner_transaction.clone();
+    let mut kept = fields.clone();
+    kept.remove(1);
+    without.prefix.extra = tx_extra::serialize(&kept).unwrap();
+    assert!(
+        without.validate().is_err(),
+        "a coinbase without the 0x02 nonce is refused"
+    );
+}

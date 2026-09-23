@@ -38,7 +38,6 @@ set(unit_tests_sources
   checkpoints.cpp
   command_line.cpp
   crypto.cpp
-  cryptonote_format_utils.cpp
   daemon_default_data_dir.cpp
   daemon_rpc_client.cpp
   daemon_submit_ffi_roundtrip.cpp
@@ -83,8 +82,8 @@ set(unit_tests_sources
   scaling_2021.cpp
   seed_epoch.cpp
   serialization.cpp
-  sha256.cpp
   slow_memmem.cpp
+  sha256.cpp
   stall_detection_calibration.cpp
   stack_trace.cpp
   test_tx_utils.cpp

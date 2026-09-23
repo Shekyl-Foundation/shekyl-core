@@ -1383,16 +1383,16 @@ bool shekyl_curve_tree_replica_next_block_root(
     uint8_t* out_root);
 
 // ---------------------------------------------------------------------------
-// tx_extra PQC field shape rule (rust/shekyl-ffi/src/tx_extra_ffi.rs;
-// GENESIS_TX_WIRE_FORMAT.md §9.6a as ruled 2026-09-05; census CEN-I19).
-//
-// With n = vout.size(): exactly one 0x06 KEM-ciphertext field of 1120·n bytes
-// and exactly one 0x07 leaf-entry field of 64·n bytes when n > 0; neither when
-// n == 0 -- and (PL-D3 content rule) every 0x07 entry's leading 32 bytes must
-// be a canonical prime-order non-identity Ed25519 point. The caller parses
-// tx_extra itself, passes the byte length of every 0x06 / 0x07 field it found,
-// in order, and the 0x07 payload when it found exactly one. Consensus: called
-// from core::check_tx_semantic and Blockchain::prevalidate_miner_transaction.
+// tx_extra shape rule codes (rust/shekyl-ffi/src/tx_extra_ffi.rs). CEN-I19
+// (GENESIS_TX_WIRE_FORMAT.md §9.6a as ruled 2026-09-05): with n = vout.size(),
+// exactly one 0x06 KEM-ciphertext field of 1120·n bytes and exactly one 0x07
+// leaf-entry field of 64·n bytes when n > 0, neither when n == 0, and (PL-D3
+// content rule) every 0x07 entry's leading 32 bytes a canonical prime-order
+// non-identity Ed25519 point. Returned by shekyl_tx_extra_shape_of and the
+// codec reads below, which parse the extra themselves; the daemon never
+// parses it (TX_EXTRA_RUST_CUTOVER.md). Consensus: applied from
+// core::check_tx_semantic, Blockchain::prevalidate_miner_transaction and the
+// DB collector through check_tx_extra_shape.
 // ---------------------------------------------------------------------------
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_OK                           0
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR                 1
@@ -1405,32 +1405,10 @@ bool shekyl_curve_tree_replica_next_block_root(
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE               8
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH                  9
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT                   10
-/// leaf_blob disagrees with the declared leaf_lens (null with a nonzero
-/// length, or a different byte count): an FFI marshalling bug in the CALLER,
-/// reported distinctly from every content verdict so the daemon never logs a
-/// "bad entry" diagnosis for a C++-side bug. Message: "FFI marshalling: leaf
-/// blob length disagrees with declared lengths". Fail-closed either way.
-#define SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING              11
+// 11 was ERR_MARSHALLING (the retired lengths-taking form's caller-bug
+// verdict); not re-minted.
 /// Buffer size for out_msg, NUL included.
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP                      256
-/// Returns SHEKYL_TX_EXTRA_PQC_SHAPE_OK or one of the codes above, and writes
-/// the rule's own sentence for that code into out_msg as a NUL-terminated
-/// string (empty on OK; truncated on a character boundary if it would not
-/// fit). The daemon LOGS THAT STRING rather than formatting a second one from
-/// the code: the rule's words belong to the crate that owns the rule, and two
-/// formatters agreeing is a promise nobody can keep. A null array pointer is
-/// accepted only with a zero count; out_msg may be null with out_msg_cap 0.
-int32_t shekyl_tx_extra_pqc_field_shape(
-    size_t n_outputs,
-    const size_t* kem_lens,
-    size_t kem_count,
-    const size_t* leaf_lens,
-    size_t leaf_count,
-    const uint8_t* leaf_blob,
-    size_t leaf_blob_len,
-    char* out_msg,
-    size_t out_msg_cap);
-
 /// Write the conforming 64-byte 0x07 leaf entry (shekyl-wire's
 /// conforming_pqc_leaf_entry: the compressed PQC_LEAF_COMMITMENT_J generator
 /// followed by the fixed opaque record) to out (64 bytes; null tolerated).
@@ -1438,6 +1416,129 @@ int32_t shekyl_tx_extra_pqc_field_shape(
 /// so no fixture hand-copies the point's bytes; test-support surface, not
 /// consensus.
 void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
+
+/* ── tx_extra codec (TX_EXTRA_RUST_CUTOVER.md §3; rule 40) ─────────────────
+ * shekyl-wire parses and builds tx_extra; the daemon transports. Every call
+ * below receives a fixed-size value or an opaque payload; C++ never reads
+ * inside an `extra` again.
+ *
+ * Codes: shape verdicts keep their SHEKYL_TX_EXTRA_PQC_SHAPE_* /
+ * SHEKYL_TX_EXTRA_SHAPE_* values (0 OK, 1..=17) and are returned unchanged
+ * by the leaf read and the coinbase writer when the rule refuses; this
+ * family's own outcomes start at 100 so the two cannot collide. A null
+ * pointer is SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR everywhere.
+ *
+ * The shape rule (shekyl_wire::tx_extra::check_tx_extra_shape) is CEN-I19 on
+ * every transaction plus, on a coinbase, the closed coinbase grammar
+ * (TXE-Q6', consensus): the extra is exactly [0x01 pubkey, 0x02 nonce of
+ * SHEKYL_COINBASE_NONCE_BYTES, 0x06 KEM(1120*n), 0x07 leaf(64*n)] in that
+ * order and nothing else; off the coinbase, no 0x02 at all. */
+/// Per-output widths of the two PQC fields (shekyl_wire::tx_extra::
+/// HYBRID_KEM_CT_BYTES = X25519 ct(32) + ML-KEM-768 ct(1088), and
+/// PQC_LEAF_ENTRY_LEN = CM(32) ‖ record(32)); a 0x06 field is 1120·n bytes
+/// and a 0x07 field 64·n for n outputs (CEN-I19).
+#define SHEKYL_HYBRID_KEM_CT_BYTES            1120
+#define SHEKYL_PQC_LEAF_ENTRY_BYTES           64
+/// Fixed width of the coinbase 0x02 nonce. 2^32 / 120 s ~= 36 MH/s exhausts
+/// the header nonce in one interval; each byte here multiplies that by 256,
+/// so 8 never binds and matches the pool convention (reserve_size: 8).
+#define SHEKYL_COINBASE_NONCE_BYTES           8
+/// Bytes from the first byte of the coinbase tx pubkey to the nonce payload.
+/// The grammar fixes the distance (shekyl_wire::tx_extra::COINBASE_NONCE_OFFSET_FROM_PUBKEY);
+/// the template adds it to the pubkey's offset in the block blob rather than
+/// re-encoding the 0x02 tag and the length byte.
+size_t shekyl_coinbase_nonce_offset_from_pubkey(void);
+/// Coinbase grammar refusals (12..=17), beside the CEN-I19 codes (1..=11).
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING   12
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH    13
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_DUPLICATE 14
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG     15
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT          16
+#define SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE   17
+#define SHEKYL_TX_EXTRA_OK                    0
+/// The extra parsed and holds no such field — the committed empty set.
+#define SHEKYL_TX_EXTRA_ABSENT                100
+/// The extra does not parse. Never the same fact as ABSENT.
+#define SHEKYL_TX_EXTRA_MALFORMED             101
+/// The caller named a tag with no payload (padding, a retired/reserved byte).
+#define SHEKYL_TX_EXTRA_UNKNOWN_TAG           102
+/// The writer's input exceeds a wire cap; nothing was built.
+#define SHEKYL_TX_EXTRA_UNSERIALIZABLE        103
+
+/// The tag bytes a C++ caller may name to shekyl_tx_extra_field. The table
+/// of record is `shekyl_wire::tx_extra::TX_EXTRA_TAG_*`; a value here that
+/// drifts from it is answered with SHEKYL_TX_EXTRA_UNKNOWN_TAG or the wrong
+/// field, which the archival_credit_wire and mining_parity round trips pin.
+#define SHEKYL_TX_EXTRA_TAG_PUBKEY               0x01
+#define SHEKYL_TX_EXTRA_TAG_NONCE                0x02
+#define SHEKYL_TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT   0x06
+#define SHEKYL_TX_EXTRA_TAG_PQC_LEAF_ENTRIES     0x07
+#define SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION 0x0B
+
+/// The `index`th field of `tag` in `extra`, as its payload bytes, in `out`
+/// (free with shekyl_buffer_free). OK / ABSENT / MALFORMED / UNKNOWN_TAG;
+/// `out` holds the payload on OK and the null buffer otherwise. A present
+/// tag with an empty payload is OK with len 0 — present-empty and absent are
+/// different facts (the 0x0B reader's contract, now a return code).
+int32_t shekyl_tx_extra_field(
+    const uint8_t* extra,
+    size_t extra_len,
+    uint8_t tag,
+    size_t index,
+    ShekylBuffer* out);
+
+/// The transaction public key (0x01, first occurrence) written into out32.
+/// OK / ABSENT / MALFORMED; out32 is written only on OK.
+int32_t shekyl_tx_extra_tx_pubkey(
+    const uint8_t* extra,
+    size_t extra_len,
+    uint8_t* out32);
+
+/// The shape rule over the extra's own parse (is_coinbase selects the
+/// coinbase grammar), then the 0x07 blob in `out` (len 0 when n_outputs ==
+/// 0). A shape code with the rule's sentence in out_msg on refusal;
+/// MALFORMED when the extra does not parse. One read where the DB add path
+/// had three passes.
+int32_t shekyl_tx_extra_leaf_entries(
+    const uint8_t* extra,
+    size_t extra_len,
+    size_t n_outputs,
+    bool is_coinbase,
+    ShekylBuffer* out,
+    char* out_msg,
+    size_t out_msg_cap);
+
+/// The shape rule over the extra's own parse — verdict and sentence only;
+/// is_coinbase selects the coinbase grammar. check_tx_extra_shape adapts it;
+/// MALFORMED when the extra does not parse (out_msg carries the admission
+/// sentence).
+int32_t shekyl_tx_extra_shape_of(
+    const uint8_t* extra,
+    size_t extra_len,
+    size_t n_outputs,
+    bool is_coinbase,
+    char* out_msg,
+    size_t out_msg_cap);
+
+/// Build the coinbase extra in the grammar's one layout: [PubKey(tx_pubkey
+/// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), PqcKemCiphertext(kem),
+/// PqcLeafEntries(leaf)] — [PubKey, Nonce] when n_outputs == 0 — judged by
+/// the coinbase grammar before it is handed back in `out`. kem is
+/// 1120·n_outputs bytes and leaf 64·n_outputs, as shekyl_construct_output
+/// produced them; anything else is refused with the shape code naming the
+/// field, so a template that could not pass admission is refused at
+/// construction, not at the miner.
+int32_t shekyl_coinbase_extra(
+    const uint8_t* tx_pubkey,
+    const uint8_t* nonce,
+    const uint8_t* kem,
+    size_t kem_len,
+    const uint8_t* leaf,
+    size_t leaf_len,
+    size_t n_outputs,
+    ShekylBuffer* out,
+    char* out_msg,
+    size_t out_msg_cap);
 
 /// Compose every curve-tree layer ABOVE the leaf layer, narrow from the leaf-chunk
 /// layer — the correct producer-side grow that telescopes to the reference root
@@ -4071,6 +4172,21 @@ int32_t shekyl_e2_trace_finish(struct ShekylE2TraceWriter* writer);
 void shekyl_e2_trace_abort(struct ShekylE2TraceWriter* writer);
 
 } // extern "C"
+
+/// Owns a Rust-allocated ShekylBuffer for one C++ scope and returns it to
+/// Rust with shekyl_buffer_free on exit. The null buffer (ptr == nullptr,
+/// len == 0) is the valid empty value every out-parameter starts as, so a
+/// call that refused leaves nothing to free. Not copyable: two owners of one
+/// allocation is the double free this type exists to make unwritable.
+struct ShekylOwnedBuffer {
+  ShekylBuffer buf{nullptr, 0};
+  ShekylOwnedBuffer() = default;
+  ShekylOwnedBuffer(const ShekylOwnedBuffer&) = delete;
+  ShekylOwnedBuffer& operator=(const ShekylOwnedBuffer&) = delete;
+  ~ShekylOwnedBuffer() { if (buf.ptr) shekyl_buffer_free(buf.ptr, buf.len); }
+  const uint8_t* data() const { return buf.ptr; }
+  size_t size() const { return buf.len; }
+};
 
 #define SHEKYL_E2_TRACE_OK               0
 #define SHEKYL_E2_TRACE_ERR_NULL_PTR    -1

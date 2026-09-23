@@ -32,7 +32,6 @@
 #include "chaingen_tests_list.h"
 #include "common/util.h"
 #include "common/command_line.h"
-#include "transaction_tests.h"
 
 #include <boost/regex.hpp>
 
@@ -41,10 +40,7 @@ namespace po = boost::program_options;
 namespace
 {
   const command_line::arg_descriptor<std::string> arg_test_data_path              = {"test_data_path", "", ""};
-  const command_line::arg_descriptor<bool>        arg_generate_test_data          = {"generate_test_data", ""};
-  const command_line::arg_descriptor<bool>        arg_play_test_data              = {"play_test_data", ""};
   const command_line::arg_descriptor<bool>        arg_generate_and_play_test_data = {"generate_and_play_test_data", ""};
-  const command_line::arg_descriptor<bool>        arg_test_transactions           = {"test_transactions", ""};
   const command_line::arg_descriptor<std::string> arg_filter                      = { "filter", "Regular expression filter for which tests to run" };
   const command_line::arg_descriptor<bool>        arg_list_tests                  = {"list_tests", ""};
 }
@@ -62,10 +58,7 @@ int main(int argc, char* argv[])
   po::options_description desc_options("Allowed options");
   command_line::add_arg(desc_options, command_line::arg_help);
   command_line::add_arg(desc_options, arg_test_data_path);
-  command_line::add_arg(desc_options, arg_generate_test_data);
-  command_line::add_arg(desc_options, arg_play_test_data);
   command_line::add_arg(desc_options, arg_generate_and_play_test_data);
-  command_line::add_arg(desc_options, arg_test_transactions);
   command_line::add_arg(desc_options, arg_filter);
   command_line::add_arg(desc_options, arg_list_tests);
 
@@ -92,27 +85,22 @@ int main(int argc, char* argv[])
   std::vector<std::string> failed_tests;
   std::string tests_folder = command_line::get_arg(vm, arg_test_data_path);
   bool list_tests = false;
-  if (command_line::get_arg(vm, arg_generate_test_data))
+  if (command_line::get_arg(vm, arg_generate_and_play_test_data) || (list_tests = command_line::get_arg(vm, arg_list_tests)))
   {
-    GENERATE("chain001.dat", gen_simple_chain_001);
-  }
-  else if (command_line::get_arg(vm, arg_play_test_data))
-  {
-    PLAY("chain001.dat", gen_simple_chain_001);
-  }
-  else if (command_line::get_arg(vm, arg_generate_and_play_test_data) || (list_tests = command_line::get_arg(vm, arg_list_tests)))
-  {
-    // Disabled: these tests construct valid user transactions via MAKE_TX /
-    // construct_tx_rct, which now produces CTTypeFcmpPlusPlusPqc stubs with
-    // empty pqc_auths. check_tx_inputs rejects them even in FAKECHAIN.
-    // Re-enable once chaingen can construct full FCMP++ transactions with
-    // valid PQC auth signatures and curve-tree membership proofs.
-    // GENERATE_AND_PLAY(gen_simple_chain_001);
-    // GENERATE_AND_PLAY(gen_simple_chain_split_1);
+    // chaingen builds blocks and coinbases only. Its user-transaction
+    // builder (construct_tx_rct over the C++ construct_tx*) went dark on
+    // 2026-05-05 when the transaction format moved to FCMP++/PQC and the
+    // C++ builder was never taught it — a capability gap, not a handoff —
+    // and every test that needed one was disabled then. Builder and tests
+    // were deleted together with the C++ tx_extra codec; the per-test record
+    // of what each exercised and where the case lives now is
+    // TX_EXTRA_RUST_CUTOVER.md §9.1. A validating Rust-built spend exists and
+    // is gated per PR (regtest_e2e e2e_fcmp_spend_accepted_by_daemon); a
+    // chain containing one that then reorgs does not — FOLLOWUPS
+    // "user-transaction chain cases", owner E2's corpus.
     GENERATE_AND_PLAY(one_block);
     GENERATE_AND_PLAY(economics_c2a_prime_layer3_pop_replay);
     GENERATE_AND_PLAY(archival_budget_conservation_boundary);
-    // GENERATE_AND_PLAY(gen_chain_switch_1);
     // Block verification tests
     GENERATE_AND_PLAY(gen_block_big_major_version);
     GENERATE_AND_PLAY(gen_block_big_minor_version);
@@ -154,19 +142,14 @@ int main(int argc, char* argv[])
     // Disabled: no "late v1 coinbase" era in Shekyl (1 = 1 = genesis)
     // GENERATE_AND_PLAY(gen_block_late_v1_coinbase_tx);
 
-    // Transaction verification tests, FCMP++ transaction tests, and staking
-    // tests removed 2026-05-05 — the chaingen synthetic-block harness mines
-    // v1 coinbases that v3-from-genesis prevalidation rejects, so every
-    // chaingen-dependent test that needs spendable outputs (gen_tx_*,
-    // gen_fcmp_*, gen_staking_*/gen_claim_*/gen_stake_*) failed at
-    // chain construction. The invariants those tests covered migrate to
-    // Rust per docs/FOLLOWUPS.md (V3.x — daemon validation Rust port).
-    // The disabled txpool_*, gen_uint_overflow_1, and gen_block_reward
-    // entries shared the same root cause and are dropped with their
-    // disabled siblings.
-
-    // Legacy Monero-era v2 mixin/dust, RCT, Borromean, and old BP tests removed.
-    // Shekyl enforces v3 (with PQC auth) for all non-coinbase transactions from genesis.
+    // Transaction verification, FCMP++ transaction and staking tests were
+    // removed 2026-05-05 (gen_tx_*, gen_fcmp_*, gen_staking_*/gen_claim_*/
+    // gen_stake_*, txpool_*), and the last user-transaction tests
+    // (gen_simple_chain_*, gen_chain_switch_1, gen_uint_overflow_*,
+    // gen_block_reward, gen_bpp_*) on 2026-09-23 — see the note above the
+    // enabled list. Monero-era v2 mixin/dust, RCT, Borromean and old BP
+    // tests are gone: Shekyl enforces v3 with PQC auth for every
+    // non-coinbase transaction from genesis.
 
     GENERATE_AND_PLAY(gen_block_low_coinbase);
 
@@ -185,10 +168,6 @@ int main(int argc, char* argv[])
         MLOG(level, "  " << test_name);
       }
     }
-  }
-  else if (command_line::get_arg(vm, arg_test_transactions))
-  {
-    CALL_TEST("TRANSACTIONS TESTS", test_transactions);
   }
   else
   {

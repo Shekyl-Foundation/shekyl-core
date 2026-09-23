@@ -243,8 +243,9 @@ parameter.
 ### `tx_extra`: Hybrid KEM ciphertext tag (`0x06`)
 
 Outputs carry hybrid KEM material for per-output PQC key derivation. The field
-`tx_extra_pqc_kem_ciphertext` is tagged `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`
-(`0x06` in `tx_extra.h`). The payload is a single `blob` whose length is
+`TxExtraField::PqcKemCiphertext` is tagged `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`
+(`0x06`, `rust/shekyl-wire/src/tx_extra.rs` — the one `tx_extra` codec since
+`TX_EXTRA_RUST_CUTOVER.md`, 2026-09-23). The payload is a single `blob` whose length is
 **N × 1120** bytes: **N** concatenated hybrid ciphertexts, one per transaction
 output in **vout order**. Each 1120-byte entry is
 `x25519_ephemeral_pk[32] || ml_kem_768_ct[1088]` — the X25519 ephemeral
@@ -258,8 +259,8 @@ Each output's `0x07` entry is 64 bytes: the leaf commitment point `CM`
 bytes) — `CM ‖ record`, computed by the sender from the output's
 `combined_ss` and canonical hybrid public key (`derive_pqc_leaf`;
 `PL-D3` / `PL-D3a`). The entries are stored in the field
-`tx_extra_pqc_leaf_entries`, tagged `TX_EXTRA_TAG_PQC_LEAF_ENTRIES` (`0x07`
-in `tx_extra.h`). The payload is a single `blob` of **N × 64** bytes:
+`TxExtraField::PqcLeafEntries`, tagged `TX_EXTRA_TAG_PQC_LEAF_ENTRIES` (`0x07`
+in `tx_extra.rs`). The payload is a single `blob` of **N × 64** bytes:
 **N** concatenated entries, one per transaction output in **vout order**.
 
 The curve tree insertion code (`collect_outputs` in `blockchain_db.cpp`)
@@ -270,8 +271,9 @@ x-coordinate as the 4th leaf scalar. The field is **consensus-mandatory**
 admission rejects any transaction with outputs that does not carry exactly
 one `0x07` of exactly `N × 64` bytes whose every entry begins with a
 canonical, prime-order, non-identity point (and exactly one `0x06` of
-`N × 1120`), at relay and at connect (`shekyl_tx_extra_pqc_field_shape`
-over `check_pqc_field_shape` + `check_pqc_leaf_entries`); the collector
+`N × 1120`), at relay, at connect and at DB add (`shekyl_tx_extra_shape_of`
+over `check_tx_extra_shape`, which is CEN-I19 + `check_pqc_leaf_entries`
+plus the coinbase grammar `CEN-I20` on a coinbase); the collector
 aborts rather than substituting a placeholder — on a v3-from-genesis chain
 there are no pre-feature outputs. (Until 2026-09-06 an absent or short field
 was zero-filled into the leaf: a leaf bound to nothing, unspendable, and a
@@ -1258,12 +1260,13 @@ Do not reintroduce them. Archival emission is a different vin
 | `FCMP_MAX_INPUTS_PER_TX` | 8 | `cryptonote_config.h` |
 | `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` | 10,000 | `cryptonote_config.h` |
 | `CTTypeFcmpPlusPlusPqc` | 1 | `ct_types.h` |
-| `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | 0x06 | `tx_extra.h` |
-| `TX_EXTRA_TAG_PQC_LEAF_ENTRIES` | 0x07 | `tx_extra.h` |
-| `ML_KEM_768_CT_BYTES` | 1088 | `tx_extra.h` |
-| `X25519_CT_BYTES` | 32 | `tx_extra.h` |
-| `HYBRID_KEM_CT_BYTES` | 1120 (32 + 1088) | `tx_extra.h` |
-| `PQC_LEAF_ENTRY_LEN` | 64 (`CM ‖ record` per output, `PL-D3`) | `tx_extra.h` |
+| `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | 0x06 | `shekyl-wire/src/tx_extra.rs` |
+| `TX_EXTRA_TAG_PQC_LEAF_ENTRIES` | 0x07 | `shekyl-wire/src/tx_extra.rs` |
+| `ML_KEM_768_CT_BYTES` | 1088 | `shekyl-wire/src/tx_extra.rs` |
+| `X25519_CT_BYTES` | 32 | `shekyl-wire/src/tx_extra.rs` |
+| `HYBRID_KEM_CT_BYTES` | 1120 (32 + 1088) | `shekyl-wire/src/tx_extra.rs` (`SHEKYL_HYBRID_KEM_CT_BYTES` in `shekyl_ffi.h`) |
+| `PQC_LEAF_ENTRY_LEN` | 64 (`CM ‖ record` per output, `PL-D3`) | `shekyl-wire/src/tx_extra.rs` (`SHEKYL_PQC_LEAF_ENTRY_BYTES` in `shekyl_ffi.h`) |
+| `COINBASE_NONCE_BYTES` | 8 (coinbase `0x02`, fixed; `TXE-Q6′`, `CEN-I20`) | `shekyl-wire/src/tx_extra.rs` (`SHEKYL_COINBASE_NONCE_BYTES`) |
 | `HF_VERSION_FCMP_PLUS_PLUS_PQC` | 1 | `cryptonote_config.h` |
 
 ---

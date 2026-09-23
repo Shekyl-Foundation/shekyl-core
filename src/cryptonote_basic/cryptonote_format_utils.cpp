@@ -431,284 +431,24 @@ namespace cryptonote
     return r;
   }
   //---------------------------------------------------------------
-  // A malformed `tx_extra` is attacker-supplied, and since CEN-I19's shape
-  // check runs at admission it reaches this parser once per relayed
-  // transaction. Echoing the whole blob back into the log is therefore an
-  // amplification: MAX_TX_EXTRA_SIZE is 24576 bytes, so a hex dump is 48 KB of
-  // log per rejected transaction per peer, at a level that is on by default.
-  // Describe the blob instead — its length, where parsing stopped, and a
-  // bounded head sample, which is what a reader needs to recognise the shape —
-  // and leave the full bytes to whoever holds the transaction.
-  static std::string describe_tx_extra(const std::vector<uint8_t>& tx_extra, size_t failed_at)
-  {
-    static constexpr size_t SAMPLE_BYTES = 32;
-    const size_t n = std::min(SAMPLE_BYTES, tx_extra.size());
-    std::ostringstream oss;
-    oss << tx_extra.size() << " bytes, stopped at offset " << failed_at << ", first " << n
-        << " bytes: " << string_tools::buff_to_hex_nodelimer(
-             std::string(reinterpret_cast<const char*>(tx_extra.data()), n));
-    if (n < tx_extra.size())
-      oss << "…";
-    return oss.str();
-  }
-  //---------------------------------------------------------------
-  bool parse_tx_extra(const std::vector<uint8_t>& tx_extra, std::vector<tx_extra_field>& tx_extra_fields)
-  {
-    tx_extra_fields.clear();
-
-    if(tx_extra.empty())
-      return true;
-
-    binary_archive<false> ar{epee::to_span(tx_extra)};
-
-    do
-    {
-      tx_extra_field field;
-      bool r = ::do_serialize(ar, field);
-      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
-      tx_extra_fields.push_back(field);
-    } while (!ar.eof());
-    CHECK_AND_NO_ASSERT_MES_L1(::serialization::check_stream_state(ar), false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
-
-    return true;
-  }
-  //---------------------------------------------------------------
-  template<typename T>
-  static bool pick(binary_archive<true> &ar, std::vector<tx_extra_field> &fields, uint8_t tag)
-  {
-    std::vector<tx_extra_field>::iterator it;
-    while ((it = std::find_if(fields.begin(), fields.end(), [](const tx_extra_field &f) { return std::get_if<T>(&f) != nullptr; })) != fields.end())
-    {
-      bool r = ::do_serialize(ar, tag);
-      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to serialize tx extra field");
-      r = ::do_serialize(ar, std::get<T>(*it));
-      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to serialize tx extra field");
-      fields.erase(it);
-    }
-    return true;
-  }
-  //---------------------------------------------------------------
-  bool sort_tx_extra(const std::vector<uint8_t>& tx_extra, std::vector<uint8_t> &sorted_tx_extra, bool allow_partial)
-  {
-    std::vector<tx_extra_field> tx_extra_fields;
-
-    if(tx_extra.empty())
-    {
-      sorted_tx_extra.clear();
-      return true;
-    }
-
-    binary_archive<false> ar{epee::to_span(tx_extra)};
-
-    size_t processed = 0;
-    do
-    {
-      tx_extra_field field;
-      bool r = ::do_serialize(ar, field);
-      if (!r)
-      {
-        MWARNING("failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
-        if (!allow_partial)
-          return false;
-        break;
-      }
-      tx_extra_fields.push_back(field);
-      processed = ar.getpos();
-    } while (!ar.eof());
-    if (!::serialization::check_stream_state(ar))
-    {
-      MWARNING("failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
-      if (!allow_partial)
-        return false;
-    }
-    MTRACE("Sorted " << processed << "/" << tx_extra.size());
-
-    std::ostringstream oss;
-    binary_archive<true> nar(oss);
-
-    // sort by:
-    if (!pick<tx_extra_pub_key>(nar, tx_extra_fields, TX_EXTRA_TAG_PUBKEY)) return false;
-    if (!pick<tx_extra_additional_pub_keys>(nar, tx_extra_fields, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS)) return false;
-    if (!pick<tx_extra_nonce>(nar, tx_extra_fields, TX_EXTRA_NONCE)) return false;
-    if (!pick<tx_extra_pqc_kem_ciphertext>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT)) return false;
-    if (!pick<tx_extra_pqc_leaf_entries>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_LEAF_ENTRIES)) return false;
-    if (!pick<tx_extra_pqc_view_tag_hints>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS)) return false;
-    if (!pick<tx_extra_pqc_spend_auth_pubkeys>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS)) return false;
-    if (!pick<tx_extra_archival_attestation>(nar, tx_extra_fields, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION)) return false;
-    if (!pick<tx_extra_padding>(nar, tx_extra_fields, TX_EXTRA_TAG_PADDING)) return false;
-
-    // if not empty, someone added a new type and did not add a case above
-    if (!tx_extra_fields.empty())
-    {
-      MERROR("tx_extra_fields not empty after sorting, someone forgot to add a case above");
-      return false;
-    }
-
-    std::string oss_str = oss.str();
-    if (allow_partial && processed < tx_extra.size())
-    {
-      MDEBUG("Appending unparsed data");
-      oss_str += std::string((const char*)tx_extra.data() + processed, tx_extra.size() - processed);
-    }
-    sorted_tx_extra = std::vector<uint8_t>(oss_str.begin(), oss_str.end());
-    return true;
-  }
-  //---------------------------------------------------------------
-  crypto::public_key get_tx_pub_key_from_extra(const std::vector<uint8_t>& tx_extra, size_t pk_index)
-  {
-    std::vector<tx_extra_field> tx_extra_fields;
-    parse_tx_extra(tx_extra, tx_extra_fields);
-
-    tx_extra_pub_key pub_key_field;
-    if(!find_tx_extra_field_by_type(tx_extra_fields, pub_key_field, pk_index))
-      return null_pkey;
-
-    return pub_key_field.pub_key;
-  }
-  //---------------------------------------------------------------
-  crypto::public_key get_tx_pub_key_from_extra(const transaction_prefix& tx_prefix, size_t pk_index)
-  {
-    return get_tx_pub_key_from_extra(tx_prefix.extra, pk_index);
-  }
-  //---------------------------------------------------------------
-  crypto::public_key get_tx_pub_key_from_extra(const transaction& tx, size_t pk_index)
-  {
-    return get_tx_pub_key_from_extra(tx.extra, pk_index);
-  }
-  //---------------------------------------------------------------
-  bool add_tx_pub_key_to_extra(transaction& tx, const crypto::public_key& tx_pub_key)
-  {
-    return add_tx_pub_key_to_extra(tx.extra, tx_pub_key);
-  }
-  //---------------------------------------------------------------
-  bool add_tx_pub_key_to_extra(transaction_prefix& tx, const crypto::public_key& tx_pub_key)
-  {
-    return add_tx_pub_key_to_extra(tx.extra, tx_pub_key);
-  }
-  //---------------------------------------------------------------
-  bool add_tx_pub_key_to_extra(std::vector<uint8_t>& tx_extra, const crypto::public_key& tx_pub_key)
-  {
-    tx_extra.resize(tx_extra.size() + 1 + sizeof(crypto::public_key));
-    tx_extra[tx_extra.size() - 1 - sizeof(crypto::public_key)] = TX_EXTRA_TAG_PUBKEY;
-    *reinterpret_cast<crypto::public_key*>(&tx_extra[tx_extra.size() - sizeof(crypto::public_key)]) = tx_pub_key;
-    return true;
-  }
-  //---------------------------------------------------------------
-  bool add_extra_nonce_to_tx_extra(std::vector<uint8_t>& tx_extra, const blobdata& extra_nonce)
-  {
-    CHECK_AND_ASSERT_MES(extra_nonce.size() <= TX_EXTRA_NONCE_MAX_COUNT, false, "extra nonce could be 255 bytes max");
-    size_t start_pos = tx_extra.size();
-    const std::size_t len_varint_bytes = tools::get_varint_byte_size(extra_nonce.size());
-    tx_extra.resize(tx_extra.size() + 1 + len_varint_bytes + extra_nonce.size());
-    //write tag
-    tx_extra[start_pos] = TX_EXTRA_NONCE;
-    //write len
-    ++start_pos;
-    unsigned char * vp = tx_extra.data() + start_pos;
-    tools::write_varint(vp, extra_nonce.size());
-    assert(vp == tx_extra.data() + tx_extra.size() - extra_nonce.size());
-    //write data
-    start_pos += len_varint_bytes;
-    if (!extra_nonce.empty())
-      memcpy(&tx_extra[start_pos], extra_nonce.data(), extra_nonce.size());
-    return true;
-  }
-  //---------------------------------------------------------------
-  bool remove_field_from_tx_extra(std::vector<uint8_t>& tx_extra, const std::type_info &type)
-  {
-    if (tx_extra.empty())
-      return true;
-    std::string extra_str(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size());
-    binary_archive<false> ar{epee::strspan<std::uint8_t>(extra_str)};
-    std::ostringstream oss;
-    binary_archive<true> newar(oss);
-
-    do
-    {
-      tx_extra_field field;
-      bool r = ::do_serialize(ar, field);
-      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
-      if (std::visit([&type](const auto& x) -> bool { return typeid(x) != type; }, field))
-        ::do_serialize(newar, field);
-    } while (!ar.eof());
-    CHECK_AND_NO_ASSERT_MES_L1(::serialization::check_stream_state(ar), false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
-    tx_extra.clear();
-    std::string s = oss.str();
-    tx_extra.reserve(s.size());
-    std::copy(s.begin(), s.end(), std::back_inserter(tx_extra));
-    return true;
-  }
-  //---------------------------------------------------------------
-  bool add_archival_attestation_to_tx_extra(std::vector<uint8_t>& tx_extra, const std::string& attestation_blob)
-  {
-    // Serialize through the tx_extra variant so the tag + length-prefixed blob are
-    // emitted canonically (matching parse_tx_extra / sort_tx_extra). `attestation_blob`
-    // is the concatenation of k canonical ARCHIVAL_ATTESTATION_HEADER_BYTES-byte records
-    // (shekyl-archival-retention's AttestationHeader). The k ≤ MAX_ATTESTATION_RECORDS +
-    // multiple-of-header-length bounds are a consensus rule enforced at miner-tx
-    // admission, not here.
-    tx_extra_field field = tx_extra_archival_attestation{attestation_blob};
-    std::ostringstream oss;
-    binary_archive<true> ar(oss);
-    if (!::do_serialize(ar, field))
-      return false;
-    const std::string s = oss.str();
-    tx_extra.insert(tx_extra.end(), s.begin(), s.end());
-    return true;
-  }
-  //---------------------------------------------------------------
   bool parse_archival_attestation_from_extra(const std::vector<uint8_t>& tx_extra, std::string& attestation_blob)
   {
-    // parse_* convention (same bool as parse_tx_extra): false ONLY on a tx_extra
-    // parse failure -- the headers are UNREADABLE. A successful parse with no
-    // attestation tag is true with an empty blob (the committed empty set), a
-    // distinction the get_*/find_* "found?" convention cannot carry. Collapsing
-    // the two would let a malformed coinbase extra pass for the empty attestation
-    // set at admission while the settlement scan later reads the same bytes.
+    // false ONLY when the extra does not parse -- the headers are UNREADABLE.
+    // A parsed extra with no attestation tag is true with an empty blob (the
+    // committed empty set). The codec carries the distinction as two codes
+    // (SHEKYL_TX_EXTRA_MALFORMED vs SHEKYL_TX_EXTRA_ABSENT); collapsing them
+    // would let a malformed coinbase extra pass for the empty attestation set
+    // at admission while the settlement scan later reads the same bytes.
     attestation_blob.clear();
-    std::vector<tx_extra_field> tx_extra_fields;
-    if (!parse_tx_extra(tx_extra, tx_extra_fields))
+    ShekylOwnedBuffer blob;
+    const int32_t rc = shekyl_tx_extra_field(
+      tx_extra.empty() ? nullptr : tx_extra.data(), tx_extra.size(),
+      SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, 0, &blob.buf);
+    if (rc == SHEKYL_TX_EXTRA_ABSENT)
+      return true;
+    if (rc != SHEKYL_TX_EXTRA_OK)
       return false;
-
-    tx_extra_archival_attestation field;
-    if (find_tx_extra_field_by_type(tx_extra_fields, field))
-      attestation_blob = field.blob;
-    return true;
-  }
-  //---------------------------------------------------------------
-  void set_payment_id_to_tx_extra_nonce(blobdata& extra_nonce, const crypto::hash& payment_id)
-  {
-    extra_nonce.clear();
-    extra_nonce.push_back(TX_EXTRA_NONCE_PAYMENT_ID);
-    const uint8_t* payment_id_ptr = reinterpret_cast<const uint8_t*>(&payment_id);
-    std::copy(payment_id_ptr, payment_id_ptr + sizeof(payment_id), std::back_inserter(extra_nonce));
-  }
-  //---------------------------------------------------------------
-  void set_encrypted_payment_id_to_tx_extra_nonce(blobdata& extra_nonce, const crypto::hash8& payment_id)
-  {
-    extra_nonce.clear();
-    extra_nonce.push_back(TX_EXTRA_NONCE_ENCRYPTED_PAYMENT_ID);
-    const uint8_t* payment_id_ptr = reinterpret_cast<const uint8_t*>(&payment_id);
-    std::copy(payment_id_ptr, payment_id_ptr + sizeof(payment_id), std::back_inserter(extra_nonce));
-  }
-  //---------------------------------------------------------------
-  bool get_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash& payment_id)
-  {
-    if(sizeof(crypto::hash) + 1 != extra_nonce.size())
-      return false;
-    if(TX_EXTRA_NONCE_PAYMENT_ID != extra_nonce[0])
-      return false;
-    payment_id = *reinterpret_cast<const crypto::hash*>(extra_nonce.data() + 1);
-    return true;
-  }
-  //---------------------------------------------------------------
-  bool get_encrypted_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash8& payment_id)
-  {
-    if(sizeof(crypto::hash8) + 1 != extra_nonce.size())
-      return false;
-    if (TX_EXTRA_NONCE_ENCRYPTED_PAYMENT_ID != extra_nonce[0])
-      return false;
-    payment_id = *reinterpret_cast<const crypto::hash8*>(extra_nonce.data() + 1);
+    attestation_blob.assign(reinterpret_cast<const char*>(blob.data()), blob.size());
     return true;
   }
   //---------------------------------------------------------------
@@ -951,46 +691,26 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
-  bool check_tx_extra_pqc_field_shape(const transaction& tx, std::string& reason)
+  bool check_tx_extra_shape(const transaction& tx, std::string& reason)
   {
-    std::vector<tx_extra_field> fields;
-    if (!parse_tx_extra(tx.extra, fields))
-    {
-      reason = "tx_extra does not parse; the PQC field shape cannot be established";
-      return false;
-    }
-    std::vector<size_t> kem_lens, leaf_lens;
-    // The 0x07 payload rides along for the content rule (PL-D3: every entry's
-    // commitment point must be admissible); the rule reads it only once the
-    // shape rule has admitted exactly one field.
-    const std::string* leaf_blob = nullptr;
-    for (const tx_extra_field& f : fields)
-    {
-      if (const auto* kem = std::get_if<tx_extra_pqc_kem_ciphertext>(&f))
-        kem_lens.push_back(kem->blob.size());
-      else if (const auto* leaf = std::get_if<tx_extra_pqc_leaf_entries>(&f))
-      {
-        leaf_lens.push_back(leaf->blob.size());
-        leaf_blob = &leaf->blob;
-      }
-    }
-    const bool one_leaf = leaf_lens.size() == 1 && leaf_blob != nullptr;
-    // The rule's verdict AND its sentence come from shekyl-wire: the daemon
-    // logs what the rule says rather than re-deriving a second wording from
-    // the code, which would be two formatters to keep in step forever.
+    // shekyl-wire parses the extra and applies the shape rule over its own
+    // parse (TX_EXTRA_RUST_CUTOVER.md §3): CEN-I19 on every transaction, the
+    // closed coinbase grammar (TXE-Q6') on a coinbase, no 0x02 off it. One
+    // parser of the grammar, so the fields the rule judges are the fields the
+    // codec found -- the daemon hands over bytes and whether the transaction
+    // is a coinbase, never a second reading of them. The verdict AND its
+    // sentence come from the rule; the daemon logs what the rule says rather
+    // than keeping a second wording in step forever.
     char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
-    const int32_t rc = shekyl_tx_extra_pqc_field_shape(tx.vout.size(),
-      kem_lens.empty() ? nullptr : kem_lens.data(), kem_lens.size(),
-      leaf_lens.empty() ? nullptr : leaf_lens.data(), leaf_lens.size(),
-      one_leaf ? reinterpret_cast<const uint8_t*>(leaf_blob->data()) : nullptr,
-      one_leaf ? leaf_blob->size() : 0,
-      msg, sizeof(msg));
-    if (rc == SHEKYL_TX_EXTRA_PQC_SHAPE_OK)
+    const int32_t rc = shekyl_tx_extra_shape_of(
+      tx.extra.empty() ? nullptr : tx.extra.data(), tx.extra.size(),
+      tx.vout.size(), is_coinbase(tx), msg, sizeof(msg));
+    if (rc == SHEKYL_TX_EXTRA_OK)
       return true;
     msg[sizeof(msg) - 1] = '\0';
     reason = msg[0] != '\0'
       ? std::string(msg)
-      : ("tx_extra PQC field shape check failed with code " + std::to_string(rc));
+      : ("tx_extra shape check failed with code " + std::to_string(rc));
     return false;
   }
   //---------------------------------------------------------------

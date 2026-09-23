@@ -249,3 +249,230 @@ fn attestation_field_bytes_match_the_daemon() {
         vec![TxExtraField::ArchivalAttestation(Vec::new())]
     );
 }
+
+// ── Twins of the retired C++ parser tests (TX_EXTRA_RUST_CUTOVER.md §9.2) ──
+//
+// `tests/unit_tests/test_tx_utils.cpp` and `cryptonote_format_utils.cpp`
+// tested the C++ `parse_tx_extra` / `sort_tx_extra` /
+// `remove_field_from_tx_extra`. With that parser gone, "parity with the
+// oracle" has no subject; the *cases* belong with the grammar's one
+// implementation. Each C++ `TEST` maps to a test here (the table in §9.2
+// names the pairs); the sorter and the field remover have no successor —
+// canonical order is produced by construction (`shekyl_coinbase_extra`) and
+// judged by `check_coinbase_extra_shape`, and nothing rewrites an extra in
+// place any more.
+
+/// C++ `parse_tx_extra.handles_empty_extra`.
+#[test]
+fn empty_extra_parses_to_no_fields() {
+    assert_eq!(tx_extra::parse(&[]).unwrap(), Vec::<TxExtraField>::new());
+}
+
+/// C++ `handles_padding_only_size_1`, `_size_2`, `_max_size`: a run of
+/// zero bytes is one padding field of that length, up to the cap.
+#[test]
+fn padding_only_parses_with_its_length_up_to_the_cap() {
+    for n in [1usize, 2, tx_extra::TX_EXTRA_PADDING_MAX_COUNT] {
+        assert_eq!(
+            tx_extra::parse(&vec![0u8; n]).unwrap(),
+            vec![TxExtraField::Padding(n)],
+            "n = {n}"
+        );
+    }
+}
+
+/// C++ `handles_padding_only_exceed_max_size`.
+#[test]
+fn padding_past_the_cap_is_refused_on_parse() {
+    let err = tx_extra::parse(&vec![0u8; tx_extra::TX_EXTRA_PADDING_MAX_COUNT + 1])
+        .expect_err("256 zero bytes must not parse");
+    assert!(err.to_string().contains("padding"), "{err}");
+}
+
+/// C++ `handles_invalid_padding_only`: padding consumes to the end, so a
+/// non-zero byte inside it is a refusal, not a second field.
+#[test]
+fn a_nonzero_byte_inside_padding_is_refused() {
+    assert!(tx_extra::parse(&[0x00, 42]).is_err());
+}
+
+/// The 33 bytes the C++ cases used for a pubkey field.
+const CPP_PUBKEY_FIELD: [u8; 33] = [
+    1, 30, 208, 98, 162, 133, 64, 85, 83, 112, 91, 188, 89, 211, 24, 131, 39, 154, 22, 228, 80, 63,
+    198, 141, 173, 111, 244, 183, 4, 149, 186, 140, 230,
+];
+
+/// C++ `handles_pub_key_only`, on the same bytes.
+#[test]
+fn pubkey_only_parses() {
+    let fields = tx_extra::parse(&CPP_PUBKEY_FIELD).unwrap();
+    assert_eq!(fields.len(), 1);
+    assert!(matches!(fields[0], TxExtraField::PubKey(k) if k[..] == CPP_PUBKEY_FIELD[1..]));
+}
+
+/// C++ `handles_extra_nonce_only`, on the same bytes `{2, 1, 42}`.
+#[test]
+fn nonce_only_parses() {
+    assert_eq!(
+        tx_extra::parse(&[2, 1, 42]).unwrap(),
+        vec![TxExtraField::Nonce(vec![42])]
+    );
+}
+
+/// C++ `handles_pub_key_and_padding`: the pubkey field followed by 63 zero
+/// bytes is two fields, the second a padding run of 63.
+#[test]
+fn pubkey_then_padding_parses_as_two_fields() {
+    let mut extra = CPP_PUBKEY_FIELD.to_vec();
+    extra.extend(std::iter::repeat_n(0u8, 63));
+    let fields = tx_extra::parse(&extra).unwrap();
+    assert_eq!(fields.len(), 2);
+    assert!(matches!(fields[0], TxExtraField::PubKey(_)));
+    assert_eq!(fields[1], TxExtraField::Padding(63));
+}
+
+/// C++ `parse_and_validate_tx_extra.fails_on_wrong_size_in_extra_nonce`:
+/// a nonce whose declared length (255) runs past the bytes present.
+#[test]
+fn a_nonce_length_past_the_bytes_is_refused() {
+    let mut extra = vec![0u8; 20];
+    extra[0] = TX_EXTRA_TAG_NONCE;
+    extra[1] = 255;
+    assert!(tx_extra::parse(&extra).is_err());
+}
+
+/// C++ `sort_tx_extra.invalid` (`{1}`: a pubkey tag with no key) and
+/// `invalid_suffix_strict` (a valid nonce field followed by a lone `1`):
+/// truncation anywhere refuses the whole extra. The sorter's *partial*
+/// mode (`invalid_suffix_partial`, which returned the unsorted prefix on a
+/// bad suffix) has no successor: accepting a partial parse is the
+/// fail-open the codec refuses.
+#[test]
+fn a_truncated_pubkey_field_is_refused_alone_and_as_a_suffix() {
+    assert!(tx_extra::parse(&[1]).is_err());
+    assert!(tx_extra::parse(&[2, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]).is_err());
+}
+
+/// C++ `remove_field_from_tx_extra.invalid_varint`: a nonce whose length
+/// varint is `0x80 0x00` — a non-canonical encoding of zero. The C++ parser
+/// refused it; so does this one, and for the same reason: one byte string,
+/// one reading.
+#[test]
+fn a_non_canonical_varint_length_is_refused() {
+    let mut extra = CPP_PUBKEY_FIELD.to_vec();
+    extra.extend_from_slice(&[TX_EXTRA_TAG_NONCE, 0x80, 0x00]);
+    assert!(tx_extra::parse(&extra).is_err());
+}
+
+/// C++ `cn_format_utils.add_extra_nonce_to_tx_extra` (nonce sizes 0..=256,
+/// with and without a preceding pubkey): every size up to the cap
+/// serializes and parses back to the same field, the cap + 1 is refused at
+/// serialize. Also `still_accepts_the_tags_that_remain` (pubkey + 8-byte
+/// nonce parse as two fields in order).
+#[test]
+fn every_nonce_length_up_to_the_cap_round_trips_and_the_cap_plus_one_is_refused() {
+    for with_prefix in [false, true] {
+        for n in 0..=tx_extra::TX_EXTRA_NONCE_MAX_COUNT {
+            let mut fields = Vec::new();
+            if with_prefix {
+                fields.push(TxExtraField::PubKey([0x11; 32]));
+            }
+            fields.push(TxExtraField::Nonce(vec![b'%'; n]));
+            let bytes = tx_extra::serialize(&fields).unwrap_or_else(|e| panic!("n = {n}: {e}"));
+            // tag + varint(len) + len, plus the pubkey field when present.
+            let varint_len = if n < 0x80 { 1 } else { 2 };
+            assert_eq!(
+                bytes.len(),
+                usize::from(with_prefix) * 33 + 1 + varint_len + n
+            );
+            assert_eq!(tx_extra::parse(&bytes).unwrap(), fields, "n = {n}");
+        }
+        let mut fields = Vec::new();
+        if with_prefix {
+            fields.push(TxExtraField::PubKey([0x11; 32]));
+        }
+        fields.push(TxExtraField::Nonce(vec![
+            b'%';
+            tx_extra::TX_EXTRA_NONCE_MAX_COUNT
+                + 1
+        ]));
+        assert!(tx_extra::serialize(&fields).is_err());
+    }
+}
+
+/// `docs/test_vectors/TX_EXTRA_PQC_ROUND_TRIP.json`, promoted to the pinned
+/// vector for the two C++ `tx_extra_pqc_round_trip` cases (TXE-Q5a). The
+/// JSON describes each case's inputs by pattern; this test derives the bytes
+/// from those descriptions, so the vector file — not this test — is the
+/// record of the case. `kem_and_leaf_entries_survive_sort`: the canonical
+/// layout serializes to the pinned byte anchors and parses back
+/// field-for-field, and serialize ∘ parse is the identity (the "double sort
+/// idempotent" expectation with no sorter). `kem_and_leaf_entries_reverse_order`:
+/// the same fields in the non-canonical order still parse to the same
+/// three contents — and the coinbase grammar refuses the order, which is
+/// what "sort reorders to canonical" became once nothing reorders.
+#[test]
+fn tx_extra_pqc_round_trip_vector_cases_hold_without_a_sorter() {
+    let doc: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docs/test_vectors/TX_EXTRA_PQC_ROUND_TRIP.json"
+    ))
+    .expect("vector parses");
+    assert_eq!(doc["constants"]["HYBRID_KEM_CT_BYTES"], HYBRID_KEM_CT_BYTES);
+    assert_eq!(doc["constants"]["PQC_LEAF_ENTRY_LEN"], PQC_LEAF_ENTRY_LEN);
+    let vectors = doc["vectors"].as_array().expect("vectors");
+    assert_eq!(vectors.len(), 2);
+
+    let hex32 = |s: &str| -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (i, b) in out.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap();
+        }
+        out
+    };
+
+    // Case 1: canonical order, sequential-byte patterns.
+    let v = &vectors[0];
+    assert_eq!(v["name"], "kem_and_leaf_entries_survive_sort");
+    let n = usize::try_from(v["inputs"]["kem_ciphertext_num_outputs"].as_u64().unwrap()).unwrap();
+    let low_byte = |i: usize| u8::try_from(i & 0xFF).unwrap();
+    let kem: Vec<u8> = (0..n * HYBRID_KEM_CT_BYTES).map(low_byte).collect();
+    let leaf: Vec<u8> = (0..n * PQC_LEAF_ENTRY_LEN)
+        .map(|i| low_byte(i + 0x42))
+        .collect();
+    assert_eq!(kem.len() as u64, v["inputs"]["kem_ciphertext_total_bytes"]);
+    assert_eq!(leaf.len() as u64, v["inputs"]["leaf_entries_total_bytes"]);
+    let fields = vec![
+        TxExtraField::PubKey(hex32(v["inputs"]["pubkey"].as_str().unwrap())),
+        TxExtraField::PqcKemCiphertext(kem.clone()),
+        TxExtraField::PqcLeafEntries(leaf.clone()),
+    ];
+    let bytes = tx_extra::serialize(&fields).unwrap();
+    let parsed = tx_extra::parse(&bytes).unwrap();
+    assert_eq!(parsed.len() as u64, v["expected"]["field_count_after_sort"]);
+    assert_eq!(parsed, fields, "kem/leaf/pubkey preserved");
+    assert_eq!(tx_extra::serialize(&parsed).unwrap(), bytes, "idempotent");
+
+    // Case 2: non-canonical insertion order.
+    let v = &vectors[1];
+    assert_eq!(v["name"], "kem_and_leaf_entries_reverse_order");
+    let kem = vec![0x55u8; HYBRID_KEM_CT_BYTES];
+    let leaf = vec![0x77u8; PQC_LEAF_ENTRY_LEN];
+    let pubkey = hex32(v["inputs"]["pubkey"].as_str().unwrap());
+    let reversed = tx_extra::serialize(&[
+        TxExtraField::PqcLeafEntries(leaf.clone()),
+        TxExtraField::PqcKemCiphertext(kem.clone()),
+        TxExtraField::PubKey(pubkey),
+    ])
+    .unwrap();
+    let parsed = tx_extra::parse(&reversed).unwrap();
+    assert_eq!(
+        parsed.len() as u64,
+        v["expected"]["field_count_before_sort"]
+    );
+    assert!(parsed.contains(&TxExtraField::PqcKemCiphertext(kem)));
+    assert!(parsed.contains(&TxExtraField::PqcLeafEntries(leaf)));
+    assert!(parsed.contains(&TxExtraField::PubKey(pubkey)));
+    // No sorter reorders it; the grammar refuses the order (and, with no
+    // nonce, the missing field first).
+    assert!(tx_extra::check_coinbase_extra_shape(&parsed, 1).is_err());
+}

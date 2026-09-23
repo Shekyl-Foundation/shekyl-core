@@ -174,8 +174,12 @@ fn registries_are_the_expected_size_at_this_increment() {
     // when the census moves, both move together in the same PR. 153 → 152
     // on 2026-09-21: CEN-F12 (the dead decomposed-denomination gate) went
     // to bucket 3 and was deleted with its C++ in the same PR (E6 slice 4
-    // Q2 (a)).
-    assert_eq!(CenRow::ALL.len(), 152);
+    // Q2 (a)). 152 → 153 on 2026-09-23: CEN-I20 (the coinbase extra
+    // grammar, TXE-Q6′) minted with its implementation in shekyl-wire —
+    // pending here, like I19, until the 4.I slice (slice 6) wires
+    // `check_tx_extra_shape` — I19 + I20 in one function; slice 4 (4.F)
+    // landed 2026-09-22 without either, as CHAIN_RULES_SLICE_4.md S21 records.
+    assert_eq!(CenRow::ALL.len(), 153);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 

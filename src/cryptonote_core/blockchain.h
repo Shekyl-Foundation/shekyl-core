@@ -377,7 +377,7 @@ namespace cryptonote
      * @param di return-by-reference tells the miner what the difficulty target is
      * @param height return-by-reference tells the miner what height it's mining against
      * @param expected_reward return-by-reference the total reward awarded to the miner finding this block, including transaction fees
-     * @param ex_nonce extra data to be added to the miner transaction's extra
+     * @param ex_nonce the miner's coinbase nonce, at most SHEKYL_COINBASE_NONCE_BYTES (zero-padded to exactly that)
      *
      * @return true if block template filled in successfully, else false
      */

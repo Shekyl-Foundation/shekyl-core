@@ -693,7 +693,16 @@ TEST(cryptonote_protocol_handler, race_condition)
     block.miner_tx.version = 3;
     block.miner_tx.unlock_time = height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
     block.miner_tx.vin.push_back(cryptonote::txin_gen{height});
-    cryptonote::add_tx_pub_key_to_extra(block.miner_tx, {});
+    {
+      // A pubkey + zero-nonce coinbase extra through the one writer (this
+      // hand-built block has always lacked the per-output PQC fields; the
+      // test it serves is GTEST_SKIP'd).
+      const uint8_t zero_key[32] = {0};
+      const uint8_t nonce[SHEKYL_COINBASE_NONCE_BYTES] = {0};
+      ShekylOwnedBuffer extra;
+      shekyl_coinbase_extra(zero_key, nonce, nullptr, 0, nullptr, 0, 0, &extra.buf, nullptr, 0);
+      block.miner_tx.extra.assign(extra.data(), extra.data() + extra.size());
+    }
     cryptonote::get_block_reward(
       db.get_block_weight(height - 1),
       {},

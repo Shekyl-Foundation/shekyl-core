@@ -43,7 +43,13 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.36: `get_info` drops `tx_prune_height` — the
+/// `CORE_RPC_VERSION_MINOR`. 3.37: `get_block_template` bounds `reserve_size`
+/// to 8 and `extra_nonce` to 8 bytes — the coinbase `0x02` nonce is a fixed
+/// 8-byte field under the closed coinbase grammar (`TX_EXTRA_RUST_CUTOVER.md`
+/// TXE-Q6′), always reserved, so `reserved_offset` is always returned; a
+/// larger request is refused with `CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND`
+/// (-23; the old 0..255 `TOO_BIG_RESERVE_SIZE` -3 is retired).
+/// 3.36: `get_info` drops `tx_prune_height` — the
 /// C++ tx-data prune whose watermark it reported is deleted (LMDB v15; the
 /// uniform discard is S-PRUNE, which will report its own frontier when it
 /// exists). 3.35: `pruning_seed` leaves `get_peer_list`,
@@ -80,8 +86,9 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `= 26` is textually identical whoever writes it. 3.33 is the
 /// `get_output_histogram` deletion on this branch; 3.34 the
 /// `get_curve_tree_path` removal, chained after it on merge; 3.35 the
-/// `pruning_seed` deletion; 3.36 the `tx_prune_height` deletion.
-pub const CORE_RPC_VERSION_MINOR: u32 = 36;
+/// `pruning_seed` deletion; 3.36 the `tx_prune_height` deletion; 3.37 the
+/// coinbase-nonce bound.
+pub const CORE_RPC_VERSION_MINOR: u32 = 37;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -486,10 +493,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_644);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 36);
+        assert_eq!(CORE_RPC_VERSION, 196_645);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 37);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 36);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 37);
     }
 
     #[test]

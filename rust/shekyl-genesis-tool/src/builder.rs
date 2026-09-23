@@ -11,19 +11,19 @@
 //! deliberate change: the tx key is the deterministic [`crate::txkey`]
 //! derivation instead of a fresh `keypair::generate`.
 //!
-//! `tx_extra` is emitted directly in the C++ `sort_tx_extra` fixed-point
-//! order for the genesis field subset — `0x01` pubkey, one aggregated `0x06`
-//! KEM-ciphertext blob, one aggregated `0x07` leaf-entry blob (`CM ‖ record`
-//! per output; pick order:
-//! `cryptonote_format_utils.cpp`, `sort_tx_extra`) — so no general sorter is
-//! needed and the emitted extra is already canonical.
+//! `tx_extra` is emitted by [`shekyl_wire::tx_extra::build_coinbase_extra`],
+//! the grammar's one constructor (`TXE-Q6′`): `0x01` pubkey, `0x02` nonce of
+//! eight **zero** bytes (genesis was not nonce-searched, and zero says so),
+//! one aggregated `0x06` KEM-ciphertext blob, one aggregated `0x07` leaf-entry
+//! blob (`CM ‖ record` per output). The constructor refuses an extra that
+//! admission would refuse, so the pins cannot drift from the grammar.
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_wire::block::{Block, BlockHeader};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
-use shekyl_wire::tx_extra::{self, TxExtraField, ML_KEM_768_CT_BYTES, PQC_LEAF_ENTRY_LEN};
+use shekyl_wire::tx_extra::{self, COINBASE_NONCE_BYTES, ML_KEM_768_CT_BYTES, PQC_LEAF_ENTRY_LEN};
 
 use crate::recipients::{Recipient, GENESIS_TOTAL_ATOMIC};
 use crate::txkey::{derive_genesis_tx_secret, tx_pubkey};
@@ -123,11 +123,18 @@ pub fn build_genesis_tx(
     }
     debug_assert_eq!(leaf_blob.len(), recipients.len() * PQC_LEAF_ENTRY_LEN);
 
-    let extra = tx_extra::serialize(&[
-        TxExtraField::PubKey(tx_pub),
-        TxExtraField::PqcKemCiphertext(kem_blob),
-        TxExtraField::PqcLeafEntries(leaf_blob),
-    ])?;
+    let extra = tx_extra::build_coinbase_extra(
+        tx_pub,
+        &[0u8; COINBASE_NONCE_BYTES],
+        outputs.len(),
+        &kem_blob,
+        &leaf_blob,
+    )
+    .map_err(|e| {
+        invalid(format!(
+            "built genesis extra fails the coinbase grammar: {e}"
+        ))
+    })?;
 
     let tx = Transaction {
         prefix: TxPrefix {

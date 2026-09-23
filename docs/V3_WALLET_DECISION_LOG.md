@@ -5545,7 +5545,7 @@ circuit crate) are the tier-2 checks on the mechanism itself.
 `SHEKYL_PINNED_REGEN_DECISION="2026-09-14 PL-D3 leaf commitment: 0x07 = CM ‖ record, CM = k·G_k + r·J opened in-circuit; leaf-hash vectors retired and re-pinned"`
 
 **Reference.** `docs/design/FCMP_SPEND_LINKABILITY.md` §6.2, §10, §12;
-`docs/design/FCMP_SPEND_LINKABILITY_CENSUS.md` §8 (pre-flight measurements);
+`docs/audit_trail/FCMP_SPEND_LINKABILITY_CENSUS.md` (was `docs/design/`; moved 2026-09-23) §8 (pre-flight measurements);
 `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism-4 `shekyl-pqc-leaf` retired;
 two mechanism-1 customizations and two mechanism-2 labels added);
 `.cursor/rules/50-testing.mdc`.

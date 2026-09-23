@@ -65,10 +65,6 @@ namespace hw {
 
 namespace ct {
 
-    /** Dummy BP+, pseudo-outs, and ECDH so construct_tx can serialize/hash; wallet replaces via shekyl_sign_fcmp_transaction. */
-    void fill_construct_tx_rct_stub(CtSig &rv, const key &message, xmr_amount txnFee,
-        const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,
-        const std::vector<xmr_amount> &outamounts, const keyV &destinations);
     bool verCtSemanticsSimple(const CtSig & rv);
     bool verCtSemanticsSimple(const std::vector<const CtSig*> & rv);
     // Fee-only RCT (empty FCMP++ proof and pseudo-outs); used by archival serve-credit.

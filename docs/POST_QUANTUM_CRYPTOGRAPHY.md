@@ -1307,10 +1307,12 @@ removed from construction, scanning, and signing paths.
   `k_amount` is derived via HKDF (label `shekyl-output-amount-key`).
 - **Commitment masks**: `z` scalar derived via HKDF (label
   `shekyl-output-mask`). Used directly by the Rust BP+ prover.
-- **Construction**: `construct_output` (Rust FFI) produces `enc_amount`,
-  commitment, and `z` scalar. The C++ `construct_tx_with_tx_key` stores
-  these in `v3_rct_data` and exports `z` scalars as `v3_commitment_masks`
-  for the signing path.
+- **Construction**: `construct_output` produces `enc_amount`, commitment,
+  and `z` scalar; the one transaction builder is `shekyl-tx-builder`
+  (`shekyl-engine-core` drives it). The C++ `construct_tx_with_tx_key` that
+  once stored these for a C++ signing path was deleted 2026-09-23
+  (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q1); only the coinbase is built in C++,
+  and its `extra` through `shekyl_coinbase_extra`.
 - **Signing**: `shekyl_sign_fcmp_transaction` receives commitment masks
   directly; the C++ `proveRangeBulletproofPlus` function has been deleted.
   All BP+ proof generation occurs in Rust.
@@ -1358,10 +1360,10 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 18 | Proof FFI (tx proof + reserve proof) | Done | `rust/shekyl-proofs/` — outbound/inbound tx proofs, reserve proofs; `rust/shekyl-ffi/src/lib.rs` (6 proof FFI exports); `src/wallet/wallet2.cpp` callers collapsed to Rust FFI |
 
 Notes:
-- Staking and unstaking use `create_transactions_2` which routes through
-  `construct_tx_with_tx_key` (PQC signing built in).
-- Claim transactions use a dedicated PQC signing block in
-  `create_claim_transaction`.
+- Staking and unstaking are built by `shekyl-tx-builder` through the Engine
+  (`create_transactions_2` / `construct_tx_with_tx_key` were the deleted C++
+  wallet's; `wallet2` left 2026-08-19 and the C++ builder 2026-09-23).
+- Claim transactions were retired with the claim-era staking specs.
 - Classical Monero-style multisig (secret-splitting, `make_multisig`) is
   removed from the rebooted chain. All multisig is PQC-only via
   `scheme_id = 2` — see `docs/PQC_MULTISIG.md`.

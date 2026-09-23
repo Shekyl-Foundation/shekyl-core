@@ -490,7 +490,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     uint64_t next_output_seq = get_num_outputs(0) - this_block_output_count;
 
     // CEN-I19: the store applies the SAME shape rule admission applies -- one
-    // rule, one implementation (`check_tx_extra_pqc_field_shape`, over
+    // rule, one implementation (`check_tx_extra_shape`, over
     // shekyl-wire's `check_pqc_field_shape`), so any path reaching add_block
     // without admission fails closed instead of storing a leaf the rule
     // forbids. Re-deriving parts of the rule here is what went wrong before:
@@ -506,25 +506,33 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     // leaves whose post-quantum binding was to nothing, invisibly. Everything
     // below is unreachable for an admitted transaction and aborts rather than
     // falling back (CEN-L11 pattern).
+    //
+    // One read: shekyl-wire parses the extra, applies the rule over its own
+    // parse and hands back the 0x07 blob (TX_EXTRA_RUST_CUTOVER.md §3) --
+    // there is no second parse for the shape check to disagree with, and the
+    // "accepted but absent" arm the three-pass form had to guard cannot occur.
     auto extract_leaf_entries = [](const transaction& tx) -> std::vector<uint8_t> {
-      std::string why;
-      if (!check_tx_extra_pqc_field_shape(tx, why))
+      char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
+      ShekylOwnedBuffer blob;
+      const int32_t rc = shekyl_tx_extra_leaf_entries(
+        tx.extra.empty() ? nullptr : tx.extra.data(), tx.extra.size(),
+        tx.vout.size(), is_coinbase(tx), &blob.buf, msg, sizeof(msg));
+      if (rc != SHEKYL_TX_EXTRA_OK)
+      {
+        msg[sizeof(msg) - 1] = '\0';
+        const std::string why = msg[0] != '\0'
+          ? std::string(msg)
+          : (rc == SHEKYL_TX_EXTRA_MALFORMED
+              ? std::string("tx_extra does not parse")
+              : "tx_extra leaf read failed with code " + std::to_string(rc));
         throw DB_ERROR(("curve-tree leaf: " + why + " at DB add for tx "
           + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
           + " (validated at admission?)").c_str());
-      // Rule-conformant and leafless: no outputs, therefore no fields, no leaf.
-      if (tx.vout.empty())
-        return {};
-      std::vector<tx_extra_field> fields;
-      if (!parse_tx_extra(tx.extra, fields))
-        throw DB_ERROR("curve-tree leaf: tx_extra parses for the shape check but not here (bug)");
-      tx_extra_pqc_leaf_entries lh;
-      if (!find_tx_extra_field_by_type(fields, lh))
-        throw DB_ERROR("curve-tree leaf: the shape check accepted a tx whose 0x07 field is absent (bug)");
-      // Exactly one field of exactly PQC_LEAF_ENTRY_LEN * vout.size() bytes
+      }
+      // Exactly one field of exactly SHEKYL_PQC_LEAF_ENTRY_BYTES * vout.size() bytes
       // whose every entry begins with an admissible commitment point, per the
-      // rule just applied -- so the first match IS the only match.
-      return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
+      // rule just applied; empty for a leafless (zero-output) transaction.
+      return std::vector<uint8_t>(blob.data(), blob.data() + blob.size());
     };
 
     // All outputs are deferred: compute leaf, determine maturity, add to pending.
@@ -538,7 +546,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         // extract_leaf_entries pinned the blob to exactly one 64-byte entry per
         // output; the leaf constructor takes the commitment point at its front
         // (PL-D3) and extracts the x-coordinate itself.
-        const uint8_t* leaf_entry = leaf_entry_blob.data() + i * PQC_LEAF_ENTRY_LEN;
+        const uint8_t* leaf_entry = leaf_entry_blob.data() + i * SHEKYL_PQC_LEAF_ENTRY_BYTES;
 
         crypto::public_key output_key;
         uint64_t maturity_raw;
@@ -589,7 +597,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         // via check_outs_valid; shekyl_check_commitment_masks via
         // check_commitment_mask_valid, with the coinbase legs in
         // prevalidate_miner_transaction; CM by the PL-D3 content rule in
-        // shekyl_tx_extra_pqc_field_shape, code 10, at relay and connect).
+        // shekyl_tx_extra_shape_of, code 10, at relay and connect).
         // So this is unreachable, and it aborts rather than silently omitting
         // the output.
         if (!shekyl_construct_curve_tree_leaf(

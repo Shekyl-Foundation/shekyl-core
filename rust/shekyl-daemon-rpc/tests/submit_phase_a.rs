@@ -119,9 +119,9 @@ fn truncated_blob_rejects() {
 
 #[test]
 fn coinbase_submission_rejects() {
-    // A structurally valid coinbase (sole gen input, Null ct) — parses and
-    // validates, but RPC submission of a miner tx is the live
-    // tx_sanity_check residue (§8.8) and must refuse.
+    // A structurally valid coinbase (sole gen input, Null ct, the CEN-I20
+    // extra grammar) — parses and validates, but RPC submission of a miner
+    // tx is the live tx_sanity_check residue (§8.8) and must refuse.
     let coinbase = Transaction {
         prefix: TxPrefix {
             unlock_time: 60,
@@ -131,7 +131,7 @@ fn coinbase_submission_rejects() {
                 key: [0x22; 32],
                 view_tag: 7,
             }],
-            extra: submit_fixtures::conforming_pqc_extra(1),
+            extra: submit_fixtures::conforming_coinbase_extra(1),
         },
         ct: Ct::Null(CtBase {
             enc_amounts: vec![[0u8; 9]],
