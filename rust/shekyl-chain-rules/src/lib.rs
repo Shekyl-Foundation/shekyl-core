@@ -138,6 +138,7 @@ pub use rule_set::{
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::difficulty::Target;
+pub use rules::miner::{Emission, Subsidy};
 pub use rules::seed_height;
 pub use substrate::Substrate;
 pub use trust::Trust;

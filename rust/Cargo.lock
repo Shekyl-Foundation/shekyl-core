@@ -3826,7 +3826,9 @@ version = "3.1.0"
 dependencies = [
  "serde_json",
  "shekyl-address",
+ "shekyl-ct-balance",
  "shekyl-difficulty",
+ "shekyl-economics",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",

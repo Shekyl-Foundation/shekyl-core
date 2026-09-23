@@ -138,7 +138,19 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
     );
     assert_eq!(held, 2, "slice 1 holds exactly A1 and A4");
     assert_eq!(at_open, 1, "slice 3 enforces exactly E5 at open");
-    for row in [CenRow::A1, CenRow::A4, CenRow::E5] {
+    assert_eq!(
+        by_construction, 4,
+        "slice 4: F2, F8, F19, F21 hold by construction"
+    );
+    for row in [
+        CenRow::A1,
+        CenRow::A4,
+        CenRow::E5,
+        CenRow::F2,
+        CenRow::F8,
+        CenRow::F19,
+        CenRow::F21,
+    ] {
         assert!(!coverage.contains(row));
         assert!(!RuleSet::GENESIS.enforced().any(|r| r == row));
     }
@@ -152,7 +164,10 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
     for row in RuleSet::GENESIS.enforced().skip(1) {
         short.insert(row);
     }
-    assert_eq!(short.len(), CenRow::ALL.len() - held - at_open - 1);
+    assert_eq!(
+        short.len(),
+        CenRow::ALL.len() - held - at_open - by_construction - 1
+    );
     assert!(!short.is_complete_for(&RuleSet::GENESIS));
 }
 

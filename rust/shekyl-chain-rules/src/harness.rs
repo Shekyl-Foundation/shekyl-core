@@ -23,7 +23,7 @@ use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Transaction, TxPrefix};
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
@@ -344,19 +344,49 @@ pub fn boundary_pair<T: Debug, V>(
 pub mod fixture {
     use super::*;
 
-    /// A coinbase-shaped transaction, distinguished by `unlock_time`.
-    pub fn coinbase(unlock_time: u64) -> Transaction {
+    /// The compressed Ed25519 basepoint `G`: canonical, prime-order,
+    /// non-identity — an output key CEN-F9 accepts. As a **mask** it is the
+    /// trivial form CEN-F10 refuses (`mask = 1, amount = 0`), which is
+    /// what the F10 fixture uses it for.
+    pub const G: [u8; 32] = [
+        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66,
+    ];
+
+    /// `2·G` compressed: a canonical prime-order point that is neither the
+    /// identity, nor `G`, nor `zeroCommit(0) = G` — a commitment mask CEN-F10
+    /// accepts for a zero-amount coinbase output. `fixture_points_are_what_
+    /// they_claim` (miner_tests) pins both constants through
+    /// `shekyl-ct-balance`.
+    pub const TWO_G: [u8; 32] = [
+        0xc9, 0xa3, 0xf8, 0x6a, 0xae, 0x46, 0x5f, 0x0e, 0x56, 0x51, 0x38, 0x64, 0x51, 0x0f, 0x39,
+        0x97, 0x56, 0x1f, 0xa2, 0xc9, 0xe8, 0x5e, 0xa2, 0x1d, 0xc2, 0x29, 0x23, 0x09, 0xf3, 0xcd,
+        0x60, 0x22,
+    ];
+
+    /// A coinbase that satisfies every structural 4.F row for a block at
+    /// `height`: one `Input::Gen(height)` (F1, F5), `Ct::Null` (F3), one
+    /// output (F4) paying `0` with key `G` (F9) and mask `2·G` (F10),
+    /// `unlock_time = height + 60` (F6). Amounts are not this fixture's
+    /// concern — the exact-payout row (F18) is not landed — so a chain of
+    /// these pays nothing and reads the tail subsidy at every height.
+    pub fn coinbase(height: u64) -> Transaction {
         Transaction {
             prefix: TxPrefix {
-                unlock_time,
-                inputs: Vec::new(),
-                outputs: Vec::new(),
+                unlock_time: height.saturating_add(60),
+                inputs: vec![Input::Gen(height)],
+                outputs: vec![Output {
+                    amount: 0,
+                    key: G,
+                    view_tag: 1,
+                }],
                 extra: Vec::new(),
             },
             ct: Ct::Null(CtBase {
-                enc_amounts: Vec::new(),
-                enc_labels: Vec::new(),
-                commitments: Vec::new(),
+                enc_amounts: vec![[0x55; 9]],
+                enc_labels: vec![[0x66; 9]],
+                commitments: vec![TWO_G],
             }),
         }
     }
@@ -394,7 +424,7 @@ pub mod fixture {
                 curve_tree_root: root,
                 ..header()
             },
-            miner_transaction: coinbase(60),
+            miner_transaction: coinbase(connecting.to_raw()),
             transaction_hashes: listed.iter().map(Transaction::hash).collect(),
         };
         Candidate::new(block, listed)
@@ -425,7 +455,10 @@ pub mod fixture {
                 timestamp,
                 ..header()
             },
-            miner_transaction: coinbase(60),
+            // Recorded blocks are never judged, so the coinbase's height
+            // claim does not matter; `0` keeps the identity a pure
+            // function of `timestamp`.
+            miner_transaction: coinbase(0),
             transaction_hashes: Vec::new(),
         };
         RecordedBlock {

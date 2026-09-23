@@ -26,11 +26,14 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         .expect("the fixture satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSetId::GENESIS);
         // Slice 1's block rows — B1, B2, B7 from the stateless stage, A2,
-        // B5 from the view-bound one, B6 from the derivation — and slice 2's
+        // B5 from the view-bound one, B6 from the derivation — slice 2's
         // 4.C rows (C1, C2 predicates; C3 definition) and 4.D rows (D2 in
         // form; D3's verification, D4 the target, D6 at its mint, D1b the
-        // comparison, D1 the predicate), and nothing else (the per-tx entry
-        // points are still empty).
+        // comparison, D1 the predicate), slice 3's E1, and slice 4's 4.F
+        // rows (F1, F3, F7, F9, F10 in form; F4, F5, F6 view-bound; F11,
+        // F13, F15, F20 the emission definitions), and nothing else (the
+        // per-tx entry points are still empty; F2/F8/F19/F21 hold by
+        // construction and are never in a coverage).
         assert_eq!(
             valid.coverage().iter().collect::<Vec<_>>(),
             [
@@ -51,6 +54,18 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::D6,
                 CenRow::D7,
                 CenRow::E1,
+                CenRow::F1,
+                CenRow::F3,
+                CenRow::F4,
+                CenRow::F5,
+                CenRow::F6,
+                CenRow::F7,
+                CenRow::F9,
+                CenRow::F10,
+                CenRow::F11,
+                CenRow::F13,
+                CenRow::F15,
+                CenRow::F20,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
@@ -168,11 +183,23 @@ fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
     // The identity is derived here, once, and is the block's (slice 3 F8).
     assert_eq!(formed.hash(), formed.candidate().block.hash());
     // The stateless rows, and only those, are recorded before the view
-    // stage runs — the three version rows and the two definitions, B6 (the
-    // identity) and D2 (the longhash).
+    // stage runs — the three version rows, the two definitions B6 (the
+    // identity) and D2 (the longhash), and the coinbase's stateless shape
+    // (F1, F3, F7, F9, F10).
     assert_eq!(
         formed.coverage().iter().collect::<Vec<_>>(),
-        [CenRow::B1, CenRow::B2, CenRow::B6, CenRow::B7, CenRow::D2]
+        [
+            CenRow::B1,
+            CenRow::B2,
+            CenRow::B6,
+            CenRow::B7,
+            CenRow::D2,
+            CenRow::F1,
+            CenRow::F3,
+            CenRow::F7,
+            CenRow::F9,
+            CenRow::F10,
+        ]
     );
 }
 

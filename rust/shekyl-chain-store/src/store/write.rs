@@ -250,6 +250,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             Corrupt::CumulativeDifficultyOverflow => StoreInvariant::FoldOverflow {
                 cell: "block_info.cumulative_difficulty",
             },
+            Corrupt::TxCountNotMonotone { at } => StoreInvariant::FoldNotMonotone {
+                cell: "block_info.cumulative_tx_count",
+                height: at.to_raw(),
+            },
         };
         self.poison.arm(row)
     }

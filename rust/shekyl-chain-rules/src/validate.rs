@@ -50,6 +50,7 @@ use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
 use crate::rules::difficulty::D4;
 use crate::rules::header::{B1, B2, B5, B6, B7};
+use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
 use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
@@ -117,9 +118,11 @@ pub fn form<S: Substrate>(
     let clock = substrate.local_clock()?;
     let mut coverage = RuleCoverage::EMPTY;
 
-    // Stateless block-level predicates, in census order.
+    // Stateless block-level predicates, in census order: the header rows,
+    // then the coinbase's shape (4.F — one field of the block, judged here
+    // because the coinbase never passes the per-transaction path).
     let cx = FormContext::new(&candidate, rule_set);
-    judge_form!(cx, coverage; B1, B2, B7);
+    judge_form!(cx, coverage; B1, B2, B7, F1, F3, F7, F9, F10);
 
     // Two definitions, after the cheap refusals and outside any
     // transaction. The identity first (B6: one keccak over the hashing
@@ -300,7 +303,14 @@ pub fn validate<'id, V: ChainView<'id>>(
 
     // View-bound block-level predicates (4.A–4.G), in census order.
     let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
-    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1);
+    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1, F4, F5, F6);
+
+    // The 4.F definitions (F11, F13, F15, F20), derived once from the
+    // parent's recorded facts and carried on the verdict: what the paid
+    // reward (F14b), the split (F16) and the exact payout (F18) price
+    // against when slice 7 lands them, and what `connect` derives
+    // `coins_generated` from. Nothing here refuses; a fault is the view's.
+    let emission = Emission::derive(view, connecting, rule_set, &mut coverage)?;
 
     let candidate = cx.candidate();
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);
@@ -323,7 +333,7 @@ pub fn validate<'id, V: ChainView<'id>>(
 
     let hash = formed.hash();
     let (candidate, _stateless) = formed.into_parts();
-    let block = ValidatedBlock::derive(candidate, hash, target, cumulative_difficulty);
+    let block = ValidatedBlock::derive(candidate, hash, target, cumulative_difficulty, emission);
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }
 
