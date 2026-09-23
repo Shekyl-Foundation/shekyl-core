@@ -1181,6 +1181,312 @@ mod tests {
 
     /// Ingest consecutive single-coinbase blocks at heights `from..=to` — the
     /// production chain shape (every real block carries a coinbase).
+    ///
+    /// `CT-6` increment 2 — the C1 oracle, height-keyed.
+    ///
+    /// `CT6_PROVING_STATE.md` C1: *"Snapshot-derived root at height `h` equals
+    /// `build_layers`' root at `h`, for every `h`. The existing full-tree
+    /// implementation is the oracle."* C3 pins what "at `h`" means: a read at
+    /// `h` reproduces `drained_leaf_count_at(drained_through(h))`, and root and
+    /// depth stay pinned to that one `n`.
+    ///
+    /// # What this module is actually testing, and what it is not
+    ///
+    /// **Comparing `root_at_count` against `build_layers` alone would be very
+    /// nearly a tautology**, and saying so is the point of this comment.
+    /// `full_build_root` (`store/ops.rs:86`) *is* `try_build_layers` followed
+    /// by `root_from_layers` — the same function under another name — and the
+    /// count-keyed direction already has its KAT
+    /// (`tail_layer_j_promotion_matches_oracle_at_j2`). Re-running that through
+    /// a height would add a green test and no coverage.
+    ///
+    /// **The height axis adds exactly one thing: the mapping
+    /// `h → drained_through(h) → drained_leaf_count_at → n`.** That is C3, and
+    /// it is the only place a height-keyed read can be wrong while every
+    /// count-keyed test stays green. So the assertions below are built to fail
+    /// on *that* mapping, and the red-bites mutate it rather than corrupting a
+    /// leaf.
+    ///
+    /// # Why the expectation is independent of the subject
+    ///
+    /// The cutoff is written as `h - 1` **here**, from the contract
+    /// (`drained_through_is_reference_minus_one`), never taken from
+    /// `drained_through` — a test that asks the subject where to look cannot
+    /// discover that the subject looks in the wrong place.
+    ///
+    /// The count then comes from [`crate::recon::drained_sorted`], which is a
+    /// genuinely **second instrument**: the production read counts through
+    /// `drained_leaf_count_at`'s cache and maturity index, a different path
+    /// from the sort. Two ways of counting the same cutoff, cross-checked.
+    mod ct6_height_keyed_oracle {
+        use super::*;
+        use crate::recon::drained_sorted;
+        use shekyl_fcmp::tree::{HELIOS_CHUNK_WIDTH, SELENE_CHUNK_WIDTH};
+
+        /// Outputs per block, chosen so the drained count is **not** an affine
+        /// function of the height.
+        ///
+        /// A uniform one-per-block fixture makes `n = h - 60` exactly, and then
+        /// every off-by-one in the cutoff shifts `n` by exactly one leaf —
+        /// always visible, which sounds good and hides the case that matters.
+        /// With a varying schedule, a one-block error shifts `n` by however
+        /// many outputs that block carried, **including zero**. The zero-output
+        /// blocks are the reason this is a schedule and not a constant: they
+        /// are where an off-by-one is invisible in the count, so the fixture
+        /// must place assertions on both sides of them.
+        const SCHEDULE: [usize; 12] = [1, 3, 0, 2, 5, 0, 1, 4, 2, 0, 3, 1];
+
+        /// Height at which the fixture's outputs start draining.
+        ///
+        /// Coinbase maturity is creation + `COINBASE_LOCK_WINDOW`, the only
+        /// drain gate for this fixture (`recon.rs:116-126`).
+        fn drains_at(created_at: u64) -> u64 {
+            created_at + COINBASE_LOCK_WINDOW as u64
+        }
+
+        /// Ingest `tip + 1` blocks whose output counts cycle through
+        /// [`SCHEDULE`], and return outputs-created-per-height.
+        fn ingest_varying(client: &mut CurveTreeClient, tip: u64) -> Vec<usize> {
+            let mut created: Vec<usize> = Vec::new();
+            for height in 0..=tip {
+                // The remainder is < SCHEDULE.len(), so it indexes in range on any
+                // pointer width; `usize::try_from` on the remainder cannot fail.
+                let slot = usize::try_from(height % SCHEDULE.len() as u64)
+                    .expect("remainder below SCHEDULE.len() fits usize");
+                let n = SCHEDULE[slot];
+                if n == 0 {
+                    // A block with no leaf-eligible outputs still advances the
+                    // chain: the gap is the fixture's point.
+                    let txs: Vec<TxLeafInputs> = Vec::new();
+                    client
+                        .ingest_block(BlockLeaves {
+                            height: BlockHeight::from_raw(height),
+                            txs: &txs,
+                        })
+                        .unwrap();
+                } else {
+                    let outs = vec![coinbase_raw(); n];
+                    ingest_outputs_at(client, height, &outs);
+                }
+                created.push(n);
+            }
+            created
+        }
+
+        /// The oracle: `build_layers`' root over the leaves drained through
+        /// `cutoff`, with `cutoff` supplied by the caller rather than read from
+        /// the subject.
+        fn oracle_root_and_count(client: &CurveTreeClient, cutoff: u64) -> ([u8; 32], u64) {
+            let drained = drained_sorted(&client.entries, BlockHeight::from_raw(cutoff));
+            let scalars: Vec<[u8; 32]> = drained
+                .iter()
+                .flat_map(|e| {
+                    let mut out = Vec::new();
+                    for chunk in e.leaf.chunks_exact(32) {
+                        let mut s = [0u8; 32];
+                        s.copy_from_slice(chunk);
+                        out.push(s);
+                    }
+                    out
+                })
+                .collect();
+            let n = drained.len() as u64;
+            if n == 0 {
+                return (shekyl_fcmp::tree::selene_hash_init(), 0);
+            }
+            let layers = shekyl_fcmp::tree::build_layers(&scalars);
+            (layers.last().unwrap()[0], n)
+        }
+
+        /// C1 + C3 at every height the fixture spans, including both sides of
+        /// each zero-output block.
+        #[test]
+        fn a_height_keyed_read_matches_build_layers_at_every_height() {
+            let tip = 96;
+            let mut client = CurveTreeClient::new();
+            let created = ingest_varying(&mut client, tip);
+
+            // Only heights whose reads have something drained are meaningful,
+            // and the fixture must actually reach that state or this test
+            // would pass by never exercising the mapping (rule 47).
+            let first_drained = drains_at(0) + 1;
+            assert!(
+                first_drained <= tip,
+                "fixture never reaches a drained state: nothing would be compared"
+            );
+
+            // **Start below `first_drained`, not at it.** `layer_count_for_leaves`
+            // changes value at only two counts in reach — `0 -> 1` and
+            // `684 -> 685` — so a sweep that begins once leaves exist straddles
+            // neither, and the depth assertion below becomes one that cannot
+            // fail. Heights with nothing drained are where the first boundary
+            // lives, so they are asserted rather than skipped.
+            let mut heights_with_leaves = 0;
+            let mut heights_empty = 0;
+            for h in 1..=tip {
+                // The cutoff is the contract's, not the subject's.
+                let (want_root, want_n) = oracle_root_and_count(&client, h - 1);
+                let (got_root, got_depth) = client
+                    .root_and_depth_at(BlockHeight::from_raw(h))
+                    .unwrap_or_else(|e| panic!("height {h}: {e:?}"));
+
+                assert_eq!(
+                    got_root.to_bytes(),
+                    want_root,
+                    "height {h}: root disagrees with build_layers over the {want_n} \
+                     leaves drained through {}",
+                    h - 1
+                );
+                // C3: depth is pinned to the same `n` the root was taken at.
+                assert_eq!(
+                    got_depth,
+                    shekyl_fcmp::tree::layer_count_for_leaves(want_n),
+                    "height {h}: depth is not pinned to n={want_n}"
+                );
+                if want_n > 0 {
+                    heights_with_leaves += 1;
+                } else {
+                    heights_empty += 1;
+                }
+            }
+            assert!(
+                heights_empty > 0,
+                "no height with an empty tree was asserted, so the 0 -> 1 depth \
+                 boundary went untested and the depth claim could not fail"
+            );
+            assert!(
+                heights_with_leaves > 0,
+                "every height compared an empty tree — the mapping was never exercised"
+            );
+            // The schedule must have contributed a zero-output block inside the
+            // drained span, or the invisible-off-by-one case went untested.
+            let drained_span =
+                usize::try_from(tip - COINBASE_LOCK_WINDOW as u64).expect("fixture tip fits usize");
+            let zero_blocks = created[..=drained_span].iter().filter(|&&n| n == 0).count();
+            assert!(
+                zero_blocks > 0,
+                "no zero-output block inside the drained span: the case where an \
+                 off-by-one shifts the count by nothing was not covered"
+            );
+        }
+
+        /// The depth boundary, asserted where it actually moves.
+        ///
+        /// `layer_count_for_leaves` is flat almost everywhere: between `1` and
+        /// `684` it is 2, and it only steps at `0 -> 1` and `684 -> 685`
+        /// (`SELENE_CHUNK_WIDTH` = 38, `HELIOS_CHUNK_WIDTH` = 18, so 38 x 18 =
+        /// 684 leaves is the last count that roots at two layers). A depth
+        /// assertion taken anywhere else is green against a wrong `n` as well
+        /// as a right one.
+        ///
+        /// This is the second of the two boundaries, and it is the one a small
+        /// fixture would never reach by accident, so the blocks here are wide
+        /// rather than many.
+        #[test]
+        fn depth_steps_where_the_layer_count_steps_and_the_root_follows_n() {
+            const WIDE: usize = 100;
+            let boundary = (SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH) as u64; // 684
+            assert_eq!(
+                shekyl_fcmp::tree::layer_count_for_leaves(boundary),
+                shekyl_fcmp::tree::layer_count_for_leaves(boundary - 1),
+                "fixture premise: the count below the boundary is flat"
+            );
+            assert_ne!(
+                shekyl_fcmp::tree::layer_count_for_leaves(boundary),
+                shekyl_fcmp::tree::layer_count_for_leaves(boundary + 1),
+                "fixture premise: the boundary is where the depth actually steps"
+            );
+
+            // Enough wide blocks to carry the drained count past `boundary + 1`.
+            let blocks_needed = (boundary + 1).div_ceil(WIDE as u64) + 1;
+            let tip = blocks_needed + COINBASE_LOCK_WINDOW as u64 + 1;
+            let mut client = CurveTreeClient::new();
+            for height in 0..=tip {
+                if height < blocks_needed {
+                    let outs = vec![coinbase_raw(); WIDE];
+                    ingest_outputs_at(&mut client, height, &outs);
+                } else {
+                    let txs: Vec<TxLeafInputs> = Vec::new();
+                    client
+                        .ingest_block(BlockLeaves {
+                            height: BlockHeight::from_raw(height),
+                            txs: &txs,
+                        })
+                        .unwrap();
+                }
+            }
+
+            // Walk heights and assert at each; record whether both sides of the
+            // boundary were actually visited, because a fixture that stops short
+            // would make this test green without testing anything.
+            let mut saw_below = false;
+            let mut saw_above = false;
+            for h in 1..=tip {
+                let (want_root, want_n) = oracle_root_and_count(&client, h - 1);
+                let (got_root, got_depth) = client
+                    .root_and_depth_at(BlockHeight::from_raw(h))
+                    .unwrap_or_else(|e| panic!("height {h}: {e:?}"));
+                assert_eq!(got_root.to_bytes(), want_root, "height {h}: root");
+                assert_eq!(
+                    got_depth,
+                    shekyl_fcmp::tree::layer_count_for_leaves(want_n),
+                    "height {h}: depth not pinned to n={want_n}"
+                );
+                if want_n > 0 && want_n <= boundary {
+                    saw_below = true;
+                }
+                if want_n > boundary {
+                    saw_above = true;
+                }
+            }
+            assert!(
+                saw_below && saw_above,
+                "the fixture did not land on both sides of n={boundary} \
+                 (below={saw_below}, above={saw_above}); the depth step was never crossed"
+            );
+        }
+
+        /// The red-bite, stated as an executable claim rather than a comment.
+        ///
+        /// If the cutoff the production read uses were `h` instead of `h - 1`,
+        /// the root must differ at some height — otherwise nothing in this
+        /// module could detect a wrong cutoff, and the whole file would be
+        /// decoration. This asserts the *detectability*, which is the property
+        /// a mutation test would otherwise have to be run by hand to learn.
+        #[test]
+        fn a_cutoff_off_by_one_is_detectable_at_some_height() {
+            let tip = 96;
+            let mut client = CurveTreeClient::new();
+            ingest_varying(&mut client, tip);
+
+            let mut differing = 0;
+            let mut identical = 0;
+            for h in (drains_at(0) + 1)..=tip {
+                let (correct, n_correct) = oracle_root_and_count(&client, h - 1);
+                let (shifted, n_shifted) = oracle_root_and_count(&client, h);
+                if correct == shifted {
+                    // Expected wherever block `h` carried no outputs — the
+                    // count is unchanged, so the root is too.
+                    assert_eq!(n_correct, n_shifted);
+                    identical += 1;
+                } else {
+                    differing += 1;
+                }
+            }
+            assert!(
+                differing > 0,
+                "a one-block cutoff shift changed nothing anywhere: this module \
+                 cannot detect a wrong cutoff and its green means nothing"
+            );
+            assert!(
+                identical > 0,
+                "a one-block shift changed the root at every height, so the \
+                 fixture never placed an assertion across a zero-output block — \
+                 the invisible case is the one worth covering"
+            );
+        }
+    }
+
     fn ingest_coinbase_blocks(client: &mut CurveTreeClient, from: u64, to: u64) {
         let outs = [coinbase_raw()];
         let blob = leaf_blob(1);
