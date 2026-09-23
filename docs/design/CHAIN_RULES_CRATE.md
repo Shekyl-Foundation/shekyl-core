@@ -847,13 +847,22 @@ at-open 1   by-construction 4   enforced 153   ratified 127 / enforced 153`
 (slice 6) applies `shekyl_wire::tx_extra::check_tx_extra_shape` (I19 + I20
 in one function) rather than minting either — slice 4 landed without it
 (`CHAIN_RULES_SLICE_4.md` S21). **After S-ARCH's pre-flight (2026-09-23,
-PR #840):** `consensus: implemented 34 / validator-enforced 152   held-by-cxx 2
-at-open 1   by-construction 4   enforced 154   ratified 128 / enforced 154` —
-CEN-L16, an R8-class placement row (the as-of-height holds-shard predicate
-evaluated inside the store, `DRS_E1_SARCH.md` SAR-2 / SAR-7), registered
-pending; its fold moves to `shekyl-archival-retention` with E4 and slice 8
-judges through it. The figure moves with each slice and the landing PR
-quotes its own.
+PR #840, measured at `dev` `d8ebfd18c` + the PR's two commits):** `consensus:
+implemented 34 / validator-enforced 152   held-by-cxx 2   at-open 1
+by-construction 4   enforced 154   ratified 128 / enforced 154` — CEN-L16, an
+R8-class placement row (the as-of-height holds-shard predicate evaluated
+inside the store, `DRS_E1_SARCH.md` SAR-2 / SAR-7), registered pending; its
+fold moves to `shekyl-archival-retention` with E4 and slice 8 judges through
+it. **`implemented 34` is that tree's figure, not the project's:** slice 5
+closed at `implemented 56` on its own branch (`CHAIN_RULES_SLICE_5.md` §5
+commit-9 row, `feat/chain-rules-slice-5` @ `3193d5c91`, unmerged when this
+was measured; its `by-construction` also moves 4 → 9), so the two lines differ by
+the slice, not by a regression — the denominator moved here (153 → 154), the
+numerator moves there (34 → 56), and whichever lands second re-runs
+`--describe` and quotes the merged tree. A figure quoted without its tree
+cannot be traced back to which branch produced it; every line in this
+paragraph should name one. The figure moves with each slice and the landing
+PR quotes its own.
 
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.
