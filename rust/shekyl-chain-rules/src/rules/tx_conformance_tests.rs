@@ -581,7 +581,7 @@ const SITES: &[Site] = &[
     invariant(
         "key-image input(s) but no prunable proof",
         Face::Memory,
-        "unreachable: a key image forces `n_out >= 2` at the context-free `spend has … needs >= 2` arm, and `n_out != 0` fires the `must have no outputs` arm before this one. The proof's non-emptiness is CEN-I14's, held elsewhere",
+        "unreachable BY ORDERING, and only by ordering: (1) `validate_context_free_pruned` runs first and its `spend has … needs >= 2` arm forces `n_out >= 2` for any key-imaged tx; (2) inside `validate`'s fee-only arm the `must have no outputs` check precedes this one, so `n_out != 0` fires it first. Insert a rule between (1) and (2), reorder the fee-only arm, or let a key-imaged shape through (1) with fewer outputs, and this arm is live and unclassified — re-check it when slice 6 adds proof verification to this path. The proof's non-emptiness is CEN-I14's, held elsewhere",
     ),
     invariant(
         "return Err(PrunedError);",

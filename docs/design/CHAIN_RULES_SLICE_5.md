@@ -1,7 +1,10 @@
 # `shekyl-chain-rules` slice 5 — census 4.H, the transaction on its own (DRS-E6 increment 6)
 
-**Status:** OPEN — **Round 1 RULED 2026-09-23 (Q1–Q8, §8, each line-local);
-implementation begins on §5.** Round 0 pre-flight written 2026-09-23 against
+**Status:** OPEN — **implementation LANDED 2026-09-23, commits 1–9 (§5);
+Round 1 RULED 2026-09-23 (Q1–Q9, §8, each line-local, with the commit-time
+amendments recorded on their rulings).** Stays in `design/` until the PR
+merges and the §5.1 slice-6 capture scope has an owner that is not this
+file. Round 0 pre-flight written 2026-09-23 against
 `dev` @ `387fa84a9` (post-#834, slice 4 landed). **The TXE lane
 (`feat/tx-extra-rust-cutover`, `TX_EXTRA_RUST_CUTOVER.md`) is in flight on
 an adjacent worktree and is this slice's boundary — §1.2.**
@@ -214,6 +217,18 @@ with a falsifier (the build-graph cost measured), owner
 
 ### 3.1.1 What the enumeration found — LANDED with commit 8, 2026-09-23
 
+**Why the table has arms for rows the crate has not implemented.** That is
+the design, and the more valuable thing in the commit. A rule arm is held
+to its row *by the row's registry status*, read at test time: implemented →
+refused on the row; by construction → the tripping value does not
+round-trip the wire; pending → nothing yet. So the **fourteen** pending-row
+arms (I1 ×2, I4, I5, I6, I8, I9, I16, J2, J11, J12, H19 ×3 — counted from
+the table's `rule(…)` rows with a trip; the review's "twelve" was my
+under-count) begin asserting **the day their row flips**, with no pin to
+update and no one touching the test. It gets stronger on its own. This is
+exactly the shape the H24 proxy (§8 Q7) could not have: H24 has no row to
+read a status from, so its test carries a pin and an instruction instead.
+
 Classifying all 59 sites, rather than sampling the fourteen predicates,
 turned up things a sample would not have. Each is recorded in the table
 row's `note` and here; none is this slice's to fix beyond recording.
@@ -237,10 +252,15 @@ row's `note` and here; none is this slice's to fix beyond recording.
   spend). Recorded as divergences with `Outcome::RefusedOn(H21)`; the owner
   is the FOLLOWUPS row for `Transaction::full/pruned` (the pruned form made
   unrepresentable at the boundary, not refused twice for two reasons).
-- **One arm is dead.** `{n_ki} key-image input(s) but no prunable proof`
-  cannot fire: a key image forces `n_out >= 2` at the context-free `>= 2`
-  arm, and `n_out != 0` fires the fee-only arm's *outputs* check first.
-  Classified **invariant** with the argument in its note. The proof's
+- **One arm is dead — by ordering, and only by ordering.** `{n_ki} key-image
+  input(s) but no prunable proof` cannot fire because (1)
+  `validate_context_free_pruned` runs first and its `>= 2` arm forces
+  `n_out >= 2` for any key-imaged tx, and (2) inside the fee-only arm the
+  *outputs* check precedes this one. Classified **invariant** with **both
+  orderings named in the note**, because an ordering argument is exactly
+  what a newly inserted rule breaks: slice 6 adds proof verification to
+  this path, and whoever reorders it must find out they have made a dead
+  arm live. **Re-check owed at slice 6's pre-flight.** The proof's
   non-emptiness is `CEN-I14`'s, held elsewhere.
 - **The holdings shard-set bound has no census row.** `MAX_HOLDINGS_SHARDS`
   (4 096) and duplicate-freeness are `ShardSet::new`'s (`bond_wire.rs`),
@@ -249,8 +269,15 @@ row's `note` and here; none is this slice's to fix beyond recording.
   wire's own doc calls it a *consensus bound*. No `CEN-` row names it.
   Classified **parse** (a codec's well-formedness, owned by the codec's own
   gate) rather than keyed to the nearest J-row — the Q8 mis-keying this
-  slice's review named. Whether the census owes a row is the census's
-  question; recorded here so it is asked, not assumed.
+  slice's review named. **This is a finding about the census, not a
+  classification problem**, and it is the second of its kind: slice 4's
+  shim sweep found the S25 arity gate uncensused, and it turned out to
+  ground CEN-L11's grading. Two consensus-adjacent limits with no row, both
+  found by enumerating something for a different reason. The question for
+  the census lane — *did the sweep cover `shekyl-wire`'s constants at all?*
+  — is the same question slice 4 raised about `src/shekyl/*.h`, still
+  unanswered; it is now carried on that FOLLOWUPS row with both grounds.
+  A slice does not amend the census on its own.
 - **The signature-blob cap has no census owner either.** `CEN-I16` names
   `PQC_MAX_PUBLIC_KEY_BLOB` as the multisig key blob's bound (→ `Rule(I16)`);
   nothing names `PQC_MAX_SIGNATURE_BLOB`. The wire's doc calls both DoS
@@ -366,7 +393,7 @@ against the wire crate's constant (Q5 as ruled — a test, not a comment).
 | 6 | H11 | KI domain: prime-order, ≠ identity — new Rust body on the crate's point primitives, DSV M8's vectors re-derived and pinned |
 | 7 | By-construction entries (Q6, Q7) — **LANDED `83d4e6204` + `12a77fb73`** | Registered: H2 and H13 (F2's falsifier), H8 (`h8_the_wire_reads_one_commitment_per_output`), H12 (F8's), H23 (`doctest:tx_form`); `by-construction 4 → 9`. **Not registered, as planned here, and the plan was wrong:** H5's script half and H15's type half are halves of rows already `implemented` — a row has one status; H24 is **bucket 3** and the registry excludes bucket-3 rows by design, so it has no `CenRow` to carry any status (Q7's amendment, §8). **Q6's condition landed as a MECHANISM:** a shared falsifier calls `credited_to_this_falsifier(&[rows…])` and the coverage gate refuses a shared falsifier whose body does not name every served row as `CenRow::<id>` (`check_chain_rules_coverage.py`, selftest green + red) |
 | 8 | The §3.1 conformance test (Q1 as ruled) — **LANDED (this commit)** | `rules/tx_conformance_tests.rs`. **Enumerated:** all **59** `Err(` sites in `shekyl-wire/src/transaction.rs` are rows of one table, checked against the file itself (`include_str!`: the count, and each fragment found as many times as listed). **Four arms, pinned `(parse 15, rule 38, policy 1, invariant 5)`** — the review asked for a third arm so an assertion-shaped site is never forced into the nearer bucket; the classification needed a fourth, because one site (`MAX_TX_EXTRA`) is **CEN-M4**, a policy row: the crate already keeps policy rows in their own enum so one is never counted as consensus, and forcing it into `Rule` would be the mis-keying the third arm exists to prevent. Every in-memory rule arm carries the transaction that trips **it** (the twin's message is matched, placeholder-aware, so an earlier arm firing is a failure); the crate is then held to the row **by the row's registry status** — implemented → refused on that row; by construction → the value does not round-trip the wire; pending → nothing yet, and the assertion **arms itself** when the row flips (no pin to update — the shape H24's proxy could not have). Read-face rule arms must be by-construction rows or mirrored by an in-memory arm keyed to the same row (checked). The baseline (coinbase, two-output spend, serve-credit) passes **both** copies. **Findings the table surfaced** (§3.1.1) |
-| 9 | Docs | This section's landing figures; census 4.H pins re-resolved against `dev` (after TXE if it has landed); `CHAIN_RULES_CRATE.md` §4.6; index; DRS-E6 row; FOLLOWUPS; CHANGELOG |
+| 9 | Docs — **LANDED (this commit)** | **Landing figures** (coverage gate at head): `implemented 34 → 56` of 153 census rows; `by-construction 4 → 9`; `enforced 145 → 140` per-block rows; 4.H: 17 `implemented`, 5 `by_construction`, H19 `pending` with its layout half running, H24 bucket 3 (no row). Tests: `shekyl-chain-rules` 193 + 15 doctests, `shekyl-chain-store` 292, `shekyl-chain-ingest` 74, all green; coverage-gate selftest 63 refusals. **Census 4.H pins re-resolved:** `git diff --stat 387fa84a9 origin/dev -- rust/shekyl-wire src/cryptonote_core/{tx_verification_utils,blockchain,cryptonote_core}.cpp` is **empty** at `f17fba8e6` — no 4.H C++ site and no wire file moved; TXE has **not** landed (its `dev` commits are docs); the pins stand as written at Round 0. `CHAIN_RULES_CRATE.md` §4.6 (the `TxRule` class, the slot-derived kind, the landed rows, the twin's demotion) and §8.5 (the fixture-sanity gate; the conformance table and **why it has arms for unimplemented rows**); index row; FOLLOWUPS (the skeleton row's first measured consequence; the shim-sweep row's second instance and the `shekyl-wire`-constants question for the census lane); CHANGELOG |
 
 **H19's verification half** stays `pending` in the registry (Q3 (b)),
 with the layout half's fixture landed under it and the blocker named:

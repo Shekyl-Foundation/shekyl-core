@@ -3,7 +3,9 @@
 **Status:** OPEN — increment 1 **implemented 2026-09-15** (branch
 `feat/drs-e6-inc1-chain-rules-scaffold`). Round 1 ruled §11; round 2's three
 questions (§12) **ruled at PR #753 review** (defaults kept; G4 tightened to
-`ChainValid<'id, V>`). §4 reflects what landed. Stays in `docs/design/` while
+`ChainValid<'id, V>`). §4 reflects what landed — **§4.6 and §8.5
+last verified against slice 5 (`CHAIN_RULES_SLICE_5.md`), 2026-09-23.**
+Stays in `docs/design/` while
 increments 2+ are open (it owns their template, §7.5.1). Implements *from*
 [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
 (the ruling, CLOSED-as-record) and
@@ -630,7 +632,10 @@ pub enum Retry { Again(FormAttempt), Exhausted }          // MAX_FORM_ATTEMPTS =
 pub enum Corrupt { CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow }   // ZeroTarget deleted 2026-09-20 (RD-F17): zero is CEN-D6's verdict
 
 /// Stateless per-tx rules (4.H). Shared verbatim by connect and pool admission.
-pub fn tx_form(tx: &shekyl_wire::Transaction, rule_set: &RuleSet) -> Verdict<RuleCoverage>;
+/// The SLOT selects the kind (`TxKind::of(slot)`): a coinbase-shaped body in a
+/// listed or lone slot is judged as a non-coinbase transaction — the input
+/// does not select the rules it is judged under (slice 5 Q2 as amended).
+pub fn tx_form(tx: &shekyl_wire::Transaction, slot: TxSlot, rule_set: &RuleSet) -> Verdict<RuleCoverage>;
 
 /// Stateful per-tx rules (4.I). The pool passes its `PoolView` decorator here.
 pub fn tx_against<'id, V: ChainView<'id>>(
@@ -663,8 +668,35 @@ membership: `form` runs B1, B2, B7 and derives B6 and D2;
 `validate` verifies D3, derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
 D1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's
-leg go stale silently, so the instant is carried, not forgotten. `tx_form` /
-`tx_against` are still empty and return `RuleCoverage::EMPTY` until 4.H/4.I.
+leg go stale silently, so the instant is carried, not forgotten.
+
+**The third rule class — `TxRule` (slice 5, 2026-09-23;
+`CHAIN_RULES_SLICE_5.md` §5).** `tx_form` judges 4.H through
+`rules::run_tx` over `TxContext { tx, slot, kind: TxKind, class: TxClass }`.
+`TxKind::{Coinbase, Listed}` is **derived from the slot, never from the
+bytes** (`TxKind::of(slot)`; there is no `is_coinbase()` read — the
+principle on the type: a classification that selects which rules apply
+comes from outside the thing classified). Each rule declares
+`SCOPE: TxScope::{All, NonCoinbase}`; an out-of-scope row records as
+evaluated-vacuous. `TxClass::{Coinbase, Spend, ServeCreditOnly, BondPost,
+Emission}` is derived once at `TxContext::derive`, and CEN-H5 (the `gen`
+half) and CEN-H6 are judged **at the derivation** — the C++ single-sources
+them in `classify_archival_tx` the same way. The limits are `const`s beside
+the rules (`MAX_TX_SIZE`, `max_tx_weight()` derived from
+`FULL_REWARD_ZONE/2 − COINBASE_BLOB_RESERVED`, `UNLOCK_TIME_SENTINEL`),
+pinned to `cryptonote_config.h` by parsing it and to `shekyl-wire`'s
+constants by equality — **tests, not comments** (Q5). Landed rows: H1, H3,
+H4, H5, H6, H7, H9, H10, H11, H14, H15, H16, H17, H18, H20, H21, H22
+(`implemented`); H2, H8, H12, H13, H23 (`by_construction`); H19's
+**layout** half runs and refuses without recording until slice 6 lands the
+BP+ verification (`H19Layout`); H24 is bucket 3 — no registry row, a
+labelled-proxy falsifier indexed from the census cell. The crypto rows call
+the bodies the C++ already marshals to (`shekyl-ct-balance`,
+`shekyl-archival-retention`), so pool and connect cannot diverge from them:
+it is one function. **The wire twin** (`shekyl_wire::Transaction::validate`,
+the wallet's pre-check) is *not* the rule of record; it is held to `tx_form`
+by an enumerated conformance test (`rules/tx_conformance_tests.rs`, §8.5).
+`tx_against` is still empty and returns `RuleCoverage::EMPTY` until 4.I.
 
 The conversion ban (G2) covers the crate's own fault tokens: no `From`/`Into`
 between `Stale`/`Fault` and `InvalidBlock`, no arm mapping one onto the other
@@ -1058,7 +1090,28 @@ second lines behind the belt and the type shapes, not gates.
   coinbase's `prunable_hash` pinned to `keccak256("")` and `pqc_auth_hash`
   `None` (bites: a pairing that hashes the wrong body, drops the miner tx,
   conflates the two digests, or labels a 3-part txid with a third component).
-- `tx_form` / `tx_against` before 4.H/4.I land: `Ok(EMPTY)` / `Ok(Ok(EMPTY))`.
+- `tx_form` — *records-was:* `Ok(EMPTY)` before 4.H. Since slice 5
+  (2026-09-23): one negative fixture per landed 4.H row at **both** sites
+  (`refused_lone` through `tx_form` at `Lone`; `refused_listed` through
+  `validate` at `Listed(0)`), the well-formed listed fixture recording every
+  landed row, the kind derived from the slot (a coinbase-shaped body at
+  `Lone` is judged non-coinbase), the limits pinned to `cryptonote_config.h`
+  and to the wire's constants (`rules/tx_tests.rs`); and the **fixture-sanity
+  gate** (`fixture_sanity_tests.rs`) walking the closed `TxShape` enum: every
+  fixture labelled valid passes under current coverage, and a red on an
+  untouched fixture is a finding, not a fixture error.
+- **the wire twin's conformance** (`rules/tx_conformance_tests.rs`, slice 5
+  Q1): every `Err(` site of `shekyl-wire/src/transaction.rs` is a row of one
+  table checked against the file itself; four arms pinned
+  `(parse 15, rule 38, policy 1, invariant 5)`. An in-memory rule arm carries
+  the transaction that trips **it** and the crate is held to the row by the
+  row's registry status — implemented → refused on the row; by construction
+  → the value does not round-trip; pending → nothing yet, and the assertion
+  **arms itself** when the row flips. *Why the table has arms for rows the
+  crate has not implemented:* that is the design — the fourteen pending-row
+  arms begin asserting the day their row lands, with no pin to update. The
+  baseline (coinbase, two-output spend, serve-credit) passes both copies.
+- `tx_against` before 4.I lands: `Ok(Ok(EMPTY))`.
 - a mock whose `Fault` is a unit type and whose `block_at` faults: `validate`
   returns `Err(fault)`, not a verdict (bites: a fault swallowed into a pass or a
   refusal). Increment 1 has no rule that reads the view, so this is exercised
