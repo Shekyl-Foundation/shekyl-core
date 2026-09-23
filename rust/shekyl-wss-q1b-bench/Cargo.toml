@@ -12,6 +12,12 @@ description = "WSS-Q1(b) grading harness: spend-edge delta and open-edge refetch
 build = "build.rs"
 
 [dependencies]
+# Scratch store for the population. Already a normal dependency of six
+# workspace crates (`shekyl-engine-file`, `shekyl-cli`, `shekyl-p-host`,
+# `shekyl-wallet-rpc`, `shekyl-tor-control-daemon`, `shekyl-sp-t3-spike`), so
+# this adds no crate to the tree and inherits their vetting (rule 17).
+tempfile = "3"
+
 # The prover the denominator is defined as (`WALLET_SIDE_STORE.md` §6.3.4:
 # "Path in, proof bytes out"). `proof::prove` here is the same function
 # `shekyl-tx-builder/src/sign.rs:171` calls in production -- the boundary is a

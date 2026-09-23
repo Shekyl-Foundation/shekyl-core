@@ -3,8 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `WSS-Q1(b)` grading harness — the two ruled measurements, at the ruled
-//! boundary.
+//! `WSS-Q1(b)` grading harness — the two ruled measurements at the ruled
+//! boundary, and one ungraded baseline beside them.
 //!
 //! `WALLET_SIDE_STORE.md` §6.3.4 adopts `WSS-Q1`(b) — *the principal's proving
 //! state is not a store* — **subject to four measurements**. Two of them are
@@ -14,6 +14,16 @@
 //! | --- | --- | --- |
 //! | **Spend edge** | spend-intent through constructed `Path` | `delta <= max(2 s, 15 % of proving time)` |
 //! | **Open edge** | refetching the held buffer at wallet open | `<= 5 s`, local-daemon posture |
+//! | **Verify edge** | `root_at_count` on an unfrozen population, per call | **none — baseline** |
+//!
+//! The verify edge is not a third *graded* row and §6.3.4 does not name it.
+//! It exists because rows 2 and 3 grade the two edges a human waits at, while
+//! `CT-6`'s F3(a) priced a cost paid **per block during refresh** — `root_at`
+//! is *"the §3.3 verify hot path"* and `merge.rs:661` calls it inside the
+//! ingest loop. `CT-6` increment 4's snapshot tier exists to remove that cost,
+//! and increment 6 is written to **re-grade**; a re-grade needs something to
+//! grade against. So this measures the naive form and reports **no verdict** —
+//! `CT-6 Q4` is pending as a derivation, and nothing here decides it.
 //!
 //! The other two (§6.3.4 rows 1 and 4 — `rollback_to_fork`'s refusal semantics
 //! and property tests against `build_layers`) are behavioural rather than
@@ -51,3 +61,4 @@ pub mod openedge;
 pub mod report;
 pub mod rig;
 pub mod timing;
+pub mod verifyedge;

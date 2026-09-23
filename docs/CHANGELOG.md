@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+### `WSS-Q1(b)` bench — a third measurement for the axis nothing grades
+
+- **New `verify_edge` binary: `root_at_count` on an unfrozen population.**
+  §6.3.4's two timed rows grade the edges a *human waits at* — the pause at
+  spend time and the pause at wallet open. Neither touches the cost `CT-6`
+  F3(a) priced, because that one is paid **per block inside refresh**:
+  `root_at` is *"the §3.3 verify hot path"* and `merge.rs:661` calls
+  `verify_root` in the ingest loop, where freeze's 730-block burial means every
+  call recomputes `R_k` over ~29 complete-but-unfrozen segments. `CT-6`
+  increment 4 exists to remove that cost and increment 6 says **re-grade** — so
+  it needed a baseline, and §7's first-run table had no row for it.
+- **It reports no verdict, and that is the output.** `CT-6 Q4` is pending as a
+  derivation and grades the *amortized* advance; this is the naive cost that
+  form replaces. The record states its status as prose rather than reusing
+  `Verdict::Ungraded`, whose meaning is *"measured off the pinned rig"* — one
+  value in front of two meanings is the defect `SCHEMA_VERSION` 2 was bumped to
+  correct. The per-call cost is reported as a **cadence fraction**,
+  informational, so the duty cycle is visible without implying a budget.
+  `SCHEMA_VERSION` is **not** bumped: a new record type under its own
+  `measurement` value removes no field and changes no meaning.
+- **The frozen control does two jobs.** It is the red-bite — removing the
+  recompute must collapse the cost — and it identifies which branch ran:
+  `root_at_count`'s `full_build_root` fallback ignores frozen sub-roots
+  entirely, so a time that collapses when frozen was on the mixed-composition
+  path. Determined behaviourally because `store::ops` is private and a harness
+  restating its branch condition would be a second copy of it. Both phases must
+  also return the same root.
+- **Rule 47 before any timing:** zero frozen segments at the start, a leaf count
+  equal to the derived rate, and at least one complete segment — a population
+  that froze by accident makes every number cheap and green. Ingest goes
+  through `append_block_deltas`, the production path, because `append_drained`
+  is a `#[cfg(test)]` wrapper and a baseline taken through a test-only door
+  would not describe refresh.
+
 ### `CT-6` Round 1 disposed — the proving-state round's questions get terminal statuses, per row
 
 - **`CT-6 Q2` RULED — two mechanisms, one reader.** CT-1's segments keep the
