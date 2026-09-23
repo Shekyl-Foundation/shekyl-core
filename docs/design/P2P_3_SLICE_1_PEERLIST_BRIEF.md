@@ -1,10 +1,18 @@
 # P2P-3 slice 1 — peerlist brief
 
-**Status:** DRAFT for steering review, 2026-09-23. Owed before slice 1's first
+**Status:** **RATIFIED 2026-09-23 (steering).** Owed before slice 1's first
 increment per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
-and [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.4. This
-brief rules nothing: it states what slice 1 builds, what it must treat as
-already decided, and what "done" means. Ratification is Rick's.
+and [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.4. It
+states what slice 1 builds, what it must treat as already decided, and what
+"done" means. *Records-was DRAFT for steering review, same day.*
+
+**Ratified as one thing, not two.** §0's reading and §5a's clause were taken
+together and deliberately: **the clause is correct only because §0's reading
+is.** If the C++ were wrong at those eight sites, entitlement — §5a's (b) —
+would be a bug to fix rather than a rule to encode, and the type would be
+smuggling a defect. The inversion is what makes the clause a preservation
+instead of an invention, so they hold or fall together. A later lane that
+reopens §0 reopens §5a with it.
 
 **Pinned:** `dev` @ `d8ebfd18c11bef38ab04e5763828c22e7ff00c49` (verified against
 `git ls-remote origin dev` at 2026-09-23; local and remote agree). Every
