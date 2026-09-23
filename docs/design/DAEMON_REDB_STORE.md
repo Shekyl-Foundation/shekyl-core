@@ -1691,7 +1691,7 @@ snapshot with a gate, not a second authority.
 | P | free | 1 | 4 | 0 | 4 | 9 |
 
 Consensus **enforced** (bucket ≠ 3) = 154 = **14 bound + 140 free** (153 / 13 / 140 between CEN-I20's minting and CEN-L16's, both 2026-09-23; 152 / 12 / 140 between CEN-F12's deletion on 2026-09-21 and CEN-I20; 153 / 141 before);
-consensus **ratified** (bucket 1 + 2) = 126. Policy enforced = 9, ratified
+consensus **ratified** (bucket 1 + 2) = 128 (88 + 40; was 126 before CEN-I20 and CEN-L16 joined bucket 1 on 2026-09-23). Policy enforced = 9, ratified
 = 5 — all nine are 4.M and all arrive through E5's `AdmissionPolicy`. The
 completeness gate's denominators are exactly these two `enforced` figures;
 the bound/free split is a **schedule** view of the same rows, never a third

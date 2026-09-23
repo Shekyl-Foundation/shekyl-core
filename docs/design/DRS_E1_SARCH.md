@@ -64,6 +64,7 @@ contract, §2.3 there).
 | `ReadSnapshot`, `AtHeight`, `AtIndex`, `chain_reads::cell`, the fault policy | landed (S-CHAIN-R, S-OUT-KI) |
 | The 17 `archival_*` tables exist in the redb schema | landed, **all `Unshaped`** (`rust/shekyl-chain-store/src/schema.rs:373–438`); accumulator classes assigned (`accumulator/class.rs:110–137`) |
 | `properties` shaped (`&str → Blob<PropertyCellBytes>`) | landed (`schema.rs:368`) — two of this surface's reads are cells in it (§2.1 #13, #14) |
+| Layout `SCHEMA_VERSION = 10` (`codec/schema_version.rs:102`; the 2026-09-22 tx-data-prune deletion's bump); rule-42 snapshot gate | landed — this increment bumps to 11 |
 | The settlement-epoch schedule pin (`codec/settlement_epoch.rs`) | landed (S-CHAIN-W SCW-2) — every epoch-keyed row here is meaningful only under it |
 | P0b journal audit (the §5 row's gate) | **met 2026-09-05** (above) |
 | `PDM-Q3`, `PDM-Q6`, `PDM-Q12` | RULED 2026-09-18 (`PDM-Q2` re-ruled 2026-09-22 does not touch this surface's reads) |
@@ -290,7 +291,7 @@ them (`bond_connect.rs:60–396`, `release_cooldown.rs`).
 
 ## 4. The read set, table by table
 
-| Table | Key → value at v9 | After this increment (v10) | Read |
+| Table | Key → value at v10 | After this increment (v11) | Read |
 |---|---|---|---|
 | `archival_bond` | `&[u8]` (32-byte `p_id`) → `Unshaped` | `PersonaId` → `Coded<BondRecord>` | A1 |
 | `archival_serve_credit` | `&[u8]` (56-byte packed) → `Unshaped` | `(PersonaId, ShardId, SettlementEpoch, BlockHeight)` → `Present` | A3, A4, A5 |
@@ -304,7 +305,7 @@ them (`bond_connect.rs:60–396`, `release_cooldown.rs`).
 | `archival_slash_log` | `&[u8]` (`BE(height) ‖ BE(seq)`) → `Unshaped` | **`SAR-Q7`**: `(BlockHeight, JournalSeq)` → `Coded<SlashLogEntry>` if A2 lands here; unchanged if deferred to E4 | A2 |
 | `archival_settlement`, `archival_slash_applied`, `archival_budget_accrual`, the five other journals | `Unshaped` | unchanged — E4's writers shape them | none |
 
-Layout `SCHEMA_VERSION` 9 → 10 (rule 42; the snapshot moves by exactly the
+Layout `SCHEMA_VERSION` 10 → 11 (rule 42; the snapshot moves by exactly the
 seven rows above — eight if `SAR-Q7` shapes the slash log here).
 
 ---
@@ -440,7 +441,7 @@ layout are not inherited (§3.5).
    `BondRecord`, `Holdings`, `IntervalEntry`, `RMarket`, `SigmaWorkMilli`,
    `BudgetAtomic`, `AttestationWitness` per `SAR-Q2`'s ruling, with `Canonical`
    codecs; `ServeCreditKey` tuple key and `PassCount` in `ids.rs`; the seven
-   tables re-typed in `schema.rs`; `SCHEMA_VERSION` 10; snapshot regenerated
+   tables re-typed in `schema.rs`; `SCHEMA_VERSION` 11; snapshot regenerated
    (rule 42); SI-14 in the register.
 2. **The reads.** `store/archival_reads.rs`: A1, A3–A10; SI-15 armed; the
    `properties` cell typed; tests: empty store, planted rows, each `Option`
@@ -476,8 +477,10 @@ layout are not inherited (§3.5).
 - `check_chain_rules_no_store.sh` (the rules crate reaches no store).
 - Rule-42 schema snapshot: **must move**, and only by the seven tables +
   version (the gate's diff is the review). **Arming checked 2026-09-23:**
-  layout 10 is this lane's fourth bump (6 → 7 at slice 2's commit 9, the tx
-  side's, S-CURVE's 8 → 9), and a gate whose subject exists only on bump
+  layout 11 is this lane's fifth bump (6 → 7 at slice 2's commit 9, the tx
+  side's, S-CURVE's 8 → 9, the tx-data-prune deletion's 9 → 10 on 2026-09-22 —
+  which this document first missed, writing "9 → 10" for its own bump until the
+  index stamp's re-run read `SchemaVersion::new(10)` at the pin), and a gate whose subject exists only on bump
   commits decays quietly between them — so it was checked in the failing
   direction rather than assumed: `ci/schema-snapshot`'s *Assert committed
   schema snapshots* leg went red on 2026-09-22 (`feat/delete-cxx-tx-data-prune`)
@@ -530,7 +533,7 @@ layout are not inherited (§3.5).
   until then it is recorded in `DAEMON_REDB_STORE.md` table 3's 4.J row.
 - `18-type-placement.mdc`: no change — the rule already covers this instance
   (`SCU-Q2`'s general form); this document cites it.
-- CHANGELOG: one entry (schema layout 10; the typed archival reads; the
+- CHANGELOG: one entry (schema layout 11; the typed archival reads; the
   bond record's Rust type).
 
 ---
