@@ -1,334 +1,359 @@
-# P2P-3 slice 1 — peerlist brief
+# P2P-3 slice 1 — the peerlist
 
-**Status:** **RATIFIED 2026-09-23 (steering).** Owed before slice 1's first
-increment per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
-and [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.4. It
-states what slice 1 builds, what it must treat as already decided, and what
-"done" means. *Records-was DRAFT for steering review, same day.*
+**Status:** **REVISED 2026-09-23 (steering).** Ratified earlier the same day; this
+text replaces that ratification. The peerlist moves into Rust. The C++ is a
+quarry: evidence for the invariant, and a list of behaviors the Rust model
+drops. *Records-was: the C++ already holds the contract at eight sites, every
+one correct, so the slice preserves it. A later same-day draft called the lists
+`Hypothesis` and `Fact` and treated any purposeful dial as promotion.*
 
-**Ratified as one thing, not two.** §0's reading and §5a's clause were taken
-together and deliberately: **the clause is correct only because §0's reading
-is.** If the C++ were wrong at those eight sites, entitlement — §5a's (b) —
-would be a bug to fix rather than a rule to encode, and the type would be
-smuggling a defect. The inversion is what makes the clause a preservation
-instead of an invention, so they hold or fall together. A later lane that
-reopens §0 reopens §5a with it.
-
-**Pinned:** `dev` @ `d8ebfd18c11bef38ab04e5763828c22e7ff00c49` (verified against
-`git ls-remote origin dev` at 2026-09-23; local and remote agree). Every
-citation below resolves at this sha. Re-verify before the first increment
-opens — `net_node.inl` anchors have moved twice in this round already.
-
-**Re-verified after merging `dev` `3a00c2175` (this branch at `6dd183f5b`): all 21
-anchors still resolve.** Recorded because a citation checked only before the
-merge is a citation checked against a tree the document never lands in.
+Owed before slice 1's first increment
+([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
+[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.4).
+Quarry lines below were read on this branch at `81746913c`. Re-read them
+before the first increment; `net_node.inl` has moved during this round.
 
 ---
 
-## 0. The correction this brief applies to its own mandate
+## 0. What this slice moves
 
-§4.4 argues for the type contract from a **process failure**: a rule in prose
-has to be re-derived by every lane, this round watched a deletion scope be
-understated three times, and a constraint survived nine turns unverified
-because it was written nowhere a check could find it. That argument is true and
-it is not the strongest one available.
+Rust owns the peerlist: the gray list, the white list, the one door between
+them, the 24-hour demotion, disclosure, and the file. At the end of the slice
+`peerlist_manager` is gone from `src/p2p`. The dial and the socket stay in C++
+until later slices. They report an outcome. They do not insert, replace, or
+erase list entries.
 
-**The stronger argument is in the tree.** Grounding slice 1 at the pin found
-that **the C++ already holds the contract, by convention, at every site**:
+---
 
-| Site | What it already does |
+## 1. The two lists
+
+**Gray** is every address that arrived and has not been confirmed by the door
+in §2. Gossip, a peerlist a neighbor sent, an inbound peer, a peer's
+advertisement, `--add-peer`, `--add-exclusive-node`, `--add-priority-node`,
+and every address reloaded from disk land here. An incoming address is added
+only to gray.
+
+**White** is an address this node has confirmed. No identity, no reputation,
+no claim about who is there.
+
+Only white is sent when another peer asks for a peerlist. The sample is a
+uniform draw from white. Gray is never in that message.
+
+Three properties fall out of the door.
+
+- White lists diverge across nodes. Each one is built from that node's own
+  confirmed dials.
+- Another node cannot place itself on this node's white list. An inbound
+  session, a transcript, a relay, or an address a peer named is gray.
+- A restart does not restore white. The file is a set of addresses, loaded
+  into gray with no rank.
+
+---
+
+## 2. The door
+
+An address moves from gray to white only when both of these happened, in
+order:
+
+1. This node drew it uniformly from gray.
+2. This node dialed that address, and the handshake confirmed.
+
+Nothing else writes white. A dial of an address that was not that draw does
+not. `--add-peer` does not. An incoming peer does not. A finished handshake
+with a harvest probe does not, except the one case in §3.
+
+The other direction is demotion. A white address with no additional contact
+for `EXPIRATION_PERIOD` (24 hours) returns to gray. Additional contact is a
+confirmed handshake, or a later successful exchange, on a connection this node
+opened to that address. It moves the clock forward. Contact that arrived
+inbound does not. One failed redial does not demote; the clock does.
+
+Capacity eviction is a draw, not a sort. Over the gray cap, drop a random
+gray address. Over the white cap, demote a random white address to gray. The
+caps move with the crate and are not re-derived
+(`src/cryptonote_config.h:176-177`). An `admit` of an address the operator
+just named evicts some other gray address when gray is at cap, so the named
+address is the one that stays. That is the whole of the `--add-peer` privilege.
+It is not a white-list write, and it is not a bias on the draw.
+
+---
+
+## 3. The Foundation seeds are the exception
+
+The hardcoded Foundation seed fleet is six literal addresses
+(`src/p2p/net_node.inl:731`, the array at `:738`). A confirmed handshake with
+one of those addresses writes white even though the address was not drawn
+from gray.
+
+That exception is the fleet, not the word "seed". `--seed-node`, `--add-peer`,
+and a peerlist taken from a seed are not it. Addresses a seed returns are
+incoming, and they are admitted to gray.
+
+The fleet is not loaded onto white. Startup does not treat those six as
+already confirmed. The handshake is still required. Today's seed dial passes
+`just_take_peerlist` and returns before any white write
+(`src/p2p/net_node.inl:1947`, `src/p2p/net_node.inl:1576`). For this fleet,
+that refusal is dropped. For every other harvest, it stands.
+
+---
+
+## 4. The types
+
+```rust
+struct Gray {
+    address: NetworkAddress,
+}
+
+struct White {
+    address: NetworkAddress,
+    last_observed: SystemTime, // when THIS process last confirmed it
+}
+
+const EXPIRATION_PERIOD: Duration = Duration::from_hours(24);
+```
+
+White has one clock, `last_observed`. The C++ field is `last_seen`
+(`src/p2p/p2p_protocol_defs.h:67`). Rust keeps one name. The clock answers
+"has this white address gone 24 hours without contact?" It is not a sort key,
+not a load rank, and not a field on gray.
+
+The C++ stamps `last_seen` and never reads it back as an age. White eviction
+is the capacity trim at `src/p2p/net_peerlist.h:215`. `EXPIRATION_PERIOD` is
+new. It is not a setting.
+
+Gray carries no timestamp. A gossiped `last_seen` is ignored at admit.
+
+---
+
+## 5. Draws
+
+Storage order is not a priority. Neither list is sorted by `last_observed`,
+by arrival, or by which list an address used to inhabit. Reload admits every
+stored address to gray, unordered. Former white addresses are not drawn
+first.
+
+The peerlist offers uniform draws and no ordered walk:
+
+| Operation | Effect |
 | --- | --- |
-| [`net_peerlist.h:347`](../../src/p2p/net_peerlist.h#L347) | `append_with_peer_white` is the **sole** function that inserts or replaces into white ([`:360`](../../src/p2p/net_peerlist.h#L360), [`:368`](../../src/p2p/net_peerlist.h#L368)). Every other touch of `m_peers_white` erases or reads |
-| [`net_node.inl:1588`](../../src/p2p/net_node.inl#L1588) | promotes only inside `try_to_connect_and_handshake_with_new_peer` ([`:1521`](../../src/p2p/net_node.inl#L1521)) — an **outbound dial** |
-| [`net_node.inl:1285`](../../src/p2p/net_node.inl#L1285) | promotes inside `if(!just_take_peerlist)` ([`:1273`](../../src/p2p/net_node.inl#L1273)) — so a seed probe does not promote |
-| [`net_node.inl:1345`](../../src/p2p/net_node.inl#L1345) | guarded `if(!context.m_is_income)` — **an inbound peer is never promoted** |
-| [`net_node.inl:3447`](../../src/p2p/net_node.inl#L3447) | promotes only after `check_connection_and_handshake_with_peer` succeeds — a dial |
-| [`net_peerlist.h:419`](../../src/p2p/net_peerlist.h#L419) | `append_operator_candidate` puts `--add-peer` in **gray**, and refuses to write a synthetic `last_seen` because *"recording an observation it never made is the exact category error this change exists to remove"* |
-| [`net_node.inl:3008`](../../src/p2p/net_node.inl#L3008) | `connect_to_peerlist` — the `--add-exclusive-node` / `--add-priority-node` path ([`:1991`](../../src/p2p/net_node.inl#L1991), [`:2006`](../../src/p2p/net_node.inl#L2006)) — **dials** rather than asserting, so those operator peers reach white only through [`:1588`](../../src/p2p/net_node.inl#L1588) and only on success |
-| [`net_peerlist.cpp:306`](../../src/p2p/net_peerlist.cpp#L306) | the save path has **no white member to write even by accident**, so *"a file cannot carry a trust assertion its loader is required to ignore"* |
+| `draw_gray()` | One uniform gray address, remembered as an outstanding draw |
+| `draw_white()` | One uniform white address. Used to re-contact, which can refresh the clock. Not a promotion |
+| `disclose(n)` | `n` distinct white addresses, uniform, order randomized. Gray is absent. `last_observed` is absent |
 
-**The operator surface is enumerated, not sampled.** There are three ways an
-operator names a peer — `--add-peer`, `--add-exclusive-node`,
-`--add-priority-node`. The first lands in gray as a candidate; the other two
-are dialed through [`connect_to_peerlist`](../../src/p2p/net_node.inl#L3008).
-**None asserts a fact.**
+`handshake_confirmed(address)` is the only writer of `White`, and only in
+three cases. The address is an outstanding gray draw: move it to white and
+set `last_observed`. The address is in the Foundation fleet: same write. The
+address is already white and the connection is one this node opened: move
+`last_observed` forward. Every other caller leaves white unchanged. A failed
+outstanding draw drops that address from gray. A failed redial of a white
+address leaves it white.
 
-> **Method, because the list is the wrong thing to inherit.** That list was
-> reached by **correction, not by enumeration** — the first draft of this
-> section read `--add-peer`, generalised from it, and said "seven sites". The
-> other two have their own containers and their own reach into the peerlist,
-> and a reader who trusts the list rather than re-deriving it inherits the
-> error silently if a fourth is ever added.
->
-> **Re-derive it, do not copy it:** `grep -n 'm_exclusive_peers\|m_priority_peers\|m_command_line_peers' src/p2p/net_node.inl`,
-> then read **every** hit — the containers are the subject, not the flag names,
-> because a flag can be renamed or aliased while the container it fills cannot.
-> The Rust side owes this check again at implementation time; the list above is
-> a result with a date on it, not a specification.
-
-Eight independent local decisions. **Every one of them is correct.** Slice 1 is
-therefore not repairing a defect, and the brief must not be written as though
-it were — a lane that believes it is fixing broken code ports differently, and
-worse, than one that knows it is preserving a working invariant.
-
-> **The contract exists because eight correct decisions do not make the ninth
-> correct.** Each site above states the rule again, in its own words, and each
-> one could have been written the other way by someone with no access to the
-> other seven. The type is what removes the requirement that the ninth author
-> reach the same conclusion unaided.
-
-Two of those sites, [`:419`](../../src/p2p/net_peerlist.h#L419) and
-[`net_peerlist.cpp:306`](../../src/p2p/net_peerlist.cpp#L306), already *argue*
-for the type in their own comments — the second explicitly contrasts an
-invariant with "a convention, not an invariant" and closes the hole by removing
-a struct member. **That is §4.4's instruction already carried out once, in
-C++.** Slice 1 generalises a move the codebase has made, rather than importing
-one.
+C++ disclosure walks white newest-first and then shuffles
+(`src/p2p/net_peerlist.h:302`, `:312`). Both callers pass the anonymize flag
+(`src/p2p/net_node.inl:2820`, `:2937`), so the sample that goes out is already
+a shuffle of the whole white list, truncated. The dial path never became a
+draw: it sorts candidates by `last_seen`
+(`src/p2p/net_node.inl:1811-1813`) and picks with a bias toward the front of
+that order (`src/p2p/net_node.inl:1849`). Rust has no time-ordered walk for
+either caller. The property PWD-I2 kept is the one `disclose` has to keep: two
+answers cannot be lined up to infer which address was confirmed more recently.
 
 ---
 
-## 1. Preconditions, verified at the pin rather than inherited
+## 6. Operations beside the door
 
-| Register claim | State at `d8ebfd18c` |
+| Operation | Effect |
 | --- | --- |
-| §4.2 row 1's opening gate: `rg -n 'pruning_seed' src/p2p/net_peerlist.*` returns nothing | **MET.** The only hit is [`net_peerlist.cpp:84`](../../src/p2p/net_peerlist.cpp#L84), a comment recording why the archive version is 9. The field is gone; the three received-seed sites the register names no longer exist |
-| 874 lines | **EXACT.** `net_peerlist.h` 545 + `net_peerlist.cpp` 329 |
-| No `net_node` / socket / connection dependency | **HOLDS.** The dependency runs the other way |
-| Greenfield — no peerlist crate in `rust/` | **HOLDS.** `shekyl-peer-policy` exists and is the natural neighbour (it already owns the inbound ceiling), but it holds no peerlist |
+| `admit_gray(address)` | Insert into gray. Does not touch a white entry at that address. This is the incoming path, the gossip path, `--add-peer`, exclusive, priority, and load |
+| `bootstrap_harvested(addresses)` | `admit_gray` for each returned address. The dialed harvest peer is not promoted by this call |
+| expiry | `now - last_observed >= EXPIRATION_PERIOD` moves that white address to gray and does not copy the clock across |
 
-The register's row-1 gate is **already green at the pin**, which means slice 1
-opens without a blocking predecessor. That is a change from when the row was
-written and it is worth stating, because the row reads as though the gate were
-still pending.
-
----
-
-## 2. The deliverable
-
-A new crate under `rust/` owning the peerlist as data, with no socket, no
-connection context and no dependency on the C++ node. It is reached from C++
-through `shekyl-ffi` like every other Rust owner.
-
-### 2.1 The type contract — §4.4, restated only where grounding changed it
-
-1. **Gray and white are different types**, not one type with a flag.
-2. **The observed type has no public constructor except from a completed dial
-   result.** A lane that wants to promote without dialing must find it cannot
-   write the code.
-
-Grounding adds one clause §4.4 does not have, and it comes from
-[`net_node.inl:1273`](../../src/p2p/net_node.inl#L1273) and
-[`:1588`](../../src/p2p/net_node.inl#L1588):
-
-3. **A dial that completes is not sufficient — the dial must have been made for
-   the purpose.** The seed path dials, handshakes, takes the peerlist and closes
-   ([`:1576`](../../src/p2p/net_node.inl#L1576)), and is excluded from promotion
-   at *both* points. So the observed type's constructor takes a dial result that
-   is **distinguishable from a peerlist-harvest probe**, or the seed path
-   silently acquires promotion rights the C++ deliberately denies it.
-
-§4.4's table says a **handshake transcript** is not a dial result. The seed path
-is the concrete instance: it produces a completed handshake and must still not
-promote.
-
-### 2.2 Persistence is a fact-to-hypothesis demotion, and the type gets it free
-
-The predicted simplification is real and it is **larger** than predicted.
-
-The store carries **one list**. Archive v8 deleted the anchor and white lists
-outright — [`net_peerlist.cpp:82`](../../src/p2p/net_peerlist.cpp#L82) records
-that *"the stream carries one list where it carried three"*. The load path
-reads only gray ([`:156`](../../src/p2p/net_peerlist.cpp#L156)); the save path
-joins two gray ranges ([`:163`](../../src/p2p/net_peerlist.cpp#L163)); and
-`get_peerlist(peerlist_types&)` copies **both live lists into `peers.gray`**
-([`:315-318`](../../src/p2p/net_peerlist.cpp#L315)).
-
-So a restart demotes every fact to a hypothesis. That is not a lossy port
-detail to be preserved for compatibility — **it is what the type contract
-implies.** A reloaded entry has no dial behind it, this process made no
-observation of it, and therefore it cannot be the observed type. The
-consequence for slice 1:
-
-> **The store round-trips the hypothesis type only. The observed type needs no
-> deserialization path, and its constructor needs no escape hatch for the
-> loader.** The format shrinks because the type refuses to represent what the
-> file cannot justify.
-
-State this as a consequence of the contract, not as a port of the C++. The C++
-arrived at it by deleting a struct member after finding a convention
-insufficient; the Rust arrives at it by the observed type having no
-constructor the loader can reach.
-
-### 2.3 The FFI seam is where the contract can leak
-
-§4.4 names this and grounding does not soften it: a `u16` crossing as a port
-carries no provenance, and a claimed port and an observed one are the same
-sixteen bits. The marshaling names which kind it is **on both sides**, and the
-C++ side's naming is part of slice 1, not a follow-up — the seam is the only
-place where the Rust type system stops holding and the only place the eighth
-author will be working.
+`--add-exclusive-node` and `--add-priority-node` are gray admits. Today
+`connect_to_peerlist` (`src/p2p/net_node.inl:3008`) dials them straight onto
+white. A successful dial on that path writes white only when the address was
+an outstanding gray draw, or is in the Foundation fleet.
 
 ---
 
-## 3. Invariants
+## 7. Persistence
 
-- **One promotion gate.** Exactly one constructor of the observed type, as
-  `append_with_peer_white` is today's single insert point. Verifiable by grep.
-- **Inbound never promotes.** [`:1345`](../../src/p2p/net_node.inl#L1345)'s
-  `!m_is_income` guard becomes a property of the type rather than of that line.
-- **Operator input is a slot policy, not a trust claim.**
-  [`net_peerlist.h:419`](../../src/p2p/net_peerlist.h#L419)'s distinction
-  survives: `--add-peer` outranks a gossiped candidate for a *place in the
-  pool* and earns white by a dial like anything else. The Rust must keep these
-  two as separate operations; collapsing them is the likeliest way to lose the
-  invariant while keeping the tests green.
-- **No synthetic observation.** No path writes a `last_seen` this node did not
-  observe.
-- **The persisted file cannot assert trust.** Structural, per §2.2.
+The file is an unordered set of addresses. Archive v8 already deleted the
+anchor and white lists (`src/p2p/net_peerlist.cpp:82`); the save path copies
+both live lists into the one gray list (`src/p2p/net_peerlist.cpp:306`,
+`src/p2p/net_peerlist.cpp:318`); load reads that list
+(`src/p2p/net_peerlist.cpp:156`).
+
+`White` has no `Deserialize` and no loader escape hatch. `last_observed` is
+not in the file. A stored timestamp would let load rebuild a white entry
+without a draw and a handshake. Restart therefore puts every address on gray.
+How long the process was down does not matter; a wall clock would answer the
+duration and would still not be the door in §2.
+
+Dropping `last_seen` from the stored entry is a format change. The version
+constant bumps (rule 42). The loader already drops a pre-current file
+wholesale.
+
+A node boots with gray only. It draws from gray until white exists, and it
+dials the Foundation fleet under §3. How many dials run at once is the
+outbound cap, owned outside this slice (`P2P_DEFAULT_OUT_PEERS`).
 
 ---
 
-## 4. Increments
+## 8. C++ behaviors this slice does not keep
+
+| Behavior | Where | Rust |
+| --- | --- | --- |
+| Promote from a bare address and stamp now | `set_peer_just_seen`, `src/p2p/net_peerlist.h:334` | No such function. White is written only by `handshake_confirmed` under §5 |
+| Two white writes on one kept outbound dial | `src/p2p/net_node.inl:1285` and `src/p2p/net_node.inl:1588` | One call, and only if that address was the gray draw or a Foundation seed |
+| `trust_last_seen` | `append_with_peer_white`, `src/p2p/net_peerlist.h:347` | No flag. The clock moves only on contact this node initiated |
+| Gossiped `last_seen` stored on gray insert | `src/p2p/net_peerlist.h:239`, `src/p2p/net_peerlist.h:405` | Ignored. Gray has no clock |
+| Time order as a rank | `by_time` at `src/p2p/net_peerlist.h:184`; the dial sort at `src/p2p/net_node.inl:1811-1813` | Uniform draws. Load is unordered |
+| White list never expires on age | trim is capacity only, `src/p2p/net_peerlist.h:215` | `EXPIRATION_PERIOD` demotes to gray |
+| Foundation seed handshake does not promote | `src/p2p/net_node.inl:1947`, `src/p2p/net_node.inl:1576` | §3. This fleet confirms onto white |
+| `--add-peer` kept off the trim front by a synthetic absence of `last_seen` | `src/p2p/net_peerlist.h:444` | The named address is admitted to gray and is not the one a full list drops. The draw is still uniform |
+
+`append_with_peer_white(const peerlist_entry&)` accepts any entry. Porting
+that signature is the hole §5 closes.
+
+---
+
+## 9. What the quarry is actually for
+
+These C++ outcomes match the lists. The functions that produce them are not
+the API.
+
+- `--add-peer` is gray (`src/p2p/net_node.inl:1004`, `src/p2p/net_peerlist.h:419`).
+- An inbound advertisement is gray (`src/p2p/net_node.inl:2918-2925`).
+- A received peerlist is merged into gray (`src/p2p/net_peerlist.h:239`).
+- Inbound timed sync does not write white (`src/p2p/net_node.inl:1345`).
+- The file cannot represent white (`src/p2p/net_peerlist.cpp:310`).
+
+A reachability probe that answers does write white today
+(`src/p2p/net_node.inl:3447`), including when the handshake was the
+harvest-shaped `just_take_peerlist` path (`src/p2p/net_node.inl:1619`). Rust
+writes white there only when that address was the outstanding gray draw.
+
+The `pruning_seed` field is already gone. The only hit under
+`src/p2p/net_peerlist.*` is the archive-version comment at
+`src/p2p/net_peerlist.cpp:84`. The register's `src/p2p/net_peerlist.h:367` is
+the white update keeping the previous `last_seen`. Its `:414` is `return true`
+at the end of `append_with_peer_gray` (`src/p2p/net_peerlist.h:414`). Neither
+is a seed guard.
+
+---
+
+## 10. The seam until the dial moves
+
+Until slices 3 and 5 move the dial into Rust, C++ reports outcomes and does
+not choose the list:
+
+- `draw_gray` / `draw_white` / `disclose`
+- `handshake_confirmed(address)` / `draw_failed(address)`
+- `admit_gray` / `bootstrap_harvested`
+
+A `u16` named on both sides of the FFI is not the mitigation. The port carries
+no provenance either way. The residual lie is a C++ caller invoking
+`handshake_confirmed` for an address the peerlist did not draw and that is not
+in the Foundation fleet. `handshake_confirmed` refuses that address. The
+function cannot be talked into a third door.
+
+---
+
+## 11. Falsifiers
+
+They check different things. Neither stands for the other.
+
+1. **Constructor reachability (source).** `White` has no public constructor.
+   The only call is inside `handshake_confirmed`, and that function promotes
+   only an outstanding gray draw or a Foundation-fleet address. There is no
+   `bool` on either type, and no `last_seen` beside `last_observed`. There is
+   no ordered iterator. The check fails if it cannot find the constructor it
+   is asserting about (rule 47).
+2. **Model sequences (runtime).** Draw-then-confirm promotes; confirm of an
+   undrawn ordinary address does not; a Foundation seed confirm does; incoming
+   and `--add-peer` stay gray; expiry returns white to gray; contact this node
+   opened moves the clock; inbound contact does not; reload is gray only and
+   does not draw former white first; `disclose` is a sample of white and
+   carries no clock; a failed draw drops gray; a failed redial leaves white.
+   The harness fails if it has no sequence (rule 47).
+3. **The C++ list is gone.** `rg -n 'm_peers_white|peerlist_manager' src/p2p`
+   returns nothing.
+
+A harness that requires Rust membership to match the C++ is the wrong oracle.
+§8 is a list of intentional divergences. *Records-was §4.2's green line.*
+
+---
+
+## 12. Reversion
+
+The contract reopens only for a third way onto white: not a gray draw this
+node dialed and confirmed, and not a confirmed handshake with the Foundation
+fleet. Inconvenience is the mechanism working.
+
+Worked against the paths this brief already knows:
+
+| Path | Gray → white? |
+| --- | --- |
+| Uniform gray draw, dial, handshake confirmed | Yes |
+| Same address, already white, contact this node opened | Clock moves. Already white |
+| Foundation fleet, handshake confirmed | Yes. §3 |
+| Bootstrap harvest of anyone else | No. Returned addresses are gray |
+| `--add-peer`, exclusive, priority | No. Gray until drawn |
+| Incoming peer, advertisement, received peerlist | No. Gray only |
+| Reload | No. Gray, unordered |
+| White, no contact for `EXPIRATION_PERIOD` | Demote to gray |
+| Undrawn address, handshake confirmed | No |
+
+Where a later lane will try:
+
+- **Cluster T's Noise transcript.** A transcript is not the door. The dialer still has to have drawn the address from gray, or be confirming a Foundation seed.
+- **A relay that succeeds.** Bytes on a path are not a gray draw.
+- **An operator assertion.** `--add-peer` is gray. Ruling that an operator may assert white is a steering decision, and it would be a third door.
+
+Falsify the constructor by a confirmed gray draw that `handshake_confirmed`
+cannot express. Fix the signature. That does not widen white.
+
+---
+
+## 13. Increments
 
 | # | Content | Greens when |
 | --- | --- | --- |
-| 1 | The two types, the dial-result constructor, the gray store and its format. No FFI | the crate builds and its own tests pass, **and** `git diff dev..HEAD --stat -- src/ contrib/` is empty — the row asserts the C++ is untouched rather than assuming it (rule 47) |
-| 2 | The differential harness: both implementations over one input sequence, compared on gray/white membership | the harness agrees on a generated sequence including promotions, demotions, trims and a save/load round trip |
-| 3 | The FFI seam and the C++ call-through, provenance named on both sides | `append_with_peer_white` has no remaining C++ caller |
+| 1 | The crate: gray, white, `EXPIRATION_PERIOD`, the draws, the door, the address file. No FFI | The crate's tests cover §11.2, and `git diff dev..HEAD --stat -- src/ contrib/` is empty |
+| 2 | The divergence ledger of §8, checked against the tree at the increment's pin | Each §8 row names the Rust operation that replaces it, and §11.1 passes |
+| 3 | Delete the C++ peerlist. Dial sites that remain call the outcome functions | §11.3 |
 
-Increment 1 lands no behaviour change **by construction**, which is what makes
-increment 2's harness meaningful: it compares a live C++ peerlist against a
-Rust one that nothing yet consults.
-
----
-
-## 5. Completion gate — two falsifiers, and they check different things
-
-§4.4 names a falsifier and §4.2 names a green command. **They are not the same
-check and the brief must not let one stand for the other.**
-
-1. **Membership oracle (runtime).** §4.2's row: a differential harness runs both
-   implementations over one input sequence and agrees on gray/white membership.
-   This catches a *behavioural* divergence — a promotion that happens in one and
-   not the other.
-2. **Constructor reachability (type).** §4.4's falsifier: slice 1 fails if its
-   first PR introduces a peerlist entry type with a public constructor reachable
-   without a dial result, or a single type carrying a `bool verified` flag. This
-   is a property of the source, not of a run, and **no amount of passing
-   membership comparison establishes it.**
-
-A membership oracle over a type that permits an unearned promotion passes right
-up until a lane writes the promotion. Falsifier 2 carries increment 1;
-falsifier 1 carries increment 2.
-
-**Rule 47:** both gates assert their own subject. The harness fails if it finds
-no sequence to run; the type check fails if it cannot locate the constructor it
-is asserting about.
+Increment 1 changes no production behavior. Increment 3 is the cutover. The
+crate boundary is what makes `White`'s constructor crate-private; `shekyl-ffi`
+is the wrong crate for that. The crate's name is the increment's, and the
+neighbor `shekyl-peer-policy` owns the inbound ceiling, not these lists.
 
 ---
 
-## 5a. Reversion clause
+## 14. Scope fences
 
-**The contract reopens if a legitimate promotion path is found that is neither
-a dial nor reducible to one.** Not "if promotion becomes inconvenient" — the
-inconvenience is the mechanism working.
-
-### The test, stated so a candidate this brief never imagined can be decided
-
-A future lane will arrive with a *legitimate-sounding* reason, not an obviously
-bad one. Three worked examples cannot answer a fourth, so the test comes first
-and the examples are only its application.
-
-**A candidate qualifies as a dial result only if BOTH hold.**
-
-**(a) Provenance — this node initiated a connection to this exact address, and
-the address answered.** Two halves, and both are load-bearing. *Initiated*
-rules out anything a peer brought to us, which is
-[`net_node.inl:1345`](../../src/p2p/net_node.inl#L1345)'s `!m_is_income`
-generalised. *This exact address* rules out an address learned **during** the
-exchange rather than dialed — the promotion records the address we dialed, not
-one the peer named, which is the difference between gossiping an address and
-adopting one.
-
-**(b) Entitlement — the policy grants promotion for this dial.** Separately
-necessary, and this is the half a naive `DialResult` type collapses. The seed
-path proves it: it satisfies (a) in full — we dialed, it answered, we completed
-a handshake — and the C++ still refuses promotion at both
-[`:1273`](../../src/p2p/net_node.inl#L1273) and
-[`:1588`](../../src/p2p/net_node.inl#L1588). So the type must be able to
-express **"this dial happened and confers nothing"**, or it will grant the seed
-path rights the C++ deliberately denies it while looking perfectly principled.
-
-**Checked against the eight sites it has to reproduce**, because a decision
-procedure nobody ran on the known cases is untested:
-
-| Path | (a) | (b) | Test says | C++ does |
-| --- | --- | --- | --- | --- |
-| [`:1588`](../../src/p2p/net_node.inl#L1588) outbound handshake | ✓ | ✓ | promote | promotes |
-| [`:1285`](../../src/p2p/net_node.inl#L1285) outbound `COMMAND_HANDSHAKE` | ✓ | ✓ | promote | promotes |
-| [`:1345`](../../src/p2p/net_node.inl#L1345) timed sync, `!m_is_income` | ✓ | ✓ | promote | promotes |
-| [`:3447`](../../src/p2p/net_node.inl#L3447) gray→white after a dial | ✓ | ✓ | promote | promotes |
-| seed probe, `just_take_peerlist` | ✓ | **✗** | **no promotion** | refuses |
-| `--add-peer` → [`append_operator_candidate`](../../src/p2p/net_peerlist.h#L419) | **✗** | — | gray | gray |
-| `--add-exclusive-node` / `--add-priority-node` | ✓ | ✓ | promote | promotes via `:1588` |
-| persisted entry at load | **✗** | — | gray | gray |
-
-**Eight for eight.** The row that earns the test its keep is the seed probe: it
-is the only one where (a) and (b) disagree, and a one-part test would have got
-it wrong in the permissive direction.
-
-**Applying it:** a candidate failing (a) is a hypothesis however strong its
-evidence, and belongs in gray. A candidate satisfying (a) but not (b) is a
-completed dial that does not promote — representable, not an exception. **Only
-a candidate that satisfies (a) and is argued to deserve (b) reopens this
-contract**, and that argument is steering's.
-
-Where to expect one, and why each named case is not one today:
-
-- **Cluster T's Noise handshake.** §4.4 names it as the example of something
-  that *looks* like a dial result and is not: a transcript proves a session,
-  not that this node reached that address on its own initiative. If cluster T
-  lands a handshake the **dialer** completes, that is already a dial and needs
-  no exception — the clause fires only if a peer-initiated transcript is argued
-  to establish reachability.
-- **A relay that succeeds.** §4.4's second row. Successful relay proves the
-  path carried bytes, which is a different claim from reachability on our own
-  dial — and over an **inbound** connection it fails (a) outright. Over an
-  outbound one it is already a dial and needs no exception.
-- **An operator assertion.** The strongest real candidate, and the C++ already
-  rejected it at [`net_peerlist.h:419`](../../src/p2p/net_peerlist.h#L419).
-  Reopening would mean ruling that an operator may assert reachability the node
-  has not observed — a ruling, not a convenience, and it belongs to steering.
-
-**Falsify this clause** by a promotion path that is dial-backed in substance
-but cannot be expressed through the constructor. That is a defect in the
-constructor's signature, not grounds to widen the type — fix the signature.
+- No admission-ceiling policy. That is slice 2.
+- No policy for which draw to dial next, and no seed-list editing. Slice 3
+  calls `draw_gray`, `draw_white`, and `handshake_confirmed`. It does not grow
+  a third door. The Foundation fleet is data this slice reads, not a second
+  selector.
+- No connection object. Slice 5. Expiry and the clock do not wait for it.
+- No new cap, no `--in-peers` number, no refusal-window number.
+- The failure cache stays where it is. It may cause the dialer to skip an
+  address `draw_gray` returned. It does not write white.
+- Disclosure stays a sample of white with no clock in the value. PWD-I2's
+  property (a second answer does not reveal which address was confirmed more
+  recently) is what `disclose` implements. The `by_time` walk is not part of
+  that property.
 
 ---
 
-## 6. Scope fences
+## 15. What this brief does not decide
 
-- **No admission policy.** The ceiling is slice 2.
-- **No discovery policy.** Seed handling and dial-candidate selection are slice
-  3; slice 1 only refuses to promote what slice 3 will dial.
-- **No connection object.** Slice 5.
-- **No `--in-peers` number, no cap number, no refusal-window number.**
-- **The failure cache stays where it is.** `record_addr_success` /
-  `add_host_fail` are not peerlist state and do not move in this slice.
-- **`m_peers_white`'s eviction and trim paths port as they are.** They are not
-  promotion and the contract says nothing about them.
+The on-disk byte layout past "an unordered set of addresses, no
+`last_observed`, no white tag", and the crate's name.
 
----
+It does not re-open §4.2's ordering.
 
-## 7. What this brief does not do
-
-It does not design the store format's bytes, choose the crate name, or rule on
-whether the peerlist lands beside `shekyl-peer-policy` or in its own crate —
-those are the first increment's, and the register's row does not constrain them.
-
-It does not re-open §4.2's ordering. The sequence was confirmed on 2026-09-23
-after the LV-2b measurement round and three corrections did not move it.
-
-It does not claim the C++ is wrong. §0 exists because the opposite is true, and
-a brief that got this backwards would produce a port that treats seven
-deliberate decisions as accidents.
+It does not claim the C++ peerlist is the specification. §8 is the list a port
+would otherwise preserve.
