@@ -230,13 +230,27 @@ inbound is our service — our inbound set is chosen by whoever dials us and is
 never a security input; diversity objectives belong to outbound selection.
 LV-3 is designed from the rulings, not derived from `p2p_connection_context`.
 
-**Two claims from the review this lane could not carry, recorded as open
-rather than written in:** (a) *"`--add-peer` is the single exemption that
-enters white without a dial"* — contradicted by the brief's §12 as ratified;
-whether the operator may assert white is the steering decision the brief
-names, not a fact this file can state. (b) *"Re-validation is demand-driven —
-dial until 12 connections are established, then batch the rest"* — no ruling
-found in the brief, the implementation round or LV-3; unverified.
+**`--add-peer` — CLOSED 2026-09-24, against the review and for the brief.**
+The review's draft of this section said *"`--add-peer` is the single
+exemption that enters white without a dial."* The brief (§12) says
+`--add-peer` is gray, and that letting an operator assert white "would be a
+third door." The brief wins, and the reason is this file's own closing
+section: white means *"I dialled this and it answered."* An operator
+assertion is not a dial. Letting `--add-peer` enter white makes white mean
+"I reached this" **or** "the operator said so" — one container, two meanings,
+resolved by how the entry got there — the same defect as `nil_uuid` in three
+roles and state 0 falling to `Fluff`, written into a document whose last
+section is about exactly that. Gray serves the operator's actual intent
+completely: the address enters the dial pool, gets dialled, promotes on
+success. They wanted the peer *tried*, not *trusted*. **How it got in,
+recorded because the failure has a shape:** the claim was cited from a past
+session where it appears as the reviewer's own *suggestion*, not as a
+ruling — and one subsequently ruled against. The borrowed-citation failure
+with oneself as the lender. It was recorded as open rather than written in;
+it is now closed. *(A second claim from the same source — a demand-driven
+re-validation figure — had no ruling behind it and is not carried at all: an
+unruled number in a reference is how a default gets chosen by whoever
+implements first.)*
 
 **Drift looks like.** A white list that accepts an inbound peer after a
 back-ping (the inbound-derived endpoint is routed to **gray** at
