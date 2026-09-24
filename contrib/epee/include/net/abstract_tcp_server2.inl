@@ -1070,11 +1070,16 @@ namespace net_utils
       fail_unstarted();
       return false;
     }
-    std::lock_guard<std::mutex> pipe_guard(m_network_pipe_mu);
-    m_network_pipe = pipe;
-    // The pipe's own deadline covers the handshake. The 10s new-connection
-    // timer would close the socket before that deadline.
+    {
+      std::lock_guard<std::mutex> pipe_guard(m_network_pipe_mu);
+      m_network_pipe = pipe;
+    }
+    // The pending timer is what keeps this connection alive: accept drops
+    // its shared_ptr when start returns, and the pipe does not arm a read.
+    // Swap the 10s new-connection deadline for the idle timeout. The pipe's
+    // own deadline still closes a handshake that never finishes.
     cancel_timer();
+    start_timer(get_default_timeout());
     return true;
   }
 

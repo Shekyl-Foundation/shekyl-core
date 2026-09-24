@@ -832,22 +832,41 @@ TEST(boosted_tcp_server, network_pipe_takes_the_descriptor)
 
   reset_probe(false);
   connect_one();
-  ASSERT_TRUE(wait_probe([](const pipe_probe& p) { return p.detaches == 1; }));
+  ASSERT_TRUE(wait_probe([](const pipe_probe& p) { return p.starts == 1; }));
   {
     std::lock_guard<std::mutex> lock(probe().mu);
     EXPECT_EQ(probe().attaches, 1);
-    EXPECT_EQ(probe().starts, 1);
+    EXPECT_EQ(probe().detaches, 0);
   }
 
+  srv.send_stop_signal();
+  srv.timed_wait_server_stop(5 * 1000);
+  srv.deinit_server();
+}
+
+TEST(boosted_tcp_server, network_pipe_attach_failure_does_not_start)
+{
+  test_tcp_server srv(epee::net_utils::e_connection_type_RPC);
+  uint8_t network_id[16] = {};
+  static const epee::net_utils::network_pipe_ops ops = {
+    &probe_attach, &probe_start, &probe_pin, &probe_unpin,
+    &probe_write, &probe_detach, &probe_read_done,
+  };
+  srv.set_network_pipe(network_id, &ops);
+  ASSERT_TRUE(srv.init_server(0, "127.0.0.1"));
+  ASSERT_TRUE(srv.run_server(1, false));
   reset_probe(true);
-  connect_one();
+  const auto port = static_cast<unsigned short>(srv.get_binded_port());
+  boost::asio::io_context client_io;
+  boost::asio::ip::tcp::socket client(client_io);
+  client.connect(boost::asio::ip::tcp::endpoint(
+    boost::asio::ip::make_address("127.0.0.1"), port));
   ASSERT_TRUE(wait_probe([](const pipe_probe& p) { return p.attaches == 1; }));
   {
     std::lock_guard<std::mutex> lock(probe().mu);
     EXPECT_EQ(probe().starts, 0);
     EXPECT_EQ(probe().detaches, 0);
   }
-
   srv.send_stop_signal();
   srv.timed_wait_server_stop(5 * 1000);
   srv.deinit_server();
