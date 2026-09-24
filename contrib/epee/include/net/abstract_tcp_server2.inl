@@ -1040,7 +1040,7 @@ namespace net_utils
     if (!ops || !ops->attach || !ops->start || !ops->pin || !ops->unpin
         || !ops->write || !ops->detach || !ops->read_done || m_state.ssl.enabled)
     {
-      interrupt();
+      fail_unstarted();
       return false;
     }
     boost::system::error_code release_ec;
@@ -1052,7 +1052,7 @@ namespace net_utils
 #endif
     if (release_failed)
     {
-      interrupt();
+      fail_unstarted();
       return false;
     }
     m_network_fd_released = true;
@@ -1065,12 +1065,28 @@ namespace net_utils
       this);
     if (!pipe)
     {
-      interrupt();
+      fail_unstarted();
       return false;
     }
     std::lock_guard<std::mutex> pipe_guard(m_network_pipe_mu);
     m_network_pipe = pipe;
     return true;
+  }
+
+  template<typename T>
+  void connection<T>::fail_unstarted()
+  {
+    m_state.protocol.wait_init = false;
+    cancel_timer();
+    detach_network_pipe();
+    if (m_state.socket.connected && !m_network_fd_released)
+    {
+      ec_t ec;
+      connection_basic::socket_.next_layer().shutdown(socket_t::shutdown_both, ec);
+      connection_basic::socket_.next_layer().close(ec);
+    }
+    m_state.socket.connected = false;
+    m_state.status = status_t::WASTED;
   }
 
   template<typename T>
@@ -1226,24 +1242,29 @@ namespace net_utils
   void connection<T>::save_dbg_log()
   {
     std::lock_guard<std::mutex> guard(m_state.lock);
-    std::string address;
-    std::string port;
-    ec_t ec;
-    auto endpoint = connection_basic::socket().remote_endpoint(ec);
-    if (ec.value()) {
-      address = "<not connected>";
-      port = "<not connected>";
-    }
-    else {
-      address = endpoint.address().to_string();
-      port = std::to_string(endpoint.port());
+    std::string local = "<pipe>";
+    std::string via_host = "<not connected>";
+    std::string via_port = "<not connected>";
+    if (!m_network_fd_released)
+    {
+      ec_t remote_ec;
+      auto remote = connection_basic::socket().remote_endpoint(remote_ec);
+      if (!remote_ec)
+      {
+        via_host = remote.address().to_string();
+        via_port = std::to_string(remote.port());
+      }
+      ec_t local_ec;
+      auto local_ep = connection_basic::socket().local_endpoint(local_ec);
+      local = local_ec
+        ? std::string("<not connected>")
+        : local_ep.address().to_string() + ":" + std::to_string(local_ep.port());
     }
     MDEBUG(
       " connection type " << std::to_string(m_connection_type) <<
-      " " << connection_basic::socket().local_endpoint().address().to_string() <<
-      ":" << connection_basic::socket().local_endpoint().port() <<
+      " " << local <<
       " <--> " << m_conn_context.m_remote_address.str() <<
-      " (via " << address << ":" << port << ")"
+      " (via " << via_host << ":" << via_port << ")"
     );
   }
 

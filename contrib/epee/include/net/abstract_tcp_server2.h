@@ -300,9 +300,11 @@ namespace net_utils
     bool m_network_fd_released{};
     void* m_network_pipe{};
     std::mutex m_network_pipe_mu;
-    /// Release the asio descriptor into the pipe. False if that failed and
-    /// the connection was interrupted. True when the pipe is off.
+    /// Release the asio descriptor into the pipe. False leaves the
+    /// connection `WASTED` and unpublished. True when the pipe is off.
     bool take_network_pipe(bool is_income);
+    /// `start_internal` failed before the connection was published.
+    void fail_unstarted();
     void detach_network_pipe();
     static int32_t network_pipe_on_plain(void* ctx, const uint8_t* data, size_t len);
     static void network_pipe_on_closed(void* ctx);
