@@ -408,7 +408,7 @@ Owed to the maintainer, and **not** to be decided inside a slice:
   derivation** (rule 76), not a reuse of either existing constant.
 - Whether visible refusal is wanted. Argued against in PWD-I7: a reason code
   before the drop is a co-residency oracle over the whole NAT, plus a
-  pre-handshake wire addition.
+  wire addition before session established.
 - Tor-by-default posture, and its dependency on
   `cryptonote_protocol_handler.inl:452` — **Tor cannot sync a chain today**, so
   that posture is a change to that line, not to a default.

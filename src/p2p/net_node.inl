@@ -1588,7 +1588,7 @@ namespace nodetool
     zone.m_peerlist.append_with_peer_white(pe_local);
     //update last seen and push it to peerlist manager
 
-    zone.m_notifier.on_handshake_complete(con->m_connection_id, con->m_is_income);
+    zone.m_notifier.on_session_established(con->m_connection_id, con->m_is_income);
     zone.m_notifier.new_out_connection();
 
     LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK.");
@@ -2291,7 +2291,7 @@ namespace nodetool
       {
         // Session state this node OBSERVED, never a wire value: only
         // handshake-completed connections take part in timed sync.
-        if(cntxt.handshake_complete() && !cntxt.m_in_timedsync)
+        if(cntxt.session_established() && !cntxt.m_in_timedsync)
         {
           cntxt.m_in_timedsync = true;
           cncts.push_back(cntxt);
@@ -2867,7 +2867,7 @@ namespace nodetool
       return 1;
     }
 
-    if(context.handshake_complete())
+    if(context.session_established())
     {
       LOG_WARNING_CC(context, "COMMAND_HANDSHAKE came on a connection that already completed one (double COMMAND_HANDSHAKE?)");
       drop_connection(context);
@@ -2899,7 +2899,7 @@ namespace nodetool
       return 1;
     }
 
-    zone.m_notifier.on_handshake_complete(context.m_connection_id, context.m_is_income);
+    zone.m_notifier.on_session_established(context.m_connection_id, context.m_is_income);
 
     context.m_in_timedsync = false;
     context.support_flags = arg.node_data.support_flags;

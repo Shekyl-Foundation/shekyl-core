@@ -162,8 +162,8 @@ the object's identity. The table below is therefore what the connection*
    accident** — if it is stable across reconnects and observable, it is
    `peer_id` re-minted under a new name.
 3. **Never on the wire.** The category is *our* classification of a peer, held
-   locally. Publishing it is a co-residency oracle and a pre-handshake wire
-   addition — both rejected in PWD-I7.
+   locally. Publishing it is a co-residency oracle and a wire addition before
+   session established — both rejected in PWD-I7.
 
 ---
 

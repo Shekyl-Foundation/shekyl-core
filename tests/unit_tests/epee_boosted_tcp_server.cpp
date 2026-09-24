@@ -143,7 +143,7 @@ TEST(test_epee_connection, test_lifetime)
   struct context_t: epee::net_utils::connection_context_base {
     static std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) noexcept { return size_t(-1); }
     static constexpr int handshake_command() noexcept { return 1001; }
-    static constexpr bool handshake_complete() noexcept { return true; }
+    static constexpr bool session_established() noexcept { return true; }
   };
 
   using functional_obj_t = std::function<void ()>;
@@ -479,7 +479,7 @@ TEST(test_epee_connection, ssl_shutdown)
   struct context_t: epee::net_utils::connection_context_base {
     static std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) noexcept { return size_t(-1); }
     static constexpr int handshake_command() noexcept { return 1001; }
-    static constexpr bool handshake_complete() noexcept { return true; }
+    static constexpr bool session_established() noexcept { return true; }
   };
 
   struct command_handler_t: epee::levin::levin_commands_handler<context_t> {

@@ -50,7 +50,7 @@ namespace net_load_tests
   {
     test_connection_context(): epee::net_utils::connection_context_base(boost::uuids::nil_uuid(), {}, false, false), m_closed(false) {}
     static constexpr int handshake_command() noexcept { return 1001; }
-    static constexpr bool handshake_complete() noexcept { return true; }
+    static constexpr bool session_established() noexcept { return true; }
     std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) const { return LEVIN_DEFAULT_MAX_PACKET_SIZE; }
     volatile bool m_closed;
   };
