@@ -25,6 +25,18 @@ use crate::verdict::{ChainValid, Locus};
 use crate::Target;
 use shekyl_types::BlockHash;
 
+/// Unwrap a parent-side read over a view that cannot fault: the view arm
+/// is uninhabited, and a corrupt answer is a fixture failure unless the
+/// test asked for one.
+#[track_caller]
+fn windowed<T>(read: Result<T, ViewRead<core::convert::Infallible>>) -> T {
+    match read {
+        Ok(value) => value,
+        Err(ViewRead::View(never)) => match never {},
+        Err(ViewRead::Corrupt(corrupt)) => panic!("unexpected corrupt view: {corrupt}"),
+    }
+}
+
 /// A chain whose blocks carry `timestamps` in height order.
 fn chain_with(timestamps: &[u64]) -> MockChain {
     timestamps
@@ -88,7 +100,7 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
         let connecting = BlockHeight::from_raw(chain.tip().map_or(0, |t| t.height.to_raw() + 1));
-        let window = crate::harness::infallible(C3::window(&view, connecting, &mut coverage));
+        let window = windowed(C3::window(&view, connecting, &mut coverage));
         crate::harness::infallible(R::check(
             &BlockContext::new(
                 &formed,
@@ -241,8 +253,7 @@ fn cen_c3_below_eleven_blocks_the_window_is_padded_with_genesis() {
 fn cen_c3_records_and_yields_no_window_at_genesis() {
     MockChain::default().with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        let window =
-            crate::harness::infallible(C3::window(&view, BlockHeight::ZERO, &mut coverage));
+        let window = windowed(C3::window(&view, BlockHeight::ZERO, &mut coverage));
         assert_eq!(window, None);
         assert!(
             coverage.contains(CenRow::C3),
@@ -257,9 +268,8 @@ fn cen_c3_window_is_the_preceding_eleven_oldest_first() {
     let chain = chain_with(&timestamps);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        let window =
-            crate::harness::infallible(C3::window(&view, BlockHeight::from_raw(15), &mut coverage))
-                .expect("fifteen blocks have a window");
+        let window = windowed(C3::window(&view, BlockHeight::from_raw(15), &mut coverage))
+            .expect("fifteen blocks have a window");
         assert_eq!(window.genesis, Timestamp::from_raw(100));
         assert_eq!(
             window.preceding,
@@ -276,8 +286,84 @@ fn cen_c3_propagates_a_fault_and_derives_nothing() {
     let mut coverage = RuleCoverage::EMPTY;
     assert_eq!(
         C3::window(&view, BlockHeight::from_raw(3), &mut coverage),
-        Err(Faulted)
+        Err(ViewRead::View(Faulted))
     );
+}
+
+/// A view whose tip says one thing and whose rows say another: `block_at`
+/// answers `AboveTip` at `hole`, a height below the tip. What SI-7 forbids
+/// a conforming store from producing — constructed here because a rule
+/// that reads below the tip must not trust that it never will.
+struct HoleyView<'a, 'id> {
+    inner: crate::harness::MockView<'a, 'id>,
+    hole: BlockHeight,
+}
+
+impl<'id> ChainView<'id> for HoleyView<'_, 'id> {
+    type Fault = core::convert::Infallible;
+
+    fn has_key_image(&self, key_image: &shekyl_types::KeyImage) -> Result<bool, Self::Fault> {
+        self.inner.has_key_image(key_image)
+    }
+
+    fn block_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<crate::view::AtHeight<crate::view::RecordedBlock>, Self::Fault> {
+        if height == self.hole {
+            return Ok(crate::view::AtHeight::AboveTip);
+        }
+        self.inner.block_at(height)
+    }
+
+    fn root_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<crate::view::AtHeight<shekyl_types::CurveTreeRoot>, Self::Fault> {
+        self.inner.root_at(height)
+    }
+
+    fn tip(&self) -> Result<Option<crate::view::Tip>, Self::Fault> {
+        self.inner.tip()
+    }
+}
+
+#[test]
+fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
+    // Until 2026-09-24 the window's two `AboveTip` arms were `unreachable!`,
+    // argued from SI-7. A view that breaks SI-7 now yields
+    // `Corrupt::HoleBelowTip` at the height that was not recorded — the
+    // class the connector halts the writer on — and the candidate is
+    // neither refused nor admitted.
+    let chain = chain_with(&[100, 220, 340, 460]);
+    let hole = BlockHeight::from_raw(2);
+    chain.with_view(|inner| {
+        let view = HoleyView { inner, hole };
+        let mut coverage = RuleCoverage::EMPTY;
+        assert_eq!(
+            C3::window(&view, BlockHeight::from_raw(4), &mut coverage),
+            Err(ViewRead::Corrupt(Corrupt::HoleBelowTip { at: hole }))
+        );
+        // Through the stage: the same fault, in `Fault`'s clothing.
+        let formed = formed_on(&chain, candidate_at(&chain, 500));
+        let outcome = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED);
+        assert!(
+            matches!(
+                outcome,
+                Err(crate::fault::Fault::Corrupt(Corrupt::HoleBelowTip { at })) if at == hole
+            ),
+            "{outcome:?}"
+        );
+    });
+    // The producer's read of the same operand reports it in the inner
+    // position, the view being unable to fault.
+    chain.with_view(|inner| {
+        let view = HoleyView { inner, hole };
+        assert_eq!(
+            mtp_median_at(&view, BlockHeight::from_raw(4)),
+            Ok(Err(Corrupt::HoleBelowTip { at: hole }))
+        );
+    });
 }
 
 // --- genesis (F3 / Q3) --------------------------------------------------

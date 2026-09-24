@@ -80,6 +80,7 @@ pub(crate) mod tx;
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
+use crate::fault::{Corrupt, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::Target;
 use crate::rules::timestamps::MtpWindow;
@@ -422,16 +423,21 @@ pub(crate) fn run_tx_unrecorded<R: TxRule>(cx: &TxContext<'_>) -> Verdict<()> {
 }
 
 /// The recorded block at `height`, which is below the connecting height
-/// and therefore present on a conforming view (a hole is the store's SI-7,
-/// reported as its fault before this arm). Shared by every rule that reads
-/// a parent-side fact (D4's window and work, F13's accumulator, F20's
-/// prefix sums).
+/// and therefore present on a conforming view. Shared by every rule that
+/// reads a parent-side fact (D4's window and work, F13's accumulator,
+/// F20's prefix sums).
+///
+/// A hole here is the store's SI-7, which a conforming store reports as
+/// its own fault before this arm; a view that answers `AboveTip` anyway
+/// is [`Corrupt::HoleBelowTip`] — the fault class that halts the writer,
+/// not a panic defended by the invariant it would be observing broken
+/// (`fault.rs`, the variant's docs).
 pub(crate) fn recorded<'id, V: ChainView<'id>>(
     view: &V,
     height: BlockHeight,
-) -> Result<RecordedBlock, V::Fault> {
-    Ok(match view.block_at(height)? {
-        AtHeight::Recorded(block) => block,
-        AtHeight::AboveTip => unreachable!("heights below the connecting height are recorded"),
-    })
+) -> Result<RecordedBlock, ViewRead<V::Fault>> {
+    match view.block_at(height).map_err(ViewRead::View)? {
+        AtHeight::Recorded(block) => Ok(block),
+        AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip { at: height })),
+    }
 }

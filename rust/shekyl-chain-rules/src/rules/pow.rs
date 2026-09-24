@@ -73,13 +73,13 @@ use shekyl_types::{BlockHash, BlockHeight, PowHash};
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Fault, Stale};
+use crate::fault::{Fault, Stale, ViewRead};
 #[cfg(test)]
 use crate::rules::difficulty::Target;
-use crate::rules::{BlockContext, BlockRule, Rule};
+use crate::rules::{recorded, BlockContext, BlockRule, Rule};
 use crate::substrate::Substrate;
 use crate::verdict::{refused, Locus, Verdict};
-use crate::view::{AtHeight, ChainView};
+use crate::view::ChainView;
 
 /// CEN-D2: the longhash is RandomX v2 over the PoW preimage under the
 /// seed, unconditionally; a verifier that cannot compute is the fail-closed
@@ -142,17 +142,14 @@ impl D3 {
     fn expected_seed<'id, V: ChainView<'id>>(
         view: &V,
         connecting: BlockHeight,
-    ) -> Result<BlockHash, V::Fault> {
+    ) -> Result<BlockHash, ViewRead<V::Fault>> {
         let Some(seed_height) = seed_height(connecting) else {
             return Ok(BlockHash::NULL);
         };
-        Ok(match view.block_at(seed_height)? {
-            AtHeight::Recorded(block) => block.hash,
-            // `seed_height ≤ connecting − 1 − SEEDHASH_EPOCH_LAG` (or 0) is
-            // below the tip on a conforming view; a hole is the store's SI-7,
-            // reported as its fault before this arm.
-            AtHeight::AboveTip => unreachable!("the seed height is below the connecting height"),
-        })
+        // `seed_height ≤ connecting − 1 − SEEDHASH_EPOCH_LAG` (or 0) is
+        // below the tip on a conforming view — the shared parent-side read,
+        // whose hole arm is the halting fault, not a panic (`recorded`).
+        Ok(recorded(view, seed_height)?.hash)
     }
 
     /// Check the claimed seed against the view, recording this row.
@@ -164,7 +161,7 @@ impl D3 {
         coverage: &mut RuleCoverage,
     ) -> Result<(), Fault<V::Fault>> {
         coverage.insert(Self::ROW);
-        let expected = Self::expected_seed(view, connecting).map_err(Fault::View)?;
+        let expected = Self::expected_seed(view, connecting)?;
         let claimed = formed.seed();
         if claimed == expected {
             Ok(())

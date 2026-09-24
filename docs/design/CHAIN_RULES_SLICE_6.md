@@ -748,13 +748,31 @@ found, which is the signal the framing was right.
 median (G6, slice 7), the frozen-segment count (E4). Each is the caller's
 pass-through exactly as the trace supplied it.
 
-**Observed while reading, not fixed here (scope):** `unreachable!` in the
-validator at `timestamps.rs` (three arms: the neutralised FTL leg, and
-two "below the connecting height is recorded") and `rules/mod.rs:435`
-(`recorded`). Each is argued sound from the view's density invariant; the
-standing constraint is that a validator carries no panic path. Filed for
-the slice's closing docs commit as a FOLLOWUPS row, owner
-`CHAIN_RULES_CRATE.md`, so it is chosen rather than found.
+**The `unreachable!` finding — raised above a FOLLOWUPS row on review, and
+acted on (2026-09-24).** The count reported here was four; the review's
+was nine, and reading every site gave a different picture in both
+directions. `difficulty.rs` `const ONE`'s bare arm is compiler-proven (a
+const item; if reachable the crate would not build — the strongest
+argument available, needing no message). `miner.rs::priced` has the
+analysis written at the site and is the in-tree standard: *a `unreachable!`
+in the validator is a panic a peer can trigger unless the argument is the
+type or the compiler.* **Four were SI-7-deferred** — `match view.block_at(h)?
+{ Recorded(b) => b, AboveTip => unreachable!(…) }` at `rules/mod.rs::recorded`,
+`pow.rs` D3's seed read, and `timestamps.rs` C3's genesis and window reads
+— each arguing "the store would have faulted first". That is a store
+invariant defending a validator panic: refusing and dying are different,
+and the validator's job is the first. The taxonomy already had the answer
+one layer up (`Fault::Corrupt` halts the writer, never a verdict), so the
+four now raise **`Corrupt::HoleBelowTip { at }`** through a narrower
+`ViewRead<VF> { View, Corrupt }` — no stale arm for a definition to match —
+and `a_hole_below_the_tip_is_the_halting_fault_not_a_panic` constructs the
+SI-7-breaking view (`HoleyView`: tip says four, `block_at(2)` says
+`AboveTip`) and pins the fault at C3, at `validate`, and at the producer's
+`mtp_median_at` (inner position). CHANGELOG carries it as
+security-relevant. **Three remain**, none remote-reachable, in FOLLOWUPS
+with the type fix named: C2's `Option<MtpWindow>` in the context
+(structural — the fix is the type, not the arm), and two local-construction
+bounds a `BoundedWindow` would carry.
 
 **Carried, not done here:** slices 2–4's view-bound rows (the D family's
 windows, B5's root, E1's anchors) have fixtures of the same shape against

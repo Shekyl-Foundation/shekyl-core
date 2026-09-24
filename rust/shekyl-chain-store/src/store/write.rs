@@ -74,7 +74,7 @@ use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 
 use shekyl_chain_rules::Corrupt;
 
-use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
+use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
 use super::keyed::{Handles, InsertTable, UpsertTable};
 use super::shared::Shared;
@@ -253,6 +253,17 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             Corrupt::TxCountNotMonotone { at } => StoreInvariant::FoldNotMonotone {
                 cell: "block_info.cumulative_tx_count",
                 height: at.to_raw(),
+            },
+            // A rule read below the connecting height and the view answered
+            // `AboveTip`: the same SI-7 row `chain_reads::absent` arms when
+            // the store itself finds a dense-range row missing — observed
+            // from the rule side this time, which is what made it a
+            // `Corrupt` rather than a panic (E6 slice 6, 2026-09-24). The
+            // height is not on the row; `CellCorrupt` names the cell, and
+            // the connecting height the batch noted is the context.
+            Corrupt::HoleBelowTip { at: _ } => StoreInvariant::CellCorrupt {
+                key: "block_info",
+                fault: CellFault::Absent,
             },
         };
         self.poison.arm(row)

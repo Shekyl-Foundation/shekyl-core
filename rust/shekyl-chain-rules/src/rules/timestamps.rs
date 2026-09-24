@@ -64,9 +64,10 @@ use shekyl_types::{BlockHeight, Timestamp};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::rules::{BlockContext, BlockRule, Rule};
+use crate::fault::{Corrupt, ViewRead};
+use crate::rules::{recorded, BlockContext, BlockRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
-use crate::view::{AtHeight, ChainView};
+use crate::view::ChainView;
 
 /// The median-time-past window at a connecting height, as C3 defines it:
 /// the up-to-eleven preceding timestamps and the genesis timestamp the
@@ -131,33 +132,22 @@ impl C3 {
         view: &V,
         connecting: BlockHeight,
         coverage: &mut RuleCoverage,
-    ) -> Result<Option<MtpWindow>, V::Fault> {
+    ) -> Result<Option<MtpWindow>, ViewRead<V::Fault>> {
         coverage.insert(Self::ROW);
         let c = connecting.to_raw();
         if c == 0 {
             return Ok(None);
         }
-        let genesis = match view.block_at(BlockHeight::ZERO)? {
-            AtHeight::Recorded(block) => Timestamp::from_raw(block.header.timestamp),
-            // `connecting ≥ 1` means block 0 is recorded on a conforming
-            // view; a hole below the tip is the store's SI-7, which its
-            // `block_at` reports as a fault before this arm is reached.
-            AtHeight::AboveTip => {
-                unreachable!("block 0 is recorded below any connecting height ≥ 1")
-            }
-        };
+        // `connecting ≥ 1` means block 0 and every height below `c` are
+        // recorded on a conforming view. The shared parent-side read
+        // (`recorded`) makes a hole there the halting fault, not a panic.
+        let genesis = Timestamp::from_raw(recorded(view, BlockHeight::ZERO)?.header.timestamp);
         let window_len = u64::try_from(MTP_WINDOW_USIZE).expect("MTP_WINDOW fits u64");
         let oldest = c.saturating_sub(window_len);
         let mut preceding = Vec::with_capacity(MTP_WINDOW_USIZE);
         for h in oldest..c {
-            match view.block_at(BlockHeight::from_raw(h))? {
-                AtHeight::Recorded(block) => {
-                    preceding.push(Timestamp::from_raw(block.header.timestamp))
-                }
-                AtHeight::AboveTip => {
-                    unreachable!("heights below the connecting height are recorded")
-                }
-            }
+            let block = recorded(view, BlockHeight::from_raw(h))?;
+            preceding.push(Timestamp::from_raw(block.header.timestamp));
         }
         Ok(Some(MtpWindow { preceding, genesis }))
     }
@@ -171,17 +161,25 @@ impl C3 {
 /// right-padded eleven-block definition. Coverage stays with [`C3`]; this
 /// is the definition alone.
 ///
+/// Two positions, as [`crate::tx_volume_window`]: the outer `Err` is the
+/// view's fault; the inner is [`Corrupt::HoleBelowTip`] — a height the
+/// window spans is not recorded.
+///
 /// # Errors
 ///
-/// The view's fault on a read.
+/// The view's fault on a read (outer).
 pub fn mtp_median_at<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
-) -> Result<Option<Timestamp>, V::Fault> {
+) -> Result<Result<Option<Timestamp>, Corrupt>, V::Fault> {
     // The producer's read is not a rule evaluation; the coverage it would
     // record is discarded here rather than lying about a judgement.
     let mut unrecorded = RuleCoverage::EMPTY;
-    Ok(C3::window(view, connecting, &mut unrecorded)?.map(|window| window.median()))
+    match C3::window(view, connecting, &mut unrecorded) {
+        Ok(window) => Ok(Ok(window.map(|window| window.median()))),
+        Err(ViewRead::View(fault)) => Err(fault),
+        Err(ViewRead::Corrupt(corrupt)) => Ok(Err(corrupt)),
+    }
 }
 
 /// CEN-C1: the candidate's timestamp is at most `clock + FTL` — the

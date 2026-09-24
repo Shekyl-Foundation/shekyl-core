@@ -464,7 +464,10 @@ impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F
                 // SI-8 broken: the same arming `Apply` performs (SI-10).
                 Err(observed) => return Err(RunFault::Store(batch.refuse_corrupt(observed))),
             };
-            let median_timestamp = shekyl_chain_rules::mtp_median_at(&view, connecting)?;
+            let median_timestamp = match shekyl_chain_rules::mtp_median_at(&view, connecting)? {
+                Ok(median) => median,
+                Err(observed) => return Err(RunFault::Store(batch.refuse_corrupt(observed))),
+            };
             Ok(ChainFacts {
                 connecting,
                 previous,

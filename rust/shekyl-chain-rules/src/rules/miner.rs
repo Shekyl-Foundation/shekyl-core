@@ -73,7 +73,7 @@ use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, Fault};
+use crate::fault::{Corrupt, Fault, ViewRead};
 use crate::rules::{recorded, BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::ChainView;
@@ -442,8 +442,7 @@ impl Emission {
                 Subsidy::Configured
             }
             Some(parent) => {
-                let already_generated = recorded(view, BlockHeight::from_raw(parent))
-                    .map_err(Fault::View)?
+                let already_generated = recorded(view, BlockHeight::from_raw(parent))?
                     .coins_generated
                     .to_raw();
                 let base = priced(base_block_reward(already_generated, params));
@@ -545,14 +544,29 @@ pub fn tx_volume_window<'id, V: ChainView<'id>>(
         return Ok(Ok(TxVolume::window(0, 0)));
     };
     let blocks = h.min(TX_VOLUME_WINDOW);
-    let upper = recorded(view, BlockHeight::from_raw(parent))?.cumulative_tx_count;
+    // A parent-side read: the view's fault is the outer position, a hole
+    // below the tip the inner (`ViewRead` → the two positions).
+    let prefix_sum = |at: u64| -> Result<Result<u64, Corrupt>, V::Fault> {
+        match recorded(view, BlockHeight::from_raw(at)) {
+            Ok(block) => Ok(Ok(block.cumulative_tx_count)),
+            Err(ViewRead::View(fault)) => Err(fault),
+            Err(ViewRead::Corrupt(corrupt)) => Ok(Err(corrupt)),
+        }
+    };
+    let upper = match prefix_sum(parent)? {
+        Ok(sum) => sum,
+        Err(corrupt) => return Ok(Err(corrupt)),
+    };
     // `h >= blocks`, so `h - blocks` is the first height in the window;
     // its predecessor's prefix sum is the lower term, `0` when the
     // window starts at genesis.
     let first_in_window = h - blocks;
     let lower = match first_in_window.checked_sub(1) {
         None => 0,
-        Some(before) => recorded(view, BlockHeight::from_raw(before))?.cumulative_tx_count,
+        Some(before) => match prefix_sum(before)? {
+            Ok(sum) => sum,
+            Err(corrupt) => return Ok(Err(corrupt)),
+        },
     };
     // A prefix sum is non-decreasing along a conforming chain (the store
     // folds it under SI-8). A decrease is not a small window, it is a
