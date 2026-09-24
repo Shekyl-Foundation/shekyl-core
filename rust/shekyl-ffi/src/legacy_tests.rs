@@ -813,58 +813,6 @@ fn witness_header_build_then_parse_roundtrip() {
     }
 }
 
-#[test]
-fn label_plaintext_for_payment_uri_null_out_returns_minus_four() {
-    let uri = std::ffi::CString::new("shekyl:addr?rid=1").unwrap();
-    // SAFETY: valid uri; out is null (the case under test).
-    let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), std::ptr::null_mut()) };
-    assert_eq!(rc, -4);
-}
-
-#[test]
-fn label_plaintext_for_payment_uri_null_uri_leaves_out_untouched() {
-    // The "-4 on null pointer, output untouched" contract is only
-    // observable when a real out buffer is passed: a null `uri` must
-    // return -4 before any write, so the caller's buffer is preserved.
-    let mut out = [0x42u8; 8];
-    // SAFETY: out is a valid 8-byte buffer; uri is null (the case under test).
-    let rc = unsafe { shekyl_label_plaintext_for_payment_uri(std::ptr::null(), out.as_mut_ptr()) };
-    assert_eq!(rc, -4);
-    assert_eq!(out, [0x42; 8], "output untouched on -4 (null uri)");
-}
-
-#[test]
-fn label_plaintext_for_payment_uri_no_rid_writes_sentinel() {
-    use shekyl_crypto_pq::label::sentinel_plaintext;
-    let mut out = [0u8; 8];
-    let uri = std::ffi::CString::new("shekyl:addr1abc?amount=1").unwrap();
-    // SAFETY: valid pointers.
-    let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), out.as_mut_ptr()) };
-    assert_eq!(rc, 0);
-    assert_eq!(out, sentinel_plaintext());
-}
-
-#[test]
-fn label_plaintext_for_payment_uri_rid_echo() {
-    use shekyl_crypto_pq::label::encode_request_plaintext;
-    let rid = 0x1234_u64;
-    let uri = std::ffi::CString::new(format!("shekyl:addr1abc?rid={rid}")).unwrap();
-    let mut out = [0u8; 8];
-    let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), out.as_mut_ptr()) };
-    assert_eq!(rc, 0);
-    assert_eq!(out, encode_request_plaintext(rid).unwrap());
-}
-
-#[test]
-fn label_plaintext_for_payment_uri_parse_fail_writes_sentinel() {
-    use shekyl_crypto_pq::label::sentinel_plaintext;
-    let uri = std::ffi::CString::new("shekyl:").unwrap();
-    let mut out = [0u8; 8];
-    let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), out.as_mut_ptr()) };
-    assert_eq!(rc, -3);
-    assert_eq!(out, sentinel_plaintext());
-}
-
 // ─── shekyl_block_reward — the boundary contract ────────────────────────────
 //
 // `block_reward_with_penalty`'s own tests cover the arithmetic. None of them

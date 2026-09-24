@@ -1528,17 +1528,19 @@ source dissolves it. Verified facts:
   — that branch is closed.
 - **The byte shape is the FFI projection, not the 2A path's.**
   `SignedProofs.bulletproof_plus: Vec<u8>` (and the `hex_blob`/`hex_vec32` serde
-  shaping) exists for the **C++ wallet JSON crossing**: `shekyl-ffi`'s
-  `shekyl_sign_transaction` calls `sign_transaction(...)` then
-  `serde_json::to_vec(&proofs)`. The 2A in-process path (`shekyl-engine-core`
-  `KeyActor`/`LocalSigner`) consumes `sign_transaction` as a **typed Rust
-  `ask`** and never serializes it to JSON.
+  shaping) was the **C++ wallet JSON crossing**. That export,
+  `shekyl_sign_transaction`, was deleted 2026-09-23. The remaining JSON
+  serialization is `shekyl_sign_fcmp_transaction`
+  (`serde_json::to_vec(&proofs)`); its callers are tests. The 2A in-process
+  path (`shekyl-engine-core` `KeyActor`/`LocalSigner`) consumes
+  `sign_transaction` as a **typed Rust value** and never serializes it to JSON.
 
 **Disposition:** on the 2A Rust→Rust path the adapter takes the **typed**
 `shekyl_bulletproofs::Bulletproof` (and the other typed components) straight
 into `PrunableProof`; the serialize→parse→serialize round-trip is **deleted, not
 guarded** (`15-deletion-and-debt.mdc`: delete the round-trip you can). The
-byte-shaped `SignedProofs` is retained **only** as the FFI projection. The
+byte-shaped `SignedProofs` remains the JSON shape of
+`shekyl_sign_fcmp_transaction`, not of the 2A path. The
 mechanism for giving the actor typed components (a typed builder result whose
 FFI edge serializes to JSON, vs. a typed accessor alongside `SignedProofs`) is a
 **2a-3 implementation detail**; the pin is "**no re-parse on the 2A path**."
