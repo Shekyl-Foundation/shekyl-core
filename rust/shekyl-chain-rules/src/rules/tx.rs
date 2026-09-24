@@ -909,9 +909,19 @@ impl TxRule for I1 {
 /// varying by nettype. Rule 71: nettype selects data, never control flow
 /// on the consensus surface; the exemption served the proof-less C++ test
 /// builder TXE-Q1 deletes, and a Rust rule that read the nettype here
-/// would be the first in this crate to do so. The cap is a hand-maintained
+/// would be the first in this crate to do so. The divergence is on the
+/// CSR-3a register as DIVERGENT with identity-on-Fakechain as the failure.
+///
+/// **The number is inherited, not derived.** The cap is a hand-maintained
 /// wire constant (`MAX_FCMP_INPUTS`, mirroring `cryptonote_config.h`'s
-/// `FCMP_MAX_INPUTS_PER_TX`), not `config/` — the census row says so.
+/// `FCMP_MAX_INPUTS_PER_TX`), not `config/`, and its only recorded
+/// rationale is RingCT-era ("bounds proof generation time and tx size").
+/// Measured (`shekyl-wire/tests/input_cap_cost.rs`;
+/// `CHAIN_RULES_SLICE_6.md` §5.4): 6.4 KB and ~12 ms of verifier time per
+/// input, linear, so `MAX_TX_SIZE` alone would admit ~153 and the cap moves
+/// no per-block bound. Carried as inherited-and-unjustified with the
+/// derivation owed (FOLLOWUPS); this rule enforces the value while the
+/// value is decided, and does not argue for it.
 pub(crate) struct I4;
 
 impl Rule for I4 {
