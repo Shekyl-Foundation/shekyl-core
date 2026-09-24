@@ -723,6 +723,65 @@ fn a_reward_exactly_on_a_varint_boundary_in_the_penalty_zone_is_refused_not_loop
          (width {}) has no fixed point at bodies {bodies} + coinbase {base}+len",
         a_hi - a_lo
     );
+
+    // --- Hold the supply inside the band and sweep the weight. ---
+    //
+    // The band is a function of supply *and* weight. If every weight
+    // failed at this supply, no template could be built, no block mined,
+    // and `already_generated` would never advance past it — a liveness
+    // stall. It does not: at a fixed supply the amount falls with weight
+    // at a slope of ~1e6 atomic units per byte, so it crosses each varint
+    // boundary in a window about one byte wide, and only a body weight
+    // that lands the coinbase's two candidate weights on opposite sides
+    // of a boundary cycles. Sweep every body weight in the penalty zone
+    // with the owners' arithmetic (no crypto), count the cycling ones,
+    // and build at the neighbouring bodies to show the escape is real.
+    let cycles_at = |body_weight: u64| -> bool {
+        (1..=9u64).any(|l| {
+            let heavy = body_weight + base + l + 1;
+            let light = body_weight + base + l;
+            let limit = 2 * FULL_REWARD_ZONE;
+            heavy <= limit
+                && varint_len(amount_at(heavy, already_generated, height, &params)) == l
+                && varint_len(amount_at(light, already_generated, height, &params)) == l + 1
+        })
+    };
+    let zone_lo = FULL_REWARD_ZONE.saturating_sub(base + 10) + 1;
+    let zone_hi = 2 * FULL_REWARD_ZONE - base - 10;
+    let cycling: Vec<u64> = (zone_lo..=zone_hi).filter(|&b| cycles_at(b)).collect();
+    assert!(
+        cycling.contains(&bodies),
+        "the constructed body weight {bodies} is one of the cycling weights"
+    );
+    let zone = zone_hi - zone_lo + 1;
+    assert!(
+        cycling.len() * 1_000 < usize::try_from(zone).expect("fits"),
+        "cycling body weights are a vanishing fraction of the zone: {} of {zone}",
+        cycling.len()
+    );
+    // Every cycling weight has a settling neighbour within a few bytes;
+    // the constructed one's neighbours are built, not only computed.
+    let nearest_clear = (1..=16u64)
+        .find(|d| !cycles_at(bodies - d) || !cycles_at(bodies + d))
+        .expect("a settling body weight within 16 bytes");
+    let one_fewer = &listed[..listed.len() - 1];
+    let one_more: Vec<Transaction> = listed
+        .iter()
+        .cloned()
+        .chain(std::iter::once(spend(point_at(999), 16)))
+        .collect();
+    for near in [one_fewer, &one_more[..]] {
+        let mut cx = context(&chain, &params, &miner, near);
+        cx.emission.already_generated_coins = AtomicUnits::from_raw(already_generated);
+        let settled =
+            build(&cx).unwrap_or_else(|e| panic!("a different body escapes the band: {e}"));
+        assert_ne!(settled.block_weight, bodies + base + len + 1);
+    }
+    eprintln!(
+        "at already_generated {already_generated}: {} of {zone} body weights in the penalty zone \
+         cycle; nearest settling weight to {bodies} is {nearest_clear} byte(s) away",
+        cycling.len()
+    );
 }
 
 // ---------------------------------------------------------------------------

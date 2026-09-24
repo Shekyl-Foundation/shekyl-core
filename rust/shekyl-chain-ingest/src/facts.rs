@@ -28,21 +28,33 @@
 //!
 //! # What `Composed` composes, and what it passes through
 //!
-//! The origins are **honest about who computed the value.** `Derived`
-//! means the *validator* derived it (`Fact::derived`); a value an owner
-//! crate computed on the producer's operands is `PassedThrough` even when
-//! the arithmetic is the owner's, because the store's `DeletedBy` table
-//! names the census rows whose landing makes each field `Derived`, and
-//! none of those rows has landed on the verdict yet:
+//! The origins are **honest about who computed the value**, and the reason
+//! is stronger than bookkeeping: `Provenance::is_parity_evidence` refuses
+//! a file any of whose facts the consensus path did not produce. `Derived`
+//! means the *validator* derived it under the row that defines it; marking
+//! a self-computed field `Derived` would let a driver-built store claim
+//! parity evidence for a field no rule judged. So a value an owner crate
+//! computed on the producer's operands is `PassedThrough` even when the
+//! arithmetic is the owner's, until the `DeletedBy` row that derives it
+//! lands on the verdict.
 //!
-//! | field | composed from | flips when |
-//! | --- | --- | --- |
-//! | `weight` | the bodies' `Transaction::weight` sum plus the coinbase's — the wire's weight, read off the verdict | CEN-G6/G6b (slice 7) |
-//! | `long_term_weight` | `shekyl_economics::long_term_weight(median, weight)` | CEN-G6/G6b |
-//! | `coins_generated` | the parent's record (`view.block_at(h − 1).coins_generated`) advanced by the caller's priced reward through `shekyl_economics::advance_already_generated` — the one fold both connect paths use | CEN-F13/F14/F14b: the verdict carries the priced reward |
-//! | `burned` | the caller's priced burn | CEN-F17/G11 |
-//! | `root_after` | the caller's | CEN-B5/I12 through S-CURVE (E3 writes the tree) |
-//! | `long_term_effective_median` | the caller's | CEN-G6/G6b |
+//! `PassedThrough` therefore covers two distances from done, and the
+//! per-field test records which is which so `Provenance::passed_through`
+//! decomposes when someone asks how far E6 has to go:
+//!
+//! - **Composed** — a provisional source of our own, one line that becomes
+//!   a deletion when the row lands.
+//! - **No source yet** — nothing of ours produces the value; the caller
+//!   supplies it exactly as the E2 trace did.
+//!
+//! | field | composed from | why passed through | flips when |
+//! | --- | --- | --- | --- |
+//! | `weight` | the coinbase's `Transaction::weight` plus the bodies' — the wire's weight, read off the verdict | composed | CEN-G6/G6b (slice 7) |
+//! | `long_term_weight` | `shekyl_economics::long_term_weight(median, weight)` | composed (over a median that has no source yet) | CEN-G6/G6b |
+//! | `coins_generated` | the parent's record advanced by the producer's priced reward through `shekyl_economics::advance_already_generated` | composed — **one source, one owner, one addition**: the reward is the template's, which is `shekyl-economics`'; the only ingest-local logic is the `+` | CEN-F13/F14/F14b: the verdict carries the priced reward |
+//! | `burned` | the producer's priced burn (`shekyl-economics` in the template) | composed by the producer | CEN-F17/G11 |
+//! | `root_after` | the caller's | no source yet — nothing here grows the tree | CEN-B5/I12 through S-CURVE (E3 writes the tree) |
+//! | `long_term_effective_median` | the caller's | no source yet — G6 is slice 7 | CEN-G6/G6b |
 //!
 //! The caller's priced figures ([`Priced`]) come from whoever built the
 //! block: the scenario driver hands over what `shekyl-block-template`

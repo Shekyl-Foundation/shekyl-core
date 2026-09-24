@@ -57,7 +57,13 @@
 //!   budget of ten (`blockchain.cpp:1830`), this crate at the same budget
 //!   ([`TemplateError::WeightNotConverged`]) — rather than emit a template
 //!   connect refuses. Neither pads `extra` back to the estimate: the
-//!   coinbase extra is a closed grammar (CEN-I20).
+//!   coinbase extra is a closed grammar (CEN-I20). **The refusal is a
+//!   point, not a wall:** it is a function of supply *and* weight, and at
+//!   a supply inside the band the amount still falls with weight at
+//!   ~10⁶ atomic units per byte, so it crosses each boundary in a window
+//!   about one byte wide — three body weights in three hundred thousand
+//!   cycle, and a settling one is a byte away. A producer that meets it
+//!   builds a different body; `already_generated` is never stalled on it.
 //!
 //! # What the crate does not do
 //!

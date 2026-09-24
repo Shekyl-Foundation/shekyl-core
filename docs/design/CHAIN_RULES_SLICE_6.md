@@ -601,6 +601,19 @@ the case), so this is a builder refusal both producers share, not a
 divergence — and the budget is pinned to the C++ figure
 (`MAX_REPRICING_PASSES = 10`) so it stays one.
 
+**Is the band a wall? (review, 2026-09-24).** The band is a function of
+supply *and* weight, so the question was whether, at a supply inside it,
+*every* weight fails — no template, no block, `already_generated` never
+advances: a liveness stall. It is not. The same test holds the supply
+inside the band and sweeps every body weight in the penalty zone with the
+owners' arithmetic: at a fixed supply the amount still falls with weight
+at ~10⁶ atomic units per byte, so it crosses each varint boundary in a
+window about one byte wide — **3 of 300 000 body weights cycle**, and the
+nearest settling weight to the constructed one is **one byte** away. The
+test then *builds* at one spend fewer and one spend more and both settle.
+The refusal means "build a different body", which a producer does on the
+next template; nothing further to say.
+
 The second question the slice asks — *what should our Rust test do by
 design?* — is answered in the crate doc and its `tests.rs`, and the answer
 is **the validator is the falsifier**: a template is judged by `form →
@@ -654,6 +667,30 @@ where it lives and how it is driven:
   duplication the seam prevents. Every origin is `PassedThrough` and a
   test pins that per field, so the flip is visible when a row lands. All
   four captured replays connect through the seam unchanged.
+
+  **Why the labelling matters (review, 2026-09-24):** `Derived` is what
+  `Provenance::is_parity_evidence` trusts. Marking a self-computed field
+  `Derived` would let a driver-built store claim parity evidence for a
+  field no rule judged — so the operational definition ("the validator
+  derived it") is load-bearing, not bookkeeping. **And `PassedThrough` now
+  folds two distances from done into the E6 counter**
+  (`Provenance::passed_through`): a field *composed* here — a provisional
+  source that becomes a deletion when its row lands — and a field with
+  *no source yet*, supplied by the caller exactly as the trace supplied
+  it. Not worth a third variant; worth the per-field test recording
+  which is which, so the count decomposes: **4 composed** (`weight`,
+  `long_term_weight`, `coins_generated`, `burned`) **+ 2 unsourced**
+  (`root_after` until S-CURVE grows the tree; `long_term_effective_median`
+  until G6). Read "six passed through" as that, not as six unsourced.
+
+  **The `coins_generated` fold is thinner than it sounds, and that is what
+  makes it safe:** parent's record + the producer's priced reward, through
+  `advance_already_generated`. The reward came from the template, which
+  got it from `shekyl-economics`; the only ingest-local logic is the
+  addition. One source, one owner, one `+`. "Ingest computes
+  `coins_generated`" reads like a second implementation and it is not —
+  that reading is exactly what the seam exists to prevent, so it is
+  named here before someone makes it.
 - **One event at a time — and the reason is the miner's, not the
   sequencer's.** Template generation *is* serial: a miner cannot build
   `h+1` until `h` is connected. The driver models that path faithfully;

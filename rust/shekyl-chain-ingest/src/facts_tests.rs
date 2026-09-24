@@ -175,13 +175,26 @@ async fn a_height_nobody_priced_is_no_facts_and_the_writer_stays_up() {
     cleanup(&path);
 }
 
+/// Why a `Composed` field is `PassedThrough` — the two distances from done
+/// that `Provenance::passed_through` folds into one count (module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Why {
+    /// A provisional source of our own; a deletion when the row lands.
+    Composed,
+    /// Nothing of ours produces it; the caller supplies it as the trace did.
+    NoSourceYet,
+}
+
 #[test]
 fn every_composed_origin_is_passed_through_until_its_row_lands() {
-    // The honesty pin: `Composed` marks nothing `Derived` today — the
-    // owners computed the values on the producer's operands, and the
-    // `DeletedBy` rows that make each field the validator's have not
-    // landed on the verdict. When one does, this test names the field
-    // whose origin flips.
+    // The honesty pin: `Composed` marks nothing `Derived` today — `Derived`
+    // is what `Provenance::is_parity_evidence` trusts, and a self-computed
+    // field marked so would let a driver-built store claim parity evidence
+    // for a field no rule judged. The `DeletedBy` rows that make each
+    // field the validator's have not landed on the verdict. When one does,
+    // this test names the field whose origin flips — and the `Why` column
+    // says how far each field is from that: four have a provisional source
+    // here, two have none.
     let chain = chain(1);
     let table = Table([priced(0, 10, 0)].into_iter().collect());
     let composed = Composed::new(table);
@@ -205,19 +218,45 @@ fn every_composed_origin_is_passed_through_until_its_row_lands() {
             "genesis folds from zero"
         );
         assert_eq!(facts.root_after.value, root_after(0));
-        for (field, origin) in [
-            ("weight", facts.weight.origin),
-            ("long_term_weight", facts.long_term_weight.origin),
-            ("coins_generated", facts.coins_generated.origin),
-            ("burned", facts.burned.origin),
-            ("root_after", facts.root_after.origin),
+        let table = [
+            ("weight", facts.weight.origin, Why::Composed),
+            (
+                "long_term_weight",
+                facts.long_term_weight.origin,
+                Why::Composed,
+            ),
+            (
+                "coins_generated",
+                facts.coins_generated.origin,
+                Why::Composed,
+            ),
+            ("burned", facts.burned.origin, Why::Composed),
+            ("root_after", facts.root_after.origin, Why::NoSourceYet),
             (
                 "long_term_effective_median",
                 facts.long_term_effective_median.origin,
+                Why::NoSourceYet,
             ),
-        ] {
+        ];
+        for (field, origin, _) in table {
             assert_eq!(origin, Origin::PassedThrough, "{field}");
         }
+        // The decomposition of the E6 counter: how many passed-through
+        // fields are one deletion from `Derived`, and how many wait on a
+        // source that does not exist here yet.
+        let composed = table
+            .iter()
+            .filter(|(_, _, why)| *why == Why::Composed)
+            .count();
+        let unsourced = table
+            .iter()
+            .filter(|(_, _, why)| *why == Why::NoSourceYet)
+            .count();
+        assert_eq!(
+            (composed, unsourced),
+            (4, 2),
+            "passed-through = 4 composed + 2 unsourced"
+        );
     });
     let _ = CurveTreeRoot::EMPTY;
 }
