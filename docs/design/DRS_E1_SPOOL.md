@@ -12,8 +12,18 @@ fall-through — as an aside inside a comment about `relayable`
 because `SPL-Q3` is the moment it is fixed or reproduced. **Copilot's
 review round (same day) added SPL-15** — a ninth DB method the §5 row
 never counted, reached past `Blockchain::` by the network path's membership
-test — and sharpened four rows (§11). The increment may now be cut from
-`dev` (§7). This file stays in `design/` as the E1/E5 boundary statement
+test — and sharpened four rows (§11). **Round 1 AMENDED the same day from
+the Dandelion++ arc (maintainer; SPL-16, SPL-17, SPL-18):** the pool file's
+write API is the chain store's closure shape and explicitly *not* a
+caller-held batch with an aborting `Drop` (`LockedTXN`'s abort-on-drop is
+the mechanism of the known relay-timestamp bug, not a property to carry);
+the record's relay fields duplicate nothing the Zone holds (confirmed field
+by field — the Zone refuses per-transaction state by its own doc), so Q7
+stands; and the record's relay fields follow §92.4's decomposition —
+`Origin` / `RelayPhase` / `Responsibility` — rather than a field-for-field
+`RelayMethod`, which re-bundles what that round unbundled (**`SPL-Q9`,
+posed with the decomposition as default; the increment does not cut before
+it is ruled**). This file stays in `design/` as the E1/E5 boundary statement
 (§0, §2.2, §2.3) until E5's plan owns it. Implements *from*
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §5 (the S-POOL row:
 extraction order **8**, "no consensus state and no dependency on the chain
@@ -121,6 +131,7 @@ is what the *pool* does at the site: *admit* (`add_tx`, `insert_attested_tx`),
 | 6 | `get_txpool_tx_count(category) -> u64` (`:1778`; `:2106`) — `mdb_stat` for `all`, a **full meta scan** for any other category | `txpool_meta` | `get_relayable_transactions` `:1152`; `get_transactions_count` `:1328`; `get_transactions` `:1336`; `get_transaction_hashes` `:1356`; `get_transaction_backlog` `:1370`; `get_transaction_stats` `:1451`; `get_transactions_and_spent_keys_info` `:1536`; `get_pool_for_rpc` `:1593–1594` — all as `reserve()` hints or an RPC count, most with `include_sensitive ? all : broadcasted` | **P6** `len() -> Result<u64, StoreError>` (the `all` count, O(1)); a per-class count is `entries().filter().count()` at the caller — the C++ already scans for it |
 | 7 | `txpool_tx_matches_category(txid, category) -> bool` (`:1830`; **`blockchain_db.cpp:1885`**, non-virtual: `get_txpool_tx_meta` then `meta.matches`; `false` on absent *and* on a DB error, with an `MERROR`) | `txpool_meta` | `insert_key_images` `:800`; `get_transactions_and_spent_keys_info` `:1578`; `get_pool_for_rpc` `:1627`; `check_for_key_images` `:1651`; `have_tx_keyimg_as_spent` `:1721` — all `broadcasted` but one | **none** — dissolves into **P4** + `RelayMethod::matches(category)` (SPL-3); the "absent ⇒ false" and "error ⇒ false" collapse the C++ made is not carried (§3.3) |
 | 8 | `for_all_txpool_txes(f, include_blob, category) -> bool` (`:1887`; `:2273`) — meta scan in key order, optional blob join (throws if a meta row has no blob — the pairing invariant, enforced at read), class filter, early exit on `f == false` | both | `get_complement` `:1005`; `remove_stuck_transactions` `:1054`; `get_relayable_transactions` `:1153` (`relayable`, no blob); `get_transactions` `:1337`; `get_transaction_hashes` `:1357`; `get_transaction_backlog` `:1371`; `get_block_template_backlog` `:1386`; `get_transaction_stats` `:1454`; `get_transactions_and_spent_keys_info` `:1539`; `get_pool_for_rpc` `:1595`; `print_pool` `:2023`; `validate` `:2253`; `init` `:2380` (two passes, blobs, `all`) | **P7** `entries(&self) -> impl Iterator<Item = Result<PoolEntry, StoreError>>` with `PoolEntry { txid, record }` and `PoolEntry::blob(&self)` a second read on demand — class filter and early exit are the iterator's consumer's; the pairing invariant is **SI-16** (§5) |
+
 | 9 | `txpool_has_tx(txid, category) -> bool` (`:1783`; `db_lmdb.cpp:2151`) — meta lookup, then `matches` unless `all`; **not on the §5 row** and **not a `Blockchain::` forward**: `tx_memory_pool::have_tx` reaches it through `m_blockchain.get_db()` (`tx_pool.cpp:1689–1694`) | `txpool_meta` | `have_tx` `:1693` — whose callers are `core::handle_incoming_tx` `cryptonote_core.cpp:999` (`broadcasted`, CEN-M1's idempotent-accept), `core::pool_has_tx` `:1512` (`all` — the protocol's "do I hold these bytes", `cryptonote_protocol_handler.inl:634`, and `levin_notify`'s `i_core_events::pool_has_tx`), and the alt-block supplement path `blockchain.cpp:2287`, `:2318` (`broadcasted`) | **none** — dissolves into **P4** + `matches` (`all` → `record(h)?.is_some()`); *the* membership read a cutover following the §5 row alone would have omitted (SPL-15; Copilot, PR #849) |
 
 #7 is the `BlockchainDB` non-virtual over #4; #9 is its `BlockchainLMDB`
@@ -151,9 +162,12 @@ virtual twin with its own callers. Both dissolve the same way.
   source of truth for a derived order.
 - **`LockedTXN`** (the pool's transactional wrapper; audit §4, FOLLOWUPS
   "`tx_pool` / `blockchain_db` LMDB transactional wrapper — typed
-  commit-or-abort") — the C++ wrapper stays with the C++ pool. Its Rust
-  successor is the pool file's `WriteBatch`, the shape B3 already made
-  commit-consuming (SPL-11); the FOLLOWUPS row is about the C++ and is not
+  commit-or-abort") — the C++ wrapper stays with the C++ pool, and **none
+  of its semantics travel** (SPL-16): not the batch-nesting (lost with the
+  second file, SPL-7) and not the abort-on-drop (the mechanism of the
+  relay-timestamp bug). Its Rust successor is `PoolStore::write(|batch| …)`,
+  the chain store's closure shape, in which forgetting to commit is
+  unrepresentable (SPL-11); the FOLLOWUPS row is about the C++ and is not
   closed here.
 - **The consensus-store schema's alt tables** (`alt_blocks`,
   `archival_alt_attestation_witness`) — §11.2 groups them with the pool as
@@ -226,10 +240,19 @@ The alternative — a sibling crate `shekyl-pool-store` — is `SPL-Q2`.
 | **P6** | `len(&self) -> Result<u64, StoreError>` | #6 (`all`) | The table's length. A per-class count is the caller's fold over P7. |
 | **P7** | `entries(&self) -> impl Iterator<Item = Result<PoolEntry, StoreError>>`, `PoolEntry { txid: TxHash, record: PoolRecord }`, `PoolEntry::blob(&self, snapshot) -> Result<Vec<u8>, StoreError>` | #8 | Key order (natural, SPL-8). The blob is a second read the consumer asks for — six of the thirteen `for_all` callers pass `include_blob = false`. A meta row whose blob is missing is **SI-16**, named by the read that found it, not the `DB_ERROR` string the C++ throws. |
 
-Reads (P4–P7) are on a read snapshot of the pool file; writes (P1–P3) on its
-write batch, **commit-consuming** (B3): the batch's `commit(self)` is the
-only way out with the writes kept, so the DRS-W2 wart — `LockedTXN::commit`
-swallowing `batch_stop`'s exception — cannot be re-created (SPL-11).
+Reads (P4–P7) are on a read snapshot of the pool file; writes (P1–P3) inside
+`PoolStore::write(|batch| …)` — **the closure shape the chain store already
+has** (`store/mod.rs:445–470`: the store constructs the batch, runs the
+closure, and `complete(outcome)` commits on `Ok` and aborts on `Err`; an
+unwind aborts). The caller never holds the batch across a return, so
+*forgetting to commit* is unrepresentable (B3) — which is the property
+`LockedTXN` lacked (SPL-16). **Explicitly not** a caller-held `PoolBatch`
+with `commit(self)`: that shape's `Drop` aborts silently on any early return,
+which is `LockedTXN`'s abort-on-drop in a new language — the mechanism of
+the known Dandelion++ bug — and was this section's first draft (corrected
+2026-09-24, §11). DRS-W2 (`LockedTXN::commit` swallowing `batch_stop`'s
+exception) is closed the same way: the store's `complete` returns the
+commit's `Result` (SPL-11).
 
 ### 3.3 Absence, faults, and what an operation may not do — the S-TX discriminator applied
 
@@ -260,16 +283,19 @@ swallowing `batch_stop`'s exception — cannot be re-created (SPL-11).
 
 | Type | Shape | Home (default) | Why |
 |---|---|---|---|
-| `RelayMethod` | `{ None, Local, Stem, Fluff, Block }`, `repr(u8)` byte-pinned to `cryptonote::relay_method`; **decoder exhaustive over the five bytes, no default arm, unknown ⇒ error** (RULED, `SPL-Q6`) | **moves to `shekyl-types`** from `shekyl-relay` (`SPL-Q6`); `shekyl-relay` re-exports; the `matches(RelayCategory)` table travels with it | Rule 18 (`SCU-Q2`, `SAR-Q2`): a word two crates need lives below both. The store cannot depend on `shekyl-relay`; a second `RelayClass` enum in the store is a conversion layer between two spellings of one fact. The decoder's shape is SPL-14's fix: `Fluff` is reached only by its own discriminant, never by fall-through; `None` is a legal, unreachable, non-relayable state and is **not** specially refused — a guard on it protects nothing. |
+| `RelayMethod` | `{ None, Local, Stem, Fluff, Block }`, `repr(u8)` byte-pinned to `cryptonote::relay_method`; **decoder exhaustive over the five bytes, no default arm, unknown ⇒ error** (RULED, `SPL-Q6`). **AMENDED 2026-09-24 (SPL-18):** the **FFI seam's word** — an arrival class handed in, a routing plan handed out — **not a field of `PoolRecord`**; the record persists `Origin` + `RelayPhase` and the seam converts `(origin, phase) → RelayMethod` where C++ still asks in that vocabulary | **moves to `shekyl-types`** from `shekyl-relay` (`SPL-Q6`); `shekyl-relay` re-exports; `matches(RelayCategory)` is defined on `(Origin, RelayPhase)` and the byte enum gets the derived form | Rule 18 (`SCU-Q2`, `SAR-Q2`): a word two crates need lives below both. The store cannot depend on `shekyl-relay`; a second `RelayClass` enum in the store is a conversion layer between two spellings of one fact. The decoder's shape is SPL-14's fix: `Fluff` is reached only by its own discriminant, never by fall-through; `None` is a legal, unreachable, non-relayable state and is **not** specially refused — a guard on it protects nothing. |
 | `RelayCategory` | `{ Broadcasted, Relayable, All }` | with `RelayMethod` | The classifier's other operand; `RelayMethod::matches` is the C++ `matches_category` table, exhaustive on both sides. |
 | `NetZone` | `{ Invalid, Public, I2p, Tor }`, `repr(u8)` pinned to `epee::net_utils::zone` | **moves to `shekyl-types`** (`SPL-Q6`) | Same ground; the record's `origin_zone`. |
-| `PoolRecord` | `weight: u64`, `fee: AtomicUnits`, `receive_time: UnixSeconds`, `relay: RelayClock`, `method: RelayMethod`, `relayed: bool`, `double_spend_seen: bool`, `observed_circulating: bool`, `origin_zone: NetZone`, `readiness: Readiness { max_used: Option<(BlockHeight, BlockHash)>, last_failed: Option<(BlockHeight, BlockHash)> }`, `fcmp_cache: Option<FcmpVerificationHash>` | `shekyl-chain-store::pool::record` (`Canonical`, `NAME = "pool_record"`) | The 192-byte packed `txpool_tx_meta_t` (`blockchain_db.h:218–348`, `LMDB_SCHEMA.md:1054–1078`) re-specified: **same semantics, not byte-compatible** (`SPL-Q3`, the `SAR-Q3` ruling's form). The five relay bits become the enum; two sentinels and an overload become `RelayClock`; the `fcmp_verified` bit and its hash become one `Option`; `pruned`, `do_not_relay` and `padding[44]` are not carried (SPL-6). The store's only reader is the store, so the record is the store's (the `BondRecord` as-built precedent, `DRS_E1_SARCH.md` §3.4). |
-| `RelayClock` | `enum { NotYet, NextAttemptAt(UnixSeconds), LastRelayedAt(UnixSeconds) }` | with `PoolRecord` | `last_relayed_time`'s three meanings (SPL-5): `u64::MAX` at admission ("never relayed", `tx_pool.cpp:470–473`); for a `stem` entry the **next attempt / embargo deadline** (`set_relayed :1297`, `get_relayable_transactions :1227`); otherwise the last relay time. Which arm is legal for which method is a `PoolRecord` construction check, not a decode-time guess. **Two admission rules, both explicit** (Copilot, PR #849): a *received* entry is admitted `NotYet` — its dispatch always follows and `set_relayed` overwrites it (`add_tx :470`); an *attested-local* entry (`insert_attested_tx`, `tx_pool.cpp:575–589`) is admitted **`LastRelayedAt(receive_time)`**, because its relay is fire-and-forget and the periodic loop is its stated fallback — and the C++ `u64::MAX` sentinel makes that fallback **permanently ineligible** (`now - max()` underflows, `get_relay_delay` returns a huge delay; the comment at `:580–585` says so). `NotYet` therefore means *dispatch pending, not eligible for the periodic fallback*, and E5's loop reads it as such — never as a timestamp. |
+| `PoolRecord` | `weight: u64`, `fee: AtomicUnits`, `receive_time: UnixSeconds`, **`origin: Origin`, `phase: RelayPhase`, `responsibility: Responsibility`** (the §92 decomposition, `SPL-Q9` — *as first written:* `relay: RelayClock`, `method: RelayMethod`, `observed_circulating: bool`, `origin_zone: NetZone`, superseded by SPL-18), `relayed: bool`, `double_spend_seen: bool`, `readiness: Readiness { max_used: Option<(BlockHeight, BlockHash)>, last_failed: Option<(BlockHeight, BlockHash)> }`, `fcmp_cache: Option<FcmpVerificationHash>` | `shekyl-chain-store::pool::record` (`Canonical`, `NAME = "pool_record"`) | The 192-byte packed `txpool_tx_meta_t` (`blockchain_db.h:218–348`, `LMDB_SCHEMA.md:1054–1078`) re-specified: **same semantics, not byte-compatible** (`SPL-Q3`, the `SAR-Q3` ruling's form). The five relay bits become the enum; two sentinels and an overload become `RelayClock`; the `fcmp_verified` bit and its hash become one `Option`; `pruned`, `do_not_relay` and `padding[44]` are not carried (SPL-6). The store's only reader is the store, so the record is the store's (the `BondRecord` as-built precedent, `DRS_E1_SARCH.md` §3.4). |
+| `Origin` | `enum { Originated, Arrived { zone: NetZone } }` — **permanent**: written by P1, and P2 refuses a record whose origin differs from the stored one (`PoolCannot::OriginChanged`) | with `PoolRecord` (`SPL-Q9`) | §92.4's first clause, *provenance is permanent*, as a field that cannot be upgraded past because nothing upgrades it. Subsumes `is_local` and `origin_zone` (the C++ already writes `zone::invalid` for an originated entry; `Arrived { Invalid }` is the "origin unknown" arm for a pre-field record and stays representable). |
+| `RelayPhase` | `enum { Held { last_attempt: Option<UnixSeconds> }, Stem { next_attempt: UnixSeconds }, Fluff { last_relayed: Option<UnixSeconds> }, Block { last_relayed: Option<UnixSeconds> } }` — each phase carries the clock word that phase means; `upgrade(origin, next)` is the ratchet **and the pin**: `Arrived` walks `Stem → Fluff → Block`; `Originated` walks `Held → Block` only (yields to proof of work, refuses a peer's `Stem`/`Fluff`) | with `PoolRecord` (`SPL-Q9`) | The ratchet's domain, with §92.4's pin as a transition rule that names its reason (`origin`) instead of a `relay_method::local` special case in `add_tx :456–458`. **Subsumes `RelayClock`** (SPL-5): `u64::MAX` is `Held { None }` / the absence of a clock, a stem deadline is `Stem { next_attempt }`, a past relay is `Fluff`/`Block { last_relayed }`, and the attested-local admission is `Held { Some(receive_time) }` — the overload dissolves because no single field means three things. `matches(Broadcasted) ⇔ Fluff \| Block`; `Relayable` is every phase (there is no `None`); `All`. The decoder has no default arm (SPL-14). |
+| `Responsibility` | `enum { Armed, Disarmed }` — legal only with `Origin::Originated`; `Arrived` entries carry none | with `PoolRecord` (`SPL-Q9`) | §92.4's second clause and §92.5c item 1's third: re-broadcast responsibility ends when F-10's predicate fires; `on_stem_propagated` writes `Disarmed`. The C++ `observed_circulating` bit, given the only entry class it is defined for. |
+| ~~`RelayClock`~~ | ~~`enum { NotYet, NextAttemptAt(UnixSeconds), LastRelayedAt(UnixSeconds) }`~~ — **SUPERSEDED 2026-09-24 by `RelayPhase`'s per-phase clock words (SPL-18, `SPL-Q9`)**; the analysis in this row stands as the reason each phase carries its own | ~~with `PoolRecord`~~ | `last_relayed_time`'s three meanings (SPL-5): `u64::MAX` at admission ("never relayed", `tx_pool.cpp:470–473`); for a `stem` entry the **next attempt / embargo deadline** (`set_relayed :1297`, `get_relayable_transactions :1227`); otherwise the last relay time. Which arm is legal for which method is a `PoolRecord` construction check, not a decode-time guess. **Two admission rules, both explicit** (Copilot, PR #849): a *received* entry is admitted `NotYet` — its dispatch always follows and `set_relayed` overwrites it (`add_tx :470`); an *attested-local* entry (`insert_attested_tx`, `tx_pool.cpp:575–589`) is admitted **`LastRelayedAt(receive_time)`**, because its relay is fire-and-forget and the periodic loop is its stated fallback — and the C++ `u64::MAX` sentinel makes that fallback **permanently ineligible** (`now - max()` underflows, `get_relay_delay` returns a huge delay; the comment at `:580–585` says so). `NotYet` therefore means *dispatch pending, not eligible for the periodic fallback*, and E5's loop reads it as such — never as a timestamp. |
 | `UnixSeconds` | `u64` newtype (wall-clock seconds) | `shekyl-types` | `receive_time` and the relay clock are **wall-clock**, not block time; `Timestamp` (a block header's field) is the wrong word for them and the two must not be addable. |
 | `FcmpVerificationHash` | `[u8; 32]` (`hash32!`) | `shekyl-types` | CEN-M8's cache key: `H(proof ‖ referenceBlock ‖ key images)` (`tx_pool.cpp:495`). `fcmp_verified ⇔ Some` (SPL-10). |
 | `PoolTxBytes` | `BlobKind`, `NAME = "pool_tx"` | `shekyl-chain-store::pool` | The raw transaction; empty refused. |
 | `PoolCannot` | `{ AlreadyHeld, NotHeld, EmptyBlob }` | `shekyl-chain-store::pool` | P1/P2's typed refusals — the pool's decisions, not faults (`StoreCannot`'s shape). `EmptyBlob` added on review (Copilot, PR #849): P1's row required the refusal and the enum did not carry it. |
-| `PoolStore`, `PoolSnapshot<'_>`, `PoolBatch<'_>` | the handle, the read snapshot, the commit-consuming write batch | `shekyl-chain-store::pool` | One file, one writer (§3.6's process model, applied to a second file). |
+| `PoolStore`, `PoolSnapshot<'_>`, `PoolBatch<'_>` | the handle, the read snapshot, the write batch **handed only to a `PoolStore::write` closure** (`#[must_use]`, never returned to a caller) | `shekyl-chain-store::pool` | One file, one writer (§3.6's process model, applied to a second file). The batch's shape is SPL-16's: the store decides commit or abort at the closure's exit; no code path holds a batch it could drop. |
 
 ### 3.5 What this surface inherits, and for how long
 
@@ -465,10 +491,14 @@ codec refuses what they would observe, SI-14's shape.
   this increment's.
 - **SPL-11 — DRS-W2 closes for the pool file by construction.**
   `LockedTXN::commit` swallows `batch_stop`'s exception (audit §4; "commit
-  failures are silent to callers"). The pool file's batch is
-  commit-consuming (B3): `commit(self) -> Result<…>` is the only exit that
-  keeps the writes, and a dropped batch aborts. Nothing to add; recorded so
-  the wart row can name where it closed.
+  failures are silent to callers"). The pool file's write API is the chain
+  store's closure shape (§3.2): `complete(outcome)` returns the commit's
+  `Result` to the caller of `write`, so a failed commit is an error at the
+  site that asked for the write. *(First draft, corrected 2026-09-24: "the
+  batch's `commit(self)` is the only exit that keeps the writes, and a
+  dropped batch aborts" — the second half of that sentence is the defect
+  SPL-16 names, and the first half is what makes it reachable.)* Recorded
+  so the wart row can name where it closed.
 - **SPL-12 — E2 is untouched, and the reason is a boundary, not an
   exclusion.** `digest_v0` excludes txpool (`:24`); §11.2 lists the pair
   under *not chain state* and says the pick "makes this a boundary rather
@@ -523,6 +553,82 @@ codec refuses what they would observe, SI-14's shape.
   of `txpool_meta` / `txpool_blob` in `db_lmdb.cpp`, then every caller of
   each), not by the `Blockchain::` corridor — the corridor is one route,
   not the set. S-ALT's pre-flight inherits this.
+- **SPL-16 — `LockedTXN` had two properties, and only one of them is worth
+  a sentence in a Rust store; the other is the mechanism of the known bug.**
+  (Maintainer, from the Dandelion++ arc, 2026-09-24.) The nesting — a
+  `LockedTXN` under an active block batch piggybacks on the block's
+  transaction — is what gave `take_tx` atomicity with connect; SPL-7 names
+  that as lost and accepted. The **abort-on-drop default** — a `LockedTXN`
+  that goes out of scope without `lock.commit()` rolls its writes back
+  silently — is how `get_relayable_transactions` lost **every** Dandelion++
+  stem/forward timestamp update on every invocation until the missing commit
+  was added (origin-disclosure class, inherited from Monero; the fix is at
+  `tx_pool.cpp:1232` and the atomicity audit re-verified it intact,
+  `LMDB_WRITE_ATOMICITY_AUDIT.md:88`). The two are separable and this
+  document now says which it preserves: **neither as a mechanism**. The
+  nesting is gone because the files are separate; the abort-on-drop is gone
+  because the pool file's write API is the chain store's closure shape
+  (§3.2), in which no caller ever holds a batch it could drop — a caller-held
+  batch with `commit(self)` and an aborting `Drop`, which this document's
+  first draft proposed, is the same defect in a new language: one early
+  `return Ok(())` and the relay clock is silently un-written again. "We kept
+  `LockedTXN`'s semantics" is exactly how the second half comes back; the
+  store keeps none of them and states the property it wants instead:
+  *forgetting to commit is unrepresentable.*
+- **SPL-17 — the Zone owns routing; the pool owns every per-transaction
+  relay fact, by the Zone's own ruling — so the record duplicates nothing.**
+  (Maintainer's question, 2026-09-24: for each relay field, does
+  `shekyl-relay-privacy` / `shekyl-relay` already hold the authoritative
+  value?) Field by field, at source:
+  `RelayZone` (`shekyl-relay`, `zone/mod.rs:305–329`) holds per-**connection**
+  and per-**epoch** state — `StemMap`, `FluffScheduler`, the epoch clock,
+  `DandelionParams`, `FluffReach` — and returns a *plan* (`STEM` /
+  `FLUFF_EPOCH` / `NO_ROUTE`) per call through
+  `shekyl_relay_zone_plan_relay_with_refresh`; it holds **no per-transaction
+  class**, and its own doc refuses to: *"retaining a per-transaction outcome
+  for a consumer to poll would put a second copy of a fact the txpool
+  already owns beside the txpool, with no invalidation tied to the pool
+  entry's own lifetime"* (`zone/mod.rs:594–597`). `EmbargoTimer`
+  (`shekyl-relay-privacy`, `schedule.rs:420`) owns the **distribution**; the
+  pool stamps and holds the **deadline** (`tx_pool.cpp:1298`, via
+  `shekyl_dandelionpp_embargo_draw_seconds`). `StemWatch` (`stem_watch.rs:194–206`)
+  holds a *transient* per-transaction `Pending { successor, source, deadline }`
+  — a **different** deadline, the observation window that judges the
+  successor — whose verdict leaves the watch and lands in the pool's
+  `observed_circulating` through `on_stem_propagated` (§92.5c item 1: *"the
+  verdict now leaves `seen` itself, the last point that still holds a
+  hash"*). `origin_zone`, `receive_time`, `relayed`, the readiness cache and
+  the class bits have no Rust twin at all. **Answer:** the pool record is
+  the *sole persistent home* of these facts, not a second copy; `SPL-Q7`'s
+  persist-whole stands on that ground. **What it adds to Q7's scenario:**
+  `StemWatch.pending` does not survive a restart, so a persisted
+  *originated* entry whose observation was in flight restarts with its
+  re-broadcast responsibility armed and no watch that can disarm it until
+  the transaction is re-observed — the second leg of the downtime scenario
+  handed to the relay-privacy lane.
+- **SPL-18 — §92.4 unbundled `Local` into three facts with three lifetimes,
+  and a field-for-field `RelayMethod` re-bundles them.** (Maintainer,
+  2026-09-24.) The ruling: *"`Local` is two facts with different lifetimes —
+  provenance, which is permanent, and re-broadcast responsibility, which
+  should end when the transaction is observed circulating"* — with the
+  disarm resolved by F-10's predicate (§92.5c item 1) as the third clause.
+  The C++ carries all three as one `relay_method::local` value plus the
+  `observed_circulating` bit plus the origin-pin logic in `add_tx`
+  (`:456–458`), and its ratchet **destroys provenance on a `Block` arrival**
+  (`set_relay_method(block)` clears `is_local`) — intended for the
+  *behaviour* (§92.4: "past that point the pin's sign flips") but it takes
+  the *fact* with it. `PoolRecord.method: RelayMethod` as §3.4 first wrote
+  it would persist exactly that collapse: provenance and phase in one
+  field, the pin re-implemented as a transition rule over an enum that
+  cannot say why. The record's relay fields are re-shaped along §92's
+  seams — `SPL-Q9` — and the byte enum stays what it is: the **FFI seam's
+  word** for an arrival class or a routing plan (transform-shaped, rule 18),
+  not the record's state. `relay_category::legacy`, recorded in §93.4 as
+  having no referent in a pre-genesis coin and deleted from the C++
+  2026-08-24, is **not** minted in `RelayCategory` (three members) — checked
+  against that arc's stale-premise list before `SPL-Q6` mints anything.
+  SPL-14 is untouched and sharper: the crate that owns fluff *scheduling*
+  is not the one decoding the byte that says *fluff*.
 
 ### 6.1 Reproduced deviations on this surface (DRS §7.6 item 1)
 
@@ -539,9 +645,14 @@ corruption path with a privacy consequence, not a conformance state.
 1. **Vocabulary.** `RelayMethod`, `RelayCategory` (with `matches`), `NetZone`
    to `shekyl-types` per `SPL-Q6`, `shekyl-relay` re-exporting (its `const`
    byte pins stay where the FFI seam is); `UnixSeconds`,
-   `FcmpVerificationHash` minted; `PoolRecord` + `RelayClock` with their
-   `Canonical` codec and construction checks (which clock arm each method
-   admits); `RelayMethod`'s decoder with no default arm (`SPL-Q6` as RULED);
+   `FcmpVerificationHash` minted; `PoolRecord` with **`Origin` /
+   `RelayPhase` / `Responsibility`** per `SPL-Q9` (as ruled) and their
+   `Canonical` codec and construction checks (`Held` only for `Originated`,
+   `Stem` only for `Arrived`, `Responsibility` only for `Originated`;
+   `RelayPhase::upgrade(origin, next)` is the ratchet and the pin), the seam
+   conversion `(Origin, RelayPhase) → RelayMethod` with `matches` pinned
+   against the C++ table exhaustively; `RelayMethod`'s decoder with no
+   default arm (`SPL-Q6` as RULED);
    tests: round trip at every arm, each refusal, **every byte outside the
    five pinned discriminants is an error and no byte reaches `Fluff` but
    3** (SPL-14), the C++ bit-pattern table transcribed as a
@@ -606,7 +717,7 @@ No fold commit: the surface has no computation.
 
 ---
 
-## 9. Round-1 questions — RULED 2026-09-24 (maintainer, on PR #849; each row line-local)
+## 9. Round-1 questions — RULED 2026-09-24 (maintainer, on PR #849; each row line-local); AMENDED the same day from the Dandelion++ arc (Q6 re-shaped, Q7 confirmed at source, Q9 posed)
 
 | Q | Question | Ruling | Why |
 |---|---|---|---|
@@ -615,9 +726,10 @@ No fold commit: the surface has no computation.
 | **SPL-Q3** | Is `PoolRecord` a re-specified `Canonical` — same semantics, dead fields dropped, the five bits an enum, the timing overload a sum type (§3.4) — or a byte-for-byte port of the 192-byte struct? | **RULED: approved — re-specified, and it is where SPL-14 lands.** Bits → enum is right; the requirement is that the enum has **no default arm** and the decoder returns an **error** on an unknown discriminant rather than a value. *(posed default: Re-specified.)* | `SAR-Q3`'s ruling applies with less resistance than it had there: nothing hashes, relays or migrates the persisted pool record, the C++ pool's LMDB dies at the cutover with its file, and the struct's encoding is `memcpy` with 44 bytes of padding. The semantic cross-check is a transcribed table (§7 commit 1), not a corpus. Absence-as-a-case, applied to a relay state where the "value" is a privacy decision. |
 | **SPL-Q4** | Does the pool file take DRS-D9's durability (full fsync per commit, "no security-vs-speed tradeoff") or a weaker setting, given §5.1 ruled the file discardable and its loss mode benign? | **RULED: approved — D9.** *(posed default: D9. One durability policy (§11.1 (d)'s reasoning: one file, one writer, one policy — applied per file).)* | "Discardable" is about what the file may be *made* to lose, not about accepting a torn one. A weaker setting would be picked on a cost nobody has measured; SPL-13 names the measurement and BENCH owns it. **Reopens** on a BENCH result showing pool-file fsync on the relay path is the binding cost on relay latency — not on a preference for speed. |
 | **SPL-Q5** | Two files, two commits on a block connect (SPL-7). Does the store offer anything toward the lost atomicity — a "reconcile at open" op that drops entries whose key images are spent — or is the ordering rule (chain first, pool second) and the reconciliation entirely E5's? | **RULED: approved — entirely E5's; the store states the order. The reason, in the row:** chain-first is the *recoverable* ordering. A crash between the two commits leaves a transaction in a block and still in the pool, which reconciliation removes; pool-first would remove it from the pool before it was in a block, losing it. Same outcome either way on a clean run; only one of them is safe on a dirty one. *(posed default: Entirely E5's; the store states the rule and offers no op.)* **Sharpened on review** (Copilot, PR #849): the reconciliation is *new* E5 work, not inherited — the C++ `init` never reads the chain's `spent_keys` (SPL-7 corrected) — so the contract names it as an obligation with a falsifier: a pool entry whose key image is spent on chain, offered to a template or a relay pass after open. | Which pool entries a connected block invalidates is admission's knowledge (the key-image set, CEN-M6/M7's domain), not the store's; a store-side reconcile would need the chain file's spent-key table, which is the cross-file read this design exists to avoid. The rule is written here (§2.3) and in the `PoolStore` docs, and E5 inherits it as a precondition — the `SAR-Q6` "record it here, decide it there" shape. |
-| **SPL-Q6** | `RelayMethod` / `NetZone` move to `shekyl-types` (rule 18, `SCU-Q2`'s general form) with `shekyl-relay` re-exporting — and does the persisted record admit `RelayMethod::None`? | **RULED: default CORRECTED — move; the codec refuses every unrecognised state, and `fluff` is never reachable by fall-through. Refusing `None` is a guard on the wrong value.** Per `blockchain_db.h:126–130` `none` is unreachable — nothing writes it, and reaching it needs a `do_not_relay` writer Shekyl does not have — so the posed default guarded a state that cannot occur while leaving the one that does (state 0 falling to `fluff`, SPL-14) unguarded. *(posed default: Move; refuse `None` at the codec.)* | One definition, both crates; a store-side `RelayClass` beside `shekyl-relay`'s `RelayMethod` is two spellings of one fact (the `SAR-Q2` lesson). `None` stays in the enum because the FFI byte contract pins it (`enums.h:39`, the `const` asserts), but no writer exists for it (SPL-6) and a persisted variant nothing writes is pre-provisioning (rule 23): `PoolRecord`'s codec refuses it on encode and decode, the way `Holdings::shard_set` refuses a duplicate. **Reopens** if an RPC that sets `do_not_relay` is ever specified — the refusal is one arm to delete. The fix is the decoder's shape (no default arm, error on an unknown discriminant, `Fluff` only by its own byte); `None` stays a legal, unreachable, non-relayable member of the shared enum and is not specially refused. |
-| **SPL-Q7** | §5.1 made residue "a policy question". Which entries survive a restart, and what is the pool file's on-disk lifetime — persist the whole record and resume every relay clock (the C++ behaviour), or wipe some class of entry (stem embargoes? `local` origins?) at open? Whose question is it? | **RULED: approved — persist whole; the relay-privacy lane owns the policy — for the same reason S-ARCH's `Option` survived.** Persisting the whole record is what makes that lane's decision *possible*: drop the state and timing at write time and "should a restarted node re-stem, fluff, or discard an embargoed transaction?" becomes unaskable, because the information needed to answer it was destroyed by the store. Record here, decide there. **Pulled forward into the hand-off as a scenario, not two field descriptions:** a persisted stem-phase entry whose embargo deadline passed during downtime — SPL-5's `RelayClock` and SPL-14's decode meeting in one record, the case where the wrong default leaks. *(posed default: Record it here, decide it there — default persist-whole; the relay-privacy lane owns the policy.)* | The store must persist whatever policy is chosen, and persisting the whole record is the superset; a store that wiped a class at open would be deciding relay privacy. The question is real — a `local` entry's `origin_zone` + `receive_time` on disk is evidence this node originated a transaction, and a stem entry's embargo resuming after a reboot is either continuity or a timing fingerprint — and it has an owner with a document (`DAEMON_RELAY_PRIVACY.md`, whose §92 already governs the `local` class's lifecycle). Forward-action named there by this PR's docs commit; the store's `open` gains a hook only if that lane rules one. |
+| **SPL-Q6** | `RelayMethod` / `NetZone` move to `shekyl-types` (rule 18, `SCU-Q2`'s general form) with `shekyl-relay` re-exporting — and does the persisted record admit `RelayMethod::None`? | **RULED: default CORRECTED — move; the codec refuses every unrecognised state, and `fluff` is never reachable by fall-through. Refusing `None` is a guard on the wrong value.** Per `blockchain_db.h:126–130` `none` is unreachable — nothing writes it, and reaching it needs a `do_not_relay` writer Shekyl does not have — so the posed default guarded a state that cannot occur while leaving the one that does (state 0 falling to `fluff`, SPL-14) unguarded. *(posed default: Move; refuse `None` at the codec.)* | One definition, both crates; a store-side `RelayClass` beside `shekyl-relay`'s `RelayMethod` is two spellings of one fact (the `SAR-Q2` lesson). `None` stays in the enum because the FFI byte contract pins it (`enums.h:39`, the `const` asserts), but no writer exists for it (SPL-6) and a persisted variant nothing writes is pre-provisioning (rule 23): `PoolRecord`'s codec refuses it on encode and decode, the way `Holdings::shard_set` refuses a duplicate. **Reopens** if an RPC that sets `do_not_relay` is ever specified — the refusal is one arm to delete. The fix is the decoder's shape (no default arm, error on an unknown discriminant, `Fluff` only by its own byte); `None` stays a legal, unreachable, non-relayable member of the shared enum and is not specially refused. **AMENDED 2026-09-24 (SPL-18, maintainer's arc review):** the move stands and the decoder rule stands, but the byte enum is the **seam's** word, not the record's — `PoolRecord` persists `Origin` + `RelayPhase` (`SPL-Q9`), so `None` is not a question the record can ask: it is neither an origin nor a phase. Rule 18's transform/state split is why the seam conversion `(origin, phase) → RelayMethod` is not `SAR-Q2`'s two-spellings hazard: they are not one fact. |
+| **SPL-Q7** | §5.1 made residue "a policy question". Which entries survive a restart, and what is the pool file's on-disk lifetime — persist the whole record and resume every relay clock (the C++ behaviour), or wipe some class of entry (stem embargoes? `local` origins?) at open? Whose question is it? | **RULED: approved — persist whole; the relay-privacy lane owns the policy — for the same reason S-ARCH's `Option` survived.** Persisting the whole record is what makes that lane's decision *possible*: drop the state and timing at write time and "should a restarted node re-stem, fluff, or discard an embargoed transaction?" becomes unaskable, because the information needed to answer it was destroyed by the store. Record here, decide there. **Pulled forward into the hand-off as a scenario, not two field descriptions:** a persisted stem-phase entry whose embargo deadline passed during downtime — SPL-5's `RelayClock` and SPL-14's decode meeting in one record, the case where the wrong default leaks. *(posed default: Record it here, decide it there — default persist-whole; the relay-privacy lane owns the policy.)* **CONFIRMED AT SOURCE 2026-09-24 (SPL-17):** the maintainer asked, field by field, whether `shekyl-relay-privacy` / `shekyl-relay` already hold the authoritative value — they hold none of them, by the Zone's own refusal to keep a per-transaction outcome (`zone/mod.rs:594–597`); the pool record is the sole persistent home, so persist-whole duplicates nothing. The scenario gains its second leg: `StemWatch.pending` does not survive a restart, so an originated entry mid-observation restarts armed with nothing that can disarm it until re-observed. | The store must persist whatever policy is chosen, and persisting the whole record is the superset; a store that wiped a class at open would be deciding relay privacy. The question is real — a `local` entry's `origin_zone` + `receive_time` on disk is evidence this node originated a transaction, and a stem entry's embargo resuming after a reboot is either continuity or a timing fingerprint — and it has an owner with a document (`DAEMON_RELAY_PRIVACY.md`, whose §92 already governs the `local` class's lifecycle). Forward-action named there by this PR's docs commit; the store's `open` gains a hook only if that lane rules one. |
 | **SPL-Q8** | Does the pool file carry its own version cell with **mismatch ⇒ recreate** (no migrator, no refusal — the file is discardable), and is its snapshot registered under the rule-42 gate as a second file? | **RULED: approved — yes to both.** Own version cell with wipe-and-recreate is consistent with the file being discardable, which is what §5.1 already paid for. **The check that authorizes the wipe, named on review** (Copilot, PR #849 — the consensus store refuses a mismatch in both directions and keeps the file, `store/mod.rs:77–87`, `:278–282`; an automatic delete needs a stated precondition): the pool file is recreated **only** when it opens as a redb database *and* carries this store's own header seal with a `PoolStore` version cell whose value differs — i.e. it is recognisably a Shekyl pool file at another layout. A path that is not a redb file, a redb file without the seal, or a sealed file whose header does not decode is **refused, never deleted** — a wrong `--data-dir`, a foreign file or a tampered one is an operator's to look at, not the store's to erase. The wipe is one log line naming the old and new versions, and the store's tests construct all three refusals. *(posed default: Yes to both.)* | Rule 42's discipline is "a persisted-block wire change ⇒ a version bump, CI-enforced"; the pool file is persisted state and its record is a codec, so the snapshot belongs under the gate. What differs is the *response* to a mismatch: the consensus file refuses to open (SI-7, rebuild from the corpus); the pool file has no corpus and §5.1 says it may be discarded wholesale, so a mismatch is a wipe-and-recreate with one log line — the fallback pick §5.1 named ("wipe-on-open"), used where it is actually correct. `rm -rf ~/.shekyl` is the pre-genesis migration path anyway (rule 15). |
+| **SPL-Q9** | *(posed 2026-09-24, post-ruling — SPL-18.)* Do the record's relay fields follow §92.4's decomposition — `origin: Origin` (permanent; P2 refuses a change), `phase: RelayPhase` (the ratchet, with the pin as a transition rule over `origin`; each phase carrying its own clock word), `responsibility: Responsibility` (F-10's disarm, `Originated` only) — with the FFI byte enum kept as the seam's word and derived at the seam; or does the record persist `method: RelayMethod` + `RelayClock` + `observed_circulating` + `origin_zone` field-for-field as §3.4 first wrote it? | **Default: the decomposition.** *(awaiting the maintainer's ruling; the increment's commit 1 is shaped by it and does not cut before it)* | A faithful port re-bundles what the design spent a round unbundling: `relay_method::local` is provenance + responsibility + a routing class in one value, the ratchet destroys the provenance on `Block`, and the pin lives in `add_tx` as a special case over an enum that cannot carry its reason. Three fields with three lifetimes make the pin a *typed transition* (`Originated` never walks to `Stem`/`Fluff`; it yields to `Block`), make the disarm's domain a construction fact (`Responsibility` exists only for `Originated`), and dissolve SPL-5's overload — each phase's clock is that phase's field. The record's only reader is E5's pool, so the shape is free (no hash, no wire, no migration; `SPL-Q3`). Cost: the seam conversion `(origin, phase) → RelayMethod` for the C++ that still speaks the byte, and the `matches` table re-derived over `(Origin, RelayPhase)` — pinned by a test against the C++ table, exhaustive on both sides. **Reopens** if E5's admission finds a pool state the three fields cannot express — the falsifier is a `RelayMethod` value with no `(Origin, RelayPhase)` preimage. |
 
 ---
 
@@ -648,6 +760,7 @@ No fold commit: the surface has no computation.
 
 | Date | Entry |
 |---|---|
+| 2026-09-24 | **Round 1 AMENDED from the Dandelion++ arc** (maintainer, PR #849; post-ruling substrate per rule 21 — a completeness amendment, not a new round). Three findings minted: **SPL-16** — `LockedTXN`'s two properties separated, the nesting lost-and-accepted (SPL-7) and the abort-on-drop (the mechanism of the `get_relayable_transactions` bug, fixed at `tx_pool.cpp:1232`, audit `:88`) explicitly not carried; §3.2's first draft — a caller-held `PoolBatch` with `commit(self)` and an aborting `Drop` — was that defect in Rust and is replaced by the chain store's `write(\|batch\| …)` closure shape. **SPL-17** — field by field, the Zone holds no per-transaction relay fact (its own doc refuses to, `zone/mod.rs:594–597`); `EmbargoTimer` owns the distribution, the pool the deadline; `StemWatch.pending` is transient and its verdict lands in the pool — the record is the sole persistent home, `SPL-Q7` confirmed, and the downtime scenario gains a second leg (a mid-observation originated entry restarts armed with nothing to disarm it). **SPL-18** — §92.4 unbundled `Local` into provenance (permanent), responsibility (disarmed by F-10) and class; a field-for-field `RelayMethod` re-bundles them and the ratchet destroys provenance on `Block`; **`SPL-Q9` posed** with the decomposition (`Origin` / `RelayPhase` / `Responsibility`, the byte enum kept as the seam's word) as default, `RelayClock` superseded by per-phase clock words; `SPL-Q6` amended accordingly (`None` is neither an origin nor a phase); `relay_category::legacy` confirmed not minted (§93.4). SPL-14 untouched and sharper. **The increment does not cut before `SPL-Q9` is ruled.** |
 | 2026-09-24 | **Copilot round on PR #849 — six findings, all validated at source, all applied.** SPL-15 minted (a ninth DB method, `txpool_has_tx`, reached past `Blockchain::` by `have_tx` — the network path's membership read; census method corrected for S-ALT); `PoolCannot::EmptyBlob` (P1's refusal had no representable result); `RelayClock`'s two admission rules (attested-local admits `LastRelayedAt(receive_time)`, not the sentinel — the sentinel makes the fallback permanently ineligible); SPL-7 / `SPL-Q5` corrected — the C++ `init` never reads the chain's `spent_keys`, so reconciliation is new E5 work with a falsifier, not inherited behaviour; `SPL-Q8` gains the check that authorizes the wipe (only a sealed pool file at another version; everything else refused); SPL-4's "five bits" → four class bits, five encoder patterns, one independent bit. |
 | 2026-09-24 | **Round 1 RULED** (maintainer, PR #849). Q1, Q2, Q4, Q8 approved; Q3 approved with the requirement stated (no default arm; an error, never a value, on an unknown discriminant); Q5 approved with the reason written into the row (chain-first is the recoverable ordering — only one order is safe on a dirty run); Q7 approved for the reason S-ARCH's `Option` survived (persist-whole is what makes the relay-privacy lane's decision askable), with the concrete scenario pulled forward — a persisted stem-phase entry whose embargo passed during downtime. **Q6's default corrected:** the maintainer's verification of SPL-4 found the fall-through already documented as an aside (`blockchain_db.h:126–130`, inside the case for keeping `relayable`) and recorded nowhere as a finding; it is now **SPL-14** — origin disclosure caused by a parse default — and the codec's guard moves from `None` (unreachable; nothing writes it) to *every unrecognised state*, with `Fluff` reachable only by its own byte. Fourteen findings; the increment may be cut. |
 | 2026-09-24 | **Round 0 executed** at `a1159f1a2`. Thirteen findings (SPL-1 … SPL-13); eight questions posed with defaults (SPL-Q1 … Q8). The surface's eight methods are eight pass-throughs with one consumer (`tx_memory_pool`) and map to seven store operations, none of which classifies; the substrate fact that sizes the increment is SPL-1 — the §5.1 pick (separate pool file) is ruled, unbuilt, and its falsifier has been firing since the schema map landed — so the increment is a **new file** and an **eviction**, not a re-typing in place. The record is re-specified (five relay bits → `RelayMethod`; `u64::MAX` / next-attempt / last-relayed → `RelayClock`; `fcmp_verified` + hash → `Option`; `pruned`, `do_not_relay`, `padding` dropped). The C++ pool moves nothing. |
