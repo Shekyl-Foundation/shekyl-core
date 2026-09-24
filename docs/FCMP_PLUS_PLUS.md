@@ -642,7 +642,7 @@ rust/
 
 | C function | Rust source | Purpose |
 |-----------|-------------|---------|
-| `shekyl_sign_transaction()` | `shekyl-ffi/src/lib.rs` | Native Rust tx signing (BP+, FCMP++, ECDH, pseudo-outs) via `shekyl-tx-builder` |
+| `shekyl_sign_fcmp_transaction()` | `shekyl-ffi/src/legacy_tx.rs` | C ABI collapsed signing. Production spends call `shekyl_tx_builder::sign_transaction_with_terms` from the engine |
 | `shekyl_fcmp_verify()` | `shekyl-ffi/src/legacy_fcmp.rs` | Verify FCMP++ proof |
 | `shekyl_fcmp_pqc_key_scalar()` | `shekyl-ffi/src/legacy_fcmp.rs` | PQC key scalar `k = H_ℓ(hybrid_pk)` for the verifier (`PL-D3`) |
 | `shekyl_derive_pqc_leaf_entry()` | `shekyl-ffi/src/legacy_fcmp.rs` | Derive the 64-byte `0x07` entry `CM ‖ record` from combined_ss (blinds stay in Rust) |
@@ -859,12 +859,12 @@ ml_dsa_seed = OutputSecrets.ml_dsa_seed   // HKDF info: "shekyl-pqc-output" || o
 ml_dsa_keypair = ML-DSA-65.KeyGen(seed = ml_dsa_seed)
 ```
 
-This is implemented in `rust/shekyl-crypto-pq/src/output.rs` as part of
-`construct_output` and `scan_output_recover`. The FFI functions
-`shekyl_construct_output` and `shekyl_scan_output_recover` return the PQC
-public key (and secret key for scan). For signing, `shekyl_sign_pqc_auth`
-derives the keypair internally from `combined_ss`, signs, and wipes —
-the ML-DSA secret key never crosses the FFI boundary.
+This is implemented in `rust/shekyl-crypto-pq/src/output.rs` as
+`construct_output` and `scan_output_recover`. The miner still calls
+`shekyl_construct_output`; the wallet calls `scan_output_recover` in Rust.
+For signing, `shekyl_sign_pqc_auth` derives the keypair internally from
+`combined_ss`, signs, and wipes — the ML-DSA secret key never crosses the
+FFI boundary.
 
 For public-key-only derivation (e.g., computing the output's `0x07` leaf
 entry or populating `tx.pqc_auths[i].hybrid_public_key` before signing),
@@ -1389,19 +1389,19 @@ Do not reintroduce them. Archival emission is a different vin
 | FROST DKG unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |
 | FROST FFI lifecycle tests (8 tests) | **Done** | `rust/shekyl-ffi/src/lib.rs` |
 | `shekyl-tx-builder` crate (native Rust signing) | **Done** | `rust/shekyl-tx-builder/` |
-| `shekyl_sign_transaction` FFI export | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| `shekyl_sign_transaction` FFI export | **Removed 2026-09-23** | The C export is gone. Signing is `sign_transaction_with_terms` in `shekyl-tx-builder`; `shekyl_sign_fcmp_transaction` remains for the C++ test caller |
 | Wallet RPC `native-sign` feature (`transfer_native`) | **Done** | `rust/shekyl-wallet-rpc/src/wallet.rs` |
 | `wallet2_ffi_prepare_transfer` / `_finalize_transfer` | **Done** | `src/wallet/wallet2_ffi.cpp`, `wallet2_ffi.h` |
 | `shekyl-tx-builder` unit tests (19 tests) | **Done** | `rust/shekyl-tx-builder/src/tests.rs` |
 | Rust `construct_output` (KEM + HKDF → O, C, enc, view_tag, PQC) | **Done** | `shekyl-crypto-pq/src/output.rs` |
 | Rust `scan_output_recover` (KEM decap + HKDF → B', ho, y, z, PQC) | **Done** | `shekyl-crypto-pq/src/output.rs` |
-| FFI `shekyl_construct_output` / `shekyl_scan_output_recover` | **Done** | `shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| FFI `shekyl_construct_output` / `shekyl_scan_output_recover` | **`shekyl_construct_output` kept (miner); `shekyl_scan_output_recover` C export removed 2026-09-23** | Rust `scan_output_recover` in `shekyl-crypto-pq/src/output.rs` |
 | Rust PQC signing (`shekyl_sign_pqc_auth`, sk in Rust only) | **Done** | `shekyl-crypto-pq/src/output.rs`, `shekyl-ffi/src/lib.rs` |
 | Rust witness header assembly (`shekyl_fcmp_build_witness_header`) | **Done** | `shekyl-ffi/src/lib.rs` |
 | `construct_miner_tx` v3 → `shekyl_construct_output` | **Done** | `cryptonote_tx_utils.cpp` |
 | `construct_tx_with_tx_key` v3 → `shekyl_construct_output` | **Done** | `cryptonote_tx_utils.cpp` |
-| Wallet v3 scanner via `scan_output_recover` | **Done** | `wallet2.cpp` |
-| X25519-only view tag (sender + scanner) | **Done** | `output.rs`, `wallet2.cpp` |
+| Wallet v3 scanner via `scan_output_recover` | **Done — Rust; `wallet2.cpp` deleted** | `shekyl-scanner` `scan.rs` (`scan_output_recover_with_ml_kem_dk`) |
+| X25519-only view tag (sender + scanner) | **Done — Rust; `wallet2.cpp` deleted** | `output.rs`, `shekyl-scanner` `scan.rs` |
 | `additional_tx_keys` removed for v3 | **Done** | `cryptonote_tx_utils.cpp` |
 | `CTTypeNull` serializes `outPk` + `enc_amounts` | **Done** | `ct_types.h` |
 | On-chain `outPk` for v3+ coinbase | **Done** | `blockchain_db.cpp` |
@@ -1780,8 +1780,9 @@ a cross-check (DoS hardening).
 **Interim path (legacy, removed):** The C++ `derivation_to_y_scalar` with
 Keccak domain separator `"shekyl_y"` was used during PR-foundation. As of
 PR-construct, all construction and scanning paths use the canonical HKDF
-derivation above via `shekyl_construct_output` (construction) and
-`shekyl_scan_output_recover` (scanning). The legacy Keccak derivation is
+derivation above via `construct_output` and `scan_output_recover` in
+`shekyl-crypto-pq`. The miner calls `shekyl_construct_output`; the wallet
+calls `scan_output_recover` directly. The legacy Keccak derivation is
 no longer used on any consensus-critical path.
 
 ### Commitment Mask Independence
