@@ -2,7 +2,7 @@
 
 **Status.** BUILT — PR #643, alpha.8. Both questions this note opened are
 ruled and implemented: **Q1** (address-type discipline made structural on the
-receive side) and **Q3** (the interim nonce rides now, request-level). Cluster
+receive side) and **Q3** (the nonce rides the Levin handshake request). Cluster
 E ratified the placement and the nonce's definition-site constraints
 (PWD-E3/E4/E6, merged at `fbd80393a`); nothing below re-decides them. Base:
 `fix/peerlist-trust-is-earned` (#637 head `7baf854fb`, boundary agreed with
@@ -32,9 +32,7 @@ amendment: self-knowledge is not a claim about a peer.)
 
 | # | Job | Ruled successor | This unit |
 |---|-----|-----------------|-----------|
-| 1 | Self-connection detection at handshake | **Zone-scoped handshake nonce** (emit random N; an arriving handshake carrying an N you recently emitted is you; comparison ONLY within the arriving zone — the inherited cross-zone-oracle warning at `handle_handshake` is preserved by construction). Owner: **PWD-T1**; the nonce is **load-bearing for D++ stem width** and its failure mode is silent, so T1 carries a stem-width falsifier | **Executed here** (§4 Q3): the interim
-token rides request-level now, zone-scoped, recorded before it can be
-written |
+| 1 | Self-connection detection at handshake | **Zone-scoped handshake nonce** (emit random N; an arriving handshake carrying an N you recently emitted is you; comparison ONLY within the arriving zone — the inherited cross-zone-oracle warning at `handle_handshake` is preserved by construction). Owner: **PWD-T1**; the nonce is **load-bearing for D++ stem width** and its failure mode is silent, so T1 carries a stem-width falsifier | **Executed here** (§4 Q3): the nonce rides the Levin handshake request, zone-scoped, recorded before it can be written. *Two handshakes* keeps it there — session content, not a transport payload |
 | 2 | Pre-dial "stored id is me" filter (`is_peer_used`) | Same job as #1, earlier; pure optimisation, loss = one wasted dial that #1 catches. Precision from the P2P-2 cluster-E round (PWD-E5 lane): the address-based pre-dial check at `zone.m_our_address == candidate.adr` is **dead on the public zone today** — `m_our_address` is assigned only in the `--anonymous-inbound` block — so public pre-dial self-avoidance is effectively absent before this unit and stays absent after it; the nonce is the public zone's correctness backstop. If PWD-E1/E2/E3 later give the node a known public endpoint, the optimisation can return on that round's terms | Dies with `peerlist_entry.id`; nothing built |
 | 3 | Duplicate-connection avoidance (id arm of `is_peer_used`) | **Address-based same-host outbound cap** — the amendment rules it "not optional cleanup; the condition under which removing the field is safe": white evicts per host but gray holds many ports per IP. **Concession, per PWD-E4 (RULED 2026-09-06): host is cheap to multiply on both transports (a /24 gives 256 free hosts on `public_` as surely as a keypair gives one onion), so the cap bounds honest duplicates and the single-IP-many-ports shape specifically — nothing adversarial beyond that, in any zone.** It restores the structural parity white already had (one entry per host), not a sybil bound — the id arm it replaces was no sybil bound either | **The minimal cap (one outbound connection per host) ships in this unit** — the same successor-ships-with-removal logic steering ruled for the nonce. Outbound diversity beyond it is PWD-B9's row |
 | 4 | Back-ping (`try_ping` + `COMMAND_PING` echo) | **Deleted, not replaced — the command with it** (`SHEKYL_P2P_PROTOCOL.md:563`: "the back-ping is deleted. COMMAND_PING (1003) is deleted with it"; PWD-B10 carries the deletion, PWC-B1 takes the command off the wire surface; four p2p commands become three). Its only job was gating whitelist promotion of an inbound peer, which PWD-I2 forbids. The echo is also independently forbidden by the governing check — it concludes handshake-peer == ping-target | **Executed here**: `try_ping`, `handle_ping`, `COMMAND_PING` (both stacks), `PING_OK`, and the Rust `PingRequest`/`PingResponse` + dual-stack PING step all go. A status-only ping was considered and withdrawn: no job survives B10's inventory, and re-introducing a deleted command is not a narrowing |
@@ -146,6 +144,9 @@ one; stated plainly, as the round asks:
   not design. Cluster E later confirmed the placement independently
   (#641 §5c) and constrained the token at its definition site (PWD-E3:
   per-connection, never persisted, not the transport IV or ephemeral pubkey).
+  **Superseded on carriage (PWD-T1, *Two handshakes*):** the nonce stays on
+  the Levin handshake request. It does not migrate into the transport
+  handshake.
 
 ## 5. Cross-stack and gates (the #587 method)
 

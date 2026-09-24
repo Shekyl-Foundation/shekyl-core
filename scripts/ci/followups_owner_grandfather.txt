@@ -236,7 +236,6 @@ Re-derive `drop_connections(address)`'s host-keyed severing together with the an
 Carry an anonymity-zone peer's endpoint in the handshake, and delete the `unknown()` sentinel with it.
 Sweep the tree for comparison tests built only from separately-constructed operands, adding an alias limb where one is missing.
 Implement 2004 byte-budget truncation continuation — the shipped requester severs a truncating responder.
-Rule pre-handshake connection admission: the *rate*, and the anonymity-zone gap.
 Extend PWD-B1's bucket to *every* dispatch — invoke and notify — and derive its four parameters.
 Derive PWD-B2's timed-sync `min`/`jitter` split.
 Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.
