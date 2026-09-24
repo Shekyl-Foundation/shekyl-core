@@ -42,18 +42,20 @@ use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, Tip};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
-    TreeLeaf, TreePosition, TxHash,
+    PCanonicalId, SettlementEpoch, ShardId, TreeLeaf, TreePosition, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
 use crate::codec::{
-    BlockInfo, CurveTreeState, OutTx, PropertyCell, TotalBurnedCell, TxOutputIndices,
+    ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CurveTreeState, OutTx, PropertyCell,
+    RMarket, SigmaWorkMilli, TotalBurnedCell, TxOutputIndices,
 };
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
+use super::archival_reads::{self, PassCount, ServedShard};
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
 use super::tx_reads::{self, Prunable, TxLocation, TxRecord};
@@ -823,6 +825,108 @@ impl ReadSnapshot<'_> {
     /// leaves in practice; this is not a full-tree walk.
     pub fn leaves(&self, range: Range<TreePosition>) -> Result<AtIndex<Vec<TreeLeaf>>, StoreError> {
         curve_reads::leaves(&self.txn, range).map_err(chain_reads::ReadFault::into_plain)
+    }
+}
+
+/// The archival reads — DRS-E1 S-ARCH (`DRS_E1_SARCH.md` §3.2; the bodies
+/// and the absence rules are `archival_reads`'). The persisted record and the
+/// close rows E4 will write, read typed; nothing here folds.
+impl ReadSnapshot<'_> {
+    /// **A1.** `archival_bond[persona]`, decoded. `None` is "no bond record"
+    /// — the state every caller branches on (a bond post finding a record is
+    /// an update; finding none is a join). Replaces `get_archival_bond_value`,
+    /// `get_archival_bond_hybrid_pubkey` and `archival_bond_join_epoch`, which
+    /// decoded the same row and each invented an absence (`false`, `false`,
+    /// `u64::MAX`; SAR-1). An undecodable row is SI-7 — SI-14's arm too.
+    pub fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, StoreError> {
+        archival_reads::bond_record(&self.txn, persona).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A3.** The latest settlement epoch `persona` earned a pass bit for
+    /// `shard` in — one reverse seek. `None` is never-served, the release
+    /// cooldown's vacuous arm. Per shard: the C++ marshal's positional
+    /// vector omitted never-served shards (SAR-3); the set is the caller's
+    /// `filter_map`. SI-15 if rows exist for a persona with no record.
+    pub fn last_served_epoch(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+    ) -> Result<Option<SettlementEpoch>, StoreError> {
+        archival_reads::last_served_epoch(&self.txn, persona, shard)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A4.** Every shard `persona` ever served, each with its latest epoch
+    /// — the complete-tree form of the last-served marshal (a foundation
+    /// record stores no shard list). One reverse seek per served shard,
+    /// never a full-table walk. Empty for a persona that never served.
+    pub fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, StoreError> {
+        archival_reads::served_shards(&self.txn, persona)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A5.** Pass bits recorded for `(persona, shard, epoch)` — `PC-D5`'s
+    /// enumeration over the pair-epoch prefix. [`PassCount::ZERO`] when none.
+    pub fn pass_count(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<PassCount, StoreError> {
+        archival_reads::pass_count(&self.txn, persona, shard, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A6.** The market's co-holder count for `shard` at `epoch`'s close.
+    /// `None` is an epoch that never closed for this shard; a written
+    /// `RMarket(0)` is a closed epoch with no co-holders — the C++ returned
+    /// `0` for both (SAR-8). What a rule does with `None` is E6 slice 8's
+    /// (`SAR-Q6`); the read's job is to stop erasing the distinction.
+    pub fn r_market(
+        &self,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<RMarket>, StoreError> {
+        archival_reads::r_market(&self.txn, shard, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A7.** The frozen `Σwork(E)` for `epoch`, in milli-units. `None` is
+    /// an epoch that never closed (SAR-8).
+    pub fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError> {
+        archival_reads::sigma_work(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A8.** The frozen `budget(E)` close row for `epoch`. `None` is an
+    /// epoch that never closed — the one gather leg the C++ already kept
+    /// apart from zero (`has_budget_row`).
+    pub fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A9.** The slash scheduler's monotone settled watermark: every
+    /// settlement epoch `<=` the value has been scanned at its slash
+    /// deadline. `None` is "no epoch settled yet" — the C++'s `u64::MAX`
+    /// sentinel, gone by the type. A `properties` cell
+    /// ([`ArchivalLastSlashEpochCell`]); E4's slash writer is its one writer.
+    pub fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, StoreError> {
+        self.get_property::<ArchivalLastSlashEpochCell>()
+    }
+
+    /// **A10.** A recorded block's attestation witness bytes, unparsed.
+    /// [`AtHeight::AboveTip`] for a height past the tip;
+    /// `Recorded(None)` for a recorded block whose attestation set was empty
+    /// (the writer stores no row for it) — the two absences the C++ returned
+    /// as one empty blob. What a *pruned* height reads as is S-PRUNE's to
+    /// say; until a prune exists the two states are exhaustive. Replaces
+    /// `get_archival_attestation_witness_at_height`; the alt-block twin is
+    /// E5 S-ALT's (`SAR-Q5`).
+    pub fn attestation_witness_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<Option<Vec<u8>>>, StoreError> {
+        archival_reads::attestation_witness_at(&self.txn, height)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 }
 

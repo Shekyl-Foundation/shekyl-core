@@ -48,6 +48,7 @@
 //! domain from the same list), and its key cannot collide with another
 //! cell's without a test in this module failing.
 
+use shekyl_types::SettlementEpoch;
 use shekyl_units::AtomicUnits;
 
 use crate::family_set::FamilySet;
@@ -281,6 +282,23 @@ property_cells! {
     /// overflow is fatal, never a saturate); `pop` restores the journaled
     /// pre-image, so there is no subtract and no pop-side saturation.
     TotalBurnedCell { key: "total_burned", scope: ChainState, value: AtomicUnits },
+    /// `archival_last_slash_epoch` — the slash scheduler's monotone settled
+    /// watermark: every settlement epoch `<=` the value has been scanned at
+    /// its slash deadline (DRS-E1 S-ARCH A9; the C++ key, verbatim).
+    ///
+    /// **Absent means no epoch settled yet** — the C++ spelled that as a
+    /// `u64::MAX` sentinel (`db_lmdb.cpp`, `get_archival_last_slash_epoch`);
+    /// here the read is `Option<SettlementEpoch>` and no sentinel is stored.
+    /// Chain-state: the bond-post admission and the emission claim source
+    /// read it as a consensus fact. E4's slash writer is its one writer; the
+    /// cell is absent in every store until then, so the digest domain gains
+    /// a key and no bytes (DRS-E2's archival coverage arrives with E4,
+    /// `DRS_E1_SARCH.md` SAR-11).
+    ArchivalLastSlashEpochCell {
+        key: "archival_last_slash_epoch",
+        scope: ChainState,
+        value: SettlementEpoch
+    },
 }
 
 /// A chain-state cell that exists only in this crate's tests, so the typed
@@ -371,10 +389,18 @@ mod tests {
                     scope: TotalBurnedCell::SCOPE,
                     value: AtomicUnits::NAME,
                 },
+                PropertyCellSpec {
+                    key: ArchivalLastSlashEpochCell::KEY,
+                    scope: ArchivalLastSlashEpochCell::SCOPE,
+                    value: SettlementEpoch::NAME,
+                },
             ]
         );
-        // The one chain-state cell so far is the digest-domain member.
+        // The two chain-state cells are the digest-domain members.
         assert_eq!(TotalBurnedCell::SCOPE, CellScope::ChainState);
+        assert_eq!(ArchivalLastSlashEpochCell::SCOPE, CellScope::ChainState);
+        // The C++ store's key, byte for byte (S-ARCH A9).
+        assert_eq!(ArchivalLastSlashEpochCell::KEY, "archival_last_slash_epoch");
         assert_eq!(SettlementEpochBlocksCell::SCOPE, CellScope::EngineLocal);
         // The pin's key is the C++ store's key, byte for byte.
         assert_eq!(SettlementEpochBlocksCell::KEY, "settlement_epoch_blocks");

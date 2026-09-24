@@ -167,6 +167,17 @@ pub enum StoreInvariant {
     /// The grow path (DRS-E3) is what replaces EMPTY. Until it does, a
     /// connected chain keeps the seal's row and this belt stays quiet.
     SummaryRootDiverged,
+    /// **SI-15** — every `archival_serve_credit` row belongs to a persona
+    /// with a bond record. The connect hook that writes a pass bit refuses
+    /// one for an unknown persona (CEN-L7's fatal backstop), so a row whose
+    /// `PCanonicalId` prefix has no `archival_bond` row is a write that
+    /// bypassed the writer. Observed by the serve-credit reads (A3, A4,
+    /// A5), which have the persona in hand; the read that found it names
+    /// it.
+    ServeCreditWithoutBond {
+        /// The persona the orphaned rows name.
+        persona: shekyl_types::PCanonicalId,
+    },
 }
 
 /// What an SI-11 read observed. One invariant, two observations: a length
@@ -200,6 +211,7 @@ impl StoreInvariant {
             Self::FoldOverflow { .. } => 8,
             Self::FoldNotMonotone { .. } => 13,
             Self::IdNotFresh => 9,
+            Self::ServeCreditWithoutBond { .. } => 15,
         }
     }
 }
@@ -265,6 +277,11 @@ impl core::fmt::Display for StoreInvariant {
                 "the grown curve_tree_meta root is not the live root at curve_tree_roots[tip + 1]; \
                  the summary and the recorded root disagree, rebuild from the block corpus",
             ),
+            Self::ServeCreditWithoutBond { persona } => write!(
+                f,
+                "archival_serve_credit holds rows for persona {persona} but archival_bond has no \
+                 record for it; a pass bit was written past the connect hook's refusal"
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -295,6 +312,7 @@ impl core::error::Error for StoreInvariant {
             | Self::IdNotFresh
             | Self::LeavesNotDense { .. }
             | Self::SummaryRootDiverged
+            | Self::ServeCreditWithoutBond { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

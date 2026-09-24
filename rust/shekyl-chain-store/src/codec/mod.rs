@@ -87,9 +87,9 @@ pub use evidence::{CoverageGaps, PassedThroughFacts, FACT_FIELDS};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{
-    ApplyPolicyCell, CellScope, ChainState, CoverageGapsCell, EngineLocal, PassedThroughFactsCell,
-    PropertyCell, PropertyCellBytes, PropertyCellSpec, SchemaVersionCell, Scope,
-    SettlementEpochBlocksCell, TotalBurnedCell, PROPERTY_CELLS,
+    ApplyPolicyCell, ArchivalLastSlashEpochCell, CellScope, ChainState, CoverageGapsCell,
+    EngineLocal, PassedThroughFactsCell, PropertyCell, PropertyCellBytes, PropertyCellSpec,
+    SchemaVersionCell, Scope, SettlementEpochBlocksCell, TotalBurnedCell, PROPERTY_CELLS,
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
 pub use settlement_epoch::SettlementEpochBlocks;
