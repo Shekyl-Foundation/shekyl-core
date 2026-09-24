@@ -1636,13 +1636,13 @@ namespace levin
     });
   }
 
-  void notify::on_handshake_complete(const boost::uuids::uuid &id, bool is_income)
+  void notify::on_session_established(const boost::uuids::uuid &id, bool is_income)
   {
     if (!zone_)
       return;
 
     boost::asio::dispatch(zone_->strand, [z = zone_, id, is_income] {
-      shekyl_relay_zone_on_handshake(z->relay.get(), uuid_bytes(id), is_income);
+      shekyl_relay_zone_on_session_established(z->relay.get(), uuid_bytes(id), is_income);
     });
   }
 

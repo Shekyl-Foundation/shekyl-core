@@ -590,7 +590,7 @@ public:
               );
 
               // peer_id remains unset if dropped
-              if (m_current_head.m_command == m_connection_context.handshake_command() && m_connection_context.handshake_complete())
+              if (m_current_head.m_command == m_connection_context.handshake_command() && m_connection_context.session_established())
                 m_max_packet_size = m_config.m_max_packet_size;
 
               if(!send_message(return_message.finalize_response(m_current_head.m_command)))

@@ -1719,7 +1719,7 @@ skip:
     std::vector<epee::net_utils::zone> zones;
     m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
-      if (!context.handshake_complete() || context.m_is_income) // only consider connected outgoing peers
+      if (!context.session_established() || context.m_is_income) // only consider connected outgoing peers
         return true;
 
       const epee::net_utils::zone zone = context.m_remote_address.get_zone();
@@ -2500,8 +2500,8 @@ skip:
     std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections;
     m_p2p->for_each_connection([&exclude_context, &connections](connection_context& context, uint32_t)
     {
-      // handshake_complete() filters out connections before handshake
-      if (context.handshake_complete() && exclude_context.m_connection_id != context.m_connection_id && context.m_remote_address.get_zone() == epee::net_utils::zone::public_)
+      // session_established() filters out connections before the Levin handshake
+      if (context.session_established() && exclude_context.m_connection_id != context.m_connection_id && context.m_remote_address.get_zone() == epee::net_utils::zone::public_)
       {
         LOG_DEBUG_CC(context, "RELAYING BLOCK TO PEER");
         connections.push_back({context.m_remote_address.get_zone(), context.m_connection_id});

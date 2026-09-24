@@ -806,14 +806,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_free(handle: *mut RelayZoneHandle) {
     }
 }
 
-/// A peer completed its handshake.
+/// A peer's Levin handshake completed (session established).
 ///
 /// A nil or null `id` is ignored: neither names a connection to track.
 ///
 /// # Safety
 /// `handle` must be live; `id` must point to 16 readable bytes, or be null.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_relay_zone_on_handshake(
+pub unsafe extern "C" fn shekyl_relay_zone_on_session_established(
     handle: *mut RelayZoneHandle,
     id: *const u8,
     is_income: bool,
@@ -828,7 +828,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_on_handshake(
         PeerDirection::Outbound
     };
     let h = &mut *handle;
-    h.driver.zone_mut().on_handshake_complete(peer, direction);
+    h.driver.zone_mut().on_session_established(peer, direction);
     h.publish();
 }
 
