@@ -299,6 +299,40 @@ mod check_workflows {
         /// Selects [`crate::engine::test_support::daemon_get_info`]'s
         /// syncing reply. This double does not build a `get_info` document.
         synchronized: bool,
+        /// The re-read of the witness tip returns a different hash than
+        /// `get_info` recorded. A verdict from this double is a failed seal.
+        witness_replaced: bool,
+    }
+
+    fn witness_block_header(height: u64, hash: [u8; 32]) -> shekyl_rpc_types::BlockHeader {
+        use shekyl_rpc_types::HashHex;
+        let zero = HashHex::from_bytes([0u8; 32]);
+        shekyl_rpc_types::BlockHeader {
+            major_version: 1,
+            minor_version: 1,
+            timestamp: 0,
+            prev_hash: zero,
+            nonce: 0,
+            orphan_status: false,
+            height,
+            depth: 0,
+            hash: HashHex::from_bytes(hash),
+            difficulty: 1,
+            wide_difficulty: "0x1".to_owned(),
+            difficulty_top64: 0,
+            cumulative_difficulty: 1,
+            wide_cumulative_difficulty: "0x1".to_owned(),
+            cumulative_difficulty_top64: 0,
+            reward: 0,
+            block_size: 0,
+            block_weight: 0,
+            num_txes: 0,
+            pow_hash: None,
+            long_term_weight: 0,
+            miner_tx_hash: zero,
+            curve_tree_root: zero,
+            attestation_root: zero,
+        }
     }
 
     impl Rpc for MockRpc {
@@ -379,11 +413,28 @@ mod check_workflows {
                         .get("method")
                         .and_then(serde_json::Value::as_str)
                         .expect("json-rpc request names a method");
-                    assert_eq!(method, "get_info", "mock serves only get_info here");
-                    let result = crate::engine::test_support::daemon_get_info(
-                        self.height as u64,
-                        !self.synchronized,
-                    );
+                    let result = match method {
+                        "get_info" => crate::engine::test_support::daemon_get_info(
+                            self.height as u64,
+                            !self.synchronized,
+                        ),
+                        "get_block_header_by_height" => {
+                            let height = req
+                                .pointer("/params/height")
+                                .and_then(serde_json::Value::as_u64)
+                                .expect("height is a number");
+                            let mut hash = crate::engine::test_support::test_block_hash_at(height);
+                            if self.witness_replaced {
+                                hash[0] ^= 0xff;
+                            }
+                            serde_json::to_value(shekyl_rpc_types::GetBlockHeaderByHeightResponse {
+                                status: shekyl_rpc_types::RpcStatus::ok(),
+                                block_header: witness_block_header(height, hash),
+                            })
+                            .expect("header serializes")
+                        }
+                        other => panic!("mock json-rpc does not serve {other}"),
+                    };
                     serde_json::json!({ "jsonrpc": "2.0", "id": "0", "result": result })
                 }
                 "get_height" => serde_json::to_value(shekyl_rpc_types::GetHeightResponse {
@@ -534,6 +585,7 @@ mod check_workflows {
                 get_transactions_calls: Arc::new(AtomicUsize::new(0)),
                 pooled: Arc::new(std::collections::BTreeSet::new()),
                 synchronized: true,
+                witness_replaced: false,
             },
             local,
         }
@@ -897,6 +949,7 @@ mod check_workflows {
             get_transactions_calls: Arc::new(AtomicUsize::new(0)),
             pooled: Arc::new(std::collections::BTreeSet::new()),
             synchronized: true,
+            witness_replaced: false,
         };
 
         let chain = ProofChainView::open(&rpc)
@@ -955,6 +1008,36 @@ mod check_workflows {
             syncing.get_transactions_calls.load(Ordering::SeqCst),
             fetches_after_control,
             "reserve verification must refuse before get_transactions"
+        );
+    }
+
+    /// A witness tip that was replaced after the reads is not a verdict.
+    ///
+    /// The mock returns `get_info`'s tip hash with one byte flipped on
+    /// `get_block_header_by_height`. Bites against `seal` returning a
+    /// token without calling `bracket`: both checks then return `Valid`.
+    /// It does **not** cover a gather that is merely shorter than the
+    /// witness, which is the next test.
+    #[tokio::test]
+    async fn a_replaced_witness_block_is_not_a_verdict() {
+        let mut fx = make_fixture(vec![]);
+        fx.rpc.witness_replaced = true;
+        let proof = inbound_proof_string(&fx);
+        let err = check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &proof)
+            .await
+            .expect_err("a replaced witness block must refuse tx-proof verification");
+        assert!(
+            matches!(err, ProofsError::Daemon(_)),
+            "expected Daemon, got {err:?}"
+        );
+
+        let reserve = reserve_proof_string(&fx);
+        let err = check_reserve_proof(&fx.rpc, &fx.address, MSG, &reserve)
+            .await
+            .expect_err("a replaced witness block must refuse reserve verification");
+        assert!(
+            matches!(err, ProofsError::Daemon(_)),
+            "expected Daemon, got {err:?}"
         );
     }
 

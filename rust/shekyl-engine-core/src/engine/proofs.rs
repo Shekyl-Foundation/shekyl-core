@@ -750,14 +750,33 @@ pub async fn check_tx_proof<R: Rpc>(
     }
 
     let (in_pool, confirmations) = confirmations_of(&fetched.state);
+    let seal = chain.seal(rpc).await?;
 
-    Ok(CheckedTxProof::Valid {
+    Ok(sealed_tx_verdict(
+        seal,
         direction,
         received,
         outputs,
         in_pool,
         confirmations,
-    })
+    ))
+}
+
+fn sealed_tx_verdict(
+    _seal: super::proofs_chain_facts::SealedProofView,
+    direction: TxProofDirection,
+    received: AtomicUnits,
+    outputs: Vec<CheckedTxOutput>,
+    in_pool: bool,
+    confirmations: u64,
+) -> CheckedTxProof {
+    CheckedTxProof::Valid {
+        direction,
+        received,
+        outputs,
+        in_pool,
+        confirmations,
+    }
 }
 
 /// WALLET-LESS verification of a `shekylreserveproof` string (contract
@@ -865,11 +884,22 @@ pub async fn check_reserve_proof<R: Rpc>(
         }
     }
 
-    Ok(CheckedReserveProof::Valid {
+    let seal = chain.seal(rpc).await?;
+
+    Ok(sealed_reserve_verdict(seal, total, spent, verified.len()))
+}
+
+fn sealed_reserve_verdict(
+    _seal: super::proofs_chain_facts::SealedProofView,
+    total: AtomicUnits,
+    spent: AtomicUnits,
+    output_count: usize,
+) -> CheckedReserveProof {
+    CheckedReserveProof::Valid {
         total,
         spent,
-        output_count: verified.len(),
-    })
+        output_count,
+    }
 }
 
 // ── Framing helpers ──────────────────────────────────────────────────

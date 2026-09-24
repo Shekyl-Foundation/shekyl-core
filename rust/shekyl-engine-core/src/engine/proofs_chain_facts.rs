@@ -37,7 +37,7 @@ use shekyl_wire::{Ct, Transaction};
 use super::block_fetch::{parse_tx_batch, refuse_unless_ok, TxBodyForm, TXS_PER_REQUEST};
 use super::daemon::synced_chain_facts::{fetch_synced_chain_facts, SyncedChainFacts};
 use super::proofs::ProofsError;
-use shekyl_types::TxHash;
+use shekyl_types::{BlockHash, TxHash};
 
 /// Where the daemon found a transaction, and the depth that goes with
 /// it. An arm rather than a `bool` beside an `Option`, for the reason
@@ -422,8 +422,9 @@ impl ProofChainView {
     /// `is_key_image_spent` for `key_images`, in request order.
     ///
     /// The receiver is the opened view, so this query cannot be issued
-    /// before [`Self::open`]. The spent set is not a height; the witness
-    /// is not re-checked here.
+    /// before [`Self::open`]. The spent set carries no height, so it is
+    /// not admitted here. [`Self::seal`] re-reads the witness block after
+    /// this query and is what a reserve verdict must hold.
     ///
     /// A reply whose status array is a different length is refused before
     /// any amount is summed: one plausible array would change the reported
@@ -456,7 +457,45 @@ impl ProofChainView {
         }
         Ok(resp.spent_status)
     }
+
+    /// Confirm the witness block still stands, now that the reads are in hand.
+    ///
+    /// One `get_block_hash` at the witness tip, then [`SyncedChainFacts::bracket`].
+    /// A replaced block is [`ProofsError::Daemon`]: the reads may be honest
+    /// and still belong to a chain the witness does not describe, so they
+    /// must not become a verdict. The token is the only way
+    /// [`super::proofs`] builds `Valid`.
+    ///
+    /// # Errors
+    ///
+    /// [`ProofsError::Daemon`] when the tip number does not fit, the re-read
+    /// fails, or the hash no longer matches.
+    pub(crate) async fn seal<R: Rpc>(self, rpc: &R) -> Result<SealedProofView, ProofsError> {
+        let tip_number = usize::try_from(self.witness.tip().to_raw()).map_err(|_| {
+            ProofsError::Daemon(RpcError::InvalidNode(
+                "witness tip does not fit a block number".into(),
+            ))
+        })?;
+        let at_tip_now = rpc
+            .get_block_hash(tip_number)
+            .await
+            .map_err(ProofsError::Daemon)?;
+        self.witness
+            .bracket(BlockHash::from_bytes(at_tip_now))
+            .map(|_bracketed| SealedProofView(()))
+            .map_err(|_| {
+                ProofsError::Daemon(RpcError::InvalidNode(
+                    "witness block was replaced before the proof verdict".into(),
+                ))
+            })
+    }
 }
+
+/// Proof the witness block was the same block after the chain reads.
+///
+/// Only [`ProofChainView::seal`] mints this. A `Valid` proof result is
+/// built from it, so a check that skips the re-read does not compile.
+pub(crate) struct SealedProofView(());
 
 #[cfg(test)]
 mod witness_admission {
