@@ -18,8 +18,15 @@ into the signer (`signing_assembly.rs` → `sign_bridge.rs` → `local_pending_t
 via `CurveTreeActor`), retiring the synthetic membership vectors (they survive in
 test fixtures only). **What REMAINS** (per
 [`CT5_SERIES_CLOSEOUT.md`](../completed/CT5_SERIES_CLOSEOUT.md) §5, reversion-clause-routed):
-(a) per-input reconstruction reuse (perf — `assemble_path` re-runs `build_layers`
-per input; reopens at mainnet scale); (b) store-backed / pruned-tree assembly
+(a) per-input reconstruction reuse — **DISCHARGED in code 2026-09-24 (PR #842,
+`CT-6` increment 3)**: `assemble_paths` reconstructs the drained leaves and
+their layers once per transaction and indexes the `gindex` positions, so the
+`k · n` this row was opened against is now `n + k`. `assemble_path` remains as
+the one-input case, delegating. *The row is kept rather than deleted because it
+is what `CT-6` was opened to discharge, and a reader arriving from
+[`CT5_SERIES_CLOSEOUT.md`](../completed/CT5_SERIES_CLOSEOUT.md) §5 — which is a
+completed record and stays as written — needs the forward pointer;*
+(b) store-backed / pruned-tree assembly
 (F5) — **superseded in design** by [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
 §6.3: the proving state is not a store (a public frontier at `F`, a recent-block
 buffer, per-output paths), and the `WSS-13` unwind retires the leaf store in code
