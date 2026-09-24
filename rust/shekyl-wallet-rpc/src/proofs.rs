@@ -442,6 +442,10 @@ mod tests {
                 WalletRpcErrorCode::ProofTxUnconfirmed,
             ),
             (
+                ProofsError::DaemonSyncing,
+                WalletRpcErrorCode::ProofDaemonSyncing,
+            ),
+            (
                 ProofsError::InvalidRecipient,
                 WalletRpcErrorCode::InvalidRecipient,
             ),
@@ -463,6 +467,16 @@ mod tests {
             "wrong HRP 'attacker-controlled'".into(),
         ));
         assert_eq!(err.message(), "proof string malformed");
+    }
+
+    #[test]
+    fn daemon_syncing_names_the_retry_and_the_code() {
+        let err = map_walletless_error(ProofsError::DaemonSyncing);
+        assert_eq!(
+            err.message(),
+            "daemon is syncing; retry proof verification once it has caught up"
+        );
+        assert_eq!(err.code().as_i32(), -29305);
     }
 
     // ── get_reserve_proof params surface ─────────────────────────────

@@ -75,12 +75,12 @@ use super::proof_bridge::{
     InboundProofOutput, InboundProofRequest, ReserveProofOutput, ReserveProofRequest,
 };
 use super::proofs_chain_facts::{
-    confirmations_of, fetch_proof_tx, fetch_proof_txs, on_chain_outputs_of, refuse_unless_synced,
+    confirmations_of, fetch_proof_tx, on_chain_outputs_of, ProofChainView,
 };
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
-use shekyl_rpc_types::{IsKeyImageSpentRequest, IsKeyImageSpentResponse, KeyImageStatus};
+use shekyl_rpc_types::KeyImageStatus;
 
 // ── Wire-framing constants (contract "Proofs" section) ──────────────
 
@@ -148,23 +148,11 @@ pub enum ProofsError {
     #[error("transaction {0} is unconfirmed (in the pool, not the chain)")]
     TxUnconfirmed(String),
 
-    /// Proof **verification** was asked of a daemon that is not
-    /// synchronized, so the chain facts it would be checked against are
-    /// not the chain's. Contract `-29305 PROOF_DAEMON_SYNCING`.
+    /// Verification was asked of a daemon that is not synchronized.
+    /// Contract `-29305 PROOF_DAEMON_SYNCING`.
     ///
-    /// **Why verification refuses instead of answering.** A proof is
-    /// checked against on-chain facts — is the tx there, how many
-    /// confirmations, which outputs. A syncing daemon can answer every
-    /// one of those honestly and wrongly: a tx it has not reached yet is
-    /// "not found", and a confirmation count taken mid-sync is short.
-    /// Both are `valid: false` shaped, and a caller cannot tell a forged
-    /// proof from a daemon that has not caught up. Refusing names the
-    /// real state and is retryable; answering would hand back a verdict
-    /// whose premise was absent.
-    ///
-    /// The gate sits **after** decode and before the first chain fetch:
-    /// decode is local and its verdict holds whatever the daemon is
-    /// doing, so a malformed proof still reports malformed.
+    /// Raised by [`ProofChainView::open`] after local decode and before
+    /// any tx fetch, so a malformed proof still reports malformed.
     #[error("daemon is syncing; proof verification needs a synchronized chain view")]
     DaemonSyncing,
 
@@ -711,9 +699,8 @@ pub async fn check_tx_proof<R: Rpc>(
         .ok_or_else(|| ProofsError::Malformed("empty tx-proof payload".into()))?;
     let direction = TxProofDirection::from_byte(direction_byte)?;
 
-    refuse_unless_synced(rpc).await?;
-
-    let fetched = fetch_proof_tx(rpc, txid).await?;
+    let chain = ProofChainView::open(rpc).await?;
+    let fetched = chain.tx(rpc, txid).await?;
     let on_chain = on_chain_outputs_of(&fetched.tx)?;
     let address_bytes = canonical_address_bytes(address);
 
@@ -786,7 +773,7 @@ pub async fn check_reserve_proof<R: Rpc>(
     let payload = decode_proof_payload(proof, HRP_RESERVE_PROOF)?;
     let (locators, proof_bytes) = parse_reserve_locators(&payload)?;
 
-    refuse_unless_synced(rpc).await?;
+    let chain = ProofChainView::open(rpc).await?;
 
     // Fetch each locator-named tx once, in chunked batched calls
     // (pruned bodies carry everything a reserve verification needs),
@@ -800,7 +787,7 @@ pub async fn check_reserve_proof<R: Rpc>(
             .filter_map(|&(txid, _)| seen.insert(txid).then_some(txid))
             .collect()
     };
-    let bodies = fetch_proof_txs(rpc, &unique_txids).await?;
+    let bodies = chain.txs(rpc, &unique_txids).await?;
     let mut tx_outputs: BTreeMap<[u8; 32], Vec<OnChainOutput>> = BTreeMap::new();
     for (txid, tx) in unique_txids.iter().zip(&bodies) {
         tx_outputs.insert(*txid, on_chain_outputs_of(tx)?);
@@ -860,27 +847,7 @@ pub async fn check_reserve_proof<R: Rpc>(
         .iter()
         .map(|v| hex::encode(v.key_image.as_bytes()))
         .collect();
-    let resp: IsKeyImageSpentResponse = rpc
-        .rpc_call(
-            "is_key_image_spent",
-            Some(
-                serde_json::to_value(IsKeyImageSpentRequest {
-                    key_images: key_images_hex,
-                })
-                .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
-            ),
-        )
-        .await?;
-    // A refusal carrying one plausible-length `spent_status` array would
-    // change this proof's reported total, so the status is read first.
-    super::block_fetch::refuse_unless_ok(&resp.status, "is_key_image_spent")
-        .map_err(ProofsError::Daemon)?;
-    let statuses = &resp.spent_status;
-    if statuses.len() != verified.len() {
-        return Err(ProofsError::Daemon(RpcError::InvalidNode(
-            "is_key_image_spent returned a different count than requested".to_string(),
-        )));
-    }
+    let statuses = chain.key_image_status(rpc, key_images_hex).await?;
 
     let mut total = AtomicUnits::ZERO;
     let mut spent = AtomicUnits::ZERO;
@@ -891,7 +858,7 @@ pub async fn check_reserve_proof<R: Rpc>(
             .ok_or(ProofsError::AmountOverflow)?;
         // Typed: a fourth value is a malformed reply refused at the boundary,
         // not an integer this comparison has to guess about.
-        if *status != KeyImageStatus::Unspent {
+        if status != KeyImageStatus::Unspent {
             spent = spent
                 .checked_add(amount)
                 .ok_or(ProofsError::AmountOverflow)?;

@@ -15,20 +15,27 @@
 //! generation and verification in `proofs` is cryptographic work over facts
 //! already established — a different job, with a different failure mode.
 //!
-//! The seam is deliberately narrow: four functions — [`fetch_proof_tx`],
-//! [`fetch_proof_txs`], [`confirmations_of`], [`on_chain_outputs_of`] — plus
-//! [`FetchedTx`], the record two of them return. The not-found reporter stays
-//! private, because a caller that needed it would be doing this module's job
-//! somewhere else.
+//! The seam is deliberately narrow. [`ProofChainView`] is the only door a
+//! verification may use: it is minted from a synchronized daemon, and every
+//! tx read and spent-set read takes one. [`fetch_proof_tx`] stays available
+//! to outbound generation, which reads a body the wallet authored and does
+//! not return a chain verdict. [`confirmations_of`] and
+//! [`on_chain_outputs_of`] project a reply the view has already admitted.
+//! The not-found reporter stays private, because a caller that needed it
+//! would be doing this module's job somewhere else.
 
 use shekyl_crypto_pq::kem::{HYBRID_KEM_CT_LEN, X25519_KEM_CT_LEN};
 use shekyl_proofs::tx_proof::OnChainOutput;
 use shekyl_rpc_client::{Rpc, RpcError};
-use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxLocation};
+use shekyl_rpc_types::{
+    GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
+    IsKeyImageSpentResponse, KeyImageStatus, TxLocation,
+};
 use shekyl_scanner::extra::Extra;
 use shekyl_wire::{Ct, Transaction};
 
 use super::block_fetch::{parse_tx_batch, refuse_unless_ok, TxBodyForm, TXS_PER_REQUEST};
+use super::daemon::synced_chain_facts::{fetch_synced_chain_facts, SyncedChainFacts};
 use super::proofs::ProofsError;
 use shekyl_types::TxHash;
 
@@ -43,7 +50,12 @@ pub(crate) enum TxChainState {
     /// locked chain snapshot as the rest of the entry -- not
     /// recomputed here from a later tip, which would pair a height
     /// from one request with a block from another.
+    ///
+    /// `block_height` is the 0-based index reported beside that count.
+    /// Verification keeps both so it can relate the reply to the
+    /// witness without recomputing the count.
     Mined {
+        block_height: u64,
         confirmations: u64,
     },
 }
@@ -94,7 +106,12 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
     // optional fields: `block_height` cannot be read off a pooled entry
     // because a pooled entry does not carry one.
     let state = match txs.first().map(|t| &t.location) {
-        Some(TxLocation::Mined { confirmations, .. }) => TxChainState::Mined {
+        Some(TxLocation::Mined {
+            block_height,
+            confirmations,
+            ..
+        }) => TxChainState::Mined {
+            block_height: *block_height,
             confirmations: *confirmations,
         },
         // No entry is not "pooled", but `parse_tx_batch` below refuses an
@@ -136,7 +153,8 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
 /// the chain, so a locator naming a pooled tx refuses loudly (naming
 /// the txid, so an honest-but-early prover knows to wait for
 /// confirmation) rather than quietly shrinking the total.
-pub(crate) async fn fetch_proof_txs<R: Rpc>(
+async fn fetch_proof_txs<R: Rpc>(
+    witness: &SyncedChainFacts,
     rpc: &R,
     txids: &[[u8; 32]],
 ) -> Result<Vec<Transaction>, ProofsError> {
@@ -180,8 +198,15 @@ pub(crate) async fn fetch_proof_txs<R: Rpc>(
         // A daemon lying about `location` can only cause a spurious refusal
         // here, never a false acceptance.
         for (requested, entry) in batch.iter().zip(&resp.txs) {
-            if matches!(entry.location, TxLocation::Pooled { .. }) {
-                return Err(ProofsError::TxUnconfirmed(hex::encode(requested)));
+            match &entry.location {
+                TxLocation::Pooled { .. } => {
+                    return Err(ProofsError::TxUnconfirmed(hex::encode(requested)));
+                }
+                TxLocation::Mined {
+                    block_height,
+                    confirmations,
+                    ..
+                } => admit_mined_against_witness(witness, *block_height, *confirmations)?,
             }
         }
         let typed: Vec<TxHash> = batch.iter().copied().map(TxHash::from_bytes).collect();
@@ -226,7 +251,7 @@ fn tx_not_found_in_request_order(batch: &[[u8; 32]], missed: &[[u8; 32]]) -> Pro
 pub(crate) fn confirmations_of(state: &TxChainState) -> (bool, u64) {
     match state {
         TxChainState::Pooled => (true, 0),
-        TxChainState::Mined { confirmations } => (false, *confirmations),
+        TxChainState::Mined { confirmations, .. } => (false, *confirmations),
     }
 }
 
@@ -282,27 +307,216 @@ pub(crate) fn on_chain_outputs_of(tx: &Transaction) -> Result<Vec<OnChainOutput>
     Ok(out)
 }
 
-/// Refuse proof **verification** unless the daemon reports a synchronized
-/// chain view (`-29305 PROOF_DAEMON_SYNCING`).
+/// The chain count a mined reply's own arithmetic implies.
 ///
-/// Consumes [`fetch_synced_chain_facts`] rather than re-deriving the
-/// predicate: `WSS-Q14` made "synced" a type whose constructor refuses an
-/// unsynced view, and a second hand-rolled check here would be the same rule
-/// in two places, free to drift from the one the watchdog and the tip gate
-/// ask.
+/// The daemon's contract is `confirmations = chain_count - block_height`
+/// (the tip block reports 1), so the count is the sum. Overflow is a reply
+/// that does not obey its own formula.
+fn gather_chain_count(block_height: u64, confirmations: u64) -> Result<u64, ProofsError> {
+    block_height.checked_add(confirmations).ok_or_else(|| {
+        ProofsError::Daemon(RpcError::InvalidNode(
+            "mined transaction's block height and confirmations overflow".into(),
+        ))
+    })
+}
+
+/// Refuse a mined reply gathered below the witness count.
 ///
-/// A transport failure stays a transport failure — it is **not** folded into
-/// the syncing refusal, because "I could not reach the daemon" and "the daemon
-/// is behind" send a caller to different remedies.
+/// That relation is the rollback half of [`SyncedChainFacts`]'s chain view:
+/// the witness was read first, and a later tx reply whose implied count sits
+/// below it was gathered on a chain that had already moved down. Ordinary
+/// advance (gather at or above the witness) is kept, and the confirmation
+/// count is still the daemon's number — this does not recompute it.
 ///
 /// # Errors
 ///
-/// [`ProofsError::DaemonSyncing`] when the daemon is not synchronized;
-/// [`ProofsError::Daemon`] when `get_info` could not be read.
-pub(crate) async fn refuse_unless_synced<R: Rpc>(rpc: &R) -> Result<(), ProofsError> {
-    match super::daemon::synced_chain_facts::fetch_synced_chain_facts(rpc).await {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => Err(ProofsError::DaemonSyncing),
-        Err(e) => Err(ProofsError::Daemon(e)),
+/// [`ProofsError::Daemon`] when the arithmetic overflows or the gather sits
+/// below the witness. Both are "do not turn this reply into a verdict".
+fn admit_mined_against_witness(
+    witness: &SyncedChainFacts,
+    block_height: u64,
+    confirmations: u64,
+) -> Result<(), ProofsError> {
+    let gather = gather_chain_count(block_height, confirmations)?;
+    if gather < witness.chain_height().to_raw() {
+        Err(ProofsError::Daemon(RpcError::InvalidNode(
+            "transaction was read below the synchronized chain count".into(),
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+/// A synchronized chain a proof may be checked against.
+///
+/// [`Self::open`] is the only constructor. It consumes
+/// [`fetch_synced_chain_facts`], so "synced" stays the witness type the
+/// watchdog and the tip gate already ask for. Tx fetches and the spent-set
+/// query are methods: a check cannot issue them without holding a view.
+/// Outbound generation does not use this type.
+///
+/// The witness is not discarded. A mined reply is admitted against it, so a
+/// rollback between `get_info` and `get_transactions` cannot become a
+/// verdict. A daemon that lies `synchronized` is outside what the witness
+/// proves; that limit is the type's own.
+pub(crate) struct ProofChainView {
+    witness: SyncedChainFacts,
+}
+
+impl ProofChainView {
+    /// Open a view on `rpc`.
+    ///
+    /// A transport or contract fault stays [`ProofsError::Daemon`]. An
+    /// unsynchronized daemon is [`ProofsError::DaemonSyncing`]
+    /// (`-29305`). The two send a caller to different remedies.
+    ///
+    /// # Errors
+    ///
+    /// [`ProofsError::DaemonSyncing`] when the daemon is not synchronized.
+    /// [`ProofsError::Daemon`] when `get_info` could not be read.
+    pub(crate) async fn open<R: Rpc>(rpc: &R) -> Result<Self, ProofsError> {
+        match fetch_synced_chain_facts(rpc).await {
+            Ok(Some(witness)) => Ok(Self { witness }),
+            Ok(None) => Err(ProofsError::DaemonSyncing),
+            Err(error) => Err(ProofsError::Daemon(error)),
+        }
+    }
+
+    /// One pruned tx, admitted against this view when it is mined.
+    ///
+    /// # Errors
+    ///
+    /// The [`fetch_proof_tx`] errors, plus [`ProofsError::Daemon`] when a
+    /// mined reply sits below the witness.
+    pub(crate) async fn tx<R: Rpc>(
+        &self,
+        rpc: &R,
+        txid: [u8; 32],
+    ) -> Result<FetchedTx, ProofsError> {
+        let fetched = fetch_proof_tx(rpc, txid).await?;
+        if let TxChainState::Mined {
+            block_height,
+            confirmations,
+        } = fetched.state
+        {
+            admit_mined_against_witness(&self.witness, block_height, confirmations)?;
+        }
+        Ok(fetched)
+    }
+
+    /// The pruned bodies of `txids`, each mined reply admitted against
+    /// this view. Pooled entries refuse as [`ProofsError::TxUnconfirmed`].
+    ///
+    /// # Errors
+    ///
+    /// The batch-fetch errors, plus [`ProofsError::Daemon`] when a mined
+    /// reply sits below the witness.
+    pub(crate) async fn txs<R: Rpc>(
+        &self,
+        rpc: &R,
+        txids: &[[u8; 32]],
+    ) -> Result<Vec<Transaction>, ProofsError> {
+        fetch_proof_txs(&self.witness, rpc, txids).await
+    }
+
+    /// `is_key_image_spent` for `key_images`, in request order.
+    ///
+    /// The receiver is the opened view, so this query cannot be issued
+    /// before [`Self::open`]. The spent set is not a height; the witness
+    /// is not re-checked here.
+    ///
+    /// A reply whose status array is a different length is refused before
+    /// any amount is summed: one plausible array would change the reported
+    /// reserve.
+    ///
+    /// # Errors
+    ///
+    /// [`ProofsError::Daemon`] on transport failure, a non-OK status, or a
+    /// length mismatch.
+    pub(crate) async fn key_image_status<R: Rpc>(
+        &self,
+        rpc: &R,
+        key_images: Vec<String>,
+    ) -> Result<Vec<KeyImageStatus>, ProofsError> {
+        let asked = key_images.len();
+        let resp: IsKeyImageSpentResponse = rpc
+            .rpc_call(
+                "is_key_image_spent",
+                Some(
+                    serde_json::to_value(IsKeyImageSpentRequest { key_images })
+                        .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
+                ),
+            )
+            .await?;
+        refuse_unless_ok(&resp.status, "is_key_image_spent").map_err(ProofsError::Daemon)?;
+        if resp.spent_status.len() != asked {
+            return Err(ProofsError::Daemon(RpcError::InvalidNode(
+                "is_key_image_spent returned a different count than requested".to_string(),
+            )));
+        }
+        Ok(resp.spent_status)
+    }
+}
+
+#[cfg(test)]
+mod witness_admission {
+    use super::super::daemon::synced_chain_facts::SyncedChainFacts;
+    use super::admit_mined_against_witness;
+    use super::ProofsError;
+    use shekyl_types::{BlockHash, ChainCount};
+
+    const BLOCK_HEIGHT: u64 = 3;
+    const CONFIRMATIONS: u64 = 5;
+    /// `confirmations = chain_count - block_height`, so the gather is the sum.
+    const GATHER: u64 = BLOCK_HEIGHT + CONFIRMATIONS;
+
+    fn witness_at(count: u64) -> SyncedChainFacts {
+        SyncedChainFacts::new(
+            ChainCount::from_raw(count),
+            0,
+            true,
+            BlockHash::from_bytes([0x11; 32]),
+        )
+        .expect("target 0 with the flag set is synchronized")
+    }
+
+    /// Bites against rejecting an equal gather. Does not cover the sync
+    /// predicate; that lives on `SyncedChainFacts::new`.
+    #[test]
+    fn a_gather_at_the_witness_count_is_admitted() {
+        admit_mined_against_witness(&witness_at(GATHER), BLOCK_HEIGHT, CONFIRMATIONS)
+            .expect("equal counts are one snapshot");
+    }
+
+    /// Bites against rejecting ordinary advance. Does not recompute the
+    /// confirmation count the caller will report.
+    #[test]
+    fn ordinary_advance_above_the_witness_is_admitted() {
+        admit_mined_against_witness(&witness_at(GATHER), BLOCK_HEIGHT, CONFIRMATIONS + 1)
+            .expect("one block of advance stays the daemon's count");
+    }
+
+    /// Bites against dropping the comparison. A gather below the witness
+    /// is the rollback direction and must not become a verdict.
+    #[test]
+    fn a_gather_below_the_witness_is_not_a_chain_verdict() {
+        let err = admit_mined_against_witness(&witness_at(GATHER + 1), BLOCK_HEIGHT, CONFIRMATIONS)
+            .expect_err("rollback between the two reads");
+        assert!(
+            matches!(err, ProofsError::Daemon(_)),
+            "expected Daemon, got {err:?}"
+        );
+    }
+
+    /// Bites against a wrapping add. Does not cover a short confirmation
+    /// count, which is a successful gather below the witness.
+    #[test]
+    fn an_overflowing_confirmation_arithmetic_is_a_daemon_fault() {
+        let err =
+            admit_mined_against_witness(&witness_at(1), u64::MAX, 1).expect_err("the sum must fit");
+        assert!(
+            matches!(err, ProofsError::Daemon(_)),
+            "expected Daemon, got {err:?}"
+        );
     }
 }

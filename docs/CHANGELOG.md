@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Wallet RPC — proof verification refuses an unsynchronized daemon
+
+- **`check_tx_proof` / `check_reserve_proof` return `-29305 PROOF_DAEMON_SYNCING`**
+  when the daemon is not synchronized, instead of a verdict built on a
+  partial chain. The check opens a synchronized chain view after local
+  decode and before any tx fetch. A tx read whose implied chain count sits
+  below that witness is a daemon failure (`-29201`), not `valid: false`.
+  Generation is unchanged. Contract document `0.7.0`; `api_version` stays 1.
+
 ### `CT-6` increment 3 — one tree reconstruction per transaction, not per input
 
 - **`CurveTreeClient::assemble_paths` is the primitive; `assemble_path` is the
