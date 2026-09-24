@@ -3768,6 +3768,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-block-template"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "shekyl-chain-rules",
+ "shekyl-crypto-pq",
+ "shekyl-difficulty",
+ "shekyl-economics",
+ "shekyl-types",
+ "shekyl-units",
+ "shekyl-wire",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "shekyl-bulletproofs"
 version = "0.1.0"
 dependencies = [

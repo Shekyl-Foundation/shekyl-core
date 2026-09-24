@@ -346,8 +346,7 @@ doing two things.
 
 | # | Commit | Gate |
 | --- | --- | --- |
-| 1a | **The captured chains** — **blocks, not transactions** (§5.2) — **LANDED `6fd74abee`, `231132849`**. For each of the five shapes — 1-in/1-out, 1-in/2-out, one bond post and one emission with a fee spend each, one depth-3 — the regtest chain the generator produced, from genesis through the block that carries the spend, committed as `.block` blobs under `rust/shekyl-chain-ingest/tests/vectors/<shape>/` with a manifest naming the spend's txid, its `referenceBlock` height and the shape; generated once through `e2e_fcmp_spend_accepted_by_daemon` / `e2e_fcmp_spend_over_depth3_tree` against a daemon built at the landing tree. **The consumer of record is `shekyl-chain-ingest`**, which replays every chain through `form` → `validate` → `connect` against a real `redb` store — the root at `ref_height`, the spent set, the tree depth are *derived* by the code that derives them in production. The rules crate reads the same blobs for its predicate tests (`fixture::spend` / `listed` load the transaction out of its block); the store's `spend(ki, outputs)` becomes a loader; the fixture-sanity gate says which builders moved | **Q1 (ii)** — if the capture is another lane's or slow, WAIT here; do not fall back to filler |
-| 1b | **The driver** (§5.3): `shekyl-block-template` (TXE-F8 claimed — the coinbase and header assembled from `shekyl-economics`, `shekyl_crypto_pq::output::construct_output`, `build_coinbase_extra`, over a caller-supplied context; store-free, gated by the cargo tree check); the scenario API in `shekyl-chain-ingest` — `mine(n)`, `spend(shape)`, `reorg(depth)` — composing `ConnectFacts` from their owners (`shekyl-curve-tree`, `shekyl-economics`, `shekyl-difficulty`) and handing one assembly to the template as context and to `connect` as facts; the first scenario's store judged by the 4.F rows (the falsifier for the template is the validator) | commit 1a; **E3's writer is not waited on** — the driver composes what E3 will later persist |
+| 1 | **The captured chains** — **blocks, not transactions** (§5.2). For each of the five shapes — 1-in/1-out, 1-in/2-out, one bond post and one emission with a fee spend each, one depth-3 — the regtest chain the generator produced, from genesis through the block that carries the spend, committed as `.block` blobs under `rust/shekyl-chain-ingest/tests/vectors/<shape>/` with a manifest naming the spend's txid, its `referenceBlock` height and the shape; generated once through `e2e_fcmp_spend_accepted_by_daemon` / `e2e_fcmp_spend_over_depth3_tree` against a daemon built at the landing tree. **The consumer of record is `shekyl-chain-ingest`**, which replays every chain through `form` → `validate` → `connect` against a real `redb` store — the root at `ref_height`, the spent set, the tree depth are *derived* by the code that derives them in production. The rules crate reads the same blobs for its predicate tests (`fixture::spend` / `listed` load the transaction out of its block); the store's `spend(ki, outputs)` becomes a loader; the fixture-sanity gate says which builders moved | **Q1 (ii)** — if the capture is another lane's or slow, WAIT here; do not fall back to filler |
 | 2 | Stateless 4.I rows in `tx_form`: I1, I4, I6, I8, I9, I14, I16; I5 with H10 kept as its equality row (Q4 (a)); each with its negative fixture at both sites, mutated from a captured spend | commit 1 — the seven self-arming conformance arms for these rows fire here; H24's falsifier flips here |
 | 3 | I19/I20 adopted: `tx_form` calls `check_tx_extra_shape`; **`TxScope::Coinbase`** minted for I20 with its doc pinning *runs at `Miner`*, never *when `is_coinbase()`*; `the_kind_is_derived_from_the_slot_not_the_bytes` gains the I20 case (Q6) | commit 1 |
 | 4 | `TxAgainstRule` (view-bound, `check(cx, view)`); I7 over `has_key_image`; I2 and I3 registry entries `by_construction`, list-and-iterate (Q3) | commit 1 |
@@ -566,6 +565,39 @@ The store's and ingest's ~fifty tests migrate to **scenarios, not
 replays**, owned by their lanes, the FOLLOWUPS row pointing at the driver.
 I15/I18/H19-verify wait on that migration either way; the difference is
 that what they wait for is worth having afterwards.
+
+#### 5.3.1 The crate — landed (2026-09-24), and what its tests do by design
+
+`rust/shekyl-block-template` is `build(&TemplateContext) → Template`: pure
+over the context, store-free (held by `check_chain_rules_no_store.sh`,
+which now names both crates), composing the owners — `construct_output`
+and `build_coinbase_extra` for the coinbase, `paid_block_reward` →
+`compute_emission_split` + `compute_fee_burn` for the amount, the reward
+priced at the block weight *including* the coinbase (a two-pass fixed point
+in the coinbase's own varint, error if it does not settle). The header's
+timestamp is `max(now, median + 1)`: the least C2 admits, no earlier than
+the clock. `nonce` is zero — the template is what the miner searches.
+
+The second question the slice asks — *what should our Rust test do by
+design?* — is answered in the crate doc and its `tests.rs`, and the answer
+is **the validator is the falsifier**: a template is judged by `form →
+validate` on a harness chain, and the test asserts that every landed 4.F
+row (F1, F3, F4, F5, F6, F7, F9, F10) and the header rows it satisfies
+from the tip's facts (A2, B1, B5, C1, C2) appear in the coverage record —
+so a row that stops judging the template fails the test, not only a row
+that refuses it. What the validator has not landed (F18 over F13–F17/F20,
+pending G6 at slice 7) is stated as the identity it will falsify: the paid
+amount equals the owners' split on the template's own reported operands.
+The remaining tests are the design's own clauses, not C++ behaviour: one
+`txin_gen` at the connecting height and one output; `unlock = h + window`;
+the extra is the I20 grammar and names `r·G`; wire round-trip; purity
+(same context → same bytes; a different `r` → a different one-time key and
+the same amount); the priced weight is the carried weight; and refusals
+that are caller conditions (a body without a fee is not listable, an
+inconsistent supply record, an unlock that overflows, a KEM key the
+construction refuses) rather than consensus verdicts. Byte-parity with
+`create_block_template` is the daemon-backed `regtest_e2e`'s job, as §5.3
+says — not this crate's.
 
 **Carried, not done here:** slices 2–4's view-bound rows (the D family's
 windows, B5's root, E1's anchors) have fixtures of the same shape against

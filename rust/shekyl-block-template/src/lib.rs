@@ -1,0 +1,464 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Block-template assembly (TXE-F8; DRS-E6 slice 6 commit 1b).
+//!
+//! # What a block template is, by design
+//!
+//! A **candidate block for height `h` on a tip `T`** that the validator
+//! admits without being asked — the honest producer's half of the contract
+//! `shekyl-chain-rules` judges. Stated against the census rather than
+//! against the C++ `create_block_template` (the two questions the slice
+//! answers are *what does the C++ template do* and *what should ours do by
+//! design*; this file is the second):
+//!
+//! - **Header.** `previous` is `T`'s identity (CEN-A2; the null hash at
+//!   genesis). `curve_tree_root` is the tree state **at** `h` — after `T`
+//!   drained, before this block does (CEN-B5). `major_version` is the rule
+//!   set's (CEN-B1). `timestamp` is the least the chain admits and no
+//!   earlier than the clock: `max(now, median + 1)` — strictly above the
+//!   median (CEN-C2, `DAA_LWMA1.md` §5.5's *strictly greater*) and within
+//!   the future limit of any clock at or after `now` (CEN-C1). `nonce` is
+//!   zero: the template is what the miner searches, not the result.
+//!   `attestation_root` is the caller's — the archival lane owns the credit
+//!   wire; the template carries the root, it does not derive one.
+//! - **Coinbase.** One `txin_gen` (CEN-F1) claiming `h` (CEN-F5);
+//!   `unlock_time = h + window` (CEN-F6); `CTTypeNull` with one committed
+//!   base per output (CEN-F3); **one output** above genesis (CEN-F4);
+//!   canonical output key (CEN-F9) and a mask that is not
+//!   `zeroCommit(amount)` (CEN-F10); the amount is exactly the miner's leg
+//!   of the penalised emission plus the miner's share of the listed fees
+//!   (CEN-F18 over CEN-F13/F14/F15/F16/F17/F20's operands). The `extra` is
+//!   the coinbase grammar's one layout (CEN-I20): pubkey, nonce, one KEM
+//!   blob, one leaf blob.
+//! - **Body.** `transaction_hashes` are the listed bodies' identities, in
+//!   the order listed (CEN-A3/A4); the weight the reward was penalised at
+//!   is the weight the block carries, coinbase included (CEN-F14's
+//!   operand) — the assembly is a fixed point in the coinbase's own size.
+//!
+//! # What the crate does not do
+//!
+//! It **reads no chain.** Every operand — the tip, the root, the emission
+//! prefix sums, the median weight, the volume window, the listed bodies —
+//! arrives in a [`TemplateContext`] the caller composed from the owner
+//! crates. That is C2-R8 principle 3 applied to production: the store
+//! persists consensus facts the owners compute and never computes them;
+//! neither does this crate read them back. `check_chain_rules_no_store.sh`
+//! holds the dependency closure to that. It does not **mine**: PoW is the
+//! miner's (the nonce search over the returned block), and difficulty is
+//! CEN-D4's — a template does not know the target and does not need to.
+//! It does not **select** transactions: which bodies to list is mempool
+//! policy, and policy is not consensus.
+//!
+//! # How it is tested, by design
+//!
+//! The validator is the falsifier. `tests` builds a template on a harness
+//! chain and passes it through `form → validate`; every landed 4.F/4.B/4.C
+//! row is a row the template can fail, and the coverage record says which
+//! rows judged it. What the validator has not landed (CEN-F18 waits on
+//! CEN-G6's median, slice 7) the tests state as the identity it will
+//! falsify — the amount equals the owners' split on the same operands —
+//! so the claim is written down where the row's landing will contradict
+//! it if the template drifts. Byte-parity with `create_block_template` is
+//! a separate witness (`CHAIN_RULES_SLICE_6.md` §5.3), not this file's.
+
+use curve25519_dalek::edwards::EdwardsPoint;
+use curve25519_dalek::scalar::Scalar;
+use shekyl_crypto_pq::output::construct_output;
+use shekyl_crypto_pq::CryptoError;
+use shekyl_economics::{
+    compute_emission_split, compute_fee_burn, paid_block_reward, CirculatingSupply, EconomicParams,
+    EmissionError, FrozenSegmentCount, SupplyInvariantViolation, TxVolume,
+};
+use shekyl_types::{
+    AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, Timestamp, TxHash,
+};
+use shekyl_units::AtomicUnits;
+use shekyl_wire::block::{Block, BlockHeader};
+use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
+use shekyl_wire::tx_extra::{self, CoinbaseBuildError, COINBASE_NONCE_BYTES};
+
+/// The keys a coinbase output is paid to: the miner's Edwards spend key
+/// and the two halves of the hybrid KEM encapsulation target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MinerKeys {
+    /// The recipient's Edwards spend public key (`B`).
+    pub spend_public: [u8; 32],
+    /// X25519 half of the hybrid KEM target.
+    pub x25519_pk: [u8; 32],
+    /// ML-KEM-768 encapsulation key.
+    pub ml_kem_ek: Vec<u8>,
+}
+
+/// The emission and fee-burn operands at the connecting height — what
+/// CEN-F13/F14/F15/F17/F20 read, composed by the caller from the owner
+/// crates (prefix sums are the store's *record*; the definitions are
+/// `shekyl-economics`' and `shekyl-chain-rules`').
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmissionOperands {
+    /// Gross emission before this block (CEN-F13's `already_generated_coins`).
+    pub already_generated_coins: AtomicUnits,
+    /// Total burned before this block; with the above, the circulating
+    /// supply the fee burn escalates on (CEN-F17).
+    pub total_burned: AtomicUnits,
+    /// The effective median block weight (CEN-F14, CEN-G6's operand).
+    pub median_weight: u64,
+    /// The transaction-volume window ending at the parent (CEN-F20).
+    pub tx_volume: TxVolume,
+    /// Frozen-segment count for the burn escalation (CEN-F17).
+    pub frozen_segments: FrozenSegmentCount,
+    /// The height the staker share's decay is measured from (CEN-F21).
+    pub emission_split_epoch: BlockHeight,
+}
+
+/// Everything a template is a function of. Pure: two contexts with the same
+/// operands produce byte-identical blocks.
+#[derive(Clone, Debug)]
+pub struct TemplateContext<'a> {
+    /// The height this block connects at (`tip + 1`; `0` at genesis).
+    pub height: BlockHeight,
+    /// The tip's identity ([`BlockHash::NULL`] at genesis) — CEN-A2.
+    pub previous: BlockHash,
+    /// The curve-tree state **at** `height` — CEN-B5.
+    pub curve_tree_root: CurveTreeRoot,
+    /// The archival attestation root the header carries.
+    pub attestation_root: AttestationRoot,
+    /// Header version pair — CEN-B1 reads the major.
+    pub major_version: u8,
+    /// Header minor version.
+    pub minor_version: u8,
+    /// The producer's clock; the header's timestamp is no earlier.
+    pub now: Timestamp,
+    /// The median timestamp CEN-C2 will compare against, when the chain is
+    /// long enough to have one. `None` at and below the window.
+    pub median_timestamp: Option<Timestamp>,
+    /// Coinbase maturity window — CEN-F6's `unlock_time = height + window`.
+    pub unlock_window: BlockCount,
+    /// Emission operands at `height`.
+    pub emission: EmissionOperands,
+    /// Economic parameters (`config/economics_params.json`'s record).
+    pub params: &'a EconomicParams,
+    /// Whom the coinbase pays.
+    pub miner: &'a MinerKeys,
+    /// The coinbase transaction secret `r`. Randomness is the caller's:
+    /// a template is deterministic in it, and a test can pin it.
+    pub tx_key_secret: [u8; 32],
+    /// The `0x02` nonce field's bytes (a pool's extra-nonce slot).
+    pub extra_nonce: [u8; COINBASE_NONCE_BYTES],
+    /// The bodies to list, in block order. Each must carry a fee
+    /// (`Ct::Fcmp`): a coinbase-shaped body cannot be listed.
+    pub listed: &'a [Transaction],
+}
+
+/// A built template: the block (nonce zero) and the listed bodies it
+/// hashes, plus the figures the coinbase was priced at, so a caller can
+/// record them without re-deriving.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Template {
+    /// The candidate block, nonce `0`.
+    pub block: Block,
+    /// The listed bodies, in the order `block.transaction_hashes` names them.
+    pub transactions: Vec<Transaction>,
+    /// The block weight the reward was penalised at, coinbase included.
+    pub block_weight: u64,
+    /// The penalised gross emission (`paid_block_reward`) — what CEN-F13
+    /// records as this block's generation.
+    pub block_reward: AtomicUnits,
+    /// The miner's leg of the emission split (CEN-F16).
+    pub miner_emission: AtomicUnits,
+    /// The listed fees, summed.
+    pub total_fees: AtomicUnits,
+    /// The miner's share of the fees after the burn (CEN-F17).
+    pub miner_fee_income: AtomicUnits,
+}
+
+/// Why a context yields no template. Every arm is a *caller* condition —
+/// an operand that cannot be priced or a body that cannot be listed — not
+/// a consensus verdict; the validator's refusals are the rules crate's.
+#[derive(Debug, thiserror::Error)]
+pub enum TemplateError {
+    /// A listed body has no fee (`Ct::Null`): coinbase-shaped bodies are not
+    /// listable.
+    #[error("listed transaction {index} carries no fee (Ct::Null); only spends are listable")]
+    ListedWithoutFee {
+        /// Position in `listed`.
+        index: usize,
+    },
+    /// The listed fees sum past `u64`.
+    #[error("listed fees overflow u64")]
+    FeeOverflow,
+    /// `height + unlock_window` overflows: no coinbase satisfies CEN-F6 at
+    /// this height (the rule's own sum overflows and refuses).
+    #[error("unlock_time = {height} + {window} overflows u64 (CEN-F6 cannot hold)")]
+    UnlockOverflow {
+        /// The connecting height.
+        height: u64,
+        /// The maturity window.
+        window: u64,
+    },
+    /// The emission cannot be priced at these operands.
+    #[error("block reward cannot be priced: {0}")]
+    Emission(#[from] EmissionError),
+    /// `total_burned > already_generated_coins` — the caller's record is
+    /// inconsistent.
+    #[error("circulating supply cannot be derived: {0}")]
+    Supply(#[from] SupplyInvariantViolation),
+    /// `miner_emission + miner_fee_income` overflows.
+    #[error("coinbase amount overflows u64")]
+    AmountOverflow,
+    /// The block weight (bodies plus coinbase) does not fit `u64`.
+    #[error("block weight overflows u64")]
+    WeightOverflow,
+    /// Output construction refused the miner's keys.
+    #[error("coinbase output construction failed: {0:?}")]
+    Output(CryptoError),
+    /// The assembled `extra` fails the coinbase grammar it was built for.
+    #[error("coinbase extra fails the grammar: {0}")]
+    Extra(#[from] CoinbaseBuildError),
+    /// The coinbase's own weight did not settle after re-pricing once: the
+    /// penalty moved the amount, the amount's varint moved the weight, and
+    /// the second pass did not agree with the first. Two passes suffice in
+    /// practice (the C++ rebuilds once); a third disagreement is reported,
+    /// not looped on.
+    #[error("coinbase weight did not converge (priced at {priced}, carries {carried})")]
+    WeightNotConverged {
+        /// The block weight the second pass priced at.
+        priced: u64,
+        /// The block weight the second pass produced.
+        carried: u64,
+    },
+}
+
+/// Build the template for `cx`. See the crate documentation for what the
+/// result satisfies by construction.
+///
+/// # Errors
+///
+/// A [`TemplateError`] when an operand cannot be priced or a body cannot be
+/// listed; never on a consensus question — those are the validator's.
+pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
+    let total_fees = listed_fees(cx.listed)?;
+    let tx_hashes: Vec<TxHash> = cx.listed.iter().map(Transaction::hash).collect();
+    let bodies_weight = cx.listed.iter().try_fold(0u64, |acc, tx| {
+        acc.checked_add(weight_of(tx)?)
+            .ok_or(TemplateError::WeightOverflow)
+    })?;
+
+    // The reward is penalised at the block's weight, and the block's weight
+    // includes the coinbase that carries the reward. Price at the bodies'
+    // weight plus a coinbase carrying that price; if the coinbase's own
+    // size moved (the amount's varint), price once more at the weight it
+    // actually has. The second coinbase is final if its weight agrees with
+    // what it was priced at.
+    let first = price_and_pay(cx, bodies_weight, total_fees)?;
+    let first_weight = bodies_weight
+        .checked_add(weight_of(&first.coinbase)?)
+        .ok_or(TemplateError::WeightOverflow)?;
+    let paid = if first_weight == bodies_weight {
+        // Unreachable in practice — a coinbase has positive weight — but
+        // the fixed point is stated, not assumed.
+        first
+    } else {
+        let second = price_and_pay(cx, first_weight, total_fees)?;
+        let second_weight = bodies_weight
+            .checked_add(weight_of(&second.coinbase)?)
+            .ok_or(TemplateError::WeightOverflow)?;
+        if second_weight != first_weight {
+            return Err(TemplateError::WeightNotConverged {
+                priced: first_weight,
+                carried: second_weight,
+            });
+        }
+        second
+    };
+    let block_weight = bodies_weight
+        .checked_add(weight_of(&paid.coinbase)?)
+        .ok_or(TemplateError::WeightOverflow)?;
+
+    let block = Block {
+        header: BlockHeader {
+            major_version: cx.major_version,
+            minor_version: cx.minor_version,
+            timestamp: template_timestamp(cx.now, cx.median_timestamp),
+            previous: cx.previous,
+            nonce: 0,
+            curve_tree_root: cx.curve_tree_root,
+            attestation_root: cx.attestation_root,
+        },
+        miner_transaction: paid.coinbase,
+        transaction_hashes: tx_hashes,
+    };
+
+    Ok(Template {
+        block,
+        transactions: cx.listed.to_vec(),
+        block_weight,
+        block_reward: paid.block_reward,
+        miner_emission: paid.miner_emission,
+        total_fees,
+        miner_fee_income: paid.miner_fee_income,
+    })
+}
+
+/// The header timestamp a template claims: `max(now, median + 1)`.
+///
+/// CEN-C2 admits a timestamp strictly above the median of the window
+/// (`DAA_LWMA1.md` §5.5); `median + 1` is the least such value. CEN-C1
+/// admits one no further than the future limit past the judging node's
+/// clock; a producer whose clock is honest satisfies it by claiming no more
+/// than `now`. When `now` is already above the median, `now` is the claim.
+/// Saturating at `u64::MAX`: a median there has no admissible successor,
+/// and the validator — not this function — says so.
+#[must_use]
+pub fn template_timestamp(now: Timestamp, median: Option<Timestamp>) -> u64 {
+    let now = now.to_raw();
+    match median {
+        Some(median) => now.max(median.to_raw().saturating_add(1)),
+        None => now,
+    }
+}
+
+/// The tx public key `r·G` for the coinbase secret `r` — the `0x01` field.
+#[must_use]
+pub fn tx_pubkey(tx_key_secret: &[u8; 32]) -> [u8; 32] {
+    let r = Scalar::from_bytes_mod_order(*tx_key_secret);
+    EdwardsPoint::mul_base(&r).compress().to_bytes()
+}
+
+/// A priced-and-paid coinbase with the figures it was priced from.
+struct Paid {
+    coinbase: Transaction,
+    block_reward: AtomicUnits,
+    miner_emission: AtomicUnits,
+    miner_fee_income: AtomicUnits,
+}
+
+/// Price the reward at `block_weight` and pay it in a coinbase.
+fn price_and_pay(
+    cx: &TemplateContext<'_>,
+    block_weight: u64,
+    total_fees: AtomicUnits,
+) -> Result<Paid, TemplateError> {
+    let e = &cx.emission;
+    // CEN-F13/F14/F15/F20: the penalised gross emission at this weight.
+    let block_reward = paid_block_reward(
+        e.median_weight,
+        block_weight,
+        e.already_generated_coins.to_raw(),
+        e.tx_volume,
+        cx.params,
+    )?;
+    // CEN-F16/F21: the miner's leg of the split.
+    let split = compute_emission_split(
+        block_reward,
+        cx.height.to_raw(),
+        e.emission_split_epoch.to_raw(),
+    );
+    // CEN-F17: the miner's share of the fees after the burn.
+    let supply = CirculatingSupply::derive(e.already_generated_coins, e.total_burned)?;
+    let burn = compute_fee_burn(
+        total_fees.to_raw(),
+        e.tx_volume,
+        supply,
+        e.frozen_segments,
+        cx.params,
+    );
+    // CEN-F18: the coinbase pays exactly this.
+    let amount = split
+        .miner_emission
+        .checked_add(burn.miner_fee_income)
+        .ok_or(TemplateError::AmountOverflow)?;
+
+    let coinbase = coinbase(cx, amount)?;
+    Ok(Paid {
+        coinbase,
+        block_reward: AtomicUnits::from_raw(block_reward),
+        miner_emission: AtomicUnits::from_raw(split.miner_emission),
+        miner_fee_income: AtomicUnits::from_raw(burn.miner_fee_income),
+    })
+}
+
+/// The coinbase paying `amount` to `cx.miner` in one output.
+fn coinbase(cx: &TemplateContext<'_>, amount: u64) -> Result<Transaction, TemplateError> {
+    let height = cx.height.to_raw();
+    let window = cx.unlock_window.to_raw();
+    // CEN-F6: `unlock_time = height + window`, and no coinbase satisfies it
+    // where the sum overflows.
+    let unlock_time = height
+        .checked_add(window)
+        .ok_or(TemplateError::UnlockOverflow { height, window })?;
+
+    // CEN-F4: one output. CEN-F9/F10 hold by construction of the output
+    // — a canonical key and a mask derived from the shared secret, which
+    // is not `zeroCommit(amount)`.
+    let od = construct_output(
+        &cx.tx_key_secret,
+        &cx.miner.x25519_pk,
+        &cx.miner.ml_kem_ek,
+        &cx.miner.spend_public,
+        amount,
+        0,
+    )
+    .map_err(TemplateError::Output)?;
+
+    let mut kem_blob =
+        Vec::with_capacity(od.kem_ciphertext_x25519.len() + od.kem_ciphertext_ml_kem.len());
+    kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
+    kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
+    let leaf_blob = od.pqc_leaf.entry_bytes();
+
+    // CEN-I20: the grammar's one constructor, which refuses what admission
+    // would.
+    let extra = tx_extra::build_coinbase_extra(
+        tx_pubkey(&cx.tx_key_secret),
+        &cx.extra_nonce,
+        1,
+        &kem_blob,
+        &leaf_blob,
+    )?;
+
+    Ok(Transaction {
+        prefix: TxPrefix {
+            unlock_time,
+            // CEN-F1/F5: one `txin_gen` claiming the connecting height.
+            inputs: vec![Input::Gen(height)],
+            outputs: vec![Output {
+                amount,
+                key: od.output_key,
+                view_tag: od.view_tag_prefilter,
+            }],
+            extra,
+        },
+        // CEN-F3: `CTTypeNull`, one committed base per output.
+        ct: Ct::Null(CtBase {
+            enc_amounts: vec![od.enc_amount_wire().to_bytes()],
+            enc_labels: vec![od.enc_label_wire().to_bytes()],
+            commitments: vec![od.commitment],
+        }),
+    })
+}
+
+/// The listed fees, summed; a body without a fee is not listable.
+fn listed_fees(listed: &[Transaction]) -> Result<AtomicUnits, TemplateError> {
+    let mut total = AtomicUnits::ZERO;
+    for (index, tx) in listed.iter().enumerate() {
+        let fee = match &tx.ct {
+            Ct::Fcmp { fee, .. } => *fee,
+            Ct::Null(_) => return Err(TemplateError::ListedWithoutFee { index }),
+        };
+        total = total
+            .checked_add(AtomicUnits::from_raw(fee))
+            .ok_or(TemplateError::FeeOverflow)?;
+    }
+    Ok(total)
+}
+
+/// A body's weight as `u64`.
+fn weight_of(tx: &Transaction) -> Result<u64, TemplateError> {
+    u64::try_from(tx.weight()).map_err(|_| TemplateError::WeightOverflow)
+}
+
+#[cfg(test)]
+mod tests;

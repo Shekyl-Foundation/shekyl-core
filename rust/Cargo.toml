@@ -180,6 +180,12 @@ members = [
     # `cargo tree -e normal,dev`) holds that transitively.
     "shekyl-chain-rules",
 
+    # Block-template assembly (TXE-F8; CHAIN_RULES_SLICE_6.md §5.3): a
+    # candidate whose coinbase and header satisfy the census by construction,
+    # pure over a caller-composed context. The producer's half of the contract
+    # shekyl-chain-rules judges; under the same no-store belt as the rules.
+    "shekyl-block-template",
+
     # The daemon's block-ingest pipeline (DRS-E2, DRS_E2_REPLAY_DRIVER.md §1):
     # Source → form → sequence → validate+connect → sinks. Production code
     # shared by E2 (replay) and E3 (live); the one crate where the validator,
