@@ -95,7 +95,7 @@ not inherited); **Q1** asks the reviewer to confirm it and to name the
 capture's owner, because the generator lives in `shekyl-engine-core`'s
 regtest — another lane's crate — and the captured blobs' *block context*
 (reference block, root at `ref_height`, membership set, tree depth) is what
-`MockChain` must be taught to serve (§4.3).
+`MockChain` must be taught to serve (§4, the capture-gated row's substrate).
 
 **Until the vectors land, this slice can land every row that does not
 verify a proof** — the stateless rows in `tx_form`, I7, I10–I13 in
@@ -218,11 +218,35 @@ commit. Same class as §3.1, smaller.
 `:4152` does. A proof built against the tree at `ref_height` carries that
 tree's depth; the range check `[1, current_depth]` admits it whether or not
 the tree has grown since, and `shekyl_fcmp::proof::verify` is told
-`layers = depth + 1` from the *transaction's* field. The two operands are
-consistent only because depth is monotone. Not a divergence — but the Rust
-row should say which depth it reads and why, and the view method §1.4 asks
-for should be height-keyed if the curve-tree lane can serve it that way
-(the same reason I12 is). **Q8.**
+`layers = depth + 1` from the *transaction's* field.
+
+**The first draft of this section said the two reads are consistent
+"because depth is monotone". That is false, and the review caught it
+before it was recorded** (the shape that has been wrong twice this month).
+`trim_curve_tree` runs on pop (`blockchain_db.cpp:878`), recomposes every
+upper layer narrow and **writes `depth = num_upper_layers`**
+(`db_lmdb.cpp:8869–8896`, with its own comment: *"Trim shrinks the tree,
+so the old structure can have more or deeper upper-layer chunks than the
+new one"*). Depth decreases across a reorg that crosses a layer boundary.
+
+What actually holds, named as the dead arm names its orderings:
+
+1. **Depth is a function of leaf count alone** — `num_upper_layers` is
+   recomposed from the leaf-chunk layer, deterministically (`:8775–8852`).
+2. **The tree at any recorded height is a prefix of the current tree.**
+   Leaves are appended by connect and removed only by pop, and pop removes
+   the *newest* leaves; so if `ref_height ≤ tip`, `leaf_count(now) ≥
+   leaf_count(ref_height)`, hence `depth(now) ≥ depth(ref_height)` by (1).
+3. **I10 runs before I13** (`:4113` before `:4162`): a `ref_height` the
+   reorg removed is refused as *not a main-chain block* before the depth
+   check sees it. So (2)'s premise holds whenever I13 is reached.
+
+Break any of the three — a depth not derived from leaf count, a pop that
+does not remove the newest leaves, an I13 evaluated before I10 — and the
+current-depth read admits a proof whose layers exceed the tree it is
+verified against. The Rust row records all three at the rule; the
+height-keyed depth read (**Q8**) removes the dependence on (3) entirely,
+which is why it is the default.
 
 ### 3.4 The FAKECHAIN gate — the rule-71 question, on the rows that own it
 
@@ -246,9 +270,35 @@ Read at `4dc5194de`, the exemption is real for exactly **one** of them:
 This is the guard variant's lesson applied forward (rule 16, the H15
 instance): a nettype-conditional check is evidence of nothing until the
 behaviour beneath it is read. The Rust I4 is unconditional (Q3); whether
-the C++ gate is deleted, and by whom, is the C++ lane's question — the
-census's three "FAKECHAIN exempt" annotations are corrected to one in this
-slice's docs commit, with the reading recorded.
+the C++ gate is deleted, and by whom, is the C++ lane's question.
+
+**Two of three annotations wrong makes the annotation unreliable wherever
+it appears, so the correction is a sweep, not two cells.** Every
+`FAKECHAIN` mention in the census, and every `m_nettype … FAKECHAIN` gate
+in the consensus C++ (`blockchain.cpp`, `cryptonote_core.cpp`, `tx_pool.cpp`,
+`tx_verification_utils.cpp`, `blockchain_db/`), read at `4dc5194de`:
+
+| Where | What the annotation says | What the code does | Verdict |
+| --- | --- | --- | --- |
+| CEN-I2 `:458` | "the FAKECHAIN carve-out … exempts this row" | the `else` at `:3539` refuses a non-FCMP tx on every nettype | **wrong** — behaviour does not vary; correct in the docs commit |
+| CEN-I3 `:459` | "FAKECHAIN exempt" | `ver_non_input_consensus :74` bounds the version on every nettype, at both sites | **wrong** — correct |
+| CEN-I4 `:460` | "FAKECHAIN exempt" | `FCMP_MAX_INPUTS_PER_TX` checked only at `:3405`, inside the gate | **right** — the one live rule-71 branch on the transaction path |
+| CEN-B5 `:339` | "FAKECHAIN skip retired 2026-09-05 (PR #623)" | no gate at the B5 site (`:1396–1460` read) | **right** |
+| CEN-D3 `:358` | env override | `:498–505`: the `SEEDHASH_EPOCH_*` lever **refuses to run** off fakechain | right — fail-closed *toward* the public network; a lever, not a rule branch |
+| CEN-H15 `:440` | (slice 5's correction) | unconditional at `:3550` and `tvu:223` | right |
+| CEN-I12 `:468` | "the in-code FAKECHAIN comment states a consequence" | comment only | right |
+| §10 R8 `:684` | "CEN-I2's carve-out block, CEN-B5's skip, CEN-D7, CEN-D3's env override" | I2's block is really I4's (above); B5 retired; D7 is `RuleSet` data in Rust; D3 fail-closed | one item mis-attributed (I2 → I4) — correct |
+| `blockchain.cpp:312`, `:498` | — | settlement-epoch and seed-epoch overrides refuse on public networks | levers, fail-closed — not rows |
+| `:341`, `:348` | — | hard-fork table construction | data, not a check |
+| `:392` | — | `m_db->fixup()` skipped on fakechain | store maintenance, not consensus |
+| `:2625` | — | `get_output_distribution` start height | RPC, not consensus |
+| `:4710` | — | `regtest_inject_archival_serve_credit` refuses off fakechain | test lever, fail-closed |
+| `cryptonote_core.cpp:269/478/517/627/1655` | — | init-time levers and the pool's fakechain flag | E5's to read when the pool lands; none is a validation branch |
+
+So on the whole consensus surface **one** nettype-conditional *behaviour*
+remains: I4. The census's two false annotations and §10 R8's
+mis-attribution are corrected in this slice's docs commit; the sweep is
+recorded here so the correction is checkable against these lines.
 
 ### 3.5 Half the family is stateless, and the census filed it under inputs
 
@@ -321,12 +371,29 @@ successor — a **split**, disclosed here in advance, not a deferral (rule
 
 ## 8. Questions for the reviewer — Round 0
 
-- **Q1 — the capture gate (§1.2).** Confirm the reading: the FOLLOWUPS
-  row's "pre-flight does not open" gates the *verification commits*, not
-  this document. And name the capture's owner: the generator is
-  `shekyl-engine-core`'s regtest; the consumer is this crate's `tests/vectors/`.
-  Default: this lane runs the generator and commits the blobs, in a commit
-  that touches only test data and the harness, with the engine lane told.
+- **Q1 — the capture gate (§1.2), and the scoping call under it.** The
+  reading first: the FOLLOWUPS row's "pre-flight does not open" is taken
+  to gate the *verification commits*, not this document — a narrowing of
+  the row's plain text, disclosed as such; confirm or refuse. Then the
+  owner: the generator is `shekyl-engine-core`'s regtest, the consumer is
+  this crate's `tests/vectors/`; default, this lane runs the generator and
+  commits the blobs in a test-data-and-harness-only commit, the engine lane
+  told. **Then the scoping call that is easier now than after commit 5.**
+  Landing the eleven stateless rows on filler fixtures (commits 1–5) is
+  safe today and *guarantees* that I15/I18/H19-verify later reject every
+  spend fixture in three crates at once — the cascade slice 5 §5.1 named.
+  Two shapes: **(i) split** — commits 1–5 land now on filler, the vectors
+  and 6–7 land as one atomic fixture migration behind them (possibly a
+  second PR); the cost is one very large commit that does two things
+  (migrate fixtures, land verification). **(ii) capture first** — the
+  vectors land as commit 1, every fixture builder loads them from the
+  start, and the stateless rows land on real spends; the cost is that
+  nothing in this slice lands until the engine-side generator has run,
+  and a `spend(ki, outputs)`-shaped API is redesigned before the rows that
+  do not need it. Default **(ii)** if the capture is this lane's and takes
+  under a day; **(i)** if it is another lane's or the block-context
+  serving in `MockChain` (§4, the capture-gated row) turns out to be the larger design. State
+  which.
 - **Q2 — the view contract (§1.4).** `ChainView::height_of(&BlockHash)` and
   a tree-depth read are contract changes to `CHAIN_RULES_CRATE.md` §4.3 and
   every implementer. Which lane lands them, and is the depth read
@@ -358,12 +425,28 @@ successor — a **split**, disclosed here in advance, not a deferral (rule
   the coinbase's own bytes, judged where the other per-transaction rules
   are, and adding the variant is the enum doing what it was shaped for
   (rule 21: a variant with a caller).
-- **Q7 — I17's body of record (§3.1).** (a) Promote the wire's
+- **Q7 — I17's body of record (§3.1).** A signing payload is not a
+  validation rule in its failure mode: a rule that diverges splits
+  consensus; a payload that diverges makes **every** signature invalid,
+  loudly, on the first spend — the e2e reds. So a conformance test (a
+  second Rust copy held to a first) buys less here than it did for the
+  wire twin. What divergence *can* do is hide on the shapes the e2e does
+  not exercise — multi-input, serve-credit inputs, mixed archival — and
+  then a class of transactions is unsignable until someone builds one.
+  The question is therefore not detection but **which implementation is
+  the specification**. Options: (a) promote the wire's
   `pqc_signing_payload_hashes` to the derivation of record and have I17
-  call it — one function, wallet and validator; (b) a derivation in this
-  crate, the wire held to it by the conformance table. Default (a): the
-  wire already carries it, the spec has vectors, and (b) would mint a
-  second copy to reconcile a second copy.
+  call it; (b) a derivation in this crate, the wire held to it; **(c) one
+  implementation in `shekyl-wire`, called by the wallet directly and by
+  the daemon through the FFI — the shape TXE just landed for the
+  `tx_extra` codec, in the same crate, with the coarse-call pattern
+  (`shekyl_tx_extra_shape_of`) already built.** (c) removes the problem
+  rather than monitoring it: the C++ assembly at `tx_pqc_verify.cpp:62–158`
+  is *replaced* by a call, so there is nothing left to reconcile. Default
+  **(c)**, with the spec's vectors (`FCMP_SPEND_SIGNING_PREIMAGE.md`
+  `:27–36`) pinned on the one body, and the C++ side of the cut scoped as
+  the shim's minimal marshaling (rule 20) — the E4 direction, taken one
+  function early because this row's correctness is the reason to.
 - **Q8 — I13's depth operand (§3.3).** Current depth (C++ parity) or depth
   at `ref_height` (consistent with I12)? Default: at `ref_height` if the
   curve-tree lane can serve it, with the C++ reading recorded as a
