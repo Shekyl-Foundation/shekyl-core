@@ -114,11 +114,11 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, BlockInfo, BondRecord, Canonical, Coded, CoverageGaps, CurveTreeState,
-    FirstPayingHeight, HeldShard, Holdings, LayerHash, LeafCount, OutKey, OutTx,
-    PassedThroughFacts, ProbeCell, PropertyCell, RMarket, RuleSetInForce, SchemaVersion,
-    SettlementEpochBlocks, SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
-    PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, BlockInfo, BlockRef, BondRecord, Canonical, Coded, CoverageGaps, CurveTreeState,
+    FirstPayingHeight, HeldShard, Holdings, LayerHash, LeafCount, Origin, OutKey, OutTx,
+    PassedThroughFacts, PoolRecord, ProbeCell, PropertyCell, RMarket, Readiness, RelayPhase,
+    Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SigmaWorkMilli,
+    TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -135,7 +135,15 @@ use shekyl_units::AtomicUnits;
 /// [`every_canonical_impl_has_a_snapshot`] holds the two namespaces apart.
 const TABLE_CATALOGUE_SNAP: &str = "tables";
 const PROPERTY_CATALOGUE_SNAP: &str = "properties";
-const CATALOGUE_SNAPS: &[&str] = &[TABLE_CATALOGUE_SNAP, PROPERTY_CATALOGUE_SNAP];
+/// The pool file's table catalogue (`crate::pool::schema::catalogue`) — a
+/// second file, pinned under the same `SCHEMA_VERSION` (DRS-E1 S-POOL,
+/// `SPL-Q8` as built: one layout number for the crate's two files).
+const POOL_CATALOGUE_SNAP: &str = "pool_tables";
+const CATALOGUE_SNAPS: &[&str] = &[
+    TABLE_CATALOGUE_SNAP,
+    PROPERTY_CATALOGUE_SNAP,
+    POOL_CATALOGUE_SNAP,
+];
 
 /// The `cargo test` filter that selects exactly this module — what the
 /// workflow's assert job runs. Pinned here so [`workflow_gates_this_crate`]
@@ -505,6 +513,84 @@ impl Fixtures for BondRecord {
         ]
     }
 }
+impl Fixtures for PoolRecord {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        use shekyl_types::{FcmpVerificationHash, NetZone, UnixSeconds};
+        let arrived = PoolRecord {
+            weight: 1_500,
+            fee: AtomicUnits::from_raw(30_000),
+            receive_time: UnixSeconds::from_raw(1_700_000_000),
+            origin: Origin::Arrived {
+                zone: NetZone::Public,
+            },
+            phase: RelayPhase::Stem {
+                next_attempt: UnixSeconds::from_raw(1_700_000_190),
+            },
+            responsibility: None,
+            relayed: false,
+            double_spend_seen: false,
+            readiness: Readiness::default(),
+            fcmp_cache: None,
+        };
+        vec![
+            // An arrival in stem: the embargo deadline is the phase's clock,
+            // no responsibility, no cache, no readiness.
+            ("arrived_stem_at_admission", arrived),
+            // The same entry fluffed and relayed once, with every optional
+            // part present: a Tor arrival, a last relay, a readiness cache
+            // on both legs, a verified FCMP++ proof, a double-spend seen.
+            (
+                "arrived_fluff_fully_populated",
+                PoolRecord {
+                    origin: Origin::Arrived { zone: NetZone::Tor },
+                    phase: RelayPhase::Fluff {
+                        last_relayed: Some(UnixSeconds::from_raw(1_700_000_300)),
+                    },
+                    relayed: true,
+                    double_spend_seen: true,
+                    readiness: Readiness {
+                        max_used: Some(BlockRef {
+                            height: BlockHeight::from_raw(41),
+                            hash: BlockHash::from_bytes([0x41; 32]),
+                        }),
+                        last_failed: Some(BlockRef {
+                            height: BlockHeight::from_raw(40),
+                            hash: BlockHash::from_bytes([0x40; 32]),
+                        }),
+                    },
+                    fcmp_cache: Some(FcmpVerificationHash::from_bytes([0xfc; 32])),
+                    ..arrived
+                },
+            ),
+            // Originated and held, admitted through the engine's attested
+            // path (the fallback clock starts at receive_time), responsibility
+            // armed.
+            (
+                "originated_held_armed",
+                PoolRecord {
+                    origin: Origin::Originated,
+                    phase: RelayPhase::Held {
+                        last_attempt: Some(UnixSeconds::from_raw(1_700_000_000)),
+                    },
+                    responsibility: Some(Responsibility::Armed),
+                    ..arrived
+                },
+            ),
+            // Originated, yielded to proof of work (a Block arrival), the
+            // responsibility disarmed by observation; never relayed since.
+            (
+                "originated_block_disarmed",
+                PoolRecord {
+                    origin: Origin::Originated,
+                    phase: RelayPhase::Block { last_relayed: None },
+                    responsibility: Some(Responsibility::Disarmed),
+                    ..arrived
+                },
+            ),
+        ]
+    }
+}
+
 impl Fixtures for RMarket {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
@@ -869,6 +955,35 @@ fn table_catalogue_snapshot() {
     );
 }
 
+/// The pool file's table catalogue snapshot (`schemas/pool_tables.snap`).
+/// The pool has no journal, so no ordinal is part of its layout; rows are
+/// name-sorted with no `#n`.
+#[test]
+fn pool_catalogue_snapshot() {
+    let catalogue = crate::pool::schema::catalogue();
+    assert!(!catalogue.is_empty(), "pool::schema::catalogue() is empty");
+    let mut rows = BTreeMap::new();
+    for spec in &catalogue {
+        let row = format!("map<{}, {}>", spec.key.name(), spec.value.name());
+        assert!(
+            rows.insert(spec.name.as_str(), row).is_none(),
+            "duplicate table name `{}` in pool::schema::catalogue()",
+            spec.name
+        );
+    }
+    let mut out = String::from(SNAPSHOT_HEADER);
+    out.push_str(&format!("tables = {}\n[tables]\n", rows.len()));
+    for (name, row) in rows {
+        out.push_str(&format!("{name} = {row}\n"));
+    }
+    let _ = check_or_update(
+        POOL_CATALOGUE_SNAP,
+        &out,
+        "the pool file's table catalogue (pool/schema.rs)",
+        "A pool table was added, removed, renamed or re-typed.",
+    );
+}
+
 /// The property-cell catalogue snapshot (`schemas/properties.snap`).
 #[test]
 fn property_catalogue_snapshot() {
@@ -1067,6 +1182,7 @@ snapshotted_codecs! {
     SigmaWorkMilli => codec_snapshot_sigma_work_milli,
     SettlementEpoch => codec_snapshot_settlement_epoch,
     ShardId => codec_snapshot_shard_id,
+    PoolRecord => codec_snapshot_pool_record,
 }
 
 /// The gate asserts its own arming state (rule 47). `UPDATE_SNAPSHOTS`

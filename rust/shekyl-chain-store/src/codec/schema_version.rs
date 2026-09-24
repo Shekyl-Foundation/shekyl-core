@@ -113,7 +113,21 @@ use super::{Canonical, CodecError};
 ///   (`bond_record`, `r_market`, `sigma_work_milli`, `settlement_epoch`,
 ///   `shard_id`). The digest's families do not move (§7.1.1 excludes
 ///   `archival_*`); the layout does.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(11);
+/// - `12` — DRS-E1 S-POOL (`DRS_E1_SPOOL.md` §4): **the pool leaves the
+///   consensus file.** `txpool_meta` and `txpool_blob` are evicted from
+///   this catalogue (`DAEMON_REDB_STORE.md` §5.1's pick, built) — which
+///   moves every later table's ordinal by two, so a v11 pop journal names
+///   the wrong tables under v12 — and the pool file is born: its own
+///   `redb::Database` (`crate::pool`), three tables (`pool_meta` →
+///   `[u8; 32] → Coded<PoolRecord>`, `pool_blob` → `Blob<PoolTxBytes>`, its
+///   `pool_header`), one layout number for the crate's two files
+///   (`SPL-Q8` as built: the pool file seals this constant in its own
+///   header cell and is **recreated**, not refused, at another value).
+///   `pool_record` is the persisted `txpool_tx_meta_t` re-specified along
+///   §92.4's seams (`Origin` / `RelayPhase` / `Responsibility`); two
+///   fixtures are born (`pool_record`, `pool_tables`). No digest family
+///   moves: the pool was never in one (§11.2).
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(12);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -170,10 +184,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(11));
-        assert_eq!(SCHEMA_VERSION.encode(), [11, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(12));
+        assert_eq!(SCHEMA_VERSION.encode(), [12, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[11, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[12, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

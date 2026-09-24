@@ -364,6 +364,40 @@ pub enum StoreCannot {
         /// The `vout` position with no commitment.
         index: u64,
     },
+    /// A pool-store refusal (DRS-E1 S-POOL, `DRS_E1_SPOOL.md` §3.2) — the
+    /// pool's decisions on its own file, none of them a fault in it.
+    Pool(PoolCannot),
+    /// The pool file at `path` is not one this store can vouch for **and**
+    /// not one it may recreate: not a redb database, a database with no
+    /// pool header, or a header that does not decode. Only a sealed pool
+    /// file at *another layout version* is recreated (`SPL-Q8` as ruled);
+    /// everything else is refused, never deleted — a wrong `--data-dir`, a
+    /// foreign file or a tampered one is an operator's to look at.
+    PoolFileForeign,
+}
+
+/// The pool store's typed refusals — the pool's decisions, not faults
+/// (`StoreCannot`'s shape; `DRS_E1_SPOOL.md` §3.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolCannot {
+    /// `insert` of a transaction the pool already holds. The pool decides
+    /// whether to upsert by removing first, as the C++ `add_tx` does.
+    AlreadyHeld,
+    /// `update` of a transaction the pool does not hold.
+    NotHeld,
+    /// `insert` with no transaction bytes: a pool entry is a transaction.
+    EmptyBlob,
+    /// `update` with a record whose [`Origin`](crate::pool::Origin) differs
+    /// from the stored one. Provenance is permanent (§92.4); the refusal is
+    /// what makes it enforced rather than asserted (`SPL-Q9`).
+    OriginChanged,
+    /// A record that carries a [`Responsibility`](crate::pool::Responsibility)
+    /// on an `Arrived` entry, or none on an `Originated` one — the
+    /// cross-field rule the codec also refuses at decode (`SPL-Q9`).
+    ResponsibilityWithoutOrigin,
+    /// A record whose phase is illegal for its origin — `Held` on an
+    /// `Arrived` entry, or `Stem` on an `Originated` one (the pin, §92.4).
+    PhaseWithoutOrigin,
 }
 
 impl core::fmt::Display for StoreCannot {
@@ -450,11 +484,44 @@ impl core::fmt::Display for StoreCannot {
                  session runs {session}: persisted join epochs and serve-credit windows would be \
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
+            Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
+            Self::PoolFileForeign => f.write_str(
+                "pool file is not one this store wrote and not one it may recreate (no redb \
+                 database, no pool header, or a header that does not decode): refused, not \
+                 deleted — check the path, or remove the file deliberately",
+            ),
         }
     }
 }
 
 impl core::error::Error for StoreCannot {}
+
+impl core::fmt::Display for PoolCannot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::AlreadyHeld => "insert of a transaction the pool already holds",
+            Self::NotHeld => "update of a transaction the pool does not hold",
+            Self::EmptyBlob => "insert with no transaction bytes",
+            Self::OriginChanged => {
+                "update that changes an entry's origin; provenance is permanent (§92.4)"
+            }
+            Self::ResponsibilityWithoutOrigin => {
+                "a responsibility on an arrived entry, or none on an originated one"
+            }
+            Self::PhaseWithoutOrigin => {
+                "a Held phase on an arrived entry, or a Stem phase on an originated one"
+            }
+        })
+    }
+}
+
+impl core::error::Error for PoolCannot {}
+
+impl From<PoolCannot> for StoreError {
+    fn from(cannot: PoolCannot) -> Self {
+        Self::Cannot(StoreCannot::Pool(cannot))
+    }
+}
 
 #[cfg(test)]
 mod tests {
