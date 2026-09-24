@@ -215,11 +215,16 @@ ceiling was generalised into the whole round's ordering.**
 patterns and the differential test harness first, and **the big-bang lands last,
 where the cost and the irreversibility already are.**
 
+**UPDATE 2026-09-23 (slice 1's brief, revised the same day it was ratified).**
+That sentence does not govern slice 1. The peerlist's green line is the Rust
+model and the deletion of the C++ lists. *Records-was: row 1 required a
+membership harness against the C++.*
+
 ### 4.2 The register
 
 | # | Slice | Inherits | Flips | Greens when it lands |
 | --- | --- | --- | --- | --- |
-| **1** | **Peerlist** — `net_peerlist.{h,cpp}`, **874 lines** at `fdf17b729` (*was 878; PR #821 removed the seed field*), gray/white and the promotion boundary. Differentially testable against the C++ with no daemon. **Carries §4.4's type contract** — the round's rule encoded, not restated | **the alpha.9 cut's ignore (§7.2 arm 1)**, because the peerlist has **three** received-seed sites of its own: the carry-forward guards at [`net_peerlist.h:367`](../../src/p2p/net_peerlist.h#L367) and [`:414`](../../src/p2p/net_peerlist.h#L414) (*"guard against older nodes not passing pruning info around"*), **and the persisted-peerlist load path, which never sanitizes — `sanitize` appears nowhere in `net_peerlist.cpp`.** `PDM-Q7`'s emitter-half clears none of them: they read what ARRIVES | I2's remaining acceptance rules; the white-list writer invariant | `rg -n 'pruning_seed' src/p2p/net_peerlist.*` returns **nothing** at open; a differential harness runs both implementations over one input sequence and agrees on gray/white membership |
+| **1** | **Peerlist** — `net_peerlist.{h,cpp}`, **874 lines** at `fdf17b729` (*was 878; PR #821 removed the seed field*). Moves into Rust: the gray list and the white list, the one door between them, expiry, and the store. **The brief is the contract** ([`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md), **REVISED 2026-09-23**). *Records-was "differentially testable against the C++"* | **The field is already gone.** *Records-was three received-seed sites at `net_peerlist.h:367` and `:414`, plus an unsanitized load. `:367` keeps the previous white `last_seen`; `:414` is `return true` at the end of `append_with_peer_gray`. The field is already absent. Leftover spellings of `pruning_seed` in code are deleted by the implementation PR the brief describes, not by this document.* | I2's remaining acceptance rules; the white-list writer invariant | The field is already absent, so the slice opens with no predecessor on this axis. The implementation PR deletes every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. *Records-was a pending gate, then a comment at `net_peerlist.cpp:84` treated as an allowed hit.* Greens when `m_peers_white` and `peerlist_manager` are gone from `src/p2p`, `rg -n pruning_seed src rust tests` returns nothing, and `White`'s only constructor is the one `handshake_confirmed` calls for an outstanding gray draw or a Foundation-fleet address. A harness that must match C++ membership is not the gate |
 | **2** | **Admission policy** — the ceiling, and nothing else after §2.9.4 | slice 1, and a **measured `--in-peers`** (§7.3) rather than `UINT32_MAX` | **I7** (mechanism deleted), **I8** (closed) | `rg -n 'has_too_many_connections' src/` returns nothing; `is_host_limit` is a counter comparison |
 | **3** | **Discovery policy** — seed handling, the dial-candidate selection, `m_used_stripe_peers`' removal | slices 1–2, and the candidate filter's `else if` already gone (§7.2) | B9's mechanism half; PWC-E9's re-derivation | `rg -n 'm_used_stripe_peers\|next_needed_pruning_stripe' src/p2p/` returns nothing |
 | **4** | **Handshake state machine** — the phases, and PWD-B1/B2's per-peer state, which have no landed mechanism and so land here first rather than migrating | slices 1–3 | **B1, B2**; B7's remainder and PWC-E5 | PWD-B1's four unguarded invoke handlers are guarded |
@@ -257,7 +262,7 @@ edited:**
 
 | Row | Was | Now |
 | --- | --- | --- |
-| **1 — peerlist** | inherits the alpha.9 ignore; three received-seed sites to clear | **inheritance SATISFIED.** `git grep -n pruning_seed origin/dev -- src/p2p/net_peerlist.*` returns **one comment**. Slice 1 is unblocked on this axis |
+| **1 — peerlist** | inherits the alpha.9 ignore; three received-seed sites to clear | **inheritance SATISFIED.** The field is gone. One comment under `src/p2p/net_peerlist.*` still spells the old name (`net_peerlist.cpp:84`). The implementation PR the brief describes deletes that spelling from code; this document does not. Slice 1 is unblocked on this axis |
 | **3 — discovery** | inherits `m_used_stripe_peers` and the candidate filter's remainder | **nothing to inherit.** The stripe machinery it was to remove does not exist |
 | **5 — LV-3** | inherits the connection-context field and `block_queue`'s signatures | **field and signatures already gone.** The `:1111` recount inheritance stands (below) |
 | ***(open)*** — handler | inherits `should_drop_connection`, `notify_new_stripe`, the span block | **all three gone.** The row survives for the handler's *fate*, which was never about stripes |
@@ -322,6 +327,20 @@ contract is its first content — the same discipline `PDM-Q-F31` applied to
 S-PRUNE's plan doc. **Falsify by** slice 1's first PR introducing a peerlist
 entry type with a public constructor reachable without a dial result, or by a
 single type carrying a `bool verified` flag.
+
+**UPDATE 2026-09-23 (steering) — the brief revised the day it was ratified.**
+[`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md) is the
+contract. The lists are gray and white. Incoming addresses and `--add-peer`
+are gray only. White is written when a uniform gray draw is dialed and the
+handshake confirms, and in one other case: a confirmed handshake with the
+hardcoded Foundation seed fleet (`src/p2p/net_node.inl:738`). A white address
+with no contact this node opened for `EXPIRATION_PERIOD` (24 hours) returns
+to gray. The C++ stamps `last_seen` and never expires on it; Rust keeps that
+one clock as `last_observed` and does not sort by it. Draws are uniform, and
+the list sent to another peer is a random sample of white only. The FFI
+sentence above — name the kind on both sides of a `u16` — is **records-was
+the seam**. Slice 1 deletes the C++ peerlist. `handshake_confirmed` refuses
+an address that was not the gray draw and is not in that fleet.
 
 ---
 
