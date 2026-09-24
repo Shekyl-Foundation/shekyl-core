@@ -1224,8 +1224,19 @@ is the only path that ever erases**), the chunk-sealed at-rest layout
 #### 6.7.2 The `own_height` fix, and the measurement it owes
 
 `own_height` becomes **the configured daemon's tip, read on `P`'s transport**
-(`R-A`), cached with an age **well under `L` blocks** — refreshed every ~30 s
-or on each block — and **`None` while the daemon reports syncing** (`R-B`).
+(`R-A`), cached with an age **well under `L` blocks** — landed as `tip_max_age`,
+one block target, with its derivation and couplings at
+`shekyl-engine-core/src/engine/stake_engine/serving/daemon_tip.rs:134` — and
+**`None` while the daemon reports syncing** (`R-B`).
+
+*Amended 2026-09-24: the ruled sentence carried "refreshed every ~30 s or on
+each block", an implementation hint from before there was an implementation.
+The landed constant is `TIP_MAX_AGE_BLOCK_TARGETS = 1` — no seconds literal, the
+refresh interval derived from the bound by divisor, a miss-probability table
+justifying the value, and `CLAIM_SOURCE_TIMEOUT`'s coherence floor stated as a
+coupling. One block of `L = 4` is comfortably "well under", so the requirement
+is met and the hint defers to the mechanism. The ruling cites the derivation
+rather than keeping a stale literal beside it.*
 
 `None` already has correct handling and needs no new path: the serve loop
 renders the shared 404 and counts a lookup failure in `ServeCounters`
