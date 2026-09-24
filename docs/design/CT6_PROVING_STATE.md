@@ -67,7 +67,7 @@ programme's own next slice — the one CT-5's closeout routed forward.
 | [`CT5_SERIES_CLOSEOUT.md`](../completed/CT5_SERIES_CLOSEOUT.md) §5 | **Not amended** — it is a completed record of what *was*. The residue row stays as written |
 | [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §"What REMAINS" | **Re-points** (a) and (b) to this document. Owed by the registering PR |
 | [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) | **The existing `CT-1…CT-5` family row is amended to `CT-1…CT-6`** (rule 94 §1) — *not* a new row. `check_index_prefix_uniqueness` holds one row per prefix and rejected a separate `CT-6` row as a `CT` collision, which is this section's ruling restated as a gate: extending a family and minting one are different edits, and the index can tell them apart |
-| `assemble.rs:106`'s comment | Names this work *"the store-backed / per-input-reconstruction assembly follow-up"*. A **re-point owed at implementation**, not now — the comment is correct until the mechanism it describes changes |
+| `assemble.rs:106`'s comment | Named this work *"the store-backed / per-input-reconstruction assembly follow-up"*. **Re-pointed at implementation (increment 3, 2026-09-24):** the comment described a follow-up that has now landed, so it states the shape that is there — the positions are indexed once for the batch — rather than naming itself as owed work |
 
 ---
 
