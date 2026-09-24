@@ -1,9 +1,10 @@
 # `shekyl-chain-rules` slice 6 — census 4.I, the transaction's inputs under FCMP++ (DRS-E6 increment 7)
 
-**Status:** OPEN — **Round 0 pre-flight written 2026-09-23 against `dev` @
-`4dc5194de` (post-#839, slice 5 landed). Rulings owed on Q1–Q9 (§8);
-implementation does not begin before Round 1 and before the §1.2 capture
-gate opens.** Registered before implementation (rule 94 §5).
+**Status:** OPEN — **Round 1 RULED 2026-09-24 (Q1–Q9, §8, each line-local);
+implementation begins on §5 in the ruled order — capture first.** Round 0
+pre-flight written 2026-09-23 against `dev` @ `4dc5194de` (post-#839, slice 5
+landed), amended on review `ca218306c`. Registered before implementation
+(rule 94 §5).
 
 Parent: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §4.6 (`tx_against`,
 `tx_form`), [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5 (DRS-E6;
@@ -95,7 +96,7 @@ not inherited); **Q1** asks the reviewer to confirm it and to name the
 capture's owner, because the generator lives in `shekyl-engine-core`'s
 regtest — another lane's crate — and the captured blobs' *block context*
 (reference block, root at `ref_height`, membership set, tree depth) is what
-`MockChain` must be taught to serve (§4, the capture-gated row's substrate).
+`MockChain` must be taught to serve (§4.3).
 
 **Until the vectors land, this slice can land every row that does not
 verify a proof** — the stateless rows in `tx_form`, I7, I10–I13 in
@@ -333,27 +334,32 @@ express: one bad proof among good ones).
 | by construction / subsumed | I2 (type set + H15), I3 (`TX_VERSION`, with H2/H13) | registry entries credit the existing falsifiers — Q6's list-and-iterate shape |
 | `validate` (block fold) | H19's verification half — one BP+ verify over the block's proofs | Q9 |
 
-## 5. Commit plan — sketch, finalised at Round 1
+## 5. Commit plan — Round 1 (2026-09-24), capture first
 
-On slice 4 Q7's rule: rules first; shared substrate where the rules need
-it; anything cross-lane last; **the capture gate splits the plan in two.**
+On slice 4 Q7's rule — rules first, shared substrate where the rules need
+it, anything cross-lane last — **reordered by Q1's ruling: the vectors are
+commit 1**, so every commit built on them exercises them, and a fixture
+bug and a verification bug are never in the same commit. *Records-was:*
+the Round-0 sketch had the eleven stateless rows first on filler fixtures
+and the vectors sixth; that ordering was ruled out as producing one commit
+doing two things.
 
 | # | Commit | Gate |
 | --- | --- | --- |
-| 1 | Stateless 4.I rows in `tx_form`: I1, I4, I6, I8, I9, I14, I16; I5 taking H10's equality arm; each with its negative fixture at both sites | none — the conformance arms for I1, I4, I5, I6, I8, I9, I16 arm themselves here; H24's falsifier flips here |
-| 2 | I19/I20 adopted: `tx_form` calls `check_tx_extra_shape`; the fixtures gain conforming `extra` (the fixture-sanity gate will say so) | none |
-| 3 | `TxAgainstRule`; I7 over `has_key_image`; I2/I3 registry entries | none |
-| 4 | `ChainView::height_of` + the depth read; I10, I11, I12 (definition), I13 | **Q2** — the view contract |
-| 5 | I17's derivation of record (Q7) with `FCMP_SPEND_SIGNING_PREIMAGE.md`'s vectors pinned | none |
-| 6 | Captured vectors under `tests/vectors/`; `MockChain` serves their context; the fixture builders load them | **§1.2 capture** — Q1 |
-| 7 | I15 over `shekyl_fcmp::proof::verify`; I18 over `shekyl_crypto_pq`; H19's verification half per Q9 | commit 6 |
-| 8 | Conformance table: re-check the dead-arm ordering; I19's arm | — |
-| 9 | Docs: census 4.I re-pinned at the landing tree (read, not diffed); the "FAKECHAIN exempt" annotations corrected to I4 alone (§3.4); `CHAIN_RULES_CRATE.md` §4.3/§4.6; index; FOLLOWUPS; CHANGELOG | — |
+| 1 | **The captured spends** under `rust/shekyl-chain-rules/tests/vectors/` — 1-in/1-out, 1-in/2-out, one bond post and one emission with a fee spend each, one depth-3 — each a `.tx` blob with its block context (reference block, root at `ref_height`, tree depth, membership set) beside it, generated once through `e2e_fcmp_spend_accepted_by_daemon` / `e2e_fcmp_spend_over_depth3_tree`; `MockChain` serves the context; `fixture::spend` / `listed` load them; the store's `spend(ki, outputs)` becomes a loader; the fixture-sanity gate says which builders moved | **Q1 (ii)** — if the capture is another lane's or slow, WAIT here; do not fall back to filler |
+| 2 | Stateless 4.I rows in `tx_form`: I1, I4, I6, I8, I9, I14, I16; I5 with H10 kept as its equality row (Q4 (a)); each with its negative fixture at both sites, mutated from a captured spend | commit 1 — the seven self-arming conformance arms for these rows fire here; H24's falsifier flips here |
+| 3 | I19/I20 adopted: `tx_form` calls `check_tx_extra_shape`; **`TxScope::Coinbase`** minted for I20 with its doc pinning *runs at `Miner`*, never *when `is_coinbase()`*; `the_kind_is_derived_from_the_slot_not_the_bytes` gains the I20 case (Q6) | commit 1 |
+| 4 | `TxAgainstRule` (view-bound, `check(cx, view)`); I7 over `has_key_image`; I2 and I3 registry entries `by_construction`, list-and-iterate (Q3) | commit 1 |
+| 5 | `ChainView::height_of` (this slice adds it; the store has it, `MockChain` gains it); I10, I11 (consts 5/100 pinned to `consensus_constants.json`, Q5), I12 as a definition recorded at derivation | commit 1; the trait change disclosed to E5 and the store lane |
+| 6 | I13 over **depth at `ref_height`** | **E3 S-CURVE** — the one gating relationship (Q2 + Q8): the height-keyed depth read is E3's method; if E3 cannot serve it, current-depth with the three §3.3 dependencies written **at the rule** |
+| 7 | I17 as **(c)**: the wire's `pqc_signing_payload_hashes` becomes the one derivation; the daemon calls it through a coarse FFI (`shekyl_tx_pqc_signing_payloads`, TXE's shape); **byte-identity gate first** — real transactions through both the C++ assembly and the Rust body, identical payloads required, multi-input and serve-credit shapes included (the `mining_parity` pattern) — then `tx_pqc_verify.cpp:62–158` becomes the call (Q7) | commit 1 (the shapes come from the vectors); touches `src/cryptonote_core/tx_pqc_verify.cpp` and `shekyl-ffi` — rule 20's minimal shim |
+| 8 | I15 over `shekyl_fcmp::proof::verify`; I18 over `shekyl_crypto_pq` through I17's payloads; H19's verification half as a **`validate` fold** over the block's BP+ proofs (Q9), if the captured contexts carry ≥ 2 spends per block — else a named successor, disclosed at commit 1 | commits 1, 6, 7 |
+| 9 | Conformance table: re-check the dead-arm ordering (`key-image input(s) but no prunable proof`) now that verification sits in the path; I19's arm | commit 8 |
+| 10 | Docs: census 4.I re-pinned at the landing tree (read, not diffed); the FAKECHAIN corrections from §3.4's sweep (I2, I3, §10 R8); `CHAIN_RULES_CRATE.md` §4.3 (`height_of`), §4.6 (`TxAgainstRule`, `TxScope::Coinbase`); index; FOLLOWUPS (the capture row closed; the I17 shim finding); CHANGELOG | — |
 
-Commits 1–5 land without the vectors. If the capture is another lane's and
-lands later, this slice's PR is commits 1–5 + 8–9 with 6–7 a named
-successor — a **split**, disclosed here in advance, not a deferral (rule
-22).
+Ten commits is the rule-06 ceiling. If commit 6 waits on E3 past the
+slice's window, it is the one named successor; nothing else in the plan
+depends on it.
 
 ## 6. What this slice does not build
 
@@ -367,11 +373,17 @@ successor — a **split**, disclosed here in advance, not a deferral (rule
 ## 7. Round log
 
 - **Round 0** (2026-09-23): pre-flight written at `4dc5194de`; every pin
-  read at the line; nine questions.
+  read at the line; nine questions. Amended on review (`ca218306c`): the
+  monotone-depth argument refuted at source (`trim_curve_tree` shrinks
+  depth), the FAKECHAIN sweep, Q7(c), Q1's scoping call.
+- **Round 1** (2026-09-24): Q1–Q9 RULED, recorded on each question below.
+  Q9 was ruled on a structural argument the reviewer flagged as possibly
+  missing the second option; §8 Q9 says what the second option was and why
+  the structural argument covers placement but not sequencing.
 
 ## 8. Questions for the reviewer — Round 0
 
-- **Q1 — the capture gate (§1.2), and the scoping call under it.** The
+- **Q1 — the capture gate (§1.2), and the scoping call under it. RULED 2026-09-24: reading CONFIRMED (the row's purpose is that verification cannot be *tested* without real proofs; a document planning verification is not the thing needing vectors); scoping (ii), CAPTURE FIRST — and the deciding argument is not the day-or-not. (i) produces one commit doing two things, and one of them — migrating spend fixtures across three crates — has revealed something every time it has happened this month (H5 caught coinbase bodies, H19-layout caught skeletons, H7/H11 caught filled points); a commit that migrates fixtures AND lands verification makes a fixture bug and a verification bug indistinguishable at review. (ii) also has the vectors exercised by every commit built on them rather than only at the end, and the `spend(ki, outputs)` redesign is not extra cost — I15 binds the image to the output through the proof, so captured values were always coming. If the capture is another lane's or slow, that is a reason to WAIT, not to fall back to (i).** The
   reading first: the FOLLOWUPS row's "pre-flight does not open" is taken
   to gate the *verification commits*, not this document — a narrowing of
   the row's plain text, disclosed as such; confirm or refuse. Then the
@@ -392,32 +404,32 @@ successor — a **split**, disclosed here in advance, not a deferral (rule
   and a `spend(ki, outputs)`-shaped API is redesigned before the rows that
   do not need it. Default **(ii)** if the capture is this lane's and takes
   under a day; **(i)** if it is another lane's or the block-context
-  serving in `MockChain` (§4, the capture-gated row) turns out to be the larger design. State
+  serving in `MockChain` (§4.3) turns out to be the larger design. State
   which.
-- **Q2 — the view contract (§1.4).** `ChainView::height_of(&BlockHash)` and
+- **Q2 — the view contract (§1.4). RULED 2026-09-24 with Q8 as ONE dependency, not two: `height_of` in commit 4; depth-at-`ref_height` as I13's operand; both put I13 behind E3, recorded as a single gating relationship rather than two rows naming the same lane.** `ChainView::height_of(&BlockHash)` and
   a tree-depth read are contract changes to `CHAIN_RULES_CRATE.md` §4.3 and
   every implementer. Which lane lands them, and is the depth read
   height-keyed (Q8)? Default: this slice adds `height_of` (the store
   already has it; `MockChain` gains it) in commit 4; the depth read is the
   E3 lane's method and I13 waits on it.
-- **Q3 — I2, I3, I4 (§3.4).** I2 subsumed by H15 plus the `Ct` type set
+- **Q3 — I2, I3, I4 (§3.4). RULED default 2026-09-24, with slice 5's Q6 condition applying: I2's and I3's shared `by_construction` entries name every row they serve (`credited_to_this_falsifier`, the gate's list check) and fail when any stops being vacuous.** I2 subsumed by H15 plus the `Ct` type set
   (registry: `by_construction`, crediting H15's fixture and the type's
   falsifier, list-and-iterate); I3 by construction on `TX_VERSION` (H2/H13's
   falsifier, fourth row on the list); I4 a `tx_form` rule, unconditional.
   Default as stated.
-- **Q4 — H10 into I5.** The C++ has one arm (`memcmp >= 0`) for "sorted"
+- **Q4 — H10 into I5. RULED (a) 2026-09-24: the census has two rows, and collapsing them in the registry makes the registry disagree with the denominator; H10 landed with its own fixture, so (b) would retire an implemented row to tidy a predicate.** The C++ has one arm (`memcmp >= 0`) for "sorted"
   and "distinct". H10 landed as its own row in slice 5 (refuses the equal
   case). Options: (a) I5 refuses `<=` and H10 keeps its row as the equality
   sub-case — two rows, one predicate, recorded on both; (b) H10 is
   re-registered as subsumed by I5. Default (a): the census has two rows and
   a row is not deleted by a slice.
-- **Q5 — the reference window's constants.** `FCMP_REFERENCE_BLOCK_MIN_AGE`
+- **Q5 — the reference window's constants. RULED consts 2026-09-24 — the F21 test as slice 5's Q5; nothing varies 5/100 by schedule step.** `FCMP_REFERENCE_BLOCK_MIN_AGE`
   / `MAX_AGE` (5 / 100) come from `config/consensus_constants.json`. As
   `RuleSet` fields (the F21 shape, varying by schedule step) or as consts
   beside the rule pinned to the JSON (slice 5 Q5's shape)? Default: consts —
   no schedule step varies them, and the first that does is their first
   `RuleSet` reader.
-- **Q6 — I20's stage.** The coinbase grammar is judged at `Miner`. As a
+- **Q6 — I20's stage. RULED 2026-09-24: `tx_form` with the new `TxScope::Coinbase`, and one thing PINNED in the variant's doc: `Coinbase` means *runs at `TxSlot::Miner`*, never *runs when `is_coinbase()`*. Slice 5's Q2 derived the kind from the slot precisely because a bytes-derived kind lets a coinbase-shaped submission exempt itself from the rows that refuse it; a coinbase-only scope is exactly where that could re-enter through the back door. `the_kind_is_derived_from_the_slot_not_the_bytes` gains an I20 case: a coinbase-shaped body at `Lone` is NOT judged under I20 (and is refused by the non-coinbase rows), and a non-coinbase body at `Miner` IS.** The coinbase grammar is judged at `Miner`. As a
   `tx_form` rule with a **new** `TxScope::Coinbase` (the enum has `All` and
   `NonCoinbase` today, `rules/mod.rs:320`; the first rule that is
   coinbase-*only*), or in 4.F's `form` stage beside F1–F10 as a `FormRule`?
@@ -425,7 +437,7 @@ successor — a **split**, disclosed here in advance, not a deferral (rule
   the coinbase's own bytes, judged where the other per-transaction rules
   are, and adding the variant is the enum doing what it was shaped for
   (rule 21: a variant with a caller).
-- **Q7 — I17's body of record (§3.1).** A signing payload is not a
+- **Q7 — I17's body of record (§3.1). RULED (c) 2026-09-24, with a BYTE-IDENTITY GATE before the C++ assembly is deleted: replacing `tx_pqc_verify.cpp:62–158` with a call preserves consensus behaviour only if the Rust body emits identical bytes on real inputs. The spec vectors (`FCMP_SPEND_SIGNING_PREIMAGE.md:27–36`) pin the specification; they do not establish that two implementations agree on the shapes the e2e builds. TXE's `mining_parity` test is the pattern — feed real transactions through both, require identical payloads, then delete — and multi-input and serve-credit shapes belong in that test specifically, since those are where divergence could hide.** A signing payload is not a
   validation rule in its failure mode: a rule that diverges splits
   consensus; a payload that diverges makes **every** signature invalid,
   loudly, on the first spend — the e2e reds. So a conformance test (a
@@ -447,12 +459,12 @@ successor — a **split**, disclosed here in advance, not a deferral (rule
   `:27–36`) pinned on the one body, and the C++ side of the cut scoped as
   the shim's minimal marshaling (rule 20) — the E4 direction, taken one
   function early because this row's correctness is the reason to.
-- **Q8 — I13's depth operand (§3.3).** Current depth (C++ parity) or depth
+- **Q8 — I13's depth operand (§3.3). RULED 2026-09-24: depth at `ref_height`, one dependency with Q2. The default is right for the reason the re-derivation exposed: the three dependencies include an ORDERING one (I10 before I13), and ordering arguments are the class that has been wrong twice this month; height-keyed removes it rather than documenting it. If E3 cannot serve it, current-depth is acceptable — but then the three dependencies live AT THE RULE, not in this document, because the slice doc gets archived and the rule does not.** Current depth (C++ parity) or depth
   at `ref_height` (consistent with I12)? Default: at `ref_height` if the
   curve-tree lane can serve it, with the C++ reading recorded as a
   parity-not-divergence note; else current, with the monotonicity argument
   written at the rule.
-- **Q9 — H19's verification half (§3.6).** In this slice as a `validate`
+- **Q9 — H19's verification half (§3.6). RULED 2026-09-24 on a structural argument: a batch verify is inherently multi-transaction and `tx_form` is per-transaction, so batching cannot live in `tx_form` without abandoning the batch or smuggling block scope into a per-tx rule — H19-verify's home is block-level. The reviewer asked whether that misses the second option. It does not miss it, because the second option was never about placement: both options placed the fold in `validate`; they differed on SEQUENCING — this slice (commit 7, if the vectors carry ≥ 2 spends per block context) versus a named successor after the vectors, owning the one-bad-proof-among-good fixture. The structural argument settles the home; the sequencing follows Q1's (ii): the vectors land first, so the ≥ 2-spends condition is decidable at commit 1, and the fold lands in this slice if it holds. If the captured contexts carry one spend each, the fold is a named successor, disclosed here, not a deferral found later.** In this slice as a `validate`
   fold over the block's proofs (one BP+ verify, the C++'s batch), or its own
   commit after the vectors with the one-bad-proof-among-good fixture?
   Default: this slice, commit 7, if the vectors carry ≥ 2 spends per block
