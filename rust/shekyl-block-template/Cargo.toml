@@ -38,6 +38,10 @@ shekyl-economics = { path = "../shekyl-economics" }
 # (`construct_output`: output key, commitment, encrypted amount/label,
 # KEM ciphertexts, PQC leaf entry).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# CEN-C1's own predicate (`is_timestamp_below_ftl`, `FTL_SECONDS`): the
+# header timestamp is checked against the future limit with the rule's
+# function, not a restatement of it.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
 # The tx public key is `r·G` for the caller's tx secret `r`; the same
 # derivation `shekyl-genesis-tool::txkey::tx_pubkey` performs.
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
@@ -49,8 +53,6 @@ thiserror = { workspace = true }
 # itself asserts about the census. Dev-only, so the production edge stays
 # template → wire/economics/crypto with no path back into the rules crate.
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
-# The tests' work-recorded chains (`CumulativeDifficulty`, `GENESIS_DIFFICULTY`).
-shekyl-difficulty = { path = "../shekyl-difficulty" }
 
 [lints]
 workspace = true

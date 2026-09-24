@@ -19,9 +19,16 @@
 //!   drained, before this block does (CEN-B5). `major_version` is the rule
 //!   set's (CEN-B1). `timestamp` is the least the chain admits and no
 //!   earlier than the clock: `max(now, median + 1)` — strictly above the
-//!   median (CEN-C2, `DAA_LWMA1.md` §5.5's *strictly greater*) and within
-//!   the future limit of any clock at or after `now` (CEN-C1). `nonce` is
-//!   zero: the template is what the miner searches, not the result.
+//!   median (CEN-C2, `DAA_LWMA1.md` §5.5's *strictly greater*) — **and
+//!   checked against CEN-C1's bound with the owner's predicate**
+//!   (`shekyl_difficulty::is_timestamp_below_ftl`), not reasoned about.
+//!   The bound is reachable: each accepted block was within FTL of *its*
+//!   acceptance clock, so a window stamped near the limit carries a median
+//!   ahead of when its blocks landed, and a producer whose clock runs
+//!   behind can find `median + 1 > now + FTL`. That template is one its
+//!   own validator refuses, so the builder refuses first
+//!   ([`TemplateError::TimestampBeyondFutureLimit`]). `nonce` is zero: the
+//!   template is what the miner searches, not the result.
 //!   `attestation_root` is the caller's — the archival lane owns the credit
 //!   wire; the template carries the root, it does not derive one.
 //! - **Coinbase.** One `txin_gen` (CEN-F1) claiming `h` (CEN-F5);
@@ -36,7 +43,21 @@
 //! - **Body.** `transaction_hashes` are the listed bodies' identities, in
 //!   the order listed (CEN-A3/A4); the weight the reward was penalised at
 //!   is the weight the block carries, coinbase included (CEN-F14's
-//!   operand) — the assembly is a fixed point in the coinbase's own size.
+//!   operand; connect refuses `!=`, CEN-F14b) — the assembly is a fixed
+//!   point in the coinbase's own size, sought in at most
+//!   [`MAX_REPRICING_PASSES`] passes. Below the effective median the
+//!   reward is weight-independent and the second pass settles it. In the
+//!   penalty zone the only variable is the amount's varint (one to ten
+//!   bytes): each pass moves the weight by at most nine bytes, so it
+//!   settles unless the reward sits **exactly** on a varint boundary and
+//!   the two weights trade places — a two-cycle with no fixed point, which
+//!   no pass budget resolves. That case is reachable (a penalty slope of a
+//!   few million atomic units per byte against a boundary such as `2^49`)
+//!   and both producers refuse it loudly — the C++ at its `try_count`
+//!   budget of ten (`blockchain.cpp:1830`), this crate at the same budget
+//!   ([`TemplateError::WeightNotConverged`]) — rather than emit a template
+//!   connect refuses. Neither pads `extra` back to the estimate: the
+//!   coinbase extra is a closed grammar (CEN-I20).
 //!
 //! # What the crate does not do
 //!
@@ -68,6 +89,7 @@ use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_crypto_pq::CryptoError;
+use shekyl_difficulty::is_timestamp_below_ftl;
 use shekyl_economics::{
     compute_emission_split, compute_fee_burn, paid_block_reward, CirculatingSupply, EconomicParams,
     EmissionError, FrozenSegmentCount, SupplyInvariantViolation, TxVolume,
@@ -217,19 +239,42 @@ pub enum TemplateError {
     /// The assembled `extra` fails the coinbase grammar it was built for.
     #[error("coinbase extra fails the grammar: {0}")]
     Extra(#[from] CoinbaseBuildError),
-    /// The coinbase's own weight did not settle after re-pricing once: the
-    /// penalty moved the amount, the amount's varint moved the weight, and
-    /// the second pass did not agree with the first. Two passes suffice in
-    /// practice (the C++ rebuilds once); a third disagreement is reported,
-    /// not looped on.
-    #[error("coinbase weight did not converge (priced at {priced}, carries {carried})")]
+    /// The coinbase's own weight did not settle within
+    /// [`MAX_REPRICING_PASSES`]: the reward sits on a varint boundary in
+    /// the penalty zone and the two weights trade places (crate docs). The
+    /// C++ fails the same case at the same budget.
+    #[error(
+        "coinbase weight did not converge in {MAX_REPRICING_PASSES} passes \
+         (last priced at {priced}, carries {carried})"
+    )]
     WeightNotConverged {
-        /// The block weight the second pass priced at.
+        /// The block weight the last pass priced at.
         priced: u64,
-        /// The block weight the second pass produced.
+        /// The block weight the last pass produced.
         carried: u64,
     },
+    /// `max(now, median + 1)` is past CEN-C1's bound on the producer's own
+    /// clock: the window's median runs more than FTL ahead of `now`. The
+    /// validator would refuse the template; the builder refuses first.
+    #[error(
+        "timestamp {timestamp} is beyond the future limit of clock {now} (CEN-C1); \
+         the window's median {median} runs ahead of this producer"
+    )]
+    TimestampBeyondFutureLimit {
+        /// The timestamp the template would have claimed.
+        timestamp: u64,
+        /// The producer's clock.
+        now: u64,
+        /// The median that forced the claim.
+        median: u64,
+    },
 }
+
+/// The re-pricing budget: the C++ `try_count != 10` (`blockchain.cpp:1830`).
+/// Pinned to the same figure so the one reachable non-convergence — a
+/// varint-boundary two-cycle — is refused by both producers, never
+/// produced by one and declined by the other.
+pub const MAX_REPRICING_PASSES: usize = 10;
 
 /// Build the template for `cx`. See the crate documentation for what the
 /// result satisfies by construction.
@@ -247,41 +292,49 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
     })?;
 
     // The reward is penalised at the block's weight, and the block's weight
-    // includes the coinbase that carries the reward. Price at the bodies'
-    // weight plus a coinbase carrying that price; if the coinbase's own
-    // size moved (the amount's varint), price once more at the weight it
-    // actually has. The second coinbase is final if its weight agrees with
-    // what it was priced at.
-    let first = price_and_pay(cx, bodies_weight, total_fees)?;
-    let first_weight = bodies_weight
-        .checked_add(weight_of(&first.coinbase)?)
-        .ok_or(TemplateError::WeightOverflow)?;
-    let paid = if first_weight == bodies_weight {
-        // Unreachable in practice — a coinbase has positive weight — but
-        // the fixed point is stated, not assumed.
-        first
-    } else {
-        let second = price_and_pay(cx, first_weight, total_fees)?;
-        let second_weight = bodies_weight
-            .checked_add(weight_of(&second.coinbase)?)
-            .ok_or(TemplateError::WeightOverflow)?;
-        if second_weight != first_weight {
-            return Err(TemplateError::WeightNotConverged {
-                priced: first_weight,
-                carried: second_weight,
-            });
+    // includes the coinbase that carries the reward (CEN-F14b: connect
+    // refuses a block priced at one weight and carrying another). Price at
+    // the bodies' weight plus a coinbase carrying that price; while the
+    // coinbase's own size moves (the amount's varint), re-price at the
+    // weight the block actually has — heavier or lighter — until the two
+    // meet or the budget runs out. The first pass prices without a
+    // coinbase and is always short by one; the loop is what settles it.
+    let (paid, block_weight) = {
+        let mut priced_at = bodies_weight;
+        let mut settled = None;
+        for _ in 0..MAX_REPRICING_PASSES {
+            let paid = price_and_pay(cx, priced_at, total_fees)?;
+            let carried = bodies_weight
+                .checked_add(weight_of(&paid.coinbase)?)
+                .ok_or(TemplateError::WeightOverflow)?;
+            if carried == priced_at {
+                settled = Some((paid, carried));
+                break;
+            }
+            priced_at = carried;
         }
-        second
+        match settled {
+            Some(settled) => settled,
+            None => {
+                // `priced_at` is the last carried weight; one more pricing
+                // at it names the pair that would not meet.
+                let paid = price_and_pay(cx, priced_at, total_fees)?;
+                let carried = bodies_weight
+                    .checked_add(weight_of(&paid.coinbase)?)
+                    .ok_or(TemplateError::WeightOverflow)?;
+                return Err(TemplateError::WeightNotConverged {
+                    priced: priced_at,
+                    carried,
+                });
+            }
+        }
     };
-    let block_weight = bodies_weight
-        .checked_add(weight_of(&paid.coinbase)?)
-        .ok_or(TemplateError::WeightOverflow)?;
 
     let block = Block {
         header: BlockHeader {
             major_version: cx.major_version,
             minor_version: cx.minor_version,
-            timestamp: template_timestamp(cx.now, cx.median_timestamp),
+            timestamp: template_timestamp(cx.now, cx.median_timestamp)?,
             previous: cx.previous,
             nonce: 0,
             curve_tree_root: cx.curve_tree_root,
@@ -302,21 +355,39 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
     })
 }
 
-/// The header timestamp a template claims: `max(now, median + 1)`.
+/// The header timestamp a template claims: `max(now, median + 1)`, checked
+/// against CEN-C1's bound on the producer's own clock.
 ///
 /// CEN-C2 admits a timestamp strictly above the median of the window
-/// (`DAA_LWMA1.md` §5.5); `median + 1` is the least such value. CEN-C1
-/// admits one no further than the future limit past the judging node's
-/// clock; a producer whose clock is honest satisfies it by claiming no more
-/// than `now`. When `now` is already above the median, `now` is the claim.
-/// Saturating at `u64::MAX`: a median there has no admissible successor,
-/// and the validator — not this function — says so.
-#[must_use]
-pub fn template_timestamp(now: Timestamp, median: Option<Timestamp>) -> u64 {
-    let now = now.to_raw();
-    match median {
-        Some(median) => now.max(median.to_raw().saturating_add(1)),
-        None => now,
+/// (`DAA_LWMA1.md` §5.5); `median + 1` is the least such value. When `now`
+/// is already above the median, `now` is the claim. CEN-C1 admits a
+/// timestamp no further than FTL past the judging clock; the claim is
+/// held to that with the rule's own predicate
+/// ([`is_timestamp_below_ftl`]) against `now` — a producer whose window
+/// median runs more than FTL ahead of its clock cannot build an admissible
+/// block, and is told so rather than handed one the validator refuses. A
+/// median at `u64::MAX` has no successor: the saturated claim fails the
+/// same check.
+///
+/// # Errors
+///
+/// [`TemplateError::TimestampBeyondFutureLimit`] when the claim exceeds
+/// `now + FTL`.
+pub fn template_timestamp(now: Timestamp, median: Option<Timestamp>) -> Result<u64, TemplateError> {
+    // No median: the claim is the clock, and a clock is within FTL of
+    // itself.
+    let Some(median) = median else {
+        return Ok(now.to_raw());
+    };
+    let claim = now.to_raw().max(median.to_raw().saturating_add(1));
+    if is_timestamp_below_ftl(Timestamp::from_raw(claim), now) {
+        Ok(claim)
+    } else {
+        Err(TemplateError::TimestampBeyondFutureLimit {
+            timestamp: claim,
+            now: now.to_raw(),
+            median: median.to_raw(),
+        })
     }
 }
 

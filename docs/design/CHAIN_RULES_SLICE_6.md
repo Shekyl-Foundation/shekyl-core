@@ -573,10 +573,33 @@ over the context, store-free (held by `check_chain_rules_no_store.sh`,
 which now names both crates), composing the owners — `construct_output`
 and `build_coinbase_extra` for the coinbase, `paid_block_reward` →
 `compute_emission_split` + `compute_fee_burn` for the amount, the reward
-priced at the block weight *including* the coinbase (a two-pass fixed point
-in the coinbase's own varint, error if it does not settle). The header's
-timestamp is `max(now, median + 1)`: the least C2 admits, no earlier than
-the clock. `nonce` is zero — the template is what the miner searches.
+priced at the block weight *including* the coinbase (a fixed point in the
+coinbase's own varint, sought in at most ten passes — the C++ `try_count`
+budget, `blockchain.cpp:1830`). The header's timestamp is
+`max(now, median + 1)`: the least C2 admits, no earlier than the clock —
+**and checked against C1's bound with the rule's own predicate**, not
+reasoned about (review, 2026-09-24: the one property the builder argued
+instead of asserting; the condition is reachable — a window stamped near
+the limit carries a median ahead of when its blocks landed, and a
+behind-clock producer finds `median + 1 > now + FTL`. The builder now
+refuses first, and `the_builders_c1_refusal_is_the_validators` constructs
+the chain and shows the same header refused on C1 by a behind clock).
+`nonce` is zero — the template is what the miner searches.
+
+**The re-pricing's one non-convergence, answered (review question).** Is
+there a reachable weight that fails to settle? Yes, exactly one shape: in
+the penalty zone, a reward sitting on a varint boundary `2^(7L)` such that
+the amount priced with an `(L+1)`-byte coinbase encodes in `L` bytes and
+the amount priced with an `L`-byte coinbase encodes in `L+1` — a two-cycle
+with no fixed point, which no pass budget resolves. It is constructed in
+`a_reward_exactly_on_a_varint_boundary_in_the_penalty_zone_is_refused_not_looped`:
+at `2^35` with a ~317 kB block against the 300 kB zone the band of
+`already_generated` is ≈`4.0e10` atomic units wide (about one block's
+emission late in the curve), and one unit either side of it the loop
+settles. The C++ fails the same band at the same budget (its comment names
+the case), so this is a builder refusal both producers share, not a
+divergence — and the budget is pinned to the C++ figure
+(`MAX_REPRICING_PASSES = 10`) so it stays one.
 
 The second question the slice asks — *what should our Rust test do by
 design?* — is answered in the crate doc and its `tests.rs`, and the answer
@@ -598,6 +621,35 @@ inconsistent supply record, an unlock that overflows, a KEM key the
 construction refuses) rather than consensus verdicts. Byte-parity with
 `create_block_template` is the daemon-backed `regtest_e2e`'s job, as §5.3
 says — not this crate's.
+
+#### 5.3.2 The driver's two shape rulings (RULED 2026-09-24)
+
+`connector.rs:285` takes `ConnectFacts` from the trace (`NoFacts`
+otherwise); a scenario driver needs a second provider, and the ruling on
+where it lives and how it is driven:
+
+- **Facts seam — `Composed` is production, not test support.** By the
+  argument that redefined 1b: written as test support it is a second
+  implementation the daemon redoes; written in production and called by
+  the driver it is the boundary advancing. `Composed` is the composition
+  live ingest will use — facts assembled from their owners
+  (`coins_generated`/`burned` from the template's priced figures via
+  `shekyl-economics`; `long_term_weight` from `shekyl_economics::
+  long_term_weight`; `root_after` passed through until E3 S-CURVE writes
+  the tree, §6; the median passed through until G6). It lands in
+  `shekyl-chain-ingest` beside the connector with the driver as first
+  consumer; E3 then flips one field's `Origin` from `PassedThrough` to
+  `Derived` inside a function that exists, instead of promoting test code.
+  `Trace` is E2-only and lives with E2's harness. Two impls, one seam.
+- **One event at a time — and the reason is the miner's, not the
+  sequencer's.** Template generation *is* serial: a miner cannot build
+  `h+1` until `h` is connected. The driver models that path faithfully;
+  teaching the sequencer a synchronous source would make it less like
+  production. **What this does not cover, stated:** the driver exercises
+  `form → validate → connect` and deliberately *not* the sequencer's
+  lookahead — replay-with-a-trace covers that. Two instruments, two
+  subjects; scenario coverage is not ingest-end-to-end coverage, and the
+  driver's doc says so.
 
 **Carried, not done here:** slices 2–4's view-bound rows (the D family's
 windows, B5's root, E1's anchors) have fixtures of the same shape against

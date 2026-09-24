@@ -11,12 +11,14 @@
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use shekyl_chain_rules::harness::fixture::{point_at, recorded_with_work, root, spend};
-use shekyl_chain_rules::harness::{expected_seed, judged, MockChain, MockSubstrate};
+use shekyl_chain_rules::harness::{
+    assert_refused, expected_seed, judged, MockChain, MockSubstrate,
+};
 use shekyl_chain_rules::{
-    form, validate, Candidate, CenRow, ChainView, FormAttempt, RuleSet, Trust,
+    form, validate, Candidate, CenRow, ChainView, FormAttempt, Locus, RuleSet, Trust,
 };
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
-use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
+use shekyl_difficulty::{CumulativeDifficulty, FTL_SECONDS, GENESIS_DIFFICULTY};
 use shekyl_economics::{
     compute_emission_split, compute_fee_burn, paid_block_reward, CirculatingSupply, EconomicParams,
     FrozenSegmentCount, TxVolume, FULL_REWARD_ZONE,
@@ -425,29 +427,301 @@ fn the_template_is_a_pure_function_of_its_context() {
 #[test]
 fn the_timestamp_is_the_least_admissible_no_earlier_than_the_clock() {
     let now = Timestamp::from_raw(1_000);
+    let claim = |median: Option<u64>| template_timestamp(now, median.map(Timestamp::from_raw));
     // No median (at and below the window): the clock.
-    assert_eq!(template_timestamp(now, None), 1_000);
+    assert_eq!(claim(None).expect("admissible"), 1_000);
     // Median below the clock: the clock (C2 holds with room; C1 is the
     // clock's own).
-    assert_eq!(
-        template_timestamp(now, Some(Timestamp::from_raw(500))),
-        1_000
-    );
+    assert_eq!(claim(Some(500)).expect("admissible"), 1_000);
     // Median at or above the clock: strictly above the median (C2's
     // *strictly greater*), and the least such value.
+    assert_eq!(claim(Some(1_000)).expect("admissible"), 1_001);
     assert_eq!(
-        template_timestamp(now, Some(Timestamp::from_raw(1_000))),
-        1_001
+        claim(Some(1_000 + FTL_SECONDS / 2)).expect("admissible"),
+        1_001 + FTL_SECONDS / 2
     );
+}
+
+#[test]
+fn a_median_more_than_ftl_ahead_of_the_clock_yields_no_template() {
+    // CEN-C1's bound, held at the boundary with the rule's own predicate.
+    // The condition is reachable: a window stamped near the future limit
+    // carries a median ahead of when its blocks landed, and a producer
+    // whose clock runs behind finds `median + 1 > now + FTL`.
+    let now = Timestamp::from_raw(1_000);
+    let claim = |median: u64| template_timestamp(now, Some(Timestamp::from_raw(median)));
+    // Last admissible: the claim lands exactly on `now + FTL`.
     assert_eq!(
-        template_timestamp(now, Some(Timestamp::from_raw(5_000))),
-        5_001
+        claim(1_000 + FTL_SECONDS - 1).expect("at the bound"),
+        1_000 + FTL_SECONDS
     );
-    // A median at the ceiling has no admissible successor; the claim
-    // saturates and the validator, not the template, refuses it.
+    // First refused: one past it.
+    let err = claim(1_000 + FTL_SECONDS).expect_err("beyond the bound");
+    assert!(
+        matches!(
+            err,
+            TemplateError::TimestampBeyondFutureLimit { timestamp, now: 1_000, median }
+                if timestamp == 1_001 + FTL_SECONDS && median == 1_000 + FTL_SECONDS
+        ),
+        "{err}"
+    );
+    // A median at the ceiling has no admissible successor at all.
+    assert!(matches!(
+        claim(u64::MAX).expect_err("no successor"),
+        TemplateError::TimestampBeyondFutureLimit {
+            timestamp: u64::MAX,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn the_builders_c1_refusal_is_the_validators() {
+    // The constructed condition end to end: a chain whose window median
+    // runs more than FTL ahead of a behind-clock producer. The builder
+    // refuses at `now = behind`; the same header, built by a producer whose
+    // clock sits at the median and judged by the behind clock, is what the
+    // validator refuses on C1 — the two agree on the one boundary.
+    let params = EconomicParams::default();
+    let miner = miner();
+    let ahead = 1_700_000_000 + FTL_SECONDS + 10_000;
+    let chain = (0..3u64).fold(MockChain::default(), |chain, h| {
+        chain.push(
+            recorded_with_work(
+                ahead + h * 120,
+                CumulativeDifficulty::from_raw(u128::from(h + 1) * GENESIS_DIFFICULTY),
+            ),
+            root(u8::try_from(h).expect("fits") + 1),
+        )
+    });
+    let behind = Timestamp::from_raw(1_700_000_000);
+
+    let mut cx = context(&chain, &params, &miner, &[]);
+    cx.now = behind;
+    let err = build(&cx).expect_err("the behind-clock producer is refused first");
+    assert!(
+        matches!(err, TemplateError::TimestampBeyondFutureLimit { .. }),
+        "{err}"
+    );
+
+    // An honest producer at the median's clock builds it; the behind clock
+    // judging it refuses on C1 — the row the builder's check stands in for.
+    cx.now = cx.median_timestamp.expect("three blocks have a median");
+    let template = build(&cx).expect("builds at an honest clock");
+    let candidate = Candidate::new(template.block, template.transactions);
+    let substrate = MockSubstrate {
+        clock: behind,
+        ..MockSubstrate::default()
+    };
+    let formed = form(
+        candidate,
+        &RuleSet::GENESIS,
+        &substrate,
+        expected_seed(&chain),
+        FormAttempt::FIRST,
+    )
+    .expect("no fault")
+    .expect("the stateless stage does not judge C1");
+    chain.with_view(|view| {
+        assert_refused(
+            judged(validate(
+                formed,
+                &view,
+                &RuleSet::GENESIS,
+                &Trust::UNANCHORED,
+            )),
+            CenRow::C1,
+            Locus::Block,
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The re-pricing fixed point — and the one case that has none
+// ---------------------------------------------------------------------------
+
+/// LEB128 byte length of `amount` on the wire.
+fn varint_len(mut amount: u64) -> u64 {
+    let mut len = 1;
+    while amount >= 0x80 {
+        amount >>= 7;
+        len += 1;
+    }
+    len
+}
+
+/// Enough fixture spends to put a block in the penalty zone: bodies
+/// weighing just over `target` bytes, distinct key images.
+fn bodies_weighing_over(target: u64) -> Vec<Transaction> {
+    let one = spend(point_at(1_000), 16);
+    let each = u64::try_from(one.weight()).expect("fits");
+    let count = target / each + 1;
+    (0..count).map(|k| spend(point_at(1_000 + k), 16)).collect()
+}
+
+/// The coinbase amount the template pays at `block_weight` with
+/// `already_generated` — the owners' composition on the test's operands
+/// (zero fees, zero volume, genesis-era split).
+fn amount_at(
+    block_weight: u64,
+    already_generated: u64,
+    height: u64,
+    params: &EconomicParams,
+) -> u64 {
+    let reward = paid_block_reward(
+        FULL_REWARD_ZONE,
+        block_weight,
+        already_generated,
+        TxVolume::ZERO,
+        params,
+    )
+    .expect("in the penalty zone, below twice the median");
+    compute_emission_split(reward, height, 1).miner_emission
+}
+
+#[test]
+fn the_repricing_settles_in_the_penalty_zone_off_a_varint_boundary() {
+    // The common case: heavier than the effective median, the reward is
+    // re-priced at the weight it carries and settles — the coinbase's
+    // varint does not move between passes.
+    let params = EconomicParams::default();
+    let miner = miner();
+    let chain = chain_of(2);
+    let listed = bodies_weighing_over(FULL_REWARD_ZONE + 10_000);
+    let template = build(&context(&chain, &params, &miner, &listed)).expect("settles");
+    assert!(
+        template.block_weight > FULL_REWARD_ZONE,
+        "the fixture is in the penalty zone"
+    );
+    let carried: usize = template.block.miner_transaction.weight()
+        + template
+            .transactions
+            .iter()
+            .map(Transaction::weight)
+            .sum::<usize>();
     assert_eq!(
-        template_timestamp(now, Some(Timestamp::from_raw(u64::MAX))),
-        u64::MAX
+        u64::try_from(carried).expect("fits"),
+        template.block_weight,
+        "CEN-F14b"
+    );
+}
+
+#[test]
+fn a_reward_exactly_on_a_varint_boundary_in_the_penalty_zone_is_refused_not_looped() {
+    // The one reachable non-convergence, constructed. In the penalty zone
+    // the coinbase's weight is `base + len(amount)` and the amount falls
+    // as the weight rises. Pick `already_generated` so that the amount
+    // priced at a coinbase of `L + 1` bytes is *below* `2^(7L)` (so it
+    // encodes in `L`) while the amount priced at a coinbase of `L` bytes
+    // is *at or above* it (so it encodes in `L + 1`): each weight prices
+    // the other's coinbase, no fixed point exists, and the budget runs
+    // out. The C++ fails the same case at the same budget
+    // (`blockchain.cpp:1830`); neither producer emits it.
+    let params = EconomicParams::default();
+    let miner = miner();
+    let chain = chain_of(2);
+    let height = 2;
+    let listed = bodies_weighing_over(FULL_REWARD_ZONE + 10_000);
+    let bodies: u64 = listed
+        .iter()
+        .map(|tx| u64::try_from(tx.weight()).expect("fits"))
+        .sum();
+
+    // The coinbase's weight net of its amount varint, measured off a
+    // template that settles.
+    let settled = build(&context(&chain, &params, &miner, &listed)).expect("settles at A = 0");
+    let coinbase = &settled.block.miner_transaction;
+    let base = u64::try_from(coinbase.weight()).expect("fits")
+        - varint_len(coinbase.prefix.outputs[0].amount);
+
+    // Find a varint boundary `T = 2^(7L)` the reward crosses as
+    // `already_generated` sweeps the curve. The band of `A` with no fixed
+    // point is `[A_lo, A_hi)`: `A_lo` the least `A` at which the amount
+    // priced with an `L + 1`-byte coinbase drops below `T`, `A_hi` the
+    // least at which the amount priced with an `L`-byte coinbase does.
+    let a_max = shekyl_economics::EMISSION_CURVE_ASYMPTOTE;
+    let least_a_below = |weight: u64, boundary: u64| {
+        let (mut lo, mut hi) = (0u64, a_max);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if amount_at(weight, mid, height, &params) < boundary {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo
+    };
+    let mut found = None;
+    for len in 1..=9u64 {
+        let boundary = 1u64 << (7 * len);
+        let heavy = bodies + base + len + 1;
+        let light = bodies + base + len;
+        let at_zero = amount_at(heavy, 0, height, &params);
+        let at_max = amount_at(heavy, a_max, height, &params);
+        if at_zero >= boundary && at_max < boundary {
+            found = Some((
+                len,
+                boundary,
+                least_a_below(heavy, boundary),
+                least_a_below(light, boundary),
+            ));
+            break;
+        }
+    }
+    let (len, boundary, a_lo, a_hi) =
+        found.expect("the emission curve crosses at least one varint boundary");
+    assert!(
+        a_lo < a_hi,
+        "the band is non-empty: the slope per byte spans the boundary"
+    );
+    let already_generated = a_lo;
+
+    // The two prices trade places: heavy prices light, light prices heavy.
+    let heavy = bodies + base + len + 1;
+    let light = bodies + base + len;
+    let priced_heavy = amount_at(heavy, already_generated, height, &params);
+    let priced_light = amount_at(light, already_generated, height, &params);
+    assert!(
+        priced_heavy < boundary,
+        "priced at the heavy weight, the amount encodes in {len}"
+    );
+    assert!(
+        priced_light >= boundary,
+        "priced at the light weight, the amount encodes in {}; the penalty slope per byte \
+         ({}) spans the boundary",
+        len + 1,
+        priced_light - priced_heavy
+    );
+
+    let mut cx = context(&chain, &params, &miner, &listed);
+    cx.emission.already_generated_coins = AtomicUnits::from_raw(already_generated);
+    let err = build(&cx).expect_err("no fixed point");
+    assert!(
+        matches!(err, TemplateError::WeightNotConverged { priced, carried }
+            if (priced == heavy && carried == light) || (priced == light && carried == heavy)),
+        "{err}"
+    );
+
+    // Either edge of the band and the loop settles again — at `A_lo − 1`
+    // the heavy coinbase prices its own length; at `A_hi` the light one
+    // does. The refusal is the band, not the zone; its width in emission
+    // is the slope per byte times the curve's inverse slope, and the
+    // message records it for the row.
+    for (edge, near) in [("A_lo - 1", a_lo - 1), ("A_hi", a_hi)] {
+        let mut cx = context(&chain, &params, &miner, &listed);
+        cx.emission.already_generated_coins = AtomicUnits::from_raw(near);
+        build(&cx).unwrap_or_else(|e| {
+            panic!(
+                "at {edge} the re-pricing settles (band [{a_lo}, {a_hi}), width {}): {e}",
+                a_hi - a_lo
+            )
+        });
+    }
+    eprintln!(
+        "varint-boundary band at 2^(7·{len}) = {boundary}: already_generated in [{a_lo}, {a_hi}) \
+         (width {}) has no fixed point at bodies {bodies} + coinbase {base}+len",
+        a_hi - a_lo
     );
 }
 
