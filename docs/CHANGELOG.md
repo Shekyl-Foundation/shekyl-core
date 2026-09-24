@@ -324,6 +324,40 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
 
 ### Daemon chain store
 
+- **DRS-E1 S-POOL — the transaction pool gets its own store file.** Schema
+  layout **12**: `txpool_meta` and `txpool_blob` leave the consensus store's
+  catalogue — the pool is not consensus state and not reconstructible from
+  blocks, and its relay-timing residue must not share free pages with the
+  chain's tables (`DAEMON_REDB_STORE.md` §5.1, ruled 2026-09-12, built now)
+  — and `shekyl-chain-store::pool::PoolStore` is born: a second redb file
+  with its own header, sealed at the crate's layout version and
+  **recreated** (never migrated) when a sealed file at another version is
+  opened, while a non-redb file, a headerless database or an undecodable
+  header is refused and kept. Seven operations replace the C++ pool's nine
+  store methods: insert (both rows; refuses a held entry, an empty blob, a
+  malformed record), update (metadata only; **refuses a changed origin**),
+  remove (idempotent), record, blob, len, entries — none of which
+  classifies, orders or parses; those stay the pool's. The persisted pool
+  record (`txpool_tx_meta_t`, 192 packed bytes) is re-specified along
+  `DAEMON_RELAY_PRIVACY.md` §92.4's seams: **origin** (originated here, or
+  arrived over a zone — permanent), **relay phase** (held, stem, fluffed,
+  or in a block — each carrying the one clock that phase means, so the
+  field that meant "never relayed", "embargo deadline" and "last relayed"
+  depending on a bit elsewhere is gone), and **re-broadcast
+  responsibility** (originated entries only; an arrived entry claiming one
+  is refused at decode and at write). **Security-relevant:** the C++ relay
+  decoder resolved an unknown or zeroed bit state to `fluff` — the
+  broadcast-to-everyone phase — so a corrupt pool row would be relayed to
+  anyone who asked while it should still have been stemming; the Rust
+  decoder has no default arm, refuses any unrecognised discriminant, and
+  reaches `fluff` only by its own byte (SPL-14). The write API is a closure
+  the store commits or aborts, so the `LockedTXN` abort-on-drop that once
+  silently rolled back every Dandelion++ relay-timestamp write cannot be
+  reproduced. `RelayMethod` / `NetZone` move to `shekyl-types` as the FFI
+  seam's words; `relay_category::legacy` is not minted. The two-file commit
+  order E5's pool inherits — chain first, pool second, reconcile at open —
+  is stated on the store. Pre-genesis: a daemon store at layout 11 is
+  recreated, not migrated; the pool file is new.
 - **DRS-E1 S-ARCH — the archival read surface, typed; the bond record's
   first Rust type.** Schema layout **11**: `archival_bond`,
   `archival_serve_credit`, `archival_r_market`, `archival_sigma_work`,

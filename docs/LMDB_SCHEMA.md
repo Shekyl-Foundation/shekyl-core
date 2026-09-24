@@ -1080,6 +1080,7 @@ Offset  Size  Field
 | Writers | `add_txpool_tx`, `update_txpool_tx`, `remove_txpool_tx` |
 | Readers | `get_txpool_tx_meta`, `for_all_txpool_txes` |
 | Introduced | Genesis |
+| redb twin | `pool_meta` (`[u8; 32] → Coded<pool_record>`) in the **pool file**, `shekyl-chain-store::pool` — not the consensus store (DRS-E1 S-POOL, 2026-09-24; `DAEMON_REDB_STORE.md` §5.1; `schema::MIRRORED_ELSEWHERE`). The 192-byte record is re-specified, not ported: `DRS_E1_SPOOL.md` §3.4 |
 
 ### `txpool_blob`
 
@@ -1095,6 +1096,7 @@ Raw transaction blobs in the memory pool.
 | Writers | `add_txpool_tx`, `remove_txpool_tx` |
 | Readers | `get_txpool_tx_blob`, `for_all_txpool_txes` |
 | Introduced | Genesis |
+| redb twin | `pool_blob` (`[u8; 32] → Blob<pool_tx>`) in the **pool file**, `shekyl-chain-store::pool` (DRS-E1 S-POOL, 2026-09-24; `schema::MIRRORED_ELSEWHERE`) |
 
 ---
 
