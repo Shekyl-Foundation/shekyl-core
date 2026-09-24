@@ -441,7 +441,11 @@ codec refuses what they would observe, SI-14's shape.
   words and cannot take `shekyl-relay` (a relay scheduler with an async
   driver) as a dependency; rule 18 says they move down (`SPL-Q6`).
 - **SPL-7 — a separate file loses an atomicity the C++ has, and §5.1 already
-  paid for it.** Today the pool's `LockedTXN` nests under an active block
+  paid for it.** *(Which `LockedTXN` property this row is about, stated
+  because the other one is the known bug — SPL-16,
+  [`RELAY_STATE_REFERENCE_SHAPES.md`](RELAY_STATE_REFERENCE_SHAPES.md) §1:
+  the batch-**nesting**, lost and accepted here; **not** the abort-on-drop,
+  which is refused.)* Today the pool's `LockedTXN` nests under an active block
   batch (audit §4: "writes piggyback on the outer transaction"), so
   `take_tx`'s removal of a mined transaction commits **with** the block, and
   a pop's re-`add_tx` commits with the pop. Two files, two commits: a crash
@@ -534,7 +538,12 @@ codec refuses what they would observe, SI-14's shape.
   falling to `fluff` — unguarded. The fix is the decoder's shape: no
   default arm, an error on any unrecognised discriminant, `Fluff` reachable
   only by its own byte. Absence-as-a-case, applied to a relay state whose
-  "value" is a privacy decision. **Scenario for the relay-privacy lane**
+  "value" is a privacy decision. **Precedent in the same subsystem** —
+  follow it rather than the principle: `shekyl-relay-privacy/src/stem_map/mod.rs:9–13`
+  removed `boost::uuids::nil_uuid()` because the C++ used one sentinel in
+  three roles and every caller had to know which; each became an `Option`
+  in a distinct position ([`RELAY_STATE_REFERENCE_SHAPES.md`](RELAY_STATE_REFERENCE_SHAPES.md)
+  §4). **Scenario for the relay-privacy lane**
   (`SPL-Q7`): a persisted stem-phase entry whose embargo deadline passed
   during downtime — SPL-5's `RelayClock` and this finding meeting in one
   record; the wrong default on either leaks.
@@ -598,9 +607,16 @@ codec refuses what they would observe, SI-14's shape.
   `observed_circulating` through `on_stem_propagated` (§92.5c item 1: *"the
   verdict now leaves `seen` itself, the last point that still holds a
   hash"*). `origin_zone`, `receive_time`, `relayed`, the readiness cache and
-  the class bits have no Rust twin at all. **Answer:** the pool record is
-  the *sole persistent home* of these facts, not a second copy; `SPL-Q7`'s
-  persist-whole stands on that ground. **What it adds to Q7's scenario:**
+  the class bits have no Rust twin at all. The test the maintainer gave for
+  each field — *if this value disagreed with the Zone's, which one would be
+  right?* — has no Zone-side value to name for any of them
+  ([`RELAY_STATE_REFERENCE_SHAPES.md`](RELAY_STATE_REFERENCE_SHAPES.md) §2).
+  **Answer:** every relay field is *evidence*, not policy state; the pool
+  record is the *sole persistent home* of these facts, not a second copy;
+  `SPL-Q7`'s persist-whole stands on that ground and only on it. **Forward
+  to E5:** the store's readers do not branch on these fields; the relay
+  loop that does (`tx_pool.cpp` deciding re-relay from `last_relayed_time`)
+  is the Zone's job in the Rust design, taking the record as input. **What it adds to Q7's scenario:**
   `StemWatch.pending` does not survive a restart, so a persisted
   *originated* entry whose observation was in flight restarts with its
   re-broadcast responsibility armed and no watch that can disarm it until
@@ -748,7 +764,15 @@ No fold commit: the surface has no computation.
 - `LMDB_WRITE_ATOMICITY_AUDIT.md` §4 / §9 (DRS-W2): the wart names where it
   closed for the pool file (SPL-11).
 - `DAEMON_RELAY_PRIVACY.md`: `SPL-Q7`'s forward-action, at the section that
-  owns the `local` class's lifecycle.
+  owns the `local` class's lifecycle. *(§92.4 gained a pointer to
+  [`RELAY_STATE_REFERENCE_SHAPES.md`](RELAY_STATE_REFERENCE_SHAPES.md) §3,
+  the pool-side consequence, on the pre-flight PR — 2026-09-24.)*
+- [`RELAY_STATE_REFERENCE_SHAPES.md`](RELAY_STATE_REFERENCE_SHAPES.md) —
+  **landed 2026-09-24 on the pre-flight PR:** the five shapes (`LockedTXN`,
+  relay-state ownership, `Local`'s three properties, SPL-14's decoder, the
+  peerlist → outbound → stem-map chain) with the ruling each comes from and
+  what drift looks like; the home for three rulings that lived only in chat
+  and comments.
 - `18-type-placement.mdc`: no change — the rule covers `SPL-Q6` (`SCU-Q2`'s
   general form); this document cites it.
 - CHANGELOG: one entry (the pool file; layout 12 with the eviction; the
