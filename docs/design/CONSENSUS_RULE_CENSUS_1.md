@@ -315,8 +315,8 @@ work rather than duplicating it.
 
 ### L-2 — `DEFAULT_MAX_PACKET_SIZE = 100 MB` (`header.rs:27`)
 
-100 MB per packet, versus a 256 KiB pre-handshake limit. A 100 MB allocation
-ceiling on a post-handshake peer is a memory-amplification lever: a handful of
+100 MB per packet, versus a 256 KiB limit before the Levin handshake completes. A 100 MB allocation
+ceiling on a peer with an established session is a memory-amplification lever: a handful of
 peers each claiming a large payload can exhaust a node. `fragment.rs:30` checks
 the claim *before* allocation, which is the right shape — but the ceiling
 itself is inherited, not derived. It should be **derived from the largest

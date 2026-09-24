@@ -170,13 +170,15 @@ namespace nodetool
     {
       basic_node_data node_data;
       t_playload_type payload_data;
-      // Self-detection nonce (SHEKYL_P2P_PROTOCOL.md, PWD-T1's token carried
-      // interim on this request until the Noise handshake lands): 32 bytes
-      // of CSPRNG output, in the clear — its only job is to be recognised
-      // by the node that emitted it. Inserted into the dialing zone's
-      // in-flight set immediately before this request is written; an
-      // arriving handshake carrying a nonce this node recently emitted IS
-      // this node. Windows are per zone; comparison is within-zone only —
+      // Self-detection nonce (SHEKYL_P2P_PROTOCOL.md §3.5, *Two handshakes*,
+      // PWD-T1): 32 bytes of CSPRNG output on the Levin handshake request.
+      // Session content — it stays here on every zone, and does not ride the
+      // transport handshake. On clearnet the Noise channel encrypts it; the
+      // counterparty still sees it, which is the point. Its only job is to
+      // be recognised by the node that emitted it. Inserted into the dialing
+      // zone's in-flight set immediately before this request is written; an
+      // arriving request carrying a nonce this node emitted IS this node.
+      // Windows are per zone; comparison is within-zone only —
       // a global window would let a peer dialed on one zone replay the
       // nonce into another zone's listener and use the drop as a
       // cross-zone correlation oracle.

@@ -3586,8 +3586,8 @@ std::size_t shekyl_relay_zone_stem_snapshot(const RelayZoneHandle* handle,
 std::size_t shekyl_relay_zone_stem_in_flight(const RelayZoneHandle* handle);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
-//! A peer completed its handshake.
-void shekyl_relay_zone_on_handshake(RelayZoneHandle* handle, const std::uint8_t* id, bool is_income);
+//! A peer's Levin handshake completed (session established).
+void shekyl_relay_zone_on_session_established(RelayZoneHandle* handle, const std::uint8_t* id, bool is_income);
 //! A peer disconnected.
 void shekyl_relay_zone_on_close(RelayZoneHandle* handle, const std::uint8_t* id);
 //! Stem slots backed by a live peer — the inherited `connection_count`. Reads a

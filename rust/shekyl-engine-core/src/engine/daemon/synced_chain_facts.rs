@@ -587,6 +587,46 @@ impl From<GetInfoFault> for RpcError {
     }
 }
 
+/// The `get_info` fields [`health_from_get_info`] and
+/// [`top_hash_from_get_info`] read.
+///
+/// Test daemons build the reply from this struct, so the field set lives
+/// next to the parser. A new mandatory field is a compile error at every
+/// caller, not a second JSON document that can drift. Test-only: production
+/// reads the daemon's reply, it does not build one.
+#[cfg(test)]
+pub(crate) struct GetInfoDocument {
+    /// Block count (`get_info.height`), not the tip's index.
+    pub(crate) chain_count: ChainCount,
+    /// Network target under the wire's "0 when synchronized" convention.
+    pub(crate) target_height: u64,
+    /// The daemon's own flag. Absent on the wire reads as false; this
+    /// struct always sets it, so a caller chooses the value.
+    pub(crate) synchronized: bool,
+    /// Identity of the chain `chain_count` counts.
+    pub(crate) top_hash: BlockHash,
+    /// Outbound peer count. Zero is "none known"; the decoder defaults
+    /// an absence to zero, and this struct does not rely on that default.
+    pub(crate) outgoing_connections: u64,
+    /// Inbound peer count. Same contract as [`Self::outgoing_connections`].
+    pub(crate) incoming_connections: u64,
+}
+
+#[cfg(test)]
+impl GetInfoDocument {
+    /// The JSON object a `get_info` result carries.
+    pub(crate) fn to_value(&self) -> Value {
+        serde_json::json!({
+            "height": self.chain_count.to_raw(),
+            "target_height": self.target_height,
+            "synchronized": self.synchronized,
+            "top_block_hash": hex::encode(self.top_hash.as_bytes()),
+            "outgoing_connections_count": self.outgoing_connections,
+            "incoming_connections_count": self.incoming_connections,
+        })
+    }
+}
+
 /// Decode the daemon's `get_info` result into [`DaemonHealth`].
 ///
 /// The single parse site for this response, shared by

@@ -57,7 +57,7 @@ fn next_wake_follows_a_newly_queued_batch_without_re_arming() {
     );
 
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Outbound);
+        .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut().queue_fluff(&[vec![1]], None, 0, &mut rng);
     let fluff = d.zone().fluff_deadline().expect("a batch is in flight");
     assert!(fluff < epoch_wake, "fixture: the fluff must be the sooner");
@@ -75,7 +75,7 @@ fn polling_releases_a_batch_at_its_deadline_and_not_before() {
     let mut rng = SplitMix64::new(41);
     let mut d = driver(&mut rng);
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Inbound);
+        .on_session_established(id(1), PeerDirection::Inbound);
     d.zone_mut().queue_fluff(&[vec![7]], None, 0, &mut rng);
     let due = d.zone().fluff_deadline().unwrap();
 
@@ -186,9 +186,9 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
         .unwrap(),
     );
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Outbound);
+        .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
-        .on_handshake_complete(id(2), PeerDirection::Outbound);
+        .on_session_established(id(2), PeerDirection::Outbound);
     d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
 
     // The hole recipe the CV-2 witness established: close the slot's peer
@@ -276,15 +276,15 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
         .unwrap(),
     );
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Outbound);
+        .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
-        .on_handshake_complete(id(2), PeerDirection::Outbound);
+        .on_session_established(id(2), PeerDirection::Outbound);
     d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
     d.zone_mut()
-        .on_handshake_complete(id(3), PeerDirection::Outbound);
+        .on_session_established(id(3), PeerDirection::Outbound);
     d.zone_mut().update_stems(vec![keep, id(3)], &mut rng);
     assert_eq!(
         d.zone().stem_slots()[0],
@@ -317,9 +317,9 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
     // from the missing schedule and not from the state failing to happen.
     let mut d = driver(&mut rng);
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Outbound);
+        .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
-        .on_handshake_complete(id(2), PeerDirection::Outbound);
+        .on_session_established(id(2), PeerDirection::Outbound);
     d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
@@ -358,7 +358,7 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
     let mut rng = SplitMix64::new(44);
     let mut d = driver(&mut rng);
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Inbound);
+        .on_session_established(id(1), PeerDirection::Inbound);
     d.zone_mut().queue_fluff(&[vec![9]], None, 0, &mut rng);
     let due = d.zone().fluff_deadline().unwrap();
     if due > 0 {
@@ -428,9 +428,9 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
     // Bind both slots: since the inversion, an unbound slot emits no send
     // (CV-2), and this test is about cadence, not binding.
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Outbound);
+        .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
-        .on_handshake_complete(id(2), PeerDirection::Outbound);
+        .on_session_established(id(2), PeerDirection::Outbound);
     d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
 
     // Fixture requirement: distinct deadlines, or "one per advance" could
@@ -511,9 +511,9 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
         .unwrap(),
     );
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Outbound);
+        .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
-        .on_handshake_complete(id(2), PeerDirection::Outbound);
+        .on_session_established(id(2), PeerDirection::Outbound);
     d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
 
     // Ground truth from the owning structure, captured before driving.
@@ -584,9 +584,9 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
         .unwrap(),
     );
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Outbound);
+        .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
-        .on_handshake_complete(id(2), PeerDirection::Outbound);
+        .on_session_established(id(2), PeerDirection::Outbound);
     d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
 
     // Make a hole at index 0 the way the RP-3a seal did: close slot 0's
@@ -660,9 +660,9 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         .unwrap(),
     );
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Outbound);
+        .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
-        .on_handshake_complete(id(2), PeerDirection::Outbound);
+        .on_session_established(id(2), PeerDirection::Outbound);
     d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
 
     let a = d.zone().noise_deadline_at(0).expect("ch0 armed");
@@ -729,7 +729,7 @@ fn a_stem_observation_resolves_on_the_poll_clock_and_a_close_drops_it() {
     let mut rng = SplitMix64::new(0x57E3);
     let mut d = driver(&mut rng);
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Outbound);
+        .on_session_established(id(1), PeerDirection::Outbound);
 
     let tx = TxId::from_bytes([7u8; 32]);
     let deadline = 5_000;
@@ -782,7 +782,7 @@ fn an_arrival_resolves_the_observation_as_propagated() {
     let mut rng = SplitMix64::new(0x57E4);
     let mut d = driver(&mut rng);
     d.zone_mut()
-        .on_handshake_complete(id(1), PeerDirection::Outbound);
+        .on_session_established(id(1), PeerDirection::Outbound);
 
     let tx = TxId::from_bytes([9u8; 32]);
     d.zone_mut().record_stem_at(&[tx], id(1), None, 5_000);

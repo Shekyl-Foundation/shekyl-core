@@ -422,9 +422,45 @@ pub fn test_block_hash_at(height: u64) -> [u8; 32] {
     h
 }
 
+/// Outbound peers a healthy test daemon reports. Non-zero so a health
+/// reading is not the peerless alarm. Inbound is zero ("none").
+const TEST_DAEMON_OUTGOING_CONNECTIONS: u64 = 8;
+
+/// How far above its chain count a syncing test daemon places
+/// `target_height`. The lead only has to be strictly positive: the sync
+/// predicate refuses any target the count has not reached. It is not a
+/// protocol constant.
+const SYNCING_TARGET_LEAD: u64 = 10_000;
+
+/// `get_info` for [`TestDaemon`] and any other double that should answer
+/// as this daemon does.
+///
+/// `syncing` moves both halves of the predicate together: the flag clears
+/// and the target sits [`SYNCING_TARGET_LEAD`] above the count. A reply
+/// that changes only one of those is not a state this double emits. The
+/// sentinel-only case (target `0` with the flag clear) is built in
+/// `synced_chain_facts_tests` against the constructor.
+pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Value {
+    let target_height = if syncing {
+        chain_count.saturating_add(SYNCING_TARGET_LEAD)
+    } else {
+        // `0` is the wire's synchronized sentinel, not an absent field.
+        0
+    };
+    super::daemon::synced_chain_facts::GetInfoDocument {
+        chain_count: ChainCount::from_raw(chain_count),
+        target_height,
+        synchronized: !syncing,
+        top_hash: BlockHash::from_bytes(test_block_hash_at(chain_count.saturating_sub(1))),
+        outgoing_connections: TEST_DAEMON_OUTGOING_CONNECTIONS,
+        incoming_connections: 0,
+    }
+    .to_value()
+}
+
 fn default_health() -> DaemonHealth {
     DaemonHealth {
-        connections: 8,
+        connections: TEST_DAEMON_OUTGOING_CONNECTIONS,
         height: 0,
         target_height: 0,
         synchronized: true,
@@ -712,20 +748,8 @@ impl Rpc for TestDaemon {
                     .unwrap_or(chain_len);
                 (h, state.daemon_syncing)
             };
-            serde_json::from_value(serde_json::json!({
-                "height": height,
-                // A daemon that is behind reports a target above its height
-                // AND clears its own flag; answering only one of the two
-                // would test a state no daemon produces.
-                "target_height": if syncing { height + 10_000 } else { 0 },
-                "synchronized": !syncing,
-                // The newest block is at height - 1 (count vs tip); an empty
-                // chain has no top block, so it reports the null hash.
-                "top_block_hash": hex::encode(test_block_hash_at(height.saturating_sub(1))),
-                "outgoing_connections_count": 8,
-                "incoming_connections_count": 0,
-            }))
-            .map_err(|e| RpcError::InvalidNode(format!("TestDaemon get_info shape: {e}")))
+            serde_json::from_value(daemon_get_info(height, syncing))
+                .map_err(|e| RpcError::InvalidNode(format!("TestDaemon get_info shape: {e}")))
         }
     }
 

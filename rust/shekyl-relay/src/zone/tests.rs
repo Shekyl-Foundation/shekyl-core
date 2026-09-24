@@ -57,14 +57,14 @@ fn handshake_is_idempotent_and_does_not_discard_a_batch() {
     // queued transactions — dropping them would silently lose relay work.
     let mut rng = SplitMix64::new(2);
     let mut z = zone(&mut rng);
-    z.on_handshake_complete(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(1), PeerDirection::Outbound);
     z.contexts
         .get_mut(&id(1))
         .expect("peer present")
         .queued
         .push(TxBlob::from([0xAAu8].as_slice()));
 
-    z.on_handshake_complete(id(1), PeerDirection::Inbound);
+    z.on_session_established(id(1), PeerDirection::Inbound);
     assert_eq!(z.peer_count(), 1, "no duplicate peer");
     assert_eq!(
         z.peer(&id(1)).expect("peer present").queued.len(),
@@ -77,8 +77,8 @@ fn handshake_is_idempotent_and_does_not_discard_a_batch() {
 fn close_removes_the_peer_and_its_queue() {
     let mut rng = SplitMix64::new(3);
     let mut z = zone(&mut rng);
-    z.on_handshake_complete(id(1), PeerDirection::Inbound);
-    z.on_handshake_complete(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(1), PeerDirection::Inbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
     z.on_connection_close(&id(1));
     assert_eq!(z.peer_count(), 1);
     assert!(z.peer(&id(1)).is_none());
@@ -154,7 +154,7 @@ fn mean_delay(direction: PeerDirection, seed: u64, n: u64) -> u64 {
     let mut total = 0_u64;
     for _ in 0..n {
         let mut z = zone(&mut rng);
-        z.on_handshake_complete(id(1), direction);
+        z.on_session_established(id(1), direction);
         assert_eq!(z.queue_fluff(&[vec![1]], None, 0, &mut rng), 1);
         total += z.fluff_deadline().expect("a batch is in flight");
     }
@@ -196,7 +196,7 @@ fn fluff_deadlines_are_pinned_for_a_fixed_seed() {
     let inbound: Vec<Millis> = (0..4)
         .map(|_| {
             let mut z = zone(&mut rng);
-            z.on_handshake_complete(id(1), PeerDirection::Inbound);
+            z.on_session_established(id(1), PeerDirection::Inbound);
             z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng);
             z.fluff_deadline().unwrap()
         })
@@ -204,7 +204,7 @@ fn fluff_deadlines_are_pinned_for_a_fixed_seed() {
     let outbound: Vec<Millis> = (0..4)
         .map(|_| {
             let mut z = zone(&mut rng);
-            z.on_handshake_complete(id(1), PeerDirection::Outbound);
+            z.on_session_established(id(1), PeerDirection::Outbound);
             z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng);
             z.fluff_deadline().unwrap()
         })
@@ -224,7 +224,7 @@ fn a_burst_does_not_push_a_peers_flush_further_out() {
     // trickling transactions and defer the fluff indefinitely.
     let mut rng = SplitMix64::new(23);
     let mut z = zone(&mut rng);
-    z.on_handshake_complete(id(1), PeerDirection::Inbound);
+    z.on_session_established(id(1), PeerDirection::Inbound);
 
     z.queue_fluff(&[vec![1]], None, 0, &mut rng);
     let first = z.fluff_deadline().unwrap();
@@ -247,8 +247,8 @@ fn a_burst_does_not_push_a_peers_flush_further_out() {
 fn fluff_skips_the_source_and_releases_on_deadline() {
     let mut rng = SplitMix64::new(24);
     let mut z = zone(&mut rng);
-    z.on_handshake_complete(id(1), PeerDirection::Inbound);
-    z.on_handshake_complete(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(1), PeerDirection::Inbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
 
     let accepted = z.queue_fluff(&[vec![7]], Some(id(1)), 0, &mut rng);
     assert_eq!(accepted, 1, "one peer took it; the source is skipped");
@@ -277,7 +277,7 @@ fn forcing_a_flush_runs_the_same_release_path() {
     // daemon's force-step hook honest rather than a special case.
     let mut rng = SplitMix64::new(25);
     let mut z = zone(&mut rng);
-    z.on_handshake_complete(id(1), PeerDirection::Inbound);
+    z.on_session_established(id(1), PeerDirection::Inbound);
     z.queue_fluff(&[vec![9]], None, 0, &mut rng);
     let deadline = z.fluff_deadline().unwrap();
 
@@ -455,9 +455,9 @@ fn a_private_zone_fluffs_only_to_outbound_peers() {
         &mut rng,
     )
     .unwrap();
-    z.on_handshake_complete(id(1), PeerDirection::Inbound);
-    z.on_handshake_complete(id(2), PeerDirection::Outbound);
-    z.on_handshake_complete(id(3), PeerDirection::Inbound);
+    z.on_session_established(id(1), PeerDirection::Inbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Inbound);
 
     assert_eq!(
         z.queue_fluff(&[vec![7]], None, 0, &mut rng),
@@ -483,9 +483,9 @@ fn a_private_zone_fluffs_only_to_outbound_peers() {
         &mut rng,
     )
     .unwrap();
-    z.on_handshake_complete(id(1), PeerDirection::Inbound);
-    z.on_handshake_complete(id(2), PeerDirection::Outbound);
-    z.on_handshake_complete(id(3), PeerDirection::Inbound);
+    z.on_session_established(id(1), PeerDirection::Inbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Inbound);
     assert_eq!(
         z.queue_fluff(&[vec![7]], None, 0, &mut rng),
         3,
@@ -554,9 +554,9 @@ fn fluff_fanout_shares_one_blob_handle_across_peers() {
     // N Arc clones of one allocation, not N owned copies of the payload.
     let mut rng = SplitMix64::new(36);
     let mut z = zone(&mut rng);
-    z.on_handshake_complete(id(1), PeerDirection::Inbound);
-    z.on_handshake_complete(id(2), PeerDirection::Outbound);
-    z.on_handshake_complete(id(3), PeerDirection::Inbound);
+    z.on_session_established(id(1), PeerDirection::Inbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Inbound);
 
     assert_eq!(z.queue_fluff(&[[0xDEu8, 0xAD]], None, 0, &mut rng), 3);
     let a = &z.peer(&id(1)).unwrap().queued[0];

@@ -116,7 +116,7 @@ the test passes but verifies nothing. Surface this with property tests
 sampling unfamiliar values, FFI tests calling the production path, or review
 by someone who didn't write the code.
 
-## Every vector declares its oracle; only external or independent ones are KATs
+## Every vector declares its oracle; only external or independent oracles are KATs
 
 A pinned test vector is a claim about *who vouches for the value*. Three
 oracle tiers, in descending strength:

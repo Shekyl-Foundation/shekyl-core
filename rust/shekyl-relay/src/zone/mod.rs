@@ -508,12 +508,13 @@ impl Zone {
         self.stems
     }
 
-    /// A peer finished its handshake and may now carry relay traffic.
+    /// A peer's Levin handshake finished (session established) and it may
+    /// now carry relay traffic.
     ///
-    /// Mirrors `notify::on_handshake_complete`. Idempotent: a repeated
-    /// handshake for a live connection keeps the existing batch rather than
+    /// Mirrors `notify::on_session_established`. Idempotent: a repeated
+    /// call for a live connection keeps the existing batch rather than
     /// discarding queued transactions.
-    pub fn on_handshake_complete(&mut self, id: ConnectionId, direction: PeerDirection) {
+    pub fn on_session_established(&mut self, id: ConnectionId, direction: PeerDirection) {
         self.contexts
             .entry(id)
             .or_insert_with(|| PeerFluff::new(direction));

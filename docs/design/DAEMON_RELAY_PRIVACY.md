@@ -3727,7 +3727,7 @@ them — the same reason RP-4's correction needed no unchanged-behaviour oracle.
 
 `notify`'s public API is the contract that must survive verbatim — callers and
 all 33 tests bind to it: `get_status`, `new_out_connection`,
-`on_handshake_complete`, `on_connection_close`, `send_txs`, and the three `run_*`
+`on_session_established`, `on_connection_close`, `send_txs`, and the three `run_*`
 hooks. Each becomes a forwarding call onto a Rust zone handle, exactly as
 `connection_map` became a forwarding wrapper in RP-2a.
 
@@ -3753,7 +3753,7 @@ guarantee than the strand, because it is enforced by ownership rather than by
 each handler remembering its `\pre`. The RP-2a map contract inverts cleanly with
 it: "no internal lock because the zone strand serializes" becomes "no internal
 lock because the Rust task owns it". The design obligation is the handoff — every
-C++-side event (`on_handshake_complete`, `on_connection_close`, `send_txs`) must
+C++-side event (`on_session_established`, `on_connection_close`, `send_txs`) must
 enqueue to that task rather than mutate anything, and the FFI must make the
 mutating path the only path.
 

@@ -91,7 +91,7 @@ namespace cryptonote
     };
 
     static constexpr int handshake_command() noexcept { return 1001; }
-    bool handshake_complete() const noexcept { return m_state != state_before_handshake; }
+    bool session_established() const noexcept { return m_state != state_before_handshake; }
 
     //! \return Payload cap for this `(command, flags)` pair, or `nullopt`
     //! if the header is unrecognised at ingress (PWD-B3a). `nullopt` is
