@@ -180,6 +180,9 @@ impl Initiator {
         remote_e.copy_from_slice(&message2[..32]);
         self.sym.mix_hash(&remote_e);
         let shared = self.eph.diffie_hellman(&PublicKey::from(remote_e));
+        if !shared.was_contributory() {
+            return Err(HandshakeError::Decrypt);
+        }
         self.sym.mix_key(shared.as_bytes());
         #[cfg(test)]
         let ck_after_ee = Zeroizing::new(*self.sym.ck);
@@ -292,6 +295,9 @@ impl ResponderReady {
         msg.extend_from_slice(&epub);
         self.sym.mix_hash(&epub);
         let shared = eph.diffie_hellman(&PublicKey::from(self.remote_e));
+        if !shared.was_contributory() {
+            return Err(HandshakeError::Decrypt);
+        }
         self.sym.mix_key(shared.as_bytes());
         #[cfg(test)]
         let ck_after_ee = Zeroizing::new(*self.sym.ck);
@@ -466,6 +472,23 @@ mod tests {
                 .unwrap();
         assert!(matches!(
             ini.read_message2(&m2),
+            Err(HandshakeError::Decrypt)
+        ));
+    }
+
+    #[test]
+    fn low_order_x25519_does_not_mix() {
+        let (ini, _m1) = Initiator::new(&nid()).unwrap();
+        let zeros = vec![0u8; MESSAGE2_LEN];
+        assert!(matches!(
+            ini.read_message2(&zeros),
+            Err(HandshakeError::Decrypt)
+        ));
+
+        let forged = vec![0u8; MESSAGE1_LEN];
+        let ready = Responder::new(&nid()).read_message1(&forged).unwrap();
+        assert!(matches!(
+            ready.write_message2(),
             Err(HandshakeError::Decrypt)
         ));
     }
