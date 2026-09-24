@@ -19,7 +19,10 @@
 //! Bytes are what the `u64` and `hash32` codecs already wrote: only the
 //! value's *name* is new.
 
-use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash, TreeLeaf, TreePosition};
+use shekyl_types::{
+    BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash, SettlementEpoch, ShardId, TreeLeaf,
+    TreePosition,
+};
 use shekyl_units::AtomicUnits;
 
 use crate::{exact, Canonical, CodecError};
@@ -151,6 +154,43 @@ impl Canonical for TreeLeaf {
     }
 }
 
+/// `archival_sigma_work[epoch]`, `archival_budget[epoch]`, and the epoch
+/// component of the serve-credit and market keys — an archival
+/// **settlement-epoch** index (DRS-E1 S-ARCH). The `shekyl-types` newtype,
+/// stored as its raw LE `u64`, so an epoch is never a height in a table.
+impl Canonical for SettlementEpoch {
+    const NAME: &'static str = "settlement_epoch";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+/// A shard id inside a stored archival row (a bond's held-shard list, a
+/// market key's component) — DRS-E1 S-ARCH. The `shekyl-types` newtype,
+/// stored as its raw LE `u64`.
+impl Canonical for ShardId {
+    const NAME: &'static str = "shard_id";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +218,8 @@ mod tests {
         roundtrip(PrunableHash::from_bytes([0xab; 32]));
         roundtrip(PqcAuthHash::from_bytes([0xcd; 32]));
         roundtrip(AtomicUnits::from_raw(u64::MAX));
+        roundtrip(SettlementEpoch::from_raw(26));
+        roundtrip(ShardId::from_raw(4095));
     }
 
     #[test]

@@ -37,9 +37,17 @@ use crate::MAX_CLAIM_AGE_W;
 pub const MAX_CLAIMED_EPOCH_ENTRIES: u64 = MAX_CLAIM_AGE_W + 6;
 
 const _: () = assert!(
-    MAX_CLAIMED_EPOCH_ENTRIES == 32,
+    MAX_CLAIM_AGE_W == shekyl_types::archival::MAX_CLAIM_AGE_W_EPOCHS,
+    "config/consensus_constants.json max_claim_age_w must equal the frozen pin \
+     shekyl_types::archival::MAX_CLAIM_AGE_W_EPOCHS (the daemon store bounds a bond \
+     record's claimed-epoch span by it)"
+);
+
+const _: () = assert!(
+    MAX_CLAIMED_EPOCH_ENTRIES == shekyl_types::archival::MAX_CLAIMED_EPOCH_ENTRIES as u64,
     "REWARD_EMISSION_LEG.md §6.3 pins the claimed-epoch cap at 32 \
-     (W = 26 + 6 reorg slack); revisit the pin if max_claim_age_w moves"
+     (W = 26 + 6 reorg slack); the frozen pin lives in shekyl-types::archival \
+     (the daemon store bounds its decode by it) and this derivation must equal it"
 );
 
 /// Rejection reasons for [`claimed_epochs_check_and_set`]; the set is not

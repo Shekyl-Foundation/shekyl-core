@@ -12,7 +12,9 @@
 //! mempool implements it natively. Facts are plain data — the shim fetches,
 //! the engine decides. Zero verdict logic lives behind this trait.
 
-use shekyl_archival_retention::{BadInterval, HoldingsDescriptor, HoldingsKind, LastServedScan};
+use shekyl_archival_retention::{
+    BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan,
+};
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
 
 use crate::submit::certificate::VerificationCertificate;

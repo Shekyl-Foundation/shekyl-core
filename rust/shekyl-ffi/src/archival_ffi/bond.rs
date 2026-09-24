@@ -9,8 +9,8 @@ use shekyl_archival_retention::{
     cold_authority_pin, reinstate_connect, reinstate_pop, release_connect, release_pop,
     verify_join_market_bond_post, verify_reinstate_bond_post, verify_release_bond_post,
     whole_record_last_served, ArchivalBondPostVin, BadInterval, BondKind, BondPostKind,
-    ColdAuthorityError, DebitAuthError, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet,
-    ShardSetError, ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES,
+    ColdAuthorityError, DebitAuthError, HoldingsDescriptor, HoldingsKind, HoldingsKindScan,
+    LastServedScan, ShardSet, ShardSetError, ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES,
 };
 
 use super::codes::*;
@@ -401,7 +401,7 @@ pub unsafe extern "C" fn shekyl_archival_whole_record_last_served(
 /// Decide which last-served LMDB scan a holdings kind uses.
 ///
 /// This is the **kind→scan decision**, exhaustive on [`HoldingsKind`]: a third
-/// variant fails to compile in [`HoldingsKind::last_served_scan`] until its
+/// variant fails to compile in [`HoldingsKindScan::last_served_scan`] until its
 /// arm is written. The two C++ gather sites (Release verify in
 /// `blockchain.cpp`, claim-source marshal in `archival_claim_source.cpp`)
 /// ask this instead of branching on `is_complete_tree()` independently.

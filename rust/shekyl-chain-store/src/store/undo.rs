@@ -93,6 +93,11 @@ impl Restorable for u64 {}
 impl Restorable for (u64, u64) {}
 // `curve_tree_layers`' `(layer, chunk)` (S-CURVE `SCU-Q3`): 9 fixed bytes.
 impl Restorable for (u8, u64) {}
+// `archival_bond`'s 32-byte persona key (S-ARCH A1) and
+// `archival_serve_credit`'s `(persona, shard, epoch, height)` (S-ARCH
+// `ServeCreditKey`): 32 and 56 fixed bytes, the tuple's derived width.
+impl Restorable for [u8; 32] {}
+impl Restorable for ([u8; 32], u64, u64, u64) {}
 // `curve_tree_meta`'s unit key (S-CURVE `SCU-Q1`): the one-row table.
 impl Restorable for () {}
 impl Restorable for LmdbHashKey {}

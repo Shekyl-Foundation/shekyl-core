@@ -54,6 +54,7 @@
 
 use shekyl_crypto_hash::cshake256_32;
 
+use super::reader::{put_bytes, Reader};
 use super::{Canonical, CodecError};
 use crate::schema::TableOrdinal;
 
@@ -124,7 +125,7 @@ impl UndoEntry {
             Self::Inserted { table, key, post } => {
                 out.push(Self::TAG_INSERTED);
                 out.extend_from_slice(&table.index().to_le_bytes());
-                bytes(out, key);
+                put_bytes(out, key);
                 out.extend_from_slice(post);
             }
             Self::Replaced {
@@ -135,12 +136,12 @@ impl UndoEntry {
             } => {
                 out.push(Self::TAG_REPLACED);
                 out.extend_from_slice(&table.index().to_le_bytes());
-                bytes(out, key);
+                put_bytes(out, key);
                 match prior {
                     None => out.push(0),
                     Some(prior) => {
                         out.push(1);
-                        bytes(out, prior);
+                        put_bytes(out, prior);
                     }
                 }
                 out.extend_from_slice(post);
@@ -151,19 +152,19 @@ impl UndoEntry {
     fn decode(r: &mut Reader<'_>) -> Result<Self, CodecError> {
         let tag = r.u8()?;
         let table = TableOrdinal::from_index(r.u32()?);
-        let key = r.bytes()?;
+        let key = Box::from(r.bytes()?);
         match tag {
             Self::TAG_INSERTED => {
-                let post = r.post()?;
+                let post = r.array::<32>("buffer ends inside a post-image digest")?;
                 Ok(Self::Inserted { table, key, post })
             }
             Self::TAG_REPLACED => {
                 let prior = match r.u8()? {
                     0 => None,
-                    1 => Some(r.bytes()?),
-                    _ => return Err(invalid("has_prior byte is neither 0 nor 1")),
+                    1 => Some(Box::from(r.bytes()?)),
+                    _ => return Err(r.invalid("has_prior byte is neither 0 nor 1")),
                 };
-                let post = r.post()?;
+                let post = r.array::<32>("buffer ends inside a post-image digest")?;
                 Ok(Self::Replaced {
                     table,
                     key,
@@ -171,7 +172,7 @@ impl UndoEntry {
                     post,
                 })
             }
-            _ => Err(invalid("entry tag names no variant")),
+            _ => Err(r.invalid("entry tag names no variant")),
         }
     }
 }
@@ -194,81 +195,38 @@ impl Canonical for UndoLog {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        let mut r = Reader(bytes);
-        let count = r.u32()?;
+        let mut r = Reader::new(Self::NAME, bytes);
         // The count is untrusted bytes: never preallocate from it. Every
         // entry is at least `MIN_ENTRY_LEN` bytes, so the remaining input
         // bounds how many can exist; a row claiming more is refused before
-        // an allocation is made for it.
-        let count =
-            usize::try_from(count).map_err(|_| invalid("entry count exceeds the address space"))?;
-        if count > r.0.len() / UndoEntry::MIN_ENTRY_LEN {
-            return Err(invalid("entry count exceeds what the row's bytes can hold"));
-        }
+        // an allocation is made for it (`count_bounded`).
+        let count = r.count_bounded(
+            UndoEntry::MIN_ENTRY_LEN,
+            usize::MAX,
+            "unreachable: no cap above the byte bound",
+        )?;
         let mut entries = Vec::with_capacity(count);
         for _ in 0..count {
             entries.push(UndoEntry::decode(&mut r)?);
         }
-        if !r.0.is_empty() {
-            return Err(invalid("trailing bytes after the last entry"));
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the last entry"));
         }
         Ok(Self(entries))
-    }
-}
-
-fn bytes(out: &mut Vec<u8>, b: &[u8]) {
-    let len = u32::try_from(b.len()).expect("redb refuses values past 3 GiB; u32 is enough");
-    out.extend_from_slice(&len.to_le_bytes());
-    out.extend_from_slice(b);
-}
-
-const fn invalid(reason: &'static str) -> CodecError {
-    CodecError::Invalid {
-        codec: UndoLog::NAME,
-        reason,
-    }
-}
-
-/// A strict cursor: every read is bounds-checked and a short buffer is a
-/// [`CodecError::Invalid`] naming what ran out, never a panic.
-struct Reader<'a>(&'a [u8]);
-
-impl Reader<'_> {
-    fn take(&mut self, n: usize, what: &'static str) -> Result<&[u8], CodecError> {
-        if self.0.len() < n {
-            return Err(invalid(what));
-        }
-        let (head, tail) = self.0.split_at(n);
-        self.0 = tail;
-        Ok(head)
-    }
-
-    fn u8(&mut self) -> Result<u8, CodecError> {
-        self.take(1, "buffer ends inside a tag or flag byte")
-            .map(|b| b[0])
-    }
-
-    fn u32(&mut self) -> Result<u32, CodecError> {
-        self.take(4, "buffer ends inside a u32 field")
-            .map(|b| u32::from_le_bytes(b.try_into().expect("take(4) yields 4 bytes")))
-    }
-
-    fn bytes(&mut self) -> Result<Box<[u8]>, CodecError> {
-        let len = usize::try_from(self.u32()?)
-            .map_err(|_| invalid("byte length exceeds the address space"))?;
-        self.take(len, "buffer ends inside a byte field")
-            .map(Box::from)
-    }
-
-    fn post(&mut self) -> Result<[u8; 32], CodecError> {
-        self.take(32, "buffer ends inside a post-image digest")
-            .map(|b| b.try_into().expect("take(32) yields 32 bytes"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fault the codec files, spelled once for the expectations below.
+    const fn invalid(reason: &'static str) -> CodecError {
+        CodecError::Invalid {
+            codec: UndoLog::NAME,
+            reason,
+        }
+    }
 
     fn entries() -> Vec<UndoEntry> {
         vec![
@@ -326,7 +284,9 @@ mod tests {
         let bytes = u32::MAX.to_le_bytes();
         assert_eq!(
             UndoLog::decode(&bytes),
-            Err(invalid("entry count exceeds what the row's bytes can hold"))
+            Err(invalid(
+                "element count exceeds what the row's bytes can hold"
+            ))
         );
     }
 

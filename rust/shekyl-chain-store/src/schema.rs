@@ -152,9 +152,10 @@ use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash, TreeLe
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    Blob, BlockBody, BlockInfo, Coded, CurveTreeState, LayerHash, OutKey, OutTx, Present,
-    PropertyCellBytes, RuleSetInForce, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
-    TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
+    AttestationWitnessBytes, Blob, BlockBody, BlockInfo, BondRecord, Coded, CurveTreeState,
+    LayerHash, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RuleSetInForce, SigmaWorkMilli,
+    TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog,
+    Unshaped,
 };
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
@@ -370,8 +371,13 @@ tables! {
     /// `block_burn` — INTEGERKEY; height → units burned, present only when non-zero.
     pub const BLOCK_BURN: TableDefinition<u64, Coded<AtomicUnits>> = TableDefinition::new("block_burn");
 
-    /// `archival_serve_credit` — default flags; composite `P_id||shard||epoch||BE(height)`.
-    pub const ARCHIVAL_SERVE_CREDIT: TableDefinition<&[u8], Unshaped> =
+    /// `archival_serve_credit` — default flags in LMDB over the 56-byte
+    /// packed key `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖ BE64(height)`; here the
+    /// tuple `([u8; 32], u64, u64, u64)`, which redb orders component-wise —
+    /// exactly the packed key's lexicographic order — with nothing to pin
+    /// (`ServeCreditKey`, `SCU-Q3`'s precedent). A row is a pass bit:
+    /// `Present`. S-ARCH (E4 writes; A3–A5 read).
+    pub const ARCHIVAL_SERVE_CREDIT: TableDefinition<([u8; 32], u64, u64, u64), Present> =
         TableDefinition::new("archival_serve_credit");
 
     /// `archival_settlement` — default flags. On the abstract interface since
@@ -379,16 +385,20 @@ tables! {
     pub const ARCHIVAL_SETTLEMENT: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_settlement");
 
-    /// `archival_attestation_witness` — INTEGERKEY.
-    pub const ARCHIVAL_ATTESTATION_WITNESS: TableDefinition<u64, Unshaped> =
+    /// `archival_attestation_witness` — INTEGERKEY; a block's stored witness
+    /// bytes, absent when the attestation set was empty (never an empty row).
+    /// S-ARCH (A10).
+    pub const ARCHIVAL_ATTESTATION_WITNESS: TableDefinition<u64, Blob<AttestationWitnessBytes>> =
         TableDefinition::new("archival_attestation_witness");
 
     /// `archival_alt_attestation_witness` — key order `compare_hash32`.
     pub const ARCHIVAL_ALT_ATTESTATION_WITNESS: TableDefinition<LmdbHashKey, Unshaped> =
         TableDefinition::new("archival_alt_attestation_witness");
 
-    /// `archival_bond` — default flags.
-    pub const ARCHIVAL_BOND: TableDefinition<&[u8], Unshaped> = TableDefinition::new("archival_bond");
+    /// `archival_bond` — default flags; keyed by the 32-byte `p_canonical_id`,
+    /// one `BondRecord` per persona (S-ARCH A1; SI-14 on decode).
+    pub const ARCHIVAL_BOND: TableDefinition<[u8; 32], Coded<BondRecord>> =
+        TableDefinition::new("archival_bond");
 
     /// `archival_shard_segment` — default flags, `BE(x)` keys (u64 preserves numeric order).
     pub const ARCHIVAL_SHARD_SEGMENT: TableDefinition<u64, Unshaped> =
@@ -418,12 +428,15 @@ tables! {
     pub const ARCHIVAL_BOND_REINSTATE_LOG: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_bond_reinstate_log");
 
-    /// `archival_r_market` — default flags.
-    pub const ARCHIVAL_R_MARKET: TableDefinition<&[u8], Unshaped> =
+    /// `archival_r_market` — default flags over `BE64(shard) ‖ BE64(epoch)`;
+    /// here the tuple `(u64, u64)`, the same order. The co-holder count frozen
+    /// at epoch close; absent is an epoch that never closed (S-ARCH A6).
+    pub const ARCHIVAL_R_MARKET: TableDefinition<(u64, u64), Coded<RMarket>> =
         TableDefinition::new("archival_r_market");
 
-    /// `archival_sigma_work` — default flags, `BE(x)` keys (u64 preserves numeric order).
-    pub const ARCHIVAL_SIGMA_WORK: TableDefinition<u64, Unshaped> =
+    /// `archival_sigma_work` — default flags, `BE(x)` keys (u64 preserves numeric
+    /// order). `Σwork(E)` frozen at epoch close (S-ARCH A7).
+    pub const ARCHIVAL_SIGMA_WORK: TableDefinition<u64, Coded<SigmaWorkMilli>> =
         TableDefinition::new("archival_sigma_work");
 
     /// `archival_epoch_close_log` — default flags, `BE(x)` keys (u64 preserves numeric order).
@@ -434,8 +447,10 @@ tables! {
     pub const ARCHIVAL_BUDGET_ACCRUAL: TableDefinition<u64, Unshaped> =
         TableDefinition::new("archival_budget_accrual");
 
-    /// `archival_budget` — default flags, `BE(x)` keys (u64 preserves numeric order).
-    pub const ARCHIVAL_BUDGET: TableDefinition<u64, Unshaped> = TableDefinition::new("archival_budget");
+    /// `archival_budget` — default flags, `BE(x)` keys (u64 preserves numeric
+    /// order). The frozen `budget(E)` close row (S-ARCH A8).
+    pub const ARCHIVAL_BUDGET: TableDefinition<u64, Coded<AtomicUnits>> =
+        TableDefinition::new("archival_budget");
 
     /// `pending_tree_leaves` — default flags; composite BE keys.
     pub const PENDING_TREE_LEAVES: TableDefinition<&[u8], Unshaped> =

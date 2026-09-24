@@ -37,7 +37,7 @@ use crate::consensus_state::BadInterval;
 /// **Genesis-frozen consensus constant** (P2B-8 Q3 posture): because Release
 /// verify rejects on it, tx validity depends on the value — a change is a
 /// hard fork, not a codec retune.
-pub const MAX_BOND_BAD_INTERVALS: usize = 256;
+pub use shekyl_types::archival::MAX_BOND_BAD_INTERVALS;
 
 // The C++ static_assert can only fire on a C++ edit; this is the Rust half of
 // the pair-wise pin (the `bond_floor` idiom), so a Rust-only edit cannot

@@ -54,11 +54,13 @@
 //! digest's fold input. That is the rule-42 ratchet §11.1(e) recorded as
 //! owed: an encoding cannot move without the version moving in the same PR.
 
+mod archival;
 mod chain;
 mod curve;
 mod evidence;
 mod primitives;
 mod property;
+mod reader;
 mod schema_version;
 mod settlement_epoch;
 mod undo;
@@ -67,6 +69,14 @@ mod undo;
 #[path = "snapshot_tests.rs"]
 mod snapshot_tests;
 
+#[cfg(test)]
+#[path = "archival_tests.rs"]
+mod archival_tests;
+
+pub use archival::{
+    AttestationWitnessBytes, BondRecord, HeldShard, Holdings, HoldingsError, RMarket,
+    SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+};
 pub(crate) use chain::stored_timelock;
 pub use chain::{
     BlockBody, BlockInfo, OutKey, OutTx, RuleSetInForce, TxIndex, TxOutputIndices,

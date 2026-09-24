@@ -188,7 +188,12 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
         .filter(|spec| spec.value == <crate::codec::Unshaped as redb::Value>::type_name())
         .count();
     assert_eq!(sealed + unshaped, schema::catalogue().len());
-    assert_eq!(unshaped, 28, "the §11.1(f) count at this layout");
+    // 28 → 22 at layout 11: S-ARCH shaped six archival tables
+    // (`DRS_E1_SARCH.md` §4 — the plan's "seven" counted the `properties`
+    // cell, which is not a table); the journals, settlement, slash-applied,
+    // accrual and segment rows and the pool, alt and txpool tables stay
+    // `Unshaped` for their increments.
+    assert_eq!(unshaped, 22, "the §11.1(f) count at this layout");
     cleanup(&path);
 }
 
