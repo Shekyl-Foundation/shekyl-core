@@ -90,7 +90,7 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
 fn tip_is_the_last_recorded_block_and_the_writer_is_live() {
     let path = tmp("read-tip-recorded");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
+    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
     let snap = store.begin_read().expect("read");
     let tip = snap.tip().expect("tip");
     assert_eq!(
@@ -249,7 +249,7 @@ fn block_infos_is_above_tip_when_the_start_is_and_clamps_the_end_otherwise() {
 fn block_returns_the_body_verified_against_the_recorded_identity() {
     let path = tmp("read-block");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
+    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
     let snap = store.begin_read().expect("read");
     let AtHeight::Recorded(body) = snap.block(h(1)).expect("read") else {
         panic!("height 1 is recorded");
@@ -483,7 +483,7 @@ fn the_fold_reads_return_exactly_what_connect_wrote() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     connect_chain(
         &store,
-        &[vec![], vec![spend(9, 1), spend(10, 1)], vec![spend(11, 1)]],
+        &[vec![], vec![spend(9, 2), spend(10, 2)], vec![spend(11, 2)]],
     );
     let snap = store.begin_read().expect("read");
     for (height, cum) in [(0u64, 0u64), (1, 2), (2, 3)] {
@@ -530,7 +530,7 @@ fn the_redb_digest_is_the_hasher_over_the_files_three_families() {
     // drain (SCW-19), which is `facts(tip).root_after`.
     let path = tmp("read-digest-chain");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 1)], vec![spend(10, 1)]]);
+    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![spend(10, 2)]]);
     let snap = store.begin_read().expect("read");
     let by_hand = {
         let blocks: Vec<[u8; 32]> = hashes.iter().map(|h| *h.as_bytes()).collect();
@@ -557,7 +557,7 @@ fn the_digest_moves_when_any_family_moves() {
     // chain's digest is not the new one.
     let path = tmp("read-digest-moves");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
+    connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
     let before = store
         .begin_read()
         .expect("read")
@@ -572,7 +572,7 @@ fn the_digest_moves_when_any_family_moves() {
         .expect("two blocks");
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let cand = candidate(2, tip.hash, vec![spend(11, 1)]);
+        let cand = candidate(2, tip.hash, vec![spend(11, 2)]);
         batch.connect(judge(&view, cand)?, facts(2, 0), RuleSet::GENESIS)?;
         Ok(())
     });

@@ -228,7 +228,7 @@ fn a_template_listing_bodies_hashes_them_in_order() {
     let params = EconomicParams::default();
     let miner = miner();
     let chain = chain_of(2);
-    let listed = [spend(point_at(11), 1), spend(point_at(12), 2)];
+    let listed = [spend(point_at(11), 2), spend(point_at(12), 3)];
     let template = build(&context(&chain, &params, &miner, &listed)).expect("builds");
     assert_eq!(
         template.block.transaction_hashes,
@@ -274,7 +274,7 @@ fn the_coinbase_pays_exactly_the_miners_leg_of_the_split_plus_its_fee_share() {
     let params = EconomicParams::default();
     let miner = miner();
     let chain = chain_of(2);
-    let listed = [spend(point_at(21), 1), spend(point_at(22), 1)];
+    let listed = [spend(point_at(21), 2), spend(point_at(22), 2)];
     let cx = context(&chain, &params, &miner, &listed);
     let template = build(&cx).expect("builds");
 
@@ -387,7 +387,7 @@ fn the_template_is_a_pure_function_of_its_context() {
     let params = EconomicParams::default();
     let miner = miner();
     let chain = chain_of(2);
-    let listed = [spend(point_at(41), 1)];
+    let listed = [spend(point_at(41), 2)];
     let cx = context(&chain, &params, &miner, &listed);
     let a = build(&cx).expect("builds");
     let b = build(&cx).expect("builds");
@@ -799,7 +799,7 @@ fn a_body_without_a_fee_is_not_listable() {
     let params = EconomicParams::default();
     let miner = miner();
     let chain = chain_of(1);
-    let listed = [spend(point_at(51), 1), coinbase_shaped()];
+    let listed = [spend(point_at(51), 2), coinbase_shaped()];
     let err = build(&context(&chain, &params, &miner, &listed)).expect_err("refused");
     assert!(
         matches!(err, TemplateError::ListedWithoutFee { index: 1 }),

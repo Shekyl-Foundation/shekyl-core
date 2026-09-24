@@ -3849,6 +3849,7 @@ dependencies = [
  "serde_json",
  "shekyl-address",
  "shekyl-archival-retention",
+ "shekyl-crypto-pq",
  "shekyl-ct-balance",
  "shekyl-difficulty",
  "shekyl-economics",

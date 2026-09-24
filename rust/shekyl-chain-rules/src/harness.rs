@@ -23,6 +23,7 @@ use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
 };
 use shekyl_units::AtomicUnits;
+use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
 use shekyl_wire::{
     Block, BlockHeader, BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
 };
@@ -729,23 +730,29 @@ pub mod fixture {
         }
     }
 
-    /// [`spend`] with one output. The shape most call sites mean by "a
-    /// listed transaction".
+    /// [`spend`] with **two** outputs — the fewest CEN-I1 admits of a
+    /// non-serve-credit transaction (slice 6 commit 2; one output until
+    /// then, which every 4.H row accepted and I1 refuses). The shape most
+    /// call sites mean by "a listed transaction".
     pub fn listed(key_image: [u8; 32]) -> Transaction {
-        spend(key_image, 1)
+        spend(key_image, 2)
     }
 
-    /// A per-input PQC authentication with **empty** key and signature
-    /// blobs: what the wire needs to round-trip a non-serve-credit `Fcmp`
-    /// transaction (`pqc_auths.len() == nvin`, no length prefix — a spend
-    /// with none parses as the storage-pruned form), and nothing the
-    /// signature rows (4.I) would accept. Filler, like [`bp_plus_layout_for`].
+    /// A per-input PQC authentication in **CEN-I16's shape** — version 1,
+    /// solo scheme, no flags, a key blob of exactly
+    /// [`PQC_HYBRID_SINGLE_KEY_LEN`] — with filler bytes in the blobs:
+    /// what the wire needs to round-trip a non-serve-credit `Fcmp`
+    /// transaction (`pqc_auths.len() == nvin`), what I16's structure
+    /// admits, and nothing the *signature* rows (I17, I18) would accept.
+    /// Filler, like [`bp_plus_layout_for`]: the structure a rule accepts,
+    /// for fixtures whose subject is not the signature. The blobs were empty
+    /// until slice 6 commit 2 landed I16.
     pub fn pqc_auth_filler() -> PqcAuth {
         PqcAuth {
             auth_version: 1,
             scheme_id: 1,
             flags: 0,
-            hybrid_public_key: Vec::new(),
+            hybrid_public_key: vec![0x5A; PQC_HYBRID_SINGLE_KEY_LEN],
             hybrid_signature: Vec::new(),
         }
     }

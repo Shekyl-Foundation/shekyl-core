@@ -45,6 +45,11 @@ shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 # term rule here would be the two-sources class the slice exists to close.
 # Slice 8 (4.J) adopts the rest of it.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# CEN-I16 (slice 6): the two hybrid scheme identifiers, read from the crate
+# that owns the signature scheme (`HYBRID_SCHEME_ID_ED25519_ML_DSA_65`,
+# `HYBRID_SCHEME_ID_MULTISIG`) rather than restated as `1` and `2`. Already
+# in the closure through shekyl-ct-balance; this names the edge.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Optional: the `harness` feature's `fixture::point_at` only (see the
 # feature's note). Never enabled on the production surface.
 curve25519-dalek = { version = "4", optional = true }

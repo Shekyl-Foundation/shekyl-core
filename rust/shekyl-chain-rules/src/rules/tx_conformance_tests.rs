@@ -611,8 +611,8 @@ const SITES: &[Site] = &[
         "pseudoOuts {} != spend (ToKey) input count",
         Face::Memory,
         CenRow::I9,
-        i9_no_pseudo_outs,
-        "",
+        i9_one_pseudo_out_for_two_inputs,
+        "the trip keeps the balance (one pseudo-out of `5·G` against `2·G + 3·G`) so H18 passes and the count refuses; a cleared pseudo-out list is H18's refusal first, here and in the C++",
     ),
     diverges(
         "fee-only ct (no prunable) must have no",
@@ -625,8 +625,8 @@ const SITES: &[Site] = &[
         "fee-only ct (no prunable) must carry empty",
         Arm::Rule(CenRow::H20),
         pruned_form_bond_post_with_an_auth,
-        Outcome::RefusedOn(CenRow::H21),
-        "as above",
+        Outcome::RefusedOn(CenRow::I1),
+        "as above in kind, and the row moved when I1 landed (slice 6 commit 2): the trip must have NO outputs to reach the twin's auth arm (its `must have no outputs` check comes first), and a zero-output bond post is CEN-I1's refusal before H21's in the crate — and in the C++, whose `fewer than two outputs` precedes every shape arm. The twin's fee-only arm still asserts H20's shape on a non-serve-credit; the crate classifies by the vin",
     ),
     invariant(
         "key-image input(s) but no prunable proof",

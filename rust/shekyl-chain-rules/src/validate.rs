@@ -54,7 +54,10 @@ use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
 use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
-use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
+use crate::rules::tx::{
+    H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9, I1, I14, I16, I4,
+    I5, I6, I8, I9,
+};
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
@@ -402,7 +405,16 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     // is both oversized and mixed is refused on H6 here and on H1 there —
     // one refusal either way, the row differs.
     let cx = rules::TxContext::derive(tx, slot, &mut coverage)?;
-    judge_tx!(cx, coverage; H1, H3, H4, H7, H9, H10, H11, H14, H15, H16, H17, H18, H20, H21, H22);
+    // The C++'s order, which decides *which* row refuses a transaction that
+    // breaks several: `ver_non_input_consensus`'s 4.H rows, then
+    // `check_tx_inputs`' input-side rows before its CT switch — outputs
+    // (I1), the input cap (I4), the key-image order (I5; H10 has already
+    // refused a repeat), offsets (I6) — then inside the switch the counts
+    // (I8, I9) ahead of the shape arms (H20–H22), and after them the
+    // proof's presence (I14) and `tx_pqc_verify`'s structural pass (I16).
+    // Slice 6 commit 2 placed the 4.I rows; the 4.H order is slice 5's.
+    judge_tx!(cx, coverage; H1, H3, H4, H7, H9, H10, H11, H14, H15, H16, H17, H18);
+    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, H20, H21, H22, I14, I16);
     // CEN-H19's layout half. The verification half is slice 6's, so the row
     // stays pending and a pass is not coverage (`run_tx_unrecorded`).
     rules::run_tx_unrecorded::<H19>(&cx)?;
