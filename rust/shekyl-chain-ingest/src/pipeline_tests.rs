@@ -35,6 +35,7 @@ use crate::test_support::{
     block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg, expected_state, h,
     key_image, open_store, reorg, spend, tmp, trace_of, Family, Scripted,
 };
+use crate::trace::Trace;
 
 /// Regtest without a fixed target: the genesis rules at every height.
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -110,12 +111,13 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     // joined so the store is released; the record is broken; a second
     // connector is spawned on the reopened store and meets the hole.
     {
-        let prepared = kameo::actor::PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
+        let prepared =
+            kameo::actor::PreparedActor::<Connector<Trace>>::new(kameo::mailbox::unbounded());
         let first = prepared.actor_ref().clone();
         let task = prepared.spawn(ConnectorArgs {
             store: open_store(&path),
             rules: GENESIS_RULES,
-            trace: Arc::clone(&trace),
+            facts: Arc::clone(&trace),
         });
         let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
         let applied = first
@@ -141,7 +143,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path),
         rules: GENESIS_RULES,
-        trace,
+        facts: trace,
     });
 
     let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
@@ -286,7 +288,7 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path),
         rules: GENESIS_RULES,
-        trace,
+        facts: trace,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
@@ -336,7 +338,7 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path),
         rules: GENESIS_RULES,
-        trace,
+        facts: trace,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");

@@ -3824,6 +3824,7 @@ dependencies = [
  "shekyl-chain-store",
  "shekyl-crypto-hash",
  "shekyl-difficulty",
+ "shekyl-economics",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",

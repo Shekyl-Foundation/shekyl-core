@@ -641,6 +641,19 @@ where it lives and how it is driven:
   consumer; E3 then flips one field's `Origin` from `PassedThrough` to
   `Derived` inside a function that exists, instead of promoting test code.
   `Trace` is E2-only and lives with E2's harness. Two impls, one seam.
+  **Landed:** `shekyl-chain-ingest/src/facts.rs` — `FactsFor` (one
+  method, read against the batch view the verdict was judged on),
+  `impl FactsFor for Trace`, `Composed<P: PricedAt>` with `Priced`
+  {`block_reward`, `burned`, `root_after`, `long_term_effective_median`};
+  `Connector<F: FactsFor>` (`ConnectorArgs::facts`), the pipeline
+  instantiating `Connector<Trace>`. `Composed` folds the parent's
+  `coins_generated` through `advance_already_generated` and clamps
+  `long_term_weight`; it **does not re-derive the emission** — F13/F15/F20
+  are landed definitions whose value stays off the verdict until F14b by
+  ruling (`CHAIN_RULES_SLICE_4.md` §4), and a second copy in ingest is the
+  duplication the seam prevents. Every origin is `PassedThrough` and a
+  test pins that per field, so the flip is visible when a row lands. All
+  four captured replays connect through the seam unchanged.
 - **One event at a time — and the reason is the miner's, not the
   sequencer's.** Template generation *is* serial: a miner cannot build
   `h+1` until `h` is connected. The driver models that path faithfully;

@@ -13,7 +13,8 @@
 //! [`Apply`] is a bounded run of consecutive `Extend`s in one closure (the
 //! write-transaction granularity), a [`Rewind`] is one closure of pops.
 //! Between messages the actor holds the store, the rule set in force, the
-//! trace's `borrow` door, and nothing mutable.
+//! facts provider (`facts.rs`: the E2 trace's `borrow` door, or production
+//! composition from the owners), and nothing mutable.
 //!
 //! # The supervision table, as code
 //!
@@ -30,7 +31,8 @@
 //! | `Fault::Corrupt` | `WriteBatch::refuse_corrupt` arms the halt (SI-10) and its `InvariantViolated` — carrying the validator's value — is the reply; the batch aborts; **terminal** |
 //! | `Fault::Stale(Seed { .. })` | a **driver defect** in replay (RD-Q5): the reply carries the claim, the expectation, and the validator's `Retry`; the writer stays up so a later caller can re-`form` |
 //! | `Fault::Stale(RuleSet { .. })` | a **driver defect** (the schedule handed the two stages different sets): surfaced; the writer stays up |
-//! | the trace has no facts at the height | the run cannot connect honestly: surfaced ([`RunFault::NoFacts`]); the writer stays up |
+//! | the facts provider has nothing at the height | the run cannot connect honestly: surfaced ([`RunFault::NoFacts`]); the writer stays up |
+//! | composing facts finds no parent record below the tip | a store invariant (SI-2), surfaced ([`RunFault::ParentMissing`]); the writer stays up |
 //!
 //! **No restart.** `on_panic` breaks; nothing supervises this actor into
 //! coming back (RD-Q11, RULED): a halt laundered into a retry loop is the
@@ -60,8 +62,8 @@ use shekyl_chain_rules::{
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
 use shekyl_types::{BlockHash, BlockHeight};
 
+use crate::facts::{FactsFault, FactsFor};
 use crate::schedule::ChainRules;
-use crate::trace::Trace;
 
 /// Why the writer is over: store-terminal faults only. `Copy` data, so it
 /// can be repeated on every later `Apply` / `Rewind`.
@@ -84,6 +86,7 @@ impl RunEnd {
             RunFault::StaleSeed { .. }
             | RunFault::StaleRuleSet { .. }
             | RunFault::NoFacts { .. }
+            | RunFault::ParentMissing { .. }
             | RunFault::RewindTarget { .. }
             | RunFault::Over(_) => None,
         }
@@ -118,13 +121,22 @@ pub enum RunFault {
         /// The connecting height.
         height: BlockHeight,
     },
-    /// The trace does not cover `height`.
-    #[error(
-        "the trace has no facts for height {height}; connect cannot be handed passed-through facts"
-    )]
+    /// The facts provider has nothing for `height` — a trace that does not
+    /// cover it, or a producer that did not price it ([`FactsFault::None`]).
+    #[error("no connect facts for height {height}; connect cannot be handed what nobody composed")]
     NoFacts {
         /// The connecting height.
         height: BlockHeight,
+    },
+    /// Composing facts for `height` read its parent and found no record —
+    /// a dense chain has one below every connecting height (SI-2). A store
+    /// invariant, surfaced; the writer stays up.
+    #[error("composing facts for height {height}: parent {parent} is not recorded")]
+    ParentMissing {
+        /// The connecting height.
+        height: BlockHeight,
+        /// The parent that was not recorded.
+        parent: BlockHeight,
     },
     /// A rewind to `to` when the tip is `tip`.
     #[error("rewind to {to} is not below the tip {tip:?}")]
@@ -185,13 +197,14 @@ pub struct HashAt {
 }
 
 /// What the actor is built from.
-pub struct ConnectorArgs {
+pub struct ConnectorArgs<F> {
     /// The store this actor alone writes.
     pub store: ChainStore,
     /// Which rules are in force at each height (RD-Q10's driver half).
     pub rules: ChainRules,
-    /// The trace, for the `borrow` door.
-    pub trace: Arc<Trace>,
+    /// Where `connect`'s facts come from ([`FactsFor`]): the E2 trace, or
+    /// production composition from the owners (`facts.rs`).
+    pub facts: Arc<F>,
 }
 
 /// The store behind its latch: the only way to a write closure, refusing
@@ -231,22 +244,25 @@ impl Writer {
     }
 }
 
-/// The single writer (module docs).
-pub struct Connector {
+/// The single writer (module docs), over a facts provider `F`.
+pub struct Connector<F> {
     writer: Writer,
     rules: ChainRules,
-    trace: Arc<Trace>,
+    facts: Arc<F>,
 }
 
-impl Actor for Connector {
-    type Args = ConnectorArgs;
+impl<F: FactsFor + Send + Sync + 'static> Actor for Connector<F> {
+    type Args = ConnectorArgs<F>;
     type Error = RunFault;
 
-    async fn on_start(args: ConnectorArgs, _actor_ref: ActorRef<Self>) -> Result<Self, RunFault> {
+    async fn on_start(
+        args: ConnectorArgs<F>,
+        _actor_ref: ActorRef<Self>,
+    ) -> Result<Self, RunFault> {
         Ok(Self {
             writer: Writer::live(args.store),
             rules: args.rules,
-            trace: args.trace,
+            facts: args.facts,
         })
     }
 
@@ -262,12 +278,12 @@ impl Actor for Connector {
     }
 }
 
-impl Message<Apply> for Connector {
+impl<F: FactsFor + Send + Sync + 'static> Message<Apply> for Connector<F> {
     type Reply = Result<Applied, RunFault>;
 
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let rules = self.rules;
-        let trace = Arc::clone(&self.trace);
+        let facts = Arc::clone(&self.facts);
         self.writer.write(|batch| {
             let view = batch.chain_view();
             let mut applied = Applied::default();
@@ -282,14 +298,27 @@ impl Message<Apply> for Connector {
                 let in_force = rules.in_force(height);
                 match validate(formed, &view, &in_force, &rules.trust()) {
                     Ok(Ok(valid)) => {
-                        let Some(facts) = trace.borrow(height) else {
-                            return Err(RunFault::NoFacts { height });
+                        // The seam: facts read against the same view the
+                        // verdict was judged on, from whoever composes
+                        // them (`facts.rs`). A missing height is the
+                        // caller's; a view fault is the store's; a parent
+                        // that is not recorded below a tip is the
+                        // invariant SI-2 keeps, surfaced as a store fault.
+                        let facts = match facts.facts_for(height, &valid, &view) {
+                            Ok(facts) => facts,
+                            Err(FactsFault::None { height }) => {
+                                return Err(RunFault::NoFacts { height })
+                            }
+                            Err(FactsFault::View(e)) => return Err(RunFault::Store(e)),
+                            Err(FactsFault::ParentMissing { parent }) => {
+                                return Err(RunFault::ParentMissing { height, parent })
+                            }
                         };
                         let hash = valid.block().hash();
                         applied
                             .exercised
                             .extend(valid.coverage().iter().map(CenRow::as_str));
-                        batch.connect(valid, facts.into(), in_force)?;
+                        batch.connect(valid, facts, in_force)?;
                         applied.connected.push((height, hash));
                     }
                     Ok(Err(refused)) => {
@@ -328,7 +357,7 @@ impl Message<Apply> for Connector {
     }
 }
 
-impl Message<Rewind> for Connector {
+impl<F: FactsFor + Send + Sync + 'static> Message<Rewind> for Connector<F> {
     type Reply = Result<Rewound, RunFault>;
 
     async fn handle(&mut self, msg: Rewind, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
@@ -350,7 +379,7 @@ impl Message<Rewind> for Connector {
     }
 }
 
-impl Message<Digest> for Connector {
+impl<F: FactsFor + Send + Sync + 'static> Message<Digest> for Connector<F> {
     type Reply = Result<crate::trace::Digest, RunFault>;
 
     async fn handle(&mut self, _: Digest, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
@@ -358,7 +387,7 @@ impl Message<Digest> for Connector {
     }
 }
 
-impl Message<HashAt> for Connector {
+impl<F: FactsFor + Send + Sync + 'static> Message<HashAt> for Connector<F> {
     type Reply = Result<Option<BlockHash>, RunFault>;
 
     async fn handle(&mut self, msg: HashAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
