@@ -6,7 +6,8 @@
 //! The archival tables' stored shapes — DRS-E1 S-ARCH
 //! (`DRS_E1_SARCH.md` §3.4, §4; `SAR-Q3` RULED 2026-09-23).
 //!
-//! Seven tables the C++ left as raw bytes gain types here; E4's writers will
+//! Six tables the C++ left as raw bytes gain types here (the seventh row of
+//! the read set is a `properties` cell, `codec::property`); E4's writers will
 //! write what these describe and may not choose a second shape for the same
 //! byte. The vocabulary two crates share — [`PCanonicalId`], [`ShardId`],
 //! [`SettlementEpoch`], [`BadInterval`], [`ShardSet`], [`HoldingsKind`] —

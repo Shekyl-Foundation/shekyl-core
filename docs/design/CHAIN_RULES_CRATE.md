@@ -895,7 +895,13 @@ commit-9 row, `feat/chain-rules-slice-5` @ `3193d5c91`, unmerged when this
 was measured; its `by-construction` also moves 4 → 9), so the two lines differ by
 the slice, not by a regression — the denominator moved here (153 → 154), the
 numerator moves there (34 → 56), and whichever lands second re-runs
-`--describe` and quotes the merged tree. A figure quoted without its tree
+`--describe` and quotes the merged tree. **Merged tree (2026-09-23, `dev`
+`4dc5194de` = the slice-5 merge #839, re-run by the S-ARCH increment — the
+first lane to stamp a tree holding both):** `consensus: implemented 56 /
+validator-enforced 152   held-by-cxx 2   at-open 1   by-construction 9
+enforced 154   ratified 128 / enforced 154` — the two lines above reconcile
+exactly as predicted; S-ARCH's increment itself moves no row (storage, no
+`CenRow`). A figure quoted without its tree
 cannot be traced back to which branch produced it; every line in this
 paragraph should name one. The figure moves with each slice and the landing
 PR quotes its own.
