@@ -136,14 +136,14 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 
 | id | status | evidence | alpha.8? (ruled) |
 |---|---|---|---|
-| **T1** handshake `Noise_NNhfs…` | NOT IMPLEMENTED | zero hits tree-wide for `Noise_NN`, `NNhfs`, `ChaChaPoly`, `BLAKE2s` | **No** — Rick ruled |
+| **T1** handshake `Noise_NNhfs…` | **IMPLEMENTED** (as of 2026-09-24) | `rust/shekyl-p2p-transport`: `Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`, messages 1216 and 1152. Off unless `--clearnet-transport-encrypt` | **No** — Rick ruled; the default flip is a later commit |
 | **T2** PW-3 retired, no padding band | NOT IMPLEMENTED | no padding band present or pinned | No — transport cluster |
-| **T3** BOLT-8 rekeying | NOT IMPLEMENTED | no rekey in a transport context (hits are engine-prefs / ledger) | No — transport cluster |
-| **T4** `e1` / `ekem1` normative | NOT IMPLEMENTED | zero hits for `ekem1` | No — transport cluster |
-| **T5** 8-byte prefix stays | **NO BUILD REQUIRED** | rules the status quo; prefix present in `contrib/epee/include/net/levin_base.h` | n/a |
+| **T3** BOLT-8 rekeying | **IMPLEMENTED** (as of 2026-09-24) | `channel.rs` `REKEY_NONCES = 1000`; each record spends two nonces (encrypted length, then body), so 500 records | No — transport cluster |
+| **T4** `e1` / `ekem1` normative | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` writes `e, e1` then `e, ee, ekem1`; empty payloads | No — transport cluster |
+| **T5** 8-byte prefix stays | **NO BUILD REQUIRED** | plaintext path still starts with `LEVIN_SIGNATURE`. The encrypting channel (flag on) uses `prefix_for` in `rust/shekyl-p2p-transport/src/prefix.rs` | n/a |
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
 | **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
-| **T8** Shekyl mints its own KATs | NOT IMPLEMENTED | no handshake KATs; nothing to pin until T1 exists | No — follows T1 |
+| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` pinned message and chaining-key test; `prefix.rs` pins `AFBCD4D1FAB98B6D`, `F0B352E8928F8D56`, `5C2942C0F9F98A21` | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
 | **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
@@ -3368,6 +3368,16 @@ message rotates at twice BOLT-8's message count for the same nonce budget.
 Stating the interval in nonces makes it survive a framing change; stating it in
 messages would silently halve or double the real budget when PWD-T6/PWD-B3 settle
 the framing.
+
+**Post-`Split` record framing (pinned 2026-09-24).** Each direction seals one
+Levin write as one record: an encrypted 2-byte big-endian length (plus its
+16-byte tag) then the encrypted body (plus its tag). Two nonce increments.
+Rekey is at 1,000 nonce increments, which is 500 records. A length in the
+clear would publish Levin bucket sizes to every path observer. The 2-byte
+length cannot hold a 100 MB bucket, so a write larger than 65535 bytes is
+chunked and the receiver concatenates; that does not change PWD-T6's inherited
+session limit. Record sizes stay measurable from the packet. Padding is not
+part of this framing.
 
 **Rotation inherits the hybrid-PQ root, which is why it does not weaken T1.**
 Every rotated key descends from the ML-KEM-mixed `ck`, so harvest-now-decrypt-

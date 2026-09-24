@@ -4009,6 +4009,22 @@ int32_t shekyl_e2_trace_finish(struct ShekylE2TraceWriter* writer);
 /// Free without a trailer.
 void shekyl_e2_trace_abort(struct ShekylE2TraceWriter* writer);
 
+/// Own a duplicated clearnet socket. `initiator` is nonzero when this node
+/// dialed. Returns an opaque link, or null if the channel did not open.
+/// `on_plain` runs on a Rust thread until `shekyl_clearnet_detach`.
+void* shekyl_clearnet_attach(
+    intptr_t native,
+    const uint8_t* network_id,
+    int32_t initiator,
+    void (*on_plain)(void* ctx, const uint8_t* data, size_t len),
+    void* ctx);
+
+/// Seal `len` plaintext bytes onto the link. 0 on success.
+int32_t shekyl_clearnet_write(void* link, const uint8_t* data, size_t len);
+
+/// Shut the channel down and join its reader. Consumes `link`.
+void shekyl_clearnet_detach(void* link);
+
 } // extern "C"
 
 /// Owns a Rust-allocated ShekylBuffer for one C++ scope and returns it to

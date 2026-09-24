@@ -272,6 +272,9 @@ namespace net_utils
     std::string m_host{};
     state_t m_state{};
     t_protocol_handler m_handler;
+    void* m_clearnet_link{};
+    void detach_clearnet();
+    static void clearnet_on_plain(void* ctx, const uint8_t* data, size_t len);
   public:
     struct shared_state : connection_basic_shared_state, t_protocol_handler::config_type
     {

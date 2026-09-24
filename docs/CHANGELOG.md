@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Clearnet Noise NNhfs, off by default
+
+- **`--clearnet-transport-encrypt`** (default off) hands the public-zone
+  clearnet socket to `shekyl-p2p-transport` for
+  `Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`. Both ends of a test pair
+  must set it. The off path stays today's plaintext Levin stream. The flag is
+  a pre-genesis test gate, not a privacy setting, and the off path is deleted
+  before genesis.
+
 ### `CT-6` increment 3 — one tree reconstruction per transaction, not per input
 
 - **`CurveTreeClient::assemble_paths` is the primitive; `assemble_path` is the

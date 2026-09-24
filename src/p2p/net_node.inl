@@ -131,6 +131,7 @@ namespace nodetool
     command_line::add_arg(desc, arg_limit_rate_down);
     command_line::add_arg(desc, arg_limit_rate);
     command_line::add_arg(desc, arg_pad_transactions);
+    command_line::add_arg(desc, arg_clearnet_transport_encrypt);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -948,6 +949,23 @@ namespace nodetool
 
     m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
     network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
+    {
+      const bool encrypt = command_line::get_arg(vm, arg_clearnet_transport_encrypt);
+      auto& cfg = public_zone.m_net_server.get_config_object();
+      cfg.m_clearnet_transport_encrypt = encrypt;
+      std::memcpy(cfg.m_clearnet_network_id, &m_network_id, 16);
+      if (encrypt)
+      {
+        cfg.m_clearnet_attach = &shekyl_clearnet_attach;
+        cfg.m_clearnet_write = &shekyl_clearnet_write;
+        cfg.m_clearnet_detach = &shekyl_clearnet_detach;
+        MINFO("public-zone clearnet transport encryption is on (Noise NNhfs test gate)");
+      }
+      else
+      {
+        MINFO("public-zone clearnet channel is unencrypted; this is temporary and the off path is deleted before genesis");
+      }
+    }
 
     if ((m_nettype == cryptonote::MAINNET && public_zone.m_port != std::to_string(::config::P2P_DEFAULT_PORT))
         || (m_nettype == cryptonote::TESTNET && public_zone.m_port != std::to_string(::config::testnet::P2P_DEFAULT_PORT))

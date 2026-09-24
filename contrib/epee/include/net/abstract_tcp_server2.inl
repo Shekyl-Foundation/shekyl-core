@@ -32,6 +32,10 @@
 
 
 #include <boost/asio/post.hpp>
+#include <vector>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #include <boost/uuid/random_generator.hpp>
 #include <boost/chrono.hpp>
 #include <boost/utility/value_init.hpp>
@@ -1000,11 +1004,83 @@ namespace net_utils
       on_interrupted();
     else if (m_state.status == status_t::TERMINATING)
       on_terminating();
+    else if (static_cast<shared_state&>(connection_basic::get_state()).m_clearnet_transport_encrypt)
+    {
+      auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
+      intptr_t native = -1;
+#ifdef _WIN32
+      WSAPROTOCOL_INFOW info{};
+      const SOCKET orig = connection_basic::socket().native_handle();
+      if (WSADuplicateSocketW(orig, GetCurrentProcessId(), &info) == 0)
+      {
+        const SOCKET duped = WSASocketW(
+          info.iAddressFamily, info.iSocketType, info.iProtocol, &info, 0, WSA_FLAG_OVERLAPPED);
+        if (duped != INVALID_SOCKET)
+          native = static_cast<intptr_t>(duped);
+      }
+#else
+      native = ::dup(connection_basic::socket().native_handle());
+#endif
+      if (native < 0 || !cfg.m_clearnet_attach)
+      {
+        if (native >= 0)
+        {
+#ifdef _WIN32
+          closesocket(static_cast<SOCKET>(native));
+#else
+          ::close(static_cast<int>(native));
+#endif
+        }
+        interrupt();
+        return false;
+      }
+      m_clearnet_link = cfg.m_clearnet_attach(
+        native,
+        cfg.m_clearnet_network_id,
+        is_income ? 0 : 1,
+        &connection::clearnet_on_plain,
+        this);
+      if (!m_clearnet_link)
+      {
+        interrupt();
+        return false;
+      }
+    }
     else if (!is_income || !m_state.ssl.enabled)
       start_read();
     else
       start_handshake();
     return true;
+  }
+
+  template<typename T>
+  void connection<T>::detach_clearnet()
+  {
+    if (!m_clearnet_link)
+      return;
+    auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
+    if (cfg.m_clearnet_detach)
+      cfg.m_clearnet_detach(m_clearnet_link);
+    m_clearnet_link = nullptr;
+  }
+
+  template<typename T>
+  void connection<T>::clearnet_on_plain(void* ctx, const uint8_t* data, size_t len)
+  {
+    auto* self = static_cast<connection*>(ctx);
+    boost::shared_ptr<connection> keep;
+    try
+    {
+      keep = self->shared_from_this();
+    }
+    catch (...)
+    {
+      return;
+    }
+    std::vector<uint8_t> copy(data, data + len);
+    boost::asio::post(self->m_strand, [keep, copy = std::move(copy)] {
+      keep->m_handler.handle_recv(copy.data(), copy.size());
+    });
   }
 
   template<typename T>
@@ -1048,6 +1124,7 @@ namespace net_utils
   template<typename T>
   connection<T>::~connection() noexcept(false)
   {
+    detach_clearnet();
     std::lock_guard<std::mutex> guard(m_state.lock);
     assert(m_state.status == status_t::TERMINATED ||
       m_state.status == status_t::WASTED ||
@@ -1117,6 +1194,15 @@ namespace net_utils
   template<typename T>
   bool connection<T>::do_send(byte_slice message)
   {
+    if (m_clearnet_link)
+    {
+      auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
+      if (!cfg.m_clearnet_write)
+        return false;
+      const uint8_t* data = message.data();
+      const size_t len = message.size();
+      return cfg.m_clearnet_write(m_clearnet_link, data, len) == 0;
+    }
     return send(std::move(message));
   }
 
@@ -1129,6 +1215,7 @@ namespace net_utils
   template<typename T>
   bool connection<T>::close()
   {
+    detach_clearnet();
     std::lock_guard<std::mutex> guard(m_state.lock);
     if (m_state.status != status_t::RUNNING)
       return false;

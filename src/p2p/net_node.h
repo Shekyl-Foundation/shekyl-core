@@ -815,6 +815,7 @@ namespace nodetool
     extern const command_line::arg_descriptor<int64_t> arg_limit_rate_down;
     extern const command_line::arg_descriptor<int64_t> arg_limit_rate;
     extern const command_line::arg_descriptor<bool> arg_pad_transactions;
+    extern const command_line::arg_descriptor<bool> arg_clearnet_transport_encrypt;
 }
 
 POP_WARNINGS
