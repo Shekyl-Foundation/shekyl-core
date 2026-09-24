@@ -89,6 +89,8 @@ pub mod substrate;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;
+#[cfg(all(test, feature = "pipeline"))]
+mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{

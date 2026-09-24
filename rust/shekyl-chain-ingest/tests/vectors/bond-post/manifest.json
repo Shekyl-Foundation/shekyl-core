@@ -1,0 +1,12 @@
+{
+  "block_count": 109,
+  "captured_by_daemon_version": "3.1.0-f18925c25",
+  "description": "A regtest chain captured whole as the DRS-E2 replay pair. corpus.e2: every block 0..=tip_height with the FULL bytes of every listed transaction (shekyl-chain-replay fetch, RD-F15-verified). trace.e2: the passed-through facts per block and the daemon's logical-state digest at the tip (shekyl-e2-trace-export, one LMDB snapshot). Consumed by replay: shekyl-chain-ingest connects the chain against a real store, so the state the 4.I rules read is derived, not asserted. Regenerate with SHEKYL_CAPTURE_CHAIN_VECTORS=1, SHEKYLD_BIN, SHEKYL_CHAIN_REPLAY_BIN and SHEKYL_E2_TRACE_EXPORT_BIN set, running the named generator --ignored.",
+  "fixed_difficulty": 1,
+  "format_version": 2,
+  "generator": "e2e_staker_bond_post_accepted_and_applied",
+  "shape": "bond-post",
+  "spend_txid": null,
+  "tip_height": 108,
+  "tx_count": 2
+}

@@ -405,6 +405,51 @@ is the thing production consumes. The rules crate depending on the store
 would violate G1 (`check_chain_rules_no_store.sh`); the ingest crate
 depends on both and is where the real chain is allowed to live.
 
+**What commit 1 actually built (2026-09-24), and two limits it carries.**
+The artifact is not a layout minted for this slice: it is **the DRS-E2
+replay pair**, produced by E2's own tools driven from the generators —
+`shekyl-chain-replay fetch` for `corpus.e2` (every block and every listed
+transaction's full bytes, RD-F15-verified against the headers) and
+`shekyl-e2-trace-export` for `trace.e2` (the per-block facts and the
+daemon's logical-state digest at the tip, one LMDB snapshot taken while the
+daemon is alive, because the harness deletes the data dir on drop). Beside
+them, `txs/<txid>.tx` — each listed transaction's bytes — for the rules
+crate, which may not read the corpus (G1) but may read a real transaction
+and mutate one field. `shekyl-chain-ingest/src/vectors_tests.rs` replays
+every captured chain through `pipeline::run` — the same composition the
+replay binary makes — against a fresh `redb` store and holds the store's
+digest to the daemon's; **fails on an empty vector set** (rule 47). First
+result: `spend-1in-2out`, 82 blocks connected, digest MATCH, 46 rows
+exercised.
+
+- **Limit 1 — the root is a passed-through fact until E3.** The trace's
+  `root_after` per block is the C++ daemon's; the Rust store persists and
+  keys it (`root_at`) but does not yet *derive* it — that is E3 S-CURVE's
+  writer. So for I12/I15 today the replay witnesses *parity with the
+  daemon's root*, not an independent derivation. That is E2's design
+  (replay C++-accepted blocks; grade disagreement), and it is one level
+  better than the mock — the root is a real tree's, computed by production
+  code, over the membership set the blocks created — but it is not the
+  end state, and this sentence is what says so. E3 landing the writer turns
+  the same test into the independent witness with no change to it.
+- **Limit 2 — the default lane mocks exactly one thing: CEN-D2's hash.**
+  RandomX light mode is ~0.6 s a block; the depth-3 chain is ~750 blocks.
+  `every_captured_chain_replays_and_matches_the_daemons_digest` runs under
+  `MockSubstrate` with the **real clock** (the mock's 2023 default refused
+  block 1 on C1 as future-dated — caught on the first run) and the
+  always-satisfying longhash. D1/D2 are not this test's subject; their
+  witness is the `#[ignore]`d `replays_every_captured_chain_under_the_production_substrate`
+  in the live lane and E2's own gate. Every other row a chain exercises is
+  judged against real state under both.
+
+**Commit 1 is split in two, disclosed here (rule 22: a split re-schedules
+inside the PR).** 1a — the vectors, the capture hook, the ingest witness,
+`MockChain`'s charter. 1b — the fixture migration: `fixture::spend` /
+`listed` and the store's `spend(ki, outputs)` become loaders over
+`txs/*.tx`, and the fixture-sanity gate says which builders moved. 1b is
+the change that has revealed something every time it has run this month,
+which is exactly why it is its own commit and not folded into 1a.
+
 **Carried, not done here:** slices 2–4's view-bound rows (the D family's
 windows, B5's root, E1's anchors) have fixtures of the same shape against
 `MockChain`, with ingest-side replay coverage in some places and not all.

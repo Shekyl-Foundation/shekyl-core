@@ -1060,6 +1060,20 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 
     let after = assert_tx_confirmed(&daemon, &address, accepted).await;
     maybe_capture_live_oracle(&daemon, &pending.tx_bytes, accepted, after).await;
+    // The shape is read off the transaction, not assumed: a self-send of half
+    // the balance is 1-in with a recipient AND a change output.
+    let outputs = shekyl_wire::Transaction::from_bytes(&pending.tx_bytes)
+        .expect("the accepted spend parses")
+        .prefix
+        .outputs
+        .len();
+    maybe_capture_chain_vector(
+        &daemon,
+        &format!("spend-1in-{outputs}out"),
+        "e2e_fcmp_spend_accepted_by_daemon",
+        Some(accepted),
+    )
+    .await;
 }
 
 /// A daemon-accepted user spend, mined, popped, and mined again.
@@ -1492,6 +1506,13 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     let accepted = require_fresh_accept(outcome, "the FCMP++ spend over a depth-3 tree");
     eprintln!("daemon accepted depth-{tree_depth} spend: {accepted}");
     assert_tx_confirmed(&daemon, &address, accepted).await;
+    maybe_capture_chain_vector(
+        &daemon,
+        "spend-depth3",
+        "e2e_fcmp_spend_over_depth3_tree",
+        Some(accepted),
+    )
+    .await;
 }
 
 /// Trim (reorg) self-consistency: popping the chain back to an earlier height must
@@ -2483,6 +2504,15 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
          ({} pre-post record(s) swept+pruned)",
         fixture.pre_post_discovered
     );
+    // The bond post is located by its vin class at load; the fixture does
+    // not surface its txid.
+    maybe_capture_chain_vector(
+        &daemon,
+        "bond-post",
+        "e2e_staker_bond_post_accepted_and_applied",
+        None,
+    )
+    .await;
 }
 
 /// PR-4c emission-claim harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4c): the
@@ -2867,6 +2897,16 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // the reward as the persona's rung-1 EmissionReward funding, amount
     // equal to the loud vout.
     mine_until_pool_drains(&daemon, &fixture.principal, "accepted emission claim", 1).await;
+    // Capture HERE, with the claim connected and before the A5 pops below —
+    // the chain the validator's fixtures need is the one that carries the
+    // claim, not the one that stranded it.
+    maybe_capture_chain_vector(
+        &daemon,
+        "emission-claim",
+        "e2e_emission_claim_accepted_and_applied",
+        None,
+    )
+    .await;
     let claim_mined_by_height = daemon.height().await;
     assert!(
         epoch_row.close_block_height < claim_mined_by_height,
@@ -3975,6 +4015,187 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     );
     eprintln!("arm #3 production discharge: phantom bonded_slots[{SLOT}] collected at open");
     reopened.close(&creds).expect("close");
+}
+
+/// Capture the regtest chain as the **E2 replay pair** — a corpus and a
+/// trace — for the consensus validator's verification-era fixtures
+/// (`CHAIN_RULES_SLICE_6.md` §5.2, Q1 (ii)), under
+/// `rust/shekyl-chain-ingest/tests/vectors/<shape>/`. Gated on
+/// `SHEKYL_CAPTURE_CHAIN_VECTORS`; a no-op otherwise, so the generators run
+/// unchanged in CI's live-daemon step.
+///
+/// The artifacts are the production replay driver's own, produced by its
+/// own tools rather than a layout minted here (RD-Q1: nothing lives only in
+/// a binary; RD-F15: the corpus writer verifies every body against its
+/// header). `shekyl-chain-replay fetch` builds the corpus from the live
+/// daemon over `/get_blocks_by_height.bin` — every block and every listed
+/// transaction's **full** bytes. `shekyl-e2-trace-export` harvests the
+/// trace — the passed-through facts (weights, `coins_generated`, the
+/// curve-tree root after each block, cumulative difficulty) and the
+/// daemon's own logical-state digest at the tip — from the daemon's LMDB
+/// under one read snapshot, **while the daemon is alive**: the harness
+/// removes the data dir on drop. Both tools are located by env var, like
+/// the daemon itself.
+///
+/// Blocks, not transactions, because the consumer is a **replay**:
+/// `shekyl-chain-ingest` connects the chain against a real store, so the
+/// spent set and the reference heights the 4.I rules read are derived by
+/// the code that derives them in production (`50-testing.mdc`: *a fixture
+/// that constructs the state a rule reads back is not a test of the
+/// rule*). The root is the one passed-through fact until E3 makes the store
+/// derive it — recorded as such in the slice doc, not hidden here.
+///
+/// `spend_txid` is recorded when the generator knows it; the archival
+/// shapes are located by their vin class at load, so it is `None` there.
+async fn maybe_capture_chain_vector(
+    daemon: &RegtestDaemon,
+    shape: &str,
+    generator: &str,
+    spend_txid: Option<TxHash>,
+) {
+    if std::env::var_os("SHEKYL_CAPTURE_CHAIN_VECTORS").is_none() {
+        return;
+    }
+    let tool = |var: &str| -> PathBuf {
+        match std::env::var_os(var) {
+            Some(p) => PathBuf::from(p),
+            None => panic!(
+                "{var} not set: the chain-vector capture drives the E2 tools \
+                 (shekyl-chain-replay from `cargo build -p shekyl-chain-ingest --release`; \
+                 shekyl-e2-trace-export from `cmake -DBUILD_E2_TRACE_EXPORT=ON`)"
+            ),
+        }
+    };
+    let replay_bin = tool("SHEKYL_CHAIN_REPLAY_BIN");
+    let trace_bin = tool("SHEKYL_E2_TRACE_EXPORT_BIN");
+    // `get_info.height` is the block COUNT; the top block is one below it.
+    let count = daemon.height().await;
+    let tip = count.checked_sub(1).expect("a chain with a genesis");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../shekyl-chain-ingest/tests/vectors")
+        .join(shape);
+    if root.exists() {
+        std::fs::remove_dir_all(&root).expect("clear a stale capture");
+    }
+    std::fs::create_dir_all(&root).expect("create capture dir");
+    let corpus = root.join("corpus.e2");
+    let trace = root.join("trace.e2");
+
+    let fetch = Command::new(&replay_bin)
+        .args(["fetch", "--daemon"])
+        .arg(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .args(["--chain", "regtest", "--from", "0", "--to"])
+        .arg(count.to_string())
+        .arg("--out")
+        .arg(&corpus)
+        .output()
+        .expect("spawn shekyl-chain-replay fetch");
+    assert!(
+        fetch.status.success(),
+        "shekyl-chain-replay fetch failed: {}\n{}",
+        String::from_utf8_lossy(&fetch.stdout),
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    let export = Command::new(&trace_bin)
+        .arg("--regtest")
+        .arg("--data-dir")
+        .arg(&daemon.data_dir)
+        .arg("--out")
+        .arg(&trace)
+        .arg("--block-stop")
+        .arg(tip.to_string())
+        .output()
+        .expect("spawn shekyl-e2-trace-export");
+    assert!(
+        export.status.success(),
+        "shekyl-e2-trace-export failed: {}\n{}",
+        String::from_utf8_lossy(&export.stdout),
+        String::from_utf8_lossy(&export.stderr)
+    );
+
+    // Beside the pair: every listed transaction's full bytes as
+    // `txs/<txid>.tx`, for the validator crate's per-rule fixtures. That
+    // crate may not reach the ingest crate (G1), so it cannot read the
+    // corpus; it reads a real transaction's bytes and mutates ONE field —
+    // the same shape its fixtures have always had, now over a spend a
+    // daemon accepted rather than a hand-built skeleton.
+    let txs_dir = root.join("txs");
+    std::fs::create_dir_all(&txs_dir).expect("create txs dir");
+    let mut tx_count = 0usize;
+    for height in 0..=tip {
+        let block_resp: serde_json::Value = daemon
+            .rpc
+            .json_rpc_call("get_block", Some(json!({ "height": height })))
+            .await
+            .unwrap_or_else(|e| panic!("get_block {height}: {e:?}"));
+        let block =
+            shekyl_wire::Block::from_bytes(&hex_decode(block_resp["blob"].as_str().expect("blob")))
+                .unwrap_or_else(|e| panic!("parse block {height}: {e:?}"));
+        if block.transaction_hashes.is_empty() {
+            continue;
+        }
+        let hashes_hex: Vec<String> = block.transaction_hashes.iter().map(hex::encode).collect();
+        let resp: serde_json::Value = daemon
+            .rpc
+            .rpc_call(
+                "get_transactions",
+                Some(json!({ "txs_hashes": hashes_hex, "prune": false })),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("get_transactions @ {height}: {e:?}"));
+        for t in resp["txs"].as_array().expect("get_transactions txs array") {
+            let bytes = hex_decode(
+                t["as_hex"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .expect("full tx as_hex"),
+            );
+            let tx = shekyl_wire::Transaction::from_bytes(&bytes)
+                .expect("a daemon-served full tx parses");
+            std::fs::write(
+                txs_dir.join(format!("{}.tx", hex::encode(tx.hash()))),
+                &bytes,
+            )
+            .expect("write tx blob");
+            tx_count += 1;
+        }
+    }
+
+    let manifest = json!({
+        "format_version": 2,
+        "tx_count": tx_count,
+        "description":
+            "A regtest chain captured whole as the DRS-E2 replay pair. corpus.e2: \
+             every block 0..=tip_height with the FULL bytes of every listed \
+             transaction (shekyl-chain-replay fetch, RD-F15-verified). trace.e2: the \
+             passed-through facts per block and the daemon's logical-state digest at \
+             the tip (shekyl-e2-trace-export, one LMDB snapshot). Consumed by replay: \
+             shekyl-chain-ingest connects the chain against a real store, so the state \
+             the 4.I rules read is derived, not asserted. Regenerate with \
+             SHEKYL_CAPTURE_CHAIN_VECTORS=1, SHEKYLD_BIN, SHEKYL_CHAIN_REPLAY_BIN and \
+             SHEKYL_E2_TRACE_EXPORT_BIN set, running the named generator --ignored.",
+        "shape": shape,
+        "generator": generator,
+        "captured_by_daemon_version": daemon.version().await,
+        "tip_height": tip,
+        "block_count": count,
+        "spend_txid": spend_txid.map(|h| h.to_string()),
+        // What `replay --chain regtest --fixed-difficulty n` must be given:
+        // the value this harness spawned the daemon with, recorded rather
+        // than remembered.
+        "fixed_difficulty": 1,
+    });
+    std::fs::write(
+        root.join("manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
+    )
+    .expect("write capture manifest");
+    eprintln!(
+        "captured chain vector `{shape}` -> {} ({count} blocks; corpus {} B, trace {} B)",
+        root.display(),
+        std::fs::metadata(&corpus).map(|m| m.len()).unwrap_or(0),
+        std::fs::metadata(&trace).map(|m| m.len()).unwrap_or(0),
+    );
 }
 
 /// Capture blocks `0..=tip` as one fixture chain (deterministic projection only).
