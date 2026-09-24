@@ -5,7 +5,7 @@
 
 //! The pool file — DRS-E1 S-POOL commit 1 (`DRS_E1_SPOOL.md` §7): create,
 //! open and recreate; every operation on the empty file; each refusal;
-//! the enumeration; SI-16 named; the header's three refusals and its one
+//! the enumeration; SI-16 named; the header's four refusals and its one
 //! recreation.
 
 use redb::{Durability, TableDefinition};
@@ -410,6 +410,44 @@ fn another_version_recreates_and_everything_else_is_refused() {
     ));
     assert!(path.exists(), "not deleted");
     drop(std::fs::remove_file(&path));
+
+    // (3b) A sealed file at the current version whose table set is not the
+    // seal's — one table deleted, one re-typed: refused, kept (Copilot,
+    // PR #851: without the check these opened as `Opened` and failed at the
+    // first op as a bare engine error).
+    let deleted = |txn: &redb::WriteTransaction| {
+        txn.delete_table(POOL_BLOB).unwrap();
+    };
+    let retyped = |txn: &redb::WriteTransaction| {
+        txn.delete_table(POOL_META).unwrap();
+        const FOREIGN: TableDefinition<u64, Blob<PropertyCellBytes>> =
+            TableDefinition::new("pool_meta");
+        txn.open_table(FOREIGN).unwrap();
+    };
+    type Tamper<'a> = &'a dyn Fn(&redb::WriteTransaction);
+    let tampers: [(&str, Tamper<'_>); 2] = [("deleted", &deleted), ("retyped", &retyped)];
+    for (label, tamper) in tampers {
+        let path = tmp(&format!("tampered-{label}"));
+        let (store, _) = PoolStore::create(&path).unwrap();
+        {
+            let txn = store.db.begin_write().unwrap();
+            tamper(&txn);
+            txn.commit().unwrap();
+        }
+        drop(store);
+        let before = std::fs::metadata(&path).unwrap().len();
+        let err = PoolStore::create(&path).expect_err("tampered table set");
+        assert!(
+            matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
+            "{label}: {err:?}"
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            before,
+            "{label}: not deleted"
+        );
+        drop(std::fs::remove_file(&path));
+    }
 
     // (4) Not a redb database at all: refused, kept, byte for byte.
     let path = tmp("notredb");

@@ -235,9 +235,11 @@ impl PoolStore {
         }
     }
 
-    /// Read the header of an existing file. Absence or an undecodable cell
-    /// is [`StoreCannot::PoolFileForeign`]: not this store's file, and not
-    /// one it may recreate.
+    /// Read the header of an existing file, and — at the current version —
+    /// verify the sealed table set. Absence or an undecodable cell, or a
+    /// current-version seal over a missing or re-typed table, is
+    /// [`StoreCannot::PoolFileForeign`]: not this store's file, and not one
+    /// it may recreate.
     fn read_header(db: &Database) -> Result<Header, StoreError> {
         let txn = db.begin_read().map_err(EngineError::BeginRead)?;
         let table = match txn.open_table(POOL_HEADER) {
@@ -253,11 +255,31 @@ impl PoolStore {
         let Ok(found) = SchemaVersion::decode(cell.value().bytes()) else {
             return Err(StoreCannot::PoolFileForeign.into());
         };
-        Ok(if found == SCHEMA_VERSION {
-            Header::Current
-        } else {
-            Header::Other(found)
-        })
+        if found != SCHEMA_VERSION {
+            // Another layout recreates, whatever its table set: the seal is
+            // this store's, the version is not, and the file is discardable.
+            return Ok(Header::Other(found));
+        }
+        // The seal at this version created both tables (`seal_fresh`), so a
+        // current-version file that lacks one — or holds one under another
+        // type — is not one this store left behind: tampered or torn.
+        // Refused and kept (`SPL-Q8`); the chain store's `verify_sealed_tables`
+        // posture. Without this, such a file opens as `Opened` and fails at
+        // the first op as a bare engine error (Copilot, PR #851).
+        for open in [
+            |t: &ReadTransaction| t.open_table(POOL_META).map(drop),
+            |t: &ReadTransaction| t.open_table(POOL_BLOB).map(drop),
+        ] {
+            match open(&txn) {
+                Ok(()) => {}
+                Err(
+                    redb::TableError::TableDoesNotExist(_)
+                    | redb::TableError::TableTypeMismatch { .. },
+                ) => return Err(StoreCannot::PoolFileForeign.into()),
+                Err(e) => return Err(EngineError::Table(e).into()),
+            }
+        }
+        Ok(Header::Current)
     }
 
     /// Run `f` inside a write batch and commit if it returns `Ok`. The
@@ -443,8 +465,8 @@ impl PoolBatch<'_> {
 }
 
 /// The cross-field rules, at the write (the codec re-applies them at the
-/// read). A record built through [`PoolRecord::new`] passes; the fields are
-/// public, so a mutated one is checked again here.
+/// read). A record that passed [`PoolRecord::checked`] passes; the fields
+/// are public, so a mutated one is checked again here.
 fn check_shape(record: &PoolRecord) -> Result<(), StoreError> {
     match record.validate() {
         Ok(()) => Ok(()),
