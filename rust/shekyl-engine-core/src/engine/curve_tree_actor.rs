@@ -315,8 +315,10 @@ pub(crate) struct RootAndDepthAt {
 /// Actor message assembling every membership path for one transaction in a
 /// single handler invocation (CT-5c T3 / Q2).
 ///
-/// The handler loops [`CurveTreeClient::assemble_path`] over `inputs` against
-/// the one shared `reference`. Because the actor processes messages serially,
+/// The handler makes one [`CurveTreeClient::assemble_paths`] call over `inputs`
+/// against the one shared `reference`, which reconstructs the drained leaves
+/// and their layers **once for the batch** instead of once per input
+/// (`CT-6` increment 3, closeout row (a)). Because the actor processes messages serially,
 /// no [`IngestBlock`] / [`RollbackToFork`] interleaves mid-assembly — the
 /// read-path snapshot atomicity (E1) is the handler invocation itself, not a
 /// discipline the caller must uphold. One `reference` for the whole batch makes
@@ -496,11 +498,10 @@ impl Message<AssembleTx> for CurveTreeActor {
         }
         // One handler invocation = one snapshot: every path is assembled
         // against the same `reference` with no ingest/rollback interleave (E1).
-        let mut paths = Vec::with_capacity(msg.inputs.len());
-        for input in &msg.inputs {
-            paths.push(self.client.assemble_path(input, &msg.reference)?);
-        }
-        Ok(paths)
+        // `assemble_paths` reconstructs the tree once for the batch rather than
+        // once per input (`CT-6` increment 3), so the shared snapshot is now a
+        // property of the values as well as of the `reference`.
+        self.client.assemble_paths(&msg.inputs, &msg.reference)
     }
 }
 

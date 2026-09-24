@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### `CT-6` increment 3 — one tree reconstruction per transaction, not per input
+
+- **`CurveTreeClient::assemble_paths` is the primitive; `assemble_path` is the
+  one-input case.** Each membership path needs the same three things — the
+  drained leaves at the reference cutoff, the layers built over them, and one
+  `gindex`'s position among those leaves — and only the third is per-input.
+  Assembling per input paid `build_layers` and `drained_sorted` over the
+  **whole** drained stream once per input: `k · n`, where `n` is 765 600 at the
+  graded worst case. Hoisting them makes it `n + k`. Discharges `CT-5`
+  closeout row (a), `CT-6` F3(b).
+- **The integrity gate runs once, before any input work**, and a root mismatch
+  returns with **no** paths rather than a partial batch — so
+  `curve_tree_actor`'s *"every input shares one tree context"* is now true of
+  the values, not only of the `reference`.
+- **Positions are indexed once** (`gindex → drain-position`) instead of scanned
+  per input: `drained` is sorted by `(maturity, gindex)`, so `gindex` is not
+  monotonic and binary search does not apply. `Gindex` is `Hash + Eq` from
+  `scalar_u64!`, so this needs nothing from `shekyl-types`.
+- **Duplicate inputs are still not refused here**, deliberately. Two inputs
+  naming one `gindex` assemble two identical paths, exactly as the loop did;
+  spending an output twice is caught by the key-image check at consensus, and a
+  second refusal here would put one rule in two places.
+- **Red-bitten on the hazard the change introduces**, not on the work it
+  removes: hoisting `leaf_pos` out of the per-input loop makes both paths
+  identical, and the test names it. The fixture places its two inputs in
+  different layer-0 chunks, because inputs inside one chunk would hide a reused
+  position.
+
 ### `tx_extra` Rust cutover — one codec, and the coinbase extra gets a consensus grammar
 
 **Consensus.** A new rule, census `CEN-I20` (`GENESIS_TX_WIRE_FORMAT.md`

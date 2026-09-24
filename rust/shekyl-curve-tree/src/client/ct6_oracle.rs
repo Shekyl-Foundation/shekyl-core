@@ -22,8 +22,9 @@
 
 use super::tests::{coinbase_raw, ingest_outputs_at};
 use super::{BlockLeaves, CurveTreeClient, TxLeafInputs};
-use crate::recon::{assemble_leaf_stream, root_from_scalars};
-use crate::types::{BlockHeight, CurveTreeRoot, LeafEntry};
+use crate::recon::{assemble_leaf_stream, drained_sorted, root_from_scalars};
+use crate::types::{AssembleInput, BlockHeight, CurveTreeRoot, LeafEntry, ReferenceBlock};
+use crate::ClientError;
 use shekyl_consensus::COINBASE_LOCK_WINDOW;
 use shekyl_fcmp::tree::{
     layer_count_for_leaves, HELIOS_CHUNK_WIDTH, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
@@ -296,6 +297,16 @@ fn agreed_reading() -> TierReading {
 /// Root and leaf count of the leaves drained through `cutoff`.
 ///
 /// `cutoff` is the caller's. This does not read [`CurveTreeClient::drained_through`].
+/// The consensus anchor the assembler gates against, taken from the client so
+/// the gate passes for a correct reference and the test is about assembly.
+fn reference_at(client: &CurveTreeClient, height: BlockHeight) -> ReferenceBlock {
+    ReferenceBlock {
+        height,
+        curve_tree_root: client.root_at(height).expect("fixture root reads"),
+        block_hash: crate::types::BlockHash::from_bytes([7u8; 32]),
+    }
+}
+
 fn oracle_at(entries: &[LeafEntry], cutoff: BlockHeight) -> (CurveTreeRoot, u64) {
     let scalars = assemble_leaf_stream(entries, cutoff);
     assert!(
@@ -579,5 +590,118 @@ fn height_outside_both_spans_is_uncovered() {
     assert_eq!(
         examine_tier_readings(layout.answers(segment, snapshot)),
         Err(TierFault::Uncovered { height: hole })
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CT-6 increment 3 — per-transaction reconstruction reuse (closeout row (a))
+// ---------------------------------------------------------------------------
+
+/// Two inputs whose leaves sit in **different layer-0 chunks**.
+///
+/// The hazard this increment introduces is shared state leaking across inputs:
+/// the drained leaves and their layers are now built once for the batch, so a
+/// value that should be per-input — `leaf_pos`, and everything derived from it
+/// — could be computed once and reused. Inputs inside one chunk would hide
+/// that, because their `leaf_chunk` is the same slice either way. These two
+/// straddle a chunk boundary, so a reused position changes the answer.
+fn two_inputs_in_different_chunks(
+    client: &CurveTreeClient,
+    cutoff: BlockHeight,
+) -> (Vec<AssembleInput>, usize, usize) {
+    let drained = drained_sorted(&client.entries, cutoff);
+    let first = 0usize;
+    let second = SELENE_CHUNK_WIDTH;
+    assert!(
+        drained.len() > second,
+        "fixture holds {} drained leaves; need more than {second} so the two \
+         inputs land in different layer-0 chunks",
+        drained.len()
+    );
+    assert_ne!(
+        first / SELENE_CHUNK_WIDTH,
+        second / SELENE_CHUNK_WIDTH,
+        "the two positions must be in different chunks or a reused leaf_pos is invisible"
+    );
+    let inputs = [first, second]
+        .into_iter()
+        .map(|pos| {
+            let e = &drained[pos];
+            AssembleInput {
+                gindex: e.gindex,
+                output_key: e.identity.output_key,
+                commitment: e
+                    .identity
+                    .commitment
+                    .expect("a drained leaf carries a commitment"),
+            }
+        })
+        .collect();
+    (inputs, first, second)
+}
+
+/// The batch assembles a **distinct** path per input.
+///
+/// This is the red-bite for increment 3: computing `leaf_pos` once and reusing
+/// it across the batch would make both paths identical, and this assertion is
+/// what notices. It is not an equivalence test against `assemble_path` —
+/// that method now delegates to the batch, so comparing them would compare a
+/// function to itself.
+#[test]
+fn batched_assembly_keeps_each_input_its_own_path() {
+    let tip = varying_tip();
+    let mut client = CurveTreeClient::new();
+    ingest_through(&mut client, tip, scheduled_outputs);
+
+    let height = tip;
+    let cutoff = height - BlockCount::ONE;
+    let (inputs, first, second) = two_inputs_in_different_chunks(&client, cutoff);
+    let reference = reference_at(&client, height);
+
+    let paths = client
+        .assemble_paths(&inputs, &reference)
+        .expect("batch assembles");
+
+    assert_eq!(paths.len(), inputs.len(), "one path per input");
+    assert_ne!(
+        paths[0].leaf_chunk, paths[1].leaf_chunk,
+        "positions {first} and {second} are in different layer-0 chunks, so their \
+         leaf chunks must differ; equal chunks mean a per-input value was computed \
+         once and reused across the batch"
+    );
+    // **The branches above layer 0 are deliberately not asserted to differ.**
+    // Two leaves in different layer-0 chunks may share every parent above
+    // them: at this fixture's depth the walk divides `leaf_node_idx` by
+    // `HELIOS_CHUNK_WIDTH`, so chunks 0 and 1 both resolve to node 0 and the
+    // branch is legitimately identical. Asserting otherwise would fail on
+    // correct code — which is how this assertion was first written, and what
+    // running it caught. `leaf_chunk` is the discriminator here because
+    // `leaf_pos` is what selects it, so a reused position changes it and
+    // nothing else needs to.
+}
+
+/// The integrity gate runs **once, before any input work**, and a mismatch
+/// yields no paths rather than a partial batch.
+#[test]
+fn a_root_mismatch_refuses_the_whole_batch() {
+    let tip = varying_tip();
+    let mut client = CurveTreeClient::new();
+    ingest_through(&mut client, tip, scheduled_outputs);
+
+    let height = tip;
+    let cutoff = height - BlockCount::ONE;
+    let (inputs, _, _) = two_inputs_in_different_chunks(&client, cutoff);
+
+    let mut reference = reference_at(&client, height);
+    let mut wrong = reference.curve_tree_root.to_bytes();
+    wrong[0] ^= 0x01;
+    reference.curve_tree_root = CurveTreeRoot::from_bytes(wrong);
+
+    let err = client
+        .assemble_paths(&inputs, &reference)
+        .expect_err("a wrong reference root must refuse the batch");
+    assert!(
+        matches!(err, ClientError::RootMismatch { .. }),
+        "expected RootMismatch, got {err:?}"
     );
 }
