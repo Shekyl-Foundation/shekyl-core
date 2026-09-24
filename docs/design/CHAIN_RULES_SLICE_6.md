@@ -346,7 +346,8 @@ doing two things.
 
 | # | Commit | Gate |
 | --- | --- | --- |
-| 1 | **The captured chains** — **blocks, not transactions** (§5.2). For each of the five shapes — 1-in/1-out, 1-in/2-out, one bond post and one emission with a fee spend each, one depth-3 — the regtest chain the generator produced, from genesis through the block that carries the spend, committed as `.block` blobs under `rust/shekyl-chain-ingest/tests/vectors/<shape>/` with a manifest naming the spend's txid, its `referenceBlock` height and the shape; generated once through `e2e_fcmp_spend_accepted_by_daemon` / `e2e_fcmp_spend_over_depth3_tree` against a daemon built at the landing tree. **The consumer of record is `shekyl-chain-ingest`**, which replays every chain through `form` → `validate` → `connect` against a real `redb` store — the root at `ref_height`, the spent set, the tree depth are *derived* by the code that derives them in production. The rules crate reads the same blobs for its predicate tests (`fixture::spend` / `listed` load the transaction out of its block); the store's `spend(ki, outputs)` becomes a loader; the fixture-sanity gate says which builders moved | **Q1 (ii)** — if the capture is another lane's or slow, WAIT here; do not fall back to filler |
+| 1a | **The captured chains** — **blocks, not transactions** (§5.2) — **LANDED `6fd74abee`, `231132849`**. For each of the five shapes — 1-in/1-out, 1-in/2-out, one bond post and one emission with a fee spend each, one depth-3 — the regtest chain the generator produced, from genesis through the block that carries the spend, committed as `.block` blobs under `rust/shekyl-chain-ingest/tests/vectors/<shape>/` with a manifest naming the spend's txid, its `referenceBlock` height and the shape; generated once through `e2e_fcmp_spend_accepted_by_daemon` / `e2e_fcmp_spend_over_depth3_tree` against a daemon built at the landing tree. **The consumer of record is `shekyl-chain-ingest`**, which replays every chain through `form` → `validate` → `connect` against a real `redb` store — the root at `ref_height`, the spent set, the tree depth are *derived* by the code that derives them in production. The rules crate reads the same blobs for its predicate tests (`fixture::spend` / `listed` load the transaction out of its block); the store's `spend(ki, outputs)` becomes a loader; the fixture-sanity gate says which builders moved | **Q1 (ii)** — if the capture is another lane's or slow, WAIT here; do not fall back to filler |
+| 1b | **The driver** (§5.3): `shekyl-block-template` (TXE-F8 claimed — the coinbase and header assembled from `shekyl-economics`, `shekyl_crypto_pq::output::construct_output`, `build_coinbase_extra`, over a caller-supplied context; store-free, gated by the cargo tree check); the scenario API in `shekyl-chain-ingest` — `mine(n)`, `spend(shape)`, `reorg(depth)` — composing `ConnectFacts` from their owners (`shekyl-curve-tree`, `shekyl-economics`, `shekyl-difficulty`) and handing one assembly to the template as context and to `connect` as facts; the first scenario's store judged by the 4.F rows (the falsifier for the template is the validator) | commit 1a; **E3's writer is not waited on** — the driver composes what E3 will later persist |
 | 2 | Stateless 4.I rows in `tx_form`: I1, I4, I6, I8, I9, I14, I16; I5 with H10 kept as its equality row (Q4 (a)); each with its negative fixture at both sites, mutated from a captured spend | commit 1 — the seven self-arming conformance arms for these rows fire here; H24's falsifier flips here |
 | 3 | I19/I20 adopted: `tx_form` calls `check_tx_extra_shape`; **`TxScope::Coinbase`** minted for I20 with its doc pinning *runs at `Miner`*, never *when `is_coinbase()`*; `the_kind_is_derived_from_the_slot_not_the_bytes` gains the I20 case (Q6) | commit 1 |
 | 4 | `TxAgainstRule` (view-bound, `check(cx, view)`); I7 over `has_key_image`; I2 and I3 registry entries `by_construction`, list-and-iterate (Q3) | commit 1 |
@@ -444,11 +445,127 @@ exercised.
 
 **Commit 1 is split in two, disclosed here (rule 22: a split re-schedules
 inside the PR).** 1a — the vectors, the capture hook, the ingest witness,
-`MockChain`'s charter. 1b — the fixture migration: `fixture::spend` /
-`listed` and the store's `spend(ki, outputs)` become loaders over
-`txs/*.tx`, and the fixture-sanity gate says which builders moved. 1b is
-the change that has revealed something every time it has run this month,
-which is exactly why it is its own commit and not folded into 1a.
+`MockChain`'s charter (landed `6fd74abee`, `231132849`). 1b — *as first
+planned*, the fixture migration: builders become loaders over `txs/*.tx`.
+**That plan was measured before it was written and found to have the wrong
+shape (§5.3): a captured spend is valid only in the chain it came from, so
+"loader" is not a thing; and the question underneath — what happens to
+every test that runs `validate` over a filler spend once verification
+lands — has an answer that is not a fixture at all.**
+
+### 5.3 The driver — 1b redefined (RULED 2026-09-24)
+
+**The measurement.** 121 `spend(`/`listed(` sites across 19 files in three
+crates. On a `validate`/`connect` path — where I15/I18/H19-verify will
+refuse filler — sit the store's `connect_fixtures.rs` (which calls the real
+`validate`; 42 sites across `read_tests`, `output_read_tests`,
+`amendments_tests`, `pop_tests`, `connect_tests`), the ingest's
+`pipeline_tests`/`mutation_tests`/`corpus_tests`, and the rules crate's
+`refused_listed` and positive controls (52 sites). About fifty tests in two
+other lanes' crates, whose subjects are SI rows, pops, sequencing and
+grading — none about proofs. Four dispositions were tabled: (A) stop
+using spend-bearing blocks — impossible where the subject *is* a key image;
+(B) replay captured chains under those tests; (C) a knob that skips proof
+verification in tests — **refused**, it is `m_nettype != FAKECHAIN` in Rust,
+the pattern §3.4 just enumerated for deletion; (D) land verification last
+and let that commit carry the cascade — what the plan did implicitly while
+hiding that the cascade is fifty tests.
+
+**The ruling: none of the four.** All four are downstream of a premise
+nobody stated — that a test fixture is *constructed*. Accept that and
+every path is a variation on making the construction pass the rules: a
+loader, a replay of someone else's construction, a knob, or waiting for
+the rules to notice. That is the Monero paradigm — the thing under test
+becomes the apparatus — and (B) is it in better clothes: replaying a
+captured chain still consumes an artifact rather than driving the
+machinery. **We are not transcribing the C++; we are rewriting it.** What
+exercises production is a **scripted driver**: *mine N blocks; build a
+spend of this shape; submit; mine; reorg two deep; submit again* — the
+blocks from the block producer, the transactions from `shekyl-tx-builder`,
+validation from `validate`, storage from `connect`. No fixture exists; the
+test names a scenario and the production path produces the state. Where
+it stops being possible is the genuinely unreachable state — a torn
+commit, a corrupt row, a fault the substrate cannot be asked for — which is
+exactly `50-testing.mdc`'s second carve-out, the same boundary.
+
+**Can it be driven in-process, with no daemon?** Yes — read at source, the
+machinery is mostly there, and the two gaps are production code:
+
+- **Have:** spend production end to end — `shekyl-wire/tests/fcmp_spend_e2e.rs`
+  builds a real depth-3 tree through the production `CurveTreeClient`,
+  assembles a path through `assemble_path`, signs through
+  `shekyl_tx_builder::sign_transaction`, verifies through
+  `shekyl_fcmp::proof::verify`, `shekyl_ct_balance`, `Bulletproof::verify`,
+  serializes to a `Transaction` — in seconds. Validation and storage:
+  `form`/`validate`/`connect`. PoW: regtest fixed difficulty 1, every hash
+  satisfies; `ProductionSubstrate` or the real-clock mock, per test, stated.
+  Tree state: `shekyl_curve_tree` derives roots and layers in Rust.
+- **Gap 1 — no Rust block template.** `construct_miner_tx` /
+  `create_block_template` are C++. **This is TXE-F8** ("the block template
+  has no Rust owner"), already recorded; the driver is the first consumer
+  that makes it claimable. Every piece is Rust already —
+  `shekyl_economics` (reward, emission split, fee burn),
+  `shekyl_crypto_pq::output::construct_output` (the coinbase output the
+  C++ calls through `shekyl_construct_output`), `build_coinbase_extra`,
+  the wire types; nothing composes them.
+- **Gap 2 — `ConnectFacts` derivation.** `connect` takes `Fact<_>` with
+  `Origin::{Derived, PassedThrough}`; today `root_after`,
+  `coins_generated`, `burned` and `long_term_effective_median` are passed
+  through from the C++ trace.
+
+**Placement, ruled.** Gap 1 → a **new crate, `shekyl-block-template`** —
+named for what it is in production, `create_block_template`'s successor,
+not for the test that forced it. *Not* in `shekyl-tx-builder`: that crate
+is wallet-side and signs with wallet keys; template assembly is
+daemon-side, and a coinbase has no inputs, no signature, no wallet keys —
+the only overlap is "fills a wire structure," which is the wire's job. The
+coinbase and the header assembly both live here, because they are one
+function in C++ for a reason: the header's `curve_tree_root` and the
+coinbase's outputs are computed against the same height and context.
+**Store-free by construction** — it needs height, `prev_id`, the root,
+the median, `already_generated_coins`, all chain facts, all supplied by
+the caller in a context struct, none read: pure over inputs, no
+`shekyl-chain-store` edge, no `redb` in its graph, gated by the same cargo
+tree check as `shekyl-chain-rules`. Three named consumers at birth: this
+driver now; `get_block_template`'s Rust handler when the RPC moves; the
+built-in miner when it moves. TXE-F8's row becomes this crate's row.
+
+Gap 2 → **the composition belongs to the caller, and the store computes
+nothing.** C2-R8 decides it: the store persists consensus facts computed
+by consensus-owned functions inside the write transaction; it never
+computes one. `Fact<Derived>` means the value was derived *by its owner*,
+not that the store derived it — putting the derivation in
+`shekyl-chain-store` would make the store the owner, which is the
+prohibition, and E3 landing the curve-tree writer persists what
+`shekyl-curve-tree`'s grow returns; it does not compute the root in the
+store (that would be `blockchain_db.cpp:663`'s fusion rebuilt in Rust, the
+single thing the ruling exists to prevent). So: each fact from its owner —
+`root_after` from `shekyl-curve-tree`, `coins_generated` and `burned` from
+`shekyl-economics`, cumulative difficulty from D4 in `shekyl-difficulty`,
+`long_term_effective_median` from wherever G6 lands in slice 7 — and the
+driver assembles them **once**, handing the same assembly to the template
+builder as context and to `connect` as `ConnectFacts`. One composition,
+two consumers. That is S-ARCH's Q4 answer one layer up (primitives only;
+composition is the caller's), and it makes the driver honest about what it
+proves: a scenario exercises four owned derivations, not the store against
+itself.
+
+**Cost.** Proving a spend ≈ 1–2 s; a depth-3 tree from scratch, seconds;
+mining at difficulty 1, nothing. A scenario is seconds; fifty tests sharing
+a handful of driven stores is under a minute. Pay it *differently*: drive
+a scenario once per shape, let many assertions share the resulting store,
+keep the frozen corpora (§5.2) for the cases where a **specific historical
+chain** is the subject rather than a shape — and keep the daemon-backed
+`regtest_e2e` as what it is, the parity witness that the C++ *accepts* what
+the Rust built.
+
+**1b is therefore:** `shekyl-block-template` (TXE-F8 claimed); the
+scenario driver over the production stack in `shekyl-chain-ingest`, with
+the facts composed from their owners; this slice's own rows landed on it.
+The store's and ingest's ~fifty tests migrate to **scenarios, not
+replays**, owned by their lanes, the FOLLOWUPS row pointing at the driver.
+I15/I18/H19-verify wait on that migration either way; the difference is
+that what they wait for is worth having afterwards.
 
 **Carried, not done here:** slices 2–4's view-bound rows (the D family's
 windows, B5's root, E1's anchors) have fixtures of the same shape against

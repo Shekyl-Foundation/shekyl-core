@@ -4047,6 +4047,19 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
 ///
 /// `spend_txid` is recorded when the generator knows it; the archival
 /// shapes are located by their vin class at load, so it is `None` there.
+///
+/// **Why the manifest stamps `genesis_hash` and `built_at_dev_sha`.** These
+/// blobs are consensus-pinned test data: valid against one genesis and one
+/// rule set, and a change of TXE-Q6′'s class (a grammar closure, a constant
+/// regeneration, a row that alters what a valid block is) invalidates every
+/// captured chain at once. Without the pin in the data, that arrives as
+/// 1,979 blocks refusing at block 1 for a reason that reads as a validator
+/// bug; with it, the replay test holds the genesis to the current build's
+/// pin *before* judging a block and says "these vectors predate the current
+/// genesis". "The daemon must enforce the current rules" gets the right
+/// binary; "these vectors are pinned to a genesis" gets the right
+/// **artifact**, and only the second survives whoever made the decision —
+/// the same reason a citation carries its era. They are not boilerplate.
 async fn maybe_capture_chain_vector(
     daemon: &RegtestDaemon,
     shape: &str,
