@@ -36,12 +36,13 @@ namespace cryptonote
 {
 
 /**
- * @brief Get the maximum transaction weight for a given hardfork
+ * @brief Maximum transaction weight.
  *
- * @param hf_version hard fork version
+ * Half the minimum block weight, less the coinbase reserve. Not version-dispatched.
+ *
  * @return the maximum unconditional transaction weight
  */
-uint64_t get_transaction_weight_limit(uint8_t hf_version);
+uint64_t get_transaction_weight_limit();
 
 /**
  * @brief Verify the semantics of a group of FCMP++ signatures as a batch (if applicable)

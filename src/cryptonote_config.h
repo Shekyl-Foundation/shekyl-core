@@ -276,14 +276,13 @@
 #define THREAD_STACK_SIZE                       5 * 1024 * 1024
 
 // Rebooted chain: all features active from genesis (HF 1).
-// Only constants still referenced in production code are kept.
+// Unreferenced Monero-era names are deleted. The names that remain are
+// version-1 thresholds. Height lookups use DYNAMIC_FEE and SHEKYL_NG.
+// `major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` still selects the curve-tree
+// and miner-tx guards. EXACT_COINBASE, VIEW_TAGS, and 2021_SCALING are the
+// same value, used by tests.
 #define HF_VERSION_DYNAMIC_FEE                  1
-#define HF_VERSION_CRYPTONIGHT_VARIANT_1        1
-#define HF_VERSION_PER_BYTE_FEE                 1
-#define HF_VERSION_SMALLER_BP                   1
-#define HF_VERSION_LONG_TERM_BLOCK_WEIGHT       1
 #define HF_VERSION_EXACT_COINBASE               1
-#define HF_VERSION_BULLETPROOF_PLUS             1
 #define HF_VERSION_VIEW_TAGS                    1
 #define HF_VERSION_2021_SCALING                 1
 #define HF_VERSION_SHEKYL_NG                    1  // Three-component economics: release rate, burn, staking

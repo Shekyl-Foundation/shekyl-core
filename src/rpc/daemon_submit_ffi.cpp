@@ -421,7 +421,7 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
 
   facts.fee_per_byte = bc.get_current_fee_per_byte();
   facts.fee_quantization_mask = Blockchain::get_fee_quantization_mask();
-  facts.weight_limit = get_transaction_weight_limit(bc.get_current_hard_fork_version());
+  facts.weight_limit = get_transaction_weight_limit();
   facts.chain_height = bc.get_current_blockchain_height();
 }
 
