@@ -4473,6 +4473,7 @@ dependencies = [
  "rand_core 0.6.4",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-levin",
  "x25519-dalek",
  "zeroize",
 ]

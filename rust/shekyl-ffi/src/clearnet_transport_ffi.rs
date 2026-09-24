@@ -3,13 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Fd handoff for the clearnet Noise channel. C++ dups the socket and stops
-//! reading it. This thread owns the duplicate.
+//! Fd handoff for the clearnet network pipe. C++ releases the asio socket.
+//! This pipe owns that descriptor. The session above it sees plaintext.
 
 use std::ffi::c_void;
 use std::net::TcpStream;
+use std::sync::Arc;
 
-use shekyl_p2p_transport::Link;
+use shekyl_p2p_transport::{ClosedCallback, Pipe, PlainCallback};
+
+use crate::legacy_util::{array_from_ptr, slice_from_ptr};
 
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
@@ -17,14 +20,21 @@ use std::os::unix::io::FromRawFd;
 use std::os::windows::io::{FromRawSocket, RawSocket};
 
 fn stream_from_native(native: isize) -> Option<TcpStream> {
+    if native < 0 {
+        return None;
+    }
     #[cfg(unix)]
     {
-        let fd = i32::try_from(native).ok()?;
+        let Ok(fd) = i32::try_from(native) else {
+            return None;
+        };
         Some(unsafe { TcpStream::from_raw_fd(fd) })
     }
     #[cfg(windows)]
     {
-        let socket = u64::try_from(native).ok()?;
+        let Ok(socket) = usize::try_from(native) else {
+            return None;
+        };
         Some(unsafe { TcpStream::from_raw_socket(socket as RawSocket) })
     }
 }
@@ -32,27 +42,32 @@ fn stream_from_native(native: isize) -> Option<TcpStream> {
 /// `initiator` is nonzero when this node dialed.
 ///
 /// # Safety
-/// `native` is an owned duplicate of a connected TCP socket. `network_id` is
-/// 16 readable bytes. `on_plain` may be called from a Rust thread until
-/// [`shekyl_clearnet_detach`]. `ctx` stays valid for that same interval.
+/// A non-negative `native` is an owned connected TCP socket and is closed
+/// on every return. `network_id` is 16 readable bytes when non-null. `on_plain`
+/// and `on_closed` are callable until [`shekyl_clearnet_detach`] joins the
+/// pipe threads. `ctx` stays valid for that same interval.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_clearnet_attach(
     native: isize,
     network_id: *const u8,
     initiator: i32,
-    on_plain: extern "C" fn(*mut c_void, *const u8, usize),
+    on_plain: PlainCallback,
+    on_closed: ClosedCallback,
     ctx: *mut c_void,
-) -> *mut Link {
-    if network_id.is_null() {
-        return std::ptr::null_mut();
-    }
-    let mut id = [0u8; 16];
-    std::ptr::copy_nonoverlapping(network_id, id.as_mut_ptr(), 16);
+) -> *mut Pipe {
     let Some(stream) = stream_from_native(native) else {
         return std::ptr::null_mut();
     };
-    match Link::attach(stream, &id, initiator != 0, on_plain, ctx) {
-        Ok(link) => Box::into_raw(link),
+    if network_id.is_null() {
+        drop(stream);
+        return std::ptr::null_mut();
+    }
+    let Some(id) = (unsafe { array_from_ptr::<16>(network_id) }) else {
+        drop(stream);
+        return std::ptr::null_mut();
+    };
+    match Pipe::attach(stream, &id, initiator != 0, on_plain, on_closed, ctx) {
+        Ok(pipe) => Arc::into_raw(pipe).cast_mut(),
         Err(_) => std::ptr::null_mut(),
     }
 }
@@ -60,20 +75,54 @@ pub unsafe extern "C" fn shekyl_clearnet_attach(
 /// # Safety
 /// `link` came from [`shekyl_clearnet_attach`] and has not been detached.
 #[no_mangle]
+pub unsafe extern "C" fn shekyl_clearnet_start(link: *const Pipe) {
+    if !link.is_null() {
+        unsafe { &*link }.start();
+    }
+}
+
+/// # Safety
+/// `link` is a live pipe pointer published under the caller's mutex, which
+/// `detach` also takes before freeing it.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_clearnet_pin(link: *const Pipe) {
+    if !link.is_null() {
+        unsafe { Arc::increment_strong_count(link) };
+    }
+}
+
+/// # Safety
+/// Pairs with one [`shekyl_clearnet_pin`] on the same pointer.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_clearnet_unpin(link: *const Pipe) {
+    if !link.is_null() {
+        unsafe { Arc::decrement_strong_count(link) };
+    }
+}
+
+/// # Safety
+/// `link` is pinned, or the caller holds the publication mutex for the call.
+#[no_mangle]
 pub unsafe extern "C" fn shekyl_clearnet_write(
-    link: *mut Link,
+    link: *const Pipe,
     data: *const u8,
     len: usize,
 ) -> i32 {
-    if link.is_null() || (data.is_null() && len != 0) {
+    if link.is_null() {
         return -1;
     }
-    let bytes = if len == 0 {
-        &[]
+    let bytes = if data.is_null() {
+        if len != 0 {
+            return -1;
+        }
+        &[][..]
     } else {
-        std::slice::from_raw_parts(data, len)
+        match unsafe { slice_from_ptr(data, len) } {
+            Some(bytes) => bytes,
+            None => return -1,
+        }
     };
-    if (*link).write(bytes).is_ok() {
+    if unsafe { &*link }.write(bytes).is_ok() {
         0
     } else {
         -1
@@ -83,17 +132,19 @@ pub unsafe extern "C" fn shekyl_clearnet_write(
 /// # Safety
 /// `link` came from [`shekyl_clearnet_attach`]. Called once.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_clearnet_detach(link: *mut Link) {
-    if !link.is_null() {
-        drop(Box::from_raw(link));
+pub unsafe extern "C" fn shekyl_clearnet_detach(link: *mut Pipe) {
+    if link.is_null() {
+        return;
     }
+    let pipe = unsafe { Arc::from_raw(link) };
+    pipe.shutdown();
 }
 
 /// # Safety
 /// `link` came from [`shekyl_clearnet_attach`] and has not been detached.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_clearnet_read_done(link: *mut Link) {
+pub unsafe extern "C" fn shekyl_clearnet_read_done(link: *const Pipe) {
     if !link.is_null() {
-        shekyl_p2p_transport::release_read_budget(&*link);
+        unsafe { &*link }.read_done();
     }
 }

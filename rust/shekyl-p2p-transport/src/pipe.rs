@@ -1,0 +1,632 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Clearnet network pipe. It owns one TCP socket and speaks the prefix, the
+//! Noise handshake, and the record layer.
+//!
+//! Levin, stem, and fluff sit above this pipe. They write and read plaintext
+//! bytes and do not branch on which network carried them. An overlay (Tor,
+//! I2P) is a different pipe with the same plaintext contract, not a second
+//! copy of the session.
+
+use std::collections::VecDeque;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{Shutdown, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use crate::channel::{RecvHalf, SendHalf};
+use crate::noise::{HandshakeError, Initiator, Responder, MESSAGE1_LEN, MESSAGE2_LEN};
+use crate::prefix::{prefix_for, NetworkId, PREFIX_LEN};
+use crate::{INITIATOR_FLIGHT_LEN, RESPONDER_FLIGHT_LEN};
+
+/// How long one handshake flight may take. A peer that cannot finish is closed.
+pub const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(15);
+
+/// Plaintext bytes queued ahead of the socket. One session bucket, matching
+/// `shekyl_levin::DEFAULT_MAX_PACKET_SIZE`. The pipe does not parse Levin;
+/// it refuses to hold more than the session is already allowed to send.
+pub const PIPE_PLAINTEXT_BUDGET: usize = 100_000_000;
+
+/// Plaintext records posted to the session and not yet released.
+const SESSION_READ_WINDOW: usize = 4;
+
+const READ_CHUNK: usize = 4096;
+
+pub type PlainCallback = extern "C" fn(*mut std::ffi::c_void, *const u8, usize) -> i32;
+pub type ClosedCallback = extern "C" fn(*mut std::ffi::c_void);
+
+#[derive(Debug)]
+pub enum PipeError {
+    Io,
+    Prefix,
+    Handshake,
+    Timeout,
+    Record,
+    Full,
+    Closed,
+    Spawn,
+}
+
+pub(crate) fn fits_plaintext_budget(queued: usize, incoming: usize) -> bool {
+    incoming > 0
+        && queued
+            .checked_add(incoming)
+            .is_some_and(|total| total <= PIPE_PLAINTEXT_BUDGET)
+}
+
+struct Outbound {
+    queue: VecDeque<Vec<u8>>,
+    bytes: usize,
+    closed: bool,
+}
+
+struct ReadWindow {
+    in_flight: usize,
+}
+
+struct Shared {
+    stop: AtomicBool,
+    outbound: Mutex<Outbound>,
+    outbound_cv: Condvar,
+    window: Mutex<ReadWindow>,
+    window_cv: Condvar,
+}
+
+struct Gate {
+    go: Mutex<bool>,
+    cv: Condvar,
+}
+
+impl Gate {
+    fn new() -> Self {
+        Self {
+            go: Mutex::new(false),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn wait(&self, stop: &AtomicBool) -> bool {
+        let mut go = lock(&self.go);
+        while !*go && !stop.load(Ordering::Acquire) {
+            go = self.cv.wait(go).unwrap_or_else(|err| err.into_inner());
+        }
+        *go && !stop.load(Ordering::Acquire)
+    }
+
+    fn open(&self) {
+        *lock(&self.go) = true;
+        self.cv.notify_all();
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+/// A running clearnet pipe. `attach` returns before the handshake; `start`
+/// lets the owner threads touch the socket. Callbacks do not run before `start`.
+pub struct Pipe {
+    shared: Arc<Shared>,
+    gate: Arc<Gate>,
+    killer: Mutex<Option<TcpStream>>,
+    reader: Mutex<Option<JoinHandle<()>>>,
+    writer: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Pipe {
+    pub fn attach(
+        stream: TcpStream,
+        network_id: &NetworkId,
+        initiator: bool,
+        on_plain: PlainCallback,
+        on_closed: ClosedCallback,
+        ctx: *mut std::ffi::c_void,
+    ) -> Result<Arc<Self>, PipeError> {
+        stream.set_nonblocking(false).map_err(|_| PipeError::Io)?;
+        let reader_stream = stream;
+        let writer_stream = reader_stream.try_clone().map_err(|_| PipeError::Io)?;
+        let killer = reader_stream.try_clone().map_err(|_| PipeError::Io)?;
+        let shared = Arc::new(Shared {
+            stop: AtomicBool::new(false),
+            outbound: Mutex::new(Outbound {
+                queue: VecDeque::new(),
+                bytes: 0,
+                closed: false,
+            }),
+            outbound_cv: Condvar::new(),
+            window: Mutex::new(ReadWindow { in_flight: 0 }),
+            window_cv: Condvar::new(),
+        });
+        let gate = Arc::new(Gate::new());
+        let (keys_tx, keys_rx) = std::sync::mpsc::channel();
+        let ctx_bits = ctx as usize;
+        let nid = *network_id;
+
+        let shared_r = Arc::clone(&shared);
+        let gate_r = Arc::clone(&gate);
+        let reader = std::thread::Builder::new()
+            .name("sk-pipe-rd".to_string())
+            .spawn(move || {
+                read_loop(
+                    reader_stream,
+                    nid,
+                    initiator,
+                    shared_r,
+                    gate_r,
+                    keys_tx,
+                    Session {
+                        on_plain,
+                        on_closed,
+                        ctx: ctx_bits,
+                    },
+                );
+            })
+            .map_err(|_| PipeError::Spawn)?;
+
+        let shared_w = Arc::clone(&shared);
+        let writer = match std::thread::Builder::new()
+            .name("sk-pipe-wr".to_string())
+            .spawn(move || write_loop(writer_stream, shared_w, keys_rx))
+        {
+            Ok(handle) => handle,
+            Err(_) => {
+                shared.stop.store(true, Ordering::Release);
+                gate.open();
+                let _ = reader.join();
+                return Err(PipeError::Spawn);
+            }
+        };
+
+        Ok(Arc::new(Self {
+            shared,
+            gate,
+            killer: Mutex::new(Some(killer)),
+            reader: Mutex::new(Some(reader)),
+            writer: Mutex::new(Some(writer)),
+        }))
+    }
+
+    /// Release the owner threads. Callbacks may run after this returns only
+    /// if they were already inside the session; new reads do not start.
+    pub fn start(&self) {
+        self.gate.open();
+    }
+
+    pub fn write(&self, plaintext: &[u8]) -> Result<(), PipeError> {
+        if plaintext.is_empty() {
+            return Ok(());
+        }
+        if plaintext.len() > PIPE_PLAINTEXT_BUDGET {
+            return Err(PipeError::Full);
+        }
+        let owned = plaintext.to_vec();
+        let mut queue = lock(&self.shared.outbound);
+        if queue.closed || self.shared.stop.load(Ordering::Acquire) {
+            return Err(PipeError::Closed);
+        }
+        if !fits_plaintext_budget(queue.bytes, owned.len()) {
+            return Err(PipeError::Full);
+        }
+        queue.bytes += owned.len();
+        queue.queue.push_back(owned);
+        self.shared.outbound_cv.notify_one();
+        Ok(())
+    }
+
+    pub fn read_done(&self) {
+        let mut window = lock(&self.shared.window);
+        window.in_flight = window.in_flight.saturating_sub(1);
+        self.shared.window_cv.notify_one();
+    }
+
+    pub fn shutdown(&self) {
+        self.shared.stop.store(true, Ordering::Release);
+        {
+            let mut queue = lock(&self.shared.outbound);
+            queue.closed = true;
+        }
+        self.shared.outbound_cv.notify_all();
+        self.shared.window_cv.notify_all();
+        self.gate.open();
+        if let Some(killer) = lock(&self.killer).take() {
+            let _ = killer.shutdown(Shutdown::Both);
+        }
+        if let Some(writer) = lock(&self.writer).take() {
+            let _ = writer.join();
+        }
+        if let Some(reader) = lock(&self.reader).take() {
+            let _ = reader.join();
+        }
+    }
+}
+
+impl Drop for Pipe {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+struct Session {
+    on_plain: PlainCallback,
+    on_closed: ClosedCallback,
+    ctx: usize,
+}
+
+fn read_loop(
+    mut stream: TcpStream,
+    network_id: NetworkId,
+    initiator: bool,
+    shared: Arc<Shared>,
+    gate: Arc<Gate>,
+    keys_tx: std::sync::mpsc::Sender<SendHalf>,
+    session: Session,
+) {
+    if !gate.wait(&shared.stop) {
+        return;
+    }
+    let deadline = Instant::now() + HANDSHAKE_DEADLINE;
+    let (send, mut recv) = match handshake(&mut stream, &network_id, initiator, deadline) {
+        Ok(halves) => halves,
+        Err(_) => {
+            report_closed(&shared, session.on_closed, session.ctx);
+            return;
+        }
+    };
+    if keys_tx.send(send).is_err() {
+        report_closed(&shared, session.on_closed, session.ctx);
+        return;
+    }
+    let mut inbound = Vec::new();
+    loop {
+        if shared.stop.load(Ordering::Acquire) || !wait_window(&shared) {
+            break;
+        }
+        match pull_record(&mut recv, &mut stream, &mut inbound) {
+            Ok(plain) => deliver(&shared, session.on_plain, session.ctx, &plain),
+            Err(_) => {
+                report_closed(&shared, session.on_closed, session.ctx);
+                break;
+            }
+        }
+    }
+}
+
+fn write_loop(
+    mut stream: TcpStream,
+    shared: Arc<Shared>,
+    keys_rx: std::sync::mpsc::Receiver<SendHalf>,
+) {
+    let Ok(mut send) = keys_rx.recv() else {
+        return;
+    };
+    loop {
+        let plain = {
+            let mut queue = lock(&shared.outbound);
+            while queue.queue.is_empty() && !queue.closed && !shared.stop.load(Ordering::Acquire) {
+                queue = shared
+                    .outbound_cv
+                    .wait(queue)
+                    .unwrap_or_else(|err| err.into_inner());
+            }
+            if queue.queue.is_empty() {
+                break;
+            }
+            let plain = queue.queue.pop_front().expect("queue is non-empty");
+            queue.bytes -= plain.len();
+            plain
+        };
+        if shared.stop.load(Ordering::Acquire) {
+            break;
+        }
+        let wire = match send.seal(&plain) {
+            Ok(wire) => wire,
+            Err(_) => {
+                let _ = stream.shutdown(Shutdown::Both);
+                break;
+            }
+        };
+        if wire.is_empty() {
+            continue;
+        }
+        if stream.write_all(&wire).is_err() {
+            let _ = stream.shutdown(Shutdown::Both);
+            break;
+        }
+    }
+}
+
+fn report_closed(shared: &Shared, on_closed: ClosedCallback, ctx_bits: usize) {
+    if !shared.stop.load(Ordering::Acquire) {
+        on_closed(ctx_bits as *mut std::ffi::c_void);
+    }
+}
+
+fn wait_window(shared: &Shared) -> bool {
+    let mut window = lock(&shared.window);
+    while window.in_flight >= SESSION_READ_WINDOW && !shared.stop.load(Ordering::Acquire) {
+        window = shared
+            .window_cv
+            .wait(window)
+            .unwrap_or_else(|err| err.into_inner());
+    }
+    !shared.stop.load(Ordering::Acquire)
+}
+
+fn deliver(shared: &Shared, on_plain: PlainCallback, ctx_bits: usize, plain: &[u8]) {
+    lock(&shared.window).in_flight += 1;
+    let rc = on_plain(
+        ctx_bits as *mut std::ffi::c_void,
+        plain.as_ptr(),
+        plain.len(),
+    );
+    if rc != 0 {
+        let mut window = lock(&shared.window);
+        window.in_flight = window.in_flight.saturating_sub(1);
+        shared.window_cv.notify_one();
+    }
+}
+
+fn pull_record(
+    recv: &mut RecvHalf,
+    stream: &mut TcpStream,
+    inbound: &mut Vec<u8>,
+) -> Result<Vec<u8>, PipeError> {
+    let mut tmp = [0u8; READ_CHUNK];
+    loop {
+        match recv.open_one(inbound) {
+            Ok((plain, used)) => {
+                inbound.drain(..used);
+                return Ok(plain);
+            }
+            Err(crate::channel::RecordError::Truncated) => {
+                let n = stream.read(&mut tmp).map_err(|_| PipeError::Io)?;
+                if n == 0 {
+                    return Err(PipeError::Io);
+                }
+                inbound.extend_from_slice(&tmp[..n]);
+            }
+            Err(_) => return Err(PipeError::Record),
+        }
+    }
+}
+
+pub(crate) fn handshake(
+    stream: &mut TcpStream,
+    network_id: &NetworkId,
+    initiator: bool,
+    deadline: Instant,
+) -> Result<(SendHalf, RecvHalf), PipeError> {
+    let halves = if initiator {
+        let (ini, msg1) = Initiator::new(network_id).map_err(handshake_io)?;
+        let mut flight = Vec::with_capacity(INITIATOR_FLIGHT_LEN);
+        flight.extend_from_slice(&prefix_for(network_id));
+        flight.extend_from_slice(&msg1);
+        write_all_deadline(stream, &flight, deadline)?;
+        read_prefix(stream, network_id, deadline)?;
+        let mut msg2 = vec![0u8; MESSAGE2_LEN];
+        read_exact(stream, &mut msg2, deadline)?;
+        ini.read_message2(&msg2).map_err(handshake_io)?.split()
+    } else {
+        read_prefix(stream, network_id, deadline)?;
+        let mut msg1 = vec![0u8; MESSAGE1_LEN];
+        read_exact(stream, &mut msg1, deadline)?;
+        let ready = Responder::new(network_id)
+            .read_message1(&msg1)
+            .map_err(handshake_io)?;
+        let (established, msg2) = ready.write_message2().map_err(handshake_io)?;
+        let mut flight = Vec::with_capacity(RESPONDER_FLIGHT_LEN);
+        flight.extend_from_slice(&prefix_for(network_id));
+        flight.extend_from_slice(&msg2);
+        write_all_deadline(stream, &flight, deadline)?;
+        established.split()
+    };
+    stream.set_read_timeout(None).map_err(|_| PipeError::Io)?;
+    stream.set_write_timeout(None).map_err(|_| PipeError::Io)?;
+    Ok(halves)
+}
+
+fn handshake_io(err: HandshakeError) -> PipeError {
+    match err {
+        HandshakeError::Decrypt
+        | HandshakeError::Kem
+        | HandshakeError::Length
+        | HandshakeError::State => PipeError::Handshake,
+    }
+}
+
+fn read_prefix(
+    stream: &mut TcpStream,
+    network_id: &NetworkId,
+    deadline: Instant,
+) -> Result<(), PipeError> {
+    let mut got = [0u8; PREFIX_LEN];
+    read_exact(stream, &mut got, deadline)?;
+    if got != prefix_for(network_id) {
+        return Err(PipeError::Prefix);
+    }
+    Ok(())
+}
+
+fn read_exact(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<(), PipeError> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(PipeError::Timeout);
+        }
+        stream
+            .set_read_timeout(Some(left))
+            .map_err(|_| PipeError::Io)?;
+        match stream.read(&mut buf[filled..]) {
+            Ok(0) => return Err(PipeError::Io),
+            Ok(n) => filled += n,
+            Err(err)
+                if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock =>
+            {
+                return Err(PipeError::Timeout);
+            }
+            Err(_) => return Err(PipeError::Io),
+        }
+    }
+    Ok(())
+}
+
+fn write_all_deadline(
+    stream: &mut TcpStream,
+    bytes: &[u8],
+    deadline: Instant,
+) -> Result<(), PipeError> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(PipeError::Timeout);
+    }
+    stream
+        .set_write_timeout(Some(left))
+        .map_err(|_| PipeError::Io)?;
+    stream.write_all(bytes).map_err(|err| {
+        if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock {
+            PipeError::Timeout
+        } else {
+            PipeError::Io
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    #[test]
+    fn plaintext_budget_is_one_session_bucket() {
+        assert_eq!(
+            PIPE_PLAINTEXT_BUDGET,
+            usize::try_from(shekyl_levin::DEFAULT_MAX_PACKET_SIZE).unwrap()
+        );
+        assert!(fits_plaintext_budget(0, 1));
+        assert!(fits_plaintext_budget(0, PIPE_PLAINTEXT_BUDGET));
+        assert!(!fits_plaintext_budget(0, 0));
+        assert!(!fits_plaintext_budget(1, PIPE_PLAINTEXT_BUDGET));
+        assert!(!fits_plaintext_budget(0, PIPE_PLAINTEXT_BUDGET + 1));
+    }
+
+    #[test]
+    fn wrong_prefix_fails_before_the_noise_message() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dialer = std::thread::spawn(move || TcpStream::connect(("127.0.0.1", port)).unwrap());
+        let (mut server, _) = listener.accept().unwrap();
+        let mut client = dialer.join().unwrap();
+        client.write_all(&[0xff; PREFIX_LEN]).unwrap();
+        client.shutdown(Shutdown::Both).unwrap();
+        assert!(matches!(
+            handshake(
+                &mut server,
+                &[0x11; 16],
+                false,
+                Instant::now() + Duration::from_secs(2),
+            ),
+            Err(PipeError::Prefix)
+        ));
+    }
+
+    struct Sink {
+        got: Mutex<Vec<u8>>,
+        cv: Condvar,
+        closed: AtomicBool,
+    }
+
+    extern "C" fn on_plain(ctx: *mut std::ffi::c_void, data: *const u8, len: usize) -> i32 {
+        let sink = unsafe { &*(ctx as *const Sink) };
+        let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+        lock(&sink.got).extend_from_slice(bytes);
+        sink.cv.notify_one();
+        0
+    }
+
+    extern "C" fn on_closed(ctx: *mut std::ffi::c_void) {
+        let sink = unsafe { &*(ctx as *const Sink) };
+        sink.closed.store(true, Ordering::Release);
+        sink.cv.notify_one();
+    }
+
+    #[test]
+    fn loopback_delivers_plaintext_after_the_handshake() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (ready_tx, ready_rx) = channel();
+        let dialer = std::thread::spawn(move || {
+            let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let sink = Sink {
+                got: Mutex::new(Vec::new()),
+                cv: Condvar::new(),
+                closed: AtomicBool::new(false),
+            };
+            let pipe = Pipe::attach(
+                stream,
+                &[0x55; 16],
+                true,
+                on_plain,
+                on_closed,
+                &sink as *const Sink as *mut std::ffi::c_void,
+            )
+            .unwrap();
+            pipe.start();
+            ready_tx.send(()).unwrap();
+            pipe.write(b"COMMAND_HANDSHAKE-shaped-bytes").unwrap();
+            let mut got = lock(&sink.got);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while got.is_empty() && Instant::now() < deadline {
+                let (guard, _) = sink
+                    .cv
+                    .wait_timeout(got, Duration::from_millis(50))
+                    .unwrap();
+                got = guard;
+            }
+            let echoed = got.clone();
+            drop(got);
+            pipe.shutdown();
+            echoed
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let sink = Sink {
+            got: Mutex::new(Vec::new()),
+            cv: Condvar::new(),
+            closed: AtomicBool::new(false),
+        };
+        let pipe = Pipe::attach(
+            stream,
+            &[0x55; 16],
+            false,
+            on_plain,
+            on_closed,
+            &sink as *const Sink as *mut std::ffi::c_void,
+        )
+        .unwrap();
+        pipe.start();
+        ready_rx.recv().unwrap();
+        let mut got = lock(&sink.got);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while got.is_empty() && Instant::now() < deadline {
+            let (guard, _) = sink
+                .cv
+                .wait_timeout(got, Duration::from_millis(50))
+                .unwrap();
+            got = guard;
+        }
+        let received = got.clone();
+        drop(got);
+        pipe.write(&received).unwrap();
+        let echoed = dialer.join().unwrap();
+        pipe.shutdown();
+        assert_eq!(received, b"COMMAND_HANDSHAKE-shaped-bytes");
+        assert_eq!(echoed, b"COMMAND_HANDSHAKE-shaped-bytes");
+    }
+}

@@ -32,10 +32,8 @@
 
 
 #include <boost/asio/post.hpp>
+#include <cstring>
 #include <vector>
-#ifndef _WIN32
-#include <unistd.h>
-#endif
 #include <boost/uuid/random_generator.hpp>
 #include <boost/chrono.hpp>
 #include <boost/utility/value_init.hpp>
@@ -724,7 +722,13 @@ namespace net_utils
     if (m_state.protocol.wait_release)
       return;
     if (m_state.socket.connected) {
-      if (!m_state.ssl.enabled) {
+      if (m_network_fd_released)
+      {
+        detach_network_pipe();
+        m_state.socket.connected = false;
+        m_state.status = status_t::WASTED;
+      }
+      else if (!m_state.ssl.enabled) {
         ec_t ec;
         connection_basic::socket_.next_layer().shutdown(
           socket_t::shutdown_both,
@@ -788,12 +792,17 @@ namespace net_utils
     if (m_state.protocol.wait_release)
       return;
     if (m_state.socket.connected) {
-      ec_t ec;
-      connection_basic::socket_.next_layer().shutdown(
-        socket_t::shutdown_both,
-        ec
-      );
-      connection_basic::socket_.next_layer().close(ec);
+      if (m_network_fd_released)
+        detach_network_pipe();
+      else
+      {
+        ec_t ec;
+        connection_basic::socket_.next_layer().shutdown(
+          socket_t::shutdown_both,
+          ec
+        );
+        connection_basic::socket_.next_layer().close(ec);
+      }
       m_state.socket.connected = false;
     }
     m_state.status = status_t::WASTED;
@@ -995,6 +1004,8 @@ namespace net_utils
       )
     );
     m_state.protocol.wait_init = true;
+    if (!take_network_pipe(is_income))
+      return false;
     guard.unlock();
     m_handler.after_init_connection();
     guard.lock();
@@ -1004,47 +1015,13 @@ namespace net_utils
       on_interrupted();
     else if (m_state.status == status_t::TERMINATING)
       on_terminating();
-    else if (static_cast<shared_state&>(connection_basic::get_state()).m_clearnet_transport_encrypt)
+    else if (m_network_fd_released)
     {
       auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
-      intptr_t native = -1;
-#ifdef _WIN32
-      WSAPROTOCOL_INFOW info{};
-      const SOCKET orig = connection_basic::socket().native_handle();
-      if (WSADuplicateSocketW(orig, GetCurrentProcessId(), &info) == 0)
-      {
-        const SOCKET duped = WSASocketW(
-          info.iAddressFamily, info.iSocketType, info.iProtocol, &info, 0, WSA_FLAG_OVERLAPPED);
-        if (duped != INVALID_SOCKET)
-          native = static_cast<intptr_t>(duped);
-      }
-#else
-      native = ::dup(connection_basic::socket().native_handle());
-#endif
-      if (native < 0 || !cfg.m_clearnet_attach)
-      {
-        if (native >= 0)
-        {
-#ifdef _WIN32
-          closesocket(static_cast<SOCKET>(native));
-#else
-          ::close(static_cast<int>(native));
-#endif
-        }
-        interrupt();
-        return false;
-      }
-      m_clearnet_link = cfg.m_clearnet_attach(
-        native,
-        cfg.m_clearnet_network_id,
-        is_income ? 0 : 1,
-        &connection::clearnet_on_plain,
-        this);
-      if (!m_clearnet_link)
-      {
-        interrupt();
-        return false;
-      }
+      const network_pipe_ops* ops = cfg.pipe_ops;
+      std::lock_guard<std::mutex> pipe_guard(m_network_pipe_mu);
+      if (m_network_pipe && ops && ops->start)
+        ops->start(m_network_pipe);
     }
     else if (!is_income || !m_state.ssl.enabled)
       start_read();
@@ -1054,23 +1031,108 @@ namespace net_utils
   }
 
   template<typename T>
-  void connection<T>::detach_clearnet()
+  bool connection<T>::take_network_pipe(bool is_income)
   {
-    void* link = nullptr;
-    {
-      std::lock_guard<std::mutex> link_guard(m_clearnet_mu);
-      link = m_clearnet_link;
-      m_clearnet_link = nullptr;
-    }
-    if (!link)
-      return;
     auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
-    if (cfg.m_clearnet_detach)
-      cfg.m_clearnet_detach(link);
+    if (!cfg.network_pipe_enabled)
+      return true;
+    const network_pipe_ops* ops = cfg.pipe_ops;
+    if (!ops || !ops->attach || !ops->start || !ops->pin || !ops->unpin
+        || !ops->write || !ops->detach || !ops->read_done || m_state.ssl.enabled)
+    {
+      interrupt();
+      return false;
+    }
+    boost::system::error_code release_ec;
+    const auto native = connection_basic::socket_.next_layer().release(release_ec);
+#ifdef _WIN32
+    const bool release_failed = release_ec || native == INVALID_SOCKET;
+#else
+    const bool release_failed = release_ec || native < 0;
+#endif
+    if (release_failed)
+    {
+      interrupt();
+      return false;
+    }
+    m_network_fd_released = true;
+    void* pipe = ops->attach(
+      static_cast<intptr_t>(native),
+      cfg.network_pipe_network_id,
+      is_income ? 0 : 1,
+      &connection::network_pipe_on_plain,
+      &connection::network_pipe_on_closed,
+      this);
+    if (!pipe)
+    {
+      interrupt();
+      return false;
+    }
+    std::lock_guard<std::mutex> pipe_guard(m_network_pipe_mu);
+    m_network_pipe = pipe;
+    return true;
   }
 
   template<typename T>
-  void connection<T>::clearnet_on_plain(void* ctx, const uint8_t* data, size_t len)
+  void connection<T>::detach_network_pipe()
+  {
+    void* pipe = nullptr;
+    {
+      std::lock_guard<std::mutex> pipe_guard(m_network_pipe_mu);
+      pipe = m_network_pipe;
+      m_network_pipe = nullptr;
+    }
+    if (!pipe)
+      return;
+    auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
+    if (cfg.pipe_ops && cfg.pipe_ops->detach)
+      cfg.pipe_ops->detach(pipe);
+  }
+
+  template<typename T>
+  int32_t connection<T>::network_pipe_on_plain(void* ctx, const uint8_t* data, size_t len)
+  {
+    auto* self = static_cast<connection*>(ctx);
+    boost::shared_ptr<connection> keep;
+    try
+    {
+      keep = self->shared_from_this();
+    }
+    catch (...)
+    {
+      return -1;
+    }
+    if (!data && len != 0)
+      return -1;
+    std::vector<uint8_t> copy(data, data + len);
+    boost::asio::post(self->strand_, [keep, copy = std::move(copy)] {
+      bool success = false;
+      {
+        std::lock_guard<std::mutex> guard(keep->m_state.lock);
+        keep->m_conn_context.m_last_recv = time(NULL);
+        keep->m_conn_context.m_recv_cnt += copy.size();
+        keep->start_timer(keep->get_timeout_from_bytes_read(copy.size()), true);
+      }
+      success = keep->m_handler.handle_recv(
+        reinterpret_cast<const char*>(copy.data()), copy.size());
+      auto& cfg = static_cast<shared_state&>(keep->get_state());
+      {
+        std::lock_guard<std::mutex> pipe_guard(keep->m_network_pipe_mu);
+        if (keep->m_network_pipe && cfg.pipe_ops && cfg.pipe_ops->read_done)
+          cfg.pipe_ops->read_done(keep->m_network_pipe);
+      }
+      if (!success)
+      {
+        std::lock_guard<std::mutex> guard(keep->m_state.lock);
+        if (keep->m_state.status == status_t::RUNNING)
+          keep->interrupt();
+      }
+    });
+    return 0;
+  }
+
+  template<typename T>
+  void connection<T>::network_pipe_on_closed(void* ctx)
   {
     auto* self = static_cast<connection*>(ctx);
     boost::shared_ptr<connection> keep;
@@ -1082,30 +1144,10 @@ namespace net_utils
     {
       return;
     }
-    std::vector<uint8_t> copy(data, data + len);
-    boost::asio::post(self->strand_, [keep, copy = std::move(copy)] {
-      bool success = false;
-      {
-        std::lock_guard<std::mutex> guard(keep->m_state.lock);
-        keep->m_conn_context.m_last_recv = time(NULL);
-        keep->m_conn_context.m_recv_cnt += copy.size();
-        keep->start_timer(keep->get_timeout_from_bytes_read(copy.size()), true);
-      }
-      success = keep->m_handler.handle_recv(copy.data(), copy.size());
-      auto& cfg = static_cast<shared_state&>(keep->get_state());
-      void* link = nullptr;
-      {
-        std::lock_guard<std::mutex> link_guard(keep->m_clearnet_mu);
-        link = keep->m_clearnet_link;
-      }
-      if (link && cfg.m_clearnet_read_done)
-        cfg.m_clearnet_read_done(link);
-      if (!success)
-      {
-        std::lock_guard<std::mutex> guard(keep->m_state.lock);
-        if (keep->m_state.status == status_t::RUNNING)
-          keep->interrupt();
-      }
+    boost::asio::post(self->strand_, [keep] {
+      std::lock_guard<std::mutex> guard(keep->m_state.lock);
+      if (keep->m_state.status == status_t::RUNNING)
+        keep->interrupt();
     });
   }
 
@@ -1150,7 +1192,7 @@ namespace net_utils
   template<typename T>
   connection<T>::~connection() noexcept(false)
   {
-    detach_clearnet();
+    detach_network_pipe();
     std::lock_guard<std::mutex> guard(m_state.lock);
     assert(m_state.status == status_t::TERMINATED ||
       m_state.status == status_t::WASTED ||
@@ -1220,17 +1262,23 @@ namespace net_utils
   template<typename T>
   bool connection<T>::do_send(byte_slice message)
   {
+    if (m_network_fd_released)
     {
-      std::lock_guard<std::mutex> link_guard(m_clearnet_mu);
-      if (m_clearnet_link)
+      auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
+      const network_pipe_ops* ops = cfg.pipe_ops;
+      if (!ops || !ops->write || !ops->pin || !ops->unpin)
+        return false;
+      void* pipe = nullptr;
       {
-        auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
-        if (!cfg.m_clearnet_write)
+        std::lock_guard<std::mutex> pipe_guard(m_network_pipe_mu);
+        pipe = m_network_pipe;
+        if (!pipe)
           return false;
-        const uint8_t* data = message.data();
-        const size_t len = message.size();
-        return cfg.m_clearnet_write(m_clearnet_link, data, len) == 0;
+        ops->pin(pipe);
       }
+      const int32_t rc = ops->write(pipe, message.data(), message.size());
+      ops->unpin(pipe);
+      return rc == 0;
     }
     return send(std::move(message));
   }
@@ -1244,7 +1292,7 @@ namespace net_utils
   template<typename T>
   bool connection<T>::close()
   {
-    detach_clearnet();
+    detach_network_pipe();
     std::lock_guard<std::mutex> guard(m_state.lock);
     if (m_state.status != status_t::RUNNING)
       return false;
@@ -1564,6 +1612,17 @@ namespace net_utils
   {
     assert(m_state != nullptr); // always set in constructor
     m_state->response_soft_limit = limit;
+  }
+  //---------------------------------------------------------------------------------
+  template<class t_protocol_handler>
+  void boosted_tcp_server<t_protocol_handler>::set_network_pipe(
+    const uint8_t network_id[16], const network_pipe_ops* ops)
+  {
+    assert(m_state != nullptr);
+    if (network_id)
+      std::memcpy(m_state->network_pipe_network_id, network_id, 16);
+    m_state->pipe_ops = ops;
+    m_state->network_pipe_enabled = ops != nullptr;
   }
   //---------------------------------------------------------------------------------
   template<class t_protocol_handler>

@@ -951,15 +951,19 @@ namespace nodetool
     network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
     {
       const bool encrypt = command_line::get_arg(vm, arg_clearnet_transport_encrypt);
-      auto& cfg = public_zone.m_net_server.get_config_object();
-      cfg.m_clearnet_transport_encrypt = encrypt;
-      std::memcpy(cfg.m_clearnet_network_id, &m_network_id, 16);
       if (encrypt)
       {
-        cfg.m_clearnet_attach = &shekyl_clearnet_attach;
-        cfg.m_clearnet_write = &shekyl_clearnet_write;
-        cfg.m_clearnet_detach = &shekyl_clearnet_detach;
-        cfg.m_clearnet_read_done = &shekyl_clearnet_read_done;
+        static const epee::net_utils::network_pipe_ops clearnet_noise_pipe = {
+          &shekyl_clearnet_attach,
+          &shekyl_clearnet_start,
+          &shekyl_clearnet_pin,
+          &shekyl_clearnet_unpin,
+          &shekyl_clearnet_write,
+          &shekyl_clearnet_detach,
+          &shekyl_clearnet_read_done,
+        };
+        public_zone.m_net_server.set_network_pipe(
+          reinterpret_cast<const uint8_t*>(&m_network_id), &clearnet_noise_pipe);
         MINFO("public-zone clearnet transport encryption is on (Noise NNhfs test gate)");
       }
       else

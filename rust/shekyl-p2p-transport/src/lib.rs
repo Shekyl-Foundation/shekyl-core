@@ -3,23 +3,21 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Clearnet transport channel: prefix, Noise NNhfs, then length-prefixed records.
+//! Clearnet network pipe: an 8-byte prefix, Noise NNhfs, then length-prefixed
+//! records. The bytes above the pipe are plaintext. This crate does not parse
+//! them, and it does not implement stem, fluff, or Levin.
 //!
-//! Tor and I2P do not use this crate. Levin command bytes are plaintext in and
-//! plaintext out; this crate never parses them.
+//! Tor and I2P are other network pipes. They are not built here.
 
+mod aead;
 mod channel;
-mod conn;
 mod noise;
+mod pipe;
 mod prefix;
 
-pub use channel::{Channel, Direction, RecordError, REKEY_NONCES};
-pub use conn::{
-    handshake_deadline, release_read_budget, run_pair, AcceptError, ClearnetSocket, Link,
-    PlainCallback,
-};
-pub use noise::{
-    pinned_initiator, Handshake, HandshakeError, Role, MESSAGE1_LEN, MESSAGE2_LEN, PROTOCOL_NAME,
+pub use noise::{MESSAGE1_LEN, MESSAGE2_LEN, PROTOCOL_NAME};
+pub use pipe::{
+    ClosedCallback, Pipe, PipeError, PlainCallback, HANDSHAKE_DEADLINE, PIPE_PLAINTEXT_BUDGET,
 };
 pub use prefix::{
     prefix_for, NetworkId, MAINNET_PREFIX, PREFIX_LEN, STAGENET_PREFIX, TESTNET_PREFIX,

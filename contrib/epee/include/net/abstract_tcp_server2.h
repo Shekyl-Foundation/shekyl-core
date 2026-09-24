@@ -47,6 +47,7 @@
 #include <cassert>
 #include <map>
 #include <memory>
+#include <cstdint>
 #include <mutex>
 #include <condition_variable>
 
@@ -90,6 +91,27 @@ namespace net_utils
     virtual ~i_connection_limit(){}
   };
   
+
+  /// Session-facing operations of a network pipe. The pipe owns the TCP
+  /// descriptor and presents plaintext bytes. Clearnet installs Noise here.
+  /// An overlay installs its own ops. The session above does not branch on
+  /// which one it is.
+  struct network_pipe_ops
+  {
+    void* (*attach)(
+      intptr_t native,
+      const uint8_t* network_id,
+      int32_t initiator,
+      int32_t (*on_plain)(void* ctx, const uint8_t* data, size_t len),
+      void (*on_closed)(void* ctx),
+      void* ctx);
+    void (*start)(void* pipe);
+    void (*pin)(void* pipe);
+    void (*unpin)(void* pipe);
+    int32_t (*write)(void* pipe, const uint8_t* data, size_t len);
+    void (*detach)(void* pipe);
+    void (*read_done)(void* pipe);
+  };
 
   /************************************************************************/
   /*                                                                      */
@@ -273,10 +295,17 @@ namespace net_utils
     std::string m_host{};
     state_t m_state{};
     t_protocol_handler m_handler;
-    void* m_clearnet_link{};
-    std::mutex m_clearnet_mu;
-    void detach_clearnet();
-    static void clearnet_on_plain(void* ctx, const uint8_t* data, size_t len);
+    /// Set once this connection's TCP descriptor belongs to `network_pipe`.
+    /// Sends never fall through to the asio socket after that.
+    bool m_network_fd_released{};
+    void* m_network_pipe{};
+    std::mutex m_network_pipe_mu;
+    /// Release the asio descriptor into the pipe. False if that failed and
+    /// the connection was interrupted. True when the pipe is off.
+    bool take_network_pipe(bool is_income);
+    void detach_network_pipe();
+    static int32_t network_pipe_on_plain(void* ctx, const uint8_t* data, size_t len);
+    static void network_pipe_on_closed(void* ctx);
   public:
     struct shared_state : connection_basic_shared_state, t_protocol_handler::config_type
     {
@@ -293,6 +322,12 @@ namespace net_utils
       i_connection_limit* plimit;
       std::size_t response_soft_limit;
       bool stop_signal_sent;
+      /// When set, this server's connections are a session over a network
+      /// pipe. The pipe owns the TCP descriptor. Levin does not branch on
+      /// which network the pipe is; another zone installs another `ops`.
+      bool network_pipe_enabled{};
+      uint8_t network_pipe_network_id[16]{};
+      const network_pipe_ops* pipe_ops{};
     };
 
     /// Construct a connection with the given io_context.
@@ -402,6 +437,9 @@ namespace net_utils
     void set_connection_filter(i_connection_filter* pfilter);
     void set_connection_limit(i_connection_limit* plimit);
     void set_response_soft_limit(std::size_t limit);
+    /// `ops == nullptr` leaves the plaintext socket. Otherwise every new
+    /// connection on this server releases its descriptor to that pipe.
+    void set_network_pipe(const uint8_t network_id[16], const network_pipe_ops* ops);
 
     void set_default_remote(epee::net_utils::network_address remote)
     {

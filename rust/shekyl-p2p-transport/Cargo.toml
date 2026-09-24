@@ -1,6 +1,6 @@
 [package]
 name = "shekyl-p2p-transport"
-description = "Clearnet Noise NNhfs channel between TCP and Levin"
+description = "Clearnet Noise NNhfs network pipe"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -18,3 +18,4 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 rand = "0.8"
+shekyl-levin = { path = "../shekyl-levin" }
