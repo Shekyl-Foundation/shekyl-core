@@ -233,12 +233,16 @@ A reachability probe that answers does write white today
 harvest-shaped `just_take_peerlist` path (`src/p2p/net_node.inl:1619`). Rust
 writes white there only when that address was the outstanding gray draw.
 
-The `pruning_seed` field is already gone. The only hit under
-`src/p2p/net_peerlist.*` is the archive-version comment at
-`src/p2p/net_peerlist.cpp:84`. The register's `src/p2p/net_peerlist.h:367` is
-the white update keeping the previous `last_seen`. Its `:414` is `return true`
-at the end of `append_with_peer_gray` (`src/p2p/net_peerlist.h:414`). Neither
-is a seed guard.
+The stripe field the register used to inherit is already gone from the
+peerlist. `src/p2p/net_peerlist.h:367` keeps the previous `last_seen`. `:414`
+is `return true` at the end of `append_with_peer_gray`
+(`src/p2p/net_peerlist.h:414`). Neither is work for this slice.
+
+`pruning_seed` is not a term this design uses. Where that spelling still
+appears in code, including comments and tests that name it in order to ignore
+it, the implementation PR this brief describes deletes it. This document does
+not. The deletion is not a predecessor: the field is already absent, and the
+slice opens without it.
 
 ---
 
@@ -276,8 +280,10 @@ They check different things. Neither stands for the other.
    does not draw former white first; `disclose` is a sample of white and
    carries no clock; a failed draw drops gray; a failed redial leaves white.
    The harness fails if it has no sequence (rule 47).
-3. **The C++ list is gone.** `rg -n 'm_peers_white|peerlist_manager' src/p2p`
-   returns nothing.
+3. **The C++ list is gone, and so is the old spelling.** `rg -n 'm_peers_white|peerlist_manager' src/p2p`
+   returns nothing. `rg -n pruning_seed src rust tests` returns nothing,
+   comments included. A gate that allowlists the word in a comment or a
+   negative test has not finished.
 
 A harness that requires Rust membership to match the C++ is the wrong oracle.
 §8 is a list of intentional divergences. *Records-was §4.2's green line.*
@@ -321,7 +327,7 @@ cannot express. Fix the signature. That does not widen white.
 | --- | --- | --- |
 | 1 | The crate: gray, white, `EXPIRATION_PERIOD`, the draws, the door, the address file. No FFI | The crate's tests cover §11.2, and `git diff dev..HEAD --stat -- src/ contrib/` is empty |
 | 2 | The divergence ledger of §8, checked against the tree at the increment's pin | Each §8 row names the Rust operation that replaces it, and §11.1 passes |
-| 3 | Delete the C++ peerlist. Dial sites that remain call the outcome functions | §11.3 |
+| 3 | Delete the C++ peerlist. Dial sites that remain call the outcome functions. Delete every remaining `pruning_seed` in `src/`, `rust/`, and `tests/` | §11.3 |
 
 Increment 1 changes no production behavior. Increment 3 is the cutover. The
 crate boundary is what makes `White`'s constructor crate-private; `shekyl-ffi`
