@@ -190,10 +190,12 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     assert_eq!(sealed + unshaped, schema::catalogue().len());
     // 28 → 22 at layout 11: S-ARCH shaped six archival tables
     // (`DRS_E1_SARCH.md` §4 — the plan's "seven" counted the `properties`
-    // cell, which is not a table); the journals, settlement, slash-applied,
-    // accrual and segment rows and the pool, alt and txpool tables stay
+    // cell, which is not a table). 22 → 20 at layout 12: S-POOL **evicted**
+    // `txpool_meta` and `txpool_blob` to the pool file (`DRS_E1_SPOOL.md`
+    // §4; not shaped here — gone from here). The journals, settlement,
+    // slash-applied, accrual and segment rows and the alt tables stay
     // `Unshaped` for their increments.
-    assert_eq!(unshaped, 22, "the §11.1(f) count at this layout");
+    assert_eq!(unshaped, 20, "the §11.1(f) count at this layout");
     cleanup(&path);
 }
 
@@ -364,9 +366,11 @@ fn the_second_rust_only_table_is_catalogued_last_and_named() {
         catalogue_len,
         "txs_pqc_auth_hash is the final catalogue slot"
     );
-    // 47 LMDB mirrors plus the two Rust-only tables (`undo_log`,
-    // `txs_pqc_auth_hash`) at SCHEMA_VERSION 10.
-    assert_eq!(catalogue_len, 49);
+    // 45 LMDB mirrors plus the two Rust-only tables (`undo_log`,
+    // `txs_pqc_auth_hash`) at SCHEMA_VERSION 12 — 47 mirrors until S-POOL
+    // moved `txpool_meta` / `txpool_blob` to the pool file (layout 12,
+    // `schema::MIRRORED_ELSEWHERE`).
+    assert_eq!(catalogue_len, 47);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(names, ["undo_log", "txs_pqc_auth_hash"]);
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.

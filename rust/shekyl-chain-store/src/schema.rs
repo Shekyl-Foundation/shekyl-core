@@ -135,6 +135,16 @@
 //! extra-leg's original refusal, so the mirror assumption retires one table
 //! at a time, never as a mode switch.
 //!
+//! Two X-macro tables have their twin in **another file** (DRS-E1 S-POOL,
+//! `DRS_E1_SPOOL.md` §4): `txpool_meta` and `txpool_blob` are `pool_meta`
+//! and `pool_blob` in the pool file (`crate::pool::schema`), because
+//! `DAEMON_REDB_STORE.md` §5.1 ruled the pool out of the consensus store
+//! file. Each is declared in [`MIRRORED_ELSEWHERE`] with the twin's name and
+//! the reason; the bijection gate reads that map too, so a censused table
+//! with no definition here is red unless it says where its twin is, and an
+//! entry that names a twin no other file defines is red as well. The class
+//! table stays the LMDB inventory: both keep their `Excluded` rows there.
+//!
 //! # The seal creates every table with a writer
 //!
 //! From S-CHAIN-R's layout commit (amendment A2, SCR-17) `header::seal` opens
@@ -218,6 +228,29 @@ pub(crate) fn undo_target(ordinal: TableOrdinal) -> Option<&'static dyn UndoTarg
 /// from). Out of the digest domain by construction: the accumulator's
 /// class table is the LMDB inventory, and a table absent from it with a
 /// reason here is a named exclusion, not an omission.
+/// X-macro tables whose redb twin is defined in **another file of this
+/// crate**, as `(lmdb_name, twin_name, reason)`. Read by
+/// `check_redb_schema_bijection.py`: every entry must be in the X-macro,
+/// must **not** have a definition in this file, and its twin must be a
+/// definition in `crate::pool::schema`; and by `check_redb_schema_key_types.py`,
+/// which has no definition here to constrain and is told so. The class table
+/// (`accumulator/class.rs`) is the LMDB inventory and keeps a row for each.
+pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
+    (
+        "txpool_meta",
+        "pool_meta",
+        "the pool is not consensus state and not reconstructible from blocks, so it lives in \
+         its own discardable file (DAEMON_REDB_STORE.md §5.1, built by DRS-E1 S-POOL): the \
+         typed record is `pool_meta` in `crate::pool`",
+    ),
+    (
+        "txpool_blob",
+        "pool_blob",
+        "the pool entry's transaction bytes, beside its record in the pool file for the same \
+         reason (DAEMON_REDB_STORE.md §5.1; DRS-E1 S-POOL): `pool_blob` in `crate::pool`",
+    ),
+];
+
 pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
     (
         "undo_log",
@@ -345,12 +378,6 @@ tables! {
     /// `spent_keys` — zerokval collapse: dup key image (`compare_hash32`) becomes the key.
     /// A set-table: the key is the member; [`Present`] is the zero-width witness.
     pub const SPENT_KEYS: TableDefinition<LmdbHashKey, Present> = TableDefinition::new("spent_keys");
-
-    /// `txpool_meta` — key order `compare_hash32`.
-    pub const TXPOOL_META: TableDefinition<LmdbHashKey, Unshaped> = TableDefinition::new("txpool_meta");
-
-    /// `txpool_blob` — key order `compare_hash32`.
-    pub const TXPOOL_BLOB: TableDefinition<LmdbHashKey, Unshaped> = TableDefinition::new("txpool_blob");
 
     /// `alt_blocks` — key order `compare_hash32`.
     pub const ALT_BLOCKS: TableDefinition<LmdbHashKey, Unshaped> = TableDefinition::new("alt_blocks");
@@ -556,17 +583,48 @@ mod tests {
             ("tx_indices", 8),
             ("output_amounts", 11),
             ("spent_keys", 12),
-            ("hf_versions", 17),
-            ("properties", 18),
-            ("block_burn", 19),
-            ("curve_tree_roots", 46),
-            ("undo_log", 47),
+            // Layout 12: `txpool_meta` (13) and `txpool_blob` (14) left for
+            // the pool file (S-POOL), so everything after `spent_keys`
+            // moved up by two — the bump this test exists to make visible.
+            ("hf_versions", 15),
+            ("properties", 16),
+            ("block_burn", 17),
+            ("curve_tree_roots", 44),
+            ("undo_log", 45),
         ];
         for &(name, index) in pinned {
             assert_eq!(
                 ordinal_of(name).map(TableOrdinal::index),
                 Some(index),
                 "{name}: ordinal moved — a declaration was inserted or reordered above it"
+            );
+        }
+    }
+
+    #[test]
+    fn mirrored_elsewhere_tables_are_absent_here_and_present_in_the_pool_file() {
+        let here: Vec<String> = catalogue().into_iter().map(|s| s.name).collect();
+        let pool: Vec<String> = crate::pool::schema::catalogue()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert!(!MIRRORED_ELSEWHERE.is_empty());
+        for &(name, twin, reason) in MIRRORED_ELSEWHERE {
+            assert!(
+                !here.iter().any(|c| c == name),
+                "{name}: named as mirrored elsewhere but defined in this file"
+            );
+            assert!(
+                pool.iter().any(|c| c == twin),
+                "{name}: its twin `{twin}` is not a pool-file table"
+            );
+            assert!(
+                reason.split_whitespace().count() >= 8,
+                "{name}: a mirrored table's reason is a sentence, not a token"
+            );
+            assert!(
+                crate::accumulator::class_for_table(name).is_some(),
+                "{name}: the class table is the LMDB inventory and keeps this row"
             );
         }
     }

@@ -103,8 +103,13 @@ SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
 # moves only with a rule, never to make a run pass. 27 since LMDB v15 / redb
 # v10 dropped two INTEGERKEY tables (`txs_prunable_tip`, `output_metadata`)
 # with the C++ tx-data prune: two key constraints fewer because two tables
-# fewer, re-derived by counting, not by subtracting.
-MIN_CONSTRAINTS = 27
+# fewer, re-derived by counting, not by subtracting. 25 since redb v12
+# (DRS-E1 S-POOL): `txpool_meta` and `txpool_blob` left `schema.rs` for the
+# pool file (`MIRRORED_ELSEWHERE`), and this gate iterates definitions in
+# `schema.rs` — the two `compare_hash32` constraints they fired go with them.
+# The pool file's keys are not LMDB's order and are outside this gate's
+# domain by construction; the bijection gate holds the twins' existence.
+MIN_CONSTRAINTS = 25
 
 # Tables the C++ no longer writes at all, with the put shape they carried
 # when they were last written. The classifying fact for a uint64-dupsort
