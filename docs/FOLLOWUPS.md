@@ -14,6 +14,14 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **`claim.rs:157` logs per-epoch `AlreadyClaimed` skips at `debug`, which correlates a persona against the public bond record.**
+  - Owner: [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md) §5.3
+  - Target: pre-genesis
+
+- **Nothing calls `refresh` on a timer, so `ServingConfig::refresh_cadence` and the unused `auto_refresh` preference do not drive the store `WALLET_SIDE_STORE.md` §6.7.2 must measure.**
+  - Owner: [`WALLET_SIDE_STORE.md`](design/WALLET_SIDE_STORE.md) §6.7.2
+  - Target: pre-genesis
+
 - **Propagate the immutable-bond ruling through the `HoldingsUpdate` documentation surface — 151 matching lines across 25 living documents** (measured at `dev@91705e5882`, before this PR's own additions; 214 lines / 35 files including records-was documents, which are **not** in scope). The ruling (2026-09-20, [`V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md); mechanics and deletion set in [`design/PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md) §5.3) fixes a persona's holdings set at the bond post, which makes every doc sentence describing an in-place holdings change wrong in substance rather than merely stale. **Method is PDM-sweep discipline — re-derivation, not find-and-replace:** a sentence that says *"the operator adds shard `k`"* is not repaired by renaming the mechanism, because the event it describes no longer exists; each site is re-derived against rotation, or deleted with its subject. The figure above derives from a count of the matching lines at a stated pin, not from a prior figure, and is expected to move as the deletion set lands. *(The handoff that ordered this row carried 138; the difference is scope, not drift — state the pin and the inclusion rule when re-counting.)* **Owner: the archival bond lane** (the `PSL`/`P2B` surface), which owns §5.3.2's deletions and should sweep the prose with them rather than ahead of them. **The recording PR deliberately did not attempt this.** Falsify by `grep -rc HoldingsUpdate docs/` reporting only records-was documents (`docs/completed/`, `CHANGELOG.md`, and this log's prior entries).
   - Owner: [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md) §5.3
   - Target: pre-genesis

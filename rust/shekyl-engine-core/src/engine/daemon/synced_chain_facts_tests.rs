@@ -14,17 +14,20 @@ fn any_hash() -> BlockHash {
     BlockHash::from_bytes([0xAB; 32])
 }
 
-/// A `get_info` reply. `target_height` follows the info surface's convention:
-/// `0` means the daemon considers itself synchronized.
+/// A `get_info` reply built by [`GetInfoDocument`], not a private schema.
+/// `target_height` follows the info surface's convention: `0` means the
+/// daemon considers itself synchronized. Connection counts are non-zero so
+/// this document does not take the decoder's default.
 fn info(height: u64, target_height: u64) -> Value {
-    json!({
-        "height": height,
-        "target_height": target_height,
-        "synchronized": true,
-        "top_block_hash": hex::encode([0xAB; 32]),
-        "outgoing_connections_count": 5,
-        "incoming_connections_count": 3,
-    })
+    GetInfoDocument {
+        chain_count: ChainCount::from_raw(height),
+        target_height,
+        synchronized: true,
+        top_hash: any_hash(),
+        outgoing_connections: 5,
+        incoming_connections: 3,
+    }
+    .to_value()
 }
 
 /// With the daemon's own flag set, `target_height: 0` is the steady state —

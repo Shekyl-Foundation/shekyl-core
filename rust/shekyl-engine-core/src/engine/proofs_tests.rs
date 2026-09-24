@@ -296,6 +296,43 @@ mod check_workflows {
         /// chain — the reserve path must refuse these, the tx-proof
         /// path must report them honestly.
         pooled: Arc<std::collections::BTreeSet<String>>,
+        /// Selects [`crate::engine::test_support::daemon_get_info`]'s
+        /// syncing reply. This double does not build a `get_info` document.
+        synchronized: bool,
+        /// The re-read of the witness tip returns a different hash than
+        /// `get_info` recorded. A verdict from this double is a failed seal.
+        witness_replaced: bool,
+    }
+
+    fn witness_block_header(height: u64, hash: [u8; 32]) -> shekyl_rpc_types::BlockHeader {
+        use shekyl_rpc_types::HashHex;
+        let zero = HashHex::from_bytes([0u8; 32]);
+        shekyl_rpc_types::BlockHeader {
+            major_version: 1,
+            minor_version: 1,
+            timestamp: 0,
+            prev_hash: zero,
+            nonce: 0,
+            orphan_status: false,
+            height,
+            depth: 0,
+            hash: HashHex::from_bytes(hash),
+            difficulty: 1,
+            wide_difficulty: "0x1".to_owned(),
+            difficulty_top64: 0,
+            cumulative_difficulty: 1,
+            wide_cumulative_difficulty: "0x1".to_owned(),
+            cumulative_difficulty_top64: 0,
+            reward: 0,
+            block_size: 0,
+            block_weight: 0,
+            num_txes: 0,
+            pow_hash: None,
+            long_term_weight: 0,
+            miner_tx_hash: zero,
+            curve_tree_root: zero,
+            attestation_root: zero,
+        }
     }
 
     impl Rpc for MockRpc {
@@ -364,6 +401,42 @@ mod check_workflows {
                 // the compiler holds this double to the contract's field set
                 // (a hand-written `{"height": ..}` once drifted and was only
                 // caught when the typed reader refused it).
+                // `json_rpc_call` posts every JSON-RPC method to this one
+                // route with the method in the body, so `get_info` arrives
+                // here. The result is [`crate::engine::test_support::daemon_get_info`],
+                // the same document `TestDaemon` serves — this arm does not
+                // carry a second schema.
+                "json_rpc" => {
+                    let req: serde_json::Value =
+                        serde_json::from_slice(&body).expect("json-rpc request decodes");
+                    let method = req
+                        .get("method")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("json-rpc request names a method");
+                    let result = match method {
+                        "get_info" => crate::engine::test_support::daemon_get_info(
+                            self.height as u64,
+                            !self.synchronized,
+                        ),
+                        "get_block_header_by_height" => {
+                            let height = req
+                                .pointer("/params/height")
+                                .and_then(serde_json::Value::as_u64)
+                                .expect("height is a number");
+                            let mut hash = crate::engine::test_support::test_block_hash_at(height);
+                            if self.witness_replaced {
+                                hash[0] ^= 0xff;
+                            }
+                            serde_json::to_value(shekyl_rpc_types::GetBlockHeaderByHeightResponse {
+                                status: shekyl_rpc_types::RpcStatus::ok(),
+                                block_header: witness_block_header(height, hash),
+                            })
+                            .expect("header serializes")
+                        }
+                        other => panic!("mock json-rpc does not serve {other}"),
+                    };
+                    serde_json::json!({ "jsonrpc": "2.0", "id": "0", "result": result })
+                }
                 "get_height" => serde_json::to_value(shekyl_rpc_types::GetHeightResponse {
                     status: shekyl_rpc_types::RpcStatus::ok(),
                     height: self.height as u64,
@@ -511,6 +584,8 @@ mod check_workflows {
                 height: CHAIN_HEIGHT,
                 get_transactions_calls: Arc::new(AtomicUsize::new(0)),
                 pooled: Arc::new(std::collections::BTreeSet::new()),
+                synchronized: true,
+                witness_replaced: false,
             },
             local,
         }
@@ -873,11 +948,168 @@ mod check_workflows {
             height: CHAIN_HEIGHT,
             get_transactions_calls: Arc::new(AtomicUsize::new(0)),
             pooled: Arc::new(std::collections::BTreeSet::new()),
+            synchronized: true,
+            witness_replaced: false,
         };
 
-        let bodies = fetch_proof_txs(&rpc, &ids).await.expect("all txs served");
+        let chain = ProofChainView::open(&rpc)
+            .await
+            .expect("fixture daemon is synchronized");
+        let bodies = chain.txs(&rpc, &ids).await.expect("all txs served");
         assert_eq!(bodies.len(), 250);
         assert_eq!(rpc.get_transactions_calls.load(Ordering::SeqCst), 3);
+    }
+
+    /// Verification refuses while the daemon reports syncing, on both
+    /// check paths, and does not fetch a tx to do it.
+    ///
+    /// Bites against deleting [`ProofChainView::open`] from either check.
+    /// It does **not** cover the sync predicate's arms (those are
+    /// `synced_chain_facts_tests`) and it does **not** cover a daemon that
+    /// lies `synchronized`.
+    #[tokio::test]
+    async fn verification_refuses_while_the_daemon_is_syncing() {
+        let fx = make_fixture(vec![]);
+        let syncing = MockRpc {
+            synchronized: false,
+            ..fx.rpc.clone()
+        };
+
+        // Control: the same proof over the synchronized daemon is not an
+        // error, so a red below is the gate and not the fixture.
+        let proof = inbound_proof_string(&fx);
+        check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &proof)
+            .await
+            .expect("a synchronized daemon verifies");
+        let fetches_after_control = fx.rpc.get_transactions_calls.load(Ordering::SeqCst);
+
+        let err = check_tx_proof(&syncing, fx.txid, &fx.address, MSG, &proof)
+            .await
+            .expect_err("a syncing daemon must refuse tx-proof verification");
+        assert!(
+            matches!(err, ProofsError::DaemonSyncing),
+            "expected DaemonSyncing, got {err:?}"
+        );
+        assert_eq!(
+            syncing.get_transactions_calls.load(Ordering::SeqCst),
+            fetches_after_control,
+            "tx-proof verification must refuse before get_transactions"
+        );
+
+        let reserve = reserve_proof_string(&fx);
+        let err = check_reserve_proof(&syncing, &fx.address, MSG, &reserve)
+            .await
+            .expect_err("a syncing daemon must refuse reserve verification");
+        assert!(
+            matches!(err, ProofsError::DaemonSyncing),
+            "expected DaemonSyncing, got {err:?}"
+        );
+        assert_eq!(
+            syncing.get_transactions_calls.load(Ordering::SeqCst),
+            fetches_after_control,
+            "reserve verification must refuse before get_transactions"
+        );
+    }
+
+    /// A witness tip that was replaced after the reads is not a verdict.
+    ///
+    /// The mock returns `get_info`'s tip hash with one byte flipped on
+    /// `get_block_header_by_height`. Bites against `seal` returning a
+    /// token without calling `bracket`: both checks then return `Valid`.
+    /// It does **not** cover a gather that is merely shorter than the
+    /// witness, which is the next test.
+    #[tokio::test]
+    async fn a_replaced_witness_block_is_not_a_verdict() {
+        let mut fx = make_fixture(vec![]);
+        fx.rpc.witness_replaced = true;
+        let proof = inbound_proof_string(&fx);
+        let err = check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &proof)
+            .await
+            .expect_err("a replaced witness block must refuse tx-proof verification");
+        assert!(
+            matches!(err, ProofsError::Daemon(_)),
+            "expected Daemon, got {err:?}"
+        );
+
+        let reserve = reserve_proof_string(&fx);
+        let err = check_reserve_proof(&fx.rpc, &fx.address, MSG, &reserve)
+            .await
+            .expect_err("a replaced witness block must refuse reserve verification");
+        assert!(
+            matches!(err, ProofsError::Daemon(_)),
+            "expected Daemon, got {err:?}"
+        );
+    }
+
+    /// A mined reply gathered below the witness count is not a verdict.
+    ///
+    /// The fixture's implied gather is `CHAIN_HEIGHT` (`TX_BLOCK_HEIGHT`
+    /// plus the confirmation count the mock derives from it). One count
+    /// higher is the rollback direction. Bites against removing
+    /// `admit_mined_against_witness` from either check. It does **not**
+    /// cover the syncing refusal above.
+    #[tokio::test]
+    async fn a_tx_read_below_the_witness_count_is_not_a_verdict() {
+        let mut fx = make_fixture(vec![]);
+        fx.rpc.height = CHAIN_HEIGHT + 1;
+        let proof = inbound_proof_string(&fx);
+        let err = check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &proof)
+            .await
+            .expect_err("a rolled-back tx read must not verify");
+        assert!(
+            matches!(err, ProofsError::Daemon(_)),
+            "expected Daemon, got {err:?}"
+        );
+
+        let reserve = reserve_proof_string(&fx);
+        let err = check_reserve_proof(&fx.rpc, &fx.address, MSG, &reserve)
+            .await
+            .expect_err("a rolled-back reserve read must not verify");
+        assert!(
+            matches!(err, ProofsError::Daemon(_)),
+            "expected Daemon, got {err:?}"
+        );
+    }
+
+    /// Outbound generation reads a body through [`fetch_proof_tx`], which
+    /// does not open a view. Bites against moving the sync gate into that
+    /// fetch. It does **not** cover `get_tx_proof`'s ledger path.
+    #[tokio::test]
+    async fn an_authored_body_is_fetched_while_the_daemon_is_syncing() {
+        let fx = make_fixture(vec![]);
+        let syncing = MockRpc {
+            synchronized: false,
+            ..fx.rpc.clone()
+        };
+        let fetched = fetch_proof_tx(&syncing, fx.txid)
+            .await
+            .expect("generation's body fetch is not the verification gate");
+        assert!(matches!(
+            fetched.state,
+            crate::engine::proofs_chain_facts::TxChainState::Mined { .. }
+        ));
+    }
+
+    /// A malformed proof still reports malformed, even while syncing.
+    ///
+    /// The gate sits after decode deliberately: decode is local and its
+    /// verdict holds whatever the daemon is doing, so gating before it would
+    /// replace a precise, actionable error with a retry suggestion that never
+    /// succeeds.
+    #[tokio::test]
+    async fn a_malformed_proof_is_malformed_even_while_syncing() {
+        let fx = make_fixture(vec![]);
+        let syncing = MockRpc {
+            synchronized: false,
+            ..fx.rpc.clone()
+        };
+        let err = check_tx_proof(&syncing, fx.txid, &fx.address, MSG, "not-a-proof")
+            .await
+            .expect_err("a malformed proof is refused");
+        assert!(
+            matches!(err, ProofsError::Malformed(_)),
+            "expected Malformed, got {err:?} — the sync gate ran before decode"
+        );
     }
 
     #[tokio::test]
@@ -1003,6 +1235,7 @@ mod confirmations_are_read_not_recomputed {
     #[test]
     fn a_mined_tx_reports_the_daemons_own_count() {
         let (in_pool, confirmations) = confirmations_of(&TxChainState::Mined {
+            block_height: 0,
             confirmations: 4_242,
         });
         assert!(!in_pool);

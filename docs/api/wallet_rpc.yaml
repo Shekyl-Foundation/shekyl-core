@@ -367,7 +367,11 @@ info:
   # outputs whose published 0x07 entry does not open to this wallet.
   # 0.6.0: RTN-6 — PaymentRequest created_at / expiry are wall-clock Unix
   # seconds (not block heights). api_version stays 1 (pre-genesis cutover).
-  version: 0.6.0
+  # 0.7.0: proof verification gains -29305 PROOF_DAEMON_SYNCING. A check
+  # asked of an unsynchronized daemon refuses instead of returning a
+  # verdict. A tx read gathered below that check's witness is -29201,
+  # not this code. Generation is not gated. api_version stays 1.
+  version: 0.7.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -647,6 +651,7 @@ components:
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
         - -29303   # PROOF_TX_NOT_FOUND
         - -29304   # PROOF_TX_UNCONFIRMED
+        - -29305   # PROOF_DAEMON_SYNCING
         - -29400   # UNKNOWN_TRANSFER_ID
         - -29500   # STAKE_NOT_READY
         - -29501   # STAKE_IN_FLIGHT
@@ -836,6 +841,22 @@ components:
                                           cannot back a reserve claim —
                                           wait for confirmation and
                                           regenerate the proof
+          -29305 PROOF_DAEMON_SYNCING     proofs: VERIFICATION was asked of
+                                          a daemon that is not synchronized,
+                                          so the chain facts the proof would
+                                          be checked against are not the
+                                          chain's. A syncing daemon answers
+                                          "not found" for a tx it has not
+                                          reached and a short confirmation
+                                          count mid-sync — both indistinguish-
+                                          able from a forged proof — so this
+                                          refuses rather than returning a
+                                          verdict whose premise was absent.
+                                          Retryable once caught up. Proof
+                                          GENERATION is not gated by this.
+                                          A transaction whose chain count
+                                          sits below the synchronized
+                                          reading is -29201, not this code.
           -29400 UNKNOWN_TRANSFER_ID      get_transfer_by_id: a well-formed
                                           id naming no row (a malformed id
                                           is -32602, not this)
