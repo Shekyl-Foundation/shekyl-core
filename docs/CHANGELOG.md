@@ -82,6 +82,40 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   because a requested artifact that silently fails to appear leaves a
   measurement with no evidence behind it.
 
+### Consensus validator — census 4.H, the transaction on its own (DRS-E6 slice 5)
+
+- `shekyl-chain-rules::tx_form(tx, slot, rule_set)` now judges the
+  stateless per-transaction rules: seventeen 4.H rows `implemented` (size,
+  weight, inputs present, the input-variant whitelist and archival mixing
+  matrix, output keys, amount overflow, in-tx key-image repeats, key-image
+  domain, confidential amounts, CT type, `unlock_time` form, masks, the CT
+  balance, and the serve-credit / bond-post / emission CT shapes with their
+  balances), five `by_construction` on the wire's types, the BP+ **layout**
+  refusing ahead of slice 6's verification. The kind (coinbase / listed) is
+  derived from the **slot**, never from the bytes. Validator-side coverage
+  `34 → 56` of 153 census rows.
+- The wallet's `shekyl_wire::Transaction::validate` is **not the rule of
+  record**: it is a pre-check, held to `tx_form` by a conformance test over
+  all 62 of its refusal arms (parse 16 / rule 40 / policy 1 / invariant 5).
+  Review found H9 summing only the output side; the input side
+  (`check_inputs_overflow`, `ToKey.amount`) now sums too, with its boundary.
+  Two divergences recorded, neither changed here: the twin refuses a
+  `tx_extra` over the **relay** cap (`CEN-M4`, policy) that consensus
+  accepts; and two of its arms guard a value (`prunable: None` on a
+  non-serve-credit) the C++ cannot hold. One arm is dead by ordering.
+- CSR-3a: `CEN-H15` (`CTTypeNull` re-rejected for non-coinbase) stays
+  **CHECKED-CONFORMANT**. A same-day DIVERGENT grading (the C++ was read as
+  gating the re-rejection on `m_nettype != FAKECHAIN`) was refuted at
+  source: that gate is CEN-I2's; H15's own sites refuse unconditionally on
+  every nettype, as the Rust does. Census 4.H site pins re-resolved at
+  `d8ebfd18c` (sixteen cells re-pinned to function anchors).
+- Test fixtures across `shekyl-chain-rules`, `shekyl-chain-store` and
+  `shekyl-chain-ingest` are now curve points from one derived table (`k·G`),
+  carry per-input PQC auth slots and a canonical BP+ layout, and a
+  fixture-sanity gate refuses a fixture labelled valid that a landed rule
+  rejects — a red on an untouched fixture is a finding. No wire or
+  consensus change.
+
 ### Design — the daemon's body horizon is the epoch calendar (`PDM-Q2` re-ruled)
 
 - Every daemon discards a shard's prunable bodies at the epoch boundary after

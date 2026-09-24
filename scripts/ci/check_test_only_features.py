@@ -161,7 +161,12 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     ): "exposes the negative-fixture harness (MockChain, MockSubstrate) as a "
     "library surface for the store's mock-vs-BatchView conformance test "
     "(E6 slice 2 F11); its own manifest says 'test-only in effect, never "
-    "from a normal dependency' — this row is that sentence as a gate",
+    "from a normal dependency' — this row is that sentence as a gate. Since "
+    "E6 slice 5 the feature also enables an optional curve25519-dalek edge "
+    "for one fixture function (fixture::point_at = k·G, the computed form of "
+    "the pinned point table); this limb is what keeps that edge off every "
+    "normal consumer — the crate's production surface only verifies, "
+    "through shekyl-ct-balance, and never derives",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).

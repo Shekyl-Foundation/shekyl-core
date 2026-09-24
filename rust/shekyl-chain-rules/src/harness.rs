@@ -23,7 +23,9 @@ use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
+use shekyl_wire::{
+    Block, BlockHeader, BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
+};
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
@@ -324,6 +326,25 @@ pub fn assert_refused<T: Debug>(result: Verdict<T>, rule: CenRow, locus: Locus) 
     }
 }
 
+/// A `by_construction` falsifier that serves several rows names every one of
+/// them, and this is what each served row must pass: it is registered
+/// `by_construction`. Slice 5 Q6's condition — one test credited to N rows
+/// is not N rows covered unless the test walks the list — so a falsifier
+/// calls this first with the rows it serves, and the coverage gate refuses
+/// a shared falsifier whose body does not name each of them. A row re-keyed
+/// to another status or another falsifier fails here until it is taken off
+/// the list.
+#[track_caller]
+pub fn credited_to_this_falsifier(rows: &[CenRow], falsifier: &str) {
+    for row in rows {
+        assert_eq!(
+            row.status(),
+            crate::census::RowStatus::ByConstruction,
+            "{row} is credited to `{falsifier}` but is not registered by_construction"
+        );
+    }
+}
+
 /// Assert `f` passes `last_ok` and refuses `first_bad` on `rule` at `locus`
 /// — the two sides of a boundary, so an off-by-one in the rule fails here.
 #[track_caller]
@@ -341,8 +362,86 @@ pub fn boundary_pair<T: Debug, V>(
 }
 
 /// Fixtures: well-formed values to mutate one field of.
+///
+/// **"Well-formed" is a gated claim, not a label.** A fixture is built by
+/// test code and never passes through a production builder, so it can be
+/// illegal in ways nobody checks — and each latent illegality surfaces one
+/// rule at a time, as a mid-commit surprise, when the rule that refuses it
+/// lands (slice 5 commit 2: three fixtures listed coinbase-shaped bodies,
+/// and CEN-H5 refused them). `fixture_sanity_tests` holds every
+/// transaction shape here to `validate` / `tx_form` under **current**
+/// coverage, at every slot it is meant for, so a bad fixture fails the
+/// moment it is written — and the set it walks is [`TxShape`], a closed
+/// enum: a new shape that the gate does not know is a **compile error**
+/// (three non-exhaustive matches), not a doc line nobody re-reads. The
+/// negative fixtures live with their rows and are labelled by the row they
+/// refuse on.
 pub mod fixture {
     use super::*;
+    use crate::verdict::TxSlot;
+
+    /// The well-formed **transaction** shapes this module builds, as a
+    /// closed set. The sanity gate walks the chain from [`FIRST`](Self::FIRST)
+    /// through [`next`](Self::next) and judges each shape at every slot
+    /// [`valid_at`](Self::valid_at) names; adding a shape means adding a
+    /// variant, and the three `match`es below refuse to compile until it is
+    /// built, placed in the chain, and given its slots — the
+    /// `FormAttempt::next` arrangement, applied to fixtures.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum TxShape {
+        /// [`coinbase`].
+        Coinbase,
+        /// [`listed`] — the ordinary spend.
+        Listed,
+        /// [`serve_credit_only`].
+        ServeCreditOnly,
+    }
+
+    impl TxShape {
+        /// Where the chain starts.
+        pub const FIRST: Self = Self::Coinbase;
+
+        /// The shape after this one; `None` closes the chain. A variant
+        /// left out of this chain is unreachable from `FIRST` and the gate
+        /// never sees it — so a new variant is *placed*, deliberately, here.
+        pub const fn next(self) -> Option<Self> {
+            match self {
+                Self::Coinbase => Some(Self::Listed),
+                Self::Listed => Some(Self::ServeCreditOnly),
+                Self::ServeCreditOnly => None,
+            }
+        }
+
+        /// A representative instance of the shape.
+        pub fn build(self) -> Transaction {
+            match self {
+                Self::Coinbase => coinbase(1),
+                Self::Listed => listed(point(9)),
+                Self::ServeCreditOnly => serve_credit_only([0x77; 32]),
+            }
+        }
+
+        /// The slots at which the shape is a valid transaction. The coinbase
+        /// is valid at the miner slot only; every other shape at the pool's
+        /// slot and listed.
+        pub const fn valid_at(self) -> &'static [TxSlot] {
+            match self {
+                Self::Coinbase => &[TxSlot::Miner],
+                Self::Listed | Self::ServeCreditOnly => &[TxSlot::Lone, TxSlot::Listed(0)],
+            }
+        }
+
+        /// Every shape, walking the chain from `FIRST`.
+        pub fn all() -> Vec<Self> {
+            let mut shapes = Vec::new();
+            let mut shape = Some(Self::FIRST);
+            while let Some(current) = shape {
+                shapes.push(current);
+                shape = current.next();
+            }
+            shapes
+        }
+    }
 
     /// The compressed Ed25519 basepoint `G`: canonical, prime-order,
     /// non-identity — an output key CEN-F9 accepts. As a **mask** it is the
@@ -364,6 +463,139 @@ pub mod fixture {
         0x97, 0x56, 0x1f, 0xa2, 0xc9, 0xe8, 0x5e, 0xa2, 0x1d, 0xc2, 0x29, 0x23, 0x09, 0xf3, 0xcd,
         0x60, 0x22,
     ];
+
+    /// Sixteen distinct canonical prime-order points — `k·G` for `k = 1..=16`,
+    /// so [`POINTS[0]`](Self) is [`G`] and `POINTS[1]` is [`TWO_G`] — the
+    /// **one** table every fixture draws its output keys, commitment masks
+    /// and key images from (slice 5, ruled 2026-09-23: one table, not three;
+    /// no 4.H rule links the three uses, and a filled byte pattern is almost
+    /// never a point). Ceiling **16** = the wire's `MAX_OUTPUTS`; key images
+    /// draw at other indices.
+    ///
+    /// **The contiguity is load-bearing.** Because `POINTS[k−1] = k·G`,
+    /// multiples add: [`spend`]'s masks are `2·G ‥ (N+1)·G` and its one
+    /// pseudo-out is their sum, so CEN-H18 holds by the table's construction
+    /// and not by anything the rule computes. The store and the ingest call
+    /// that one function — a private copy is how a fixture drifted the last
+    /// time a point rule landed. A scalar past 16 (the sum leaves the table
+    /// at five outputs) is [`multiple_of_g`], which is [`point_at`] outside
+    /// the table and the pinned entry inside it. `fixture_points_are_what_
+    /// they_claim` holds `POINTS[k−1] == k·G` for every `k`, so the two
+    /// cannot disagree.
+    ///
+    /// **Derived once, pinned, never re-derived in production code** (the
+    /// crate's production surface has no curve dependency; the test surface
+    /// has `curve25519-dalek`). The gate asserts what a fixture needs —
+    /// every entry a canonical prime-order point (`shekyl-ct-balance`),
+    /// pairwise distinct, entries 0 and 1 the named constants — and the
+    /// multiplicity above. Provenance for the record: the values were first
+    /// produced by RFC 8032 arithmetic over `2^255 − 19`,
+    /// `d = −121665/121666`, `G = (x(4/5), 4/5)`, repeated affine addition,
+    /// compressed as `y ‖ sign(x) << 7` little-endian — thirty lines of
+    /// Python with no dependencies, which reproduced `G` and `TWO_G` before
+    /// the other fourteen were taken; the gate now says the same.
+    pub const POINTS: [[u8; 32]; 16] = [
+        G,
+        TWO_G,
+        hex32(*b"d4b4f5784868c3020403246717ec169ff79e26608ea126a1ab69ee77d1b16712"),
+        hex32(*b"2f1132ca61ab38dff00f2fea3228f24c6c71d58085b80e47e19515cb27e8d047"),
+        hex32(*b"edc876d6831fd2105d0b4389ca2e283166469289146e2ce06faefe98b22548df"),
+        hex32(*b"f47e49f9d07ad2c1606b4d94067c41f9777d4ffda709b71da1d88628fce34d85"),
+        hex32(*b"b862409fb5c4c4123df2abf7462b88f041ad36dd6864ce872fd5472be363c5b1"),
+        hex32(*b"b4b937fca95b2f1e93e41e62fc3c78818ff38a66096fad6e7973e5c90006d321"),
+        hex32(*b"c0f1225584444ec730446e231390781ffdd2f256e9fcbeb2f40dddc2c2233d7f"),
+        hex32(*b"2c7be86ab07488ba43e8e03d85a67625cfbf98c8544de4c877241b7aaafc7fe3"),
+        hex32(*b"1337036ac32d8f30d4589c3c1c595812ce0fff40e37c6f5a97ab213f318290ad"),
+        hex32(*b"f9e42d2edc81d23367967352b47e4856b82578634e6c1de72280ce8b60ce70c0"),
+        hex32(*b"801f40eaaee1ef8723279a28b2cf4037b889dad222604678748b53ed0db0db92"),
+        hex32(*b"39289c8998fd69835c26b619e89848a7bf02b7cb7ad1ba1581cbc4506f2550ce"),
+        hex32(*b"df5c2eadc44c6d94a19a9aa118afe5ac3193d26401f76251f522ff042dfbcb92"),
+        hex32(*b"eb2767c137ab7ad8279c078eff116ab0786ead3a2e0f989f72c37f82f2969670"),
+    ];
+
+    /// The `k`-th point of [`POINTS`], `k` from 1: a distinct canonical
+    /// point for the `k`-th output, mask or key image of a fixture. Panics
+    /// past the ceiling — a fixture wanting more than sixteen distinct
+    /// points from the *pinned* table wants more than the wire allows
+    /// outputs; a fixture that needs an unbounded supply (a key image per
+    /// block over a long chain) uses [`point_at`].
+    pub const fn point(k: usize) -> [u8; 32] {
+        POINTS[k - 1]
+    }
+
+    /// `k·G`, compressed, for any `k ≥ 1` — the **computed** form of
+    /// [`POINTS`], for fixtures whose need is unbounded: the ingest's
+    /// seed-epoch chains spend a fresh key image per block for two thousand
+    /// blocks, which no pinned table should grow to. Same derivation home
+    /// as the table (the harness derives; production only verifies), and
+    /// `fixture_points_are_what_they_claim` holds `point_at(k) == point(k)`
+    /// for the pinned sixteen. Panics on `0`: `0·G` is the identity, which
+    /// no rule accepts anywhere and no fixture should be able to ask for by
+    /// accident.
+    pub fn point_at(k: u64) -> [u8; 32] {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+        use curve25519_dalek::scalar::Scalar;
+        assert!(k >= 1, "0·G is the identity; a fixture never wants it");
+        (ED25519_BASEPOINT_POINT * Scalar::from(k))
+            .compress()
+            .to_bytes()
+    }
+
+    /// `k·G` for `k ≥ 1`, from the pinned table when `k` is in range and
+    /// from [`point_at`] past it. [`spend`]'s pseudo-out scalar is the sum
+    /// of its mask scalars, which exceeds [`POINTS`]'s ceiling before the
+    /// wire's output cap does; callers that already know `k` is in
+    /// `1..=16` keep using [`point`].
+    pub fn multiple_of_g(k: u64) -> [u8; 32] {
+        if let Ok(index) = usize::try_from(k) {
+            if (1..=POINTS.len()).contains(&index) {
+                return point(index);
+            }
+        }
+        point_at(k)
+    }
+
+    /// Masks start at `2·G`. `1·G` is `zeroCommit(0)`, and CEN-H17 refuses it.
+    const FIRST_MASK_SCALAR: u64 = 2;
+
+    /// Sum of the mask scalars `FIRST_MASK_SCALAR ..= FIRST_MASK_SCALAR + N - 1`.
+    /// Zero when there are no outputs, so a zero-output spend asks for no point.
+    ///
+    /// `Σ = N · (first + last) / 2`. One of `N` and `(first + last)` is even,
+    /// so the division is exact; which one is divided first is what keeps the
+    /// product inside `u64`.
+    fn mask_scalar_sum(outputs: usize) -> u64 {
+        let n = u64::try_from(outputs).expect("an output count fits in u64");
+        if n == 0 {
+            return 0;
+        }
+        let last = FIRST_MASK_SCALAR + n - 1;
+        let pair = FIRST_MASK_SCALAR + last;
+        if n % 2 == 0 {
+            (n / 2).checked_mul(pair).expect("mask scalar sum fits")
+        } else {
+            n.checked_mul(pair / 2).expect("mask scalar sum fits")
+        }
+    }
+
+    /// Thirty-two bytes from sixty-four lowercase hex digits, at compile
+    /// time — so the table above reads as the deriver printed it.
+    const fn hex32(hex: [u8; 64]) -> [u8; 32] {
+        const fn nibble(c: u8) -> u8 {
+            match c {
+                b'0'..=b'9' => c - b'0',
+                b'a'..=b'f' => c - b'a' + 10,
+                _ => panic!("hex digit"),
+            }
+        }
+        let mut out = [0u8; 32];
+        let mut i = 0;
+        while i < 32 {
+            out[i] = (nibble(hex[2 * i]) << 4) | nibble(hex[2 * i + 1]);
+            i += 1;
+        }
+        out
+    }
 
     /// A coinbase that satisfies every structural 4.F row for a block at
     /// `height`: one `Input::Gen(height)` (F1, F5), `Ct::Null` (F3), one
@@ -398,6 +630,132 @@ pub mod fixture {
                 enc_labels: vec![[0x66; 9]],
                 commitments: vec![TWO_G],
             }),
+        }
+    }
+
+    /// A spend of `key_image` with `outputs` zero-amount outputs, shaped to
+    /// pass every structural 4.H row that has landed.
+    ///
+    /// One `ToKey` input with empty offsets. Output `k` (from 1) is keyed
+    /// `k·G`; its mask is `(k+1)·G`, so the masks are `2·G ‥ (N+1)·G` and
+    /// `G` — `zeroCommit(0)`, which CEN-H17 refuses — is never a mask. Fee
+    /// is zero and the one pseudo-out is the sum of those scalars, which is
+    /// CEN-H18 by construction of [`multiple_of_g`]. The committed base is
+    /// sized to the outputs (H8). A prunable region is present exactly when
+    /// there are outputs, and its one BP+ has the canonical layout for that
+    /// count (H19's layout half). One [`pqc_auth_filler`] per input, so the
+    /// txid is 4-part. The proof bytes are filler: H19's verification and
+    /// the 4.I membership rows are not landed, and when they land this
+    /// fixture is theirs to refuse. [`listed`] is the one-output case.
+    pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
+        let n = u64::try_from(outputs).expect("an output count fits in u64");
+        let prunable = (outputs > 0).then(|| Prunable {
+            bulletproofs: vec![bp_plus_layout_for(outputs)],
+            tree_depth: 0,
+            fcmp_proof: vec![0xF0],
+            pseudo_outs: vec![multiple_of_g(mask_scalar_sum(outputs))],
+            serve_credit_pruned: Vec::new(),
+        });
+        Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::ToKey {
+                    amount: 0,
+                    key_offsets: Vec::new(),
+                    key_image,
+                }],
+                outputs: (1..=n)
+                    .map(|k| Output {
+                        amount: 0,
+                        key: multiple_of_g(k),
+                        view_tag: 2,
+                    })
+                    .collect(),
+                extra: Vec::new(),
+            },
+            ct: Ct::Fcmp {
+                fee: 0,
+                reference_block: BlockHash::from_bytes([0x99; 32]),
+                base: CtBase {
+                    enc_amounts: vec![[0x11; 9]; outputs],
+                    enc_labels: vec![[0x22; 9]; outputs],
+                    commitments: (0..n)
+                        .map(|i| multiple_of_g(FIRST_MASK_SCALAR + i))
+                        .collect(),
+                },
+                pqc_auths: vec![pqc_auth_filler()],
+                prunable,
+            },
+        }
+    }
+
+    /// [`spend`] with one output. The shape most call sites mean by "a
+    /// listed transaction".
+    pub fn listed(key_image: [u8; 32]) -> Transaction {
+        spend(key_image, 1)
+    }
+
+    /// A per-input PQC authentication with **empty** key and signature
+    /// blobs: what the wire needs to round-trip a non-serve-credit `Fcmp`
+    /// transaction (`pqc_auths.len() == nvin`, no length prefix — a spend
+    /// with none parses as the storage-pruned form), and nothing the
+    /// signature rows (4.I) would accept. Filler, like [`bp_plus_layout_for`].
+    pub fn pqc_auth_filler() -> PqcAuth {
+        PqcAuth {
+            auth_version: 1,
+            scheme_id: 1,
+            flags: 0,
+            hybrid_public_key: Vec::new(),
+            hybrid_signature: Vec::new(),
+        }
+    }
+
+    /// A BP+ with the **canonical layout** for `outputs` outputs — `|L| = |R|
+    /// = 6 + ⌈log₂ outputs⌉` (CEN-H19's layout half) — and filler scalars.
+    /// It proves nothing; it is the shape the layout rule accepts, for
+    /// fixtures whose subject is not the proof.
+    pub fn bp_plus_layout_for(outputs: usize) -> BpPlus {
+        let rounds = 6 + outputs.next_power_of_two().trailing_zeros() as usize;
+        BpPlus {
+            a: [0xA0; 32],
+            a1: [0xA1; 32],
+            b: [0xB0; 32],
+            r1: [0xC1; 32],
+            s1: [0xD1; 32],
+            d1: [0xE1; 32],
+            l: vec![[0x1F; 32]; rounds],
+            r: vec![[0x2F; 32]; rounds],
+        }
+    }
+
+    /// A **serve-credit-only** transaction (CEN-H20's shape: serve-credit
+    /// inputs and nothing else, no outputs, zero fee, no spend material),
+    /// carrying `record` as its one pass record. The one legal non-coinbase
+    /// shape with **no key image** — what a test needs when it must list the
+    /// same body twice (SI-3) without tripping the spent-key-image set. The
+    /// record's bytes are the wire's minimum (tag byte, then payload); the
+    /// serving-credit rules that read them are 4.J's, not this crate's yet.
+    pub fn serve_credit_only(record: [u8; 32]) -> Transaction {
+        let mut canonical_bytes = vec![shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT];
+        canonical_bytes.extend_from_slice(&record);
+        Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::ServeCredit { canonical_bytes }],
+                outputs: Vec::new(),
+                extra: Vec::new(),
+            },
+            ct: Ct::Fcmp {
+                fee: 0,
+                reference_block: BlockHash::from_bytes([0x99; 32]),
+                base: CtBase {
+                    enc_amounts: Vec::new(),
+                    enc_labels: Vec::new(),
+                    commitments: Vec::new(),
+                },
+                pqc_auths: Vec::new(),
+                prunable: None,
+            },
         }
     }
 
@@ -494,3 +852,7 @@ pub mod fixture {
 #[cfg(test)]
 #[path = "harness_probe_tests.rs"]
 mod harness_probe_tests;
+
+#[cfg(test)]
+#[path = "fixture_sanity_tests.rs"]
+mod fixture_sanity_tests;

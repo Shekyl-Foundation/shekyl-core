@@ -139,8 +139,8 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
     assert_eq!(held, 2, "slice 1 holds exactly A1 and A4");
     assert_eq!(at_open, 1, "slice 3 enforces exactly E5 at open");
     assert_eq!(
-        by_construction, 4,
-        "slice 4: F2, F8, F19, F21 hold by construction"
+        by_construction, 9,
+        "slice 4: F2, F8, F19, F21; slice 5: H2, H8, H12, H13, H23 hold by construction"
     );
     for row in [
         CenRow::A1,

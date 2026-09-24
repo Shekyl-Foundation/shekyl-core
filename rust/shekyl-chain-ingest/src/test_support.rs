@@ -25,7 +25,7 @@ use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage, LongTermWeight,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
+use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 use crate::corpus::{CorpusNet, CorpusWriter};
 use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
@@ -107,44 +107,29 @@ pub enum Family {
     Fork = 0xB0,
 }
 
-/// The key image block `height` of `family` spends: the family tag, then
-/// the height's eight little-endian bytes, then a fill byte.
+/// The key image block `height` of `family` spends: `k·G` for a `k` that
+/// is distinct per `(family, height)` — a canonical prime-order point
+/// (CEN-H11), which a family tag over height bytes was not. Computed, not
+/// pinned (`fixture::point_at`): the seed-epoch tests spend a fresh image
+/// per block for two thousand blocks, past any table. The family offsets
+/// (`1_000` main, `2_000_000` fork) keep the two chains' images apart and
+/// clear of the pinned table's range, which the same fixtures use for keys
+/// and masks. At 4.H an image is held to pointness only; when CEN-I15 binds
+/// it to the spent output (slice 6) these become captured spends' own
+/// images.
 pub fn key_image(family: Family, height: u64) -> [u8; 32] {
-    let mut bytes = [0x11u8; 32];
-    bytes[0] = family as u8;
-    bytes[1..9].copy_from_slice(&height.to_le_bytes());
-    bytes
+    let offset = match family {
+        Family::Main => 1_000,
+        Family::Fork => 2_000_000,
+    };
+    fixture::point_at(offset + height)
 }
 
-/// A spend of `key_image`.
+/// A spend of `key_image`: the rules harness's one-output [`fixture::listed`].
+/// The same body the store connects, so a point rule cannot refuse this
+/// crate's chains alone.
 pub fn spend(key_image: [u8; 32]) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                key_image,
-            }],
-            outputs: vec![Output {
-                amount: 0,
-                key: [0x80; 32],
-                view_tag: 2,
-            }],
-            extra: Vec::new(),
-        },
-        ct: Ct::Fcmp {
-            fee: 7,
-            reference_block: BlockHash::from_bytes([0x99; 32]),
-            base: CtBase {
-                enc_amounts: vec![[0x11; 9]],
-                enc_labels: vec![[0x22; 9]],
-                commitments: vec![[0xa0; 32]],
-            },
-            pqc_auths: Vec::new(),
-            prunable: None,
-        },
-    }
+    fixture::listed(key_image)
 }
 
 /// A block at `height` on `previous`, listing `listed`, with `nonce`.

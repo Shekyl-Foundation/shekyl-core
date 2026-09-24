@@ -14,14 +14,15 @@
 //! - **A2** — every table with a writer exists from the seal, none of the
 //!   `Unshaped` ones do, and a sealed file missing one is refused (SI-7).
 //! - **A3** — `txs_pqc_auth_hash` has a row for a 4-part txid and none for
-//!   the coinbase or a 3-part spend, the row is the identity's value, and a
+//!   the coinbase or a 3-part serve credit, the row is the identity's value, and a
 //!   pop removes it with the rest of the block.
 
 use redb::ReadableTableMetadata;
+use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, LongTermWeight};
 
-use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend, spend_with_pqc_auth};
+use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend};
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -49,11 +50,7 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     // |txs| per height: 0, 2, 1 → cum 0, 2, 3.
     connect_chain(
         &store,
-        &[
-            vec![],
-            vec![spend(0x5e, 1), spend(0x5f, 1)],
-            vec![spend(0x60, 1)],
-        ],
+        &[vec![], vec![spend(9, 1), spend(10, 1)], vec![spend(11, 1)]],
     );
     let cum = |h| block_info(&store, h).expect("row").cumulative_tx_count;
     assert_eq!(
@@ -74,11 +71,7 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     // Re-connect a different block 2 with three transactions: the total
     // resumes from the parent's row, not from anything the popped block left.
     let b1_hash = block_info(&store, 1).expect("row").hash;
-    let b2 = candidate(
-        2,
-        b1_hash,
-        vec![spend(0x61, 1), spend(0x62, 1), spend(0x63, 1)],
-    );
+    let b2 = candidate(2, b1_hash, vec![spend(12, 1), spend(13, 1), spend(14, 1)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)
@@ -303,8 +296,12 @@ fn a_file_with_a_foreign_header_table_type_is_layout_foreign() {
 fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() {
     let path = tmp("a3-row-iff-4-part");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let four_part = spend_with_pqc_auth(0x5e, 1);
-    let three_part = spend(0x5f, 1);
+    // Every spend carries per-input auths (the wire reads `nvin` of them),
+    // so a spend is 4-part; the 3-part non-coinbase transaction is the
+    // serve-credit-only shape, whose `pqc_auths` are empty by rule (CEN-H20)
+    // — the countersignature rides the vin.
+    let four_part = spend(9, 1);
+    let three_part = fixture::serve_credit_only([0x5f; 32]);
     let expected = four_part
         .txid_parts()
         .pqc_auth_hash
@@ -327,7 +324,7 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     for (tx_id, why) in [
         (0, "genesis coinbase"),
         (1, "block-1 coinbase"),
-        (3, "3-part spend"),
+        (3, "3-part serve credit"),
     ] {
         assert!(
             table.get(tx_id).expect("g").is_none(),

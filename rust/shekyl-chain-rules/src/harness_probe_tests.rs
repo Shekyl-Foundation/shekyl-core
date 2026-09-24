@@ -16,7 +16,7 @@
 //! each shown to bite before the first real rule leans on them. The
 //! `should_panic` cases are what make this file's green mean something.
 
-use super::fixture::{candidate, candidate_on, coinbase, recorded, root};
+use super::fixture::{candidate, candidate_on, listed, point, recorded, root};
 use super::*;
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
@@ -146,7 +146,7 @@ fn the_mock_view_validates_a_candidate_with_a_brand_of_its_own() {
     let chain = one_block();
     chain.with_view(|view| {
         let valid = judged(validate(
-            formed_on(&chain, candidate_on(&chain, vec![coinbase(1)])),
+            formed_on(&chain, candidate_on(&chain, vec![listed(point(9))])),
             &view,
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,

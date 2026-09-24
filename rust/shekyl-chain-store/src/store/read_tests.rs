@@ -12,6 +12,7 @@
 //! returns, the writer **still `Live`**: a read never arms the halt
 //! (`DAEMON_REDB_STORE.md` §3.6.2, the read-side half).
 
+use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{AtHeight, RuleSet};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
@@ -89,7 +90,7 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
 fn tip_is_the_last_recorded_block_and_the_writer_is_live() {
     let path = tmp("read-tip-recorded");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(0x5e, 1)]]);
+    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
     let snap = store.begin_read().expect("read");
     let tip = snap.tip().expect("tip");
     assert_eq!(
@@ -129,7 +130,7 @@ fn height_of_is_some_for_a_recorded_hash_and_none_otherwise() {
 fn block_info_is_recorded_at_and_below_the_tip_and_above_tip_above_it() {
     let path = tmp("read-block-info");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(0x5e, 2)], vec![]]);
+    connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![]]);
     let snap = store.begin_read().expect("read");
     for height in 0..3u64 {
         let AtHeight::Recorded(info) = snap.block_info(h(height)).expect("read") else {
@@ -248,7 +249,7 @@ fn block_infos_is_above_tip_when_the_start_is_and_clamps_the_end_otherwise() {
 fn block_returns_the_body_verified_against_the_recorded_identity() {
     let path = tmp("read-block");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(0x5e, 1)]]);
+    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
     let snap = store.begin_read().expect("read");
     let AtHeight::Recorded(body) = snap.block(h(1)).expect("read") else {
         panic!("height 1 is recorded");
@@ -482,11 +483,7 @@ fn the_fold_reads_return_exactly_what_connect_wrote() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     connect_chain(
         &store,
-        &[
-            vec![],
-            vec![spend(0x5e, 1), spend(0x5f, 1)],
-            vec![spend(0x60, 1)],
-        ],
+        &[vec![], vec![spend(9, 1), spend(10, 1)], vec![spend(11, 1)]],
     );
     let snap = store.begin_read().expect("read");
     for (height, cum) in [(0u64, 0u64), (1, 2), (2, 3)] {
@@ -533,21 +530,20 @@ fn the_redb_digest_is_the_hasher_over_the_files_three_families() {
     // drain (SCW-19), which is `facts(tip).root_after`.
     let path = tmp("read-digest-chain");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(
-        &store,
-        &[vec![], vec![spend(0x5e, 1)], vec![spend(0x5f, 1)]],
-    );
+    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 1)], vec![spend(10, 1)]]);
     let snap = store.begin_read().expect("read");
     let by_hand = {
         let blocks: Vec<[u8; 32]> = hashes.iter().map(|h| *h.as_bytes()).collect();
-        let spent = [[0x5e; 32], [0x5f; 32]];
+        // The spent images are the fixtures' by name (`spend(9, _)`,
+        // `spend(10, _)`), not literals that would follow the code.
+        let spent = [fixture::point(9), fixture::point(10)];
         crate::digest_v0::digest_v0(&blocks, &spent, facts(2, 0).root_after.value.as_bytes())
     };
     assert_eq!(snap.logical_state_digest_v0().expect("digest"), by_hand);
     // Order-insensitive in the spent family, as the hasher promises.
     let swapped = crate::digest_v0::digest_v0(
         &hashes.iter().map(|h| *h.as_bytes()).collect::<Vec<_>>(),
-        &[[0x5f; 32], [0x5e; 32]],
+        &[fixture::point(10), fixture::point(9)],
         facts(2, 0).root_after.value.as_bytes(),
     );
     assert_eq!(by_hand, swapped);
@@ -561,7 +557,7 @@ fn the_digest_moves_when_any_family_moves() {
     // chain's digest is not the new one.
     let path = tmp("read-digest-moves");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(0x5e, 1)]]);
+    connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
     let before = store
         .begin_read()
         .expect("read")
@@ -576,7 +572,7 @@ fn the_digest_moves_when_any_family_moves() {
         .expect("two blocks");
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let cand = candidate(2, tip.hash, vec![spend(0x60, 1)]);
+        let cand = candidate(2, tip.hash, vec![spend(11, 1)]);
         batch.connect(judge(&view, cand)?, facts(2, 0), RuleSet::GENESIS)?;
         Ok(())
     });

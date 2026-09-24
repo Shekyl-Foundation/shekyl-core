@@ -22,7 +22,8 @@ use crate::harness::fixture::{
     candidate, candidate_on, coinbase, recorded, recorded_with_work, G, TWO_G,
 };
 use crate::harness::{
-    assert_refused, expected_seed, formed_on, infallible, judged, Faulted, MockChain, MockSubstrate,
+    assert_refused, credited_to_this_falsifier, expected_seed, formed_on, infallible, judged,
+    Faulted, MockChain, MockSubstrate,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule};
@@ -105,11 +106,58 @@ fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Ver
 /// coinbase output.
 #[test]
 fn fixture_points_are_what_they_claim() {
+    use crate::harness::fixture::{point, POINTS};
     use shekyl_ct_balance::{check_commitment_masks, check_output_keys, MaskSubject};
     assert!(check_output_keys(&G).is_ok());
     assert!(check_output_keys(&TWO_G).is_ok());
     assert!(check_commitment_masks(&G, 1, MaskSubject::Coinbase { amounts: &[0] }).is_err());
     assert!(check_commitment_masks(&TWO_G, 1, MaskSubject::Coinbase { amounts: &[0] }).is_ok());
+    // The table (slice 5): every entry a canonical prime-order point, all
+    // sixteen pairwise distinct, the first two the named constants, and
+    // `point(k)` the k-th from 1. Pointness is what the fixtures need.
+    assert_eq!(POINTS[0], G);
+    assert_eq!(POINTS[1], TWO_G);
+    // Multiplicity — `POINTS[k−1] == k·G` for every k — is what the balance
+    // fixtures rely on (the table's contiguity, see its doc). Curve
+    // arithmetic makes it a gate rather than quoted provenance: a renumbered
+    // or non-contiguous table fails here, not in a store test three crates
+    // away. The same loop holds the pinned table equal to its computed form,
+    // `point_at`, so the two never disagree about what `k·G` is.
+    {
+        use crate::harness::fixture::point_at;
+        use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+        use curve25519_dalek::scalar::Scalar;
+        for (i, p) in POINTS.iter().enumerate() {
+            let k = u64::try_from(i + 1).expect("small");
+            let expected = (ED25519_BASEPOINT_POINT * Scalar::from(k))
+                .compress()
+                .to_bytes();
+            assert_eq!(*p, expected, "POINTS[{i}] is {k}·G");
+            assert_eq!(point_at(k), *p, "point_at({k}) is the pinned entry");
+        }
+        assert!(
+            check_output_keys(&point_at(2_113)).is_ok(),
+            "a far entry is a canonical prime-order point too"
+        );
+    }
+    assert_eq!(point(1), G);
+    assert_eq!(point(16), POINTS[15]);
+    let flat: Vec<u8> = POINTS.iter().flatten().copied().collect();
+    assert!(
+        check_output_keys(&flat).is_ok(),
+        "every entry is a canonical prime-order point"
+    );
+    let distinct: std::collections::BTreeSet<[u8; 32]> = POINTS.iter().copied().collect();
+    assert_eq!(distinct.len(), POINTS.len(), "pairwise distinct");
+    // Every entry also serves as a non-trivial mask for a zero-amount
+    // output except `G` itself (`zeroCommit(0) = G`), which is the one entry
+    // a fixture must not use as a coinbase mask.
+    for (i, p) in POINTS.iter().enumerate().skip(1) {
+        assert!(
+            check_commitment_masks(p, 1, MaskSubject::Coinbase { amounts: &[0] }).is_ok(),
+            "entry {i} is a usable mask"
+        );
+    }
 }
 
 /// The fixture coinbase passes every 4.F row at genesis and at height 1.
@@ -486,12 +534,18 @@ fn shipped_parameters_price_the_tail() {
 
 // --- the rows that hold by construction (Q4) -------------------------------
 
-/// CEN-F2's falsifier: the wire admits exactly one transaction version.
-/// A coinbase re-encoded with version `2` — the C++ `version >= 3` rule's
-/// boundary — does not decode, so no `Transaction` with another version
-/// can reach a rule.
+/// CEN-F2's falsifier — and **CEN-H2's and CEN-H13's**, the same property
+/// stated at the non-coinbase sites (`ver_non_input_consensus` rules 2/3,
+/// `check_tx_outputs`): the wire admits exactly one transaction version. A
+/// transaction re-encoded with version `2` — the C++ `version >= 3` rule's
+/// boundary — does not decode, so no `Transaction` with another version can
+/// reach any rule, coinbase or not.
 #[test]
 fn f2_the_wire_admits_one_transaction_version() {
+    credited_to_this_falsifier(
+        &[CenRow::F2, CenRow::H2, CenRow::H13],
+        "f2_the_wire_admits_one_transaction_version",
+    );
     let tx = coinbase(1);
     let mut bytes = Vec::new();
     tx.write(&mut bytes).expect("serialize");
@@ -506,11 +560,16 @@ fn f2_the_wire_admits_one_transaction_version() {
     }
 }
 
-/// CEN-F8's falsifier: the wire admits exactly one output tag
-/// (`txout_to_tagged_key`). An output re-encoded under the legacy
-/// `txout_to_key` tag, or any other, does not decode.
+/// CEN-F8's falsifier — and **CEN-H12's**, the same property for a listed
+/// transaction's outputs (`check_output_types`): the wire admits exactly
+/// one output tag (`txout_to_tagged_key`). An output re-encoded under the
+/// legacy `txout_to_key` tag, or any other, does not decode.
 #[test]
 fn f8_the_wire_admits_one_output_tag() {
+    credited_to_this_falsifier(
+        &[CenRow::F8, CenRow::H12],
+        "f8_the_wire_admits_one_output_tag",
+    );
     let output = Output {
         amount: 0,
         key: G,

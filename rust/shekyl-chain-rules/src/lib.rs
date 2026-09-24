@@ -66,9 +66,17 @@
 //! `RuleSet::mined_money_unlock_window` (the split epoch is
 //! `rules::miner::EMISSION_SPLIT_EPOCH` until a schedule step names
 //! another); F14/F14b/F16/F18 wait on CEN-G6's
-//! median (slice 7) and F17 on the curve tree's writer (DRS-E3). Only
-//! complete coverage is parity evidence, so no verdict minted before the
-//! last slice can be read as one.
+//! median (slice 7) and F17 on the curve tree's writer (DRS-E3); slice 5
+//! (`CHAIN_RULES_SLICE_5.md`) landed 4.H — the transaction on its own —
+//! as the third rule class, `TxRule` over a `TxContext` (crate-private,
+//! `rules/mod.rs`) whose kind is derived from the **slot**
+//! (a classification that selects the rules comes from outside the thing
+//! classified), seventeen rows `implemented`, five `by_construction`,
+//! H19's layout half running ahead of its verification, and the wallet's
+//! wire twin (`shekyl_wire::Transaction::validate`) demoted to a
+//! pre-check held to [`tx_form`] by a conformance test over every one of
+//! its refusal arms. Only complete coverage is parity evidence, so no
+//! verdict minted before the last slice can be read as one.
 //!
 //! # Consumers
 //!

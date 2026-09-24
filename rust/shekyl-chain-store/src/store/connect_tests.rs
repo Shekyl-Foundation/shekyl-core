@@ -19,7 +19,7 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{candidate, coinbase, connect_genesis, facts, judge, spend};
+use super::connect_fixtures::{candidate, connect_genesis, facts, judge, spend};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
@@ -265,7 +265,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let g = candidate(0, BlockHash::NULL, Vec::new());
     let g_hash = g.block.hash();
-    let b1 = candidate(1, g_hash, vec![spend(0x5e, 2)]);
+    let b1 = candidate(1, g_hash, vec![spend(9, 2)]);
     let b1_hash = b1.block.hash();
     let spend_hash = b1.transactions[0].hash();
 
@@ -281,18 +281,19 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     assert_eq!(c0.height, BlockHeight::ZERO);
     assert_eq!(c1.height, BlockHeight::from_raw(1));
     // block 1: miner tx 7 (tx_indices, txs_pruned, txs_prunable,
-    // txs_prunable_hash, output_txs, member, tx_outputs) + spend 10 (1 key
-    // image + the same 4 tx rows + 2 outputs × (output_txs + member) +
+    // txs_prunable_hash, output_txs, member, tx_outputs) + spend 12 (1 key
+    // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
+    // and txs_pqc_auth_hash row + 2 outputs × (output_txs + member) +
     // tx_outputs) + root 1 + block 3 + hf 1 + block_burn 1 + total_burned 1
-    // = 24.
-    assert_eq!(c1.journaled, 24);
+    // = 26.
+    assert_eq!(c1.journaled, 26);
 
     let snap = store.begin_read().expect("read");
     assert_eq!(snap.open_table(BLOCKS).expect("t").len().expect("len"), 2);
     assert!(
         snap.open_table(SPENT_KEYS)
             .expect("t")
-            .get(LmdbHashKey::from_bytes([0x5e; 32]))
+            .get(LmdbHashKey::from_bytes(fixture::point(9)))
             .expect("g")
             .is_some(),
         "the spend's key image is recorded"
@@ -375,15 +376,20 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
         snap.get_property::<TotalBurnedCell>().expect("cell"),
         Some(AtomicUnits::from_raw(25))
     );
-    // The spend's prunable row is empty (storage-pruned form) and its
-    // prunable hash is keccak256("") — the same value a coinbase carries.
+    // The spend's prunable row is its prunable segment, byte-for-byte — the
+    // wire's `pruned ‖ pqc_auths ‖ prunable` split (STX-8), derived from the
+    // fixture rather than pinned as a length. (Until E6 slice 5 the fixture
+    // was the storage-pruned form and this row was empty; CEN-H19 refuses
+    // that form at consensus.)
+    let expected_prunable = spend(9, 2).write_segments().expect("segments").prunable;
+    assert!(!expected_prunable.is_empty());
     assert_eq!(
         snap.open_table(TXS_PRUNABLE)
             .expect("t")
             .get(2)
             .expect("g")
-            .map(|g| g.value().bytes().len()),
-        Some(0)
+            .map(|g| g.value().bytes().to_vec()),
+        Some(expected_prunable)
     );
     cleanup(&path);
 }
@@ -419,7 +425,7 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
     // there is no `total_burned` cell yet.
     assert_eq!(after_genesis, (1, 1, 1, 1, 0, None));
 
-    let b1 = candidate(1, genesis.hash(), vec![spend(0x5e, 1)]);
+    let b1 = candidate(1, genesis.hash(), vec![spend(9, 1)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, b1)?, facts(1, 4), RuleSet::GENESIS)?)
@@ -627,7 +633,7 @@ fn a_key_image_spent_in_an_earlier_block_is_si1() {
     let path = tmp("connect-ki");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let (_, genesis) = connect_genesis(&store, 0);
-    let b1 = candidate(1, genesis.hash(), vec![spend(0x5e, 1)]);
+    let b1 = candidate(1, genesis.hash(), vec![spend(9, 1)]);
     let b1_hash = b1.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
@@ -637,7 +643,7 @@ fn a_key_image_spent_in_an_earlier_block_is_si1() {
     // No landed rule checks key images yet (CEN-I7 is slice 6), so the
     // double spend reaches the store — and the belt beneath the rule catches
     // it as a fatal.
-    let b2 = candidate(2, b1_hash, vec![spend(0x5e, 1)]);
+    let b2 = candidate(2, b1_hash, vec![spend(9, 1)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)
@@ -658,9 +664,13 @@ fn the_same_transaction_in_two_blocks_is_si3() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let (_, genesis) = connect_genesis(&store, 0);
     // A spend with a fresh key image each time but the SAME body cannot be
-    // built (the key image is in the body), so reuse a coinbase-shaped body
-    // as a listed tx: listed twice across blocks, same hash, no key image.
-    let dup = coinbase(77);
+    // built (the key image is in the body). The one legal listed shape with
+    // no key image is a serve-credit-only transaction: listed twice across
+    // blocks, same hash, nothing for SI-1 to see. (A coinbase-shaped body
+    // served here until E6 slice 5 landed CEN-H5, which refuses `gen`
+    // outside the miner slot — the fixture was the input the row exists to
+    // refuse.)
+    let dup = fixture::serve_credit_only([0x77; 32]);
     let b1 = candidate(1, genesis.hash(), vec![dup.clone()]);
     let b1_hash = b1.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {

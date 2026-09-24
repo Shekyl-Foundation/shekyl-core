@@ -86,6 +86,19 @@ pub enum Stale {
     /// target reuses [`RuleSetId::GENESIS`](crate::RuleSetId::GENESIS), so
     /// the id alone cannot tell `GENESIS` from `fakechain(n)`, or two
     /// different `n`.
+    ///
+    /// **This arm is what sizes [`Fault`]** (112 bytes at slice 5 with
+    /// `RuleSet` at 48): it carries two rule sets by value, so every byte
+    /// `RuleSet` gains is charged twice here. That is the first cost slice 2
+    /// Q10 has presented — making the rule set runtime-parameterised made
+    /// `RuleSetId` stop being a key, and anything that round-trips a rule
+    /// set must carry the value. Not a reason to reverse Q10 (the
+    /// fixed-difficulty lever being impossible on public nets *by type* is
+    /// worth more than a struct's width); a reason to know where the next
+    /// size problem in this crate comes from. If it ever matters, the fix is
+    /// **boxing this payload**, which keeps the by-value comparison the
+    /// Fakechain caveat requires — not shrinking `RuleSet`, and not keeping
+    /// limits off it that a schedule step could vary (slice 5 Q5, corrected).
     RuleSet {
         /// What `form` was given.
         formed_under: RuleSet,

@@ -520,6 +520,51 @@ def check_by_construction(entries: list[Entry], crate_src: str | None, errors: l
                 "`#[test] fn` defined in the crate — a by-construction row names the test that "
                 "would fail if the property lapsed"
             )
+    # One falsifier credited to several rows counts once per row in the
+    # figures, which is honest only if the test walks every row it serves
+    # (slice 5 Q6). The shape that forces it: the test's body names each
+    # served row as `CenRow::<id>` (the harness's `credited_to_this_falsifier`
+    # takes the list). A shared falsifier that names only the first row
+    # reads as compliant and is not; this refuses it.
+    shared: dict[str, list[Entry]] = {}
+    for e in rows:
+        if not (e.proof or "").startswith("doctest:"):
+            shared.setdefault(e.proof or "", []).append(e)
+    for falsifier, served in shared.items():
+        if len(served) < 2:
+            continue
+        body = _test_body(stripped_src, falsifier)
+        if body is None:
+            continue  # reported above
+        for e in served:
+            short = e.id.removeprefix("CEN-")
+            if not re.search(rf"\bCenRow::{re.escape(short)}\b", body):
+                errors.append(
+                    f"by_construction entry {e.id} (line {e.line}): falsifier {falsifier!r} serves "
+                    f"{len(served)} rows but its body does not name `CenRow::{short}` — a shared "
+                    "falsifier walks every row it is credited to (slice 5 Q6), or it is one test "
+                    f"counted {len(served)} times"
+                )
+
+
+def _test_body(stripped_src: str, name: str) -> str | None:
+    """The brace-balanced body of `#[test] fn <name>`, or `None` if absent."""
+    m = _test_def_re(name).search(stripped_src)
+    if m is None:
+        return None
+    start = stripped_src.find("{", m.end())
+    if start < 0:
+        return None
+    depth = 0
+    for i in range(start, len(stripped_src)):
+        c = stripped_src[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return stripped_src[start : i + 1]
+    return None
 
 
 def check_held(entries: list[Entry], rows: list[Row], cxx: Callable[[str], str | None], errors: list[str]) -> None:
@@ -927,6 +972,17 @@ def selftest() -> None:
     if "at-open 0   by-construction 1   enforced 5" not in summary(figs3):
         raise SystemExit(f"selftest by-construction summary:\n{summary(figs3)}")
     _expect_refusal(_inputs(registry=bc_reg, crate_src="fn l1_falsifier() {}\n"), "falsifier 'l1_falsifier' is not a `#[test] fn`", "by-construction falsifier without #[test]")
+    # a falsifier shared by two rows names both in its body (slice 5 Q6), or it is one test counted twice
+    bc_shared_reg = bc_reg.replace("        M2 pending,\n", '        M2 by_construction(crate::view::ChainView, "l1_falsifier"),\n')
+    _expect_ok(
+        _inputs(registry=bc_shared_reg, crate_src="#[test]\nfn l1_falsifier() {\n    credited(&[CenRow::L1, CenRow::M2]);\n}\n"),
+        "a shared falsifier naming both rows",
+    )
+    _expect_refusal(
+        _inputs(registry=bc_shared_reg, crate_src="#[test]\nfn l1_falsifier() {\n    credited(&[CenRow::L1]);\n}\n"),
+        "serves 2 rows but its body does not name `CenRow::M2`",
+        "shared falsifier naming only the first row",
+    )
     _expect_refusal(_inputs(registry=bc_reg, crate_src=None), "crate's sources could not be read", "by-construction row but no crate sources")
     bc_doc_reg = _REGISTRY_OK.replace("        L1 pending,\n", '        L1 by_construction(crate::view::ChainView, "doctest:validate"),\n')
     doc_src = "/// Judged against one view, cannot connect under another:\n///\n/// ```compile_fail\n/// let x: () = 1u8;\n/// ```\npub fn validate() {}\n"

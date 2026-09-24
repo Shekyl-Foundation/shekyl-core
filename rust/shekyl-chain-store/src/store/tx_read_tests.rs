@@ -12,7 +12,7 @@
 use shekyl_types::{BlockHash, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::Transaction;
 
-use super::connect_fixtures::{connect_chain, spend, spend_with_pqc_auth};
+use super::connect_fixtures::{connect_chain, spend};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, EPOCH};
 use super::*;
@@ -29,13 +29,15 @@ fn hash_of(tx: &Transaction) -> TxHash {
     tx.txid_parts().hash
 }
 
-/// Genesis, then a block with one plain spend, then a block with a spend
-/// carrying a `pqc_auths` segment. Coinbases at every height, so the dense
-/// id space is `0..=4`: coinbase 0, coinbase 1, spend, coinbase 2, pqc spend.
+/// Genesis, then a block with one 3-part body (a serve-credit-only
+/// transaction — no `pqc_auths` by rule, CEN-H20), then a block with a
+/// spend, which carries per-input `pqc_auths` and is 4-part. Coinbases at
+/// every height, so the dense id space is `0..=4`: coinbase 0, coinbase 1,
+/// serve credit, coinbase 2, spend.
 fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
     let store = ChainStore::create(path, EPOCH).expect("create");
-    let plain = spend(0x5e, 2);
-    let with_pqc = spend_with_pqc_auth(0x6f, 1);
+    let plain = shekyl_chain_rules::harness::fixture::serve_credit_only([0x5e; 32]);
+    let with_pqc = spend(15, 1);
     let hashes = connect_chain(
         &store,
         &[vec![], vec![plain.clone()], vec![with_pqc.clone()]],
@@ -327,7 +329,11 @@ fn tx_output_indices_is_dense_bound_first_and_a_hole_is_si9() {
     let AtIndex::Recorded(indices) = snap.tx_output_indices(plain_id).expect("read") else {
         panic!("below the count is recorded");
     };
-    assert_eq!(indices.0.len(), 2, "the plain spend has two outputs");
+    assert_eq!(
+        indices.0.len(),
+        0,
+        "the serve credit has no outputs — and a row, dense, never a hole"
+    );
     let pqc_id = snap
         .tx_location(&hash_of(&with_pqc))
         .expect("read")

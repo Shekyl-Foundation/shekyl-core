@@ -44,9 +44,19 @@
 //! CEN-D2's longhash) — is not in either list: it records its own `ROW` at
 //! the derivation site ([`header::B6::identity`]), so a gate that could
 //! never fail is never run as one (slice 1 Q5). Those are the writers of
-//! coverage, and `RuleCoverage::insert` names them. The per-transaction
-//! classes (4.H `tx_form`, 4.I `tx_against`) get their own traits with their
-//! slices.
+//! coverage, and `RuleCoverage::insert` names them.
+//!
+//! The **per-transaction** classes have the same two shapes one level down.
+//! A [`TxRule`] (census 4.H) judges one transaction from its bytes alone —
+//! a [`TxContext`]: the transaction, which position it occupies
+//! ([`TxKind`], derived from the transaction and never declared by the
+//! caller), and the rule set — and runs in `tx_form`, which the pool
+//! (DRS-E5) shares with `validate`. Each rule states its [`TxScope`]: a
+//! row the C++ applies to non-coinbase transactions only is recorded
+//! **vacuous** on the coinbase rather than skipped (slice 5 Q2 — CEN-E1's
+//! precedent at an unanchored height), so coverage says the row was
+//! evaluated at every slot and the pool cannot mis-declare a kind. The
+//! 4.I class (`tx_against`, view-bound) arrives with slice 6.
 //!
 //! # Where a refusal is written
 //!
@@ -65,6 +75,7 @@ pub(crate) mod pow;
 pub use pow::seed_height;
 pub(crate) mod timestamps;
 pub(crate) mod topology;
+pub(crate) mod tx;
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
@@ -72,10 +83,12 @@ use crate::coverage::RuleCoverage;
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::Target;
 use crate::rules::timestamps::MtpWindow;
+use crate::rules::tx::TxClass;
 use crate::trust::Trust;
-use crate::verdict::Verdict;
+use crate::verdict::{Locus, TxSlot, Verdict};
 use crate::view::{AtHeight, ChainView, RecordedBlock, Tip};
 use shekyl_types::BlockHeight;
+use shekyl_wire::Transaction;
 
 /// A consensus rule, bound to the census row it implements.
 ///
@@ -255,6 +268,157 @@ pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(
         coverage.insert(R::ROW);
     }
     Ok(verdict)
+}
+
+/// Which position a transaction occupies, for the rules whose statement
+/// names one. **Derived from the slot**, never declared: `TxSlot::Miner` is
+/// the coinbase position and every other slot is not. Not derived from the
+/// bytes — a sole-`gen` transaction listed in a block, or submitted to the
+/// pool on its own, is coinbase-*shaped* and must be refused (CEN-H5) by
+/// the rules that are stated for non-coinbase transactions, which a
+/// bytes-derived kind would exempt (slice 5 Q2 as amended). The pool holds
+/// one slot, [`TxSlot::Lone`](crate::verdict::TxSlot::Lone), so it cannot
+/// mis-declare; only `validate` names the miner, for the block's own miner
+/// field.
+///
+/// The principle, since it will recur (slice 5 Q2, ruled 2026-09-23): **a
+/// classification that selects which rules apply must come from outside
+/// the thing being classified.** Position in a block is a fact about the
+/// block; position in the pool is a fact about the pool; `is_coinbase()` is
+/// a fact the submitter controls, and an input that selects the rule set it
+/// is judged under is a self-exempting input. Same family as `ChainValid`
+/// being unforgeable and `held_by_cxx` needing a rejection test rather than
+/// a grep: authority sits with something the adversary does not author. The
+/// C++ has no such gap only because `ver_non_input_consensus` never sees a
+/// coinbase — an accident of call site, not a property of the rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TxKind {
+    /// The block's miner transaction — whatever its bytes; CEN-F1 judges
+    /// that they are a sole `Input::Gen`.
+    Coinbase,
+    /// Everything else — a listed transaction, or a lone one at the pool.
+    Listed,
+}
+
+impl TxKind {
+    /// The kind a slot implies.
+    pub(crate) const fn of(slot: TxSlot) -> Self {
+        match slot {
+            TxSlot::Miner => Self::Coinbase,
+            TxSlot::Listed(_) | TxSlot::Lone => Self::Listed,
+        }
+    }
+}
+
+/// Which transactions a [`TxRule`] judges. The C++ runs
+/// `ver_non_input_consensus` over the pool supplement only and reaches the
+/// coinbase through three block-side calls, so most 4.H rows are stated for
+/// non-coinbase transactions and a few for all; the scope is the rule's to
+/// state, and [`run_tx`] records an out-of-scope row as **vacuous** rather
+/// than skipping it (slice 5 Q2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TxScope {
+    /// Every transaction, the coinbase included.
+    All,
+    /// Non-coinbase transactions; vacuous on the coinbase.
+    NonCoinbase,
+}
+
+impl TxScope {
+    /// Whether a rule with this scope judges a transaction of `kind`.
+    pub(crate) const fn applies_to(self, kind: TxKind) -> bool {
+        match self {
+            Self::All => true,
+            Self::NonCoinbase => matches!(kind, TxKind::Listed),
+        }
+    }
+}
+
+/// What a **stateless per-transaction** rule may read: the transaction and
+/// its kind. No view, by construction — a rule that needs one is a 4.I rule
+/// (`tx_against`, slice 6). No rule set either, yet: every 4.H limit is a
+/// frozen constant beside its rule (`rules::tx`), the F21 arrangement — a
+/// limit joins `RuleSet` when a schedule step can name a different one, and
+/// the first such row adds the field. A struct so the set can grow without
+/// moving any rule's signature, as [`FormContext`] is.
+pub(crate) struct TxContext<'a> {
+    /// The transaction, exactly as parsed.
+    pub(crate) tx: &'a Transaction,
+    /// The slot the transaction occupies — where a refusal points.
+    pub(crate) slot: TxSlot,
+    /// Derived from `slot`, never declared.
+    pub(crate) kind: TxKind,
+    /// What kind of transaction the inputs make this — derived once
+    /// ([`TxClass::derive`]), judging CEN-H5 and CEN-H6 as it goes, and read
+    /// by every rule whose shape depends on it (H14, H20–H22).
+    pub(crate) class: TxClass,
+}
+
+impl<'a> TxContext<'a> {
+    /// Build the context, deriving the class. A refusal here is H5's or
+    /// H6's, at `slot`; both rows are recorded in `coverage` when they pass
+    /// — at their derivation site, the CEN-B6 arrangement.
+    pub(crate) fn derive(
+        tx: &'a Transaction,
+        slot: TxSlot,
+        coverage: &mut RuleCoverage,
+    ) -> Verdict<Self> {
+        let kind = TxKind::of(slot);
+        let class = TxClass::derive(tx, slot, kind, coverage)?;
+        Ok(Self {
+            tx,
+            slot,
+            kind,
+            class,
+        })
+    }
+
+    /// Where this transaction's refusals point.
+    pub(crate) const fn locus(&self) -> Locus {
+        Locus::Tx { slot: self.slot }
+    }
+}
+
+/// A stateless per-transaction rule (census 4.H): judges one transaction
+/// from its bytes alone. Runs in `tx_form`, at block connect for every
+/// slot and at pool admission for a lone transaction — one function, two
+/// sites, which is the C++'s `ver_non_input_consensus` arrangement kept.
+///
+/// No fault position: nothing a 4.H rule reads can fail to answer.
+/// `Ok(())` passed; `Err(refused)` refused on `Self::ROW` at the context's
+/// [`locus`](TxContext::locus) — the slot the caller judged.
+pub(crate) trait TxRule: Rule {
+    /// Which transactions this rule judges.
+    const SCOPE: TxScope;
+    fn check(cx: &TxContext<'_>) -> Verdict<()>;
+}
+
+/// Run one per-transaction rule and record its row: as passed if it ran and
+/// passed, as **vacuous** if the rule's scope excludes this transaction's
+/// kind. Both are "the row was evaluated at this slot"; a rule that was not
+/// run at all is not in coverage.
+pub(crate) fn run_tx<R: TxRule>(cx: &TxContext<'_>, coverage: &mut RuleCoverage) -> Verdict<()> {
+    if !R::SCOPE.applies_to(cx.kind) {
+        coverage.insert(R::ROW);
+        return Ok(());
+    }
+    let verdict = R::check(cx);
+    if verdict.is_ok() {
+        coverage.insert(R::ROW);
+    }
+    verdict
+}
+
+/// Run one per-transaction rule whose census row is not yet `implemented`.
+///
+/// Scope applies, as in [`run_tx`]: an out-of-scope kind is not judged.
+/// A pass is not coverage. Recording a half-landed row would claim it.
+/// The caller switches to [`run_tx`] in the commit that flips the row.
+pub(crate) fn run_tx_unrecorded<R: TxRule>(cx: &TxContext<'_>) -> Verdict<()> {
+    if !R::SCOPE.applies_to(cx.kind) {
+        return Ok(());
+    }
+    R::check(cx)
 }
 
 /// The recorded block at `height`, which is below the connecting height
