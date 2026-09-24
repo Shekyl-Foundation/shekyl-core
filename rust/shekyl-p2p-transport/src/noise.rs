@@ -22,7 +22,7 @@ use rand_core::OsRng;
 use rand_core::{CryptoRng, RngCore};
 use shekyl_crypto_pq::kem::{ML_KEM_768_CT_LEN, ML_KEM_768_EK_LEN};
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::aead::{self, HASH_LEN, TAG_LEN};
 use crate::channel::{halves, RecvHalf, SendHalf};
@@ -193,9 +193,8 @@ impl Initiator {
         let ct =
             ml_kem_768::CipherText::try_from_bytes(ct_bytes).map_err(|_| HandshakeError::Kem)?;
         let ss = self.dk.try_decaps(&ct).map_err(|_| HandshakeError::Kem)?;
-        let mut ss_bytes = ss.into_bytes();
-        self.sym.mix_key(&ss_bytes);
-        ss_bytes.zeroize();
+        let ss_bytes = Zeroizing::new(ss.into_bytes());
+        self.sym.mix_key(&ss_bytes[..]);
         let payload = self.sym.decrypt_and_hash(&message2[ct_end..])?;
         if !payload.is_empty() {
             return Err(HandshakeError::State);
@@ -306,9 +305,8 @@ impl ResponderReady {
             return Err(HandshakeError::Length);
         }
         msg.extend_from_slice(&encrypted);
-        let mut ss_bytes = ss.into_bytes();
-        self.sym.mix_key(&ss_bytes);
-        ss_bytes.zeroize();
+        let ss_bytes = Zeroizing::new(ss.into_bytes());
+        self.sym.mix_key(&ss_bytes[..]);
         let tag = self.sym.encrypt_and_hash(&[])?;
         if tag.len() != TAG_LEN {
             return Err(HandshakeError::Length);
@@ -533,6 +531,11 @@ mod tests {
         assert_eq!(
             hex_of(&k_back),
             "2ece957080019fedc1e7d21bf46dce09ac2619495194edd54c35ef0280d31e4a"
+        );
+        let record = a_send.seal(&[0x42]).unwrap();
+        assert_eq!(
+            hex_of(&record),
+            "ac9785f15ea6b2a4eac23e7c168e34ca3aa62f35a5d84cdbc01eb822264aed4d43016f"
         );
     }
 }

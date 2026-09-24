@@ -39,6 +39,19 @@ const READ_CHUNK: usize = 4096;
 
 pub type PlainCallback = extern "C" fn(*mut std::ffi::c_void, *const u8, usize) -> i32;
 pub type ClosedCallback = extern "C" fn(*mut std::ffi::c_void);
+pub type ReadyCallback = extern "C" fn(*mut std::ffi::c_void);
+/// `direction` is 0 for bytes read and 1 for bytes written. The return value
+/// is how many milliseconds to wait before the next socket operation.
+pub type WireCallback = extern "C" fn(*mut std::ffi::c_void, i32, usize) -> i32;
+
+/// Callbacks the session installs. They may run only after [`Pipe::start`].
+#[derive(Clone, Copy)]
+pub struct PipeHooks {
+    pub on_plain: PlainCallback,
+    pub on_closed: ClosedCallback,
+    pub on_ready: ReadyCallback,
+    pub on_wire: WireCallback,
+}
 
 #[derive(Debug)]
 pub enum PipeError {
@@ -123,8 +136,7 @@ impl Pipe {
         stream: TcpStream,
         network_id: &NetworkId,
         initiator: bool,
-        on_plain: PlainCallback,
-        on_closed: ClosedCallback,
+        hooks: PipeHooks,
         ctx: *mut std::ffi::c_void,
     ) -> Result<Arc<Self>, PipeError> {
         stream.set_nonblocking(false).map_err(|_| PipeError::Io)?;
@@ -160,8 +172,7 @@ impl Pipe {
                     gate_r,
                     keys_tx,
                     Session {
-                        on_plain,
-                        on_closed,
+                        hooks,
                         ctx: ctx_bits,
                     },
                 );
@@ -171,8 +182,17 @@ impl Pipe {
         let shared_w = Arc::clone(&shared);
         let writer = match std::thread::Builder::new()
             .name("sk-pipe-wr".to_string())
-            .spawn(move || write_loop(writer_stream, shared_w, keys_rx))
-        {
+            .spawn(move || {
+                write_loop(
+                    writer_stream,
+                    shared_w,
+                    keys_rx,
+                    Session {
+                        hooks,
+                        ctx: ctx_bits,
+                    },
+                );
+            }) {
             Ok(handle) => handle,
             Err(_) => {
                 shared.stop.store(true, Ordering::Release);
@@ -191,8 +211,8 @@ impl Pipe {
         }))
     }
 
-    /// Release the owner threads. Callbacks may run after this returns only
-    /// if they were already inside the session; new reads do not start.
+    /// Let the owner threads begin. The handshake, `on_ready`, wire
+    /// accounting, and plaintext callbacks all happen after this returns.
     pub fn start(&self) {
         self.gate.open();
     }
@@ -251,9 +271,9 @@ impl Drop for Pipe {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Session {
-    on_plain: PlainCallback,
-    on_closed: ClosedCallback,
+    hooks: PipeHooks,
     ctx: usize,
 }
 
@@ -273,12 +293,23 @@ fn read_loop(
     let (send, mut recv) = match handshake(&mut stream, &network_id, initiator, deadline) {
         Ok(halves) => halves,
         Err(_) => {
-            report_closed(&shared, session.on_closed, session.ctx);
+            report_closed(&shared, session.hooks.on_closed, session.ctx);
             return;
         }
     };
+    let (wrote, read) = if initiator {
+        (INITIATOR_FLIGHT_LEN, RESPONDER_FLIGHT_LEN)
+    } else {
+        (RESPONDER_FLIGHT_LEN, INITIATOR_FLIGHT_LEN)
+    };
+    note_wire(&session, 1, wrote);
+    note_wire(&session, 0, read);
+    if shared.stop.load(Ordering::Acquire) {
+        return;
+    }
+    (session.hooks.on_ready)(session.ctx as *mut std::ffi::c_void);
     if keys_tx.send(send).is_err() {
-        report_closed(&shared, session.on_closed, session.ctx);
+        report_closed(&shared, session.hooks.on_closed, session.ctx);
         return;
     }
     let mut inbound = Vec::new();
@@ -286,10 +317,12 @@ fn read_loop(
         if shared.stop.load(Ordering::Acquire) || !wait_window(&shared) {
             break;
         }
-        match pull_record(&mut recv, &mut stream, &mut inbound) {
-            Ok(plain) => deliver(&shared, session.on_plain, session.ctx, &plain),
+        match pull_record(&mut recv, &mut stream, &mut inbound, |n| {
+            note_wire(&session, 0, n);
+        }) {
+            Ok(plain) => deliver(&shared, session.hooks.on_plain, session.ctx, &plain),
             Err(_) => {
-                report_closed(&shared, session.on_closed, session.ctx);
+                report_closed(&shared, session.hooks.on_closed, session.ctx);
                 break;
             }
         }
@@ -300,6 +333,7 @@ fn write_loop(
     mut stream: TcpStream,
     shared: Arc<Shared>,
     keys_rx: std::sync::mpsc::Receiver<SendHalf>,
+    session: Session,
 ) {
     let Ok(mut send) = keys_rx.recv() else {
         return;
@@ -337,6 +371,19 @@ fn write_loop(
             let _ = stream.shutdown(Shutdown::Both);
             break;
         }
+        note_wire(&session, 1, wire.len());
+    }
+}
+
+fn note_wire(session: &Session, direction: i32, n: usize) {
+    if n == 0 {
+        return;
+    }
+    let pause = (session.hooks.on_wire)(session.ctx as *mut std::ffi::c_void, direction, n);
+    if pause > 0 {
+        std::thread::sleep(Duration::from_millis(u64::from(
+            pause.clamp(0, 1_000) as u32
+        )));
     }
 }
 
@@ -375,6 +422,7 @@ fn pull_record(
     recv: &mut RecvHalf,
     stream: &mut TcpStream,
     inbound: &mut Vec<u8>,
+    mut on_read: impl FnMut(usize),
 ) -> Result<Vec<u8>, PipeError> {
     let mut tmp = [0u8; READ_CHUNK];
     loop {
@@ -388,6 +436,7 @@ fn pull_record(
                 if n == 0 {
                     return Err(PipeError::Io);
                 }
+                on_read(n);
                 inbound.extend_from_slice(&tmp[..n]);
             }
             Err(_) => return Err(PipeError::Record),
@@ -557,6 +606,21 @@ mod tests {
         sink.cv.notify_one();
     }
 
+    extern "C" fn on_ready(_: *mut std::ffi::c_void) {}
+
+    extern "C" fn on_wire(_: *mut std::ffi::c_void, _: i32, _: usize) -> i32 {
+        0
+    }
+
+    fn hooks() -> PipeHooks {
+        PipeHooks {
+            on_plain,
+            on_closed,
+            on_ready,
+            on_wire,
+        }
+    }
+
     #[test]
     fn loopback_delivers_plaintext_after_the_handshake() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -573,8 +637,7 @@ mod tests {
                 stream,
                 &[0x55; 16],
                 true,
-                on_plain,
-                on_closed,
+                hooks(),
                 &sink as *const Sink as *mut std::ffi::c_void,
             )
             .unwrap();
@@ -605,8 +668,7 @@ mod tests {
             stream,
             &[0x55; 16],
             false,
-            on_plain,
-            on_closed,
+            hooks(),
             &sink as *const Sink as *mut std::ffi::c_void,
         )
         .unwrap();

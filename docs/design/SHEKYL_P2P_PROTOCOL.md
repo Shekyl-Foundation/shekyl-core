@@ -3371,7 +3371,10 @@ the framing.
 
 **Post-`Split` record framing (pinned 2026-09-24).** Each direction seals one
 Levin write as one record: an encrypted 2-byte big-endian length (plus its
-16-byte tag) then the encrypted body (plus its tag). Two nonce increments.
+16-byte tag) then the encrypted body (plus its tag). The length AEAD's
+associated data is the three bytes `len`. The body's is the four bytes
+`body`. Empty associated data would let a length ciphertext be replayed as a
+body. Two nonce increments.
 Rekey is at 1,000 nonce increments, which is 500 records. A length in the
 clear would publish Levin bucket sizes to every path observer. The 2-byte
 length cannot hold a 100 MB bucket, so a write larger than 65535 bytes is

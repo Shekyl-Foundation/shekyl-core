@@ -104,6 +104,11 @@ namespace net_utils
       int32_t initiator,
       int32_t (*on_plain)(void* ctx, const uint8_t* data, size_t len),
       void (*on_closed)(void* ctx),
+      void (*on_ready)(void* ctx),
+      /// `direction` is 0 for bytes read and 1 for bytes written. Returns
+      /// how many milliseconds the pipe should wait before the next record,
+      /// so the global rate limit still applies.
+      int32_t (*on_wire)(void* ctx, int32_t direction, size_t bytes),
       void* ctx);
     void (*start)(void* pipe);
     void (*pin)(void* pipe);
@@ -308,6 +313,8 @@ namespace net_utils
     void detach_network_pipe();
     static int32_t network_pipe_on_plain(void* ctx, const uint8_t* data, size_t len);
     static void network_pipe_on_closed(void* ctx);
+    static void network_pipe_on_ready(void* ctx);
+    static int32_t network_pipe_on_wire(void* ctx, int32_t direction, size_t bytes);
   public:
     struct shared_state : connection_basic_shared_state, t_protocol_handler::config_type
     {

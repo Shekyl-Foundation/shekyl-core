@@ -17,7 +17,8 @@ mod prefix;
 
 pub use noise::{MESSAGE1_LEN, MESSAGE2_LEN, PROTOCOL_NAME};
 pub use pipe::{
-    ClosedCallback, Pipe, PipeError, PlainCallback, HANDSHAKE_DEADLINE, PIPE_PLAINTEXT_BUDGET,
+    ClosedCallback, Pipe, PipeError, PipeHooks, PlainCallback, ReadyCallback, WireCallback,
+    HANDSHAKE_DEADLINE, PIPE_PLAINTEXT_BUDGET,
 };
 pub use prefix::{
     prefix_for, NetworkId, MAINNET_PREFIX, PREFIX_LEN, STAGENET_PREFIX, TESTNET_PREFIX,

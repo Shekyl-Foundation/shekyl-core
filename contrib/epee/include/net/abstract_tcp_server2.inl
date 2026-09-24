@@ -1062,6 +1062,8 @@ namespace net_utils
       is_income ? 0 : 1,
       &connection::network_pipe_on_plain,
       &connection::network_pipe_on_closed,
+      &connection::network_pipe_on_ready,
+      &connection::network_pipe_on_wire,
       this);
     if (!pipe)
     {
@@ -1070,6 +1072,9 @@ namespace net_utils
     }
     std::lock_guard<std::mutex> pipe_guard(m_network_pipe_mu);
     m_network_pipe = pipe;
+    // The pipe's own deadline covers the handshake. The 10s new-connection
+    // timer would close the socket before that deadline.
+    cancel_timer();
     return true;
   }
 
@@ -1126,8 +1131,7 @@ namespace net_utils
       {
         std::lock_guard<std::mutex> guard(keep->m_state.lock);
         keep->m_conn_context.m_last_recv = time(NULL);
-        keep->m_conn_context.m_recv_cnt += copy.size();
-        keep->start_timer(keep->get_timeout_from_bytes_read(copy.size()), true);
+        keep->start_timer(keep->get_default_timeout(), true);
       }
       success = keep->m_handler.handle_recv(
         reinterpret_cast<const char*>(copy.data()), copy.size());
@@ -1145,6 +1149,93 @@ namespace net_utils
       }
     });
     return 0;
+  }
+
+  template<typename T>
+  void connection<T>::network_pipe_on_ready(void* ctx)
+  {
+    auto* self = static_cast<connection*>(ctx);
+    boost::shared_ptr<connection> keep;
+    try
+    {
+      keep = self->shared_from_this();
+    }
+    catch (...)
+    {
+      return;
+    }
+    boost::asio::post(self->strand_, [keep] {
+      std::lock_guard<std::mutex> guard(keep->m_state.lock);
+      if (keep->m_state.status == status_t::RUNNING)
+        keep->start_timer(keep->get_default_timeout());
+    });
+  }
+
+  template<typename T>
+  int32_t connection<T>::network_pipe_on_wire(void* ctx, int32_t direction, size_t bytes)
+  {
+    auto* self = static_cast<connection*>(ctx);
+    if (!self || bytes == 0)
+      return 0;
+    boost::shared_ptr<connection> keep;
+    try
+    {
+      keep = self->shared_from_this();
+    }
+    catch (...)
+    {
+      return 0;
+    }
+    int32_t sleep_ms = 0;
+    if (self->speed_limit_is_enabled())
+    {
+      double seconds = 0;
+      if (direction == 0)
+      {
+        CRITICAL_REGION_LOCAL(network_throttle_manager_t::m_lock_get_global_throttle_in);
+        auto& throttle = network_throttle_manager_t::get_global_throttle_in();
+        throttle.handle_trafic_exact(bytes);
+        seconds = std::min(throttle.get_sleep_time_after_tick(1), 1.0);
+      }
+      else
+      {
+        CRITICAL_REGION_LOCAL(network_throttle_manager_t::m_lock_get_global_throttle_out);
+        auto& throttle = network_throttle_manager_t::get_global_throttle_out();
+        throttle.handle_trafic_exact(bytes);
+        seconds = std::min(throttle.get_sleep_time_after_tick(1), 1.0);
+      }
+      sleep_ms = static_cast<int32_t>(seconds * 1000.0);
+    }
+    boost::asio::post(self->strand_, [keep, direction, bytes] {
+      std::lock_guard<std::mutex> guard(keep->m_state.lock);
+      if (keep->m_state.status != status_t::RUNNING)
+        return;
+      if (direction == 0)
+      {
+        keep->m_state.stat.in.throttle.handle_trafic_exact(bytes);
+        const auto speed = keep->m_state.stat.in.throttle.get_current_speed();
+        keep->m_conn_context.m_current_speed_down = speed;
+        keep->m_conn_context.m_max_speed_down = std::max(
+          keep->m_conn_context.m_max_speed_down, speed);
+        keep->logger_handle_net_read(bytes);
+        keep->m_conn_context.m_last_recv = time(NULL);
+        keep->m_conn_context.m_recv_cnt += bytes;
+        keep->start_timer(keep->get_timeout_from_bytes_read(bytes), true);
+      }
+      else
+      {
+        keep->m_state.stat.out.throttle.handle_trafic_exact(bytes);
+        const auto speed = keep->m_state.stat.out.throttle.get_current_speed();
+        keep->m_conn_context.m_current_speed_up = speed;
+        keep->m_conn_context.m_max_speed_up = std::max(
+          keep->m_conn_context.m_max_speed_up, speed);
+        keep->logger_handle_net_write(bytes);
+        keep->m_conn_context.m_last_send = time(NULL);
+        keep->m_conn_context.m_send_cnt += bytes;
+        keep->start_timer(keep->get_default_timeout(), true);
+      }
+    });
+    return sleep_ms;
   }
 
   template<typename T>

@@ -10,7 +10,7 @@ use std::ffi::c_void;
 use std::net::TcpStream;
 use std::sync::Arc;
 
-use shekyl_p2p_transport::{ClosedCallback, Pipe, PlainCallback};
+use shekyl_p2p_transport::{Pipe, PipeHooks};
 
 use crate::legacy_util::{array_from_ptr, slice_from_ptr};
 
@@ -51,8 +51,10 @@ pub unsafe extern "C" fn shekyl_clearnet_attach(
     native: isize,
     network_id: *const u8,
     initiator: i32,
-    on_plain: PlainCallback,
-    on_closed: ClosedCallback,
+    on_plain: shekyl_p2p_transport::PlainCallback,
+    on_closed: shekyl_p2p_transport::ClosedCallback,
+    on_ready: shekyl_p2p_transport::ReadyCallback,
+    on_wire: shekyl_p2p_transport::WireCallback,
     ctx: *mut c_void,
 ) -> *mut Pipe {
     let Some(stream) = stream_from_native(native) else {
@@ -66,7 +68,18 @@ pub unsafe extern "C" fn shekyl_clearnet_attach(
         drop(stream);
         return std::ptr::null_mut();
     };
-    match Pipe::attach(stream, &id, initiator != 0, on_plain, on_closed, ctx) {
+    match Pipe::attach(
+        stream,
+        &id,
+        initiator != 0,
+        PipeHooks {
+            on_plain,
+            on_closed,
+            on_ready,
+            on_wire,
+        },
+        ctx,
+    ) {
         Ok(pipe) => Arc::into_raw(pipe).cast_mut(),
         Err(_) => std::ptr::null_mut(),
     }
