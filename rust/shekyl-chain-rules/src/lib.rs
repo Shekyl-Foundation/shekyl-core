@@ -156,7 +156,9 @@ pub use rule_set::{
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::difficulty::Target;
+pub use rules::miner::{tx_volume_window, EMISSION_SPLIT_EPOCH};
 pub use rules::seed_height;
+pub use rules::timestamps::mtp_median_at;
 pub use substrate::Substrate;
 pub use trust::Trust;
 pub use validate::{form, tx_against, tx_form, validate};

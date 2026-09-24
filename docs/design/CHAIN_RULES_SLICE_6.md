@@ -654,6 +654,12 @@ where it lives and how it is driven:
   consumer; E3 then flips one field's `Origin` from `PassedThrough` to
   `Derived` inside a function that exists, instead of promoting test code.
   `Trace` is E2-only and lives with E2's harness. Two impls, one seam.
+  **Disposition: STAGED (rule 23)** — `Composed`'s production consumer is
+  E3's live ingest; its consumer today is the scenario driver (landed,
+  §5.3.3). **Falsify by:** `rg -n 'Composed::new' rust --glob '*.rs'`
+  returns a caller outside `#[cfg(test)]` / `*_tests.rs` — checked when
+  E3 lands; if E3 lands and this still returns only the driver, the seam
+  was not the boundary advancing and this row reopens.
   **Landed:** `shekyl-chain-ingest/src/facts.rs` — `FactsFor` (one
   method, read against the batch view the verdict was judged on),
   `impl FactsFor for Trace`, `Composed<P: PricedAt>` with `Priced`
@@ -700,6 +706,55 @@ where it lives and how it is driven:
   lookahead — replay-with-a-trace covers that. Two instruments, two
   subjects; scenario coverage is not ingest-end-to-end coverage, and the
   driver's doc says so.
+
+#### 5.3.3 The driver — landed (2026-09-24), and the third gap
+
+`shekyl-chain-ingest/src/scenario.rs` (test-only in ingest for now; a
+`scenario` TEST_ONLY feature lands with the first cross-crate consumer,
+the store's fixture migration). `Scenario::open(name)` → `mine(n)`,
+`mine_listing(txs)` (a refusal is data), `rewind_to(h)`, `facts()`,
+`close()`. Each block: ask the connector what the chain is → price a
+coinbase with `shekyl-block-template` → `form` under a driver-owned clock
+(`Clocked<P>`, 120 s per block; the free longhash by default, real RandomX
+under `Clocked<ProductionSubstrate>` — the `#[ignore]`d twin mines under
+it in 17 s) → `Apply` through `Connector<Composed<Ledger>>`, the ledger
+answering `PricedAt` from the template. Its own tests: six blocks, every
+one judged by the eight landed 4.F rows and A2/B1/B5/C1/C2; the record is
+the fold of what the templates priced; F20's window and C2's median read
+back as the producer expects; a rewind to 2 pops two, mining resumes on
+the new tip with the fold restarting from block 2. **One event at a time**
+and the doc says what that does not cover (the sequencer's lookahead —
+replay's subject).
+
+**The third gap, as predicted.** Two gaps were measured (template,
+facts); writing the driver surfaced a third, and it is production: **the
+producer's read path** — what the chain *is*, read on the view the
+validator judges against and through the validator's own definitions. It
+landed as `Connector`'s `TemplateFacts → ChainFacts` message (tip, root at
+the connecting height, parent's emission, total burned, F20 window, C2
+median — inside one write closure so the view is the `BatchView` the rules
+read) and three producer-facing exports from `shekyl-chain-rules`:
+`tx_volume_window` (F20's definition, now two-position: view fault outer,
+`Corrupt::TxCountNotMonotone` inner, so no caller matches a stale arm that
+cannot occur), `mtp_median_at` (C3's padded median) and
+`EMISSION_SPLIT_EPOCH` (F21). Each is public for one stated reason: the
+producer prices at the operands it will be judged by, read from the
+definition, not a second copy. That is `get_block_template`'s read path
+in the shape E3 will serve it — more production than the measurement
+found, which is the signal the framing was right.
+
+**Placeholders, each named at the line that sets it:** `root_after`
+(S-CURVE grows the tree), the effective median weight and the long-term
+median (G6, slice 7), the frozen-segment count (E4). Each is the caller's
+pass-through exactly as the trace supplied it.
+
+**Observed while reading, not fixed here (scope):** `unreachable!` in the
+validator at `timestamps.rs` (three arms: the neutralised FTL leg, and
+two "below the connecting height is recorded") and `rules/mod.rs:435`
+(`recorded`). Each is argued sound from the view's density invariant; the
+standing constraint is that a validator carries no panic path. Filed for
+the slice's closing docs commit as a FOLLOWUPS row, owner
+`CHAIN_RULES_CRATE.md`, so it is chosen rather than found.
 
 **Carried, not done here:** slices 2–4's view-bound rows (the D family's
 windows, B5's root, E1's anchors) have fixtures of the same shape against

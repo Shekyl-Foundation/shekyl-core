@@ -196,6 +196,35 @@ pub struct HashAt {
     pub height: BlockHeight,
 }
 
+/// What a block producer needs from the chain to build the next
+/// candidate, read on the view the validator will judge it against and
+/// through the definitions the validator uses (`tx_volume_window`,
+/// `mtp_median_at`) — so the template is priced at the operands it will be
+/// judged by, never at a second copy of them. The `get_block_template`
+/// read path in the shape E3 will serve it; the slice-6 scenario driver is
+/// its first consumer.
+#[derive(Clone, Copy, Debug)]
+pub struct TemplateFacts;
+
+/// [`TemplateFacts`]' reply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainFacts {
+    /// The height the next block connects at (`tip + 1`; `0` when empty).
+    pub connecting: BlockHeight,
+    /// The tip's identity, [`BlockHash::NULL`] when empty (CEN-A2).
+    pub previous: BlockHash,
+    /// The tree state at `connecting` (CEN-B5).
+    pub curve_tree_root: shekyl_types::CurveTreeRoot,
+    /// The parent's gross emission (CEN-F13's accumulator); zero at genesis.
+    pub parent_coins_generated: shekyl_units::AtomicUnits,
+    /// Everything burned through the tip.
+    pub total_burned: shekyl_units::AtomicUnits,
+    /// CEN-F20's window at `connecting`.
+    pub tx_volume: shekyl_economics::TxVolume,
+    /// CEN-C2's median at `connecting`; `None` at genesis.
+    pub median_timestamp: Option<shekyl_types::Timestamp>,
+}
+
 /// What the actor is built from.
 pub struct ConnectorArgs<F> {
     /// The store this actor alone writes.
@@ -384,6 +413,68 @@ impl<F: FactsFor + Send + Sync + 'static> Message<Digest> for Connector<F> {
 
     async fn handle(&mut self, _: Digest, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         Ok(self.writer.read()?.logical_state_digest_v0()?)
+    }
+}
+
+impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F> {
+    type Reply = Result<ChainFacts, RunFault>;
+
+    /// Read inside one write closure: the producer's operands come off the
+    /// same `BatchView` the validator reads, so `tx_volume_window` and
+    /// `mtp_median_at` are the rules' own definitions over the rules' own
+    /// view. Nothing is written; the closure is the view's door. A corrupt
+    /// prefix sum is the store's SI-8 and arms the halt exactly as it would
+    /// under `Apply`.
+    async fn handle(
+        &mut self,
+        _: TemplateFacts,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let total_burned = self.writer.read()?.total_burned()?;
+        self.writer.write(|batch| {
+            let view = batch.chain_view();
+            let tip = view.tip()?;
+            let connecting = tip.as_ref().map_or(BlockHeight::ZERO, |t| {
+                BlockHeight::from_raw(t.height.to_raw().saturating_add(1))
+            });
+            let previous = tip.as_ref().map_or(BlockHash::NULL, |t| t.hash);
+            let curve_tree_root = match view.root_at(connecting)? {
+                AtHeight::Recorded(root) => root,
+                AtHeight::AboveTip => {
+                    return Err(RunFault::ParentMissing {
+                        height: connecting,
+                        parent: connecting,
+                    })
+                }
+            };
+            let parent_coins_generated = match tip {
+                None => shekyl_units::AtomicUnits::ZERO,
+                Some(t) => match view.block_at(t.height)? {
+                    AtHeight::Recorded(record) => record.coins_generated,
+                    AtHeight::AboveTip => {
+                        return Err(RunFault::ParentMissing {
+                            height: connecting,
+                            parent: t.height,
+                        })
+                    }
+                },
+            };
+            let tx_volume = match shekyl_chain_rules::tx_volume_window(&view, connecting)? {
+                Ok(volume) => volume,
+                // SI-8 broken: the same arming `Apply` performs (SI-10).
+                Err(observed) => return Err(RunFault::Store(batch.refuse_corrupt(observed))),
+            };
+            let median_timestamp = shekyl_chain_rules::mtp_median_at(&view, connecting)?;
+            Ok(ChainFacts {
+                connecting,
+                previous,
+                curve_tree_root,
+                parent_coins_generated,
+                total_burned,
+                tx_volume,
+                median_timestamp,
+            })
+        })
     }
 }
 

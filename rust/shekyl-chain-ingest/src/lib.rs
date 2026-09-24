@@ -80,6 +80,8 @@ mod mutation_tests;
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod scenario;
 #[cfg(feature = "pipeline")]
 pub mod schedule;
 #[cfg(feature = "pipeline")]
@@ -96,7 +98,8 @@ mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    Applied, Apply, Connector, ConnectorArgs, Digest, HashAt, Rewind, Rewound, RunEnd, RunFault,
+    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Rewind, Rewound, RunEnd,
+    RunFault, TemplateFacts,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "pipeline")]

@@ -98,6 +98,14 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = 
 # The rules crate's fixtures — MockSubstrate, the always-satisfying
 # longhash — for pipeline tests. Dev-dependency edge only.
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# The block producer the scenario driver (`scenario.rs`, test-only) builds
+# candidates with — the production template over the production stack
+# (CHAIN_RULES_SLICE_6.md §5.3). Dev-dependency: the driver is a test
+# instrument; the template crate's production consumer is E3's handler.
+shekyl-block-template = { path = "../shekyl-block-template" }
+# The driver's miner keys (an Edwards spend key, a hybrid KEM keypair).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 # Planting a corrupt row for the SI-10 path.
 redb = { workspace = true }
 # The mutation family's seed-sensitive mock longhash (`keccak256(blob ‖ seed)`,

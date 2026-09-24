@@ -200,6 +200,9 @@ pub struct Template {
     pub total_fees: AtomicUnits,
     /// The miner's share of the fees after the burn (CEN-F17).
     pub miner_fee_income: AtomicUnits,
+    /// The fees destroyed by the burn (CEN-F17's `actually_destroyed`) —
+    /// what connect records as this block's `burned`.
+    pub fees_burned: AtomicUnits,
 }
 
 /// Why a context yields no template. Every arm is a *caller* condition —
@@ -358,6 +361,7 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
         miner_emission: paid.miner_emission,
         total_fees,
         miner_fee_income: paid.miner_fee_income,
+        fees_burned: paid.fees_burned,
     })
 }
 
@@ -410,6 +414,7 @@ struct Paid {
     block_reward: AtomicUnits,
     miner_emission: AtomicUnits,
     miner_fee_income: AtomicUnits,
+    fees_burned: AtomicUnits,
 }
 
 /// Price the reward at `block_weight` and pay it in a coinbase.
@@ -454,6 +459,7 @@ fn price_and_pay(
         block_reward: AtomicUnits::from_raw(block_reward),
         miner_emission: AtomicUnits::from_raw(split.miner_emission),
         miner_fee_income: AtomicUnits::from_raw(burn.miner_fee_income),
+        fees_burned: AtomicUnits::from_raw(burn.actually_destroyed),
     })
 }
 

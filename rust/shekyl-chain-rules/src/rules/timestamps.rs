@@ -83,6 +83,14 @@ pub(crate) struct MtpWindow {
 }
 
 impl MtpWindow {
+    /// The padded median itself — `check_timestamp_rule`'s second return,
+    /// read with the candidate as its own clock so neither leg can fire.
+    fn median(&self) -> Timestamp {
+        let (_verdict, median) =
+            check_timestamp_rule(self.genesis, &self.preceding, self.genesis, self.genesis);
+        median
+    }
+
     /// Whether `candidate_ts` is strictly above this window's padded median
     /// — the MTP half of the one implementation, the FTL half neutralised by
     /// passing the candidate as its own clock (`ts − ts = 0 ≤ FTL`).
@@ -153,6 +161,27 @@ impl C3 {
         }
         Ok(Some(MtpWindow { preceding, genesis }))
     }
+}
+
+/// CEN-C2's operand at `connecting`: the padded median of the CEN-C3
+/// window, `None` at genesis. **Public for one reason** (E6 slice 6,
+/// `CHAIN_RULES_SLICE_6.md` §5.3): the block producer claims the least
+/// timestamp the chain admits, `max(now, median + 1)`, and the median it
+/// claims against is *this one* — read here, not from a second copy of the
+/// right-padded eleven-block definition. Coverage stays with [`C3`]; this
+/// is the definition alone.
+///
+/// # Errors
+///
+/// The view's fault on a read.
+pub fn mtp_median_at<'id, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+) -> Result<Option<Timestamp>, V::Fault> {
+    // The producer's read is not a rule evaluation; the coverage it would
+    // record is discarded here rather than lying about a judgement.
+    let mut unrecorded = RuleCoverage::EMPTY;
+    Ok(C3::window(view, connecting, &mut unrecorded)?.map(|window| window.median()))
 }
 
 /// CEN-C1: the candidate's timestamp is at most `clock + FTL` — the

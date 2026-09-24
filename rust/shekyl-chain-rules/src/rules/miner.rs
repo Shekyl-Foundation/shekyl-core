@@ -113,7 +113,11 @@ pub(crate) fn economics() -> &'static EconomicParams {
 /// becomes a [`crate::RuleSet`] field when a schedule step names a different
 /// epoch. Until then a field would be copied into every rule-set mismatch
 /// and no row would read it.
-pub(crate) const EMISSION_SPLIT_EPOCH: BlockHeight = BlockHeight::from_raw(1);
+///
+/// Public since E6 slice 6 for the same one reason as [`tx_volume_window`]:
+/// the producer's split (`shekyl-block-template`) is priced at the epoch
+/// the validator will judge, read here, not restated.
+pub const EMISSION_SPLIT_EPOCH: BlockHeight = BlockHeight::from_raw(1);
 
 // The census pin is `use EMISSION_SPLIT_EPOCH as _`, and an unused import
 // does not count as a read. F16 is the reader. Until that call exists, the
@@ -495,49 +499,71 @@ fn priced(emission: Result<u64, shekyl_economics::EmissionError>) -> u64 {
 }
 
 impl F20 {
-    /// `(Σ tx_hashes.len() over blocks [h − n, h − 1], n)` with `n =
-    /// min(h, W)`, from two prefix sums: `ctc(h − 1) − ctc(h − 1 − n)`,
-    /// the lower term `0` when the window reaches genesis. `(0, 0)` at
-    /// height 0. The window `W` is `shekyl_economics::TX_VOLUME_WINDOW`
-    /// (720), the constant the C++ `get_tx_volume_window` reads.
+    /// [`tx_volume_window`], recorded as evaluated.
     fn window<'id, V: ChainView<'id>>(
         view: &V,
         connecting: BlockHeight,
         coverage: &mut RuleCoverage,
     ) -> Result<TxVolume, Fault<V::Fault>> {
         coverage.insert(Self::ROW);
-        let h = connecting.to_raw();
-        let Some(parent) = h.checked_sub(1) else {
-            return Ok(TxVolume::window(0, 0));
-        };
-        let blocks = h.min(TX_VOLUME_WINDOW);
-        let upper = recorded(view, BlockHeight::from_raw(parent))
+        tx_volume_window(view, connecting)
             .map_err(Fault::View)?
-            .cumulative_tx_count;
-        // `h >= blocks`, so `h - blocks` is the first height in the window;
-        // its predecessor's prefix sum is the lower term, `0` when the
-        // window starts at genesis.
-        let first_in_window = h - blocks;
-        let lower = match first_in_window.checked_sub(1) {
-            None => 0,
-            Some(before) => {
-                recorded(view, BlockHeight::from_raw(before))
-                    .map_err(Fault::View)?
-                    .cumulative_tx_count
-            }
-        };
-        // A prefix sum is non-decreasing along a conforming chain (the
-        // store folds it under SI-8). A decrease is not a small window, it
-        // is a store that does not hold what it claims — a fault, never a
-        // saturated zero that `calc_release_multiplier` would price as a
-        // dormant chain.
-        let sum = upper
-            .checked_sub(lower)
-            .ok_or(Fault::Corrupt(Corrupt::TxCountNotMonotone {
-                at: BlockHeight::from_raw(parent),
-            }))?;
-        Ok(TxVolume::window(sum, blocks))
+            .map_err(Fault::Corrupt)
     }
+}
+
+/// CEN-F20's operand: `(Σ tx_hashes.len() over blocks [h − n, h − 1], n)`
+/// with `n = min(h, W)`, from two prefix sums: `ctc(h − 1) − ctc(h − 1 −
+/// n)`, the lower term `0` when the window reaches genesis. `(0, 0)` at
+/// height 0. The window `W` is `shekyl_economics::TX_VOLUME_WINDOW` (720),
+/// the constant the C++ `get_tx_volume_window` reads.
+///
+/// **Public for one reason** (E6 slice 6, `CHAIN_RULES_SLICE_6.md` §5.3):
+/// the block producer prices its coinbase at the same volume operand the
+/// validator judges it by — `shekyl-block-template` takes the window as a
+/// context field, and the caller composing that context reads it *here*
+/// rather than from a second copy of the two-prefix-sum definition. A
+/// producer with its own copy is the divergence CEN-F18 would later catch
+/// one block too late. The rule's coverage insert stays with
+/// [`F20`]; this is the definition alone.
+///
+/// Two positions, because they are two things: the outer `Err` is the
+/// view's fault; the inner `Err` is [`Corrupt::TxCountNotMonotone`] — the
+/// prefix sum decreased, a store that does not hold what it claims, never
+/// a saturated zero. A definition raises no stale premise, so the type
+/// says so instead of a caller matching an arm that cannot occur.
+///
+/// # Errors
+///
+/// The view's fault on a read (outer).
+pub fn tx_volume_window<'id, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+) -> Result<Result<TxVolume, Corrupt>, V::Fault> {
+    let h = connecting.to_raw();
+    let Some(parent) = h.checked_sub(1) else {
+        return Ok(Ok(TxVolume::window(0, 0)));
+    };
+    let blocks = h.min(TX_VOLUME_WINDOW);
+    let upper = recorded(view, BlockHeight::from_raw(parent))?.cumulative_tx_count;
+    // `h >= blocks`, so `h - blocks` is the first height in the window;
+    // its predecessor's prefix sum is the lower term, `0` when the
+    // window starts at genesis.
+    let first_in_window = h - blocks;
+    let lower = match first_in_window.checked_sub(1) {
+        None => 0,
+        Some(before) => recorded(view, BlockHeight::from_raw(before))?.cumulative_tx_count,
+    };
+    // A prefix sum is non-decreasing along a conforming chain (the store
+    // folds it under SI-8). A decrease is not a small window, it is a
+    // store that does not hold what it claims — a fault, never a saturated
+    // zero that `calc_release_multiplier` would price as a dormant chain.
+    Ok(match upper.checked_sub(lower) {
+        Some(sum) => Ok(TxVolume::window(sum, blocks)),
+        None => Err(Corrupt::TxCountNotMonotone {
+            at: BlockHeight::from_raw(parent),
+        }),
+    })
 }
 
 #[cfg(test)]
