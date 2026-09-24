@@ -14,7 +14,6 @@ DRS-BENCH redb arm: add when a redb-backed `shekyld` build target exists that re
 DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.
 `tx_extra` `0x0B` (archival attestation) has a consensus reader and no producer.
 Attestation verify must move behind PoW before credit-wire population activates.
-Dead hard-fork version dispatch survives from genesis (rule 60).
 Bond admission's shard predicate — RULED, unbuilt; three design questions owed to E4 / S-ARCH.
 `PDM` propagation sweep — DISCHARGED 2026-09-19, four PRs in the ruled order, one per document: `docs/pdm-sweep-psl` (PRINCIPAL_STAKE_LIFECYCLE → LIVING CONTRACT), `docs/pdm-sweep-acm` (ARCHIVAL_CHALLENGE_MECHANISM on the tx unit), `docs/pdm-sweep-v3sa` (V3_STAKER_ARCHIVAL contracted, 1,546 → 1,000 lines), `docs/pdm-sweep-ctc` (CURVE_TREE_CLIENT §7 resolved in two halves); PRs #795, #796, #797, #798 in that order (#798 merges last; it carries this line). Each carries `PDM-Q6` / `PDM-Q12` in its current-tense body, not as an appended banner; `grep -c PDM` at the closing pin: PSL 9, ACM 24, V3SA 25, CTC 21. The row's original text follows as the record of what was found.
 `PRINCIPAL_STAKE_LIFECYCLE.md` §4a PR-row table: the dated UPDATE / Corrected chains accrete instead of resolving; PR-P4's row is the extreme case.
@@ -78,7 +77,6 @@ GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in` single-st
 Block-height representation unification at the WI-2 anchoring seam
 Alt-chain supply accumulation advances by the coinbase, not the emission subsidy.
 Should the genesis block header carry a real mint timestamp instead of 0?
-Tx version min/max is written twice and disagrees in form.
 The pool admits duplicate archival unique-keys that only fail at connect.
 External cryptographic review of the `FcmpMembershipOnly` soundness [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md)
 Emission leg: verify reward→identity binding is structural, not [`design/ARCHIVAL_FIREWALL_GATE6.md`](./design/ARCHIVAL_FIREWALL_GATE6.md)

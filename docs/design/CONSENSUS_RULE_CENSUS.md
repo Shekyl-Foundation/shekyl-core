@@ -609,15 +609,17 @@ walking the live function will meet them. Rule-60 material throughout.
    path uses the 4-arg form (`add_new_block` :6655, promotion :1438,
    rollback :1370). Both walks converged: one live rule set, one dead
    forwarder.
-5. **HF version dispatch is dead from genesis** (detail in the archived
-   CEN §5.4, carried by reference — the enumeration there was verified by
-   the seven-re-reader pass): all eleven `HF_VERSION_*` constants are 1;
-   every `>=` arm always-taken, every else-arm unreachable; four constants
-   wholly unreferenced in production code; the
-   `should_ask_for_pruned_data` refusal (`HF_VERSION_SMALLER_BP+1` →
-   `UINT64_MAX`) means this node never requests pruned spans — a dead
-   dispatch with a live behavioral consequence. Live FOLLOWUPS row
-   (owner repointed here).
+5. **HF version-dispatch arms deleted 2026-09-24.** At the seven-re-reader
+   pass all eleven `HF_VERSION_*` constants were 1, every `>=` arm was
+   always taken, four constants were unreferenced, and
+   `should_ask_for_pruned_data` refused pruned spans because
+   `HF_VERSION_SMALLER_BP+1` overflowed. That function is already gone.
+   The unreferenced macros and the unreachable transaction-version and
+   weight-limit arms are deleted. What remains are version-1 thresholds
+   still used as height-lookup keys and as
+   `major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` guards, plus the
+   miner-vote window, kept 2026-09-23 (rule 75). `HardFork::add`'s ignored
+   reject is the open residue.
 6. **`txin_to_script` / `txin_to_scripthash`** exist only to be rejected
    (CEN-H5) — variant fossils. **Unused ring-era locals** in
    `check_tx_inputs` (`sig_index` :3444, `pubkeys` :3532) ride along.
