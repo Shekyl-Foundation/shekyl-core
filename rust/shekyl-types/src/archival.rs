@@ -47,6 +47,10 @@
 //!   The retention crate derives the same number from the consensus
 //!   constants file and const-asserts equality with this pin, so the
 //!   derivation and the frozen value cannot drift apart silently.
+//! - [`MAX_ATTESTATION_WITNESS_BYTES`] — the exact maximum of a canonical
+//!   attestation witness. The retention crate derives the same product from
+//!   the witness layout and const-asserts equality; the wire twin
+//!   `PQC_HYBRID_SINGLE_SIG_LEN` const-asserts the signature factor.
 //!
 //! The persisted record these words compose into — `BondRecord` — is the
 //! daemon store's own (`shekyl-chain-store::codec::archival`), as
@@ -94,6 +98,38 @@ pub const MAX_CLAIMED_EPOCH_ENTRIES: usize = 32;
 /// file and const-asserts it equals this pin; [`MAX_CLAIMED_EPOCH_ENTRIES`]
 /// is `W + 6`.
 pub const MAX_CLAIM_AGE_W_EPOCHS: u64 = 26;
+
+/// Records in one block's attestation witness. Genesis-frozen.
+/// `shekyl-archival-retention::MAX_ATTESTATION_RECORDS` const-asserts equality.
+pub const MAX_ATTESTATION_RECORDS: usize = 256;
+
+/// `count` prefix of a canonical attestation witness, in bytes.
+pub const ATTESTATION_WITNESS_COUNT_LEN: usize = 8;
+
+/// Nonce on one witness entry.
+pub const ATTESTATION_WITNESS_NONCE_LEN: usize = 32;
+
+/// Anchor height on one witness entry.
+pub const ATTESTATION_WITNESS_ANCHOR_LEN: usize = 8;
+
+/// One hybrid signature on a witness entry. Twin of
+/// `HybridSignature::CANONICAL_LEN` and `PQC_HYBRID_SINGLE_SIG_LEN`; both
+/// const-assert equality, so this factor cannot drift from the signature.
+pub const ATTESTATION_WITNESS_SIGNATURE_LEN: usize = 3385;
+
+/// Exact maximum of a canonical attestation witness:
+/// count prefix, then [`MAX_ATTESTATION_RECORDS`] entries of
+/// nonce ‖ anchor height ‖ signature.
+///
+/// The retention crate derives the same product from
+/// `HybridSignature::CANONICAL_LEN` and const-asserts equality. The daemon
+/// store refuses a longer blob before it copies one. A hand-picked slack
+/// figure above the product would be free padding on every block.
+pub const MAX_ATTESTATION_WITNESS_BYTES: usize = ATTESTATION_WITNESS_COUNT_LEN
+    + MAX_ATTESTATION_RECORDS
+        * (ATTESTATION_WITNESS_NONCE_LEN
+            + ATTESTATION_WITNESS_ANCHOR_LEN
+            + ATTESTATION_WITNESS_SIGNATURE_LEN);
 
 // ---------------------------------------------------------------------------
 // ShardSet

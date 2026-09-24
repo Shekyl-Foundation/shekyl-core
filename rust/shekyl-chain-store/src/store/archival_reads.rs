@@ -63,10 +63,11 @@
 
 use redb::ReadableTable;
 use shekyl_chain_rules::AtHeight;
+use shekyl_store_codec::{BlobKind, CodecError};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
-use crate::codec::{BondRecord, RMarket, SigmaWorkMilli};
+use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli};
 use crate::ids::ServeCreditKey;
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_R_MARKET,
@@ -84,6 +85,8 @@ const R_MARKET: &str = "archival_r_market";
 const SIGMA_WORK: &str = "archival_sigma_work";
 /// The `archival_budget` cell as faults name it.
 const BUDGET: &str = "archival_budget";
+/// The `archival_attestation_witness` cell as faults name it.
+const WITNESS: &str = "archival_attestation_witness";
 
 /// How many pass bits a `(persona, shard, epoch)` recorded — `PC-D5`'s
 /// enumeration over the pair-epoch prefix. `u32` in the C++ (`PC-D5`'s
@@ -128,15 +131,7 @@ pub(super) fn bond_record<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
 ) -> Result<Option<BondRecord>, ReadFault> {
-    let table = txn.table(ARCHIVAL_BOND)?;
-    let Some(guard) = table.get(*persona.as_bytes())? else {
-        return Ok(None);
-    };
-    guard
-        .value()
-        .decode()
-        .map(Some)
-        .map_err(|cause| undecodable(BOND, cause))
+    chain_reads::cell(txn, ARCHIVAL_BOND, *persona.as_bytes(), BOND)
 }
 
 /// Whether `persona` has a bond record — SI-15's precondition, read without
@@ -196,8 +191,9 @@ pub(super) fn served_shards<T: ReadTables>(
     let table = txn.table(ARCHIVAL_SERVE_CREDIT)?;
     let persona_hi = *ServeCreditKey::persona_range(*persona).end();
     let mut out = Vec::new();
-    // Seek to the persona's first row; then, per shard found, take the
-    // shard's last row and seek to the first key past that shard.
+    // Seek to the persona's first row; then, per shard found, take that
+    // shard's last row and seek to the first key of the next shard. A gap
+    // between shard ids is one `range.next()`, not a walk of the gap.
     let mut from = *ServeCreditKey::persona_range(*persona).start();
     loop {
         let Some(row) = table.range(from..=persona_hi)?.next() else {
@@ -207,13 +203,12 @@ pub(super) fn served_shards<T: ReadTables>(
         let last = table
             .range(ServeCreditKey::shard_range(*persona, shard))?
             .next_back()
-            .expect("the shard's first row is in its own range")?;
+            .expect("the shard's first row is inside its own range")?;
         out.push(ServedShard {
             shard,
             last_served: ServeCreditKey::from_key(last.0.value()).epoch(),
         });
-        // The hop: the first possible key of the next shard. A shard id of
-        // u64::MAX has no successor, and its range ended at persona_hi.
+        // No successor shard id: this shard is the persona's last possible.
         let Some(next_shard) = shard.to_raw().checked_add(1) else {
             break;
         };
@@ -262,15 +257,12 @@ pub(super) fn r_market<T: ReadTables>(
     shard: ShardId,
     epoch: SettlementEpoch,
 ) -> Result<Option<RMarket>, ReadFault> {
-    let table = txn.table(ARCHIVAL_R_MARKET)?;
-    let Some(guard) = table.get((shard.to_raw(), epoch.to_raw()))? else {
-        return Ok(None);
-    };
-    guard
-        .value()
-        .decode()
-        .map(Some)
-        .map_err(|cause| undecodable(R_MARKET, cause))
+    chain_reads::cell(
+        txn,
+        ARCHIVAL_R_MARKET,
+        (shard.to_raw(), epoch.to_raw()),
+        R_MARKET,
+    )
 }
 
 /// **A7.** `archival_sigma_work[epoch]` — the frozen `Σwork(E)`. `None` is an
@@ -295,7 +287,9 @@ pub(super) fn budget<T: ReadTables>(
 /// **A10.** A recorded block's attestation witness bytes. `AboveTip` for a
 /// height the chain has not reached; `Recorded(None)` for a recorded block
 /// whose attestation set was empty (the writer stores no row for it);
-/// `Recorded(Some(bytes))` otherwise. The store does not parse the witness
+/// `Recorded(Some(bytes))` for a row [`AttestationWitnessBytes`] accepts
+/// (non-empty, within [`MAX_ATTESTATION_WITNESS_BYTES`](shekyl_types::archival::MAX_ATTESTATION_WITNESS_BYTES)).
+/// An empty or over-cap row is SI-7. The store does not parse the witness
 /// (`shekyl-archival-retention::attestation_wire` does).
 pub(super) fn attestation_witness_at<T: ReadTables>(
     txn: &T,
@@ -310,5 +304,18 @@ pub(super) fn attestation_witness_at<T: ReadTables>(
     let Some(guard) = table.get(h)? else {
         return Ok(AtHeight::Recorded(None));
     };
-    Ok(AtHeight::Recorded(Some(guard.value().bytes().to_vec())))
+    let bytes = guard.value().bytes();
+    // `Blob::bytes` does not run the kind's check. An empty row is the
+    // absence this read already spells as `Recorded(None)`; a present empty
+    // or over-cap row is a value the writer is not allowed to store.
+    AttestationWitnessBytes::well_formed(bytes).map_err(|reason| {
+        undecodable(
+            WITNESS,
+            CodecError::Invalid {
+                codec: AttestationWitnessBytes::NAME,
+                reason,
+            },
+        )
+    })?;
+    Ok(AtHeight::Recorded(Some(bytes.to_vec())))
 }

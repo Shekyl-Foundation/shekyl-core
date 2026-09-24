@@ -277,15 +277,21 @@ tree).** The shared *vocabulary* moved down as `SAR-Q2` ruled —
 `shekyl_types::archival` now owns `ShardSet`, `HoldingsKind`,
 `HoldingsDescriptor`, `BadInterval` and the four genesis-frozen caps
 (`MAX_HOLDINGS_SHARDS`, `MAX_BOND_BAD_INTERVALS`, `MAX_CLAIMED_EPOCH_ENTRIES`,
-`MAX_CLAIM_AGE_W_EPOCHS`), the retention crate re-exports them and keeps every
-fold (its own `MAX_CLAIM_AGE_W` and cap are const-asserted equal to the
-`shekyl-types` owners; `HoldingsKind::last_served_scan` became the extension
-trait `HoldingsKindScan`, because a fold-shaped method cannot ride a
+`MAX_CLAIM_AGE_W_EPOCHS`), plus the attestation-witness byte cap
+(`MAX_ATTESTATION_WITNESS_BYTES`, the layout product, const-asserted equal
+to the retention crate's derivation and to `PQC_HYBRID_SINGLE_SIG_LEN`).
+The retention crate re-exports the vocabulary and keeps every fold (its own
+`MAX_CLAIM_AGE_W` and cap are const-asserted equal to the `shekyl-types`
+owners; `HoldingsKind::last_served_scan` became the extension trait
+`HoldingsKindScan`, because a fold-shaped method cannot ride a
 `shekyl-types` word). `PersonaId` is the existing `PCanonicalId`; `ShardId`
 and `SettlementEpoch` already existed there and gained `Canonical` impls in
 `shekyl-store-codec`. **The record itself did not move to `shekyl-types`:**
-`BondRecord`, `Holdings`, `HeldShard`, `RMarket`, `SigmaWorkMilli` and
-`AttestationWitnessBytes` live in `shekyl-chain-store::codec::archival`,
+`BondRecord`, `Holdings` (`ShardSet` carries a private `HeldShards` list,
+so only `Holdings::shard_set` can build one), `HeldShard`,
+`FirstPayingHeight` (a paying height cannot be zero), `RMarket`,
+`SigmaWorkMilli` and `AttestationWitnessBytes` live in
+`shekyl-chain-store::codec::archival`,
 because `bonded_total` is an `AtomicUnits` and `shekyl-units` is
 `shekyl-types`' sibling, not its dependency — the record cannot be spelled
 below the crate that owns its amount without adding an edge rule 18 did not
@@ -611,6 +617,7 @@ port — so the docs commit is the third. `SI-14` landed `ruled` and `SI-15`
 
 | Date | Entry |
 |---|---|
+| 2026-09-24 | **Review of the read half, before merge.** `Holdings::ShardSet` carries a private list: `Holdings::shard_set` is the constructor and it calls `ShardSet::new`, so a duplicate or over-cap holding cannot be built and `descriptor` no longer panics on a value the type accepts. `first_paying_emission_height` is `Option<FirstPayingHeight>`; height 0 is the C++ unset sentinel and is refused at decode, and the type cannot hold it. `attestation_witness_at` runs `AttestationWitnessBytes::well_formed` (non-empty, at most `MAX_ATTESTATION_WITNESS_BYTES`) and an ill-formed row is SI-7. `served_shards` seeks to the next shard id; it does not rescan the persona prefix. |
 | 2026-09-23 | **As built — two deviations from the ruled defaults, disclosed by the increment's docs commit (rule 22).** **(1) The record's home.** `SAR-Q2` moved the shared vocabulary to `shekyl-types` and that landed as ruled; §3.4's table also put `BondRecord` there by default, and it did not go: `bonded_total` is an `AtomicUnits`, `shekyl-units` is `shekyl-types`' sibling, and rule 18's own test ("both crates need it") is not met while the daemon store is the record's only reader. `BondRecord`, `Holdings`, `HeldShard` and the three close-row scalars live in `shekyl-chain-store::codec::archival`; reopens on slice 8 needing the record on `ChainView` (§3.4 as-built). **(2) The count.** "Seven tables" was six tables and one `properties` cell; the snapshots (`tables.snap` 28 → 22 `Unshaped`, `properties.snap` 6 → 7) are the count of record (§4). **Two smaller corrections the tree made to the plan:** SI-14 lands `ruled`, not `built` — the codec refuses what it would observe, so SI-7 is its arm and no variant is minted for it; and its "in shard-id order" clause is struck, the v7 record preserving insertion order and the corpus proving it (§5). **What the corpus bought (carry 1 of PR #840):** the claimed-set span rule (`last − first ≤ W`), absent from the first Rust cut and present in the C++ encoder's throw — a rule the self round trip could not have found. |
 | 2026-09-23 | **Three carries into the increment** (maintainer, PR #840, after the rulings): **(1)** the v7 cross-check corpus — real `ArchivalBondValue` blobs decoded by the C++ reader, asserted equal to the Rust `BondRecord` (§7 commit 1/2), because a self round trip proves self-consistency and not identity, and the C++ decoder E4 deletes is the only oracle; **(2)** the schema gate's arming verified in the failing direction, not assumed (§8); **(3)** S-PRUNE's dependency on `PDM-Q11`'s provisional `D_max` moved onto that skeleton's banner (`DRS_E1_SPRUNE.md`), because a watermark fixed before the constant is confirmed is picked by implementation convenience — R8's shape. |
 | 2026-09-23 | **Round 1 RULED** (maintainer, PR #840). Q1, Q2, Q4, Q5 held (Q2 an application of rule 18, not a ruling; Q4 because `EmissionEpochSource` already exists and composition is the caller's). Q3 approved with the word checked: same *semantics*, not byte-compatible. Q6 approved, with why the `Option` is load-bearing regardless of slice 8's answer. **Q7 amended: defer the port, not the row** — CEN-L16 minted in this PR; the R8 sweep gap and its two siblings (slice 4 S25, slice 5 shard-set bound) folded into one census-lane question on the existing FOLLOWUPS row. **Process note acted on:** the §5 row's eighteen-day stale gate is the `DEFERRED_DOCS` self-expiry shape applied to plan-row blockers; measured over `docs/design/*.md` table rows — 119 blockers, 45 naming an identifier a gate could resolve, 74 prose — so it is a wish until blockers take rule 22's `blocked on <ID> — falsify by <check>` form; a FOLLOWUPS row proposes the lint (owner `DAEMON_REDB_STORE.md` §5). |

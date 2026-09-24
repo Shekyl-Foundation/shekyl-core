@@ -17,15 +17,15 @@ use std::path::Path;
 
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
 use shekyl_types::archival::{
-    BadInterval, HoldingsKind, MAX_BOND_BAD_INTERVALS, MAX_CLAIMED_EPOCH_ENTRIES,
-    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+    BadInterval, HoldingsKind, MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS,
+    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
 };
 use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use super::archival::{
-    AttestationWitnessBytes, BondRecord, HeldShard, Holdings, HoldingsError, RMarket,
-    SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+    AttestationWitnessBytes, BondRecord, FirstPayingHeight, HeldShard, Holdings, HoldingsError,
+    RMarket, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
 };
 
 fn invalid(reason: &'static str) -> CodecError {
@@ -112,7 +112,7 @@ fn the_record_round_trips_at_every_cap() {
         claimed_settlement_epochs: (2..=2 + MAX_CLAIM_AGE_W_EPOCHS)
             .map(SettlementEpoch::from_raw)
             .collect(),
-        first_paying_emission_height: Some(BlockHeight::from_raw(30_000)),
+        first_paying_emission_height: FirstPayingHeight::new(BlockHeight::from_raw(30_000)),
         ..base()
     });
 
@@ -260,6 +260,21 @@ fn the_decode_refuses_what_the_type_makes_unrepresentable() {
         BondRecord::decode(&bytes),
         Err(invalid("trailing bytes after the record"))
     );
+
+    // Presence bit set, height 0: the C++ unset sentinel spelled as a payment.
+    let mut bytes = base().encode();
+    assert_eq!(bytes.last().copied(), Some(0));
+    *bytes
+        .last_mut()
+        .expect("the record ends with the presence byte") = 1;
+    bytes.extend_from_slice(&BlockHeight::ZERO.to_raw().to_le_bytes());
+    assert_eq!(
+        BondRecord::decode(&bytes),
+        Err(invalid(
+            "first paying height 0 is the unset sentinel, not a payment"
+        ))
+    );
+    assert!(FirstPayingHeight::new(BlockHeight::ZERO).is_none());
 }
 
 #[test]
@@ -309,6 +324,13 @@ fn the_close_row_scalars_are_the_raw_le_word_and_the_witness_refuses_empty() {
     ));
     assert!(AttestationWitnessBytes::well_formed(&[]).is_err());
     assert!(AttestationWitnessBytes::well_formed(&[1]).is_ok());
+    assert!(
+        AttestationWitnessBytes::well_formed(&vec![1u8; MAX_ATTESTATION_WITNESS_BYTES]).is_ok()
+    );
+    assert!(
+        AttestationWitnessBytes::well_formed(&vec![1u8; MAX_ATTESTATION_WITNESS_BYTES + 1])
+            .is_err()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -359,8 +381,8 @@ fn record_from_v7_fields(f: &serde_json::Value) -> BondRecord {
         }
     };
     let first_paying = match u64_of(&f["first_paying_emission_height"]) {
-        0 => None,
-        h => Some(BlockHeight::from_raw(h)),
+        h if h == BlockHeight::ZERO.to_raw() => None,
+        h => FirstPayingHeight::new(BlockHeight::from_raw(h)),
     };
     BondRecord {
         hybrid_pubkey: hex_bytes(&f["hybrid_pubkey_hex"]),
@@ -470,7 +492,7 @@ fn the_v7_corpus_maps_onto_the_record_without_loss() {
         assert_eq!(
             record
                 .first_paying_emission_height
-                .map_or(0, BlockHeight::to_raw),
+                .map_or(BlockHeight::ZERO.to_raw(), FirstPayingHeight::to_raw),
             u64_of(&f["first_paying_emission_height"]),
             "{name}: the 0 sentinel is None and nothing else is"
         );

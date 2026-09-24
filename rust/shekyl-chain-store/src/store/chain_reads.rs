@@ -67,6 +67,8 @@
 //! two notions of a block's identity in one store is SCR-7, and this body
 //! has one.
 
+use std::borrow::Borrow;
+
 use redb::{Key, ReadTransaction, ReadableTable, TableDefinition, Value, WriteTransaction};
 use shekyl_chain_rules::AtHeight;
 use shekyl_types::KeyImage;
@@ -241,18 +243,26 @@ pub(super) fn tip_of<T: ReadTables>(txn: &T) -> Result<Option<(u64, BlockInfo)>,
     Ok(Some((height.value(), info)))
 }
 
-/// One cell of a `u64 → Coded<V>` table, decoded under **the table's**
+/// One cell of a `K → Coded<V>` table, decoded under **the table's**
 /// codec: `V` is inferred from the definition, never named independently,
 /// so table identity and codec identity are one inference (`codec::shape`
 /// module docs, *Two guards*). Absent is `Ok(None)` — **the caller
 /// classifies it** against the tip, because whether an absent row is a
 /// hole is not this function's to know.
-pub(super) fn cell<T: ReadTables, V: Canonical + 'static>(
+pub(super) fn cell<T, K, V>(
     txn: &T,
-    table: TableDefinition<'static, u64, Coded<V>>,
-    key: u64,
+    table: TableDefinition<'static, K, Coded<V>>,
+    key: K,
     cell_name: &'static str,
-) -> Result<Option<V>, ReadFault> {
+) -> Result<Option<V>, ReadFault>
+where
+    T: ReadTables,
+    K: Key + 'static,
+    // `ReadableTable::get` takes `Borrow<K::SelfType<'a>>`. For the keys
+    // this store uses, that associated type is `K`.
+    for<'a> K: Borrow<K::SelfType<'a>>,
+    V: Canonical + 'static,
+{
     let table = txn.table(table)?;
     let Some(guard) = table.get(key)? else {
         return Ok(None);

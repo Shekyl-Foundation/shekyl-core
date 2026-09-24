@@ -74,8 +74,8 @@ mod snapshot_tests;
 mod archival_tests;
 
 pub use archival::{
-    AttestationWitnessBytes, BondRecord, HeldShard, Holdings, HoldingsError, RMarket,
-    SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+    AttestationWitnessBytes, BondRecord, FirstPayingHeight, HeldShard, HeldShards, Holdings,
+    HoldingsError, RMarket, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
 };
 pub(crate) use chain::stored_timelock;
 pub use chain::{

@@ -114,10 +114,11 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, BlockInfo, BondRecord, Canonical, Coded, CoverageGaps, CurveTreeState, HeldShard,
-    Holdings, LayerHash, LeafCount, OutKey, OutTx, PassedThroughFacts, ProbeCell, PropertyCell,
-    RMarket, RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SigmaWorkMilli, TreeDepth,
-    TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, BlockInfo, BondRecord, Canonical, Coded, CoverageGaps, CurveTreeState,
+    FirstPayingHeight, HeldShard, Holdings, LayerHash, LeafCount, OutKey, OutTx,
+    PassedThroughFacts, ProbeCell, PropertyCell, RMarket, RuleSetInForce, SchemaVersion,
+    SettlementEpochBlocks, SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
+    PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -495,7 +496,9 @@ impl Fixtures for BondRecord {
                         SettlementEpoch::from_raw(4),
                         SettlementEpoch::from_raw(6),
                     ],
-                    first_paying_emission_height: Some(BlockHeight::from_raw(50_000)),
+                    first_paying_emission_height: FirstPayingHeight::new(BlockHeight::from_raw(
+                        50_000,
+                    )),
                     ..base
                 },
             ),

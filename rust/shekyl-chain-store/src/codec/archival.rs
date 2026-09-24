@@ -27,9 +27,11 @@
 //! - [`Holdings`] is one sum type. A held shard and its add-epoch are one
 //!   [`HeldShard`]; the parallel-vector desync the C++ made FATAL at
 //!   `db_lmdb.cpp:4943` is unrepresentable (**SI-14**).
-//! - `first_paying_emission_height` is an [`Option`]. The C++ spelled "not
-//!   yet paid" as height `0` and documented why `0` could not be a real
-//!   value (`shekyl_types.h`, the field's comment); the type says it.
+//! - `first_paying_emission_height` is an [`Option<FirstPayingHeight>`].
+//!   The C++ spelled "not yet paid" as height `0` and documented why `0`
+//!   could not be a real value (`shekyl_types.h`, the field's comment).
+//!   [`FirstPayingHeight`] refuses that sentinel, so a paid record at
+//!   genesis cannot be stored.
 //! - Every count is bounded **before** it sizes an allocation, by the cap
 //!   the consensus constant names ([`MAX_HOLDINGS_SHARDS`],
 //!   [`MAX_BOND_BAD_INTERVALS`], [`MAX_CLAIMED_EPOCH_ENTRIES`]) and by the
@@ -70,8 +72,9 @@
 
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
 use shekyl_types::archival::{
-    BadInterval, HoldingsDescriptor, HoldingsKind, ShardSet, MAX_BOND_BAD_INTERVALS,
-    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+    BadInterval, HoldingsDescriptor, HoldingsKind, ShardSet, ShardSetError,
+    MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
 };
 use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -101,18 +104,45 @@ pub struct HeldShard {
     pub add_epoch: SettlementEpoch,
 }
 
+/// A bond's compact holdings: one [`HeldShard`] per shard.
+///
+/// The list is private. [`Holdings::shard_set`] is the constructor, and it
+/// is the only one: a duplicate or an over-cap list cannot be spelled.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldShards {
+    pairs: Vec<HeldShard>,
+}
+
+impl HeldShards {
+    /// The pairs, in insertion order.
+    #[must_use]
+    pub fn as_slice(&self) -> &[HeldShard] {
+        &self.pairs
+    }
+}
+
+impl core::ops::Deref for HeldShards {
+    type Target = [HeldShard];
+
+    fn deref(&self) -> &[HeldShard] {
+        &self.pairs
+    }
+}
+
 /// A bond's holdings as persisted (gate-4 §3.4.1).
 ///
 /// The C++ kept a kind byte plus `held_shard_ids` and `shard_add_epochs`,
 /// "index-parallel", coupled by one count in the codec and by call-site
 /// discipline in memory, with a FATAL on desync. Here a compact holding is a
 /// list of [`HeldShard`] pairs and a complete tree carries nothing: the two
-/// lengths cannot disagree because there is one list (**SI-14**).
+/// lengths cannot disagree because there is one list (**SI-14**). The
+/// compact list is a [`HeldShards`], so the duplicate and cap checks in
+/// [`Holdings::shard_set`] are the only way to build one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Holdings {
     /// An explicit, bounded, duplicate-free list — insertion order
     /// preserved, as the wire's [`ShardSet`] is.
-    ShardSet(Vec<HeldShard>),
+    ShardSet(HeldShards),
     /// Every shard; a foundation record. Cannot `HoldingsUpdate`.
     CompleteTree,
 }
@@ -147,26 +177,29 @@ impl core::fmt::Display for HoldingsError {
 
 impl std::error::Error for HoldingsError {}
 
+impl From<ShardSetError> for HoldingsError {
+    fn from(err: ShardSetError) -> Self {
+        match err {
+            ShardSetError::CountExceeded { got } => Self::CountExceeded { got },
+            ShardSetError::Duplicate { shard_id } => Self::Duplicate {
+                shard: ShardId::from_raw(shard_id),
+            },
+        }
+    }
+}
+
 impl Holdings {
     /// A compact holding from its pairs, refusing an over-cap or
-    /// duplicate-bearing list — the same two invariants [`ShardSet::new`]
-    /// enforces on the wire form, applied to the persisted one.
+    /// duplicate-bearing list. Uniqueness and the cap are [`ShardSet::new`]'s,
+    /// the wire form's check, applied to the shard ids of these pairs.
     ///
     /// # Errors
     ///
     /// [`HoldingsError`] naming the bound or the first duplicate.
     pub fn shard_set(held: Vec<HeldShard>) -> Result<Self, HoldingsError> {
-        if held.len() > MAX_HOLDINGS_SHARDS {
-            return Err(HoldingsError::CountExceeded { got: held.len() });
-        }
-        let mut ids: Vec<u64> = held.iter().map(|h| h.shard.to_raw()).collect();
-        ids.sort_unstable();
-        if let Some(pair) = ids.windows(2).find(|w| w[0] == w[1]) {
-            return Err(HoldingsError::Duplicate {
-                shard: ShardId::from_raw(pair[0]),
-            });
-        }
-        Ok(Self::ShardSet(held))
+        let ids = held.iter().map(|h| h.shard.to_raw()).collect::<Vec<_>>();
+        ShardSet::new(ids)?;
+        Ok(Self::ShardSet(HeldShards { pairs: held }))
     }
 
     /// The kind byte the wire and the C++ record both use.
@@ -201,8 +234,9 @@ impl Holdings {
 
     /// The wire-shaped view the retention crate's folds take: the kind and
     /// the id list (empty for a complete tree). Insertion order preserved.
-    /// Infallible: a `Holdings` was constructed under the same two
-    /// invariants, so the id list is already a [`ShardSet`].
+    ///
+    /// Infallible: [`HeldShards`] is built only by [`Self::shard_set`], which
+    /// has already run [`ShardSet::new`] on these ids.
     #[must_use]
     pub fn descriptor(&self) -> HoldingsDescriptor {
         match self {
@@ -210,12 +244,50 @@ impl Holdings {
                 kind: HoldingsKind::CompleteTree,
                 shard_ids: ShardSet::empty(),
             },
-            Self::ShardSet(held) => HoldingsDescriptor {
-                kind: HoldingsKind::ShardSetCompact,
-                shard_ids: ShardSet::new(held.iter().map(|h| h.shard.to_raw()).collect())
-                    .expect("Holdings::shard_set enforced the bound and uniqueness"),
-            },
+            Self::ShardSet(held) => {
+                let ids = held.iter().map(|h| h.shard.to_raw()).collect::<Vec<_>>();
+                HoldingsDescriptor {
+                    kind: HoldingsKind::ShardSetCompact,
+                    shard_ids: ShardSet::new(ids)
+                        .expect("HeldShards is built only after ShardSet::new"),
+                }
+            }
         }
+    }
+}
+
+/// Height of the emission that first paid a persona.
+///
+/// The C++ record stored "not yet paid" as height `0`, and documented that
+/// `0` cannot be a real payment: no emission pays before the first
+/// settlement epoch closes, which is after genesis. Absence on the record
+/// is [`Option::None`]. This type is the `Some` arm, so a paid height of
+/// zero cannot be constructed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FirstPayingHeight(BlockHeight);
+
+impl FirstPayingHeight {
+    /// A paying height. `None` when `height` is [`BlockHeight::ZERO`] — that
+    /// word is the record's absence, not a payment.
+    #[must_use]
+    pub const fn new(height: BlockHeight) -> Option<Self> {
+        if height.to_raw() == BlockHeight::ZERO.to_raw() {
+            None
+        } else {
+            Some(Self(height))
+        }
+    }
+
+    /// The height.
+    #[must_use]
+    pub const fn height(self) -> BlockHeight {
+        self.0
+    }
+
+    /// The height as a raw chain ordinal.
+    #[must_use]
+    pub const fn to_raw(self) -> u64 {
+        self.0.to_raw()
     }
 }
 
@@ -256,8 +328,8 @@ pub struct BondRecord {
     /// at-rest shape.
     pub claimed_settlement_epochs: Vec<SettlementEpoch>,
     /// Height of the first emission that paid this `P`; set once, immutable.
-    /// `None` until then — the C++ spelled that as height `0`.
-    pub first_paying_emission_height: Option<BlockHeight>,
+    /// `None` until then. Height zero is not a value of this field.
+    pub first_paying_emission_height: Option<FirstPayingHeight>,
 }
 
 impl BondRecord {
@@ -286,7 +358,7 @@ impl Canonical for BondRecord {
             Holdings::ShardSet(held) => {
                 out.push(Self::HOLDINGS_COMPACT);
                 put_count(out, held.len());
-                for h in held {
+                for h in held.iter() {
                     out.extend_from_slice(&h.shard.to_raw().to_le_bytes());
                     out.extend_from_slice(&h.add_epoch.to_raw().to_le_bytes());
                 }
@@ -390,7 +462,13 @@ impl Canonical for BondRecord {
         }
         let first_paying_emission_height = match r.u8()? {
             0 => None,
-            1 => Some(BlockHeight::from_raw(r.u64()?)),
+            1 => {
+                let height =
+                    FirstPayingHeight::new(BlockHeight::from_raw(r.u64()?)).ok_or_else(|| {
+                        r.invalid("first paying height 0 is the unset sentinel, not a payment")
+                    })?;
+                Some(height)
+            }
             _ => return Err(r.invalid("first-paying-height presence byte is neither 0 nor 1")),
         };
         if !r.is_empty() {
@@ -501,6 +579,9 @@ impl BlobKind for AttestationWitnessBytes {
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
         if bytes.is_empty() {
             return Err("an empty witness is no row, never an empty row");
+        }
+        if bytes.len() > MAX_ATTESTATION_WITNESS_BYTES {
+            return Err("attestation witness exceeds MAX_ATTESTATION_WITNESS_BYTES");
         }
         Ok(())
     }

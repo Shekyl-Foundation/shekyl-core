@@ -882,7 +882,8 @@ hash32! {
 pub mod archival;
 pub use archival::{
     BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindError, ShardSet, ShardSetError,
-    MAX_BOND_BAD_INTERVALS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+    MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
 };
 
 mod block_axis;

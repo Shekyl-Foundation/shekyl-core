@@ -828,25 +828,18 @@ impl ReadSnapshot<'_> {
     }
 }
 
-/// The archival reads — DRS-E1 S-ARCH (`DRS_E1_SARCH.md` §3.2; the bodies
-/// and the absence rules are `archival_reads`'). The persisted record and the
-/// close rows E4 will write, read typed; nothing here folds.
+/// Archival reads (DRS-E1 S-ARCH). The bodies and the absence rules live in
+/// `archival_reads`.
 impl ReadSnapshot<'_> {
-    /// **A1.** `archival_bond[persona]`, decoded. `None` is "no bond record"
-    /// — the state every caller branches on (a bond post finding a record is
-    /// an update; finding none is a join). Replaces `get_archival_bond_value`,
-    /// `get_archival_bond_hybrid_pubkey` and `archival_bond_join_epoch`, which
-    /// decoded the same row and each invented an absence (`false`, `false`,
-    /// `u64::MAX`; SAR-1). An undecodable row is SI-7 — SI-14's arm too.
+    /// **A1.** `archival_bond[persona]`. `None` is no record. An undecodable
+    /// row is SI-7.
     pub fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, StoreError> {
         archival_reads::bond_record(&self.txn, persona).map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **A3.** The latest settlement epoch `persona` earned a pass bit for
-    /// `shard` in — one reverse seek. `None` is never-served, the release
-    /// cooldown's vacuous arm. Per shard: the C++ marshal's positional
-    /// vector omitted never-served shards (SAR-3); the set is the caller's
-    /// `filter_map`. SI-15 if rows exist for a persona with no record.
+    /// **A3.** Latest epoch `persona` served `shard`, one reverse seek.
+    /// `None` is never-served. SI-15 when rows exist and the persona has no
+    /// bond record.
     pub fn last_served_epoch(
         &self,
         persona: &PCanonicalId,
@@ -856,17 +849,15 @@ impl ReadSnapshot<'_> {
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **A4.** Every shard `persona` ever served, each with its latest epoch
-    /// — the complete-tree form of the last-served marshal (a foundation
-    /// record stores no shard list). One reverse seek per served shard,
-    /// never a full-table walk. Empty for a persona that never served.
+    /// **A4.** Every shard `persona` served, each with its latest epoch.
+    /// One reverse seek per served shard. Empty when the persona never served.
     pub fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, StoreError> {
         archival_reads::served_shards(&self.txn, persona)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **A5.** Pass bits recorded for `(persona, shard, epoch)` — `PC-D5`'s
-    /// enumeration over the pair-epoch prefix. [`PassCount::ZERO`] when none.
+    /// **A5.** Pass bits for `(persona, shard, epoch)`. [`PassCount::ZERO`]
+    /// when none.
     pub fn pass_count(
         &self,
         persona: &PCanonicalId,
@@ -877,11 +868,8 @@ impl ReadSnapshot<'_> {
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **A6.** The market's co-holder count for `shard` at `epoch`'s close.
-    /// `None` is an epoch that never closed for this shard; a written
-    /// `RMarket(0)` is a closed epoch with no co-holders — the C++ returned
-    /// `0` for both (SAR-8). What a rule does with `None` is E6 slice 8's
-    /// (`SAR-Q6`); the read's job is to stop erasing the distinction.
+    /// **A6.** Co-holder count at `(shard, epoch)`. `None` is an epoch that
+    /// never closed; a written zero is a closed epoch with no co-holders.
     pub fn r_market(
         &self,
         shard: ShardId,
@@ -891,36 +879,27 @@ impl ReadSnapshot<'_> {
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **A7.** The frozen `Σwork(E)` for `epoch`, in milli-units. `None` is
-    /// an epoch that never closed (SAR-8).
+    /// **A7.** Frozen `Σwork(E)`, in milli-units. `None` is an epoch that
+    /// never closed.
     pub fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError> {
         archival_reads::sigma_work(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **A8.** The frozen `budget(E)` close row for `epoch`. `None` is an
-    /// epoch that never closed — the one gather leg the C++ already kept
-    /// apart from zero (`has_budget_row`).
+    /// **A8.** Frozen `budget(E)`. `None` is an epoch that never closed.
     pub fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
         archival_reads::budget(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **A9.** The slash scheduler's monotone settled watermark: every
-    /// settlement epoch `<=` the value has been scanned at its slash
-    /// deadline. `None` is "no epoch settled yet" — the C++'s `u64::MAX`
-    /// sentinel, gone by the type. A `properties` cell
-    /// ([`ArchivalLastSlashEpochCell`]); E4's slash writer is its one writer.
+    /// **A9.** Slash watermark ([`ArchivalLastSlashEpochCell`]). `None` is
+    /// no epoch settled yet.
     pub fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, StoreError> {
         self.get_property::<ArchivalLastSlashEpochCell>()
     }
 
-    /// **A10.** A recorded block's attestation witness bytes, unparsed.
-    /// [`AtHeight::AboveTip`] for a height past the tip;
-    /// `Recorded(None)` for a recorded block whose attestation set was empty
-    /// (the writer stores no row for it) — the two absences the C++ returned
-    /// as one empty blob. What a *pruned* height reads as is S-PRUNE's to
-    /// say; until a prune exists the two states are exhaustive. Replaces
-    /// `get_archival_attestation_witness_at_height`; the alt-block twin is
-    /// E5 S-ALT's (`SAR-Q5`).
+    /// **A10.** Attestation witness bytes, unparsed. [`AtHeight::AboveTip`]
+    /// past the tip; `Recorded(None)` when the recorded block stored no row;
+    /// `Recorded(Some(bytes))` for a non-empty row within the witness cap.
+    /// An empty or over-cap row is SI-7.
     pub fn attestation_witness_at(
         &self,
         height: BlockHeight,

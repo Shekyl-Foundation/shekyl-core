@@ -99,7 +99,7 @@ use super::{Canonical, CodecError};
 ///   (`DRS_E1_SPRUNE.md`), which will mint what it needs against the tx
 ///   unit rather than inherit either row. LMDB moved `14 → 15` in the same
 ///   PR (the X-macro is the bijection's other half).
-/// - `11` — DRS-E1 S-ARCH (`DRS_E1_SARCH.md` §4): seven archival tables
+/// - `11` — DRS-E1 S-ARCH (`DRS_E1_SARCH.md` §4): six archival tables
 ///   leave `Unshaped`. `archival_bond` → `[u8; 32] → Coded<BondRecord>` (the
 ///   persisted bond record's first Rust type, re-specified from
 ///   `ArchivalBondValue` v7 — same semantics, its own encoding, `SAR-Q3`);

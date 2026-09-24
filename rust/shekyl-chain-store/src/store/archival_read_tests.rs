@@ -12,6 +12,7 @@
 use redb::Value;
 use shekyl_chain_rules::AtHeight;
 use shekyl_store_codec::Coded;
+use shekyl_types::archival::MAX_ATTESTATION_WITNESS_BYTES;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
@@ -405,6 +406,41 @@ fn a10_tells_above_tip_from_a_recorded_block_with_no_witness_from_one_with() {
         snap.attestation_witness_at(BlockHeight::from_raw(3))
             .unwrap(),
         AtHeight::AboveTip
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn a10_an_empty_or_over_cap_row_is_si7() {
+    let path = tmp("arch-a10-ill");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[vec![], vec![]]); // tip 1
+    drop(store);
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_ATTESTATION_WITNESS).expect("t");
+        t.insert(0u64, Raw::<AttestationWitnessBytes>::new(&[]))
+            .expect("insert");
+        t.insert(
+            1u64,
+            Raw::<AttestationWitnessBytes>::new(&vec![0xab; MAX_ATTESTATION_WITNESS_BYTES + 1]),
+        )
+        .expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    let empty = snap
+        .attestation_witness_at(BlockHeight::from_raw(0))
+        .unwrap_err();
+    assert!(
+        is_si7_undecodable(&empty, "archival_attestation_witness"),
+        "{empty}"
+    );
+    let over = snap
+        .attestation_witness_at(BlockHeight::from_raw(1))
+        .unwrap_err();
+    assert!(
+        is_si7_undecodable(&over, "archival_attestation_witness"),
+        "{over}"
     );
     cleanup(&path);
 }

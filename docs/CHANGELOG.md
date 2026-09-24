@@ -307,8 +307,10 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   **same semantics, not byte-compatible**; nothing hashes or relays the
   stored record — where the holdings are one sum type (a shard and its
   add-epoch are one entry, so the parallel-vector desync the C++ made FATAL
-  is unrepresentable), "not yet paid" is an `Option`, and every count is
-  bounded by its consensus cap before it sizes an allocation. Cross-checked
+  is unrepresentable; the compact list is private and only the checked
+  constructor builds it), "not yet paid" is `None` and a paying height
+  cannot be zero, and every count is bounded by its consensus cap before
+  it sizes an allocation. Cross-checked
   against the C++ encoder over a checked-in corpus
   (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`, written by a C++ unit
   test from the encoder E4 will delete), which caught the claimed-set span
@@ -321,7 +323,8 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   `Option` — an epoch that never closed and a closed epoch with zero
   co-holders were both `0` in C++; `last_settled_slash_epoch` (the cell;
   the `u64::MAX` sentinel gone); `attestation_witness_at` tells a height
-  above the tip from a recorded block with an empty attestation set. The
+  above the tip from a recorded block with an empty attestation set; an
+  empty or over-cap witness row is a store fault. The
   emission gather shell is deleted rather than ported (its Rust consumer
   already has the typed shape); the holds-shard fold, the alt-witness pair
   and the prune watermark stay with E4, S-ALT and S-PRUNE by ruling.

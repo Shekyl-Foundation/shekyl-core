@@ -45,6 +45,20 @@ pub const WITNESS_ENTRY_LEN: usize =
 pub const MAX_ATTESTATION_WITNESS_BYTES: usize =
     WITNESS_PREFIX_LEN + MAX_ATTESTATION_RECORDS * WITNESS_ENTRY_LEN;
 
+// The store bounds a witness blob by the pin in `shekyl-types` (it cannot
+// take this crate's graph). The pin is this layout, factored: each factor
+// and the product are the same number.
+const _: () = assert!(WITNESS_PREFIX_LEN == shekyl_types::archival::ATTESTATION_WITNESS_COUNT_LEN);
+const _: () = assert!(MAX_ATTESTATION_RECORDS == shekyl_types::archival::MAX_ATTESTATION_RECORDS);
+const _: () = assert!(PASS_NONCE_LEN == shekyl_types::archival::ATTESTATION_WITNESS_NONCE_LEN);
+const _: () =
+    assert!(PASS_ANCHOR_HEIGHT_LEN == shekyl_types::archival::ATTESTATION_WITNESS_ANCHOR_LEN);
+const _: () = assert!(
+    HybridSignature::CANONICAL_LEN == shekyl_types::archival::ATTESTATION_WITNESS_SIGNATURE_LEN
+);
+const _: () =
+    assert!(MAX_ATTESTATION_WITNESS_BYTES == shekyl_types::archival::MAX_ATTESTATION_WITNESS_BYTES);
+
 const KIND_MISS: u8 = 0;
 const KIND_PASS: u8 = 1;
 
