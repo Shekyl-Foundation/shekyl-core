@@ -15286,6 +15286,13 @@ left.
 > not by the value meaning anything but by monotonicity throwing the value away.
 > A value that works because it is ignored is not a mechanism to carry forward.
 
+**Pool-side consequence, recorded 2026-09-24 (S-POOL pre-flight).** The
+three clauses above are three fields with three lifetimes on the Rust pool
+record, not one `relay_method` value: [`RELAY_STATE_REFERENCE_SHAPES.md`](RELAY_STATE_REFERENCE_SHAPES.md)
+§3 and [`DRS_E1_SPOOL.md`](DRS_E1_SPOOL.md) SPL-18 / `SPL-Q9`. A
+field-for-field port of `relay_method::local` re-bundles what this section
+unbundled.
+
 ### 92.5 The disarm's SCOPE is open — and origin-only is net-NEGATIVE
 
 **This is the deciding question, not insurance.** The re-broadcast loop is
