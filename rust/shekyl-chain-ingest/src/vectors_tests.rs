@@ -42,7 +42,8 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::Substrate;
+use shekyl_chain_rules::{ReleaseAnchors, Substrate};
+use shekyl_types::BlockHeight;
 
 use crate::corpus::CorpusReader;
 use crate::metrics::Metrics;
@@ -63,6 +64,11 @@ struct Manifest {
     block_count: u64,
     spend_txid: Option<String>,
     fixed_difficulty: u128,
+    /// The hash of block 0 as the daemon reported it — the operand that
+    /// decides what these chains are valid against (§5.2).
+    genesis_hash: String,
+    /// The `dev` tree the daemon that built the chain was compiled at.
+    built_at_dev_sha: String,
 }
 
 /// Every captured chain, in name order. **Fails on an empty set** (rule
@@ -156,6 +162,14 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         manifest.tip_height,
         dir.display()
     );
+    let (h0, connected_genesis) = report.connected[0];
+    assert_eq!(h0, BlockHeight::from_raw(0));
+    assert_eq!(
+        hex_of(connected_genesis.as_bytes()),
+        manifest.genesis_hash,
+        "{}: the corpus's block 0 is not the genesis the manifest names",
+        manifest.shape
+    );
     let checkpoint = report.checkpoint.as_ref().unwrap_or_else(|| {
         panic!(
             "{}: the trace carries the daemon's digest at the tip",
@@ -181,6 +195,40 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     }
 }
 
+/// **The consensus pin, made visible.** These blobs are valid against one
+/// genesis and one rule set; a change of TXE-Q6′'s class — a grammar
+/// closure, a constant regeneration, a row that alters what a valid block
+/// is — invalidates all four chains at once, and without this check the
+/// failure would arrive as 1,979 blocks refusing at block 1 for a reason
+/// that reads as a validator bug. So the manifest carries the genesis the
+/// chain was built from, and this holds it — before any block is judged —
+/// to the genesis the **current build** pins: Fakechain is mainnet's
+/// config (`cryptonote_config.h`: `case FAKECHAIN: return mainnet`), so
+/// the pin is `ReleaseAnchors::MAINNET`'s, which slice 4 verifies by
+/// equality against the C++ `GENESIS_TX`. A regeneration fails HERE with
+/// "these vectors predate the current genesis", not at block 1.
+fn genesis_is_the_current_builds(manifest: &Manifest) {
+    let pinned = ReleaseAnchors::for_network(shekyl_address::Network::Mainnet)
+        .expected_at(BlockHeight::from_raw(0))
+        .expect("the release pins mainnet's genesis, which Fakechain shares");
+    assert_eq!(
+        manifest.genesis_hash,
+        hex_of(pinned.as_bytes()),
+        "{}: these vectors predate the current genesis — captured from a chain whose block 0 \
+         is {} (built at dev {}), but this build pins {}. A TXE-Q6′-class change regenerated \
+         genesis; re-capture every chain against a daemon built at the current tree \
+         (SHEKYL_CAPTURE_CHAIN_VECTORS=1, the generators named in each manifest).",
+        manifest.shape,
+        manifest.genesis_hash,
+        manifest.built_at_dev_sha,
+        hex_of(pinned.as_bytes())
+    );
+}
+
+fn hex_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Every captured chain connects whole against a real store and matches the
 /// daemon's digest at its tip — under the mock longhash (D2 is not this
 /// test's subject; see the module doc).
@@ -200,6 +248,7 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         longhash: MockSubstrate::always_satisfies,
     });
     for (dir, manifest) in captured_chains() {
+        genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
         hold(&dir, &manifest, &report);
         eprintln!(
@@ -224,6 +273,7 @@ async fn replays_every_captured_chain_under_the_production_substrate() {
         Arc::clone(&metrics),
     ));
     for (dir, manifest) in captured_chains() {
+        genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, substrate.clone()).await;
         hold(&dir, &manifest, &report);
     }

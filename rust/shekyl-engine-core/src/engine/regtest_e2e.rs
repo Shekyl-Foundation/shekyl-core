@@ -4161,9 +4161,33 @@ async fn maybe_capture_chain_vector(
         }
     }
 
+    // The consensus pin, made visible: block 0's hash as the daemon
+    // reports it, and the tree the daemon was built at. The replay test
+    // holds the former to the genesis the current build pins BEFORE judging
+    // any block, so a regeneration fails there, not as 1,979 refusals.
+    let genesis: serde_json::Value = daemon
+        .rpc
+        .json_rpc_call("get_block", Some(json!({ "height": 0 })))
+        .await
+        .expect("get_block 0");
+    let genesis_hash = genesis["block_header"]["hash"]
+        .as_str()
+        .expect("block 0's hash")
+        .to_owned();
+    let built_at_dev_sha = Command::new("git")
+        .args(["rev-parse", "--short=9", "HEAD"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_else(|| "unknown".to_owned());
+
     let manifest = json!({
         "format_version": 2,
         "tx_count": tx_count,
+        "genesis_hash": genesis_hash,
+        "built_at_dev_sha": built_at_dev_sha,
         "description":
             "A regtest chain captured whole as the DRS-E2 replay pair. corpus.e2: \
              every block 0..=tip_height with the FULL bytes of every listed \
