@@ -2272,7 +2272,12 @@ gates do **not** all wait on the second:
    (known-unwired, `DAEMON_REDB_STORE.md` §3.5). Membership against
    `assignment(h)` and dedup `(P,s,E,h)` exact-get are the two gates
    that wait here, with the writer call site. S-ARCH remains priority 7
-   of 9 and gated on the P0b journal audit; that is **not** "waiting for
+   of 9 and gated on the P0b journal audit — **UPDATE 2026-09-23: that gate
+   lifted 2026-09-05 (P0b RECONCILED) and was re-read by S-ARCH's Round-0
+   pre-flight ([`DRS_E1_SARCH.md`](DRS_E1_SARCH.md) §0, PR #840), which
+   splits the row: the *reads* are E1 increment 8, ruled and cuttable; the
+   settlement *write path* this item waits on is E4's, whose first question
+   the pre-flight names (SAR-7)** — that is **not** "waiting for
    essentially the whole port." Falsify: a production caller of the
    settlement write on the Rust apply/slash path.
 

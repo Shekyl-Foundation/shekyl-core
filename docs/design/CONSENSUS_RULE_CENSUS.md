@@ -184,17 +184,17 @@ every changed row.
 | --- | ---: |
 | Entry points | 4 |
 | Validation-site union (§3.3) | 98 functions |
-| Rules (rows in §4) | **174** (CEN-I20 minted 2026-09-23 with its implementation; CEN-I19 minted 2026-09-06 with its implementation; C2-R1c split CEN-K1 → K1a/K1b — the row conflated the self-claimed and derived heights) |
-| — consensus-flagged | 165 |
+| Rules (rows in §4) | **175** (CEN-L16 minted 2026-09-23 by S-ARCH's pre-flight — an R8-class placement row for a store-evaluated predicate; CEN-I20 minted 2026-09-23 with its implementation; CEN-I19 minted 2026-09-06 with its implementation; C2-R1c split CEN-K1 → K1a/K1b — the row conflated the self-claimed and derived heights) |
+| — consensus-flagged | 166 |
 | — policy-flagged | 9 |
-| Bucket 1 (Shekyl-specific, spec'd) | 88 |
+| Bucket 1 (Shekyl-specific, spec'd) | 89 |
 | Bucket 2 (inherited, ratified on record) | 44 |
 | Bucket 3 (deletion disposition recorded or executed) | 11 |
 | Bucket 4 (inherited, not ratified — classes recorded) | 31 |
 
-Sum check: `88 + 44 + 11 + 31 = 174 = 165 + 9` (CEN-I20 added to bucket 1 on 2026-09-23; before it `87 + 44 + 11 + 31 = 173 = 164 + 9`, recounted 2026-09-14 with the census's own commands below, after C2-R8 applied CEN-L1 4 → 2 and CEN-L2/L3/L4/L5/L6/L13 4 → 3 to the rows — §7 #20; the line had read `87 + 43 + 5 + 38` from the 2026-09-06 recount after R2's eight bucket-4 → 2 promotions, before that `87 + 35 + 5 + 46` the same day, and before that `86 + 25 + 5 + 55 = 171` since the C1 era while the table above it had already moved — records-was). **By flag** (the cross-tab C2-R8 §10 uses, because a consensus denominator that counts policy rows promotes them by proximity): consensus `[86, 40, 11, 27] = 164`, policy `[1, 4, 0, 4] = 9`. Merged set = 161 CEN rows
-+ 10 minted (`CEN-A7, B6, B7, F20, F21, H23, H24, L15`, `CEN-I19`
-2026-09-06 with its implementation, and `CEN-I20` 2026-09-23 with its implementation) + 3 split (`CEN-D1b, F14b`, and
+Sum check: `89 + 44 + 11 + 31 = 175 = 166 + 9` (CEN-L16 added to bucket 1 on 2026-09-23 by S-ARCH's pre-flight; CEN-I20 the same day; before them `87 + 44 + 11 + 31 = 173 = 164 + 9`, recounted 2026-09-14 with the census's own commands below, after C2-R8 applied CEN-L1 4 → 2 and CEN-L2/L3/L4/L5/L6/L13 4 → 3 to the rows — §7 #20; the line had read `87 + 43 + 5 + 38` from the 2026-09-06 recount after R2's eight bucket-4 → 2 promotions, before that `87 + 35 + 5 + 46` the same day, and before that `86 + 25 + 5 + 55 = 171` since the C1 era while the table above it had already moved — records-was). **By flag** (the cross-tab C2-R8 §10 uses, because a consensus denominator that counts policy rows promotes them by proximity): consensus `[88, 40, 12, 26] = 166`, policy `[1, 4, 0, 4] = 9` (recounted 2026-09-23 with the §11 commands after CEN-I20 and CEN-L16 joined bucket 1 and CEN-F12 left for bucket 3; the line had read `[86, 40, 11, 27] = 164` from the 2026-09-14 recount — records-was). Merged set = 161 CEN rows
++ 11 minted (`CEN-A7, B6, B7, F20, F21, H23, H24, L15`, `CEN-I19`
+2026-09-06 with its implementation, `CEN-I20` 2026-09-23 with its implementation, and `CEN-L16` 2026-09-23 as an R8-class placement row) + 3 split (`CEN-D1b, F14b`, and
 `CEN-K1 → K1a/K1b` on 2026-09-04 — that split was never carried into this
 decomposition, so the line summed to 171 while the table above it said 172). Bucket-4 class split (recounted 2026-09-14 over the bucket-4 rows only,
 after C2-R8): 2 `examined-disposition` + 1 `KAT-port`
@@ -556,6 +556,7 @@ Reward emission (per tx; whole-tx shape CEN-H22):
 | CEN-L13 | Corruption/desync guards throughout the write and pop paths (serve-credit re-parse, bond-counter overflow, journal-vs-tip belts, trim bounds, pruned-pop refusal, …) abort the operation rather than storing inconsistent consensus state | blockchain_db.cpp / lmdb/db_lmdb.cpp per traversal | C | 3 | — | C2-R8 §7.1: not chain rules — arm B, classed into the register: cell decode `SI-7`, accumulator arithmetic `SI-8`, journal-vs-tip `SI-6`, trim bounds `SI-5`; **pruned-pop refusal is `StoreCannot`** (a capability, misfiled as a guard) | counted as one row: sanity class, not independently ratifiable chain behavior. **UPDATE 2026-09-14 (C2-R8, §7 #20): 4 → 3** — [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md) owns them |
 | CEN-L14 | DB-absent uniqueness (deliberately verify-side only): serve-credit pass bits, bond records (JoinMarket p_id), budget accrual rows, witness rows, curve-root heights are flag-0 overwrites | lmdb/db_lmdb.cpp:5168–5181, 5591–5615, 4916–4928, 9663–9672, 9618 | C | 4 | examined-disposition | C2-R8 §7.3 ruled the **mechanism** (every keyed write is a declared `insert` or `upsert`; silent overwrite unrepresentable) and found each of the five semantics **unnamed by any document — arm C**, routed as R8b-3…R8b-7 (§10) | recorded absences; the PC-D4 comment at blockchain_db.cpp:775–786 records the bug class this tolerance once masked. **UPDATE 2026-09-14 (C2-R8, §7 #20): stays 4, class `none` → `examined-disposition`.** R8 examined; R8b names — one word per site once ruled |
 | CEN-L15 | `if (blk.major_version >= 4)` cumulative-RCT accumulation in `block_info` never runs (live major is 1); `bi_cum_rct` therefore holds this block's RCT count only — a dead Monero-v4 (RCT-era) dispatch arm on the write path | lmdb/db_lmdb.cpp:988–998 | C | 3 | — | rule 60: `RCTType*` named in the deleted-from-construction list; "delete the dead branch" for Monero-era version dispatch | [m] RC-180 ⇒ minted at RC's bucket. §10 R5 executes |
+| CEN-L16 | **A consensus predicate evaluated inside the store layer (R8-class placement, minted 2026-09-23 by S-ARCH's pre-flight):** the as-of-height holdings fold — *did `P` hold shard `s` at height `h`* — the operand of CEN-J8 (serve-credit acceptance at `H_fire`) and of the slash writer's eligibility check (CEN-L9), is computed by `BlockchainLMDB::archival_bond_holds_shard_of`: held at tip ⇒ held from the shard's add-epoch + 1 (P2B-7 Pin 5) or back to join for a complete tree; not held at tip ⇒ held at `h` iff a logged slash strictly above `h` removed it, by a **range scan over `archival_slash_log`** (`archival_slash_removed_holding_after`) — the pop-reversal journal read forward as consensus history; a `held_shard_ids` / `shard_add_epochs` desync is FATAL. **C2-R8 did not census it:** R8's eight L-rows were drawn from `add_block` / `pop_block` (the write paths); this is a *read*, and the sweep did not cover reads (`DRS_E1_SARCH.md` SAR-2, SAR-7; the census-lane question in `FOLLOWUPS.md`, third ground) | lmdb/db_lmdb.cpp:4889–4950 (the fold), :4804–4870 (the slash-log scan), :4943 (the FATAL); consumers blockchain.cpp:4874 (serve-credit verifier, `PDM-Q3`), lmdb/db_lmdb.cpp:5381 (slash eligibility) | C | 1 | spec | [`DRS_E1_SARCH.md`](DRS_E1_SARCH.md) §6 SAR-2 / SAR-7, `SAR-Q7` (RULED: the *port* travels with E4's journal ruling — the fold to `shekyl-archival-retention` as `holds_shard_at(&BondRecord, ShardId, BlockHeight, &[SlashLogEntry])`, the reads as A1 + A2; the *row* lands now); twin **CEN-J8** (the rule); [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q3` (the C++ verifier dies at E4) | Store-bound (`DAEMON_REDB_STORE.md` §7.5 table 2: **E4 S-ARCH**). Not a new rule — J8 is the rule; this row is where the tree evaluates it, and the R8 discriminator (*would this survive a rule change?*) says the store is the wrong home. UNREVIEWED by construction in the reconciliation register. |
 
 ### 4.M Mempool admission (the `kept_by_block` axis)
 
@@ -1194,6 +1195,30 @@ input, not fixes.
     coinbase corpus recaptured, the daemon's h0 equal to geblock's). The
     row is enforced everywhere I19 is and by the wallet's context-free
     validator, and — the same gap I19 has — not yet by `shekyl-chain-rules`.
+
+23. **CEN-L16 minted — an R8-class placement row for a store-evaluated
+    consensus predicate (2026-09-23, `DRS_E1_SARCH.md` SAR-2 / SAR-7,
+    ruled on PR #840).** S-ARCH's pre-flight read `db_lmdb.cpp:4889`:
+    `archival_bond_holds_shard_of` folds `held_shard_ids` against
+    `shard_add_epochs`, calls `shekyl_archival_settlement_epoch_at_height`,
+    range-scans `archival_slash_log` to reconstruct a slashed-away tenure,
+    and throws FATAL on desync at `:4943` — CEN-J8's operand, evaluated
+    inside the store. **C2-R8 established that the store computes nothing
+    consensus-visible and never censused this:** its eight L-rows were all
+    drawn from `add_block` / `pop_block`, the write paths; `holds_shard` is a
+    read, and the sweep behind R8's row set did not cover reads. So the
+    category test applies and the enumeration behind it does not reach here.
+    The maintainer's ruling: *defer the port, not the row* — the fold's move
+    to `shekyl-archival-retention` travels with E4's journal ruling
+    (`SAR-Q7`), but the finding lands in the census now, because carried
+    only as an E4 deferral the R8 gap travels with it and nobody sees the
+    pattern. **The pattern:** third instance this month of a sweep whose
+    subject excluded the surface the finding sat on — `src/shekyl/*.h` shims
+    (slice 4, S25), `shekyl-wire`'s constants (slice 5, the shard-set bound),
+    and now R8's store reads — each found by enumerating something else for a
+    different reason. The census lane is asked one question rather than
+    three (`FOLLOWUPS.md`, the sweep-subject row): *what was each sweep's
+    file and call-direction subject, and which of them excluded reads?*
 
 ---
 

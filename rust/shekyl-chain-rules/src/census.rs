@@ -501,6 +501,7 @@ census_rows! {
         L11 pending,
         L12 pending,
         L14 pending,
+        L16 pending,
         // 4.M Mempool admission (the `kept_by_block` axis) — consensus-flagged rows
         M2 pending,
         M8 pending,
