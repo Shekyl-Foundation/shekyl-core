@@ -281,3 +281,28 @@ pub(crate) fn on_chain_outputs_of(tx: &Transaction) -> Result<Vec<OnChainOutput>
     }
     Ok(out)
 }
+
+/// Refuse proof **verification** unless the daemon reports a synchronized
+/// chain view (`-29305 PROOF_DAEMON_SYNCING`).
+///
+/// Consumes [`fetch_synced_chain_facts`] rather than re-deriving the
+/// predicate: `WSS-Q14` made "synced" a type whose constructor refuses an
+/// unsynced view, and a second hand-rolled check here would be the same rule
+/// in two places, free to drift from the one the watchdog and the tip gate
+/// ask.
+///
+/// A transport failure stays a transport failure — it is **not** folded into
+/// the syncing refusal, because "I could not reach the daemon" and "the daemon
+/// is behind" send a caller to different remedies.
+///
+/// # Errors
+///
+/// [`ProofsError::DaemonSyncing`] when the daemon is not synchronized;
+/// [`ProofsError::Daemon`] when `get_info` could not be read.
+pub(crate) async fn refuse_unless_synced<R: Rpc>(rpc: &R) -> Result<(), ProofsError> {
+    match super::daemon::synced_chain_facts::fetch_synced_chain_facts(rpc).await {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(ProofsError::DaemonSyncing),
+        Err(e) => Err(ProofsError::Daemon(e)),
+    }
+}

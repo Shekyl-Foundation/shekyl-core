@@ -1,7 +1,11 @@
 # CLI wallet coherence and usability (CU)
 
-**Status:** OPEN — Round 1 (2026-09-11); CU-1…CU-6 implemented on
-`feat/cli-usability-cu` (one commit per cut), awaiting landing on `dev`.
+**Status:** OPEN — Round 1 (2026-09-11); **CU-1…CU-6 LANDED on `dev`**
+(branch archived as `archive/cli-usability-cu-2026-09-13`; the cuts are live in
+`rust/shekyl-cli/`). *Corrected 2026-09-24: this banner read "awaiting landing
+on `dev`" for eleven days after the work landed — a status claim that outlived
+its subject, and the direction that costs, since nobody re-checks a row that
+says the work is still pending.*
 Owning doc for the `CU-1…CU-N` identifier family (registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2).
 

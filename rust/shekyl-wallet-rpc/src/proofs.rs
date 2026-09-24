@@ -310,6 +310,10 @@ fn map_walletless_error(e: ProofsError) -> WalletRpcError {
             tracing::info!(txid = %txid, "reserve locator names a pooled (unconfirmed) tx");
             WalletRpcError::ProofTxUnconfirmed
         }
+        ProofsError::DaemonSyncing => {
+            tracing::info!("proof verification refused: daemon is syncing");
+            WalletRpcError::ProofDaemonSyncing
+        }
         ProofsError::InvalidRecipient => WalletRpcError::InvalidRecipient,
         ProofsError::AmountOverflow => {
             WalletRpcError::InternalError("proof amount sum overflow".into())

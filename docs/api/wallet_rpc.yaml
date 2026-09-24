@@ -647,6 +647,7 @@ components:
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
         - -29303   # PROOF_TX_NOT_FOUND
         - -29304   # PROOF_TX_UNCONFIRMED
+        - -29305   # PROOF_DAEMON_SYNCING
         - -29400   # UNKNOWN_TRANSFER_ID
         - -29500   # STAKE_NOT_READY
         - -29501   # STAKE_IN_FLIGHT
@@ -836,6 +837,19 @@ components:
                                           cannot back a reserve claim —
                                           wait for confirmation and
                                           regenerate the proof
+          -29305 PROOF_DAEMON_SYNCING     proofs: VERIFICATION was asked of
+                                          a daemon that is not synchronized,
+                                          so the chain facts the proof would
+                                          be checked against are not the
+                                          chain's. A syncing daemon answers
+                                          "not found" for a tx it has not
+                                          reached and a short confirmation
+                                          count mid-sync — both indistinguish-
+                                          able from a forged proof — so this
+                                          refuses rather than returning a
+                                          verdict whose premise was absent.
+                                          Retryable once caught up. Proof
+                                          GENERATION is not gated by this.
           -29400 UNKNOWN_TRANSFER_ID      get_transfer_by_id: a well-formed
                                           id naming no row (a malformed id
                                           is -32602, not this)

@@ -296,6 +296,13 @@ mod check_workflows {
         /// chain — the reserve path must refuse these, the tx-proof
         /// path must report them honestly.
         pooled: Arc<std::collections::BTreeSet<String>>,
+        /// What `get_info` reports for `synchronized`.
+        ///
+        /// Verification now gates on a synchronized chain view
+        /// (`-29305 PROOF_DAEMON_SYNCING`), so the double has to be able to
+        /// say "no" — a mock that only ever reports synced could not fail
+        /// the gate and the gate's test would pass against a stub of itself.
+        synchronized: bool,
     }
 
     impl Rpc for MockRpc {
@@ -364,6 +371,40 @@ mod check_workflows {
                 // the compiler holds this double to the contract's field set
                 // (a hand-written `{"height": ..}` once drifted and was only
                 // caught when the typed reader refused it).
+                // `json_rpc_call` posts every JSON-RPC method to this one
+                // route with the method in the body, so the gate's `get_info`
+                // arrives here rather than as its own route.
+                //
+                // **The reply is a real daemon's, not this file's.**
+                // `tests/fixtures/get_info_regtest.json` was captured from a
+                // regtest `shekyld` and carries its provenance; 42 of its 43
+                // fields are replayed untouched and only `synchronized` is
+                // varied, because that is the field under test. The hand-written
+                // literal this replaced named 5 fields and omitted two the
+                // decoder actually reads — `incoming_connections_count` and
+                // `outgoing_connections_count` — so it exercised a defaulted
+                // decode path no daemon produces, and its green said only that
+                // the author's JSON agreed with the author's expectation. That
+                // is the same defect the `get_transactions` note above records
+                // from RK-4c, reached again from the other side.
+                "json_rpc" => {
+                    let req: serde_json::Value =
+                        serde_json::from_slice(&body).expect("json-rpc request decodes");
+                    let method = req
+                        .get("method")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("json-rpc request names a method");
+                    assert_eq!(method, "get_info", "mock serves only get_info here");
+
+                    const CAPTURED: &str =
+                        include_str!("../../tests/fixtures/get_info_regtest.json");
+                    let fixture: serde_json::Value =
+                        serde_json::from_str(CAPTURED).expect("captured get_info parses");
+                    let mut result = fixture["result"].clone();
+                    // The one varied field, and the only one.
+                    result["synchronized"] = serde_json::Value::Bool(self.synchronized);
+                    serde_json::json!({ "jsonrpc": "2.0", "id": "0", "result": result })
+                }
                 "get_height" => serde_json::to_value(shekyl_rpc_types::GetHeightResponse {
                     status: shekyl_rpc_types::RpcStatus::ok(),
                     height: self.height as u64,
@@ -511,6 +552,7 @@ mod check_workflows {
                 height: CHAIN_HEIGHT,
                 get_transactions_calls: Arc::new(AtomicUsize::new(0)),
                 pooled: Arc::new(std::collections::BTreeSet::new()),
+                synchronized: true,
             },
             local,
         }
@@ -873,11 +915,75 @@ mod check_workflows {
             height: CHAIN_HEIGHT,
             get_transactions_calls: Arc::new(AtomicUsize::new(0)),
             pooled: Arc::new(std::collections::BTreeSet::new()),
+            synchronized: true,
         };
 
         let bodies = fetch_proof_txs(&rpc, &ids).await.expect("all txs served");
         assert_eq!(bodies.len(), 250);
         assert_eq!(rpc.get_transactions_calls.load(Ordering::SeqCst), 3);
+    }
+
+    /// Verification refuses against a daemon that is not synchronized
+    /// (`-29305 PROOF_DAEMON_SYNCING`), on **both** check paths.
+    ///
+    /// A syncing daemon answers every chain question honestly and wrongly:
+    /// a tx it has not reached is "not found", and a confirmation count
+    /// taken mid-sync is short. Both are shaped like a failed verification,
+    /// so a caller could not tell a forged proof from a daemon that has not
+    /// caught up. The refusal names the real state and is retryable.
+    #[tokio::test]
+    async fn verification_refuses_while_the_daemon_is_syncing() {
+        let fx = make_fixture(vec![]);
+        let syncing = MockRpc {
+            synchronized: false,
+            ..fx.rpc.clone()
+        };
+
+        // Control: the same proof over the same daemon, synchronized, is not
+        // an error — so a red below is the gate and not the fixture.
+        let proof = inbound_proof_string(&fx);
+        check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &proof)
+            .await
+            .expect("a synchronized daemon verifies");
+
+        let err = check_tx_proof(&syncing, fx.txid, &fx.address, MSG, &proof)
+            .await
+            .expect_err("a syncing daemon must refuse tx-proof verification");
+        assert!(
+            matches!(err, ProofsError::DaemonSyncing),
+            "expected DaemonSyncing, got {err:?}"
+        );
+
+        let reserve = reserve_proof_string(&fx);
+        let err = check_reserve_proof(&syncing, &fx.address, MSG, &reserve)
+            .await
+            .expect_err("a syncing daemon must refuse reserve verification");
+        assert!(
+            matches!(err, ProofsError::DaemonSyncing),
+            "expected DaemonSyncing, got {err:?}"
+        );
+    }
+
+    /// A malformed proof still reports malformed, even while syncing.
+    ///
+    /// The gate sits after decode deliberately: decode is local and its
+    /// verdict holds whatever the daemon is doing, so gating before it would
+    /// replace a precise, actionable error with a retry suggestion that never
+    /// succeeds.
+    #[tokio::test]
+    async fn a_malformed_proof_is_malformed_even_while_syncing() {
+        let fx = make_fixture(vec![]);
+        let syncing = MockRpc {
+            synchronized: false,
+            ..fx.rpc.clone()
+        };
+        let err = check_tx_proof(&syncing, fx.txid, &fx.address, MSG, "not-a-proof")
+            .await
+            .expect_err("a malformed proof is refused");
+        assert!(
+            matches!(err, ProofsError::Malformed(_)),
+            "expected Malformed, got {err:?} — the sync gate ran before decode"
+        );
     }
 
     #[tokio::test]

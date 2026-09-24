@@ -75,7 +75,7 @@ use super::proof_bridge::{
     InboundProofOutput, InboundProofRequest, ReserveProofOutput, ReserveProofRequest,
 };
 use super::proofs_chain_facts::{
-    confirmations_of, fetch_proof_tx, fetch_proof_txs, on_chain_outputs_of,
+    confirmations_of, fetch_proof_tx, fetch_proof_txs, on_chain_outputs_of, refuse_unless_synced,
 };
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
@@ -147,6 +147,26 @@ pub enum ProofsError {
     /// `-29304 PROOF_TX_UNCONFIRMED`.
     #[error("transaction {0} is unconfirmed (in the pool, not the chain)")]
     TxUnconfirmed(String),
+
+    /// Proof **verification** was asked of a daemon that is not
+    /// synchronized, so the chain facts it would be checked against are
+    /// not the chain's. Contract `-29305 PROOF_DAEMON_SYNCING`.
+    ///
+    /// **Why verification refuses instead of answering.** A proof is
+    /// checked against on-chain facts — is the tx there, how many
+    /// confirmations, which outputs. A syncing daemon can answer every
+    /// one of those honestly and wrongly: a tx it has not reached yet is
+    /// "not found", and a confirmation count taken mid-sync is short.
+    /// Both are `valid: false` shaped, and a caller cannot tell a forged
+    /// proof from a daemon that has not caught up. Refusing names the
+    /// real state and is retryable; answering would hand back a verdict
+    /// whose premise was absent.
+    ///
+    /// The gate sits **after** decode and before the first chain fetch:
+    /// decode is local and its verdict holds whatever the daemon is
+    /// doing, so a malformed proof still reports malformed.
+    #[error("daemon is syncing; proof verification needs a synchronized chain view")]
+    DaemonSyncing,
 
     /// The counterparty address carries non-canonical key material (its
     /// Ed25519 view key does not map to an X25519 point). Contract
@@ -691,6 +711,8 @@ pub async fn check_tx_proof<R: Rpc>(
         .ok_or_else(|| ProofsError::Malformed("empty tx-proof payload".into()))?;
     let direction = TxProofDirection::from_byte(direction_byte)?;
 
+    refuse_unless_synced(rpc).await?;
+
     let fetched = fetch_proof_tx(rpc, txid).await?;
     let on_chain = on_chain_outputs_of(&fetched.tx)?;
     let address_bytes = canonical_address_bytes(address);
@@ -763,6 +785,8 @@ pub async fn check_reserve_proof<R: Rpc>(
 ) -> Result<CheckedReserveProof, ProofsError> {
     let payload = decode_proof_payload(proof, HRP_RESERVE_PROOF)?;
     let (locators, proof_bytes) = parse_reserve_locators(&payload)?;
+
+    refuse_unless_synced(rpc).await?;
 
     // Fetch each locator-named tx once, in chunked batched calls
     // (pruned bodies carry everything a reserve verification needs),
