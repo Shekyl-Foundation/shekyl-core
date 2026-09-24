@@ -819,7 +819,9 @@ TEST(boosted_tcp_server, network_pipe_takes_the_descriptor)
     &probe_write, &probe_detach, &probe_read_done,
   };
   srv.set_network_pipe(network_id, &ops);
-  ASSERT_TRUE(srv.init_server(0, "127.0.0.1"));
+  ASSERT_TRUE(srv.init_server(
+    0, "127.0.0.1", 0, "::", false, true,
+    epee::net_utils::ssl_support_t::e_ssl_support_disabled));
   ASSERT_TRUE(srv.run_server(1, false));
 
   const auto port = static_cast<unsigned short>(srv.get_binded_port());
@@ -853,7 +855,9 @@ TEST(boosted_tcp_server, network_pipe_attach_failure_does_not_start)
     &probe_write, &probe_detach, &probe_read_done,
   };
   srv.set_network_pipe(network_id, &ops);
-  ASSERT_TRUE(srv.init_server(0, "127.0.0.1"));
+  ASSERT_TRUE(srv.init_server(
+    0, "127.0.0.1", 0, "::", false, true,
+    epee::net_utils::ssl_support_t::e_ssl_support_disabled));
   ASSERT_TRUE(srv.run_server(1, false));
   reset_probe(true);
   const auto port = static_cast<unsigned short>(srv.get_binded_port());
