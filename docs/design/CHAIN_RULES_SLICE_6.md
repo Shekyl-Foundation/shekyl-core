@@ -346,7 +346,7 @@ doing two things.
 
 | # | Commit | Gate |
 | --- | --- | --- |
-| 1 | **The captured spends** under `rust/shekyl-chain-rules/tests/vectors/` — 1-in/1-out, 1-in/2-out, one bond post and one emission with a fee spend each, one depth-3 — each a `.tx` blob with its block context (reference block, root at `ref_height`, tree depth, membership set) beside it, generated once through `e2e_fcmp_spend_accepted_by_daemon` / `e2e_fcmp_spend_over_depth3_tree`; `MockChain` serves the context; `fixture::spend` / `listed` load them; the store's `spend(ki, outputs)` becomes a loader; the fixture-sanity gate says which builders moved | **Q1 (ii)** — if the capture is another lane's or slow, WAIT here; do not fall back to filler |
+| 1 | **The captured chains** — **blocks, not transactions** (§5.2). For each of the five shapes — 1-in/1-out, 1-in/2-out, one bond post and one emission with a fee spend each, one depth-3 — the regtest chain the generator produced, from genesis through the block that carries the spend, committed as `.block` blobs under `rust/shekyl-chain-ingest/tests/vectors/<shape>/` with a manifest naming the spend's txid, its `referenceBlock` height and the shape; generated once through `e2e_fcmp_spend_accepted_by_daemon` / `e2e_fcmp_spend_over_depth3_tree` against a daemon built at the landing tree. **The consumer of record is `shekyl-chain-ingest`**, which replays every chain through `form` → `validate` → `connect` against a real `redb` store — the root at `ref_height`, the spent set, the tree depth are *derived* by the code that derives them in production. The rules crate reads the same blobs for its predicate tests (`fixture::spend` / `listed` load the transaction out of its block); the store's `spend(ki, outputs)` becomes a loader; the fixture-sanity gate says which builders moved | **Q1 (ii)** — if the capture is another lane's or slow, WAIT here; do not fall back to filler |
 | 2 | Stateless 4.I rows in `tx_form`: I1, I4, I6, I8, I9, I14, I16; I5 with H10 kept as its equality row (Q4 (a)); each with its negative fixture at both sites, mutated from a captured spend | commit 1 — the seven self-arming conformance arms for these rows fire here; H24's falsifier flips here |
 | 3 | I19/I20 adopted: `tx_form` calls `check_tx_extra_shape`; **`TxScope::Coinbase`** minted for I20 with its doc pinning *runs at `Miner`*, never *when `is_coinbase()`*; `the_kind_is_derived_from_the_slot_not_the_bytes` gains the I20 case (Q6) | commit 1 |
 | 4 | `TxAgainstRule` (view-bound, `check(cx, view)`); I7 over `has_key_image`; I2 and I3 registry entries `by_construction`, list-and-iterate (Q3) | commit 1 |
@@ -360,6 +360,56 @@ doing two things.
 Ten commits is the rule-06 ceiling. If commit 6 waits on E3 past the
 slice's window, it is the one named successor; nothing else in the plan
 depends on it.
+
+### 5.2 The witness is the real chain, and the mock has a two-line charter (ruled 2026-09-24)
+
+The Round-0 draft had `MockChain` *serving* the captured block context —
+`root_at(ref_height)` handed the captured root, the spent set handed the
+captured images — and the verification rows fixtured against that. The
+review named it for what it is: **not a weaker witness but a false test**.
+A mock told a value and serving it back proves the rule reads what it was
+handed; a proof verified against a root nobody recomputed says nothing
+about whether the store would compute that root, whether the leaf is in the
+tree, or whether production would accept the spend. Now
+`50-testing.mdc`, *"A fixture that constructs the state a rule reads back is
+not a test of the rule"*, with this slice as the instance.
+
+**So, for every view-bound and verification row (I7, I10–I13, I15, I17,
+I18, H19-verify):**
+
+- **The witness is the ingest replay.** `shekyl-chain-ingest` connects the
+  captured blocks against a real store; `tx_against` reads the derived
+  state through `BatchView`; I15 verifies a real proof against a root the
+  test derived over a membership set that exists because blocks put it
+  there. Positive fixture: the captured spend connects. Negative fixtures:
+  **mutations of the captured transaction replayed the same way** — the
+  spend re-submitted after its block (I7), a `referenceBlock` not in the
+  chain (I10), one 6 blocks too young and one 101 too old (I11), a
+  `tree_depth` above the tree's (I13), one flipped byte in the proof (I15),
+  one in the signature (I18), one in the range proof (H19). Every one goes
+  through the production path with production state.
+- **The rules crate's own fixtures are not parity evidence** for these
+  rows, and the crate's doc has said so since increment 1. They keep
+  exactly the two jobs the rule allows: predicate logic on plain values
+  (I11's window arithmetic at its four boundaries; I5's ordering; I12's
+  *derivation* being recorded), and the faulting view (a store fault
+  propagates as `Fault`, never as a verdict). `MockChain`'s doc comment
+  carries this charter so a third job cannot be added without editing the
+  sentence that forbids it.
+- **The store's twin-chain conformance test stays**: its subject is the
+  mock's fidelity to `BatchView`'s read API, not any rule.
+
+This is why commit 1 captures **blocks** and puts the vectors in the
+**ingest** crate: both witnesses derive from one artifact, and the artifact
+is the thing production consumes. The rules crate depending on the store
+would violate G1 (`check_chain_rules_no_store.sh`); the ingest crate
+depends on both and is where the real chain is allowed to live.
+
+**Carried, not done here:** slices 2–4's view-bound rows (the D family's
+windows, B5's root, E1's anchors) have fixtures of the same shape against
+`MockChain`, with ingest-side replay coverage in some places and not all.
+That is an audit of the earlier slices, filed in FOLLOWUPS with the crate
+contract as owner, so it is chosen rather than found.
 
 ## 6. What this slice does not build
 
