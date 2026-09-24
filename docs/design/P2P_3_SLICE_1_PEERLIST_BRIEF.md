@@ -19,6 +19,10 @@ reopens §0 reopens §5a with it.
 citation below resolves at this sha. Re-verify before the first increment
 opens — `net_node.inl` anchors have moved twice in this round already.
 
+**Re-verified after merging `dev` `3a00c2175` (this branch at `6dd183f5b`): all 21
+anchors still resolve.** Recorded because a citation checked only before the
+merge is a citation checked against a tree the document never lands in.
+
 ---
 
 ## 0. The correction this brief applies to its own mandate
