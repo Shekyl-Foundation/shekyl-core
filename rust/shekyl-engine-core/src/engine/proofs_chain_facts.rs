@@ -320,18 +320,23 @@ fn gather_chain_count(block_height: u64, confirmations: u64) -> Result<u64, Proo
     })
 }
 
-/// Refuse a mined reply gathered below the witness count.
+/// Refuse a mined reply this witness does not cover.
 ///
-/// That relation is the rollback half of [`SyncedChainFacts`]'s chain view:
-/// the witness was read first, and a later tx reply whose implied count sits
-/// below it was gathered on a chain that had already moved down. Ordinary
-/// advance (gather at or above the witness) is kept, and the confirmation
-/// count is still the daemon's number — this does not recompute it.
+/// Two relations, both "do not turn this reply into a verdict":
+///
+/// - The implied gather count sits below the witness. The witness was
+///   read first, so that reply was gathered on a chain that had already
+///   moved down.
+/// - The tx's own block is above the witness tip. Extra blocks can arrive
+///   and leave again without replacing the tip, so a bracket of the tip
+///   hash does not cover them. Confirmations stacked on a block that is
+///   already inside the witness are kept, and the count stays the
+///   daemon's number.
 ///
 /// # Errors
 ///
-/// [`ProofsError::Daemon`] when the arithmetic overflows or the gather sits
-/// below the witness. Both are "do not turn this reply into a verdict".
+/// [`ProofsError::Daemon`] when the arithmetic overflows, the gather sits
+/// below the witness, or the tx block is above the witness tip.
 fn admit_mined_against_witness(
     witness: &SyncedChainFacts,
     block_height: u64,
@@ -339,12 +344,16 @@ fn admit_mined_against_witness(
 ) -> Result<(), ProofsError> {
     let gather = gather_chain_count(block_height, confirmations)?;
     if gather < witness.chain_height().to_raw() {
-        Err(ProofsError::Daemon(RpcError::InvalidNode(
+        return Err(ProofsError::Daemon(RpcError::InvalidNode(
             "transaction was read below the synchronized chain count".into(),
-        )))
-    } else {
-        Ok(())
+        )));
     }
+    if block_height > witness.tip().to_raw() {
+        return Err(ProofsError::Daemon(RpcError::InvalidNode(
+            "transaction block is above the synchronized chain".into(),
+        )));
+    }
+    Ok(())
 }
 
 /// A synchronized chain a proof may be checked against.
@@ -355,10 +364,11 @@ fn admit_mined_against_witness(
 /// query are methods: a check cannot issue them without holding a view.
 /// Outbound generation does not use this type.
 ///
-/// The witness is not discarded. A mined reply is admitted against it, so a
-/// rollback between `get_info` and `get_transactions` cannot become a
-/// verdict. A daemon that lies `synchronized` is outside what the witness
-/// proves; that limit is the type's own.
+/// The witness is not discarded. A mined reply is admitted only when its
+/// block is inside that prefix and its gather is not below it, so neither
+/// a rollback nor a block the witness never saw can become a verdict.
+/// A daemon that lies `synchronized` is outside what the witness proves;
+/// that limit is the type's own.
 pub(crate) struct ProofChainView {
     witness: SyncedChainFacts,
 }
@@ -545,6 +555,28 @@ mod witness_admission {
             matches!(err, ProofsError::Daemon(_)),
             "expected Daemon, got {err:?}"
         );
+    }
+
+    /// Bites against admitting a tx whose block the witness never saw.
+    /// One confirmation in the next block has a gather above the witness,
+    /// and the tip hash is unchanged. Does not cover a confirmation
+    /// stacked on a block already inside the witness.
+    #[test]
+    fn a_block_above_the_witness_tip_is_not_a_chain_verdict() {
+        let err = admit_mined_against_witness(&witness_at(GATHER), GATHER, 1)
+            .expect_err("the next block is not this witness");
+        assert!(
+            matches!(err, ProofsError::Daemon(_)),
+            "expected Daemon, got {err:?}"
+        );
+    }
+
+    /// The witness tip itself is covered. The bracket, not this check,
+    /// refuses a replacement of that block.
+    #[test]
+    fn the_witness_tip_block_is_admitted() {
+        admit_mined_against_witness(&witness_at(GATHER), GATHER - 1, 1)
+            .expect("the tip block is the witness");
     }
 
     /// Bites against a wrapping add. Does not cover a short confirmation
