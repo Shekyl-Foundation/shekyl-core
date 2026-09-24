@@ -1250,8 +1250,7 @@ bool t_rpc_command_executor::print_blockchain_dynamic_stats(uint64_t nblocks)
   // RK-5b: `get_fee_estimate` and `get_block_headers_range` are served from
   // Rust, and the whole command renders there. The `hard_fork_info` leg is
   // gone rather than moved: its only use was choosing between "byte" and
-  // "kB", and `HF_VERSION_PER_BYTE_FEE` is 1 on a chain whose HardFork is
-  // constructed with original_version 1, so the "kB" arm was unreachable.
+  // "kB", and the "kB" arm was unreachable from genesis.
   return run_rust_console({"print_blockchain_dynamic_stats", std::to_string(nblocks)});
 }
 

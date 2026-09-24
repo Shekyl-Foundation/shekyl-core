@@ -276,14 +276,11 @@
 #define THREAD_STACK_SIZE                       5 * 1024 * 1024
 
 // Rebooted chain: all features active from genesis (HF 1).
-// Only constants still referenced in production code are kept.
+// Unreferenced Monero-era names (CryptoNight, smaller BP, long-term weight,
+// Bulletproof+) are deleted. The names that remain are version-1 aliases
+// still passed into height lookups and tests; they do not select a code path.
 #define HF_VERSION_DYNAMIC_FEE                  1
-#define HF_VERSION_CRYPTONIGHT_VARIANT_1        1
-#define HF_VERSION_PER_BYTE_FEE                 1
-#define HF_VERSION_SMALLER_BP                   1
-#define HF_VERSION_LONG_TERM_BLOCK_WEIGHT       1
 #define HF_VERSION_EXACT_COINBASE               1
-#define HF_VERSION_BULLETPROOF_PLUS             1
 #define HF_VERSION_VIEW_TAGS                    1
 #define HF_VERSION_2021_SCALING                 1
 #define HF_VERSION_SHEKYL_NG                    1  // Three-component economics: release rate, burn, staking

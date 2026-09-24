@@ -150,9 +150,8 @@ pub const COINBASE_BLOB_RESERVED_SIZE: usize = 600;
 /// Per-transaction weight limit (`get_transaction_weight_limit`,
 /// `src/cryptonote_core/tx_verification_utils.cpp`): half the minimum block
 /// weight minus the coinbase reserve. A compile-time constant on Shekyl
-/// (v3-from-genesis: `HF_VERSION_PER_BYTE_FEE = 1`, so the `/ 2` arm always
-/// applies — the daemon-rpc submit facts pin the same 149 400 value from the
-/// C++ side). Tx weight is the serialized size plus the Bp+ verification
+/// (the half-weight arm is unconditional from genesis; the daemon-rpc submit
+/// facts pin the same 149 400 value from the C++ side). Tx weight is the serialized size plus the Bp+ verification
 /// clawback ([`bp_plus_weight_clawback`]); the mempool refuses any tx whose
 /// weight exceeds this, so builders must bound against it, never against
 /// [`MAX_TX_SIZE`].
