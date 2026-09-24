@@ -9,8 +9,11 @@ Concurrent lanes each work in their own `git worktree` (`06-branching.mdc`).
 A worktree left open between edits — by an agent across tool calls, by an
 editor with the file loaded — has been observed to **revert edited files
 to an earlier buffer** with no diff shown to whoever made the edit. This
-rule exists because that has now happened in two independent lanes, and
-the cause is environmental rather than anything either lane did (a third instance followed in the same lane, below).
+rule exists because that has happened in three lanes, eleven times. It was
+first recorded as environmental; the `wt-e6-s6` entry below names the
+mechanism by elimination — **a tracked file rewritten on disk by something
+other than the edit tool while an editor buffer still held its older
+text** — and what closes or reopens that finding.
 
 ## The observed failure
 
@@ -37,6 +40,24 @@ the cause is environmental rather than anything either lane did (a third instanc
   sufficient: **before staging a file you edited, diff it against `HEAD`
   and read every hunk you did not make.** Fixed by a follow-up commit; the
   pushed tip was wrong for eight minutes.
+- **`wt-e6-s6` (2026-09-24) — the mechanism, by elimination.** Instances
+  nine, ten and eleven in one lane, one day, one signature: after each
+  push, `git status` showed the file most recently **rewritten on disk
+  behind an open editor buffer** — by `cargo fmt`, or by a `python3`
+  heredoc that read a tracked file and wrote it back whole (`sed -i` by
+  another name; the standing rule against `sed -i` on tracked files was
+  being honoured in letter only) — reverted to that buffer's pre-rewrite
+  text. Never a file only the edit tool had touched. All seven instances
+  that had a file named involved a file an editor had open. The
+  in-place rewrites were retired that afternoon; the next pushes were
+  clean. **Recorded as the cause rather than as a coincidence, with the
+  falsifier stated:** a further drift instance on a file no out-of-editor
+  process rewrote reopens "environmental"; several more clean pushes
+  close it. Until then the sentence above — *environmental* — is the
+  hypothesis this one replaces, and constraint 2 (verify from a fresh
+  clone) is a **belt**, kept, not the mitigation for an unknown cause.
+  Operationally: edit tracked files with the edit tool only; let `cargo
+  fmt` be the one out-of-editor writer, and check `git status` after it.
 
 Both were caught by a human or an agent reading the diff. That does not
 scale, and it is not the dangerous case. **The dangerous case is a drift

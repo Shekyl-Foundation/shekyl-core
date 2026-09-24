@@ -750,8 +750,13 @@ pass-through exactly as the trace supplied it.
 
 **The `unreachable!` finding — raised above a FOLLOWUPS row on review, and
 acted on (2026-09-24).** The count reported here was four; the review's
-was nine, and reading every site gave a different picture in both
-directions. `difficulty.rs` `const ONE`'s bare arm is compiler-proven (a
+was nine-with-four-unread, and reading every site gave a different
+picture in both directions — including that two of the "unread" four were
+the same `AboveTip` shape as the two the review had named. **Both
+enumerations were partial and both were wrong in the same direction**,
+because the sites that looked different at a glance were identical at the
+line; the count that held was the one taken by reading every site, not by
+grepping and classifying the hits by their surroundings. `difficulty.rs` `const ONE`'s bare arm is compiler-proven (a
 const item; if reachable the crate would not build — the strongest
 argument available, needing no message). `miner.rs::priced` has the
 analysis written at the site and is the in-tree standard: *a `unreachable!`
