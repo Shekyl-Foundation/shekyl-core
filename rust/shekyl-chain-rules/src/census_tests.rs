@@ -179,7 +179,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // pending here, like I19, until the 4.I slice (slice 6) wires
     // `check_tx_extra_shape` — I19 + I20 in one function; slice 4 (4.F)
     // landed 2026-09-22 without either, as CHAIN_RULES_SLICE_4.md S21 records.
-    assert_eq!(CenRow::ALL.len(), 153);
+    // 153 → 154 on 2026-09-23: CEN-L16 (the store-evaluated holds-shard
+    // predicate, an R8-class placement row minted by S-ARCH's pre-flight,
+    // DRS_E1_SARCH.md SAR-2 / SAR-7) — pending here until E4 moves the fold
+    // to shekyl-archival-retention and slice 8 judges through it.
+    assert_eq!(CenRow::ALL.len(), 154);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 

@@ -1350,11 +1350,11 @@ pub fn compute_output_key_image(
     Ok(result)
 }
 
-/// Compute key image from pre-derived `ho` (for `tx_source_entry` boundary).
+/// Compute key image from a pre-derived `ho`.
 ///
-/// Same as `compute_output_key_image` but takes `ho` directly instead of
-/// `combined_ss`. Used at the single site where `ho` has already crossed
-/// the wallet -> tx_utils boundary via `tx_source_entry`.
+/// Same arithmetic as [`compute_output_key_image`], which derives `ho` itself
+/// and is what the scanner and the engine call. This entry exists for the one
+/// site that already holds `ho`: `shekyl_scan_and_recover`.
 pub fn compute_output_key_image_from_ho(
     ho: &[u8; 32],
     spend_secret: &[u8; 32],

@@ -1,7 +1,7 @@
 //! FFI integration test: construct output -> scan -> build tree -> sign -> verify.
 //!
 //! Exercises the full `shekyl_sign_fcmp_transaction` -> `shekyl_fcmp_verify` cycle
-//! through C-ABI FFI calls, following the same pattern as `cache_ffi_round_trip.rs`.
+//! through C-ABI FFI calls.
 
 #![allow(
     clippy::borrow_as_ptr,

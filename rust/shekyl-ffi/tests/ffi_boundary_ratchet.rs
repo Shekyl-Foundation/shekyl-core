@@ -94,7 +94,10 @@ const BASELINE: &[(&str, usize, usize)] = &[
     ("legacy_frost.rs", 2, 3),
     ("legacy_proofs.rs", 4, 0),
     ("legacy_tests.rs", 3, 0),
-    ("legacy_tx.rs", 1, 2),
+    // 2 -> 1 with_capacity: the wallet-cache envelope export was the other
+    // reserve, and it left with the callerless cache FFI. The remaining
+    // reserve is the collapsed-sign input vec.
+    ("legacy_tx.rs", 1, 1),
     ("levin_ffi.rs", 4, 0),
     ("pow_randomx_ffi.rs", 1, 0),
     // Curve-tree replica (test-generator surface, 2026-09-05): one typed-slice

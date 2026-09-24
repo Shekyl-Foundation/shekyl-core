@@ -1124,6 +1124,12 @@ impl From<StoreError> for ClientError {
     }
 }
 
+// CT-6 increment 2. The oracle fixture and the Q2 examiner live here so
+// this file does not absorb them. Increment 4's tests grade the real
+// segment tier and snapshot tier through `examine_tier_readings`.
+#[cfg(test)]
+mod ct6_oracle;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1141,7 +1147,7 @@ mod tests {
         0x66, 0x66,
     ];
 
-    fn coinbase_raw() -> RawOutput {
+    pub(super) fn coinbase_raw() -> RawOutput {
         RawOutput {
             output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
             commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
@@ -1195,7 +1201,11 @@ mod tests {
         }
     }
 
-    fn ingest_outputs_at(client: &mut CurveTreeClient, height: u64, outputs: &[RawOutput]) {
+    pub(super) fn ingest_outputs_at(
+        client: &mut CurveTreeClient,
+        height: u64,
+        outputs: &[RawOutput],
+    ) {
         let blob = leaf_blob(outputs.len());
         let txs = coinbase_block(outputs, &blob);
         client

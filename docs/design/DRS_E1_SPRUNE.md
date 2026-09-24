@@ -17,7 +17,18 @@ the Round-0 pre-flight are DRS-E's; the filename is provisional until DRS
 numbers the increment (`FOLLOWUPS.md`'s F31 row is the falsifier). **The
 Q1 gate is cleared:** `PDM-Q1` RULED 2026-09-18 (§9 of the charter graded
 against the tx unit), so the plan **may open**; its Round-0 pre-flight owes
-Q1's journal-horizon check alongside (§9 below).
+Q1's journal-horizon check alongside (§9 below). **One dependency this plan
+cannot discharge itself, stated on its face (2026-09-23, on PR #840):** the
+undo-log retention floor this surface inherits from `SCW-7` /
+`pop_target_allowed` is bounded below by **`D_max`, whose numeric is
+PROVISIONAL** (`PDM-Q11` RULED 2026-09-17 — shape frozen, `720` provisional,
+home `CEN-E2`). A watermark fixed before that constant is confirmed is picked
+by implementation convenience and inherited as if ruled — R8's shape exactly.
+So the plan may be *written* now, but its watermark section names `D_max` as
+an operand, not a number, until `PDM-Q11`'s numeric is confirmed; the
+increment does not cut before then. Falsify by: `PDM-Q11`'s section losing
+the word PROVISIONAL, or the row in §3 that today reads `retention ≥ D_max`
+acquiring a literal.
 
 **Family:** none minted here. Findings and questions this document raises
 at pre-flight take DRS-E's next free series (rule 94 §1), not a `PDM-` id.

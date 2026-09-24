@@ -140,7 +140,7 @@ pub struct ShekylFcmpProveResult {
     pub success: bool,
 }
 
-/// Result of `shekyl_sign_transaction`.
+/// Result of `shekyl_sign_fcmp_transaction`.
 ///
 /// On success, `success` is true and `proofs_json` contains a JSON-encoded
 /// `SignedProofs` (BP+, FCMP++, ECDH, pseudo-outs, tree metadata).
