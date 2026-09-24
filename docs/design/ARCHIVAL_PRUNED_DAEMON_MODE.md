@@ -809,9 +809,9 @@ different states and the table says which.**
 | `RF-D1` — `leaf_bytes`, 128 B on the kept vin (`ARCHIVAL_RESPONSE_FORMAT.md` §3.5) | **Reopened.** The claim was *one leaf*; under a whole-shard read there is no claimed transaction and no `tx_id` to claim — the identifier is `shard_id`, already on the vin. Kept side loses 128 B. | `RF-D1` re-prices the kept side (~230 B → ~100 B). The pruned half is the pass record's own `CtSigPrunable`, unchanged in kind. |
 | `RF-D6` — `SHARD_BYTES = 25,992 × 128`; `segment_subroot_rk`/`leaf_index_in_segment` off the wire | **Reopened, and half survives** — ~~the fixed byte *size* survives as the boundary metric (F32)~~ **retired entirely 2026-09-23 (item 5: fixed cardinality `T`; 3.33 MB is `T`'s sizing heuristic only)**; the "leaves × 128" derivation and the two off-wire leaf terms do not. | `RF-D6` restates: `SHARD_BYTES` is the boundary metric, body size bounded by `SHARD_BYTES + MAX_TX_SIZE`; the off-wire terms become `(b_k, b_{k+1})`, verifier-derived on the same argument. |
 | `challenge_leaf_index` + fire schedule; `c1_layers`/`c2_layers` path in the pruned record | **Retired by ruling (`RF-D8` (i) retracted 2026-08-26) — live in code.** `challenge.rs`, `path.rs`, `segment_freeze.rs`, `serve_credit_decisions.rs`, `wire.rs` (the `c1_layers` write at `:90`), the fuzz target, and the consensus call site all carry it. | **Deleted at E4 / S-ARCH** with the verifier row above. Not "no action". |
-| `LeafStore::frozen_segment` + the freeze pipeline | **Retired → Q12; the store itself is rebuilt, not deleted** (amended on #775). | Derivable membership (item 3, F32); a body store keyed by shard over `[b_k, b_{k+1})`. |
+| `LeafStore::frozen_segment` + the freeze pipeline | **Retired → Q12; the store itself is rebuilt, not deleted** (amended on #775). | Derivable membership (item 3, F32); a body store keyed by shard over `[k·T, (k+1)·T)` (item 5; was `[b_k, b_{k+1})`). |
 | `SF-D7` — memory floor `N × SHARD_BYTES` | **Re-keyed, then re-keyed again 2026-09-23 (item 5).** The floor is a cap on in-flight bytes; with per-tx streaming verification nothing materialises a shard, so the floor is **`N × MAX_TX_SIZE`** — one transaction per in-flight fetch. `N = 8` and the `L` candidate were measured at 3.33 MB and **stand as approximate** under `T`; re-measurement is the spike lane's. | Line-local in `ARCHIVAL_SHARD_FETCH.md`. |
-| `SF-D8` — verify seam "local `R_k` + countersignature" | **Reopened (content half); re-keyed (countersignature half).** Content-verify is per-tx via `Transaction::txid_parts()` against the two hash rows, plus membership against `(b_k, b_{k+1})`; the `SF-D8` request countersignature (72-byte anchor header ‖ `shard_id`) is unchanged and lives in sub-PR 1 (`PDM-Q-F25`). | Sub-PR 2's `ContentVerify`, `expected = (txs_prunable_hash, Option<txs_pqc_auth_hash>)` per `tx_id` in `[b_k, b_{k+1})`. |
+| `SF-D8` — verify seam "local `R_k` + countersignature" | **Reopened (content half); re-keyed (countersignature half).** Content-verify is per-tx via `Transaction::txid_parts()` against the two hash rows, plus membership against `(b_k, b_{k+1})`; the `SF-D8` request countersignature (72-byte anchor header ‖ `shard_id`) is unchanged and lives in sub-PR 1 (`PDM-Q-F25`). | Sub-PR 2's `ContentVerify`, `expected = (txs_prunable_hash, Option<txs_pqc_auth_hash>)` per `tx_id` in `[k·T, (k+1)·T)` (item 5). |
 | `SF-D1` — addressing clause ("no leaf addressing; materialise the segment") | **Re-keyed.** No per-tx addressing on the route either; the read is still whole-shard. The clause's *reason* (`R_k` needs the whole segment) is gone; its *conclusion* (one resource, one path) stands on `RF-R1` alone. | Line-local. |
 | `CR-D2` — carrier (pass-record partition) | **Re-keyed, kept side re-priced by `RF-D1`'s row** (~230 B → ~100 B). The partition itself is unchanged; the pruned half is inside the good (`PDM-Q-F15`). | Pointer, plus the re-price. |
 | `TJ-D` — this charter as design home | **Re-keyed.** TJ-D named leaves; the home is the same, the subject moved. | The two reconciliations TJ-D owes are restated against the tx unit in its own row. |
@@ -1389,7 +1389,8 @@ existence. *Rust, deleted:* `rust/shekyl-curve-tree/src/store/redb_backend.rs:16
 `segment_freeze.rs` and the freeze half of `challenge.rs` / `path.rs`
 (item 4's "retired by ruling, live in code" row — deleted at E4 /
 S-ARCH with the verifier). *Rust, rebuilt:* `LeafStore` becomes a
-body store keyed by shard `k` over `[b_k, b_{k+1})`, filled from the
+body store keyed by shard `k` over `[k·T, (k+1)·T)` (*re-keyed 2026-09-23,
+item 5; was `[b_k, b_{k+1})`*), filled from the
 local daemon during the specified-to-scarce window (Q9), served
 **whole-shard** (`WSS-Q7`; verification is per-tx, the read is not);
 `shekyl-p-host`'s `StoreShardProvider` **keeps reading it** — the
@@ -1404,7 +1405,7 @@ txid** — *amended 2026-09-19 by the wallet lane's `WSS-Q5` ruling
 ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.4): a filler holds the whole
 transaction, so it recomputes the consensus commitment itself rather than
 trusting a supplied digest; the hash rows remain the **discarding daemon's**
-own need for `DRS-D10` skeleton replay*; key by shard over `[b_k, b_{k+1})`; serve **whole-shard**
+own need for `DRS-D10` skeleton replay*; key by shard over `[k·T, (k+1)·T)` (item 5, 2026-09-23; `[b_k, b_{k+1})` at ruling); serve **whole-shard**
 (`WSS-Q7`, 2026-09-19 — `SF-D1`'s whole-shard read stands; it is *verification*
 that Q6 made per-tx)
 through `shekyl-p-serve` (`SF-D8`'s content half, sub-PR 2); carry its
