@@ -959,6 +959,7 @@ namespace nodetool
         cfg.m_clearnet_attach = &shekyl_clearnet_attach;
         cfg.m_clearnet_write = &shekyl_clearnet_write;
         cfg.m_clearnet_detach = &shekyl_clearnet_detach;
+        cfg.m_clearnet_read_done = &shekyl_clearnet_read_done;
         MINFO("public-zone clearnet transport encryption is on (Noise NNhfs test gate)");
       }
       else

@@ -88,3 +88,12 @@ pub unsafe extern "C" fn shekyl_clearnet_detach(link: *mut Link) {
         drop(Box::from_raw(link));
     }
 }
+
+/// # Safety
+/// `link` came from [`shekyl_clearnet_attach`] and has not been detached.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_clearnet_read_done(link: *mut Link) {
+    if !link.is_null() {
+        shekyl_p2p_transport::release_read_budget(&*link);
+    }
+}

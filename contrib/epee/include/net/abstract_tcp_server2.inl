@@ -1056,12 +1056,17 @@ namespace net_utils
   template<typename T>
   void connection<T>::detach_clearnet()
   {
-    if (!m_clearnet_link)
+    void* link = nullptr;
+    {
+      std::lock_guard<std::mutex> link_guard(m_clearnet_mu);
+      link = m_clearnet_link;
+      m_clearnet_link = nullptr;
+    }
+    if (!link)
       return;
     auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
     if (cfg.m_clearnet_detach)
-      cfg.m_clearnet_detach(m_clearnet_link);
-    m_clearnet_link = nullptr;
+      cfg.m_clearnet_detach(link);
   }
 
   template<typename T>
@@ -1078,8 +1083,29 @@ namespace net_utils
       return;
     }
     std::vector<uint8_t> copy(data, data + len);
-    boost::asio::post(self->m_strand, [keep, copy = std::move(copy)] {
-      keep->m_handler.handle_recv(copy.data(), copy.size());
+    boost::asio::post(self->strand_, [keep, copy = std::move(copy)] {
+      bool success = false;
+      {
+        std::lock_guard<std::mutex> guard(keep->m_state.lock);
+        keep->m_conn_context.m_last_recv = time(NULL);
+        keep->m_conn_context.m_recv_cnt += copy.size();
+        keep->start_timer(keep->get_timeout_from_bytes_read(copy.size()), true);
+      }
+      success = keep->m_handler.handle_recv(copy.data(), copy.size());
+      auto& cfg = static_cast<shared_state&>(keep->get_state());
+      void* link = nullptr;
+      {
+        std::lock_guard<std::mutex> link_guard(keep->m_clearnet_mu);
+        link = keep->m_clearnet_link;
+      }
+      if (link && cfg.m_clearnet_read_done)
+        cfg.m_clearnet_read_done(link);
+      if (!success)
+      {
+        std::lock_guard<std::mutex> guard(keep->m_state.lock);
+        if (keep->m_state.status == status_t::RUNNING)
+          keep->interrupt();
+      }
     });
   }
 
@@ -1194,14 +1220,17 @@ namespace net_utils
   template<typename T>
   bool connection<T>::do_send(byte_slice message)
   {
-    if (m_clearnet_link)
     {
-      auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
-      if (!cfg.m_clearnet_write)
-        return false;
-      const uint8_t* data = message.data();
-      const size_t len = message.size();
-      return cfg.m_clearnet_write(m_clearnet_link, data, len) == 0;
+      std::lock_guard<std::mutex> link_guard(m_clearnet_mu);
+      if (m_clearnet_link)
+      {
+        auto& cfg = static_cast<shared_state&>(connection_basic::get_state());
+        if (!cfg.m_clearnet_write)
+          return false;
+        const uint8_t* data = message.data();
+        const size_t len = message.size();
+        return cfg.m_clearnet_write(m_clearnet_link, data, len) == 0;
+      }
     }
     return send(std::move(message));
   }

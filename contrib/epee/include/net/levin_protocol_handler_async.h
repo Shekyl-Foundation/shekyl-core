@@ -114,6 +114,7 @@ public:
     void (*on_plain)(void* ctx, const uint8_t* data, size_t len), void* ctx);
   int32_t (*m_clearnet_write)(void* link, const uint8_t* data, size_t len);
   void (*m_clearnet_detach)(void* link);
+  void (*m_clearnet_read_done)(void* link);
 
   int invoke(int command, message_writer in_msg, std::string& buff_out, boost::uuids::uuid connection_id);
   template<class callback_t>
@@ -132,7 +133,7 @@ public:
   size_t get_in_connections_count();
   void set_handler(levin_commands_handler<t_connection_context>* handler, void (*destroy)(levin_commands_handler<t_connection_context>*) = NULL);
 
-  async_protocol_handler_config():m_pcommands_handler(NULL), m_pcommands_handler_destroy(NULL), m_initial_max_packet_size(LEVIN_INITIAL_MAX_PACKET_SIZE), m_max_packet_size(LEVIN_DEFAULT_MAX_PACKET_SIZE), m_invoke_timeout(LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED), m_clearnet_transport_encrypt(false), m_clearnet_network_id{}, m_clearnet_attach(NULL), m_clearnet_write(NULL), m_clearnet_detach(NULL)
+  async_protocol_handler_config():m_pcommands_handler(NULL), m_pcommands_handler_destroy(NULL), m_initial_max_packet_size(LEVIN_INITIAL_MAX_PACKET_SIZE), m_max_packet_size(LEVIN_DEFAULT_MAX_PACKET_SIZE), m_invoke_timeout(LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED), m_clearnet_transport_encrypt(false), m_clearnet_network_id{}, m_clearnet_attach(NULL), m_clearnet_write(NULL), m_clearnet_detach(NULL), m_clearnet_read_done(NULL)
   {}
   ~async_protocol_handler_config() { set_handler(NULL, NULL); }
   void del_out_connections(size_t count);

@@ -42,6 +42,7 @@ pub struct ClearnetSocket {
 
 impl ClearnetSocket {
     pub fn connect(stream: TcpStream, network_id: &NetworkId) -> Result<Self, AcceptError> {
+        stream.set_nonblocking(false).map_err(|_| AcceptError::Io)?;
         stream
             .set_read_timeout(Some(HANDSHAKE_DEADLINE))
             .map_err(|_| AcceptError::Io)?;
@@ -74,6 +75,7 @@ impl ClearnetSocket {
     }
 
     pub fn accept(stream: TcpStream, network_id: &NetworkId) -> Result<Self, AcceptError> {
+        stream.set_nonblocking(false).map_err(|_| AcceptError::Io)?;
         stream
             .set_read_timeout(Some(HANDSHAKE_DEADLINE))
             .map_err(|_| AcceptError::Io)?;
@@ -104,8 +106,9 @@ impl ClearnetSocket {
         })
     }
 
-    pub fn clear_read_timeout(&self) -> std::io::Result<()> {
-        self.stream.set_read_timeout(None)
+    pub fn clear_io_timeouts(&self) -> std::io::Result<()> {
+        self.stream.set_read_timeout(None)?;
+        self.stream.set_write_timeout(None)
     }
 
     pub fn shutdown(&self) -> std::io::Result<()> {
@@ -114,6 +117,17 @@ impl ClearnetSocket {
 
     pub fn try_clone_stream(&self) -> std::io::Result<TcpStream> {
         self.stream.try_clone()
+    }
+
+    fn into_io(
+        self,
+    ) -> (
+        crate::channel::SendHalf,
+        crate::channel::RecvHalf,
+        TcpStream,
+    ) {
+        let (send, recv) = self.channel.split_io();
+        (send, recv, self.stream)
     }
 
     pub fn write_plain(&mut self, plaintext: &[u8]) -> Result<(), AcceptError> {
@@ -220,12 +234,25 @@ pub fn run_pair(network_id: &NetworkId, first: &[u8]) -> Result<Vec<u8>, AcceptE
     Ok(got)
 }
 
-/// A socket Rust owns after the C++ handoff. The read loop calls `on_plain`
-/// outside the lock so a write from that callback cannot deadlock.
+/// How many plaintext writes may sit ahead of the socket. Past this, `write`
+/// fails instead of blocking the caller or growing without a bound.
+const WRITE_QUEUE: usize = 8;
+/// How many received records may be waiting on the C++ strand.
+const READ_IN_FLIGHT: usize = 4;
+
+struct Budget {
+    in_flight: usize,
+    stop: bool,
+}
+
+/// A socket Rust owns after the C++ handoff. The reader never holds the
+/// writer, so a Levin send cannot deadlock on a blocked read.
 pub struct Link {
-    io: std::sync::Arc<std::sync::Mutex<ClearnetSocket>>,
+    outbound: std::sync::Mutex<Option<std::sync::mpsc::SyncSender<Vec<u8>>>>,
     killer: TcpStream,
+    budget: std::sync::Arc<(std::sync::Mutex<Budget>, std::sync::Condvar)>,
     reader: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    writer: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 pub type PlainCallback = extern "C" fn(*mut std::ffi::c_void, *const u8, usize);
@@ -244,51 +271,153 @@ impl Link {
             ClearnetSocket::accept(stream, network_id)?
         };
         let killer = sock.try_clone_stream().map_err(|_| AcceptError::Io)?;
-        sock.clear_read_timeout().map_err(|_| AcceptError::Io)?;
-        let io = std::sync::Arc::new(std::sync::Mutex::new(sock));
-        let reader_io = std::sync::Arc::clone(&io);
-        // The connection pointer is an integer across the thread boundary.
-        // C++ keeps the connection alive until detach joins this thread.
+        sock.clear_io_timeouts().map_err(|_| AcceptError::Io)?;
+        let (send, recv, write_stream) = sock.into_io();
+        let read_stream = killer.try_clone().map_err(|_| AcceptError::Io)?;
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(WRITE_QUEUE);
+        let budget = std::sync::Arc::new((
+            std::sync::Mutex::new(Budget {
+                in_flight: 0,
+                stop: false,
+            }),
+            std::sync::Condvar::new(),
+        ));
+        let writer_budget = std::sync::Arc::clone(&budget);
+        let writer = std::thread::spawn(move || {
+            let mut send = send;
+            let mut write_stream = write_stream;
+            while let Ok(plain) = rx.recv() {
+                if writer_budget.0.lock().map(|g| g.stop).unwrap_or(true) {
+                    break;
+                }
+                let Ok(wire) = send.seal(&plain) else {
+                    break;
+                };
+                if write_stream.write_all(&wire).is_err() {
+                    break;
+                }
+            }
+        });
+        let reader_budget = std::sync::Arc::clone(&budget);
         let ctx_bits = ctx as usize;
         let reader = std::thread::spawn(move || {
-            let mut buf = [0u8; 8192];
+            let mut recv = recv;
+            let mut read_stream = read_stream;
+            let mut inbound = Vec::new();
+            let mut plain = Vec::new();
+            let mut tmp = [0u8; 4096];
             loop {
-                let n = {
-                    let mut guard = match reader_io.lock() {
-                        Ok(g) => g,
-                        Err(_) => return,
-                    };
-                    match guard.read_plain(&mut buf) {
-                        Ok(n) => n,
-                        Err(_) => return,
-                    }
-                };
-                if n == 0 {
+                if !wait_budget(&reader_budget) {
                     return;
                 }
-                on_plain(ctx_bits as *mut std::ffi::c_void, buf.as_ptr(), n);
+                let n = match pull_plain(
+                    &mut recv,
+                    &mut read_stream,
+                    &mut inbound,
+                    &mut plain,
+                    &mut tmp,
+                ) {
+                    Ok(n) => n,
+                    Err(_) => return,
+                };
+                if n == 0 {
+                    continue;
+                }
+                if let Ok(mut guard) = reader_budget.0.lock() {
+                    guard.in_flight += 1;
+                }
+                on_plain(ctx_bits as *mut std::ffi::c_void, plain.as_ptr(), n);
+                plain.drain(..n);
             }
         });
         Ok(Box::new(Self {
-            io,
+            outbound: std::sync::Mutex::new(Some(tx)),
             killer,
+            budget,
             reader: std::sync::Mutex::new(Some(reader)),
+            writer: std::sync::Mutex::new(Some(writer)),
         }))
     }
 
     pub fn write(&self, plaintext: &[u8]) -> Result<(), AcceptError> {
-        let mut guard = self.io.lock().map_err(|_| AcceptError::Io)?;
-        guard.write_plain(plaintext)
+        let guard = self.outbound.lock().map_err(|_| AcceptError::Io)?;
+        let Some(tx) = guard.as_ref() else {
+            return Err(AcceptError::Io);
+        };
+        tx.try_send(plaintext.to_vec()).map_err(|_| AcceptError::Io)
     }
 
+    /// Unblock the reader and writer, then join them.
     pub fn shutdown(&self) {
+        if let Ok(mut budget) = self.budget.0.lock() {
+            budget.stop = true;
+            self.budget.1.notify_all();
+        }
         let _ = self.killer.shutdown(std::net::Shutdown::Both);
+        if let Ok(mut slot) = self.outbound.lock() {
+            slot.take();
+        }
+        if let Ok(mut slot) = self.writer.lock() {
+            if let Some(writer) = slot.take() {
+                let _ = writer.join();
+            }
+        }
         if let Ok(mut slot) = self.reader.lock() {
             if let Some(reader) = slot.take() {
                 let _ = reader.join();
             }
         }
     }
+}
+
+fn wait_budget(budget: &std::sync::Arc<(std::sync::Mutex<Budget>, std::sync::Condvar)>) -> bool {
+    let Ok(mut guard) = budget.0.lock() else {
+        return false;
+    };
+    while guard.in_flight >= READ_IN_FLIGHT && !guard.stop {
+        guard = match budget.1.wait(guard) {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+    }
+    !guard.stop
+}
+
+/// C++ calls this once `handle_recv` has finished with a posted buffer.
+pub fn release_read_budget(link: &Link) {
+    if let Ok(mut guard) = link.budget.0.lock() {
+        guard.in_flight = guard.in_flight.saturating_sub(1);
+        link.budget.1.notify_one();
+    }
+}
+
+fn pull_plain(
+    recv: &mut crate::channel::RecvHalf,
+    stream: &mut TcpStream,
+    inbound: &mut Vec<u8>,
+    plain: &mut Vec<u8>,
+    tmp: &mut [u8],
+) -> Result<usize, AcceptError> {
+    if plain.is_empty() {
+        loop {
+            match recv.open_one(inbound) {
+                Ok((pt, used)) => {
+                    inbound.drain(..used);
+                    plain.extend_from_slice(&pt);
+                    break;
+                }
+                Err(RecordError::Truncated) => {
+                    let n = stream.read(tmp).map_err(|_| AcceptError::Io)?;
+                    if n == 0 {
+                        return Err(AcceptError::Io);
+                    }
+                    inbound.extend_from_slice(&tmp[..n]);
+                }
+                Err(e) => return Err(AcceptError::Record(e)),
+            }
+        }
+    }
+    Ok(plain.len())
 }
 
 impl Drop for Link {

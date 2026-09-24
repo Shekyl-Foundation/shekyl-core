@@ -14,7 +14,10 @@ mod noise;
 mod prefix;
 
 pub use channel::{Channel, Direction, RecordError, REKEY_NONCES};
-pub use conn::{handshake_deadline, run_pair, AcceptError, ClearnetSocket, Link, PlainCallback};
+pub use conn::{
+    handshake_deadline, release_read_budget, run_pair, AcceptError, ClearnetSocket, Link,
+    PlainCallback,
+};
 pub use noise::{
     pinned_initiator, Handshake, HandshakeError, Role, MESSAGE1_LEN, MESSAGE2_LEN, PROTOCOL_NAME,
 };

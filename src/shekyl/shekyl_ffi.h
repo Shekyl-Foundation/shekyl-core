@@ -4025,6 +4025,9 @@ int32_t shekyl_clearnet_write(void* link, const uint8_t* data, size_t len);
 /// Shut the channel down and join its reader. Consumes `link`.
 void shekyl_clearnet_detach(void* link);
 
+/// One posted plaintext buffer has been handed to the Levin handler.
+void shekyl_clearnet_read_done(void* link);
+
 } // extern "C"
 
 /// Owns a Rust-allocated ShekylBuffer for one C++ scope and returns it to

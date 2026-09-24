@@ -47,6 +47,7 @@
 #include <cassert>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <condition_variable>
 
 #include <boost/asio.hpp>
@@ -273,6 +274,7 @@ namespace net_utils
     state_t m_state{};
     t_protocol_handler m_handler;
     void* m_clearnet_link{};
+    std::mutex m_clearnet_mu;
     void detach_clearnet();
     static void clearnet_on_plain(void* ctx, const uint8_t* data, size_t len);
   public:
