@@ -42,18 +42,20 @@ use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, Tip};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
-    TreeLeaf, TreePosition, TxHash,
+    PCanonicalId, SettlementEpoch, ShardId, TreeLeaf, TreePosition, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
 use crate::codec::{
-    BlockInfo, CurveTreeState, OutTx, PropertyCell, TotalBurnedCell, TxOutputIndices,
+    ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CurveTreeState, OutTx, PropertyCell,
+    RMarket, SigmaWorkMilli, TotalBurnedCell, TxOutputIndices,
 };
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
+use super::archival_reads::{self, PassCount, ServedShard};
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
 use super::tx_reads::{self, Prunable, TxLocation, TxRecord};
@@ -823,6 +825,87 @@ impl ReadSnapshot<'_> {
     /// leaves in practice; this is not a full-tree walk.
     pub fn leaves(&self, range: Range<TreePosition>) -> Result<AtIndex<Vec<TreeLeaf>>, StoreError> {
         curve_reads::leaves(&self.txn, range).map_err(chain_reads::ReadFault::into_plain)
+    }
+}
+
+/// Archival reads (DRS-E1 S-ARCH). The bodies and the absence rules live in
+/// `archival_reads`.
+impl ReadSnapshot<'_> {
+    /// **A1.** `archival_bond[persona]`. `None` is no record. An undecodable
+    /// row is SI-7.
+    pub fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, StoreError> {
+        archival_reads::bond_record(&self.txn, persona).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A3.** Latest epoch `persona` served `shard`, one reverse seek.
+    /// `None` is never-served. SI-15 when rows exist and the persona has no
+    /// bond record.
+    pub fn last_served_epoch(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+    ) -> Result<Option<SettlementEpoch>, StoreError> {
+        archival_reads::last_served_epoch(&self.txn, persona, shard)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A4.** Every shard `persona` served, each with its latest epoch.
+    /// One reverse seek per served shard. Empty when the persona never served.
+    pub fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, StoreError> {
+        archival_reads::served_shards(&self.txn, persona)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A5.** Pass bits for `(persona, shard, epoch)`. [`PassCount::ZERO`]
+    /// when none.
+    pub fn pass_count(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<PassCount, StoreError> {
+        archival_reads::pass_count(&self.txn, persona, shard, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A6.** Co-holder count at `(shard, epoch)`. `None` is an epoch that
+    /// never closed; a written zero is a closed epoch with no co-holders.
+    pub fn r_market(
+        &self,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<RMarket>, StoreError> {
+        archival_reads::r_market(&self.txn, shard, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A7.** Frozen `Σwork(E)`, in milli-units. `None` is an epoch that
+    /// never closed.
+    pub fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError> {
+        archival_reads::sigma_work(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A8.** Frozen `budget(E)`. `None` is an epoch that never closed.
+    pub fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A9.** Slash watermark ([`ArchivalLastSlashEpochCell`]). `None` is
+    /// no epoch settled yet.
+    pub fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, StoreError> {
+        self.get_property::<ArchivalLastSlashEpochCell>()
+    }
+
+    /// **A10.** Attestation witness bytes, unparsed. [`AtHeight::AboveTip`]
+    /// past the tip; `Recorded(None)` when the recorded block stored no row;
+    /// `Recorded(Some(bytes))` for a non-empty row within the witness cap.
+    /// An empty or over-cap row is SI-7.
+    pub fn attestation_witness_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<Option<Vec<u8>>>, StoreError> {
+        archival_reads::attestation_witness_at(&self.txn, height)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 }
 

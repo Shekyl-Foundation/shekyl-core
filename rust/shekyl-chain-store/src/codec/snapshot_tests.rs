@@ -114,19 +114,20 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, BlockInfo, Canonical, Coded, CoverageGaps, CurveTreeState, LayerHash, LeafCount,
-    OutKey, OutTx, PassedThroughFacts, ProbeCell, PropertyCell, RuleSetInForce, SchemaVersion,
-    SettlementEpochBlocks, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS,
-    SCHEMA_VERSION,
+    post_image, BlockInfo, BondRecord, Canonical, Coded, CoverageGaps, CurveTreeState,
+    FirstPayingHeight, HeldShard, Holdings, LayerHash, LeafCount, OutKey, OutTx,
+    PassedThroughFacts, ProbeCell, PropertyCell, RMarket, RuleSetInForce, SchemaVersion,
+    SettlementEpochBlocks, SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
+    PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
 use shekyl_chain_rules::{CenRow, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
-    BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
-    OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash, Timestamp, TreeLeaf, TreePosition,
-    TxHash,
+    BadInterval, BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot,
+    LongTermWeight, OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash, SettlementEpoch,
+    ShardId, Timestamp, TreeLeaf, TreePosition, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -446,6 +447,96 @@ impl Fixtures for LayerHash {
     }
 }
 
+impl Fixtures for BondRecord {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        let base = BondRecord {
+            hybrid_pubkey: vec![0x11; 4],
+            bond_spend_pk: vec![0x22; 3],
+            endpoint: [0x33; 32],
+            join_settlement_epoch: SettlementEpoch::from_raw(3),
+            bonded_total: AtomicUnits::from_raw(1_000_000),
+            holdings: Holdings::CompleteTree,
+            bad_intervals: vec![],
+            claimed_settlement_epochs: vec![],
+            first_paying_emission_height: None,
+        };
+        vec![
+            // Every optional part absent: a complete tree, clean standing,
+            // nothing claimed, never paid — the join-time record.
+            ("complete_tree_at_join", base.clone()),
+            // Every part present, each with a distinct value: two held
+            // shards (insertion order kept, not sorted), an open bad interval
+            // followed by a zero-length clean-close marker, two claimed
+            // epochs strictly increasing, a first-paying height.
+            (
+                "compact_fully_populated",
+                BondRecord {
+                    holdings: Holdings::shard_set(vec![
+                        HeldShard {
+                            shard: ShardId::from_raw(42),
+                            add_epoch: SettlementEpoch::from_raw(3),
+                        },
+                        HeldShard {
+                            shard: ShardId::from_raw(7),
+                            add_epoch: SettlementEpoch::from_raw(5),
+                        },
+                    ])
+                    .expect("distinct, bounded"),
+                    bad_intervals: vec![
+                        BadInterval {
+                            start_epoch: 4,
+                            end_exclusive: BadInterval::OPEN_END,
+                        },
+                        BadInterval {
+                            start_epoch: 9,
+                            end_exclusive: 9,
+                        },
+                    ],
+                    claimed_settlement_epochs: vec![
+                        SettlementEpoch::from_raw(4),
+                        SettlementEpoch::from_raw(6),
+                    ],
+                    first_paying_emission_height: FirstPayingHeight::new(BlockHeight::from_raw(
+                        50_000,
+                    )),
+                    ..base
+                },
+            ),
+        ]
+    }
+}
+impl Fixtures for RMarket {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero_coholders_written", RMarket::from_raw(0)),
+            ("distinct", RMarket::from_raw(0x0102_0304_0506_0708)),
+        ]
+    }
+}
+impl Fixtures for SigmaWorkMilli {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", SigmaWorkMilli::from_raw(0)),
+            ("distinct", SigmaWorkMilli::from_raw(0x0102_0304_0506_0708)),
+        ]
+    }
+}
+impl Fixtures for SettlementEpoch {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", SettlementEpoch::from_raw(0)),
+            ("distinct", SettlementEpoch::from_raw(0x0102_0304_0506_0708)),
+        ]
+    }
+}
+impl Fixtures for ShardId {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", ShardId::from_raw(0)),
+            ("distinct", ShardId::from_raw(0x0102_0304_0506_0708)),
+        ]
+    }
+}
 impl Fixtures for CurveTreeRoot {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
@@ -971,6 +1062,11 @@ snapshotted_codecs! {
     TreeLeaf => codec_snapshot_tree_leaf,
     CurveTreeState => codec_snapshot_curve_tree_state,
     LayerHash => codec_snapshot_layer_hash,
+    BondRecord => codec_snapshot_bond_record,
+    RMarket => codec_snapshot_r_market,
+    SigmaWorkMilli => codec_snapshot_sigma_work_milli,
+    SettlementEpoch => codec_snapshot_settlement_epoch,
+    ShardId => codec_snapshot_shard_id,
 }
 
 /// The gate asserts its own arming state (rule 47). `UPDATE_SNAPSHOTS`

@@ -182,6 +182,11 @@ pub const PQC_HYBRID_SINGLE_KEY_LEN: usize = 1996;
 /// Single hybrid signature length — twin of `SINGLE_SIG_CANONICAL_LEN`.
 pub const PQC_HYBRID_SINGLE_SIG_LEN: usize = 3385;
 
+// The attestation-witness cap in `shekyl-types` factors this length in.
+// A signature-size change has to move the pin in the same edit.
+const _: () =
+    assert!(PQC_HYBRID_SINGLE_SIG_LEN == shekyl_types::archival::ATTESTATION_WITNESS_SIGNATURE_LEN);
+
 /// Transport bound on a serve-credit vin's opaque `canonical_bytes` (kept
 /// half, `RF-D1`): `tag(1) + p_id(32) + shard varint(≤10) + epoch varint(≤10)
 /// + Ed25519(64)`. The Rust codec (`shekyl-archival-retention::wire`) is the

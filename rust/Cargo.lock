@@ -3843,6 +3843,7 @@ name = "shekyl-chain-store"
 version = "3.1.0"
 dependencies = [
  "redb",
+ "serde_json",
  "shekyl-chain-rules",
  "shekyl-crypto-hash",
  "shekyl-difficulty",

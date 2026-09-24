@@ -123,6 +123,11 @@
 #![no_std]
 #![deny(unsafe_code)]
 
+// `alloc`, not `std`: the archival vocabulary (`archival::ShardSet`, a
+// bounded id list) needs `Vec`. A `no_std` consumer with any global
+// allocator — every crate that takes this one today — is unaffected.
+extern crate alloc;
+
 use core::fmt;
 
 /// Defines a `u64`-backed, transparent domain newtype with the common edge
@@ -873,6 +878,13 @@ hash32! {
     /// the canonical encoding, not a log line).
     PCanonicalId, redact
 }
+
+pub mod archival;
+pub use archival::{
+    BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindError, ShardSet, ShardSetError,
+    MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+};
 
 mod block_axis;
 

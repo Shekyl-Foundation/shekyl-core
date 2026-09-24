@@ -324,6 +324,45 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
 
 ### Daemon chain store
 
+- **DRS-E1 S-ARCH — the archival read surface, typed; the bond record's
+  first Rust type.** Schema layout **11**: `archival_bond`,
+  `archival_serve_credit`, `archival_r_market`, `archival_sigma_work`,
+  `archival_budget` and `archival_attestation_witness` leave `Unshaped`, and
+  `properties` gains a typed `archival_last_slash_epoch` cell. The persisted
+  bond record (`ArchivalBondValue` v7 in C++, a 350-line hand codec with a
+  kind byte and two index-parallel vectors) becomes `BondRecord`, a
+  `Canonical` codec with the same fields and the same genesis-frozen caps —
+  **same semantics, not byte-compatible**; nothing hashes or relays the
+  stored record — where the holdings are one sum type (a shard and its
+  add-epoch are one entry, so the parallel-vector desync the C++ made FATAL
+  is unrepresentable; the compact list is private and only the checked
+  constructor builds it), "not yet paid" is `None` and a paying height
+  cannot be zero, and every count is bounded by its consensus cap before
+  it sizes an allocation. Cross-checked
+  against the C++ encoder over a checked-in corpus
+  (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`, written by a C++ unit
+  test from the encoder E4 will delete), which caught the claimed-set span
+  rule the first Rust cut had missed. Nine reads on `ReadSnapshot`, each
+  absence carried by the type where the C++ returned a sentinel:
+  `bond_record` (no record is `None`, not a `u64::MAX` join epoch);
+  `last_served_epoch` / `served_shards` / `pass_count` over a tuple key
+  (one reverse seek per shard, never a full walk; the 56-byte packed LMDB
+  key is not inherited); `r_market` / `sigma_work` / `budget` return
+  `Option` — an epoch that never closed and a closed epoch with zero
+  co-holders were both `0` in C++; `last_settled_slash_epoch` (the cell;
+  the `u64::MAX` sentinel gone); `attestation_witness_at` tells a height
+  above the tip from a recorded block with an empty attestation set; an
+  empty or over-cap witness row is a store fault. The
+  emission gather shell is deleted rather than ported (its Rust consumer
+  already has the typed shape); the holds-shard fold, the alt-witness pair
+  and the prune watermark stay with E4, S-ALT and S-PRUNE by ruling.
+  Store invariant **SI-15** (serve-credit rows belong to a persona with a
+  record) is armed at the serve-credit reads. The shared archival
+  vocabulary (`ShardSet`, `HoldingsKind`, `BadInterval`, the four frozen
+  caps) moves to `shekyl-types`; the retention crate re-exports it and keeps
+  every fold. Pre-genesis: a daemon store at layout 10 is recreated, not
+  migrated. The write half — the connect-side hooks and the journals — is
+  E4's and unchanged.
 - **DRS-E1 S-CURVE — the curve-tree read surface, typed.** Schema layout
   **9**: `curve_tree_leaves`, `curve_tree_layers` and `curve_tree_meta` leave
   `Unshaped`. The meta table is **one row** (`CurveTreeState`: root, depth,

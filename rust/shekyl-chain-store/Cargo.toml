@@ -55,3 +55,7 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 # 2 F11): every landed rule, identical verdicts and coverage over both. The
 # feature is test-only by contract; see the rules crate's `[features]`.
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# The v7 cross-check corpus (`codec::archival_tests`) is JSON written by the
+# C++ unit test that still owns the decoder; read with the workspace's
+# serde_json (rule 17: already a workspace dependency, no new crate).
+serde_json = { workspace = true }

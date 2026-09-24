@@ -22,6 +22,7 @@
 
 use core::fmt;
 
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 macro_rules! store_id {
@@ -273,6 +274,154 @@ impl LayerChunk {
     pub const fn layer_range(layer: TreeLayer) -> core::ops::RangeInclusive<(u8, u64)> {
         let lo = Self::new(layer, ChunkIndex::FIRST).key();
         let hi = Self::new(layer, ChunkIndex::from_raw(u64::MAX)).key();
+        lo..=hi
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The serve-credit key (S-ARCH)
+// ---------------------------------------------------------------------------
+
+/// One serve-credit pass bit's key: `(persona, shard, epoch, height)`.
+///
+/// The C++ packed it as `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖ BE64(height)` —
+/// 56 bytes under LMDB's default byte comparator (`PC-D4`), which orders the
+/// four components lexicographically. redb's tuple `([u8; 32], u64, u64,
+/// u64)` orders component-wise, which is the same order over every key the
+/// pack could produce, with nothing to pin (`SCU-Q3`'s precedent). Fields
+/// are private: the tuple is assembled only through [`Self::key`] /
+/// [`Self::from_key`], and the three scans the reads take are the three
+/// range constructors — a persona's rows, a persona-and-shard's rows, a
+/// pair-epoch's rows — so the component order is written once.
+///
+/// Height is the **last** component so a `(P, s, E)` prefix's rows are
+/// contiguous and a `(P, s)` prefix's last row is that shard's latest epoch
+/// (the reverse seek A3 takes, `DRS_E1_SARCH.md` §3.2).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ServeCreditKey {
+    persona: PCanonicalId,
+    shard: ShardId,
+    epoch: SettlementEpoch,
+    height: BlockHeight,
+}
+
+/// The redb tuple a [`ServeCreditKey`] is stored under.
+pub type ServeCreditTuple = ([u8; 32], u64, u64, u64);
+
+impl ServeCreditKey {
+    /// The key for one pass bit.
+    #[must_use]
+    pub const fn new(
+        persona: PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+        height: BlockHeight,
+    ) -> Self {
+        Self {
+            persona,
+            shard,
+            epoch,
+            height,
+        }
+    }
+
+    /// Whose bit.
+    #[must_use]
+    pub const fn persona(&self) -> &PCanonicalId {
+        &self.persona
+    }
+
+    /// Which shard.
+    #[must_use]
+    pub const fn shard(self) -> ShardId {
+        self.shard
+    }
+
+    /// Which settlement epoch.
+    #[must_use]
+    pub const fn epoch(self) -> SettlementEpoch {
+        self.epoch
+    }
+
+    /// The height the credit was accepted at.
+    #[must_use]
+    pub const fn height(self) -> BlockHeight {
+        self.height
+    }
+
+    /// The redb key. An *edge* accessor: the tuple is the engine's shape.
+    #[must_use]
+    pub const fn key(self) -> ServeCreditTuple {
+        (
+            *self.persona.as_bytes(),
+            self.shard.to_raw(),
+            self.epoch.to_raw(),
+            self.height.to_raw(),
+        )
+    }
+
+    /// A key from the redb tuple. An *edge* constructor.
+    #[must_use]
+    pub const fn from_key((persona, shard, epoch, height): ServeCreditTuple) -> Self {
+        Self::new(
+            PCanonicalId::from_bytes(persona),
+            ShardId::from_raw(shard),
+            SettlementEpoch::from_raw(epoch),
+            BlockHeight::from_raw(height),
+        )
+    }
+
+    /// Every row of one persona: `(P, 0, 0, 0) ..= (P, MAX, MAX, MAX)`. The
+    /// hop scan A4 walks (`served_shards`).
+    #[must_use]
+    pub const fn persona_range(
+        persona: PCanonicalId,
+    ) -> core::ops::RangeInclusive<ServeCreditTuple> {
+        let lo = Self::new(
+            persona,
+            ShardId::ZERO,
+            SettlementEpoch::ZERO,
+            BlockHeight::ZERO,
+        )
+        .key();
+        let hi = Self::new(
+            persona,
+            ShardId::from_raw(u64::MAX),
+            SettlementEpoch::from_raw(u64::MAX),
+            BlockHeight::from_raw(u64::MAX),
+        )
+        .key();
+        lo..=hi
+    }
+
+    /// Every row of one persona-and-shard, all epochs: the range whose last
+    /// row is that shard's latest served epoch (A3, one reverse seek).
+    #[must_use]
+    pub const fn shard_range(
+        persona: PCanonicalId,
+        shard: ShardId,
+    ) -> core::ops::RangeInclusive<ServeCreditTuple> {
+        let lo = Self::new(persona, shard, SettlementEpoch::ZERO, BlockHeight::ZERO).key();
+        let hi = Self::new(
+            persona,
+            shard,
+            SettlementEpoch::from_raw(u64::MAX),
+            BlockHeight::from_raw(u64::MAX),
+        )
+        .key();
+        lo..=hi
+    }
+
+    /// Every row of one pair-epoch `(P, s, E)`, all heights: the prefix A5
+    /// counts (`pass_count`, `PC-D5`).
+    #[must_use]
+    pub const fn pair_epoch_range(
+        persona: PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> core::ops::RangeInclusive<ServeCreditTuple> {
+        let lo = Self::new(persona, shard, epoch, BlockHeight::ZERO).key();
+        let hi = Self::new(persona, shard, epoch, BlockHeight::from_raw(u64::MAX)).key();
         lo..=hi
     }
 }

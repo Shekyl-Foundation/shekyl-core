@@ -1,14 +1,22 @@
 # DRS-E1 S-ARCH — archival reads: increment plan and Round-0 pre-flight
 
-**Status:** OPEN — **Round 0 executed 2026-09-23** at `dev` @ `d8ebfd18c`;
+**Status:** LANDED — **implemented 2026-09-23** on the S-ARCH increment PR
+cut from `dev` @ `4dc5194de` (three commits, §7 as executed; layout
+**10 → 11**; nine reads A1, A3–A10 on `ReadSnapshot`; the bond record's
+first Rust type, `shekyl-chain-store::codec::archival::BondRecord`, cross-checked
+against the C++ v7 encoder over a checked-in corpus; SI-14 ruled, SI-15
+built); **Round 0 executed 2026-09-23** at `dev` @ `d8ebfd18c`;
 **Round 1 RULED 2026-09-23** (maintainer, on PR #840; §9, each row
 line-local): **Q1, Q2, Q4, Q5 defaults held; Q3 approved with one word
 checked (same *semantics*, not byte-compatible); Q6 approved with the
 reason the `Option` is load-bearing recorded; Q7 — defer the *port*, not
 the *row*: the store-evaluated predicate is minted as CEN-L16 now, an
-R8-class placement row C2-R8's write-path sweep never reached.** The
-increment may now be cut from `dev` (§7). This file stays in `design/` as
-the E1/E4 boundary statement (§0, §2.2, §2.3) until E4's plan owns it.
+R8-class placement row C2-R8's write-path sweep never reached.** Two
+as-built deviations from §3.4's default homes are recorded in §11
+(2026-09-23, "as built"): the record lives in the daemon store's codec, not
+`shekyl-types`, and the read set is six tables plus one `properties` cell,
+not seven tables. This file stays in `design/` as the E1/E4 boundary
+statement (§0, §2.2, §2.3) until E4's plan owns it.
 Implements *from* [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §5 (the
 S-ARCH row: extraction order **7**, "largest surface (18) and gated on the
 P0b journal audit"), §3.4 rule 3 ("Archival (DRS-E4): design typed cursors
@@ -198,13 +206,13 @@ error enum. The folds the C++ wraps around reads (#4, #5) live in
 | **A1** | `bond_record(&self, p: &PersonaId) -> Result<Option<BondRecord>, StoreError>` | #1, #2, #3, and the record half of #4, #5 | `archival_bond[p]`, decoded. `None` is "no bond record for `p`" — the reachable state every caller tests for (`bond_present`, `record_exists`, `have_record`). A row that does not decode is `CellCorrupt`. The pubkey (#2) and join epoch (#3) are fields; the C++'s `u64::MAX` join epoch on absence (`db_lmdb.cpp:5074`) is gone by the type. |
 | **A2** (`SAR-Q7`) | `slash_log_after(&self, p: &PersonaId, h: BlockHeight) -> Result<Vec<SlashLogEntry>, StoreError>` | the slash-log half of #5 | The rows of `archival_slash_log` at heights strictly above `h` whose persona is `p`, excluding epoch-marker rows (`db_lmdb.cpp:4804–4870`: the scan starts at `(h + 1, 0)`, and `h == u64::MAX` is `false` by construction so the start key cannot wrap — a bound the tuple key makes moot). The fold over them (`holds_shard_at(&BondRecord, ShardId, BlockHeight, &[SlashLogEntry])`) is the retention crate's. **Requires shaping `archival_slash_log`** — a journal whose fate is E4's first question (SAR-7); `SAR-Q7` RULED: not in this increment — A2 and the fold are E4's commit 1, the census row (CEN-L16) is this PR's. |
 | **A3** | `last_served_epoch(&self, p: &PersonaId, shard: ShardId) -> Result<Option<SettlementEpoch>, StoreError>` | #6 (per shard) | The greatest `epoch` with any row under `P ‖ shard` — one reverse seek in the composite key's own order (§4). `None` is never-served, which the Rust fold already treats as "cooldown vacuously elapsed" (`blockchain_db.h:2332–2339`); the marshal's omission of never-served shards becomes the type. |
-| **A4** | `served_shards(&self, p: &PersonaId) -> Result<Vec<(ShardId, SettlementEpoch)>, StoreError>` | #7 | The `P`-prefix hop scan: each served shard with its last-served epoch, one reverse seek per shard, never a full-table walk (`db_lmdb.cpp:6546–6650`). Empty for a persona that never served. |
+| **A4** | `served_shards(&self, p: &PersonaId) -> Result<Vec<ServedShard>, StoreError>` (*as built:* `ServedShard { shard, last_served }`, a named pair rather than a tuple) | #7 | The `P`-prefix hop scan: each served shard with its last-served epoch, one reverse seek per shard, never a full-table walk (`db_lmdb.cpp:6546–6650`). Empty for a persona that never served. |
 | **A5** | `pass_count(&self, p: &PersonaId, shard: ShardId, epoch: SettlementEpoch) -> Result<PassCount, StoreError>` | #8 | Rows under the pair-epoch prefix; `PassCount(0)` when none. A `u32` in C++ (`PC-D5`); the newtype keeps the bound. |
 | **A6** | `r_market(&self, shard: ShardId, epoch: SettlementEpoch) -> Result<Option<RMarket>, StoreError>` | #9 | `archival_r_market[(shard, epoch)]`. **`None`, not 0**: the C++ returns 0 on `MDB_NOTFOUND` (`db_lmdb.cpp:7929`) and every consumer then treats "no market row" as "zero co-holders", which is the absence-as-value class (SAR-8). A closed epoch with zero co-holders is a written `RMarket(0)`; an epoch that never closed is `None`. |
 | **A7** | `sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError>` | the gather's Σwork leg | Same shape and the same reason as A6 (`db_lmdb.cpp:7936–7950`, 0 on absence). |
-| **A8** | `budget(&self, epoch: SettlementEpoch) -> Result<Option<BudgetAtomic>, StoreError>` | the gather's budget leg | The frozen close row. The C++ gather already distinguishes absent from zero here (`has_budget_row`, `blockchain_db.h:554–558`) — the one place the C++ got the class right, and the reason the whole gather must keep the distinction rather than lose it in a `u64`. |
+| **A8** | `budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError>` (*as built:* `BudgetAtomic` is `AtomicUnits` itself, no second newtype) | the gather's budget leg | The frozen close row. The C++ gather already distinguishes absent from zero here (`has_budget_row`, `blockchain_db.h:554–558`) — the one place the C++ got the class right, and the reason the whole gather must keep the distinction rather than lose it in a `u64`. |
 | **A9** | `last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, StoreError>` | #13 | `properties["archival_last_slash_epoch"]` as a typed cell. `None` is "no epoch settled yet"; the C++ `u64::MAX` sentinel (`db_lmdb.cpp:5215`) is gone by the type. |
-| **A10** | `attestation_witness_at(&self, h: BlockHeight) -> Result<AtHeight<Option<AttestationWitness>>, StoreError>` | #15 | `archival_attestation_witness[h]`. Two absences the C++ collapsed into one empty blob (`blockchain_db.h:2672–2676`: "an empty attestation set, or a pruned/never-written height"): `AboveTip` for a height the chain has not reached; `Recorded(None)` for a recorded block whose attestation set was empty (the writer stores no row for an empty witness — `:2696–2700`'s rule for the alt twin, and `add_block`'s for this one). Whether a *pruned* height reads as `None` or as a third state is S-PRUNE's to say when it deletes anything here (`DRS_E1_SPRUNE.md` §11 names the witness rows); until a prune exists the two states are exhaustive. |
+| **A10** | `attestation_witness_at(&self, h: BlockHeight) -> Result<AtHeight<Option<Vec<u8>>>, StoreError>` (*as built:* the bytes, under `Blob<AttestationWitnessBytes>`; the parse stays the retention crate's) | #15 | `archival_attestation_witness[h]`. Two absences the C++ collapsed into one empty blob (`blockchain_db.h:2672–2676`: "an empty attestation set, or a pruned/never-written height"): `AboveTip` for a height the chain has not reached; `Recorded(None)` for a recorded block whose attestation set was empty (the writer stores no row for an empty witness — `:2696–2700`'s rule for the alt twin, and `add_block`'s for this one). Whether a *pruned* height reads as `None` or as a third state is S-PRUNE's to say when it deletes anything here (`DRS_E1_SPRUNE.md` §11 names the witness rows); until a prune exists the two states are exhaustive. |
 
 The gather (#10) is **deleted, not ported** (SAR-4): its Rust consumer,
 `emission_verify::EmissionEpochSource<'a>` / `ClaimantBondRecord<'a>`
@@ -264,6 +272,38 @@ them (`bond_connect.rs:60–396`, `release_cooldown.rs`).
 | `RMarket`, `SigmaWorkMilli`, `BudgetAtomic` | `u64` newtypes (`BudgetAtomic` = `AtomicUnits`) | `shekyl-types` / `shekyl-units` | Three close-row scalars the C++ stores as `BE64`; typed so `Option<RMarket>` cannot be added to a height. |
 | `AttestationWitness` | the witness blob, opaque to the store | `shekyl-types` (`shekyl-archival-retention/src/attestation_wire.rs` owns the parse) | Stored bytes; the store does not parse it. `Blob`, not `Coded`. |
 
+**As built (2026-09-23; the table above is the ruled default, this is the
+tree).** The shared *vocabulary* moved down as `SAR-Q2` ruled —
+`shekyl_types::archival` now owns `ShardSet`, `HoldingsKind`,
+`HoldingsDescriptor`, `BadInterval` and the four genesis-frozen caps
+(`MAX_HOLDINGS_SHARDS`, `MAX_BOND_BAD_INTERVALS`, `MAX_CLAIMED_EPOCH_ENTRIES`,
+`MAX_CLAIM_AGE_W_EPOCHS`), plus the attestation-witness byte cap
+(`MAX_ATTESTATION_WITNESS_BYTES`, the layout product, const-asserted equal
+to the retention crate's derivation and to `PQC_HYBRID_SINGLE_SIG_LEN`).
+The retention crate re-exports the vocabulary and keeps every fold (its own
+`MAX_CLAIM_AGE_W` and cap are const-asserted equal to the `shekyl-types`
+owners; `HoldingsKind::last_served_scan` became the extension trait
+`HoldingsKindScan`, because a fold-shaped method cannot ride a
+`shekyl-types` word). `PersonaId` is the existing `PCanonicalId`; `ShardId`
+and `SettlementEpoch` already existed there and gained `Canonical` impls in
+`shekyl-store-codec`. **The record itself did not move to `shekyl-types`:**
+`BondRecord`, `Holdings` (`ShardSet` carries a private `HeldShards` list,
+so only `Holdings::shard_set` can build one), `HeldShard`,
+`FirstPayingHeight` (a paying height cannot be zero), `RMarket`,
+`SigmaWorkMilli` and `AttestationWitnessBytes` live in
+`shekyl-chain-store::codec::archival`,
+because `bonded_total` is an `AtomicUnits` and `shekyl-units` is
+`shekyl-types`' sibling, not its dependency — the record cannot be spelled
+below the crate that owns its amount without adding an edge rule 18 did not
+ask for. Today the store is the record's only reader, so the daemon store's
+codec is the owning crate by the rule's own test. **Reopens** (rule 21) if
+E6 slice 8 needs `BondRecord` on `ChainView` — the record would then be
+carried across the validator boundary and the type would have two readers;
+the re-evaluation is slice 8's pre-flight, and the move is mechanical (the
+codec is `Canonical`, not tied to the store). `ServeCreditKey` and
+`PassCount` are where the table put them (`ids.rs`; `PassCount` in
+`store/archival_reads.rs`, exported from `store`).
+
 ### 3.5 What this surface inherits, and for how long
 
 - **The 56-byte packed serve-credit key** — **not inherited** (tuple key; the
@@ -293,20 +333,25 @@ them (`bond_connect.rs:60–396`, `release_cooldown.rs`).
 
 | Table | Key → value at v10 | After this increment (v11) | Read |
 |---|---|---|---|
-| `archival_bond` | `&[u8]` (32-byte `p_id`) → `Unshaped` | `PersonaId` → `Coded<BondRecord>` | A1 |
-| `archival_serve_credit` | `&[u8]` (56-byte packed) → `Unshaped` | `(PersonaId, ShardId, SettlementEpoch, BlockHeight)` → `Present` | A3, A4, A5 |
-| `archival_r_market` | `&[u8]` (`BE64 ‖ BE64`) → `Unshaped` | `(ShardId, SettlementEpoch)` → `Coded<RMarket>` | A6 |
-| `archival_sigma_work` | `u64` → `Unshaped` (BE64) | `SettlementEpoch` → `Coded<SigmaWorkMilli>` | A7 |
-| `archival_budget` | `u64` → `Unshaped` (BE64) | `SettlementEpoch` → `Coded<BudgetAtomic>` | A8 |
-| `archival_attestation_witness` | `u64` → `Unshaped` | `BlockHeight` → `Blob<AttestationWitness>` | A10 |
-| `properties["archival_last_slash_epoch"]` | `Blob<PropertyCellBytes>` | typed cell → `Option<SettlementEpoch>` | A9 |
+| `archival_bond` | `&[u8]` (32-byte `p_id`) → `Unshaped` | `[u8; 32]` (`PCanonicalId`'s bytes) → `Coded<BondRecord>` — **built** | A1 |
+| `archival_serve_credit` | `&[u8]` (56-byte packed) → `Unshaped` | `([u8; 32], u64, u64, u64)` via `ServeCreditKey::key` → `Present` — **built** | A3, A4, A5 |
+| `archival_r_market` | `&[u8]` (`BE64 ‖ BE64`) → `Unshaped` | `(u64, u64)` (shard, epoch) → `Coded<RMarket>` — **built** | A6 |
+| `archival_sigma_work` | `u64` → `Unshaped` (BE64) | `u64` (epoch) → `Coded<SigmaWorkMilli>` — **built** | A7 |
+| `archival_budget` | `u64` → `Unshaped` (BE64) | `u64` (epoch) → `Coded<AtomicUnits>` — **built** | A8 |
+| `archival_attestation_witness` | `u64` → `Unshaped` | `u64` (height) → `Blob<AttestationWitnessBytes>` — **built** | A10 |
+| `properties["archival_last_slash_epoch"]` | `Blob<PropertyCellBytes>` | typed cell `ArchivalLastSlashEpochCell` (chain-state, `settlement_epoch`) → `Option<SettlementEpoch>` — **built** (`properties.snap` `cells = 7`) | A9 |
 | `archival_shard_segment` | `u64` → `Unshaped` | **unchanged — retired table** (`PDM-Q12`; E4 deletes) | none |
 | `archival_alt_attestation_witness` | `LmdbHashKey` → `Unshaped` | unchanged (E5 S-ALT, `SAR-Q5`) | none |
 | `archival_slash_log` | `&[u8]` (`BE(height) ‖ BE(seq)`) → `Unshaped` | **`SAR-Q7`**: `(BlockHeight, JournalSeq)` → `Coded<SlashLogEntry>` if A2 lands here; unchanged if deferred to E4 | A2 |
 | `archival_settlement`, `archival_slash_applied`, `archival_budget_accrual`, the five other journals | `Unshaped` | unchanged — E4's writers shape them | none |
 
 Layout `SCHEMA_VERSION` 10 → 11 (rule 42; the snapshot moves by exactly the
-seven rows above — eight if `SAR-Q7` shapes the slash log here).
+seven rows above — eight if `SAR-Q7` shapes the slash log here). **As
+landed (2026-09-23):** the seven rows are **six tables and one `properties`
+cell** — `tables.snap` loses six `Unshaped` (28 → 22) and `properties.snap`
+gains one cell (6 → 7); `SAR-Q7` deferred, so the slash log did not move.
+"Seven tables" elsewhere in this file's Round-0 text counts the cell as a
+table; the snapshots are the count of record.
 
 ---
 
@@ -314,12 +359,14 @@ seven rows above — eight if `SAR-Q7` shapes the slash log here).
 
 | Row | Statement | Armed where |
 |---|---|---|
-| **SI-14** | **A bond record's holdings are one shape.** `Holdings::ShardSet` carries exactly one `add_epoch` per shard id, in shard-id order, ids distinct — the parallel-vector invariant the C++ checked at decode (`shekyl_types.h:1335–1470`) made unrepresentable by the type; a row that decodes to anything else is `CellCorrupt`. | A1 (decode) |
-| **SI-15** | **Serve-credit rows are keyed by persona.** Every `archival_serve_credit` key's `PersonaId` component has a bond record (`archival_bond[p]` exists) — the writer's precondition (the connect hook refuses a credit for an unknown persona, CEN-L7). Observed by A3/A4 as a walk that finds a prefix with no record. | A3, A4 |
+| **SI-14** | **A bond record's holdings are one shape.** `Holdings::ShardSet` carries exactly one `add_epoch` per shard id, ids distinct (~~in shard-id order~~ — struck as built: the C++ v7 record preserves *insertion* order and the corpus cross-check holds it, so the codec preserves order and refuses only duplicates and the cap) — the parallel-vector invariant the C++ checked at decode (`shekyl_types.h:1335–1470`) made unrepresentable by the type; a row that decodes to anything else is SI-7 (`CellCorrupt`). **Register status `ruled`, not `built`:** no `StoreInvariant` variant carries it, because the type leaves it nothing to observe — a duplicate or an over-cap set is refused by the codec at decode and surfaces as SI-7's `undecodable`, which is the register's existing arm. | A1 (decode, through SI-7) |
+| **SI-15** | **Serve-credit rows are keyed by persona.** Every `archival_serve_credit` key's `PersonaId` component has a bond record (`archival_bond[p]` exists) — the writer's precondition (the connect hook refuses a credit for an unknown persona, CEN-L7). Observed by A3/A4/A5 as a walk that finds a prefix with no record — **built**, `StoreInvariant::ServeCreditWithoutBond { persona }`; a walk that found no row asserts nothing (a query about a stranger is an answer). | A3, A4, A5 |
 
-Both register rows land with commit 1 (`STORE_INVARIANT_REGISTER.md`). No
-invariant is stated over the close rows (A6–A8): whether "an epoch that
-closed has all three rows" holds is E4's to assert when it writes them.
+Both register rows land with commit 1 (`STORE_INVARIANT_REGISTER.md`) — as
+executed, SI-14 with commit 1 and SI-15 with commit 2, each beside the code
+that arms it. No invariant is stated over the close rows (A6–A8): whether
+"an epoch that closed has all three rows" holds is E4's to assert when it
+writes them.
 
 ---
 
@@ -470,13 +517,33 @@ layout are not inherited (§3.5).
    `STORE_INVARIANT_REGISTER.md`, this file's status; the census's CEN-L10
    row gains the `PDM-Q12` note pointing at E4's deletion.
 
+**As executed (2026-09-23, three commits).** Commit 1 as planned, plus the
+v7 corpus's *writer*: a C++ gtest (`tests/unit_tests/archival_bond_record_v7_corpus.cpp`)
+that builds five records through `ArchivalBondValue`'s own encoder, asserts
+the C++ decoder round-trips them, and writes
+`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json` (bytes + fields, under
+`SHEKYL_WRITE_V7_CORPUS=1`) — because `archival_substrate_lmdb.cpp`'s
+fixtures are not stored blobs, and only the encoder E4 deletes can mint
+them. Commit 2 as planned; its corpus half rebuilds each `BondRecord` from
+the JSON's fields and asserts losslessness through the Rust codec and
+non-identity with the v7 bytes (`SAR-Q3`: same semantics, not
+byte-compatible). The corpus caught the claimed-set **span** rule
+(`last − first ≤ W = 26`, `shekyl_types.h`'s encoder throw) that the Rust
+codec's first cut had not carried — the check the round trip could not
+give, giving it. Commit 3 (the fold) did not exist — `SAR-Q7` deferred the
+port — so the docs commit is the third. `SI-14` landed `ruled` and `SI-15`
+`built` (§5).
+
 ---
 
 ## 8. Denominator — what must stay green, what must be extended
 
 - `check_chain_rules_no_store.sh` (the rules crate reaches no store).
 - Rule-42 schema snapshot: **must move**, and only by the seven tables +
-  version (the gate's diff is the review). **Arming checked 2026-09-23:**
+  version (the gate's diff is the review) — *moved as landed:* `tables.snap`
+  six rows (`Unshaped` 28 → 22), `properties.snap` one cell (6 → 7), five new
+  codec snapshots (`bond_record`, `r_market`, `sigma_work_milli`,
+  `settlement_epoch`, `shard_id`), `SCHEMA_VERSION` 11. **Arming checked 2026-09-23:**
   layout 11 is this lane's fifth bump (6 → 7 at slice 2's commit 9, the tx
   side's, S-CURVE's 8 → 9, the tx-data-prune deletion's 9 → 10 on 2026-09-22 —
   which this document first missed, writing "9 → 10" for its own bump until the
@@ -496,7 +563,14 @@ layout are not inherited (§3.5).
 - `check_store_unlock_time_projection.py`: unchanged.
 - E2's `pipeline_tests` and `digest_read_tests`: unchanged in outcome
   (SAR-11); they are the belt that proves it.
-- `cargo test -p shekyl-archival-retention` grows by commit 3's fold tests.
+- `cargo test -p shekyl-archival-retention` grows by commit 3's fold tests
+  — *as landed:* unchanged in count (no fold commit, `SAR-Q7`); the crate's
+  tests run against the moved vocabulary and stay green, and two
+  `const _:` assertions pin its `MAX_CLAIM_AGE_W` /
+  `MAX_CLAIMED_EPOCH_ENTRIES` to the `shekyl-types` owners.
+- The C++ `unit_tests` gain `archival_bond_record_v7_corpus` (the corpus
+  writer, §7 as executed); the checked-in JSON is read by
+  `shekyl-chain-store`'s `codec::archival_tests`.
 
 ---
 
@@ -514,13 +588,14 @@ layout are not inherited (§3.5).
 
 ---
 
-## 10. Documentation owed by the increment (rule 91)
+## 10. Documentation owed by the increment (rule 91) — discharged 2026-09-23 (commit 3)
 
 - `DAEMON_REDB_STORE.md` §5: S-ARCH row → LANDED with the mapping and the
-  gate re-read; §7.5 table 2's E4 rows gain "shapes minted by E1 S-ARCH".
+  gate re-read; §7.5 table 2's E4 rows gain "shapes minted by E1 S-ARCH". *(done)*
 - `IMPLEMENTATION_INDEX.md`: `SAR-` / `SAR-Q` rows lead with status; this
-  document's row.
-- `STORE_INVARIANT_REGISTER.md`: SI-14, SI-15.
+  document's row; the verification stamp moved to the increment's tree. *(done)*
+- `STORE_INVARIANT_REGISTER.md`: SI-14 (`ruled`, commit 1), SI-15 (`built`,
+  commit 2). *(done)*
 - `CONSENSUS_RULE_CENSUS.md`: **CEN-L16 minted by this PR** (Q7 as ruled: the
   row now, the port with E4) — §4.L row, counts 174 → 175 / 165 → 166 / bucket 1
   88 → 89, §7 #23; `CONSENSUS_STORE_RECONCILIATION.md` row UNREVIEWED by
@@ -530,11 +605,11 @@ layout are not inherited (§3.5).
   row notes `PDM-Q12` and the E4 deletion (SAR-5); no bucket move until E4
   deletes the code.
 - `CHAIN_RULES_SLICE_8` (when scaffolded) inherits `SAR-Q6`'s forward-action;
-  until then it is recorded in `DAEMON_REDB_STORE.md` table 3's 4.J row.
+  until then it is recorded in `DAEMON_REDB_STORE.md` table 3's 4.J row. *(done — the 4.J row carries it)*
 - `18-type-placement.mdc`: no change — the rule already covers this instance
   (`SCU-Q2`'s general form); this document cites it.
 - CHANGELOG: one entry (schema layout 11; the typed archival reads; the
-  bond record's Rust type).
+  bond record's Rust type). *(done)*
 
 ---
 
@@ -542,6 +617,8 @@ layout are not inherited (§3.5).
 
 | Date | Entry |
 |---|---|
+| 2026-09-24 | **Review of the read half, before merge.** `Holdings::ShardSet` carries a private list: `Holdings::shard_set` is the constructor and it calls `ShardSet::new`, so a duplicate or over-cap holding cannot be built and `descriptor` no longer panics on a value the type accepts. `first_paying_emission_height` is `Option<FirstPayingHeight>`; height 0 is the C++ unset sentinel and is refused at decode, and the type cannot hold it. `attestation_witness_at` runs `AttestationWitnessBytes::well_formed` (non-empty, at most `MAX_ATTESTATION_WITNESS_BYTES`) and an ill-formed row is SI-7. `served_shards` seeks to the next shard id; it does not rescan the persona prefix. |
+| 2026-09-23 | **As built — two deviations from the ruled defaults, disclosed by the increment's docs commit (rule 22).** **(1) The record's home.** `SAR-Q2` moved the shared vocabulary to `shekyl-types` and that landed as ruled; §3.4's table also put `BondRecord` there by default, and it did not go: `bonded_total` is an `AtomicUnits`, `shekyl-units` is `shekyl-types`' sibling, and rule 18's own test ("both crates need it") is not met while the daemon store is the record's only reader. `BondRecord`, `Holdings`, `HeldShard` and the three close-row scalars live in `shekyl-chain-store::codec::archival`; reopens on slice 8 needing the record on `ChainView` (§3.4 as-built). **(2) The count.** "Seven tables" was six tables and one `properties` cell; the snapshots (`tables.snap` 28 → 22 `Unshaped`, `properties.snap` 6 → 7) are the count of record (§4). **Two smaller corrections the tree made to the plan:** SI-14 lands `ruled`, not `built` — the codec refuses what it would observe, so SI-7 is its arm and no variant is minted for it; and its "in shard-id order" clause is struck, the v7 record preserving insertion order and the corpus proving it (§5). **What the corpus bought (carry 1 of PR #840):** the claimed-set span rule (`last − first ≤ W`), absent from the first Rust cut and present in the C++ encoder's throw — a rule the self round trip could not have found. |
 | 2026-09-23 | **Three carries into the increment** (maintainer, PR #840, after the rulings): **(1)** the v7 cross-check corpus — real `ArchivalBondValue` blobs decoded by the C++ reader, asserted equal to the Rust `BondRecord` (§7 commit 1/2), because a self round trip proves self-consistency and not identity, and the C++ decoder E4 deletes is the only oracle; **(2)** the schema gate's arming verified in the failing direction, not assumed (§8); **(3)** S-PRUNE's dependency on `PDM-Q11`'s provisional `D_max` moved onto that skeleton's banner (`DRS_E1_SPRUNE.md`), because a watermark fixed before the constant is confirmed is picked by implementation convenience — R8's shape. |
 | 2026-09-23 | **Round 1 RULED** (maintainer, PR #840). Q1, Q2, Q4, Q5 held (Q2 an application of rule 18, not a ruling; Q4 because `EmissionEpochSource` already exists and composition is the caller's). Q3 approved with the word checked: same *semantics*, not byte-compatible. Q6 approved, with why the `Option` is load-bearing regardless of slice 8's answer. **Q7 amended: defer the port, not the row** — CEN-L16 minted in this PR; the R8 sweep gap and its two siblings (slice 4 S25, slice 5 shard-set bound) folded into one census-lane question on the existing FOLLOWUPS row. **Process note acted on:** the §5 row's eighteen-day stale gate is the `DEFERRED_DOCS` self-expiry shape applied to plan-row blockers; measured over `docs/design/*.md` table rows — 119 blockers, 45 naming an identifier a gate could resolve, 74 prose — so it is a wish until blockers take rule 22's `blocked on <ID> — falsify by <check>` form; a FOLLOWUPS row proposes the lint (owner `DAEMON_REDB_STORE.md` §5). |
 | 2026-09-23 | **Round 0 executed** at `d8ebfd18c`. Eleven findings (SAR-1 … SAR-11); seven questions posed with defaults (SAR-Q1 … Q7). The surface's eighteen methods map to ten Rust reads: two are dead by ruling (SAR-5), one is a log operand and S-PRUNE's (SAR-6), two are E5 S-ALT's (`SAR-Q5`), one is E4's test hook, one is the gather shell §3.4 rule 3 said to delete (SAR-4), one wraps a fold that is already Rust behind an FFI shim, and one is a C++ consensus fold in the DB layer that reads the slash log as history (SAR-2, SAR-7) — its port travels with E4's journal ruling by default (`SAR-Q7`). The substrate fact that sizes the increment is SAR-9: the persisted bond record has no Rust type. The §5 row's gate was found lifted eighteen days before this read (rule 22). |
