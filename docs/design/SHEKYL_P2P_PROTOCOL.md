@@ -3370,12 +3370,12 @@ messages would silently halve or double the real budget when PWD-T6/PWD-B3 settl
 the framing.
 
 **Post-`Split` record framing (pinned 2026-09-24).** Each direction seals one
-Levin write as one record: an encrypted 2-byte big-endian length (plus its
-16-byte tag) then the encrypted body (plus its tag). The length AEAD's
-associated data is the three bytes `len`. The body's is the four bytes
-`body`. Empty associated data would let a length ciphertext be replayed as a
-body. Two nonce increments.
-Rekey is at 1,000 nonce increments, which is 500 records. A length in the
+Levin write as one or more records. A record is an encrypted 2-byte
+big-endian length (plus its 16-byte tag) then the encrypted body (plus its
+tag). The length AEAD's associated data is the three bytes `len`. The body's
+is the four bytes `body`. Empty associated data would let a length ciphertext
+be replayed as a body. Two nonce increments per record.
+Rekey is at 1,000 nonce increments. A length in the
 clear would publish Levin bucket sizes to every path observer. The 2-byte
 length cannot hold a 100 MB bucket, so a write larger than 65535 bytes is
 chunked and the receiver concatenates; that does not change PWD-T6's inherited
@@ -3525,12 +3525,11 @@ the network table**, which is what keeps the property true if a `NETWORK_ID`
 ever changes; **if one does pre-genesis, these three values re-derive** and
 PWD-T8's vectors re-mint with them.
 
-**The registry row is deliberately not added in this round.** The domain gate
-requires a registered literal to have a defining file and a `const` site, and
-P2P-2 implements nothing — a row now would fail CI for being honest about the
-schedule. `shekyl/p2p-wire-prefix-v1` registers **at the P2P-3 call site**,
-together with the mechanism-1 count-pin bump the gate requires; both halves are
-in the FOLLOWUPS item so neither can be dropped as an implementation detail.
+**The registry row landed with the call site (2026-09-24).** P2P-2 could not
+add it: the domain gate requires a registered literal to have a defining file
+and a `const` site, and that round implements nothing. `WIRE_PREFIX_DST` in
+`rust/shekyl-p2p-transport/src/prefix.rs` is that site, and
+`CRYPTO_DOMAIN_REGISTRY.tsv` carries `shekyl/p2p-wire-prefix-v1`.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |

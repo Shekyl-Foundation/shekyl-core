@@ -3,6 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
+#![deny(unsafe_code)]
+
 //! Clearnet network pipe: an 8-byte prefix, Noise NNhfs, then length-prefixed
 //! records. The bytes above the pipe are plaintext. This crate does not parse
 //! them, and it does not implement stem, fluff, or Levin.

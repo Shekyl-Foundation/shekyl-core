@@ -290,20 +290,19 @@ fn read_loop(
         return;
     }
     let deadline = Instant::now() + HANDSHAKE_DEADLINE;
-    let (send, mut recv) = match handshake(&mut stream, &network_id, initiator, deadline) {
+    let (send, mut recv) = match handshake(
+        &mut stream,
+        &network_id,
+        initiator,
+        deadline,
+        &mut |direction, n| note_wire(&session, direction, n),
+    ) {
         Ok(halves) => halves,
         Err(_) => {
             report_closed(&shared, session.hooks.on_closed, session.ctx);
             return;
         }
     };
-    let (wrote, read) = if initiator {
-        (INITIATOR_FLIGHT_LEN, RESPONDER_FLIGHT_LEN)
-    } else {
-        (RESPONDER_FLIGHT_LEN, INITIATOR_FLIGHT_LEN)
-    };
-    note_wire(&session, 1, wrote);
-    note_wire(&session, 0, read);
     if shared.stop.load(Ordering::Acquire) {
         return;
     }
@@ -449,21 +448,22 @@ pub(crate) fn handshake(
     network_id: &NetworkId,
     initiator: bool,
     deadline: Instant,
+    on_io: &mut dyn FnMut(i32, usize),
 ) -> Result<(SendHalf, RecvHalf), PipeError> {
     let halves = if initiator {
         let (ini, msg1) = Initiator::new(network_id).map_err(handshake_io)?;
         let mut flight = Vec::with_capacity(INITIATOR_FLIGHT_LEN);
         flight.extend_from_slice(&prefix_for(network_id));
         flight.extend_from_slice(&msg1);
-        write_all_deadline(stream, &flight, deadline)?;
-        read_prefix(stream, network_id, deadline)?;
+        write_all_deadline(stream, &flight, deadline, on_io)?;
+        read_prefix(stream, network_id, deadline, on_io)?;
         let mut msg2 = vec![0u8; MESSAGE2_LEN];
-        read_exact(stream, &mut msg2, deadline)?;
+        read_exact(stream, &mut msg2, deadline, on_io)?;
         ini.read_message2(&msg2).map_err(handshake_io)?.split()
     } else {
-        read_prefix(stream, network_id, deadline)?;
+        read_prefix(stream, network_id, deadline, on_io)?;
         let mut msg1 = vec![0u8; MESSAGE1_LEN];
-        read_exact(stream, &mut msg1, deadline)?;
+        read_exact(stream, &mut msg1, deadline, on_io)?;
         let ready = Responder::new(network_id)
             .read_message1(&msg1)
             .map_err(handshake_io)?;
@@ -471,7 +471,7 @@ pub(crate) fn handshake(
         let mut flight = Vec::with_capacity(RESPONDER_FLIGHT_LEN);
         flight.extend_from_slice(&prefix_for(network_id));
         flight.extend_from_slice(&msg2);
-        write_all_deadline(stream, &flight, deadline)?;
+        write_all_deadline(stream, &flight, deadline, on_io)?;
         established.split()
     };
     stream.set_read_timeout(None).map_err(|_| PipeError::Io)?;
@@ -492,16 +492,22 @@ fn read_prefix(
     stream: &mut TcpStream,
     network_id: &NetworkId,
     deadline: Instant,
+    on_io: &mut dyn FnMut(i32, usize),
 ) -> Result<(), PipeError> {
     let mut got = [0u8; PREFIX_LEN];
-    read_exact(stream, &mut got, deadline)?;
+    read_exact(stream, &mut got, deadline, on_io)?;
     if got != prefix_for(network_id) {
         return Err(PipeError::Prefix);
     }
     Ok(())
 }
 
-fn read_exact(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<(), PipeError> {
+fn read_exact(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    deadline: Instant,
+    on_io: &mut dyn FnMut(i32, usize),
+) -> Result<(), PipeError> {
     let mut filled = 0;
     while filled < buf.len() {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -513,7 +519,10 @@ fn read_exact(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Resu
             .map_err(|_| PipeError::Io)?;
         match stream.read(&mut buf[filled..]) {
             Ok(0) => return Err(PipeError::Io),
-            Ok(n) => filled += n,
+            Ok(n) => {
+                on_io(0, n);
+                filled += n;
+            }
             Err(err)
                 if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock =>
             {
@@ -529,24 +538,36 @@ fn write_all_deadline(
     stream: &mut TcpStream,
     bytes: &[u8],
     deadline: Instant,
+    on_io: &mut dyn FnMut(i32, usize),
 ) -> Result<(), PipeError> {
-    let left = deadline.saturating_duration_since(Instant::now());
-    if left.is_zero() {
-        return Err(PipeError::Timeout);
-    }
-    stream
-        .set_write_timeout(Some(left))
-        .map_err(|_| PipeError::Io)?;
-    stream.write_all(bytes).map_err(|err| {
-        if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock {
-            PipeError::Timeout
-        } else {
-            PipeError::Io
+    let mut sent = 0;
+    while sent < bytes.len() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(PipeError::Timeout);
         }
-    })
+        stream
+            .set_write_timeout(Some(left))
+            .map_err(|_| PipeError::Io)?;
+        match stream.write(&bytes[sent..]) {
+            Ok(0) => return Err(PipeError::Io),
+            Ok(n) => {
+                on_io(1, n);
+                sent += n;
+            }
+            Err(err)
+                if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock =>
+            {
+                return Err(PipeError::Timeout);
+            }
+            Err(_) => return Err(PipeError::Io),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)] // the extern callbacks receive the sink as a raw context
 mod tests {
     use super::*;
     use std::net::TcpListener;
@@ -581,6 +602,7 @@ mod tests {
                 &[0x11; 16],
                 false,
                 Instant::now() + Duration::from_secs(2),
+                &mut |_, _| {},
             ),
             Err(PipeError::Prefix)
         ));
