@@ -29,7 +29,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -548,6 +550,60 @@ class CorpusCrossCheck(unittest.TestCase):
         rc, out = run_gate("docs/design/NO_SUCH_DOCUMENT.md")
         self.assertEqual(rc, 1)
         self.assertIn("not present", out)
+
+
+def load_gate_module():
+    """The gate as a module, for asserting on its registries directly. Its
+    `main()` sits behind the `__main__` guard, so the import is inert."""
+    spec = importlib.util.spec_from_file_location("check_doc_code_citations", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def resolved_count(out):
+    match = re.search(r"code citations: (\d+) resolved", out)
+    if match is None:
+        raise AssertionError(f"no resolved-count line in gate output:\n{out}")
+    return int(match.group(1))
+
+
+class DefaultSet(unittest.TestCase):
+    """Every test above drives the gate with `--docs`, which bypasses
+    `DEFAULT_DOCS` entirely. These hold the wiring itself: which documents the
+    no-argument run -- the one CI invokes -- actually reads (#854 review)."""
+
+    def test_the_census_is_checked_by_default_and_no_longer_deferred(self):
+        gate = load_gate_module()
+        census = "docs/design/CONSENSUS_RULE_CENSUS.md"
+        self.assertIn(census, gate.DEFAULT_DOCS)
+        self.assertNotIn(census, gate.DEFERRED_DOCS)
+        # The two registries are disjoint by construction: a document cannot
+        # be both checked and excused.
+        self.assertFalse(set(gate.DEFAULT_DOCS) & set(gate.DEFERRED_DOCS))
+
+    def test_the_default_run_reads_every_default_document(self):
+        """The no-argument path resolves exactly the citations the default
+        documents hold, one by one -- so a document dropped from
+        `DEFAULT_DOCS` lowers this count rather than passing unnoticed, and a
+        default run cannot be green over a subset."""
+        gate = load_gate_module()
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        out = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, out)
+        per_document = 0
+        for relpath in gate.DEFAULT_DOCS:
+            rc, doc_out = run_gate(relpath)
+            self.assertEqual(rc, 0, doc_out)
+            count = resolved_count(doc_out)
+            self.assertGreater(count, 0, relpath)
+            per_document += count
+        self.assertEqual(resolved_count(out), per_document)
 
 
 if __name__ == "__main__":
