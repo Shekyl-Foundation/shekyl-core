@@ -732,12 +732,15 @@ producer's read path** — what the chain *is*, read on the view the
 validator judges against and through the validator's own definitions. It
 landed as `Connector`'s `TemplateFacts → ChainFacts` message (tip, root at
 the connecting height, parent's emission, total burned, F20 window, C2
-median — inside one write closure so the view is the `BatchView` the rules
-read) and three producer-facing exports from `shekyl-chain-rules`:
-`tx_volume_window` (F20's definition, now two-position: view fault outer,
-`Corrupt::TxCountNotMonotone` inner, so no caller matches a stale arm that
-cannot occur), `mtp_median_at` (C3's padded median) and
-`EMISSION_SPLIT_EPOCH` (F21). Each is public for one stated reason: the
+median — on the `BatchView` the rules read, through `ChainStore::inspect`,
+which aborts the batch so a template read is not a commit) and three
+producer-facing exports from `shekyl-chain-rules`:
+`tx_volume_window` (F20's definition, returning `ViewRead`: the view's
+fault or `Corrupt::TxCountNotMonotone`, so no caller matches a stale arm
+that cannot occur), `mtp_median_at` (C3's padded median, the same
+`ViewRead`) and `EMISSION_SPLIT_EPOCH` (F21). A hole below the tip is
+`Corrupt::HoleBelowTip` and halts the writer, the class a rule raises.
+Each export is public for one stated reason: the
 producer prices at the operands it will be judged by, read from the
 definition, not a second copy. That is `get_block_template`'s read path
 in the shape E3 will serve it — more production than the measurement

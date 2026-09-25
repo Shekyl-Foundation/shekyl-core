@@ -195,3 +195,51 @@ fn a_hole_below_the_tip_seen_by_the_validator_is_si7_and_halts_the_writer() {
     assert!(again.is_err(), "the writer stays halted: {again:?}");
     cleanup(&path);
 }
+
+/// A producer read opens a batch and aborts it. The slot is released —
+/// `inspect` is not `write`.
+#[test]
+fn inspect_aborts_so_a_later_write_still_runs() {
+    let path = tmp("inspect-aborts");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<Option<BlockHeight>, TestErr> = store.inspect(|batch| {
+        let view = batch.chain_view();
+        Ok(ChainView::tip(&view)?.map(|t| t.height))
+    });
+    assert_eq!(out.expect("inspect"), None);
+    let again: Result<(), TestErr> = store.write(|_batch| Ok(()));
+    assert!(again.is_ok(), "the slot was released: {again:?}");
+    assert_eq!(store.connect_state(), ConnectState::Live);
+    cleanup(&path);
+}
+
+/// Poison inside `inspect` halts the writer and commits nothing, the same
+/// latch `write` arms.
+#[test]
+fn inspect_of_a_hole_halts_the_writer() {
+    let path = tmp("inspect-hole-halts");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.inspect(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::HoleBelowTip {
+                at: BlockHeight::ZERO,
+            })
+            .into())
+    });
+    let row = StoreInvariant::CellCorrupt {
+        key: "block_info",
+        fault: CellFault::Absent,
+    };
+    expect_row(&out, row);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::ZERO,
+            row,
+        }
+    );
+    let again: Result<(), TestErr> = store.write(|_batch| Ok(()));
+    assert!(again.is_err(), "the writer stays halted: {again:?}");
+    cleanup(&path);
+}

@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::block::Candidate;
-use crate::fault::FormAttempt;
+use crate::fault::{Corrupt, FormAttempt};
 use crate::harness::fixture::{candidate_on, recorded, root};
 use crate::harness::{
     assert_refused, boundary_pair, expected_seed, formed_on, judged, Faulted, FaultingView,
@@ -355,13 +355,12 @@ fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
             "{outcome:?}"
         );
     });
-    // The producer's read of the same operand reports it in the inner
-    // position, the view being unable to fault.
+    // The producer's read of the same operand reports the same fault.
     chain.with_view(|inner| {
         let view = HoleyView { inner, hole };
         assert_eq!(
             mtp_median_at(&view, BlockHeight::from_raw(4)),
-            Ok(Err(Corrupt::HoleBelowTip { at: hole }))
+            Err(ViewRead::Corrupt(Corrupt::HoleBelowTip { at: hole }))
         );
     });
 }

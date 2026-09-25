@@ -123,14 +123,16 @@ impl Poison {
 /// and it never leaves the closure it was handed to: the closure sees
 /// `&mut WriteBatch`, and `'id` is bound inside the closure's own type, so
 /// neither the batch nor anything carrying its brand can escape. The
-/// closure returning `Ok` commits; returning `Err` — or unwinding — drops
-/// the batch, and dropping **aborts** (redb rolls back on drop). That is
+/// [`ChainStore::write`](super::ChainStore::write) commits an unpoisoned
+/// `Ok`; [`ChainStore::inspect`](super::ChainStore::inspect) aborts it.
+/// `Err` — or an unwind — drops the batch, and dropping **aborts** (redb
+/// rolls back on drop). That is
 /// the DRS-W8 direction, where a C++ throw left the write transaction live
 /// and poisoned every later block write.
 ///
 /// Dropping also releases the store's write-held flag, so a later
 /// [`write`](super::ChainStore::write) can proceed.
-#[must_use = "a WriteBatch is only ever handed to a `ChainStore::write` closure"]
+#[must_use = "a WriteBatch is only ever handed to a `ChainStore::write` or `inspect` closure"]
 pub struct WriteBatch<'store, 'id> {
     txn: Option<WriteTransaction>,
     apply_policy: ApplyPolicy,
@@ -566,9 +568,8 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// ([`StoreCannot::UndoUnsealed`]) is for a closure that swallowed the
     /// failure and returned `Ok`.
     pub(super) fn complete<R, E: From<StoreError>>(self, outcome: Result<R, E>) -> Result<R, E> {
-        if let Some(row) = self.poison.armed() {
-            self.halt_for(row);
-            return Err(StoreError::from(row).into());
+        if let Some(err) = self.halted() {
+            return Err(err);
         }
         let value = outcome?;
         if let Some(height) = self.journal.abandoned() {
@@ -576,6 +577,25 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         }
         self.commit()?;
         Ok(value)
+    }
+
+    /// Finish a batch that must not land: poison still halts the writer,
+    /// and the transaction is aborted on drop either way. The producer's
+    /// read ([`ChainStore::inspect`](super::ChainStore::inspect)) uses this
+    /// so a template read is not a commit.
+    pub(super) fn abandon<R, E: From<StoreError>>(self, outcome: Result<R, E>) -> Result<R, E> {
+        if let Some(err) = self.halted() {
+            return Err(err);
+        }
+        outcome
+    }
+
+    /// Poison wins: the first armed row halts the writer and becomes the
+    /// error, whichever arm the closure took.
+    fn halted<E: From<StoreError>>(&self) -> Option<E> {
+        let row = self.poison.armed()?;
+        self.halt_for(row);
+        Some(StoreError::from(row).into())
     }
 
     /// A violation on a connect, a pop, or a branded `chain_view` read

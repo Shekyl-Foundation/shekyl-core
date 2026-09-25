@@ -64,7 +64,7 @@ use shekyl_types::{BlockHeight, Timestamp};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, ViewRead};
+use crate::fault::ViewRead;
 use crate::rules::{recorded, BlockContext, BlockRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::ChainView;
@@ -161,25 +161,21 @@ impl C3 {
 /// right-padded eleven-block definition. Coverage stays with [`C3`]; this
 /// is the definition alone.
 ///
-/// Two positions, as [`crate::tx_volume_window`]: the outer `Err` is the
-/// view's fault; the inner is [`Corrupt::HoleBelowTip`] — a height the
-/// window spans is not recorded.
+/// One position, [`ViewRead`], the same type [`C3::window`] and
+/// [`crate::tx_volume_window`] already return: the view's fault, or
+/// [`crate::Corrupt::HoleBelowTip`] when a height the window spans is not recorded.
 ///
 /// # Errors
 ///
-/// The view's fault on a read (outer).
+/// [`ViewRead::View`] on a view fault; [`ViewRead::Corrupt`] on a hole.
 pub fn mtp_median_at<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
-) -> Result<Result<Option<Timestamp>, Corrupt>, V::Fault> {
+) -> Result<Option<Timestamp>, ViewRead<V::Fault>> {
     // The producer's read is not a rule evaluation; the coverage it would
     // record is discarded here rather than lying about a judgement.
     let mut unrecorded = RuleCoverage::EMPTY;
-    match C3::window(view, connecting, &mut unrecorded) {
-        Ok(window) => Ok(Ok(window.map(|window| window.median()))),
-        Err(ViewRead::View(fault)) => Err(fault),
-        Err(ViewRead::Corrupt(corrupt)) => Ok(Err(corrupt)),
-    }
+    Ok(C3::window(view, connecting, &mut unrecorded)?.map(|window| window.median()))
 }
 
 /// CEN-C1: the candidate's timestamp is at most `clock + FTL` — the

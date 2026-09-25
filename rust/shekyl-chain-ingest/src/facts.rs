@@ -66,7 +66,7 @@
 //! §4); a second copy of those definitions here is the duplication the
 //! seam exists to prevent.
 
-use shekyl_chain_rules::{AtHeight, ChainValid, ChainView};
+use shekyl_chain_rules::{recorded, ChainValid, ChainView, Corrupt, ViewRead};
 use shekyl_chain_store::store::{ConnectFacts, Fact};
 use shekyl_economics::{advance_already_generated, long_term_weight};
 use shekyl_types::{BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight};
@@ -86,13 +86,19 @@ pub enum FactsFault<VF> {
     },
     /// A view read faulted while composing (the parent's record).
     View(VF),
-    /// The parent's record is not there — the view said the height above
-    /// the tip is being connected, but its parent is not recorded. A
-    /// store invariant broken, not a value to default.
-    ParentMissing {
-        /// The parent height that was not recorded.
-        parent: BlockHeight,
-    },
+    /// The parent read observed a store invariant — a hole below the tip
+    /// ([`Corrupt::HoleBelowTip`]). The connector halts the writer on it,
+    /// the same class a rule's [`recorded`] read raises.
+    Corrupt(Corrupt),
+}
+
+impl<VF> From<ViewRead<VF>> for FactsFault<VF> {
+    fn from(read: ViewRead<VF>) -> Self {
+        match read {
+            ViewRead::View(fault) => Self::View(fault),
+            ViewRead::Corrupt(corrupt) => Self::Corrupt(corrupt),
+        }
+    }
 }
 
 /// The seam. One method: the facts `connect` persists for `valid` at
@@ -102,8 +108,8 @@ pub trait FactsFor {
     /// # Errors
     ///
     /// A [`FactsFault`]; the connector maps `None` to
-    /// [`crate::connector::RunFault::NoFacts`] and `View` to the store
-    /// fault it carries.
+    /// [`crate::connector::RunFault::NoFacts`], `View` to the store fault
+    /// it carries, and `Corrupt` through `refuse_corrupt` so the writer halts.
     fn facts_for<'id, V: ChainView<'id>>(
         &self,
         height: BlockHeight,
@@ -171,19 +177,25 @@ impl<P> Composed<P> {
     }
 }
 
+/// One transaction's weight as `u64`. A validated transaction has already
+/// passed CEN-H1 (`MAX_TX_SIZE`), so the `usize` fits.
+fn weight_u64(tx: &Transaction) -> u64 {
+    u64::try_from(tx.weight()).expect("a validated transaction's weight fits u64")
+}
+
 /// The wire weight of a validated block: the coinbase plus every listed
 /// body (`blockchain.cpp:5445`'s `coinbase_weight + Σ td.weight`, the
-/// CEN-F14 operand). Saturating at `u64::MAX`, where no block is.
+/// CEN-F14 operand). Checked, not saturated: a sum that does not fit is a
+/// block the size bound already made unrepresentable.
 #[must_use]
 pub fn block_weight<'id, V: ChainView<'id>>(valid: &ChainValid<'id, V>) -> BlockWeight {
     let block = valid.block();
-    let coinbase = u64::try_from(block.miner_tx().1.weight()).unwrap_or(u64::MAX);
-    let bodies = block
-        .transactions()
-        .iter()
-        .map(|(_, tx): &(_, Transaction)| u64::try_from(tx.weight()).unwrap_or(u64::MAX))
-        .fold(0u64, u64::saturating_add);
-    BlockWeight::from_raw(coinbase.saturating_add(bodies))
+    let coinbase = weight_u64(block.miner_tx().1);
+    let total = block.transactions().iter().fold(coinbase, |acc, (_, tx)| {
+        acc.checked_add(weight_u64(tx))
+            .expect("a validated block's weight fits u64")
+    });
+    BlockWeight::from_raw(total)
 }
 
 impl<P: PricedAt> FactsFor for Composed<P> {
@@ -199,16 +211,12 @@ impl<P: PricedAt> FactsFor for Composed<P> {
             .ok_or(FactsFault::None { height })?;
 
         // CEN-F13's accumulator: the parent's gross emission, advanced by
-        // this block's paid reward. Genesis starts the fold at zero.
+        // this block's paid reward. Genesis starts the fold at zero. The
+        // parent read is the rules' own (`recorded`): a hole is
+        // `Corrupt::HoleBelowTip`, not a second fault.
         let parent_coins = match height.to_raw().checked_sub(1) {
             None => AtomicUnits::ZERO,
-            Some(parent) => {
-                let parent = BlockHeight::from_raw(parent);
-                match view.block_at(parent).map_err(FactsFault::View)? {
-                    AtHeight::Recorded(record) => record.coins_generated,
-                    AtHeight::AboveTip => return Err(FactsFault::ParentMissing { parent }),
-                }
-            }
+            Some(parent) => recorded(view, BlockHeight::from_raw(parent))?.coins_generated,
         };
         let coins_generated = AtomicUnits::from_raw(advance_already_generated(
             parent_coins.to_raw(),

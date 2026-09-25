@@ -98,10 +98,7 @@ fn tip_facts(chain: &MockChain) -> (BlockHeight, BlockHash, CurveTreeRoot) {
 fn median_of(chain: &MockChain) -> Option<Timestamp> {
     let (connecting, _, _) = tip_facts(chain);
     chain.with_view(|view| {
-        shekyl_chain_rules::harness::infallible(shekyl_chain_rules::mtp_median_at(
-            &view, connecting,
-        ))
-        .expect("a MockChain is dense")
+        shekyl_chain_rules::harness::defined(shekyl_chain_rules::mtp_median_at(&view, connecting))
     })
 }
 

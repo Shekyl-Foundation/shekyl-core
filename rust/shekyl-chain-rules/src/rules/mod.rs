@@ -432,7 +432,7 @@ pub(crate) fn run_tx_unrecorded<R: TxRule>(cx: &TxContext<'_>) -> Verdict<()> {
 /// is [`Corrupt::HoleBelowTip`] — the fault class that halts the writer,
 /// not a panic defended by the invariant it would be observing broken
 /// (`fault.rs`, the variant's docs).
-pub(crate) fn recorded<'id, V: ChainView<'id>>(
+pub fn recorded<'id, V: ChainView<'id>>(
     view: &V,
     height: BlockHeight,
 ) -> Result<RecordedBlock, ViewRead<V::Fault>> {

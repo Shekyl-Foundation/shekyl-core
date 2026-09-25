@@ -29,7 +29,7 @@ use shekyl_wire::{
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
-use crate::fault::{Fault, FormAttempt};
+use crate::fault::{Fault, FormAttempt, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::substrate::Substrate;
 use crate::validate::form;
@@ -318,6 +318,18 @@ pub fn infallible<T>(result: Result<T, Infallible>) -> T {
     match result {
         Ok(value) => value,
         Err(never) => match never {},
+    }
+}
+
+/// Unwrap a parent-side definition ([`crate::tx_volume_window`],
+/// [`crate::mtp_median_at`]) over a view that cannot fault and is dense.
+/// A hole is a fixture failure.
+#[track_caller]
+pub fn defined<T>(read: Result<T, ViewRead<Infallible>>) -> T {
+    match read {
+        Ok(value) => value,
+        Err(ViewRead::View(never)) => match never {},
+        Err(ViewRead::Corrupt(corrupt)) => panic!("corrupt view: {corrupt}"),
     }
 }
 
