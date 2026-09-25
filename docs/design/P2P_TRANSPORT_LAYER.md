@@ -149,9 +149,10 @@ schedule. How many to dial, and when, is discovery policy (P2P-3 slice
 in step 7, C7.
 
 The peers-monitor thread starts at `net_node.inl:1114` and walks
-`foreach_connection` at `:1125` once a second.
-`is_host_limit` is `net_node.inl:231`. Both read the Levin registry.
-Connections that have no channel yet are invisible to that walk (D8).
+`foreach_connection` once a second (`:1113-1138`). It is not removed
+by this round (D8). `is_host_limit` is `net_node.inl:231`. Both read
+the Levin registry today. Connections that have no channel yet are
+invisible to that walk.
 
 Two private tokio runtimes already exist:
 `rust/shekyl-daemon-rpc/src/ffi_exports.rs:162` and
@@ -635,13 +636,60 @@ ruling here.
 
 ---
 
-## D8 — socket count (RULED 2026-09-25)
+## D8 — two counts (RULED 2026-09-25)
 
-The transport layer owns the count of live sockets, per network and per
-direction, including sockets that have no channel yet. That count is
-what socket admission reads. The Levin registry is not consulted.
-`census_inbound` (`net_node.inl:3158`) and the monitor walk at `:1125`
-are the knot this replaces. There is no second count.
+There are two counts, and each layer owns its own. This is the same
+principle as admission.
+
+**Sockets** belong to the transport layer. That is every live socket,
+per connector and direction, including ones with no channel yet. It is
+what socket admission and the descriptor ceiling need.
+
+**Sessions** belong to the session layer: established Levin sessions,
+per network key and direction. Until LV-3 that count is the Levin
+registry's. It is what the outbound-fill logic is really about.
+
+Today the C++ blurs them. `get_outgoing_connections_count` and
+`census_inbound` both walk the Levin registry and count whatever
+contexts are in it (`net_node.inl:2021-2069`, `:2117-2129`, `:3158`).
+Once pre-channel sockets never appear in the registry, that walk
+cannot serve socket admission.
+
+The check and the increment are one step. Today's ceiling compares a
+snapshot: a live walk, plus a separately maintained atomic rewritten
+once a second (`:233-235`, `:1113-1138`). Concurrent accepts can all
+read the same count, all pass, and overshoot the ceiling. Accept
+reserves a slot with an atomic compare-and-increment against the
+ceiling. Close releases it exactly once. That matches D4: close is
+idempotent and records one cause. The parked pipe branch's
+`37a0e0b` fixed a count that never came back down when a connection
+died mid-handshake. The reservation does not repeat that.
+
+- The transport layer owns socket counts per connector and direction,
+  including pre-channel sockets.
+- The session layer owns session counts, held in the Levin registry
+  until LV-3.
+- Neither layer derives its count from the other's state.
+- Socket admission reads the socket count through that atomic
+  reservation. There is no snapshot and no recount on the admission
+  path.
+- The ceiling's `inbound_held` input comes from this count
+  (`InboundCeiling::resolve`). That is valid because D11 asserts one
+  descriptor per socket.
+- The transport layer exposes outbound socket counts per connector.
+  Which count governs filling outbound slots is discovery policy,
+  slice 3's decision.
+- The once-a-second monitor thread (`:1113-1138`) is not removed by
+  this round. Its remaining consumers are the out-peers check at
+  `:1556` and discovery's fill loops at `:2021-2069`, all slice 3's.
+  It goes when slice 3 lands.
+- RPC reports both counts, each under its own name. Sockets and
+  sessions are not one number.
+
+**Test.** Under churn — including connections that fail before the
+channel exists, and simultaneous closes — the socket count always
+equals the number of live sockets, and returns to zero once they are
+gone.
 
 ---
 
