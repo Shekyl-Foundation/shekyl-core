@@ -17,6 +17,7 @@ use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::ChainValid;
+use crate::view::AtHeight;
 use shekyl_difficulty::{check_hash, CumulativeDifficulty, Difficulty, GENESIS_DIFFICULTY};
 
 /// A chain of `len` blocks with distinct identities (timestamps a target

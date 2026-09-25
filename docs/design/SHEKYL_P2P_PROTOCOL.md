@@ -140,7 +140,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T2** PW-3 retired, no padding band | NOT IMPLEMENTED | no padding band present or pinned | No — transport cluster |
 | **T3** BOLT-8 rekeying | **IMPLEMENTED** (as of 2026-09-24) | `channel.rs` `REKEY_NONCES = 1000`; each record spends two nonces (encrypted length, then body), so 500 records | No — transport cluster |
 | **T4** `e1` / `ekem1` normative | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` writes `e, e1` then `e, ee, ekem1`; empty payloads | No — transport cluster |
-| **T5** 8-byte prefix stays | **NO BUILD REQUIRED** | plaintext path still starts with `LEVIN_SIGNATURE`. The encrypting channel (flag on) uses `prefix_for` in `rust/shekyl-p2p-transport/src/prefix.rs` | n/a |
+| **T5** 8-byte prefix stays | **INTERIM** (as of 2026-09-25) | The encrypting path uses `prefix_for` (`prefix.rs`). The plaintext path still starts with `LEVIN_SIGNATURE`. That start is deleted at the flip; it is not a finished wire | n/a |
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
 | **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
 | **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages, `ck` after `ee` and after the KEM mix, both transport keys' rekey (`ck'`, `k'`), and the initial chaining key. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. `prefix.rs` pins `AFBCD4D1FAB98B6D`, `F0B352E8928F8D56`, `5C2942C0F9F98A21` | No — follows T1 |
@@ -3369,7 +3369,19 @@ Stating the interval in nonces makes it survive a framing change; stating it in
 messages would silently halve or double the real budget when PWD-T6/PWD-B3 settle
 the framing.
 
-**Post-`Split` record framing (pinned 2026-09-24).** Each direction seals one
+**Post-`Split` record framing. Direction RULED 2026-09-25**
+(transport-layer design, D14 item 4). Fixed-window framing is the
+wire. The window size is derived from the measured distribution of
+record sizes. Until that measurement, the option keeps the BOLT-8
+framing pinned 2026-09-24, quoted below as the interim, not as the
+target. PWD-T8 vectors are re-minted when the window size is derived.
+Rekey is every record if the Pi-4 benchmark shows three HMAC-BLAKE2s
+per record are affordable beside seal cost; otherwise the interval is
+derived from the measured record rates. Fixed windows spend one nonce
+per record.
+
+**Interim, pinned 2026-09-24, BOLT-8, in force only while the option
+is off the fixed window.** Each direction seals one
 Levin write as one or more records. A record is an encrypted 2-byte
 big-endian length (plus its 16-byte tag) then the encrypted body (plus its
 tag). The length AEAD's associated data is the three bytes `len`. The body's

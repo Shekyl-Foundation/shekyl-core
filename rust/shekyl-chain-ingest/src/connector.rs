@@ -13,7 +13,8 @@
 //! [`Apply`] is a bounded run of consecutive `Extend`s in one closure (the
 //! write-transaction granularity), a [`Rewind`] is one closure of pops.
 //! Between messages the actor holds the store, the rule set in force, the
-//! trace's `borrow` door, and nothing mutable.
+//! facts provider (`facts.rs`: the E2 trace's `borrow` door, or production
+//! composition from the owners), and nothing mutable.
 //!
 //! # The supervision table, as code
 //!
@@ -30,7 +31,10 @@
 //! | `Fault::Corrupt` | `WriteBatch::refuse_corrupt` arms the halt (SI-10) and its `InvariantViolated` — carrying the validator's value — is the reply; the batch aborts; **terminal** |
 //! | `Fault::Stale(Seed { .. })` | a **driver defect** in replay (RD-Q5): the reply carries the claim, the expectation, and the validator's `Retry`; the writer stays up so a later caller can re-`form` |
 //! | `Fault::Stale(RuleSet { .. })` | a **driver defect** (the schedule handed the two stages different sets): surfaced; the writer stays up |
-//! | the trace has no facts at the height | the run cannot connect honestly: surfaced ([`RunFault::NoFacts`]); the writer stays up |
+//! | the source's height for an `Extend` is not `tip + 1` on the batch's view | a **driver defect** ([`RunFault::HeightClaim`]): surfaced before the rule set is chosen or a fact is composed under the wrong height; the writer stays up |
+//! | the facts provider has nothing at the height | the run cannot connect honestly: surfaced ([`RunFault::NoFacts`]); the writer stays up |
+//! | a parent-side read observes a hole ([`shekyl_chain_rules::Corrupt::HoleBelowTip`]) | `refuse_corrupt` arms SI-7 and the writer **halts**, the same class a rule raises |
+//! | the tip has no successor height | surfaced ([`RunFault::NoNextHeight`]); the writer stays up |
 //!
 //! **No restart.** `on_panic` breaks; nothing supervises this actor into
 //! coming back (RD-Q11, RULED): a halt laundered into a retry loop is the
@@ -54,14 +58,14 @@ use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    validate, AtHeight, CenRow, ChainView, Fault, InvalidBlock, Retry, Stale, StructurallyValid,
-    Verdict,
+    recorded, validate, AtHeight, CenRow, ChainView, Corrupt, Fault, InvalidBlock, Retry, Stale,
+    StructurallyValid, Verdict, ViewRead,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
+use crate::facts::{FactsFault, FactsFor};
 use crate::schedule::ChainRules;
-use crate::trace::Trace;
 
 /// Why the writer is over: store-terminal faults only. `Copy` data, so it
 /// can be repeated on every later `Apply` / `Rewind`.
@@ -83,7 +87,9 @@ impl RunEnd {
             RunFault::Store(_) => Some(Self::StoreFaulted),
             RunFault::StaleSeed { .. }
             | RunFault::StaleRuleSet { .. }
+            | RunFault::HeightClaim { .. }
             | RunFault::NoFacts { .. }
+            | RunFault::NoNextHeight { .. }
             | RunFault::RewindTarget { .. }
             | RunFault::Over(_) => None,
         }
@@ -118,13 +124,33 @@ pub enum RunFault {
         /// The connecting height.
         height: BlockHeight,
     },
-    /// The trace does not cover `height`.
+    /// The source's height for an `Extend` is not the height the chain
+    /// connects at (`tip + 1` on the batch's view). Nothing is judged: the
+    /// rule set, the facts and the record are all keyed by the connecting
+    /// height, and a block judged under the claimed one would be judged
+    /// under the wrong schedule. A driver defect; the writer stays up.
     #[error(
-        "the trace has no facts for height {height}; connect cannot be handed passed-through facts"
+        "driver defect: the source claims height {claimed} for a block the chain connects at {connecting}"
     )]
+    HeightClaim {
+        /// The source's height for the event.
+        claimed: BlockHeight,
+        /// `tip + 1` as the store holds it.
+        connecting: BlockHeight,
+    },
+    /// The facts provider has nothing for `height` — a trace that does not
+    /// cover it, or a producer that did not price it ([`FactsFault::None`]).
+    #[error("no connect facts for height {height}; connect cannot be handed what nobody composed")]
     NoFacts {
         /// The connecting height.
         height: BlockHeight,
+    },
+    /// The recorded tip is `u64::MAX`: there is no next height to build at.
+    /// A chain that long has no successor; the writer stays up.
+    #[error("tip {tip} has no successor height")]
+    NoNextHeight {
+        /// The tip that cannot be extended.
+        tip: BlockHeight,
     },
     /// A rewind to `to` when the tip is `tip`.
     #[error("rewind to {to} is not below the tip {tip:?}")]
@@ -184,14 +210,44 @@ pub struct HashAt {
     pub height: BlockHeight,
 }
 
+/// What a block producer needs from the chain to build the next
+/// candidate, read on the view the validator will judge it against and
+/// through the definitions the validator uses (`tx_volume_window`,
+/// `mtp_median_at`) — so the template is priced at the operands it will be
+/// judged by, never at a second copy of them. The `get_block_template`
+/// read path in the shape E3 will serve it; the slice-6 scenario driver is
+/// its first consumer.
+#[derive(Clone, Copy, Debug)]
+pub struct TemplateFacts;
+
+/// [`TemplateFacts`]' reply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainFacts {
+    /// The height the next block connects at (`tip + 1`; `0` when empty).
+    pub connecting: BlockHeight,
+    /// The tip's identity, [`BlockHash::NULL`] when empty (CEN-A2).
+    pub previous: BlockHash,
+    /// The tree state at `connecting` (CEN-B5).
+    pub curve_tree_root: shekyl_types::CurveTreeRoot,
+    /// The parent's gross emission (CEN-F13's accumulator); zero at genesis.
+    pub parent_coins_generated: shekyl_units::AtomicUnits,
+    /// Everything burned through the tip.
+    pub total_burned: shekyl_units::AtomicUnits,
+    /// CEN-F20's window at `connecting`.
+    pub tx_volume: shekyl_economics::TxVolume,
+    /// CEN-C2's median at `connecting`; `None` at genesis.
+    pub median_timestamp: Option<shekyl_types::Timestamp>,
+}
+
 /// What the actor is built from.
-pub struct ConnectorArgs {
+pub struct ConnectorArgs<F> {
     /// The store this actor alone writes.
     pub store: ChainStore,
     /// Which rules are in force at each height (RD-Q10's driver half).
     pub rules: ChainRules,
-    /// The trace, for the `borrow` door.
-    pub trace: Arc<Trace>,
+    /// Where `connect`'s facts come from ([`FactsFor`]): the E2 trace, or
+    /// production composition from the owners (`facts.rs`).
+    pub facts: Arc<F>,
 }
 
 /// The store behind its latch: the only way to a write closure, refusing
@@ -224,6 +280,24 @@ impl Writer {
         result
     }
 
+    /// One read through a write batch that **aborts**. The producer's
+    /// [`TemplateFacts`](crate::TemplateFacts): the validator's view and
+    /// its poison latch, and no commit. A terminal fault arms the same
+    /// latch `write` does.
+    fn inspect<R, F>(&mut self, f: F) -> Result<R, RunFault>
+    where
+        F: for<'id> FnOnce(&mut WriteBatch<'_, 'id>) -> Result<R, RunFault>,
+    {
+        if let Some(end) = self.over {
+            return Err(RunFault::Over(end));
+        }
+        let result = self.store.inspect(f);
+        if let Some(end) = result.as_ref().err().and_then(RunEnd::of) {
+            self.over.get_or_insert(end);
+        }
+        result
+    }
+
     /// A read snapshot — open on a halted store, so the driver can still
     /// name the store's state (or meet the same hole the validator did).
     fn read(&self) -> Result<ReadSnapshot<'_>, StoreError> {
@@ -231,22 +305,25 @@ impl Writer {
     }
 }
 
-/// The single writer (module docs).
-pub struct Connector {
+/// The single writer (module docs), over a facts provider `F`.
+pub struct Connector<F> {
     writer: Writer,
     rules: ChainRules,
-    trace: Arc<Trace>,
+    facts: Arc<F>,
 }
 
-impl Actor for Connector {
-    type Args = ConnectorArgs;
+impl<F: FactsFor + Send + Sync + 'static> Actor for Connector<F> {
+    type Args = ConnectorArgs<F>;
     type Error = RunFault;
 
-    async fn on_start(args: ConnectorArgs, _actor_ref: ActorRef<Self>) -> Result<Self, RunFault> {
+    async fn on_start(
+        args: ConnectorArgs<F>,
+        _actor_ref: ActorRef<Self>,
+    ) -> Result<Self, RunFault> {
         Ok(Self {
             writer: Writer::live(args.store),
             rules: args.rules,
-            trace: args.trace,
+            facts: args.facts,
         })
     }
 
@@ -262,16 +339,32 @@ impl Actor for Connector {
     }
 }
 
-impl Message<Apply> for Connector {
+impl<F: FactsFor + Send + Sync + 'static> Message<Apply> for Connector<F> {
     type Reply = Result<Applied, RunFault>;
 
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let rules = self.rules;
-        let trace = Arc::clone(&self.trace);
+        let facts = Arc::clone(&self.facts);
         self.writer.write(|batch| {
             let view = batch.chain_view();
             let mut applied = Applied::default();
-            for (height, formed) in msg.0 {
+            for (claimed, formed) in msg.0 {
+                // The height is the store's to say, not the source's: the
+                // rule set in force, the facts composed, and the row the
+                // block is recorded under are all keyed by the height the
+                // chain connects at, which is `tip + 1` on this view (the
+                // tip advances as the batch connects). The tuple's height
+                // is the source's bookkeeping; where the two disagree the
+                // source is wrong about the chain, and that is a driver
+                // defect surfaced before anything is judged under the
+                // wrong schedule (#852 review).
+                let (height, _) = connecting(view.tip()?)?;
+                if claimed != height {
+                    return Err(RunFault::HeightClaim {
+                        claimed,
+                        connecting: height,
+                    });
+                }
                 let formed = match formed {
                     Ok(formed) => formed,
                     Err(refused) => {
@@ -282,14 +375,26 @@ impl Message<Apply> for Connector {
                 let in_force = rules.in_force(height);
                 match validate(formed, &view, &in_force, &rules.trust()) {
                     Ok(Ok(valid)) => {
-                        let Some(facts) = trace.borrow(height) else {
-                            return Err(RunFault::NoFacts { height });
+                        // The seam: facts read against the same view the
+                        // verdict was judged on, from whoever composes
+                        // them (`facts.rs`). A missing height is the
+                        // caller's; a view fault is the store's; a hole
+                        // below the tip is `Corrupt` and halts.
+                        let facts = match facts.facts_for(height, &valid, &view) {
+                            Ok(facts) => facts,
+                            Err(FactsFault::None { height }) => {
+                                return Err(RunFault::NoFacts { height })
+                            }
+                            Err(FactsFault::View(e)) => return Err(RunFault::Store(e)),
+                            Err(FactsFault::Corrupt(observed)) => {
+                                return Err(RunFault::Store(batch.refuse_corrupt(observed)))
+                            }
                         };
                         let hash = valid.block().hash();
                         applied
                             .exercised
                             .extend(valid.coverage().iter().map(CenRow::as_str));
-                        batch.connect(valid, facts.into(), in_force)?;
+                        batch.connect(valid, facts, in_force)?;
                         applied.connected.push((height, hash));
                     }
                     Ok(Err(refused)) => {
@@ -328,7 +433,7 @@ impl Message<Apply> for Connector {
     }
 }
 
-impl Message<Rewind> for Connector {
+impl<F: FactsFor + Send + Sync + 'static> Message<Rewind> for Connector<F> {
     type Reply = Result<Rewound, RunFault>;
 
     async fn handle(&mut self, msg: Rewind, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
@@ -350,7 +455,7 @@ impl Message<Rewind> for Connector {
     }
 }
 
-impl Message<Digest> for Connector {
+impl<F: FactsFor + Send + Sync + 'static> Message<Digest> for Connector<F> {
     type Reply = Result<crate::trace::Digest, RunFault>;
 
     async fn handle(&mut self, _: Digest, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
@@ -358,7 +463,96 @@ impl Message<Digest> for Connector {
     }
 }
 
-impl Message<HashAt> for Connector {
+impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F> {
+    type Reply = Result<ChainFacts, RunFault>;
+
+    /// Read on the validator's view, inside a batch that aborts. Every
+    /// operand — `total_burned` included — comes off that one view, and
+    /// `tx_volume_window` / `mtp_median_at` are the rules' own definitions.
+    /// A hole or a decreasing prefix sum halts the writer; nothing commits.
+    async fn handle(
+        &mut self,
+        _: TemplateFacts,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.writer.inspect(|batch| {
+            let total_burned = batch.total_burned()?;
+            let view = batch.chain_view();
+            let tip = view.tip()?;
+            let (connecting, previous) = connecting(tip)?;
+            let curve_tree_root = present(batch, connecting, view.root_at(connecting))?;
+            let parent_coins_generated = match tip {
+                None => shekyl_units::AtomicUnits::ZERO,
+                Some(t) => definition(batch, recorded(&view, t.height))?.coins_generated,
+            };
+            let tx_volume = definition(
+                batch,
+                shekyl_chain_rules::tx_volume_window(&view, connecting),
+            )?;
+            let median_timestamp =
+                definition(batch, shekyl_chain_rules::mtp_median_at(&view, connecting))?;
+            Ok(ChainFacts {
+                connecting,
+                previous,
+                curve_tree_root,
+                parent_coins_generated,
+                total_burned,
+                tx_volume,
+                median_timestamp,
+            })
+        })
+    }
+}
+
+/// The height the next block connects at and the hash it must name as its
+/// parent, from the recorded tip: `(0, NULL)` on an empty chain, else
+/// `(tip + 1, tip.hash)`. The one derivation both handlers use — the
+/// producer to price a template, `Apply` to hold a source's claimed height
+/// to it — so the two cannot drift. A tip with no successor is
+/// [`RunFault::NoNextHeight`], not a saturated height.
+fn connecting(tip: Option<shekyl_chain_rules::Tip>) -> Result<(BlockHeight, BlockHash), RunFault> {
+    match tip {
+        None => Ok((BlockHeight::ZERO, BlockHash::NULL)),
+        Some(t) => Ok((
+            t.height
+                .checked_add(BlockCount::ONE)
+                .ok_or(RunFault::NoNextHeight { tip: t.height })?,
+            t.hash,
+        )),
+    }
+}
+
+/// A [`ViewRead`] from a definition, as a connector fault. A hole halts.
+fn definition<T>(
+    batch: &WriteBatch<'_, '_>,
+    read: Result<T, ViewRead<StoreError>>,
+) -> Result<T, RunFault> {
+    match read {
+        Ok(value) => Ok(value),
+        Err(ViewRead::View(fault)) => Err(RunFault::Store(fault)),
+        Err(ViewRead::Corrupt(corrupt)) => Err(RunFault::Store(batch.refuse_corrupt(corrupt))),
+    }
+}
+
+/// A height the producer asked for as recorded. `AboveTip` inside the
+/// range the caller derived (`tip + 1` for the live root, the tip itself
+/// for its block) is [`Corrupt::HoleBelowTip`] and halts; a store fault
+/// passes through, and an in-range hole is already that fault from the view.
+fn present<T>(
+    batch: &WriteBatch<'_, '_>,
+    height: BlockHeight,
+    at: Result<AtHeight<T>, StoreError>,
+) -> Result<T, RunFault> {
+    match at {
+        Ok(AtHeight::Recorded(value)) => Ok(value),
+        Ok(AtHeight::AboveTip) => Err(RunFault::Store(
+            batch.refuse_corrupt(Corrupt::HoleBelowTip { at: height }),
+        )),
+        Err(fault) => Err(RunFault::Store(fault)),
+    }
+}
+
+impl<F: FactsFor + Send + Sync + 'static> Message<HashAt> for Connector<F> {
     type Reply = Result<Option<BlockHash>, RunFault>;
 
     async fn handle(&mut self, msg: HashAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {

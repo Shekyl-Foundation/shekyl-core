@@ -292,7 +292,7 @@ pub fn validate<'id, V: ChainView<'id>>(
     // computed against a chain this is not, and nothing else is worth
     // judging until `form` is redone.
     D3::verify_seed(view, connecting, &formed, &mut coverage)?;
-    let mtp_window = C3::window(view, connecting, &mut coverage).map_err(Fault::View)?;
+    let mtp_window = C3::window(view, connecting, &mut coverage)?;
     let target = match D4::target(view, connecting, rule_set, &mut coverage)? {
         Ok(target) => target,
         // CEN-D6: the ratified algorithm derived zero for this height; the

@@ -165,7 +165,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 # Documents whose code citations are load-bearing evidence. A document listed
 # here must produce citations; see the rule-47 note above.
-DEFAULT_DOCS = ("docs/design/CONSENSUS_STORE_RECONCILIATION.md",)
+DEFAULT_DOCS = (
+    "docs/design/CONSENSUS_STORE_RECONCILIATION.md",
+    # Deferred 2026-09-23 on twenty-one doc-side failures; resolved 2026-09-24
+    # (chore/census-citations-resolve): the bare basenames qualified from the
+    # rows that cite them, the records-was pins dated at the deleting commit's
+    # parent, the module-split cite re-homed (`tx_extra.rs` -> `tx_extra/`),
+    # the slice-5 cells' eras moved to the merge that landed their files, and
+    # §7 item 21's era written in the parsed form. Its pins drift under every
+    # DRS-E6 slice; from here the gate notices before a lane does.
+    "docs/design/CONSENSUS_RULE_CENSUS.md",
+)
 
 # Documents whose citations are load-bearing but which this gate does not check
 # yet, each with the blocker that keeps it out. This is NOT an allowlist of
@@ -182,31 +192,6 @@ DEFERRED_DOCS = {
         "whichever sha was declared last -- a silent wrong-era resolution, "
         "worse than refusing. How the document declares eras is an editorial "
         "decision owned by its authors, not this gate."
-    ),
-    "docs/design/CONSENSUS_RULE_CENSUS.md": (
-        "fails 21 resolutions at `d8ebfd18c` (measured 2026-09-23, E6 slice 5 "
-        "#839), every one DOC-SIDE: fourteen bare basenames that match more "
-        "than one tracked file (`blockchain_db.cpp` x8 -- src/ and "
-        "tests/unit_tests/ -- `proof.rs` x2, `anchors.rs`, `client.rs`, "
-        "`scan.rs`, `conformance.rs`), one deleted file "
-        "(`tests/unit_tests/canonical_amounts.cpp`, CEN-F12's deletion row), "
-        "and one records-was pin without its era "
-        "(`cryptonote_format_utils.cpp:1547`, past the file's end). The "
-        "census is the load-bearing map for every DRS-E6 slice and its pins "
-        "drift under it: slice 5 found twenty of the twenty-four §4.H site "
-        "cells stale at `d8ebfd18c` -- several exactly one deletion behind, "
-        "correct at their era and wrong now -- and the drift cost that lane "
-        "two retractions in one session. Those cells now carry the "
-        "`symbol` + `file:range` form this gate resolves; the fix is the "
-        "census lane qualifying the fourteen ambiguous paths, dating the two "
-        "records-was pins, and moving the document to DEFAULT_DOCS. Owner: "
-        "CONSENSUS_RULE_CENSUS.md §3.4 (the same row FOLLOWUPS carries for "
-        "the shim-sweep and shekyl-wire-constants question). NOTE the "
-        "capability gap above (item 1): even in DEFAULT_DOCS this gate checks "
-        "a table row's citation for path uniqueness and range bounds, not for "
-        "the symbol beside it -- a line shift that stays inside the file would "
-        "still pass. The row-form symbol check is the instrument change the "
-        "re-pinned cells' shape now makes possible."
     ),
 }
 

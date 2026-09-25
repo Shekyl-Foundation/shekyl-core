@@ -58,6 +58,11 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-address = { path = "../shekyl-address" }
 # CumulativeDifficulty — the accumulator the trace records for SI-10.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+# The owners of two connect-fact folds `facts::Composed` performs:
+# `advance_already_generated` (CEN-F13's accumulator) and `long_term_weight`
+# (CEN-G6's clamp). Composition, not derivation — the emission itself is
+# never re-derived here (facts.rs module docs).
+shekyl-economics = { path = "../shekyl-economics" }
 # BlockHeight, BlockHash, PowHash, Timestamp, the weight newtypes.
 shekyl-types = { path = "../shekyl-types" }
 # AtomicUnits: coins_generated and burned in the trace.
@@ -93,6 +98,17 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = 
 # The rules crate's fixtures — MockSubstrate, the always-satisfying
 # longhash — for pipeline tests. Dev-dependency edge only.
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# The block producer the scenario driver (`scenario.rs`, test-only) builds
+# candidates with — the production template over the production stack
+# (CHAIN_RULES_SLICE_6.md §5.3). Dev-dependency: the driver is a test
+# instrument; the template crate's production consumer is E3's handler.
+shekyl-block-template = { path = "../shekyl-block-template" }
+# The driver's miner keys (an Edwards spend key, a hybrid KEM keypair).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+# The driver's coinbase secret is a `Zeroizing<[u8; 32]>`, the type
+# `TemplateContext` takes (rule 35).
+zeroize = { workspace = true }
 # Planting a corrupt row for the SI-10 path.
 redb = { workspace = true }
 # The mutation family's seed-sensitive mock longhash (`keccak256(blob ‖ seed)`,

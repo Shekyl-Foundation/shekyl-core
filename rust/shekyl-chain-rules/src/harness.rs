@@ -29,7 +29,7 @@ use shekyl_wire::{
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
-use crate::fault::{Fault, FormAttempt};
+use crate::fault::{Fault, FormAttempt, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::substrate::Substrate;
 use crate::validate::form;
@@ -39,7 +39,35 @@ use crate::view::{AtHeight, ChainView, RecordedBlock, Tip};
 /// Invariant brand, as in `verdict.rs`.
 type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 
-/// A recorded chain in memory.
+/// A recorded chain in memory — **a struct literal with a `ChainView`
+/// impl, and nothing else**. It computes nothing; every value it serves is
+/// a value a test pushed into it.
+///
+/// # Charter (slice 6 §5.2, `50-testing.mdc`) — two jobs, and no third
+///
+/// A mock that is *told* a root, a depth or a spent set and *serves* it to
+/// a rule proves that the rule reads what it was handed — none of the
+/// evidence about production behaviour a green check implies. So this type
+/// is the right instrument for exactly two things:
+///
+/// 1. **Predicate logic on plain values, where there is no state to
+///    fake** — a window's boundary arithmetic, an ordering, a count, a
+///    derivation being *recorded*. The chain is incidental; the test is
+///    about the arithmetic.
+/// 2. **Faults the real substrate cannot be made to exhibit on demand** —
+///    "a store fault propagates as a `Fault`, never a verdict" needs a view
+///    that fails at height 7 ([`FaultingView`]); a real store will not.
+///
+/// **Anything where the pushed value stands in for state production would
+/// derive** — the root at a reference height, the tree's depth, a spent
+/// set populated so a rule fires, a membership set — is not a test of the
+/// rule and is not written against this type. The witness for a rule that
+/// reads derived state is the real chain: captured regtest blocks replayed
+/// through `form → validate → connect` against a real store, in
+/// `shekyl-chain-ingest` (`vectors_tests.rs`), which is where the
+/// dependency-direction belt (`check_chain_rules_no_store.sh`) allows a
+/// store to live. A third job added here is a job this comment forbids;
+/// edit the sentence before adding the job.
 ///
 /// Blocks and roots are **dense by construction**: [`push`](Self::push)
 /// appends at `tip + 1`, so — like the store — the only absence the view can
@@ -290,6 +318,18 @@ pub fn infallible<T>(result: Result<T, Infallible>) -> T {
     match result {
         Ok(value) => value,
         Err(never) => match never {},
+    }
+}
+
+/// Unwrap a parent-side definition ([`crate::tx_volume_window`],
+/// [`crate::mtp_median_at`]) over a view that cannot fault and is dense.
+/// A hole is a fixture failure.
+#[track_caller]
+pub fn defined<T>(read: Result<T, ViewRead<Infallible>>) -> T {
+    match read {
+        Ok(value) => value,
+        Err(ViewRead::View(never)) => match never {},
+        Err(ViewRead::Corrupt(corrupt)) => panic!("corrupt view: {corrupt}"),
     }
 }
 

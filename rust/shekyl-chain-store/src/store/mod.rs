@@ -469,6 +469,43 @@ impl ChainStore {
         batch.complete(outcome)
     }
 
+    /// Open a write batch, run `f`, and **abort**.
+    ///
+    /// The producer's read of the chain (`TemplateFacts`): it needs the
+    /// validator's [`WriteBatch::chain_view`] — the same body, the same
+    /// poison latch — and it must not commit. An invariant the closure
+    /// observes still halts the writer, exactly as [`Self::write`] does;
+    /// an unpoisoned `Ok` drops the transaction. A connect or a pop inside
+    /// `f` is rolled back with it.
+    ///
+    /// # Errors
+    ///
+    /// The same admission and engine errors as [`Self::write`]. An armed
+    /// invariant is returned in place of `f`'s own error and the writer
+    /// halts. Nothing is committed.
+    pub fn inspect<R, E, F>(&self, f: F) -> Result<R, E>
+    where
+        E: From<StoreError>,
+        F: for<'id> FnOnce(&mut WriteBatch<'_, 'id>) -> Result<R, E>,
+    {
+        let Backend::Writable(db) = &self.backend else {
+            return Err(StoreError::from(StoreCannot::ReadOnly).into());
+        };
+        if let Err(cannot) = self.shared.admit_write() {
+            return Err(StoreError::from(cannot).into());
+        }
+        let txn = match arm_write(db) {
+            Ok(txn) => txn,
+            Err(e) => {
+                self.shared.release_write();
+                return Err(e.into());
+            }
+        };
+        let mut batch = WriteBatch::new(txn, self.apply_policy, &self.shared);
+        let outcome = f(&mut batch);
+        batch.abandon(outcome)
+    }
+
     /// Begin a read snapshot. Concurrent with a live write batch.
     ///
     /// # Errors
