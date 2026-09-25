@@ -29,8 +29,11 @@
 //!   or `Block`). Responsibility lives only on the originated arm.
 //!   [`RelayState::origin`] is the permanent projection [`PoolBatch::update`](crate::pool::PoolBatch::update)
 //!   compares; a phase or responsibility change is not an origin change.
-//!   [`RelayState::upgrade`] is the strict forward step, and update stores
-//!   a new phase only when the walk is that step or the same phase.
+//!   [`RelayState::follows`] is the ratchet as one answer — same phase or a
+//!   forward step, with a [`RelayRefusal`] naming which lifetime a candidate
+//!   breaks — and [`PoolBatch::update`](crate::pool::PoolBatch::update)
+//!   stores nothing it refuses; [`RelayState::upgrade`] is the strict
+//!   forward step for the pool's admission path.
 //!
 //! # The seam
 //!
@@ -144,10 +147,10 @@ pub enum Responsibility {
 /// value.
 ///
 /// The phase enum is chosen by the provenance, so the pairs the pin forbids
-/// cannot be constructed. [`RelayState::origin`] is what an update compares
-/// for permanence. [`RelayState::upgrade`] is a strict forward step;
-/// [`RelayState::accepts`] is that step or a rewrite at the same phase
-/// (a new clock, a disarmed responsibility, a readiness note).
+/// cannot be constructed. [`RelayState::follows`] is the whole update rule
+/// — provenance permanent, phase forward or unchanged, responsibility never
+/// re-armed — with the refusal named; [`RelayState::upgrade`] is its strict
+/// forward step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelayState {
     /// Originated here. Responsibility is required, because the arm exists
@@ -167,14 +170,47 @@ pub enum RelayState {
     },
 }
 
-/// What a candidate relay state is, relative to the one stored.
+/// Why a candidate relay state may not replace a stored one — the ratchet's
+/// three refusals, as the value [`RelayState::follows`] returns. Each is one
+/// of §92.4's lifetimes: provenance is permanent, the phase walks forward,
+/// and a disarmed responsibility stays disarmed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelayRefusal {
+    /// The provenance differs — a different origin, or a different arrival
+    /// zone. First arrival wins and nothing revises it.
+    OriginChanged,
+    /// The phase is neither the stored phase nor a forward step on this
+    /// provenance's walk.
+    PhaseNotForward,
+    /// A responsibility already disarmed by observation would be armed
+    /// again. Observation ends the obligation.
+    ResponsibilityRearmed,
+}
+
+impl core::fmt::Display for RelayRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::OriginChanged => "the origin differs; provenance is permanent (§92.4)",
+            Self::PhaseNotForward => "the phase is neither the stored phase nor a forward step",
+            Self::ResponsibilityRearmed => {
+                "a responsibility observation disarmed would be armed again"
+            }
+        })
+    }
+}
+
+impl core::error::Error for RelayRefusal {}
+
+/// Where a candidate phase sits relative to the stored one, on the same
+/// provenance.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PhaseStep {
-    /// Same phase. Clocks and responsibility may differ.
+    /// Same phase. Clocks may differ.
     Same,
     /// A forward step on this provenance's walk.
     Forward,
-    /// A different provenance, or a phase that is not a forward step.
-    Refused,
+    /// Not on the walk from here.
+    Backward,
 }
 
 impl RelayState {
@@ -232,43 +268,73 @@ impl RelayState {
         self.relay_method().matches(category)
     }
 
-    /// `next` when it is a strict forward step on the same provenance:
-    /// originated `Held → Block`; arrived `Stem → Fluff`, `Stem → Block`,
-    /// or `Fluff → Block`. Same phase is not a step — the caller keeps its
-    /// own clock. A different zone, a step off that walk, or re-arming a
-    /// disarmed responsibility is `None`.
+    /// Whether `next` may replace `self` in the store — the ratchet as one
+    /// answer, with the reason when it is no. `Ok` for the same phase (a new
+    /// clock, a disarmed responsibility) or a forward step; the three
+    /// refusals are [`RelayRefusal`]'s, checked in the order the lifetimes
+    /// nest: provenance, then phase, then responsibility.
+    ///
+    /// # Errors
+    ///
+    /// [`RelayRefusal`] naming the rule `next` breaks.
+    pub const fn follows(self, next: Self) -> Result<(), RelayRefusal> {
+        match self.step(next) {
+            Err(refusal) => Err(refusal),
+            Ok(PhaseStep::Backward) => Err(RelayRefusal::PhaseNotForward),
+            Ok(PhaseStep::Same | PhaseStep::Forward) => {
+                if self.rearms(next) {
+                    Err(RelayRefusal::ResponsibilityRearmed)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// `next` when it is a **strict** forward step from `self` that
+    /// [`follows`](Self::follows): originated `Held → Block`; arrived
+    /// `Stem → Fluff`, `Stem → Block`, or `Fluff → Block`. The same phase is
+    /// not a step — the caller keeps its own clock. The pool's admission
+    /// path (E5) uses this where the C++ used `upgrade_relay_method`.
     #[must_use]
     pub const fn upgrade(self, next: Self) -> Option<Self> {
-        if self.rearms(next) {
-            return None;
-        }
-        match self.step(next) {
-            PhaseStep::Forward => Some(next),
-            PhaseStep::Same | PhaseStep::Refused => None,
+        match (self.follows(next), self.step(next)) {
+            (Ok(()), Ok(PhaseStep::Forward)) => Some(next),
+            _ => None,
         }
     }
 
-    /// Whether an update may replace `self` with `next`: the phase follows
-    /// ([`Self::phase_follows`]) and the responsibility is not re-armed.
-    #[must_use]
-    pub const fn accepts(self, next: Self) -> bool {
-        self.phase_follows(next) && !self.rearms(next)
-    }
-
-    /// Same provenance, and either the same phase or a forward step.
-    /// Responsibility is not part of this answer.
-    #[must_use]
-    pub const fn phase_follows(self, next: Self) -> bool {
-        match self.step(next) {
-            PhaseStep::Same | PhaseStep::Forward => true,
-            PhaseStep::Refused => false,
+    /// The phase relation on the same provenance; a provenance change is
+    /// the refusal, not a step.
+    const fn step(self, next: Self) -> Result<PhaseStep, RelayRefusal> {
+        match (self, next) {
+            (Self::Originated { phase: from, .. }, Self::Originated { phase: to, .. }) => {
+                Ok(originated_step(from, to))
+            }
+            (
+                Self::Arrived {
+                    zone: from_zone,
+                    phase: from,
+                },
+                Self::Arrived {
+                    zone: to_zone,
+                    phase: to,
+                },
+            ) => {
+                if from_zone.to_byte() == to_zone.to_byte() {
+                    Ok(arrived_step(from, to))
+                } else {
+                    Err(RelayRefusal::OriginChanged)
+                }
+            }
+            (Self::Originated { .. }, Self::Arrived { .. })
+            | (Self::Arrived { .. }, Self::Originated { .. }) => Err(RelayRefusal::OriginChanged),
         }
     }
 
-    /// Whether `next` arms a responsibility `self` has already disarmed.
-    /// Observation ends the obligation. An arrival has nothing to re-arm.
-    #[must_use]
-    pub const fn rearms(self, next: Self) -> bool {
+    /// Whether `next` arms a responsibility `self` has already disarmed. An
+    /// arrival has nothing to re-arm.
+    const fn rearms(self, next: Self) -> bool {
         matches!(
             (self, next),
             (
@@ -283,31 +349,6 @@ impl RelayState {
             )
         )
     }
-
-    const fn step(self, next: Self) -> PhaseStep {
-        match (self, next) {
-            (Self::Originated { phase: from, .. }, Self::Originated { phase: to, .. }) => {
-                originated_step(from, to)
-            }
-            (
-                Self::Arrived {
-                    zone: from_zone,
-                    phase: from,
-                },
-                Self::Arrived {
-                    zone: to_zone,
-                    phase: to,
-                },
-            ) => {
-                if from_zone.to_byte() != to_zone.to_byte() {
-                    PhaseStep::Refused
-                } else {
-                    arrived_step(from, to)
-                }
-            }
-            _ => PhaseStep::Refused,
-        }
-    }
 }
 
 /// The originated walk. Every pair is an arm, so a new phase does not compile
@@ -315,7 +356,7 @@ impl RelayState {
 const fn originated_step(from: OriginatedPhase, to: OriginatedPhase) -> PhaseStep {
     match (from, to) {
         (OriginatedPhase::Held { .. }, OriginatedPhase::Block { .. }) => PhaseStep::Forward,
-        (OriginatedPhase::Block { .. }, OriginatedPhase::Held { .. }) => PhaseStep::Refused,
+        (OriginatedPhase::Block { .. }, OriginatedPhase::Held { .. }) => PhaseStep::Backward,
         (OriginatedPhase::Held { .. }, OriginatedPhase::Held { .. })
         | (OriginatedPhase::Block { .. }, OriginatedPhase::Block { .. }) => PhaseStep::Same,
     }
@@ -329,7 +370,7 @@ const fn arrived_step(from: ArrivedPhase, to: ArrivedPhase) -> PhaseStep {
         | (ArrivedPhase::Fluff { .. }, ArrivedPhase::Block { .. }) => PhaseStep::Forward,
         (ArrivedPhase::Fluff { .. }, ArrivedPhase::Stem { .. })
         | (ArrivedPhase::Block { .. }, ArrivedPhase::Stem { .. })
-        | (ArrivedPhase::Block { .. }, ArrivedPhase::Fluff { .. }) => PhaseStep::Refused,
+        | (ArrivedPhase::Block { .. }, ArrivedPhase::Fluff { .. }) => PhaseStep::Backward,
         (ArrivedPhase::Stem { .. }, ArrivedPhase::Stem { .. })
         | (ArrivedPhase::Fluff { .. }, ArrivedPhase::Fluff { .. })
         | (ArrivedPhase::Block { .. }, ArrivedPhase::Block { .. }) => PhaseStep::Same,
@@ -379,7 +420,7 @@ pub struct PoolRecord {
     /// The readiness cache.
     pub readiness: Readiness,
     /// The FCMP++ verification cache (CEN-M8). `Some` iff verified.
-    /// [`NULL_VERIFICATION_HASH`] is not a cache hit; the store and the
+    /// `NULL_VERIFICATION_HASH` is not a cache hit; the store and the
     /// decoder both refuse it.
     pub fcmp_cache: Option<FcmpVerificationHash>,
 }
@@ -602,7 +643,7 @@ fn decode_relay(reader: &mut Reader<'_>) -> Result<RelayState, CodecError> {
 ///
 /// Responsibility is `1` Armed or `2` Disarmed. A tag outside `0..=4`, a
 /// zone or responsibility outside its set, a presence byte other than
-/// `0` or `1`, or a verification hash of [`NULL_VERIFICATION_HASH`] is a
+/// `0` or `1`, or a verification hash of `NULL_VERIFICATION_HASH` is a
 /// codec error. Trailing bytes are a codec error.
 impl Canonical for PoolRecord {
     const NAME: &'static str = "pool_record";

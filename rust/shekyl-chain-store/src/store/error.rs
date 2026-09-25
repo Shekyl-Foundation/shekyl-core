@@ -387,19 +387,12 @@ pub enum PoolCannot {
     NotHeld,
     /// `insert` with no transaction bytes: a pool entry is a transaction.
     EmptyBlob,
-    /// `update` with a record whose [`Origin`](crate::codec::Origin) differs
-    /// from the stored one. Provenance is permanent (§92.4); the refusal is
-    /// what makes it enforced rather than asserted (`SPL-Q9`). Phase and
-    /// responsibility are not part of that comparison.
-    OriginChanged,
-    /// `update` whose phase is neither the stored phase nor a forward step
-    /// of [`RelayState::upgrade`](crate::codec::RelayState::upgrade). An
-    /// originated entry walks `Held → Block` only; an arrival walks
-    /// `Stem → Fluff → Block`.
-    PhaseNotForward,
-    /// `update` that arms a responsibility the stored entry has already
-    /// disarmed. Observation ends the re-broadcast obligation.
-    ResponsibilityRearmed,
+    /// `update` whose relay state does not
+    /// [`follow`](crate::codec::RelayState::follows) the stored one — the
+    /// ratchet's verdict, carried as the type gave it: a changed provenance
+    /// (§92.4, `SPL-Q9`), a phase that is not the stored one or a forward
+    /// step, a responsibility re-armed after observation disarmed it.
+    Relay(crate::codec::RelayRefusal),
     /// `fcmp_cache` is the all-zero null hash. Absence is `None`; the null
     /// hash is not a verification (SPL-10).
     NullFcmpCache,
@@ -503,21 +496,17 @@ impl core::error::Error for StoreCannot {}
 
 impl core::fmt::Display for PoolCannot {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(match self {
-            Self::AlreadyHeld => "insert of a transaction the pool already holds",
-            Self::NotHeld => "update of a transaction the pool does not hold",
-            Self::EmptyBlob => "insert with no transaction bytes",
-            Self::OriginChanged => {
-                "update that changes an entry's origin; provenance is permanent (§92.4)"
+        match self {
+            Self::AlreadyHeld => f.write_str("insert of a transaction the pool already holds"),
+            Self::NotHeld => f.write_str("update of a transaction the pool does not hold"),
+            Self::EmptyBlob => f.write_str("insert with no transaction bytes"),
+            Self::Relay(refusal) => {
+                write!(f, "update whose relay state does not follow: {refusal}")
             }
-            Self::PhaseNotForward => {
-                "update whose phase is not the stored phase and not a forward step"
+            Self::NullFcmpCache => {
+                f.write_str("fcmp verification cache is the null hash; absence is None")
             }
-            Self::ResponsibilityRearmed => {
-                "update that arms a responsibility observation already ended"
-            }
-            Self::NullFcmpCache => "fcmp verification cache is the null hash; absence is None",
-        })
+        }
     }
 }
 

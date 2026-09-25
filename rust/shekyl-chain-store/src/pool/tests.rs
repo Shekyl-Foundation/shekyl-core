@@ -15,8 +15,12 @@ use shekyl_units::AtomicUnits;
 
 use super::schema::{POOL_BLOB, POOL_HEADER, POOL_META};
 use super::*;
-use crate::codec::PropertyCellBytes;
-use crate::store::{ErrorClass, StoreCannot};
+use shekyl_store_codec::Canonical;
+
+use crate::codec::{PropertyCellBytes, RelayRefusal, SCHEMA_VERSION};
+use crate::store::{
+    ErrorClass, PoolCannot, StoreCannot, StoreInvariant, DURABILITY, TWO_PHASE_COMMIT,
+};
 
 fn tmp(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
@@ -160,7 +164,10 @@ fn insert_update_remove_and_their_refusals() {
     let err = store
         .write(|b| b.update(&h, &originated_held()))
         .expect_err("origin change");
-    assert_eq!(cannot(&err), Some(PoolCannot::OriginChanged));
+    assert_eq!(
+        cannot(&err),
+        Some(PoolCannot::Relay(RelayRefusal::OriginChanged))
+    );
 
     // P3 twice: idempotent.
     store.write(|b| b.remove(&h)).unwrap();
@@ -170,7 +177,7 @@ fn insert_update_remove_and_their_refusals() {
 }
 
 /// The walk is enforced at the write. Same phase may change its clock; a
-/// backwards step is [`PoolCannot::PhaseNotForward`]; a forward step lands.
+/// backwards step is [`PoolCannot::Relay(RelayRefusal::PhaseNotForward)`]; a forward step lands.
 /// An originated entry cannot be constructed as fluff — that phase is not
 /// in [`OriginatedPhase`].
 #[test]
@@ -185,7 +192,10 @@ fn the_walk_is_enforced_at_the_write_and_a_null_cache_is_refused() {
     let err = store
         .write(|b| b.update(&h, &arrived_stem()))
         .expect_err("fluff does not walk back to stem");
-    assert_eq!(cannot(&err), Some(PoolCannot::PhaseNotForward));
+    assert_eq!(
+        cannot(&err),
+        Some(PoolCannot::Relay(RelayRefusal::PhaseNotForward))
+    );
     assert_eq!(
         store.begin_read().unwrap().record(&h).unwrap(),
         Some(arrived_fluff())
@@ -241,7 +251,10 @@ fn the_walk_is_enforced_at_the_write_and_a_null_cache_is_refused() {
     let err = store
         .write(|b| b.update(&local, &rearmed))
         .expect_err("observation already ended");
-    assert_eq!(cannot(&err), Some(PoolCannot::ResponsibilityRearmed));
+    assert_eq!(
+        cannot(&err),
+        Some(PoolCannot::Relay(RelayRefusal::ResponsibilityRearmed))
+    );
     assert_eq!(
         store.begin_read().unwrap().record(&local).unwrap(),
         Some(yielded)

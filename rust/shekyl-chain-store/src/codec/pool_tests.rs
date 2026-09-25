@@ -16,8 +16,8 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 
 use super::{
-    ArrivedPhase, BlockRef, Origin, OriginatedPhase, PoolRecord, Readiness, RelayState,
-    Responsibility,
+    ArrivedPhase, BlockRef, Origin, OriginatedPhase, PoolRecord, Readiness, RelayRefusal,
+    RelayState, Responsibility,
 };
 
 fn secs(n: u64) -> UnixSeconds {
@@ -247,7 +247,7 @@ fn truncated_and_trailing_bytes_are_refused() {
 /// an originated entry moves `Held → Block` only. Same phase is not a step.
 /// A different zone is refused here and is `OriginChanged` at the store.
 #[test]
-fn upgrade_is_the_forward_walk_and_accepts_keeps_the_same_phase() {
+fn upgrade_is_the_forward_walk_and_follows_keeps_the_same_phase() {
     let stem = RelayState::Arrived {
         zone: NetZone::Public,
         phase: ArrivedPhase::Stem {
@@ -280,12 +280,17 @@ fn upgrade_is_the_forward_walk_and_accepts_keeps_the_same_phase() {
         "an arrival does not walk backwards"
     );
     assert_eq!(fluff.upgrade(fluff), None, "same phase is not a step");
-    assert!(fluff.accepts(RelayState::Arrived {
-        zone: NetZone::Public,
-        phase: ArrivedPhase::Fluff {
-            last_relayed: Some(secs(9)),
-        },
-    }));
+    assert_eq!(
+        fluff.follows(RelayState::Arrived {
+            zone: NetZone::Public,
+            phase: ArrivedPhase::Fluff {
+                last_relayed: Some(secs(9)),
+            },
+        }),
+        Ok(()),
+        "same phase with a new clock follows"
+    );
+    assert_eq!(fluff.follows(stem), Err(RelayRefusal::PhaseNotForward));
 
     assert_eq!(held.upgrade(originated_block), Some(originated_block));
     let rearmed = RelayState::Originated {
@@ -297,24 +302,32 @@ fn upgrade_is_the_forward_walk_and_accepts_keeps_the_same_phase() {
         None,
         "a disarmed entry does not re-arm, even moving to the same block phase"
     );
-    assert!(!originated_block.accepts(rearmed));
-    assert!(originated_block.phase_follows(rearmed));
+    assert_eq!(
+        originated_block.follows(rearmed),
+        Err(RelayRefusal::ResponsibilityRearmed),
+        "same phase, but the responsibility is re-armed"
+    );
     assert_eq!(originated_block.upgrade(held), None);
     assert_eq!(held.upgrade(stem), None);
     assert_eq!(held.upgrade(fluff), None);
-    assert!(held.accepts(RelayState::Originated {
-        phase: OriginatedPhase::Held {
-            last_attempt: Some(secs(4)),
-        },
-        responsibility: Responsibility::Disarmed,
-    }));
+    assert_eq!(
+        held.follows(RelayState::Originated {
+            phase: OriginatedPhase::Held {
+                last_attempt: Some(secs(4)),
+            },
+            responsibility: Responsibility::Disarmed,
+        }),
+        Ok(()),
+        "disarming at the same phase follows"
+    );
+    assert_eq!(held.follows(stem), Err(RelayRefusal::OriginChanged));
 
     let other_zone = RelayState::Arrived {
         zone: NetZone::Tor,
         phase: ArrivedPhase::Fluff { last_relayed: None },
     };
     assert_eq!(fluff.upgrade(other_zone), None);
-    assert!(!fluff.accepts(other_zone));
+    assert_eq!(fluff.follows(other_zone), Err(RelayRefusal::OriginChanged));
     assert_eq!(
         fluff.origin(),
         Origin::Arrived {
