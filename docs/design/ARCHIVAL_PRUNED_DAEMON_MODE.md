@@ -1778,8 +1778,7 @@ exists.** [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) (family `WSS-`,
 registered at birth) is the wallet-side store's umbrella; `CTS-` closes as
 record and is partitioned by unit there. Its `WSS-Q1` — one store with two
 obligations, or two files — is the axis every one of Q12's unmade decisions
-inherits, and it is posed, not yet ruled; **DRS-E** — S-PRUNE's **plan** (the skeleton `DRS_E1_SPRUNE.md` landed; the plan — increment ordinal, Round-0 pre-flight, commit sequence — is still owed, after Q1's
-horizon check lands), A3 (#772), A4, the daemon-uniformity constraint in
+inherits, and it is posed, not yet ruled; **DRS-E** — S-PRUNE **LANDED 2026-09-25** (`DRS_E1_SPRUNE.md` §14; the retention prune is built, `D_max` has a mechanism to test against — the Q1 horizon check was not a precondition: `journal_horizon` is minted beside `D_MAX`, and Q1's assertion is S-ARCH's when its journal writers land), A3 (#772), A4, the daemon-uniformity constraint in
 `DAEMON_REDB_STORE.md` (#775's row); **E4 / S-ARCH** — the serve-credit
 verifier re-key (consensus) and the leaf-cluster deletion; **E6** — the
 `Trust` mode and the `CEN-E1`/`E2` re-key; **the reward leg** — the

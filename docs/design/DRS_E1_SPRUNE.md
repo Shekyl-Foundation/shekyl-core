@@ -49,8 +49,10 @@ mechanism is this increment. Built with `D_max` as a parameter
 (`Horizons::undo_retention`, production `D_MAX`); the numeric stays
 PROVISIONAL in `PDM-Q11`, now testable.**
 
-**Family:** none minted here. Findings and questions this document raises
-at pre-flight take DRS-E's next free series (rule 94 §1), not a `PDM-` id.
+**Family:** `SPR-N` (as-built findings, §14) and `SPR-QN` (questions the
+build posed), both registered in `IMPLEMENTATION_INDEX.md` §2 at the
+increment (rule 94 §1) — not `PDM-` ids, which stay with that document's
+own questions.
 
 ---
 
@@ -403,7 +405,7 @@ have no Rust writer here); what this surface owes it is the function.
 | Body horizon | the epoch boundary after the shard's freeze epoch — `close_epoch(k) + 2 ≤ current_epoch`; the batch's set at `E` is `{k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3}` (additive on `u64`, never `E − 2`); a rule, **no constant, no frontier** | ruled (`PDM-Q2`, 2026-09-22); `W` retired |
 | `SEB` | `settlement_epoch_blocks = 10,000`; `settlement_epoch_at_height(h) = h / SEB` (`consensus_state.rs:27`) | pinned |
 | `D_max` | 720, **PROVISIONAL** (`PDM-Q11`). Built 2026-09-25 as `shekyl_chain_rules::D_MAX`, derived from `config/consensus_constants.json`'s `archival_reorg_depth_blocks` (one source; its comment names PDM-Q11's gate as a consumer). `SEB > D_MAX` is const-asserted beside the constant. A session pair with `retention` zero or `≥ SEB` is refused at open (`StoreCannot::RetentionNotInsideEpoch`), on a writer and on `open_read_only` — both take a checked `Horizons`. A shortened epoch names its own retention through `Horizons::new`. `SEB = 2` with retention 720 is not a configuration (rule 71). | PROVISIONAL numeric; constant built (`shekyl_chain_rules::reorg`) |
-| Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **built** 2026-09-25 as `shekyl_chain_rules::journal_horizon(tip) -> Option<BlockHeight>` beside `D_MAX`, consumed by S-ARCH when its journal writers land (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
+| Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **built** 2026-09-25 as `shekyl_chain_rules::journal_horizon(tip) -> Option<BlockHeight>` beside `D_MAX` (the production pair; `journal_horizon_under(tip, epoch_blocks, reorg_cap)` takes a session's `Horizons` pair, so a shortened schedule's horizon moves with it), consumed by S-ARCH when its journal writers land (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
 | `T` | **200 transactions per shard, PROVISIONAL** — the one consensus constant of the partition, one const-asserted home (the discipline `SHARD_BYTES` carried, FOLLOWUPS `:72`); chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB | ruled (`PDM-Q6` item 5, 2026-09-23); **built** 2026-09-25 as `shekyl_types::SHARD_TX_COUNT`; numeric on the Round-2 gate with `n`, `D_max`, `w_launch` |
 | Shard boundaries | `k·T` — no table, no rows, no prefix sum; `close_height(k) = height((k+1)·T − 1)` by binary search over the storage-id total | derived, never received (item 5) |
 | `first_tx_id(h)`, `cumulative_tx_count` | `cumulative_tx_count` is the listed-transaction fold. `first_tx_id(0) = 0`; for `h ≥ 1`, `first_tx_id(h) = storage_ids_through(cumulative_tx_count(h−1), h−1)` — listed plus one coinbase per block (`shekyl_types::storage_ids_through`, SPR-1). The primitive under `close_height`, and so under `close_epoch` | landed on #772 as the listed fold — **the coinbase term is SPR-1** |
@@ -473,11 +475,17 @@ fires again on a reorg across 300 and the store is the same store;
 `h_scarce` at each epoch, on the batch and the snapshot. A planted
 decrease in the storage-id total refuses the boundary connect as SI-13
 and leaves the writer halted with the block uncommitted. A read-only
-open reports the `Horizons` it was given. `Horizons`' refusals; `D_MAX`,
-`SEB > D_MAX` and `journal_horizon` in `shekyl-chain-rules`. 355 + 14
+open reports the `Horizons` it was given. A planted undecodable
+`undo_log_floor` cell is SI-7 through `pop` and arms the latch: a closure
+that swallows it does not commit, and the writer halts. `Horizons`'
+refusals; `D_MAX`, `SEB > D_MAX`, `journal_horizon` and its session form
+`journal_horizon_under(tip, epoch_blocks, reorg_cap)` in
+`shekyl-chain-rules`. 355 + 14
 chain-store, 32 + 7 `shekyl-types`, 207 chain-rules; every `scripts/ci`
-gate green at the mechanism commit, and the review fix re-ran the store
-and types libs (355, 32).
+gate green at the mechanism commit; the review fix re-ran the store
+and types libs (355, 32), and the round-3 fix (the floor cell arms the
+latch; `journal_horizon_under`) re-ran chain-store and chain-rules
+(**356** + 14, **208**).
 
 **What stays E4's / E5's / S-ARCH's**, unchanged by this build: the
 journals' retirement at `journal_horizon` (S-ARCH's writers, when they
