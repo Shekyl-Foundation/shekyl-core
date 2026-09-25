@@ -452,8 +452,8 @@ census_rows! {
         I16 implemented(crate::rules::tx_inputs::I16),
         I17 pending,
         I18 pending,
-        I19 pending,
-        I20 pending,
+        I19 implemented(crate::rules::tx_extra::I19),
+        I20 implemented(crate::rules::tx_extra::I20),
         // 4.J Archival transaction families (all verdicts Rust-side; C++ marshals)
         J1 pending,
         J2 pending,

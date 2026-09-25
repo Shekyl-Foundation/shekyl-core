@@ -24,6 +24,9 @@ use shekyl_types::{
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
+use shekyl_wire::tx_extra::{
+    self, conforming_pqc_leaf_blob, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES,
+};
 use shekyl_wire::{
     Block, BlockHeader, BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
 };
@@ -638,10 +641,40 @@ pub mod fixture {
         out
     }
 
+    /// The `extra` CEN-I19 requires of a transaction with `n_outputs`
+    /// outputs: one `0x06` KEM-ciphertext field of `1120·n` bytes and one
+    /// `0x07` leaf-entry field of `64·n` conforming entries — empty when
+    /// `n == 0`. The KEM bytes are filler (no rule reads their content; the
+    /// leaf entries' leading points are what `PL-D3` checks, and
+    /// [`conforming_pqc_leaf_blob`] supplies canonical ones). Slice 6
+    /// commit 3 landed I19 and every fixture with outputs grew this field.
+    pub fn pqc_extra(n_outputs: usize) -> Vec<u8> {
+        if n_outputs == 0 {
+            return Vec::new();
+        }
+        tx_extra::serialize(&[
+            TxExtraField::PqcKemCiphertext(vec![0x5A; HYBRID_KEM_CT_BYTES * n_outputs]),
+            TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n_outputs)),
+        ])
+        .expect("two capped fields serialize")
+    }
+
+    /// The coinbase `extra` in CEN-I20's one layout for `n_outputs` outputs:
+    /// `[0x01 pubkey, 0x02 nonce(8), 0x06, 0x07]`, built by the grammar's
+    /// own constructor so the fixture cannot drift from the rule. The
+    /// pubkey is `G` and the nonce zero: no rule reads either's value.
+    pub fn coinbase_extra(n_outputs: usize) -> Vec<u8> {
+        let kem = vec![0x5A; HYBRID_KEM_CT_BYTES * n_outputs];
+        let leaf = conforming_pqc_leaf_blob(n_outputs);
+        tx_extra::build_coinbase_extra(G, &[0; COINBASE_NONCE_BYTES], n_outputs, &kem, &leaf)
+            .expect("the grammar's one layout builds")
+    }
+
     /// A coinbase that satisfies every structural 4.F row for a block at
     /// `height`: one `Input::Gen(height)` (F1, F5), `Ct::Null` (F3), one
     /// output (F4) paying `0` with key `G` (F9) and mask `2·G` (F10),
-    /// `unlock_time = height + mined_money_unlock_window` (F6). Amounts are
+    /// `unlock_time = height + mined_money_unlock_window` (F6), and the
+    /// grammar's `extra` for one output (I19, I20). Amounts are
     /// not this fixture's concern — the exact-payout row (F18) is not
     /// landed — so a chain of these pays nothing and reads the tail subsidy
     /// at every height.
@@ -664,7 +697,7 @@ pub mod fixture {
                     key: G,
                     view_tag: 1,
                 }],
-                extra: Vec::new(),
+                extra: coinbase_extra(1),
             },
             ct: Ct::Null(CtBase {
                 enc_amounts: vec![[0x55; 9]],
@@ -714,7 +747,7 @@ pub mod fixture {
                         view_tag: 2,
                     })
                     .collect(),
-                extra: Vec::new(),
+                extra: pqc_extra(outputs),
             },
             ct: Ct::Fcmp {
                 fee: 0,

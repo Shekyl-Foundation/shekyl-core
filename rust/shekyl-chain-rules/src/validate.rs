@@ -55,6 +55,7 @@ use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
+use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9};
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
@@ -407,7 +408,11 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //
     // 1. The 4.H line every transaction is held to. H1 (serialized size) is
     //    the byte bound and runs first; the rest of the line is slice 5's
-    //    order.
+    //    order — with I19 and I20 (the `tx_extra` rows, slice 6 commit 3)
+    //    where `check_tx_semantic` runs the shape adapter: after
+    //    `check_outs_valid` (H7) and before `check_money_overflow` (H9).
+    //    I20 is `TxScope::Coinbase` and records as vacuous on every listed
+    //    slot.
     // 2. Class shape (H20–H22), then H19's BP+ layout. A transaction that
     //    fails its shape and an input-path row is named by the shape: a
     //    proof-less bond post is H21, not "fewer than two outputs". That is
@@ -419,7 +424,7 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     // 3. The stateless input-path rows. The cap does not have to precede
     //    the shape rules to bound proof work: I15 and the H19 batch verify
     //    run after `tx_form` returns, so I4 has already refused.
-    judge_tx!(cx, coverage; H1, H3, H4, H7, H9, H10, H11, H14, H15, H16, H17, H18);
+    judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
     judge_tx!(cx, coverage; H20, H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
     judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16);

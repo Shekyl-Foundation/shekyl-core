@@ -93,6 +93,8 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I9,
                 CenRow::I14,
                 CenRow::I16,
+                CenRow::I19,
+                CenRow::I20,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
@@ -209,7 +211,9 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::I8,
             CenRow::I9,
             CenRow::I14,
-            CenRow::I16
+            CenRow::I16,
+            CenRow::I19,
+            CenRow::I20
         ]
     );
     MockChain::default().with_view(|view| {

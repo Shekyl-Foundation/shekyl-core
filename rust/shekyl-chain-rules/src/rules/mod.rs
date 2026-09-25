@@ -80,6 +80,7 @@ pub use pow::seed_height;
 pub(crate) mod timestamps;
 pub(crate) mod topology;
 pub(crate) mod tx;
+pub(crate) mod tx_extra;
 pub(crate) mod tx_inputs;
 
 use crate::block::{Candidate, StructurallyValid};
@@ -328,6 +329,18 @@ pub(crate) enum TxScope {
     All,
     /// Non-coinbase transactions; vacuous on the coinbase.
     NonCoinbase,
+    /// The coinbase only; vacuous on every listed transaction.
+    ///
+    /// **`Coinbase` means *runs at [`TxSlot::Miner`]*, never *runs when the
+    /// bytes look like a coinbase*** (slice 6 Q6, RULED 2026-09-24). The kind
+    /// is derived from the slot (slice 5 Q2) precisely so a coinbase-shaped
+    /// body cannot exempt itself from the rows that refuse it by declaring
+    /// what it is; a coinbase-only scope is exactly where that would
+    /// re-enter through the back door. So a coinbase-shaped body at `Lone`
+    /// is **not** judged under a `Coinbase` rule — it is refused by the
+    /// non-coinbase rows — and a non-coinbase body at `Miner` **is**.
+    /// `the_kind_is_derived_from_the_slot_not_the_bytes` holds both.
+    Coinbase,
 }
 
 impl TxScope {
@@ -336,6 +349,7 @@ impl TxScope {
         match self {
             Self::All => true,
             Self::NonCoinbase => matches!(kind, TxKind::Listed),
+            Self::Coinbase => matches!(kind, TxKind::Coinbase),
         }
     }
 }
