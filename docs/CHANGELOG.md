@@ -343,6 +343,28 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
 
 ### Daemon chain store
 
+- **DRS-E1 S-ALT — the alternative-chain store, typed, on the consensus
+  file; the switch is one transaction.** Schema layout **13**: `alt_blocks`
+  becomes `LmdbHashKey → Coded<AltBlock>` — the C++ `alt_block_data_t ‖ blob`
+  re-specified as one record (the 128-bit cumulative difficulty as one field
+  rather than two hand-split words; the weight's zero sentinel as absence;
+  the block bytes and the reorg-survival attestation witness as fields) —
+  and `archival_alt_attestation_witness` is **folded** into that record and
+  leaves the catalogue (the witness can no longer outlive or lack its alt
+  block by construction). Seven operations on the store's existing write
+  batch and read snapshot replace the C++ alt path's nine store methods:
+  insert (refuses a held hash — the duplicate belt, typed), remove (refuses
+  an absent hash — a caller-contract violation, not a no-op), drop-all,
+  read, membership without a decode, count, enumerate. Because the batch
+  already pops and connects repeatedly, a chain switch — pop to the split,
+  demote, promote, remove — is **one** `ChainStore::write` closure that
+  commits or aborts as a unit; the C++ `rollback_blockchain_switching` has
+  no Rust counterpart and is deleted at cutover. The alt surface stays
+  outside every digest, and that boundary is now **tested** (an alt block
+  with a witness moves no digest) rather than declared. The schema
+  bijection gate gains its fourth direction (`FOLDED_INTO`) with a selftest
+  for each refusal. Pre-genesis: a daemon store at layout 12 is recreated,
+  not migrated.
 - **DRS-E1 S-POOL — the transaction pool gets its own store file.** Schema
   layout **12**: `txpool_meta` and `txpool_blob` leave the consensus store's
   catalogue — the pool is not consensus state and not reconstructible from

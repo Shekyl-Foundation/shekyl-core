@@ -819,6 +819,7 @@ Reorg-survival counterpart: the same opaque bytes, keyed by **block hash**
 | Writers | `store_archival_alt_attestation_witness` (`handle_alternative_block`, beside `add_alt_block`, same txn), `remove_archival_alt_attestation_witness` (from `remove_alt_block`), `drop_alt_blocks` |
 | Readers | `get_archival_alt_attestation_witness` (reorg promotion in `switch_to_alternative_blockchain`) |
 | Introduced | rides the v9 boundary (additive, no bump) |
+| redb twin | **none — folded** into `alt_blocks`' record as `AltBlock::attestation_witness` (DRS-E1 S-ALT, 2026-09-25, layout 13; `schema::FOLDED_INTO`, `SAR-Q5`). The one-owner rule below is structural there: a field cannot outlive its row. |
 
 **One table, one owner.** Rows are owned by the alt block: written beside
 `add_alt_block`, removed by `remove_alt_block` / `drop_alt_blocks` /
@@ -1129,6 +1130,7 @@ Offset  Size  Field
 | Writers | `add_alt_block`, `remove_alt_block`, `drop_alt_blocks` |
 | Readers | `get_alt_block`, `for_all_alt_blocks` |
 | Introduced | Genesis |
+| redb twin | `alt_blocks` (`LmdbHashKey → Coded<alt_block>`) in the **consensus file** — `AltBlock`: the u128 as one field, the weight's zero sentinel as `Option`, the block bytes **and the alt attestation witness** as fields (DRS-E1 S-ALT, 2026-09-25, layout 13; `DRS_E1_SALT.md` §3.4). Seven operations AL1–AL7 replace the six methods above plus the witness pair. |
 
 ---
 
