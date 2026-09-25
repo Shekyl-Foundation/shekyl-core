@@ -282,11 +282,22 @@ impl Canonical for AltBlock {
 /// A parseable block for this crate's tests and snapshot fixtures: a
 /// header at `height` over a coinbase, no listed transactions. Lives here so
 /// the codec test and the snapshot fixture build **the same** bytes.
+///
+/// The coinbase is built **inline, not borrowed from the rules harness**.
+/// This codec carries the block as a blob; its snapshot pins the blob's
+/// bytes, and `schema-snapshot.yml` demands a `SCHEMA_VERSION` bump for any
+/// snapshot change. A harness fixture is another lane's to move — it did
+/// (E6 slice 6 commit 3 gave every fixture coinbase its `extra`), and a
+/// codec whose layout had not changed would have been asked for a schema
+/// bump it did not earn. The bytes here are the ones the snapshot has
+/// always held: a coinbase no rule reads, only the codec.
 #[cfg(test)]
 pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
-    use shekyl_chain_rules::harness::fixture;
+    use shekyl_chain_rules::harness::fixture::{G, TWO_G};
+    use shekyl_chain_rules::RuleSet;
     use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot};
-    use shekyl_wire::{Block, BlockHeader};
+    use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
+    let unlock_time = height.saturating_add(RuleSet::GENESIS.mined_money_unlock_window().to_raw());
     Block {
         header: BlockHeader {
             major_version: 1,
@@ -297,7 +308,23 @@ pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
             curve_tree_root: CurveTreeRoot::EMPTY,
             attestation_root: AttestationRoot::from_bytes([0x33; 32]),
         },
-        miner_transaction: fixture::coinbase(height),
+        miner_transaction: Transaction {
+            prefix: TxPrefix {
+                unlock_time,
+                inputs: vec![Input::Gen(height)],
+                outputs: vec![Output {
+                    amount: 0,
+                    key: G,
+                    view_tag: 1,
+                }],
+                extra: Vec::new(),
+            },
+            ct: Ct::Null(CtBase {
+                enc_amounts: vec![[0x55; 9]],
+                enc_labels: vec![[0x66; 9]],
+                commitments: vec![TWO_G],
+            }),
+        },
         transaction_hashes: Vec::new(),
     }
     .serialize()
