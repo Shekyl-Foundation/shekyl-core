@@ -44,9 +44,15 @@
 //!   substrate and the pipeline.
 //! - [`mutation`] — one deliberate invalidation of one `Extend`, naming
 //!   the census row and the place that refuse it (§3.10).
+//! - `scenario` — **test-only** (`cfg(test)`, `pipeline`; not a public
+//!   module): the scripted driver that mines through the production
+//!   template and connects through this pipeline against a real store
+//!   (`CHAIN_RULES_SLICE_6.md` §5.3). It has no feature flag of its own and
+//!   nothing outside this crate's tests can reach it — by design: a driver
+//!   that shipped would be a second producer.
 //!
 //! Form is `shekyl_chain_rules::form`. The sequencer, the validate+connect
-//! actor, the grader and the driver live behind `feature = "pipeline"`.
+//! actor, the grader and the replay driver live behind `feature = "pipeline"`.
 //!
 //! # What this crate never does
 //!
