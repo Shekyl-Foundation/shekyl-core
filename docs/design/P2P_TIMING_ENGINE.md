@@ -1,77 +1,193 @@
 # P2P timing engine
 
-**Status: OPEN — Round 1, 2026-09-25.** The round is the design of the
-engine [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D6 already
-named. It does not re-open that ruling. Implementation does not start
-until the round closes. **Rule 26 is cited explicitly**
-(`26-sub-pr-design-discipline.mdc`): the engine crosses the FFI and
-replaces asio's event loop. Numeric budgets are not written before a
-measurement (rule 26 B9). This document mints no identifier family.
-The register row is P2P-3's **TE**.
+**Status: OPEN — Round 2, 2026-09-25.** Round 1's deadline table fired
+its own falsifier. This round replaces that table and proposes the
+answers to the four open questions. Nothing here is a number. Periods
+belong to their owners. **Rule 26 is cited explicitly.** This document
+mints no identifier family. The register row is P2P-3's **TE**.
 
-Pinned to `fix/p2p-transport-hmac-oracle` `55d7b2b16`, which sits on
-`dev` after the transport-layer design. Line numbers below were read
-at that pin.
-
-Opening this round discharges D6's third falsifier: the interim
-executor is bounded because its end is this round, not LV-3.
+Pinned to `fix/p2p-transport-hmac-oracle` `55d7b2b16`. Line numbers
+were read there. Opening the round still discharges D6's third
+falsifier ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D6).
 
 ---
 
-## What is already ruled
+## What D6 already ruled
 
-D6, not this document:
-
-- Until this engine lands, one socketless `io_context` remains, built
-  by D5's constructor, with a measured thread budget in place of the
-  hard-coded 10. C++ on a transport thread only posts work to it.
-- This engine then owns every deadline in Rust. C++ is called, not
-  driven. C++ work runs on a budgeted blocking pool owned by Rust,
-  never on an async worker, with one delivery at a time per connection.
-  The `io_context` is deleted. C++ has no event loop.
-- Relay dispatch is the next round after this one (P2P-3 **RD**). This
-  round arms the relay `Driver`'s sleep. It does not send relay messages.
-- The cryptonote handler stays the open register row. It runs on the
-  blocking pool once this engine lands. Its replacement has no owner.
-
-The deadlines D6 named, and where they are at this pin:
-
-| Deadline | Where it lives now |
-| --- | --- |
-| Levin invoke timeout | `anvoke_handler` arms `m_timer` on the connection's `io_context` (`levin_protocol_handler_async.h:229`, waits at `:236` and `:298`). Two waits, not the single site D6's summary cited. |
-| Idle cadence | Two handlers, each 1 second, on the public zone (`net_node.inl:1146-1147`). |
-| Executor pool | Hard-coded `thrds_count = 10` (`net_node.inl:1150`). |
-| Shared context | `add_zone` builds every other zone on the public zone's `io_context` (`net_node.inl:805`). |
-| Relay sleep | `shekyl-relay`'s `Driver` does not sleep. It returns `next_wake` (`driver/mod.rs:6-13`, `:123-124`). The asio timer is what sleeps. There is no cached `armed_deadline`; the next wake is derived (`:18-21`). |
+Not reopened here. Until this engine lands, one socketless `io_context`
+remains. Then this engine owns every deadline in Rust. C++ is called,
+not driven, on a budgeted blocking pool, one delivery at a time per
+connection. The `io_context` is deleted. Relay dispatch is the next
+round (P2P-3 **RD**). This round arms the relay sleep. It does not send
+relay messages.
 
 ---
 
-## What this round has to decide
+## Schedules — Round 1 table FIRED 2026-09-25
 
-These are open. A number is not an answer.
+Round 1 listed two idle cadences and did not name the relay timer or
+the schedules those cadences poll. The falsifier fired. The table
+below is the replacement. Each row is one job. A shared interval is
+what the code does today, not a constant of this engine.
 
-1. **Where the sleeps run.** D5 gives the transport layer its own
-   runtime, because a peer flood must not starve wallet RPC, and it
-   refuses an unbudgeted third runtime. This round decides whether the
-   engine's sleeps share that runtime or are a budgeted runtime of
-   their own. The blocking pool is separate from either: C++ does not
-   run on an async worker.
-2. **One wake, or one timer per deadline.** The relay driver is built
-   so one caller arms one timer against `next_wake` and does not keep
-   a second copy of the deadline. Levin invokes are many timeouts at
-   once, cancelled when the response arrives. The idle cadences are
-   periodic. The engine has to hold all three without giving the relay
-   driver a cached deadline.
-3. **The call into C++.** An expiry carries an id. C++ keeps the
-   pending-invoke state. The shape of that id, of cancel, and of "one
-   delivery at a time" on the blocking pool is this round's contract.
-4. **Shutdown.** The interim's order is already ruled (stop accept,
-   cancel transport tasks, drain, stop). This round names the engine's
-   own order: which deadlines are cancelled, which C++ calls are
-   allowed to finish, and what a deadline firing during shutdown is.
+The engine carries no periods. A timer exists only when an action must
+happen and no event will cause it. Its period is derived from the need
+it serves, never inherited. Until the owner re-derives the job, the
+engine runs today's behaviour so a differential harness can match it.
 
-## Falsifier
+| Job | Today | Owner |
+| --- | --- | --- |
+| Relay wake | `steady_timer wake` in `src/cryptonote_protocol/levin_notify.cpp:495`, armed at `:895` from `Driver::next_wake` | relay `Driver`. This engine only sleeps until that wake |
+| Chain-state backstop | `peer_sync_idle_maker` sends command 1002 every 60 s (`P2P_DEFAULT_HANDSHAKE_INTERVAL`, `cryptonote_config.h:185`). Both sides exchange height and top block (`process_payload_sync_data`) | sync lane. The period is how long a node can be stale after a missed announcement, against the block time. New blocks are already pushed when found |
+| Peerlist gossip | the same 1002 response carries up to 250 addresses (`p2p_protocol_defs.h:215-239`) into the gray list | peerlist, slices 1 and 3. Also a privacy surface: each exchange shows a peer part of this node's view of the network |
+| Connection liveness | the same 1002 is a request that must be answered, and it keeps the session off the inherited idle timer | the transport layer, per connector (D9). Not a Levin command |
+| Outbound fill | `connections_maker`, gated at 1 s (`net_node.h:721`). The fill loop `sleep_for`s 1 s when it makes no connection (`net_node.inl:2063`) and dials serially | slice 3. A call can run for many seconds. The blocking pool has to allow that |
+| Gray-peer probe | `gray_peerlist_housekeeping`, gated at 60 s (`net_node.h:723`). Dials one random gray peer to promote or evict | slice 1. Under the earned-trust door, promotion already happens on ordinary outbound sessions. Whether a dedicated probe remains is slice 1's call. A short-lived connection every minute is a pattern an observer can see |
+| Peerlist store | `store_config`, gated at 30 min (`net_node.h:722`) | slice 1 |
+| Incoming-connection check | `check_incoming_connections`, gated at 1 h (`net_node.h:724`) | slice 3 |
+| Tor process death | `check_ephemeral_tor_liveness`, gated at 60 s (`net_node.h:725`, body at `net_node.inl:2229`) | not a timer. The Tor-control actor owns the child and can report its exit |
+| Idle-peer kick | `m_idle_peer_kicker`, 8 s (`cryptonote_protocol_handler.h:205`), run from `on_idle` (`cryptonote_protocol_handler.inl:1665`) | the cryptonote handler's open register row |
+| Standby check | `m_standby_checker`, 100 ms (`:206`). The tick that polls it is 1 s, so today it runs about once a second | the same open row |
+| Sync search | `m_sync_search_checker`, 101 s (`:207`) | the same open row |
+| Peers-monitor thread | its own thread, `sleep_for(1s)` (`net_node.inl:1113-1140`) | not this engine. D8 retires it with slice 3 |
+| Rate-limit sleep | `handler_response_blocks_now` (`cryptonote_protocol_handler-base.cpp:102`). Its calls are commented out (`cryptonote_protocol_handler.inl:966-967` and `cryptonote_protocol_handler.h:238`) | not a deadline. Delete the function (rule 15) |
 
-Re-cut this round, rather than implement from it, if a deadline the
-daemon already arms is missing from the table above. Check by reading
-the timer and `async_wait` sites at the pin, not by trusting this list.
+`idle_worker` (`net_node.inl:2217-2226`) is the 1-second poll over the
+six `node_server` gates. `on_idle` is the poll over the three
+cryptonote gates. They are not two schedules.
+
+The inherited handshake interval is 60, comment spelled `//secondes`,
+with no derivation on either side of the fork. Three different jobs
+share that minute. None of them needed 60.
+
+Timed sync stays one message until its owners split it. PWD-B2 already
+ruled that it fires per connection, independently drawn, so sessions
+are not correlated by phase. It did not ask why 60.
+
+Levin invoke timeouts are not in this table. They are keyed one-shots,
+below. The source type is spelled `anvoke_handler`
+(`levin_protocol_handler_async.h:226`). That is an inherited misspelling.
+This document calls them invoke timeouts. The waits are at `:236` and
+`:298`.
+
+Anything that merely expires is evaluated when it is next used, from
+timestamps: ban entries, the 24-hour peerlist demotion, the accept-rate
+bucket's refill. Bans already work that way: `is_remote_host_allowed`
+unbans on lookup. No timer per peerlist entry.
+
+---
+
+## Proposed answers (2026-09-25)
+
+Proposed, not yet ruled. Built for the Rust owners, not for asio's
+shape.
+
+### 1. The engine schedules owners
+
+An owner is a state machine with `next_wake(now)` and `poll(now)` that
+returns effects. It never sleeps. That is the relay `Driver`'s shape,
+used for every Rust consumer: relay dispatch, the transport layer's
+per-connection deadlines (dial clock, handshake, gap, idle), PWD-B2's
+per-connection timed sync, and later discovery (slice 3).
+
+After every poll or event delivered to an owner, the engine asks
+`next_wake` again. The owner is the only source of its deadline. The
+engine holds a hint of when to wake, not a second copy. An early or
+spurious wake is harmless, because the owner checks `now`. Waking late
+is the failure, and it is measured.
+
+### 2. A period is an owner
+
+A periodic owner's next wake is last-run-finished plus its period.
+Fixed delay. No catch-up burst after a stall, and no overlapping run.
+One mechanism.
+
+Until an owner lands, the engine keeps calling `idle_worker` and
+`on_idle` once a second, never overlapping, and their internal gates
+keep today's behaviour.
+
+### 3. No timer when the next use can decide
+
+Stated with the table above.
+
+### 4. The call into C++
+
+A Levin invoke timeout is `arm(connection, invoke_id, deadline)` and
+returns an opaque `TimerId` that is never reused. Cancelling a stale id
+does nothing. Cancel is best-effort. Correctness is the delivery, not
+the cancel.
+
+Expiry is a message on that connection's queue, the same queue as its
+incoming bytes, one delivery at a time. A response racing its timeout
+is whichever is dequeued first. C++ resolves the invoke by id,
+idempotently. Firing a timer only enqueues. The engine does not wait on
+C++. C++ does not block the engine.
+
+Idle cadences run on their own lane of the blocking pool, never
+overlapping. When LV-3 moves invokes into Rust, invoke timeouts become
+ordinary owner deadlines and this bridge goes away.
+
+### 5. Where the sleeps run
+
+One dedicated engine thread, budget one, counted in D5. Not the
+transport runtime. That runtime is where attacker-driven work lands,
+and a tokio timer fires only when a worker polls the time driver. A
+saturated transport runtime means late relay wakes.
+
+An owner's `poll` is cheap and never blocks. Heavy work is posted
+elsewhere. That is what makes one thread enough.
+
+If the transport design's step-7 flood measurement shows relay lateness
+no better on this thread than on the transport runtime, merge the
+engine into the transport runtime.
+
+### 6. Shutdown, in order
+
+1. Stop accepting new registrations.
+2. The transport stops accepting and cancels its tasks. Those owners
+   drop, and their deadlines go with them.
+3. Pending invoke timeouts resolve as `Aborted(Shutdown)`, not
+   `Timeout`, through each connection's queue. Shutdown is not a peer
+   misbehaving.
+4. A periodic callback already running finishes. No new one starts.
+5. Relay owners drop. Whether anything is flushed first is a hook the
+   relay lane exposes. It is not this engine's decision.
+6. The blocking pool drains.
+7. The engine thread exits.
+
+After step 1, a deadline that fires is dropped, except the invoke
+aborts in step 3.
+
+### 7. What the engine never does
+
+It does not draw randomness. Distributions stay in the policy crates
+the conformance tests grade. It does not coalesce or quantise a
+privacy-sensitive deadline. Timer slack is only for a class labelled
+housekeeping.
+
+### 8. The clock is monotonic and passed in
+
+Tests pass a clock as a constructor argument or a type parameter, not a
+cargo feature. `shekyl-ffi`'s features merge into the production build,
+so a feature-gated test clock would ship. Virtual time lets relay
+conformance and the transport timeouts run deterministically.
+
+### 9. Lateness is an output
+
+Every fire records its deadline against when it fired, per owner class.
+That is the input to the step-7 lateness measurement and to D5's
+budgets. It is exposed to the operator over RPC, never to a peer.
+
+---
+
+## One mechanism, one job
+
+A setting, field, timer, or structure that serves more than one job is
+split. Each job names an owner. The owner derives its own value, or
+replaces the mechanism with an event. A value shared between jobs is
+inherited, not derived. The shared setting ends up tuned for whichever
+job its author was thinking of, and the others cannot change it without
+disturbing the first.
+
+This round is the first place that test is applied on purpose. Timed
+sync is three rows in the table above for that reason.
