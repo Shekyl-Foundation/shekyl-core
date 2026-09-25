@@ -905,8 +905,14 @@ Bytes identical to the i9 (the wire is deterministic). **64.9 ms of
 verifier time per input** at the floor (63.9 ms the proof; 1.0 ms the
 hybrid auth), a fixed **34.9 ms** BP+, linearity held (the test's 5%
 assertion passed there too). The floor multiplier is **5.5×** on the
-per-input verifier cost and 13× on the BP+; prove time 15.3 s at eight
-inputs, the sender's. **The relay-budget value, at the floor:** ~0.62 s
+per-input verifier cost and **13× on the BP+**; prove time 15.3 s at eight
+inputs, the sender's. **The BP+ number is not an artifact, and it matters
+for the budget's shape:** the range proof degrades harder on the A72 than
+the membership proof the cap is about, so the fixed per-transaction
+overhead that makes splitting expensive is *more* dominant on the floor
+than on the desktop — 35 ms of the 167 ms a one-input spend costs there,
+against 2.7 of 26 on the i9. The floor strengthens splitting-costs-more
+rather than merely preserving it. **The relay-budget value, at the floor:** ~0.62 s
 of verifier work per eight-input transaction that proves invalid; ~10.0 s
 per 153-input one. That is the number the round decides against.
 
