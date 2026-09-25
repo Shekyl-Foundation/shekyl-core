@@ -469,11 +469,13 @@ a hard-coded 10 threads (`:1150`). It hosts:
   interim and after the timing engine lands. The interim's pool budget
   and the blocking pool's budget both come from it.
 
-**The register.** P2P-3 §4.2 gains two rows, in this order: the timing
-engine, after the transport layer; relay dispatch, after the timing
-engine. LV-3 keeps steps a–c: the connection type, ownership transfer,
-and the registry. LV-3 §6.3 falsifier 3 has already fired, and this
-extends that record. The cryptonote handler (3,213 lines, the
+**The register.** P2P-3 §4.2's timing-engine row is two pieces
+(updated 2026-09-25). The core precedes the transport layer, so
+connection deadlines are owners from the first line. The bridge
+follows the transport cutover and deletes the `io_context`. Relay
+dispatch stays the row after the bridge. LV-3 keeps steps a–c: the
+connection type, ownership transfer, and the registry. LV-3 §6.3
+falsifier 3 has already fired, and this extends that record. The cryptonote handler (3,213 lines, the
 register's "(open)" row) runs on the Rust-owned blocking pool once the
 timing engine lands, so deleting the executor no longer waits on it.
 Its replacement still has no owner, and the row stays visible.
@@ -485,7 +487,8 @@ Its replacement still has no owner, and the row stays visible.
 - the relay conformance grades degrade after the sleep moves to Rust;
 - the timing-engine round has not opened by the time transport-layer
   implementation starts. The interim is bounded only if its end has
-  been scheduled.
+  been scheduled. **Opened 2026-09-25:**
+  [`P2P_TIMING_ENGINE.md`](P2P_TIMING_ENGINE.md), Round 1.
 
 ---
 
