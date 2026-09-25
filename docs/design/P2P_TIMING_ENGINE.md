@@ -5,13 +5,22 @@ Wakes go to the owner's home. The wake set is ordered by time. Slice 1
 holds one list deadline. PWD-B2 leaves the interim tick first. Nothing
 here is a number. Periods belong to their owners. **Rule 26 is cited
 explicitly.** This document mints no identifier family. The register
-row is P2P-3's **TE**. The design is closed. Rule 26's pre-flight
-is the next gate; the engine core is not written until that pass is
-recorded. The C++ bridge waits until after the transport cutover.
+row is P2P-3's **TE**. The design is closed. The pre-flight is
+discharged at `dev` `78eef562d`. The engine core is the next code.
+The C++ bridge waits until after the transport cutover.
 
 Pinned to `fix/p2p-transport-hmac-oracle` `55d7b2b16`. Line numbers
 were read there. Opening the round still discharges D6's third
 falsifier ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D6).
+
+**Pre-flight discharged 2026-09-25** at `dev` `78eef562d` (the #860
+merge). Substrate re-read: `levin_notify.cpp:495` and `:895`,
+`net_node.h:720-725`, and `Driver::next_wake`. The relay function is
+now `driver/mod.rs:158`; the design had cited `:149`. It is still
+derived on every call and not cached. No other cited site moved. The
+closed design names no bench and no numeric budget, so there was no
+artifact to run. No redesign. The core may be written. The C++ bridge
+still waits.
 
 ---
 
@@ -40,7 +49,7 @@ engine runs today's behaviour so a differential harness can match it.
 
 | Job | Today | Owner |
 | --- | --- | --- |
-| Relay wake | `steady_timer wake` in `src/cryptonote_protocol/levin_notify.cpp:495`, armed at `:895` from `Driver::next_wake` (`shekyl-relay` `driver/mod.rs:149-181`) | relay `Driver`. This engine only sleeps until that wake |
+| Relay wake | `steady_timer wake` in `src/cryptonote_protocol/levin_notify.cpp:495`, armed at `:895` from `Driver::next_wake` (`shekyl-relay` `driver/mod.rs:158`; pre-flight: was cited as `:149` at the design pin) | relay `Driver`. This engine only sleeps until that wake |
 | Chain-state backstop | `peer_sync_idle_maker` sends command 1002 every 60 s (`P2P_DEFAULT_HANDSHAKE_INTERVAL`, `cryptonote_config.h:185`). Both sides exchange height and top block (`process_payload_sync_data`) | sync lane. The period is how long a node can be stale after a missed announcement, against the block time. New blocks are already pushed when found |
 | Peerlist gossip | the same 1002 response carries up to 250 addresses (`p2p_protocol_defs.h:215-239`) into the gray list | peerlist, slices 1 and 3. Also a privacy surface: each exchange shows a peer part of this node's view of the network |
 | Connection liveness | the same 1002 is a request that must be answered, and it keeps the session off the inherited idle timer | the transport layer, per connector (D9). Not a Levin command |
@@ -237,8 +246,8 @@ interim executor.
    (`next_wake`, `poll`), the time-ordered wake set with generation
    numbers, delivery of a wake to the owner's home, the injected
    monotonic clock, and lateness recording. It is tested in virtual
-   time. The transport layer uses it from its first line. Rule 26's
-pre-flight is recorded before this crate is written.
+   time. The transport layer uses it from its first line. The pre-flight
+at `dev` `78eef562d` is that gate.
 2. **The C++ bridge, after the transport cutover.** Invoke-timeout
    arming, the interim idle cadences on the blocking pool, moving the
    relay `Driver`'s sleep off asio, and deleting the `io_context`.
