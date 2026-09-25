@@ -565,17 +565,16 @@ impl<C: Clock> Engine<C> {
     }
 
     /// Rebuild when stale hints outnumber live ones: one rebuild per doubling.
+    ///
+    /// Filter the heap's vector and rebuild. That is linear. Popping one
+    /// hint at a time would be n log n in everything the heap holds.
     fn compact_if_stale(&mut self) {
         if self.heap.len() <= self.live.saturating_mul(2) {
             return;
         }
-        let mut keep = Vec::with_capacity(self.live);
-        while let Some(Reverse(hint)) = self.heap.pop() {
-            if self.is_live(&hint) {
-                keep.push(Reverse(hint));
-            }
-        }
-        self.heap = keep.into();
+        let mut keep = std::mem::take(&mut self.heap).into_vec();
+        keep.retain(|Reverse(hint)| self.is_live(hint));
+        self.heap = BinaryHeap::from(keep);
     }
 }
 

@@ -5,24 +5,16 @@
 
 //! Arm and poll cost against the number of owners.
 //!
-//! The top of the range is the usual descriptor soft limit times the
-//! deadlines one connection holds: idle, gap, and timed sync. The inbound
-//! ceiling is headroom under that soft limit, so it cannot exceed it.
+//! Sizes are powers of four through 2^18, so the curve is visible and no
+//! operating point is baked in. The number this daemon actually holds is
+//! `InboundCeiling`, recorded with the Pi 4 run, not a constant here.
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use shekyl_timing_engine::{Engine, ManualClock, OwnerClass, Tick};
 
-const DEADLINES_PER_CONNECTION: usize = 3;
-const DESCRIPTOR_SOFT_LIMIT: usize = 1024;
-
-fn sizes() -> [usize; 5] {
-    [
-        1,
-        16,
-        256,
-        DESCRIPTOR_SOFT_LIMIT,
-        DESCRIPTOR_SOFT_LIMIT * DEADLINES_PER_CONNECTION,
-    ]
+fn sizes() -> impl Iterator<Item = usize> {
+    // 4^0 .. 4^9. 4^9 = 2^18.
+    (0..=9).map(|power| 1usize << (power * 2))
 }
 
 fn armed(n: usize) -> (Engine<ManualClock>, Vec<shekyl_timing_engine::OwnerId>) {
@@ -40,6 +32,9 @@ fn armed(n: usize) -> (Engine<ManualClock>, Vec<shekyl_timing_engine::OwnerId>) 
 
 fn bench_arm_and_poll(c: &mut Criterion) {
     let mut group = c.benchmark_group("wake_hints");
+    // Ten is criterion's minimum. The sweep goes to 2^18 owners, and this
+    // bench is meant to finish on a Pi 4.
+    group.sample_size(10);
     for n in sizes() {
         group.bench_function(format!("arm_earlier/{n}"), |b| {
             b.iter_batched(
