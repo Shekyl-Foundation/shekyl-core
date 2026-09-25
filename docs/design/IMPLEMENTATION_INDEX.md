@@ -1,7 +1,7 @@
 # Implementation index and phase map
 
 **Status:** MAP — identifier families and landing inventory. Not a design SoT.
-Last verification: 2026-09-25, `dev` = `9532b58f5` + PR #856's tree + the S-ALT increment's tree (DRS-E1 increment 10 — layout 13, `alt_blocks` shaped, the witness folded). This header and the verification stamp below are that same tree; the S-POOL stamp is retained there as superseded.
+Last verification: 2026-09-25, `dev` = `fc6d87ca5` + the S-PRUNE increment's tree (DRS-E1, the retention prune — layout 14, the `undo_log_floor` cell, `D_MAX` / `journal_horizon` / `SHARD_TX_COUNT` built). This header and the verification stamp below are that same tree; the S-ALT and S-POOL stamps are retained there as superseded.
 
 **Purpose.** One page that answers "what does this identifier mean, which doc
 owns it, and what has actually landed on `dev`?" The wallet/staking work spans

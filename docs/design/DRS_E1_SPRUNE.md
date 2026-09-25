@@ -130,8 +130,9 @@ horizon is a rule of the epoch calendar (no constant exists to name), the
 journal horizon is F19's expression. `W` — the 2026-09-18 constant that
 made them one number — is **retired**. The undo floor `D_max` is a lower
 bound both clear and is not a third horizon: every discarded body is
-`≥ SEB + 1` blocks old and `SEB > D_max` (const-asserted at `D_max`'s home
-when that constant is built — owed, FOLLOWUPS).
+`≥ SEB + 1` blocks old and `SEB > D_max` (const-asserted at `D_max`'s home,
+`shekyl_chain_rules::reorg` — **built 2026-09-25**, and re-asserted at
+store open on the session pair as `StoreCannot::RetentionNotInsideEpoch`).
 
 **Who deletes what.** S-PRUNE's batch discards bodies. **Undo-row
 retirement below `tip − D_max` is also this surface's** — `pop.rs` says the
@@ -247,7 +248,7 @@ the daemon.
 
 ## 5. Store contracts in force
 
-- **The store invariant: three legs landed, a fourth owed.**
+- **The store invariant: three legs, all landed (the fourth was withdrawn — below).**
   `DAEMON_REDB_STORE.md` §7.7 as it stands (F26, landed with A3 on #772):
   (i) hash row ⇔ 4-part txid, permanent, written at connect, never deleted;
   (ii) segment present ⇒ hash row present; (iii) hash row ∧ segment absent ⇔

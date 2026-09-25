@@ -214,7 +214,8 @@ not yet recorded — has no `close_epoch` and is never a candidate.
 **Enforcement point** unchanged: asserted where the discard is decided —
 S-PRUNE's per-epoch batch, whose set at boundary `E` is **named by `E`** —
 `{k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3}`, read off
-`cumulative_tx_count`;
+the storage-id total — `cumulative_tx_count` (listed transactions) plus one
+coinbase per block, `storage_ids_through` (SPR-1);
 no frontier, no search over disk — and which runs **inside the boundary
 block's connect transaction**, so "connected past `E·SEB` with the batch
 un-run" is unrepresentable (skeleton §4) — never discovered downstream; a violated predicate is a
@@ -655,7 +656,8 @@ a discarded shard's true size is unrecoverable. So:
   **specified** when `b_{k+1}` closes (membership final, bondable from
   `close_height(k) = height(b_{k+1} − 1)`, the last included
   transaction's height — `b_{k+1}` itself is the first of `k+1` and may
-  not exist yet — a binary search over `cumulative_tx_count`, no new
+  not exist yet — a binary search over the storage-id total,
+  `storage_ids_through(cumulative_tx_count, h)` (SPR-1), no new
   state) and becomes **scarce** only at
   `discard(k)`, at the boundary after its freeze epoch — `≥ SEB + 1`
   blocks later (*re-keyed 2026-09-22 from "`≥ W` blocks later"*). Between the two every ordinary daemon still holds it, so
@@ -866,7 +868,8 @@ store knows what it holds. **No one in consensus needs the count.**
 *Ruling — (e).* A shard is **`T` transactions by `tx_id`**:
 `k = ⌊tx_id / T⌋`, `[k·T, (k+1)·T)` — item 3's original 2026-09-17 shape,
 restored. Membership and `close_height(k) = height((k+1)·T − 1)` derive
-from `cumulative_tx_count` on every node with **zero new data**: no length
+from the storage-id total (`cumulative_tx_count` plus one coinbase per
+block, SPR-1) on every node with **zero new data**: no length
 in the base, no length on the wire, no A4 rows, no `CtSigBase` change, no
 `SHARD_BYTES` constant, no prefix sum. The Bugbot finding has nothing to
 bind because nothing is claimed. **`T` is the one consensus constant of
@@ -1189,8 +1192,8 @@ exception falsifiers go.
 **`PDM-Q-F33` — #775 is written against the leaf unit, and re-keys
 under Q6 / Q12.** Its *architecture* (two stores by obligation; the
 partition is consensus) is unit-independent and stands. Its
-*consequences* re-key: the partition is `⌊tx_id / T⌋` from
-`cumulative_tx_count` (*re-keyed 2026-09-23, item 5; was `b_*` from
+*consequences* re-key: the partition is `⌊tx_id / T⌋` over storage ids
+(`cumulative_tx_count` plus one coinbase per block, SPR-1) (*re-keyed 2026-09-23, item 5; was `b_*` from
 retained length rows* — consensus by the same argument: admission
 validates `shard_id` against closed shards, a divergent partition forks at
 admission, which is why nothing unbound may feed it);
