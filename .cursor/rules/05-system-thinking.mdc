@@ -43,3 +43,27 @@ subsystem, ask:
 
 Record the answer in the module's docstring or in `docs/FOLLOWUPS.md`. Don't
 assume something is needed because it exists.
+
+## One mechanism, one job
+
+When one setting, field, timer, structure or message serves several jobs
+with different requirements, that is a defect, not an economy. The shared
+value was tuned for one job, and every other job inherits a number nobody
+derived for it — nor can it be changed without disturbing the first.
+
+When reviewing or designing, for any mechanism ask: what jobs does this
+do? If more than one:
+
+1. Split it. Name each job and its owner.
+2. Each owner derives its own value from its own requirement, or replaces the
+mechanism with an event if no timer, field or setting is actually needed.
+3. A value shared between jobs is inherited, never derived; record it as such
+until it is split.
+
+Found so far: timed sync (chain-state backstop, peer gossip, liveness);
+LEVIN_SIGNATURE (framing, network separation); the 256 KiB initial limit
+(Levin message limit, missing transport limit); handshake_complete
+(channel, session); enum class zone (identity, origin-selection priority);
+epee's io_context (event loop, executor, timer source); m_local
+(address class, timer grant); network_zone (network plumbing, protocol
+state).
