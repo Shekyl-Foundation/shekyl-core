@@ -36,6 +36,13 @@
 //! trips (the cascade slice 5 §5.1 named — the fixture was right; the
 //! rule is what moved).
 
+// A whole-file test module, gated at `lib.rs` by
+// `#[cfg(all(test, feature = "pipeline"))]`. The inner attribute is the
+// file's own declaration of the same fact, for the debug-macro lint
+// (`build.yml`), which keys on it — the shape `regtest_e2e.rs` uses. The
+// replay summary below is a test's report line, not production output.
+#![cfg(test)]
+
 use std::num::{NonZeroU128, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -96,13 +103,33 @@ fn captured_chains() -> Vec<(PathBuf, Manifest)> {
         })
         .collect();
     found.sort_by(|a, b| a.0.cmp(&b.0));
-    assert!(
-        !found.is_empty(),
-        "no captured chains under {} — the witness has no subject",
-        root.display()
-    );
+    // The witness's subject is these four shapes, not "whatever is in the
+    // directory": a capture that fails to land, or a directory that is
+    // renamed or pruned, would otherwise shrink the corpus and the test
+    // would pass over the remainder (rule 47 — assert the subject exists).
+    for want in CAPTURED_SHAPES {
+        assert!(
+            found.iter().any(|(_, m)| m.shape == want),
+            "captured chain `{want}` is missing under {} (present: {:?})",
+            root.display(),
+            found
+                .iter()
+                .map(|(_, m)| m.shape.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
     found
 }
+
+/// The shapes `regtest_e2e.rs` captures, by the names its `maybe_capture_chain_vector`
+/// calls write into `manifest.json` (§5.2). Adding a capture there adds a
+/// name here; the corpus is enumerated, not discovered.
+const CAPTURED_SHAPES: [&str; 4] = [
+    "bond-post",
+    "emission-claim",
+    "spend-1in-2out",
+    "spend-depth3",
+];
 
 /// Replay one captured chain through the production pipeline against a
 /// fresh store; return the report.
