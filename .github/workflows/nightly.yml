@@ -66,4 +66,7 @@ jobs:
         env:
           PROPTEST_CASES: "8192"
         run: |
-          cargo test --locked --release -p shekyl-timing-engine --lib random_ops_match_a_scanned_reference -- --nocapture
+          set -eu
+          list=$(cargo test --locked --release -p shekyl-timing-engine --lib -- --list)
+          printf '%s\n' "$list" | grep -qx 'model::random_ops_match_a_scanned_reference: test'
+          cargo test --locked --release -p shekyl-timing-engine --lib -- --exact model::random_ops_match_a_scanned_reference --nocapture
