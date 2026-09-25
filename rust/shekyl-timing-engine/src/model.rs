@@ -38,13 +38,25 @@ fn op_strategy() -> impl Strategy<Value = Op> {
     ]
 }
 
-/// 128 cases unless `PROPTEST_CASES` is set. The nightly job sets that.
+/// Ordinary runs use 128 cases. `PROPTEST_CASES` replaces that number.
+///
+/// Set here, not left to [`ProptestConfig::default`]. That default reads the
+/// variable once per process and caches the result.
 fn proptest_config() -> ProptestConfig {
-    let mut config = ProptestConfig::default();
-    if std::env::var_os("PROPTEST_CASES").is_none() {
-        config.cases = 128;
+    ProptestConfig {
+        cases: cases_from_env(),
+        ..ProptestConfig::default()
     }
-    config
+}
+
+fn cases_from_env() -> u32 {
+    match std::env::var("PROPTEST_CASES") {
+        Ok(raw) => raw
+            .parse()
+            .unwrap_or_else(|_| panic!("PROPTEST_CASES must be a u32, got {raw}")),
+        Err(std::env::VarError::NotPresent) => 128,
+        Err(std::env::VarError::NotUnicode(_)) => panic!("PROPTEST_CASES is not Unicode"),
+    }
 }
 
 struct RefOwner {

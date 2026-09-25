@@ -566,14 +566,19 @@ impl<C: Clock> Engine<C> {
 
     /// Rebuild when stale hints outnumber live ones: one rebuild per doubling.
     ///
-    /// Filter the heap's vector and rebuild. That is linear. Popping one
-    /// hint at a time would be n log n in everything the heap holds.
+    /// The new heap is allocated for the live hints only. Filtering the old
+    /// vector in place would keep the capacity those stale hints occupied.
     fn compact_if_stale(&mut self) {
         if self.heap.len() <= self.live.saturating_mul(2) {
             return;
         }
-        let mut keep = std::mem::take(&mut self.heap).into_vec();
-        keep.retain(|Reverse(hint)| self.is_live(hint));
+        let stale = std::mem::take(&mut self.heap).into_vec();
+        let mut keep = Vec::with_capacity(self.live);
+        for Reverse(hint) in stale {
+            if self.is_live(&hint) {
+                keep.push(Reverse(hint));
+            }
+        }
         self.heap = BinaryHeap::from(keep);
     }
 }
@@ -791,6 +796,25 @@ mod tests {
         assert!(engine.heap.len() <= 2);
         assert_eq!(engine.live, 1);
         assert_eq!(engine.next_deadline(), Some(Tick::new(1)));
+    }
+
+    #[test]
+    fn compaction_frees_the_capacity_stale_hints_occupied() {
+        let mut engine = engine_at(0);
+        let mut ids = Vec::new();
+        for i in 0..64 {
+            let id = owner(&mut engine);
+            engine.arm(id, Tick::new(1_000 + i)).unwrap();
+            ids.push(id);
+        }
+        for (i, id) in ids.iter().enumerate() {
+            let earlier = 500 - u64::try_from(i).unwrap();
+            engine.arm(*id, Tick::new(earlier)).unwrap();
+        }
+        engine.arm(ids[0], Tick::new(1)).unwrap();
+        assert_eq!(engine.live, 64);
+        assert_eq!(engine.heap.len(), engine.live);
+        assert_eq!(engine.heap.capacity(), engine.live);
     }
 
     #[test]
