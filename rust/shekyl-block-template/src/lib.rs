@@ -91,6 +91,8 @@
 //! it if the template drifts. Byte-parity with `create_block_template` is
 //! a separate witness (`CHAIN_RULES_SLICE_6.md` §5.3), not this file's.
 
+use core::fmt;
+
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use shekyl_crypto_pq::output::construct_output;
@@ -107,6 +109,7 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::block::{Block, BlockHeader};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 use shekyl_wire::tx_extra::{self, CoinbaseBuildError, COINBASE_NONCE_BYTES};
+use zeroize::Zeroizing;
 
 /// The keys a coinbase output is paid to: the miner's Edwards spend key
 /// and the two halves of the hybrid KEM encapsulation target.
@@ -143,7 +146,11 @@ pub struct EmissionOperands {
 
 /// Everything a template is a function of. Pure: two contexts with the same
 /// operands produce byte-identical blocks.
-#[derive(Clone, Debug)]
+///
+/// Not `Clone`: the context carries the coinbase secret `r`, and a clone is a
+/// second copy of a secret the compiler cannot see wiped (rule 35; the
+/// `AllKeysBlob` shape). A caller wanting two templates builds two contexts.
+/// `Debug` is redacted for the same field.
 pub struct TemplateContext<'a> {
     /// The height this block connects at (`tip + 1`; `0` at genesis).
     pub height: BlockHeight,
@@ -159,8 +166,12 @@ pub struct TemplateContext<'a> {
     pub minor_version: u8,
     /// The producer's clock; the header's timestamp is no earlier.
     pub now: Timestamp,
-    /// The median timestamp CEN-C2 will compare against, when the chain is
-    /// long enough to have one. `None` at and below the window.
+    /// The median timestamp CEN-C2 will compare against:
+    /// `shekyl_chain_rules::mtp_median_at` at `height`, which is `None`
+    /// **only at genesis** — from height 1 the window is right-padded with
+    /// genesis and a median exists however short the chain. A producer that
+    /// passes `None` on a short chain claims its bare clock and builds a
+    /// block C2 refuses whenever that clock trails the padded median.
     pub median_timestamp: Option<Timestamp>,
     /// Coinbase maturity window — CEN-F6's `unlock_time = height + window`.
     pub unlock_window: BlockCount,
@@ -170,14 +181,39 @@ pub struct TemplateContext<'a> {
     pub params: &'a EconomicParams,
     /// Whom the coinbase pays.
     pub miner: &'a MinerKeys,
-    /// The coinbase transaction secret `r`. Randomness is the caller's:
-    /// a template is deterministic in it, and a test can pin it.
-    pub tx_key_secret: [u8; 32],
+    /// The coinbase transaction secret `r`, wiped when the context drops.
+    /// Randomness is the caller's: a template is deterministic in it, and
+    /// a test can pin it.
+    pub tx_key_secret: Zeroizing<[u8; 32]>,
     /// The `0x02` nonce field's bytes (a pool's extra-nonce slot).
     pub extra_nonce: [u8; COINBASE_NONCE_BYTES],
     /// The bodies to list, in block order. Each must carry a fee
     /// (`Ct::Fcmp`): a coinbase-shaped body cannot be listed.
     pub listed: &'a [Transaction],
+}
+
+impl fmt::Debug for TemplateContext<'_> {
+    /// Every operand but the secret; the secret prints as `[redacted]` so a
+    /// panic message or a log line never carries `r`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TemplateContext")
+            .field("height", &self.height)
+            .field("previous", &self.previous)
+            .field("curve_tree_root", &self.curve_tree_root)
+            .field("attestation_root", &self.attestation_root)
+            .field("major_version", &self.major_version)
+            .field("minor_version", &self.minor_version)
+            .field("now", &self.now)
+            .field("median_timestamp", &self.median_timestamp)
+            .field("unlock_window", &self.unlock_window)
+            .field("emission", &self.emission)
+            .field("params", &self.params)
+            .field("miner", &self.miner)
+            .field("tx_key_secret", &"[redacted]")
+            .field("extra_nonce", &self.extra_nonce)
+            .field("listed", &self.listed.len())
+            .finish()
+    }
 }
 
 /// A built template: the block (nonce zero) and the listed bodies it
@@ -385,16 +421,20 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
 /// ([`is_timestamp_below_ftl`]) against `now` — a producer whose window
 /// median runs more than FTL ahead of its clock cannot build an admissible
 /// block, and is told so rather than handed one the validator refuses. A
-/// median at `u64::MAX` has no successor: the saturated claim fails the
-/// same check.
+/// median at `u64::MAX` has no successor and is refused on that ground
+/// before the FTL check.
+///
+/// `median` is `None` at genesis only — `mtp_median_at`'s contract, which
+/// pads a short window with genesis rather than declining to answer.
 ///
 /// # Errors
 ///
+/// [`TemplateError::MedianHasNoSuccessor`] when the median is `u64::MAX`;
 /// [`TemplateError::TimestampBeyondFutureLimit`] when the claim exceeds
 /// `now + FTL`.
 pub fn template_timestamp(now: Timestamp, median: Option<Timestamp>) -> Result<u64, TemplateError> {
-    // No median: the claim is the clock, and a clock is within FTL of
-    // itself.
+    // No median — genesis: the claim is the clock, and a clock is within
+    // FTL of itself.
     let Some(median) = median else {
         return Ok(now.to_raw());
     };
@@ -422,9 +462,11 @@ pub fn template_timestamp(now: Timestamp, median: Option<Timestamp>) -> Result<u
 }
 
 /// The tx public key `r·G` for the coinbase secret `r` — the `0x01` field.
+/// The reduced scalar lives in a [`Zeroizing`] for the one multiplication
+/// (`curve25519-dalek`'s `zeroize` feature is what makes that wipe real).
 #[must_use]
 pub fn tx_pubkey(tx_key_secret: &[u8; 32]) -> [u8; 32] {
-    let r = Scalar::from_bytes_mod_order(*tx_key_secret);
+    let r = Zeroizing::new(Scalar::from_bytes_mod_order(*tx_key_secret));
     EdwardsPoint::mul_base(&r).compress().to_bytes()
 }
 

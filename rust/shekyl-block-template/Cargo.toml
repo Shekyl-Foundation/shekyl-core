@@ -45,6 +45,10 @@ shekyl-difficulty = { path = "../shekyl-difficulty" }
 # The tx public key is `r·G` for the caller's tx secret `r`; the same
 # derivation `shekyl-genesis-tool::txkey::tx_pubkey` performs.
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+# The coinbase secret `r` is held in a `Zeroizing<[u8; 32]>` (rule 35) and the
+# reduced scalar in a `Zeroizing<Scalar>` — the dalek `zeroize` feature above
+# is what gives `Scalar` its `Zeroize` impl.
+zeroize = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

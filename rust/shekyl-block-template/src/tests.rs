@@ -27,6 +27,7 @@ use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, Times
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{Ct, Input, Transaction};
 use shekyl_wire::tx_extra::{self, check_tx_extra_shape, ExtraSubject, TxExtraField};
+use zeroize::Zeroizing;
 
 use crate::{
     build, template_timestamp, tx_pubkey, EmissionOperands, MinerKeys, Template, TemplateContext,
@@ -137,7 +138,7 @@ fn context<'a>(
         emission: genesis_era_emission(),
         params,
         miner,
-        tx_key_secret: [0x77; 32],
+        tx_key_secret: Zeroizing::new([0x77; 32]),
         extra_nonce: [0; tx_extra::COINBASE_NONCE_BYTES],
         listed,
     }
@@ -397,8 +398,10 @@ fn the_template_is_a_pure_function_of_its_context() {
     );
     assert_eq!(a.block.hash(), b.block.hash());
 
-    let mut other_key = cx.clone();
-    other_key.tx_key_secret = [0x78; 32];
+    // A second context, not a clone: the context is not `Clone` because it
+    // carries the secret.
+    let mut other_key = context(&chain, &params, &miner, &listed);
+    other_key.tx_key_secret = Zeroizing::new([0x78; 32]);
     let c = build(&other_key).expect("builds");
     assert_ne!(
         c.block.miner_transaction.prefix.outputs[0].key,

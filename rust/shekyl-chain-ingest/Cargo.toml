@@ -106,6 +106,9 @@ shekyl-block-template = { path = "../shekyl-block-template" }
 # The driver's miner keys (an Edwards spend key, a hybrid KEM keypair).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+# The driver's coinbase secret is a `Zeroizing<[u8; 32]>`, the type
+# `TemplateContext` takes (rule 35).
+zeroize = { workspace = true }
 # Planting a corrupt row for the SI-10 path.
 redb = { workspace = true }
 # The mutation family's seed-sensitive mock longhash (`keccak256(blob ‖ seed)`,

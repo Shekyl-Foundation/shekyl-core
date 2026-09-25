@@ -386,7 +386,9 @@ where
         now: Timestamp,
         listed: &[Transaction],
     ) -> Result<Template, TemplateError> {
-        let mut tx_key_secret = [0u8; 32];
+        // Written straight into the zeroizing cell: no bare copy of the
+        // scalar's bytes exists on this stack after the context drops.
+        let mut tx_key_secret = zeroize::Zeroizing::new([0u8; 32]);
         tx_key_secret[..8].copy_from_slice(&self.next_tx_secret.to_le_bytes());
         self.next_tx_secret += 1;
         let rule_set: RuleSet = self.rules.in_force(facts.connecting);
