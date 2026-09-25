@@ -26,9 +26,9 @@ pub(crate) fn hash(data: &[u8]) -> [u8; HASH_LEN] {
 
 /// RFC 2104 HMAC over BLAKE2s-256.
 ///
-/// The `hmac` crate cannot wrap this hash: BLAKE2s finalizes lazily (the last
-/// block is flagged), and `hmac`'s `BlockSizeUser` bound requires an eager
-/// buffer. This is the Noise `HMAC(key, data)` those two facts leave us.
+/// `Hmac<Blake2s256>` does not implement `Mac` (BLAKE2 finalizes lazily).
+/// `SimpleHmac` does, and it does not wipe its keyed state. The pads here
+/// are `Zeroizing` because this runs on the Noise chaining key.
 fn hmac_blake2s(key: &[u8], data: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
     const BLOCK: usize = 64;
     let mut key_block = Zeroizing::new([0u8; BLOCK]);
