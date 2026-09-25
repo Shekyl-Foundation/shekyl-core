@@ -6,7 +6,8 @@ holds one list deadline. PWD-B2 leaves the interim tick first. Nothing
 here is a number. Periods belong to their owners. **Rule 26 is cited
 explicitly.** This document mints no identifier family. The register
 row is P2P-3's **TE**. The design is closed. The pre-flight is
-discharged at `dev` `78eef562d`. The engine core is
+`ca825e8df`, which re-read `dev` `78eef562d` and landed before the
+crate. The engine core is
 `shekyl-timing-engine`: wake hints, an earlier-only arm, one outstanding
 wake per owner, and lateness per class. The engine service and the C++
 bridge are not in that crate. The bridge waits until after the transport
@@ -16,7 +17,8 @@ Pinned to `fix/p2p-transport-hmac-oracle` `55d7b2b16`. Line numbers
 were read there. Opening the round still discharges D6's third
 falsifier ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D6).
 
-**Pre-flight discharged 2026-09-25** at `dev` `78eef562d` (the #860
+**Pre-flight discharged 2026-09-25** by `ca825e8df`, the commit before
+the crate. It re-read the substrate at `dev` `78eef562d` (the #860
 merge). Substrate re-read: `levin_notify.cpp:495` and `:895`,
 `net_node.h:720-725`, and `Driver::next_wake`. The relay function is
 now `driver/mod.rs:158`; the design had cited `:149`. It is still
