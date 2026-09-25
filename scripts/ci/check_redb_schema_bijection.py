@@ -26,8 +26,6 @@
 # Instance of 47-gate-subject-assertion.mdc: an empty parse on either side has
 # an empty difference, which is indistinguishable from a clean run.
 
-import re
-import sys
 #
 # RUST-ONLY TABLES (S-CHAIN-W commit 1, SCW-11). The mirror assumption retires
 # one table at a time, never as a mode switch: `schema.rs` carries a named map
@@ -40,6 +38,19 @@ import sys
 # that IS in the X-macro, or that has no definition, or with an empty reason,
 # is red. `--selftest` proves each refusal fires on the input built to trip it.
 
+#
+# MIRRORED IN ANOTHER FILE (S-POOL, SPL-2). The third direction: an X-macro
+# table whose redb twin is a definition in ANOTHER file of the crate — the pool
+# file (`DAEMON_REDB_STORE.md` §5.1: the pool does not live in the consensus
+# store file). `schema.rs` carries `MIRRORED_ELSEWHERE: &[(&str, &str, &str)]`
+# as `(lmdb_name, twin_name, reason)`. Every entry must be in the X-macro, must
+# NOT be defined in `schema.rs`, and its twin must be a definition in
+# `pool/schema.rs`; and a censused table missing from `schema.rs` is red unless
+# it is named here. The class table is still the LMDB inventory — a mirrored
+# table keeps its class row — so that check is unchanged. Self-asserting like
+# the Rust-only map: an entry naming a table not in the X-macro, one that IS
+# defined here, one whose twin no other file defines, one with a token for
+# a reason, or two entries that name one twin, is red.
 import re
 import sys
 from pathlib import Path
@@ -47,15 +58,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 LMDB = ROOT / "src/blockchain_db/lmdb/db_lmdb.cpp"
 SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
+POOL_SCHEMA = ROOT / "rust/shekyl-chain-store/src/pool/schema.rs"
 CLASSES = ROOT / "rust/shekyl-chain-store/src/accumulator/class.rs"
 
 MACRO_RE = re.compile(r"#define SHEKYL_LMDB_TABLES\(X\)(.*?)\n\n", re.S)
 ENTRY_RE = re.compile(r'X\(\s*\w+\s*,\s*"([^"]+)"\s*\)')
 DEF_RE = re.compile(r'(?:Multimap)?TableDefinition::new\("([^"]+)"\)')
 RUST_ONLY_RE = re.compile(r"pub const RUST_ONLY_TABLES\s*:[^=]*=\s*&\[(.*?)\];", re.S)
-# One `("name", "reason")` pair; the reason may span lines via `\` string
-# continuation or adjacent literals, so it is captured loosely and joined.
-PAIR_RE = re.compile(r'\(\s*"([a-z_0-9]+)"\s*,\s*((?:"(?:[^"\\]|\\.)*"\s*)+),?\s*\)', re.S)
+MIRRORED_RE = re.compile(r"pub const MIRRORED_ELSEWHERE\s*:[^=]*=\s*&\[(.*?)\];", re.S)
+# One string literal inside a const-tuple field. A reason may be several,
+# joined, including a `\` newline continuation that the parser elides.
 LIT_RE = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
 
 
@@ -68,45 +80,69 @@ def dupes(names):
     return out
 
 
-def parse_rust_only(schema: str):
-    """`RUST_ONLY_TABLES` as {name: reason}. Raises if the const is absent —
-    the map is part of the gate's subject now that one Rust-only table
-    exists, so a missing const is a missing subject, not an empty map."""
-    m = RUST_ONLY_RE.search(schema)
+def parse_const_tuples(schema: str, const_name: str, const_re, width: int):
+    """The body of `pub const NAME = &[ (...), ... ]` as a list of string
+    tuples of `width`. The last field may be adjacent literals or a
+    backslash continuation; every other byte of the body must be a tuple,
+    a comma, a comment or whitespace. A missing const is a missing subject
+    (rule 47), and an entry the pattern cannot see is a refusal — `findall`
+    would skip it and report a clean map it had shortened."""
+    m = const_re.search(schema)
     if not m:
-        raise ValueError("schema.rs: `pub const RUST_ONLY_TABLES` did not parse — subject missing")
+        raise ValueError(
+            f"schema.rs: `pub const {const_name}` did not parse — subject missing")
+    names = r'\s*,\s*'.join(['"([a-z_0-9]+)"'] * (width - 1))
+    entry_re = re.compile(
+        rf'\(\s*{names}\s*,\s*((?:"(?:[^"\\]|\\.)*"\s*)+)\s*,?\s*\)', re.S)
     body = m.group(1)
-    out = {}
-    # Every byte of the body must be consumed by a well-formed pair, a
-    # separating comma, a comment, or whitespace. `findall` alone would skip
-    # an entry it could not parse — a table named with a hyphen, a reason
-    # that is not a string literal — and the gate would then report a clean
-    # bijection over a map it had silently shortened (rule 47: the gate
-    # asserts its own subject).
+    out = []
     pos = 0
     while pos < len(body):
         ws = re.compile(r"\s+|//[^\n]*\n?|,").match(body, pos)
         if ws:
             pos = ws.end()
             continue
-        pair = PAIR_RE.match(body, pos)
-        if not pair:
+        entry = entry_re.match(body, pos)
+        if not entry:
             snippet = body[pos:pos + 60].strip().splitlines()[0] if body[pos:].strip() else ""
             raise ValueError(
-                f"RUST_ONLY_TABLES: unparsed content at offset {pos}: `{snippet}` — every "
-                "entry must be `(\"table_name\", \"reason\")` with a [a-z0-9_] name")
-        name, lits = pair.group(1), pair.group(2)
-        reason = "".join(LIT_RE.findall(lits))
-        # Rust string continuation: `\` + newline + leading whitespace is elided.
-        reason = re.sub(r"\\\n\s*", "", reason)
-        if name in out:
-            raise ValueError(f"RUST_ONLY_TABLES: `{name}` listed twice")
-        out[name] = reason.strip()
-        pos = pair.end()
+                f"{const_name}: unparsed content at offset {pos}: `{snippet}` — every "
+                f"entry must be {width} string fields, names [a-z0-9_], reason last")
+        fields = list(entry.groups()[:-1])
+        reason = re.sub(r"\\\n\s*", "", "".join(LIT_RE.findall(entry.group(width))))
+        fields.append(reason.strip())
+        out.append(tuple(fields))
+        pos = entry.end()
     return out
 
 
-def check(censused, defined, classed, rust_only):
+def parse_rust_only(schema: str):
+    """`RUST_ONLY_TABLES` as {name: reason}. Raises if the const is absent —
+    the map is part of the gate's subject now that one Rust-only table
+    exists, so a missing const is a missing subject, not an empty map."""
+    rows = parse_const_tuples(schema, "RUST_ONLY_TABLES", RUST_ONLY_RE, 2)
+    out = {}
+    for name, reason in rows:
+        if name in out:
+            raise ValueError(f"RUST_ONLY_TABLES: `{name}` listed twice")
+        out[name] = reason
+    return out
+
+
+def parse_mirrored(schema: str):
+    """`MIRRORED_ELSEWHERE` as {lmdb_name: (twin_name, reason)}. Raises if the
+    const is absent — since S-POOL two censused tables live in another file,
+    so the map is part of the subject."""
+    rows = parse_const_tuples(schema, "MIRRORED_ELSEWHERE", MIRRORED_RE, 3)
+    out = {}
+    for name, twin, reason in rows:
+        if name in out:
+            raise ValueError(f"MIRRORED_ELSEWHERE: `{name}` listed twice")
+        out[name] = (twin, reason)
+    return out
+
+
+def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=()):
     """The set arithmetic over the three surfaces plus the Rust-only map.
     Returns the failure list; empty means the surfaces agree."""
     failures = []
@@ -137,14 +173,56 @@ def check(censused, defined, classed, rust_only):
             + "\n    Slice A assigns one of five tokens to every table; a gap here means "
               "the two slices disagree about the inventory.")
 
-    missing = sorted(set(censused) - set(defined))
+    mirrored = mirrored or {}
+    missing = sorted(set(censused) - set(defined) - set(mirrored))
     extra = sorted(set(defined) - set(censused))
     if missing:
         failures.append(
             f"{len(missing)} censused table(s) have NO redb TableDefinition:\n    "
             + ", ".join(missing)
             + "\n    Every table in the X-macro must be mapped; a gap here ships a store "
-              "missing a table LMDB has.")
+              "missing a table LMDB has. A table whose twin lives in another file of the "
+              "crate is named in MIRRORED_ELSEWHERE with the twin and the reason.")
+
+    # FIFTH SURFACE: the mirrored-elsewhere map (S-POOL). Each entry is a
+    # censused table with no definition here and a twin defined in the pool
+    # file; anything else is a stale or invented entry.
+    not_censused = sorted(set(mirrored) - set(censused))
+    if not_censused:
+        failures.append(
+            f"{len(not_censused)} MIRRORED_ELSEWHERE entr(y/ies) name a table that is NOT in the "
+            f"X-macro:\n    " + ", ".join(not_censused)
+            + "\n    The map is for censused tables whose twin is elsewhere; a name LMDB never "
+              "had belongs in RUST_ONLY_TABLES of the file that defines it, or nowhere.")
+    also_here = sorted(set(mirrored) & set(defined))
+    if also_here:
+        failures.append(
+            f"{len(also_here)} MIRRORED_ELSEWHERE entr(y/ies) name a table that IS defined in "
+            f"schema.rs:\n    " + ", ".join(also_here)
+            + "\n    A table cannot be both here and elsewhere; one of the two is the twin.")
+    twinless = sorted(n for n, (twin, _) in mirrored.items() if twin not in pool_defined)
+    if twinless:
+        failures.append(
+            f"{len(twinless)} MIRRORED_ELSEWHERE entr(y/ies) name a twin that pool/schema.rs "
+            f"does NOT define:\n    "
+            + ", ".join(f"{n} -> {mirrored[n][0]}" for n in twinless)
+            + "\n    The twin is a definition that exists; a stale entry is a moved table "
+              "whose forwarding address outlived it.")
+    owners = {}
+    for name, (twin, _) in mirrored.items():
+        owners.setdefault(twin, []).append(name)
+    shared = sorted(twin for twin, names in owners.items() if len(names) > 1)
+    if shared:
+        failures.append(
+            f"{len(shared)} MIRRORED_ELSEWHERE twin(s) are named by more than one censused "
+            f"table:\n    "
+            + ", ".join(f"{twin} <- {', '.join(sorted(owners[twin]))}" for twin in shared)
+            + "\n    The map is a bijection: one censused table, one twin.")
+    unreasoned_m = sorted(n for n, (_, r) in mirrored.items() if len(r.split()) < 8)
+    if unreasoned_m:
+        failures.append(
+            f"{len(unreasoned_m)} MIRRORED_ELSEWHERE entr(y/ies) carry no reason (a sentence, "
+            f"not a token):\n    " + ", ".join(unreasoned_m))
 
     # FOURTH SURFACE: the Rust-only map. Every extra definition must be named
     # there with a reason; everything named there must be an extra definition.
@@ -158,11 +236,11 @@ def check(censused, defined, classed, rust_only):
               "whether it is really a row inside another table. If it is genuinely a "
               "table LMDB never had, name it in RUST_ONLY_TABLES with the sentence that "
               "says why.")
-    mirrored = sorted(set(rust_only) & set(censused))
-    if mirrored:
+    rust_only_censused = sorted(set(rust_only) & set(censused))
+    if rust_only_censused:
         failures.append(
-            f"{len(mirrored)} RUST_ONLY_TABLES entr(y/ies) name a table that IS in the X-macro:\n    "
-            + ", ".join(mirrored)
+            f"{len(rust_only_censused)} RUST_ONLY_TABLES entr(y/ies) name a table that IS in the X-macro:\n    "
+            + ", ".join(rust_only_censused)
             + "\n    A mirrored table is not Rust-only; the map is for tables with no twin.")
     dangling = sorted(set(rust_only) - set(defined))
     if dangling:
@@ -197,8 +275,14 @@ def main():
     defined = DEF_RE.findall(schema)
     try:
         rust_only = parse_rust_only(schema)
+        mirrored = parse_mirrored(schema)
     except ValueError as e:
         report([str(e)])
+    if not POOL_SCHEMA.is_file():
+        report([f"{POOL_SCHEMA.relative_to(ROOT)}: missing — the mirrored twins' file does not exist"])
+    pool_defined = DEF_RE.findall(POOL_SCHEMA.read_text(encoding="utf-8"))
+    if not pool_defined:
+        report([f"{POOL_SCHEMA.name}: parsed ZERO TableDefinitions — the twins' subject is missing"])
 
     # Subject assertions: an empty side covers trivially.
     if not censused:
@@ -218,10 +302,12 @@ def main():
     if not classed:
         report([f"{CLASSES.name}: parsed ZERO class entries — third surface missing"])
 
-    report(check(censused, defined, classed, rust_only))
-    mirrored = len(set(defined) & set(censused))
+    report(check(censused, defined, classed, rust_only, mirrored, pool_defined))
+    here = len(set(defined) & set(censused))
     print(f"redb schema bijection: {len(censused)} censused LMDB tables <-> "
-          f"{mirrored} mirrored redb table definitions <-> {len(classed)} accumulator classes; "
+          f"{here} mirrored redb table definitions in schema.rs + {len(mirrored)} mirrored in "
+          f"the pool file ({', '.join(f'{n}->{t}' for n, (t, _) in sorted(mirrored.items()))}) "
+          f"<-> {len(classed)} accumulator classes; "
           f"+ {len(rust_only)} Rust-only table(s) with a named reason "
           f"({', '.join(sorted(rust_only))}); {len(defined)} definitions total; "
           f"no duplicates, no unnamed extras, no gaps in any direction")
@@ -325,7 +411,46 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
         "undo_log": "the pop journal: one row of pre-images per height, replacing the C++ journals"
     }:
         raise SystemExit("selftest commented map: did not parse")
-    print("redb schema bijection selftest: 2 clean shapes pass, 9 refusals fire")
+    # The mirrored-elsewhere direction (S-POOL).
+    mirrored_ok = {"c": ("pool_c", "the c table lives in the pool file for a reason of eight words")}
+    clean_m = check(censused, ["a", "b", "undo_log"], classed, rust_only, mirrored_ok, ["pool_c"])
+    if clean_m:
+        raise SystemExit("selftest mirrored clean: expected no failures, got:\n  " + "\n  ".join(clean_m))
+    _expect("mirrored entry not censused",
+            check(censused, ["a", "b", "c", "undo_log"], classed, rust_only,
+                  {"zzz": ("pool_z", "a reason long enough to pass the eight-word floor here")}, ["pool_z"]),
+            "NOT in the X-macro")
+    _expect("mirrored entry also defined here",
+            check(censused, ["a", "b", "c", "undo_log"], classed, rust_only, mirrored_ok, ["pool_c"]),
+            "IS defined in schema.rs")
+    _expect("mirrored entry with no twin",
+            check(censused, ["a", "b", "undo_log"], classed, rust_only, mirrored_ok, []),
+            "does NOT define")
+    _expect("mirrored entry with a token for a reason",
+            check(censused, ["a", "b", "undo_log"], classed, rust_only, {"c": ("pool_c", "pool")}, ["pool_c"]),
+            "carry no reason")
+    both = "a reason long enough to pass the eight-word floor here"
+    _expect("two censused tables name one twin",
+            check(censused, ["a", "undo_log"], classed, rust_only,
+                  {"b": ("pool_c", both), "c": ("pool_c", both)}, ["pool_c"]),
+            "one twin")
+    parsed = parse_mirrored('''
+pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
+    // the pool
+    ("txpool_meta", "pool_meta", "the pool is not consensus state and lives in \\
+     its own file"),
+];
+''')
+    if parsed != {"txpool_meta": ("pool_meta", "the pool is not consensus state and lives in its own file")}:
+        raise SystemExit(f"selftest mirrored parse: got {parsed!r}")
+    try:
+        parse_mirrored("pub const OTHER: u8 = 1;")
+    except ValueError as e:
+        if "subject missing" not in str(e):
+            raise SystemExit(f"selftest absent mirrored map: wrong message {e}")
+    else:
+        raise SystemExit("selftest absent mirrored map: expected a refusal")
+    print("redb schema bijection selftest: 3 clean shapes pass, 14 refusals fire")
 
 
 if __name__ == "__main__":

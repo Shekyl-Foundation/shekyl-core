@@ -19,6 +19,9 @@ repository.workspace = true
 # points — and therefore the 33-test oracle — available (DAEMON_RELAY_PRIVACY.md
 # §18.1).
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+# The seam's byte-pinned vocabulary (`RelayMethod`, `NetZone`) lives below both
+# this crate and the daemon store (rule 18; DRS-E1 S-POOL `SPL-Q6`).
+shekyl-types = { path = "../shekyl-types" }
 
 [lints]
 workspace = true

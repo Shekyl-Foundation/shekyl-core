@@ -21,7 +21,8 @@
 //! | Curve root | live Selene root | `curve_tree_meta` `"root"` via `get_curve_tree_root` | 32-byte value as-is (empty tree → Selene `hash_init`) |
 //!
 //! **Deliberately excluded (P0e / §7.1.1):** archival journals
-//! (`archival_*`), txpool, alt-chain, txs, outputs, `curve_tree_roots`
+//! (`archival_*`), the txpool (which since layout 12 is not in this file at
+//! all — `crate::pool`, S-POOL), alt-chain, txs, outputs, `curve_tree_roots`
 //! history, `hf_versions`, and every other table. A backend that omits
 //! archival apply/revert still passes this digest — that is why
 //! §7.1.1 forbids extracting S-ARCH until those journals are in the

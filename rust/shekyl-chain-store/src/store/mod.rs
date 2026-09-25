@@ -109,8 +109,8 @@ pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
 pub use error::{
-    CellFault, EngineError, ErrorClass, LeafDensity, StoreCannot, StoreError, StoreInvariant,
-    UndoFault,
+    CellFault, EngineError, ErrorClass, LeafDensity, PoolCannot, StoreCannot, StoreError,
+    StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};

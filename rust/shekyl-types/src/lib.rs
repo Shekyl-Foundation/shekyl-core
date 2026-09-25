@@ -886,6 +886,29 @@ pub use archival::{
     MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
 };
 
+pub mod relay;
+pub use relay::{NetZone, RelayCategory, RelayMethod};
+
+scalar_u64! {
+    /// **Wall-clock** seconds since the Unix epoch — a pool entry's
+    /// `receive_time`, a relay clock's instant (DRS-E1 S-POOL, SPL-5).
+    ///
+    /// Not a [`Timestamp`]: that is a block header's field, consensus time
+    /// the chain agreed on; this is one node's clock at the moment a
+    /// transaction arrived or was relayed, and the two must not be
+    /// subtractable from each other. The store's other time words are
+    /// block time; this one is the pool's, and it never enters a rule.
+    UnixSeconds
+}
+
+hash32! {
+    /// The pool's FCMP++ verification-cache key — `H(proof ‖ referenceBlock
+    /// ‖ key images)` (CEN-M8; `tx_pool.cpp:495`). A cached verdict is
+    /// `Some(hash)`; "no cache" is `None`, never a zero hash with a bit
+    /// beside it (DRS-E1 S-POOL, SPL-10).
+    FcmpVerificationHash
+}
+
 mod block_axis;
 
 impl Timestamp {

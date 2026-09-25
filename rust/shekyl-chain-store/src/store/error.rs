@@ -364,6 +364,38 @@ pub enum StoreCannot {
         /// The `vout` position with no commitment.
         index: u64,
     },
+    /// A pool-store refusal (DRS-E1 S-POOL, `DRS_E1_SPOOL.md` §3.2) — the
+    /// pool's decisions on its own file, none of them a fault in it.
+    Pool(PoolCannot),
+    /// The pool file at `path` is not one this store can vouch for **and**
+    /// not one it may recreate: not a redb database, a database with no
+    /// pool header, or a header that does not decode. Only a sealed pool
+    /// file at *another layout version* is recreated (`SPL-Q8` as ruled);
+    /// everything else is refused, never deleted — a wrong `--data-dir`, a
+    /// foreign file or a tampered one is an operator's to look at.
+    PoolFileForeign,
+}
+
+/// The pool store's typed refusals — the pool's decisions, not faults
+/// (`StoreCannot`'s shape; `DRS_E1_SPOOL.md` §3.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolCannot {
+    /// `insert` of a transaction the pool already holds. The pool decides
+    /// whether to upsert by removing first, as the C++ `add_tx` does.
+    AlreadyHeld,
+    /// `update` of a transaction the pool does not hold.
+    NotHeld,
+    /// `insert` with no transaction bytes: a pool entry is a transaction.
+    EmptyBlob,
+    /// `update` whose relay state does not
+    /// [`follow`](crate::codec::RelayState::follows) the stored one — the
+    /// ratchet's verdict, carried as the type gave it: a changed provenance
+    /// (§92.4, `SPL-Q9`), a phase that is not the stored one or a forward
+    /// step, a responsibility re-armed after observation disarmed it.
+    Relay(crate::codec::RelayRefusal),
+    /// `fcmp_cache` is the all-zero null hash. Absence is `None`; the null
+    /// hash is not a verification (SPL-10).
+    NullFcmpCache,
 }
 
 impl core::fmt::Display for StoreCannot {
@@ -450,11 +482,41 @@ impl core::fmt::Display for StoreCannot {
                  session runs {session}: persisted join epochs and serve-credit windows would be \
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
+            Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
+            Self::PoolFileForeign => f.write_str(
+                "pool file is not one this store wrote and not one it may recreate (no redb \
+                 database, no pool header, or a header that does not decode): refused, not \
+                 deleted — check the path, or remove the file deliberately",
+            ),
         }
     }
 }
 
 impl core::error::Error for StoreCannot {}
+
+impl core::fmt::Display for PoolCannot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::AlreadyHeld => f.write_str("insert of a transaction the pool already holds"),
+            Self::NotHeld => f.write_str("update of a transaction the pool does not hold"),
+            Self::EmptyBlob => f.write_str("insert with no transaction bytes"),
+            Self::Relay(refusal) => {
+                write!(f, "update whose relay state does not follow: {refusal}")
+            }
+            Self::NullFcmpCache => {
+                f.write_str("fcmp verification cache is the null hash; absence is None")
+            }
+        }
+    }
+}
+
+impl core::error::Error for PoolCannot {}
+
+impl From<PoolCannot> for StoreError {
+    fn from(cannot: PoolCannot) -> Self {
+        Self::Cannot(StoreCannot::Pool(cannot))
+    }
+}
 
 #[cfg(test)]
 mod tests {

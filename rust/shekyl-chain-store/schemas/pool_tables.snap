@@ -1,0 +1,8 @@
+# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
+#   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
+# and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
+tables = 3
+[tables]
+pool_blob = map<[u8;32], shekyl::Blob<pool_tx>>
+pool_header = map<&str, shekyl::Blob<property_cell>>
+pool_meta = map<[u8;32], shekyl::Coded<pool_record>>

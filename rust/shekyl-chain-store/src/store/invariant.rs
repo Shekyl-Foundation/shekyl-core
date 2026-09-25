@@ -178,6 +178,16 @@ pub enum StoreInvariant {
         /// The persona the orphaned rows name.
         persona: shekyl_types::PCanonicalId,
     },
+    /// **SI-16** — a pool entry is one entry: `pool_meta[h]` exists iff
+    /// `pool_blob[h]` exists. `insert` writes both, `remove` deletes both,
+    /// `update` touches only the meta row, and no other writer exists; a
+    /// key present in one table and absent from the other is a write that
+    /// bypassed the store. Observed by the enumeration's blob read and by
+    /// `insert` (DRS-E1 S-POOL, `DRS_E1_SPOOL.md` §5).
+    PoolEntryUnpaired {
+        /// The transaction whose two rows disagree.
+        txid: shekyl_types::TxHash,
+    },
 }
 
 /// What an SI-11 read observed. One invariant, two observations: a length
@@ -212,6 +222,7 @@ impl StoreInvariant {
             Self::FoldNotMonotone { .. } => 13,
             Self::IdNotFresh => 9,
             Self::ServeCreditWithoutBond { .. } => 15,
+            Self::PoolEntryUnpaired { .. } => 16,
         }
     }
 }
@@ -282,6 +293,11 @@ impl core::fmt::Display for StoreInvariant {
                 "archival_serve_credit holds rows for persona {persona} but archival_bond has no \
                  record for it; a pass bit was written past the connect hook's refusal"
             ),
+            Self::PoolEntryUnpaired { txid } => write!(
+                f,
+                "pool entry {txid} has a row in one of pool_meta / pool_blob and not the other; \
+                 a write bypassed the pool store"
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -313,6 +329,7 @@ impl core::error::Error for StoreInvariant {
             | Self::LeavesNotDense { .. }
             | Self::SummaryRootDiverged
             | Self::ServeCreditWithoutBond { .. }
+            | Self::PoolEntryUnpaired { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

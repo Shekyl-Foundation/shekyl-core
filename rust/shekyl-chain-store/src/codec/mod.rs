@@ -58,6 +58,7 @@ mod archival;
 mod chain;
 mod curve;
 mod evidence;
+mod pool;
 mod primitives;
 mod property;
 mod reader;
@@ -73,6 +74,10 @@ mod snapshot_tests;
 #[path = "archival_tests.rs"]
 mod archival_tests;
 
+#[cfg(test)]
+#[path = "pool_tests.rs"]
+mod pool_tests;
+
 pub use archival::{
     AttestationWitnessBytes, BondRecord, FirstPayingHeight, HeldShard, HeldShards, Holdings,
     HoldingsError, RMarket, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
@@ -84,6 +89,10 @@ pub use chain::{
 };
 pub use curve::{CurveTreeState, LayerHash, LeafCount, TreeDepth};
 pub use evidence::{CoverageGaps, PassedThroughFacts, FACT_FIELDS};
+pub use pool::{
+    ArrivedPhase, BlockRef, Origin, OriginatedPhase, PoolRecord, Readiness, RelayRefusal,
+    RelayState, Responsibility,
+};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{

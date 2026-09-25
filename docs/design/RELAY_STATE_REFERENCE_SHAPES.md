@@ -138,16 +138,22 @@ arrival — intended for the *behaviour* (§92.4: "past that point the pin's
 sign flips") but it takes the *fact* with it. "Has it been broadcast" and "did
 we originate it" cannot be asked separately.
 
-**The correct shape.** Three fields with three lifetimes, not one enum value.
-`DRS_E1_SPOOL.md` `SPL-Q9` poses it as `origin: Origin { Originated, Arrived
-{ zone } }` (write once; the store refuses an update that changes it),
-`phase: RelayPhase` (the ratchet — how it is travelling now — with the pin as
-a typed transition over `origin`: `Originated` never walks to `Stem`/`Fluff`,
-it yields to `Block`), and `responsibility: Responsibility { Armed, Disarmed }`
-(`Originated` only; F-10's verdict writes `Disarmed`). The disarm *timer* is
-the Zone's; the pool holds no timer. The byte enum `RelayMethod` stays what it
-is — the FFI seam's word for an arrival class or a routing plan — and is
-derived at the seam, not persisted.
+**The correct shape.** Three lifetimes, not one enum value.
+`DRS_E1_SPOOL.md` `SPL-Q9` poses provenance (permanent; the store refuses an
+update that changes it), phase (the ratchet — how it is travelling now — with
+the pin that an originated entry never walks to `Stem`/`Fluff` and yields to
+`Block`), and responsibility (`Armed` / `Disarmed`, originated entries only;
+F-10's verdict writes `Disarmed`). **As built (2026-09-24, review on the
+increment):** those three are one `RelayState`. The phase enum is chosen by
+the provenance — `OriginatedPhase` is `Held | Block`, `ArrivedPhase` is
+`Stem | Fluff | Block` — so the forbidden pairs have no value, and
+responsibility is a field of the originated arm only. Permanence compares
+`RelayState::origin()` (originated, or arrived over a zone), not the whole
+state, so a phase step or a disarm is not an origin change. `upgrade` is the
+strict forward step; an update stores a new phase only when it is that step
+or the same phase. The disarm *timer* is the Zone's; the pool holds no timer.
+The byte enum `RelayMethod` stays what it is — the FFI seam's word for an
+arrival class or a routing plan — and is derived at the seam, not persisted.
 
 **Drift looks like.** A single `RelayMethod` field that callers mutate to
 record progress — `local` → `fluff` on first relay. One variable carrying
