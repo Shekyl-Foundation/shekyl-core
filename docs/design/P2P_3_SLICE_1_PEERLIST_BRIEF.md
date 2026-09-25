@@ -1,12 +1,10 @@
 # P2P-3 slice 1 — the peerlist
 
-**Status:** **REVISED 2026-09-25 (connector partition).** Lists are partitioned
-by connector, derived from the address type. *Records-was REVISED 2026-09-23
-(steering).* The peerlist moves into Rust. The C++ is a
+**Status:** **REVISED 2026-09-25 (connector partition; white target is diversity).** Lists are partitioned
+by connector, derived from the address type. Gray is drawn when white falls
+below that target, not on a fixed minute. The peerlist moves into Rust. The C++ is a
 quarry: evidence for the invariant, and a list of behaviors the Rust model
-drops. *Records-was: the C++ already holds the contract at eight sites, every
-one correct, so the slice preserves it. A later same-day draft called the lists
-`Hypothesis` and `Fact` and treated any purposeful dial as promotion.*
+drops.
 
 Owed before slice 1's first increment
 ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
@@ -83,6 +81,38 @@ for `EXPIRATION_PERIOD` (24 hours) returns to gray. Additional contact is a
 confirmed handshake, or a later successful exchange, on a connection this node
 opened to that address. It moves the clock forward. Contact that arrived
 inbound does not. One failed redial does not demote; the clock does.
+
+**White's target is draw diversity (ruled 2026-09-25).** Outbound
+connections are drawn uniformly from white, so a small white list is a
+small set of hosts an attacker can dominate. The target is enough
+distinct candidates that no attacker-held fraction dominates the draws.
+Slices 1 and 3 derive it. It is not "twice the out-degree", and it is
+not today's 1,000 cap. Two levels, both derived, neither a number.
+The diversity floor is the minimum that resists eclipse. The refill
+line sits above that floor, derived from it. Headroom is the gap
+between them. Refill starts when white crosses the refill line, while
+it is still above the floor, so the node is not probing stale gray
+entries in the moment connectivity has already collapsed.
+
+**The refill trigger is the refill line, plus one deadline for quiet decline.**
+If white is already below the refill line, including empty after boot
+or after eviction, slice 1 reports that immediately. There is no expiry
+to wait for. When white is at or above the refill line, slice 1 holds
+the earliest expiry among its entries. When that deadline fires, slice
+1 re-counts and reports below the refill line if it is. That is one
+timer for the list, not one per entry. Evaluating expiry when the list
+is next used still decides whether an entry has demoted. In steady
+state every outbound slot is full and nothing draws from white, so a
+demotion with no deadline would wait until a connection is already
+lost. Slice 1 does not dial. The pace of the promotion dials is slice
+3's: a bounded rate, derived, with jittered spacing. The inherited
+60-second housekeeping timer did both the trigger and the pace, and it
+is not kept.
+
+White shrinks by that demotion, by capacity eviction, and by removal
+for misbehaviour. Dandelion++ does not remove white entries. It chooses
+which existing outbound connections carry stem traffic, and it changes
+that choice each epoch.
 
 Capacity eviction is a draw, not a sort. Over the gray cap, drop a random
 gray address. Over the white cap, demote a random white address to gray. The
@@ -323,7 +353,7 @@ They check different things. Neither stands for the other.
    negative test has not finished.
 
 A harness that requires Rust membership to match the C++ is the wrong oracle.
-§8 is a list of intentional divergences. *Records-was §4.2's green line.*
+§8 is a list of intentional divergences.
 
 ---
 
