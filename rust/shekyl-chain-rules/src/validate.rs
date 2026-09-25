@@ -55,12 +55,13 @@ use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
+use crate::rules::tx_against::{I7, L1};
 use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9};
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
-use crate::verdict::{ChainValid, InvalidBlock, TxSlot, Verdict};
+use crate::verdict::{ChainValid, TxSlot, Verdict};
 use crate::view::{ChainView, Tip};
 
 /// Run the listed stateless rules in order; the first refusal is the verdict.
@@ -324,17 +325,20 @@ pub fn validate<'id, V: ChainView<'id>>(
         .enumerate()
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
     for (slot, tx) in core::iter::once(miner).chain(listed) {
+        // Both stages refuse at the slot they were given (slice 6 commit 4
+        // gave `tx_against` the slot `tx_form` already had), so the locus
+        // arrives named and nothing is re-homed.
         match judge_tx(tx, slot, view, rule_set).map_err(Fault::View)? {
             Ok(tx_coverage) => coverage.union(&tx_coverage),
-            // `tx_form` refuses at the slot it was given; `tx_against` still
-            // writes `Lone` (slice 6 adopts the slot), so the re-home stays.
-            Err(refused) => {
-                return Ok(Err(InvalidBlock::new(
-                    refused.rule,
-                    refused.locus.rehome(slot),
-                )));
-            }
+            Err(refused) => return Ok(Err(refused)),
         }
+    }
+    // CEN-L1 spans the slots — a key image twice among the block's inputs —
+    // and runs once every slot has passed: each slot's view is the chain
+    // before the block, so this is the only place the repeat is visible to
+    // the validator. Last, as the C++'s `add_spent_key` refusal is.
+    if let Err(refused) = rules::run::<L1, _>(&cx, view, &mut coverage).map_err(Fault::View)? {
+        return Ok(Err(refused));
     }
 
     let hash = formed.hash();
@@ -431,24 +435,50 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     Ok(coverage)
 }
 
-/// Stateful per-transaction rules (census 4.I): everything that needs the
-/// recorded chain — spent key images, the membership anchor. The pool passes
-/// its view decorator here.
+/// Stateful per-transaction rules (census 4.I, the view-bound half):
+/// everything that needs the recorded chain — spent key images, and with
+/// the later commits the reference block and the tree. The pool passes its
+/// view decorator here.
 ///
-/// A refusal's locus is [`TxSlot::Lone`]; `validate` re-homes it.
+/// Runs after [`tx_form`] has admitted the bytes, as the C++'s
+/// `check_tx_inputs` runs its DB lookups after its stateless arms; the
+/// class is derived again here (cheaply) so a caller that skipped
+/// `tx_form` still gets H5/H6's refusal rather than a rule judging an
+/// unclassified transaction.
+///
+/// Takes the **slot**, as [`tx_form`] does, for the same reason: the kind a
+/// rule's scope reads is the slot's, never the bytes' (slice 5 Q2), and a
+/// view-bound rule scoped `NonCoinbase` must know it is looking at the
+/// miner transaction without asking the transaction. The pool passes
+/// [`TxSlot::Lone`]; `validate` passes the position. A refusal names the
+/// slot it was given.
 pub fn tx_against<'id, V: ChainView<'id>>(
     tx: &Transaction,
+    slot: TxSlot,
     view: &V,
     rule_set: &RuleSet,
 ) -> Result<Verdict<RuleCoverage>, V::Fault> {
-    // 4.I rules land with their slice (DRS-D12); nothing reads the
-    // transaction, the view, or the rule set yet.
-    let _ = (tx, view, rule_set);
-    Ok(Ok(RuleCoverage::EMPTY))
+    // No 4.I row reads the rule set yet; the first that does (a schedule
+    // step varying a reference-window constant, Q5) takes it from here.
+    let _ = rule_set;
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = match rules::TxContext::derive(tx, slot, &mut coverage) {
+        Ok(cx) => cx,
+        Err(refused) => return Ok(Err(refused)),
+    };
+    // Order: the C++'s `check_tx_inputs` looks up each key image as it
+    // walks the inputs (I7), before the reference-block and membership
+    // reads the later commits add (I10–I13, I15).
+    match rules::run_tx_against::<I7, _>(&cx, view, &mut coverage)? {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    Ok(Ok(coverage))
 }
 
-/// [`tx_form`] then [`tx_against`], coverages unioned. The locus of a
-/// refusal is left as the callee wrote it.
+/// [`tx_form`] then [`tx_against`] at one slot, coverages unioned. Both
+/// stages name the slot they were given, so a refusal's locus is left as
+/// the callee wrote it.
 fn judge_tx<'id, V: ChainView<'id>>(
     tx: &Transaction,
     slot: TxSlot,
@@ -459,7 +489,7 @@ fn judge_tx<'id, V: ChainView<'id>>(
         Ok(coverage) => coverage,
         Err(refused) => return Ok(Err(refused)),
     };
-    Ok(tx_against(tx, view, rule_set)?.map(|against| {
+    Ok(tx_against(tx, slot, view, rule_set)?.map(|against| {
         coverage.union(&against);
         coverage
     }))

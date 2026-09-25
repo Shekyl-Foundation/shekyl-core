@@ -149,12 +149,14 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::I4,
             CenRow::I5,
             CenRow::I6,
+            CenRow::I7,
             CenRow::I8,
             CenRow::I9,
             CenRow::I14,
             CenRow::I16,
             CenRow::I19,
             CenRow::I20,
+            CenRow::L1,
         ]
     );
     let by_construction: Vec<CenRow> = CenRow::ALL
@@ -174,10 +176,13 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::H12,
             CenRow::H13,
             CenRow::H23,
+            CenRow::I2,
+            CenRow::I3,
         ],
         "slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter; \
          slice 5 Q6: the same version (H2, H13) and tag (H12) for listed transactions, one \
-         commitment per output (H8), and a parsed transaction as `tx_form`'s input (H23)"
+         commitment per output (H8), and a parsed transaction as `tx_form`'s input (H23); \
+         slice 6 Q3: the CT type set plus H15 (I2) and the same version a fourth time (I3)"
     );
     assert!(PolicyRow::ALL
         .iter()

@@ -19,11 +19,14 @@ use shekyl_types::{
     Timestamp,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Transaction};
+use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 use super::store_tests::TestErr;
 use super::view::BatchView;
 use super::*;
+use crate::codec::Present;
+use crate::lmdb_order::LmdbHashKey;
+use crate::schema::SPENT_KEYS;
 
 /// The coinbase for `height`: the rules harness's, which satisfies every
 /// landed 4.F row (a sole `Input::Gen(height)`, `Null` ct, one output with
@@ -172,6 +175,37 @@ pub(super) fn judge<'b, 'id>(
         Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),
         Err(Fault::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt}"),
     }
+}
+
+/// Reach the SI-1 belt. CEN-I7 refuses a recorded key image at `validate`
+/// (slice 6 commit 4), so a double spend no longer walks through
+/// [`judge`] to the store; what the belt beneath the rule still guards is
+/// the table **moving under a judged token**. This judges `candidate`
+/// against the batch's view, then records its first listed input's key
+/// image as spent — the same `Present` row `connect` would write — and
+/// only then connects. Returns `connect`'s outcome: SI-1, poisoning the
+/// batch.
+pub(super) fn connect_with_image_planted_under_the_token(
+    store: &ChainStore,
+    candidate: Candidate,
+    height: u64,
+) -> Result<Connected, TestErr> {
+    let Some(Input::ToKey { key_image, .. }) = candidate
+        .transactions
+        .first()
+        .and_then(|tx| tx.prefix.inputs.first())
+    else {
+        panic!("the candidate's first listed transaction spends");
+    };
+    let planted = LmdbHashKey::from_bytes(*key_image);
+    store.write(|batch| {
+        let view = batch.chain_view();
+        let judged = judge(&view, candidate)?;
+        batch
+            .open_insert_table(SPENT_KEYS, StoreInvariant::KeyImageNotFresh)?
+            .insert(planted, Present)?;
+        Ok(batch.connect(judged, facts(height, 0), RuleSet::GENESIS)?)
+    })
 }
 
 /// Connect `listed` as consecutive blocks from genesis in one batch,

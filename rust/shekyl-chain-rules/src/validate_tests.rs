@@ -7,7 +7,7 @@ use super::*;
 use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, Retry, Stale};
 use crate::harness::fixture::{candidate, coinbase, listed, point};
-use crate::harness::{formed, formed_under, judged, Faulted, MockChain, MockSubstrate};
+use crate::harness::{formed, formed_under, infallible, judged, Faulted, MockChain, MockSubstrate};
 use crate::rule_set::RuleSetId;
 use crate::substrate::Substrate;
 use crate::trust::Trust;
@@ -89,12 +89,17 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I4,
                 CenRow::I5,
                 CenRow::I6,
+                // Slice 6 commit 4: the first view-bound row (I7, vacuous
+                // on the coinbase) and the block-level L1, which a block
+                // of one coinbase passes with nothing to compare.
+                CenRow::I7,
                 CenRow::I8,
                 CenRow::I9,
                 CenRow::I14,
                 CenRow::I16,
                 CenRow::I19,
                 CenRow::I20,
+                CenRow::L1,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
@@ -176,10 +181,11 @@ fn a_block_with_no_listed_transactions_passes() {
     });
 }
 
-/// `tx_form` judges the landed 4.H rows at the slot it is given (slice 5);
-/// `tx_against` still records nothing (4.I is slice 6). At the miner slot a
-/// well-formed coinbase records H1/H3/H4 vacuous and H16 passed — every
-/// landed row was evaluated.
+/// `tx_form` judges the landed stateless rows at the slot it is given
+/// (slice 5, slice 6 commits 2–3); `tx_against` the landed view-bound ones
+/// (slice 6 commit 4). At the miner slot a well-formed coinbase records
+/// the non-coinbase rows vacuous and the rest passed — every landed row was
+/// evaluated.
 #[test]
 fn tx_entry_points_record_the_landed_rows() {
     let tx = coinbase(1);
@@ -216,10 +222,16 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::I20
         ]
     );
+    // `tx_against` at the miner slot: the class derivation records H5/H6
+    // here too (it derives its own context, so it evaluated them), and I7
+    // — the one view-bound row landed so far (slice 6 commit 4) — is
+    // `NonCoinbase`, recorded vacuous.
     MockChain::default().with_view(|view| {
+        let against = infallible(tx_against(&tx, TxSlot::Miner, &view, &RuleSet::GENESIS))
+            .expect("the coinbase reads nothing from the view");
         assert_eq!(
-            tx_against(&tx, &view, &RuleSet::GENESIS),
-            Ok(Ok(RuleCoverage::EMPTY))
+            against.iter().collect::<Vec<_>>(),
+            vec![CenRow::H5, CenRow::H6, CenRow::I7]
         );
     });
 }

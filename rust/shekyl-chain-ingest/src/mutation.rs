@@ -24,8 +24,9 @@
 //!   ([`ExpectedPlace::Unnamed`]) is a failed assertion, not a guessed
 //!   block locus.
 //! - `Pending` — the rule is not in Rust yet, and the family **pins what
-//!   happens today** (§3.10's last column: the block connects, or a store
-//!   belt halts the run). The pin is not acceptance of the gap; it is the
+//!   happens today** (§3.10's last column: the block connects; until E6
+//!   slice 6 ported CEN-I7 one pin was a store belt halting the run). The
+//!   pin is not acceptance of the gap; it is the
 //!   gap made a red test the moment the row is ported, because the branch
 //!   is chosen by the census at every run. The census is the falsifier.
 //!

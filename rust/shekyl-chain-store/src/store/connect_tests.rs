@@ -19,7 +19,9 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{candidate, connect_genesis, facts, judge, spend};
+use super::connect_fixtures::{
+    candidate, connect_genesis, connect_with_image_planted_under_the_token, facts, judge, spend,
+};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
@@ -630,31 +632,22 @@ fn a_gapped_txs_pruned_primary_is_si9() {
     });
 }
 
+/// The belt beneath CEN-I7. A key image an earlier block spent is I7's
+/// refusal at `validate` (slice 6 commit 4) and never reaches `connect`
+/// through `judge`; the belt's remaining subject is the table moving under
+/// a token already judged against it, and that is what this plants.
 #[test]
-fn a_key_image_spent_in_an_earlier_block_is_si1() {
+fn a_key_image_recorded_under_a_judged_token_is_si1() {
     let path = tmp("connect-ki");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let (_, genesis) = connect_genesis(&store, 0);
     let b1 = candidate(1, genesis.hash(), vec![spend(9, 2)]);
-    let b1_hash = b1.block.hash();
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), RuleSet::GENESIS)?)
-    });
-    out.expect("block 1");
-    // No landed rule checks key images yet (CEN-I7 is slice 6), so the
-    // double spend reaches the store — and the belt beneath the rule catches
-    // it as a fatal.
-    let b2 = candidate(2, b1_hash, vec![spend(9, 2)]);
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)
-    });
+    let out = connect_with_image_planted_under_the_token(&store, b1, 1);
     expect_row(&out, StoreInvariant::KeyImageNotFresh);
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.open_table(BLOCKS).expect("t").len().expect("len"),
-        2,
+        1,
         "nothing landed"
     );
     cleanup(&path);

@@ -10,12 +10,13 @@
 //! open, and NOT latched by a violation in a batch that connected nothing.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
-use super::connect_fixtures::{candidate, connect_chain_with_burn, facts, judge, spend};
+use super::connect_fixtures::{
+    candidate, connect_chain_with_burn, connect_with_image_planted_under_the_token, spend,
+};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::*;
 use crate::codec::{forged, BlockBody, Canonical, Raw, TotalBurnedCell};
@@ -184,13 +185,12 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
         "no connect or pop: no halt"
     );
 
-    // A connect whose belt fires halts the writer at the connecting height.
+    // A connect whose belt fires halts the writer at the connecting height
+    // (SI-1, reached by the spent-keys table moving under a judged token:
+    // a double spend itself is CEN-I7's refusal before `connect`).
     let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
-    let double = candidate(2, hashes[1], vec![spend(9, 2)]);
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, double)?, facts(2, 0), RuleSet::GENESIS)?)
-    });
+    let double = candidate(2, hashes[1], vec![spend(10, 2)]);
+    let out = connect_with_image_planted_under_the_token(&store, double, 2);
     assert!(matches!(out, Err(TestErr::Store(ref m)) if m.starts_with("SI-1 violated")));
     assert_eq!(
         store.connect_state(),

@@ -12,12 +12,10 @@ use std::sync::Arc;
 
 use shekyl_chain_rules::harness::{Faulted, MockSubstrate};
 use shekyl_chain_rules::{seed_height, Candidate, CenRow, Locus, RowStatus, TxSlot};
-use shekyl_chain_store::store::{StoreError, StoreInvariant};
 use shekyl_difficulty::{check_hash, Difficulty, FTL_SECONDS};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, Transaction};
 
-use crate::connector::RunFault;
 use crate::metrics::Metrics;
 use crate::mutation::{
     first_nonce, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Pow, Unmutable,
@@ -190,8 +188,11 @@ fn assert_lands(mutation: Mutation, at: u64, outcome: &Outcome) {
     let expected = mutation.expected();
     match expected.status() {
         RowStatus::Implemented => {
-            let Outcome::Report(report) = outcome else {
-                panic!("{mutation}: the run faulted instead of refusing");
+            let report = match outcome {
+                Outcome::Report(report) => report,
+                Outcome::Fault(fault) => {
+                    panic!("{mutation}: the run faulted instead of refusing: {fault}")
+                }
             };
             let (height, verdict) = report
                 .refused
@@ -247,11 +248,12 @@ fn assert_place(mutation: Mutation, locus: Locus) {
 fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
     match mutation {
         Mutation::WrongReward | Mutation::ReorderedBodies => {
-            let Outcome::Report(report) = outcome else {
-                panic!(
-                    "{mutation}: the run faulted; {} is Pending and connects today",
+            let report = match outcome {
+                Outcome::Report(report) => report,
+                Outcome::Fault(fault) => panic!(
+                    "{mutation}: the run faulted; {} is Pending and connects today: {fault}",
                     mutation.expected().as_str()
-                );
+                ),
             };
             assert_eq!(
                 report.refused,
@@ -266,29 +268,17 @@ fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
                 "{mutation}: the mutated block connected"
             );
         }
-        // The validator has no I7, so the double spend reaches `connect`,
-        // where SI-1 is the belt: the run halts. C2-R8's taxonomy — a belt
-        // firing is the validator's hole — observed, not accepted.
-        Mutation::DoubleSpend => {
-            let Outcome::Fault(fault) = outcome else {
-                panic!("{mutation}: expected the SI-1 halt while I7 is Pending");
-            };
-            assert!(
-                matches!(
-                    fault,
-                    PipelineFault::Connector(RunFault::Store(StoreError::InvariantViolated(
-                        StoreInvariant::KeyImageNotFresh
-                    )))
-                ),
-                "{mutation}: expected the SI-1 halt while I7 is Pending, got {fault}"
-            );
-        }
+        // `DoubleSpend` pinned the SI-1 halt while I7 was Pending (C2-R8's
+        // taxonomy — a belt firing is the validator's hole — observed, not
+        // accepted); E6 slice 6 commit 4 ported I7 and the pin was deleted
+        // with the hole. It refuses at its input now, like the six.
         Mutation::HeaderVersion
         | Mutation::Orphan
         | Mutation::WrongRoot
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
-        | Mutation::PowUnderWrongSeed => panic!(
+        | Mutation::PowUnderWrongSeed
+        | Mutation::DoubleSpend => panic!(
             "{mutation}: the census says {} is pending, and the family has no pin for a row \
              that was Implemented at the pin",
             mutation.expected().as_str()
@@ -538,7 +528,7 @@ fn a_candidate_that_cannot_carry_the_mutation_names_why() {
 }
 
 #[test]
-fn every_mutation_names_a_row_and_the_pending_ones_are_the_three_the_plan_lists() {
+fn every_mutation_names_a_row_and_the_pending_ones_are_the_two_the_plan_lists() {
     let pending: Vec<CenRow> = Mutation::ALL
         .iter()
         .map(|m| m.expected())
@@ -548,8 +538,10 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_the_three_the_plan_lists(
     // line and the family's pinned-gap arm both go red together — the plan's
     // table is then updated with the row, not the test loosened. (Slice 4
     // re-keyed WrongReward F13 → F18, Q8: F13 landed as a definition, and
-    // the predicate a wrong amount trips is F18, blocked on G6.)
-    assert_eq!(pending, vec![CenRow::F18, CenRow::G2, CenRow::I7]);
+    // the predicate a wrong amount trips is F18, blocked on G6. Slice 6
+    // commit 4 ported I7: `DoubleSpend` now refuses at its input, and the
+    // family's landing arm below holds it.)
+    assert_eq!(pending, vec![CenRow::F18, CenRow::G2]);
     for m in Mutation::ALL {
         assert!(
             m.to_string().contains(m.expected().as_str()),
