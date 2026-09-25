@@ -47,6 +47,7 @@
 #include <cassert>
 #include <map>
 #include <memory>
+#include <functional>
 #include <cstdint>
 #include <mutex>
 #include <condition_variable>
@@ -116,6 +117,16 @@ namespace net_utils
     int32_t (*write)(void* pipe, const uint8_t* data, size_t len);
     void (*detach)(void* pipe);
     void (*read_done)(void* pipe);
+  };
+
+  /// Callback context for a pipe-backed connection. The pipe thread holds this
+  /// object, never the last `shared_ptr` to the connection. `hold` runs after
+  /// the anchor is owned and before the connection is locked, so a test can
+  /// drop every connection reference while the callback is in flight.
+  struct network_pipe_ctx : std::enable_shared_from_this<network_pipe_ctx>
+  {
+    std::function<boost::shared_ptr<void>()> lock_owner;
+    void (*hold)() = nullptr;
   };
 
   /************************************************************************/
@@ -304,6 +315,7 @@ namespace net_utils
     /// Sends never fall through to the asio socket after that.
     bool m_network_fd_released{};
     void* m_network_pipe{};
+    std::shared_ptr<network_pipe_ctx> m_pipe_ctx;
     std::mutex m_network_pipe_mu;
     /// Release the asio descriptor into the pipe. False leaves the
     /// connection `WASTED` and unpublished. True when the pipe is off.

@@ -126,7 +126,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct Pipe {
     shared: Arc<Shared>,
     gate: Arc<Gate>,
-    killer: Mutex<Option<TcpStream>>,
+    stream: Arc<TcpStream>,
     reader: Mutex<Option<JoinHandle<()>>>,
     writer: Mutex<Option<JoinHandle<()>>>,
 }
@@ -140,9 +140,11 @@ impl Pipe {
         ctx: *mut std::ffi::c_void,
     ) -> Result<Arc<Self>, PipeError> {
         stream.set_nonblocking(false).map_err(|_| PipeError::Io)?;
-        let reader_stream = stream;
-        let writer_stream = reader_stream.try_clone().map_err(|_| PipeError::Io)?;
-        let killer = reader_stream.try_clone().map_err(|_| PipeError::Io)?;
+        // One descriptor. `Read`/`Write` exist for `&TcpStream`, so the
+        // reader and the writer share this `Arc` instead of cloned fds.
+        let stream = Arc::new(stream);
+        let reader_stream = Arc::clone(&stream);
+        let writer_stream = Arc::clone(&stream);
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             outbound: Mutex::new(Outbound {
@@ -205,7 +207,7 @@ impl Pipe {
         Ok(Arc::new(Self {
             shared,
             gate,
-            killer: Mutex::new(Some(killer)),
+            stream,
             reader: Mutex::new(Some(reader)),
             writer: Mutex::new(Some(writer)),
         }))
@@ -253,16 +255,22 @@ impl Pipe {
         self.shared.outbound_cv.notify_all();
         self.shared.window_cv.notify_all();
         self.gate.open();
-        if let Some(killer) = lock(&self.killer).take() {
-            let _ = killer.shutdown(Shutdown::Both);
-        }
-        if let Some(writer) = lock(&self.writer).take() {
-            let _ = writer.join();
-        }
-        if let Some(reader) = lock(&self.reader).take() {
-            let _ = reader.join();
-        }
+        let _ = self.stream.shutdown(Shutdown::Both);
+        join_unless_self(&self.writer);
+        join_unless_self(&self.reader);
     }
+}
+
+/// Joining the calling thread panics and aborts the process from `extern "C"`.
+/// Drop detaches that handle; the caller is already that thread and will exit.
+fn join_unless_self(slot: &Mutex<Option<JoinHandle<()>>>) {
+    let Some(handle) = lock(slot).take() else {
+        return;
+    };
+    if handle.thread().id() == std::thread::current().id() {
+        return;
+    }
+    let _ = handle.join();
 }
 
 impl Drop for Pipe {
@@ -278,7 +286,7 @@ struct Session {
 }
 
 fn read_loop(
-    mut stream: TcpStream,
+    stream: Arc<TcpStream>,
     network_id: NetworkId,
     initiator: bool,
     shared: Arc<Shared>,
@@ -291,7 +299,7 @@ fn read_loop(
     }
     let deadline = Instant::now() + HANDSHAKE_DEADLINE;
     let (send, mut recv) = match handshake(
-        &mut stream,
+        &stream,
         &network_id,
         initiator,
         deadline,
@@ -316,10 +324,16 @@ fn read_loop(
         if shared.stop.load(Ordering::Acquire) || !wait_window(&shared) {
             break;
         }
-        match pull_record(&mut recv, &mut stream, &mut inbound, |n| {
+        match pull_record(&mut recv, &stream, &mut inbound, |n| {
             note_wire(&session, 0, n);
         }) {
-            Ok(plain) => deliver(&shared, session.hooks.on_plain, session.ctx, &plain),
+            Ok(plain) => {
+                if !deliver(&shared, session.hooks.on_plain, session.ctx, &plain) {
+                    report_closed(&shared, session.hooks.on_closed, session.ctx);
+                    shared.stop.store(true, Ordering::Release);
+                    break;
+                }
+            }
             Err(_) => {
                 report_closed(&shared, session.hooks.on_closed, session.ctx);
                 break;
@@ -329,7 +343,7 @@ fn read_loop(
 }
 
 fn write_loop(
-    mut stream: TcpStream,
+    stream: Arc<TcpStream>,
     shared: Arc<Shared>,
     keys_rx: std::sync::mpsc::Receiver<SendHalf>,
     session: Session,
@@ -366,7 +380,7 @@ fn write_loop(
         if wire.is_empty() {
             continue;
         }
-        if stream.write_all(&wire).is_err() {
+        if (&*stream).write_all(&wire).is_err() {
             let _ = stream.shutdown(Shutdown::Both);
             break;
         }
@@ -403,7 +417,7 @@ fn wait_window(shared: &Shared) -> bool {
     !shared.stop.load(Ordering::Acquire)
 }
 
-fn deliver(shared: &Shared, on_plain: PlainCallback, ctx_bits: usize, plain: &[u8]) {
+fn deliver(shared: &Shared, on_plain: PlainCallback, ctx_bits: usize, plain: &[u8]) -> bool {
     lock(&shared.window).in_flight += 1;
     let rc = on_plain(
         ctx_bits as *mut std::ffi::c_void,
@@ -411,15 +425,19 @@ fn deliver(shared: &Shared, on_plain: PlainCallback, ctx_bits: usize, plain: &[u
         plain.len(),
     );
     if rc != 0 {
+        // A nonzero return means the session did not take the buffer.
+        // The reader stops; the caller reports closed once.
         let mut window = lock(&shared.window);
         window.in_flight = window.in_flight.saturating_sub(1);
-        shared.window_cv.notify_one();
+        shared.window_cv.notify_all();
+        return false;
     }
+    true
 }
 
 fn pull_record(
     recv: &mut RecvHalf,
-    stream: &mut TcpStream,
+    stream: &TcpStream,
     inbound: &mut Vec<u8>,
     mut on_read: impl FnMut(usize),
 ) -> Result<Vec<u8>, PipeError> {
@@ -431,7 +449,8 @@ fn pull_record(
                 return Ok(plain);
             }
             Err(crate::channel::RecordError::Truncated) => {
-                let n = stream.read(&mut tmp).map_err(|_| PipeError::Io)?;
+                let mut io = stream;
+                let n = io.read(&mut tmp).map_err(|_| PipeError::Io)?;
                 if n == 0 {
                     return Err(PipeError::Io);
                 }
@@ -444,7 +463,7 @@ fn pull_record(
 }
 
 pub(crate) fn handshake(
-    stream: &mut TcpStream,
+    stream: &TcpStream,
     network_id: &NetworkId,
     initiator: bool,
     deadline: Instant,
@@ -489,7 +508,7 @@ fn handshake_io(err: HandshakeError) -> PipeError {
 }
 
 fn read_prefix(
-    stream: &mut TcpStream,
+    stream: &TcpStream,
     network_id: &NetworkId,
     deadline: Instant,
     on_io: &mut dyn FnMut(i32, usize),
@@ -503,7 +522,7 @@ fn read_prefix(
 }
 
 fn read_exact(
-    stream: &mut TcpStream,
+    stream: &TcpStream,
     buf: &mut [u8],
     deadline: Instant,
     on_io: &mut dyn FnMut(i32, usize),
@@ -517,7 +536,8 @@ fn read_exact(
         stream
             .set_read_timeout(Some(left))
             .map_err(|_| PipeError::Io)?;
-        match stream.read(&mut buf[filled..]) {
+        let mut io = stream;
+        match io.read(&mut buf[filled..]) {
             Ok(0) => return Err(PipeError::Io),
             Ok(n) => {
                 on_io(0, n);
@@ -535,7 +555,7 @@ fn read_exact(
 }
 
 fn write_all_deadline(
-    stream: &mut TcpStream,
+    stream: &TcpStream,
     bytes: &[u8],
     deadline: Instant,
     on_io: &mut dyn FnMut(i32, usize),
@@ -549,7 +569,8 @@ fn write_all_deadline(
         stream
             .set_write_timeout(Some(left))
             .map_err(|_| PipeError::Io)?;
-        match stream.write(&bytes[sent..]) {
+        let mut io = stream;
+        match io.write(&bytes[sent..]) {
             Ok(0) => return Err(PipeError::Io),
             Ok(n) => {
                 on_io(1, n);
@@ -592,13 +613,13 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let dialer = std::thread::spawn(move || TcpStream::connect(("127.0.0.1", port)).unwrap());
-        let (mut server, _) = listener.accept().unwrap();
+        let (server, _) = listener.accept().unwrap();
         let mut client = dialer.join().unwrap();
         client.write_all(&[0xff; PREFIX_LEN]).unwrap();
         client.shutdown(Shutdown::Both).unwrap();
         assert!(matches!(
             handshake(
-                &mut server,
+                &server,
                 &[0x11; 16],
                 false,
                 Instant::now() + Duration::from_secs(2),
@@ -712,5 +733,214 @@ mod tests {
         pipe.shutdown();
         assert_eq!(received, b"COMMAND_HANDSHAKE-shaped-bytes");
         assert_eq!(echoed, b"COMMAND_HANDSHAKE-shaped-bytes");
+    }
+
+    #[cfg(target_os = "linux")]
+    fn descriptor_count() -> usize {
+        std::fs::read_dir("/proc/self/fd").unwrap().count()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn one_descriptor_per_connection() {
+        let before = descriptor_count();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (pipe_tx, pipe_rx) = channel();
+        let (done_tx, done_rx) = channel();
+        let dialer = std::thread::spawn(move || {
+            let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let sink = Sink {
+                got: Mutex::new(Vec::new()),
+                cv: Condvar::new(),
+                closed: AtomicBool::new(false),
+            };
+            let pipe = Pipe::attach(
+                stream,
+                &[0x56; 16],
+                true,
+                hooks(),
+                &sink as *const Sink as *mut _,
+            )
+            .unwrap();
+            pipe.start();
+            pipe_tx.send(pipe).unwrap();
+            let _ = done_rx.recv();
+        });
+        let (stream, _) = listener.accept().unwrap();
+        drop(listener);
+        let sink = Sink {
+            got: Mutex::new(Vec::new()),
+            cv: Condvar::new(),
+            closed: AtomicBool::new(false),
+        };
+        let pipe = Pipe::attach(
+            stream,
+            &[0x56; 16],
+            false,
+            hooks(),
+            &sink as *const Sink as *mut _,
+        )
+        .unwrap();
+        pipe.start();
+        let remote = pipe_rx.recv().unwrap();
+        assert_eq!(descriptor_count(), before + 2);
+        remote.shutdown();
+        pipe.shutdown();
+        let _ = done_tx.send(());
+        let _ = dialer.join();
+    }
+
+    struct Kill {
+        pipe: Mutex<Option<Arc<Pipe>>>,
+        plains: std::sync::atomic::AtomicUsize,
+        closed: AtomicBool,
+        cv: Condvar,
+    }
+
+    extern "C" fn kill_from_plain(ctx: *mut std::ffi::c_void, _: *const u8, _: usize) -> i32 {
+        let kill = unsafe { &*(ctx as *const Kill) };
+        kill.plains
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        if let Some(pipe) = lock(&kill.pipe).clone() {
+            pipe.shutdown();
+        }
+        0
+    }
+
+    extern "C" fn kill_from_closed(ctx: *mut std::ffi::c_void) {
+        let kill = unsafe { &*(ctx as *const Kill) };
+        if let Some(pipe) = lock(&kill.pipe).clone() {
+            pipe.shutdown();
+        }
+        kill.closed.store(true, Ordering::Release);
+        kill.cv.notify_one();
+    }
+
+    #[test]
+    fn shutdown_from_the_reader_does_not_abort() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dialer = std::thread::spawn(move || {
+            let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let sink = Sink {
+                got: Mutex::new(Vec::new()),
+                cv: Condvar::new(),
+                closed: AtomicBool::new(false),
+            };
+            let pipe = Pipe::attach(
+                stream,
+                &[0x57; 16],
+                true,
+                hooks(),
+                &sink as *const Sink as *mut _,
+            )
+            .unwrap();
+            pipe.start();
+            pipe.write(b"stop-on-plain").unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            pipe.shutdown();
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let kill = Kill {
+            pipe: Mutex::new(None),
+            plains: std::sync::atomic::AtomicUsize::new(0),
+            closed: AtomicBool::new(false),
+            cv: Condvar::new(),
+        };
+        let pipe = Pipe::attach(
+            stream,
+            &[0x57; 16],
+            false,
+            PipeHooks {
+                on_plain: kill_from_plain,
+                on_closed: kill_from_closed,
+                on_ready,
+                on_wire,
+            },
+            &kill as *const Kill as *mut _,
+        )
+        .unwrap();
+        *lock(&kill.pipe) = Some(Arc::clone(&pipe));
+        pipe.start();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while kill.plains.load(std::sync::atomic::Ordering::Acquire) == 0
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(kill.plains.load(std::sync::atomic::Ordering::Acquire) >= 1);
+        pipe.shutdown();
+        dialer.join().unwrap();
+    }
+
+    extern "C" fn refuse_plain(ctx: *mut std::ffi::c_void, _: *const u8, _: usize) -> i32 {
+        let kill = unsafe { &*(ctx as *const Kill) };
+        kill.plains
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        1
+    }
+
+    extern "C" fn note_closed(ctx: *mut std::ffi::c_void) {
+        let kill = unsafe { &*(ctx as *const Kill) };
+        kill.closed.store(true, Ordering::Release);
+        kill.cv.notify_one();
+    }
+
+    #[test]
+    fn nonzero_plain_closes_the_reader() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dialer = std::thread::spawn(move || {
+            let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let sink = Sink {
+                got: Mutex::new(Vec::new()),
+                cv: Condvar::new(),
+                closed: AtomicBool::new(false),
+            };
+            let pipe = Pipe::attach(
+                stream,
+                &[0x58; 16],
+                true,
+                hooks(),
+                &sink as *const Sink as *mut _,
+            )
+            .unwrap();
+            pipe.start();
+            pipe.write(b"first").unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            let _ = pipe.write(b"second");
+            std::thread::sleep(Duration::from_millis(150));
+            pipe.shutdown();
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let kill = Kill {
+            pipe: Mutex::new(None),
+            plains: std::sync::atomic::AtomicUsize::new(0),
+            closed: AtomicBool::new(false),
+            cv: Condvar::new(),
+        };
+        let pipe = Pipe::attach(
+            stream,
+            &[0x58; 16],
+            false,
+            PipeHooks {
+                on_plain: refuse_plain,
+                on_closed: note_closed,
+                on_ready,
+                on_wire,
+            },
+            &kill as *const Kill as *mut _,
+        )
+        .unwrap();
+        pipe.start();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !kill.closed.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(kill.closed.load(Ordering::Acquire));
+        assert_eq!(kill.plains.load(std::sync::atomic::Ordering::Acquire), 1);
+        pipe.shutdown();
+        dialer.join().unwrap();
     }
 }

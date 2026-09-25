@@ -4013,8 +4013,9 @@ void shekyl_e2_trace_abort(struct ShekylE2TraceWriter* writer);
 /// until `shekyl_clearnet_start`, so the caller can publish `link` first.
 /// `initiator` is nonzero when this node dialed. Null means the socket was
 /// closed and the pipe was not created. `on_plain` returns 0 when the
-/// session will call `shekyl_clearnet_read_done`, and nonzero when it did not
-/// take the buffer.
+/// session will call `shekyl_clearnet_read_done`. Nonzero means the buffer
+/// was not taken: the pipe closes, `on_closed` runs, and no further
+/// `on_plain` is delivered.
 void* shekyl_clearnet_attach(
     intptr_t native,
     const uint8_t* network_id,

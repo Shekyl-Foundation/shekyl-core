@@ -1056,6 +1056,13 @@ namespace net_utils
       return false;
     }
     m_network_fd_released = true;
+    m_pipe_ctx = std::make_shared<network_pipe_ctx>();
+    {
+      boost::weak_ptr<connection> weak(this->shared_from_this());
+      m_pipe_ctx->lock_owner = [weak]() -> boost::shared_ptr<void> {
+        return weak.lock();
+      };
+    }
     void* pipe = ops->attach(
       static_cast<intptr_t>(native),
       cfg.network_pipe_network_id,
@@ -1064,7 +1071,7 @@ namespace net_utils
       &connection::network_pipe_on_closed,
       &connection::network_pipe_on_ready,
       &connection::network_pipe_on_wire,
-      this);
+      m_pipe_ctx.get());
     if (!pipe)
     {
       fail_unstarted();
@@ -1116,18 +1123,34 @@ namespace net_utils
   }
 
   template<typename T>
-  int32_t connection<T>::network_pipe_on_plain(void* ctx, const uint8_t* data, size_t len)
+  static boost::shared_ptr<connection<T>> lock_network_pipe_ctx(void* raw)
   {
-    auto* self = static_cast<connection*>(ctx);
-    boost::shared_ptr<connection> keep;
+    if (!raw)
+      return {};
+    auto* ctx = static_cast<network_pipe_ctx*>(raw);
+    std::shared_ptr<network_pipe_ctx> anchor;
     try
     {
-      keep = self->shared_from_this();
+      anchor = ctx->shared_from_this();
     }
     catch (...)
     {
-      return -1;
+      return {};
     }
+    if (anchor->hold)
+      anchor->hold();
+    if (!anchor->lock_owner)
+      return {};
+    return boost::static_pointer_cast<connection<T>>(anchor->lock_owner());
+  }
+
+  template<typename T>
+  int32_t connection<T>::network_pipe_on_plain(void* ctx, const uint8_t* data, size_t len)
+  {
+    auto keep = lock_network_pipe_ctx<T>(ctx);
+    if (!keep)
+      return -1;
+    auto* self = keep.get();
     if (!data && len != 0)
       return -1;
     std::vector<uint8_t> copy(data, data + len);
@@ -1159,17 +1182,10 @@ namespace net_utils
   template<typename T>
   void connection<T>::network_pipe_on_ready(void* ctx)
   {
-    auto* self = static_cast<connection*>(ctx);
-    boost::shared_ptr<connection> keep;
-    try
-    {
-      keep = self->shared_from_this();
-    }
-    catch (...)
-    {
+    auto keep = lock_network_pipe_ctx<T>(ctx);
+    if (!keep)
       return;
-    }
-    boost::asio::post(self->strand_, [keep] {
+    boost::asio::post(keep->strand_, [keep] {
       std::lock_guard<std::mutex> guard(keep->m_state.lock);
       if (keep->m_state.status == status_t::RUNNING)
         keep->start_timer(keep->get_default_timeout());
@@ -1179,18 +1195,10 @@ namespace net_utils
   template<typename T>
   int32_t connection<T>::network_pipe_on_wire(void* ctx, int32_t direction, size_t bytes)
   {
-    auto* self = static_cast<connection*>(ctx);
-    if (!self || bytes == 0)
+    auto keep = lock_network_pipe_ctx<T>(ctx);
+    if (!keep || bytes == 0)
       return 0;
-    boost::shared_ptr<connection> keep;
-    try
-    {
-      keep = self->shared_from_this();
-    }
-    catch (...)
-    {
-      return 0;
-    }
+    auto* self = keep.get();
     int32_t sleep_ms = 0;
     if (self->speed_limit_is_enabled())
     {
@@ -1246,17 +1254,10 @@ namespace net_utils
   template<typename T>
   void connection<T>::network_pipe_on_closed(void* ctx)
   {
-    auto* self = static_cast<connection*>(ctx);
-    boost::shared_ptr<connection> keep;
-    try
-    {
-      keep = self->shared_from_this();
-    }
-    catch (...)
-    {
+    auto keep = lock_network_pipe_ctx<T>(ctx);
+    if (!keep)
       return;
-    }
-    boost::asio::post(self->strand_, [keep] {
+    boost::asio::post(keep->strand_, [keep] {
       std::lock_guard<std::mutex> guard(keep->m_state.lock);
       if (keep->m_state.status == status_t::RUNNING)
         keep->interrupt();

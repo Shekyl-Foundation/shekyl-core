@@ -38,6 +38,7 @@
 #include <chrono>
 #include <functional>
 #include <optional>
+#include <atomic>
 #include <thread>
 #ifndef _WIN32
 #include <unistd.h>
@@ -874,4 +875,84 @@ TEST(boosted_tcp_server, network_pipe_attach_failure_does_not_start)
   srv.send_stop_signal();
   srv.timed_wait_server_stop(5 * 1000);
   srv.deinit_server();
+}
+
+namespace
+{
+  std::atomic<int> g_pipe_hold{0};
+  int32_t (*g_plain)(void*, const uint8_t*, size_t) = nullptr;
+  void* g_ctx = nullptr;
+  std::atomic<int32_t> g_plain_rc{0};
+
+  void pipe_hold_gate()
+  {
+    g_pipe_hold.store(1);
+    while (g_pipe_hold.load() == 1)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  void* drop_attach(
+    intptr_t native, const uint8_t*, int32_t,
+    int32_t (*on_plain)(void*, const uint8_t*, size_t),
+    void (*)(void*), void (*)(void*),
+    int32_t (*)(void*, int32_t, size_t), void* ctx)
+  {
+    g_plain = on_plain;
+    g_ctx = ctx;
+    static_cast<epee::net_utils::network_pipe_ctx*>(ctx)->hold = &pipe_hold_gate;
+    probe().fd = native;
+    return &g_pipe_hold;
+  }
+
+  void drop_start(void*) {}
+  void drop_pin(void*) {}
+  void drop_unpin(void*) {}
+  int32_t drop_write(void*, const uint8_t*, size_t) { return 0; }
+  void drop_read_done(void*) {}
+  void drop_detach(void*)
+  {
+    close_native(probe().fd);
+    probe().fd = -1;
+  }
+}
+
+TEST(boosted_tcp_server, network_pipe_callback_drops_last_owner)
+{
+  test_tcp_server srv(epee::net_utils::e_connection_type_RPC);
+  uint8_t network_id[16] = {};
+  static const epee::net_utils::network_pipe_ops ops = {
+    &drop_attach, &drop_start, &drop_pin, &drop_unpin,
+    &drop_write, &drop_detach, &drop_read_done,
+  };
+  srv.set_network_pipe(network_id, &ops);
+  ASSERT_TRUE(srv.init_server(
+    0, "127.0.0.1", 0, "::", false, true,
+    epee::net_utils::ssl_support_t::e_ssl_support_disabled));
+  ASSERT_TRUE(srv.run_server(1, false));
+  g_pipe_hold.store(0);
+  g_ctx = nullptr;
+  const auto port = static_cast<unsigned short>(srv.get_binded_port());
+  boost::asio::io_context client_io;
+  boost::asio::ip::tcp::socket client(client_io);
+  client.connect(boost::asio::ip::tcp::endpoint(
+    boost::asio::ip::make_address("127.0.0.1"), port));
+  for (int i = 0; i < 100 && !g_ctx; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  ASSERT_NE(g_ctx, nullptr);
+
+  std::thread callback([&] {
+    g_plain_rc.store(g_plain(g_ctx, nullptr, 0));
+  });
+  for (int i = 0; i < 100 && g_pipe_hold.load() != 1; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  ASSERT_EQ(g_pipe_hold.load(), 1);
+
+  client.close();
+  srv.send_stop_signal();
+  srv.timed_wait_server_stop(5 * 1000);
+  srv.deinit_server();
+
+  g_pipe_hold.store(2);
+  callback.join();
+  EXPECT_EQ(g_plain_rc.load(), -1);
 }
