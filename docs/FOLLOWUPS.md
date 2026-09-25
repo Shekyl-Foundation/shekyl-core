@@ -14,6 +14,10 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **Delete the clearnet pipe scaffolding at transport cutover.** `pipe.rs`, the descriptor-handoff FFI, and epee's `network_pipe_ops` are the interim host. The transport layer replaces them; they are not a test host for the option. The deletion set is D13 of the transport-layer design.
+  - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
+  - Target: pre-genesis
+
 - **`claim.rs:157` logs per-epoch `AlreadyClaimed` skips at `debug`, which correlates a persona against the public bond record.**
   - Owner: [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md) §5.3
   - Target: pre-genesis
