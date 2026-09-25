@@ -485,7 +485,7 @@ chain-store, 32 + 7 `shekyl-types`, 207 chain-rules; every `scripts/ci`
 gate green at the mechanism commit; the review fix re-ran the store
 and types libs (355, 32), and the round-3 fix (the floor cell arms the
 latch; `journal_horizon_under`) re-ran chain-store and chain-rules
-(**356** + 14, **208**).
+(**357** + 14, **208**).
 
 **What stays E4's / E5's / S-ARCH's**, unchanged by this build: the
 journals' retirement at `journal_horizon` (S-ARCH's writers, when they

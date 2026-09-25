@@ -37,7 +37,7 @@ storage-id total, `open_read_only` takes a checked `Horizons`) re-ran
 `cargo test -p shekyl-chain-store -p shekyl-types --lib --tests`: **355**
 and **32**; the round-3 fix (undecodable `undo_log_floor` is SI-7 through
 the latch; `journal_horizon_under`) re-ran chain-store and chain-rules:
-**356** + 14, **208**. `SCHEMA_VERSION = 14`;
+**357** + 14, **208**. `SCHEMA_VERSION = 14`;
 `schemas/properties.snap` 8 cells (+ `undo_log_floor`); `tables.snap`
 unchanged at 46; `check_redb_schema_bijection.py` / `check_redb_schema_key_types.py`
 unchanged (46 / 24); `check_store_invariant_register.py` 16 rows, 14 ↔ 14;
