@@ -33,7 +33,7 @@ one of these rules, stop and ask the human first.
    and 141-commit dev drift before being merged, and the merge itself
    became a multi-day project. Do not recreate this pattern.
 
-3. **Don't continuously merge `dev` into a feature branch to "keep it current".**
+3. **Never continuously merge `dev` into a feature branch to "keep it current".**
    This is the failure pattern that produces orphaned branches. If a
    feature branch is falling behind dev, the answer is to land it on dev
    sooner, not to repeatedly merge dev into it. If the branch isn't ready
