@@ -441,6 +441,18 @@ lands (§10).
   two tables, no exclusion test. One row means one test: a write through
   AL1 (with a witness) must move no digest, the `txpool` exclusion test's
   shape. The increment writes it (§7 commit 2) and closes the item.
+  **Enforcement was not the fold's purpose.** The row was chosen for
+  `SAL-Q2`'s reasons — one logical thing, pairings unrepresentable — and the
+  test exists because the boundary *became testable*, not because someone
+  set out to close an audit row; a reader who finds the test later should
+  read it that way. **What travels to E4, as one item, not two:** (a) the
+  witness's non-canonical classification is a **dated conditional** — it
+  holds "because the domain argument is the one that holds today" and
+  *expires* when S-ARCH's apply path ports, at which point the §7.1.1 KAT
+  obligation is live; and (b) the route that obligation is exercised
+  through is **AL1 → AL4 → the height-keyed row**, not a table of its own.
+  Carried together (§10) so E4 does not inherit a table that looks settled
+  and a route nobody described.
 
 ### 6.1 Reproduced deviations on this surface (DRS §7.6 item 1)
 
@@ -521,6 +533,13 @@ Nothing that was accepted becomes refused, or the reverse.
 - **Carried to E5's plan when it is written:** SAL-14's deletion row for
   `rollback_blockchain_switching` with its falsifier, and SAL-13's demotion
   sequence.
+- **Carried to E4's plan (the archival write half) as one item:** the
+  witness's non-canonical classification is a dated conditional that
+  expires when the apply path ports (§7.1.1's KAT obligation goes live),
+  **and** the route the KAT exercises is AL1 → AL4 → the height-keyed row
+  (SAL-15). Neither half alone: the first without the second is a table
+  that looks settled; the second without the first is a route with no
+  reason to run it.
 - `CHANGELOG.md`: one Unreleased line if the layout bump is judged
   user-visible (a store re-create at 12 → 13 is, pre-genesis, `rm -rf`).
 - This file: `Status` → LANDED with the as-built row in §11.
