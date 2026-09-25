@@ -3371,13 +3371,14 @@ the framing.
 
 **Post-`Split` record framing. Direction RULED 2026-09-25**
 (transport-layer design, D14 item 4). Fixed-window framing is the
-wire. The window size is derived from C9's measured size distribution.
-Until that measurement, the option keeps the BOLT-8 framing pinned
-2026-09-24, quoted below as the interim, not as the target. PWD-T8
-vectors are re-minted when the window size is derived. Rekey is every
-record if C5's Pi-4 benchmark shows three HMAC-BLAKE2s per record are
-affordable beside seal cost; otherwise the interval is derived from
-C9's measured record rates. Fixed windows spend one nonce per record.
+wire. The window size is derived from the measured distribution of
+record sizes. Until that measurement, the option keeps the BOLT-8
+framing pinned 2026-09-24, quoted below as the interim, not as the
+target. PWD-T8 vectors are re-minted when the window size is derived.
+Rekey is every record if the Pi-4 benchmark shows three HMAC-BLAKE2s
+per record are affordable beside seal cost; otherwise the interval is
+derived from the measured record rates. Fixed windows spend one nonce
+per record.
 
 **Interim, pinned 2026-09-24, BOLT-8, in force only while the option
 is off the fixed window.** Each direction seals one
