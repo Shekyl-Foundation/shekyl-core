@@ -6,8 +6,11 @@ holds one list deadline. PWD-B2 leaves the interim tick first. Nothing
 here is a number. Periods belong to their owners. **Rule 26 is cited
 explicitly.** This document mints no identifier family. The register
 row is P2P-3's **TE**. The design is closed. The pre-flight is
-discharged at `dev` `78eef562d`. The engine core is the next code.
-The C++ bridge waits until after the transport cutover.
+discharged at `dev` `78eef562d`. The engine core is
+`shekyl-timing-engine`: wake hints, an earlier-only arm, one outstanding
+wake per owner, and lateness per class. The engine service and the C++
+bridge are not in that crate. The bridge waits until after the transport
+cutover.
 
 Pinned to `fix/p2p-transport-hmac-oracle` `55d7b2b16`. Line numbers
 were read there. Opening the round still discharges D6's third
@@ -19,8 +22,8 @@ merge). Substrate re-read: `levin_notify.cpp:495` and `:895`,
 now `driver/mod.rs:158`; the design had cited `:149`. It is still
 derived on every call and not cached. No other cited site moved. The
 closed design names no bench and no numeric budget, so there was no
-artifact to run. No redesign. The core may be written. The C++ bridge
-still waits.
+artifact to run. No redesign. The core may be written. It has since
+been written, as `shekyl-timing-engine`. The C++ bridge still waits.
 
 ---
 
@@ -113,7 +116,11 @@ The owner reports a new `next_wake` only when the earliest deadline
 moves earlier. A deadline that moves later is not reported. The owner
 is woken at the old time, which is harmless because it checks `now`,
 and it re-arms then. Idle and gap timers, which move later on every
-byte, do not re-arm the engine on each byte.
+byte, do not re-arm the engine on each byte. The core holds the same
+rule: `arm` at a deadline that is not strictly earlier than the one
+already stored is a no-op and returns the current generation. An owner
+that is not armed, because it fired or was cleared, takes the new
+deadline as its first hint.
 
 An early or spurious wake is harmless, because the owner checks `now`.
 Waking late is the failure. Lateness has two parts, both measured: the
@@ -140,7 +147,15 @@ ordered by time and wakes only the earliest. A superseded hint is
 discarded by a generation number, not by a search. Cost per re-arm is
 logarithmic in the number of owners. Nothing on the tick is linear in
 that number. A loop over every owner would rebuild `idle_worker`'s
-one-second poll inside the new engine.
+one-second poll inside the new engine. The count of armed owners is
+updated as owners arm, fire, clear, and deregister, so stale hints are
+heap length minus that count. The heap is rebuilt when stale hints
+outnumber live ones: at most one rebuild per doubling.
+
+Equal deadlines fire in owner-id order, oldest owner first. The order
+is fixed so virtual-time tests and relay conformance are deterministic.
+Nanosecond ticks and jittered draws make a tie rare. Older owners are
+served first when one happens. Fairness must not depend on that order.
 
 A timer exists only when an action must happen and no event will cause
 it. Ban entries, the 24-hour demotion's correctness, and the
@@ -214,12 +229,27 @@ cargo feature. `shekyl-ffi`'s features merge into the production build,
 so a feature-gated test clock would ship. Virtual time lets relay
 conformance and the transport timeouts run deterministically.
 
+A `Tick` is nanoseconds since the clock's origin. `ManualClock` is the
+test clock. `MonotonicClock` is the production clock: `std::time::Instant`,
+origin at construction. On Linux that instant is `CLOCK_MONOTONIC`, which
+does not advance while the system is suspended, so a deadline is not late
+by the time the machine spent suspended. The transport layer and the C++
+bridge use this clock. They do not keep their own.
+
 ### 9. Lateness is an output
 
 Every fire records two delays, per owner class: how late the wake was
-delivered, and how long it then waited in the owner's home queue. That
-is the input to the step-7 lateness measurement and to D5's budgets. It
-is exposed to the operator over RPC, never to a peer.
+delivered, and how long it then waited in the owner's home queue. Each
+class keeps the sum, the maximum, and a 64-bucket power-of-two histogram,
+so the tail — how often a wake is late by at least a power-of-two
+threshold — is a bucket sum. That is the input to the step-7 lateness
+measurement and to D5's budgets. It is exposed to the operator over RPC,
+never to a peer.
+
+An owner has at most one outstanding wake. A later fire before the home
+reports replaces that wake, and the replacement is its own lateness
+count. The pending set is one slot per owner. Deregistering removes that
+slot. A slow home cannot pile up wakes for the same owner.
 
 ---
 
@@ -245,13 +275,32 @@ that path twice. The engine therefore lands in two pieces. D6's order
 is unchanged: the transport cutover still precedes the deletion of the
 interim executor.
 
-1. **The engine core, first.** A small Rust crate. The owner trait
-   (`next_wake`, `poll`), the time-ordered wake set with generation
-   numbers, delivery of a wake to the owner's home, the injected
-   monotonic clock, and lateness recording. It is tested in virtual
-   time. The transport layer uses it from its first line. The pre-flight
-at `dev` `78eef562d` is that gate.
+1. **The engine core, landed as `shekyl-timing-engine`.** Wake hints
+   ordered by time and dropped by generation. An owner reports a new
+   deadline by calling `arm`, and only when that deadline is earlier
+   than the one stored. The engine's `poll` hands due wakes back; the
+   owner polls itself at home. There is no owner trait in this crate,
+   because the engine does not call the owner. The clock is injected.
+   Lateness is a per-class histogram, and each owner has one outstanding
+   wake. Tested in virtual time against a list scanned in full. The
+   transport layer uses it from its first line. The pre-flight at `dev`
+   `78eef562d` was the gate before this crate.
 2. **The C++ bridge, after the transport cutover.** Invoke-timeout
    arming, the interim idle cadences on the blocking pool, moving the
    relay `Driver`'s sleep off asio, and deleting the `io_context`.
    That is the replacement D6 already ruled.
+
+## The engine service — next, not in the core
+
+The crate above is the data structure. The ruled design also needs a
+service around it, written down before the transport layer consumes it.
+This is not a new round.
+
+- A mailbox in. `arm`, `clear`, and `deregister` arrive from owners'
+  homes on other threads.
+- One thread. It sleeps until the earlier of `next_deadline()` and the
+  next mailbox message.
+- Delivery out that never blocks. Each wake goes to its owner's home,
+  one outstanding per owner.
+- Shutdown follows ruling 6. The closed state is step 1. Invoke aborts
+  are the bridge, not this service's data structure.

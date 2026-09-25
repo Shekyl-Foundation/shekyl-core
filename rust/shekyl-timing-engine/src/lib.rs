@@ -8,19 +8,23 @@
 //! An owner lives somewhere else and polls itself there. This crate stores
 //! wake hints ordered by time, and hands back the ones that are due. A newer
 //! arming drops the older one by generation. The clock is passed in.
+//!
+//! A [`Tick`] is nanoseconds since the clock's origin. [`MonotonicClock`] is
+//! the production clock. [`ManualClock`] is the one tests move by hand.
 
 #![deny(unsafe_code)]
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
+use std::time::Instant;
 
-/// A monotonic instant. The unit belongs to the clock that minted it.
+/// Nanoseconds since the clock's origin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tick(u64);
 
 impl Tick {
-    pub const fn new(ticks: u64) -> Self {
-        Self(ticks)
+    pub const fn new(nanos: u64) -> Self {
+        Self(nanos)
     }
 
     pub const fn get(self) -> u64 {
@@ -59,6 +63,37 @@ impl Clock for ManualClock {
     }
 }
 
+/// Production clock. The origin is the moment of construction.
+///
+/// `Instant` on Linux is `CLOCK_MONOTONIC`. That clock does not advance
+/// while the system is suspended, so a deadline is not late by the time
+/// the machine spent suspended.
+#[derive(Clone, Debug)]
+pub struct MonotonicClock {
+    origin: Instant,
+}
+
+impl MonotonicClock {
+    pub fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+        }
+    }
+}
+
+impl Default for MonotonicClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clock for MonotonicClock {
+    fn now(&self) -> Tick {
+        let nanos = self.origin.elapsed().as_nanos();
+        Tick(u64::try_from(nanos).unwrap_or(u64::MAX))
+    }
+}
+
 /// Why an owner exists. Lateness is kept per class, not per fire.
 ///
 /// Housekeeping is the only class that may later take timer slack.
@@ -87,6 +122,19 @@ impl OwnerClass {
             Self::Interim => 6,
         }
     }
+
+    #[cfg(test)]
+    fn from_index(index: u8) -> Self {
+        match index % 7 {
+            0 => Self::Relay,
+            1 => Self::Transport,
+            2 => Self::TimedSync,
+            3 => Self::Peerlist,
+            4 => Self::Discovery,
+            5 => Self::Housekeeping,
+            _ => Self::Interim,
+        }
+    }
 }
 
 /// One owner. Minted by [`Engine::register`].
@@ -104,6 +152,9 @@ impl Generation {
 }
 
 /// A due hint, for the caller to deliver to the owner's home.
+///
+/// When several owners are due at the same [`Tick`], the lower [`OwnerId`]
+/// comes first. That order is fixed. It is not a fairness policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Wake {
     pub owner: OwnerId,
@@ -113,13 +164,90 @@ pub struct Wake {
     pub fired_at: Tick,
 }
 
-/// Lateness for one [`OwnerClass`], summed across fires.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// How many power-of-two buckets each lateness histogram has.
+///
+/// Bucket 0 counts a delay of exactly 0. Bucket `k` for `k` in `1..=62`
+/// counts delays in `[2^(k-1), 2^k)`. Bucket 63 counts delays of at least
+/// `2^62` nanoseconds. A tail summed from a power-of-two threshold is exact.
+pub const LATENESS_BUCKETS: usize = 64;
+
+/// Which histogram bucket holds `delay`. See [`LATENESS_BUCKETS`].
+#[must_use]
+pub fn lateness_bucket(delay: u64) -> usize {
+    if delay == 0 {
+        0
+    } else {
+        usize::try_from(delay.ilog2())
+            .unwrap_or(LATENESS_BUCKETS - 1)
+            .saturating_add(1)
+            .min(LATENESS_BUCKETS - 1)
+    }
+}
+
+/// Lateness for one [`OwnerClass`].
+///
+/// The sums give the mean. The buckets and the maximum give the tail:
+/// how often a wake was late by at least a power-of-two threshold.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClassLateness {
     pub fires: u64,
     pub wake_delay: u64,
+    pub max_wake_delay: u64,
+    pub wake_buckets: [u64; LATENESS_BUCKETS],
     pub home_reports: u64,
     pub home_delay: u64,
+    pub max_home_delay: u64,
+    pub home_buckets: [u64; LATENESS_BUCKETS],
+    /// A new wake replaced one whose home had not reported.
+    pub replaced_wakes: u64,
+}
+
+impl Default for ClassLateness {
+    fn default() -> Self {
+        Self {
+            fires: 0,
+            wake_delay: 0,
+            max_wake_delay: 0,
+            wake_buckets: [0; LATENESS_BUCKETS],
+            home_reports: 0,
+            home_delay: 0,
+            max_home_delay: 0,
+            home_buckets: [0; LATENESS_BUCKETS],
+            replaced_wakes: 0,
+        }
+    }
+}
+
+impl ClassLateness {
+    /// Fires whose bucket starts at or above `delay`.
+    ///
+    /// Exact when `delay` is 0 or a power of two. A threshold inside a
+    /// bucket also counts the smaller delays that share that bucket.
+    #[must_use]
+    pub fn wakes_at_least(&self, delay: u64) -> u64 {
+        tail(&self.wake_buckets, delay)
+    }
+
+    /// Home reports whose bucket starts at or above `delay`. Same rule as
+    /// [`Self::wakes_at_least`].
+    #[must_use]
+    pub fn homes_at_least(&self, delay: u64) -> u64 {
+        tail(&self.home_buckets, delay)
+    }
+}
+
+fn tail(buckets: &[u64; LATENESS_BUCKETS], delay: u64) -> u64 {
+    buckets[lateness_bucket(delay)..]
+        .iter()
+        .copied()
+        .fold(0, u64::saturating_add)
+}
+
+fn record_sample(sum: &mut u64, max: &mut u64, buckets: &mut [u64; LATENESS_BUCKETS], delay: u64) {
+    *sum = sum.saturating_add(delay);
+    *max = (*max).max(delay);
+    let index = lateness_bucket(delay);
+    buckets[index] = buckets[index].saturating_add(1);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +256,7 @@ pub enum EngineError {
     Closed,
     /// `polled_at` is before the wake was handed out.
     HomeBeforeFire,
-    /// No handed-out wake matches this owner and generation.
+    /// No outstanding wake matches this owner and generation.
     NoSuchWake,
 }
 
@@ -157,11 +285,15 @@ impl PartialOrd for Hint {
 struct Owner {
     class: OwnerClass,
     generation: u64,
-    armed: bool,
+    /// The live hint, if this owner is armed.
+    deadline: Option<Tick>,
+    /// The one wake whose home has not reported.
+    pending: Option<PendingHome>,
 }
 
+#[derive(Clone, Copy)]
 struct PendingHome {
-    class: OwnerClass,
+    generation: u64,
     fired_at: Tick,
 }
 
@@ -170,9 +302,12 @@ pub struct Engine<C: Clock> {
     clock: C,
     next_id: u64,
     closed: bool,
+    /// Owners whose `deadline` is `Some`. Maintained, never scanned.
+    live: usize,
+    /// Owners with an outstanding home report.
+    pending_count: usize,
     owners: HashMap<OwnerId, Owner>,
     heap: BinaryHeap<Reverse<Hint>>,
-    pending: HashMap<(OwnerId, u64), PendingHome>,
     by_class: [ClassLateness; CLASS_COUNT],
 }
 
@@ -182,10 +317,11 @@ impl<C: Clock> Engine<C> {
             clock,
             next_id: 1,
             closed: false,
+            live: 0,
+            pending_count: 0,
             owners: HashMap::new(),
             heap: BinaryHeap::new(),
-            pending: HashMap::new(),
-            by_class: [ClassLateness::default(); CLASS_COUNT],
+            by_class: std::array::from_fn(|_| ClassLateness::default()),
         }
     }
 
@@ -208,28 +344,55 @@ impl<C: Clock> Engine<C> {
             Owner {
                 class,
                 generation: 0,
-                armed: false,
+                deadline: None,
+                pending: None,
             },
         );
         Ok(id)
     }
 
-    /// Forget an owner. Hints still in the heap are dropped when they reach the front.
+    /// Forget an owner. Its one outstanding wake goes with it. Hints still
+    /// in the heap are dropped when they reach the front.
     pub fn deregister(&mut self, owner: OwnerId) -> Result<(), EngineError> {
-        if self.owners.remove(&owner).is_none() {
+        let Some(removed) = self.owners.remove(&owner) else {
             return Err(EngineError::UnknownOwner);
+        };
+        if removed.deadline.is_some() {
+            self.live -= 1;
         }
-        self.pending.retain(|(id, _), _| *id != owner);
+        if removed.pending.is_some() {
+            self.pending_count -= 1;
+        }
         self.compact_if_stale();
         Ok(())
     }
 
-    /// Replace this owner's hint. Call only when the owner's earliest deadline moves earlier.
+    /// Arm `deadline`.
+    ///
+    /// If this owner is already armed at `deadline` or earlier, this is a
+    /// no-op and returns the current generation. A later deadline is not a
+    /// new hint. An owner that is not armed (it fired, or it was cleared)
+    /// takes `deadline` as its first hint.
     pub fn arm(&mut self, owner: OwnerId, deadline: Tick) -> Result<Generation, EngineError> {
         if self.closed {
             return Err(EngineError::Closed);
         }
-        let generation = self.bump(owner)?;
+        let slot = self
+            .owners
+            .get_mut(&owner)
+            .ok_or(EngineError::UnknownOwner)?;
+        if let Some(current) = slot.deadline {
+            if deadline >= current {
+                return Ok(Generation(slot.generation));
+            }
+        }
+        let was_armed = slot.deadline.is_some();
+        slot.generation = slot.generation.saturating_add(1);
+        let generation = slot.generation;
+        slot.deadline = Some(deadline);
+        if !was_armed {
+            self.live += 1;
+        }
         self.heap.push(Reverse(Hint {
             when: deadline,
             owner,
@@ -244,10 +407,16 @@ impl<C: Clock> Engine<C> {
         if self.closed {
             return Err(EngineError::Closed);
         }
-        self.bump(owner)?;
-        if let Some(slot) = self.owners.get_mut(&owner) {
-            slot.armed = false;
+        let slot = self
+            .owners
+            .get_mut(&owner)
+            .ok_or(EngineError::UnknownOwner)?;
+        if slot.deadline.is_none() {
+            return Ok(());
         }
+        slot.generation = slot.generation.saturating_add(1);
+        slot.deadline = None;
+        self.live -= 1;
         self.compact_if_stale();
         Ok(())
     }
@@ -256,9 +425,11 @@ impl<C: Clock> Engine<C> {
     pub fn close(&mut self) {
         self.closed = true;
         self.heap.clear();
-        self.pending.clear();
+        self.live = 0;
+        self.pending_count = 0;
         for owner in self.owners.values_mut() {
-            owner.armed = false;
+            owner.deadline = None;
+            owner.pending = None;
         }
     }
 
@@ -273,7 +444,11 @@ impl<C: Clock> Engine<C> {
         self.heap.peek().map(|Reverse(hint)| hint.when)
     }
 
-    /// Hand back every live hint that is due. Stale hints are discarded only at the front.
+    /// Hand back every live hint that is due.
+    ///
+    /// Equal deadlines come out in [`OwnerId`] order, oldest first. An owner
+    /// has one outstanding wake: a new one replaces an unreported one, and
+    /// that replacement is counted on the owner's class.
     pub fn poll(&mut self) -> Vec<Wake> {
         if self.closed {
             return Vec::new();
@@ -288,21 +463,32 @@ impl<C: Clock> Engine<C> {
             let Some(owner) = self.owners.get_mut(&hint.owner) else {
                 continue;
             };
-            if owner.generation != hint.generation {
+            if owner.deadline.is_none() || owner.generation != hint.generation {
                 continue;
             }
-            owner.armed = false;
+            owner.deadline = None;
             let class = owner.class;
+            let replaced = owner.pending.is_some();
+            owner.pending = Some(PendingHome {
+                generation: hint.generation,
+                fired_at: now,
+            });
+            self.live -= 1;
+            if replaced {
+                self.by_class[class.index()].replaced_wakes = self.by_class[class.index()]
+                    .replaced_wakes
+                    .saturating_add(1);
+            } else {
+                self.pending_count += 1;
+            }
             let wake_delay = now.saturating_since(hint.when);
             let totals = &mut self.by_class[class.index()];
             totals.fires = totals.fires.saturating_add(1);
-            totals.wake_delay = totals.wake_delay.saturating_add(wake_delay);
-            self.pending.insert(
-                (hint.owner, hint.generation),
-                PendingHome {
-                    class,
-                    fired_at: now,
-                },
+            record_sample(
+                &mut totals.wake_delay,
+                &mut totals.max_wake_delay,
+                &mut totals.wake_buckets,
+                wake_delay,
             );
             due.push(Wake {
                 owner: hint.owner,
@@ -322,65 +508,75 @@ impl<C: Clock> Engine<C> {
         generation: Generation,
         polled_at: Tick,
     ) -> Result<(), EngineError> {
-        let pending = self
-            .pending
-            .remove(&(owner, generation.get()))
-            .ok_or(EngineError::NoSuchWake)?;
-        if polled_at < pending.fired_at {
-            self.pending.insert((owner, generation.get()), pending);
-            return Err(EngineError::HomeBeforeFire);
-        }
-        let totals = &mut self.by_class[pending.class.index()];
-        totals.home_reports = totals.home_reports.saturating_add(1);
-        totals.home_delay = totals
-            .home_delay
-            .saturating_add(polled_at.saturating_since(pending.fired_at));
-        Ok(())
-    }
-
-    pub fn lateness(&self, class: OwnerClass) -> ClassLateness {
-        self.by_class[class.index()]
-    }
-
-    /// Wakes handed out whose home has not reported yet.
-    pub fn pending_homes(&self) -> usize {
-        self.pending.len()
-    }
-
-    fn bump(&mut self, owner: OwnerId) -> Result<u64, EngineError> {
         let slot = self
             .owners
             .get_mut(&owner)
             .ok_or(EngineError::UnknownOwner)?;
-        slot.generation = slot.generation.saturating_add(1);
-        slot.armed = true;
-        Ok(slot.generation)
+        let Some(pending) = slot.pending else {
+            return Err(EngineError::NoSuchWake);
+        };
+        if pending.generation != generation.get() {
+            return Err(EngineError::NoSuchWake);
+        }
+        if polled_at < pending.fired_at {
+            return Err(EngineError::HomeBeforeFire);
+        }
+        let class = slot.class;
+        let delay = polled_at.saturating_since(pending.fired_at);
+        slot.pending = None;
+        self.pending_count -= 1;
+        let totals = &mut self.by_class[class.index()];
+        totals.home_reports = totals.home_reports.saturating_add(1);
+        record_sample(
+            &mut totals.home_delay,
+            &mut totals.max_home_delay,
+            &mut totals.home_buckets,
+            delay,
+        );
+        Ok(())
+    }
+
+    pub fn lateness(&self, class: OwnerClass) -> &ClassLateness {
+        &self.by_class[class.index()]
+    }
+
+    /// Wakes handed out whose home has not reported yet. At most one per owner.
+    pub fn pending_homes(&self) -> usize {
+        self.pending_count
+    }
+
+    fn is_live(&self, hint: &Hint) -> bool {
+        self.owners
+            .get(&hint.owner)
+            .is_some_and(|owner| owner.deadline.is_some() && owner.generation == hint.generation)
     }
 
     fn discard_stale_front(&mut self) {
         while let Some(Reverse(hint)) = self.heap.peek().copied() {
-            if self.owners.get(&hint.owner).map(|owner| owner.generation) == Some(hint.generation) {
+            if self.is_live(&hint) {
                 break;
             }
             self.heap.pop();
         }
     }
 
-    /// Rebuild when stale hints outnumber the ones that can still fire.
+    /// Rebuild when stale hints outnumber live ones: one rebuild per doubling.
     fn compact_if_stale(&mut self) {
-        let live = self.owners.values().filter(|owner| owner.armed).count();
-        if self.heap.len() <= live.saturating_mul(2) {
+        if self.heap.len() <= self.live.saturating_mul(2) {
             return;
         }
-        let mut keep = Vec::with_capacity(live);
+        let mut keep = Vec::with_capacity(self.live);
         while let Some(Reverse(hint)) = self.heap.pop() {
-            if self.owners.get(&hint.owner).map(|owner| owner.generation) == Some(hint.generation) {
+            if self.is_live(&hint) {
                 keep.push(Reverse(hint));
             }
         }
         self.heap = keep.into();
     }
 }
+
+#[cfg(test)]
+mod model;
 
 #[cfg(test)]
 mod tests {
@@ -412,21 +608,25 @@ mod tests {
         assert_eq!(wakes.len(), 1);
         assert_eq!(wakes[0].deadline, Tick::new(8));
         assert_eq!(wakes[0].fired_at, Tick::new(10));
-        assert_eq!(engine.lateness(OwnerClass::Housekeeping).wake_delay, 2);
-        assert_eq!(engine.lateness(OwnerClass::Housekeeping).fires, 1);
+        let totals = engine.lateness(OwnerClass::Housekeeping);
+        assert_eq!(totals.wake_delay, 2);
+        assert_eq!(totals.fires, 1);
+        assert_eq!(totals.max_wake_delay, 2);
+        assert_eq!(totals.wake_buckets[lateness_bucket(2)], 1);
+        assert_eq!(totals.wakes_at_least(2), 1);
+        assert_eq!(totals.wakes_at_least(4), 0);
     }
 
     #[test]
-    fn a_later_rearm_drops_the_earlier_hint() {
+    fn a_later_arm_is_a_no_op() {
         let mut engine = engine_at(0);
         let id = owner(&mut engine);
-        engine.arm(id, Tick::new(5)).unwrap();
-        engine.arm(id, Tick::new(9)).unwrap();
+        let first = engine.arm(id, Tick::new(5)).unwrap();
+        let second = engine.arm(id, Tick::new(9)).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(engine.heap.len(), 1);
         engine.clock_mut().set(Tick::new(5));
-        assert!(engine.poll().is_empty());
-        assert_eq!(engine.next_deadline(), Some(Tick::new(9)));
-        engine.clock_mut().set(Tick::new(9));
-        assert_eq!(engine.poll()[0].deadline, Tick::new(9));
+        assert_eq!(engine.poll()[0].deadline, Tick::new(5));
     }
 
     #[test]
@@ -434,12 +634,13 @@ mod tests {
         let mut engine = engine_at(0);
         let id = owner(&mut engine);
         engine.arm(id, Tick::new(9)).unwrap();
-        engine.arm(id, Tick::new(4)).unwrap();
+        let earlier = engine.arm(id, Tick::new(4)).unwrap();
         assert_eq!(engine.next_deadline(), Some(Tick::new(4)));
         engine.clock_mut().set(Tick::new(4));
         let wakes = engine.poll();
         assert_eq!(wakes.len(), 1);
         assert_eq!(wakes[0].deadline, Tick::new(4));
+        assert_eq!(wakes[0].generation, earlier);
     }
 
     #[test]
@@ -449,6 +650,7 @@ mod tests {
         engine.arm(id, Tick::new(5)).unwrap();
         engine.clear(id).unwrap();
         assert_eq!(engine.next_deadline(), None);
+        assert_eq!(engine.live, 0);
         engine.clock_mut().set(Tick::new(5));
         assert!(engine.poll().is_empty());
     }
@@ -480,30 +682,55 @@ mod tests {
         let wakes = engine.poll();
         assert_eq!(wakes.len(), 1);
         assert_eq!(wakes[0].owner, ids[0]);
+        assert_eq!(engine.live, 31);
     }
 
     #[test]
     fn next_deadline_skips_a_stale_hint() {
         let mut engine = engine_at(0);
-        let id = owner(&mut engine);
-        engine.arm(id, Tick::new(3)).unwrap();
-        engine.arm(id, Tick::new(8)).unwrap();
+        let early = owner(&mut engine);
+        let later = owner(&mut engine);
+        engine.arm(early, Tick::new(3)).unwrap();
+        engine.arm(later, Tick::new(8)).unwrap();
+        engine.clear(early).unwrap();
         assert_eq!(engine.next_deadline(), Some(Tick::new(8)));
     }
 
     #[test]
-    fn deregister_drops_the_owner() {
+    fn deregister_drops_the_owner_and_its_pending_wake() {
         let mut engine = engine_at(0);
         let id = owner(&mut engine);
         engine.arm(id, Tick::new(4)).unwrap();
-        engine.deregister(id).unwrap();
-        assert_eq!(engine.next_deadline(), None);
         engine.clock_mut().set(Tick::new(4));
-        assert!(engine.poll().is_empty());
+        assert_eq!(engine.poll().len(), 1);
+        assert_eq!(engine.pending_homes(), 1);
+        engine.deregister(id).unwrap();
+        assert_eq!(engine.pending_homes(), 0);
+        assert_eq!(engine.next_deadline(), None);
         assert_eq!(
             engine.arm(id, Tick::new(5)).unwrap_err(),
             EngineError::UnknownOwner
         );
+    }
+
+    #[test]
+    fn a_second_wake_replaces_an_unreported_one() {
+        let mut engine = engine_at(0);
+        let id = owner(&mut engine);
+        let first = engine.arm(id, Tick::new(1)).unwrap();
+        engine.clock_mut().set(Tick::new(1));
+        engine.poll();
+        engine.arm(id, Tick::new(3)).unwrap();
+        engine.clock_mut().set(Tick::new(3));
+        let second = engine.poll()[0].generation;
+        assert_eq!(engine.pending_homes(), 1);
+        assert_eq!(engine.lateness(OwnerClass::Housekeeping).replaced_wakes, 1);
+        assert_eq!(
+            engine.note_home(id, first, Tick::new(3)).unwrap_err(),
+            EngineError::NoSuchWake
+        );
+        engine.note_home(id, second, Tick::new(3)).unwrap();
+        assert_eq!(engine.pending_homes(), 0);
     }
 
     #[test]
@@ -517,6 +744,7 @@ mod tests {
         let totals = engine.lateness(OwnerClass::TimedSync);
         assert_eq!(totals.wake_delay, 0);
         assert_eq!(totals.home_delay, 4);
+        assert_eq!(totals.home_buckets[lateness_bucket(4)], 1);
         assert_eq!(engine.pending_homes(), 0);
     }
 
@@ -532,17 +760,19 @@ mod tests {
         }
         assert_eq!(engine.pending_homes(), 0);
         assert_eq!(engine.lateness(OwnerClass::Housekeeping).fires, 64);
+        assert_eq!(engine.owners.len(), 1);
     }
 
     #[test]
-    fn rearming_compacts_stale_hints() {
+    fn rearming_earlier_compacts_stale_hints() {
         let mut engine = engine_at(0);
         let id = owner(&mut engine);
-        for n in 1..=8 {
+        for n in (1..=8).rev() {
             engine.arm(id, Tick::new(n)).unwrap();
         }
         assert!(engine.heap.len() <= 2);
-        assert_eq!(engine.next_deadline(), Some(Tick::new(8)));
+        assert_eq!(engine.live, 1);
+        assert_eq!(engine.next_deadline(), Some(Tick::new(1)));
     }
 
     #[test]
@@ -562,6 +792,7 @@ mod tests {
             engine.arm(id, Tick::new(2)).unwrap_err(),
             EngineError::Closed
         );
+        assert_eq!(engine.clear(id).unwrap_err(), EngineError::Closed);
     }
 
     #[test]
@@ -569,5 +800,13 @@ mod tests {
         let mut engine = engine_at(0);
         let err = engine.arm(OwnerId(99), Tick::new(1)).unwrap_err();
         assert_eq!(err, EngineError::UnknownOwner);
+    }
+
+    #[test]
+    fn the_monotonic_clock_does_not_go_backwards() {
+        let clock = MonotonicClock::new();
+        let first = clock.now();
+        let second = clock.now();
+        assert!(second >= first);
     }
 }
