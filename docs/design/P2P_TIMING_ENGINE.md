@@ -1,10 +1,11 @@
 # P2P timing engine
 
-**Status: OPEN — Round 2, 2026-09-25.** Round 1's deadline table fired
-its own falsifier. This round replaces that table and proposes the
-answers to the four open questions. Nothing here is a number. Periods
-belong to their owners. **Rule 26 is cited explicitly.** This document
-mints no identifier family. The register row is P2P-3's **TE**.
+**Status: OPEN — Round 2, 2026-09-25. The nine proposals are RULED,**
+with the wake delivered to the owner's home, the wake set ordered by
+time, slice 1's single list deadline, and PWD-B2 pulled out of the
+interim tick. Nothing here is a number. Periods belong to their owners.
+**Rule 26 is cited explicitly.** This document mints no identifier
+family. The register row is P2P-3's **TE**.
 
 Pinned to `fix/p2p-transport-hmac-oracle` `55d7b2b16`. Line numbers
 were read there. Opening the round still discharges D6's third
@@ -42,7 +43,7 @@ engine runs today's behaviour so a differential harness can match it.
 | Peerlist gossip | the same 1002 response carries up to 250 addresses (`p2p_protocol_defs.h:215-239`) into the gray list | peerlist, slices 1 and 3. Also a privacy surface: each exchange shows a peer part of this node's view of the network |
 | Connection liveness | the same 1002 is a request that must be answered, and it keeps the session off the inherited idle timer | the transport layer, per connector (D9). Not a Levin command |
 | Outbound fill | `connections_maker`, gated at 1 s (`net_node.h:721`). The fill loop `sleep_for`s 1 s when it makes no connection (`net_node.inl:2063`) and dials serially | slice 3. A call can run for many seconds. The blocking pool has to allow that |
-| Gray refill | `gray_peerlist_housekeeping`, gated at 60 s (`net_node.h:723`). That timer both triggered promotion and capped it at about one probe a minute | **replaced by an event (2026-09-25).** White below its diversity target, noticed when the list is next used. Slice 1 owns the target and the event. No timer |
+| Gray refill | `gray_peerlist_housekeeping`, gated at 60 s (`net_node.h:723`). That timer both triggered promotion and capped it at about one probe a minute | **replaced by an event (2026-09-25).** Slice 1 holds one deadline for the list, the earliest white expiry. When it fires, slice 1 re-counts and reports below target. Evaluating expiry at the next use still decides correctness. No timer per entry |
 | Promotion pace | the same 60 s gate, secretly | slice 3. A bounded derived rate, jittered. This is the timer that remains |
 | Peerlist store | `store_config`, gated at 30 min (`net_node.h:722`) | slice 1 |
 | Incoming-connection check | `check_incoming_connections`, gated at 1 h (`net_node.h:724`) | slice 3 |
@@ -78,24 +79,28 @@ unbans on lookup. No timer per peerlist entry.
 
 ---
 
-## Proposed answers (2026-09-25)
+## Ruled answers (2026-09-25)
 
-Proposed, not yet ruled. Built for the Rust owners, not for asio's
-shape.
-
-### 1. The engine schedules owners
+### 1. The engine delivers wakes; the owner polls at home
 
 An owner is a state machine with `next_wake(now)` and `poll(now)` that
-returns effects. It never sleeps. That is the relay `Driver`'s shape,
-used for every Rust consumer: relay dispatch, the transport layer's
-per-connection deadlines (dial clock, handshake, gap, idle), PWD-B2's
-per-connection timed sync, and later discovery (slice 3).
+returns effects. It never sleeps. The engine does not poll an owner
+that lives somewhere else. It delivers a wake message to that owner's
+home, and the owner polls itself there. A per-connection transport
+state machine, and PWD-B2's per-connection timed sync, live with the
+connection. Their events arrive on transport tasks. The engine thread
+does not share that state.
 
-After every poll or event delivered to an owner, the engine asks
-`next_wake` again. The owner is the only source of its deadline. The
-engine holds a hint of when to wake, not a second copy. An early or
-spurious wake is harmless, because the owner checks `now`. Waking late
-is the failure, and it is measured.
+Owners that live on the engine thread poll in place: the relay
+`Driver`, and the interim C++ cadences. The invoke bridge is the same
+pattern. Expiry is a message on the connection's queue.
+
+The owner reports a new `next_wake` only when its earliest deadline
+changes. A byte arriving does not re-arm the engine.
+
+An early or spurious wake is harmless, because the owner checks `now`.
+Waking late is the failure. Lateness has two parts, both measured: the
+delay in delivering the wake, and the delay in the owner's home queue.
 
 ### 2. A period is an owner
 
@@ -103,13 +108,28 @@ A periodic owner's next wake is last-run-finished plus its period.
 Fixed delay. No catch-up burst after a stall, and no overlapping run.
 One mechanism.
 
-Until an owner lands, the engine keeps calling `idle_worker` and
-`on_idle` once a second, never overlapping, and their internal gates
-keep today's behaviour.
+**The interim coupling is a known defect.** Until the owners land, one
+`idle_worker` tick runs all six `node_server` gates in sequence.
+`connections_maker` can block for many seconds, and timed sync waits
+behind it. PWD-B2's per-connection timed sync is one of the first
+owners to land, rather than staying inside `idle_worker` until the
+sync and peerlist splits. The other gates may keep today's call until
+their owners exist, and those calls do not overlap one another.
 
-### 3. No timer when the next use can decide
+### 3. The wake set is ordered by time
 
-Stated with the table above.
+The engine never scans owners. It keeps wake hints in a structure
+ordered by time and wakes only the earliest. A superseded hint is
+discarded by a generation number, not by a search. Cost per re-arm is
+logarithmic in the number of owners. Nothing on the tick is linear in
+that number. A loop over every owner would rebuild `idle_worker`'s
+one-second poll inside the new engine.
+
+A timer exists only when an action must happen and no event will cause
+it. Ban entries, the 24-hour demotion's correctness, and the
+accept-rate bucket's refill are evaluated when next used, from
+timestamps. The demotion's *notice* is the one list deadline in the
+table, not a timer per entry.
 
 ### 4. The call into C++
 
@@ -123,6 +143,10 @@ incoming bytes, one delivery at a time. A response racing its timeout
 is whichever is dequeued first. C++ resolves the invoke by id,
 idempotently. Firing a timer only enqueues. The engine does not wait on
 C++. C++ does not block the engine.
+
+An invoke timeout queued behind a stuck handler for the same connection
+waits with it. The backstop is the transport layer's per-connection gap
+and idle deadlines: they close the connection whatever C++ is doing.
 
 Idle cadences run on their own lane of the blocking pool, never
 overlapping. When LV-3 moves invokes into Rust, invoke timeouts become
@@ -175,9 +199,10 @@ conformance and the transport timeouts run deterministically.
 
 ### 9. Lateness is an output
 
-Every fire records its deadline against when it fired, per owner class.
-That is the input to the step-7 lateness measurement and to D5's
-budgets. It is exposed to the operator over RPC, never to a peer.
+Every fire records two delays, per owner class: how late the wake was
+delivered, and how long it then waited in the owner's home queue. That
+is the input to the step-7 lateness measurement and to D5's budgets. It
+is exposed to the operator over RPC, never to a peer.
 
 ---
 

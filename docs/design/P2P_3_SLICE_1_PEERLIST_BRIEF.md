@@ -2,8 +2,7 @@
 
 **Status:** **REVISED 2026-09-25 (connector partition; white target is diversity).** Lists are partitioned
 by connector, derived from the address type. Gray is drawn when white falls
-below that target, not on a fixed minute. *Records-was REVISED 2026-09-23
-(steering).* The peerlist moves into Rust. The C++ is a
+below that target, not on a fixed minute. The peerlist moves into Rust. The C++ is a
 quarry: evidence for the invariant, and a list of behaviors the Rust model
 drops. *Records-was: the C++ already holds the contract at eight sites, every
 one correct, so the slice preserves it. A later same-day draft called the lists
@@ -95,12 +94,18 @@ short of that target, so a collapse is not the moment the node first
 probes stale gray entries. The threshold is set against the diversity
 target. No number is written here.
 
-**The refill trigger is an event.** When white falls below the target,
-this slice says so. It does not dial. The pace of those promotion dials
-is slice 3's: a bounded rate, derived, with jittered spacing. The
-inherited 60-second housekeeping timer did both jobs and is not kept.
-White falling below target is noticed when the list is next used,
-including the 24-hour demotion, which is evaluated then.
+**The refill trigger is one deadline for the list.** Slice 1 holds the
+earliest expiry among white's entries. When that deadline fires, slice
+1 re-counts and reports below target if it is. That is one timer for
+the list, not one per entry. Evaluating expiry when the list is next
+used still decides whether an entry has demoted. The deadline only
+makes sure the decline is noticed before the next dial. In steady
+state every outbound slot is full and nothing draws from white, so
+"noticed on next use" would wait until a connection is already lost.
+Slice 1 does not dial. The pace of the promotion dials is slice 3's: a
+bounded rate, derived, with jittered spacing. The inherited 60-second
+housekeeping timer did both the trigger and the pace, and it is not
+kept.
 
 White shrinks by that demotion, by capacity eviction, and by removal
 for misbehaviour. Dandelion++ does not remove white entries. It chooses
