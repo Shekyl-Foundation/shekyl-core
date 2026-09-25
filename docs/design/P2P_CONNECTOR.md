@@ -103,7 +103,7 @@ Timers that exist today, read at `abstract_tcp_server2.inl:59-63`:
 
 | Constant | Value | Who |
 | --- | --- | --- |
-| `NEW_CONNECTION_TIMEOUT_LOCAL` | 1,200,000 ms (2 minutes) | `m_local` |
+| `NEW_CONNECTION_TIMEOUT_LOCAL` | 1,200,000 ms (20 minutes). The comment on `:60` says "2 minutes"; the value is the fact | inherited `m_local` path, refused by D3 |
 | `NEW_CONNECTION_TIMEOUT_REMOTE` | 10,000 ms | not `m_local` |
 | `DEFAULT_TIMEOUT_MS_LOCAL` | 1,800,000 ms (30 minutes) | `m_local` idle (`:109`) |
 | `DEFAULT_TIMEOUT_MS_REMOTE` | 300,000 ms (5 minutes) | not `m_local` |
@@ -113,8 +113,9 @@ Timers that exist today, read at `abstract_tcp_server2.inl:59-63`:
 `m_local` is set at `abstract_tcp_server2.inl:992` from
 `is_loopback() || is_local()` on the remote address the connection was
 started with, and the new-connection timer picks the local or remote
-constant at `:1001-1004`. That is a trust distinction by address class
-(D3).
+constant at `:1001-1004`. `is_local` is RFC 1918 (`local_ip.h:41-62`).
+A peer in that class holds the socket for 20 minutes before any Levin
+session exists, then has a 30-minute idle timer. D3 refuses that split.
 
 `P2P_DEFAULT_CONNECTION_TIMEOUT` at `src/cryptonote_config.h:189` is
 **5,000 ms**, not 10 seconds. `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` at
@@ -130,8 +131,10 @@ Outbound dialing is serial. `connections_maker` is
 `try_to_connect_and_handshake_with_new_peer` (`net_node.inl:1544`) at
 the call sites `:1917` and `:1970`. A transport handshake adds a round
 trip to every dial. A stalled peer holds that loop for the whole
-attempt. Whether dials stay serial is D14-adjacent and is stated in D3,
-not decided as a number.
+attempt. The connector dials asynchronously and does not choose the
+schedule. How many to dial, and when, is discovery policy (P2P-3 slice
+3). Dials stay serial through cutover. The extra round trip is measured
+in step 7, C7.
 
 The peers-monitor thread starts at `net_node.inl:1114` and walks
 `foreach_connection` at `:1125` once a second.
@@ -200,10 +203,10 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | Carry. The connector calls admission. It does not own the policy. Serves the ceiling admission already owns. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
 | SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust. `tokio-socks` 0.5.3 is already a workspace dependency (`shekyl-p-fetch/Cargo.toml:40`, `shekyl-rpc-transport/Cargo.toml:43`). Reusing it adds no supply-chain surface (rule 17). A separate `socks` 0.3.4 crate is in `Cargo.lock` because `ureq` 3.3.0 depends on it, and `shekyl-p-transport` enables `ureq/socks-proxy` via its `tor-socks` feature. The connector uses `tokio-socks`, not that crate. |
-| Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry, and do not attribute from the socket.** Tor and I2P inbound connections arrive on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host and would mark every overlay peer `m_local` (the next row). This is where LV-3's OBSERVED endpoint originates. |
+| Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry, and do not attribute from the socket.** Tor and I2P inbound connections arrive on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host. This is where LV-3's OBSERVED endpoint originates. |
 | Tor forward listener | `net_node.inl:863-880` | Carry. Bound to `127.0.0.1` on port 0. The OS-assigned port is read back with `get_binded_port` (`:881`) and handed to Tor control. Bind failure erases the zone (`:878`). |
-| Local versus remote timers | `m_local` at `abstract_tcp_server2.inl:992`; timers at `:100-112` and `:1001-1004` | **Carry the split or refuse it in the open.** Today a loopback or local address gets a 2-minute new-connection timer and a 30-minute idle timer; everyone else gets 10 seconds and 5 minutes. That is a trust distinction by address class. It is wrong for overlay peers if F-1's attribution is the loopback socket. Proposed: the split applies only to a clearnet remote that `is_loopback()` or `is_local()`. An overlay inbound is not local. Review can refuse the split entirely; it cannot leave it implicit. |
-| Gap from channel established to session established | Outbound Levin invoke is 5 s (`cryptonote_config.h:193`). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes remote, 30 minutes if `m_local`). The connector owns that deadline, beside PWD-B3's byte cap for command 1001. |
+| Local versus remote timers | `m_local` at `abstract_tcp_server2.inl:992`; timers at `:100-112` and `:1001-1004`. Local new-connection is 1,200,000 ms (20 minutes), not the "2 minutes" comment on `:60` | **Refuse.** D2 already refuses a timeout whose only justification is that epee uses it, and this row names no other ruling. `m_local` is loopback or RFC 1918, so a LAN neighbour holds a connection for 20 minutes before any Levin session, against 10 seconds for everyone else. A test rig that needs a longer timer sets it explicitly. It is not a trust rule on address class. |
+| Gap from channel established to session established | Outbound Levin invoke is 5 s (`cryptonote_config.h:193`). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes, or 30 minutes on the refused `m_local` path). The connector owns one deadline for every peer, beside PWD-B3's byte cap for command 1001. |
 | Dual-stack bind and port 0 | `init_server` at `net_node.inl:1065` takes IPv4 and IPv6 ports and addresses plus `m_use_ipv6` / `m_require_ipv4` | Carry. A port-0 bind reads the assigned port back. The Tor listener above is the port-0 case that must not abort the rest of the boot. |
 | Worker pool | `run_server`'s thread count; `set_threads_prefix` | Carry the pool as a stated size, not as "however many epee used". D6 sizes the socketless executor separately. |
 | Graceful stop | `send_stop_signal`, then connections drained, then `deinit_server` (`net_node.inl:1187` is one `deinit_server` site) | Carry the order: stop accepting, drain or cancel live connections, then tear the listeners down. |
@@ -212,11 +215,12 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Rate limit and per-connection speed stats | `network_throttle*`; the pipe's `on_wire` path on the parked branch | Carry the limit. Stats are observed facts reported upward, not a second policy. |
 | Send-queue bounds | 1,000 messages and 100 MiB (`abstract_tcp_server2.h:72-73`) | Carry, with one source. The pipe's `PIPE_PLAINTEXT_BUDGET` was a second copy and is not repeated. |
 | Send backpressure and strand order | Send path in `abstract_tcp_server2.inl` (queue checks near the caps above) | Re-derive. Nonce order equals wire order because there is one writer per direction. A strand is not required to get that. |
-| `IP_TOS`, `no_delay(false)` | Set on the accepted socket in the transport | **Still open: on, off, or measured.** A network observer can fingerprint TCP behaviour. Round 2 records the decision as owed, not made. |
-| FIN versus RST, linger | epee close / shutdown | **A decision.** It also has to meet the uniform-failure behaviour the evaluation will measure (step 7, C4). |
+| `--tos-flag` / `IP_TOS` | `net_node.cpp:182`, default `-1`. Applied at `net_node.inl:597` and `set_tos_flag` `:3378-3383` (a `-1` returns without storing). Every socket still calls `setsockopt` at `abstract_tcp_server2.inl:966-976`. The static `m_default_tos` (`connection_basic.cpp:121`) is zero-initialized, so the default path sets TOS to 0 | **Refuse the knob.** A per-operator DSCP is a per-node marker on every packet. The connector does not call `setsockopt` for TOS. Step 7 C1 records the DSCP that actually leaves today on the `-1` default. What the kernel emits for TOS 0 is measured, not assumed. |
+| `no_delay(false)` (Nagle) | Set on every socket at `abstract_tcp_server2.inl:977-982` | **Measure before deciding**, under step 7 C9. Nagle changes the record sizes an observer sees, so it is part of the record-length evidence. It is not fixed before that evidence exists. |
+| FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 C4 asserts those failures are indistinguishable from the far side. |
 | `add_ref` / `release`, `request_callback`, `send_done` | `i_service_endpoint` | The adapter's contract (D4). Not a copy of epee's refcount. |
 | Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer | D6. Proposed: a socketless `io_context` until LV-3. |
-| Serial outbound dialing | `connections_maker` at `net_node.inl:2009`, call at `:1917` | State it. The transport handshake lengthens every attempt. Leaving it serial is a proposal, not a ruling; changing it is a `net_node` change and needs its own sentence in review. |
+| Serial outbound dialing | `connections_maker` at `net_node.inl:2009`, call at `:1917` | **Stays serial through cutover.** The connector exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7, C7. |
 | SSL | `m_state.ssl` on the connection | **Refuse.** |
 
 ---
@@ -454,9 +458,10 @@ is observed:
 Closed in this revision, from a re-read at `db2788d`:
 
 - Overlay inbound attribution and the Tor forward listener (D3, D4).
-- The local-versus-remote timer split, carried only for a clearnet
-  address that is actually local (D3). Review may still refuse the
-  split; it is no longer missing.
+- The local new-connection timer is 1,200,000 ms, which is 20 minutes.
+  The comment on `abstract_tcp_server2.inl:60` says "2 minutes". The
+  local/remote split is refused (D3). A longer test timer is explicit
+  test configuration.
 - A derived deadline between channel established and session
   established (D9, D10).
 - `AdmissionRefused`, `DialFailed`, `ProxyRefused`, and `LocalClose`
@@ -470,9 +475,16 @@ Closed in this revision, from a re-read at `db2788d`:
 - `call_run_once_service_io` and the sync invoke are a deletion. A
   test-only caller found later reopens that row.
 
+Closed in the same revision, from the review of that text:
+
+- `--tos-flag` is refused. The connector does not set TOS. C1 records
+  today's DSCP on the default path, which `setsockopt`s 0.
+- Nagle waits on C9.
+- Failures before the channel exists close with a FIN after zero bytes
+  written. C4 measures that they match.
+- Dials stay serial through cutover. The schedule is P2P-3 slice 3.
+  C7 measures the extra round trip.
+
 Still open, and not decided here:
 
 - D14, all four items.
-- Whether the local/remote timer split is kept or refused outright.
-- Whether outbound dials stay serial.
-- TCP options and FIN versus RST, each as on, off, or measure-first.
