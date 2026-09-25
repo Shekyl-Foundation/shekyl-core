@@ -21,11 +21,12 @@
 //! - **bytes per input** on the wire, broken into the PQC auth (key + sig),
 //!   the proof's growth, and the prefix (key image + pseudo-out);
 //! - **verifier time per input**, broken the same way;
-//! - the **implied cap** `MAX_TX_SIZE / bytes_per_input` — the input count
-//!   the size limit already refuses past. If it is below 8 the cap is dead
-//!   weight; if above, the cap is the binding constraint and needs a
-//!   derivation from a stated verifier budget, not a number from RingCT's
-//!   era.
+//! - the **implied cap** `(TX_WEIGHT_LIMIT − fixed) / weight_per_input` —
+//!   the input count CEN-H3's weight limit (149 400) already refuses past.
+//!   If it is below 8 the cap is dead weight; if above, the cap is the
+//!   binding constraint and needs a derivation from a stated verifier
+//!   budget, not a number from RingCT's era. The parser's `MAX_TX_SIZE`
+//!   (1 MiB) is reported beside it as the wider, non-consensus ceiling.
 //!
 //! The prover refuses more than eight (`shekyl_fcmp::MAX_INPUTS`), so the
 //! sweep stops at the cap and the shape past it is read off the slope — the
@@ -65,7 +66,7 @@ use shekyl_tx_builder::{
     TreeContext,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::{MAX_FCMP_INPUTS, MAX_TX_SIZE};
+use shekyl_wire::transaction::{MAX_FCMP_INPUTS, MAX_TX_SIZE, TX_WEIGHT_LIMIT};
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
 const COINBASE_LOCK_WINDOW: u64 = shekyl_consensus::COINBASE_LOCK_WINDOW as u64;
@@ -127,6 +128,11 @@ struct Measured {
     inputs: usize,
     /// Serialized wire bytes of the whole transaction.
     tx_bytes: usize,
+    /// CEN-H3's operand: `Transaction::weight()` — the serialized bytes plus
+    /// the BP+ clawback, zero for this two-output shape, so equal to
+    /// `tx_bytes` here and recorded separately because H3 judges the
+    /// weight, not the length.
+    tx_weight: usize,
     /// The FCMP++ proof blob alone.
     proof_bytes: usize,
     /// All PQC auths (key + signature blobs, both inputs' worth).
@@ -340,6 +346,11 @@ fn measure(
     let outputs = [pack(&payment, payment_amount), pack(&change, change_amount)];
 
     let key_images: Vec<[u8; 32]> = chosen.iter().map(|s| *s.key_image.as_bytes()).collect();
+    // The prefix the proof and the auths bind to is the prefix the wire
+    // carries — `extra` included, built once and reused in `TxPrefix` below.
+    // A hash over an empty extra would have signed different bytes than the
+    // transaction serialized (#853 review).
+    let extra = conforming_pqc_extra(2);
     let tx_prefix_hash = tx_prefix_hash_from_parts(
         &key_images,
         &[payment.output_key, change.output_key],
@@ -347,7 +358,7 @@ fn measure(
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),
         ],
-        &[],
+        &extra,
     );
     let tree_ctx = TreeContext {
         reference_block: reference.block_hash,
@@ -447,7 +458,7 @@ fn measure(
                     view_tag: change.view_tag_prefilter,
                 },
             ],
-            extra: conforming_pqc_extra(2),
+            extra,
         },
         ct: Ct::Fcmp {
             fee,
@@ -484,6 +495,7 @@ fn measure(
     Measured {
         inputs: n,
         tx_bytes: bytes.len(),
+        tx_weight: wire_tx.weight(),
         proof_bytes: signed.fcmp_proof.len(),
         auth_bytes: auths
             .iter()
@@ -570,17 +582,31 @@ fn the_input_caps_cost_is_measured_not_inherited() {
         .as_secs_f64()
         / span;
     let fixed_bytes = first.tx_bytes as f64 - bytes_per_input;
-    let implied_cap = ((MAX_TX_SIZE as f64 - fixed_bytes) / bytes_per_input).floor();
+    // Two ceilings, one binding. CEN-H3 refuses a transaction whose weight
+    // exceeds `TX_WEIGHT_LIMIT` (149 400) — that is the consensus bound an
+    // accepted spend actually meets, and the one the input cap is measured
+    // against. `MAX_TX_SIZE` (1 MiB) is the parser's refusal, seven times
+    // wider; reported beside it so the two are never confused again (#853
+    // review: an earlier cut of this test read the cap off the parser
+    // bound and overstated the headroom sevenfold).
+    let weight_per_input = (last.tx_weight - first.tx_weight) as f64 / span;
+    let fixed_weight = first.tx_weight as f64 - weight_per_input;
+    let implied_cap = ((TX_WEIGHT_LIMIT as f64 - fixed_weight) / weight_per_input).floor();
+    let parser_cap = ((MAX_TX_SIZE as f64 - fixed_bytes) / bytes_per_input).floor();
 
     println!();
     println!("bytes/input        {bytes_per_input:>10.0}  (proof {proof_bytes_per_input:.0}, auths {auth_bytes_per_input:.0}, prefix+pseudo-out 64)");
+    println!("weight/input       {weight_per_input:>10.0}  (H3's operand; BP+ clawback is 0 at two outputs)");
     println!("verify s/input     {verify_per_input:>10.4}  (proof {proof_verify_per_input:.4}, auths {auth_verify_per_input:.4})");
     println!("fixed bytes        {fixed_bytes:>10.0}  (the two outputs, the BP+, the header)");
     println!(
-        "implied cap        {implied_cap:>10.0}  inputs fit under MAX_TX_SIZE = {MAX_TX_SIZE}; consensus caps at {MAX_FCMP_INPUTS}"
+        "implied cap (H3)   {implied_cap:>10.0}  inputs fit under TX_WEIGHT_LIMIT = {TX_WEIGHT_LIMIT}; consensus caps at {MAX_FCMP_INPUTS}"
     );
     println!(
-        "verifier work at the cap  {:.3?} per tx; at the implied cap  {:.3?}",
+        "parser cap         {parser_cap:>10.0}  inputs fit under MAX_TX_SIZE = {MAX_TX_SIZE} (the parser's refusal, not a consensus bound)"
+    );
+    println!(
+        "verifier work at the cap  {:.3?} per tx; at the H3-implied cap  {:.3?}",
         Duration::from_secs_f64(
             first.verify_total().as_secs_f64() + verify_per_input * (MAX_FCMP_INPUTS - 1) as f64
         ),
@@ -602,8 +628,14 @@ fn the_input_caps_cost_is_measured_not_inherited() {
             b.inputs
         );
     }
-    // The size limit refuses past the implied cap; the consensus cap is
-    // either tighter (independent work) or looser (dead weight). Recorded,
-    // not asserted: which one it is, is the finding.
-    assert!(bytes_per_input > 0.0 && implied_cap >= 1.0);
+    // H3 refuses past the implied cap; the consensus cap is either tighter
+    // (independent work) or looser (dead weight). Recorded, not asserted:
+    // which one it is, is the finding. What is asserted is the ordering of
+    // the two ceilings — the parser's is the wider one, and the finding is
+    // read off H3's.
+    assert!(weight_per_input > 0.0 && implied_cap >= 1.0);
+    assert!(
+        parser_cap > implied_cap,
+        "the parser bound is the wider ceiling"
+    );
 }
