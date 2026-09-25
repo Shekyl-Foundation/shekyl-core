@@ -341,7 +341,7 @@ codec is `Canonical`, not tied to the store). `ServeCreditKey` and
 | `archival_attestation_witness` | `u64` → `Unshaped` | `u64` (height) → `Blob<AttestationWitnessBytes>` — **built** | A10 |
 | `properties["archival_last_slash_epoch"]` | `Blob<PropertyCellBytes>` | typed cell `ArchivalLastSlashEpochCell` (chain-state, `settlement_epoch`) → `Option<SettlementEpoch>` — **built** (`properties.snap` `cells = 7`) | A9 |
 | `archival_shard_segment` | `u64` → `Unshaped` | **unchanged — retired table** (`PDM-Q12`; E4 deletes) | none |
-| `archival_alt_attestation_witness` | `LmdbHashKey` → `Unshaped` | unchanged (E5 S-ALT, `SAR-Q5`) | none |
+| `archival_alt_attestation_witness` | `LmdbHashKey` → `Unshaped` | ~~unchanged (E5 S-ALT, `SAR-Q5`)~~ **FOLDED 2026-09-25 (DRS-E1 S-ALT, layout 13):** no table of its own in the redb store — the witness is `AltBlock::attestation_witness`, a field of `alt_blocks`' row (`schema::FOLDED_INTO`); read through S-ALT's AL4 `alt_block`, written through AL1 `insert_alt_block` (`DRS_E1_SALT.md` §3.2, SAL-6) | none here — #16/#17 land as S-ALT's AL4/AL1 |
 | `archival_slash_log` | `&[u8]` (`BE(height) ‖ BE(seq)`) → `Unshaped` | **`SAR-Q7`**: `(BlockHeight, JournalSeq)` → `Coded<SlashLogEntry>` if A2 lands here; unchanged if deferred to E4 | A2 |
 | `archival_settlement`, `archival_slash_applied`, `archival_budget_accrual`, the five other journals | `Unshaped` | unchanged — E4's writers shape them | none |
 
