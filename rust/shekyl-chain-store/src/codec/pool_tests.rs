@@ -288,6 +288,17 @@ fn upgrade_is_the_forward_walk_and_accepts_keeps_the_same_phase() {
     }));
 
     assert_eq!(held.upgrade(originated_block), Some(originated_block));
+    let rearmed = RelayState::Originated {
+        phase: OriginatedPhase::Block { last_relayed: None },
+        responsibility: Responsibility::Armed,
+    };
+    assert_eq!(
+        originated_block.upgrade(rearmed),
+        None,
+        "a disarmed entry does not re-arm, even moving to the same block phase"
+    );
+    assert!(!originated_block.accepts(rearmed));
+    assert!(originated_block.phase_follows(rearmed));
     assert_eq!(originated_block.upgrade(held), None);
     assert_eq!(held.upgrade(stem), None);
     assert_eq!(held.upgrade(fluff), None);

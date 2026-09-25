@@ -166,14 +166,9 @@ impl PoolStore {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 let db = match builder.open(path) {
                     Ok(db) => db,
-                    // Not a redb database (or a torn one redb refuses to
-                    // repair): refused, not recreated — the store cannot tell
-                    // its own torn file from a foreign one by looking, and
-                    // deleting on that basis is the automatic wipe `SPL-Q8`
-                    // declined.
-                    Err(redb::DatabaseError::Storage(
-                        redb::StorageError::Corrupted(_) | redb::StorageError::Io(_),
-                    )) => return Err(StoreCannot::PoolFileForeign.into()),
+                    Err(e) if open_is_foreign(&e) => {
+                        return Err(StoreCannot::PoolFileForeign.into())
+                    }
                     Err(e) => return Err(EngineError::Open(e).into()),
                 };
                 match Self::read_header(&db)? {
@@ -306,6 +301,23 @@ impl PoolStore {
     }
 }
 
+/// Whether `err` means "these bytes are not a pool database".
+///
+/// redb reports a magic mismatch, and an empty file opened rather than
+/// created, as `Io(InvalidData)` (`page_manager` / `open_empty_file`).
+/// `Corrupted` is the same answer once a header has been read and rejected.
+/// Any other `Io` — permissions, a full disk — is an engine failure, not a
+/// cue to delete the file (`SPL-Q8`).
+fn open_is_foreign(err: &redb::DatabaseError) -> bool {
+    match err {
+        redb::DatabaseError::Storage(redb::StorageError::Corrupted(_)) => true,
+        redb::DatabaseError::Storage(redb::StorageError::Io(io)) => {
+            io.kind() == std::io::ErrorKind::InvalidData
+        }
+        _ => false,
+    }
+}
+
 /// A current-version file's data table must open under the type the seal
 /// wrote. Missing or re-typed is [`StoreCannot::PoolFileForeign`].
 fn require_sealed_table<K, V>(
@@ -406,8 +418,10 @@ impl PoolBatch<'_> {
     /// the stored one (§92.4, `SPL-Q9`); [`PoolCannot::PhaseNotForward`] if
     /// the phase is neither the stored phase nor a forward step of
     /// [`RelayState::upgrade`](crate::codec::RelayState::upgrade);
-    /// [`PoolCannot::NullFcmpCache`] if the verification cache is the null
-    /// hash; [`StoreInvariant::CellCorrupt`] if the stored row does not decode.
+    /// [`PoolCannot::ResponsibilityRearmed`] if a disarmed entry is armed
+    /// again; [`PoolCannot::NullFcmpCache`] if the verification cache is the
+    /// null hash; [`StoreInvariant::CellCorrupt`] if the stored row does not
+    /// decode.
     pub fn update(&mut self, txid: &TxHash, record: &PoolRecord) -> Result<(), StoreError> {
         refuse_null_cache(record)?;
         let key = txid.to_bytes();
@@ -429,8 +443,11 @@ impl PoolBatch<'_> {
         if stored.origin() != record.origin() {
             return Err(PoolCannot::OriginChanged.into());
         }
-        if !stored.relay_state.accepts(record.relay_state) {
+        if !stored.relay_state.phase_follows(record.relay_state) {
             return Err(PoolCannot::PhaseNotForward.into());
+        }
+        if stored.relay_state.rearms(record.relay_state) {
+            return Err(PoolCannot::ResponsibilityRearmed.into());
         }
         meta.insert(key, record.encoded().as_encoded())
             .map_err(EngineError::Storage)?;

@@ -397,6 +397,9 @@ pub enum PoolCannot {
     /// originated entry walks `Held → Block` only; an arrival walks
     /// `Stem → Fluff → Block`.
     PhaseNotForward,
+    /// `update` that arms a responsibility the stored entry has already
+    /// disarmed. Observation ends the re-broadcast obligation.
+    ResponsibilityRearmed,
     /// `fcmp_cache` is the all-zero null hash. Absence is `None`; the null
     /// hash is not a verification (SPL-10).
     NullFcmpCache,
@@ -509,6 +512,9 @@ impl core::fmt::Display for PoolCannot {
             }
             Self::PhaseNotForward => {
                 "update whose phase is not the stored phase and not a forward step"
+            }
+            Self::ResponsibilityRearmed => {
+                "update that arms a responsibility observation already ended"
             }
             Self::NullFcmpCache => "fcmp verification cache is the null hash; absence is None",
         })

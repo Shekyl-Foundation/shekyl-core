@@ -235,23 +235,53 @@ impl RelayState {
     /// `next` when it is a strict forward step on the same provenance:
     /// originated `Held → Block`; arrived `Stem → Fluff`, `Stem → Block`,
     /// or `Fluff → Block`. Same phase is not a step — the caller keeps its
-    /// own clock. A different zone, or any step off that walk, is `None`.
+    /// own clock. A different zone, a step off that walk, or re-arming a
+    /// disarmed responsibility is `None`.
     #[must_use]
     pub const fn upgrade(self, next: Self) -> Option<Self> {
+        if self.rearms(next) {
+            return None;
+        }
         match self.step(next) {
             PhaseStep::Forward => Some(next),
             PhaseStep::Same | PhaseStep::Refused => None,
         }
     }
 
-    /// Whether an update may replace `self` with `next`: same provenance,
-    /// and either the same phase or a forward step.
+    /// Whether an update may replace `self` with `next`: the phase follows
+    /// ([`Self::phase_follows`]) and the responsibility is not re-armed.
     #[must_use]
     pub const fn accepts(self, next: Self) -> bool {
+        self.phase_follows(next) && !self.rearms(next)
+    }
+
+    /// Same provenance, and either the same phase or a forward step.
+    /// Responsibility is not part of this answer.
+    #[must_use]
+    pub const fn phase_follows(self, next: Self) -> bool {
         match self.step(next) {
             PhaseStep::Same | PhaseStep::Forward => true,
             PhaseStep::Refused => false,
         }
+    }
+
+    /// Whether `next` arms a responsibility `self` has already disarmed.
+    /// Observation ends the obligation. An arrival has nothing to re-arm.
+    #[must_use]
+    pub const fn rearms(self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (
+                Self::Originated {
+                    responsibility: Responsibility::Disarmed,
+                    ..
+                },
+                Self::Originated {
+                    responsibility: Responsibility::Armed,
+                    ..
+                },
+            )
+        )
     }
 
     const fn step(self, next: Self) -> PhaseStep {

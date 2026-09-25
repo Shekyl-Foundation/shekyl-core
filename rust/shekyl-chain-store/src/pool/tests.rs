@@ -229,6 +229,24 @@ fn the_walk_is_enforced_at_the_write_and_a_null_cache_is_refused() {
     assert_eq!(stored.origin(), Origin::Originated);
     assert_eq!(stored, yielded);
 
+    let rearmed = PoolRecord {
+        relay_state: RelayState::Originated {
+            phase: OriginatedPhase::Block {
+                last_relayed: Some(UnixSeconds::from_raw(12)),
+            },
+            responsibility: Responsibility::Armed,
+        },
+        ..yielded
+    };
+    let err = store
+        .write(|b| b.update(&local, &rearmed))
+        .expect_err("observation already ended");
+    assert_eq!(cannot(&err), Some(PoolCannot::ResponsibilityRearmed));
+    assert_eq!(
+        store.begin_read().unwrap().record(&local).unwrap(),
+        Some(yielded)
+    );
+
     let mut null_cache = arrived_fluff();
     null_cache.fcmp_cache = Some(FcmpVerificationHash::from_bytes([0; 32]));
     let err = store

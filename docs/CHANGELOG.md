@@ -355,7 +355,8 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   entry cannot be stored as fluff and an arrival cannot be stored as held.
   An update may keep the phase (a new clock, a disarmed responsibility) or
   take a forward step — originated `held → block`, arrived
-  `stem → fluff → block` — and it refuses a changed origin. The null
+  `stem → fluff → block` — and it refuses a changed origin or a
+  responsibility armed again after observation ended it. The null
   verification hash is not a cache hit. A blob read reports a row present
   in only one of the two tables as the same pairing fault insert reports.
   **Security-relevant:** the C++ relay
