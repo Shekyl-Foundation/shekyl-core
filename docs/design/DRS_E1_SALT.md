@@ -1,8 +1,17 @@
 # DRS-E1 S-ALT — the alternative-chain store: increment plan and Round-0 pre-flight
 
 **Status:** OPEN — **Round 0 executed 2026-09-24** at `dev` @ `9532b58f5`
-(the merge of PR #851, S-POOL). **Round 1 posed** (§9) with defaults; the
-increment is cut from `dev` only after §9 is RULED. Implements *from*
+(the merge of PR #851, S-POOL). **Round 1 RULED 2026-09-25** (maintainer, on
+PR #856; §9, each row line-local): **all six defaults approved; Q3's reason
+replaced** — refusal because removing what is not held is a caller-contract
+violation (L14's insert-versus-upsert ruling applied to a remove), not
+because the C++ throws; **Q1's cross-check written into the row**, Q5's
+performance ground made explicit. Two findings added on the rulings:
+**SAL-14** (`rollback_blockchain_switching` is deleted, not ported — its
+absence is the evidence SAL-1's atomicity landed) and **SAL-15** (the folded
+witness's §7.1.1 KAT obligation transfers to `alt_blocks`, and the
+"declared, not enforced" exclusion boundary can now be enforced by one
+test). **The increment may be cut from `dev` (§7).** Implements *from*
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §5 (the S-ALT row: extraction
 order **9**, the last ordered surface — "alt-chain storage depends on both
 chain surfaces being settled; its reorg path is the one place both are
@@ -143,6 +152,11 @@ lifetime of its own (CW-2, made structural).
   `rollback_blockchain_switching` has no Rust counterpart because the store
   never shows a half-switched chain. E5 inherits the *sequence* (read the
   tip before popping it — SAL-13), not the compensation.
+- **A deletion, not a port** (SAL-14): `rollback_blockchain_switching`
+  (`:1080`) exists only to compensate for writes the C++ committed
+  separately. At cutover it is deleted; E5's plan carries the row and its
+  falsifier (`git grep rollback_blockchain_switching src/` → 0 after the
+  cutover PR).
 - CW-2's lifetime clause for free: the witness cannot outlive its alt block
   because it is a field of it.
 
@@ -151,7 +165,10 @@ lifetime of its own (CW-2, made structural).
 `alt_blocks` shaped (`[u8; 32] → Coded<AltBlock>`), the witness table
 **folded** into that record and evicted from the catalogue (`tables.snap`
 47 → 46, `Unshaped` 20 → 18), the bijection gate's fourth direction
-(`FOLDED_INTO`, SAL-2), layout 12 → 13.
+(`FOLDED_INTO`, SAL-2), layout 12 → 13 — and the **exclusion test** the
+audit named as this class's open item (SAL-15): a write to `alt_blocks`
+must not move any digest, the `txpool` exclusion test's shape, now
+covering the witness too because the witness is in that row.
 
 ### 2.5 What DRS-E2 gets
 
@@ -387,6 +404,43 @@ lands (§10).
   cumulative difficulty, coins and weight and the witness through the
   batch's view, `pop()`, AL1. Stated here so the E5 plan inherits the order
   rather than discovering `Popped`'s shape.
+- **SAL-14 — `rollback_blockchain_switching` is a deletion, not a port**
+  *(added on the rulings, 2026-09-25)*. The function (`:1080`, called at
+  `:1204`) pops the blocks the failed switch promoted and re-adds the ones
+  it disconnected — it exists *only* because the C++ commits the switch's
+  writes separately (SAL-1). Under one `ChainStore::write` closure there is
+  no half-switched state to compensate for, so the function has no Rust
+  counterpart and is deleted at the cutover rather than moved. **Its
+  absence is the evidence that the atomicity landed**: a Rust reorg that
+  needed a rollback would be a reorg that was not one transaction. The row
+  belongs to E5's plan with the falsifier stated there
+  (`git grep rollback_blockchain_switching src/` → 0 after the cutover);
+  this document names it so the E5 plan inherits a deletion, not a
+  translation task.
+- **SAL-15 — the folded witness's §7.1.1 obligation moves with it, and the
+  fold lets the "declared, not enforced" boundary be enforced** *(added on
+  the rulings, 2026-09-25; checked against `DAEMON_REDB_STORE.md` §7.1.1
+  and `LMDB_WRITE_ATOMICITY_AUDIT.md` §"non-canonical")*. **The archival
+  bar's count does not move.** §7.1.1 bars the *apply/revert* path — the
+  archival journal families E4 writes — until a digest family or a
+  replacement KAT forces them; `archival_alt_attestation_witness` was never
+  in that set. The audit classes it **non-canonical (4)** with `alt_blocks`
+  and the pool pair ("the alt witness is archival as well as alt; it is
+  classed here because the domain argument is the one that holds today, and
+  it inherits §7.1.1's KAT obligation when S-ARCH ports"), Digest v0
+  `excluded` / accumulator `excluded`, and the digest freeze excludes the
+  non-chain class "for all future digests". **What the fold changes is the
+  route the obligation takes**: the KAT that must force the witness path —
+  stored at admission (AL1), read at promotion (AL4), re-written
+  height-keyed by `connect` (E4's write half) — now exercises `alt_blocks`
+  rows, not a table of its own, so when the archival apply KAT is written
+  (E4) its alt leg is AL1 → AL4 → the height-keyed row, and the S-ARCH #16 /
+  #17 rows point here. **What the fold makes possible**: the audit's open
+  item for this class is that `alt_blocks` and the witness "have no
+  equivalent test, so for them the boundary is *declared, not enforced*" —
+  two tables, no exclusion test. One row means one test: a write through
+  AL1 (with a witness) must move no digest, the `txpool` exclusion test's
+  shape. The increment writes it (§7 commit 2) and closes the item.
 
 ### 6.1 Reproduced deviations on this surface (DRS §7.6 item 1)
 
@@ -411,7 +465,8 @@ Nothing that was accepted becomes refused, or the reverse.
    `store/alt.rs`, `store/alt_reads.rs`, `AltCannot` under `StoreCannot`,
    tests: each op and refusal, the atomic switch shape (pop, connect, AL1,
    AL2 in one closure; an `Err` aborts all four), AL4/AL5 on the batch's
-   view, SI-7 on a corrupt row, `entries` with both callers' folds.
+   view, SI-7 on a corrupt row, `entries` with both callers' folds; the
+   **alt exclusion test** — an AL1 with a witness moves no digest (SAL-15).
 3. **`docs: S-ALT landed (DRS-E1 increment 10)`** — §10.
 
 ---
@@ -425,21 +480,22 @@ Nothing that was accepted becomes refused, or the reverse.
 | `check_drs_c_surface_map.py` | 95 ↔ 95 across 10 surfaces | unchanged — the S-ALT Methods cell stays 6; witness methods stay in S-ARCH's cell (SAL-3) |
 | rule-42 snapshot gate | `SCHEMA_VERSION = 12` | 13; `tables.snap` −1 row, one re-typed; `alt_block.snap` new |
 | `check_store_invariant_register.py` | 16 rows / 14 ↔ 14 | unchanged (no new SI) |
+| digest exclusion tests (`accumulator`) | `txpool` pair only — alt boundary "declared, not enforced" | + the `alt_blocks` exclusion test (SAL-15) |
 | `check_conformance_coverage.py`, `check_consensus_invariants.sh` | 126 / 2 / 5 over 133 rows | unchanged (no verdict moves; CEN-K3's anchor text updates) |
 | `cargo test -p shekyl-chain-store` | 332 + 14 | + the §7 commit-2 suite |
 
 ---
 
-## 9. Round-1 questions — posed 2026-09-24 with defaults
+## 9. Round-1 questions — RULED 2026-09-25 (maintainer, on PR #856; each row line-local)
 
 | Q | Question | Default | Reason |
 |---|---|---|---|
-| **SAL-Q1** | Do the alt tables stay in the **consensus file** (same `Database`, same `WriteBatch`), or move to a second file as the pool did — or into the pool file? | **Consensus file.** | SAL-1: the switch is the one place atomicity with `connect`/`pop` is the property, and it is only expressible in one transaction. SAL-10: the C++ already writes alt rows inside the chain batch. The pool's grounds (`SPL-Q2`: privacy-bearing state; never inside a chain write; discardable wholesale) are absent, absent, and satisfied by AL3. "Not chain state" (§11.2) is a *digest* statement, honoured by `Excluded`, not a file statement. The pool file is wrong for the same reason a second file is: a switch would then span two databases with no transaction across them. |
-| **SAL-Q2** | One row per alt block — record, block bytes and witness in one `Coded<AltBlock>` — or the LMDB shape, three tables (`alt_meta`, `alt_block`, `alt_witness`) with an SI-16-style pairing invariant? | **One row.** | Every reader that wants the record's bytes wants the block too, or wants only membership (SAL-12, served by AL5 without a decode). The pairings become unrepresentable rather than enforced; CW-2's lifetime clause is a field's lifetime. Alt blocks are few (a table dropped at every init) so the copy cost of one row is not a consideration. Precedent for bytes inside a `Coded` record: `BondRecord` (`codec/archival.rs:305`). Reopens if E5 shows a hot record-only read — a walk that needs `height`/`coins_generated` per step without the block — in which case `alt_record` splits the row *by op*, not by table. |
-| **SAL-Q3** | `remove` of an absent key: typed refusal (`AltCannot::NotHeld`, the C++ throw at `:4354`) or idempotent success (the pool's P3 choice)? | **Refusal.** | The pool's C++ ignored `MDB_NOTFOUND`; this one throws, and its callers remove exactly the blocks they enumerated in the same switch. An absent key means the switch's own bookkeeping is wrong — surfacing it aborts the batch, which is the right outcome inside SAL-1's atomic closure. Reproduces polarity (§6.1). |
-| **SAL-Q4** | `block_weight: Option<BlockWeight>` with `None` for the C++ zero sentinel, or `BlockWeight` with zero carried? | **`Option`.** | `:2345` writes `0` for "cannot determine"; a block with a miner tx never weighs zero, so the sentinel is unambiguous and the type says what the zero meant. The consumer (`get_alternate_chains`'s `block_weight` field; the alt window's weight inputs if any) decides what to do with `None` — the rule's business, not the store's (S-ARCH discipline). |
-| **SAL-Q5** | Keep AL5 `contains` as a separate op, or fold it into AL4 (`alt_block(h)?.is_some()`)? | **Keep.** | `have_block_unlocked` (`:3004`) runs per announced hash; a membership test that decodes and copies a block for a `bool` is the wrong shape on a p2p path. `contains` is a `get` whose guard is dropped undecoded. |
-| **SAL-Q6** | `FOLDED_INTO` as a fourth gate direction (own array, own three refusals), or widen `MIRRORED_ELSEWHERE`'s twin cell to mean "table or host"? | **Own direction.** | A twin *table* is checked by opening its definition in the named file; a host *field* is checked by the host table's definition existing here and the LMDB name's definition not. Different checks, different failure messages; one array that means two things is the allowlist-by-name the gate was built to avoid (SPL-2). |
+| **SAL-Q1** | Do the alt tables stay in the **consensus file** (same `Database`, same `WriteBatch`), or move to a second file as the pool did — or into the pool file? | **RULED: consensus file — approved, with the method written into the row.** The answer was reached by checking S-POOL's grounds *against this surface* — privacy-bearing state (absent: alt blocks are public), never inside a chain write (absent: SAL-10), discardable wholesale (satisfied by AL3) — which is why the two files differ *for a reason* rather than by whoever asked first; `SPL-Q2`'s reopening criterion is what sent the question here, and this row is its discharge. | SAL-1: the switch is the one place atomicity with `connect`/`pop` is the property, and it is only expressible in one transaction. SAL-10: the C++ already writes alt rows inside the chain batch. The pool's grounds (`SPL-Q2`: privacy-bearing state; never inside a chain write; discardable wholesale) are absent, absent, and satisfied by AL3. "Not chain state" (§11.2) is a *digest* statement, honoured by `Excluded`, not a file statement. The pool file is wrong for the same reason a second file is: a switch would then span two databases with no transaction across them. |
+| **SAL-Q2** | One row per alt block — record, block bytes and witness in one `Coded<AltBlock>` — or the LMDB shape, three tables (`alt_meta`, `alt_block`, `alt_witness`) with an SI-16-style pairing invariant? | **RULED: one row — approved.** Three tables would reproduce LMDB's split for no reason; the record is one logical thing and the split was storage mechanics. | Every reader that wants the record's bytes wants the block too, or wants only membership (SAL-12, served by AL5 without a decode). The pairings become unrepresentable rather than enforced; CW-2's lifetime clause is a field's lifetime. Alt blocks are few (a table dropped at every init) so the copy cost of one row is not a consideration. Precedent for bytes inside a `Coded` record: `BondRecord` (`codec/archival.rs:305`). Reopens if E5 shows a hot record-only read — a walk that needs `height`/`coins_generated` per step without the block — in which case `alt_record` splits the row *by op*, not by table. |
+| **SAL-Q3** | `remove` of an absent key: typed refusal (`AltCannot::NotHeld`, the C++ throw at `:4354`) or idempotent success (the pool's P3 choice)? | **RULED: refusal — approved, reason REPLACED.** | *Ruled reason:* removing what is not held is a **caller-contract violation**, and `AltCannot::NotHeld` makes the caller state what it expected — L14's insert-versus-upsert ruling applied to a remove. Had the C++ returned silently the answer would still be refusal. *The posed reason* ("the C++ throws; polarity reproduced") was the transcription reflex and happened to reach the right answer; kept here only as the record of what was posed. The consequence stands: an absent key means the switch's own bookkeeping is wrong, and surfacing it aborts SAL-1's closure. |
+| **SAL-Q4** | `block_weight: Option<BlockWeight>` with `None` for the C++ zero sentinel, or `BlockWeight` with zero carried? | **RULED: `Option` — approved by the discriminator, not by pattern.** `0` is an impossible weight (every block has a coinbase), so the sentinel is unambiguous; and `None` carries a distinct, caller-actionable meaning — *not yet validated far enough to have a weight* — which is exactly what a cumulative-weight comparison must not consume silently. | `:2345` writes `0` for "cannot determine"; a block with a miner tx never weighs zero, so the sentinel is unambiguous and the type says what the zero meant. The consumer (`get_alternate_chains`'s `block_weight` field; the alt window's weight inputs if any) decides what to do with `None` — the rule's business, not the store's (S-ARCH discipline). |
+| **SAL-Q5** | Keep AL5 `contains` as a separate op, or fold it into AL4 (`alt_block(h)?.is_some()`)? | **RULED: keep — approved, on performance, stated so.** `have_block` per announced hash is a hot path, and a full record read (decode plus a block-blob copy) to answer a membership question is real waste. **Performance is the legitimate reason for a separate read here**; the op is not an accidental duplicate of AL4 and its doc comment says why it exists. | `have_block_unlocked` (`:3004`) runs per announced hash; a membership test that decodes and copies a block for a `bool` is the wrong shape on a p2p path. `contains` is a `get` whose guard is dropped undecoded. |
+| **SAL-Q6** | `FOLDED_INTO` as a fourth gate direction (own array, own three refusals), or widen `MIRRORED_ELSEWHERE`'s twin cell to mean "table or host"? | **RULED: own direction — approved.** Widening `MIRRORED_ELSEWHERE` would make one vocabulary term mean two relationships — the defect `RELAY_STATE_REFERENCE_SHAPES.md` is about, arriving in a gate's vocabulary. | A twin *table* is checked by opening its definition in the named file; a host *field* is checked by the host table's definition existing here and the LMDB name's definition not. Different checks, different failure messages; one array that means two things is the allowlist-by-name the gate was built to avoid (SPL-2). |
 
 ---
 
@@ -458,6 +514,13 @@ Nothing that was accepted becomes refused, or the reverse.
   `AltBlock.attestation_witness`".
 - `IMPLEMENTATION_INDEX.md`: `SAL-` rows LANDED with the verify grep; the
   §4 code-anchors paragraph.
+- `LMDB_WRITE_ATOMICITY_AUDIT.md` §"non-canonical": the class's open item
+  (alt boundary declared, not enforced) closed by the `alt_blocks` exclusion
+  test; the witness's §7.1.1 KAT obligation now routed through `alt_blocks`
+  (SAL-15) — a dated note; the inventory rows are the audit's pin.
+- **Carried to E5's plan when it is written:** SAL-14's deletion row for
+  `rollback_blockchain_switching` with its falsifier, and SAL-13's demotion
+  sequence.
 - `CHANGELOG.md`: one Unreleased line if the layout bump is judged
   user-visible (a store re-create at 12 → 13 is, pre-genesis, `rm -rf`).
 - This file: `Status` → LANDED with the as-built row in §11.
@@ -468,4 +531,5 @@ Nothing that was accepted becomes refused, or the reverse.
 
 | Date | Entry |
 |---|---|
+| 2026-09-25 | **Round 1 RULED** (maintainer, PR #856). All six defaults approved. **Q1** with the method in the row: the answer was reached by checking S-POOL's grounds against this surface, which is why the two files differ for a reason. **Q3's reason replaced**: refusal because removing what is not held is a caller-contract violation (L14's insert-vs-upsert applied to a remove), not because the C++ throws — the posed reason was the transcription reflex. **Q4** earns `Option` by the discriminator (`None` = not yet validated far enough to have a weight). **Q5** keeps `contains` on performance, stated explicitly. **Q6** own direction: one vocabulary term must not mean two relationships. **Two findings added:** SAL-14 (`rollback_blockchain_switching` is deleted, not ported; its absence is the evidence SAL-1 landed — row and falsifier carried to E5's plan) and SAL-15 (the fold moves the witness's §7.1.1 KAT obligation onto `alt_blocks` without moving the archival bar's count, and lets the audit's "declared, not enforced" alt boundary be enforced by one exclusion test — written in commit 2). **The increment may be cut.** |
 | 2026-09-24 | **Round 0 executed** at `9532b58f5`. Thirteen findings (SAL-1 … SAL-13); six questions posed with defaults (SAL-Q1 … Q6). Nine methods on two tables map to seven operations; the witness pair (`SAR-Q5`) becomes a field; the alt tables stay in the consensus file for the reason the pool's left it — the switch is one transaction or it is not a switch. |
