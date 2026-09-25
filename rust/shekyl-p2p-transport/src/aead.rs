@@ -29,7 +29,7 @@ pub(crate) fn hash(data: &[u8]) -> [u8; HASH_LEN] {
 ///
 /// `Hmac<Blake2s256>` does not implement `Mac` (BLAKE2 finalizes lazily).
 /// `SimpleHmac` is the wrapper the crate documents for that hash.
-fn hmac_blake2s(key: &[u8], data: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
+fn simple_hmac(key: &[u8], data: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
     let mut mac = <SimpleHmac<Blake2s256> as Mac>::new_from_slice(key)
         .expect("SimpleHmac accepts every key length");
     mac.update(data);
@@ -44,12 +44,12 @@ pub(crate) fn hkdf(
     ck: &[u8; HASH_LEN],
     ikm: &[u8],
 ) -> (Zeroizing<[u8; HASH_LEN]>, Zeroizing<[u8; HASH_LEN]>) {
-    let temp = hmac_blake2s(ck, ikm);
-    let out1 = hmac_blake2s(&temp[..], &[0x01]);
+    let temp = simple_hmac(ck, ikm);
+    let out1 = simple_hmac(&temp[..], &[0x01]);
     let mut second = Zeroizing::new([0u8; HASH_LEN + 1]);
     second[..HASH_LEN].copy_from_slice(&out1[..]);
     second[HASH_LEN] = 0x02;
-    let out2 = hmac_blake2s(&temp[..], &second[..]);
+    let out2 = simple_hmac(&temp[..], &second[..]);
     (out1, out2)
 }
 

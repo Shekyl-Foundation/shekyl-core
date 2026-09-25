@@ -4021,7 +4021,7 @@ void* shekyl_clearnet_attach(
     const uint8_t* network_id,
     int32_t initiator,
     int32_t (*on_plain)(void* ctx, const uint8_t* data, size_t len),
-    void (*on_closed)(void* ctx),
+    void (*on_closed)(void* ctx, int32_t cause),
     void (*on_ready)(void* ctx),
     /// `direction` 0 = bytes read, 1 = bytes written. Returns milliseconds
     /// the pipe should pause so the global rate limit still applies.

@@ -25,7 +25,31 @@ use crate::prefix::{prefix_for, NetworkId, PREFIX_LEN};
 use crate::{INITIATOR_FLIGHT_LEN, RESPONDER_FLIGHT_LEN};
 
 /// How long one handshake flight may take. A peer that cannot finish is closed.
+/// The 15s figure is underived; it is not a tuned budget.
 pub const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(15);
+
+/// `on_closed` cause values. Levin causes are logged by the node, not the pipe.
+pub const CLOSE_PREFIX_MISMATCH: i32 = 1;
+pub const CLOSE_TRANSPORT_HANDSHAKE: i32 = 2;
+pub const CLOSE_TRANSPORT_TIMEOUT: i32 = 3;
+
+#[cfg(test)]
+pub fn close_cause_label(cause: i32) -> &'static str {
+    match cause {
+        CLOSE_PREFIX_MISMATCH => "PrefixMismatch",
+        CLOSE_TRANSPORT_HANDSHAKE => "TransportHandshakeFailed",
+        CLOSE_TRANSPORT_TIMEOUT => "TransportTimeout",
+        _ => "TransportHandshakeFailed",
+    }
+}
+
+fn cause_of(err: PipeError) -> i32 {
+    match err {
+        PipeError::Prefix => CLOSE_PREFIX_MISMATCH,
+        PipeError::Timeout => CLOSE_TRANSPORT_TIMEOUT,
+        _ => CLOSE_TRANSPORT_HANDSHAKE,
+    }
+}
 
 /// Plaintext bytes queued ahead of the socket. One session bucket, matching
 /// `shekyl_levin::DEFAULT_MAX_PACKET_SIZE`. The pipe does not parse Levin;
@@ -38,7 +62,7 @@ const SESSION_READ_WINDOW: usize = 4;
 const READ_CHUNK: usize = 4096;
 
 pub type PlainCallback = extern "C" fn(*mut std::ffi::c_void, *const u8, usize) -> i32;
-pub type ClosedCallback = extern "C" fn(*mut std::ffi::c_void);
+pub type ClosedCallback = extern "C" fn(*mut std::ffi::c_void, i32);
 pub type ReadyCallback = extern "C" fn(*mut std::ffi::c_void);
 /// `direction` is 0 for bytes read and 1 for bytes written. The return value
 /// is how many milliseconds to wait before the next socket operation.
@@ -306,8 +330,8 @@ fn read_loop(
         &mut |direction, n| note_wire(&session, direction, n),
     ) {
         Ok(halves) => halves,
-        Err(_) => {
-            report_closed(&shared, session.hooks.on_closed, session.ctx);
+        Err(err) => {
+            report_closed(&shared, session.hooks.on_closed, session.ctx, cause_of(err));
             return;
         }
     };
@@ -316,7 +340,12 @@ fn read_loop(
     }
     (session.hooks.on_ready)(session.ctx as *mut std::ffi::c_void);
     if keys_tx.send(send).is_err() {
-        report_closed(&shared, session.hooks.on_closed, session.ctx);
+        report_closed(
+            &shared,
+            session.hooks.on_closed,
+            session.ctx,
+            CLOSE_TRANSPORT_HANDSHAKE,
+        );
         return;
     }
     let mut inbound = Vec::new();
@@ -329,13 +358,23 @@ fn read_loop(
         }) {
             Ok(plain) => {
                 if !deliver(&shared, session.hooks.on_plain, session.ctx, &plain) {
-                    report_closed(&shared, session.hooks.on_closed, session.ctx);
+                    report_closed(
+                        &shared,
+                        session.hooks.on_closed,
+                        session.ctx,
+                        CLOSE_TRANSPORT_HANDSHAKE,
+                    );
                     shared.stop.store(true, Ordering::Release);
                     break;
                 }
             }
             Err(_) => {
-                report_closed(&shared, session.hooks.on_closed, session.ctx);
+                report_closed(
+                    &shared,
+                    session.hooks.on_closed,
+                    session.ctx,
+                    CLOSE_TRANSPORT_HANDSHAKE,
+                );
                 break;
             }
         }
@@ -400,9 +439,9 @@ fn note_wire(session: &Session, direction: i32, n: usize) {
     }
 }
 
-fn report_closed(shared: &Shared, on_closed: ClosedCallback, ctx_bits: usize) {
+fn report_closed(shared: &Shared, on_closed: ClosedCallback, ctx_bits: usize, cause: i32) {
     if !shared.stop.load(Ordering::Acquire) {
-        on_closed(ctx_bits as *mut std::ffi::c_void);
+        on_closed(ctx_bits as *mut std::ffi::c_void, cause);
     }
 }
 
@@ -643,7 +682,7 @@ mod tests {
         0
     }
 
-    extern "C" fn on_closed(ctx: *mut std::ffi::c_void) {
+    extern "C" fn on_closed(ctx: *mut std::ffi::c_void, _: i32) {
         let sink = unsafe { &*(ctx as *const Sink) };
         sink.closed.store(true, Ordering::Release);
         sink.cv.notify_one();
@@ -743,7 +782,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn one_descriptor_per_connection() {
-        let before = descriptor_count();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let (pipe_tx, pipe_rx) = channel();
@@ -769,6 +807,7 @@ mod tests {
         });
         let (stream, _) = listener.accept().unwrap();
         drop(listener);
+        let before = descriptor_count();
         let sink = Sink {
             got: Mutex::new(Vec::new()),
             cv: Condvar::new(),
@@ -784,7 +823,8 @@ mod tests {
         .unwrap();
         pipe.start();
         let remote = pipe_rx.recv().unwrap();
-        assert_eq!(descriptor_count(), before + 2);
+        // Both sockets already exist. Attach must not clone a descriptor.
+        assert_eq!(descriptor_count(), before);
         remote.shutdown();
         pipe.shutdown();
         let _ = done_tx.send(());
@@ -808,7 +848,7 @@ mod tests {
         0
     }
 
-    extern "C" fn kill_from_closed(ctx: *mut std::ffi::c_void) {
+    extern "C" fn kill_from_closed(ctx: *mut std::ffi::c_void, _: i32) {
         let kill = unsafe { &*(ctx as *const Kill) };
         if let Some(pipe) = lock(&kill.pipe).clone() {
             pipe.shutdown();
@@ -881,7 +921,7 @@ mod tests {
         1
     }
 
-    extern "C" fn note_closed(ctx: *mut std::ffi::c_void) {
+    extern "C" fn note_closed(ctx: *mut std::ffi::c_void, _: i32) {
         let kill = unsafe { &*(ctx as *const Kill) };
         kill.closed.store(true, Ordering::Release);
         kill.cv.notify_one();
@@ -940,6 +980,133 @@ mod tests {
         }
         assert!(kill.closed.load(Ordering::Acquire));
         assert_eq!(kill.plains.load(std::sync::atomic::Ordering::Acquire), 1);
+        pipe.shutdown();
+        dialer.join().unwrap();
+    }
+
+    #[test]
+    fn failure_labels_are_distinct() {
+        assert_eq!(close_cause_label(CLOSE_PREFIX_MISMATCH), "PrefixMismatch");
+        assert_eq!(
+            close_cause_label(CLOSE_TRANSPORT_HANDSHAKE),
+            "TransportHandshakeFailed"
+        );
+        assert_eq!(
+            close_cause_label(CLOSE_TRANSPORT_TIMEOUT),
+            "TransportTimeout"
+        );
+        assert_ne!(
+            close_cause_label(CLOSE_PREFIX_MISMATCH),
+            close_cause_label(CLOSE_TRANSPORT_TIMEOUT)
+        );
+    }
+
+    struct Cause {
+        cause: std::sync::atomic::AtomicI32,
+        ready: AtomicBool,
+    }
+
+    extern "C" fn cause_closed(ctx: *mut std::ffi::c_void, cause: i32) {
+        let cause_slot = unsafe { &*(ctx as *const Cause) };
+        cause_slot.cause.store(cause, Ordering::Release);
+    }
+
+    extern "C" fn cause_ready(ctx: *mut std::ffi::c_void) {
+        let cause_slot = unsafe { &*(ctx as *const Cause) };
+        cause_slot.ready.store(true, Ordering::Release);
+    }
+
+    extern "C" fn ignore_plain(_: *mut std::ffi::c_void, _: *const u8, _: usize) -> i32 {
+        0
+    }
+
+    #[test]
+    fn wrong_prefix_closes_with_its_label() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dialer = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            stream.write_all(&[0xff; PREFIX_LEN]).unwrap();
+            let _ = stream.shutdown(Shutdown::Both);
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let slot = Cause {
+            cause: std::sync::atomic::AtomicI32::new(0),
+            ready: AtomicBool::new(false),
+        };
+        let pipe = Pipe::attach(
+            stream,
+            &[0x11; 16],
+            false,
+            PipeHooks {
+                on_plain: ignore_plain,
+                on_closed: cause_closed,
+                on_ready: cause_ready,
+                on_wire,
+            },
+            &slot as *const Cause as *mut _,
+        )
+        .unwrap();
+        pipe.start();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while slot.cause.load(Ordering::Acquire) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(slot.cause.load(Ordering::Acquire), CLOSE_PREFIX_MISMATCH);
+        assert!(!slot.ready.load(Ordering::Acquire));
+        pipe.shutdown();
+        dialer.join().unwrap();
+    }
+
+    #[test]
+    fn six_second_transport_delay_still_reaches_the_channel() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dialer = std::thread::spawn(move || {
+            let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            std::thread::sleep(Duration::from_secs(6));
+            let sink = Sink {
+                got: Mutex::new(Vec::new()),
+                cv: Condvar::new(),
+                closed: AtomicBool::new(false),
+            };
+            let pipe = Pipe::attach(
+                stream,
+                &[0x59; 16],
+                true,
+                hooks(),
+                &sink as *const Sink as *mut _,
+            )
+            .unwrap();
+            pipe.start();
+            pipe.write(b"after-six-seconds").unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+            pipe.shutdown();
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let slot = Cause {
+            cause: std::sync::atomic::AtomicI32::new(0),
+            ready: AtomicBool::new(false),
+        };
+        let pipe = Pipe::attach(
+            stream,
+            &[0x59; 16],
+            false,
+            PipeHooks {
+                on_plain: ignore_plain,
+                on_closed: cause_closed,
+                on_ready: cause_ready,
+                on_wire,
+            },
+            &slot as *const Cause as *mut _,
+        )
+        .unwrap();
+        pipe.start();
+        let deadline = Instant::now() + Duration::from_secs(12);
+        while !slot.ready.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(slot.ready.load(Ordering::Acquire));
         pipe.shutdown();
         dialer.join().unwrap();
     }

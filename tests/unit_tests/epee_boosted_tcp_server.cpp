@@ -763,7 +763,7 @@ namespace
   void* probe_attach(
     intptr_t native, const uint8_t*, int32_t,
     int32_t (*)(void*, const uint8_t*, size_t),
-    void (*)(void*), void (*)(void*),
+    void (*)(void*, int32_t), void (*)(void*),
     int32_t (*)(void*, int32_t, size_t), void*)
   {
     std::lock_guard<std::mutex> lock(probe().mu);
@@ -894,7 +894,7 @@ namespace
   void* drop_attach(
     intptr_t native, const uint8_t*, int32_t,
     int32_t (*on_plain)(void*, const uint8_t*, size_t),
-    void (*)(void*), void (*)(void*),
+    void (*)(void*, int32_t), void (*)(void*),
     int32_t (*)(void*, int32_t, size_t), void* ctx)
   {
     g_plain = on_plain;

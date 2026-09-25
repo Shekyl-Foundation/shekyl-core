@@ -1242,6 +1242,23 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::do_handshake_with_peer(p2p_connection_context& context_, bool just_take_peerlist)
   {
+    // A pipe-backed dial waits out the transport handshake before Levin's
+    // 5s clock starts. The pipe's own deadline stays 15s and is underived;
+    // this wait only stops a stuck pipe from holding the dial forever.
+    if (auto gate = context_.m_clearnet_channel)
+    {
+      std::unique_lock<std::mutex> lock(gate->mu);
+      const bool signaled = gate->cv.wait_for(lock, std::chrono::seconds(16), [&] {
+        return gate->ready || gate->failed;
+      });
+      if (!gate->ready)
+      {
+        const int cause = signaled ? gate->cause : 3;
+        LOG_WARNING_CC(context_, epee::net_utils::clearnet_failure_label(cause));
+        return false;
+      }
+    }
+
     network_zone& zone = m_network_zones.at(context_.m_remote_address.get_zone());
 
     typename COMMAND_HANDSHAKE::request arg;
@@ -1325,7 +1342,7 @@ namespace nodetool
 
     if(!hsh_result)
     {
-      LOG_WARNING_CC(context_, "COMMAND_HANDSHAKE Failed");
+      LOG_WARNING_CC(context_, timeout ? "LevinHandshakeTimeout" : "LevinHandshakeRejected");
       if (!timeout)
         zone.m_net_server.get_config_object().close(context_.m_connection_id);
     }

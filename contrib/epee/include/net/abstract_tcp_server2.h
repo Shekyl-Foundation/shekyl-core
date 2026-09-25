@@ -104,7 +104,7 @@ namespace net_utils
       const uint8_t* network_id,
       int32_t initiator,
       int32_t (*on_plain)(void* ctx, const uint8_t* data, size_t len),
-      void (*on_closed)(void* ctx),
+      void (*on_closed)(void* ctx, int32_t cause),
       void (*on_ready)(void* ctx),
       /// `direction` is 0 for bytes read and 1 for bytes written. Returns
       /// how many milliseconds the pipe should wait before the next record,
@@ -324,7 +324,7 @@ namespace net_utils
     void fail_unstarted();
     void detach_network_pipe();
     static int32_t network_pipe_on_plain(void* ctx, const uint8_t* data, size_t len);
-    static void network_pipe_on_closed(void* ctx);
+    static void network_pipe_on_closed(void* ctx, int32_t cause);
     static void network_pipe_on_ready(void* ctx);
     static int32_t network_pipe_on_wire(void* ctx, int32_t direction, size_t bytes);
   public:

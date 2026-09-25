@@ -1056,6 +1056,7 @@ namespace net_utils
       return false;
     }
     m_network_fd_released = true;
+    m_conn_context.arm_clearnet_channel();
     m_pipe_ctx = std::make_shared<network_pipe_ctx>();
     {
       boost::weak_ptr<connection> weak(this->shared_from_this());
@@ -1185,6 +1186,7 @@ namespace net_utils
     auto keep = lock_network_pipe_ctx<T>(ctx);
     if (!keep)
       return;
+    keep->m_conn_context.note_clearnet_ready();
     boost::asio::post(keep->strand_, [keep] {
       std::lock_guard<std::mutex> guard(keep->m_state.lock);
       if (keep->m_state.status == status_t::RUNNING)
@@ -1252,11 +1254,12 @@ namespace net_utils
   }
 
   template<typename T>
-  void connection<T>::network_pipe_on_closed(void* ctx)
+  void connection<T>::network_pipe_on_closed(void* ctx, int32_t cause)
   {
     auto keep = lock_network_pipe_ctx<T>(ctx);
     if (!keep)
       return;
+    keep->m_conn_context.note_clearnet_failed(cause);
     boost::asio::post(keep->strand_, [keep] {
       std::lock_guard<std::mutex> guard(keep->m_state.lock);
       if (keep->m_state.status == status_t::RUNNING)

@@ -32,6 +32,9 @@
 #include <boost/uuid/uuid.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/address_v6.hpp>
+#include <memory>
+#include <mutex>
+#include <condition_variable>
 #include <typeinfo>
 #include <type_traits>
 #include "byte_slice.h"
@@ -363,6 +366,30 @@ namespace net_utils
 	/************************************************************************/
 	/*                                                                      */
 	/************************************************************************/
+	/// Shared by the live connection and the context copy `connect` returns.
+	/// The Levin handshake waits here until the transport channel is up.
+	struct clearnet_channel_gate
+	{
+	  std::mutex mu;
+	  std::condition_variable cv;
+	  bool ready = false;
+	  bool failed = false;
+	  int cause = 0;
+	};
+
+	inline const char* clearnet_failure_label(int cause)
+	{
+	  switch (cause)
+	  {
+	    case 1: return "PrefixMismatch";
+	    case 2: return "TransportHandshakeFailed";
+	    case 3: return "TransportTimeout";
+	    case 4: return "LevinHandshakeTimeout";
+	    case 5: return "LevinHandshakeRejected";
+	    default: return "TransportHandshakeFailed";
+	  }
+	}
+
 	struct connection_context_base
 	{
     const boost::uuids::uuid m_connection_id;
@@ -378,6 +405,34 @@ namespace net_utils
     double m_current_speed_up;
     double m_max_speed_down;
     double m_max_speed_up;
+    std::shared_ptr<clearnet_channel_gate> m_clearnet_channel;
+
+    void arm_clearnet_channel()
+    {
+      if (!m_clearnet_channel)
+        m_clearnet_channel = std::make_shared<clearnet_channel_gate>();
+    }
+
+    void note_clearnet_ready()
+    {
+      if (!m_clearnet_channel)
+        return;
+      std::lock_guard<std::mutex> lock(m_clearnet_channel->mu);
+      m_clearnet_channel->ready = true;
+      m_clearnet_channel->cv.notify_all();
+    }
+
+    void note_clearnet_failed(int cause)
+    {
+      if (!m_clearnet_channel)
+        return;
+      std::lock_guard<std::mutex> lock(m_clearnet_channel->mu);
+      if (m_clearnet_channel->ready)
+        return;
+      m_clearnet_channel->failed = true;
+      m_clearnet_channel->cause = cause;
+      m_clearnet_channel->cv.notify_all();
+    }
 
     connection_context_base(boost::uuids::uuid connection_id,
                             const network_address &remote_address, bool is_income, bool ssl,
@@ -416,11 +471,13 @@ namespace net_utils
     connection_context_base(const connection_context_base& a): connection_context_base()
     {
       set_details(a.m_connection_id, a.m_remote_address, a.m_is_income, a.m_ssl);
+      m_clearnet_channel = a.m_clearnet_channel;
     }
 
     connection_context_base& operator=(const connection_context_base& a)
     {
       set_details(a.m_connection_id, a.m_remote_address, a.m_is_income, a.m_ssl);
+      m_clearnet_channel = a.m_clearnet_channel;
       return *this;
     }
     

@@ -561,4 +561,81 @@ mod tests {
             "ac9785f15ea6b2a4eac23e7c168e34ca3aa62f35a5d84cdbc01eb822264aed4d43016f"
         );
     }
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// Cacophony `Noise_NN_25519_ChaChaPoly_BLAKE2s`, the classical pattern NNhfs
+    /// shares. Source: snow `tests/vectors/cacophony.txt` at
+    /// `8ac60f51cfe3e010c84f0a454cc575ad9204fa12`
+    /// (https://github.com/mcginty/snow/blob/8ac60f51cfe3e010c84f0a454cc575ad9204fa12/tests/vectors/cacophony.txt).
+    #[test]
+    fn cacophony_nn_blake2s_matches_sym() {
+        let prologue = unhex("4a6f686e2047616c74");
+        let init_e: [u8; 32] =
+            unhex("893e28b9dc6ca8d611ab664754b8ceb7bac5117349a4439a6b0569da977c464a")
+                .try_into()
+                .unwrap();
+        let resp_e: [u8; 32] =
+            unhex("bbdb4cdbd309f1a1f2e1456967fe288cadd6f712d65dc7b7793d5e63da6b375b")
+                .try_into()
+                .unwrap();
+        let p0 = unhex("4c756477696720766f6e204d69736573");
+        let p1 = unhex("4d757272617920526f746862617264");
+        let p2 = unhex("462e20412e20486179656b");
+        let p3 = unhex("4361726c204d656e676572");
+        let name = b"Noise_NN_25519_ChaChaPoly_BLAKE2s";
+
+        let init_sec = StaticSecret::from(init_e);
+        let resp_sec = StaticSecret::from(resp_e);
+        let init_pub = PublicKey::from(&init_sec).to_bytes();
+        let resp_pub = PublicKey::from(&resp_sec).to_bytes();
+
+        let mut ini = Sym::new(name, &prologue);
+        ini.mix_hash(&init_pub);
+        let mut msg1 = init_pub.to_vec();
+        msg1.extend(ini.encrypt_and_hash(&p0).unwrap());
+        assert_eq!(
+            hex_of(&msg1),
+            "ca35def5ae56cec33dc2036731ab14896bc4c75dbb07a61f879f8e3afa4c79444c756477696720766f6e204d69736573"
+        );
+
+        let mut resp = Sym::new(name, &prologue);
+        resp.mix_hash(&init_pub);
+        assert_eq!(resp.decrypt_and_hash(&msg1[32..]).unwrap(), p0);
+        resp.mix_hash(&resp_pub);
+        let shared = resp_sec.diffie_hellman(&PublicKey::from(init_pub));
+        resp.mix_key(shared.as_bytes());
+        let mut msg2 = resp_pub.to_vec();
+        msg2.extend(resp.encrypt_and_hash(&p1).unwrap());
+        assert_eq!(
+            hex_of(&msg2),
+            "95ebc60d2b1fa672c1f46a8aa265ef51bfe38e7ccb39ec5be34069f144808843ff34a6759d06e7733c83aeb5556c15bc762b664b3ba0556b1e7eaea4168bb6"
+        );
+
+        ini.mix_hash(&resp_pub);
+        let shared = init_sec.diffie_hellman(&PublicKey::from(resp_pub));
+        ini.mix_key(shared.as_bytes());
+        assert_eq!(ini.decrypt_and_hash(&msg2[32..]).unwrap(), p1);
+        assert_eq!(
+            hex_of(&ini.h),
+            "a621e3943a29c1d984b43727697fbec096107d0b569031ac7e0f1131de19f4f4"
+        );
+
+        let (k_ini, k_resp) = crate::aead::hkdf(&ini.ck, &[]);
+        let t0 = crate::aead::seal(&k_ini, 0, &[], &p2).unwrap();
+        let t1 = crate::aead::seal(&k_resp, 0, &[], &p3).unwrap();
+        assert_eq!(
+            hex_of(&t0),
+            "79285da88da3535f52b07b70006c85706de7ddb1fd3dddac995b7e"
+        );
+        assert_eq!(
+            hex_of(&t1),
+            "ffdad3a7f0db4c39077f223659c5c1d107666405566ecdf4ab53bf"
+        );
+    }
 }
