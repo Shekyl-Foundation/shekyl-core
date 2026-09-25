@@ -66,10 +66,10 @@ ruled that it fires per connection, independently drawn, so sessions
 are not correlated by phase. It did not ask why 60.
 
 Levin invoke timeouts are not in this table. They are keyed one-shots,
-below. The source type is spelled `anvoke_handler`
-(`levin_protocol_handler_async.h:226`). That is an inherited misspelling.
-This document calls them invoke timeouts. The waits are at `:236` and
-`:298`.
+below. The C++ type at `levin_protocol_handler_async.h:226` is spelled
+`anvoke_handler`. That file goes away with the event loop, so the
+spelling is not renamed there. Rust spells it `invoke`. The waits are
+at `:236` and `:298`.
 
 Anything that merely expires is evaluated when it is next used, from
 timestamps: ban entries, the 24-hour peerlist demotion, the accept-rate
