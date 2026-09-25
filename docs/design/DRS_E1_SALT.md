@@ -42,10 +42,15 @@ are given by the increments that own the tables and can be checked against
 each other"* (`SPL-Q2`'s reopening criterion). This document's answer is
 **the other one — the consensus file, the same `WriteBatch`** — and §6
 SAL-1 / SAL-10 state why the two answers differ: the pool is never inside
-a chain transaction and holds privacy-bearing relay state; the alt store is
-*only ever* written inside one (the C++ already does so — the witness write
-dereferences the live batch's `m_write_txn`), holds public data, and the one
-place it matters — the switch — is the place atomicity is the property.
+a chain transaction and holds privacy-bearing relay state; the alt store's
+**admission and reorg writes** — `add_alt_block`, the witness, `remove_alt_block`
+— run inside one (the C++ already does so — the witness write dereferences
+the live batch's `m_write_txn`), it holds public data, and the one place it
+matters — the switch — is the place atomicity is the property. The one
+write that is *not* inside a chain transaction is `drop_alt_blocks`, which
+opens its own (SAL-9) at init and reset; it is the wipe, not the reorg, and
+AL3 puts it in the caller's batch. (Narrowed on review, Copilot PR #856:
+the first draft said "only ever".)
 Same rule, opposite facts, opposite answer (`SAL-Q1`).
 
 **Two lanes, stated once.** *E1 S-ALT* (this document) is the **store**: the
@@ -148,10 +153,22 @@ lifetime of its own (CW-2, made structural).
   the C++ throws as strings (`AltCannot`).
 - **The atomic switch** (SAL-1): pop to the split, connect the alt chain,
   demote the disconnected blocks, remove the promoted alts — one
-  `ChainStore::write` closure. A failure anywhere aborts everything;
-  `rollback_blockchain_switching` has no Rust counterpart because the store
-  never shows a half-switched chain. E5 inherits the *sequence* (read the
-  tip before popping it — SAL-13), not the compensation.
+  `ChainStore::write` closure. A failure anywhere aborts everything the
+  **store** did; the store never shows a half-switched chain, so the
+  rollback's *store* compensation has no Rust counterpart. E5 inherits the
+  *sequence* (read the tip before popping it — SAL-13), not the
+  compensation — **and the non-store side effects the C++ rollback also
+  undid** (Copilot, PR #856): `pop_block_from_blockchain` re-adds the popped
+  block's transactions to the pool and steps the hard-fork tracker
+  (`:711`, `:738`), promotion takes transactions out of the pool, and both
+  invalidate the block-template cache (`:753`). Those are not in the store's
+  transaction. They need no compensation **if they run after the closure
+  commits**: chain-first, pool-second is already the ruled order
+  (`SPL-Q5`), so E5 applies the pool returns and the cache invalidation from
+  the closure's `Ok`, and an abort has applied nothing to compensate. The
+  hard-fork state is `hf_versions`, a store table, inside the transaction.
+  A crash between the commit and the pool's apply is the case the pool's
+  reconcile-at-open already owns (`SPL-Q5`, new E5 work).
 - **A deletion, not a port** (SAL-14): `rollback_blockchain_switching`
   (`:1080`) exists only to compensate for writes the C++ committed
   separately. At cutover it is deleted; E5's plan carries the row and its
@@ -235,8 +252,8 @@ and `pop`; **no separate handle, no separate transaction** (`SAL-Q1`).
 
 | Type | Shape | Home (default) | Why |
 |---|---|---|---|
-| `AltBlock` | `{ height: BlockHeight, block_weight: Option<BlockWeight>, cumulative_difficulty: CumulativeDifficulty, coins_generated: AtomicUnits, block: Vec<u8> /* BlockBody bytes, opaque */, attestation_witness: Option<Vec<u8>> }` | `shekyl-chain-store::codec::alt` | `alt_block_data_t` re-specified: the u128 as one field, the weight's zero sentinel as `None`, the misnamed `cumulative_weight` (it is the block's own weight, `:2313–2340`) named for what it holds, the block bytes and the CW-2 witness beside the record so the pairing invariants S-POOL had to *enforce* (SI-16) are here *unrepresentable* (`SAL-Q2`). Constructed through a `checked()` that refuses empty block bytes and an empty (as opposed to absent) witness; the codec refuses what construction would (SI-14's shape). |
-| `AltCannot` | `{ AlreadyHeld, NotHeld, EmptyBlock }` | `shekyl-chain-store::store::error`, as `StoreCannot::Alt(AltCannot)` | The store's decisions, not faults — `PoolCannot`'s shape. `AlreadyHeld` is CEN-K3's belt; `NotHeld` is the C++ throw at `:4354`, typed. |
+| `AltBlock` | `{ height: BlockHeight, block_weight: Option<BlockWeight>, cumulative_difficulty: CumulativeDifficulty, coins_generated: AtomicUnits, block: Vec<u8> /* BlockBody bytes, opaque */, attestation_witness: Option<Vec<u8>> }` | `shekyl-chain-store::codec::alt` | `alt_block_data_t` re-specified: the u128 as one field, the weight's zero sentinel as `None`, the misnamed `cumulative_weight` (it is the block's own weight, `:2313–2340`) named for what it holds, the block bytes and the CW-2 witness beside the record so the pairing invariants S-POOL had to *enforce* (SI-16) are here *unrepresentable* (`SAL-Q2`). Constructed through `checked()`, which applies **the shared validation, not an emptiness check** (sharpened on review, Copilot PR #856): the block bytes must satisfy `BlockBody::well_formed` — the `blocks` table's own rule, which parses — and a present witness must satisfy `AttestationWitnessBytes::well_formed` — the height-keyed twin's own rule, which refuses empty and over-bound; a zero weight is refused; the codec refuses the same three at decode (SI-14's shape). **The parse boundary is explicit:** the record does not hand out raw bytes — `AltBlock::block()` returns a parsed `Block` (every C++ consumer parses: `:937`, `:2023`, `:2590`, `:6749`; a row that decodes *is* a block), and the untyped `Vec<u8>` is a storage detail behind a private field, never a surface. And the key is not trusted: **AL1 verifies `id == block.hash()`** (`AltCannot::IdentityMismatch`), the same belt class as `chain_reads::block_body` verifying a blob against `block_info.hash` — verification of a caller-supplied identity, not computation of a consensus value (C2-R8). The witness accessor stays `Option<&[u8]>` for parity with the height-keyed read (S-ARCH #15 returns `Option<Vec<u8>>`); a typed witness wrapper is a change to that family's whole surface and is E4's. |
+| `AltCannot` | `{ AlreadyHeld, NotHeld, IdentityMismatch, EmptyBlock }` | `shekyl-chain-store::store::error`, as `StoreCannot::Alt(AltCannot)` | The store's decisions, not faults — `PoolCannot`'s shape. `AlreadyHeld` is CEN-K3's belt; `NotHeld` is the C++ throw at `:4354`, typed; `IdentityMismatch` (added on review, Copilot PR #856) refuses an AL1 whose key is not the hash of the block it stores — the C++ trusted the caller (`:2359`), the store need not. |
 | `FOLDED_INTO: &[(&str, &str, &str)]` | `(lmdb_name, host_table, reason)` | `schema.rs`, beside `MIRRORED_ELSEWHERE` | The bijection gate's fourth direction: an X-macro table whose bytes now live as a **field of another table's record**. Rule-47 self-assertion as the other two: an entry naming a table not in the X-macro is red; an entry whose host is not a `TableDefinition` in `schema.rs` is red; an entry whose LMDB name *is* still defined in `schema.rs` is red (SAL-2). |
 
 No new vocabulary in `shekyl-types`: every scalar the record needs exists.
@@ -264,7 +281,7 @@ No new vocabulary in `shekyl-types`: every scalar the record needs exists.
 
 | Table | At v12 | After this increment (v13) | Op |
 |---|---|---|---|
-| `alt_blocks` | `LmdbHashKey → Unshaped` (#13) | `[u8; 32]` (`BlockHash`) → `Coded<AltBlock>` | AL1–AL7 |
+| `alt_blocks` | `LmdbHashKey → Unshaped` (#13) | `LmdbHashKey → Coded<AltBlock>` — the key type **stays** `LmdbHashKey`: the LMDB table is `compare_hash32`, the key-types gate maps that comparator to `LmdbHashKey`, and `BlockHash` converts at the API boundary (`alt_reads::key`). *Corrected on review (Copilot, PR #856): the first draft wrote `[u8; 32]`, the pool file's deliberate exception, which would have failed the gate or silently changed key order.* | AL1–AL7 |
 | `archival_alt_attestation_witness` | `LmdbHashKey → Unshaped` (#21) | **folded** — no definition in `schema.rs`; named in `FOLDED_INTO` with `alt_blocks` as the host (SAL-2) | — |
 
 `SCHEMA_VERSION` 12 → 13 (rule 42; `tables.snap` loses exactly one row and
@@ -375,7 +392,10 @@ lands (§10).
   `store_archival_alt_attestation_witness` dereferences `*m_write_txn`
   unguarded (`db_lmdb.cpp:9137`) — it would fault outside a batch. The
   "which file" question is answered by the transaction the C++ already
-  uses: the alt store has never had a transaction of its own. The pool's
+  uses for admission and reorg: those alt writes have never had a
+  transaction of their own — the one that has, `drop_alt_blocks`'s
+  `TXN_PREFIX(0)` (SAL-9), is the wipe at init/reset, not a reorg write,
+  and AL3 folds it into the caller's batch. The pool's
   separate file was ruled on privacy and on the pool never being inside a
   chain write (`SPL-Q2`); both grounds are absent here. The two answers are
   checked against each other, as `SPL-Q2` asked: same rule, opposite facts.
@@ -409,14 +429,20 @@ lands (§10).
   `:1204`) pops the blocks the failed switch promoted and re-adds the ones
   it disconnected — it exists *only* because the C++ commits the switch's
   writes separately (SAL-1). Under one `ChainStore::write` closure there is
-  no half-switched state to compensate for, so the function has no Rust
-  counterpart and is deleted at the cutover rather than moved. **Its
+  no half-switched **store** state to compensate for, so the function has no
+  Rust counterpart and is deleted at the cutover rather than moved. **Its
   absence is the evidence that the atomicity landed**: a Rust reorg that
-  needed a rollback would be a reorg that was not one transaction. The row
-  belongs to E5's plan with the falsifier stated there
-  (`git grep rollback_blockchain_switching src/` → 0 after the cutover);
-  this document names it so the E5 plan inherits a deletion, not a
-  translation task.
+  needed a rollback would be a reorg that was not one transaction. **What
+  the deletion does not cover, stated so E5 does not inherit a gap**
+  (Copilot, PR #856): the C++ function also re-adds the failed promotion's
+  transactions to the pool and re-pops hard-fork and cache state — effects
+  outside the store's transaction. Their owner is an **ordering rule**, not
+  a rollback: pool and cache effects are applied from the closure's `Ok`
+  (chain-first, pool-second — `SPL-Q5`'s contract), so an aborted switch has
+  applied nothing non-store. The row belongs to E5's plan with both halves
+  and the falsifier (`git grep rollback_blockchain_switching src/` → 0 after
+  the cutover); this document names it so the E5 plan inherits a deletion
+  plus an ordering rule, not a translation task.
 - **SAL-15 — the folded witness's §7.1.1 obligation moves with it, and the
   fold lets the "declared, not enforced" boundary be enforced** *(added on
   the rulings, 2026-09-25; checked against `DAEMON_REDB_STORE.md` §7.1.1
@@ -550,5 +576,6 @@ Nothing that was accepted becomes refused, or the reverse.
 
 | Date | Entry |
 |---|---|
+| 2026-09-25 | **Copilot round on PR #856 — four findings, all validated at source, all applied.** **(1)** SAL-1 / SAL-14 overstated what one `ChainStore::write` closure covers: the store rows, not the pool re-adds, the hard-fork step or the cache invalidation `pop_block_from_blockchain` and promotion also perform (`:711`, `:738`, `:753`) and the C++ rollback also undid. The deletion stands for the store half; the non-store half's owner is an **ordering rule** — apply pool and cache effects from the closure's `Ok` (chain-first, pool-second, `SPL-Q5`) — written into §2.3 and SAL-14 so E5 inherits a deletion *plus* an ordering rule. **(2)** §4 wrote the shaped key as `[u8; 32]`; the table is `compare_hash32` and the key-types gate maps that to `LmdbHashKey` — corrected; `BlockHash` converts at the API boundary. **(3)** §3.4's `AltBlock` row described `checked()` as an emptiness check over untyped bytes; sharpened to the shared validation (`BlockBody::well_formed`, `AttestationWitnessBytes::well_formed`), an explicit parse boundary (`block()` returns a parsed `Block`; no raw-bytes surface), and a new AL1 belt `AltCannot::IdentityMismatch` — the key must hash the block. **(4)** §0 and SAL-10 said the alt store is "only ever" written inside a chain transaction; `drop_alt_blocks` opens its own (SAL-9) — narrowed to the admission and reorg writes. |
 | 2026-09-25 | **Round 1 RULED** (maintainer, PR #856). All six defaults approved. **Q1** with the method in the row: the answer was reached by checking S-POOL's grounds against this surface, which is why the two files differ for a reason. **Q3's reason replaced**: refusal because removing what is not held is a caller-contract violation (L14's insert-vs-upsert applied to a remove), not because the C++ throws — the posed reason was the transcription reflex. **Q4** earns `Option` by the discriminator (`None` = not yet validated far enough to have a weight). **Q5** keeps `contains` on performance, stated explicitly. **Q6** own direction: one vocabulary term must not mean two relationships. **Two findings added:** SAL-14 (`rollback_blockchain_switching` is deleted, not ported; its absence is the evidence SAL-1 landed — row and falsifier carried to E5's plan) and SAL-15 (the fold moves the witness's §7.1.1 KAT obligation onto `alt_blocks` without moving the archival bar's count, and lets the audit's "declared, not enforced" alt boundary be enforced by one exclusion test — written in commit 2). **The increment may be cut.** |
 | 2026-09-24 | **Round 0 executed** at `9532b58f5`. Thirteen findings (SAL-1 … SAL-13); six questions posed with defaults (SAL-Q1 … Q6). Nine methods on two tables map to seven operations; the witness pair (`SAR-Q5`) becomes a field; the alt tables stay in the consensus file for the reason the pool's left it — the switch is one transaction or it is not a switch. |
