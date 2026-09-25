@@ -387,10 +387,15 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // the production send path does (`sign_bridge.rs` via
     // `tx_prefix_hash_from_parts`): the FCMP++ signable hash is the Keccak hash
     // over the prefix fields assembled into `wire_tx` below — the key image, the
-    // two output keys + view tags, and the (empty) extra. Deriving it from the
-    // constructed parts rather than a fixed constant means mutating any of those
-    // prefix fields would invalidate the proof, so this oracle actually
-    // exercises the prefix-binding consensus rule (not just self-consistency).
+    // two output keys + view tags, and the conforming extra (the same bytes
+    // `wire_tx` and the encoder both carry; hashing an empty extra here would
+    // have bound the proof to bytes the transaction does not serialize — the
+    // defect #853's review found in this test's sibling, `input_cap_cost`).
+    // Deriving it from the constructed parts rather than a fixed constant means
+    // mutating any of those prefix fields would invalidate the proof, so this
+    // oracle actually exercises the prefix-binding consensus rule (not just
+    // self-consistency).
+    let extra = conforming_pqc_extra(2);
     let tx_prefix_hash = tx_prefix_hash_from_parts(
         &[*ki.key_image.as_bytes()],
         &[payment.output_key, change.output_key],
@@ -398,7 +403,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),
         ],
-        &[],
+        &extra,
     );
     let signed = sign_transaction(
         tx_prefix_hash,
@@ -550,7 +555,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                     view_tag: change.view_tag_prefilter,
                 },
             ],
-            extra: conforming_pqc_extra(2),
+            extra: extra.clone(),
         },
         ct: Ct::Fcmp {
             fee,
@@ -629,7 +634,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         // Same conforming 0x06/0x07 fields the hand-assembled tx above carries:
         // the two encoders are asserted byte-identical, so both sides must build
         // the transaction consensus would actually accept (CEN-I19).
-        tx_extra: conforming_pqc_extra(2),
+        tx_extra: extra,
         fee,
         enc_amounts: signed.enc_amounts.clone(),
         enc_labels: signed.enc_labels.clone(),
