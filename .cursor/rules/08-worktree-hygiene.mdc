@@ -58,8 +58,18 @@ text** — and what closes or reopens that finding.
   clone) is a **belt**, kept, not the mitigation for an unknown cause.
   Operationally: edit tracked files with the edit tool only; let `cargo
   fmt` be the one out-of-editor writer, and check `git status` after it.
+- **`wt-salt` (2026-09-25) — the first instance caught by a mechanism
+  rather than by vigilance.** Between a pre-flight commit and the ruling
+  edit an hour later, `DRS_E1_SALT.md`'s working copy reverted to the buffer
+  from *before* eleven line-number corrections had been applied and
+  committed. Nobody noticed a modified file. What noticed was the edit
+  itself: the ruling edit was an **anchored** script — replace exactly this
+  text with exactly that — and it refused to run because the text it was
+  written against was not there (`:4354` was `:4353` again). Nothing was
+  written; the file was restored from `HEAD`; the edit was re-run against
+  the restored text and applied cleanly. See "The edit form that notices".
 
-Both were caught by a human or an agent reading the diff. That does not
+Most of these were caught by a human or an agent reading the diff. That does not
 scale, and it is not the dangerous case. **The dangerous case is a drift
 followed by `git add -A` or `git commit -a`:** the stale content is
 committed, and the tree that was tested and the tree that ships diverge
@@ -92,6 +102,70 @@ exactly the content the verification existed to remove.
    verification. A clone of the pushed commit makes the tested artifact and
    the shipped artifact **the same object**, and it is the only mitigation
    here that does not depend on someone noticing.
+
+## The edit form that notices
+
+The fourteenth instance is worth more than the count, because the
+detection did not come from a check designed to detect drift. It came from
+an edit that **could not apply to text it was not written against**.
+
+An anchored edit — `StrReplace` with enough context to be unique, a script
+that asserts its `old` occurs exactly once before writing — is
+self-verifying: it carries a claim about the file's current content, and a
+drifted file falsifies the claim, so the edit fails loudly and writes
+nothing. A **line-number** edit (`sed -i '4354s/…/…/'`) or a **wholesale
+write** (`Write` of a whole file, a heredoc over it) carries no such claim:
+it succeeds against whatever is there, and against a drifted file it
+succeeds *silently* — which is exactly how eleven reverted line numbers
+would have travelled into a commit under a tool that wrote the file whole.
+
+So the durable mitigation is not another check. It is the form of the edit:
+
+- **Treat the working copy as untrusted.** Not because it is usually wrong,
+  but because when it is wrong nothing tells you.
+- **Anchor every edit to the text it expects.** Prefer `StrReplace` and
+  assert-count-then-replace scripts over line-addressed or whole-file
+  writes for any file that has been sitting in a worktree between edits.
+  When a wholesale write is unavoidable (a new file, a regeneration), diff
+  the result against `HEAD` and read every hunk you did not intend.
+  Two halves, and they compose: the `wt-e6-s6` entry names the **cause**
+  (a tracked file rewritten on disk behind an open editor buffer — by
+  `cargo fmt`, or by a script that reads the file and writes it back
+  whole), and this section names the **form that notices**. An
+  assert-then-replace *script* that writes the whole file back is anchored
+  and still an out-of-editor rewrite: it detects the drift it inherits and
+  can seed the next one. The edit tool is anchored and is not a rewrite.
+  Prefer it; when a script is the tool, check `git status` after it as
+  after `cargo fmt`.
+- **An anchored edit that fails to match is a finding, not a nuisance.**
+  Do not "fix" it by loosening the anchor or by re-reading the file and
+  re-targeting the edit against what is there now. Run `git diff` on the
+  file first: if the current text differs from `HEAD` in lines you did not
+  touch this session, that is the drift, and `git checkout -- <path>` comes
+  before the edit does.
+
+Constraints 1 and 2 stand; this is the mechanism that makes constraint 1's
+"read every hunk you did not make" happen by construction rather than by
+attention.
+
+**Does this apply to work already done? Yes — and the same day.** The
+commit that landed one hour before this section was written (`1b5023cca`,
+PR #856's neighbour PR #851) used `sed -i 'Ns/…/'` for rustdoc-link edits
+on `pool.rs` and `mod.rs`. Those edits were **safe by circumstance, not by
+form**: the files had been created by the same session minutes earlier, and
+the pushed SHA was verified from a fresh clone. Be precise about what that
+verification did and did not establish — the gates pass **whether or not
+drift was carried**, because a drifted-but-valid file still compiles and
+still resolves its links. A green gate is evidence the tree is
+well-formed; it is not evidence the tree is the one you edited. Only the
+anchor knows that.
+
+**The line to guard hardest is the third.** The instinct on a refused
+match is to widen the anchor until it matches — re-read the file, retarget
+against what is there now, get past it. That converts a drift *detection*
+into a successful write against stale content: the exact failure the form
+prevents, undone by the reflex to finish. `git diff` first is the whole
+defence, and it is the step under pressure to skip.
 
 ## What this rule does not change
 
