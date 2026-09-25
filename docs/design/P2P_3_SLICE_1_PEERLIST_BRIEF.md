@@ -4,9 +4,7 @@
 by connector, derived from the address type. Gray is drawn when white falls
 below that target, not on a fixed minute. The peerlist moves into Rust. The C++ is a
 quarry: evidence for the invariant, and a list of behaviors the Rust model
-drops. *Records-was: the C++ already holds the contract at eight sites, every
-one correct, so the slice preserves it. A later same-day draft called the lists
-`Hypothesis` and `Fact` and treated any purposeful dial as promotion.*
+drops.
 
 Owed before slice 1's first increment
 ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
@@ -351,7 +349,7 @@ They check different things. Neither stands for the other.
    negative test has not finished.
 
 A harness that requires Rust membership to match the C++ is the wrong oracle.
-§8 is a list of intentional divergences. *Records-was §4.2's green line.*
+§8 is a list of intentional divergences.
 
 ---
 

@@ -1,11 +1,12 @@
 # P2P timing engine
 
-**Status: OPEN — Round 2, 2026-09-25. The nine proposals are RULED,**
-with the wake delivered to the owner's home, the wake set ordered by
-time, slice 1's single list deadline, and PWD-B2 pulled out of the
-interim tick. Nothing here is a number. Periods belong to their owners.
-**Rule 26 is cited explicitly.** This document mints no identifier
-family. The register row is P2P-3's **TE**.
+**Status: CLOSED — Round 2, 2026-09-25.** The nine proposals are ruled.
+Wakes go to the owner's home. The wake set is ordered by time. Slice 1
+holds one list deadline. PWD-B2 leaves the interim tick first. Nothing
+here is a number. Periods belong to their owners. **Rule 26 is cited
+explicitly.** This document mints no identifier family. The register
+row is P2P-3's **TE**. Implementation of the engine core may start.
+The C++ bridge waits until after the transport cutover (below).
 
 Pinned to `fix/p2p-transport-hmac-oracle` `55d7b2b16`. Line numbers
 were read there. Opening the round still discharges D6's third
@@ -217,3 +218,23 @@ disturbing the first.
 
 This round is the first place that test is applied on purpose. Timed
 sync is three rows in the table above for that reason.
+
+---
+
+## Implementation order
+
+The transport layer's per-connection deadlines are owners of this
+engine. Building them on tokio timers, then moving them, would edit
+that path twice. The engine therefore lands in two pieces. D6's order
+is unchanged: the transport cutover still precedes the deletion of the
+interim executor.
+
+1. **The engine core, first.** A small Rust crate. The owner trait
+   (`next_wake`, `poll`), the time-ordered wake set with generation
+   numbers, delivery of a wake to the owner's home, the injected
+   monotonic clock, and lateness recording. It is tested in virtual
+   time. The transport layer uses it from its first line.
+2. **The C++ bridge, after the transport cutover.** Invoke-timeout
+   arming, the interim idle cadences on the blocking pool, moving the
+   relay `Driver`'s sleep off asio, and deleting the `io_context`.
+   That is the replacement D6 already ruled.
