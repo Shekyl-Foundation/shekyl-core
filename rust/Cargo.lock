@@ -4744,6 +4744,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-timing-engine"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-tor-control-client"
 version = "3.1.0"
 dependencies = [
