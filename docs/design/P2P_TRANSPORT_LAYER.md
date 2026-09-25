@@ -57,8 +57,9 @@ The design round is closed. D6 is ruled: a socketless `io_context` is a
 bounded interim that ends when the timing engine lands, not at LV-3.
 What is not a number yet is named in the section that owns it: deadline
 values (D9), the fixed-window size and whether every-record rekey is
-affordable (D14 item 4, gated on C9 and C5), and the executor's thread
-budget (D6, from C6). Those measurements do not reopen the direction.
+affordable (D14 item 4), and the executor's thread budget (D6). Those
+measurements do not reopen the direction. Step 7 is where they are
+taken. It is not an identifier family; this document mints none.
 
 The wire spec is `SHEKYL_P2P_PROTOCOL.md`. It carries the framing
 direction. This document does not.
@@ -146,7 +147,7 @@ trip to every dial. A stalled peer holds that loop for the whole
 attempt. The transport layer dials asynchronously and does not choose the
 schedule. How many to dial, and when, is discovery policy (P2P-3 slice
 3). Dials stay serial through cutover. The extra round trip is measured
-in step 7, C7.
+in step 7.
 
 The peers-monitor thread starts at `net_node.inl:1114` and walks
 `foreach_connection` once a second (`:1113-1138`). It is not removed
@@ -296,14 +297,14 @@ and the mechanism does not. "Refuse" means it does not survive.
 | New-connection, idle, bytes, and aggressive timers | `abstract_tcp_server2.inl:59-63` | Re-derive each. Channel-established and session-established bound different waits. The inherited values are inputs, not the answer. |
 | Rate limit and per-connection speed stats | `network_throttle*`; the pipe's `on_wire` path on the parked branch | Carry the limit. Stats are observed facts reported upward, not a second policy. |
 | Send-queue bounds | 1,000 messages and 100 MiB (`abstract_tcp_server2.h:72-73`) | **Carry the mechanism, with one source, and re-derive the value.** The value is PWD-T6's session-established limit (the largest legitimate message) plus measurement. It is not 100 MiB. That inherited round number gives no memory bound once it is multiplied by the inbound ceiling. The pipe's `PIPE_PLAINTEXT_BUDGET` was a second copy and is not repeated. |
-| Send backpressure and strand order | Send path in `abstract_tcp_server2.inl` (queue checks near the caps above) | Re-derive. Nonce order equals wire order because there is one writer per direction. A strand is not required to get that. |
+| Send backpressure and strand order | `do_send` at `abstract_tcp_server2.inl:823-870` takes `m_state.lock` and posts on `m_strand`. C++ calls it from more than one executor thread | **One writer per direction, owned by the transport layer.** Callers enqueue. They do not write the socket. Nonce order is wire order because that writer is the only one. The strand is not copied. A full queue closes with `SendQueueFull` (D4, D12). |
 | `--proxy` | `daemon.cpp:156-157` passes `arg_proxy` (`command_line_args.h:97`). `net_node.inl:926-935` sets the public zone's `m_connect = socks_connect` | **Carry as a dial duty.** The clearnet connector can dial through a SOCKS proxy the operator configures. The daemon speaks SOCKS. How the operator reaches that proxy, including a non-loopback address, is the operator's job (D14, settled: accept). It changes no declared capability. Clearnet still needs the Noise layer because its declaration has no native encryption. |
-| `--tos-flag` / IP Type of Service | `net_node.cpp:182`, default `-1`. Applied at `net_node.inl:597` and `set_tos_flag` `:3378-3383` (a `-1` returns without storing). Every socket still calls `setsockopt` at `abstract_tcp_server2.inl:966-976`. The static `m_default_tos` (`connection_basic.cpp:121`) is zero-initialized, so the default path sets TOS to 0 | **Refuse (D14).** TOS is the Type of Service byte, DSCP plus ECN, in cleartext on every packet. A chosen value is an operator-made fingerprint. Do not call `setsockopt`. Packets carry the operating system's default. C1 records the DSCP that leaves today, when the default path sets TOS to 0. |
-| `no_delay(false)` (Nagle) | Set on every socket at `abstract_tcp_server2.inl:977-982` | **Measure before deciding**, under step 7 C9. Nagle changes the record sizes an observer sees, so it is part of the record-length evidence. It is not fixed before that evidence exists. |
-| FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 C4 asserts those failures are indistinguishable from the far side. |
+| `--tos-flag` / IP Type of Service | `net_node.cpp:182`, default `-1`. Applied at `net_node.inl:597` and `set_tos_flag` `:3378-3383` (a `-1` returns without storing). Every socket still calls `setsockopt` at `abstract_tcp_server2.inl:966-976`. The static `m_default_tos` (`connection_basic.cpp:121`) is zero-initialized, so the default path sets TOS to 0 | **Refuse (D14).** TOS is the Type of Service byte, DSCP plus ECN, in cleartext on every packet. A chosen value is an operator-made fingerprint. Do not call `setsockopt`. Packets carry the operating system's default. Step 7 records the DSCP that leaves today, when the default path sets TOS to 0. |
+| `no_delay(false)` (Nagle) | Set on every socket at `abstract_tcp_server2.inl:977-982` | **Measure before deciding**, in step 7. Nagle changes the record sizes an observer sees, so it is part of the record-length evidence. It is not fixed before that evidence exists. |
+| FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 asserts those failures are indistinguishable from the far side. |
 | `add_ref` / `release`, `request_callback`, `send_done` | `i_service_endpoint` | The adapter's contract (D4). Not a copy of epee's refcount. |
 | Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer. The pool is 10 threads (`net_node.inl:1150`) | **D6, ruled.** A socketless `io_context` is the interim until the timing engine lands. Its pool is a measured budget, not 10. |
-| Serial outbound dialing | `connections_maker` at `net_node.inl:2009`, call at `:1917` | **Stays serial through cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7, C7. |
+| Serial outbound dialing | `connections_maker` at `net_node.inl:2009`, call at `:1917` | **Stays serial through cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
 | SSL | `m_state.ssl` on the connection | **Refuse.** |
 
 ---
@@ -460,7 +461,7 @@ a hard-coded 10 threads (`:1150`). It hosts:
 - Relay conformance grades. The existing statistical grades must pass
   unchanged when the sleeper moves. Only who sleeps changes; the draws
   stay in `shekyl-relay-privacy`.
-- Timer lateness under load. Step 7's C6 gains a measurement of how
+- Timer lateness under load. Step 7 measures how
   late relay timers fire under peer-driven load, taken both on the
   interim and after the timing engine lands. The interim's pool budget
   and the blocking pool's budget both come from it.
@@ -552,7 +553,7 @@ declaration, not a new set of branches.
 | Destination hidden from an observer at this node's end | no | yes — that observer can see Tor is in use, not the destination | not assessed |
 | This node's address hidden from an observer at the peer's end | no | yes | not assessed |
 | Correlation by an observer at both ends (timing, volume) | **not provided** | **not provided** | not assessed |
-| Connection existence, timing, volume and sizes visible to an observer at this node's end | **visible.** Record framing is ruled fixed-window, with the window size from step 7's C9; until then BOLT-8 framing hides only the length field | visible as Tor traffic (cell-quantised sizes) | not assessed |
+| Connection existence, timing, volume and sizes visible to an observer at this node's end | **visible.** Record framing is ruled fixed-window, with the window size from step 7's measured size distribution; until then BOLT-8 framing hides only the length field | visible as Tor traffic (cell-quantised sizes) | not assessed |
 | Origin of relayed transactions, against peers | **not provided by any connector** — taxed by Dandelion++, not eliminated | same | same |
 | Inbound peer has a bannable address (D4) | yes | no — "this zone, no address" | not assessed |
 | Stream semantics | TCP | Tor stream | not assessed |
@@ -747,7 +748,7 @@ listener, and so a connection in the gap phase.
    `noise.rs` currently performs the X25519 Diffie-Hellman before
    validating the encapsulation key (`ResponderReady::finish`). The key
    check moves to `read_message1`. Every failure still closes the same
-   way: FIN after zero bytes written. Step 7's C4 measures that.
+   way: FIN after zero bytes written. Step 7 measures that.
 
 3. **Clearnet accept rate is owned here.** This document owns the
    FOLLOWUPS row on connection admission before the channel exists. The
@@ -755,7 +756,7 @@ listener, and so a connection in the gap phase.
    work, per connector and per host, because clearnet's declaration says
    inbound peers have an observable address. Whether to aggregate hosts
    by subnet is a policy question for measurement. The values come from
-   C5's measured per-connection crypto cost against a stated CPU budget.
+   the measured per-connection crypto cost against a stated CPU budget.
    No number is written before that measurement (rule 26 B9). The bound
    is clearnet-only: Tor inbound does no Noise work on our side.
 
@@ -802,7 +803,7 @@ lines 1370-1406) was written for shard serving. Its strongest argument,
 a large response the attacker must receive under Tor flow control, does
 not apply to p2p, where a flooder wants slots and CPU.
 
-**Evidence.** Under a flood (step 7, C6), connections that fail before
+**Evidence.** Under a flood in step 7, connections that fail before
 the channel exists never leak a D8 slot, and cryptographic work per
 second stays inside item 3's bound. The Tor flood test is deferred
 until after implementation and is owned by this document: a controlled
@@ -889,18 +890,18 @@ The set:
 
 - `contrib/epee/include/net/abstract_tcp_server2.h`
 - `contrib/epee/include/net/abstract_tcp_server2.inl`
-- `connection_basic.hpp` / `connection_basic.cpp`
-- `network_throttle*`
-- `src/net/socks*`
+- `connection_basic.hpp` / `connection_basic.cpp` and `network_throttle*`, after the rate-limit calls move in this same cutover. Today `core_rpc_server.cpp` calls `connection_basic::get_rate_*` / `set_rate_*`, `rpc_facts_ffi.cpp` reads `network_throttle_manager`, and `cryptonote_protocol_handler-base.cpp` sleeps and accounts through the global out-throttle. Those three call the transport layer's rate limit. The files go only once that `rg` is empty.
+- the SOCKS dial: `socks_connect.cpp`, `socks_connect.h`, and the client `net_node` calls. Not a wildcard over `src/net/socks*`. `parse.cpp` parses a proxy URL (`src/net/parse.cpp:34`, the `socks` parser at `:260`), and `tests/unit_tests/net.cpp` exercises that API. The endpoint type those use stays, or moves with them in this cutover. The deletion gate is no remaining dial, not an empty `socks.h` while the parser still includes it.
 - `network_pipe_ops` and `set_network_pipe`
-- `rust/shekyl-p2p-transport/src/pipe.rs`
-- `rust/shekyl-ffi/src/clearnet_transport_ffi.rs`
+- `rust/shekyl-p2p-transport/src/pipe.rs`, and its module and re-export in `rust/shekyl-p2p-transport/src/lib.rs`
+- `rust/shekyl-ffi/src/clearnet_transport_ffi.rs`, and `pub mod clearnet_transport_ffi` in `rust/shekyl-ffi/src/lib.rs`
+- the C++ call sites of those headers, in the same `rg`
 - the epee transport unit tests that exist only to drive that server
 
 `noise.rs`, `channel.rs`, `prefix.rs`, and `aead.rs` are not in this
 list. They are the crypto core.
 
-Deleting `src/net/socks*` removes the C++ I2P path (`zone::i2p` and the
+Deleting the SOCKS dial removes the C++ I2P path (`zone::i2p` and the
 `--tx-proxy` handling that dials it). I2P support is removed until an
 I2P connector is built. The cutover PR states that. It is not a silent
 deletion (rule 15). D14 records the same ruling: clearnet and Tor cut
@@ -923,19 +924,20 @@ over together.
    twice, and the differential harness would no longer have transport
    as its only variable. `shekyl-levin` is the framing LV-3 inherits.
 4. **Record framing and rekey, direction set, sizes measured.**
-   Framing is fixed-window. The window size is derived from C9's
+   Framing is fixed-window. The window size is derived from the
    measured size distribution. Until that measurement, the option uses
    BOLT-8 framing, which hides the length field and still leaves a
    burst visible as a message size. Fixed windows hide the size down
    to a count of identical windows, reuse `fragment.rs`, and make one
    window one record: no length field, one nonce per record. The
    PWD-T8 vectors are re-minted when the window size is derived.
-   Rekey is every record if C5's Pi-4 benchmark shows three
+   Rekey is every record if the Pi-4 benchmark shows three
    HMAC-BLAKE2s per record are affordable beside seal cost. A
    count-based interval lets a quiet link keep one key for a session,
    and a later memory capture then exposes every transaction that key
-   sealed. If C5 shows the cost is a meaningful fraction of seal cost,
-   the interval is derived from C9's measured record rates instead.
+   sealed. If that benchmark shows the cost is a meaningful fraction
+   of seal cost, the interval is derived from the measured record
+   rates instead.
 5. **The local/remote timer split is refused** (D3).
 6. **`--tos-flag` is refused** (D3). No `setsockopt` for the Type of
    Service byte.
