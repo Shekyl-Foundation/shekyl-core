@@ -356,7 +356,7 @@ doing two things.
 | 2 | **LANDED 2026-09-24.** Stateless 4.I rows in `tx_form`: I1, I4, I6, I8, I9, I14, I16; I5 with H10 kept as its equality row (Q4 (a)); each with its negative fixture at both sites. Judged in three bands: the 4.H line (H1 first — the byte bound), then H20–H22 and H19's layout, then I1, I4, I5, I6, I8, I9, I14, I16. A transaction that fails its shape and an input-path row is named by the shape (a proof-less bond post is H21, not I1). That is the C++ caller's order (`ver_non_input_consensus`, then the BP+ layout, then `check_tx_inputs`), and it is the right one here for that reason — not because the caller is inherited. The input cap still precedes proof verification: I15 and the H19 batch fold run after `tx_form` returns. Commit 2's first cut had placed the I rows ahead of H20–H22 from `check_tx_inputs`' internal order; #853's review read the caller. The rows live in `rules/tx_inputs.rs`. I8/I9/I14 judge `TxClass::Spend`; the archival counts stay H20–H22's (the census names the split). I4 is **unconditional** (rule 71): the C++ gates it on `m_nettype != FAKECHAIN`, §3.4's one varying cell. I16's multisig floor is the container header (3); the exact parse is I17/I18's. **Fixture consequence, disclosed:** `fixture::listed` grew to two outputs and `pqc_auth_filler` to a 1996-byte solo key blob — the fewest I1 and I16 admit — and the store's 22 `spend(k, 1)` sites moved with it (two count pins moved by exactly the second output). The negative fixtures are mutations of the harness spend, not of a captured one: the captured spends are real and pass every new row through the ingest replay (the four vectors, unchanged); the "mutated from a captured spend" form waits on the loader that the scenario's real-spend commit brings | commit 1 — the seven self-arming conformance arms for these rows fire here (I9's trip re-cut to keep H18's balance, since the balance precedes the count here and in the C++); H24's falsifier flipped (`h24_cannot_fire_on_an_input_i6_admits` asserts I6 at both sites); the pruned-form bond-post arm with no outputs records H21 as its refusal (commit 2 wrote I1 here, reading `check_tx_inputs` alone; #853's review read the caller — `ver_non_input_consensus`'s arms run first, so a lone bond post never reaches the output count in the C++ either — and the twin's bond-post face of I1 is now a recorded divergence for the same reason), the C++'s order |
 | 3 | I19/I20 adopted: `tx_form` calls `check_tx_extra_shape`; **`TxScope::Coinbase`** minted for I20 with its doc pinning *runs at `Miner`*, never *when `is_coinbase()`*; `the_kind_is_derived_from_the_slot_not_the_bytes` gains the I20 case (Q6) | commit 1 |
 | 4 | `TxAgainstRule` (view-bound, `check(cx, view)`); I7 over `has_key_image`; I2 and I3 registry entries `by_construction`, list-and-iterate (Q3) | commit 1 |
-| 5 | `ChainView::height_of` (this slice adds it; the store has it, `MockChain` gains it); I10, I11 (consts 5/100 pinned to `consensus_constants.json`, Q5), I12 as a definition recorded at derivation | commit 1; the trait change disclosed to E5 and the store lane |
+| 5 | `ChainView::height_of` — the trait method **and `BatchView`'s impl in the same commit** (§5.1: a trait change without its impl is a broken build inside a commit); `MockChain` gains it; I10, I11 (consts 5/100 pinned to `consensus_constants.json`, Q5), I12 as a definition recorded at derivation | commit 1; the shape disclosed to E5 and the store lane |
 | 6 | I13 over **depth at `ref_height`** | **E3 S-CURVE** — the one gating relationship (Q2 + Q8): the height-keyed depth read is E3's method; if E3 cannot serve it, current-depth with the three §3.3 dependencies written **at the rule** |
 | 7 | I17 as **(c)**: the wire's `pqc_signing_payload_hashes` becomes the one derivation; the daemon calls it through a coarse FFI (`shekyl_tx_pqc_signing_payloads`, TXE's shape); **byte-identity gate first** — real transactions through both the C++ assembly and the Rust body, identical payloads required, multi-input and serve-credit shapes included (the `mining_parity` pattern) — then `tx_pqc_verify.cpp:62–158` becomes the call (Q7) | commit 1 (the shapes come from the vectors); touches `src/cryptonote_core/tx_pqc_verify.cpp` and `shekyl-ffi` — rule 20's minimal shim |
 | 8 | I15 over `shekyl_fcmp::proof::verify`; I18 over `shekyl_crypto_pq` through I17's payloads; H19's verification half as a **`validate` fold** over the block's BP+ proofs (Q9), if the captured contexts carry ≥ 2 spends per block — else a named successor, disclosed at commit 1 | commits 1, 6, 7 |
@@ -366,6 +366,41 @@ doing two things.
 Ten commits is the rule-06 ceiling. If commit 6 waits on E3 past the
 slice's window, it is the one named successor; nothing else in the plan
 depends on it.
+
+### 5.1 The expectation for commits 3–10, written before commit 3 (2026-09-25)
+
+Commits 1a, 1b and 2 landed as #852 and #853 (with the census resolver
+#854 between them), on a branch that ran to twenty-two commits — the
+overrun recorded in #852's body with its reason. The remaining rows resume
+on `feat/chain-rules-slice-6-rows`, cut from `dev@fc6d87ca5` with all
+three merged, and **this table is the branch's first commit**: an
+expectation stated before the work, so an overrun is a signal with a
+subject rather than a number nobody predicted.
+
+| commit | lands | cost | falsifier applies |
+| --- | --- | --- | --- |
+| 3 | I19/I20 in `tx_form`; `TxScope::Coinbase` | 1 | yes |
+| 4 | `TxAgainstRule`; I7 over `has_key_image`; I2/I3 by-construction | 1 | yes |
+| 5 | `ChainView::height_of` **and `BatchView`'s impl in `shekyl-chain-store`, one commit, both sides** — the trait is the rules crate's and the impl is the store's, and a trait change without its impl is a broken build inside a commit, not a tolerable interval. I10, I11, I12. The disclosure to the store lane is about the *shape* they inherit (`height_of`'s contract), not a warning about a gap | 1–2 | yes |
+| 6 | I13 over depth at `ref_height` | 1 if E3 S-CURVE serves it; else the named successor | yes |
+| 7 | I17 (c): the payload derivation as a production body in `shekyl-wire`, the FFI shim, the byte-identity gate against the C++ on real multi-input and serve-credit shapes — before `tx_pqc_verify.cpp:62–158` can go | 2, may run to 3–4 | **no — exempt.** This is a cross-crate cutover of TXE's coarse-call shape, which took its own PR; it was always sized like one. An overrun here says a cutover took what a cutover takes, not that the substrate was unfinished. Named so the signal, if it fires, fires for the right reason |
+| 8 | I15 over `proof::verify`; I18 through I17's payloads; H19-verify as a `validate` fold — witnessed by the captured chains' real proofs, gated on 5 and 7 only | 1–2 | yes |
+| 9 | conformance re-check (the dead arm's ordering; I19's arm) | 1 | yes |
+| 10 | docs: 4.I re-pinned to function anchors with eras — into a census that is now in the citation gate's `DEFAULT_DOCS` (#854), so the re-pin is checked the moment it lands; index; CHANGELOG | 1 | yes |
+
+**Expectation: nine commits, ten if I13 lands.** Coverage 64 → 74
+implemented (75 with I13; I2 and I3 count as by-construction, not
+implemented). **The signal:** more than ten commits *excluding commit 7's
+overrun* means the substrate was not as finished as this table claims —
+that is the answerable form. Commit 7's overrun is excluded because it
+would fire the signal for a reason the table already knows.
+
+Two things the sequence also inherits, recorded here so they are not
+re-derived: the branch names its own commits by PR and subject, never by
+SHA (six pins died in the last rebase — the rule at this file's head); and
+rule-08 instances 12–14 (a `cargo fmt` reverting a buffer; a `git checkout`
+write-back; a branch-switch write-back caught by "a file I did not edit
+shows modified") go into `08-worktree-hygiene.mdc` with commit 10.
 
 ### 5.2 The witness is the real chain, and the mock has a two-line charter (ruled 2026-09-24)
 
