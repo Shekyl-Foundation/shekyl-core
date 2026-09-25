@@ -529,12 +529,12 @@ impl Fixtures for AltBlock {
             // absences are one presence byte each.
             (
                 "weight_unknown_no_witness",
-                AltBlock::checked(facts(None), block.clone(), None).expect("fixture"),
+                AltBlock::checked(facts(None), &block, None).expect("fixture"),
             ),
             // Every optional part present: a weight and a 40-byte witness.
             (
                 "weight_and_witness",
-                AltBlock::checked(facts(Some(2_048)), block, Some(vec![0xA5; 40]))
+                AltBlock::checked(facts(Some(2_048)), &block, Some(vec![0xA5; 40]))
                     .expect("fixture"),
             ),
         ]

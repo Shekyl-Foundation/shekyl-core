@@ -74,7 +74,7 @@ use shekyl_chain_rules::AtHeight;
 use shekyl_types::KeyImage;
 use shekyl_wire::Block;
 
-use crate::codec::{BlockInfo, Canonical, CodecError, Coded};
+use crate::codec::{BlockBody, BlockInfo, Canonical, CodecError, Coded};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCKS, BLOCK_INFO, SPENT_KEYS};
 
@@ -377,8 +377,7 @@ pub(super) fn block_body<T: ReadTables>(
     };
     let blocks = txn.table(BLOCKS)?;
     let blob = blocks.get(height)?.ok_or_else(|| absent("blocks"))?;
-    let block = Block::from_bytes(blob.value().bytes())
-        .map_err(|_| blocks_invalid("block blob does not parse"))?;
+    let block = BlockBody::parse(blob.value().bytes()).map_err(blocks_invalid)?;
     if block.hash() != info.hash {
         return Err(blocks_invalid(
             "block blob does not hash to block_info.hash",

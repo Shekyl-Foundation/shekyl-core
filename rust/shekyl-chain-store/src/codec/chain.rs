@@ -335,17 +335,25 @@ impl Canonical for RuleSetInForce {
 /// `blocks[height]` — a block body in the chain's wire encoding. Well-formed
 /// iff it parses; that it hashes to `block_info[height].hash` is checked
 /// where both are in hand (`store/chain_reads.rs`, *The blob is verified
-/// where it is decoded*).
+/// where it is decoded*). [`Self::parse`] is that parse, shared with
+/// [`super::AltBlock`] so the two tables cannot disagree about what a block is.
 #[derive(Debug)]
 pub struct BlockBody;
+
+impl BlockBody {
+    /// Parse a block body. [`BlobKind::well_formed`] is this with the block
+    /// discarded; callers that keep the block ([`super::AltBlock`]) take
+    /// the value. One function, so a later check lands here once.
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Block, &'static str> {
+        Block::from_bytes(bytes).map_err(|_| "block blob does not parse")
+    }
+}
 
 impl BlobKind for BlockBody {
     const NAME: &'static str = "block";
 
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
-        Block::from_bytes(bytes)
-            .map(drop)
-            .map_err(|_| "block blob does not parse")
+        Self::parse(bytes).map(drop)
     }
 }
 

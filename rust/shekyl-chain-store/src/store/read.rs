@@ -48,14 +48,13 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
 use crate::codec::{
-    AltBlock, ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CurveTreeState, OutTx,
-    PropertyCell, RMarket, SigmaWorkMilli, TotalBurnedCell, TxOutputIndices,
+    ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CurveTreeState, OutTx, PropertyCell,
+    RMarket, SigmaWorkMilli, TotalBurnedCell, TxOutputIndices,
 };
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
-use super::alt_reads::{self, AltEntry};
 use super::archival_reads::{self, PassCount, ServedShard};
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -170,6 +169,12 @@ pub struct ReadSnapshot<'store> {
 impl<'store> ReadSnapshot<'store> {
     pub(super) fn new(txn: ReadTransaction, store: &'store ChainStore) -> Self {
         Self { txn, store }
+    }
+
+    /// The transaction, for a read surface whose methods live with their
+    /// bodies (`alt_reads`) rather than in this file.
+    pub(super) fn txn(&self) -> &ReadTransaction {
+        &self.txn
     }
 
     /// Open a table for reading — the raw handle, **crate-private** (Q3,
@@ -826,35 +831,6 @@ impl ReadSnapshot<'_> {
     /// leaves in practice; this is not a full-tree walk.
     pub fn leaves(&self, range: Range<TreePosition>) -> Result<AtIndex<Vec<TreeLeaf>>, StoreError> {
         curve_reads::leaves(&self.txn, range).map_err(chain_reads::ReadFault::into_plain)
-    }
-}
-
-/// Alt-chain reads (DRS-E1 S-ALT). The bodies live in `alt_reads`; the same
-/// bodies serve the batch (`store/alt.rs`) so a switch reads what it is
-/// about to change. Never on `ChainView` (SAL-7).
-impl ReadSnapshot<'_> {
-    /// **AL4.** `alt_blocks[id]`: the record, the block bytes and the
-    /// witness. `None` is "not an alt block". An undecodable row is SI-7.
-    pub fn alt_block(&self, id: &BlockHash) -> Result<Option<AltBlock>, StoreError> {
-        alt_reads::alt_block(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// **AL5.** Whether `alt_blocks` holds `id`, without decoding the row —
-    /// `have_block`'s question, asked per announced hash (`SAL-Q5`).
-    pub fn has_alt_block(&self, id: &BlockHash) -> Result<bool, StoreError> {
-        alt_reads::has_alt_block(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// **AL6.** How many alt blocks the store holds.
-    pub fn alt_block_count(&self) -> Result<u64, StoreError> {
-        alt_reads::alt_block_count(&self.txn).map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// **AL7.** Every alt block in key order, each with its record. The
-    /// consumer parses the bytes and walks the chains; a row that does not
-    /// decode is SI-7.
-    pub fn alt_blocks(&self) -> Result<Vec<AltEntry>, StoreError> {
-        alt_reads::alt_blocks(&self.txn).map_err(chain_reads::ReadFault::into_plain)
     }
 }
 

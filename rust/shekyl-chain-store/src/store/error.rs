@@ -382,9 +382,12 @@ pub enum StoreCannot {
 /// The alt-chain store's typed refusals — decisions, not faults
 /// (`StoreCannot`'s shape; `DRS_E1_SALT.md` §3.4).
 ///
-/// Both are **caller-contract violations** made visible (`SAL-Q3` as ruled):
-/// the caller states what it expected of the table, and the store says when
-/// the table disagrees, instead of doing something silently different.
+/// Each is a **caller-contract violation** made visible (`SAL-Q3` as ruled,
+/// and the identity belt with it): the caller states what it expected of
+/// the table, and the store says when the table disagrees, instead of
+/// doing something silently different. A row already on disk whose block
+/// does not hash to its key is not one of these — that is SI-7 at AL4/AL7,
+/// the row having bypassed this boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AltCannot {
     /// `insert_alt_block` of a hash the store already holds — CEN-K3's

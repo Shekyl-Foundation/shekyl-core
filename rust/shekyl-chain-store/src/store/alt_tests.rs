@@ -14,11 +14,11 @@ use shekyl_units::AtomicUnits;
 use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
-use crate::codec::{forged, AltBlock, AltBlockFacts};
+use crate::codec::{forged, AltBlock, AltBlockFacts, Canonical, CodecError};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::ALT_BLOCKS;
 
-fn alt(height: u64, block: Vec<u8>, witness: Option<Vec<u8>>) -> AltBlock {
+fn alt(height: u64, block: &[u8], witness: Option<Vec<u8>>) -> AltBlock {
     AltBlock::checked(
         AltBlockFacts {
             height: BlockHeight::from_raw(height),
@@ -66,8 +66,8 @@ fn insert_read_enumerate_remove_and_drop() {
     let witness = vec![0xA5; 40];
 
     let out: Result<(), TestErr> = store.write(|batch| {
-        batch.insert_alt_block(&a, &alt(1, a_bytes.clone(), None))?;
-        batch.insert_alt_block(&b, &alt(2, b_bytes.clone(), Some(witness.clone())))?;
+        batch.insert_alt_block(&a, &alt(1, &a_bytes, None))?;
+        batch.insert_alt_block(&b, &alt(2, &b_bytes, Some(witness.clone())))?;
         // The batch sees its own writes.
         assert!(batch.has_alt_block(&a)?);
         assert_eq!(batch.alt_block_count()?, 2);
@@ -125,7 +125,7 @@ fn insert_read_enumerate_remove_and_drop() {
     }
 
     let out: Result<u64, TestErr> = store.write(|batch| {
-        batch.insert_alt_block(&a, &alt(1, a_bytes.clone(), None))?;
+        batch.insert_alt_block(&a, &alt(1, &a_bytes, None))?;
         Ok(batch.drop_alt_blocks()?)
     });
     assert_eq!(out, Ok(2), "drop reports how many it removed");
@@ -147,11 +147,11 @@ fn insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals() {
     let (a, a_bytes) = side_block(1, main[0], 5);
 
     let out: Result<(), TestErr> =
-        store.write(|batch| Ok(batch.insert_alt_block(&a, &alt(1, a_bytes.clone(), None))?));
+        store.write(|batch| Ok(batch.insert_alt_block(&a, &alt(1, &a_bytes, None))?));
     out.expect("first insert");
 
     let out: Result<(), TestErr> =
-        store.write(|batch| Ok(batch.insert_alt_block(&a, &alt(1, a_bytes.clone(), None))?));
+        store.write(|batch| Ok(batch.insert_alt_block(&a, &alt(1, &a_bytes, None))?));
     assert_eq!(
         out,
         Err(TestErr::Store(
@@ -176,7 +176,7 @@ fn insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals() {
 
     // The key must be the block's hash: `a`'s bytes under `main[0]`'s key.
     let out: Result<(), TestErr> =
-        store.write(|batch| Ok(batch.insert_alt_block(&main[0], &alt(1, a_bytes.clone(), None))?));
+        store.write(|batch| Ok(batch.insert_alt_block(&main[0], &alt(1, &a_bytes, None))?));
     assert_eq!(
         out,
         Err(TestErr::Store(
@@ -235,14 +235,86 @@ fn a_row_that_does_not_decode_is_si7_on_both_readers() {
         "a snapshot read arms nothing"
     );
 
-    // The batch-side read arms the poison: a switch that read a corrupt alt
-    // row does not commit, and the writer halts.
+    // Poison aborts the batch. No connect, pop, or chain_view ran, so no
+    // height is noted and the writer stays live: an alt row is not chain
+    // work, and a side-table decode failure must not stop main-chain connects.
     let out: Result<(), TestErr> = store.write(|batch| {
         let e = batch.alt_block(&bad).expect_err("corrupt");
         assert!(is_si7(&e));
         Ok(())
     });
     assert!(out.is_err(), "the poisoned batch refuses to commit");
+    assert!(
+        store.connect_state().is_live(),
+        "alt corruption aborts the batch and does not halt the writer"
+    );
+    cleanup(&path);
+}
+
+/// A well-formed row planted under a key that is not the block's hash.
+/// AL1 would have refused this as `IdentityMismatch`; a row that reached
+/// the file around that boundary is SI-7 on AL4 and AL7, the same belt
+/// `block_body` applies to `blocks` against `block_info.hash`. AL5 does
+/// not decode, so membership still answers.
+#[test]
+fn a_row_whose_block_does_not_hash_to_its_key_is_si7() {
+    let path = tmp("alt-key-mismatch");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let main = connect_chain(&store, &[vec![]]);
+    let (a, a_bytes) = side_block(1, main[0], 7);
+    let wrong = BlockHash::from_bytes([0xBD; 32]);
+    assert_ne!(wrong, a);
+    let record = alt(1, &a_bytes, None);
+
+    let out: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .txn()
+            .open_table(ALT_BLOCKS)
+            .map_err(|e| StoreError::from(EngineError::Table(e)))?
+            .insert(
+                LmdbHashKey::from_bytes(*wrong.as_bytes()),
+                record.encoded().as_encoded(),
+            )
+            .map_err(|e| StoreError::from(EngineError::Storage(e)))?;
+        Ok(())
+    });
+    out.expect("plant");
+
+    let is_mismatch = |e: &StoreError| {
+        matches!(
+            e,
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                key: "alt_blocks",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "alt_block",
+                    reason,
+                }),
+            }) if *reason == super::alt_reads::ALT_KEY_MISMATCH
+        )
+    };
+    let snap = store.begin_read().expect("read");
+    assert!(is_mismatch(&snap.alt_block(&wrong).expect_err("mismatch")));
+    assert!(is_mismatch(&snap.alt_blocks().expect_err("mismatch")));
+    assert!(
+        snap.has_alt_block(&wrong).expect("has"),
+        "membership does not decode"
+    );
+    assert!(
+        store.connect_state().is_live(),
+        "a snapshot read arms nothing"
+    );
+    drop(snap);
+
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let e = batch.alt_block(&wrong).expect_err("mismatch");
+        assert!(is_mismatch(&e));
+        Ok(())
+    });
+    assert!(out.is_err(), "the poisoned batch refuses to commit");
+    assert!(
+        store.connect_state().is_live(),
+        "a mis-keyed alt row does not halt the writer"
+    );
     cleanup(&path);
 }
 
@@ -261,7 +333,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     let out: Result<(), TestErr> = store.write(|batch| {
         Ok(batch.insert_alt_block(
             &alt_2,
-            &alt(2, alt_cand.block.serialize(), Some(alt_witness.clone())),
+            &alt(2, &alt_cand.block.serialize(), Some(alt_witness.clone())),
         )?)
     });
     out.expect("hold 2'");
@@ -273,7 +345,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         let promoted = batch.alt_block(&alt_2)?.expect("2' is held");
         let popped = batch.pop()?;
         assert_eq!(popped.height, BlockHeight::from_raw(2));
-        batch.insert_alt_block(&main[2], &alt(2, main_2_bytes.clone(), None))?;
+        batch.insert_alt_block(&main[2], &alt(2, &main_2_bytes, None))?;
         batch.connect(
             judge(&view, candidate(2, main[1], vec![spend(11, 1)]))?,
             facts(2, 0),
@@ -306,7 +378,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         batch.pop()?;
-        batch.insert_alt_block(&alt_2, &alt(2, alt_cand.block.serialize(), None))?;
+        batch.insert_alt_block(&alt_2, &alt(2, &alt_cand.block.serialize(), None))?;
         batch.connect(
             judge(&view, candidate(2, main[1], vec![spend(10, 1)]))?,
             facts(2, 0),
@@ -358,7 +430,7 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
 
     let (a, a_bytes) = side_block(1, main[0], 6);
     let out: Result<(), TestErr> = store
-        .write(|batch| Ok(batch.insert_alt_block(&a, &alt(1, a_bytes, Some(vec![0xC3; 40])))?));
+        .write(|batch| Ok(batch.insert_alt_block(&a, &alt(1, &a_bytes, Some(vec![0xC3; 40])))?));
     out.expect("insert");
     let snap = store.begin_read().expect("read");
     assert!(snap.has_alt_block(&a).expect("has"), "the write landed");

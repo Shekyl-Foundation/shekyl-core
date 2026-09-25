@@ -42,6 +42,9 @@
 //! journaling handle: the handle's belt on a present key is an `SI-` row
 //! and poisons the batch, and a present alt key is not an invariant
 //! violation — it is the caller's contract, refused as [`AltCannot`].
+//! [`WriteBatch::alt_table`] asserts the recording is not live, in every
+//! build: the same class of crate bug [`WriteBatch::replay_undo`] refuses
+//! with `assert!`.
 
 use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_store_codec::{Canonical, Coded};
@@ -59,9 +62,11 @@ use super::write::WriteBatch;
 
 impl WriteBatch<'_, '_> {
     /// Open the alt table for this batch's writes. Never while a connect's
-    /// recording is live — see the module docs.
+    /// recording is live — see the module docs. `assert!`, not
+    /// `debug_assert!`: a release build must not journal-skip this by
+    /// accident, and [`WriteBatch::replay_undo`] guards the same way.
     fn alt_table(&self) -> Result<redb::Table<'_, LmdbHashKey, Coded<AltBlock>>, StoreError> {
-        debug_assert!(
+        assert!(
             !self.journal().is_recording(),
             "alt writes are not chain state and must not run inside a connect's recording"
         );
@@ -131,10 +136,15 @@ impl WriteBatch<'_, '_> {
         Ok(count)
     }
 
-    /// **AL4**, on this batch: `alt_blocks[id]` **including this batch's own
-    /// writes** — a switch reads the alt chain it is about to promote through
-    /// the transaction that will remove it. `None` is "not an alt block"; a
-    /// row that does not decode is SI-7 and poisons the batch.
+    /// **AL4**, on this batch: [`super::read::ReadSnapshot::alt_block`],
+    /// including this batch's own writes. A switch reads the alt chain it
+    /// is about to promote through the transaction that will remove it.
+    ///
+    /// An invariant (undecodable row, or a block that does not hash to
+    /// `id`) poisons the batch, so the switch does not commit. It does not
+    /// by itself halt the writer: that latch notes a height only for
+    /// connect, pop, and [`WriteBatch::chain_view`](Self::chain_view), and
+    /// an alt row is not chain work.
     ///
     /// # Errors
     ///
@@ -164,19 +174,20 @@ impl WriteBatch<'_, '_> {
     }
 
     /// **AL7**, on this batch: every alt block, key order, seeing this
-    /// batch's own writes.
+    /// batch's own writes. Each row is held to AL4's rule.
     ///
     /// # Errors
     ///
     /// [`super::StoreInvariant::CellCorrupt`] for a row that does not
-    /// decode; engine faults.
+    /// decode or whose block does not hash to its key; engine faults.
     pub fn alt_blocks(&self) -> Result<Vec<AltEntry>, StoreError> {
         alt_reads::alt_blocks(self.txn()).map_err(|f| self.arm_read_fault(f))
     }
 
     /// The batch-side policy for a classified read fault: an invariant
-    /// violation arms the fatal latch (a switch that read a corrupt alt row
-    /// must not commit), an engine fault passes through.
+    /// violation arms the batch's poison (the switch must not commit), an
+    /// engine fault passes through. Poison without a height hint aborts
+    /// this batch and leaves the writer live — alt rows are not chain work.
     fn arm_read_fault(&self, fault: ReadFault) -> StoreError {
         match fault {
             ReadFault::Engine(e) => e.into(),

@@ -19,38 +19,40 @@
 //!   determined at admission" (`blockchain.cpp:2345`), and no block weighs
 //!   zero, so the sentinel is `None` (`SAL-Q4`); the field is named for what
 //!   it holds — the block's own weight, not a cumulative one (SAL-11);
-//! - the block bytes and the witness are **fields**, so an alt record
-//!   without its block, or a witness outliving its block, is not a value
+//! - the block and the witness are **fields**, so an alt record without
+//!   its block, or a witness outliving its block, is not a value
 //!   (`SAL-Q2`; CW-2's lifetime clause made structural, SAL-6).
 //!
 //! # Construction and decoding refuse the same things
 //!
 //! [`AltBlock::checked`] is the constructor; the fields are private so it
 //! is the *only* constructor. It refuses block bytes that are not a block
-//! ([`BlockBody::well_formed`] — the `blocks` table's own rule), a witness
-//! that is present and empty or over its bound
+//! ([`BlockBody::parse`] — the `blocks` table's own rule), a witness that
+//! is present and empty or over its bound
 //! ([`AttestationWitnessBytes::well_formed`] — the height-keyed twin's own
 //! rule; "empty stores no row" is `None`), and a weight of zero (the
 //! sentinel re-minted). [`Canonical::decode`] refuses the same three, so a
 //! row that decodes is a row `checked` would have built (SI-14's shape).
 //!
-//! # The parse boundary is here, not at the consumer
+//! # The value is the block
 //!
-//! The record stores the block's wire bytes (the one canonical encoding),
-//! but it hands out a **parsed** [`Block`] — [`AltBlock::block`] — never the
-//! bytes. Every C++ consumer parsed (`blockchain.cpp:937`, `:2023`,
-//! `:2590`, `:6749`) and `MERROR`-skipped a blob that would not; here a row
-//! that decodes *is* a block, because decoding ran the same parse. The
-//! chain read surface keeps its unverified-bytes shape (`RawBlockBytes`)
-//! for the relay path that forwards without parsing; no alt consumer
-//! forwards, so no raw shape is offered (Copilot, PR #856).
+//! Construction and decode each call [`BlockBody::parse`] once and store
+//! the [`Block`]. [`AltBlock::block`] returns that value; nothing parses
+//! again, and there is no raw-bytes accessor. Encode writes
+//! [`Block::serialize`]: a blob `from_bytes` accepted re-encodes to itself,
+//! so the row's bytes are the canonical encoding without a second copy of
+//! them sitting beside the block. The chain read surface keeps its
+//! unverified-bytes shape (`RawBlockBytes`) for the relay path that
+//! forwards without parsing; no alt consumer forwards, so no raw shape is
+//! offered.
 //!
-//! What the record does not carry is its own hash: the key is the identity,
-//! and the store verifies at AL1 that the key hashes the block
-//! (`AltCannot::IdentityMismatch`) — the belt class `chain_reads::block_body`
-//! already applies to a blob against `block_info.hash`, verification of a
-//! caller-supplied identity rather than computation of a consensus value
-//! (C2-R8 Q4). The C++ trusted the caller (`blockchain.cpp:2359`).
+//! What the record does not carry is its own hash: the key is the identity.
+//! AL1 refuses a caller-supplied key that is not `block.hash()`
+//! (`AltCannot::IdentityMismatch`). AL4 and AL7 refuse a row already on
+//! disk whose block does not hash to its key, as SI-7 — the belt
+//! `chain_reads::block_body` applies to a blob against `block_info.hash`,
+//! verification of an identity rather than computation of a consensus
+//! value (C2-R8 Q4). The C++ trusted the caller (`blockchain.cpp:2359`).
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
@@ -99,7 +101,9 @@ pub struct AltBlock {
     block_weight: Option<BlockWeight>,
     cumulative_difficulty: CumulativeDifficulty,
     coins_generated: AtomicUnits,
-    block: Vec<u8>,
+    /// Parsed once, at construction or decode. The wire form is
+    /// [`Block::serialize`] of this value.
+    block: Block,
     attestation_witness: Option<Vec<u8>>,
 }
 
@@ -134,10 +138,17 @@ impl AltBlock {
     /// if `facts.block_weight` is `Some(0)`.
     pub fn checked(
         facts: AltBlockFacts,
-        block: Vec<u8>,
+        block: &[u8],
         attestation_witness: Option<Vec<u8>>,
     ) -> Result<Self, AltBlockError> {
-        validate(facts.block_weight, &block, attestation_witness.as_deref())?;
+        if facts.block_weight.is_some_and(|w| w.to_raw() == 0) {
+            return Err(AltBlockError::ZeroWeight);
+        }
+        let block = BlockBody::parse(block).map_err(|_| AltBlockError::BlockMalformed)?;
+        if let Some(witness) = attestation_witness.as_deref() {
+            AttestationWitnessBytes::well_formed(witness)
+                .map_err(|_| AltBlockError::WitnessMalformed)?;
+        }
         Ok(Self {
             height: facts.height,
             block_weight: facts.block_weight,
@@ -183,19 +194,10 @@ impl AltBlock {
         self.coins_generated
     }
 
-    /// The block, parsed. The bytes parsed at construction or at decode (the
-    /// same [`BlockBody::well_formed`]), so this cannot fail; there is no
-    /// raw-bytes accessor (module docs, *The parse boundary is here*).
+    /// The block. Parsed once, at construction or decode
+    /// ([`BlockBody::parse`]); this returns that value.
     #[must_use]
-    pub fn block(&self) -> Block {
-        Block::from_bytes(&self.block)
-            .expect("an AltBlock's bytes parsed at construction or decode; nothing mutates them")
-    }
-
-    /// The block's wire bytes, for the tests that pin the row's layout.
-    /// Test-only: the block is [`block`](Self::block), parsed.
-    #[cfg(test)]
-    pub(crate) fn block_bytes(&self) -> &[u8] {
+    pub const fn block(&self) -> &Block {
         &self.block
     }
 
@@ -204,22 +206,6 @@ impl AltBlock {
     pub fn attestation_witness(&self) -> Option<&[u8]> {
         self.attestation_witness.as_deref()
     }
-}
-
-/// The three refusals, shared by construction and decoding.
-fn validate(
-    block_weight: Option<BlockWeight>,
-    block: &[u8],
-    witness: Option<&[u8]>,
-) -> Result<(), AltBlockError> {
-    if block_weight.is_some_and(|w| w.to_raw() == 0) {
-        return Err(AltBlockError::ZeroWeight);
-    }
-    BlockBody::well_formed(block).map_err(|_| AltBlockError::BlockMalformed)?;
-    if let Some(w) = witness {
-        AttestationWitnessBytes::well_formed(w).map_err(|_| AltBlockError::WitnessMalformed)?;
-    }
-    Ok(())
 }
 
 impl Canonical for AltBlock {
@@ -237,7 +223,7 @@ impl Canonical for AltBlock {
         }
         out.extend_from_slice(&self.cumulative_difficulty.to_raw().to_le_bytes());
         self.coins_generated.encode_into(out);
-        put_bytes(out, &self.block);
+        put_bytes(out, &self.block.serialize());
         match &self.attestation_witness {
             None => out.push(Self::ABSENT),
             Some(w) => {
@@ -259,7 +245,9 @@ impl Canonical for AltBlock {
             r.array::<16>("buffer ends inside the cumulative difficulty")?,
         ));
         let coins_generated = AtomicUnits::from_raw(r.u64()?);
-        let block = r.bytes()?.to_vec();
+        // Copied out so the witness can be read before the parse. The
+        // `Block` is what is kept.
+        let block_bytes = r.bytes()?.to_vec();
         let attestation_witness = match r.u8()? {
             Self::ABSENT => None,
             Self::PRESENT => Some(r.bytes()?.to_vec()),
@@ -268,17 +256,18 @@ impl Canonical for AltBlock {
         if !r.is_empty() {
             return Err(r.invalid("trailing bytes after the alt block record"));
         }
-        validate(block_weight, &block, attestation_witness.as_deref()).map_err(|e| {
-            r.invalid(match e {
-                AltBlockError::BlockMalformed => "alt block bytes do not parse as a block",
-                AltBlockError::WitnessMalformed => {
-                    "attestation witness is empty or over its bound; absence is a missing option"
-                }
-                AltBlockError::ZeroWeight => {
-                    "block weight is zero; undetermined is a missing option"
-                }
-            })
-        })?;
+        if block_weight.is_some_and(|w| w.to_raw() == 0) {
+            return Err(r.invalid("block weight is zero; undetermined is a missing option"));
+        }
+        let block = BlockBody::parse(&block_bytes)
+            .map_err(|_| r.invalid("alt block bytes do not parse as a block"))?;
+        if let Some(witness) = attestation_witness.as_deref() {
+            AttestationWitnessBytes::well_formed(witness).map_err(|_| {
+                r.invalid(
+                    "attestation witness is empty or over its bound; absence is a missing option",
+                )
+            })?;
+        }
         Ok(Self {
             height,
             block_weight,

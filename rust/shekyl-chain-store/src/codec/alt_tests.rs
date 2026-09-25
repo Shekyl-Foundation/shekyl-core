@@ -30,8 +30,8 @@ fn witness() -> Vec<u8> {
 
 #[test]
 fn round_trips_with_and_without_the_optional_parts() {
-    let bare = AltBlock::checked(facts(None), block(), None).expect("bare");
-    let full = AltBlock::checked(facts(Some(2_048)), block(), Some(witness())).expect("full");
+    let bare = AltBlock::checked(facts(None), &block(), None).expect("bare");
+    let full = AltBlock::checked(facts(Some(2_048)), &block(), Some(witness())).expect("full");
     for record in [&bare, &full] {
         let bytes = record.encode();
         assert_eq!(AltBlock::decode(&bytes).as_ref(), Ok(record));
@@ -40,11 +40,10 @@ fn round_trips_with_and_without_the_optional_parts() {
     assert_eq!(bare.attestation_witness(), None);
     assert_eq!(full.block_weight(), Some(BlockWeight::from_raw(2_048)));
     assert_eq!(full.attestation_witness(), Some(witness().as_slice()));
-    assert_eq!(full.block_bytes(), block().as_slice());
     assert_eq!(
         full.block().serialize(),
         block(),
-        "the parsed block is the stored bytes' block"
+        "encode writes the canonical block, which is the bytes checked parsed"
     );
     assert_eq!(full.facts(), facts(Some(2_048)));
     assert_eq!(
@@ -57,30 +56,30 @@ fn round_trips_with_and_without_the_optional_parts() {
 #[test]
 fn checked_refuses_what_decode_refuses() {
     assert_eq!(
-        AltBlock::checked(facts(None), vec![0xFF; 7], None).map(drop),
+        AltBlock::checked(facts(None), &[0xFF; 7], None).map(drop),
         Err(AltBlockError::BlockMalformed)
     );
     assert_eq!(
-        AltBlock::checked(facts(None), Vec::new(), None).map(drop),
+        AltBlock::checked(facts(None), &[], None).map(drop),
         Err(AltBlockError::BlockMalformed),
         "an empty block is not a block"
     );
     assert_eq!(
-        AltBlock::checked(facts(None), block(), Some(Vec::new())).map(drop),
+        AltBlock::checked(facts(None), &block(), Some(Vec::new())).map(drop),
         Err(AltBlockError::WitnessMalformed),
         "empty stores no row: absence is None, not Some(empty)"
     );
     assert_eq!(
         AltBlock::checked(
             facts(None),
-            block(),
+            &block(),
             Some(vec![0; MAX_ATTESTATION_WITNESS_BYTES + 1])
         )
         .map(drop),
         Err(AltBlockError::WitnessMalformed)
     );
     assert_eq!(
-        AltBlock::checked(facts(Some(0)), block(), None).map(drop),
+        AltBlock::checked(facts(Some(0)), &block(), None).map(drop),
         Err(AltBlockError::ZeroWeight),
         "the C++ sentinel is not re-minted"
     );
