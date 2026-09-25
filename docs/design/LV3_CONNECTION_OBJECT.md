@@ -1551,10 +1551,12 @@ not a design question for this slice.)*
    §5's reopening criterion, now with a register to check it against. The
    missing noun re-created in one of six places means the ordering **below** it
    is wrong, not merely late.
-3. **`levin_notify` stops being the dispatch seam** — if relay dispatch moves
-   or is displaced by cluster T's work (§4 and
-   [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §5, still
-   open), then this slice's 2,189-line core is not where it is assumed to be.
+3. **`levin_notify` stops being the dispatch seam** — **FIRED 2026-09-25.**
+   Relay dispatch moves to its own round, after the timing engine
+   ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D6). LV-3 keeps
+   steps a–c: the connection type, ownership transfer, and the
+   registry. The 2,189-line dispatch core is not where this slice's
+   remaining work sits.
 
 **Each of the first two is a command. The third is why cluster T's sequencing
 is still named as open** rather than quietly assumed.

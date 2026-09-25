@@ -1,6 +1,6 @@
 # P2P transport layer — Rust connectors in place of epee's TCP server
 
-**Status: CLOSED — Round 4, 2026-09-25. D3 RULED. D6 is not ruled.** The design is the spec for
+**Status: CLOSED — Round 4, 2026-09-25. D3 RULED. D6 RULED.** The design is the spec for
 implementation. Round 1 was pinned to `dev`
 `db2788d164660003948376ba369fa396c5f4c482`. Round 2 re-read that pin.
 The 11 commits `dev` gained after it are S-POOL / chain-store and do
@@ -53,11 +53,12 @@ what that row deletes.
 
 ## 0. Status
 
-The design round is closed except D6. D6 is the socketless executor,
-and it is not ruled. What is not a number yet is named in the section
-that owns it: deadline values (D9), the fixed-window size and whether
-every-record rekey is affordable (D14 item 4, gated on C9 and C5).
-Those measurements do not reopen the direction.
+The design round is closed. D6 is ruled: a socketless `io_context` is a
+bounded interim that ends when the timing engine lands, not at LV-3.
+What is not a number yet is named in the section that owns it: deadline
+values (D9), the fixed-window size and whether every-record rekey is
+affordable (D14 item 4, gated on C9 and C5), and the executor's thread
+budget (D6, from C6). Those measurements do not reopen the direction.
 
 The wire spec is `SHEKYL_P2P_PROTOCOL.md`. It carries the framing
 direction. This document does not.
@@ -222,8 +223,9 @@ this round. Item 7 is the knot this round untangles.
    `net_node` reaches them through `get_config_object()`.
 2. Levin drives the transport event loop. Invoke timers come from
    `get_io_context()` (`levin_protocol_handler_async.h:229`). The
-   synchronous invoke pumps that I/O (`:753`). D6 is the interim for
-   this item.
+   synchronous invoke pumps that I/O (`:753`) and is deleted under D3.
+   D6 keeps a socketless `io_context` until the timing engine lands,
+   and then C++ has no event loop.
 3. One protocol stack per network. Each `network_zone` owns its own
    `m_net_server` (`net_node.h:335-339`), and therefore its own Levin
    config, registry, and notifier.
@@ -299,7 +301,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | `no_delay(false)` (Nagle) | Set on every socket at `abstract_tcp_server2.inl:977-982` | **Measure before deciding**, under step 7 C9. Nagle changes the record sizes an observer sees, so it is part of the record-length evidence. It is not fixed before that evidence exists. |
 | FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 C4 asserts those failures are indistinguishable from the far side. |
 | `add_ref` / `release`, `request_callback`, `send_done` | `i_service_endpoint` | The adapter's contract (D4). Not a copy of epee's refcount. |
-| Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer | D6. Proposed: a socketless `io_context` until LV-3. |
+| Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer. The pool is 10 threads (`net_node.inl:1150`) | **D6, ruled.** A socketless `io_context` is the interim until the timing engine lands. Its pool is a measured budget, not 10. |
 | Serial outbound dialing | `connections_maker` at `net_node.inl:2009`, call at `:1917` | **Stays serial through cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7, C7. |
 | SSL | `m_state.ssl` on the connection | **Refuse.** |
 
@@ -368,18 +370,117 @@ plus blocking pools. The transport layer does not add one that way.
 
 ---
 
-## D6 — executor above the transport, until LV-3 (not ruled)
+## D6 — the executor above the transport (RULED 2026-09-25: a bounded interim)
 
-This is D1 violation 2, kept on purpose until LV-3, not a carried
-design. Levin invoke timeouts take their timer from `get_io_context()`
-(`levin_protocol_handler_async.h:229`). `net_node` idle handlers run
-on the server's `io_context`. Each zone's relay notifier is
-constructed with that same `io_context` and with `get_config_shared()`
-(`net_node.inl:483`, `:642`, `:890`). Keep a socketless asio
-`io_context` as that executor, and delete it at LV-3. It hosts Levin's
-invoke timers, `net_node`'s idle handlers, and LV-3's relay-dispatch
-timers. Its thread pool is sized for those three, not only the first
-two. The socket-bearing context does not survive cutover.
+**Context.** Once the transport layer owns the sockets, the C++ that
+stays above the seam still needs something to run on. Today that is a
+single asio `io_context`. It belongs to the public zone, and Tor's zone
+is built on the same one (`add_zone`, `net_node.inl:805`). Its pool is
+a hard-coded 10 threads (`:1150`). It hosts:
+
+- Levin's invoke timers (`levin_protocol_handler_async.h:229`). The
+  synchronous invoke path is deleted under D3.
+- The 1-second idle cadences for `net_node`'s `idle_worker` and the
+  cryptonote handler's `on_idle` (`net_node.inl:1146-1147`).
+- Each zone's relay notifier. Each is constructed with this
+  `io_context` and `get_config_shared()` (`:483`, `:642`, `:890`) and
+  serialises through a per-zone strand.
+- All message handling triggered by `handle_recv`, including the
+  cryptonote handler.
+- The per-connection ordering D4 requires: one delivery at a time.
+
+**Ruling.**
+
+1. **A socketless `io_context` is a bounded interim.** It lasts from
+   the transport-layer cutover until the timing-engine round lands,
+   not until LV-3. While it lives:
+   - there is one executor for all networks;
+   - its pool is built by D5's single constructor, with a measured
+     budget that counts toward the Pi-4 total, replacing the
+     hard-coded 10;
+   - it hosts the full list above;
+   - the only C++ executed on a transport thread is posting work to it;
+   - shutdown runs in this order: the transport stops accepting, the
+     transport cancels its tasks, the executor drains posted work, the
+     executor stops.
+
+2. **The timing engine, which is the next round, owns every deadline
+   in Rust:**
+   - Levin's invoke timeouts. C++ keeps the pending-invoke state; Rust
+     arms and cancels each timeout and reports expiry by id.
+   - The idle cadences.
+   - The relay `Driver`'s sleep.
+   - PWD-B2's per-connection timed-sync deadlines.
+
+   After it lands, C++ is called, not driven. C++ work runs on a
+   budgeted blocking pool owned by Rust, never on an async worker
+   thread, with one delivery at a time per connection. The asio
+   `io_context` is then deleted, and C++ has no event loop. That
+   resolves D1's second violation.
+
+3. **Relay dispatch moves to Rust in its own round, which is LV-3's
+   step d brought forward.**
+   - It carries out `shekyl-relay`'s `Driver` effects by writing
+     directly to transport-layer connections by id. The stem map and
+     connection events are already in Rust.
+   - Rust builds relay messages with `shekyl-levin`, an exception to
+     D14 item 3 scoped to relay messages. Two conditions: each
+     submission is a whole message, and there is a single writer per
+     direction.
+   - The crate already provides the header (byte-pinned against C++'s
+     `make_header`, `tests/oracle_kats.rs`), the `notify` builder
+     (`message.rs:25`), typed `NewTransactions` (2002) and
+     `NewCompactBlock` (2008) with encode and decode, and compression
+     and cover-traffic emission, which are already live.
+   - **Gate:** before Rust sends a single relay message, the 2002 and
+     2008 payloads must either match the C++ serializer byte for byte,
+     or pass the dual-stack run (`tests/dual_stack.rs`, made a hard
+     gate: Rust emits, a C++ node accepts and relays). Today's payload
+     tests are only Rust-to-Rust round trips.
+
+**Why.**
+
+- The relay lane's reason 2 prescribes this, and names when it applies
+  (`shekyl-relay-privacy/src/lib.rs:117-146`). Relay timing decisions
+  are already Rust's (`shekyl-relay/src/driver/mod.rs:6-13`); only the
+  sleep is asio's. Reason 2 keeps one reactor in the p2p path and says
+  the reactor moves when the C++ relay path is removed. The transport
+  cutover by itself puts a tokio runtime next to asio, which is the
+  two-reactor seam reason 2 warns about. This ruling keeps that seam
+  short and then removes it.
+- Isolation needs both halves. With only the timers in Rust, a relay
+  timer would fire on time but its send would still queue behind block
+  validation in the C++ pool. With timing and relay dispatch in Rust,
+  Dandelion++'s timing and sends never wait behind work an attacker
+  can generate.
+
+**Evidence required.**
+
+- Relay conformance grades. The existing statistical grades must pass
+  unchanged when the sleeper moves. Only who sleeps changes; the draws
+  stay in `shekyl-relay-privacy`.
+- Timer lateness under load. Step 7's C6 gains a measurement of how
+  late relay timers fire under peer-driven load, taken both on the
+  interim and after the timing engine lands. The interim's pool budget
+  and the blocking pool's budget both come from it.
+
+**The register.** P2P-3 §4.2 gains two rows, in this order: the timing
+engine, after the transport layer; relay dispatch, after the timing
+engine. LV-3 keeps steps a–c: the connection type, ownership transfer,
+and the registry. LV-3 §6.3 falsifier 3 has already fired, and this
+extends that record. The cryptonote handler (3,213 lines, the
+register's "(open)" row) runs on the Rust-owned blocking pool once the
+timing engine lands, so deleting the executor no longer waits on it.
+Its replacement still has no owner, and the row stays visible.
+
+**Falsifiers (rule 21). Reopen this ruling if:**
+
+- any C++ component must block on a timer or an event loop, and so
+  cannot be simply called;
+- the relay conformance grades degrade after the sleep moves to Rust;
+- the timing-engine round has not opened by the time transport-layer
+  implementation starts. The interim is bounded only if its end has
+  been scheduled.
 
 ---
 
