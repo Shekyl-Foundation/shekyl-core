@@ -936,8 +936,18 @@ over together.
    window starts with an authenticated occupancy, a 2-byte count of
    the stream bytes that follow; the rest of the window is padding.
    The count is inside the AEAD, so a trimmed tail cannot be mistaken
-   for stream data. `fragment.rs` does not supply it: that helper is
-   Levin-aware, and this layer does not see a command. The
+   for stream data. The channel has its own framing.
+   `fragment.rs` stays the message-level tool for cover traffic: it
+   works on Levin messages, and this layer never sees a command
+   (D1, D14 item 3). That split is the decoupling, not a leftover of
+   the occupancy encoding. When a window is only partly filled, the
+   sender either seals it at once or waits for more bytes. Sealing at
+   once makes a message end a window boundary with a time, so an
+   observer reads boundaries and approximate sizes from window counts
+   and timing. Waiting puts that delay on relay latency, including
+   Dandelion++. The flush policy is part of this framing decision. It
+   is measured in step 7 with the window size and Nagle, and it is not
+   chosen before that measurement. The
    PWD-T8 vectors are re-minted when the window size is derived.
    Rekey is every record if the Pi-4 benchmark shows three
    HMAC-BLAKE2s per record are affordable beside seal cost. A

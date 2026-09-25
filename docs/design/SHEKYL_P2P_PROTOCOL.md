@@ -3380,7 +3380,12 @@ per record are affordable beside seal cost; otherwise the interval is
 derived from the measured record rates. Fixed windows spend one nonce
 per record. Each window's plaintext starts with a 2-byte occupancy,
 the count of stream bytes that follow, and the rest is padding. The
-count is inside the AEAD. There is no cleartext length.
+count is inside the AEAD. There is no cleartext length. The channel
+frames itself; `fragment.rs` stays the message-level tool for cover
+traffic, because the transport never sees a Levin command. The flush
+policy — seal a partly filled window at once, or wait for more bytes —
+is part of this framing decision. It is measured with the window size
+and Nagle, and it is not chosen before that measurement.
 
 **Interim, pinned 2026-09-24, BOLT-8, in force only while the option
 is off the fixed window.** Each direction seals one
