@@ -34,17 +34,29 @@
 //! sentinel re-minted). [`Canonical::decode`] refuses the same three, so a
 //! row that decodes is a row `checked` would have built (SI-14's shape).
 //!
-//! # What the store does not check
+//! # The parse boundary is here, not at the consumer
 //!
-//! That the key hashes the block bytes. The caller computed the key from
-//! the block it is storing (`blockchain.cpp:2359`); hashing the block again
-//! to verify it would be the store computing a consensus-visible value
-//! (C2-R8 Q4). The contract is the caller's.
+//! The record stores the block's wire bytes (the one canonical encoding),
+//! but it hands out a **parsed** [`Block`] — [`AltBlock::block`] — never the
+//! bytes. Every C++ consumer parsed (`blockchain.cpp:937`, `:2023`,
+//! `:2590`, `:6749`) and `MERROR`-skipped a blob that would not; here a row
+//! that decodes *is* a block, because decoding ran the same parse. The
+//! chain read surface keeps its unverified-bytes shape (`RawBlockBytes`)
+//! for the relay path that forwards without parsing; no alt consumer
+//! forwards, so no raw shape is offered (Copilot, PR #856).
+//!
+//! What the record does not carry is its own hash: the key is the identity,
+//! and the store verifies at AL1 that the key hashes the block
+//! (`AltCannot::IdentityMismatch`) — the belt class `chain_reads::block_body`
+//! already applies to a blob against `block_info.hash`, verification of a
+//! caller-supplied identity rather than computation of a consensus value
+//! (C2-R8 Q4). The C++ trusted the caller (`blockchain.cpp:2359`).
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
 use shekyl_types::{BlockHeight, BlockWeight};
 use shekyl_units::AtomicUnits;
+use shekyl_wire::Block;
 
 use super::archival::AttestationWitnessBytes;
 use super::chain::BlockBody;
@@ -171,10 +183,19 @@ impl AltBlock {
         self.coins_generated
     }
 
-    /// The block, in the chain's wire encoding — unparsed here; the consumer
-    /// parses (S-CHAIN-R's `RawBlockBytes` discipline).
+    /// The block, parsed. The bytes parsed at construction or at decode (the
+    /// same [`BlockBody::well_formed`]), so this cannot fail; there is no
+    /// raw-bytes accessor (module docs, *The parse boundary is here*).
     #[must_use]
-    pub fn block(&self) -> &[u8] {
+    pub fn block(&self) -> Block {
+        Block::from_bytes(&self.block)
+            .expect("an AltBlock's bytes parsed at construction or decode; nothing mutates them")
+    }
+
+    /// The block's wire bytes, for the tests that pin the row's layout.
+    /// Test-only: the block is [`block`](Self::block), parsed.
+    #[cfg(test)]
+    pub(crate) fn block_bytes(&self) -> &[u8] {
         &self.block
     }
 

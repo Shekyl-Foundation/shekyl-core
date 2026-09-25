@@ -368,9 +368,11 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   leaves the catalogue (the witness can no longer outlive or lack its alt
   block by construction). Seven operations on the store's existing write
   batch and read snapshot replace the C++ alt path's nine store methods:
-  insert (refuses a held hash — the duplicate belt, typed), remove (refuses
+  insert (refuses a held hash — the duplicate belt, typed — and a key that
+  is not the hash of the block it stores), remove (refuses
   an absent hash — a caller-contract violation, not a no-op), drop-all,
-  read, membership without a decode, count, enumerate. Because the batch
+  read (a parsed block, never raw bytes), membership without a decode,
+  count, enumerate. Because the batch
   already pops and connects repeatedly, a chain switch — pop to the split,
   demote, promote, remove — is **one** `ChainStore::write` closure that
   commits or aborts as a unit; the C++ `rollback_blockchain_switching` has

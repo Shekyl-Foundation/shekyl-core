@@ -91,7 +91,12 @@ fn insert_read_enumerate_remove_and_drop() {
         );
         assert_eq!(snap.alt_block(&main[1]).expect("get"), None);
         let got = snap.alt_block(&a).expect("get").expect("held");
-        assert_eq!(got.block(), a_bytes.as_slice());
+        assert_eq!(
+            got.block().serialize(),
+            a_bytes,
+            "handed out parsed, not as bytes"
+        );
+        assert_eq!(got.block().hash(), a, "the key is the block's identity");
         assert_eq!(got.attestation_witness(), None);
         assert_eq!(got.height(), BlockHeight::from_raw(1));
         assert_eq!(snap.alt_block_count().expect("len"), 2);
@@ -167,6 +172,21 @@ fn insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals() {
             StoreError::from(AltCannot::NotHeld).to_string()
         )),
         "removing what is not held is a caller-contract violation"
+    );
+
+    // The key must be the block's hash: `a`'s bytes under `main[0]`'s key.
+    let out: Result<(), TestErr> =
+        store.write(|batch| Ok(batch.insert_alt_block(&main[0], &alt(1, a_bytes.clone(), None))?));
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(AltCannot::IdentityMismatch {
+                key: main[0],
+                actual: a,
+            })
+            .to_string()
+        )),
+        "the store verifies the identity it is handed"
     );
 
     // Neither refusal is fatal: the store still holds `a` and still writes.

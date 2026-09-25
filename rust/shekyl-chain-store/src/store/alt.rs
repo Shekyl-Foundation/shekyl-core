@@ -74,10 +74,18 @@ impl WriteBatch<'_, '_> {
     ///
     /// # Errors
     ///
-    /// [`AltCannot::AlreadyHeld`] if the store already holds `id` — CEN-K3's
-    /// belt, typed; the caller need not (and inside a batch, cannot usefully)
-    /// pre-read (SAL-4). Engine faults otherwise.
+    /// [`AltCannot::IdentityMismatch`] if `id` is not the hash of the block
+    /// `block` carries — the key is the record's identity and the store
+    /// verifies the one it is given (the `chain_reads::block_body` belt
+    /// class; the C++ trusted the caller). [`AltCannot::AlreadyHeld`] if the
+    /// store already holds `id` — CEN-K3's belt, typed; the caller need not
+    /// (and inside a batch, cannot usefully) pre-read (SAL-4). Engine faults
+    /// otherwise.
     pub fn insert_alt_block(&self, id: &BlockHash, block: &AltBlock) -> Result<(), StoreError> {
+        let actual = block.block().hash();
+        if actual != *id {
+            return Err(AltCannot::IdentityMismatch { key: *id, actual }.into());
+        }
         let encoded = block.encoded();
         check_row::<Coded<AltBlock>>(ALT_BLOCKS_CELL, &encoded.as_encoded())?;
         let mut table = self.alt_table()?;

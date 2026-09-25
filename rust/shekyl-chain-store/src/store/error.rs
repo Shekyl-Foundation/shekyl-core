@@ -35,7 +35,7 @@
 
 use crate::apply_policy::ArchivalFamily;
 use shekyl_chain_rules::RuleSet;
-use shekyl_types::TxHash;
+use shekyl_types::{BlockHash, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
@@ -394,6 +394,17 @@ pub enum AltCannot {
     /// is not held is a caller-contract violation — L14's insert-versus-upsert
     /// ruling applied to a remove — not an idempotent no-op.
     NotHeld,
+    /// `insert_alt_block` whose key is not the hash of the block it stores.
+    /// The key is the alt block's identity and the record does not carry a
+    /// second one, so the store verifies the one it is given — the belt
+    /// class `chain_reads::block_body` applies to a blob against
+    /// `block_info.hash`. The C++ trusted the caller (`blockchain.cpp:2359`).
+    IdentityMismatch {
+        /// The key the caller supplied.
+        key: BlockHash,
+        /// What the block bytes hash to.
+        actual: BlockHash,
+    },
 }
 
 /// The pool store's typed refusals — the pool's decisions, not faults
@@ -541,10 +552,14 @@ impl From<PoolCannot> for StoreError {
 
 impl core::fmt::Display for AltCannot {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(match self {
-            Self::AlreadyHeld => "insert of an alt block the store already holds",
-            Self::NotHeld => "remove of an alt block the store does not hold",
-        })
+        match self {
+            Self::AlreadyHeld => f.write_str("insert of an alt block the store already holds"),
+            Self::NotHeld => f.write_str("remove of an alt block the store does not hold"),
+            Self::IdentityMismatch { key, actual } => write!(
+                f,
+                "insert of an alt block under key {key} whose bytes hash to {actual}"
+            ),
+        }
     }
 }
 

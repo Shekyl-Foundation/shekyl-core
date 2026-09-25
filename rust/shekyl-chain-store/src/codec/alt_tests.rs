@@ -40,7 +40,12 @@ fn round_trips_with_and_without_the_optional_parts() {
     assert_eq!(bare.attestation_witness(), None);
     assert_eq!(full.block_weight(), Some(BlockWeight::from_raw(2_048)));
     assert_eq!(full.attestation_witness(), Some(witness().as_slice()));
-    assert_eq!(full.block(), block().as_slice());
+    assert_eq!(full.block_bytes(), block().as_slice());
+    assert_eq!(
+        full.block().serialize(),
+        block(),
+        "the parsed block is the stored bytes' block"
+    );
     assert_eq!(full.facts(), facts(Some(2_048)));
     assert_eq!(
         full.cumulative_difficulty().to_raw(),
