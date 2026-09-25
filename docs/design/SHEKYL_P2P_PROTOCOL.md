@@ -3370,7 +3370,7 @@ messages would silently halve or double the real budget when PWD-T6/PWD-B3 settl
 the framing.
 
 **Post-`Split` record framing. Direction RULED 2026-09-25**
-(`P2P_TRANSPORT_LAYER.md` D14 item 4). Fixed-window framing is the
+(transport-layer design, D14 item 4). Fixed-window framing is the
 wire. The window size is derived from C9's measured size distribution.
 Until that measurement, the option keeps the BOLT-8 framing pinned
 2026-09-24, quoted below as the interim, not as the target. PWD-T8
