@@ -47,7 +47,10 @@
 //! coverage, and `RuleCoverage::insert` names them.
 //!
 //! The **per-transaction** classes have the same two shapes one level down.
-//! A [`TxRule`] (census 4.H) judges one transaction from its bytes alone —
+//! A [`TxRule`] judges one transaction from its bytes alone — census 4.H,
+//! and the 4.I rows that read no view (I1, I4, I5, I6, I8, I9, I14, I16;
+//! slice 6 commit 2, `rules::tx_inputs`); the partition is
+//! view-dependence, not the census chapter —
 //! a [`TxContext`]: the transaction, which position it occupies
 //! ([`TxKind`], derived from the transaction and never declared by the
 //! caller), and the rule set — and runs in `tx_form`, which the pool
@@ -56,7 +59,8 @@
 //! **vacuous** on the coinbase rather than skipped (slice 5 Q2 — CEN-E1's
 //! precedent at an unanchored height), so coverage says the row was
 //! evaluated at every slot and the pool cannot mis-declare a kind. The
-//! 4.I class (`tx_against`, view-bound) arrives with slice 6.
+//! **view-bound** 4.I rows (`tx_against`: the spent set, the reference
+//! block, the tree) arrive with slice 6's later commits.
 //!
 //! # Where a refusal is written
 //!
@@ -337,9 +341,11 @@ impl TxScope {
 }
 
 /// What a **stateless per-transaction** rule may read: the transaction and
-/// its kind. No view, by construction — a rule that needs one is a 4.I rule
-/// (`tx_against`, slice 6). No rule set either, yet: every 4.H limit is a
-/// frozen constant beside its rule (`rules::tx`), the F21 arrangement — a
+/// its kind. No view, by construction — a rule that needs one is a
+/// `tx_against` rule (the view-bound half of 4.I, slice 6), whatever chapter
+/// the census files it under. No rule set either, yet: every stateless
+/// limit (4.H's in `rules::tx`, 4.I's in `rules::tx_inputs`) is a frozen
+/// constant beside its rule, the F21 arrangement — a
 /// limit joins `RuleSet` when a schedule step can name a different one, and
 /// the first such row adds the field. A struct so the set can grow without
 /// moving any rule's signature, as [`FormContext`] is.
@@ -381,12 +387,15 @@ impl<'a> TxContext<'a> {
     }
 }
 
-/// A stateless per-transaction rule (census 4.H): judges one transaction
-/// from its bytes alone. Runs in `tx_form`, at block connect for every
-/// slot and at pool admission for a lone transaction — one function, two
-/// sites, which is the C++'s `ver_non_input_consensus` arrangement kept.
+/// A stateless per-transaction rule: judges one transaction from its bytes
+/// alone. Census 4.H, and the 4.I rows that read no view (`rules::tx_inputs`)
+/// — the class is view-dependence, not the census chapter. Runs in
+/// `tx_form`, at block connect for every slot and at pool admission for a
+/// lone transaction — one function, two sites, which is the C++'s
+/// `ver_non_input_consensus` + input-side `check_tx_inputs` arrangement
+/// kept, in the caller's order (`validate.rs`).
 ///
-/// No fault position: nothing a 4.H rule reads can fail to answer.
+/// No fault position: nothing a stateless rule reads can fail to answer.
 /// `Ok(())` passed; `Err(refused)` refused on `Self::ROW` at the context's
 /// [`locus`](TxContext::locus) — the slot the caller judged.
 pub(crate) trait TxRule: Rule {

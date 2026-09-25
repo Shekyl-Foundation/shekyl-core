@@ -825,8 +825,9 @@ from waiting. The one objective a consensus input cap defensibly bounds is
 `shekyl-wire/tests/input_cap_cost.rs` (measurement lane, `#[ignore]`d)
 builds real 1/2/4/8-input spends through the production builder over a
 real depth-3 tree and times the production verifiers. On an i9-11950H,
-release, 2026-09-24 — **not the Pi 4 floor** (rule 76; the floor
-multiplier is owed with the derivation):
+release, 2026-09-24 — **not the Pi 4 floor** (rule 76; the floor run
+follows below, same day — this table is the desktop reference the floor
+multiplier is read against):
 
 | inputs | tx bytes | proof | auths | BP+ | verify | of which proof | auths | BP+ | prove |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -906,17 +907,23 @@ is the claim "the cap gives us privacy" would have to mean.
 **Disposition: keep, as inherited and unjustified, with the derivation
 owed.** Deleting a consensus bound on a reachability argument nobody has
 run at the floor is worse than carrying one for a slice. The derivation
-round: re-run the measurement at the Pi 4 floor; state the verifier
-budget a single unverified transaction may consume at relay; derive the
-cap from it, or move the bound to relay policy and delete the consensus
-rule as redundant with CEN-H3's weight limit (which then caps inputs at
-22 for this shape); and price the consolidation-sequence
-cost in the same row so the trade is made knowing both sides. Until that
-round, `rules/tx_inputs.rs::I4` carries the number and this section carries the
-reason it is not yet a reason. The `shekyl_fcmp::MAX_INPUTS = 8` in the
-prover and verifier is the same inherited figure and moves with it.
+round — with the floor measurement **in hand** (below, same day; the
+first cut of this paragraph listed it as the round's first step): state
+the verifier budget a single unverified transaction may consume at relay;
+derive the cap from it against the floor's 64.9 ms/input, or move the
+bound to relay policy and delete the consensus rule as redundant with
+CEN-H3's weight limit (which then caps inputs at 22 for this shape); and
+price the consolidation-sequence cost in the same row so the trade is
+made knowing both sides. Until that round, `rules/tx_inputs.rs::I4`
+carries the number and this section carries the reason it is not yet a
+reason. The `shekyl_fcmp::MAX_INPUTS = 8` in the prover and verifier is
+the same inherited figure and moves with it (`shekyl-tx-builder`
+const-asserts the two equal; see the caveat on operands in that
+assertion's comment — the prover counts spends, I4 counts the whole
+`vin`).
 
-**Two things the measurement is not.** It is not the floor (rule 76). And
+**Two things the desktop measurement is not.** It is not the floor (rule
+76) — the floor run follows. And
 it is not a claim about the FCMP++ prover's scaling past eight — the
 prover refuses more, so the read past the cap is the slope, which the test
 asserts is a line within 5% so the read is honest.
