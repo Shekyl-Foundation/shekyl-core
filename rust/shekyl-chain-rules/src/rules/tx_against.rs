@@ -409,8 +409,10 @@ impl Rule for I17 {
 
 impl I17 {
     /// Every input's `signed_hash(i)`, in input order, recorded as this row.
-    /// Empty for a body with no per-input authentication (the coinbase, the
-    /// serve-credit form), where the row is vacuous.
+    /// Empty for a body with no `pqc_auths` — the coinbase, and the
+    /// serve-credit form, which CEN-H20 forbids to carry any: that form is
+    /// signed over the pass record instead (CEN-J10), so this row and I18
+    /// are vacuous on it by construction, not by exemption.
     pub(crate) fn signed_hashes(cx: &TxContext<'_>, coverage: &mut RuleCoverage) -> Vec<[u8; 32]> {
         coverage.insert(Self::ROW);
         cx.tx.pqc_signing_payload_hashes()

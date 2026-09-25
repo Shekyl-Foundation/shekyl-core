@@ -23,8 +23,12 @@
 //! the live oracle's), the bond post's `to_key ‖ bond_post` and the
 //! emission's `to_key ‖ to_key ‖ emission` (mixed archival
 //! arms, whose pseudo-out count is the *spend* subset), and the serve-credit
-//! form, which carries no per-input authentication and so has **no**
-//! preimage at all.
+//! form, which has **no** preimage at all — not because it is unsigned, but
+//! because consensus forbids it `pqc_auths` (CEN-H20) and its hybrid
+//! countersignature is over the pass record, by the bond's registered key,
+//! with the Ed25519 leg on the vin and the ML-DSA leg in the pruned record
+//! (`shekyl_archival_verify_serve_credit_vin`, CEN-J10). Its zero entry here
+//! is that boundary recorded, and it is why CEN-I18 is vacuous on the form.
 //!
 //! **Why a fixture and not a live comparison.** The payload was assembled in
 //! C++ (`tx_pqc_verify.cpp`, `get_transaction_signed_payload`) until E6
@@ -152,7 +156,7 @@ fn subjects() -> Vec<Subject> {
         },
         Subject {
             name: "serve-credit-only",
-            source: "shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json (no per-input authentication: no preimage)",
+            source: "shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json (no pqc_auths by consensus, CEN-H20; signed over the pass record instead, CEN-J10: no preimage)",
             tx: json_hex_field(
                 &manifest("tests/fixtures/serve_credit_tx_parity_v1.json"),
                 "tx_hex",
@@ -195,8 +199,11 @@ fn emit_pqc_signing_preimage_kat_inputs() {
          payloads are the specification's output for these bytes, captured from the \
          C++ assembly (tx_pqc_verify.cpp, get_transaction_signed_payload) by the C++ \
          leg's capture mode before E6 slice 6 commit 7 made shekyl-wire the \
-         derivation of record and deleted that assembly. A transaction with no \
-         per-input authentication (the serve-credit form) has no preimage: empty lists.",
+         derivation of record and deleted that assembly. The serve-credit form has \
+         no preimage (empty lists) because consensus forbids it pqc_auths (CEN-H20): \
+         it is hybrid-signed over the pass record by the bond's registered key, \
+         Ed25519 leg on the vin and ML-DSA leg in the pruned record, verified by \
+         shekyl_archival_verify_serve_credit_vin (CEN-J10), not over this preimage.",
         "captured_by": "",
         "transactions": entries,
     });
@@ -209,7 +216,8 @@ fn emit_pqc_signing_preimage_kat_inputs() {
 
 /// The Rust leg: this crate's derivation reproduces every captured payload
 /// and hash, transaction by transaction, input by input; the eight shapes
-/// are all present; the serve-credit form yields nothing.
+/// are all present; the serve-credit form yields nothing (its signature is
+/// CEN-J10's, over the pass record — see the module doc).
 #[test]
 fn pqc_signing_preimage_matches_the_captured_specification_output() {
     let doc: Value =
@@ -307,6 +315,7 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
         .expect("the serve-credit form");
     assert_eq!(
         serve_credit.2, 0,
-        "the serve-credit form carries no per-input authentication and has no preimage"
+        "the serve-credit form carries no pqc_auths (CEN-H20) — its countersignature is \
+         over the pass record (CEN-J10) — and so has no preimage"
     );
 }

@@ -52,11 +52,16 @@ pub struct PqcSigningPreimage {
 }
 
 impl PqcSigningPreimage {
-    /// The preimage of `tx`, or `None` for a body that carries no per-input
-    /// PQC authentication and so has none: a coinbase (`Null` CT), the
-    /// serve-credit form (its countersignature rides the vin; `pqc_auths` is
-    /// empty), and the storage-pruned spend form (no prunable region to
-    /// bind).
+    /// The preimage of `tx`, or `None` for a body that has none: a coinbase
+    /// (`Null` CT); the storage-pruned spend form (no prunable region to
+    /// bind); and the serve-credit form, which consensus forbids to carry
+    /// `pqc_auths` at all (`blockchain.cpp`'s serve-credit arm, CEN-H20). That
+    /// form is not unauthenticated — it is hybrid-signed, but over a different
+    /// object with a different key: the pass record (registry sub-root,
+    /// challenged leaf, path), under `SCHEME_DOMAIN_SERVE_CREDIT`, by the
+    /// bond's registered key, with the Ed25519 leg on the vin and the ML-DSA
+    /// leg in the pruned record (`shekyl_archival_verify_serve_credit_vin`,
+    /// CEN-J10). This preimage is the wrong object for it, not a missing one.
     #[must_use]
     pub fn of(tx: &Transaction) -> Option<Self> {
         let Ct::Fcmp {

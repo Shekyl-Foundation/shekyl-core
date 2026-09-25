@@ -35,7 +35,11 @@ shekyl-oxide output. Its full end-to-end proof is the live-oracle spend KAT
 > `rust/shekyl-wire/tests/pqc_signing_preimage_kat.rs` over
 > `tests/fixtures/pqc_signing_preimage_v1.json`: eight daemon-accepted
 > transactions (one, two and six inputs; the bond post's and the emission's
-> mixed archival arms; the serve-credit form, which has no preimage) with
+> mixed archival arms; the serve-credit form, which has no preimage — not
+> because it is unsigned but because consensus forbids it `pqc_auths`
+> (CEN-H20) and its hybrid countersignature is over the pass record under
+> `SCHEME_DOMAIN_SERVE_CREDIT`, Ed25519 leg on the vin and ML-DSA leg in the
+> pruned record, CEN-J10) with
 > every input's payload bytes and signed hash, **captured from the C++
 > assembly before its deletion as the specification's output for those
 > bytes**. The C++ line anchors that follow are records of where the layout

@@ -1111,7 +1111,9 @@ pub enum Ct {
         /// Committed base arrays (per output).
         base: CtBase,
         /// Per-input PQC authentication (count == `nvin`, no length prefix; empty
-        /// in the serve-credit form — the countersignature rides the vin).
+        /// in the serve-credit form, whose hybrid countersignature is over the
+        /// pass record instead — Ed25519 leg on the vin, ML-DSA leg in the
+        /// pruned record; CEN-J10).
         pqc_auths: Vec<PqcAuth>,
         /// Prunable region. `None` only for the storage-pruned *spend* form
         /// (daemon `get_transactions prune:true`). Serve-credit carries
