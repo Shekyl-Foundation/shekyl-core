@@ -456,6 +456,9 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // prefix and still verify.
     let mut mutated_output_keys = [payment.output_key, change.output_key];
     mutated_output_keys[0][0] ^= 0x01;
+    // Same extra as the signed prefix: the output key must be the ONLY
+    // field that differs, or the refusal could be the extra's and the
+    // property unexercised (#853 review).
     let mutated_prefix_hash = tx_prefix_hash_from_parts(
         &[*ki.key_image.as_bytes()],
         &mutated_output_keys,
@@ -463,7 +466,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),
         ],
-        &[],
+        &extra,
     );
     let mutated_result = proof::verify(
         &verifier_proof,

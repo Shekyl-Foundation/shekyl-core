@@ -112,6 +112,66 @@ fn bp_plus_from_blob(blob: &[u8]) -> BpPlus {
     }
 }
 
+/// The wire transaction for a two-output spend of `key_images` with the
+/// proofs `signed` carries and `pqc_auths` as given — provisional headers
+/// (empty signatures) for phase 1's payload hashing, the signed ones for
+/// the body that is verified and measured. One constructor so the hashed
+/// body and the serialized body cannot differ in anything but the
+/// signatures.
+fn assemble(
+    key_images: &[[u8; 32]],
+    payment: &OutputData,
+    change: &OutputData,
+    extra: Vec<u8>,
+    fee: u64,
+    signed: &shekyl_tx_builder::SignedProofs,
+    pqc_auths: Vec<shekyl_wire::PqcAuth>,
+) -> Transaction {
+    Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: key_images
+                .iter()
+                .map(|key_image| Input::ToKey {
+                    amount: 0,
+                    key_offsets: Vec::new(),
+                    key_image: *key_image,
+                })
+                .collect(),
+            outputs: vec![
+                Output {
+                    amount: 0,
+                    key: payment.output_key,
+                    view_tag: payment.view_tag_prefilter,
+                },
+                Output {
+                    amount: 0,
+                    key: change.output_key,
+                    view_tag: change.view_tag_prefilter,
+                },
+            ],
+            extra,
+        },
+        ct: Ct::Fcmp {
+            fee,
+            reference_block: signed.reference_block,
+            base: CtBase {
+                enc_amounts: signed.enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+                enc_labels: signed.enc_labels.iter().map(|f| f.to_bytes()).collect(),
+                commitments: signed.commitments.clone(),
+            },
+            pqc_auths,
+            prunable: Some(Prunable {
+                serve_credit_pruned: Vec::new(),
+                bulletproofs: vec![bp_plus_from_blob(&signed.bulletproof_plus)],
+                tree_depth: u64::from(signed.tree_depth.checked_sub(1).expect("L >= 1")),
+                fcmp_proof: signed.fcmp_proof.clone(),
+                pseudo_outs: signed.pseudo_outs.clone(),
+            }),
+        },
+    }
+}
+
 /// One spent output the wallet owns: what the prover needs and what the
 /// verifier reads back.
 struct Spent {
@@ -375,8 +435,52 @@ fn measure(
         &tree_ctx,
     )
     .expect("sign transaction");
-    let auths = sign_pqc_auths(&vec![tx_prefix_hash.to_bytes(); n], &spend_inputs)
-        .expect("Phase-2 PQC auth signing");
+
+    // Phase 2, as production runs it (`sign_bridge.rs`): the wire body is
+    // assembled with the proofs and *provisional* auth headers — each
+    // input's hybrid key, no signature — the canonical per-input payload
+    // hashes are read off that body (`pqc_signing_payload_hashes`: prefix ‖
+    // CT base ‖ prunable hash ‖ this auth's header ‖ every auth's key hash),
+    // and those are what the auths sign. A stand-in message (the prefix
+    // hash for every input, the first cut) signs bytes the transaction does
+    // not bind and leaves the verifier's per-input hashing unmeasured
+    // (#853 review).
+    // Each input's hybrid public key, canonical bytes (what the auth header
+    // carries and what the proof binds through `PqcKeyScalar`).
+    let hybrid_pks: Vec<Vec<u8>> = chosen
+        .iter()
+        .map(|s| derive_pqc_public_key(&s.combined_ss, s.index).expect("derive hybrid pk"))
+        .collect();
+    let mut wire_tx = assemble(
+        &key_images,
+        &payment,
+        &change,
+        extra,
+        fee,
+        &signed,
+        hybrid_pks
+            .iter()
+            .map(|pk| shekyl_wire::PqcAuth {
+                auth_version: 1,
+                scheme_id: 1,
+                flags: 0,
+                hybrid_public_key: pk.clone(),
+                hybrid_signature: Vec::new(),
+            })
+            .collect(),
+    );
+    let payload_hashes = wire_tx.pqc_signing_payload_hashes();
+    assert_eq!(payload_hashes.len(), n, "one payload hash per input");
+    let auths = sign_pqc_auths(&payload_hashes, &spend_inputs).expect("Phase-2 PQC auth signing");
+    if let Ct::Fcmp { pqc_auths, .. } = &mut wire_tx.ct {
+        for (slot, auth) in pqc_auths.iter_mut().zip(&auths) {
+            assert_eq!(
+                slot.hybrid_public_key, auth.public_key,
+                "the provisional header carried the key the signer used"
+            );
+            slot.hybrid_signature = auth.signature.clone();
+        }
+    }
     let prove = started.elapsed();
 
     // ── The verifiers, timed separately ──────────────────────────────────
@@ -386,13 +490,9 @@ fn measure(
         tree_depth: signed.tree_depth,
     };
     let kis: Vec<KeyImage> = chosen.iter().map(|s| s.key_image).collect();
-    let pqc_pk_hashes: Vec<PqcKeyScalar> = chosen
+    let pqc_pk_hashes: Vec<PqcKeyScalar> = hybrid_pks
         .iter()
-        .map(|s| {
-            PqcKeyScalar::from_pqc_public_key(
-                &derive_pqc_public_key(&s.combined_ss, s.index).expect("derive hybrid pk"),
-            )
-        })
+        .map(|pk| PqcKeyScalar::from_pqc_public_key(pk))
         .collect();
     let started = Instant::now();
     let ok = proof::verify(
@@ -408,21 +508,25 @@ fn measure(
     let verify_proof = started.elapsed();
     assert!(ok, "{n}-input FCMP++ proof verifies");
 
+    // The verifier's auth work is what the validator does with the
+    // assembled transaction: re-derive every input's payload hash from the
+    // body it received, then verify each hybrid signature over its own.
+    // The hashing is inside the timer because the validator pays it.
     let started = Instant::now();
     let scheme = HybridEd25519MlDsa;
-    for auth in &auths {
+    let verifier_hashes = wire_tx.pqc_signing_payload_hashes();
+    for (auth, message) in auths.iter().zip(&verifier_hashes) {
         let pk = HybridPublicKey::from_canonical_bytes(&auth.public_key).expect("key parses");
         let sig = HybridSignature::from_canonical_bytes(&auth.signature).expect("sig parses");
         scheme
-            .verify(
-                &pk,
-                SCHEME_DOMAIN_PQC_AUTH_TX,
-                &tx_prefix_hash.to_bytes(),
-                &sig,
-            )
-            .expect("hybrid auth verifies");
+            .verify(&pk, SCHEME_DOMAIN_PQC_AUTH_TX, message, &sig)
+            .expect("hybrid auth verifies over the assembled transaction's payload hash");
     }
     let verify_auths = started.elapsed();
+    assert_eq!(
+        verifier_hashes, payload_hashes,
+        "the signed payload hashes are the ones the assembled transaction yields"
+    );
 
     let bp = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice()).expect("BP+");
     let bp_commitments: Vec<CompressedPoint> = signed
@@ -434,59 +538,7 @@ fn measure(
     assert!(bp.verify(rng, &bp_commitments), "BP+ verifies");
     let verify_bp = started.elapsed();
 
-    // ── The wire bytes ───────────────────────────────────────────────────
-    let wire_tx = Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: key_images
-                .iter()
-                .map(|key_image| Input::ToKey {
-                    amount: 0,
-                    key_offsets: Vec::new(),
-                    key_image: *key_image,
-                })
-                .collect(),
-            outputs: vec![
-                Output {
-                    amount: 0,
-                    key: payment.output_key,
-                    view_tag: payment.view_tag_prefilter,
-                },
-                Output {
-                    amount: 0,
-                    key: change.output_key,
-                    view_tag: change.view_tag_prefilter,
-                },
-            ],
-            extra,
-        },
-        ct: Ct::Fcmp {
-            fee,
-            reference_block: signed.reference_block,
-            base: CtBase {
-                enc_amounts: signed.enc_amounts.iter().map(|f| f.to_bytes()).collect(),
-                enc_labels: signed.enc_labels.iter().map(|f| f.to_bytes()).collect(),
-                commitments: signed.commitments.clone(),
-            },
-            pqc_auths: auths
-                .iter()
-                .map(|auth| shekyl_wire::PqcAuth {
-                    auth_version: auth.auth_version,
-                    scheme_id: 1,
-                    flags: 0,
-                    hybrid_public_key: auth.public_key.clone(),
-                    hybrid_signature: auth.signature.clone(),
-                })
-                .collect(),
-            prunable: Some(Prunable {
-                serve_credit_pruned: Vec::new(),
-                bulletproofs: vec![bp_plus_from_blob(&signed.bulletproof_plus)],
-                tree_depth: u64::from(signed.tree_depth.checked_sub(1).expect("L >= 1")),
-                fcmp_proof: signed.fcmp_proof.clone(),
-                pseudo_outs: signed.pseudo_outs.clone(),
-            }),
-        },
-    };
+    // ── The wire bytes: the assembled, signed transaction ────────────────
     wire_tx
         .validate()
         .expect("the assembled spend passes the wire's structural validation");
