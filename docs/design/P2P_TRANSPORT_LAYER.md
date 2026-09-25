@@ -39,9 +39,9 @@ the pipe would not carry; protocol evidence does not need the pipe.
 | 2 | Documentation and register corrections | Separate doc PR; not this file |
 | 3 | Pi-4 crypto bench and protocol fuzz | After this round opens; results count at the flip |
 | 4 | This design round | Closed. This document is the spec |
-| 5 | Transport-layer implementation, then a differential harness against epee | Code, after the round closes |
-| 6 | Cutover: epee's transport and the pipe deleted | Not a flag day (D11) |
-| 7 | Option evaluation on the transport layer | Evaluation record |
+| 5 | Transport-layer implementation, then a differential harness against epee. The thread budget and the per-connector deadlines are measured on this build | Code, after the round closes |
+| 6 | Cutover: epee's transport and the pipe deleted. Does not land until those two measurements are in the record | Not a flag day (D11) |
+| 7 | Option evaluation: window size, rekey cost, Nagle, flood. Not the source of the cutover numbers | Evaluation record |
 | 8 | The flip | Flag day (rule 07), only after step 7 |
 
 The scaffolding-deletion FOLLOWUPS row is step 2, a separate doc PR.
@@ -56,10 +56,11 @@ what that row deletes.
 The design round is closed. D6 is ruled: a socketless `io_context` is a
 bounded interim that ends when the timing engine lands, not at LV-3.
 What is not a number yet is named in the section that owns it: deadline
-values (D9), the fixed-window size and whether every-record rekey is
-affordable (D14 item 4), and the executor's thread budget (D6). Those
-measurements do not reopen the direction. Step 7 is where they are
-taken. It is not an identifier family; this document mints none.
+values (D9) and the executor's thread budget (D6), both measured on the
+step-5 build before cutover, and the fixed-window size and whether
+every-record rekey is affordable (D14 item 4), measured in step 7.
+Those measurements do not reopen the direction. Step 7 is option
+evaluation. It is not an identifier family; this document mints none.
 
 The wire spec is `SHEKYL_P2P_PROTOCOL.md`. It carries the framing
 direction. This document does not.
@@ -365,10 +366,12 @@ runtime has no task priorities, so a shared pool would let a peer flood
 starve wallet RPC, and the reverse. Separate runtimes contain that.
 
 Today each subsystem builds its own runtime. Two already do
-(`shekyl-daemon-rpc` `ffi_exports.rs:162`, `shekyl-tor-control-daemon`
-`blocking.rs:120`). A multi-thread runtime defaults to one worker per
-core, so a third unbudgeted runtime on a 4-core Pi-4 is twelve workers
-plus blocking pools. The transport layer does not add one that way.
+(`shekyl-daemon-rpc` `ffi_exports.rs:162` builds a multi-thread runtime
+and does not set a worker count, so it takes one worker per core;
+`shekyl-tor-control-daemon` `blocking.rs:120` sets `.worker_threads(1)`).
+On a 4-core Pi-4 those two are five workers. A third runtime that also
+took the default would make nine, plus blocking pools. The transport
+layer does not add one that way.
 
 ---
 
@@ -928,8 +931,13 @@ over together.
    measured size distribution. Until that measurement, the option uses
    BOLT-8 framing, which hides the length field and still leaves a
    burst visible as a message size. Fixed windows hide the size down
-   to a count of identical windows, reuse `fragment.rs`, and make one
-   window one record: no length field, one nonce per record. The
+   to a count of identical windows, and make one window one record:
+   no cleartext length, one nonce per record. The plaintext of each
+   window starts with an authenticated occupancy, a 2-byte count of
+   the stream bytes that follow; the rest of the window is padding.
+   The count is inside the AEAD, so a trimmed tail cannot be mistaken
+   for stream data. `fragment.rs` does not supply it: that helper is
+   Levin-aware, and this layer does not see a command. The
    PWD-T8 vectors are re-minted when the window size is derived.
    Rekey is every record if the Pi-4 benchmark shows three
    HMAC-BLAKE2s per record are affordable beside seal cost. A

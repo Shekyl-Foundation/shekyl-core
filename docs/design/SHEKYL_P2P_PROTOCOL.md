@@ -3378,7 +3378,9 @@ target. PWD-T8 vectors are re-minted when the window size is derived.
 Rekey is every record if the Pi-4 benchmark shows three HMAC-BLAKE2s
 per record are affordable beside seal cost; otherwise the interval is
 derived from the measured record rates. Fixed windows spend one nonce
-per record.
+per record. Each window's plaintext starts with a 2-byte occupancy,
+the count of stream bytes that follow, and the rest is padding. The
+count is inside the AEAD. There is no cleartext length.
 
 **Interim, pinned 2026-09-24, BOLT-8, in force only while the option
 is off the fixed window.** Each direction seals one

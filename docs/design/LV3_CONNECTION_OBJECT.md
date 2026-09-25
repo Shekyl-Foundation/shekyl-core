@@ -1,4 +1,4 @@
-# LV-3 — sockets and relay dispatch, and the connection object that lives there (P2P-3 slice 5)
+# LV-3 — the connection object (P2P-3 slice 5). Sockets are the transport layer; relay dispatch is its own round (2026-09-25)
 
 **Status: DESIGN ROUND CLOSED 2026-09-21** — Rounds 1, 2 and 3 answered; **the
 deliverable is the slice register at §6**, and implementation is deferred past
@@ -8,8 +8,11 @@ block. **The deliverable of this round is a design, not code** — rule 20 is
 explicit that migrating a subsystem is a planning activity with its own design
 document, review cycle and test gates, never folded into feature work. Rule 26
 cited explicitly. Owner:
-[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4, **slice
-5 — the LAST slice** (restructured 2026-09-21, §4.1 there).
+[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.
+**UPDATE 2026-09-25: slice 5 is steps a–c. Sockets are the transport
+layer. Relay dispatch is the RD row after the timing engine. This is
+not the last work and it does not own sockets.** *Records-was: slice
+5 — the LAST slice (restructured 2026-09-21, §4.1 there).*
 
 **SCOPE NARROWED 2026-09-21 (steering).** *Records-was: "P2P-3 slice 1", and the
 scope was the whole p2p surface.* **LV-3 is the `levin_notify` / `net_node`
@@ -118,9 +121,11 @@ on.**~~ **WITHDRAWN 2026-09-21.** The conclusion does not follow from the
 premise. **Six consumers needing the noun says the noun must exist before
 THEY land — it says nothing about what else in the round is independent of
 it**, and four of P2P-3's five slices are. Peerlist, admission, discovery and
-handshake do not wait on a connection object; **this slice is where the cost
-and the irreversibility are, so it goes last**, after four slices have
-established the patterns and the differential harness
+handshake do not wait on a connection object. **UPDATE 2026-09-25:
+this slice is steps a–c and is not last.** Sockets move with the
+transport layer, and relay dispatch is the RD row after the timing
+engine. *Records-was: this slice goes last, after four slices, because
+it owned the sockets and the dispatch.*
 ([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.1).
 
 **What survives, and it is the part worth keeping:** the six consumers are real,
@@ -1506,6 +1511,10 @@ one level up: a slice's closing deliverable cannot be the round's plan.
 > [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2**, with
 > five slices in dependency order and LV-3 as **slice 5**. Each row carries what
 > it inherits and a command that greens when it lands.
+>
+> **UPDATE 2026-09-25.** That register now has the timing engine and
+> relay dispatch as their own rows. Slice 5 is steps a–c. It is not
+> last, and it does not own sockets or relay dispatch.
 
 *Records-was: rows `L1`…`L5` here named the object, the ownership transfer,
 per-peer state, the score, and the failure-class carry — a decomposition of
@@ -1520,13 +1529,14 @@ wrong was calling them the round.*
 | **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, zone, established-at | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
 | **b** | Ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle | |
 | **c** | The connection registry, **including its own count** | see the inheritance below |
-| **d** | Relay dispatch — `levin_notify`'s 2,189 lines | the bulk, and the irreversible part |
+| **d** | Relay dispatch — moved out 2026-09-25 to the RD row, after the timing engine | not this slice; see §6.3 item 3 |
 
-**What slice 5 inherits from slices 1–4, and it is the reason it goes last:**
-the peerlist's differential harness, admission's ceiling, discovery's candidate
-selection and the handshake phases are all **already in Rust and already
-tested** before the sockets move. **The big-bang lands against established
-patterns rather than defining them.**
+**What slice 5 inherits from slices 1–4. UPDATE 2026-09-25: it does not
+go last, and the sockets are not its move.** The peerlist's differential
+harness, admission's ceiling, discovery's candidate selection and the
+handshake phases are in Rust before this slice's connection object.
+*Records-was: that inheritance was why this slice went last, and why
+the sockets moved here.*
 
 **And one concrete inheritance worth naming**, because it is invisible from
 `levin_notify`: admission's ceiling is compared against an atomic that a
