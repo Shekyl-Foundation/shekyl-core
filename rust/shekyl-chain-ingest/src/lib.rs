@@ -44,9 +44,15 @@
 //!   substrate and the pipeline.
 //! - [`mutation`] — one deliberate invalidation of one `Extend`, naming
 //!   the census row and the place that refuse it (§3.10).
+//! - `scenario` — **test-only** (`cfg(test)`, `pipeline`; not a public
+//!   module): the scripted driver that mines through the production
+//!   template and connects through this pipeline against a real store
+//!   (`CHAIN_RULES_SLICE_6.md` §5.3). It has no feature flag of its own and
+//!   nothing outside this crate's tests can reach it — by design: a driver
+//!   that shipped would be a second producer.
 //!
 //! Form is `shekyl_chain_rules::form`. The sequencer, the validate+connect
-//! actor, the grader and the driver live behind `feature = "pipeline"`.
+//! actor, the grader and the replay driver live behind `feature = "pipeline"`.
 //!
 //! # What this crate never does
 //!
@@ -65,6 +71,8 @@ mod artifact_tests;
 #[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
+#[cfg(feature = "pipeline")]
+pub mod facts;
 #[cfg(feature = "fetch")]
 pub mod fetch;
 #[cfg(feature = "pipeline")]
@@ -78,6 +86,8 @@ mod mutation_tests;
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod scenario;
 #[cfg(feature = "pipeline")]
 pub mod schedule;
 #[cfg(feature = "pipeline")]
@@ -89,12 +99,17 @@ pub mod substrate;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;
+#[cfg(all(test, feature = "pipeline"))]
+mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    Applied, Apply, Connector, ConnectorArgs, Digest, HashAt, Rewind, Rewound, RunEnd, RunFault,
+    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Rewind, Rewound, RunEnd,
+    RunFault, TemplateFacts,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
+#[cfg(feature = "pipeline")]
+pub use facts::{block_weight, Composed, FactsFault, FactsFor, Priced, PricedAt};
 #[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
 #[cfg(feature = "pipeline")]

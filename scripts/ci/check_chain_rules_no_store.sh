@@ -39,9 +39,16 @@
 # and relying on the hosted image happening to ship one is the class of
 # accident check_test_only_features.py's placement note already names.
 
+#
+# Two subjects, one belt. `shekyl-block-template` (TXE-F8, CHAIN_RULES_SLICE_6.md
+# §5.3) is the producer's half of the contract the rules crate judges, and it
+# is held to the same absence: it computes nothing it could read from a
+# store, so every operand arrives in its context (C2-R8 principle 3). A store
+# edge there would be the same inversion arriving from the other side.
+
 set -euo pipefail
 
-CRATE=shekyl-chain-rules
+CRATES=(shekyl-chain-rules shekyl-block-template)
 # The same two names check_chain_rules_coverage.py refuses in Cargo.toml.
 BANNED=(redb shekyl-chain-store)
 
@@ -52,9 +59,11 @@ fail() {
   exit 1
 }
 
-# Subject 1: the crate is a resolvable workspace member.
-cargo tree --locked -p "$CRATE" --depth 0 >/dev/null \
-  || fail "$CRATE does not resolve as a workspace member — the gate has no subject"
+# Subject 1: each crate is a resolvable workspace member.
+for crate in "${CRATES[@]}"; do
+  cargo tree --locked -p "$crate" --depth 0 >/dev/null \
+    || fail "$crate does not resolve as a workspace member — the gate has no subject"
+done
 
 # Subject 2: every banned name is a package the workspace resolves at all.
 for pkg in "${BANNED[@]}"; do
@@ -62,30 +71,35 @@ for pkg in "${BANNED[@]}"; do
     || fail "banned package '$pkg' is not in the workspace graph — the ban names nothing; update BANNED"
 done
 
-# The closure: every package reachable from CRATE over normal+dev edges, one
-# `name vX.Y.Z …` per line, **every target**. Host-only would miss a
-# `cfg(windows)` / `target.'cfg(…)'.dependencies` arrival of a banned
-# package while G1 claims the crate never reaches either (Copilot #753).
-TREE=(cargo tree --locked -e normal,dev --target all -p "$CRATE")
-closure="$("${TREE[@]}" --prefix none)" \
-  || fail "cargo tree failed; a failed resolve is not a clean graph"
-first_line="${closure%%$'\n'*}"
-case "$first_line" in
-  "$CRATE v"*) ;;
-  *) fail "closure does not start at $CRATE (got: '$first_line')" ;;
-esac
-
 status=0
-for pkg in "${BANNED[@]}"; do
-  if grep -qE "^${pkg} v[0-9]" <<<"$closure"; then
-    echo "FATAL: check_chain_rules_no_store: '$pkg' is reachable from $CRATE (G1). Path(s):" >&2
-    "${TREE[@]}" -i "$pkg" >&2 || true
-    status=1
+for crate in "${CRATES[@]}"; do
+  # The closure: every package reachable from the crate over normal+dev
+  # edges, one `name vX.Y.Z …` per line, **every target**. Host-only would
+  # miss a `cfg(windows)` / `target.'cfg(…)'.dependencies` arrival of a
+  # banned package while G1 claims the crate never reaches either
+  # (Copilot #753).
+  TREE=(cargo tree --locked -e normal,dev --target all -p "$crate")
+  closure="$("${TREE[@]}" --prefix none)" \
+    || fail "cargo tree failed for $crate; a failed resolve is not a clean graph"
+  first_line="${closure%%$'\n'*}"
+  case "$first_line" in
+    "$crate v"*) ;;
+    *) fail "closure does not start at $crate (got: '$first_line')" ;;
+  esac
+
+  clean=1
+  for pkg in "${BANNED[@]}"; do
+    if grep -qE "^${pkg} v[0-9]" <<<"$closure"; then
+      echo "FATAL: check_chain_rules_no_store: '$pkg' is reachable from $crate (G1). Path(s):" >&2
+      "${TREE[@]}" -i "$pkg" >&2 || true
+      status=1
+      clean=0
+    fi
+  done
+
+  if [ "$clean" -eq 1 ]; then
+    count="$(grep -c . <<<"$closure")"
+    echo "check_chain_rules_no_store: $crate reaches none of {${BANNED[*]}} across $count packages (normal+dev)"
   fi
 done
-if [ "$status" -ne 0 ]; then
-  exit "$status"
-fi
-
-count="$(grep -c . <<<"$closure")"
-echo "check_chain_rules_no_store: $CRATE reaches none of {${BANNED[*]}} across $count packages (normal+dev)"
+exit "$status"

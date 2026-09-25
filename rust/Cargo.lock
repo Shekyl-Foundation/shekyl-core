@@ -3768,6 +3768,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-block-template"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "shekyl-chain-rules",
+ "shekyl-crypto-pq",
+ "shekyl-difficulty",
+ "shekyl-economics",
+ "shekyl-types",
+ "shekyl-units",
+ "shekyl-wire",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-bulletproofs"
 version = "0.1.0"
 dependencies = [
@@ -3799,16 +3815,20 @@ name = "shekyl-chain-ingest"
 version = "3.1.0"
 dependencies = [
  "clap",
+ "curve25519-dalek",
  "kameo",
  "redb",
  "serde",
  "serde_json",
  "shekyl-address",
  "shekyl-archival-retention",
+ "shekyl-block-template",
  "shekyl-chain-rules",
  "shekyl-chain-store",
  "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
  "shekyl-difficulty",
+ "shekyl-economics",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
@@ -3818,6 +3838,7 @@ dependencies = [
  "shekyl-wire",
  "thiserror 2.0.18",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]

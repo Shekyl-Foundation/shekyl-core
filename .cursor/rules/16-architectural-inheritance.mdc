@@ -107,6 +107,22 @@ Worked instances, all verified at source:
   true. The reviewer's own account: *"I confirmed the parts of the claim
   that were convenient to confirm and inherited the part that carried the
   verdict."*
+- **`CHAIN_RULES_SLICE_6.md` §5.3.3** (E6 slice 6, 2026-09-24). The 1b
+  pre-measurement enumerated what a scenario driver would need from the
+  production stack and found two gaps — a block template and the
+  composition of connect facts. Writing the driver surfaced a third, and it
+  was production: the **producer's read path** — what the chain *is*, read
+  on the view the validator judges against and through the validator's own
+  definitions (F20's window, C3's median, F21's epoch). The measurement had
+  counted the validator's *inputs* and never asked what a producer needs to
+  read back *out of* it. This is the family's **direction** variant: the
+  earlier instances mistook a site, a figure, a mood, a guard; this one ran
+  the sweep along one dependency direction and reported the total as if it
+  covered both. It is the fourth time an enumeration's subject turned out
+  narrower than the claim built on it, so *which direction did the sweep
+  run* joins the questions asked of every sweep — and an enumeration of
+  what a component consumes says nothing about what its consumers consume
+  from it.
 
 So, when a claim is load-bearing for a security property:
 
