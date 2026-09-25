@@ -187,7 +187,10 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
 
     // A connect whose belt fires halts the writer at the connecting height
     // (SI-1, reached by the spent-keys table moving under a judged token:
-    // a double spend itself is CEN-I7's refusal before `connect`).
+    // a double spend itself is CEN-I7's refusal before `connect`). Before
+    // slice 6 commit 4 a plain double spend reached this belt, which tested
+    // it as the rule; this is the belt tested as a belt, the shape the test
+    // should always have had.
     let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
     let double = candidate(2, hashes[1], vec![spend(10, 2)]);
     let out = connect_with_image_planted_under_the_token(&store, double, 2);

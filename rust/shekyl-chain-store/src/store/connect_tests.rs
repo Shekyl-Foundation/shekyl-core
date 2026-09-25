@@ -636,6 +636,11 @@ fn a_gapped_txs_pruned_primary_is_si9() {
 /// refusal at `validate` (slice 6 commit 4) and never reaches `connect`
 /// through `judge`; the belt's remaining subject is the table moving under
 /// a token already judged against it, and that is what this plants.
+///
+/// Until commit 4 this test reached SI-1 with a plain double spend — it was
+/// testing the belt as if it were the rule, and the belt passing was the
+/// validator's hole made green. This is the shape it should always have
+/// had: the rule refuses the spend, and the belt is tested as a belt.
 #[test]
 fn a_key_image_recorded_under_a_judged_token_is_si1() {
     let path = tmp("connect-ki");
