@@ -35,7 +35,7 @@ fn alt(height: u64, block: &[u8], witness: Option<Vec<u8>>) -> AltBlock {
 /// A block off the main chain at `height`, distinguished by its listed
 /// transaction, and its bytes.
 fn side_block(height: u64, previous: BlockHash, key_image: usize) -> (BlockHash, Vec<u8>) {
-    let cand = candidate(height, previous, vec![spend(key_image, 1)]);
+    let cand = candidate(height, previous, vec![spend(key_image, 2)]);
     (cand.block.hash(), cand.block.serialize())
 }
 
@@ -325,9 +325,9 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     let path = tmp("alt-switch");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     // Main chain: 0 — 1 — 2. A competing block 2' on 1 is held as an alt.
-    let main = connect_chain(&store, &[vec![], vec![spend(9, 1)], vec![spend(10, 1)]]);
-    let main_2_bytes = candidate(2, main[1], vec![spend(10, 1)]).block.serialize();
-    let alt_cand = candidate(2, main[1], vec![spend(11, 1)]);
+    let main = connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![spend(10, 2)]]);
+    let main_2_bytes = candidate(2, main[1], vec![spend(10, 2)]).block.serialize();
+    let alt_cand = candidate(2, main[1], vec![spend(11, 2)]);
     let alt_2 = alt_cand.block.hash();
     let alt_witness = vec![0x5A; 40];
     let out: Result<(), TestErr> = store.write(|batch| {
@@ -347,7 +347,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         assert_eq!(popped.height, BlockHeight::from_raw(2));
         batch.insert_alt_block(&main[2], &alt(2, &main_2_bytes, None))?;
         batch.connect(
-            judge(&view, candidate(2, main[1], vec![spend(11, 1)]))?,
+            judge(&view, candidate(2, main[1], vec![spend(11, 2)]))?,
             facts(2, 0),
             RuleSet::GENESIS,
         )?;
@@ -380,7 +380,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         batch.pop()?;
         batch.insert_alt_block(&alt_2, &alt(2, &alt_cand.block.serialize(), None))?;
         batch.connect(
-            judge(&view, candidate(2, main[1], vec![spend(10, 1)]))?,
+            judge(&view, candidate(2, main[1], vec![spend(10, 2)]))?,
             facts(2, 0),
             RuleSet::GENESIS,
         )?;
@@ -421,7 +421,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
 fn an_alt_block_with_a_witness_moves_no_digest() {
     let path = tmp("alt-digest-boundary");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let main = connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
+    let main = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
     let before = store
         .begin_read()
         .expect("read")
