@@ -9,6 +9,7 @@
 //! (I2's falsifier lives here; I3's is `f2_the_wire_admits_one_transaction_version`).
 
 use crate::census::CenRow;
+use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::harness::fixture::{
     anchored_on, candidate_on, coinbase, listed, listed_on, point, point_at, serve_credit_only,
@@ -20,7 +21,8 @@ use crate::harness::{
 };
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{refused_listed, refused_lone};
-use crate::rules::tx_against::{I11, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
+use crate::rules::tx_against::{I11, I17, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
+use crate::rules::TxContext;
 use crate::trust::Trust;
 use crate::validate::{tx_against, validate};
 use crate::verdict::{Locus, TxSlot};
@@ -439,6 +441,35 @@ fn i12_a_missing_root_at_the_reference_height_is_corrupt_not_a_verdict() {
                 record: PerHeightRecord::CurveTreeRoot,
             }))
         );
+    });
+}
+
+// ---- CEN-I17 ------------------------------------------------------------
+
+/// I17 is a definition adopted from the wire: what `tx_against` derives
+/// for a spend is `Transaction::pqc_signing_payload_hashes`, one hash per
+/// input, and the row is recorded at the derivation. The bytes themselves
+/// are the wire KAT's subject (`pqc_signing_preimage_kat.rs`, eight
+/// daemon-accepted shapes); this holds only that the validator reads that
+/// derivation and no other.
+#[test]
+fn i17_derives_the_wires_signing_preimage_and_records_the_row() {
+    let chain = spendable_chain();
+    let tx = listed_on(&chain, KI);
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    let hashes = I17::signed_hashes(&cx, &mut coverage);
+    assert_eq!(hashes, tx.pqc_signing_payload_hashes());
+    assert_eq!(
+        hashes.len(),
+        tx.prefix.inputs.len(),
+        "one preimage per input"
+    );
+    assert!(coverage.contains(CenRow::I17));
+    chain.with_view(|view| {
+        let against = defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS))
+            .expect("an anchored spend passes");
+        assert!(against.contains(CenRow::I17), "recorded through tx_against");
     });
 }
 

@@ -379,6 +379,44 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
     Ok(Ok(()))
 }
 
+/// CEN-I17, a **definition**: what each input's hybrid signature is over —
+/// the PQC signing preimage, `FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1: the
+/// pruned segment ‖ keccak256(prunable) ‖ that input's PQC header ‖
+/// keccak256 of every input's hybrid public key, so neither the proof nor
+/// any input's key can be swapped under a standing signature. **Adopted**
+/// from the wire, not re-derived: [`shekyl_wire::PqcSigningPreimage`] is the
+/// one derivation the wallet signs over and the daemon verifies against
+/// (through `shekyl_tx_pqc_signing_payload_hashes`; slice 6 Q7 (c)), and it
+/// is held to the specification's output over eight daemon-accepted shapes
+/// by `shekyl-wire/tests/pqc_signing_preimage_kat.rs`. A second body here
+/// would be the two-sources class the cutover closed.
+///
+/// Recorded as coverage where the hashes are derived, the D4 arrangement:
+/// nothing about a candidate fails a definition, and
+/// `implemented(rules::tx_against::I17)` names this derivation. Stateless —
+/// it reads the transaction alone — but derived here beside I12's anchor
+/// because the two are CEN-I18's and CEN-I15's operands, assembled where
+/// those verification rows run.
+///
+/// The consumer is CEN-I18's signature verification (slice 6 commit 8,
+/// this PR); until it lands the hashes are derived, recorded and dropped —
+/// staged with the consumer named, as I12's anchor is.
+pub(crate) struct I17;
+
+impl Rule for I17 {
+    const ROW: CenRow = CenRow::I17;
+}
+
+impl I17 {
+    /// Every input's `signed_hash(i)`, in input order, recorded as this row.
+    /// Empty for a body with no per-input authentication (the coinbase, the
+    /// serve-credit form), where the row is vacuous.
+    pub(crate) fn signed_hashes(cx: &TxContext<'_>, coverage: &mut RuleCoverage) -> Vec<[u8; 32]> {
+        coverage.insert(Self::ROW);
+        cx.tx.pqc_signing_payload_hashes()
+    }
+}
+
 #[cfg(test)]
 #[path = "tx_against_tests.rs"]
 mod tx_against_tests;

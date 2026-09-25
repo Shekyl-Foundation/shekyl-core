@@ -24,8 +24,25 @@ shekyl-oxide output. Its full end-to-end proof is the live-oracle spend KAT
 
 ## 1. Canonical layout — the C++ daemon
 
+> **Derivation of record since 2026-09-25 (E6 slice 6 commit 7, Q7 (c)):
+> `shekyl_wire::PqcSigningPreimage`** (`rust/shekyl-wire/src/transaction/signing_preimage.rs`).
+> The C++ assembly this section was written against
+> (`get_transaction_signed_payload`, `tx_pqc_verify.cpp`) is **deleted**; the
+> daemon calls `shekyl_tx_pqc_signing_payload_hashes` and verifies each input's
+> signature against the hash it receives, and the wallet signs over the same
+> body. The definition below is unchanged — this section is now the
+> specification the one derivation is held to, by
+> `rust/shekyl-wire/tests/pqc_signing_preimage_kat.rs` over
+> `tests/fixtures/pqc_signing_preimage_v1.json`: eight daemon-accepted
+> transactions (one, two and six inputs; the bond post's and the emission's
+> mixed archival arms; the serve-credit form, which has no preimage) with
+> every input's payload bytes and signed hash, **captured from the C++
+> assembly before its deletion as the specification's output for those
+> bytes**. The C++ line anchors that follow are records of where the layout
+> was read at the pin, not live sites.
+
 ### 1.1 Per-input PQC signing preimage
-`get_transaction_signed_payload(tx, i)` (`src/cryptonote_core/tx_pqc_verify.cpp:58-152`):
+`get_transaction_signed_payload(tx, i)` (`src/cryptonote_core/tx_pqc_verify.cpp:58-152`, at the pin; deleted 2026-09-25):
 
 ```
 payload(i) = prefix_blob ‖ ct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
@@ -138,6 +155,12 @@ proof-type imports are removed.
   round-trip #169 (prunable).
 - **Golden vectors (new):** pin `prefix_hash` + `pqc_signing_payload_hashes` for fixed
   inputs so a future drift fails closed (mirror the `scan_output_kat` idiom).
+- **The specification's-output KAT (landed 2026-09-25, E6 slice 6 commit 7):**
+  `pqc_signing_preimage_v1.json` — payload bytes and hashes per input over eight
+  daemon-accepted shapes, captured from the C++ assembly before the cutover
+  deleted it. This is the gate that survives the oracle: the golden vectors
+  above pin fixed *synthetic* inputs; this pins the real shapes a divergence
+  could hide in (multi-input, mixed archival arms, no-preimage).
 - **Live C++ oracle (§1.1):** **landed.** `e2e_fcmp_spend_accepted_by_daemon`
   builds via the production Engine; a live `shekyld` accepts and connects the
   spend; `live_oracle_spend_v1.json` is the captured blob, with Rust and C++

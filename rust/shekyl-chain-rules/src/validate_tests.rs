@@ -114,6 +114,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I12,
                 CenRow::I14,
                 CenRow::I16,
+                // Slice 6 commit 7: the signing preimage, a definition
+                // recorded where the hashes are derived.
+                CenRow::I17,
                 CenRow::I19,
                 CenRow::I20,
                 CenRow::L1,
@@ -246,7 +249,8 @@ fn tx_entry_points_record_the_landed_rows() {
     // `tx_against` at the miner slot: the class derivation records H5/H6
     // here too (it derives its own context, so it evaluated them), and the
     // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I12 (the
-    // regular-spend reference rows) — are recorded vacuous on a coinbase.
+    // regular-spend reference rows), I17 (the signing preimage, of which a
+    // coinbase has none) — are recorded vacuous on a coinbase.
     MockChain::default().with_view(|view| {
         let against = defined(tx_against(&tx, TxSlot::Miner, &view, &RuleSet::GENESIS))
             .expect("the coinbase reads nothing from the view");
@@ -258,7 +262,8 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::I7,
                 CenRow::I10,
                 CenRow::I11,
-                CenRow::I12
+                CenRow::I12,
+                CenRow::I17
             ]
         );
     });
