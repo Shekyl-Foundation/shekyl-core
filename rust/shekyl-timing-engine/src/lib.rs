@@ -498,6 +498,10 @@ impl<C: Clock> Engine<C> {
                 fired_at: now,
             });
         }
+        // Firing lowers the live count and leaves superseded hints behind
+        // the deadlines that are not yet due. Those hints are not at the
+        // front, so the next sleep cannot see them.
+        self.compact_if_stale();
         due
     }
 
@@ -761,6 +765,21 @@ mod tests {
         assert_eq!(engine.pending_homes(), 0);
         assert_eq!(engine.lateness(OwnerClass::Housekeeping).fires, 64);
         assert_eq!(engine.owners.len(), 1);
+    }
+
+    #[test]
+    fn a_partial_poll_compacts_hints_left_behind() {
+        let mut engine = engine_at(0);
+        for i in 0..3 {
+            let id = owner(&mut engine);
+            engine.arm(id, Tick::new(100 + i)).unwrap();
+            engine.arm(id, Tick::new(10 + i)).unwrap();
+        }
+        engine.clock_mut().set(Tick::new(11));
+        assert_eq!(engine.poll().len(), 2);
+        assert_eq!(engine.live, 1);
+        assert!(engine.heap.len() <= engine.live.saturating_mul(2).saturating_add(1));
+        assert_eq!(engine.next_deadline(), Some(Tick::new(12)));
     }
 
     #[test]
