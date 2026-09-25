@@ -816,7 +816,9 @@ deleted, and a cap the test network could not test while relaxed there —
 only the record was missing, the half Q9 taught is easy to skip.
 
 **Then the question the number never answered: what does the cap bound?**
-`cryptonote_config.h:313` says *"bounds proof generation time and tx size"*.
+`cryptonote_config.h`'s `FCMP_MAX_INPUTS_PER_TX` (`:312` at `dev@a1159f1a2`;
+`:313` before the rebase that moved it one line) says *"bounds proof
+generation time and tx size"*.
 Generation time is the sender's cost; consensus does not protect a sender
 from waiting. The one objective a consensus input cap defensibly bounds is
 **the verifier work one transaction can impose**, and that is observable.

@@ -6,7 +6,9 @@
 //! CEN-I4's cost, measured — not inherited (`CHAIN_RULES_SLICE_6.md` §5.4).
 //!
 //! `FCMP_MAX_INPUTS_PER_TX = 8` arrived with the comment *"bounds proof
-//! generation time and tx size"* (`cryptonote_config.h:313`). Half of that is
+//! generation time and tx size"* (`cryptonote_config.h`, the
+//! `FCMP_MAX_INPUTS_PER_TX` define — cite the symbol; its line has moved
+//! twice this month). Half of that is
 //! not a reason for a consensus rule — generation time is the sender's cost.
 //! The only objective a consensus input cap defensibly bounds is **the
 //! verifier work one transaction can impose**, and that is observable. So
