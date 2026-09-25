@@ -485,7 +485,8 @@ Its replacement still has no owner, and the row stays visible.
 - the relay conformance grades degrade after the sleep moves to Rust;
 - the timing-engine round has not opened by the time transport-layer
   implementation starts. The interim is bounded only if its end has
-  been scheduled.
+  been scheduled. **Opened 2026-09-25:**
+  [`P2P_TIMING_ENGINE.md`](P2P_TIMING_ENGINE.md), Round 1.
 
 ---
 
