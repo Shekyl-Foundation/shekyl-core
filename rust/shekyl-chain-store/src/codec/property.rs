@@ -282,18 +282,7 @@ property_cells! {
     /// overflow is fatal, never a saturate); `pop` restores the journaled
     /// pre-image, so there is no subtract and no pop-side saturation.
     TotalBurnedCell { key: "total_burned", scope: ChainState, value: AtomicUnits },
-    /// `archival_last_slash_epoch` — the slash scheduler's monotone settled
-    /// watermark: every settlement epoch `<=` the value has been scanned at
-    /// its slash deadline (DRS-E1 S-ARCH A9; the C++ key, verbatim).
-    ///
-    /// **Absent means no epoch settled yet** — the C++ spelled that as a
-    /// `u64::MAX` sentinel (`db_lmdb.cpp`, `get_archival_last_slash_epoch`);
-    /// here the read is `Option<SettlementEpoch>` and no sentinel is stored.
-    /// Chain-state: the bond-post admission and the emission claim source
-    /// read it as a consensus fact. E4's slash writer is its one writer; the
-    /// cell is absent in every store until then, so the digest domain gains
-    /// a key and no bytes (DRS-E2's archival coverage arrives with E4,
-    /// `DRS_E1_SARCH.md` SAR-11).
+
     /// `undo_log_floor` — the lowest height whose `undo_log` row the
     /// retention prune has kept (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md` §3, §7;
     /// S-CHAIN-W §5.4's "persists the floor it establishes").
@@ -309,6 +298,19 @@ property_cells! {
     /// this is not the body discard's frontier (which is named by the epoch
     /// and stored nowhere, §4) but the undo journal's own retention mark.
     UndoLogFloorCell { key: "undo_log_floor", scope: EngineLocal, value: BlockHeight },
+
+    /// `archival_last_slash_epoch` — the slash scheduler's monotone settled
+    /// watermark: every settlement epoch `<=` the value has been scanned at
+    /// its slash deadline (DRS-E1 S-ARCH A9; the C++ key, verbatim).
+    ///
+    /// **Absent means no epoch settled yet** — the C++ spelled that as a
+    /// `u64::MAX` sentinel (`db_lmdb.cpp`, `get_archival_last_slash_epoch`);
+    /// here the read is `Option<SettlementEpoch>` and no sentinel is stored.
+    /// Chain-state: the bond-post admission and the emission claim source
+    /// read it as a consensus fact. E4's slash writer is its one writer; the
+    /// cell is absent in every store until then, so the digest domain gains
+    /// a key and no bytes (DRS-E2's archival coverage arrives with E4,
+    /// `DRS_E1_SARCH.md` SAR-11).
     ArchivalLastSlashEpochCell {
         key: "archival_last_slash_epoch",
         scope: ChainState,

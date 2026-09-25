@@ -98,10 +98,11 @@ corrupted write, and it is evaluated **at discard time**: a reorg across an
 epoch boundary may move `current_epoch` back by one after a discard, and
 that shard is not "wrongly discarded" (Q2; pops are §7's business).
 ~~`first_tx_id(h)` is `block_info[h−1].cumulative_tx_count` for `h ≥ 1`~~
-**CORRECTED as built (SPR-1):** `first_tx_id(h) = block_info[h−1].cumulative_tx_count + h`
-for `h ≥ 1` — the running total counts a block's **listed** transactions
-(`connect.rs`), while storage ids are dense over every recorded transaction,
-coinbase included, one per block; and
+**CORRECTED as built (SPR-1):** `first_tx_id(h)` for `h ≥ 1` is
+`shekyl_types::storage_ids_through(block_info[h−1].cumulative_tx_count, h−1)`,
+which is `cumulative_tx_count(h−1) + h` — the running total counts a block's
+**listed** transactions (`connect.rs`), while storage ids are dense over every
+recorded transaction, coinbase included, one per block; and
 **`first_tx_id(0) = 0`** (FL-R3-STORE, `BlockInfo`, landed on #772);
 `close_height(k)` is `height((k+1)·T − 1)` — the last **included**
 transaction's height, since `(k+1)·T` is the first of `k+1` and need not
@@ -400,11 +401,11 @@ have no Rust writer here); what this surface owes it is the function.
 | --- | --- | --- |
 | Body horizon | the epoch boundary after the shard's freeze epoch — `close_epoch(k) + 2 ≤ current_epoch`; the batch's set at `E` is `{k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3}` (additive on `u64`, never `E − 2`); a rule, **no constant, no frontier** | ruled (`PDM-Q2`, 2026-09-22); `W` retired |
 | `SEB` | `settlement_epoch_blocks = 10,000`; `settlement_epoch_at_height(h) = h / SEB` (`consensus_state.rs:27`) | pinned |
-| `D_max` | 720 — **built 2026-09-25 as `shekyl_chain_rules::D_MAX`, derived from `config/consensus_constants.json`'s `archival_reorg_depth_blocks` (one source; its comment names PDM-Q11's gate as a consumer); `SEB > D_MAX` const-asserted beside it, and `0 < retention < SEB` refused at store open for the session pair (SPR-3).** **`SEB > D_max` const-asserted beside it, on the production constants — the only assertion.** The invariant holds on **every nettype** (rule 71: nettype selects data, the data satisfies the same invariant): the regtest `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override (`constants.rs:257`, today `2..=SETTLEMENT_EPOCH_BLOCKS` in isolation) must not admit `SEB ≤ D_max` — one knob that overrides both and preserves the ratio, or a parse that refuses. `SEB = 2` with `D_max = 720` is a rejected configuration, not a supported one | PROVISIONAL numeric, Round-2 gate (`PDM-Q11`); **constant built** (`shekyl_chain_rules::reorg`, the crate CEN-E2 lands in); fakechain: a shortened epoch names its own retention through `Horizons::new` or is refused (rule 71) |
+| `D_max` | 720, **PROVISIONAL** (`PDM-Q11`). Built 2026-09-25 as `shekyl_chain_rules::D_MAX`, derived from `config/consensus_constants.json`'s `archival_reorg_depth_blocks` (one source; its comment names PDM-Q11's gate as a consumer). `SEB > D_MAX` is const-asserted beside the constant. A session pair with `retention` zero or `≥ SEB` is refused at open (`StoreCannot::RetentionNotInsideEpoch`), on a writer and on `open_read_only` — both take a checked `Horizons`. A shortened epoch names its own retention through `Horizons::new`. `SEB = 2` with retention 720 is not a configuration (rule 71). | PROVISIONAL numeric; constant built (`shekyl_chain_rules::reorg`) |
 | Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **built** 2026-09-25 as `shekyl_chain_rules::journal_horizon(tip) -> Option<BlockHeight>` beside `D_MAX`, consumed by S-ARCH when its journal writers land (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
 | `T` | **200 transactions per shard, PROVISIONAL** — the one consensus constant of the partition, one const-asserted home (the discipline `SHARD_BYTES` carried, FOLLOWUPS `:72`); chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB | ruled (`PDM-Q6` item 5, 2026-09-23); **built** 2026-09-25 as `shekyl_types::SHARD_TX_COUNT`; numeric on the Round-2 gate with `n`, `D_max`, `w_launch` |
-| Shard boundaries | `k·T` — no table, no rows, no prefix sum; `close_height(k) = height((k+1)·T − 1)` by binary search over `cumulative_tx_count` | derived, never received (item 5) |
-| `first_tx_id(h)`, `cumulative_tx_count` | `BlockInfo.cumulative_tx_count`; `first_tx_id(0) = 0`; the primitive under `close_height`, and so under `close_epoch` | landed on #772 — **kept** (the horizon expression `first_tx_id(tip − W)` is gone; the primitive is not) |
+| Shard boundaries | `k·T` — no table, no rows, no prefix sum; `close_height(k) = height((k+1)·T − 1)` by binary search over the storage-id total | derived, never received (item 5) |
+| `first_tx_id(h)`, `cumulative_tx_count` | `cumulative_tx_count` is the listed-transaction fold. `first_tx_id(0) = 0`; for `h ≥ 1`, `first_tx_id(h) = storage_ids_through(cumulative_tx_count(h−1), h−1)` — listed plus one coinbase per block (`shekyl_types::storage_ids_through`, SPR-1). The primitive under `close_height`, and so under `close_epoch` | landed on #772 as the listed fold — **the coinbase term is SPR-1** |
 | `w_launch` | flat in-window commitment weight through epochs 0–1; superseded by the derived scarce-set median at the first `discard(k)` | **reward leg's** (Q6 item 3 amendment) — on the Round-2 gate with `n`, `D_max`; S-PRUNE's `discard(k)` event defines the scarce set |
 
 **No byte length is read anywhere in this surface (`PDM-Q6` item 5, RULED
@@ -468,10 +469,14 @@ into a `u8`, so the module carries its own long-chain header and facts):
 exactly `[250, 300]`; epochs 0–1 run no batch; fifty-one pops land and the
 fifty-second is `PopBelowFloor { 249, 250 }` with the writer live; the hook
 fires again on a reorg across 300 and the store is the same store;
-`h_scarce` at each epoch, on the batch and the snapshot. `Horizons`'
-refusals; `D_MAX`, `SEB > D_MAX` and `journal_horizon` in
-`shekyl-chain-rules`. 353 + 14 chain-store, 207 chain-rules; every
-`scripts/ci` gate green.
+`h_scarce` at each epoch, on the batch and the snapshot. A planted
+decrease in the storage-id total refuses the boundary connect as SI-13
+and leaves the writer halted with the block uncommitted. A read-only
+open reports the `Horizons` it was given. `Horizons`' refusals; `D_MAX`,
+`SEB > D_MAX` and `journal_horizon` in `shekyl-chain-rules`. 355 + 14
+chain-store, 32 + 7 `shekyl-types`, 207 chain-rules; every `scripts/ci`
+gate green at the mechanism commit, and the review fix re-ran the store
+and types libs (355, 32).
 
 **What stays E4's / E5's / S-ARCH's**, unchanged by this build: the
 journals' retirement at `journal_horizon` (S-ARCH's writers, when they

@@ -20,7 +20,7 @@ use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{candidate, connect_genesis, facts, judge, spend};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{cleanup, production_horizons, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
@@ -853,7 +853,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
     // Monotone: a later fully-derived connect cannot narrow it, and a
     // read-only reopen reads the same record from the file.
     drop(store);
-    let ro = ChainStore::open_read_only(&path, EPOCH).expect("ro");
+    let ro = ChainStore::open_read_only(&path, production_horizons()).expect("ro");
     assert_eq!(ro.provenance(), prov);
     assert_eq!(ro.provenance().artifact_stamp(), prov.artifact_stamp());
     cleanup(&path);

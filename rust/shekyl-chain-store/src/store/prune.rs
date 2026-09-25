@@ -26,9 +26,12 @@
 //! > `D(E) = { k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3 }`
 //!
 //! — the shards whose `close_height` falls in `[max(E−3, 0)·SEB, (E−1)·SEB)`.
-//! A shard's last transaction is id `(k+1)·T − 1`; a height interval is a
-//! `cumulative_tx_count` interval; so `D(E)` is a contiguous `k` range read
-//! off **two `block_info` rows**, and the division `⌊id / T⌋` places every
+//! A shard's last transaction is storage id `(k+1)·T − 1`. A storage id is
+//! not `cumulative_tx_count`: that field counts listed transactions, and
+//! each block also records one miner transaction.
+//! [`shekyl_types::storage_ids_through`] is that sum, so a height interval
+//! is the storage-id interval it names and `D(E)` is a contiguous `k` range
+//! read off **two `block_info` rows**. The division `⌊id / T⌋` places every
 //! boundary. No table of boundaries, no length rows, no read of what is
 //! present — a presence read that *selected* what to discard would be a
 //! second, node-local source (§8), and the whole point is that every node
@@ -76,18 +79,21 @@ use core::ops::Range;
 
 use redb::WriteTransaction;
 use shekyl_chain_rules::D_MAX;
-use shekyl_types::{BlockCount, BlockHeight, SHARD_TX_COUNT};
+use shekyl_types::{storage_ids_through, BlockCount, BlockHeight, SHARD_TX_COUNT};
 
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
 use crate::schema::{BLOCK_INFO, PROPERTIES, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG};
 
 use super::chain_reads::{self, ReadFault, ReadTables};
-use super::error::{EngineError, StoreCannot, StoreError};
+use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
 use super::write::WriteBatch;
 
 /// The `block_info` cell as faults name it.
 const BLOCK_INFO_CELL: &str = "block_info";
+
+/// The listed-transaction fold inside that cell. SI-8 and SI-13 name it.
+const TX_COUNT_CELL: &str = "block_info.cumulative_tx_count";
 
 /// The pop floor before anything has been retired: genesis is never
 /// poppable, so the lowest poppable height is `1`.
@@ -144,15 +150,6 @@ impl Horizons {
     /// shortened schedule must name its own retention.
     pub fn production(epoch: SettlementEpochBlocks) -> Result<Self, StoreCannot> {
         Self::new(epoch, D_MAX)
-    }
-
-    /// For a read-only handle, which retires nothing: the schedule with the
-    /// production retention, **unchecked** — no write can run under it.
-    pub(super) const fn read_only(epoch: SettlementEpochBlocks) -> Self {
-        Self {
-            epoch,
-            undo_retention: D_MAX,
-        }
     }
 
     /// The settlement schedule.
@@ -303,24 +300,22 @@ fn discard_set<T: ReadTables>(
     let hi_height = horizons.first_height_of(e - 1);
     let lo_id = first_tx_id(txn, lo_height)?;
     let hi_id = first_tx_id(txn, hi_height)?;
+    // A later height naming fewer ids than an earlier one is SI-13. An
+    // empty window is `start == end`; clamping an inversion to empty would
+    // commit the boundary with `D(E)` skipped.
+    if hi_id < lo_id {
+        return Err(fold_not_monotone(hi_height));
+    }
     // The last id of shard `k` is `(k+1)·T − 1`. It is `≥ lo_id` iff
     // `k ≥ ⌊lo_id / T⌋`, and `< hi_id` iff `k < ⌊hi_id / T⌋`.
     let start = lo_id / SHARD_TX_COUNT;
     let end = hi_id / SHARD_TX_COUNT;
-    Ok(start..end.max(start))
+    Ok(start..end)
 }
 
-/// `first_tx_id(h)`: the storage id of the first transaction at height `h`
-/// — every transaction recorded through height `h − 1`, and `0` at genesis.
-///
-/// **Not** `block_info[h − 1].cumulative_tx_count` alone, as the S-PRUNE
-/// skeleton wrote it (§2): that running total counts the block's **listed**
-/// transactions (`connect.rs`, "the parent's plus this block's listed
-/// transactions"), while storage ids are dense over **every** recorded
-/// transaction, coinbase included (`record_tx` runs for the miner
-/// transaction first). One coinbase per block (CEN-F), so the ids through
-/// height `h − 1` are the listed total plus `h` coinbases. Read at the
-/// code, not the plan — the rule-16 corollary.
+/// `first_tx_id(h)`: the storage id of the first transaction at height `h`.
+/// `0` at genesis; otherwise [`storage_ids_through`] at height `h − 1`
+/// (every id issued before `h`).
 fn first_tx_id<T: ReadTables>(txn: &T, height: u64) -> Result<u64, ReadFault> {
     let Some(parent) = height.checked_sub(1) else {
         return Ok(0);
@@ -328,19 +323,23 @@ fn first_tx_id<T: ReadTables>(txn: &T, height: u64) -> Result<u64, ReadFault> {
     ids_through(txn, parent)
 }
 
-/// How many storage ids the chain has issued through height `h` inclusive:
-/// `block_info[h].cumulative_tx_count` listed transactions plus `h + 1`
-/// coinbases. Every id below the value is at a height `≤ h`.
+/// Storage ids issued through height `h` inclusive. The listed total is
+/// the row; the coinbase term is [`storage_ids_through`].
 fn ids_through<T: ReadTables>(txn: &T, height: u64) -> Result<u64, ReadFault> {
     let listed = block_info_at(txn, height)?.cumulative_tx_count;
-    listed
-        .checked_add(height)
-        .and_then(|n| n.checked_add(1))
-        .ok_or_else(|| {
-            ReadFault::Invariant(super::error::StoreInvariant::FoldOverflow {
-                cell: "block_info.cumulative_tx_count",
-            })
+    storage_ids_through(listed, height).ok_or_else(|| {
+        ReadFault::Invariant(StoreInvariant::FoldOverflow {
+            cell: TX_COUNT_CELL,
         })
+    })
+}
+
+/// SI-13: the listed-transaction fold decreased. `height` is the later sample.
+fn fold_not_monotone(height: u64) -> ReadFault {
+    ReadFault::Invariant(StoreInvariant::FoldNotMonotone {
+        cell: TX_COUNT_CELL,
+        height,
+    })
 }
 
 /// A `block_info` row the calendar says exists: absent is SI-7 (the table
@@ -387,6 +386,16 @@ fn height_of_tx_id<T: ReadTables>(txn: &T, id: u64, tip: u64) -> Result<u64, Rea
             lo = mid + 1;
         }
     }
+    // The cut is the first height whose issued ids pass `id`. A decrease
+    // lets the search land off that cut; refuse it rather than name a
+    // close height the rows do not support (SI-13).
+    let through = ids_through(txn, lo)?;
+    if through <= id {
+        return Err(fold_not_monotone(lo));
+    }
+    if lo > 0 && ids_through(txn, lo - 1)? > id {
+        return Err(fold_not_monotone(lo));
+    }
     Ok(lo)
 }
 
@@ -402,6 +411,27 @@ fn discard_range<V: redb::Value + 'static>(
         .retain_in::<u64, _>(ids, |_, _| false)
         .map_err(EngineError::Storage)?;
     Ok(())
+}
+
+impl super::read::ReadSnapshot<'_> {
+    /// `h_scarce` at the recorded tip: the `close_height` of the last shard
+    /// the calendar has discarded — `PDM-Q5`'s band-2 edge, the same number
+    /// on every node. `None` on an empty chain, in epochs 0–1, and before
+    /// any shard has closed.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 if a `block_info` row the calendar names is absent or does not
+    /// decode; SI-13 if the storage-id total decreases across the search.
+    /// A snapshot returns the fault plain — it does not halt the writer.
+    pub fn h_scarce(&self) -> Result<Option<BlockHeight>, StoreError> {
+        let Some((tip, _)) = chain_reads::tip_of(self.txn()).map_err(ReadFault::into_plain)? else {
+            return Ok(None);
+        };
+        h_scarce(self.txn(), self.horizons(), tip)
+            .map(|height| height.map(BlockHeight::from_raw))
+            .map_err(ReadFault::into_plain)
+    }
 }
 
 #[cfg(test)]

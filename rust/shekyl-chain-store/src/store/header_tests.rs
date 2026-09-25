@@ -15,7 +15,9 @@
 use shekyl_types::BlockCount;
 use shekyl_units::AtomicUnits;
 
-use super::store_tests::{cleanup, probe_row, tmp, TestErr, EPOCH, OTHER_EPOCH, PROBE};
+use super::store_tests::{
+    cleanup, probe_row, production_horizons, tmp, TestErr, EPOCH, OTHER_EPOCH, PROBE,
+};
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{
@@ -139,7 +141,10 @@ fn a_file_reopens_under_its_pinned_schedule_and_refuses_another() {
     );
     assert!(
         matches!(
-            ChainStore::open_read_only(&path, OTHER_EPOCH),
+            ChainStore::open_read_only(
+                &path,
+                Horizons::new(OTHER_EPOCH, BlockCount::from_raw(10)).expect("inside")
+            ),
             Err(StoreError::Cannot(got)) if got == want
         ),
         "a reader interprets epoch-derived rows too, so it is refused the same way"
@@ -157,8 +162,24 @@ fn a_file_reopens_under_its_pinned_schedule_and_refuses_another() {
         raw_get(&path, "settlement_epoch_blocks").as_deref(),
         Some(10_000u64.to_le_bytes().as_slice())
     );
-    let ro = ChainStore::open_read_only(&path, EPOCH).expect("reader under the pinned schedule");
+    let ro = ChainStore::open_read_only(&path, production_horizons())
+        .expect("reader under the pinned schedule");
     assert_eq!(ro.settlement_epoch_blocks(), EPOCH);
+    assert_eq!(ro.horizons(), production_horizons());
+    cleanup(&path);
+}
+
+#[test]
+fn a_reader_reports_the_retention_it_was_opened_with() {
+    // The file records the epoch, not the retention. A reader of a
+    // shortened schedule names that schedule's own retention; it does not
+    // inherit `D_max`, which does not fit inside the epoch.
+    let path = tmp("ro-session");
+    let session = Horizons::new(OTHER_EPOCH, BlockCount::from_raw(10)).expect("inside");
+    drop(ChainStore::with_horizons(&path, ApplyPolicy::default(), session).expect("create"));
+    let ro = ChainStore::open_read_only(&path, session).expect("reader");
+    assert_eq!(ro.horizons(), session);
+    assert_eq!(ro.settlement_epoch_blocks(), OTHER_EPOCH);
     cleanup(&path);
 }
 
@@ -176,7 +197,7 @@ fn a_missing_zero_or_malformed_pin_is_corruption_not_unpinned() {
         raw_put(&path, "settlement_epoch_blocks", bytes);
         for open in [
             ChainStore::create(&path, EPOCH).err(),
-            ChainStore::open_read_only(&path, EPOCH).err(),
+            ChainStore::open_read_only(&path, production_horizons()).err(),
         ] {
             let e = open.unwrap_or_else(|| panic!("{label}: opened a store with a bad pin"));
             assert!(
@@ -266,7 +287,7 @@ fn a_different_version_is_refused_in_both_directions() {
         );
         assert!(
             matches!(
-                ChainStore::open_read_only(&path, EPOCH),
+                ChainStore::open_read_only(&path, production_horizons()),
                 Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found: f, .. })) if f == found
             ),
             "read-only reopen at v{other}"
@@ -292,7 +313,7 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
     assert!(matches!(
-        ChainStore::open_read_only(&path, EPOCH),
+        ChainStore::open_read_only(&path, production_horizons()),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
     cleanup(&path);
@@ -310,7 +331,7 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
     assert!(matches!(
-        ChainStore::open_read_only(&foreign, EPOCH),
+        ChainStore::open_read_only(&foreign, production_horizons()),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
     assert!(
@@ -344,7 +365,7 @@ fn a_malformed_header_cell_is_corruption_not_a_version() {
     // a foreign edit, not "an older file".
     raw_put(&path, "apply_policy", None);
     assert!(matches!(
-        ChainStore::open_read_only(&path, EPOCH),
+        ChainStore::open_read_only(&path, production_horizons()),
         Err(StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
             key: "apply_policy",
             fault: CellFault::Absent,
@@ -399,7 +420,7 @@ fn a_stubbed_commit_taints_the_file_and_a_full_session_cannot_clean_it() {
     drop(full);
 
     // The falsifier: a read-only handle reads the persisted policy.
-    let ro = ChainStore::open_read_only(&path, EPOCH).expect("ro");
+    let ro = ChainStore::open_read_only(&path, production_horizons()).expect("ro");
     assert_eq!(ro.provenance().stubbed(), FamilySet::of(SLASH));
     assert_eq!(
         ro.begin_read()
@@ -424,7 +445,7 @@ fn taint_is_a_union_across_sessions() {
             FamilySet::of(&[ArchivalFamily::Bond, ArchivalFamily::SlashLog])
         );
     }
-    let ro = ChainStore::open_read_only(&path, EPOCH).expect("ro");
+    let ro = ChainStore::open_read_only(&path, production_horizons()).expect("ro");
     assert_eq!(
         ro.provenance().stubbed(),
         FamilySet::of(&[ArchivalFamily::Bond, ArchivalFamily::SlashLog])
@@ -451,7 +472,7 @@ fn an_aborted_stubbed_batch_leaves_no_taint() {
         assert_eq!(result, Err(TestErr::Abort));
         assert!(s.provenance().is_parity_evidence(), "abort");
     }
-    assert!(ChainStore::open_read_only(&path, EPOCH)
+    assert!(ChainStore::open_read_only(&path, production_horizons())
         .expect("ro")
         .provenance()
         .is_parity_evidence());
@@ -557,7 +578,7 @@ fn a_corrupt_chain_state_cell_is_refused_on_read() {
     let path = tmp("typed-corrupt");
     seeded(&path, ApplyPolicy::Full);
     raw_put(&path, ProbeCell::KEY, Some(&[1, 2, 3]));
-    let store = ChainStore::open_read_only(&path, EPOCH).expect("header is fine");
+    let store = ChainStore::open_read_only(&path, production_horizons()).expect("header is fine");
     assert!(matches!(
         store
             .begin_read()

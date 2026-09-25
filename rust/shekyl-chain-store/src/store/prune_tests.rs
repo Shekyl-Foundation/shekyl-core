@@ -15,6 +15,7 @@
 //! their heights to a `u8`, so this module carries its own header and facts
 //! for long chains, with the same shape.
 
+use redb::ReadableTable;
 use shekyl_chain_rules::{Candidate, RuleSet};
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -26,9 +27,9 @@ use shekyl_wire::{Block, BlockHeader, Transaction};
 use super::connect_fixtures::{coinbase, judge, spend};
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
-use crate::codec::{SettlementEpochBlocks, UndoLogFloorCell};
+use crate::codec::{Canonical, SettlementEpochBlocks, UndoLogFloorCell};
 use crate::ids::TxStorageId;
-use crate::schema::UNDO_LOG;
+use crate::schema::{BLOCK_INFO, UNDO_LOG};
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
@@ -351,4 +352,65 @@ fn h_scarce_is_the_last_discarded_shards_close_height() {
     // is block 198's coinbase.
     assert_eq!(e3, Some(198), "epoch 3: shard 0 closed at height 198");
     cleanup(&path);
+}
+
+/// A later `block_info` row whose storage-id total is below an earlier
+/// one's is SI-13. The boundary connect must not commit with `D(E)` skipped.
+#[test]
+fn a_decreasing_storage_id_total_refuses_the_boundary() {
+    let path = tmp("prune-monotone");
+    let horizons = Horizons::new(
+        SettlementEpochBlocks::new(10).expect("non-zero"),
+        BlockCount::from_raw(3),
+    )
+    .expect("0 < retention < epoch");
+    let store = ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons).expect("create");
+    let mut b = Builder::new();
+    // Height 40 is epoch 4, the first boundary whose window starts above
+    // genesis: `D(4)` reads `first_tx_id(10)` and `first_tx_id(30)`.
+    b.connect(&store, 0, 39, |_| Vec::new());
+    drop(store);
+    plant_listed(&path, 9, 5_000);
+    let store = ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons).expect("reopen");
+    let previous = b.hashes.last().copied().expect("parent");
+    let cand = candidate(40, previous, Vec::new());
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, cand)?, facts(40), RuleSet::GENESIS)?)
+    });
+    assert!(
+        out.is_err(),
+        "the boundary does not commit over a decreasing total"
+    );
+    assert_eq!(tip(&store), 39);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(40),
+            row: StoreInvariant::FoldNotMonotone {
+                cell: "block_info.cumulative_tx_count",
+                height: 30,
+            },
+        }
+    );
+    cleanup(&path);
+}
+
+/// Replace `block_info[height].cumulative_tx_count`. A raw write: the
+/// store's own connect never records a decrease.
+fn plant_listed(path: &std::path::Path, height: u64, listed: u64) {
+    let db = redb::Database::open(path).expect("open raw");
+    let txn = db.begin_write().expect("write");
+    {
+        let mut table = txn.open_table(BLOCK_INFO).expect("block_info");
+        let info = {
+            let guard = table.get(height).expect("get").expect("row");
+            let mut info = guard.value().decode().expect("decodes");
+            info.cumulative_tx_count = listed;
+            info
+        };
+        let encoded = info.encoded();
+        table.insert(height, encoded.as_encoded()).expect("plant");
+    }
+    txn.commit().expect("commit");
 }

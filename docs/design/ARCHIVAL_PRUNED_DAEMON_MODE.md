@@ -185,9 +185,10 @@ surviving text (rule 16):
 
 **The predicate.** `close_height(k) = height((k+1)·T − 1)` (Q6 item 5;
 written `height(b_{k+1} − 1)` under F32) — the shard's last **included**
-transaction, found by binary search over
-`BlockInfo.cumulative_tx_count` (`first_tx_id(h) = block_info[h−1].cumulative_tx_count`
-for `h ≥ 1`, `first_tx_id(0) = 0`; landed on #772; no new state). Let
+transaction, found by binary search over the storage-id total
+(`first_tx_id(h)` for `h ≥ 1` is `storage_ids_through(block_info[h−1].cumulative_tx_count, h−1)`
+— the listed total plus one coinbase per block; `first_tx_id(0) = 0`;
+`shekyl_types::storage_ids_through`, SPR-1). Let
 `close_epoch(k) = settlement_epoch_at_height(close_height(k))`. The
 **freeze epoch** of shard `k` is `close_epoch(k) + 1` — the whole epoch
 after the one it closed in. Shard `k` has its prunable regions and
@@ -632,10 +633,11 @@ a discarded shard's true size is unrecoverable. So:
 - **`height(tx)` is not a `tx_indices` lookup** — `tx_indices` is
   keyed by tx *hash* (`codec/chain.rs:126-135`), so from a `tx_id` the
   lookup needs the body it is deciding whether to delete. The
-  primitive is `first_tx_id(h) = block_info[h−1].cumulative_tx_count`
-  for `h ≥ 1`, `first_tx_id(0) = 0` (the FL-R3-STORE running total,
-  `BlockInfo.cumulative_tx_count`, landed on #772), and `tx_id` is
-  monotone in height. *Re-keyed 2026-09-22 (Q2 re-ruled):* the horizon is
+  primitive is `first_tx_id(h)` for `h ≥ 1` =
+  `storage_ids_through(block_info[h−1].cumulative_tx_count, h−1)` — the
+  listed total plus one coinbase per block, not the listed total alone
+  (SPR-1; `shekyl_types::storage_ids_through`) — and `first_tx_id(0) = 0`.
+  `tx_id` is monotone in height. *Re-keyed 2026-09-22 (Q2 re-ruled):* the horizon is
   the epoch boundary after the shard's freeze epoch, evaluated only when
   `current_epoch ≥ 2`; in epochs 0 and 1 nothing discards (Q2's genesis
   guard).

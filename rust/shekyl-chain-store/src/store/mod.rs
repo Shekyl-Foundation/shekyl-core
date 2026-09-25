@@ -372,18 +372,20 @@ impl ChainStore {
 
     /// Open an **existing** store without the ability to write.
     ///
-    /// The schedule pin is checked here too: a reader interprets
-    /// epoch-derived rows, so a reader under the wrong schedule is as
-    /// mislabeled as a writer.
+    /// `horizons` is the same session pair a writer names
+    /// ([`with_horizons`](Self::with_horizons)). The file checks the epoch
+    /// pin: a reader interprets epoch-derived rows, so a reader under the
+    /// wrong schedule is as mislabeled as a writer. The retention is not
+    /// stored in the file — the `undo_log_floor` cell records what was
+    /// retired — so a reader reports the retention it was given, and that
+    /// pair has already passed [`Horizons::new`]. A reader retires nothing.
     ///
     /// # Errors
     ///
     /// [`EngineError::Open`] if the file is absent or cannot be opened; the
     /// same header refusals as [`with_apply_policy`](Self::with_apply_policy).
-    pub fn open_read_only(
-        path: impl AsRef<Path>,
-        epoch: SettlementEpochBlocks,
-    ) -> Result<Self, StoreError> {
+    pub fn open_read_only(path: impl AsRef<Path>, horizons: Horizons) -> Result<Self, StoreError> {
+        let epoch = horizons.epoch();
         let db = redb::Builder::new()
             .set_cache_size(CACHE_SIZE)
             .open_read_only(path)
@@ -394,7 +396,7 @@ impl ChainStore {
             // A read-only handle writes nothing, so its session policy is
             // vacuously Full; the file's history is `provenance`.
             apply_policy: ApplyPolicy::Full,
-            horizons: Horizons::read_only(epoch),
+            horizons,
             shared: Shared::new(provenance),
         })
     }

@@ -308,14 +308,13 @@ pub enum StoreCannot {
     },
     /// The session's undo-log retention is not strictly inside its
     /// settlement epoch — zero, or `≥ SEB` (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md`
-    /// §3, §12). The retention prune's pop floor is a belt *because*
-    /// `tip − retention` sits above the body horizon, which is exactly
-    /// `SEB > retention`; a configuration that breaks it is not a valid
-    /// Shekyl configuration on any nettype (rule 71) — a regtest override
-    /// that shortens the epoch shortens the retention with it, or is
-    /// refused here at open. `SETTLEMENT_EPOCH_BLOCKS > D_MAX` is
-    /// const-asserted on the production pair (`shekyl_chain_rules::D_MAX`);
-    /// this is the same inequality on the session's.
+    /// §3, §12). `tip − retention` has to sit above the body horizon, which
+    /// is `SEB > retention`. The body-horizon pop arm is not minted
+    /// (`store/prune.rs`); this refusal is what keeps that ordering. A
+    /// regtest override that shortens the epoch shortens the retention with
+    /// it. `SETTLEMENT_EPOCH_BLOCKS > D_MAX` is const-asserted on the
+    /// production pair (`shekyl_chain_rules::D_MAX`); this is the same
+    /// inequality on the session's, writer and reader.
     RetentionNotInsideEpoch {
         /// The undo-log retention the session asked for.
         retention: shekyl_types::BlockCount,

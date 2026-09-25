@@ -65,7 +65,6 @@ use super::curve_reads;
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
 use super::halt::ConnectState;
 use super::header;
-use super::prune;
 use super::ChainStore;
 
 /// The recorded tip **and** the writer's state, together (R1; §3.4).
@@ -173,9 +172,14 @@ impl<'store> ReadSnapshot<'store> {
     }
 
     /// The transaction, for a read surface whose methods live with their
-    /// bodies (`alt_reads`) rather than in this file.
+    /// bodies (`alt_reads`, `prune`) rather than in this file.
     pub(super) fn txn(&self) -> &ReadTransaction {
         &self.txn
+    }
+
+    /// The session horizons, for a read that lives with the prune.
+    pub(super) fn horizons(&self) -> super::Horizons {
+        self.store.horizons()
     }
 
     /// Open a table for reading — the raw handle, **crate-private** (Q3,
@@ -693,10 +697,12 @@ impl ReadSnapshot<'_> {
     /// # Errors
     ///
     /// A recorded transaction missing its pruned segment or its prunable
-    /// hash row, or a `pqc_auths` segment and hash row that disagree on
-    /// presence, is **SI-7** with the table named (§7.7 legs (i)–(ii));
-    /// a present index whose `tx_id` is at or past the dense count is
-    /// **SI-9**; an undecodable row is SI-7; engine errors pass through.
+    /// hash row, or a `pqc_auths` segment without its hash row, is **SI-7**
+    /// (§7.7 legs (i)–(ii)). A hash row without its segment is
+    /// [`PqcAuths::Discarded`](super::PqcAuths::Discarded) — the retention
+    /// prune's one state for that region, not a fault. A present index
+    /// whose `tx_id` is at or past the dense count is **SI-9**; an
+    /// undecodable row is SI-7; engine errors pass through.
     pub fn tx_record(&self, hash: &TxHash) -> Result<Option<TxRecord>, StoreError> {
         tx_reads::record_at(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
     }
@@ -832,22 +838,6 @@ impl ReadSnapshot<'_> {
     /// leaves in practice; this is not a full-tree walk.
     pub fn leaves(&self, range: Range<TreePosition>) -> Result<AtIndex<Vec<TreeLeaf>>, StoreError> {
         curve_reads::leaves(&self.txn, range).map_err(chain_reads::ReadFault::into_plain)
-    }
-}
-
-/// The retention prune's one chain-named read (DRS-E1 S-PRUNE).
-impl ReadSnapshot<'_> {
-    /// `h_scarce` at the recorded tip: the `close_height` of the last shard
-    /// the calendar has discarded — `PDM-Q5`'s band-2 edge, the same number
-    /// on every node (`store/prune.rs`). `None` on an empty chain, in
-    /// epochs 0–1, and before any shard has closed.
-    pub fn h_scarce(&self) -> Result<Option<BlockHeight>, StoreError> {
-        let Some((tip, _)) = self.tip_row()? else {
-            return Ok(None);
-        };
-        prune::h_scarce(&self.txn, self.store.horizons(), tip)
-            .map(|h| h.map(BlockHeight::from_raw))
-            .map_err(chain_reads::ReadFault::into_plain)
     }
 }
 

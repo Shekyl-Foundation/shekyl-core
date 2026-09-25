@@ -365,11 +365,13 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   `pqc_auths` regions of every archival shard whose close epoch lies two
   behind (`discard(k) ⇔ current_epoch ≥ close_epoch(k) + 2`, `T = 200`
   transactions per shard): a set named by the epoch and computed from the
-  chain's running transaction total, never from what is present on disk, so
+  storage-id total (listed transactions plus one coinbase per block,
+  `storage_ids_through`), never from what is present on disk, so
   every node discards the same shards at the same height whether it was
   online or not. Hash rows stay; a read of a discarded region answers
   *discarded*, never a fault, and the whole transaction's wire bytes are
-  reported unavailable rather than recomposed. The pop-undo journal is
+  reported unavailable rather than recomposed. A decreasing storage-id
+  total is SI-13 and the boundary connect does not commit. The pop-undo journal is
   retired below `tip − D_max` at the same boundary and the store records the
   lowest height it kept, so a reorg deeper than the retention is refused as
   a capability limit (`PopBelowFloor`), never mistaken for a corrupt

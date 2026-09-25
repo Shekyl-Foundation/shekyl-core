@@ -439,9 +439,11 @@ pub(super) fn location_at<T: ReadTables>(
 /// rows that must exist (§7.7 leg (i); `connect` writes them in one batch
 /// with the index row): missing is **SI-7** with the table named, which is
 /// what `rpc_facts_ffi.cpp`'s `MERROR` on a missing prunable hash becomes
-/// under a typed read (STX-6). The `pqc_auths` pair is present iff the txid
-/// is 4-part, and the two must agree — a segment without its hash row, or
-/// a hash row without its segment, is leg (ii)'s breach, SI-7 too.
+/// under a typed read (STX-6). The `pqc_auths` hash row is present iff the
+/// txid is 4-part. A segment without that hash row is leg (ii)'s breach,
+/// SI-7. A hash row without its segment is [`PqcAuths::Discarded`] — leg
+/// (iii), the retention prune's state for the region, not a fault. No hash
+/// row and no segment is a 3-part transaction.
 pub(super) fn record_at<T: ReadTables>(
     txn: &T,
     hash: &TxHash,
