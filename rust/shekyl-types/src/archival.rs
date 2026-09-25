@@ -72,6 +72,20 @@ use core::fmt;
 /// refused before any allocation is sized from the count.
 pub const MAX_HOLDINGS_SHARDS: usize = 4096;
 
+/// `T` — transactions per archival shard: shard `k` is the transactions with
+/// storage ids `[k·T, (k+1)·T)`, `k = ⌊tx_id / T⌋` (`PDM-Q6` item 5, RULED
+/// 2026-09-23; `DRS_E1_SPRUNE.md` §2). The one consensus constant of the
+/// partition: no boundary table, no length rows, no byte lengths anywhere —
+/// every node derives the same shard set from `cumulative_tx_count` alone.
+///
+/// **PROVISIONAL numeric** (Round-2 gate with `n`, `D_max`, `w_launch`):
+/// chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB. Pinned
+/// here, the shard vocabulary's home, so the store's discard (`⌊id / T⌋`)
+/// and the archiver's holdings name one `T`.
+pub const SHARD_TX_COUNT: u64 = 200;
+
+const _: () = assert!(SHARD_TX_COUNT > 0, "a shard holds at least one transaction");
+
 /// Upper bound on a bond record's standing-log entries. **Genesis-frozen
 /// consensus constant, not a codec tunable:** Release verify rejects a
 /// record at this cap (`IntervalLogFull`, the connect's clean interval-close
