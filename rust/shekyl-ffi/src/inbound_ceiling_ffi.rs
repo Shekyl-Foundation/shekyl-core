@@ -150,8 +150,16 @@ fn read_soft_nofile() -> DescriptorLimit {
     if limit.rlim_cur == libc::RLIM_INFINITY {
         return DescriptorLimit::Unlimited;
     }
-    // `rlim_t` is `u64` on the 64-bit POSIX targets this crate builds.
-    DescriptorLimit::Soft(limit.rlim_cur)
+    // `rlim_t` is unsigned on Linux and signed on FreeBSD. Widen first so
+    // both compile, then refuse a value that is not a usable soft limit.
+    let wide = i128::from(limit.rlim_cur);
+    if wide < 0 {
+        return DescriptorLimit::LimitUnreadable;
+    }
+    let Ok(soft) = u64::try_from(wide) else {
+        return DescriptorLimit::LimitUnreadable;
+    };
+    DescriptorLimit::Soft(soft)
 }
 
 /// Open descriptors, or `None` when this platform cannot count them.
