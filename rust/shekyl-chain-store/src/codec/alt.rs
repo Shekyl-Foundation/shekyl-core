@@ -283,21 +283,37 @@ impl Canonical for AltBlock {
 /// header at `height` over a coinbase, no listed transactions. Lives here so
 /// the codec test and the snapshot fixture build **the same** bytes.
 ///
-/// The coinbase is built **inline, not borrowed from the rules harness**.
-/// This codec carries the block as a blob; its snapshot pins the blob's
-/// bytes, and `schema-snapshot.yml` demands a `SCHEMA_VERSION` bump for any
-/// snapshot change. A harness fixture is another lane's to move — it did
-/// (E6 slice 6 commit 3 gave every fixture coinbase its `extra`), and a
-/// codec whose layout had not changed would have been asked for a schema
-/// bump it did not earn. The bytes here are the ones the snapshot has
-/// always held: a coinbase no rule reads, only the codec.
+/// The coinbase is built **inline, from literals alone — no rules-harness
+/// fixture, no consensus constant** (rule 42: a codec snapshot's input is
+/// constructed inline, never a shared value). This codec carries the block
+/// as a blob; its snapshot pins the blob's bytes, and `schema-snapshot.yml`
+/// demands a `SCHEMA_VERSION` bump for any snapshot change. Anything read
+/// from elsewhere is another lane's to move — the harness coinbase did (E6
+/// slice 6 commit 3 gave every fixture coinbase its `extra`), and a
+/// consensus window or a fixture point could — and a codec whose layout had
+/// not changed would then be asked for a schema bump it did not earn. The
+/// bytes here are the ones the snapshot has always held: a coinbase no rule
+/// reads, only the codec, so its `unlock_time` offset and its points are
+/// this snapshot's own literals and nothing else's.
 #[cfg(test)]
 pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
-    use shekyl_chain_rules::harness::fixture::{G, TWO_G};
-    use shekyl_chain_rules::RuleSet;
     use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot};
     use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
-    let unlock_time = height.saturating_add(RuleSet::GENESIS.mined_money_unlock_window().to_raw());
+    // The snapshot's own bytes. `UNLOCK_OFFSET` happens to equal the genesis
+    // unlock window and `KEY` / `MASK` the harness's `G` / `2·G` at the pin;
+    // that is where the bytes came from, not what they are bound to.
+    const UNLOCK_OFFSET: u64 = 60;
+    const KEY: [u8; 32] = [
+        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66,
+    ];
+    const MASK: [u8; 32] = [
+        0xc9, 0xa3, 0xf8, 0x6a, 0xae, 0x46, 0x5f, 0x0e, 0x56, 0x51, 0x38, 0x64, 0x51, 0x0f, 0x39,
+        0x97, 0x56, 0x1f, 0xa2, 0xc9, 0xe8, 0x5e, 0xa2, 0x1d, 0xc2, 0x29, 0x23, 0x09, 0xf3, 0xcd,
+        0x60, 0x22,
+    ];
+    let unlock_time = height.saturating_add(UNLOCK_OFFSET);
     Block {
         header: BlockHeader {
             major_version: 1,
@@ -314,7 +330,7 @@ pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
                 inputs: vec![Input::Gen(height)],
                 outputs: vec![Output {
                     amount: 0,
-                    key: G,
+                    key: KEY,
                     view_tag: 1,
                 }],
                 extra: Vec::new(),
@@ -322,7 +338,7 @@ pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
             ct: Ct::Null(CtBase {
                 enc_amounts: vec![[0x55; 9]],
                 enc_labels: vec![[0x66; 9]],
-                commitments: vec![TWO_G],
+                commitments: vec![MASK],
             }),
         },
         transaction_hashes: Vec::new(),

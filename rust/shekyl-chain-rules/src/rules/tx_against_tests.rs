@@ -96,8 +96,10 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
     });
 }
 
-/// The same refusal at a listed slot through `validate`, re-homed from
-/// `Lone` to `Listed(n)` — the transaction's position, not the pool's.
+/// The same refusal at a listed slot through `validate`: `validate` hands
+/// `tx_against` the slot it is judging, so the refusal is written at
+/// `Listed(n)` — the transaction's position, not the pool's — and nothing
+/// re-homes it afterwards (`Locus::rehome` went with slice 6 commit 4).
 #[test]
 fn i7_at_a_listed_slot_the_refusal_names_the_slot() {
     let chain = spendable_chain().with_key_image(KeyImage::from_bytes(point(11)));
