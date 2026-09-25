@@ -1,0 +1,13 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-timing-engine"
+description = "P2P timing-engine core: time-ordered wake hints, generation drop, and lateness. No sockets and no event loop."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
