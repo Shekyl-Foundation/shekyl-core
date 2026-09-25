@@ -1,13 +1,17 @@
 # P2P connector — Rust transport in place of epee's TCP server
 
-**Status: OPEN — Round 1, 2026-09-25.** Pinned to `dev`
-`db2788d164660003948376ba369fa396c5f4c482`. **The deliverable of this round
-is a design, not code.** Implementation does not start until the round
-closes. Target is 4–6 review rounds (rule 20). **Rule 26 is cited
-explicitly** (`26-sub-pr-design-discipline.mdc`): this work crosses an FFI
-boundary and replaces an inherited reference. Numeric budgets are not
-written before a measurement (rule 26 B9). This document mints no
-identifier family; decisions stay `PWD-` and the slices stay P2P-3's.
+**Status: OPEN — Round 2, 2026-09-25.** Round 1 was pinned to `dev`
+`db2788d164660003948376ba369fa396c5f4c482`. Round 2 re-read that pin.
+The 11 commits `dev` gained after it are S-POOL / chain-store and do
+not touch epee, `src/p2p`, `src/net`, the transport crate, or the
+protocol docs, so Round 1's anchors still hold. **The deliverable of
+this round is a design, not code.** Implementation does not start until
+the round closes. Target is 4–6 review rounds (rule 20). **Rule 26 is
+cited explicitly** (`26-sub-pr-design-discipline.mdc`): this work
+crosses an FFI boundary and replaces an inherited reference. Numeric
+budgets are not written before a measurement (rule 26 B9). This
+document mints no identifier family; decisions stay `PWD-` and the
+slices stay P2P-3's.
 
 **Ordering ruling (Rick, 2026-09-25).** The epee TCP server is replaced by
 this connector first. The clearnet option is then tested on the connector,
@@ -79,22 +83,38 @@ epee's TCP stack is three layers. Only the bottom one is this connector.
 `close`, `send_done`, `call_run_once_service_io`, `request_callback`,
 `get_io_context`, `add_ref`, `release`.
 
-`net_node`'s direct transport calls, confirmed present: `init_server`,
-`run_server`, `send_stop_signal`, `deinit_server`, `connect`,
-`add_connection` (`net_node.inl:3618`), `set_network_pipe`
-(`net_node.inl:965`). The brief's remaining names (`add_idle_handler`,
-`set_connection_filter`, `set_connection_limit`, `get_binded_port`,
-`is_stop_signal_sent`) are the round's checklist for pre-flight; Round 1
-does not claim each was re-read line by line beyond the ones dated above.
+Every `m_net_server` call in `net_node.inl`, read at this pin:
+`add_connection`, `add_idle_handler`, `connect`, `deinit_server`,
+`get_binded_port`, `get_binded_port_ipv6`, `get_config_object`,
+`get_config_shared`, `get_io_context`, `init_server`,
+`is_stop_signal_sent`, `run_server`, `send_stop_signal`,
+`set_connection_filter`, `set_connection_limit`, `set_default_remote`,
+`set_network_pipe`, `set_threads_prefix`. `get_config_shared` is what
+each zone's `levin::notify` is constructed with (`net_node.inl:483`,
+`:642`, `:890`), together with `get_io_context()`.
+
+Under `src/`, only `src/p2p/net_node.h` includes epee's TCP server. The
+other hits are epee's own internals (`connection_basic.cpp`,
+`network_throttle-detail.cpp`, the Levin handler) and tests
+(`tests/unit_tests/epee_boosted_tcp_server.cpp`, `tests/fuzz/levin.cpp`,
+`tests/net_load_tests/`). p2p is the only production user.
 
 Timers that exist today, read at `abstract_tcp_server2.inl:59-63`:
 
-| Constant | Value |
-| --- | --- |
-| `NEW_CONNECTION_TIMEOUT_REMOTE` | 10,000 ms |
-| `DEFAULT_TIMEOUT_MS_REMOTE` | 300,000 ms (5 minutes) |
-| `AGGRESSIVE_TIMEOUT_THRESHOLD` | 120 sockets |
-| `TIMEOUT_EXTRA_MS_PER_BYTE` | 0.2 |
+| Constant | Value | Who |
+| --- | --- | --- |
+| `NEW_CONNECTION_TIMEOUT_LOCAL` | 1,200,000 ms (2 minutes) | `m_local` |
+| `NEW_CONNECTION_TIMEOUT_REMOTE` | 10,000 ms | not `m_local` |
+| `DEFAULT_TIMEOUT_MS_LOCAL` | 1,800,000 ms (30 minutes) | `m_local` idle (`:109`) |
+| `DEFAULT_TIMEOUT_MS_REMOTE` | 300,000 ms (5 minutes) | not `m_local` |
+| `AGGRESSIVE_TIMEOUT_THRESHOLD` | 120 sockets | shifts the idle timer |
+| `TIMEOUT_EXTRA_MS_PER_BYTE` | 0.2 | bytes-read extension |
+
+`m_local` is set at `abstract_tcp_server2.inl:992` from
+`is_loopback() || is_local()` on the remote address the connection was
+started with, and the new-connection timer picks the local or remote
+constant at `:1001-1004`. That is a trust distinction by address class
+(D3).
 
 `P2P_DEFAULT_CONNECTION_TIMEOUT` at `src/cryptonote_config.h:189` is
 **5,000 ms**, not 10 seconds. `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` at
@@ -179,16 +199,23 @@ and the mechanism does not. "Refuse" means it does not survive.
 | --- | --- | --- |
 | Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | Carry. The connector calls admission. It does not own the policy. Serves the ceiling admission already owns. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
-| SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust. An existing Rust SOCKS client is an inventory item for the next round (rule 17), not assumed here. |
+| SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust. `tokio-socks` 0.5.3 is already a workspace dependency (`shekyl-p-fetch/Cargo.toml:40`, `shekyl-rpc-transport/Cargo.toml:43`). Reusing it adds no supply-chain surface (rule 17). A separate `socks` 0.3.4 crate is in `Cargo.lock` because `ureq` 3.3.0 depends on it, and `shekyl-p-transport` enables `ureq/socks-proxy` via its `tor-socks` feature. The connector uses `tokio-socks`, not that crate. |
+| Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry, and do not attribute from the socket.** Tor and I2P inbound connections arrive on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host and would mark every overlay peer `m_local` (the next row). This is where LV-3's OBSERVED endpoint originates. |
+| Tor forward listener | `net_node.inl:863-880` | Carry. Bound to `127.0.0.1` on port 0. The OS-assigned port is read back with `get_binded_port` (`:881`) and handed to Tor control. Bind failure erases the zone (`:878`). |
+| Local versus remote timers | `m_local` at `abstract_tcp_server2.inl:992`; timers at `:100-112` and `:1001-1004` | **Carry the split or refuse it in the open.** Today a loopback or local address gets a 2-minute new-connection timer and a 30-minute idle timer; everyone else gets 10 seconds and 5 minutes. That is a trust distinction by address class. It is wrong for overlay peers if F-1's attribution is the loopback socket. Proposed: the split applies only to a clearnet remote that `is_loopback()` or `is_local()`. An overlay inbound is not local. Review can refuse the split entirely; it cannot leave it implicit. |
+| Gap from channel established to session established | Outbound Levin invoke is 5 s (`cryptonote_config.h:193`). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes remote, 30 minutes if `m_local`). The connector owns that deadline, beside PWD-B3's byte cap for command 1001. |
+| Dual-stack bind and port 0 | `init_server` at `net_node.inl:1065` takes IPv4 and IPv6 ports and addresses plus `m_use_ipv6` / `m_require_ipv4` | Carry. A port-0 bind reads the assigned port back. The Tor listener above is the port-0 case that must not abort the rest of the boot. |
+| Worker pool | `run_server`'s thread count; `set_threads_prefix` | Carry the pool as a stated size, not as "however many epee used". D6 sizes the socketless executor separately. |
+| Graceful stop | `send_stop_signal`, then connections drained, then `deinit_server` (`net_node.inl:1187` is one `deinit_server` site) | Carry the order: stop accepting, drain or cancel live connections, then tear the listeners down. |
+| `call_run_once_service_io` | Called from `levin_protocol_handler_async.h:753`. The synchronous `invoke_remote_command2` (`levin_abstract_invoke2.h:60`) has no caller under `src/` at this pin. p2p uses `async_invoke_remote_command2` only (`net_node.inl:1270`, `:1351`, `:2802`). Tests call the async form too | **Delete**, not carry. The sync invoke path goes with it. A test-only caller found later reopens this row. |
 | New-connection, idle, bytes, and aggressive timers | `abstract_tcp_server2.inl:59-63` | Re-derive each. Channel-established and session-established bound different waits. The inherited values are inputs, not the answer. |
 | Rate limit and per-connection speed stats | `network_throttle*`; the pipe's `on_wire` path on the parked branch | Carry the limit. Stats are observed facts reported upward, not a second policy. |
 | Send-queue bounds | 1,000 messages and 100 MiB (`abstract_tcp_server2.h:72-73`) | Carry, with one source. The pipe's `PIPE_PLAINTEXT_BUDGET` was a second copy and is not repeated. |
 | Send backpressure and strand order | Send path in `abstract_tcp_server2.inl` (queue checks near the caps above) | Re-derive. Nonce order equals wire order because there is one writer per direction. A strand is not required to get that. |
-| `IP_TOS`, `no_delay(false)` | Set on the accepted socket in the transport | **A decision, not a default.** A network observer can fingerprint TCP behaviour. Round 2 states each option as on, off, or measured. |
+| `IP_TOS`, `no_delay(false)` | Set on the accepted socket in the transport | **Still open: on, off, or measured.** A network observer can fingerprint TCP behaviour. Round 2 records the decision as owed, not made. |
 | FIN versus RST, linger | epee close / shutdown | **A decision.** It also has to meet the uniform-failure behaviour the evaluation will measure (step 7, C4). |
 | `add_ref` / `release`, `request_callback`, `send_done` | `i_service_endpoint` | The adapter's contract (D4). Not a copy of epee's refcount. |
 | Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer | D6. Proposed: a socketless `io_context` until LV-3. |
-| `call_run_once_service_io` | `levin_protocol_handler_async.h:753` | Next round lists every caller. Carry only a caller that still exists; otherwise delete. |
 | Serial outbound dialing | `connections_maker` at `net_node.inl:2009`, call at `:1917` | State it. The transport handshake lengthens every attempt. Leaving it serial is a proposal, not a ruling; changing it is a `net_node` change and needs its own sentence in review. |
 | SSL | `m_state.ssl` on the connection | **Refuse.** |
 
@@ -203,6 +230,11 @@ and the mechanism does not. "Refuse" means it does not survive.
   pre-channel byte limit is the size of one flight, not a 256 KiB
   inherited cap. Nothing above the transport can see a connection that
   has no channel.
+- **The connector supplies only observed endpoints.** For a clearnet
+  socket that is the peer address. For Tor and I2P inbound, the
+  observed truth is "this zone, no address". It is never the loopback
+  socket the local router accepted on. A C++ object created at channel
+  established receives that observed endpoint, not `127.0.0.1`.
 - **Tasks, not threads.** Connector tasks post into the C++ executor.
   Delivered buffers are bounded by a read window. A C++ call does not
   block a connector task. A connector task is never the last owner of
@@ -237,9 +269,13 @@ Round 1 does not pick. D14 item 1 is this choice.
 
 Levin invoke timeouts take their timer from `get_io_context()`
 (`levin_protocol_handler_async.h:229`). `net_node` idle handlers run
-on the server's `io_context`. Proposed: keep a socketless asio
-`io_context` as that executor, and delete it at LV-3. The next round
-confirms nothing else needs the socket-bearing context.
+on the server's `io_context`. Each zone's relay notifier is
+constructed with that same `io_context` and with `get_config_shared()`
+(`net_node.inl:483`, `:642`, `:890`). Proposed: keep a socketless asio
+`io_context` as that executor, and delete it at LV-3. It hosts Levin's
+invoke timers, `net_node`'s idle handlers, and LV-3's relay-dispatch
+timers. Its thread pool is sized for those three, not only the first
+two. The socket-bearing context does not survive cutover.
 
 ---
 
@@ -291,6 +327,13 @@ ML-KEM encapsulation after it has read message 1. What bounds the rate
 of that work is the existing admission-before-channel question. This
 round does not re-solve it; it names the dependency.
 
+The connector also bounds the time **after** the channel exists and
+before the Levin handshake finishes. Outbound already has the 5 s
+invoke timeout. Inbound does not: a peer that completes the transport
+handshake and then sends nothing holds its slot until the idle timer.
+That deadline is derived under D9, next to PWD-B3's byte cap for
+command 1001. It is not the idle timer.
+
 ---
 
 ## D11 — test gates
@@ -303,6 +346,10 @@ round can reject them.
   Compare delivered bytes, close causes, and timeout behaviour. epee
   stays in the tree as the reference until this passes. It is not a
   test host for the option.
+- **Cross-build interop.** A connector node and an epee node, option
+  off, peering on testnet through sync, relay, and both dial
+  directions. The loopback harness is one build. The claim that
+  cutover is not a flag day is about two builds talking to each other.
 - **One descriptor per connection.** Count `readlink` results equal to
   that socket's `socket:[inode]`. Assert one. Do not count
   `/proc/self/fd` for the whole process.
@@ -325,17 +372,23 @@ hand-kept copy.
 
 | Phase | Causes |
 | --- | --- |
-| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout` |
-| Channel exists, Levin handshake not done | `LevinHandshakeTimeout`, `LevinHandshakeRejected` |
+| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `DialFailed`, `ProxyRefused`, `LocalClose` |
+| Channel exists, Levin handshake not done | `LevinHandshakeTimeout`, `LevinHandshakeRejected`, `LocalClose` |
 | Any time after the channel exists | `PeerClosed`, `RecordRejected`, `SessionRefused`, `IoError`, `LocalClose` |
 
+`AdmissionRefused` is a ban-filter or inbound-ceiling refusal at
+accept. `DialFailed` is an outbound TCP connect that did not complete.
+`ProxyRefused` is a SOCKS or overlay failure and carries the reply
+code (an unreachable onion is this cause, not a generic I/O error).
+`LocalClose` is this node closing, including a shutdown during the
+handshake, so it is valid in every phase.
 `RecordRejected` is an AEAD failure or a poisoned receiver.
 `SessionRefused` is the C++ side declining a delivery (D4).
-`LocalClose` is this node closing. A failure an operator can act on
-is one of these values (rule 82), not a generic drop.
 
 This table is a requirement of the connector. It is not implemented
-on the pipe.
+on the pipe. A failure an operator can act on is one of these values
+(rule 82), not a generic drop. On the overlays that is
+`ProxyRefused` with its reply code, not `IoError`.
 
 ---
 
@@ -396,11 +449,30 @@ is observed:
 
 ---
 
-## What Round 2 should answer
+## What Round 2 closed, and what Round 3 still owes
 
-- Confirm or correct every D3 row a reviewer marks.
-- The caller list for `call_run_once_service_io`.
-- Whether a Rust SOCKS implementation already exists in the workspace
-  (rule 17), read at source.
-- The TCP-option decision (D3), as on, off, or "measure first".
-- Nothing in D14.
+Closed in this revision, from a re-read at `db2788d`:
+
+- Overlay inbound attribution and the Tor forward listener (D3, D4).
+- The local-versus-remote timer split, carried only for a clearnet
+  address that is actually local (D3). Review may still refuse the
+  split; it is no longer missing.
+- A derived deadline between channel established and session
+  established (D9, D10).
+- `AdmissionRefused`, `DialFailed`, `ProxyRefused`, and `LocalClose`
+  in every phase (D12).
+- Cross-build interop as a D11 gate.
+- Dual-stack bind, the worker pool, stop order, and `levin::notify`
+  on the socketless executor (D3, D6).
+- The full `m_net_server` call list and the sole production user (D0).
+- `tokio-socks` 0.5.3 is the SOCKS client. `socks` 0.3.4 is `ureq`'s,
+  via `shekyl-p-transport`'s `tor-socks` feature.
+- `call_run_once_service_io` and the sync invoke are a deletion. A
+  test-only caller found later reopens that row.
+
+Still open, and not decided here:
+
+- D14, all four items.
+- Whether the local/remote timer split is kept or refused outright.
+- Whether outbound dials stay serial.
+- TCP options and FIN versus RST, each as on, off, or measure-first.
