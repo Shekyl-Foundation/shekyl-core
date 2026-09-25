@@ -89,25 +89,20 @@ fn tip_facts(chain: &MockChain) -> (BlockHeight, BlockHash, CurveTreeRoot) {
     (connecting, tip.map_or(BlockHash::NULL, |t| t.hash), root)
 }
 
-/// The median the recorded chain has: the middle timestamp of its blocks,
-/// `None` when empty. (The C2 window is wider than these chains; the
-/// median of everything is what the rule computes below the window.)
+/// The median CEN-C2 will judge against, read through the rules crate's own
+/// definition (`mtp_median_at`: the up-to-eleven preceding timestamps,
+/// right-padded with genesis, sorted index 5) — the read the production
+/// driver performs. A test-local "middle of the recorded stamps" was wrong
+/// below eleven blocks (the padding puts the median at genesis) and passed
+/// only because the clock exceeded both (#852 review).
 fn median_of(chain: &MockChain) -> Option<Timestamp> {
-    let tip = chain.tip()?;
-    let mut stamps: Vec<u64> = chain.with_view(|view| {
-        (0..=tip.height.to_raw())
-            .map(|h| {
-                match shekyl_chain_rules::harness::infallible(
-                    view.block_at(BlockHeight::from_raw(h)),
-                ) {
-                    shekyl_chain_rules::AtHeight::Recorded(block) => block.header.timestamp,
-                    shekyl_chain_rules::AtHeight::AboveTip => panic!("below the tip"),
-                }
-            })
-            .collect()
-    });
-    stamps.sort_unstable();
-    Some(Timestamp::from_raw(stamps[stamps.len() / 2]))
+    let (connecting, _, _) = tip_facts(chain);
+    chain.with_view(|view| {
+        shekyl_chain_rules::harness::infallible(shekyl_chain_rules::mtp_median_at(
+            &view, connecting,
+        ))
+        .expect("a MockChain is dense")
+    })
 }
 
 /// Emission operands for a chain whose recorded blocks generated nothing —
@@ -465,14 +460,20 @@ fn a_median_more_than_ftl_ahead_of_the_clock_yields_no_template() {
         ),
         "{err}"
     );
-    // A median at the ceiling has no admissible successor at all.
-    assert!(matches!(
-        claim(u64::MAX).expect_err("no successor"),
-        TemplateError::TimestampBeyondFutureLimit {
-            timestamp: u64::MAX,
-            ..
-        }
-    ));
+    // A median at the ceiling has no admissible successor at all — refused
+    // on that ground, whatever the clock. With a clock far below, the FTL
+    // check would have caught it too; with a clock at the same ceiling it
+    // would not (#852 review), which is why the successor is checked first.
+    for now in [1_000, u64::MAX] {
+        assert!(matches!(
+            template_timestamp(
+                Timestamp::from_raw(now),
+                Some(Timestamp::from_raw(u64::MAX))
+            )
+            .expect_err("no successor"),
+            TemplateError::MedianHasNoSuccessor { median: u64::MAX }
+        ));
+    }
 }
 
 #[test]

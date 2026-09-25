@@ -277,6 +277,15 @@ pub enum TemplateError {
         /// The median that forced the claim.
         median: u64,
     },
+    /// The window's median is `u64::MAX`: CEN-C2 admits only a timestamp
+    /// strictly above it, and there is none. No template exists for this
+    /// chain state; refused on that ground rather than emitted for the
+    /// validator to refuse.
+    #[error("the window's median {median} has no successor (CEN-C2); no timestamp is admissible")]
+    MedianHasNoSuccessor {
+        /// The median at the ceiling.
+        median: u64,
+    },
 }
 
 /// The re-pricing budget: the C++ `try_count != 10` (`blockchain.cpp:1830`).
@@ -389,7 +398,18 @@ pub fn template_timestamp(now: Timestamp, median: Option<Timestamp>) -> Result<u
     let Some(median) = median else {
         return Ok(now.to_raw());
     };
-    let claim = now.to_raw().max(median.to_raw().saturating_add(1));
+    // CEN-C2 wants strictly above the median; a median at the ceiling has
+    // no successor and no template can satisfy the rule. Refused here on
+    // its own ground — not left to the FTL check, which a clock at the
+    // same ceiling would pass (review of #852).
+    let least_above =
+        median
+            .to_raw()
+            .checked_add(1)
+            .ok_or(TemplateError::MedianHasNoSuccessor {
+                median: median.to_raw(),
+            })?;
+    let claim = now.to_raw().max(least_above);
     if is_timestamp_below_ftl(Timestamp::from_raw(claim), now) {
         Ok(claim)
     } else {
