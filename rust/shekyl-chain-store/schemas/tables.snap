@@ -3,7 +3,7 @@
 # and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
 tables = 47
 [tables]
-alt_blocks = #13 map<shekyl::LmdbHashKey, shekyl::Unshaped>
+alt_blocks = #13 map<shekyl::LmdbHashKey, shekyl::Coded<alt_block>>
 archival_alt_attestation_witness = #21 map<shekyl::LmdbHashKey, shekyl::Unshaped>
 archival_attestation_witness = #20 map<u64, shekyl::Blob<attestation_witness>>
 archival_bond = #22 map<[u8;32], shekyl::Coded<bond_record>>

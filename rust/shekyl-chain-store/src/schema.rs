@@ -162,10 +162,10 @@ use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash, TreeLe
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    AttestationWitnessBytes, Blob, BlockBody, BlockInfo, BondRecord, Coded, CurveTreeState,
-    LayerHash, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RuleSetInForce, SigmaWorkMilli,
-    TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog,
-    Unshaped,
+    AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockInfo, BondRecord, Coded,
+    CurveTreeState, LayerHash, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RuleSetInForce,
+    SigmaWorkMilli, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
+    TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
@@ -380,8 +380,12 @@ tables! {
     /// A set-table: the key is the member; [`Present`] is the zero-width witness.
     pub const SPENT_KEYS: TableDefinition<LmdbHashKey, Present> = TableDefinition::new("spent_keys");
 
-    /// `alt_blocks` — key order `compare_hash32`.
-    pub const ALT_BLOCKS: TableDefinition<LmdbHashKey, Unshaped> = TableDefinition::new("alt_blocks");
+    /// `alt_blocks` — key order `compare_hash32`; block hash → the alt
+    /// block's record, bytes and reorg-survival witness in one row (S-ALT
+    /// AL1–AL7, `DRS_E1_SALT.md` §3; `SAL-Q2`). Not chain state (§11.2):
+    /// `Excluded` from every digest, written outside any pop recording.
+    pub const ALT_BLOCKS: TableDefinition<LmdbHashKey, Coded<AltBlock>> =
+        TableDefinition::new("alt_blocks");
 
     /// `hf_starting_heights` — default flags. Dead (DRS-W5): no runtime rows.
     pub const HF_STARTING_HEIGHTS: TableDefinition<&[u8], Unshaped> =

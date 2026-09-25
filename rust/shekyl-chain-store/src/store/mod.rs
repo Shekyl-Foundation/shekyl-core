@@ -86,6 +86,8 @@
 //! answer to either is a rebuild from the block corpus
 //! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
+mod alt;
+mod alt_reads;
 mod archival_reads;
 mod at_index;
 mod chain_reads;
@@ -105,12 +107,13 @@ pub(crate) mod undo;
 mod view;
 mod write;
 
+pub use alt_reads::AltEntry;
 pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
 pub use error::{
-    CellFault, EngineError, ErrorClass, LeafDensity, PoolCannot, StoreCannot, StoreError,
-    StoreInvariant, UndoFault,
+    AltCannot, CellFault, EngineError, ErrorClass, LeafDensity, PoolCannot, StoreCannot,
+    StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
@@ -571,6 +574,10 @@ mod curve_read_tests;
 #[cfg(test)]
 #[path = "archival_read_tests.rs"]
 mod archival_read_tests;
+
+#[cfg(test)]
+#[path = "alt_tests.rs"]
+mod alt_tests;
 #[cfg(test)]
 #[path = "output_read_tests.rs"]
 mod output_read_tests;

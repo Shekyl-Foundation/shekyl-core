@@ -192,10 +192,11 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // (`DRS_E1_SARCH.md` §4 — the plan's "seven" counted the `properties`
     // cell, which is not a table). 22 → 20 at layout 12: S-POOL **evicted**
     // `txpool_meta` and `txpool_blob` to the pool file (`DRS_E1_SPOOL.md`
-    // §4; not shaped here — gone from here). The journals, settlement,
-    // slash-applied, accrual and segment rows and the alt tables stay
-    // `Unshaped` for their increments.
-    assert_eq!(unshaped, 20, "the §11.1(f) count at this layout");
+    // §4; not shaped here — gone from here). 20 → 19 at layout 13: S-ALT
+    // shaped `alt_blocks` (`DRS_E1_SALT.md` §4). The journals, settlement,
+    // slash-applied, accrual and segment rows and the alt witness table
+    // stay `Unshaped` for their increments.
+    assert_eq!(unshaped, 19, "the §11.1(f) count at this layout");
     cleanup(&path);
 }
 

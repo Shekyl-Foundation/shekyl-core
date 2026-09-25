@@ -374,6 +374,26 @@ pub enum StoreCannot {
     /// everything else is refused, never deleted — a wrong `--data-dir`, a
     /// foreign file or a tampered one is an operator's to look at.
     PoolFileForeign,
+    /// An alt-chain store refusal (DRS-E1 S-ALT, `DRS_E1_SALT.md` §3.2) —
+    /// the store's decisions on `alt_blocks`, none of them a fault in it.
+    Alt(AltCannot),
+}
+
+/// The alt-chain store's typed refusals — decisions, not faults
+/// (`StoreCannot`'s shape; `DRS_E1_SALT.md` §3.4).
+///
+/// Both are **caller-contract violations** made visible (`SAL-Q3` as ruled):
+/// the caller states what it expected of the table, and the store says when
+/// the table disagrees, instead of doing something silently different.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AltCannot {
+    /// `insert_alt_block` of a hash the store already holds — CEN-K3's
+    /// belt (`MDB_NODUPDATA`), re-specified as the one typed refusal (SAL-4).
+    AlreadyHeld,
+    /// `remove_alt_block` of a hash the store does not hold. Removing what
+    /// is not held is a caller-contract violation — L14's insert-versus-upsert
+    /// ruling applied to a remove — not an idempotent no-op.
+    NotHeld,
 }
 
 /// The pool store's typed refusals — the pool's decisions, not faults
@@ -483,6 +503,7 @@ impl core::fmt::Display for StoreCannot {
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
+            Self::Alt(cannot) => write!(f, "alt-chain store: {cannot}"),
             Self::PoolFileForeign => f.write_str(
                 "pool file is not one this store wrote and not one it may recreate (no redb \
                  database, no pool header, or a header that does not decode): refused, not \
@@ -515,6 +536,23 @@ impl core::error::Error for PoolCannot {}
 impl From<PoolCannot> for StoreError {
     fn from(cannot: PoolCannot) -> Self {
         Self::Cannot(StoreCannot::Pool(cannot))
+    }
+}
+
+impl core::fmt::Display for AltCannot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::AlreadyHeld => "insert of an alt block the store already holds",
+            Self::NotHeld => "remove of an alt block the store does not hold",
+        })
+    }
+}
+
+impl core::error::Error for AltCannot {}
+
+impl From<AltCannot> for StoreError {
+    fn from(cannot: AltCannot) -> Self {
+        Self::Cannot(StoreCannot::Alt(cannot))
     }
 }
 
