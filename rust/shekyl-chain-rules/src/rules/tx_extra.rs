@@ -24,9 +24,13 @@
 //! no `0x02` at all"* under I20; that clause is decided on a **listed**
 //! transaction, which a `Coinbase`-scoped rule never sees, and the C++ emits
 //! it from I19's site (`ExtraSubject::General`). The crate therefore refuses
-//! a stray nonce on **I19**, and the census cell moves the clause with
-//! commit 10 — a relocation of wording between two rows the same adapter
-//! serves, disclosed in §5 row 3, not a rule change.
+//! a stray nonce on **I19** (ruled 2026-09-25: the cell describes the rule
+//! that refuses), and the census cell moves the clause with commit 10 —
+//! citing `TXE-Q6′` from both cells, because that ruling decided the nonce's
+//! width and the grammar's closure together for one reason (the nonce is a
+//! covert channel; the fix is uniformity), and two clauses in two rows with
+//! no pointer would read as unrelated. The same ruling's other half — no
+//! closed grammar off the coinbase — is a FOLLOWUPS row of its own.
 //!
 //! **Order.** In `check_tx_semantic` the shape check follows `check_outs_valid`
 //! (H7) and `outPk == vout` (H8) and precedes `check_money_overflow` (H9):

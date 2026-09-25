@@ -44,6 +44,21 @@ assertion is armed unless `UPDATE_SNAPSHOTS` is set (in which case exactly
 one test fails loudly), and the workflow file still runs this module by name
 and reads `SCHEMA_VERSION` with the declaration grammar the source uses.
 
+**A codec snapshot's input is constructed inline, never a shared fixture.**
+The snapshot's subject is the encoding. Build its input from a fixture some
+other crate owns and the subject becomes the fixture: every legitimate change
+to that fixture reads as a codec change, the paired-bump gate above demands a
+`SCHEMA_VERSION` bump for a codec nobody touched, and someone under time
+pressure supplies it — the version has now moved for a fixture edit, which
+is the one thing the gate exists to make impossible. Observed 2026-09-25:
+`codec::alt::test_block_bytes` embedded `shekyl_chain_rules::harness::
+fixture::coinbase`; E6 slice 6 gave every harness coinbase its `tx_extra`
+(CEN-I19/I20) and `schemas/alt_block.snap` moved with a codec whose layout
+had not. The block is built inline now and the snapshot is byte-identical.
+A snapshot fixture may *use* shared constants (a point, a hash) whose value
+no rule will ever move; it may not use a shared *transaction or block*,
+which rules move.
+
 History: from `DRS-0` (2026-09-13) to `DRS-E1` increment 2 the chain-store
 glob was attached to this rule with **no gate behind it**, and said so here.
 That paragraph is gone because its subject is; the FOLLOWUPS row that carried
