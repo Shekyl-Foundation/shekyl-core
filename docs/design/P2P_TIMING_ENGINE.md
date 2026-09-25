@@ -42,7 +42,8 @@ engine runs today's behaviour so a differential harness can match it.
 | Peerlist gossip | the same 1002 response carries up to 250 addresses (`p2p_protocol_defs.h:215-239`) into the gray list | peerlist, slices 1 and 3. Also a privacy surface: each exchange shows a peer part of this node's view of the network |
 | Connection liveness | the same 1002 is a request that must be answered, and it keeps the session off the inherited idle timer | the transport layer, per connector (D9). Not a Levin command |
 | Outbound fill | `connections_maker`, gated at 1 s (`net_node.h:721`). The fill loop `sleep_for`s 1 s when it makes no connection (`net_node.inl:2063`) and dials serially | slice 3. A call can run for many seconds. The blocking pool has to allow that |
-| Gray-peer probe | `gray_peerlist_housekeeping`, gated at 60 s (`net_node.h:723`). Dials one random gray peer to promote or evict | slice 1. Under the earned-trust door, promotion already happens on ordinary outbound sessions. Whether a dedicated probe remains is slice 1's call. A short-lived connection every minute is a pattern an observer can see |
+| Gray refill | `gray_peerlist_housekeeping`, gated at 60 s (`net_node.h:723`). That timer both triggered promotion and capped it at about one probe a minute | **replaced by an event (2026-09-25).** White below its diversity target, noticed when the list is next used. Slice 1 owns the target and the event. No timer |
+| Promotion pace | the same 60 s gate, secretly | slice 3. A bounded derived rate, jittered. This is the timer that remains |
 | Peerlist store | `store_config`, gated at 30 min (`net_node.h:722`) | slice 1 |
 | Incoming-connection check | `check_incoming_connections`, gated at 1 h (`net_node.h:724`) | slice 3 |
 | Tor process death | `check_ephemeral_tor_liveness`, gated at 60 s (`net_node.h:725`, body at `net_node.inl:2229`) | not a timer. The Tor-control actor owns the child and can report its exit |

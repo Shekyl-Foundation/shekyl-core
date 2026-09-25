@@ -1,7 +1,8 @@
 # P2P-3 slice 1 — the peerlist
 
-**Status:** **REVISED 2026-09-25 (connector partition).** Lists are partitioned
-by connector, derived from the address type. *Records-was REVISED 2026-09-23
+**Status:** **REVISED 2026-09-25 (connector partition; white target is diversity).** Lists are partitioned
+by connector, derived from the address type. Gray is drawn when white falls
+below that target, not on a fixed minute. *Records-was REVISED 2026-09-23
 (steering).* The peerlist moves into Rust. The C++ is a
 quarry: evidence for the invariant, and a list of behaviors the Rust model
 drops. *Records-was: the C++ already holds the contract at eight sites, every
@@ -83,6 +84,28 @@ for `EXPIRATION_PERIOD` (24 hours) returns to gray. Additional contact is a
 confirmed handshake, or a later successful exchange, on a connection this node
 opened to that address. It moves the clock forward. Contact that arrived
 inbound does not. One failed redial does not demote; the clock does.
+
+**White's target is draw diversity (ruled 2026-09-25).** Outbound
+connections are drawn uniformly from white, so a small white list is a
+small set of hosts an attacker can dominate. The target is enough
+distinct candidates that no attacker-held fraction dominates the draws.
+Slices 1 and 3 derive it. It is not "twice the out-degree", and it is
+not today's 1,000 cap. Headroom means refill starts before white is
+short of that target, so a collapse is not the moment the node first
+probes stale gray entries. The threshold is set against the diversity
+target. No number is written here.
+
+**The refill trigger is an event.** When white falls below the target,
+this slice says so. It does not dial. The pace of those promotion dials
+is slice 3's: a bounded rate, derived, with jittered spacing. The
+inherited 60-second housekeeping timer did both jobs and is not kept.
+White falling below target is noticed when the list is next used,
+including the 24-hour demotion, which is evaluated then.
+
+White shrinks by that demotion, by capacity eviction, and by removal
+for misbehaviour. Dandelion++ does not remove white entries. It chooses
+which existing outbound connections carry stem traffic, and it changes
+that choice each epoch.
 
 Capacity eviction is a draw, not a sort. Over the gray cap, drop a random
 gray address. Over the white cap, demote a random white address to gray. The
