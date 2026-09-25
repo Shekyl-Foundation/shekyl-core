@@ -78,7 +78,8 @@
 pub mod schema;
 
 pub use crate::codec::{
-    BlockRef, Origin, PoolRecord, Readiness, RecordShapeError, RelayPhase, Responsibility,
+    ArrivedPhase, BlockRef, Origin, OriginatedPhase, PoolRecord, Readiness, RelayState,
+    Responsibility,
 };
 pub use schema::PoolTxBytes;
 
@@ -266,19 +267,8 @@ impl PoolStore {
         // Refused and kept (`SPL-Q8`); the chain store's `verify_sealed_tables`
         // posture. Without this, such a file opens as `Opened` and fails at
         // the first op as a bare engine error (Copilot, PR #851).
-        for open in [
-            |t: &ReadTransaction| t.open_table(POOL_META).map(drop),
-            |t: &ReadTransaction| t.open_table(POOL_BLOB).map(drop),
-        ] {
-            match open(&txn) {
-                Ok(()) => {}
-                Err(
-                    redb::TableError::TableDoesNotExist(_)
-                    | redb::TableError::TableTypeMismatch { .. },
-                ) => return Err(StoreCannot::PoolFileForeign.into()),
-                Err(e) => return Err(EngineError::Table(e).into()),
-            }
-        }
+        require_sealed_table(&txn, POOL_META)?;
+        require_sealed_table(&txn, POOL_BLOB)?;
         Ok(Header::Current)
     }
 
@@ -313,6 +303,25 @@ impl PoolStore {
     pub fn begin_read(&self) -> Result<PoolSnapshot, StoreError> {
         let txn = self.db.begin_read().map_err(EngineError::BeginRead)?;
         Ok(PoolSnapshot { txn })
+    }
+}
+
+/// A current-version file's data table must open under the type the seal
+/// wrote. Missing or re-typed is [`StoreCannot::PoolFileForeign`].
+fn require_sealed_table<K, V>(
+    txn: &ReadTransaction,
+    definition: redb::TableDefinition<'_, K, V>,
+) -> Result<(), StoreError>
+where
+    K: redb::Key + 'static,
+    V: redb::Value + 'static,
+{
+    match txn.open_table(definition) {
+        Ok(_) => Ok(()),
+        Err(
+            redb::TableError::TableDoesNotExist(_) | redb::TableError::TableTypeMismatch { .. },
+        ) => Err(StoreCannot::PoolFileForeign.into()),
+        Err(e) => Err(EngineError::Table(e).into()),
     }
 }
 
@@ -351,10 +360,10 @@ impl PoolBatch<'_> {
     ///
     /// [`PoolCannot::AlreadyHeld`] if the pool holds `txid` (the C++
     /// `MDB_KEYEXIST` throw, typed and non-fatal — the pool upserts by
-    /// removing first); [`PoolCannot::EmptyBlob`] if `blob` is empty; a
-    /// record-shape refusal ([`PoolBatch::update`]'s list) if `record`
-    /// breaks a cross-field rule; [`StoreInvariant::PoolEntryUnpaired`]
-    /// (SI-16) if `txid` has a row in one table and not the other.
+    /// removing first); [`PoolCannot::EmptyBlob`] if `blob` is empty;
+    /// [`PoolCannot::NullFcmpCache`] if the record's verification cache is
+    /// the null hash; [`StoreInvariant::PoolEntryUnpaired`] (SI-16) if
+    /// `txid` has a row in one table and not the other.
     pub fn insert(
         &mut self,
         txid: TxHash,
@@ -362,7 +371,7 @@ impl PoolBatch<'_> {
         blob: &[u8],
     ) -> Result<(), StoreError> {
         PoolTxBytes::well_formed(blob).map_err(|_| PoolCannot::EmptyBlob)?;
-        check_shape(record)?;
+        refuse_null_cache(record)?;
         let key = txid.to_bytes();
         let mut meta = self
             .txn()
@@ -374,10 +383,10 @@ impl PoolBatch<'_> {
             .map_err(EngineError::Table)?;
         let has_meta = meta.get(key).map_err(EngineError::Storage)?.is_some();
         let has_blob = blobs.get(key).map_err(EngineError::Storage)?.is_some();
-        match (has_meta, has_blob) {
-            (true, true) => return Err(PoolCannot::AlreadyHeld.into()),
-            (false, false) => {}
-            _ => return Err(StoreInvariant::PoolEntryUnpaired { txid }.into()),
+        match pair(has_meta, has_blob) {
+            Pair::Held => return Err(PoolCannot::AlreadyHeld.into()),
+            Pair::Absent => {}
+            Pair::Unpaired => return Err(StoreInvariant::PoolEntryUnpaired { txid }.into()),
         }
         meta.insert(key, record.encoded().as_encoded())
             .map_err(EngineError::Storage)?;
@@ -393,14 +402,14 @@ impl PoolBatch<'_> {
     /// # Errors
     ///
     /// [`PoolCannot::NotHeld`] if the pool does not hold `txid`;
-    /// [`PoolCannot::OriginChanged`] if `record.origin` differs from the
-    /// stored one (§92.4, `SPL-Q9`);
-    /// [`PoolCannot::ResponsibilityWithoutOrigin`] or
-    /// [`PoolCannot::PhaseWithoutOrigin`] if the record breaks a
-    /// cross-field rule; [`StoreInvariant::CellCorrupt`] if the stored row
-    /// does not decode.
+    /// [`PoolCannot::OriginChanged`] if [`PoolRecord::origin`] differs from
+    /// the stored one (§92.4, `SPL-Q9`); [`PoolCannot::PhaseNotForward`] if
+    /// the phase is neither the stored phase nor a forward step of
+    /// [`RelayState::upgrade`](crate::codec::RelayState::upgrade);
+    /// [`PoolCannot::NullFcmpCache`] if the verification cache is the null
+    /// hash; [`StoreInvariant::CellCorrupt`] if the stored row does not decode.
     pub fn update(&mut self, txid: &TxHash, record: &PoolRecord) -> Result<(), StoreError> {
-        check_shape(record)?;
+        refuse_null_cache(record)?;
         let key = txid.to_bytes();
         let mut meta = self
             .txn()
@@ -417,8 +426,11 @@ impl PoolBatch<'_> {
                 })
             })?
         };
-        if stored.origin != record.origin {
+        if stored.origin() != record.origin() {
             return Err(PoolCannot::OriginChanged.into());
+        }
+        if !stored.relay_state.accepts(record.relay_state) {
+            return Err(PoolCannot::PhaseNotForward.into());
         }
         meta.insert(key, record.encoded().as_encoded())
             .map_err(EngineError::Storage)?;
@@ -464,19 +476,27 @@ impl PoolBatch<'_> {
     }
 }
 
-/// The cross-field rules, at the write (the codec re-applies them at the
-/// read). A record that passed [`PoolRecord::checked`] passes; the fields
-/// are public, so a mutated one is checked again here.
-fn check_shape(record: &PoolRecord) -> Result<(), StoreError> {
-    match record.validate() {
-        Ok(()) => Ok(()),
-        Err(
-            RecordShapeError::ResponsibilityWithoutOrigin
-            | RecordShapeError::OriginWithoutResponsibility,
-        ) => Err(PoolCannot::ResponsibilityWithoutOrigin.into()),
-        Err(RecordShapeError::HeldButArrived | RecordShapeError::StemButOriginated) => {
-            Err(PoolCannot::PhaseWithoutOrigin.into())
-        }
+/// Whether the two rows of one key are both present, both absent, or split.
+#[derive(Clone, Copy)]
+enum Pair {
+    Absent,
+    Held,
+    Unpaired,
+}
+
+fn pair(has_meta: bool, has_blob: bool) -> Pair {
+    match (has_meta, has_blob) {
+        (false, false) => Pair::Absent,
+        (true, true) => Pair::Held,
+        (true, false) | (false, true) => Pair::Unpaired,
+    }
+}
+
+fn refuse_null_cache(record: &PoolRecord) -> Result<(), StoreError> {
+    if record.has_null_fcmp_cache() {
+        Err(PoolCannot::NullFcmpCache.into())
+    } else {
+        Ok(())
     }
 }
 
@@ -508,7 +528,8 @@ impl PoolEntry {
     ///
     /// [`StoreInvariant::PoolEntryUnpaired`] (SI-16) if the meta row this
     /// entry came from has no blob row — the C++ `DB_ERROR("Failed to find
-    /// txpool tx blob to match metadata")`, named.
+    /// txpool tx blob to match metadata")`, named. [`PoolSnapshot::blob`]
+    /// reports the same fault, including a blob row with no meta row.
     pub fn blob(&self, snapshot: &PoolSnapshot) -> Result<Vec<u8>, StoreError> {
         snapshot
             .blob(&self.txid)?
@@ -552,19 +573,31 @@ impl PoolSnapshot {
         })
     }
 
-    /// **P5.** The entry's transaction bytes, unparsed, or `None` if the
-    /// pool does not hold it. No category parameter: the filter is
+    /// **P5.** The entry's transaction bytes, unparsed, or `None` if neither
+    /// row holds `txid`. No category parameter: the filter is
     /// `record(h)?.filter(|r| r.matches(cat))` at the caller (SPL-3).
     ///
     /// # Errors
     ///
-    /// Engine faults only.
+    /// [`StoreInvariant::PoolEntryUnpaired`] (SI-16) if exactly one of the
+    /// two rows holds `txid`. Engine faults otherwise.
     pub fn blob(&self, txid: &TxHash) -> Result<Option<Vec<u8>>, StoreError> {
-        let table = self.blobs()?;
-        Ok(table
-            .get(txid.to_bytes())
+        let key = txid.to_bytes();
+        let meta_held = self
+            .meta()?
+            .get(key)
             .map_err(EngineError::Storage)?
-            .map(|g| g.value().bytes().to_vec()))
+            .is_some();
+        let bytes = self
+            .blobs()?
+            .get(key)
+            .map_err(EngineError::Storage)?
+            .map(|guard| guard.value().bytes().to_vec());
+        match pair(meta_held, bytes.is_some()) {
+            Pair::Absent => Ok(None),
+            Pair::Held => Ok(bytes),
+            Pair::Unpaired => Err(StoreInvariant::PoolEntryUnpaired { txid: *txid }.into()),
+        }
     }
 
     /// **P6.** How many entries the pool holds. A per-class count is the

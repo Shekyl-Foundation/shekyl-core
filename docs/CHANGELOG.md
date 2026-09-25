@@ -348,13 +348,17 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   remove (idempotent), record, blob, len, entries — none of which
   classifies, orders or parses; those stay the pool's. The persisted pool
   record (`txpool_tx_meta_t`, 192 packed bytes) is re-specified along
-  `DAEMON_RELAY_PRIVACY.md` §92.4's seams: **origin** (originated here, or
-  arrived over a zone — permanent), **relay phase** (held, stem, fluffed,
-  or in a block — each carrying the one clock that phase means, so the
-  field that meant "never relayed", "embargo deadline" and "last relayed"
-  depending on a bit elsewhere is gone), and **re-broadcast
-  responsibility** (originated entries only; an arrived entry claiming one
-  is refused at decode and at write). **Security-relevant:** the C++ relay
+  `DAEMON_RELAY_PRIVACY.md` §92.4's seams as one `RelayState`: an originated
+  entry is held or in a block (and carries re-broadcast responsibility);
+  an arrival is in stem, fluffed, or in a block, over the zone it arrived
+  on. Those are the only combinations the type can hold, so an originated
+  entry cannot be stored as fluff and an arrival cannot be stored as held.
+  An update may keep the phase (a new clock, a disarmed responsibility) or
+  take a forward step — originated `held → block`, arrived
+  `stem → fluff → block` — and it refuses a changed origin. The null
+  verification hash is not a cache hit. A blob read reports a row present
+  in only one of the two tables as the same pairing fault insert reports.
+  **Security-relevant:** the C++ relay
   decoder resolved an unknown or zeroed bit state to `fluff` — the
   broadcast-to-everyone phase — so a corrupt pool row would be relayed to
   anyone who asked while it should still have been stemming; the Rust

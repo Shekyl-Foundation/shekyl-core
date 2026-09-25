@@ -10,7 +10,7 @@
 
 use redb::{Durability, TableDefinition};
 use shekyl_store_codec::{Blob, Raw};
-use shekyl_types::{NetZone, TxHash, UnixSeconds};
+use shekyl_types::{FcmpVerificationHash, NetZone, TxHash, UnixSeconds};
 use shekyl_units::AtomicUnits;
 
 use super::schema::{POOL_BLOB, POOL_HEADER, POOL_META};
@@ -39,29 +39,37 @@ fn arrived_fluff() -> PoolRecord {
         weight: 1,
         fee: AtomicUnits::from_raw(1),
         receive_time: UnixSeconds::from_raw(1),
-        origin: Origin::Arrived {
+        relay_state: RelayState::Arrived {
             zone: NetZone::Public,
+            phase: ArrivedPhase::Fluff { last_relayed: None },
         },
-        phase: RelayPhase::Fluff { last_relayed: None },
-        responsibility: None,
         relayed: false,
         double_spend_seen: false,
         readiness: Readiness::default(),
         fcmp_cache: None,
     }
-    .checked()
-    .unwrap()
 }
 
 fn originated_held() -> PoolRecord {
     PoolRecord {
-        origin: Origin::Originated,
-        phase: RelayPhase::Held { last_attempt: None },
-        responsibility: Some(Responsibility::Armed),
+        relay_state: RelayState::Originated {
+            phase: OriginatedPhase::Held { last_attempt: None },
+            responsibility: Responsibility::Armed,
+        },
         ..arrived_fluff()
     }
-    .checked()
-    .unwrap()
+}
+
+fn arrived_stem() -> PoolRecord {
+    PoolRecord {
+        relay_state: RelayState::Arrived {
+            zone: NetZone::Public,
+            phase: ArrivedPhase::Stem {
+                next_attempt: UnixSeconds::from_raw(50),
+            },
+        },
+        ..arrived_fluff()
+    }
 }
 
 fn cannot(err: &StoreError) -> Option<PoolCannot> {
@@ -134,8 +142,11 @@ fn insert_update_remove_and_their_refusals() {
     // P2 changes the record, keeps the blob and the origin.
     let relayed = PoolRecord {
         relayed: true,
-        phase: RelayPhase::Fluff {
-            last_relayed: Some(UnixSeconds::from_raw(9)),
+        relay_state: RelayState::Arrived {
+            zone: NetZone::Public,
+            phase: ArrivedPhase::Fluff {
+                last_relayed: Some(UnixSeconds::from_raw(9)),
+            },
         },
         ..rec
     };
@@ -158,40 +169,72 @@ fn insert_update_remove_and_their_refusals() {
     drop(std::fs::remove_file(&path));
 }
 
-/// The cross-field rules at the write, not only at construction and decode
-/// (`SPL-Q9`): the fields are public, so a record mutated past `checked()`
-/// is refused where it would land.
+/// The walk is enforced at the write. Same phase may change its clock; a
+/// backwards step is [`PoolCannot::PhaseNotForward`]; a forward step lands.
+/// An originated entry cannot be constructed as fluff — that phase is not
+/// in [`OriginatedPhase`].
 #[test]
-fn arrived_plus_armed_and_held_plus_arrived_are_refused_at_the_write() {
-    let path = tmp("shape");
+fn the_walk_is_enforced_at_the_write_and_a_null_cache_is_refused() {
+    let path = tmp("walk");
     let (store, _) = PoolStore::create(&path).unwrap();
     let h = txid(3);
-    let mut bad = arrived_fluff();
-    bad.responsibility = Some(Responsibility::Armed);
-    let err = store
-        .write(|b| b.insert(h, &bad, b"x"))
-        .expect_err("Arrived + Armed at insert");
-    assert_eq!(cannot(&err), Some(PoolCannot::ResponsibilityWithoutOrigin));
-
     store
         .write(|b| b.insert(h, &arrived_fluff(), b"x"))
         .unwrap();
-    let err = store
-        .write(|b| b.update(&h, &bad))
-        .expect_err("Arrived + Armed at update");
-    assert_eq!(cannot(&err), Some(PoolCannot::ResponsibilityWithoutOrigin));
 
-    let mut held_arrived = arrived_fluff();
-    held_arrived.phase = RelayPhase::Held { last_attempt: None };
     let err = store
-        .write(|b| b.update(&h, &held_arrived))
-        .expect_err("Held on an Arrived entry");
-    assert_eq!(cannot(&err), Some(PoolCannot::PhaseWithoutOrigin));
-    // Nothing above landed.
+        .write(|b| b.update(&h, &arrived_stem()))
+        .expect_err("fluff does not walk back to stem");
+    assert_eq!(cannot(&err), Some(PoolCannot::PhaseNotForward));
     assert_eq!(
         store.begin_read().unwrap().record(&h).unwrap(),
         Some(arrived_fluff())
     );
+
+    let stemmed = txid(4);
+    store
+        .write(|b| b.insert(stemmed, &arrived_stem(), b"s"))
+        .unwrap();
+    let fluffed = PoolRecord {
+        relay_state: RelayState::Arrived {
+            zone: NetZone::Public,
+            phase: ArrivedPhase::Fluff {
+                last_relayed: Some(UnixSeconds::from_raw(9)),
+            },
+        },
+        relayed: true,
+        ..arrived_stem()
+    };
+    store.write(|b| b.update(&stemmed, &fluffed)).unwrap();
+    assert_eq!(
+        store.begin_read().unwrap().record(&stemmed).unwrap(),
+        Some(fluffed)
+    );
+
+    let local = txid(5);
+    store
+        .write(|b| b.insert(local, &originated_held(), b"l"))
+        .unwrap();
+    let yielded = PoolRecord {
+        relay_state: RelayState::Originated {
+            phase: OriginatedPhase::Block {
+                last_relayed: Some(UnixSeconds::from_raw(11)),
+            },
+            responsibility: Responsibility::Disarmed,
+        },
+        ..originated_held()
+    };
+    store.write(|b| b.update(&local, &yielded)).unwrap();
+    let stored = store.begin_read().unwrap().record(&local).unwrap().unwrap();
+    assert_eq!(stored.origin(), Origin::Originated);
+    assert_eq!(stored, yielded);
+
+    let mut null_cache = arrived_fluff();
+    null_cache.fcmp_cache = Some(FcmpVerificationHash::from_bytes([0; 32]));
+    let err = store
+        .write(|b| b.insert(txid(6), &null_cache, b"n"))
+        .expect_err("null verification hash");
+    assert_eq!(cannot(&err), Some(PoolCannot::NullFcmpCache));
     drop(std::fs::remove_file(&path));
 }
 
@@ -280,6 +323,21 @@ fn an_unpaired_entry_is_si16() {
         }
         other => panic!("expected SI-16, got {other:?}"),
     }
+    // The blob read itself is the other direction: a blob with no meta row
+    // is SI-16, not `Some` bytes for an entry `len` does not count.
+    match snap.blob(&txid(3)) {
+        Err(StoreError::InvariantViolated(StoreInvariant::PoolEntryUnpaired { txid: t })) => {
+            assert_eq!(t, txid(3));
+        }
+        other => panic!("expected SI-16 on the orphan blob, got {other:?}"),
+    }
+    match snap.blob(&txid(2)) {
+        Err(StoreError::InvariantViolated(StoreInvariant::PoolEntryUnpaired { txid: t })) => {
+            assert_eq!(t, txid(2));
+        }
+        other => panic!("expected SI-16 on the meta-only row, got {other:?}"),
+    }
+    assert_eq!(snap.record(&txid(3)).unwrap(), None);
     drop(snap);
     // Inserting over the half-entry names it too.
     let err = store
@@ -307,9 +365,9 @@ fn an_undecodable_meta_row_is_si7() {
         let txn = store.db.begin_write().unwrap();
         {
             let mut meta = txn.open_table(POOL_META).unwrap();
-            // A relay-phase tag of 0xff: refused, never `Fluff` (SPL-14).
+            // A relay-state tag of 0xff: refused, never `Fluff` (SPL-14).
             let mut bytes = arrived_fluff().encode();
-            bytes[26] = 0xff;
+            bytes[24] = 0xff;
             meta.insert(
                 txid(4).to_bytes(),
                 <shekyl_store_codec::Coded<PoolRecord> as redb::Value>::from_bytes(&bytes),

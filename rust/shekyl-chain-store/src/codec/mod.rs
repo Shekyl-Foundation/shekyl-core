@@ -90,7 +90,8 @@ pub use chain::{
 pub use curve::{CurveTreeState, LayerHash, LeafCount, TreeDepth};
 pub use evidence::{CoverageGaps, PassedThroughFacts, FACT_FIELDS};
 pub use pool::{
-    BlockRef, Origin, PoolRecord, Readiness, RecordShapeError, RelayPhase, Responsibility,
+    ArrivedPhase, BlockRef, Origin, OriginatedPhase, PoolRecord, Readiness, RelayState,
+    Responsibility,
 };
 #[cfg(test)]
 pub(crate) use property::ProbeCell;

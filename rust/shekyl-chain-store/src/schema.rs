@@ -221,20 +221,14 @@ pub(crate) fn undo_target(ordinal: TableOrdinal) -> Option<&'static dyn UndoTarg
     UNDO_TARGETS.get(usize::try_from(ordinal.0).ok()?).copied()
 }
 
-/// Tables this crate defines that have **no** X-macro twin, each with the
-/// reason it exists. Read by `check_redb_schema_bijection.py` (a definition
-/// is either mirrored or named here — never silently extra) and by
-/// `check_redb_schema_key_types.py` (no LMDB flags to derive a key type
-/// from). Out of the digest domain by construction: the accumulator's
-/// class table is the LMDB inventory, and a table absent from it with a
-/// reason here is a named exclusion, not an omission.
 /// X-macro tables whose redb twin is defined in **another file of this
 /// crate**, as `(lmdb_name, twin_name, reason)`. Read by
 /// `check_redb_schema_bijection.py`: every entry must be in the X-macro,
-/// must **not** have a definition in this file, and its twin must be a
-/// definition in `crate::pool::schema`; and by `check_redb_schema_key_types.py`,
-/// which has no definition here to constrain and is told so. The class table
-/// (`accumulator/class.rs`) is the LMDB inventory and keeps a row for each.
+/// must **not** have a definition in this file, its twin must be a
+/// definition in `crate::pool::schema`, and two entries must not name the
+/// same twin; `check_redb_schema_key_types.py` has no definition here to
+/// constrain and is told so. The class table (`accumulator/class.rs`) is
+/// the LMDB inventory and keeps a row for each.
 pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
     (
         "txpool_meta",
@@ -251,6 +245,13 @@ pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Tables this crate defines that have **no** X-macro twin, each with the
+/// reason it exists. Read by `check_redb_schema_bijection.py` (a definition
+/// is either mirrored or named here — never silently extra) and by
+/// `check_redb_schema_key_types.py` (no LMDB flags to derive a key type
+/// from). Out of the digest domain by construction: the accumulator's
+/// class table is the LMDB inventory, and a table absent from it with a
+/// reason here is a named exclusion, not an omission.
 pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
     (
         "undo_log",

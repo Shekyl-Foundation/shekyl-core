@@ -60,8 +60,8 @@ pub enum RelayMethod {
     None = 0,
     /// Originated by this node; trying to send over i2p/tor. The class that
     /// routes the txpool backstop to fail-closed rather than `public_req`.
-    /// At the seam only — the record spells it `Origin::Originated` +
-    /// `RelayPhase::Held` (§92.4).
+    /// At the seam only — the record spells it
+    /// `RelayState::Originated { phase: Held, .. }` (§92.4).
     Local = 1,
     /// Received/sent using Dandelion++ stem.
     Stem = 2,

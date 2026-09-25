@@ -123,9 +123,11 @@ use super::{Canonical, CodecError};
 ///   `pool_header`), one layout number for the crate's two files
 ///   (`SPL-Q8` as built: the pool file seals this constant in its own
 ///   header cell and is **recreated**, not refused, at another value).
-///   `pool_record` is the persisted `txpool_tx_meta_t` re-specified along
-///   §92.4's seams (`Origin` / `RelayPhase` / `Responsibility`); two
-///   fixtures are born (`pool_record`, `pool_tables`). No digest family
+///   `pool_record` is the persisted `txpool_tx_meta_t` re-specified as
+///   `RelayState` — the phase enum is chosen by provenance, so an
+///   originated entry is `Held` or `Block` and an arrival is `Stem`,
+///   `Fluff` or `Block`; two fixtures are born (`pool_record`,
+///   `pool_tables`). No digest family
 ///   moves: the pool was never in one (§11.2).
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(12);
 

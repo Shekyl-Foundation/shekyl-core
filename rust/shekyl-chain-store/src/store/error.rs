@@ -387,17 +387,19 @@ pub enum PoolCannot {
     NotHeld,
     /// `insert` with no transaction bytes: a pool entry is a transaction.
     EmptyBlob,
-    /// `update` with a record whose [`Origin`](crate::pool::Origin) differs
+    /// `update` with a record whose [`Origin`](crate::codec::Origin) differs
     /// from the stored one. Provenance is permanent (§92.4); the refusal is
-    /// what makes it enforced rather than asserted (`SPL-Q9`).
+    /// what makes it enforced rather than asserted (`SPL-Q9`). Phase and
+    /// responsibility are not part of that comparison.
     OriginChanged,
-    /// A record that carries a [`Responsibility`](crate::pool::Responsibility)
-    /// on an `Arrived` entry, or none on an `Originated` one — the
-    /// cross-field rule the codec also refuses at decode (`SPL-Q9`).
-    ResponsibilityWithoutOrigin,
-    /// A record whose phase is illegal for its origin — `Held` on an
-    /// `Arrived` entry, or `Stem` on an `Originated` one (the pin, §92.4).
-    PhaseWithoutOrigin,
+    /// `update` whose phase is neither the stored phase nor a forward step
+    /// of [`RelayState::upgrade`](crate::codec::RelayState::upgrade). An
+    /// originated entry walks `Held → Block` only; an arrival walks
+    /// `Stem → Fluff → Block`.
+    PhaseNotForward,
+    /// `fcmp_cache` is the all-zero null hash. Absence is `None`; the null
+    /// hash is not a verification (SPL-10).
+    NullFcmpCache,
 }
 
 impl core::fmt::Display for StoreCannot {
@@ -505,12 +507,10 @@ impl core::fmt::Display for PoolCannot {
             Self::OriginChanged => {
                 "update that changes an entry's origin; provenance is permanent (§92.4)"
             }
-            Self::ResponsibilityWithoutOrigin => {
-                "a responsibility on an arrived entry, or none on an originated one"
+            Self::PhaseNotForward => {
+                "update whose phase is not the stored phase and not a forward step"
             }
-            Self::PhaseWithoutOrigin => {
-                "a Held phase on an arrived entry, or a Stem phase on an originated one"
-            }
+            Self::NullFcmpCache => "fcmp verification cache is the null hash; absence is None",
         })
     }
 }

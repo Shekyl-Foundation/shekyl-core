@@ -114,11 +114,12 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, BlockInfo, BlockRef, BondRecord, Canonical, Coded, CoverageGaps, CurveTreeState,
-    FirstPayingHeight, HeldShard, Holdings, LayerHash, LeafCount, Origin, OutKey, OutTx,
-    PassedThroughFacts, PoolRecord, ProbeCell, PropertyCell, RMarket, Readiness, RelayPhase,
-    Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SigmaWorkMilli,
-    TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, ArrivedPhase, BlockInfo, BlockRef, BondRecord, Canonical, Coded, CoverageGaps,
+    CurveTreeState, FirstPayingHeight, HeldShard, Holdings, LayerHash, LeafCount, OriginatedPhase,
+    OutKey, OutTx, PassedThroughFacts, PoolRecord, ProbeCell, PropertyCell, RMarket, Readiness,
+    RelayState, Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
+    SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS,
+    SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -520,13 +521,12 @@ impl Fixtures for PoolRecord {
             weight: 1_500,
             fee: AtomicUnits::from_raw(30_000),
             receive_time: UnixSeconds::from_raw(1_700_000_000),
-            origin: Origin::Arrived {
+            relay_state: RelayState::Arrived {
                 zone: NetZone::Public,
+                phase: ArrivedPhase::Stem {
+                    next_attempt: UnixSeconds::from_raw(1_700_000_190),
+                },
             },
-            phase: RelayPhase::Stem {
-                next_attempt: UnixSeconds::from_raw(1_700_000_190),
-            },
-            responsibility: None,
             relayed: false,
             double_spend_seen: false,
             readiness: Readiness::default(),
@@ -542,9 +542,11 @@ impl Fixtures for PoolRecord {
             (
                 "arrived_fluff_fully_populated",
                 PoolRecord {
-                    origin: Origin::Arrived { zone: NetZone::Tor },
-                    phase: RelayPhase::Fluff {
-                        last_relayed: Some(UnixSeconds::from_raw(1_700_000_300)),
+                    relay_state: RelayState::Arrived {
+                        zone: NetZone::Tor,
+                        phase: ArrivedPhase::Fluff {
+                            last_relayed: Some(UnixSeconds::from_raw(1_700_000_300)),
+                        },
                     },
                     relayed: true,
                     double_spend_seen: true,
@@ -568,11 +570,12 @@ impl Fixtures for PoolRecord {
             (
                 "originated_held_armed",
                 PoolRecord {
-                    origin: Origin::Originated,
-                    phase: RelayPhase::Held {
-                        last_attempt: Some(UnixSeconds::from_raw(1_700_000_000)),
+                    relay_state: RelayState::Originated {
+                        phase: OriginatedPhase::Held {
+                            last_attempt: Some(UnixSeconds::from_raw(1_700_000_000)),
+                        },
+                        responsibility: Responsibility::Armed,
                     },
-                    responsibility: Some(Responsibility::Armed),
                     ..arrived
                 },
             ),
@@ -581,9 +584,10 @@ impl Fixtures for PoolRecord {
             (
                 "originated_block_disarmed",
                 PoolRecord {
-                    origin: Origin::Originated,
-                    phase: RelayPhase::Block { last_relayed: None },
-                    responsibility: Some(Responsibility::Disarmed),
+                    relay_state: RelayState::Originated {
+                        phase: OriginatedPhase::Block { last_relayed: None },
+                        responsibility: Responsibility::Disarmed,
+                    },
                     ..arrived
                 },
             ),
