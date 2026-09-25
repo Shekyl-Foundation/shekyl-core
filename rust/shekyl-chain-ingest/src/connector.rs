@@ -419,19 +419,20 @@ impl<F: FactsFor + Send + Sync + 'static> Message<Digest> for Connector<F> {
 impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F> {
     type Reply = Result<ChainFacts, RunFault>;
 
-    /// Read inside one write closure: the producer's operands come off the
-    /// same `BatchView` the validator reads, so `tx_volume_window` and
+    /// Read inside one write closure — every operand, `total_burned`
+    /// included: the producer's facts come off the same `BatchView` the
+    /// validator reads, under one transaction, so `tx_volume_window` and
     /// `mtp_median_at` are the rules' own definitions over the rules' own
-    /// view. Nothing is written; the closure is the view's door. A corrupt
-    /// prefix sum is the store's SI-8 and arms the halt exactly as it would
-    /// under `Apply`.
+    /// view and the burn total is the one that tip's chain folded. Nothing
+    /// is written; the closure is the view's door. A corrupt prefix sum is
+    /// the store's SI-8 and arms the halt exactly as it would under `Apply`.
     async fn handle(
         &mut self,
         _: TemplateFacts,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let total_burned = self.writer.read()?.total_burned()?;
         self.writer.write(|batch| {
+            let total_burned = batch.total_burned()?;
             let view = batch.chain_view();
             let tip = view.tip()?;
             let connecting = tip.as_ref().map_or(BlockHeight::ZERO, |t| {

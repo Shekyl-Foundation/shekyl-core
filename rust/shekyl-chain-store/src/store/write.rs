@@ -69,10 +69,11 @@ use core::marker::PhantomData;
 use redb::{Key, ReadableTable, TableDefinition, TableHandle, WriteTransaction};
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
-use crate::codec::{post_image, Canonical, ChainState, PropertyCell, UndoEntry};
+use crate::codec::{post_image, Canonical, ChainState, PropertyCell, TotalBurnedCell, UndoEntry};
 use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 
 use shekyl_chain_rules::Corrupt;
+use shekyl_units::AtomicUnits;
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
@@ -428,6 +429,25 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             .open_table(PROPERTIES)
             .map_err(EngineError::Table)?;
         header::get::<C>(&table).map_err(|e| self.poison.note(e))
+    }
+
+    /// The batch's view of [`ReadSnapshot::total_burned`]: `Σ fees_burned`
+    /// over the connected chain as this write transaction sees it, `ZERO`
+    /// when nothing has been connected. A producer assembling
+    /// `ChainFacts` reads it here, under the same transaction as the tip
+    /// and the windows it pairs it with, rather than through a snapshot
+    /// taken before the batch opened (#852 review).
+    ///
+    /// [`ReadSnapshot::total_burned`]: super::read::ReadSnapshot::total_burned
+    ///
+    /// # Errors
+    ///
+    /// SI-7 if the cell does not decode (and the batch is poisoned); engine
+    /// errors pass through.
+    pub fn total_burned(&self) -> Result<AtomicUnits, StoreError> {
+        Ok(self
+            .get_property::<TotalBurnedCell>()?
+            .unwrap_or(AtomicUnits::ZERO))
     }
 
     /// Upsert a typed **chain-state** `properties` cell.
