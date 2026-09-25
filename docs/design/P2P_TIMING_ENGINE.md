@@ -39,12 +39,13 @@ engine runs today's behaviour so a differential harness can match it.
 
 | Job | Today | Owner |
 | --- | --- | --- |
-| Relay wake | `steady_timer wake` in `src/cryptonote_protocol/levin_notify.cpp:495`, armed at `:895` from `Driver::next_wake` | relay `Driver`. This engine only sleeps until that wake |
+| Relay wake | `steady_timer wake` in `src/cryptonote_protocol/levin_notify.cpp:495`, armed at `:895` from `Driver::next_wake` (`shekyl-relay` `driver/mod.rs:149-181`) | relay `Driver`. This engine only sleeps until that wake |
 | Chain-state backstop | `peer_sync_idle_maker` sends command 1002 every 60 s (`P2P_DEFAULT_HANDSHAKE_INTERVAL`, `cryptonote_config.h:185`). Both sides exchange height and top block (`process_payload_sync_data`) | sync lane. The period is how long a node can be stale after a missed announcement, against the block time. New blocks are already pushed when found |
 | Peerlist gossip | the same 1002 response carries up to 250 addresses (`p2p_protocol_defs.h:215-239`) into the gray list | peerlist, slices 1 and 3. Also a privacy surface: each exchange shows a peer part of this node's view of the network |
 | Connection liveness | the same 1002 is a request that must be answered, and it keeps the session off the inherited idle timer | the transport layer, per connector (D9). Not a Levin command |
+| Per-connection timed sync | today it is the same 60 s maker as the three jobs above. PWD-B2 already ruled a per-connection draw, so sessions are not correlated by phase | the connection. One of the first owners to leave `idle_worker` |
 | Outbound fill | `connections_maker`, gated at 1 s (`net_node.h:721`). The fill loop `sleep_for`s 1 s when it makes no connection (`net_node.inl:2063`) and dials serially | slice 3. A call can run for many seconds. The blocking pool has to allow that |
-| Gray refill | `gray_peerlist_housekeeping`, gated at 60 s (`net_node.h:723`). That timer both triggered promotion and capped it at about one probe a minute | **replaced by an event (2026-09-25).** Slice 1 holds one deadline for the list, the earliest white expiry. When it fires, slice 1 re-counts and reports below target. Evaluating expiry at the next use still decides correctness. No timer per entry |
+| Gray refill | `gray_peerlist_housekeeping`, gated at 60 s (`net_node.h:723`). That timer both triggered promotion and capped it at about one probe a minute | **replaced by an event (2026-09-25).** If white is already below target, including empty, the count is the event and there is no expiry to wait for. Otherwise slice 1 holds one deadline, the earliest white expiry, and re-counts when it fires. Evaluating expiry at the next use still decides correctness. No timer per entry |
 | Promotion pace | the same 60 s gate, secretly | slice 3. A bounded derived rate, jittered. This is the timer that remains |
 | Peerlist store | `store_config`, gated at 30 min (`net_node.h:722`) | slice 1 |
 | Incoming-connection check | `check_incoming_connections`, gated at 1 h (`net_node.h:724`) | slice 3 |
@@ -57,7 +58,9 @@ engine runs today's behaviour so a differential harness can match it.
 
 `idle_worker` (`net_node.inl:2217-2226`) is the 1-second poll over the
 six `node_server` gates. `on_idle` is the poll over the three
-cryptonote gates. They are not two schedules.
+cryptonote gates. They are not two schedules. Dial, handshake, gap,
+and idle deadlines are owners of this engine too. They are specified
+with the transport layer, not missing rows of this inventory.
 
 The inherited handshake interval is 60, comment spelled `//secondes`,
 with no derivation on either side of the fork. Three different jobs

@@ -92,18 +92,19 @@ short of that target, so a collapse is not the moment the node first
 probes stale gray entries. The threshold is set against the diversity
 target. No number is written here.
 
-**The refill trigger is one deadline for the list.** Slice 1 holds the
-earliest expiry among white's entries. When that deadline fires, slice
+**The refill trigger is the count, plus one deadline for quiet decline.**
+If white is already below the diversity target, including empty after
+boot or after eviction, slice 1 reports that immediately. There is no
+expiry to wait for. When white is at or above the target, slice 1 holds
+the earliest expiry among its entries. When that deadline fires, slice
 1 re-counts and reports below target if it is. That is one timer for
 the list, not one per entry. Evaluating expiry when the list is next
-used still decides whether an entry has demoted. The deadline only
-makes sure the decline is noticed before the next dial. In steady
-state every outbound slot is full and nothing draws from white, so
-"noticed on next use" would wait until a connection is already lost.
-Slice 1 does not dial. The pace of the promotion dials is slice 3's: a
-bounded rate, derived, with jittered spacing. The inherited 60-second
-housekeeping timer did both the trigger and the pace, and it is not
-kept.
+used still decides whether an entry has demoted. In steady state every
+outbound slot is full and nothing draws from white, so a demotion with
+no deadline would wait until a connection is already lost. Slice 1 does
+not dial. The pace of the promotion dials is slice 3's: a bounded rate,
+derived, with jittered spacing. The inherited 60-second housekeeping
+timer did both the trigger and the pace, and it is not kept.
 
 White shrinks by that demotion, by capacity eviction, and by removal
 for misbehaviour. Dandelion++ does not remove white entries. It chooses
