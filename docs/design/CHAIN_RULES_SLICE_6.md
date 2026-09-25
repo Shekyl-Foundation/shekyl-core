@@ -890,6 +890,50 @@ it is not a claim about the FCMP++ prover's scaling past eight — the
 prover refuses more, so the read past the cap is the slope, which the test
 asserts is a line within 5% so the read is honest.
 
+**The floor, run (skl-pi, Raspberry Pi 4 Model B, Cortex-A72 ×4,
+`rustc` 1.94 aarch64, release, 2026-09-24, 51 °C, same test at
+`d9ccd4c74`):**
+
+| inputs | tx bytes | verify | of which proof | auths | BP+ | prove |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 13 584 | 166.7 ms | 130.6 ms | 1.1 ms | 34.9 ms | 3.0 s |
+| 2 | 20 352 | 229.1 ms | 191.9 ms | 2.2 ms | 35.0 ms | 4.8 s |
+| 4 | 33 824 | 351.6 ms | 312.7 ms | 4.1 ms | 34.8 ms | 8.3 s |
+| 8 | 58 720 | 621.0 ms | 578.1 ms | 8.0 ms | 34.9 ms | 15.3 s |
+
+Bytes identical to the i9 (the wire is deterministic). **64.9 ms of
+verifier time per input** at the floor (63.9 ms the proof; 1.0 ms the
+hybrid auth), a fixed **34.9 ms** BP+, linearity held (the test's 5%
+assertion passed there too). The floor multiplier is **5.5×** on the
+per-input verifier cost and 13× on the BP+; prove time 15.3 s at eight
+inputs, the sender's. **The relay-budget value, at the floor:** ~0.62 s
+of verifier work per eight-input transaction that proves invalid; ~10.0 s
+per 153-input one. That is the number the round decides against.
+
+**What the floor decided and what it could not (review, 2026-09-24).** The
+Pi 4 changed the absolute milliseconds and not one ratio: linearity,
+positive per-transaction overhead, splitting-costs-more and the 19×
+against `MAX_TX_SIZE` are structural and held on the floor exactly as on
+the i9. The floor set one number — the *value* of the relay verifier
+budget (0.62 s at 8, 10 s at 153) — and a re-run returning five and a half
+times the milliseconds reopened nothing above.
+**The deletion, when the round ends there, is a widening:** the chain would
+accept nine-input transactions it now refuses. Pre-genesis that is free;
+after genesis it is a hard fork. The window for making it free closes at
+genesis. **And two constants part company at that moment**, both named so
+neither orphans: the consensus cap (`shekyl_wire::MAX_FCMP_INPUTS`, read
+by `rules/tx.rs::I4`; the C++ `FCMP_MAX_INPUTS_PER_TX` until E4 retires
+it) and the prover/verifier cap (`shekyl_fcmp::MAX_INPUTS`, refused at
+`proof.rs`'s prove and verify entry points). The second moves to whatever
+bound the round states, or a prover that refuses at eight becomes the cap
+by accident — a consensus rule enforced by a library constant nobody
+ratified. Three claims were tested here and two came back opposite to what
+the inherited constant implies: "bounds proof generation time" is the
+sender's 2.9 s; "bounds tx size" is answered by 153, which makes the cap
+load-bearing rather than redundant; and the linear cost with positive
+overhead is what decides the round, because it shows the cap bounds a
+relay-policy quantity and nothing else — the CEN-M4 shape, one rule over.
+
 ## 6. What this slice does not build
 
 - **The pool.** `tx_against` takes any `ChainView`; E5's decorator is E5's.
