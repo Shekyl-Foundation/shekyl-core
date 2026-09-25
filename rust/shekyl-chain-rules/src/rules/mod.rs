@@ -76,6 +76,7 @@ pub use pow::seed_height;
 pub(crate) mod timestamps;
 pub(crate) mod topology;
 pub(crate) mod tx;
+pub(crate) mod tx_inputs;
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
