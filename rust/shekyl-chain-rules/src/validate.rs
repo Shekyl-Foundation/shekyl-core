@@ -406,18 +406,25 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     // one refusal either way, the row differs.
     let cx = rules::TxContext::derive(tx, slot, &mut coverage)?;
     // The C++'s order, which decides *which* row refuses a transaction that
-    // breaks several: `ver_non_input_consensus`'s 4.H rows, then
-    // `check_tx_inputs`' input-side rows before its CT switch — outputs
-    // (I1), the input cap (I4), the key-image order (I5; H10 has already
-    // refused a repeat), offsets (I6) — then inside the switch the counts
-    // (I8, I9) ahead of the shape arms (H20–H22), and after them the
-    // proof's presence (I14) and `tx_pqc_verify`'s structural pass (I16).
-    // Slice 6 commit 2 placed the 4.I rows; the 4.H order is slice 5's.
+    // breaks several. Everything `ver_non_input_consensus` judges comes
+    // first — the 4.H rows, then its archival arms (H20–H22, the shape and
+    // balance of a serve-credit / bond-post / emission transaction), then
+    // its Rule 7 (`ver_mixed_ct_semantics`: the BP+ layout, H19, over the
+    // regular spends the arms did not claim). Only then `check_tx_inputs`'
+    // rows: outputs (I1), the input cap (I4), the key-image order (I5; H10
+    // has already refused a repeat), offsets (I6), the counts inside its CT
+    // switch (I8, I9), the proof's presence (I14) and `tx_pqc_verify`'s
+    // structural pass (I16). So a bond-post with no proof and nine inputs is
+    // refused on H21, not I4; a spend with a malformed BP+ and nine inputs
+    // on H19, not I4 — there, and here. (Slice 6 commit 2 first placed the
+    // 4.I rows ahead of H19–H22 from the CT switch alone; #853's review
+    // read the caller's order.) The 4.H order within its line is slice 5's.
     judge_tx!(cx, coverage; H1, H3, H4, H7, H9, H10, H11, H14, H15, H16, H17, H18);
-    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, H20, H21, H22, I14, I16);
+    judge_tx!(cx, coverage; H20, H21, H22);
     // CEN-H19's layout half. The verification half is slice 6's, so the row
     // stays pending and a pass is not coverage (`run_tx_unrecorded`).
     rules::run_tx_unrecorded::<H19>(&cx)?;
+    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16);
     Ok(coverage)
 }
 

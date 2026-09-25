@@ -396,6 +396,12 @@ pub(super) fn i1_one_output_spend() -> Transaction {
     with_pqc_extra(crate::harness::fixture::spend(point(9), 1))
 }
 
+/// A bond post standing alone with one output — the shape that reaches the
+/// twin's `spend/bond_post` face of its output-count arm (a funding spend
+/// would trip its `spend has` face first). The crate refuses it on H21,
+/// not I1: no funding spend, and `ver_non_input_consensus`'s arm refuses
+/// that (`spend_input_count == 0`) before `check_tx_inputs` reads an output
+/// count — recorded as the site's divergence.
 pub(super) fn i1_one_output_bond_post() -> Transaction {
     let prunable = shekyl_wire::Prunable {
         bulletproofs: vec![bp_plus_layout_for(1)],
