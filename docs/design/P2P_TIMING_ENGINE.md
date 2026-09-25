@@ -49,7 +49,7 @@ engine runs today's behaviour so a differential harness can match it.
 
 | Job | Today | Owner |
 | --- | --- | --- |
-| Relay wake | `steady_timer wake` in `src/cryptonote_protocol/levin_notify.cpp:495`, armed at `:895` from `Driver::next_wake` (`shekyl-relay` `driver/mod.rs:158`; pre-flight: was cited as `:149` at the design pin) | relay `Driver`. This engine only sleeps until that wake |
+| Relay wake | `steady_timer wake` in `src/cryptonote_protocol/levin_notify.cpp:495`, armed at `:895` from `Driver::next_wake` (`shekyl-relay` `driver/mod.rs:158`) | relay `Driver`. This engine only sleeps until that wake |
 | Chain-state backstop | `peer_sync_idle_maker` sends command 1002 every 60 s (`P2P_DEFAULT_HANDSHAKE_INTERVAL`, `cryptonote_config.h:185`). Both sides exchange height and top block (`process_payload_sync_data`) | sync lane. The period is how long a node can be stale after a missed announcement, against the block time. New blocks are already pushed when found |
 | Peerlist gossip | the same 1002 response carries up to 250 addresses (`p2p_protocol_defs.h:215-239`) into the gray list | peerlist, slices 1 and 3. Also a privacy surface: each exchange shows a peer part of this node's view of the network |
 | Connection liveness | the same 1002 is a request that must be answered, and it keeps the session off the inherited idle timer | the transport layer, per connector (D9). Not a Levin command |
@@ -109,8 +109,11 @@ Owners that live on the engine thread poll in place: the relay
 `Driver`, and the interim C++ cadences. The invoke bridge is the same
 pattern. Expiry is a message on the connection's queue.
 
-The owner reports a new `next_wake` only when its earliest deadline
-changes. A byte arriving does not re-arm the engine.
+The owner reports a new `next_wake` only when the earliest deadline
+moves earlier. A deadline that moves later is not reported. The owner
+is woken at the old time, which is harmless because it checks `now`,
+and it re-arms then. Idle and gap timers, which move later on every
+byte, do not re-arm the engine on each byte.
 
 An early or spurious wake is harmless, because the owner checks `now`.
 Waking late is the failure. Lateness has two parts, both measured: the
