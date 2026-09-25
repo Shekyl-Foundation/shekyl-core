@@ -3,8 +3,14 @@
 **Status:** OPEN — **Round 1 RULED 2026-09-24 (Q1–Q9, §8, each line-local);
 implementation begins on §5 in the ruled order — capture first.** Round 0
 pre-flight written 2026-09-23 against `dev` @ `4dc5194de` (post-#839, slice 5
-landed), amended on review `ca218306c`. Registered before implementation
-(rule 94 §5).
+landed), amended on review 2026-09-23 (PR #852, commit *docs: slice 6 Round
+0 amended on review*). Registered before implementation (rule 94 §5).
+
+Branch commits are named by PR and subject, never by SHA: the branch was
+rebased once already and every SHA the first cut of this file pinned to
+its own commits stopped existing (six, found 2026-09-24 — one of them in
+the CSR-3a register, where the citation gate would have refused it). A
+`dev` SHA is an era; a branch SHA is a promise the next rebase breaks.
 
 Parent: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §4.6 (`tx_against`,
 `tx_form`), [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5 (DRS-E6;
@@ -444,7 +450,8 @@ exercised.
 
 **Commit 1 is split in two, disclosed here (rule 22: a split re-schedules
 inside the PR).** 1a — the vectors, the capture hook, the ingest witness,
-`MockChain`'s charter (landed `6fd74abee`, `231132849`). 1b — *as first
+`MockChain`'s charter (landed in #852: *four regtest chains captured whole*;
+*the vectors carry their genesis*). 1b — *as first
 planned*, the fixture migration: builders become loaders over `txs/*.tx`.
 **That plan was measured before it was written and found to have the wrong
 shape (§5.3): a captured spend is valid only in the chain it came from, so
@@ -800,7 +807,8 @@ contract as owner, so it is chosen rather than found.
 ## 7. Round log
 
 - **Round 0** (2026-09-23): pre-flight written at `4dc5194de`; every pin
-  read at the line; nine questions. Amended on review (`ca218306c`): the
+  read at the line; nine questions. Amended on review (#852, *docs: slice 6
+  Round 0 amended on review*): the
   monotone-depth argument refuted at source (`trim_curve_tree` shrinks
   depth), the FAKECHAIN sweep, Q7(c), Q1's scoping call.
 - **Round 1** (2026-09-24): Q1–Q9 RULED, recorded on each question below.
