@@ -916,8 +916,10 @@ prover refuses more, so the read past the cap is the slope, which the test
 asserts is a line within 5% so the read is honest.
 
 **The floor, run (skl-pi, Raspberry Pi 4 Model B, Cortex-A72 ×4,
-`rustc` 1.94 aarch64, release, 2026-09-24, 51 °C, same test at
-`d9ccd4c74`):**
+`rustc` 1.94 aarch64, release, 2026-09-24, 51 °C, the test as #853's
+commit *CEN-I4 graded DIVERGENT by ruling; the input cap's cost measured*
+carried it — before the #853-review corrections, which change what the
+proof binds to and which ceiling is read, not the bytes or the time):**
 
 | inputs | tx bytes | verify | of which proof | auths | BP+ | prove |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
