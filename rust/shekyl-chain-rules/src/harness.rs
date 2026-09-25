@@ -18,7 +18,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use std::collections::BTreeSet;
 
-use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
 };
@@ -751,7 +751,7 @@ pub mod fixture {
             },
             ct: Ct::Fcmp {
                 fee: 0,
-                reference_block: BlockHash::from_bytes([0x99; 32]),
+                reference_block: UNRECORDED_REFERENCE,
                 base: CtBase {
                     enc_amounts: vec![[0x11; 9]; outputs],
                     enc_labels: vec![[0x22; 9]; outputs],
@@ -771,6 +771,113 @@ pub mod fixture {
     /// call sites mean by "a listed transaction".
     pub fn listed(key_image: [u8; 32]) -> Transaction {
         spend(key_image, 2)
+    }
+
+    /// The reference block no chain holds — what [`spend`] carries until a
+    /// chain anchors it ([`referencing`]): CEN-I10's own negative fixture.
+    pub const UNRECORDED_REFERENCE: BlockHash = BlockHash::from_bytes([0x99; 32]);
+
+    /// `tx` with its `Fcmp` `reference_block` set to `reference` — the one
+    /// place a fixture's anchor is written, so every crate that lists a
+    /// spend on a chain anchors it the same way. A `Null` ct has no
+    /// reference and is returned unchanged.
+    #[must_use]
+    pub fn referencing(mut tx: Transaction, reference: BlockHash) -> Transaction {
+        if let Ct::Fcmp {
+            reference_block, ..
+        } = &mut tx.ct
+        {
+            *reference_block = reference;
+        }
+        tx
+    }
+
+    /// The newest reference CEN-I11 admits for a spend listed in the block
+    /// that connects at `connecting`: the block `REFERENCE_BLOCK_MIN_AGE`
+    /// below it (`ref_height ≤ chain_height − MIN_AGE`, `blockchain.cpp:4121`,
+    /// with `chain_height` the connecting height). `None` when the chain is
+    /// too young to carry a spend at all — the first block that can list
+    /// one is height `MIN_AGE`, referencing genesis.
+    #[must_use]
+    pub fn newest_admissible_reference(connecting: BlockHeight) -> Option<BlockHeight> {
+        connecting.checked_sub_count(crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE)
+    }
+
+    /// `tx` anchored for a block connecting at `height` on a chain whose
+    /// block hashes so far are `hashes`: its reference is the block at
+    /// [`newest_admissible_reference`]. The one anchoring body for every
+    /// crate's chain builder — the store's `connect_chain`, the ingest's
+    /// `chain_listing` — so no fixture anchors a spend differently from
+    /// the crate that judges it. A body with no `ToKey` input (the
+    /// serve-credit-only shape) spends nothing, is not CEN-I10/I11's
+    /// subject, and is returned unchanged; it may be listed at any height.
+    /// Panics when a spend is listed on a chain too young to reference — the
+    /// fixture asked for a shape consensus refuses (I11).
+    #[must_use]
+    pub fn anchored_at(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
+        if !tx
+            .prefix
+            .inputs
+            .iter()
+            .any(|input| matches!(input, Input::ToKey { .. }))
+        {
+            return tx;
+        }
+        let at = newest_admissible_reference(BlockHeight::from_raw(height)).unwrap_or_else(|| {
+            panic!(
+                "a spend needs {} blocks beneath it (CEN-I11); height {height} has fewer",
+                crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE
+            )
+        });
+        let reference = hashes
+            .get(usize::try_from(at.to_raw()).expect("a fixture height fits usize"))
+            .unwrap_or_else(|| panic!("the chain holds no block at {at} to reference"));
+        referencing(tx, *reference)
+    }
+
+    /// `tx` anchored on `chain` for the block that connects next
+    /// ([`anchored_at`] over the mock's recorded hashes).
+    #[must_use]
+    pub fn anchored_on(chain: &MockChain, tx: Transaction) -> Transaction {
+        let connecting = Tip::connecting_height(chain.tip().as_ref());
+        let hashes: Vec<BlockHash> = chain.recorded.iter().map(|block| block.hash).collect();
+        anchored_at(&hashes, connecting.to_raw(), tx)
+    }
+
+    /// [`listed`], [`anchored_on`] `chain` — what a test that lists a spend
+    /// on a chain means by one.
+    #[must_use]
+    pub fn listed_on(chain: &MockChain, key_image: [u8; 32]) -> Transaction {
+        anchored_on(chain, listed(key_image))
+    }
+
+    /// The youngest chain on which a listed spend is admissible: `MIN_AGE`
+    /// blocks, so the next block connects at height `MIN_AGE` and a spend
+    /// it lists references genesis ([`anchored_on`]). The chain every
+    /// fixture that is *about a spend* and not about the chain builds on.
+    #[must_use]
+    pub fn spendable_chain() -> MockChain {
+        chain_of(crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE.to_raw())
+    }
+
+    /// A chain of `len` coinbase-only blocks with distinct identities
+    /// (timestamps a target block time apart, all below the harness clock)
+    /// and the genesis constant of work per block — long enough for a
+    /// spend to reference when `len ≥ MIN_AGE`, and with enough work that
+    /// D4's window, once it opens, derives a real target rather than the
+    /// zero a work-less chain yields (moved here from `pow_tests`, slice 6
+    /// commit 5).
+    #[must_use]
+    pub fn chain_of(len: u64) -> MockChain {
+        (0..len).fold(MockChain::default(), |chain, h| {
+            chain.push(
+                recorded_with_work(
+                    1_000 + h * 120,
+                    CumulativeDifficulty::from_raw(u128::from(h + 1) * GENESIS_DIFFICULTY),
+                ),
+                root(u8::try_from(h % 250).expect("fits") + 1),
+            )
+        })
     }
 
     /// A per-input PQC authentication in **CEN-I16's shape** — version 1,
@@ -829,7 +936,7 @@ pub mod fixture {
             },
             ct: Ct::Fcmp {
                 fee: 0,
-                reference_block: BlockHash::from_bytes([0x99; 32]),
+                reference_block: UNRECORDED_REFERENCE,
                 base: CtBase {
                     enc_amounts: Vec::new(),
                     enc_labels: Vec::new(),

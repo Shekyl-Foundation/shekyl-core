@@ -12,7 +12,8 @@
 use super::*;
 use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{
-    candidate_on, coinbase, coinbase_extra, listed, point, pqc_extra, serve_credit_only, G, TWO_G,
+    candidate_on, coinbase, coinbase_extra, listed, listed_on, point, pqc_extra, serve_credit_only,
+    spendable_chain, G, TWO_G,
 };
 use crate::harness::{assert_refused, credited_to_this_falsifier, formed_on, judged, MockChain};
 use crate::rule_set::RuleSet;
@@ -116,11 +117,14 @@ fn a_non_coinbase_row_is_vacuous_at_the_miner_slot_and_run_elsewhere() {
 /// transactions carries H4 once.
 #[test]
 fn tx_form_coverage_is_unioned_per_slot_by_validate() {
-    let chain = MockChain::default();
+    let chain = spendable_chain();
     chain.with_view(|view| {
         let formed = formed_on(
             &chain,
-            candidate_on(&chain, vec![listed(KI), listed(point(10))]),
+            candidate_on(
+                &chain,
+                vec![listed_on(&chain, KI), listed_on(&chain, point(10))],
+            ),
         );
         let valid = judged(validate(
             formed,

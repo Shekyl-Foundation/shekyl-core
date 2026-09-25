@@ -22,7 +22,9 @@ use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, LongTermWeight};
 
-use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend};
+use super::connect_fixtures::{
+    candidate, connect_chain, facts, judge, spend, spend_at, spendable_prefix, FIRST_SPEND_HEIGHT,
+};
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -47,10 +49,12 @@ fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
 fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     let path = tmp("a1-cum-tx-count");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // |txs| per height: 0, 2, 1 → cum 0, 2, 3.
-    connect_chain(
+    // |txs| per height: none through the prefix, then 2, 1 → cum 0 …, 2, 3.
+    let first = FIRST_SPEND_HEIGHT;
+    let second = first + 1;
+    let hashes = connect_chain(
         &store,
-        &[vec![], vec![spend(9, 2), spend(10, 2)], vec![spend(11, 2)]],
+        &spendable_prefix(&[vec![spend(9, 2), spend(10, 2)], vec![spend(11, 2)]]),
     );
     let cum = |h| block_info(&store, h).expect("row").cumulative_tx_count;
     assert_eq!(
@@ -58,27 +62,36 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
         0,
         "cum(0) == |txs(0)| — the genesis case, stated alone"
     );
-    assert_eq!(cum(1) - cum(0), 2);
-    assert_eq!(cum(2) - cum(1), 1);
-    assert_eq!(cum(2), 3);
+    assert_eq!(cum(first - 1), 0, "nothing listed through the prefix");
+    assert_eq!(cum(first) - cum(first - 1), 2);
+    assert_eq!(cum(second) - cum(first), 1);
+    assert_eq!(cum(second), 3);
 
     // Pop the tip: the row goes with it; the parent's total is untouched.
     let popped: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
-    assert_eq!(popped.expect("pop").height, BlockHeight::from_raw(2));
-    assert!(block_info(&store, 2).is_none());
-    assert_eq!(cum(1), 2);
+    assert_eq!(popped.expect("pop").height, BlockHeight::from_raw(second));
+    assert!(block_info(&store, second).is_none());
+    assert_eq!(cum(first), 2);
 
-    // Re-connect a different block 2 with three transactions: the total
+    // Re-connect a different block with three transactions: the total
     // resumes from the parent's row, not from anything the popped block left.
-    let b1_hash = block_info(&store, 1).expect("row").hash;
-    let b2 = candidate(2, b1_hash, vec![spend(12, 2), spend(13, 2), spend(14, 2)]);
+    let parent_hash = block_info(&store, first).expect("row").hash;
+    let b2 = candidate(
+        second,
+        parent_hash,
+        vec![
+            spend_at(&hashes, second, 12, 2),
+            spend_at(&hashes, second, 13, 2),
+            spend_at(&hashes, second, 14, 2),
+        ],
+    );
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b2)?, facts(second, 0), RuleSet::GENESIS)?)
     });
     out.expect("reconnect");
-    assert_eq!(cum(2) - cum(1), 3);
-    assert_eq!(cum(2), 5);
+    assert_eq!(cum(second) - cum(first), 3);
+    assert_eq!(cum(second), 5);
     cleanup(&path);
 }
 
@@ -316,15 +329,18 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
         .pqc_auth_hash
         .expect("one pqc_auth makes the txid 4-part");
     assert!(three_part.txid_parts().pqc_auth_hash.is_none());
-    // Block 1 lists the 4-part spend then the 3-part one: tx_ids 0 (genesis
-    // miner), 1 (block-1 miner), 2 (four_part), 3 (three_part).
-    connect_chain(&store, &[vec![], vec![four_part, three_part]]);
+    // The first spend block lists the 4-part spend then the 3-part one:
+    // tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one per block through
+    // that one), then four_part, then three_part.
+    connect_chain(&store, &spendable_prefix(&[vec![four_part, three_part]]));
+    let four_part_id = FIRST_SPEND_HEIGHT + 1;
+    let three_part_id = four_part_id + 1;
     let snap = store.begin_read().expect("read");
     let table = snap.open_table(TXS_PQC_AUTH_HASH).expect("sealed");
     assert_eq!(table.len().expect("len"), 1, "one 4-part txid, one row");
     assert_eq!(
         table
-            .get(2)
+            .get(four_part_id)
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
         Some(expected),
@@ -332,8 +348,8 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     );
     for (tx_id, why) in [
         (0, "genesis coinbase"),
-        (1, "block-1 coinbase"),
-        (3, "3-part serve credit"),
+        (FIRST_SPEND_HEIGHT, "the spend block's coinbase"),
+        (three_part_id, "3-part serve credit"),
     ] {
         assert!(
             table.get(tx_id).expect("g").is_none(),

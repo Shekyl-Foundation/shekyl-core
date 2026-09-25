@@ -9,13 +9,17 @@
 //! (I2's falsifier lives here; I3's is `f2_the_wire_admits_one_transaction_version`).
 
 use crate::census::CenRow;
-use crate::harness::fixture::{candidate_on, coinbase, listed, point, point_at, spend, TWO_G};
+use crate::harness::fixture::{
+    anchored_on, candidate_on, coinbase, listed, listed_on, point, point_at, spend,
+    spendable_chain, TWO_G,
+};
 use crate::harness::{
     assert_refused, credited_to_this_falsifier, formed_on, infallible, judged, Faulted,
     FaultingView, MockChain,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{refused_listed, refused_lone};
+use crate::rules::tx_against::{REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
 use crate::trust::Trust;
 use crate::validate::{tx_against, validate};
 use crate::verdict::{Locus, TxSlot};
@@ -25,6 +29,38 @@ use shekyl_wire::{Ct, CtBase, Input, Transaction};
 
 const KI: [u8; 32] = point(9);
 
+// ---- the reference window: pinned to the JSON authority ----------------
+
+/// `REFERENCE_BLOCK_{MIN,MAX}_AGE` equal `config/consensus_constants.json`'s
+/// `fcmp_reference_block_{min,max}_age` — read from the file, not from a
+/// copy of the numbers, so an edit to the authority fails here rather than
+/// leaving the validator's window behind the daemon's (slice 6 Q5, the
+/// slice-5 Q5 pin shape over the JSON instead of the header: the header
+/// derives from the JSON too).
+#[test]
+fn reference_window_is_the_json_authoritys() {
+    let json: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../config/consensus_constants.json"))
+            .expect("consensus_constants.json parses");
+    let age = |key: &str| {
+        json[key]
+            .as_u64()
+            .unwrap_or_else(|| panic!("consensus_constants.json carries {key} as an integer"))
+    };
+    assert_eq!(
+        REFERENCE_BLOCK_MIN_AGE.to_raw(),
+        age("fcmp_reference_block_min_age")
+    );
+    assert_eq!(
+        REFERENCE_BLOCK_MAX_AGE.to_raw(),
+        age("fcmp_reference_block_max_age")
+    );
+    assert!(
+        REFERENCE_BLOCK_MAX_AGE.to_raw() > REFERENCE_BLOCK_MIN_AGE.to_raw(),
+        "the window is non-empty (cryptonote_config.h's static_assert)"
+    );
+}
+
 // ---- CEN-I7 -------------------------------------------------------------
 
 /// A spend of a key image the chain has recorded is refused on I7 at the
@@ -32,11 +68,11 @@ const KI: [u8; 32] = point(9);
 /// row. Both through `tx_against`, the entry point the pool calls.
 #[test]
 fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
-    let chain = MockChain::default().with_key_image(KeyImage::from_bytes(KI));
+    let chain = spendable_chain().with_key_image(KeyImage::from_bytes(KI));
     chain.with_view(|view| {
         assert_refused(
             infallible(tx_against(
-                &listed(KI),
+                &listed_on(&chain, KI),
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
@@ -48,7 +84,7 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
             },
         );
         let fresh = infallible(tx_against(
-            &listed(point(10)),
+            &listed_on(&chain, point(10)),
             TxSlot::Lone,
             &view,
             &RuleSet::GENESIS,
@@ -62,9 +98,12 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
 /// `Lone` to `Listed(n)` — the transaction's position, not the pool's.
 #[test]
 fn i7_at_a_listed_slot_the_refusal_names_the_slot() {
-    let chain = MockChain::default().with_key_image(KeyImage::from_bytes(point(11)));
+    let chain = spendable_chain().with_key_image(KeyImage::from_bytes(point(11)));
     chain.with_view(|view| {
-        let block = candidate_on(&chain, vec![listed(point(10)), listed(point(11))]);
+        let block = candidate_on(
+            &chain,
+            vec![listed_on(&chain, point(10)), listed_on(&chain, point(11))],
+        );
         let formed = formed_on(&chain, block);
         assert_refused(
             judged(validate(
@@ -88,11 +127,11 @@ fn i7_at_a_listed_slot_the_refusal_names_the_slot() {
 #[test]
 fn i7_looks_up_an_archival_shapes_funding_spend_too() {
     let funding = point_at(23);
-    let chain = MockChain::default().with_key_image(KeyImage::from_bytes(funding));
+    let chain = spendable_chain().with_key_image(KeyImage::from_bytes(funding));
     // A two-input spend whose second input is the recorded image; the
     // class does not matter to the lookup, and a plain spend keeps the
     // fixture out of H21's balance arithmetic.
-    let mut tx = listed(KI);
+    let mut tx = listed_on(&chain, KI);
     tx.prefix.inputs.push(Input::ToKey {
         amount: 0,
         key_offsets: Vec::new(),
@@ -179,11 +218,11 @@ fn i7_propagates_a_view_fault() {
 /// would pass `validate` and meet the store's fatal SI-1 at connect.
 #[test]
 fn l1_a_key_image_twice_across_a_blocks_transactions_is_refused_at_the_second() {
-    let chain = MockChain::default();
+    let chain = spendable_chain();
     chain.with_view(|view| {
         // Distinct transactions (different outputs) over the same image.
-        let first = listed(KI);
-        let mut second = spend(KI, 3);
+        let first = listed_on(&chain, KI);
+        let mut second = anchored_on(&chain, spend(KI, 3));
         second.prefix.extra = crate::harness::fixture::pqc_extra(3);
         let block = candidate_on(&chain, vec![first, second]);
         let formed = formed_on(&chain, block);
@@ -209,10 +248,10 @@ fn l1_a_key_image_twice_across_a_blocks_transactions_is_refused_at_the_second() 
 /// too.
 #[test]
 fn l1_runs_after_the_per_transaction_rows() {
-    let chain = MockChain::default();
+    let chain = spendable_chain();
     chain.with_view(|view| {
-        let first = listed(KI);
-        let mut second = listed(KI);
+        let first = listed_on(&chain, KI);
+        let mut second = listed_on(&chain, KI);
         // The second transaction fails H15 (a `Null` CT off the coinbase).
         second.ct = Ct::Null(CtBase {
             enc_amounts: vec![[0x11; 9]; 2],
@@ -238,11 +277,14 @@ fn l1_runs_after_the_per_transaction_rows() {
 /// A block of distinct spends passes and records L1.
 #[test]
 fn l1_distinct_images_pass_and_record() {
-    let chain = MockChain::default();
+    let chain = spendable_chain();
     chain.with_view(|view| {
         let formed = formed_on(
             &chain,
-            candidate_on(&chain, vec![listed(point(10)), listed(point(11))]),
+            candidate_on(
+                &chain,
+                vec![listed_on(&chain, point(10)), listed_on(&chain, point(11))],
+            ),
         );
         let valid = judged(validate(
             formed,

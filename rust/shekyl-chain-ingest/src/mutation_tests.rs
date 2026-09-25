@@ -26,7 +26,7 @@ use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{
     block_with_nonce, chain_listing, chain_listing_with, cleanup, h, key_image, open_store,
-    root_at, spend, tmp, trace_of, Family, Scripted,
+    root_at, spend, tmp, trace_of, Family, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -103,9 +103,11 @@ fn nonce_meeting_target(
 /// satisfies the target. The seed is [`seed_height`]'s, the same function
 /// the pipeline claims with.
 fn mined_chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
+    // The same listing as `test_support::chain`: a spend from the first
+    // admissible height, nothing below.
     let listed: Vec<Vec<Transaction>> = (0..n)
         .map(|hh| {
-            if hh == 0 {
+            if hh < FIRST_SPEND_HEIGHT {
                 Vec::new()
             } else {
                 vec![spend(key_image(Family::Main, hh))]
@@ -300,14 +302,17 @@ async fn the_family_lands_on_its_named_rows() {
     }
 }
 
-/// Where a mutation lands: block 2, so blocks 0 and 1 are below it (a spend
-/// to reuse, a median to fall under). The mutated block is the tip.
+/// Where a mutation lands: the block after the first spend block, so the
+/// blocks below it hold a spend to reuse and a median to fall under. The
+/// mutated block is the tip. (Block 2 until slice 6 commit 5: CEN-I11 put
+/// the first admissible spend at `FIRST_SPEND_HEIGHT`, and `DoubleSpend`
+/// needs one beneath it.)
 ///
 /// A pending row connects, and a successor built on the pre-mutation hash
 /// orphans on CEN-A2, so the pin would read a gap as a refusal. An
 /// implemented row stops the run at the refusal, so a successor would not
 /// be judged either. One length covers both.
-const AT: u64 = 2;
+const AT: u64 = FIRST_SPEND_HEIGHT + 1;
 const CHAIN_LEN: u64 = AT + 1;
 
 async fn setup_and_judge(mutation: Mutation) -> Outcome {
@@ -342,15 +347,22 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
             .await
         }
         Mutation::ReorderedBodies => {
-            // Block 2 lists two bodies so there is something to swap.
-            let listed = vec![
-                Vec::new(),
-                vec![spend(key_image(Family::Main, 1))],
-                vec![
-                    spend(key_image(Family::Main, 2)),
-                    spend(key_image(Family::Fork, 2)),
-                ],
-            ];
+            // `chain(n)`'s listing, except that block `AT` lists two bodies
+            // so there is something to swap.
+            let listed: Vec<Vec<Transaction>> = (0..n)
+                .map(|hh| {
+                    if hh < FIRST_SPEND_HEIGHT {
+                        Vec::new()
+                    } else if hh == AT {
+                        vec![
+                            spend(key_image(Family::Main, hh)),
+                            spend(key_image(Family::Fork, hh)),
+                        ]
+                    } else {
+                        vec![spend(key_image(Family::Main, hh))]
+                    }
+                })
+                .collect();
             assert_eq!(listed.len() as u64, n, "the reordered block is the tip");
             let chain = chain_listing(listed);
             judge(
@@ -391,7 +403,9 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_mined_chain_replays_clean_under_the_seeded_hasher() {
     let path = tmp("mutation-mined-clean");
-    let chain = mined_chain(4);
+    // The family's own length, so the clean replay covers the spend blocks
+    // the mutations are staged over.
+    let chain = mined_chain(CHAIN_LEN);
     let mut source = scripted(&chain);
     let report = run(
         &mut source,
@@ -408,7 +422,10 @@ async fn the_mined_chain_replays_clean_under_the_seeded_hasher() {
     .await
     .expect("a mined chain is a valid chain");
     assert_eq!(report.refused, None);
-    assert_eq!(report.connected.len(), 4);
+    assert_eq!(
+        report.connected.len(),
+        usize::try_from(CHAIN_LEN).expect("small")
+    );
     assert!(
         report.exercised.contains("CEN-D1"),
         "D1 was judged, not skipped"
@@ -495,16 +512,27 @@ fn a_mutation_height_the_chain_never_reaches_is_a_fault_not_a_clean_replay() {
 
 #[test]
 fn a_candidate_that_cannot_carry_the_mutation_names_why() {
-    // Block 1 of `chain(2)` lists one body: nothing to reorder.
-    let chain = crate::test_support::chain(2);
-    let mut source = Mutated::new(scripted(&chain), h(1), Mutation::ReorderedBodies, env());
-    source.next().expect("block 0");
+    // The first spend block of `chain(FIRST_SPEND_HEIGHT + 1)` lists one
+    // body: nothing to reorder.
+    let first_spend = FIRST_SPEND_HEIGHT;
+    let chain = crate::test_support::chain(first_spend + 1);
+    let mut source = Mutated::new(
+        scripted(&chain),
+        h(first_spend),
+        Mutation::ReorderedBodies,
+        env(),
+    );
+    for below in 0..first_spend {
+        source
+            .next()
+            .unwrap_or_else(|e| panic!("block {below} passes through: {e:?}"));
+    }
     match source.next() {
         Err(MutationFault::Unmutable {
             mutation: Mutation::ReorderedBodies,
             at,
             cause: Unmutable::TooFewBodies { listed: 1 },
-        }) => assert_eq!(at, h(1)),
+        }) => assert_eq!(at, h(first_spend)),
         other => panic!("{other:?}"),
     }
     // Genesis has nothing spent before it: no double spend to stage.

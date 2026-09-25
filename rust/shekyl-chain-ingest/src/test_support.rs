@@ -125,11 +125,33 @@ pub fn key_image(family: Family, height: u64) -> [u8; 32] {
     fixture::point_at(offset + height)
 }
 
-/// A spend of `key_image`: the rules harness's one-output [`fixture::listed`].
+/// A spend of `key_image`: the rules harness's two-output [`fixture::listed`].
 /// The same body the store connects, so a point rule cannot refuse this
-/// crate's chains alone.
+/// crate's chains alone. Bare — its reference is written when it is placed
+/// on a chain ([`chain_listing_with`] anchors every listed body at its
+/// height), so a spend is chain-relative here as it is in production.
 pub fn spend(key_image: [u8; 32]) -> Transaction {
     fixture::listed(key_image)
+}
+
+/// The first height at which a block may list a spend (CEN-I11: the
+/// reference is at least `REFERENCE_BLOCK_MIN_AGE` below the connecting
+/// height, and the youngest reference any chain has is genesis). [`chain`]
+/// lists nothing below it; a listing that puts a spend lower asks for a
+/// shape consensus refuses, and the builder says so.
+pub const FIRST_SPEND_HEIGHT: u64 = shekyl_chain_rules::REFERENCE_BLOCK_MIN_AGE.to_raw();
+
+/// A fixture height as an index into a hash or block list.
+pub fn at(height: u64) -> usize {
+    usize::try_from(height).expect("a fixture height fits usize")
+}
+
+/// `tx` anchored for a block at `height` on the chain whose block hashes so
+/// far are `hashes`: the harness's [`fixture::anchored_at`] — the newest
+/// reference CEN-I11 admits, a body with no `ToKey` input left as it is,
+/// a spend below `FIRST_SPEND_HEIGHT` refused by the builder.
+pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
+    fixture::anchored_at(hashes, height, tx)
 }
 
 /// A block at `height` on `previous`, listing `listed`, with `nonce`.
@@ -169,25 +191,30 @@ pub fn chain_listing_with(
     listed: Vec<Vec<Transaction>>,
     mut make: impl FnMut(u64, BlockHash, &[Transaction]) -> Block,
 ) -> Vec<(Block, Vec<Transaction>)> {
-    let mut previous = BlockHash::NULL;
+    let mut hashes: Vec<BlockHash> = Vec::new();
     listed
         .into_iter()
         .enumerate()
         .map(|(hh, txs)| {
-            let b = make(hh as u64, previous, &txs);
-            previous = b.hash();
+            let hh = hh as u64;
+            let txs: Vec<Transaction> = txs.into_iter().map(|tx| anchor(&hashes, hh, tx)).collect();
+            let previous = hashes.last().copied().unwrap_or(BlockHash::NULL);
+            let b = make(hh, previous, &txs);
+            hashes.push(b.hash());
             (b, txs)
         })
         .collect()
 }
 
-/// A chain of `n` blocks: genesis lists nothing; block `h > 0` lists one
-/// spend of the main family's key image for `h`.
+/// A chain of `n` blocks: block `h ≥ FIRST_SPEND_HEIGHT` lists one spend of
+/// the main family's key image for `h`; the blocks below list nothing —
+/// nothing they could list would be admissible (CEN-I11). A chain shorter
+/// than `FIRST_SPEND_HEIGHT + 1` blocks carries no spend at all.
 pub fn chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
     chain_listing(
         (0..n)
             .map(|hh| {
-                if hh == 0 {
+                if hh < FIRST_SPEND_HEIGHT {
                     Vec::new()
                 } else {
                     vec![spend(key_image(Family::Main, hh))]
@@ -221,17 +248,27 @@ pub fn reorg(main_len: u64, to: u64, fork_len: u64) -> Reorg {
     let main = chain(main_len);
     let mut after: Vec<(Block, Vec<Transaction>)> =
         main[..=usize::try_from(to).expect("small")].to_vec();
-    let mut previous = after.last().expect("non-empty").0.hash();
+    let mut hashes: Vec<BlockHash> = after.iter().map(|(b, _)| b.hash()).collect();
     for i in 0..fork_len {
         let height = to + 1 + i;
-        let txs = vec![spend(key_image(Family::Fork, height))];
+        // A fork block lists a spend where a main block would (CEN-I11's
+        // floor), anchored on the fork's own chain.
+        let txs: Vec<Transaction> = if height < FIRST_SPEND_HEIGHT {
+            Vec::new()
+        } else {
+            vec![anchor(
+                &hashes,
+                height,
+                spend(key_image(Family::Fork, height)),
+            )]
+        };
         let b = block_with_nonce(
             height,
-            previous,
+            *hashes.last().expect("non-empty"),
             &txs,
             99 + u32::try_from(i).expect("small"),
         );
-        previous = b.hash();
+        hashes.push(b.hash());
         after.push((b, txs));
     }
     Reorg { main, to, after }

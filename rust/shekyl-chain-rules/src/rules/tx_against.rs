@@ -33,8 +33,24 @@ use crate::census::CenRow;
 use crate::rules::{BlockContext, BlockRule, Rule, TxAgainstRule, TxContext, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::ChainView;
-use shekyl_types::KeyImage;
+use shekyl_types::{BlockCount, KeyImage};
 use shekyl_wire::Input;
+
+/// CEN-I11's window, lower edge: a spend's `referenceBlock` is at least
+/// this many blocks below the connecting height (`ref_height ≤
+/// chain_height − MIN_AGE`; `blockchain.cpp:4121`). A `const` beside its
+/// rule, not a `RuleSet` field: no schedule step varies it (slice 6 Q5,
+/// the F21 test). The authority is `config/consensus_constants.json`
+/// (`fcmp_reference_block_min_age`), which also drives the C++ header;
+/// `reference_window_is_the_json_authoritys` holds this equal to it, so
+/// the two cannot drift apart silently.
+pub const REFERENCE_BLOCK_MIN_AGE: BlockCount = BlockCount::from_raw(5);
+
+/// CEN-I11's window, upper edge: a spend's `referenceBlock` is at most
+/// this many blocks below the connecting height (`ref_height ≥
+/// chain_height − MAX_AGE`; `blockchain.cpp:4133`). Same authority and
+/// pin as [`REFERENCE_BLOCK_MIN_AGE`] (`fcmp_reference_block_max_age`).
+pub const REFERENCE_BLOCK_MAX_AGE: BlockCount = BlockCount::from_raw(100);
 
 /// CEN-I7: no input's key image is already spent on the recorded chain
 /// (`blockchain.cpp` `have_tx_keyimg_as_spent`, per `ToKey` input — the
