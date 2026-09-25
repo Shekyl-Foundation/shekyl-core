@@ -31,6 +31,7 @@
 //! | `Fault::Corrupt` | `WriteBatch::refuse_corrupt` arms the halt (SI-10) and its `InvariantViolated` — carrying the validator's value — is the reply; the batch aborts; **terminal** |
 //! | `Fault::Stale(Seed { .. })` | a **driver defect** in replay (RD-Q5): the reply carries the claim, the expectation, and the validator's `Retry`; the writer stays up so a later caller can re-`form` |
 //! | `Fault::Stale(RuleSet { .. })` | a **driver defect** (the schedule handed the two stages different sets): surfaced; the writer stays up |
+//! | the source's height for an `Extend` is not `tip + 1` on the batch's view | a **driver defect** ([`RunFault::HeightClaim`]): surfaced before the rule set is chosen or a fact is composed under the wrong height; the writer stays up |
 //! | the facts provider has nothing at the height | the run cannot connect honestly: surfaced ([`RunFault::NoFacts`]); the writer stays up |
 //! | a parent-side read observes a hole ([`shekyl_chain_rules::Corrupt::HoleBelowTip`]) | `refuse_corrupt` arms SI-7 and the writer **halts**, the same class a rule raises |
 //! | the tip has no successor height | surfaced ([`RunFault::NoNextHeight`]); the writer stays up |
@@ -86,6 +87,7 @@ impl RunEnd {
             RunFault::Store(_) => Some(Self::StoreFaulted),
             RunFault::StaleSeed { .. }
             | RunFault::StaleRuleSet { .. }
+            | RunFault::HeightClaim { .. }
             | RunFault::NoFacts { .. }
             | RunFault::NoNextHeight { .. }
             | RunFault::RewindTarget { .. }
@@ -121,6 +123,20 @@ pub enum RunFault {
     StaleRuleSet {
         /// The connecting height.
         height: BlockHeight,
+    },
+    /// The source's height for an `Extend` is not the height the chain
+    /// connects at (`tip + 1` on the batch's view). Nothing is judged: the
+    /// rule set, the facts and the record are all keyed by the connecting
+    /// height, and a block judged under the claimed one would be judged
+    /// under the wrong schedule. A driver defect; the writer stays up.
+    #[error(
+        "driver defect: the source claims height {claimed} for a block the chain connects at {connecting}"
+    )]
+    HeightClaim {
+        /// The source's height for the event.
+        claimed: BlockHeight,
+        /// `tip + 1` as the store holds it.
+        connecting: BlockHeight,
     },
     /// The facts provider has nothing for `height` — a trace that does not
     /// cover it, or a producer that did not price it ([`FactsFault::None`]).
@@ -332,7 +348,23 @@ impl<F: FactsFor + Send + Sync + 'static> Message<Apply> for Connector<F> {
         self.writer.write(|batch| {
             let view = batch.chain_view();
             let mut applied = Applied::default();
-            for (height, formed) in msg.0 {
+            for (claimed, formed) in msg.0 {
+                // The height is the store's to say, not the source's: the
+                // rule set in force, the facts composed, and the row the
+                // block is recorded under are all keyed by the height the
+                // chain connects at, which is `tip + 1` on this view (the
+                // tip advances as the batch connects). The tuple's height
+                // is the source's bookkeeping; where the two disagree the
+                // source is wrong about the chain, and that is a driver
+                // defect surfaced before anything is judged under the
+                // wrong schedule (#852 review).
+                let (height, _) = connecting(view.tip()?)?;
+                if claimed != height {
+                    return Err(RunFault::HeightClaim {
+                        claimed,
+                        connecting: height,
+                    });
+                }
                 let formed = match formed {
                     Ok(formed) => formed,
                     Err(refused) => {
@@ -447,15 +479,7 @@ impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F
             let total_burned = batch.total_burned()?;
             let view = batch.chain_view();
             let tip = view.tip()?;
-            let (connecting, previous) = match tip {
-                None => (BlockHeight::ZERO, BlockHash::NULL),
-                Some(t) => (
-                    t.height
-                        .checked_add(BlockCount::ONE)
-                        .ok_or(RunFault::NoNextHeight { tip: t.height })?,
-                    t.hash,
-                ),
-            };
+            let (connecting, previous) = connecting(tip)?;
             let curve_tree_root = present(batch, connecting, view.root_at(connecting))?;
             let parent_coins_generated = match tip {
                 None => shekyl_units::AtomicUnits::ZERO,
@@ -477,6 +501,24 @@ impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F
                 median_timestamp,
             })
         })
+    }
+}
+
+/// The height the next block connects at and the hash it must name as its
+/// parent, from the recorded tip: `(0, NULL)` on an empty chain, else
+/// `(tip + 1, tip.hash)`. The one derivation both handlers use — the
+/// producer to price a template, `Apply` to hold a source's claimed height
+/// to it — so the two cannot drift. A tip with no successor is
+/// [`RunFault::NoNextHeight`], not a saturated height.
+fn connecting(tip: Option<shekyl_chain_rules::Tip>) -> Result<(BlockHeight, BlockHash), RunFault> {
+    match tip {
+        None => Ok((BlockHeight::ZERO, BlockHash::NULL)),
+        Some(t) => Ok((
+            t.height
+                .checked_add(BlockCount::ONE)
+                .ok_or(RunFault::NoNextHeight { tip: t.height })?,
+            t.hash,
+        )),
     }
 }
 
