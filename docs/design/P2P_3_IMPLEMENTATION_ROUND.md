@@ -225,10 +225,12 @@ membership harness against the C++.*
 | # | Slice | Inherits | Flips | Greens when it lands |
 | --- | --- | --- | --- | --- |
 | **1** | **Peerlist** — `net_peerlist.{h,cpp}`, **874 lines** at `fdf17b729` (*was 878; PR #821 removed the seed field*). Moves into Rust: the gray list and the white list, the one door between them, expiry, and the store. **The brief is the contract** ([`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md), **REVISED 2026-09-23**). *Records-was "differentially testable against the C++"* | **The field is already gone.** *Records-was three received-seed sites at `net_peerlist.h:367` and `:414`, plus an unsanitized load. `:367` keeps the previous white `last_seen`; `:414` is `return true` at the end of `append_with_peer_gray`. The field is already absent. Leftover spellings of `pruning_seed` in code are deleted by the implementation PR the brief describes, not by this document.* | I2's remaining acceptance rules; the white-list writer invariant | The field is already absent, so the slice opens with no predecessor on this axis. The implementation PR deletes every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. *Records-was a pending gate, then a comment at `net_peerlist.cpp:84` treated as an allowed hit.* Greens when `m_peers_white` and `peerlist_manager` are gone from `src/p2p`, `rg -n pruning_seed src rust tests` returns nothing, and `White`'s only constructor is the one `handshake_confirmed` calls for an outstanding gray draw or a Foundation-fleet address. A harness that must match C++ membership is not the gate |
-| **2** | **Admission policy** — the ceiling, and nothing else after §2.9.4 | slice 1, and a **measured `--in-peers`** (§7.3) rather than `UINT32_MAX` | **I7** (mechanism deleted), **I8** (closed) | `rg -n 'has_too_many_connections' src/` returns nothing; `is_host_limit` is a counter comparison |
+| **2** | **Socket admission — folded into the transport layer, 2026-09-25.** The ceiling, enforced at accept. The count it needs lives in the transport layer ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D1, D3, D8), so the accept path is not edited twice. *Records-was "Admission policy — the ceiling, and nothing else after §2.9.4".* | the transport layer's socket count, and a **measured `--in-peers`** (§7.3) rather than `UINT32_MAX` | **I7** (mechanism deleted), **I8** (closed) | `rg -n 'has_too_many_connections' src/` returns nothing; `is_host_limit` is a counter comparison; `census_inbound` no longer walks the Levin registry |
 | **3** | **Discovery policy** — seed handling, the dial-candidate selection, `m_used_stripe_peers`' removal | slices 1–2, and the candidate filter's `else if` already gone (§7.2) | B9's mechanism half; PWC-E9's re-derivation | `rg -n 'm_used_stripe_peers\|next_needed_pruning_stripe' src/p2p/` returns nothing |
 | **4** | **Handshake state machine** — the phases, and PWD-B1/B2's per-peer state, which have no landed mechanism and so land here first rather than migrating | slices 1–3 | **B1, B2**; B7's remainder and PWC-E5 | PWD-B1's four unguarded invoke handlers are guarded |
-| **5** | **LV-3 — sockets and relay dispatch.** The `levin_notify` / `net_node` seam: 2,189 lines of dispatch plus `net_node.inl`'s connection registry. **The connection object lives here** | slices 1–4 — **the patterns and the harness**. Plus the walk-fed counter at [`net_node.inl:1112`](../../src/p2p/net_node.inl#L1112): a once-per-second `foreach_connection` recount feeding admission's atomic, which **a Rust connection registry should own its own count of** rather than inherit | the failure-window row; LV-3's own `IMPLEMENTATION_INDEX` cell | the C++ connection registry has no remaining policy caller; `:1112`'s recount thread is gone |
+| **TE** | **Timing engine — after the transport layer (D6, 2026-09-25).** Every deadline in Rust: Levin invoke timeouts, the idle cadences, the relay `Driver`'s sleep, PWD-B2's per-connection timed sync. After it lands, C++ is called, not driven, and the asio `io_context` is deleted | the transport layer | D1 violation 2 | C++ has no event loop; step 7 of the transport-layer design has measured timer lateness on the interim and after |
+| **RD** | **Relay dispatch — after the timing engine.** LV-3 step d, brought forward. `shekyl-relay`'s `Driver` effects write to transport connections by id. Relay messages are built in `shekyl-levin`. The 2002/2008 byte gate is D6 | the timing engine | the C++ relay path | Rust emits a relay message a C++ node accepts, or the payloads match the C++ serializer byte for byte; conformance grades are unchanged |
+| **5** | **LV-3 — the connection type, ownership transfer, and the registry (steps a–c).** Relay dispatch is the **RD** row, brought forward 2026-09-25. *Records-was "sockets and relay dispatch" as one slice.* The connection registry stays here. **The connection object lives here** | slices 1–4, **TE**, and **RD** | the failure-window row; LV-3's own `IMPLEMENTATION_INDEX` cell | the C++ connection registry has no remaining policy caller |
 | *(open)* | **The fate of `cryptonote_protocol_handler`** — 3,213 lines, and **not yet a slice** | — | — | named so its absence is visible, per §0's defect |
 
 **E1/E2 are deliberately not rows.** E1 tier-1's diagnostic half lands in
@@ -267,10 +269,16 @@ edited:**
 | **5 — LV-3** | inherits the connection-context field and `block_queue`'s signatures | **field and signatures already gone.** The `:1111` recount inheritance stands (below) |
 | ***(open)*** — handler | inherits `should_drop_connection`, `notify_new_stripe`, the span block | **all three gone.** The row survives for the handler's *fate*, which was never about stripes |
 
-**One inheritance is unaffected and re-anchored:** the admission counter is
+**SUPERSEDED 2026-09-25.** The sentence below said the admission
+recount stays slice 5's. Socket admission, and the count it reads,
+moved to the transport layer (`P2P_TRANSPORT_LAYER.md` D8). The
+one-second `foreach_connection` recount is the walk that recount
+replaces.
+
+*Records-was:* the admission counter is
 still refreshed by a `foreach_connection` recount on a one-second sleep —
 [`net_node.inl:1111`](../../src/p2p/net_node.inl#L1111) at `fdf17b729`
-(*was `:1112`*). It remains slice 5's, and remains a rule-76 measurement input
+(*was `:1112`*). It was slice 5's, and a rule-76 measurement input
 for `--in-peers`.
 
 ### 4.4 SLICE 1's TYPE CONTRACT — the round's rule, encoded rather than written down

@@ -1,7 +1,8 @@
 # P2P-3 slice 1 — the peerlist
 
-**Status:** **REVISED 2026-09-23 (steering).** Ratified earlier the same day; this
-text replaces that ratification. The peerlist moves into Rust. The C++ is a
+**Status:** **REVISED 2026-09-25 (connector partition).** Lists are partitioned
+by connector, derived from the address type. *Records-was REVISED 2026-09-23
+(steering).* The peerlist moves into Rust. The C++ is a
 quarry: evidence for the invariant, and a list of behaviors the Rust model
 drops. *Records-was: the C++ already holds the contract at eight sites, every
 one correct, so the slice preserves it. A later same-day draft called the lists
@@ -27,6 +28,14 @@ erase list entries.
 
 ## 1. The two lists
 
+**Partition (ruled 2026-09-25).** Every gray and white entry belongs to
+exactly one connector. The connector is the partition key of both lists,
+derived from the address type through the transport layer's declaration
+([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D7). It is not a stored
+tag. Gray and white caps (`P2P_LOCAL_GRAY_PEERLIST_LIMIT` 5000 and
+`P2P_LOCAL_WHITE_PEERLIST_LIMIT` 1000, `cryptonote_config.h:176-177`) and
+the random-draw eviction apply within each connector's lists.
+
 **Gray** is every address that arrived and has not been confirmed by the door
 in §2. Gossip, a peerlist a neighbor sent, an inbound peer, a peer's
 advertisement, `--add-peer`, `--add-exclusive-node`, `--add-priority-node`,
@@ -51,6 +60,13 @@ Three properties fall out of the door.
 ---
 
 ## 2. The door
+
+**Admit (ruled 2026-09-25).** An entry learned over a session is admitted
+only if its connector is the session's connector. One foreign entry rejects
+the peer's whole list (`net_node.inl:2376-2383`). `--add-peer` routes to its
+connector by address type. An address whose type no local connector serves
+is not admitted. Promotion, the 24-hour demotion (`EXPIRATION_PERIOD`), and
+§3's Foundation-seed exception operate within one connector.
 
 An address moves from gray to white only when both of these happened, in
 order:
@@ -80,6 +96,9 @@ It is not a white-list write, and it is not a bias on the draw.
 
 ## 3. The Foundation seeds are the exception
 
+**Seeds are declared per connector (ruled 2026-09-25).** The exception below
+operates inside the connector that owns those addresses.
+
 The hardcoded Foundation seed fleet is six literal addresses
 (`src/p2p/net_node.inl:731`, the array at `:738`). A confirmed handshake with
 one of those addresses writes white even though the address was not drawn
@@ -98,6 +117,10 @@ that refusal is dropped. For every other harvest, it stands.
 ---
 
 ## 4. The types
+
+**Both lists are partitioned by connector, derived from the address type
+(ruled 2026-09-25).** There is no tag field. A stored tag could disagree
+with the address.
 
 ```rust
 struct Gray {
@@ -126,6 +149,10 @@ Gray carries no timestamp. A gossiped `last_seen` is ignored at admit.
 ---
 
 ## 5. Draws
+
+**A dial draws from the list of the connector it will dial through (ruled
+2026-09-25).** Which connector to dial is slice 3. The peerlist never hands
+one network's address to another network's connector.
 
 Storage order is not a priority. Neither list is sorted by `last_observed`,
 by arrival, or by which list an address used to inhabit. Reload admits every
@@ -176,6 +203,10 @@ an outstanding gray draw, or is in the Foundation fleet.
 ---
 
 ## 7. Persistence
+
+**Reload (ruled 2026-09-25).** The connector is derived again at load. A
+loaded address whose type no local connector serves is dropped. No tag is
+stored.
 
 The file is an unordered set of addresses. Archive v8 already deleted the
 anchor and white lists (`src/p2p/net_peerlist.cpp:82`); the save path copies
@@ -273,14 +304,20 @@ They check different things. Neither stands for the other.
    `bool` on either type, and no `last_seen` beside `last_observed`. There is
    no ordered iterator. The check fails if it cannot find the constructor it
    is asserting about (rule 47).
-2. **Model sequences (runtime).** Draw-then-confirm promotes; confirm of an
+2. **No entry crosses connectors (ruled 2026-09-25).** On admit, on
+   disclosure, on eviction, and on reload, including the whole-list
+   rejection when one foreign entry arrives. If a future network shares
+   address syntax with another, so its connector cannot be derived from the
+   address type, the connector becomes a stored field, validated against the
+   address at admit, and D7 reopens on the same event.
+3. **Model sequences (runtime).** Draw-then-confirm promotes; confirm of an
    undrawn ordinary address does not; a Foundation seed confirm does; incoming
    and `--add-peer` stay gray; expiry returns white to gray; contact this node
    opened moves the clock; inbound contact does not; reload is gray only and
    does not draw former white first; `disclose` is a sample of white and
    carries no clock; a failed draw drops gray; a failed redial leaves white.
    The harness fails if it has no sequence (rule 47).
-3. **The C++ list is gone, and so is the old spelling.** `rg -n 'm_peers_white|peerlist_manager' src/p2p`
+4. **The C++ list is gone, and so is the old spelling.** `rg -n 'm_peers_white|peerlist_manager' src/p2p`
    returns nothing. `rg -n pruning_seed src rust tests` returns nothing,
    comments included. A gate that allowlists the word in a comment or a
    negative test has not finished.
@@ -338,8 +375,11 @@ neighbor `shekyl-peer-policy` owns the inbound ceiling, not these lists.
 
 ## 14. Scope fences
 
-- No admission-ceiling policy. That is slice 2.
-- No policy for which draw to dial next, and no seed-list editing. Slice 3
+- No admission-ceiling policy. Socket admission is the transport layer
+  ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md)), which folded
+  slice 2 on 2026-09-25.
+- No policy for which draw to dial next, and no seed-list editing. Choosing
+  which connector to dial is slice 3's, not this slice's. Slice 3
   calls `draw_gray`, `draw_white`, and `handshake_confirmed`. It does not grow
   a third door. The Foundation fleet is data this slice reads, not a second
   selector.
