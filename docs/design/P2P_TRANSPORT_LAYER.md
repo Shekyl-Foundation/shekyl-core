@@ -486,80 +486,112 @@ Its replacement still has no owner, and the row stays visible.
 
 ## D7 — capabilities are data (RULED 2026-09-25)
 
-Each connector declares its native capabilities as data. The stack for
-a connection is assembled from that declaration in a fixed order:
-routing, then the connector, then added layers, then the contract.
-Whatever the contract needs and the network lacks, a layer supplies.
-If no layer can supply it, that connector is not usable. Nothing above
-the transport layer asks which network it is on. The order is tested,
-so a misordered or doubled layer cannot occur by configuration.
+**Context.** Tor, I2P and clearnet were handled in the C++ as named cases:
+about 62 zone-identity comparisons (`src/p2p` 53, `src/cryptonote_protocol` 7,
+`src/net` 2), and a selection policy hidden in `enum class zone`'s ordering
+(`enums.h:53`). Each network is instead a **connector** that declares what its
+network natively provides. The transport layer assembles each connection's
+stack from that declaration, so a future network (Nym, Lokinet) is a new
+declaration, not a new set of branches.
 
-**No connector, capability, or declaration carries an unqualified
-"protected", "secure", or "anonymous".** Every declared capability
-names the property, the adversary, and what remains exposed (and who
-owns that remainder, or "unowned"). A cell nobody has assessed reads
-**not assessed**. It does not inherit a default from another network.
-No deep assessment is owed in this round. I2P, Nym, and Lokinet are
-columns that test the interface. They are not work.
+**Ruling.**
 
-| Declared per connector | Clearnet | Tor | I2P |
+1. **Each connector declares its native capabilities as data.** A connection's
+   stack is assembled in a fixed, tested order: **the connector (with its dial
+   method, direct or SOCKS), then added layers, then the contract.** Whatever
+   the contract needs and the network lacks, a layer supplies. If no layer can,
+   the connector is not usable. There is no separate routing element: how an
+   operator routes traffic is the operator's configuration, and the daemon
+   knows only its configured capabilities and speaks SOCKS.
+
+2. **Above the transport layer, the network is an opaque partition key and
+   never a branch condition.** Relay, peerlists, nonce windows and admission
+   use it to keep networks apart. Any behaviour that differs between networks
+   reads a declared capability, never the network's identity.
+
+3. **The address type selects the connector.** The connector declarations own
+   that mapping, and it is the single source for every consumer — the dialer,
+   the peerlist (Part 2 of this ruling, in
+   [`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md)), and
+   the relay lane's per-network properties (`RelayZone` / `LinkSecrecy` in
+   `rust/shekyl-relay-privacy/src/zone.rs` reads the declaration rather than
+   keeping a second table; recording that requirement is this round's job,
+   changing the relay lane is not).
+
+4. **One stated exception, until the flip.** A clearnet stack without the Noise
+   layer fails the contract's encryption clause. It is permitted while the
+   option exists, and **the flip deletes this exception**. There is no mode
+   that accepts both the Noise prefix and plaintext on one port.
+
+5. **No network is a magic bullet.** No connector, capability or declaration
+   carries an unqualified "protected", "secure" or "anonymous". Every declared
+   capability names **the property**, **the adversary it holds against**, and
+   **what remains exposed** — and who owns that remainder, or "unowned". A cell
+   nobody has assessed reads **not assessed**; it never inherits a default from
+   another network or from reputation. Encryption hides the content of the
+   bytes; it benefits confidentiality and does not create it. No deep
+   assessment is owed in this round.
+
+6. **A precondition we can check is checked.** The Tor connector's "no exits"
+   is enforced, not asserted: **the Tor connector dials onion addresses only**
+   and refuses anything else with `DialFailed`. A completed transport handshake
+   is checked the same way. What cannot be checked — an overlay's own
+   cryptography — is a trust assumption with its concession (Tor's is
+   classical-only, accepted). The daemon does not police the path an operator
+   uses to reach a SOCKS router.
+
+**The declaration table.**
+
+| Declared per connector | Clearnet | Tor | I2P — no connector until one is built (D14 item 2); this column tests the interface |
 | --- | --- | --- | --- |
-| Addressing | IPv4/IPv6 + port. Plain clearnet: no assumption about how the operator routes it | onion v3. Peers are onion services. No exits. Traffic does not leave Tor onto clearnet | `.b32.i2p`; not assessed further |
-| Encryption of the byte stream against the network observer | none native — **Noise layer added** (hybrid PQ). Encryption only: the peer's address and port stay visible, and traffic patterns stay observable | native, end to end to the peer's onion service, classical only (accepted) | native; not assessed further |
-| Destination authenticated to the dialer | no. Noise NN gives no peer authentication | yes, one way. An onion address is the service's public key, so completing the rendezvous means the dialer reached the holder of that key. The service learns nothing about the client | not assessed |
-| This node's address hidden from the peer | no | native | native |
-| Destination hidden from an observer at this node's end | no | yes. That observer can see that Tor is in use, not the destination | not assessed |
+| Addressing | IPv4/IPv6 + port. No assumption about how the operator routes it | onion v3. Peers are onion services; the connector dials onion addresses only, so traffic does not leave Tor onto clearnet | `.b32.i2p` |
+| Encryption of the byte stream against the network observer | none native — **Noise layer added** (hybrid PQ). Encryption only: the peer's address and port stay visible, and traffic patterns stay observable | native, end to end to the peer's onion service, classical only (accepted) | not assessed |
+| Destination authenticated to the dialer | no — Noise NN gives no peer authentication | yes, one way: an onion address is the service's public key, so completing the rendezvous means the dialer reached the holder of that key. The service learns nothing about the client | not assessed |
+| This node's address hidden from the peer | no | yes | not assessed |
+| Destination hidden from an observer at this node's end | no | yes — that observer can see Tor is in use, not the destination | not assessed |
 | This node's address hidden from an observer at the peer's end | no | yes | not assessed |
-| Correlation by an observer at both ends (timing, volume) | **not provided** | **not provided** | **not assessed** |
-| Connection existence, timing, volume, sizes visible to an observer at this node's end | **visible** — sizes pending the record-length direction (D14) | visible as Tor traffic (cell-quantised sizes) | not assessed |
+| Correlation by an observer at both ends (timing, volume) | **not provided** | **not provided** | not assessed |
+| Connection existence, timing, volume and sizes visible to an observer at this node's end | **visible.** Record framing is ruled fixed-window, with the window size from step 7's C9; until then BOLT-8 framing hides only the length field | visible as Tor traffic (cell-quantised sizes) | not assessed |
 | Origin of relayed transactions, against peers | **not provided by any connector** — taxed by Dandelion++, not eliminated | same | same |
-| Stream semantics | TCP | Tor stream | streaming library |
-| Observed identity of an inbound peer | the socket address | "this zone, no address" | "this zone, no address" |
-| Inbound peer has a bannable address | yes | no ("this zone, no address") | not assessed |
-| Deadline inputs (D9) | measured per connector | measured per connector | measured per connector |
+| Inbound peer has a bannable address (D4) | yes | no — "this zone, no address" | not assessed |
+| Stream semantics | TCP | Tor stream | not assessed |
+| Observed identity of an inbound peer | the socket address | "this zone, no address" | not assessed |
+| Deadline inputs (D9) | measured per connector | measured per connector | when a connector exists |
 
-Consequences:
+**Consequences.**
 
-- **Clearnet is plain clearnet, plus the Noise layer.** The declaration
-  is what clearnet provides natively. It says nothing about how the
-  operator routes it. The stack includes Noise because clearnet declares
-  no native encryption. Noise supplies encryption. It benefits
-  confidentiality and does not create it: the peer's IP address and
-  port stay available, and traffic can still be monitored by volume and
-  by the other connections. The option-off path is a stack
-  that does not meet the contract. The flip is "enforce the contract".
-  There is no mode that accepts both the Noise prefix and plaintext on
-  one port. `noise.rs`, `channel.rs`, `prefix.rs`, and `aead.rs` are
-  that layer. The HMAC implementation and the NN oracle live on
-  `fix/p2p-transport-hmac-oracle`.
-- **Tor is a complete overlay, not a VPN.** The Tor connector speaks
-  onion to onion. Peers are onion services, so traffic never leaves Tor
-  onto clearnet. Encryption is end to end to the peer's service, and
-  classical only, which is accepted. The destination is authenticated
-  to the dialer, one way, as the table says.
-- **Deadlines are per-connector data** (D9). A network with seconds of
-  mixing delay would break one global handshake deadline.
-- **Stream semantics are a capability.** A future message-shaped
-  network would need a stream layer (ordering, reliability, framing).
-  That is the interface's stress test. This round does not design that
-  layer.
-- **A precondition we can check is checked.** A completed handshake is
-  one. An overlay's own cryptography is a trust assumption with its
-  concession. Tor's is classical-only. The daemon does not police the
-  path an operator uses to reach a SOCKS router.
-- **Meeting the contract is encryption of the byte stream, and
-  integrity of those bytes, against the network observer.** It is not
-  confidentiality. It says nothing about traffic analysis, peer
-  graphing, or origin privacy. Those rows name their owner or say they
-  are unowned.
-- **One source.** `RelayZone` / `LinkSecrecy` in
-  `rust/shekyl-relay-privacy/src/zone.rs` is a second per-network
-  property table for the same networks. The connector declaration is
-  the source. The relay lane reads it. Recording that requirement is
-  this round's job. Changing the relay lane is not.
+- **Clearnet is plain clearnet, plus the Noise layer.** The declaration is what
+  clearnet provides natively. The stack includes Noise because clearnet
+  declares no native encryption. `noise.rs`, `channel.rs`, `prefix.rs` and
+  `aead.rs` are that layer. The option-off path is the exception in ruling 4;
+  the flip is "enforce the contract". `--proxy` is a D3 dial duty and changes
+  no declared capability.
+- **Tor is a complete overlay, not a VPN.** The Tor connector speaks onion to
+  onion. Encryption is end to end to the peer's service, classical only,
+  accepted. The destination is authenticated to the dialer, one way.
+- **Deadlines are per-connector data** (D9). A network with seconds of mixing
+  delay would break one global handshake deadline.
+- **Stream semantics are a capability.** A future message-shaped network would
+  need a stream layer (ordering, reliability, framing). That is the
+  interface's stress test; this round does not design that layer.
+- **Meeting the contract** is encryption of the byte stream, and integrity of
+  those bytes, against the network observer. It is not confidentiality, and it
+  says nothing about traffic analysis, peer graphing or origin privacy; those
+  rows name their owner or say "unowned".
+- **Behaviour is uniform within a connector** (the TCP-option and close
+  decisions in D3), even where connectors differ from each other.
 
-Behaviour stays uniform within a connector (the TCP-option and close
-decisions in D3), even where connectors differ from each other.
+**Falsifiers (rule 21). Reopen D7 if:**
+
+- code above the transport layer **branches on a network's identity** rather
+  than reading a declared capability;
+- **two connectors serve the same address type**, so the address type no
+  longer selects a connector (the peerlist brief's falsifier is the same
+  event);
+- a declaration cell is **filled from reputation or another network** rather
+  than assessed, or reads "protected", "secure" or "anonymous".
+
+---
 
 ## Network partitions (RULED 2026-09-25)
 
@@ -570,8 +602,11 @@ These partitions exist today, and each one stays:
 - Self-detection nonce windows are zone-scoped (PWD-I1).
 - `m_our_address`, and what is advertised, are per zone.
 - Admission counts are per zone.
-- Peerlists, and what peer exchange returns, are per zone.
-- Seed nodes are per zone.
+- Peerlists, and what peer exchange returns, are per connector. The
+  rule is the slice 1 brief
+  ([`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md),
+  amended 2026-09-25). This section does not restate it.
+- Seed nodes are per connector, declared in that same amendment.
 
 Separately, origin-zone priority is hidden in `enum class zone`'s
 ordering (`enums.h:53`: "order from here changes priority of selection
