@@ -115,6 +115,27 @@ TreeLeaf`, `curve_tree_layers[LayerChunk] → LayerHash`, `curve_tree_meta` as
 one `CurveTreeState` row (§3.4). E3 writes what these reads read; it does not
 get to choose a second shape for the same byte.
 
+**What E3 is asked for (E6 slice 6, 2026-09-25 — CEN-I13's operand).** A
+**height-keyed depth read**: the tree's depth **at** chain height `h` — the
+depth after the block at `h − 1` connected, before the block at `h` drained
+its leaves — keyed exactly as `curve_tree_roots[h]` is (SCW-19), so a spend
+whose reference is `ref_height` is measured against the depth of the tree
+its proof was built over, not the depth of whatever tree exists when the
+block is judged. Surface: `ChainView::depth_at(height) -> AtHeight<TreeDepth>`
+beside `root_at`, the per-height record written by the same connect that
+writes the root (a `(root, depth)` row at `h`, or a second table keyed the
+same way — E3's shape to choose; the ask is the *keying*). Why height-keyed
+and not the current depth the C++ reads (`get_curve_tree_depth()`,
+`blockchain.cpp:4162`): `CHAIN_RULES_SLICE_6.md` §3.3 and Q8 — current depth
+is correct only under three dependencies, one of which is an ordering
+argument (I10 refuses a `ref_height` a reorg removed before I13 reaches it),
+and ordering arguments have been wrong twice this month; the height-keyed
+read removes the dependency rather than documenting it. **Until it exists,
+CEN-I13 is slice 6's named successor** (`CHAIN_RULES_SLICE_6.md` §5 row 6;
+`FOLLOWUPS.md`), not a current-depth read taken early. Falsify by:
+`rg 'fn depth_at' rust/shekyl-chain-rules/src/view.rs` → the trait method,
+with `BatchView`'s impl in `store/view.rs`.
+
 ### 2.4 What DRS-E2 gets
 
 Nothing new to compare — `digest_v0`'s root family already reads
