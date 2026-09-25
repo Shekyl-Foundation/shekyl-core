@@ -44,7 +44,6 @@ use shekyl_types::BlockHash;
 use shekyl_wire::Transaction;
 
 use crate::block::{Candidate, StructurallyValid, ValidatedBlock};
-use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
@@ -56,7 +55,7 @@ use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
-use crate::rules::tx_against::{I10, I11, I12, I7, L1};
+use crate::rules::tx_against::{judge_reference, I7, L1};
 use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9};
 use crate::rules::{self, BlockContext, FormContext};
@@ -487,34 +486,14 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Err(refused) => return Ok(Err(refused)),
     };
     // Order: the C++'s `check_tx_inputs` looks up each key image as it
-    // walks the inputs (I7), then — on the regular-spend arm — the
-    // reference block (I10), its age (I11) and the anchor at its height
-    // (I12, a definition), before the tree-depth and proof reads the later
-    // commits add (I13, I15).
+    // walks the inputs (I7), then the reference sequence (I10 yields the
+    // height, I11 measures it, I12 reads the anchor). I13 and I15 join
+    // that sequence in `judge_reference`, not here.
     match rules::run_tx_against::<I7, _>(&cx, view, &mut coverage).map_err(ViewRead::View)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    let ref_height =
-        match I10::reference_height(&cx, view, &mut coverage).map_err(ViewRead::View)? {
-            Ok(ref_height) => ref_height,
-            Err(refused) => return Ok(Err(refused)),
-        };
-    if let Some(ref_height) = ref_height {
-        match I11::check(&cx, ref_height, view, &mut coverage).map_err(ViewRead::View)? {
-            Ok(()) => {}
-            Err(refused) => return Ok(Err(refused)),
-        }
-        // Derived and dropped until CEN-I15 (slice 6 commit 8) verifies the
-        // proof against it; `I12::anchor`'s docs carry the staging.
-        let _anchor = I12::anchor(ref_height, view, &mut coverage)?;
-    } else {
-        // Not a regular spend: I11 and I12 have no operand and are vacuous
-        // here, recorded as evaluated, like I10 above.
-        coverage.insert(CenRow::I11);
-        coverage.insert(CenRow::I12);
-    }
-    Ok(Ok(coverage))
+    judge_reference(&cx, view, &mut coverage).map(|verdict| verdict.map(|()| coverage))
 }
 
 /// [`tx_form`] then [`tx_against`] at one slot, coverages unioned. Both

@@ -247,9 +247,10 @@ pub(super) fn spend_at(
 }
 
 /// `tx` anchored for a block connecting at `height` (see [`spend_at`]):
-/// the harness's [`fixture::anchored_at`], which leaves a body with no
-/// `ToKey` input (the serve-credit-only shape) unanchored at any height
-/// and panics on a spend listed below `FIRST_SPEND_HEIGHT`.
+/// the harness's [`fixture::anchored_at`]. A serve credit stays as it is
+/// at any height. A spend or an emission — including an emission with no
+/// fee input, CEN-J21 — is anchored, and panics below
+/// `FIRST_SPEND_HEIGHT`.
 pub(super) fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
     fixture::anchored_at(hashes, height, tx)
 }

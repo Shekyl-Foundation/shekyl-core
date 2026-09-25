@@ -9,14 +9,14 @@
 //! (I2's falsifier lives here; I3's is `f2_the_wire_admits_one_transaction_version`).
 
 use crate::census::CenRow;
-use crate::fault::{Corrupt, ViewRead};
+use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::harness::fixture::{
     anchored_on, candidate_on, coinbase, listed, listed_on, point, point_at, serve_credit_only,
     spend, spendable_chain, TWO_G,
 };
 use crate::harness::{
     assert_refused, credited_to_this_falsifier, defined, formed_on, judged, Faulted, FaultingView,
-    MockChain,
+    MockChain, WithheldRead,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{refused_listed, refused_lone};
@@ -24,8 +24,7 @@ use crate::rules::tx_against::{I11, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN
 use crate::trust::Trust;
 use crate::validate::{tx_against, validate};
 use crate::verdict::{Locus, TxSlot};
-use crate::view::{AtHeight, ChainView};
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_types::{BlockHeight, KeyImage};
 use shekyl_wire::transaction::CT_TYPE_FCMP;
 use shekyl_wire::{Ct, CtBase, Input, Transaction};
 
@@ -34,11 +33,10 @@ const KI: [u8; 32] = point(9);
 // ---- the reference window: pinned to the JSON authority ----------------
 
 /// `REFERENCE_BLOCK_{MIN,MAX}_AGE` equal `config/consensus_constants.json`'s
-/// `fcmp_reference_block_{min,max}_age` — read from the file, not from a
-/// copy of the numbers, so an edit to the authority fails here rather than
-/// leaving the validator's window behind the daemon's (slice 6 Q5, the
-/// slice-5 Q5 pin shape over the JSON instead of the header: the header
-/// derives from the JSON too).
+/// `fcmp_reference_block_{min,max}_age`. The build script is what a
+/// production build reads; this is the falsifier that the consts are still
+/// that file — a later edit that replaces the generated value with a
+/// literal fails here (slice 6 Q5). The header derives from the JSON too.
 #[test]
 fn reference_window_is_the_json_authoritys() {
     let json: serde_json::Value =
@@ -303,17 +301,18 @@ fn l1_distinct_images_pass_and_record() {
 
 // ---- CEN-I10, I11, I12 -------------------------------------------------
 //
-// The mock earns two things here and no more: the window's boundary
-// arithmetic (`I11::window`, predicate logic on two heights) and the fault
-// classifications a driven chain cannot produce (a hole where a root
-// should be). The rows *operating* — a reference the chain does not hold
-// refused, a young reference refused, a real spend's reference found and
-// its anchor read — are witnessed by the driver: the ingest's mutation
-// family (`UnknownReference`, `ReferenceTooRecent`) through the production
-// pipeline against a real store, and every captured chain's real spends
-// (`vectors_tests`). A `MockChain` whose `height_of` answers what a test
-// wants is a fixture constructing the state the rule reads back, and is
-// not used for that.
+// The mock earns three things here and no more. The window's boundary
+// arithmetic (`I11::window`) is predicate logic on two heights. An
+// unrecorded hash is absence — `height_of` returns `None`, which is what
+// the read means, so CEN-I10's refusal of that hash is the mock's to say.
+// A root missing where the same view just reported the block recorded is
+// [`WithheldRead::RootAt`], charter job 3. The rows *operating* — a real
+// spend's reference found and its anchor read — are witnessed by the
+// driver: the ingest's mutation family (`UnknownReference`,
+// `ReferenceTooRecent`) through the production pipeline against a real
+// store, and every captured chain's real spends (`vectors_tests`). An
+// anchored spend on `MockChain` is the fixture writing a hash the mock
+// serves back, and is not a witness that those rows operate.
 
 /// The young edge: a reference exactly `MIN_AGE` below the connecting
 /// height is admitted; one block younger is refused.
@@ -376,14 +375,13 @@ fn i11_refuses_every_reference_on_a_chain_younger_than_min_age() {
     );
 }
 
-/// The three rows through `tx_against` on the harness's own spend: bare,
-/// its reference is the one no chain holds and I10 refuses at the
-/// transaction; anchored, I10 finds it, I11 measures it, I12 reads the
-/// anchor — all three recorded. This is the predicate over the fixture the
-/// harness defines, not a witness that the rows operate on a chain; that
-/// is the driver's (`mutation_tests`, `vectors_tests`).
+/// A spend whose `referenceBlock` is the hash no chain holds is CEN-I10's
+/// refusal at the transaction. Absence is what `height_of` means, so the
+/// mock can say it. The pass — an anchored spend recording I10, I11 and
+/// I12 — is the driver's (`mutation_tests`, `vectors_tests`) and the
+/// fixture gate's (`fixture_sanity_tests`).
 #[test]
-fn i10_refuses_the_unrecorded_reference_and_an_anchored_spend_records_the_three_rows() {
+fn i10_refuses_an_unrecorded_reference() {
     let chain = spendable_chain();
     chain.with_view(|view| {
         assert_refused(
@@ -396,16 +394,6 @@ fn i10_refuses_the_unrecorded_reference_and_an_anchored_spend_records_the_three_
             CenRow::I10,
             Locus::Tx { slot: TxSlot::Lone },
         );
-        let anchored = defined(tx_against(
-            &listed_on(&chain, KI),
-            TxSlot::Lone,
-            &view,
-            &RuleSet::GENESIS,
-        ))
-        .expect("an anchored spend passes the reference rows");
-        for row in [CenRow::I10, CenRow::I11, CenRow::I12] {
-            assert!(anchored.contains(row), "{row} recorded");
-        }
     });
 }
 
@@ -438,47 +426,17 @@ fn i10_i11_i12_are_vacuous_on_a_serve_credit() {
 /// the mock's to witness.
 #[test]
 fn i12_a_missing_root_at_the_reference_height_is_corrupt_not_a_verdict() {
-    struct RootlessBelow<'a, 'id> {
-        inner: crate::harness::MockView<'a, 'id>,
-        missing: BlockHeight,
-    }
-    impl<'id> ChainView<'id> for RootlessBelow<'_, 'id> {
-        type Fault = core::convert::Infallible;
-        fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Self::Fault> {
-            self.inner.has_key_image(key_image)
-        }
-        fn block_at(
-            &self,
-            height: BlockHeight,
-        ) -> Result<AtHeight<crate::view::RecordedBlock>, Self::Fault> {
-            self.inner.block_at(height)
-        }
-        fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Self::Fault> {
-            self.inner.height_of(hash)
-        }
-        fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault> {
-            if height == self.missing {
-                return Ok(AtHeight::AboveTip);
-            }
-            self.inner.root_at(height)
-        }
-        fn tip(&self) -> Result<Option<crate::view::Tip>, Self::Fault> {
-            self.inner.tip()
-        }
-    }
     let chain = spendable_chain();
     // The anchored spend references genesis (`newest_admissible_reference`
     // of the connecting height), so genesis's root is the one withheld.
     let tx = listed_on(&chain, KI);
     chain.with_view(|inner| {
-        let view = RootlessBelow {
-            inner,
-            missing: BlockHeight::ZERO,
-        };
+        let view = inner.withholding(WithheldRead::RootAt(BlockHeight::ZERO));
         assert_eq!(
             tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS),
             Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
-                at: BlockHeight::ZERO
+                at: BlockHeight::ZERO,
+                record: PerHeightRecord::CurveTreeRoot,
             }))
         );
     });

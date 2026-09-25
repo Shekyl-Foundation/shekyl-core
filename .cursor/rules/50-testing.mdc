@@ -143,10 +143,10 @@ which:
    to hold these (SI-2, SI-4, SI-7), so no driven chain can produce them,
    and the validator's answer to them — `Corrupt::HoleBelowTip`, the
    controlled fault that replaced four `unreachable!`s — has **no other way
-   to be reached by a test**. The instrument is a wrapper over the dense
-   mock that withholds or contradicts one read (`HoleyView`,
-   `RootlessBelow`), and the assertion is the *classification* — the fault
-   arm, never a verdict.
+   to be reached by a test**. The instrument is `WithholdingView`: one
+   `WithheldRead` (`BlockAt` or `RootAt` at one height) over the dense
+   mock, and the assertion is the *classification* — the fault arm, never
+   a verdict.
 
 The line between the three and everything else is **whether the chain is
 the subject**. I11's window is arithmetic that happens to take heights as
@@ -158,7 +158,7 @@ not mock-versus-driver; it is three things — **arithmetic on the mock,
 operation on the driver, unreachable-by-construction states on wrappers
 over the mock** — and a test that is none of the three is the false test
 above. (E6 slice 6 commit 5, 2026-09-25: I10 and I12 operate on the
-driver, I11's boundaries on the mock, `HoleBelowTip` on `RootlessBelow`.)
+driver, I11's boundaries on the mock, `HoleBelowTip` on `WithholdingView`.)
 
 Everything else — a computed root, a tree depth, a spent set populated to
 make a rule fire, a membership set that exists because a test said so — is

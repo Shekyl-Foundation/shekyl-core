@@ -148,8 +148,8 @@ pub fn at(height: u64) -> usize {
 
 /// `tx` anchored for a block at `height` on the chain whose block hashes so
 /// far are `hashes`: the harness's [`fixture::anchored_at`] — the newest
-/// reference CEN-I11 admits, a body with no `ToKey` input left as it is,
-/// a spend below `FIRST_SPEND_HEIGHT` refused by the builder.
+/// reference CEN-I11 admits. A serve credit is left as it is. A spend or
+/// an emission below `FIRST_SPEND_HEIGHT` is refused by the builder.
 pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
     fixture::anchored_at(hashes, height, tx)
 }

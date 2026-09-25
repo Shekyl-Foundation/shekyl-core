@@ -109,8 +109,8 @@ fn balanced_bond_post_and_emission_fixtures_pass() {
 }
 
 /// The transaction, listed first, connects — on the youngest chain that
-/// can list a spend, anchored on it (CEN-I10/I11 read the reference of a
-/// regular spend; an archival shape is left as it is).
+/// can list a spend, anchored on it. A spend's reference and an emission's
+/// reference (CEN-J21, including no fee input) are a block the chain holds.
 fn refused_listed_never(tx: &Transaction) {
     let chain = spendable_chain();
     chain.with_view(|view| {

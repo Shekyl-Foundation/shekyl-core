@@ -87,7 +87,7 @@ pub(crate) mod tx_inputs;
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, ViewRead};
+use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::Target;
 use crate::rules::timestamps::MtpWindow;
@@ -503,6 +503,9 @@ pub fn recorded<'id, V: ChainView<'id>>(
 ) -> Result<RecordedBlock, ViewRead<V::Fault>> {
     match view.block_at(height).map_err(ViewRead::View)? {
         AtHeight::Recorded(block) => Ok(block),
-        AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip { at: height })),
+        AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+            at: height,
+            record: PerHeightRecord::Block,
+        })),
     }
 }

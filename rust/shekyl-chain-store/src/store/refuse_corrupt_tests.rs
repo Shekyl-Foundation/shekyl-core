@@ -168,6 +168,7 @@ fn a_hole_below_the_tip_seen_by_the_validator_is_si7_and_halts_the_writer() {
         Err(batch
             .refuse_corrupt(shekyl_chain_rules::Corrupt::HoleBelowTip {
                 at: BlockHeight::from_raw(1),
+                record: shekyl_chain_rules::PerHeightRecord::Block,
             })
             .into())
     });
@@ -193,6 +194,39 @@ fn a_hole_below_the_tip_seen_by_the_validator_is_si7_and_halts_the_writer() {
         Ok(batch.connect(judge(&view, cand)?, facts(2, 0), RuleSet::GENESIS)?)
     });
     assert!(again.is_err(), "the writer stays halted: {again:?}");
+    cleanup(&path);
+}
+
+/// The same class, the other record. CEN-I12's root read and the producer's
+/// `root_at` both raise `HoleBelowTip` for the curve-tree root; mapping
+/// every hole onto `block_info` would halt the writer against the wrong
+/// table. The cell is the record's.
+#[test]
+fn a_missing_root_below_the_tip_is_si7_on_curve_tree_roots() {
+    let path = tmp("connect-refuse-corrupt-root-hole");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new()]);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::HoleBelowTip {
+                at: BlockHeight::ZERO,
+                record: shekyl_chain_rules::PerHeightRecord::CurveTreeRoot,
+            })
+            .into())
+    });
+    let row = StoreInvariant::CellCorrupt {
+        key: "curve_tree_roots",
+        fault: CellFault::Absent,
+    };
+    expect_row(&out, row);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row,
+        }
+    );
     cleanup(&path);
 }
 
@@ -224,6 +258,7 @@ fn inspect_of_a_hole_halts_the_writer() {
         Err(batch
             .refuse_corrupt(shekyl_chain_rules::Corrupt::HoleBelowTip {
                 at: BlockHeight::ZERO,
+                record: shekyl_chain_rules::PerHeightRecord::Block,
             })
             .into())
     });

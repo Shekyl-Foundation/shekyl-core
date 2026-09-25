@@ -31,7 +31,7 @@ use std::collections::BTreeSet;
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, ViewRead};
+use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::rules::tx::TxClass;
 use crate::rules::{BlockContext, BlockRule, Rule, TxAgainstRule, TxContext, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
@@ -39,21 +39,37 @@ use crate::view::{AtHeight, ChainView, Tip};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Ct, Input};
 
+// CEN-I11's window, from `config/consensus_constants.json` at build time
+// (`build.rs`). The same file drives the C++ header and
+// `shekyl-curve-tree`. The consts stay beside the rule (slice 6 Q5): no
+// schedule step varies them, so they are not `RuleSet` fields. The
+// sentinels below are the review gate a JSON edit must touch on purpose;
+// `reference_window_is_the_json_authoritys` is the falsifier that these
+// consts are still that file.
+include!(concat!(env!("OUT_DIR"), "/reference_window_generated.rs"));
+
 /// CEN-I11's window, lower edge: a spend's `referenceBlock` is at least
 /// this many blocks below the connecting height (`ref_height ≤
-/// chain_height − MIN_AGE`; `blockchain.cpp:4121`). A `const` beside its
-/// rule, not a `RuleSet` field: no schedule step varies it (slice 6 Q5,
-/// the F21 test). The authority is `config/consensus_constants.json`
-/// (`fcmp_reference_block_min_age`), which also drives the C++ header;
-/// `reference_window_is_the_json_authoritys` holds this equal to it, so
-/// the two cannot drift apart silently.
-pub const REFERENCE_BLOCK_MIN_AGE: BlockCount = BlockCount::from_raw(5);
+/// chain_height − MIN_AGE`; `blockchain.cpp:4121`).
+pub const REFERENCE_BLOCK_MIN_AGE: BlockCount = BlockCount::from_raw(FCMP_REFERENCE_BLOCK_MIN_AGE);
 
 /// CEN-I11's window, upper edge: a spend's `referenceBlock` is at most
 /// this many blocks below the connecting height (`ref_height ≥
-/// chain_height − MAX_AGE`; `blockchain.cpp:4133`). Same authority and
-/// pin as [`REFERENCE_BLOCK_MIN_AGE`] (`fcmp_reference_block_max_age`).
-pub const REFERENCE_BLOCK_MAX_AGE: BlockCount = BlockCount::from_raw(100);
+/// chain_height − MAX_AGE`; `blockchain.cpp:4133`).
+pub const REFERENCE_BLOCK_MAX_AGE: BlockCount = BlockCount::from_raw(FCMP_REFERENCE_BLOCK_MAX_AGE);
+
+const _: () = assert!(
+    REFERENCE_BLOCK_MIN_AGE.to_raw() == 5,
+    "fcmp_reference_block_min_age left the baseline 5; review CEN-I11 before updating this sentinel"
+);
+const _: () = assert!(
+    REFERENCE_BLOCK_MAX_AGE.to_raw() == 100,
+    "fcmp_reference_block_max_age left the baseline 100; review CEN-I11 before updating this sentinel"
+);
+const _: () = assert!(
+    REFERENCE_BLOCK_MAX_AGE.to_raw() > REFERENCE_BLOCK_MIN_AGE.to_raw(),
+    "the reference window is empty"
+);
 
 /// CEN-I7: no input's key image is already spent on the recorded chain
 /// (`blockchain.cpp` `have_tx_keyimg_as_spent`, per `ToKey` input — the
@@ -317,9 +333,50 @@ impl I12 {
         coverage.insert(Self::ROW);
         match view.root_at(ref_height).map_err(ViewRead::View)? {
             AtHeight::Recorded(root) => Ok(root),
-            AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip { at: ref_height })),
+            AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+                at: ref_height,
+                record: PerHeightRecord::CurveTreeRoot,
+            })),
         }
     }
+}
+
+/// The rows that consume the height [`I10`] yields. Recorded vacuous when
+/// that height does not exist — a non-spend, where I10 itself recorded
+/// vacuous. CEN-I13 joins this list when `depth_at` exists; the list is
+/// the whole of what a later commit has to remember.
+const REFERENCE_SUCCESSORS: &[CenRow] = &[I11::ROW, I12::ROW];
+
+/// CEN-I10, CEN-I11 and CEN-I12 as one sequence.
+///
+/// I10 yields the reference height. On a pass, I11 measures it and I12
+/// reads the anchor at it. The anchor is in flight for CEN-I15: derived
+/// here so a missing root is classified with the operand, and dropped
+/// beside that derivation until the proof is verified against it. A
+/// transaction that is not a regular spend records the successors vacuous.
+pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
+    cx: &TxContext<'_>,
+    view: &V,
+    coverage: &mut RuleCoverage,
+) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+    let ref_height = match I10::reference_height(cx, view, coverage).map_err(ViewRead::View)? {
+        Ok(height) => height,
+        Err(refused) => return Ok(Err(refused)),
+    };
+    let Some(ref_height) = ref_height else {
+        for row in REFERENCE_SUCCESSORS {
+            coverage.insert(*row);
+        }
+        return Ok(Ok(()));
+    };
+    match I11::check(cx, ref_height, view, coverage).map_err(ViewRead::View)? {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    // In flight for CEN-I15 (slice 6 commit 8). Dropping it here, beside
+    // the derivation, is the staging; `validate` does not name the value.
+    let _anchor = I12::anchor(ref_height, view, coverage)?;
+    Ok(Ok(()))
 }
 
 #[cfg(test)]

@@ -58,8 +58,8 @@ use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    recorded, validate, AtHeight, CenRow, ChainView, Corrupt, Fault, InvalidBlock, Retry, Stale,
-    StructurallyValid, Verdict, ViewRead,
+    recorded, validate, AtHeight, CenRow, ChainView, Corrupt, Fault, InvalidBlock, PerHeightRecord,
+    Retry, Stale, StructurallyValid, Verdict, ViewRead,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
@@ -480,7 +480,12 @@ impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F
             let view = batch.chain_view();
             let tip = view.tip()?;
             let (connecting, previous) = connecting(tip)?;
-            let curve_tree_root = present(batch, connecting, view.root_at(connecting))?;
+            let curve_tree_root = present(
+                batch,
+                connecting,
+                PerHeightRecord::CurveTreeRoot,
+                view.root_at(connecting),
+            )?;
             let parent_coins_generated = match tip {
                 None => shekyl_units::AtomicUnits::ZERO,
                 Some(t) => definition(batch, recorded(&view, t.height))?.coins_generated,
@@ -535,18 +540,19 @@ fn definition<T>(
 }
 
 /// A height the producer asked for as recorded. `AboveTip` inside the
-/// range the caller derived (`tip + 1` for the live root, the tip itself
-/// for its block) is [`Corrupt::HoleBelowTip`] and halts; a store fault
-/// passes through, and an in-range hole is already that fault from the view.
+/// range the caller derived (`tip + 1` for the live root) is
+/// [`Corrupt::HoleBelowTip`] for `record` and halts; a store fault passes
+/// through, and an in-range hole is already that fault from the view.
 fn present<T>(
     batch: &WriteBatch<'_, '_>,
     height: BlockHeight,
+    record: PerHeightRecord,
     at: Result<AtHeight<T>, StoreError>,
 ) -> Result<T, RunFault> {
     match at {
         Ok(AtHeight::Recorded(value)) => Ok(value),
         Ok(AtHeight::AboveTip) => Err(RunFault::Store(
-            batch.refuse_corrupt(Corrupt::HoleBelowTip { at: height }),
+            batch.refuse_corrupt(Corrupt::HoleBelowTip { at: height, record }),
         )),
         Err(fault) => Err(RunFault::Store(fault)),
     }
