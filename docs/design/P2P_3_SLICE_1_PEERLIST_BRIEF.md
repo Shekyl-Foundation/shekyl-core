@@ -87,24 +87,27 @@ connections are drawn uniformly from white, so a small white list is a
 small set of hosts an attacker can dominate. The target is enough
 distinct candidates that no attacker-held fraction dominates the draws.
 Slices 1 and 3 derive it. It is not "twice the out-degree", and it is
-not today's 1,000 cap. Headroom means refill starts before white is
-short of that target, so a collapse is not the moment the node first
-probes stale gray entries. The threshold is set against the diversity
-target. No number is written here.
+not today's 1,000 cap. Two levels, both derived, neither a number.
+The diversity floor is the minimum that resists eclipse. The refill
+line sits above that floor, derived from it. Headroom is the gap
+between them. Refill starts when white crosses the refill line, while
+it is still above the floor, so the node is not probing stale gray
+entries in the moment connectivity has already collapsed.
 
-**The refill trigger is the count, plus one deadline for quiet decline.**
-If white is already below the diversity target, including empty after
-boot or after eviction, slice 1 reports that immediately. There is no
-expiry to wait for. When white is at or above the target, slice 1 holds
+**The refill trigger is the refill line, plus one deadline for quiet decline.**
+If white is already below the refill line, including empty after boot
+or after eviction, slice 1 reports that immediately. There is no expiry
+to wait for. When white is at or above the refill line, slice 1 holds
 the earliest expiry among its entries. When that deadline fires, slice
-1 re-counts and reports below target if it is. That is one timer for
-the list, not one per entry. Evaluating expiry when the list is next
-used still decides whether an entry has demoted. In steady state every
-outbound slot is full and nothing draws from white, so a demotion with
-no deadline would wait until a connection is already lost. Slice 1 does
-not dial. The pace of the promotion dials is slice 3's: a bounded rate,
-derived, with jittered spacing. The inherited 60-second housekeeping
-timer did both the trigger and the pace, and it is not kept.
+1 re-counts and reports below the refill line if it is. That is one
+timer for the list, not one per entry. Evaluating expiry when the list
+is next used still decides whether an entry has demoted. In steady
+state every outbound slot is full and nothing draws from white, so a
+demotion with no deadline would wait until a connection is already
+lost. Slice 1 does not dial. The pace of the promotion dials is slice
+3's: a bounded rate, derived, with jittered spacing. The inherited
+60-second housekeeping timer did both the trigger and the pace, and it
+is not kept.
 
 White shrinks by that demotion, by capacity eviction, and by removal
 for misbehaviour. Dandelion++ does not remove white entries. It chooses

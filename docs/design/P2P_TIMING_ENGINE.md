@@ -5,8 +5,9 @@ Wakes go to the owner's home. The wake set is ordered by time. Slice 1
 holds one list deadline. PWD-B2 leaves the interim tick first. Nothing
 here is a number. Periods belong to their owners. **Rule 26 is cited
 explicitly.** This document mints no identifier family. The register
-row is P2P-3's **TE**. Implementation of the engine core may start.
-The C++ bridge waits until after the transport cutover (below).
+row is P2P-3's **TE**. The design is closed. Rule 26's pre-flight
+is the next gate; the engine core is not written until that pass is
+recorded. The C++ bridge waits until after the transport cutover.
 
 Pinned to `fix/p2p-transport-hmac-oracle` `55d7b2b16`. Line numbers
 were read there. Opening the round still discharges D6's third
@@ -45,7 +46,7 @@ engine runs today's behaviour so a differential harness can match it.
 | Connection liveness | the same 1002 is a request that must be answered, and it keeps the session off the inherited idle timer | the transport layer, per connector (D9). Not a Levin command |
 | Per-connection timed sync | today it is the same 60 s maker as the three jobs above. PWD-B2 already ruled a per-connection draw, so sessions are not correlated by phase | the connection. One of the first owners to leave `idle_worker` |
 | Outbound fill | `connections_maker`, gated at 1 s (`net_node.h:721`). The fill loop `sleep_for`s 1 s when it makes no connection (`net_node.inl:2063`) and dials serially | slice 3. A call can run for many seconds. The blocking pool has to allow that |
-| Gray refill | `gray_peerlist_housekeeping`, gated at 60 s (`net_node.h:723`). That timer both triggered promotion and capped it at about one probe a minute | **replaced by an event (2026-09-25).** If white is already below target, including empty, the count is the event and there is no expiry to wait for. Otherwise slice 1 holds one deadline, the earliest white expiry, and re-counts when it fires. Evaluating expiry at the next use still decides correctness. No timer per entry |
+| Gray refill | `gray_peerlist_housekeeping`, gated at 60 s (`net_node.h:723`). That timer both triggered promotion and capped it at about one probe a minute | **replaced by an event (2026-09-25).** The diversity floor is the eclipse minimum. The refill line sits above it. If white is already below the refill line, including empty, the count is the event. Otherwise one deadline, the earliest white expiry, and a re-count when it fires. No timer per entry |
 | Promotion pace | the same 60 s gate, secretly | slice 3. A bounded derived rate, jittered. This is the timer that remains |
 | Peerlist store | `store_config`, gated at 30 min (`net_node.h:722`) | slice 1 |
 | Incoming-connection check | `check_incoming_connections`, gated at 1 h (`net_node.h:724`) | slice 3 |
@@ -172,20 +173,20 @@ engine into the transport runtime.
 
 ### 6. Shutdown, in order
 
-1. Stop accepting new registrations.
-2. The transport stops accepting and cancels its tasks. Those owners
-   drop, and their deadlines go with them.
-3. Pending invoke timeouts resolve as `Aborted(Shutdown)`, not
-   `Timeout`, through each connection's queue. Shutdown is not a peer
-   misbehaving.
-4. A periodic callback already running finishes. No new one starts.
-5. Relay owners drop. Whether anything is flushed first is a hook the
+1. Stop accepting new registrations. A deadline that fires after this,
+   other than the aborts in step 3, is dropped.
+2. The transport stops accepting new connections. Connection queues
+   stay up.
+3. Pending invoke timeouts are enqueued as `Aborted(Shutdown)`, not
+   `Timeout`, on those queues, and each queue delivers that message.
+   Shutdown is not a peer misbehaving. The queues exist for this step.
+4. Then the transport cancels its tasks. Those owners drop, and their
+   deadlines go with them.
+5. A periodic callback already running finishes. No new one starts.
+6. Relay owners drop. Whether anything is flushed first is a hook the
    relay lane exposes. It is not this engine's decision.
-6. The blocking pool drains.
-7. The engine thread exits.
-
-After step 1, a deadline that fires is dropped, except the invoke
-aborts in step 3.
+7. The blocking pool drains.
+8. The engine thread exits.
 
 ### 7. What the engine never does
 
@@ -236,7 +237,8 @@ interim executor.
    (`next_wake`, `poll`), the time-ordered wake set with generation
    numbers, delivery of a wake to the owner's home, the injected
    monotonic clock, and lateness recording. It is tested in virtual
-   time. The transport layer uses it from its first line.
+   time. The transport layer uses it from its first line. Rule 26's
+pre-flight is recorded before this crate is written.
 2. **The C++ bridge, after the transport cutover.** Invoke-timeout
    arming, the interim idle cadences on the blocking pool, moving the
    relay `Driver`'s sleep off asio, and deleting the `io_context`.
