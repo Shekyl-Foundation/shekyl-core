@@ -105,6 +105,19 @@ pub use wire::{
 /// Maximum number of inputs per transaction (consensus limit, matches `shekyl-fcmp::MAX_INPUTS`).
 pub const MAX_INPUTS: usize = shekyl_fcmp::MAX_INPUTS;
 
+// The prover's cap (`shekyl_fcmp::MAX_INPUTS`, what `sign_transaction`
+// refuses past) and the validator's (`shekyl_wire::transaction::
+// MAX_FCMP_INPUTS`, what CEN-I4 refuses past) are two declarations of one
+// consensus value, in two crates with no dependency edge between their
+// production halves (`shekyl-wire` dev-depends on `shekyl-fcmp` only). This
+// crate depends on both, so the equality is pinned here: a builder that could
+// prove a spend the chain refuses, or a chain that admits a spend no builder
+// can prove, fails to compile (E6 slice 6, CEN-I4; #853 review).
+const _: () = assert!(
+    MAX_INPUTS == shekyl_wire::transaction::MAX_FCMP_INPUTS,
+    "shekyl_fcmp::MAX_INPUTS (the prover's cap) must equal shekyl_wire::transaction::MAX_FCMP_INPUTS (CEN-I4's cap)",
+);
+
 /// Maximum curve-tree depth a membership proof spans (consensus limit,
 /// re-exported from `shekyl-fcmp` so engine-side consumers that depend on
 /// tx-builder — not fcmp directly — have a single source for the proof-system
