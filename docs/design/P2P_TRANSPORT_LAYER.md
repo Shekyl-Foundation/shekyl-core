@@ -1,6 +1,6 @@
 # P2P transport layer — Rust connectors in place of epee's TCP server
 
-**Status: OPEN — Round 3, 2026-09-25.** Round 1 was pinned to `dev`
+**Status: OPEN — Round 3, D14 RULED 2026-09-25.** Round 1 was pinned to `dev`
 `db2788d164660003948376ba369fa396c5f4c482`. Round 2 re-read that pin.
 The 11 commits `dev` gained after it are S-POOL / chain-store and do
 not touch epee, `src/p2p`, `src/net`, the transport crate, or the
@@ -27,15 +27,14 @@ in the path.
 
 **Ordering ruling (Rick, 2026-09-25).** The epee TCP server is replaced by
 the transport layer first. The clearnet option is then tested on that
-layer,
-and the flip happens only after that testing passes. The interim pipe
+layer, and the flip happens only after that testing passes. The interim pipe
 (`pipe.rs`, the descriptor-handoff FFI, epee's `network_pipe_ops`) is
 deleted at cutover and receives no further work. Host evidence gathered on
 the pipe would not carry; protocol evidence does not need the pipe.
 
 | Step | What | Kind |
 | --- | --- | --- |
-| 1 | Crypto core split onto `fix/p2p-transport-hmac-oracle` (`75f826cfb`); pipe branch parked at `190cbdc3b` | Done locally; crypto branch pushed |
+| 1 | Crypto core on `fix/p2p-transport-hmac-oracle`; pipe branch parked at `190cbdc3b` | Branch state is the index row, not this table |
 | 2 | Documentation and register corrections | Separate doc PR; not this file |
 | 3 | Pi-4 crypto bench and protocol fuzz | After this round opens; results count at the flip |
 | 4 | This design round | This document |
@@ -128,8 +127,7 @@ Timers that exist today, read at `abstract_tcp_server2.inl:59-63`:
 started with, and the new-connection timer picks the local or remote
 constant at `:1001-1004`. `is_local` is RFC 1918 (`local_ip.h:41-62`).
 A peer in that class holds the socket for 20 minutes before any Levin
-session exists, then has a 30-minute idle timer. D3 recommends refusing
-that split. The ruling is D14 item 6.
+session exists, then has a 30-minute idle timer. D14 refuses that split.
 
 `P2P_DEFAULT_CONNECTION_TIMEOUT` at `src/cryptonote_config.h:189` is
 **5,000 ms**, not 10 seconds. `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` at
@@ -184,7 +182,7 @@ through an `i_service_endpoint` adapter until LV-3.
 **Out.** The `Connection` type, ownership transfer, the registry, and
 relay dispatch (LV-3 steps a–d). The peerlist, admission policy,
 discovery, and the handshake state machine (P2P-3 slices 1–4). Whether
-Levin framing moves with the transport layer is D14 item 3.
+Levin framing stays C++ through cutover and moves with LV-3 (D14).
 
 **Decoupling rule.** Levin framing, the p2p protocol, and the cryptonote
 protocol run over the transport contract and nothing else. The transport
@@ -269,8 +267,8 @@ and the mechanism does not. "Refuse" means it does not survive.
 | SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust. `tokio-socks` 0.5.3 is already a workspace dependency (`shekyl-p-fetch/Cargo.toml:40`, `shekyl-rpc-transport/Cargo.toml:43`). Reusing it adds no supply-chain surface (rule 17). A separate `socks` 0.3.4 crate is in `Cargo.lock` because `ureq` 3.3.0 depends on it, and `shekyl-p-transport` enables `ureq/socks-proxy` via its `tor-socks` feature. The connector uses `tokio-socks`, not that crate. |
 | Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry, and do not attribute from the socket.** Tor and I2P inbound connections arrive on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host. This is where LV-3's OBSERVED endpoint originates. |
 | Tor forward listener | `net_node.inl:863-880` | Carry. Bound to `127.0.0.1` on port 0. The OS-assigned port is read back with `get_binded_port` (`:881`) and handed to Tor control. Bind failure erases the zone (`:878`). |
-| Local versus remote timers | `m_local` at `abstract_tcp_server2.inl:992`; timers at `:100-112` and `:1001-1004`. Local new-connection is 1,200,000 ms (20 minutes), not the "2 minutes" comment on `:60` | **Recommended refuse. Ruling is D14 item 6.** D2 already refuses a timeout whose only justification is that epee uses it, and this row names no other ruling. `m_local` is loopback or RFC 1918, so a LAN neighbour holds a connection for 20 minutes before any Levin session, against 10 seconds for everyone else. A test rig that needs a longer timer sets it explicitly. |
-| Gap from channel established to session established | Outbound Levin invoke is 5 s (`cryptonote_config.h:193`). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A per-connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes, or 30 minutes on the `m_local` path D14 item 6 is asked to refuse). Each connector owns one deadline for its peers, beside PWD-B3's byte cap for command 1001. |
+| Local versus remote timers | `m_local` at `abstract_tcp_server2.inl:992`; timers at `:100-112` and `:1001-1004`. Local new-connection is 1,200,000 ms (20 minutes), not the "2 minutes" comment on `:60` | **Refuse (D14).** D2 already refuses a timeout whose only justification is that epee uses it. The class is loopback or RFC 1918, so any LAN host gets 20 minutes before a Levin session, against 10 seconds for everyone else. Container port-forwarding makes this worse: inbound peers arrive from the bridge gateway's private address, every peer looks local, and admission's per-host view collapses to one host. A test rig that needs a longer timer sets it explicitly. |
+| Gap from channel established to session established | Outbound Levin invoke is 5 s (`cryptonote_config.h:193`). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A per-connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes on the path that remains after D14 refuses the local split). Each connector owns one deadline for its peers, beside PWD-B3's byte cap for command 1001. |
 | Dual-stack bind and port 0 | `init_server` at `net_node.inl:1065` takes IPv4 and IPv6 ports and addresses plus `m_use_ipv6` / `m_require_ipv4` | Carry. A port-0 bind reads the assigned port back. The Tor listener above is the port-0 case that must not abort the rest of the boot. |
 | Worker pool | `run_server`'s thread count; `set_threads_prefix` | Carry the pool as a stated size, not as "however many epee used". D6 sizes the socketless executor separately. |
 | Graceful stop | `send_stop_signal`, then connections drained, then `deinit_server` (`net_node.inl:1187` is one `deinit_server` site) | Carry the order: stop accepting, drain or cancel live connections, then tear the listeners down. |
@@ -279,9 +277,8 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Rate limit and per-connection speed stats | `network_throttle*`; the pipe's `on_wire` path on the parked branch | Carry the limit. Stats are observed facts reported upward, not a second policy. |
 | Send-queue bounds | 1,000 messages and 100 MiB (`abstract_tcp_server2.h:72-73`) | Carry, with one source. The pipe's `PIPE_PLAINTEXT_BUDGET` was a second copy and is not repeated. |
 | Send backpressure and strand order | Send path in `abstract_tcp_server2.inl` (queue checks near the caps above) | Re-derive. Nonce order equals wire order because there is one writer per direction. A strand is not required to get that. |
-| `--proxy` (clearnet through SOCKS) | `daemon.cpp:156-157` passes `arg_proxy` (`command_line_args.h:97`). `net_node.inl:926-935` sets the public zone's `m_connect = socks_connect` and a proxy address | **Carry, and name it.** Aimed at Tor, this is clearnet addressing reached through Tor exit relays. The peer does not see this node's address. Encryption ends at the exit, which sees the clearnet peer, so the Noise layer is still required on that hop. Proxied connections enter the public server via `add_connection`, so the option-on path covers them today. The declaration makes that coverage a property of the stack, not an accident of which server the pipe attached to. |
-| Overlay proxy precondition | `--tx-proxy tor,<ip>:<port>` accepts any address (`net_node.inl:623`) | **Declare the precondition. The disposition of a non-loopback address is D14 item 5.** Tor's native encryption holds from the local router onward. A router on another host means unencrypted Levin crosses that hop. The Tor connector's declaration states "the hop to the router is loopback", and configuration checks the part it can check. |
-| `--tos-flag` / `IP_TOS` | `net_node.cpp:182`, default `-1`. Applied at `net_node.inl:597` and `set_tos_flag` `:3378-3383` (a `-1` returns without storing). Every socket still calls `setsockopt` at `abstract_tcp_server2.inl:966-976`. The static `m_default_tos` (`connection_basic.cpp:121`) is zero-initialized, so the default path sets TOS to 0 | **Recommended refuse. Ruling is D14 item 7.** A per-operator DSCP is a per-node marker on every packet. The recommendation is no `setsockopt` at all, so TOS stays at the OS default. Step 7 C1 records the DSCP that actually leaves today on the `-1` default, which sets TOS to 0. What the kernel emits is measured, not assumed. |
+| `--proxy` | `daemon.cpp:156-157` passes `arg_proxy` (`command_line_args.h:97`). `net_node.inl:926-935` sets the public zone's `m_connect = socks_connect` | **Carry as a dial duty.** The clearnet connector can dial through a SOCKS proxy the operator configures. The daemon speaks SOCKS. How the operator reaches that proxy, including a non-loopback address, is the operator's job (D14, settled: accept). It changes no declared capability. Clearnet still needs the Noise layer because its declaration has no native encryption. |
+| `--tos-flag` / IP Type of Service | `net_node.cpp:182`, default `-1`. Applied at `net_node.inl:597` and `set_tos_flag` `:3378-3383` (a `-1` returns without storing). Every socket still calls `setsockopt` at `abstract_tcp_server2.inl:966-976`. The static `m_default_tos` (`connection_basic.cpp:121`) is zero-initialized, so the default path sets TOS to 0 | **Refuse (D14).** TOS is the Type of Service byte, DSCP plus ECN, in cleartext on every packet. A chosen value is an operator-made fingerprint. Do not call `setsockopt`. Packets carry the operating system's default. C1 records the DSCP that leaves today, when the default path sets TOS to 0. |
 | `no_delay(false)` (Nagle) | Set on every socket at `abstract_tcp_server2.inl:977-982` | **Measure before deciding**, under step 7 C9. Nagle changes the record sizes an observer sees, so it is part of the record-length evidence. It is not fixed before that evidence exists. |
 | FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 C4 asserts those failures are indistinguishable from the far side. |
 | `add_ref` / `release`, `request_callback`, `send_done` | `i_service_endpoint` | The adapter's contract (D4). Not a copy of epee's refcount. |
@@ -322,16 +319,23 @@ to keep.
 
 ---
 
-## D5 — runtime ownership (not decided)
+## D5 — runtime ownership (RULED 2026-09-25)
 
-Options, with the cost left for the Pi-4 floor rather than invented:
+One place in the daemon constructs every runtime. The transport layer
+gets its own runtime, with a stated thread budget. The budgets are
+explicit and have to add up to something the Pi-4 can carry. The
+numbers come from measurement, not from this ruling.
 
-1. One daemon-owned runtime, handed to the transport layer and to the
-   existing daemon-rpc and tor-control users.
-2. A connector runtime with a stated thread budget, beside the two
-   that already exist.
+The transport layer faces attackers: any peer can drive its load. The
+RPC and Tor-control runtimes serve the operator. A tokio multi-thread
+runtime has no task priorities, so a shared pool would let a peer flood
+starve wallet RPC, and the reverse. Separate runtimes contain that.
 
-Round 1 does not pick. D14 item 1 is this choice.
+Today each subsystem builds its own runtime. Two already do
+(`shekyl-daemon-rpc` `ffi_exports.rs:162`, `shekyl-tor-control-daemon`
+`blocking.rs:120`). A multi-thread runtime defaults to one worker per
+core, so a third unbudgeted runtime on a 4-core Pi-4 is twelve workers
+plus blocking pools. The transport layer does not add one that way.
 
 ---
 
@@ -370,22 +374,25 @@ columns that test the interface. They are not work.
 
 | Declared per connector | Clearnet | Tor | I2P |
 | --- | --- | --- | --- |
-| Addressing | IPv4/IPv6 + port | onion v3 | `.b32.i2p` |
-| Encryption of the byte stream against the network observer | none native — **Noise layer added** (hybrid PQ). Encryption only: the peer's address and port stay visible, and traffic patterns stay observable | native, classical only (accepted); precondition: the hop to the local router (D3). Encryption only; the rows below say what stays visible | native; not assessed further |
+| Addressing | IPv4/IPv6 + port. Plain clearnet: no assumption about how the operator routes it | onion v3. Peers are onion services. No exits. Traffic does not leave Tor onto clearnet | `.b32.i2p`; not assessed further |
+| Encryption of the byte stream against the network observer | none native — **Noise layer added** (hybrid PQ). Encryption only: the peer's address and port stay visible, and traffic patterns stay observable | native, end to end to the peer's onion service, classical only (accepted) | native; not assessed further |
+| Destination authenticated to the dialer | no. Noise NN gives no peer authentication | yes, one way. An onion address is the service's public key, so completing the rendezvous means the dialer reached the holder of that key. The service learns nothing about the client | not assessed |
 | This node's address hidden from the peer | no | native | native |
-| This node's address hidden from an observer at one end | no | partially — the observer sees Tor use, not the destination; not assessed further | not assessed |
+| Destination hidden from an observer at this node's end | no | yes. That observer can see that Tor is in use, not the destination | not assessed |
+| This node's address hidden from an observer at the peer's end | no | yes | not assessed |
 | Correlation by an observer at both ends (timing, volume) | **not provided** | **not provided** | **not assessed** |
-| Connection existence, timing, volume, sizes visible to an observer at this node's end | **visible** — sizes pending the record-length ruling (D14 item 4) | visible as Tor traffic (cell-quantised sizes) | not assessed |
-| Origin of relayed transactions, against peers | **not provided by any connector** — owned by Dandelion++ | same | same |
+| Connection existence, timing, volume, sizes visible to an observer at this node's end | **visible** — sizes pending the record-length direction (D14) | visible as Tor traffic (cell-quantised sizes) | not assessed |
+| Origin of relayed transactions, against peers | **not provided by any connector** — taxed by Dandelion++, not eliminated | same | same |
 | Stream semantics | TCP | Tor stream | streaming library |
 | Observed identity of an inbound peer | the socket address | "this zone, no address" | "this zone, no address" |
 | Deadline inputs (D9) | measured per connector | measured per connector | measured per connector |
 
 Consequences:
 
-- **Clearnet is a connector plus the Noise layer.** Noise is not a
-  clearnet special case in code. The stack includes it because clearnet
-  declares no native encryption. Noise supplies encryption. It benefits
+- **Clearnet is plain clearnet, plus the Noise layer.** The declaration
+  is what clearnet provides natively. It says nothing about how the
+  operator routes it. The stack includes Noise because clearnet declares
+  no native encryption. Noise supplies encryption. It benefits
   confidentiality and does not create it: the peer's IP address and
   port stay available, and traffic can still be monitored by volume and
   by the other connections. The option-off path is a stack
@@ -394,19 +401,21 @@ Consequences:
   one port. `noise.rs`, `channel.rs`, `prefix.rs`, and `aead.rs` are
   that layer. The HMAC implementation and the NN oracle live on
   `fix/p2p-transport-hmac-oracle`.
-- **`--proxy` is clearnet addressing plus Tor routing** (D3). The peer
-  does not see this node's address. Encryption ends at the exit, so the
-  Noise layer is still required beyond it.
+- **Tor is a complete overlay, not a VPN.** The Tor connector speaks
+  onion to onion. Peers are onion services, so traffic never leaves Tor
+  onto clearnet. Encryption is end to end to the peer's service, and
+  classical only, which is accepted. The destination is authenticated
+  to the dialer, one way, as the table says.
 - **Deadlines are per-connector data** (D9). A network with seconds of
   mixing delay would break one global handshake deadline.
 - **Stream semantics are a capability.** A future message-shaped
   network would need a stream layer (ordering, reliability, framing).
   That is the interface's stress test. This round does not design that
   layer.
-- **A precondition we can check is checked.** A loopback hop, a
-  completed handshake. One we cannot check — an overlay's own
-  cryptography — is a trust assumption with its concession. Tor's is
-  classical-only.
+- **A precondition we can check is checked.** A completed handshake is
+  one. An overlay's own cryptography is a trust assumption with its
+  concession. Tor's is classical-only. The daemon does not police the
+  path an operator uses to reach a SOCKS router.
 - **Meeting the contract is encryption of the byte stream, and
   integrity of those bytes, against the network observer.** It is not
   confidentiality. It says nothing about traffic analysis, peer
@@ -430,6 +439,13 @@ These partitions exist today, and each one stays:
 - Self-detection nonce windows are zone-scoped (PWD-I1).
 - `m_our_address`, and what is advertised, are per zone.
 - Admission counts are per zone.
+- Peerlists, and what peer exchange returns, are per zone.
+- Seed nodes are per zone.
+
+Separately, origin-zone priority is hidden in `enum class zone`'s
+ordering (`enums.h:53`: "order from here changes priority of selection
+for origin TXes"). That is a cross-network selection rule, not a
+partition. It survives decoupling as explicit, named policy.
 
 **Every partition survives as explicit policy keyed by the session's
 network, not as a duplicated protocol stack, and a test proves none of
@@ -571,32 +587,49 @@ Round 1 names the set:
 `noise.rs`, `channel.rs`, `prefix.rs`, and `aead.rs` are not in this
 list. They are the crypto core.
 
+Deleting `src/net/socks*` removes the C++ I2P path (`zone::i2p` and the
+`--tx-proxy` handling that dials it). I2P support is removed until an
+I2P connector is built. The cutover PR states that. It is not a silent
+deletion (rule 15). D14 records the same ruling: clearnet and Tor cut
+over together.
+
 ---
 
-## D14 — rulings for Rick
+## D14 — rulings (RULED 2026-09-25)
 
-The round will prepare these. Round 1 does not decide them.
+1. **Runtime ownership** (D5). One daemon-level place constructs every
+   runtime. The transport layer has its own, with a stated thread
+   budget. The numbers are measured against the Pi-4 floor.
+2. **Overlays.** Clearnet and Tor cut over together. Staging would
+   leave epee's socket-bearing server beside the transport layer.
+   I2P's C++ path is removed with epee's SOCKS code, and the cutover
+   PR says so, until an I2P connector exists.
+3. **Levin framing stays C++ through cutover and moves with LV-3.**
+   The adapter already passes bytes, so the transport layer never sees
+   a command. Moving framing now would edit `async_protocol_handler`
+   twice, and the differential harness would no longer have transport
+   as its only variable. `shekyl-levin` is the framing LV-3 inherits.
+4. **Record framing and rekey, direction set, sizes measured.**
+   Framing is fixed-window. The window size is derived from C9's
+   measured size distribution. Until that measurement, the option uses
+   BOLT-8 framing, which hides the length field and still leaves a
+   burst visible as a message size. Fixed windows hide the size down
+   to a count of identical windows, reuse `fragment.rs`, and make one
+   window one record: no length field, one nonce per record. The
+   PWD-T8 vectors are re-minted when the window size is derived.
+   Rekey is every record if C5's Pi-4 benchmark shows three
+   HMAC-BLAKE2s per record are affordable beside seal cost. A
+   count-based interval lets a quiet link keep one key for a session,
+   and a later memory capture then exposes every transaction that key
+   sealed. If C5 shows the cost is a meaningful fraction of seal cost,
+   the interval is derived from C9's measured record rates instead.
+5. **The local/remote timer split is refused** (D3).
+6. **`--tos-flag` is refused** (D3). No `setsockopt` for the Type of
+   Service byte.
 
-1. **Runtime ownership** (D5): one daemon runtime, or a transport-layer
-   runtime with a stated budget.
-2. **Overlays in the same cutover as clearnet, or staged.** One
-   transport layer, with a connector per network, matches D7. Staging
-   leaves two transports, and a zone branch in `net_node`, until the
-   second cutover.
-3. **Whether Levin framing moves with the transport layer** or stays
-   C++ until LV-3.
-4. **Record framing and the rekey interval.** Record-length
-   concealment is in scope against a network observer; fixed-window
-   framing versus BOLT-8 is open. `REKEY_NONCES = 1000` is BOLT-8's
-   inherited value, not a derivation. Step 7's evidence informs both.
-   This design does not freeze either.
-5. **A non-loopback overlay proxy address:** refuse, warn, or accept
-   (D3). The model only requires that the precondition is declared and
-   checked. It does not pick the disposition.
-6. **The local/remote timer split.** Recommended refuse (D3). The local
-   new-connection value is 20 minutes, and the class includes RFC 1918.
-7. **The `--tos-flag` knob.** Recommended refuse (D3). Leave TOS at the
-   OS default, with no `setsockopt`. C1 records what goes out today.
+A non-loopback SOCKS address is accepted. Configuring the path to a
+router is the operator's job. The daemon speaks SOCKS and does not
+police that path. That question is not an open item.
 
 ---
 
@@ -612,60 +645,3 @@ is observed:
    changes beyond that endpoint.
 3. **Another piece of the daemon grows its own socket owner** while
    this round is open.
-
----
-
-## What Round 2 closed, and what Round 3 still owes
-
-Closed in this revision, from a re-read at `db2788d`:
-
-- Overlay inbound attribution and the Tor forward listener (D3, D4).
-- The local new-connection timer is 1,200,000 ms, which is 20 minutes.
-  The comment on `abstract_tcp_server2.inl:60` says "2 minutes".
-  Refusing the local/remote split is recommended. The ruling is D14
-  item 6.
-- A derived deadline between channel established and session
-  established (D9, D10).
-- `AdmissionRefused`, `DialFailed`, `ProxyRefused`, and `LocalClose`
-  in every phase (D12).
-- Cross-build interop as a D11 gate.
-- Dual-stack bind, the worker pool, stop order, and `levin::notify`
-  on the socketless executor (D3, D6).
-- The full `m_net_server` call list and the sole production user (D0).
-- `tokio-socks` 0.5.3 is the SOCKS client. `socks` 0.3.4 is `ureq`'s,
-  via `shekyl-p-transport`'s `tor-socks` feature.
-- `call_run_once_service_io` and the sync invoke are a deletion. A
-  test-only caller found later reopens that row.
-
-Closed in the same revision, from the review of that text:
-
-- `--tos-flag` is recommended refused (D14 item 7). The default path
-  `setsockopt`s TOS 0. C1 records the DSCP that leaves.
-- Nagle waits on C9.
-- Failures before the channel exists close with a FIN after zero bytes
-  written. C4 measures that they match.
-- Dials stay serial through cutover. The schedule is P2P-3 slice 3.
-  C7 measures the extra round trip.
-
-## What Round 3 adopted
-
-Ruled vocabulary and structure, no new implementation tasks:
-
-- The subsystem is the transport layer. A connector reaches one network.
-  The filename is `P2P_TRANSPORT_LAYER.md`.
-- D1's decoupling rule, with the six C++ violations recorded for LV-3.
-- D7's capability table. Clearnet has no native encryption. The Noise
-  layer adds encryption and does not create confidentiality.
-  Unassessed cells say so.
-- `--proxy` and the overlay proxy precondition (D3). The precondition's
-  disposition is D14 item 5.
-- Network partitions stay as tested policy keyed by the session's
-  network. One Levin layer for every connector is an LV-3 input.
-- `LinkSecrecy` reads the connector declaration. It does not keep a
-  second copy.
-- Unrecognised peer-exchange address types are a FOLLOWUPS row owned by
-  `SHEKYL_P2P_PROTOCOL.md`.
-
-Still open:
-
-- D14, all seven items.
