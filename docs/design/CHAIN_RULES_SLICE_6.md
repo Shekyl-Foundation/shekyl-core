@@ -289,7 +289,7 @@ in the consensus C++ (`blockchain.cpp`, `cryptonote_core.cpp`, `tx_pool.cpp`,
 | --- | --- | --- | --- |
 | CEN-I2 `:458` | "the FAKECHAIN carve-out … exempts this row" | the `else` at `:3539` refuses a non-FCMP tx on every nettype | **wrong** — behaviour does not vary; correct in the docs commit |
 | CEN-I3 `:459` | "FAKECHAIN exempt" | `ver_non_input_consensus :74` bounds the version on every nettype, at both sites | **wrong** — correct |
-| CEN-I4 `:460` | "FAKECHAIN exempt" | `FCMP_MAX_INPUTS_PER_TX` checked only at `:3405`, inside the gate | **right** — the one live rule-71 branch on the transaction path |
+| CEN-I4 `:460` | "FAKECHAIN exempt" | `FCMP_MAX_INPUTS_PER_TX` checked only at `:3405`, inside the gate | **right** — the one live rule-71 branch on the transaction path. UPDATE 2026-09-24: the Rust rule landed unconditional (commit 2); the register row is DIVERGENT with identity-on-Fakechain as the failure, the census cell states both behaviours, and the cap's *value* is measured and owed a derivation (§5.4). UPDATE 2026-09-24 (#853 review): the measurement's ceiling corrected from the 1 MB parser bound to CEN-H3's weight limit — the cap binds ~2.75× (22 admitted), not 19× (153); the test's prefix hash now binds the `extra` the wire carries; `shekyl-tx-builder` const-asserts the prover's and the validator's caps equal |
 | CEN-B5 `:339` | "FAKECHAIN skip retired 2026-09-05 (PR #623)" | no gate at the B5 site (`:1396–1460` read) | **right** |
 | CEN-D3 `:358` | env override | `:498–505`: the `SEEDHASH_EPOCH_*` lever **refuses to run** off fakechain | right — fail-closed *toward* the public network; a lever, not a rule branch |
 | CEN-H15 `:440` | (slice 5's correction) | unconditional at `:3550` and `tvu:223` | right |
@@ -353,7 +353,7 @@ doing two things.
 | # | Commit | Gate |
 | --- | --- | --- |
 | 1 | **The captured chains** — **blocks, not transactions** (§5.2). For each of the five shapes — 1-in/1-out, 1-in/2-out, one bond post and one emission with a fee spend each, one depth-3 — the regtest chain the generator produced, from genesis through the block that carries the spend, committed as `.block` blobs under `rust/shekyl-chain-ingest/tests/vectors/<shape>/` with a manifest naming the spend's txid, its `referenceBlock` height and the shape; generated once through `e2e_fcmp_spend_accepted_by_daemon` / `e2e_fcmp_spend_over_depth3_tree` against a daemon built at the landing tree. **The consumer of record is `shekyl-chain-ingest`**, which replays every chain through `form` → `validate` → `connect` against a real `redb` store — the root at `ref_height`, the spent set, the tree depth are *derived* by the code that derives them in production. The rules crate reads the same blobs for its predicate tests (`fixture::spend` / `listed` load the transaction out of its block); the store's `spend(ki, outputs)` becomes a loader; the fixture-sanity gate says which builders moved | **Q1 (ii)** — if the capture is another lane's or slow, WAIT here; do not fall back to filler |
-| 2 | Stateless 4.I rows in `tx_form`: I1, I4, I6, I8, I9, I14, I16; I5 with H10 kept as its equality row (Q4 (a)); each with its negative fixture at both sites, mutated from a captured spend | commit 1 — the seven self-arming conformance arms for these rows fire here; H24's falsifier flips here |
+| 2 | **LANDED 2026-09-24.** Stateless 4.I rows in `tx_form`: I1, I4, I6, I8, I9, I14, I16; I5 with H10 kept as its equality row (Q4 (a)); each with its negative fixture at both sites. Judged in three bands: the 4.H line (H1 first — the byte bound), then H20–H22 and H19's layout, then I1, I4, I5, I6, I8, I9, I14, I16. A transaction that fails its shape and an input-path row is named by the shape (a proof-less bond post is H21, not I1). That is the C++ caller's order (`ver_non_input_consensus`, then the BP+ layout, then `check_tx_inputs`), and it is the right one here for that reason — not because the caller is inherited. The input cap still precedes proof verification: I15 and the H19 batch fold run after `tx_form` returns. Commit 2's first cut had placed the I rows ahead of H20–H22 from `check_tx_inputs`' internal order; #853's review read the caller. The rows live in `rules/tx_inputs.rs`. I8/I9/I14 judge `TxClass::Spend`; the archival counts stay H20–H22's (the census names the split). I4 is **unconditional** (rule 71): the C++ gates it on `m_nettype != FAKECHAIN`, §3.4's one varying cell. I16's multisig floor is the container header (3); the exact parse is I17/I18's. **Fixture consequence, disclosed:** `fixture::listed` grew to two outputs and `pqc_auth_filler` to a 1996-byte solo key blob — the fewest I1 and I16 admit — and the store's 22 `spend(k, 1)` sites moved with it (two count pins moved by exactly the second output). The negative fixtures are mutations of the harness spend, not of a captured one: the captured spends are real and pass every new row through the ingest replay (the four vectors, unchanged); the "mutated from a captured spend" form waits on the loader that the scenario's real-spend commit brings | commit 1 — the seven self-arming conformance arms for these rows fire here (I9's trip re-cut to keep H18's balance, since the balance precedes the count here and in the C++); H24's falsifier flipped (`h24_cannot_fire_on_an_input_i6_admits` asserts I6 at both sites); the pruned-form bond-post arm with no outputs records H21 as its refusal (commit 2 wrote I1 here, reading `check_tx_inputs` alone; #853's review read the caller — `ver_non_input_consensus`'s arms run first, so a lone bond post never reaches the output count in the C++ either — and the twin's bond-post face of I1 is now a recorded divergence for the same reason), the C++'s order |
 | 3 | I19/I20 adopted: `tx_form` calls `check_tx_extra_shape`; **`TxScope::Coinbase`** minted for I20 with its doc pinning *runs at `Miner`*, never *when `is_coinbase()`*; `the_kind_is_derived_from_the_slot_not_the_bytes` gains the I20 case (Q6) | commit 1 |
 | 4 | `TxAgainstRule` (view-bound, `check(cx, view)`); I7 over `has_key_image`; I2 and I3 registry entries `by_construction`, list-and-iterate (Q3) | commit 1 |
 | 5 | `ChainView::height_of` (this slice adds it; the store has it, `MockChain` gains it); I10, I11 (consts 5/100 pinned to `consensus_constants.json`, Q5), I12 as a definition recorded at derivation | commit 1; the trait change disclosed to E5 and the store lane |
@@ -798,6 +798,193 @@ windows, B5's root, E1's anchors) have fixtures of the same shape against
 `MockChain`, with ingest-side replay coverage in some places and not all.
 That is an audit of the earlier slices, filed in FOLLOWUPS with the crate
 contract as owner, so it is chosen rather than found.
+
+### 5.4 CEN-I4 — the divergence recorded, the cost measured, the derivation owed (2026-09-24)
+
+**The record first.** Commit 2 landed I4 unconditional while the CSR-3a
+register still graded it CHECKED-CONFORMANT and the census row still read
+"FAKECHAIN exempt" — Q9's situation with the polarity reversed: Q9 graded
+a divergence that did not exist, this left a deliberate one under a
+conformant grade. Both fixed in this commit: the register row is
+**DIVERGENT** with its pass condition stated (on Fakechain the Rust refuses
+a nine-input transaction the C++ admits, *by ruling*; identity there is the
+failure, and a comparator reporting it has reproduced the ruling, not found
+a defect); the census row states the C++'s behaviour and the Rust's beside
+it; the tally moved to 125/3/5 and the gate re-derived it. The ruling is
+not in question — rule 71, an exemption that served a builder being
+deleted, and a cap the test network could not test while relaxed there —
+only the record was missing, the half Q9 taught is easy to skip.
+
+**Then the question the number never answered: what does the cap bound?**
+`cryptonote_config.h`'s `FCMP_MAX_INPUTS_PER_TX` (`:312` at `dev@a1159f1a2`;
+`:313` before the rebase that moved it one line) says *"bounds proof
+generation time and tx size"*.
+Generation time is the sender's cost; consensus does not protect a sender
+from waiting. The one objective a consensus input cap defensibly bounds is
+**the verifier work one transaction can impose**, and that is observable.
+`shekyl-wire/tests/input_cap_cost.rs` (measurement lane, `#[ignore]`d)
+builds real 1/2/4/8-input spends through the production builder over a
+real depth-3 tree and times the production verifiers. On an i9-11950H,
+release, 2026-09-24 — **not the Pi 4 floor** (rule 76; the floor run
+follows below, same day — this table is the desktop reference the floor
+multiplier is read against):
+
+| inputs | tx bytes | proof | auths | BP+ | verify | of which proof | auths | BP+ | prove |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 13 584 | 4 896 | 5 381 | 642 | 26.1 ms | 23.3 ms | 0.21 ms | 2.6 ms | 0.54 s |
+| 2 | 20 352 | 6 208 | 10 762 | 642 | 37.4 ms | 34.2 ms | 0.42 ms | 2.7 ms | 0.86 s |
+| 4 | 33 824 | 8 768 | 21 524 | 642 | 59.8 ms | 56.2 ms | 0.79 ms | 2.9 ms | 1.50 s |
+| 8 | 58 720 | 11 840 | 43 048 | 642 | 109.2 ms | 104.6 ms | 1.72 ms | 2.9 ms | 2.88 s |
+
+Read off the table: **6.4 KB per input** on the wire (5.4 KB of it the
+hybrid auth — a 1 996-byte key and a 3 385-byte signature — plus ~1 KB of
+proof growth and 64 bytes of prefix), **11.9 ms of verifier time per
+input** (11.6 ms of it the membership proof; the hybrid signature is 0.2 ms;
+the BP+ is a fixed 2.7 ms over the two outputs), fixed overhead ~7.1 KB and
+~15 ms per transaction. Linear within 5% across the sweep (the proof's
+per-input growth is mildly *sub*linear: 1.3 KB early, 0.8 KB by 4→8).
+(Re-run 2026-09-24 after the #853 corrections below: bytes identical,
+10.9 ms/input, 254 ms at 22 inputs — the corrections change what the
+proof binds to and which ceiling the cap is read against, not the proof's
+size or its verifier time. Second re-run the same day after the auths were
+moved onto the canonical per-input payload hashes — production's two-phase
+form, `pqc_signing_payload_hashes` over the assembled body with
+provisional headers, in place of a prefix-hash stand-in — with the
+verifier's per-input hashing now inside the auth timer: 11.3 ms/input,
+auths 0.22 ms/input, 263 ms at 22. The hashing is noise beside ML-DSA
+verification; the figures above stand.)
+
+**CORRECTED 2026-09-24 (#853 review) — the ceiling.** The first cut of
+this section read the cap against `MAX_TX_SIZE` (1 MB) and reported the
+cap binding "by a factor of nineteen" with 153 inputs admitted. That is
+the **parser's** refusal, not the bound an accepted transaction meets:
+CEN-H3 refuses any transaction whose *weight* exceeds `TX_WEIGHT_LIMIT`
+(149 400; `shekyl_wire::transaction::TX_WEIGHT_LIMIT`, const-asserted to
+the C++ `get_transaction_weight_limit`), seven times tighter. For this
+two-output shape weight equals bytes (the BP+ clawback is zero at two
+outputs), so H3 admits **22** inputs at this slope, not 153. The test now
+computes the implied cap from `TX_WEIGHT_LIMIT` and reports the parser
+cap beside it, asserting the parser's is the wider. The same review found
+the test's prefix hash omitted the `extra` the wire carried — the proof
+was bound to bytes the transaction did not serialize; fixed, and the same
+defect in `fcmp_spend_e2e.rs` with it. Every number below that depended
+on the ceiling is restated; the structural findings did not depend on it.
+
+**What that says.** (1) **The cap is the binding constraint, by a factor
+of ~2.75 against the ceiling that binds.** CEN-H3's weight limit admits
+**22** inputs at this slope; the cap refuses at 8. It is doing independent
+work — so it is not dead weight, and the question is what the work is.
+(The 1 MB parser bound would admit 153; it is not a consensus bound and
+no accepted transaction is measured against it.) (2) **It does not bound per-block
+verifier work.** Per-input cost is linear and per-transaction overhead is
+positive, so a block's verifier time is set by the block weight limit,
+and splitting twenty inputs across three transactions costs the verifier
+*more* (three BP+s, three proof bases, 21 KB more wire) than one
+transaction would. A block full of eight-input spends and a block full of
+one-input spends verify in the same time per byte; the cap moves no
+per-block bound. (3) **What it does bound is per-transaction work on a
+transaction that turns out invalid** — the relay path's exposure to a peer
+handing over garbage that costs full verification before refusal. At the
+cap that is ~109 ms per garbage transaction here; at the H3-implied 22
+it would be ~0.25 s. Whether 0.25 s is acceptable is a **relay-policy**
+question about an unverified peer's byte budget, which the pool already
+prices per byte — not a consensus question about a valid transaction's
+shape. (4) **Prove time is the sender's:** 2.9 s for eight inputs here, and
+it is linear too.
+
+**The side nobody had written down.** A cap truncates the input-count
+distribution. A wallet holding twenty spendable outputs cannot consolidate
+in one transaction; it emits three in a short window from one wallet —
+a timing correlation a single twenty-input transaction does not produce.
+On a chain whose design objective is origin and linkage privacy that is a
+trade, and it is currently made by inheritance. Note what the cap does
+*not* buy: uniformity. Input count is public and correlates with wallet
+state at any ceiling; the honest alternative for uniformity is fixed-count
+transactions padded with dummy inputs — each needing a real membership
+proof at 6.4 KB and 12 ms — which is almost certainly not worth it, but it
+is the claim "the cap gives us privacy" would have to mean.
+
+**Disposition: keep, as inherited and unjustified, with the derivation
+owed.** Deleting a consensus bound on a reachability argument nobody has
+run at the floor is worse than carrying one for a slice. The derivation
+round — with the floor measurement **in hand** (below, same day; the
+first cut of this paragraph listed it as the round's first step): state
+the verifier budget a single unverified transaction may consume at relay;
+derive the cap from it against the floor's 64.9 ms/input, or move the
+bound to relay policy and delete the consensus rule as redundant with
+CEN-H3's weight limit (which then caps inputs at 22 for this shape); and
+price the consolidation-sequence cost in the same row so the trade is
+made knowing both sides. Until that round, `rules/tx_inputs.rs::I4`
+carries the number and this section carries the reason it is not yet a
+reason. The `shekyl_fcmp::MAX_INPUTS = 8` in the prover and verifier is
+the same inherited figure and moves with it (`shekyl-tx-builder`
+const-asserts the two equal; see the caveat on operands in that
+assertion's comment — the prover counts spends, I4 counts the whole
+`vin`).
+
+**Two things the desktop measurement is not.** It is not the floor (rule
+76) — the floor run follows. And
+it is not a claim about the FCMP++ prover's scaling past eight — the
+prover refuses more, so the read past the cap is the slope, which the test
+asserts is a line within 5% so the read is honest.
+
+**The floor, run (skl-pi, Raspberry Pi 4 Model B, Cortex-A72 ×4,
+`rustc` 1.94 aarch64, release, 2026-09-24, 51 °C, the test as #853's
+commit *CEN-I4 graded DIVERGENT by ruling; the input cap's cost measured*
+carried it — before the #853-review corrections, which change what the
+proof binds to and which ceiling is read, not the bytes or the time):**
+
+| inputs | tx bytes | verify | of which proof | auths | BP+ | prove |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 13 584 | 166.7 ms | 130.6 ms | 1.1 ms | 34.9 ms | 3.0 s |
+| 2 | 20 352 | 229.1 ms | 191.9 ms | 2.2 ms | 35.0 ms | 4.8 s |
+| 4 | 33 824 | 351.6 ms | 312.7 ms | 4.1 ms | 34.8 ms | 8.3 s |
+| 8 | 58 720 | 621.0 ms | 578.1 ms | 8.0 ms | 34.9 ms | 15.3 s |
+
+Bytes identical to the i9 (the wire is deterministic). **64.9 ms of
+verifier time per input** at the floor (63.9 ms the proof; 1.0 ms the
+hybrid auth), a fixed **34.9 ms** BP+, linearity held (the test's 5%
+assertion passed there too). The floor multiplier is **5.5×** on the
+per-input verifier cost and **13× on the BP+**; prove time 15.3 s at eight
+inputs, the sender's. **The BP+ number is not an artifact, and it matters
+for the budget's shape:** the range proof degrades harder on the A72 than
+the membership proof the cap is about, so the fixed per-transaction
+overhead that makes splitting expensive is *more* dominant on the floor
+than on the desktop — 35 ms of the 167 ms a one-input spend costs there,
+against 2.7 of 26 on the i9. The floor strengthens splitting-costs-more
+rather than merely preserving it. **The relay-budget value, at the floor:** ~0.62 s
+of verifier work per eight-input transaction that proves invalid; ~1.5 s
+per 22-input one (H3's ceiling; the first cut wrote "10 s per 153-input",
+read off the parser bound — corrected above). That is the number the
+round decides against — and it is a narrower question than the first cut
+made it: the cap's whole effect at the floor is the difference between
+0.62 s and 1.5 s of wasted verifier time per garbage transaction. (The Pi
+table stands: the prefix-hash fix changes what the proof binds to, not
+its size or verifier time, and the bytes are identical either way.)
+
+**What the floor decided and what it could not (review, 2026-09-24).** The
+Pi 4 changed the absolute milliseconds and not one ratio: linearity,
+positive per-transaction overhead, splitting-costs-more and the ~2.75×
+against CEN-H3's weight limit are structural and held on the floor exactly
+as on the i9. The floor set one number — the *value* of the relay verifier
+budget (0.62 s at 8, 1.5 s at 22) — and a re-run returning five and a half
+times the milliseconds reopened nothing above.
+**The deletion, when the round ends there, is a widening:** the chain would
+accept nine-input transactions it now refuses. Pre-genesis that is free;
+after genesis it is a hard fork. The window for making it free closes at
+genesis. **And two constants part company at that moment**, both named so
+neither orphans: the consensus cap (`shekyl_wire::transaction::MAX_FCMP_INPUTS`, read
+by `rules/tx_inputs.rs::I4`; the C++ `FCMP_MAX_INPUTS_PER_TX` until E4 retires
+it) and the prover/verifier cap (`shekyl_fcmp::MAX_INPUTS`, refused at
+`proof.rs`'s prove and verify entry points). The second moves to whatever
+bound the round states, or a prover that refuses at eight becomes the cap
+by accident — a consensus rule enforced by a library constant nobody
+ratified. Three claims were tested here and two came back opposite to what
+the inherited constant implies: "bounds proof generation time" is the
+sender's 2.9 s; "bounds tx size" is answered by H3's 22, which makes the
+cap load-bearing rather than redundant; and the linear cost with positive
+overhead is what decides the round, because it shows the cap bounds a
+relay-policy quantity and nothing else — the CEN-M4 shape, one rule over.
 
 ## 6. What this slice does not build
 

@@ -579,12 +579,12 @@ const SITES: &[Site] = &[
         "",
     ),
     // -- `validate` (prunable-coupled) ----------------------------------------
-    rule(
+    diverges(
         "spend/bond_post has {n_out} output(s), needs >= 2",
-        Face::Memory,
-        CenRow::I1,
+        Arm::Rule(CenRow::I1),
         i1_one_output_bond_post,
-        "the bond-post face of I1 (`non-serve-credit txs`)",
+        Outcome::RefusedOn(CenRow::H21),
+        "the bond-post face of I1 in the twin (`non-serve-credit txs`), reached only by a bond post with NO funding spend (one with a spend trips the twin's `spend has` face first). The C++ never reads that bond post's output count: `ver_non_input_consensus` runs before `check_tx_inputs` (tx_pool.cpp:237 before :312; blockchain.cpp:2271 before the block's `check_tx_inputs`) and its bond-post arm refuses `spend_input_count == 0` first — so H21, and the crate's order follows the caller's (#853 review; slice 6 commit 2 had read `check_tx_inputs` alone and placed I1 ahead). The twin's `spend has` face is I1's live trip: `i1_one_output_spend`",
     ),
     rule(
         "pqc_auths {} != input count {n_in}",
@@ -611,8 +611,8 @@ const SITES: &[Site] = &[
         "pseudoOuts {} != spend (ToKey) input count",
         Face::Memory,
         CenRow::I9,
-        i9_no_pseudo_outs,
-        "",
+        i9_one_pseudo_out_for_two_inputs,
+        "the trip keeps the balance (one pseudo-out of `5·G` against `2·G + 3·G`) so H18 passes and the count refuses; a cleared pseudo-out list is H18's refusal first, here and in the C++",
     ),
     diverges(
         "fee-only ct (no prunable) must have no",
@@ -626,7 +626,7 @@ const SITES: &[Site] = &[
         Arm::Rule(CenRow::H20),
         pruned_form_bond_post_with_an_auth,
         Outcome::RefusedOn(CenRow::H21),
-        "as above",
+        "as above in kind: the trip must have NO outputs to reach the twin's auth arm (its `must have no outputs` check comes first). Slice 6 commit 2 first recorded this as CEN-I1's refusal, reading `check_tx_inputs` alone (`fewer than two outputs`, blockchain.cpp:3388, is that function's first check); #853's review read the caller — `ver_non_input_consensus` runs first (tx_pool.cpp:237 before :312; blockchain.cpp:2271 before the block's `check_tx_inputs`), and its bond-post arm refuses a proof-less bond post (`fcmp_pp_proof.empty()`) before `check_tx_inputs` ever sees the output count. So H21 before I1, there and here. The twin's fee-only arm still asserts H20's shape on a non-serve-credit; the crate classifies by the vin",
     ),
     invariant(
         "key-image input(s) but no prunable proof",

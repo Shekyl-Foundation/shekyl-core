@@ -472,12 +472,11 @@ const BP_PLUS_MAX_ROUNDS: usize = 6 + shekyl_wire::transaction::MAX_OUTPUTS.ilog
 /// archival ones included (`verArchivalCtBalanceAndRange` runs the same
 /// layout check when a proof is present).
 ///
-/// The **verification** half — the range proof itself, batched across the
-/// block — lands with slice 6's proof bodies (Q3 (b)). Until then the row
-/// stays `pending`, and `tx_form` runs this rule through
-/// [`crate::rules::run_tx_unrecorded`]: a refusal is H19's, a pass is not
-/// coverage. Slice 6 switches that call to [`crate::rules::run_tx`] and
-/// flips the registry entry.
+/// The **verification** half — the range proof itself, one batch verify
+/// over the block — is the `validate` fold (slice 6 commit 8, Q9). Until
+/// that fold lands the row stays `pending`, and `tx_form` runs this layout
+/// check through [`crate::rules::run_tx_unrecorded`]: a refusal is H19's, a
+/// pass is not coverage.
 pub(crate) struct H19;
 
 impl Rule for H19 {
@@ -854,6 +853,9 @@ impl TxRule for H22 {
 #[cfg(test)]
 #[path = "tx_tests.rs"]
 mod tx_tests;
+
+#[cfg(test)]
+pub(crate) use tx_tests::{emission, refused_listed, refused_lone, spend, with_inputs};
 
 #[cfg(test)]
 #[path = "tx_conformance_tests.rs"]

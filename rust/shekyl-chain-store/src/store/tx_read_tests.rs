@@ -37,7 +37,7 @@ fn hash_of(tx: &Transaction) -> TxHash {
 fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
     let store = ChainStore::create(path, EPOCH).expect("create");
     let plain = shekyl_chain_rules::harness::fixture::serve_credit_only([0x5e; 32]);
-    let with_pqc = spend(15, 1);
+    let with_pqc = spend(15, 2);
     let hashes = connect_chain(
         &store,
         &[vec![], vec![plain.clone()], vec![with_pqc.clone()]],
@@ -342,7 +342,7 @@ fn tx_output_indices_is_dense_bound_first_and_a_hole_is_si9() {
     let AtIndex::Recorded(indices) = snap.tx_output_indices(pqc_id).expect("read") else {
         panic!("below the count is recorded");
     };
-    assert_eq!(indices.0.len(), 1);
+    assert_eq!(indices.0.len(), 2, "the spend's two outputs (CEN-I1)");
     assert_eq!(
         snap.tx_output_indices(id(count)).expect("read"),
         AtIndex::BeyondCount

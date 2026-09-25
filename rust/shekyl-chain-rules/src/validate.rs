@@ -55,6 +55,7 @@ use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
+use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9};
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
@@ -402,10 +403,26 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     // is both oversized and mixed is refused on H6 here and on H1 there —
     // one refusal either way, the row differs.
     let cx = rules::TxContext::derive(tx, slot, &mut coverage)?;
-    judge_tx!(cx, coverage; H1, H3, H4, H7, H9, H10, H11, H14, H15, H16, H17, H18, H20, H21, H22);
-    // CEN-H19's layout half. The verification half is slice 6's, so the row
-    // stays pending and a pass is not coverage (`run_tx_unrecorded`).
+    // Three bands, and the first refusal is the verdict.
+    //
+    // 1. The 4.H line every transaction is held to. H1 (serialized size) is
+    //    the byte bound and runs first; the rest of the line is slice 5's
+    //    order.
+    // 2. Class shape (H20–H22), then H19's BP+ layout. A transaction that
+    //    fails its shape and an input-path row is named by the shape: a
+    //    proof-less bond post is H21, not "fewer than two outputs". That is
+    //    also where the C++ caller runs these arms
+    //    (`ver_non_input_consensus`, then `ver_mixed_ct_semantics`, then
+    //    `check_tx_inputs`). Pulling I1 or I4 ahead of H21 would hide the
+    //    class failure. H19's verification half is the later `validate`
+    //    fold (slice 6 commit 8), so this call stays unrecorded.
+    // 3. The stateless input-path rows. The cap does not have to precede
+    //    the shape rules to bound proof work: I15 and the H19 batch verify
+    //    run after `tx_form` returns, so I4 has already refused.
+    judge_tx!(cx, coverage; H1, H3, H4, H7, H9, H10, H11, H14, H15, H16, H17, H18);
+    judge_tx!(cx, coverage; H20, H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
+    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16);
     Ok(coverage)
 }
 

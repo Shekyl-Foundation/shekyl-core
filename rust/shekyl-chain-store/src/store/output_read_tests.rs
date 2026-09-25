@@ -44,7 +44,7 @@ fn output_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>) {
 fn has_key_image_is_true_for_a_spent_image_and_false_otherwise_on_one_snapshot() {
     let path = tmp("read-has-key-image");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 1)], vec![spend(15, 1)]]);
+    connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![spend(15, 2)]]);
     let snap = store.begin_read().expect("read");
     // N calls on one snapshot are the batch form `has_key_images` was
     // (SOK-3): every answer is against the same committed state.
@@ -71,7 +71,7 @@ fn has_key_image_is_true_for_a_spent_image_and_false_otherwise_on_one_snapshot()
 fn has_key_image_on_the_snapshot_and_in_the_batch_are_one_body() {
     let path = tmp("read-has-key-image-two-readers");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
+    connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
     let snap = store.begin_read().expect("read");
     let images = [fixture::point(9), fixture::point(16)];
     let from_snapshot: Vec<bool> = images
@@ -104,7 +104,7 @@ fn key_images_yields_exactly_the_connected_set() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     connect_chain(
         &store,
-        &[vec![], vec![spend(9, 1), spend(16, 1)], vec![spend(15, 1)]],
+        &[vec![], vec![spend(9, 2), spend(16, 2)], vec![spend(15, 2)]],
     );
     let snap = store.begin_read().expect("read");
     let mut scanned: Vec<[u8; 32]> = snap
@@ -140,10 +140,10 @@ fn key_images_on_an_empty_chain_is_an_empty_scan_not_an_error() {
 fn a_snapshot_sees_one_committed_state_across_a_concurrent_connect() {
     let path = tmp("read-key-images-snapshot-isolation");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
+    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
     let snap = store.begin_read().expect("read");
     // Connect another spend after the snapshot was taken.
-    let cand = candidate(2, hashes[1], vec![spend(15, 1)]);
+    let cand = candidate(2, hashes[1], vec![spend(15, 2)]);
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         batch.connect(judge(&view, cand)?, facts(2, 0), RuleSet::GENESIS)?;

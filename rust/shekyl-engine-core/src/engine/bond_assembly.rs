@@ -443,9 +443,11 @@ pub(crate) struct FundingSelection {
 /// exactly one vin that is not a funding spend: the bond post's bond vin,
 /// the exit's `Release` vin, the claim's emission vin. A selection of
 /// `MAX_INPUTS` funding records therefore assembles a `MAX_INPUTS + 1`-vin
-/// transaction — accepted on FAKECHAIN (the C++ cap is gated off there, so
-/// no regtest walk can observe the boundary) and rejected on every public
-/// network. The drain does NOT take this constant: a drain is
+/// transaction — rejected on every public network, and (since E6 slice 6
+/// commit 2 made the Rust I4 unconditional, rule 71) refused by the Rust
+/// validator on FAKECHAIN too, so a regtest walk through `shekyl-chain-rules`
+/// *does* observe the boundary; only the C++ daemon's cap stays gated off
+/// there until E4 retires it. The drain does NOT take this constant: a drain is
 /// transfer-shaped with no extra vin, so its selector caps at the full
 /// [`shekyl_tx_builder::MAX_INPUTS`].
 pub(crate) const MAX_RETENTION_FUNDING_INPUTS: usize = shekyl_tx_builder::MAX_INPUTS - 1;

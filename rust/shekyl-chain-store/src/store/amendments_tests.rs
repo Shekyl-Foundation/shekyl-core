@@ -50,7 +50,7 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     // |txs| per height: 0, 2, 1 → cum 0, 2, 3.
     connect_chain(
         &store,
-        &[vec![], vec![spend(9, 1), spend(10, 1)], vec![spend(11, 1)]],
+        &[vec![], vec![spend(9, 2), spend(10, 2)], vec![spend(11, 2)]],
     );
     let cum = |h| block_info(&store, h).expect("row").cumulative_tx_count;
     assert_eq!(
@@ -71,7 +71,7 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     // Re-connect a different block 2 with three transactions: the total
     // resumes from the parent's row, not from anything the popped block left.
     let b1_hash = block_info(&store, 1).expect("row").hash;
-    let b2 = candidate(2, b1_hash, vec![spend(12, 1), spend(13, 1), spend(14, 1)]);
+    let b2 = candidate(2, b1_hash, vec![spend(12, 2), spend(13, 2), spend(14, 2)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)
@@ -307,7 +307,7 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     // so a spend is 4-part; the 3-part non-coinbase transaction is the
     // serve-credit-only shape, whose `pqc_auths` are empty by rule (CEN-H20)
     // — the countersignature rides the vin.
-    let four_part = spend(9, 1);
+    let four_part = spend(9, 2);
     let three_part = fixture::serve_credit_only([0x5f; 32]);
     let expected = four_part
         .txid_parts()

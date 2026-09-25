@@ -28,7 +28,7 @@ mod tx_balance_tests;
 const KI: [u8; 32] = point(9);
 
 /// A refusal through `tx_form` at the pool's slot names the row and `Lone`.
-fn refused_lone(tx: &Transaction, row: CenRow) {
+pub(crate) fn refused_lone(tx: &Transaction, row: CenRow) {
     assert_refused(
         tx_form(tx, TxSlot::Lone, &RuleSet::GENESIS),
         row,
@@ -38,7 +38,7 @@ fn refused_lone(tx: &Transaction, row: CenRow) {
 
 /// The same transaction listed first in a block is refused by `validate` on
 /// the same row at `Listed(0)` — one function, two sites.
-fn refused_listed(tx: &Transaction, row: CenRow) {
+pub(crate) fn refused_listed(tx: &Transaction, row: CenRow) {
     let chain = MockChain::default();
     chain.with_view(|view| {
         let formed = formed_on(&chain, candidate_on(&chain, vec![tx.clone()]));
@@ -406,7 +406,7 @@ fn serve_credit() -> Input {
     }
 }
 
-fn emission() -> Input {
+pub(crate) fn emission() -> Input {
     Input::ArchivalRewardEmission {
         canonical_bytes: Vec::new(),
     }
@@ -426,7 +426,7 @@ fn bond_post() -> Input {
 }
 
 /// A spend input whose key image is the `k`-th table point.
-fn spend(k: usize) -> Input {
+pub(crate) fn spend(k: usize) -> Input {
     Input::ToKey {
         amount: 0,
         key_offsets: Vec::new(),
@@ -435,7 +435,7 @@ fn spend(k: usize) -> Input {
 }
 
 /// `listed(KI)` with its inputs replaced.
-fn with_inputs(inputs: Vec<Input>) -> Transaction {
+pub(crate) fn with_inputs(inputs: Vec<Input>) -> Transaction {
     let mut tx = listed(KI);
     tx.prefix.inputs = inputs;
     tx
@@ -573,10 +573,10 @@ fn h8_the_wire_reads_one_commitment_per_output() {
         base.enc_amounts.push([0; 9]);
         base.enc_labels.push([0; 9]);
     }
-    assert_eq!(two_masks.prefix.outputs.len(), 1);
+    assert_eq!(two_masks.prefix.outputs.len(), 2);
     assert!(
         Transaction::from_bytes(&two_masks.serialize()).is_err(),
-        "two masks over one output must not round-trip"
+        "three masks over two outputs must not round-trip"
     );
     let mut no_masks = listed(KI);
     if let Ct::Fcmp { base, .. } = &mut no_masks.ct {
@@ -586,19 +586,23 @@ fn h8_the_wire_reads_one_commitment_per_output() {
     }
     assert!(
         Transaction::from_bytes(&no_masks.serialize()).is_err(),
-        "no mask over one output must not round-trip"
+        "no mask over two outputs must not round-trip"
     );
     assert!(Transaction::from_bytes(&listed(KI).serialize()).is_ok());
 }
 
-/// CEN-H24's falsifier (slice 5 Q7). The residue check — a relative
-/// `key_offset` after the first must not be `0` — has nothing to read on
-/// the empty offset list CEN-I6 admits, and it fires on the list I6 forbids.
+/// CEN-H24's falsifier (slice 5 Q7), **flipped at slice 6 commit 2**. The
+/// residue check — a relative `key_offset` after the first must not be
+/// `0` — has nothing to read on the empty offset list CEN-I6 admits, and
+/// it fires on the list I6 forbids.
 ///
 /// H24 is bucket 3: no registry row, no coverage. The census cell and this
-/// test are what index it. `tx_form` still accepts the offsets fixture,
-/// which is the gap. The day a row refuses that fixture, this `expect`
-/// fails and the assertion becomes that row's refusal.
+/// test are what index it. Until I6 landed, `tx_form` accepted the offsets
+/// fixture and this test held the gap open with an `expect`; the day a row
+/// refused it, the assertion was to become that row's refusal. That day is
+/// this commit: the fixture is refused on **I6**, at both sites, and H24's
+/// residue arm has no input left to read on a transaction the validator
+/// admits.
 #[test]
 fn h24_cannot_fire_on_an_input_i6_admits() {
     let residue_fires = |offsets: &[u64]| offsets.iter().skip(1).any(|&o| o == 0);
@@ -614,10 +618,8 @@ fn h24_cannot_fire_on_an_input_i6_admits() {
     if let Some(Input::ToKey { key_offsets, .. }) = with_offsets.prefix.inputs.get_mut(0) {
         *key_offsets = vec![7, 0];
     }
-    tx_form(&with_offsets, TxSlot::Lone, &RuleSet::GENESIS).expect(
-        "CEN-H24: key offsets are not a 4.H refusal; the day a row refuses this fixture, \
-         that refusal is what this test asserts",
-    );
+    refused_lone(&with_offsets, CenRow::I6);
+    refused_listed(&with_offsets, CenRow::I6);
 }
 
 // ---- CEN-H4 -------------------------------------------------------------
@@ -656,7 +658,15 @@ fn a_well_formed_listed_transaction_records_every_landed_row() {
             CenRow::H18,
             CenRow::H20,
             CenRow::H21,
-            CenRow::H22
+            CenRow::H22,
+            CenRow::I1,
+            CenRow::I4,
+            CenRow::I5,
+            CenRow::I6,
+            CenRow::I8,
+            CenRow::I9,
+            CenRow::I14,
+            CenRow::I16
         ]
     );
 }
@@ -671,14 +681,24 @@ fn h10_a_repeated_key_image_within_one_transaction_is_refused() {
     let dup = with_inputs(vec![spend(11), spend(11)]);
     refused_lone(&dup, CenRow::H10);
     refused_listed(&dup, CenRow::H10);
-    // Two pseudo-outs, `G + G = 2·G`, against the one mask — so layout and
-    // balance are not what decides here.
-    let mut distinct = with_inputs(vec![spend(12), spend(11)]);
+    // Two distinct images in the order I5 wants (descending), and two
+    // pseudo-outs summing to the fixture's masks (`4·G + G = 2·G + 3·G`) —
+    // so neither order, layout nor balance is what decides here.
+    let (hi, lo) = if point(12) > point(11) {
+        (12, 11)
+    } else {
+        (11, 12)
+    };
+    let mut distinct = with_inputs(vec![spend(hi), spend(lo)]);
     if let Ct::Fcmp {
-        prunable: Some(p), ..
+        pqc_auths,
+        prunable: Some(p),
+        ..
     } = &mut distinct.ct
     {
-        p.pseudo_outs = vec![G, G];
+        // One auth per input (I8).
+        pqc_auths.push(crate::harness::fixture::pqc_auth_filler());
+        p.pseudo_outs = vec![crate::harness::fixture::multiple_of_g(4), G];
     }
     assert!(tx_form(&distinct, TxSlot::Lone, &RuleSet::GENESIS)
         .expect("distinct key images pass")
@@ -775,7 +795,9 @@ fn h19_a_non_canonical_layout_is_refused_and_the_row_is_not_yet_recorded() {
         prunable: Some(p), ..
     } = &mut tx.ct
     {
-        p.bulletproofs = vec![bp_plus_layout_for(2)];
+        // Three outputs' layout (padded 4) over the fixture's two: `4 < 2·2`
+        // fails, so the layout is not canonical for the count.
+        p.bulletproofs = vec![bp_plus_layout_for(3)];
     }
     refused_lone(&tx, CenRow::H19);
     refused_listed(&tx, CenRow::H19);

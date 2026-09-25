@@ -425,15 +425,17 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
     // there is no `total_burned` cell yet.
     assert_eq!(after_genesis, (1, 1, 1, 1, 0, None));
 
-    let b1 = candidate(1, genesis.hash(), vec![spend(9, 1)]);
+    let b1 = candidate(1, genesis.hash(), vec![spend(9, 2)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, b1)?, facts(1, 4), RuleSet::GENESIS)?)
     });
     out.expect("block 1 connects");
+    // `OUTPUT_TXS`: the two coinbases' one output each, plus the spend's two
+    // (CEN-I1's minimum since slice 6 commit 2).
     assert_eq!(
         counts(&store),
-        (2, 3, 3, 2, 1, Some(AtomicUnits::from_raw(4)))
+        (2, 3, 4, 2, 1, Some(AtomicUnits::from_raw(4)))
     );
 
     let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
@@ -633,7 +635,7 @@ fn a_key_image_spent_in_an_earlier_block_is_si1() {
     let path = tmp("connect-ki");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let (_, genesis) = connect_genesis(&store, 0);
-    let b1 = candidate(1, genesis.hash(), vec![spend(9, 1)]);
+    let b1 = candidate(1, genesis.hash(), vec![spend(9, 2)]);
     let b1_hash = b1.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
@@ -643,7 +645,7 @@ fn a_key_image_spent_in_an_earlier_block_is_si1() {
     // No landed rule checks key images yet (CEN-I7 is slice 6), so the
     // double spend reaches the store — and the belt beneath the rule catches
     // it as a fatal.
-    let b2 = candidate(2, b1_hash, vec![spend(9, 1)]);
+    let b2 = candidate(2, b1_hash, vec![spend(9, 2)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)

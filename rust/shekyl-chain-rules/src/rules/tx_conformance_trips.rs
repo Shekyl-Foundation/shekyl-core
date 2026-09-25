@@ -391,9 +391,17 @@ pub(super) fn h8_short_base_arrays() -> Transaction {
 }
 
 pub(super) fn i1_one_output_spend() -> Transaction {
-    with_pqc_extra(listed(point(9)))
+    // `listed` grew to two outputs when I1 landed; the trip is the one it
+    // left behind.
+    with_pqc_extra(crate::harness::fixture::spend(point(9), 1))
 }
 
+/// A bond post standing alone with one output — the shape that reaches the
+/// twin's `spend/bond_post` face of its output-count arm (a funding spend
+/// would trip its `spend has` face first). The crate refuses it on H21,
+/// not I1: no funding spend, and `ver_non_input_consensus`'s arm refuses
+/// that (`spend_input_count == 0`) before `check_tx_inputs` reads an output
+/// count — recorded as the site's divergence.
 pub(super) fn i1_one_output_bond_post() -> Transaction {
     let prunable = shekyl_wire::Prunable {
         bulletproofs: vec![bp_plus_layout_for(1)],
@@ -435,19 +443,26 @@ pub(super) fn h19_layout_for_the_wrong_output_count() -> Transaction {
     tx
 }
 
-pub(super) fn i9_no_pseudo_outs() -> Transaction {
-    let mut tx = spend2();
-    if let Ct::Fcmp {
-        prunable: Some(p), ..
-    } = &mut tx.ct
-    {
-        p.pseudo_outs.clear();
+/// Two inputs, one pseudo-out — and the one pseudo-out still balances the
+/// masks (`5·G`), so H18 passes and the count is what refuses. Clearing the
+/// pseudo-outs instead would be refused on H18 first, in the crate and in
+/// the C++ alike (`ver_non_input_consensus`' balance runs before
+/// `check_tx_inputs`' count); the trip must reach the arm it is keyed to.
+/// The second input's image is placed so the pair descends (I5).
+pub(super) fn i9_one_pseudo_out_for_two_inputs() -> Transaction {
+    let mut tx = spend2_plus(spend_input(10));
+    if point(10) > point(9) {
+        tx.prefix.inputs.swap(0, 1);
     }
     tx
 }
 
 pub(super) fn pruned_form_bond_post_with_an_output() -> Transaction {
-    bond_post_alone(1, None)
+    // Two outputs so the fixture satisfies I1 regardless, and the arm's
+    // subject — the pruned form — is what H21 judges. (H21 runs before I1
+    // here as in the C++'s caller order; the output count is kept valid so
+    // no reader has to reason about which of the two would have fired.)
+    bond_post_alone(2, None)
 }
 
 pub(super) fn pruned_form_bond_post_with_an_auth() -> Transaction {

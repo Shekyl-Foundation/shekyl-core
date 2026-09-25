@@ -34,7 +34,7 @@ fn tip_height(store: &ChainStore) -> Option<u64> {
 fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
     let path = tmp("pop-basic");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 1)], vec![spend(10, 1)]]);
+    connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![spend(10, 2)]]);
     assert_eq!(tip_height(&store), Some(2));
     let burned_after_three = {
         let snap = store.begin_read().expect("read");
@@ -185,8 +185,8 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
     );
 
     // A connect whose belt fires halts the writer at the connecting height.
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
-    let double = candidate(2, hashes[1], vec![spend(9, 1)]);
+    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
+    let double = candidate(2, hashes[1], vec![spend(9, 2)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, double)?, facts(2, 0), RuleSet::GENESIS)?)
@@ -215,7 +215,7 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
 fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
     let path = tmp("pop-post-image");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
+    connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
     // Write around the journal: overwrite `blocks[1]` through an upsert
     // handle in a batch that records nothing.
     let impostor = candidate(1, BlockHash::from_bytes([0x77; 32]), Vec::new())

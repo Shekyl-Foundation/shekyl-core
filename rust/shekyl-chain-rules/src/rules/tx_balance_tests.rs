@@ -10,7 +10,9 @@
 use super::{emission, refused_listed, refused_lone, spend, with_inputs, KI};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::harness::fixture::{candidate_on, coinbase, listed, serve_credit_only, G, TWO_G};
+use crate::harness::fixture::{
+    candidate_on, coinbase, listed, multiple_of_g, serve_credit_only, G, TWO_G,
+};
 use crate::harness::{assert_refused, formed_on, judged, MockChain};
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{TxContext, H17, H7};
@@ -34,11 +36,11 @@ fn mask_committing(k: u64, amount: u64) -> [u8; 32] {
     (blinding + value).compress().to_bytes()
 }
 
-/// A **balanced bond post**: one funding spend, one output with a `2·G`
-/// mask, zero fee, one auth per input, a non-empty proof, and a pseudo-out
-/// of `2·G + credit·H` — so `Σ pseudoOuts + debit·H = Σ masks + fee·H +
-/// credit·H` holds with `(credit, debit) = (credit, 0)`. The bond's own
-/// bytes are the type's minimum.
+/// A **balanced bond post**: one funding spend, the two outputs CEN-I1
+/// requires (masks `2·G` and `3·G`), zero fee, one auth per input, a
+/// non-empty proof, and a pseudo-out of `5·G + credit·H` — so `Σ
+/// pseudoOuts + debit·H = Σ masks + fee·H + credit·H` holds with `(credit,
+/// debit) = (credit, 0)`. The bond's own bytes are the type's minimum.
 fn bond_post_tx(credit: u64) -> Transaction {
     use shekyl_wire::{BondPost, BondPostKind, Holdings};
     let mut tx = listed(KI);
@@ -52,7 +54,7 @@ fn bond_post_tx(credit: u64) -> Transaction {
         bond_debit: 0,
     })));
     // The credit lands on the mask side of the balance, so the pseudo-out
-    // carries it: `2·G + credit·H` against the `2·G` mask.
+    // carries it: `5·G + credit·H` against the `2·G + 3·G` masks.
     if let Ct::Fcmp {
         pqc_auths,
         prunable: Some(p),
@@ -60,15 +62,16 @@ fn bond_post_tx(credit: u64) -> Transaction {
     } = &mut tx.ct
     {
         pqc_auths.push(crate::harness::fixture::pqc_auth_filler());
-        p.pseudo_outs = vec![mask_committing(2, credit)];
+        p.pseudo_outs = vec![mask_committing(5, credit)];
     }
     tx
 }
 
 /// A **balanced emission** with one fee spend: the loud vouts sum to
-/// `reward`; the mint rides the debit slot, so `Σ pseudoOuts + reward·H =
-/// Σ masks + fee·H` — a pseudo-out of `2·G` against a mask of `2·G +
-/// reward·H`, zero fee.
+/// `reward` (the first carries it, the second is a loud zero — I1 wants
+/// two); the mint rides the debit slot, so `Σ pseudoOuts + reward·H = Σ
+/// masks + fee·H` — a pseudo-out of `5·G` against masks of `2·G + reward·H`
+/// and `3·G`, zero fee.
 fn emission_tx(reward: u64) -> Transaction {
     let mut tx = with_inputs(vec![spend(13), emission()]);
     tx.prefix.outputs[0].amount = reward;
@@ -80,8 +83,8 @@ fn emission_tx(reward: u64) -> Transaction {
     } = &mut tx.ct
     {
         pqc_auths.push(crate::harness::fixture::pqc_auth_filler());
-        base.commitments = vec![mask_committing(2, reward)];
-        p.pseudo_outs = vec![TWO_G];
+        base.commitments = vec![mask_committing(2, reward), multiple_of_g(3)];
+        p.pseudo_outs = vec![multiple_of_g(5)];
     }
     tx
 }
@@ -263,12 +266,9 @@ fn h18_an_unbalanced_spend_is_refused() {
 #[test]
 fn h18_the_balance_is_over_the_hidden_amounts_not_only_the_blindings() {
     let with_pseudo_out = |fee: u64, pseudo_out: [u8; 32]| {
+        // `listed` already carries two outputs (I1); only the masks and the
+        // pseudo-out change.
         let mut tx = listed(KI);
-        tx.prefix.outputs.push(shekyl_wire::Output {
-            amount: 0,
-            key: TWO_G,
-            view_tag: 3,
-        });
         if let Ct::Fcmp {
             fee: f,
             base,
@@ -278,9 +278,6 @@ fn h18_the_balance_is_over_the_hidden_amounts_not_only_the_blindings() {
         {
             *f = fee;
             base.commitments = vec![mask_committing(2, 3), mask_committing(3, 4)];
-            base.enc_amounts.push([0x33; 9]);
-            base.enc_labels.push([0x44; 9]);
-            p.bulletproofs = vec![crate::harness::fixture::bp_plus_layout_for(2)];
             p.pseudo_outs = vec![pseudo_out];
         }
         tx
@@ -368,7 +365,7 @@ fn h22_every_departure_from_the_emission_shape_or_balance_is_refused() {
     let mut zero = base();
     zero.prefix.outputs[0].amount = 0;
     if let Ct::Fcmp { base: b, .. } = &mut zero.ct {
-        b.commitments = vec![TWO_G];
+        b.commitments = vec![TWO_G, multiple_of_g(3)];
     }
     refused_lone(&zero, CenRow::H22);
     refused_listed(&zero, CenRow::H22);
@@ -394,7 +391,7 @@ fn h22_every_departure_from_the_emission_shape_or_balance_is_refused() {
         ..
     } = &mut no_spend_with_proof.ct
     {
-        b.commitments = vec![mask_committing(2, 5)];
+        b.commitments = vec![mask_committing(2, 5), multiple_of_g(3)];
         p.pseudo_outs.clear();
     }
     refused_lone(&no_spend_with_proof, CenRow::H22);

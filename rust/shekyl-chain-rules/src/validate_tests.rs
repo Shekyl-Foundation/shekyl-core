@@ -83,6 +83,16 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::H20,
                 CenRow::H21,
                 CenRow::H22,
+                // Slice 6 commit 2: the stateless 4.I rows, every one
+                // recorded on the coinbase as vacuous (`NonCoinbase`).
+                CenRow::I1,
+                CenRow::I4,
+                CenRow::I5,
+                CenRow::I6,
+                CenRow::I8,
+                CenRow::I9,
+                CenRow::I14,
+                CenRow::I16,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
@@ -191,7 +201,15 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::H18,
             CenRow::H20,
             CenRow::H21,
-            CenRow::H22
+            CenRow::H22,
+            CenRow::I1,
+            CenRow::I4,
+            CenRow::I5,
+            CenRow::I6,
+            CenRow::I8,
+            CenRow::I9,
+            CenRow::I14,
+            CenRow::I16
         ]
     );
     MockChain::default().with_view(|view| {

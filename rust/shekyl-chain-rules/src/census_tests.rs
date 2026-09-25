@@ -143,6 +143,16 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::H20,
             CenRow::H21,
             CenRow::H22,
+            // Slice 6 commit 2: the stateless 4.I rows (`CHAIN_RULES_SLICE_6.md`
+            // §5 row 2). The view-bound and verification rows follow.
+            CenRow::I1,
+            CenRow::I4,
+            CenRow::I5,
+            CenRow::I6,
+            CenRow::I8,
+            CenRow::I9,
+            CenRow::I14,
+            CenRow::I16,
         ]
     );
     let by_construction: Vec<CenRow> = CenRow::ALL
