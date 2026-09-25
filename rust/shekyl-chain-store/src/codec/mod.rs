@@ -54,6 +54,7 @@
 //! digest's fold input. That is the rule-42 ratchet §11.1(e) recorded as
 //! owed: an encoding cannot move without the version moving in the same PR.
 
+mod alt;
 mod archival;
 mod chain;
 mod curve;
@@ -78,6 +79,11 @@ mod archival_tests;
 #[path = "pool_tests.rs"]
 mod pool_tests;
 
+#[cfg(test)]
+#[path = "alt_tests.rs"]
+mod alt_tests;
+
+pub use alt::{AltBlock, AltBlockError, AltBlockFacts};
 pub use archival::{
     AttestationWitnessBytes, BondRecord, FirstPayingHeight, HeldShard, HeldShards, Holdings,
     HoldingsError, RMarket, SigmaWorkMilli, MAX_BOND_KEY_BYTES,

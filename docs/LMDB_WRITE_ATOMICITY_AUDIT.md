@@ -1233,7 +1233,18 @@ is the whole justification, and it is a domain claim, not a safety claim.
   equivalent test, so for them the boundary is *declared, not enforced*. That
   is this class's open item. The alt witness is archival as well as alt; it
   is classed here because the domain argument is the one that holds today,
-  and it inherits §7.1.1's KAT obligation when S-ARCH ports.
+  and it inherits §7.1.1's KAT obligation when S-ARCH ports. *UPDATE
+  2026-09-25 (DRS-E1 S-ALT, `DRS_E1_SALT.md` SAL-15): the open item is
+  **closed** — the witness is now a field of the `alt_blocks` row in the
+  redb store (`schema::FOLDED_INTO`), so the class is one table there and
+  one exclusion test enforces its boundary
+  (`an_alt_block_with_a_witness_moves_no_digest`, `store/alt_tests.rs`).
+  The test exists because the fold made the boundary testable, not because
+  the fold was made to close this row. The inherited §7.1.1 obligation is
+  unchanged in force and changed in route: when the archival apply path
+  ports (E4), the KAT that forces the witness runs AL1 → AL4 → the
+  height-keyed row, not a table of its own; the dated conditional above
+  and that route travel to E4 together.*
 - **Archival journal families (16):** the `DAEMON_REDB_STORE.md` §7.1.1 named
   exclusion. §7.1.1 forbids extracting S-ARCH or implementing archival apply
   in `shekyl-chain-store` until these are digested *or* carry a replacement

@@ -171,6 +171,12 @@ impl<'store> ReadSnapshot<'store> {
         Self { txn, store }
     }
 
+    /// The transaction, for a read surface whose methods live with their
+    /// bodies (`alt_reads`) rather than in this file.
+    pub(super) fn txn(&self) -> &ReadTransaction {
+        &self.txn
+    }
+
     /// Open a table for reading — the raw handle, **crate-private** (Q3,
     /// SCR-9). Every table this surface serves has a typed read above;
     /// a raw handle on the read side is the mirror of the raw `properties`

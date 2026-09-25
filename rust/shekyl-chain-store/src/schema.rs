@@ -162,10 +162,10 @@ use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash, TreeLe
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    AttestationWitnessBytes, Blob, BlockBody, BlockInfo, BondRecord, Coded, CurveTreeState,
-    LayerHash, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RuleSetInForce, SigmaWorkMilli,
-    TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog,
-    Unshaped,
+    AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockInfo, BondRecord, Coded,
+    CurveTreeState, LayerHash, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RuleSetInForce,
+    SigmaWorkMilli, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
+    TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
@@ -244,6 +244,26 @@ pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
          reason (DAEMON_REDB_STORE.md §5.1; DRS-E1 S-POOL): `pool_blob` in `crate::pool`",
     ),
 ];
+
+/// X-macro tables whose bytes live as a **field of another table's
+/// record** in this file, as `(lmdb_name, host_table, reason)` — the
+/// bijection gate's fourth direction (DRS-E1 S-ALT, SAL-2; `SAL-Q6`: its
+/// own direction, because a twin *table* and a host *field* are different
+/// claims and the gate should say which it checked). Read by
+/// `check_redb_schema_bijection.py`: every entry must be in the X-macro,
+/// must **not** have a definition in this file, and its host must be a
+/// definition in this file; `check_redb_schema_key_types.py` has no
+/// definition here to constrain and its floor moved with the fold. The
+/// class table (`accumulator/class.rs`) is the LMDB inventory and keeps a
+/// row for each.
+pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
+    "archival_alt_attestation_witness",
+    "alt_blocks",
+    "the reorg-survival attestation witness is an attribute of the alt block it is keyed by \
+     (ARCHIVAL_CREDIT_WIRE.md §3 CW-2: written beside it, removed with it, never outliving \
+     it), so it is a field of `AltBlock` rather than a second hash-keyed table (DRS-E1 S-ALT, \
+     `SAR-Q5`, `SAL-Q2`): `AltBlock::attestation_witness`",
+)];
 
 /// Tables this crate defines that have **no** X-macro twin, each with the
 /// reason it exists. Read by `check_redb_schema_bijection.py` (a definition
@@ -380,8 +400,12 @@ tables! {
     /// A set-table: the key is the member; [`Present`] is the zero-width witness.
     pub const SPENT_KEYS: TableDefinition<LmdbHashKey, Present> = TableDefinition::new("spent_keys");
 
-    /// `alt_blocks` — key order `compare_hash32`.
-    pub const ALT_BLOCKS: TableDefinition<LmdbHashKey, Unshaped> = TableDefinition::new("alt_blocks");
+    /// `alt_blocks` — key order `compare_hash32`; block hash → the alt
+    /// block's record, bytes and reorg-survival witness in one row (S-ALT
+    /// AL1–AL7, `DRS_E1_SALT.md` §3; `SAL-Q2`). Not chain state (§11.2):
+    /// `Excluded` from every digest, written outside any pop recording.
+    pub const ALT_BLOCKS: TableDefinition<LmdbHashKey, Coded<AltBlock>> =
+        TableDefinition::new("alt_blocks");
 
     /// `hf_starting_heights` — default flags. Dead (DRS-W5): no runtime rows.
     pub const HF_STARTING_HEIGHTS: TableDefinition<&[u8], Unshaped> =
@@ -418,10 +442,6 @@ tables! {
     /// S-ARCH (A10).
     pub const ARCHIVAL_ATTESTATION_WITNESS: TableDefinition<u64, Blob<AttestationWitnessBytes>> =
         TableDefinition::new("archival_attestation_witness");
-
-    /// `archival_alt_attestation_witness` — key order `compare_hash32`.
-    pub const ARCHIVAL_ALT_ATTESTATION_WITNESS: TableDefinition<LmdbHashKey, Unshaped> =
-        TableDefinition::new("archival_alt_attestation_witness");
 
     /// `archival_bond` — default flags; keyed by the 32-byte `p_canonical_id`,
     /// one `BondRecord` per persona (S-ARCH A1; SI-14 on decode).
@@ -590,8 +610,11 @@ mod tests {
             ("hf_versions", 15),
             ("properties", 16),
             ("block_burn", 17),
-            ("curve_tree_roots", 44),
-            ("undo_log", 45),
+            // Layout 13: `archival_alt_attestation_witness` (21) folded
+            // into `alt_blocks` (S-ALT), so everything after it moved up by
+            // one.
+            ("curve_tree_roots", 43),
+            ("undo_log", 44),
         ];
         for &(name, index) in pinned {
             assert_eq!(
@@ -622,6 +645,30 @@ mod tests {
             assert!(
                 reason.split_whitespace().count() >= 8,
                 "{name}: a mirrored table's reason is a sentence, not a token"
+            );
+            assert!(
+                crate::accumulator::class_for_table(name).is_some(),
+                "{name}: the class table is the LMDB inventory and keeps this row"
+            );
+        }
+    }
+
+    #[test]
+    fn folded_tables_are_absent_here_and_their_host_is_defined() {
+        let here: Vec<String> = catalogue().into_iter().map(|s| s.name).collect();
+        assert!(!FOLDED_INTO.is_empty());
+        for &(name, host, reason) in FOLDED_INTO {
+            assert!(
+                !here.iter().any(|c| c == name),
+                "{name}: named as folded but defined in this file"
+            );
+            assert!(
+                here.iter().any(|c| c == host),
+                "{name}: its host `{host}` is not a table in this file"
+            );
+            assert!(
+                reason.split_whitespace().count() >= 8,
+                "{name}: a folded table's reason is a sentence, not a token"
             );
             assert!(
                 crate::accumulator::class_for_table(name).is_some(),

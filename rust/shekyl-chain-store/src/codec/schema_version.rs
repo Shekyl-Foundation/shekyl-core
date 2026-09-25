@@ -129,7 +129,18 @@ use super::{Canonical, CodecError};
 ///   `Fluff` or `Block`; two fixtures are born (`pool_record`,
 ///   `pool_tables`). No digest family
 ///   moves: the pool was never in one (§11.2).
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(12);
+/// - `13` — DRS-E1 S-ALT (`DRS_E1_SALT.md` §4): **the alt-chain store
+///   stays in this file and takes its shape.** `alt_blocks` →
+///   `LmdbHashKey → Coded<AltBlock>` — the C++ `alt_block_data_t ‖ blob`
+///   re-specified as one record: the `u128` as one field, the weight's
+///   zero sentinel as `None`, the block bytes and the reorg-survival
+///   attestation witness as fields (`SAL-Q2`). One fixture is born
+///   (`alt_block`). `archival_alt_attestation_witness` is **folded** into
+///   that record and leaves this catalogue (`FOLDED_INTO`, SAL-2) — every
+///   later table's ordinal moves by one. No digest family moves: the alt
+///   surface is `Excluded` (§11.2), and a write to it moving no digest is
+///   now a test rather than a declaration (SAL-15).
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(13);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -186,10 +197,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(12));
-        assert_eq!(SCHEMA_VERSION.encode(), [12, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(13));
+        assert_eq!(SCHEMA_VERSION.encode(), [13, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[12, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[13, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

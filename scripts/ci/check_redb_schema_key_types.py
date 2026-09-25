@@ -109,7 +109,11 @@ SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
 # `schema.rs` — the two `compare_hash32` constraints they fired go with them.
 # The pool file's keys are not LMDB's order and are outside this gate's
 # domain by construction; the bijection gate holds the twins' existence.
-MIN_CONSTRAINTS = 25
+# 24 since redb v13 (DRS-E1 S-ALT): `archival_alt_attestation_witness` left
+# `schema.rs` as a field of `alt_blocks`' record (`FOLDED_INTO`) — its one
+# `compare_hash32` constraint went with it; `alt_blocks` itself keeps its
+# `LmdbHashKey` and still fires. Re-derived by counting.
+MIN_CONSTRAINTS = 24
 
 # Tables the C++ no longer writes at all, with the put shape they carried
 # when they were last written. The classifying fact for a uint64-dupsort

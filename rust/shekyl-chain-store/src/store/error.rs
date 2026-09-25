@@ -35,7 +35,7 @@
 
 use crate::apply_policy::ArchivalFamily;
 use shekyl_chain_rules::RuleSet;
-use shekyl_types::TxHash;
+use shekyl_types::{BlockHash, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
@@ -374,6 +374,40 @@ pub enum StoreCannot {
     /// everything else is refused, never deleted — a wrong `--data-dir`, a
     /// foreign file or a tampered one is an operator's to look at.
     PoolFileForeign,
+    /// An alt-chain store refusal (DRS-E1 S-ALT, `DRS_E1_SALT.md` §3.2) —
+    /// the store's decisions on `alt_blocks`, none of them a fault in it.
+    Alt(AltCannot),
+}
+
+/// The alt-chain store's typed refusals — decisions, not faults
+/// (`StoreCannot`'s shape; `DRS_E1_SALT.md` §3.4).
+///
+/// Each is a **caller-contract violation** made visible (`SAL-Q3` as ruled,
+/// and the identity belt with it): the caller states what it expected of
+/// the table, and the store says when the table disagrees, instead of
+/// doing something silently different. A row already on disk whose block
+/// does not hash to its key is not one of these — that is SI-7 at AL4/AL7,
+/// the row having bypassed this boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AltCannot {
+    /// `insert_alt_block` of a hash the store already holds — CEN-K3's
+    /// belt (`MDB_NODUPDATA`), re-specified as the one typed refusal (SAL-4).
+    AlreadyHeld,
+    /// `remove_alt_block` of a hash the store does not hold. Removing what
+    /// is not held is a caller-contract violation — L14's insert-versus-upsert
+    /// ruling applied to a remove — not an idempotent no-op.
+    NotHeld,
+    /// `insert_alt_block` whose key is not the hash of the block it stores.
+    /// The key is the alt block's identity and the record does not carry a
+    /// second one, so the store verifies the one it is given — the belt
+    /// class `chain_reads::block_body` applies to a blob against
+    /// `block_info.hash`. The C++ trusted the caller (`blockchain.cpp:2359`).
+    IdentityMismatch {
+        /// The key the caller supplied.
+        key: BlockHash,
+        /// What the block bytes hash to.
+        actual: BlockHash,
+    },
 }
 
 /// The pool store's typed refusals — the pool's decisions, not faults
@@ -483,6 +517,7 @@ impl core::fmt::Display for StoreCannot {
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
+            Self::Alt(cannot) => write!(f, "alt-chain store: {cannot}"),
             Self::PoolFileForeign => f.write_str(
                 "pool file is not one this store wrote and not one it may recreate (no redb \
                  database, no pool header, or a header that does not decode): refused, not \
@@ -515,6 +550,27 @@ impl core::error::Error for PoolCannot {}
 impl From<PoolCannot> for StoreError {
     fn from(cannot: PoolCannot) -> Self {
         Self::Cannot(StoreCannot::Pool(cannot))
+    }
+}
+
+impl core::fmt::Display for AltCannot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::AlreadyHeld => f.write_str("insert of an alt block the store already holds"),
+            Self::NotHeld => f.write_str("remove of an alt block the store does not hold"),
+            Self::IdentityMismatch { key, actual } => write!(
+                f,
+                "insert of an alt block under key {key} whose bytes hash to {actual}"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for AltCannot {}
+
+impl From<AltCannot> for StoreError {
+    fn from(cannot: AltCannot) -> Self {
+        Self::Cannot(StoreCannot::Alt(cannot))
     }
 }
 

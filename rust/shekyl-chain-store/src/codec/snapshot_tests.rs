@@ -114,12 +114,12 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, ArrivedPhase, BlockInfo, BlockRef, BondRecord, Canonical, Coded, CoverageGaps,
-    CurveTreeState, FirstPayingHeight, HeldShard, Holdings, LayerHash, LeafCount, OriginatedPhase,
-    OutKey, OutTx, PassedThroughFacts, PoolRecord, ProbeCell, PropertyCell, RMarket, Readiness,
-    RelayState, Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
-    SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS,
-    SCHEMA_VERSION,
+    post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockInfo, BlockRef, BondRecord, Canonical,
+    Coded, CoverageGaps, CurveTreeState, FirstPayingHeight, HeldShard, Holdings, LayerHash,
+    LeafCount, OriginatedPhase, OutKey, OutTx, PassedThroughFacts, PoolRecord, ProbeCell,
+    PropertyCell, RMarket, Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion,
+    SettlementEpochBlocks, SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
+    PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -514,6 +514,33 @@ impl Fixtures for BondRecord {
         ]
     }
 }
+impl Fixtures for AltBlock {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        use shekyl_types::BlockWeight;
+        let facts = |weight: Option<u64>| AltBlockFacts {
+            height: BlockHeight::from_raw(41),
+            block_weight: weight.map(BlockWeight::from_raw),
+            cumulative_difficulty: CumulativeDifficulty::from_raw((5u128 << 64) | 4), // lo = 4, hi = 5
+            coins_generated: AtomicUnits::from_raw(1_234_567),
+        };
+        let block = super::alt::test_block_bytes(41);
+        vec![
+            // Weight undetermined at admission, no witness: the two
+            // absences are one presence byte each.
+            (
+                "weight_unknown_no_witness",
+                AltBlock::checked(facts(None), &block, None).expect("fixture"),
+            ),
+            // Every optional part present: a weight and a 40-byte witness.
+            (
+                "weight_and_witness",
+                AltBlock::checked(facts(Some(2_048)), &block, Some(vec![0xA5; 40]))
+                    .expect("fixture"),
+            ),
+        ]
+    }
+}
+
 impl Fixtures for PoolRecord {
     fn fixtures() -> Vec<(&'static str, Self)> {
         use shekyl_types::{FcmpVerificationHash, NetZone, UnixSeconds};
@@ -1187,6 +1214,7 @@ snapshotted_codecs! {
     SettlementEpoch => codec_snapshot_settlement_epoch,
     ShardId => codec_snapshot_shard_id,
     PoolRecord => codec_snapshot_pool_record,
+    AltBlock => codec_snapshot_alt_block,
 }
 
 /// The gate asserts its own arming state (rule 47). `UPDATE_SNAPSHOTS`

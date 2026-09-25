@@ -1,6 +1,21 @@
 # DRS-E1 S-ALT — the alternative-chain store: increment plan and Round-0 pre-flight
 
-**Status:** OPEN — **Round 0 executed 2026-09-24** at `dev` @ `9532b58f5`
+**Status:** LANDED — **implemented 2026-09-25** on the S-ALT increment PR,
+stacked on the pre-flight (#856): three commits (§7 as executed; layout
+**12 → 13**; `codec/alt.rs` `AltBlock`, `store/alt.rs` AL1–AL3 on the
+batch, `store/alt_reads.rs` AL4–AL7 on the snapshot and the batch,
+`AltCannot` under `StoreCannot`; `archival_alt_attestation_witness` folded
+into `alt_blocks`, `schema::FOLDED_INTO` and the bijection gate's fourth
+direction with its selftest; the digest-boundary test). As-built deviations
+in §11 (2026-09-25, "as built", and the #858 review the same day): ops
+named by family on the shared handle, AL7 returns a `Vec`, `AltCannot` has
+three arms (`AlreadyHeld`, `NotHeld`, `IdentityMismatch`) — a malformed
+block, an empty witness and a zero weight are `AltBlockError` at
+`checked`, not a fourth arm — and SAL-2's key-types claim corrected (the
+floor moved 25 → 24).
+This file stays in `design/` as the E1/E5 boundary statement (§0, §2.2,
+§2.3, SAL-13, SAL-14) until E5's plan owns it.
+**Round 0 executed 2026-09-24** at `dev` @ `9532b58f5`
 (the merge of PR #851, S-POOL). **Round 1 RULED 2026-09-25** (maintainer, on
 PR #856; §9, each row line-local): **all six defaults approved; Q3's reason
 replaced** — refusal because removing what is not held is a caller-contract
@@ -11,7 +26,7 @@ performance ground made explicit. Two findings added on the rulings:
 absence is the evidence SAL-1's atomicity landed) and **SAL-15** (the folded
 witness's §7.1.1 KAT obligation transfers to `alt_blocks`, and the
 "declared, not enforced" exclusion boundary can now be enforced by one
-test). **The increment may be cut from `dev` (§7).** Implements *from*
+test). The increment was cut and landed the same day (§7). Implements *from*
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §5 (the S-ALT row: extraction
 order **9**, the last ordered surface — "alt-chain storage depends on both
 chain surfaces being settled; its reorg path is the one place both are
@@ -137,10 +152,13 @@ lifetime of its own (CW-2, made structural).
   are **computed by E5** (`:2130`, `:2157`, `:2311–2346`, `shekyl-difficulty`,
   `shekyl_advance_already_generated`). The store types and holds them; it
   computes none (C2-R8: the store computes nothing consensus-visible).
-- **Parsing the block** — both enumerators parse
+- **Re-parsing the block** — the C++ enumerators parse
   (`parse_and_validate_block_from_blob`, `:2590`, `:6749`) and `MERROR`-skip
-  a bad blob. The store hands bytes (S-CHAIN-R's `RawBlockBytes` discipline);
-  what a consumer does with an unparsable alt block is its business.
+  a bad blob. Here the record parses once, at construction and at decode
+  (`BlockBody::parse`, the `blocks` table's rule), and holds the `Block`.
+  An unparsable row is SI-7, not a consumer's policy. `RawBlockBytes` stays
+  the relay shape for the main-chain blob; no alt consumer forwards, so
+  none is offered.
 - **Any change to the consensus file's digest families** — both tables are
   `Excluded` today and stay so (§11.2); this increment moves no family.
 - **`ChainView`** — alt data is **never** projected onto the validator's
@@ -203,21 +221,24 @@ pre-genesis, and the C++ default already discards them).
 
 The **consensus file**, on the existing handles: writes as methods of
 `WriteBatch<'store, 'id>` in `rust/shekyl-chain-store/src/store/alt.rs`
-(the `connect.rs` / `pop.rs` shape — one file per write surface), reads as
-methods of `ReadSnapshot` in `store/alt_reads.rs` (the `archival_reads.rs`
-shape), the record in `codec/alt.rs`. **Not** a second file (`SAL-Q1`).
+(the `connect.rs` / `pop.rs` shape — one file per write surface), and the
+batch-side reads beside them so the poison policy stays on the batch.
+`ReadSnapshot`'s methods live in `store/alt_reads.rs` with the bodies they
+call, not as a façade in `store/read.rs` — that file is the recorded-chain
+read surface. The record is in `codec/alt.rs`. **Not** a second file
+(`SAL-Q1`).
 
 ### 3.2 The mapping — nine methods, seven operations
 
 | Op | Signature | Replaces | Semantics |
 |---|---|---|---|
-| **AL1** | `insert(&self, id: BlockHash, block: &AltBlock) -> Result<(), StoreError>` on the batch | #1, #7 | One row. An existing key is `AltCannot::AlreadyHeld` — CEN-K3's belt, typed; the caller's pre-read at `:2352` is redundant inside a batch (SAL-4). Empty block bytes are `AltCannot::EmptyBlock`. The witness rides in the record as `Option` — `None` is the C++ "empty stores no row". |
-| **AL2** | `remove(&self, id: &BlockHash) -> Result<(), StoreError>` | #3, #9 | One row; an absent key is `AltCannot::NotHeld` — the C++ throws here and its three callers remove blocks they just enumerated, so absence is a logic fault worth surfacing, not an idempotent no-op (`SAL-Q3`). The witness leaves with the row. |
-| **AL3** | `drop_all(&self) -> Result<u64, StoreError>` | #5 | Every row, in the caller's batch; returns how many. The C++ opened its own transaction for this and ran it *outside* the reset's guard (SAL-9). |
-| **AL4** | `alt_block(&self, id: &BlockHash) -> Result<Option<AltBlock>, StoreError>` on the snapshot **and** on the batch's view | #2 (three callers), #8 | The record, the block bytes and the witness. `None` is "not an alt block". An undecodable row is SI-7. |
-| **AL5** | `contains(&self, id: &BlockHash) -> Result<bool, StoreError>` | #2 (two callers) | Membership without decoding or copying a block — `have_block_unlocked` asks this for every hash a peer announces (SAL-12). |
-| **AL6** | `len(&self) -> Result<u64, StoreError>` | #4 | The table's length. |
-| **AL7** | `entries(&self) -> impl Iterator<Item = Result<(BlockHash, AltBlock), StoreError>>` | #6 | Key order. Both callers want the bytes; there is no bytes-less enumeration to offer (SAL-11). |
+| **AL1** | `insert_alt_block(&self, id: &BlockHash, block: &AltBlock) -> Result<(), StoreError>` on `WriteBatch` (*ruled as* `insert`; the shared handle carries the family in the name — §11 as built) | #1, #7 | One row. A key that is not the hash of the block is `AltCannot::IdentityMismatch` (Copilot, PR #856 — the store verifies the identity it is handed; the C++ trusted the caller at `:2359`). An existing key is `AltCannot::AlreadyHeld` — CEN-K3's belt, typed; the caller's pre-read at `:2352` is redundant inside a batch (SAL-4). ~~Empty block bytes are `AltCannot::EmptyBlock`~~ — as built, bytes that are not a block cannot reach the store: `AltBlock::checked` refuses them (`AltBlockError::BlockMalformed`, §11 (3)). The witness rides in the record as `Option` — `None` is the C++ "empty stores no row". |
+| **AL2** | `remove_alt_block(&self, id: &BlockHash) -> Result<(), StoreError>` (*ruled as* `remove`) | #3, #9 | One row; an absent key is `AltCannot::NotHeld` — the C++ throws here and its three callers remove blocks they just enumerated, so absence is a logic fault worth surfacing, not an idempotent no-op (`SAL-Q3`). The witness leaves with the row. |
+| **AL3** | `drop_alt_blocks(&self) -> Result<u64, StoreError>` (*ruled as* `drop_all`) | #5 | Every row, in the caller's batch; returns how many. The C++ opened its own transaction for this and ran it *outside* the reset's guard (SAL-9). |
+| **AL4** | `alt_block(&self, id: &BlockHash) -> Result<Option<AltBlock>, StoreError>` on `ReadSnapshot` **and** on `WriteBatch` (the batch itself, not `BatchView` — alt data is never a `ChainView` fact, SAL-7) | #2 (three callers), #8 | The record, the parsed block and the witness. `None` is "not an alt block". An undecodable row is SI-7, and so is a row whose block does not hash to the key (the `chain_reads::block_body` belt: a decoded row is never returned under a false identity). AL5 still answers membership without decoding. |
+| **AL5** | `has_alt_block(&self, id: &BlockHash) -> Result<bool, StoreError>` (*ruled as* `contains`) | #2 (two callers) | Membership without decoding or copying a block — `have_block_unlocked` asks this for every hash a peer announces (SAL-12). |
+| **AL6** | `alt_block_count(&self) -> Result<u64, StoreError>` (*ruled as* `len`) | #4 | The table's length. |
+| **AL7** | `alt_blocks(&self) -> Result<Vec<AltEntry>, StoreError>`, `AltEntry { id: BlockHash, block: AltBlock }` (*ruled as* an iterator; a `Vec` as built — one body serves a `ReadOnlyTable` and a write `Table`, the table is small by construction, SAL-8) | #6 | Key order. Both callers want the block; there is no block-less enumeration to offer (SAL-11). Each row is checked as AL4 checks one, so a mis-keyed row fails the walk. |
 
 Reads on `ReadSnapshot`; the reorg reads AL4/AL5 through the batch's own
 view so a switch decides against what it is about to change. Writes inside
@@ -246,14 +267,16 @@ and `pop`; **no separate handle, no separate transaction** (`SAL-Q1`).
   chain codec already encodes it (SAL-5).
 - **What an operation may not do:** decide whether a block is an alt block
   (admission), walk a chain, choose a fork, compute a difficulty, weight or
-  coin total, parse a block, or drop alt blocks on its own initiative.
+  coin total, or drop alt blocks on its own initiative. The record holds a
+  parsed `Block`; an operation does not parse again and does not hand
+  bytes to a consumer to parse.
 
 ### 3.4 Types this increment adds — and where they live
 
 | Type | Shape | Home (default) | Why |
 |---|---|---|---|
-| `AltBlock` | `{ height: BlockHeight, block_weight: Option<BlockWeight>, cumulative_difficulty: CumulativeDifficulty, coins_generated: AtomicUnits, block: Vec<u8> /* BlockBody bytes, opaque */, attestation_witness: Option<Vec<u8>> }` | `shekyl-chain-store::codec::alt` | `alt_block_data_t` re-specified: the u128 as one field, the weight's zero sentinel as `None`, the misnamed `cumulative_weight` (it is the block's own weight, `:2313–2340`) named for what it holds, the block bytes and the CW-2 witness beside the record so the pairing invariants S-POOL had to *enforce* (SI-16) are here *unrepresentable* (`SAL-Q2`). Constructed through `checked()`, which applies **the shared validation, not an emptiness check** (sharpened on review, Copilot PR #856): the block bytes must satisfy `BlockBody::well_formed` — the `blocks` table's own rule, which parses — and a present witness must satisfy `AttestationWitnessBytes::well_formed` — the height-keyed twin's own rule, which refuses empty and over-bound; a zero weight is refused; the codec refuses the same three at decode (SI-14's shape). **The parse boundary is explicit:** the record does not hand out raw bytes — `AltBlock::block()` returns a parsed `Block` (every C++ consumer parses: `:937`, `:2023`, `:2590`, `:6749`; a row that decodes *is* a block), and the untyped `Vec<u8>` is a storage detail behind a private field, never a surface. And the key is not trusted: **AL1 verifies `id == block.hash()`** (`AltCannot::IdentityMismatch`), the same belt class as `chain_reads::block_body` verifying a blob against `block_info.hash` — verification of a caller-supplied identity, not computation of a consensus value (C2-R8). The witness accessor stays `Option<&[u8]>` for parity with the height-keyed read (S-ARCH #15 returns `Option<Vec<u8>>`); a typed witness wrapper is a change to that family's whole surface and is E4's. |
-| `AltCannot` | `{ AlreadyHeld, NotHeld, IdentityMismatch, EmptyBlock }` | `shekyl-chain-store::store::error`, as `StoreCannot::Alt(AltCannot)` | The store's decisions, not faults — `PoolCannot`'s shape. `AlreadyHeld` is CEN-K3's belt; `NotHeld` is the C++ throw at `:4354`, typed; `IdentityMismatch` (added on review, Copilot PR #856) refuses an AL1 whose key is not the hash of the block it stores — the C++ trusted the caller (`:2359`), the store need not. |
+| `AltBlock` | `{ height: BlockHeight, block_weight: Option<BlockWeight>, cumulative_difficulty: CumulativeDifficulty, coins_generated: AtomicUnits, block: Block /* canonical bytes on the wire; the value is the one parse */, attestation_witness: Option<Vec<u8>> }` | `shekyl-chain-store::codec::alt` | `alt_block_data_t` re-specified: the u128 as one field, the weight's zero sentinel as `None`, the misnamed `cumulative_weight` (it is the block's own weight, `:2313–2340`) named for what it holds, the block bytes and the CW-2 witness beside the record so the pairing invariants S-POOL had to *enforce* (SI-16) are here *unrepresentable* (`SAL-Q2`). Constructed through `checked()`, which applies **the shared validation, not an emptiness check** (sharpened on review, Copilot PR #856): the block bytes must satisfy `BlockBody::well_formed` — the `blocks` table's own rule, which parses — and a present witness must satisfy `AttestationWitnessBytes::well_formed` — the height-keyed twin's own rule, which refuses empty and over-bound; a zero weight is refused; the codec refuses the same three at decode (SI-14's shape). **The parse boundary is the value:** `checked` and `decode` each call `BlockBody::parse` once and store the `Block`; `AltBlock::block()` returns `&Block` (every C++ consumer parses: `:937`, `:2023`, `:2590`, `:6749`; a row that decodes *is* a block). Encode writes `Block::serialize`, which re-encodes a blob `from_bytes` accepted to the same bytes, so there is no second copy and no raw-bytes accessor. And the key is not trusted at either boundary: **AL1 verifies `id == block.hash()`** (`AltCannot::IdentityMismatch`, the caller's contract, before the row exists) and **AL4/AL7 refuse a row already on disk whose block does not hash to its key as SI-7** (the `chain_reads::block_body` belt — a decoded row is never returned under a false identity; #858). Verification of an identity, not computation of a consensus value (C2-R8). The witness accessor stays `Option<&[u8]>` for parity with the height-keyed read (S-ARCH #15 returns `Option<Vec<u8>>`); a typed witness wrapper is a change to that family's whole surface and is E4's. |
+| `AltCannot` | **as built:** `{ AlreadyHeld, NotHeld, IdentityMismatch }` — `IdentityMismatch` refuses an AL1 whose key is not the hash of the block it stores (Copilot, PR #856; the C++ trusted the caller at `:2359`) — (*ruled as* `{ AlreadyHeld, NotHeld, EmptyBlock }` — `EmptyBlock` is unreachable at the store: the record cannot be built without a block, so the refusal is `AltBlockError::BlockMalformed` at `AltBlock::checked`, beside `WitnessMalformed` and `ZeroWeight`) | `shekyl-chain-store::store::error`, as `StoreCannot::Alt(AltCannot)`; `AltBlockError` in `codec::alt` | The store's decisions, not faults — `PoolCannot`'s shape. `AlreadyHeld` is CEN-K3's belt; `NotHeld` is the C++ throw at `:4354`, typed. |
 | `FOLDED_INTO: &[(&str, &str, &str)]` | `(lmdb_name, host_table, reason)` | `schema.rs`, beside `MIRRORED_ELSEWHERE` | The bijection gate's fourth direction: an X-macro table whose bytes now live as a **field of another table's record**. Rule-47 self-assertion as the other two: an entry naming a table not in the X-macro is red; an entry whose host is not a `TableDefinition` in `schema.rs` is red; an entry whose LMDB name *is* still defined in `schema.rs` is red (SAL-2). |
 
 No new vocabulary in `shekyl-types`: every scalar the record needs exists.
@@ -331,9 +354,15 @@ lands (§10).
   adds `FOLDED_INTO` with the same three self-assertions (§3.4) rather
   than widening `MIRRORED_ELSEWHERE`'s meaning — a twin table and a host
   field are different claims and the gate should say which it checked.
-  `check_redb_schema_key_types.py` carries no constraint on either table
+  ~~`check_redb_schema_key_types.py` carries no constraint on either table
   (both are `compare_hash32`, the default), so its floor of 25 does not
-  move.
+  move.~~ **CORRECTED as built (2026-09-25):** `compare_hash32` is *not*
+  the gate's default — it is the constraint that maps a table to
+  `LmdbHashKey` (`expected_key_types`), and both tables fired it. Folding
+  the witness table removes one constraint: **floor 25 → 24**, re-derived
+  by counting; `alt_blocks` keeps `LmdbHashKey` and still fires. The
+  pre-flight read the gate's comment, not its code — the rule-16 corollary,
+  caught by the gate itself on the increment.
 - **SAL-3 — the surface has one consumer and it *is* `blockchain.cpp`.**
   Every production caller of the nine methods is in `blockchain.cpp`
   (twelve sites, eight functions) or `cryptonote_core.cpp:653`; the two RPC
@@ -513,14 +542,14 @@ Nothing that was accepted becomes refused, or the reverse.
 
 | Gate / suite | Now | After |
 |---|---|---|
-| `check_redb_schema_bijection.py` | 47 ↔ 45 + 2 ↔ 47 | 46 ↔ 43 + 2 mirrored + 1 folded ↔ 46; selftest gains the three `FOLDED_INTO` refusals |
-| `check_redb_schema_key_types.py` | floor 25 | unchanged (neither table carries an LMDB key constraint) |
+| `check_redb_schema_bijection.py` | 47 ↔ 45 + 2 ↔ 47 | **as built:** 47 censused ↔ 44 here + 2 mirrored + 1 folded ↔ 47 classes; 46 definitions; selftest 4 clean shapes / 19 refusals (five `FOLDED_INTO` refusals plus the absent-const parse refusal) |
+| `check_redb_schema_key_types.py` | floor 25 | **25 → 24 as built** — the folded table's `compare_hash32` constraint left with it (SAL-2, corrected) |
 | `check_drs_c_surface_map.py` | 95 ↔ 95 across 10 surfaces | unchanged — the S-ALT Methods cell stays 6; witness methods stay in S-ARCH's cell (SAL-3) |
 | rule-42 snapshot gate | `SCHEMA_VERSION = 12` | 13; `tables.snap` −1 row, one re-typed; `alt_block.snap` new |
 | `check_store_invariant_register.py` | 16 rows / 14 ↔ 14 | unchanged (no new SI) |
 | digest exclusion tests (`accumulator`) | `txpool` pair only — alt boundary "declared, not enforced" | + the `alt_blocks` exclusion test (SAL-15) |
 | `check_conformance_coverage.py`, `check_consensus_invariants.sh` | 126 / 2 / 5 over 133 rows | unchanged (no verdict moves; CEN-K3's anchor text updates) |
-| `cargo test -p shekyl-chain-store` | 332 + 14 | + the §7 commit-2 suite |
+| `cargo test -p shekyl-chain-store` | 332 + 14 | **342 + 14 as built** (four codec tests, five store tests including the switch and the digest boundary, one schema test) |
 
 ---
 
@@ -537,7 +566,7 @@ Nothing that was accepted becomes refused, or the reverse.
 
 ---
 
-## 10. Documentation owed by the increment (rule 91)
+## 10. Documentation owed by the increment (rule 91) — discharged 2026-09-25 (commit 3)
 
 - `DAEMON_REDB_STORE.md` §5 S-ALT row → LANDED (6 → 7 mapping; the witness
   pair's disposition; Methods cell **6**, unchanged — SAL-3); §11.2's table
@@ -576,6 +605,8 @@ Nothing that was accepted becomes refused, or the reverse.
 
 | Date | Entry |
 |---|---|
+| 2026-09-25 | **PR #858 review — the record holds the block it parsed, and a mis-keyed row is SI-7.** Validated against the code, not copied from the review text. **(1)** `AltBlock` stores the `Block` from one `BlockBody::parse` (the `blocks` table's rule; `well_formed` is that parse with the value dropped, and `chain_reads::block_body` calls the same function). `block()` returns `&Block`. Encode writes `Block::serialize`, which re-encodes a blob `from_bytes` accepted to itself, so `alt_block.snap` does not move and `SCHEMA_VERSION` stays 13. The test-only byte accessor is gone. **(2)** AL1's `IdentityMismatch` stays the caller's contract, before the row exists and without poisoning. AL4 and AL7 refuse a row already on disk whose block does not hash to its key as SI-7 (`CellCorrupt` / `Undecodable`), the `block_body` belt. AL5 still does not decode. **(3)** `ReadSnapshot`'s alt methods moved to `store/alt_reads.rs` with their bodies. `store/read.rs` had crossed 1000 lines for a second copy of four forwards whose docs still said the consumer parses bytes. **(4)** A batch that only reads a corrupt or mis-keyed alt row poisons and does not commit, and does not halt the writer: `halt_for` notes a height only for connect, pop, and `chain_view`. The test asserts `connect_state` stays live. **(5)** `alt_table` uses `assert!`, as `replay_undo` does, so a release build cannot write an alt row inside a connect recording. |
 | 2026-09-25 | **Copilot round on PR #856 — four findings, all validated at source, all applied.** **(1)** SAL-1 / SAL-14 overstated what one `ChainStore::write` closure covers: the store rows, not the pool re-adds, the hard-fork step or the cache invalidation `pop_block_from_blockchain` and promotion also perform (`:711`, `:738`, `:753`) and the C++ rollback also undid. The deletion stands for the store half; the non-store half's owner is an **ordering rule** — apply pool and cache effects from the closure's `Ok` (chain-first, pool-second, `SPL-Q5`) — written into §2.3 and SAL-14 so E5 inherits a deletion *plus* an ordering rule. **(2)** §4 wrote the shaped key as `[u8; 32]`; the table is `compare_hash32` and the key-types gate maps that to `LmdbHashKey` — corrected; `BlockHash` converts at the API boundary. **(3)** §3.4's `AltBlock` row described `checked()` as an emptiness check over untyped bytes; sharpened to the shared validation (`BlockBody::well_formed`, `AttestationWitnessBytes::well_formed`), an explicit parse boundary (`block()` returns a parsed `Block`; no raw-bytes surface), and a new AL1 belt `AltCannot::IdentityMismatch` — the key must hash the block. **(4)** §0 and SAL-10 said the alt store is "only ever" written inside a chain transaction; `drop_alt_blocks` opens its own (SAL-9) — narrowed to the admission and reorg writes. |
+| 2026-09-25 | **As built — the increment (three commits stacked on #856), with its deviations from the ruled plan disclosed (rule 22).** **(1) Names carry the family.** The ops live on the `WriteBatch` / `ReadSnapshot` that `connect`, `pop` and every other surface share, so `insert` / `remove` / `drop_all` / `contains` / `len` / `entries` became `insert_alt_block` / `remove_alt_block` / `drop_alt_blocks` / `has_alt_block` / `alt_block_count` / `alt_blocks` — a bare `insert` on a shared handle names nothing. **(2) AL7 returns `Vec<AltEntry>`**, not an iterator: one body serves the snapshot's `ReadOnlyTable` and the batch's write `Table`, and the table is small by construction (SAL-8). **(3) `AltCannot { AlreadyHeld, NotHeld, IdentityMismatch }`** — `IdentityMismatch` added on the #856 Copilot round (the key must hash the block), and `AltBlock::block()` returns a **parsed** `Block` rather than bytes (the parse boundary is the record's; no raw-bytes accessor outside tests); — the ruled `EmptyBlock` is unreachable at the store because `AltBlock` has private fields and one constructor, `checked(facts, block, witness)`, which refuses block bytes that do not parse (`BlockBody::well_formed`, the `blocks` table's rule), a present-but-malformed witness (`AttestationWitnessBytes::well_formed`, the height-keyed twin's rule) and a zero weight; decode refuses the same three, so a row that decodes is a row `checked` would have built. **(4) SAL-2's key-types claim was wrong** and the gate said so: both tables fired the `compare_hash32 → LmdbHashKey` constraint, so the fold moves the floor 25 → 24 (the row above corrected in-line). **(5) Alt writes bypass the journaling handles on purpose.** `InsertTable::insert` treats a present key as an `SI-` row and poisons the batch; a present alt key is a refusal, not an invariant. And alt rows must never enter a pop journal (a pop must not delete a block demoted in the same batch), which the batch's own sequence guarantees — the recording is live only inside `connect` — and a `debug_assert` states. **(6) `ArchivalFamily::AltAttestationWitness` stays.** The family list is pinned against the LMDB X-macro, where the table still exists for the C++; in this store a policy that stubs that family has nothing to skip — the witness travels in the alt row, which is not an archival write. E4's plan inherits that note with SAL-15's carry. **What the tests hold** (§7 as executed): 4 codec tests (round trips, every refusal at `checked` and at decode against hand-forged bytes), 5 store tests (the ops and both readers seeing the batch's own writes; both refusals non-fatal; SI-7 on a corrupt row — the snapshot arms nothing, the batch poisons and refuses to commit; **the switch as one transaction** — pop, demote, connect, remove in one closure, then the same closure failing at its last step with the pop, the insert and the remove all not landed; **the digest boundary** — an alt block with a witness moves `logical_state_digest_v0` by nothing, and neither does its removal), 1 schema test (`folded_tables_are_absent_here_and_their_host_is_defined`); the bijection selftest gains five `FOLDED_INTO` refusals and the parse refusal. |
 | 2026-09-25 | **Round 1 RULED** (maintainer, PR #856). All six defaults approved. **Q1** with the method in the row: the answer was reached by checking S-POOL's grounds against this surface, which is why the two files differ for a reason. **Q3's reason replaced**: refusal because removing what is not held is a caller-contract violation (L14's insert-vs-upsert applied to a remove), not because the C++ throws — the posed reason was the transcription reflex. **Q4** earns `Option` by the discriminator (`None` = not yet validated far enough to have a weight). **Q5** keeps `contains` on performance, stated explicitly. **Q6** own direction: one vocabulary term must not mean two relationships. **Two findings added:** SAL-14 (`rollback_blockchain_switching` is deleted, not ported; its absence is the evidence SAL-1 landed — row and falsifier carried to E5's plan) and SAL-15 (the fold moves the witness's §7.1.1 KAT obligation onto `alt_blocks` without moving the archival bar's count, and lets the audit's "declared, not enforced" alt boundary be enforced by one exclusion test — written in commit 2). **The increment may be cut.** |
 | 2026-09-24 | **Round 0 executed** at `9532b58f5`. Thirteen findings (SAL-1 … SAL-13); six questions posed with defaults (SAL-Q1 … Q6). Nine methods on two tables map to seven operations; the witness pair (`SAR-Q5`) becomes a field; the alt tables stay in the consensus file for the reason the pool's left it — the switch is one transaction or it is not a switch. |

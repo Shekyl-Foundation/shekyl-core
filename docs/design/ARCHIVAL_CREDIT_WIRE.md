@@ -364,7 +364,10 @@ convention:
 - **`archival_alt_attestation_witness`, hash-keyed** — **owned by the alt-block
   table**. Written only beside `add_alt_block`, removed only by
   `remove_alt_block` / `drop_alt_blocks` / `reset()`. A row therefore exists
-  there **iff** its alt block does.
+  there **iff** its alt block does. *In the redb store (DRS-E1 S-ALT,
+  2026-09-25) this clause is structural rather than maintained: the witness
+  is a field of the alt block's own row (`AltBlock::attestation_witness`,
+  `DRS_E1_SALT.md` SAL-6) and there is no second table to own.*
 
 Neither owner writes the other's table. The consequences are what make the rule
 worth stating rather than leaving to comments:
