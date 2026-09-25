@@ -118,6 +118,25 @@ Constraints 1 and 2 stand; this is the mechanism that makes constraint 1's
 "read every hunk you did not make" happen by construction rather than by
 attention.
 
+**Does this apply to work already done? Yes — and the same day.** The
+commit that landed one hour before this section was written (`1b5023cca`,
+PR #856's neighbour PR #851) used `sed -i 'Ns/…/'` for rustdoc-link edits
+on `pool.rs` and `mod.rs`. Those edits were **safe by circumstance, not by
+form**: the files had been created by the same session minutes earlier, and
+the pushed SHA was verified from a fresh clone. Be precise about what that
+verification did and did not establish — the gates pass **whether or not
+drift was carried**, because a drifted-but-valid file still compiles and
+still resolves its links. A green gate is evidence the tree is
+well-formed; it is not evidence the tree is the one you edited. Only the
+anchor knows that.
+
+**The line to guard hardest is the third.** The instinct on a refused
+match is to widen the anchor until it matches — re-read the file, retarget
+against what is there now, get past it. That converts a drift *detection*
+into a successful write against stale content: the exact failure the form
+prevents, undone by the reflex to finish. `git diff` first is the whole
+defence, and it is the step under pressure to skip.
+
 ## What this rule does not change
 
 CI runs on the pushed SHA already, so a drift that reaches a push will
