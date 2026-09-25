@@ -177,6 +177,15 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
         })
     }
 
+    fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+        Ok(self
+            .chain
+            .recorded
+            .iter()
+            .position(|block| block.hash == *hash)
+            .map(|index| BlockHeight::from_raw(u64::try_from(index).expect("a Vec fits in u64"))))
+    }
+
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
         Ok(self.chain.root(height))
     }
@@ -202,6 +211,10 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
     }
 
     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Faulted> {
         Err(Faulted)
     }
 

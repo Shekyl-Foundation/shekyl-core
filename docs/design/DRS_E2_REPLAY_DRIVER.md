@@ -456,6 +456,8 @@ falsifier is the census, not a date (rule 22).
 | `WrongReward` | the coinbase's clear output amount off by one | **CEN-F18** *(re-keyed 2026-09-22 from F13 — E6 slice 4 Q8: F13 is the base-subsidy **definition**, a value pin that refuses nothing; the predicate a wrong amount trips is F18, exact payout. The family's branch is chosen by `CenRow::status`, so with F13 `Implemented` and the key unchanged the test would have expected a refusal F13 cannot produce.)* | `validate` (4.F) | **Pending** (blocked on CEN-G6's median, slice 7) | the block **connects** — Rust has the emission *definitions* (F13, F15, F20) but not the exact-payout check; the family pins the acceptance so the gap is a red test the moment F18 lands, not a surprise in a security review |
 | `ReorderedBodies` | two listed bodies swapped; the header's `tx_hashes` untouched | **CEN-G2** (body ↔ hash agreement) | `validate` (4.G) | **Pending** | the block **connects**. The corpus *writer and reader* refuse this shape as a source fault (RD-F15) — that is artifact hygiene, not the verdict; the in-memory family reaches `validate` with it and shows the rule is absent |
 | `DoubleSpend` | a listed spend reuses a key image an earlier block spent | **CEN-I7** (+ CEN-L1, the validator's intra-block check; SI-1 is the store's belt beneath both) | `validate` (4.I) | **Implemented** *(E6 slice 6 commit 4, 2026-09-25)* | refused at `Locus::Input { slot: Listed(n), input }`, the place this row named before the rule existed. Until then the pinned shape was: `validate` accepts; `connect` arms **SI-1** `KeyImageNotFresh` and the run ends in a **halt** (`PipelineFault`, the writer `Over`) — C2-R8's taxonomy, *a belt firing is the validator's hole*. The hole is closed; the belt's remaining subject is the spent-keys table moving under a judged token (`connect_fixtures::connect_with_image_planted_under_the_token`) |
+| `UnknownReference` | a listed spend's `referenceBlock` replaced by a hash the chain never held (the harness's `UNRECORDED_REFERENCE`); the header re-lists the changed body so the violation is one | **CEN-I10** | `validate` (4.I) | **Implemented** *(E6 slice 6 commit 5, 2026-09-25 — written before the rule, as this table's rows are)* | refused at `Locus::Tx { slot: Listed(n) }` — the transaction, as the C++ names it (`blockchain.cpp:4113`); no input is singled out because the reference is the transaction's, not an input's |
+| `ReferenceTooRecent` | a listed spend's `referenceBlock` replaced by the candidate's own parent — a block the chain holds, one block old, `MIN_AGE − 1` too young | **CEN-I11** | `validate` (4.I) | **Implemented** *(E6 slice 6 commit 5, 2026-09-25)* | refused at `Locus::Tx { slot: Listed(n) }`. The other edge — `MAX_AGE + 1` too old — needs a chain past 100 blocks, which the fixture family's `root_after` bytes (`0xc0 + h`) cannot build; that boundary is the mock's (`I11::window`, the arithmetic alone) and the driver holds the young edge |
 
 **Environment a mutation needs**, supplied by the caller (`Environment`): the
 clock the substrate will report (C1's bound is computed from it, not
@@ -466,7 +468,9 @@ already passed through, `Orphan`/`WrongRoot` use named constants no chain holds.
 
 **Place.** `Mutation::expected` is the row. `Mutation::expected_place` is
 where that row points: `Block` for the six rows implemented at the pin,
-`Input` for `DoubleSpend` (the I7 refusal this table names), `Miner` for
+`Input` for `DoubleSpend` (the I7 refusal this table names), `Listed` for
+`UnknownReference` and `ReferenceTooRecent` (I10/I11 name the transaction,
+`Locus::Tx { slot: Listed(_) }`), `Miner` for
 `WrongReward` (4.F named its locus with slice 4, Q6: every coinbase row
 refuses at `Locus::Tx { slot: TxSlot::Miner }`), and `Unnamed` for
 `ReorderedBodies` until 4.G names its locus. The refusal branch asserts

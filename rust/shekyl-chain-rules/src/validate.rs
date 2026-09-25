@@ -44,8 +44,9 @@ use shekyl_types::BlockHash;
 use shekyl_wire::Transaction;
 
 use crate::block::{Candidate, StructurallyValid, ValidatedBlock};
+use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Fault, FormAttempt, Stale};
+use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
 use crate::rules::difficulty::D4;
@@ -55,7 +56,7 @@ use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
-use crate::rules::tx_against::{I7, L1};
+use crate::rules::tx_against::{I10, I11, I12, I7, L1};
 use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9};
 use crate::rules::{self, BlockContext, FormContext};
@@ -178,7 +179,7 @@ pub fn form<S: Substrate>(
 /// use core::convert::Infallible;
 /// use core::marker::PhantomData;
 /// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
+/// use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 ///
 /// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
 /// impl<'id> ChainView<'id> for View<'id> {
@@ -188,6 +189,9 @@ pub fn form<S: Substrate>(
 ///     }
 ///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+///         Ok(None)
 ///     }
 ///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
@@ -224,7 +228,7 @@ pub fn form<S: Substrate>(
 /// use core::convert::Infallible;
 /// use core::marker::PhantomData;
 /// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
+/// use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 ///
 /// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
 /// impl<'id> ChainView<'id> for View<'id> {
@@ -232,6 +236,9 @@ pub fn form<S: Substrate>(
 ///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> { Ok(false) }
 ///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+///         Ok(None)
 ///     }
 ///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
@@ -246,6 +253,9 @@ pub fn form<S: Substrate>(
 ///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> { Ok(false) }
 ///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+///         Ok(None)
 ///     }
 ///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
@@ -328,7 +338,7 @@ pub fn validate<'id, V: ChainView<'id>>(
         // Both stages refuse at the slot they were given (slice 6 commit 4
         // gave `tx_against` the slot `tx_form` already had), so the locus
         // arrives named and nothing is re-homed.
-        match judge_tx(tx, slot, view, rule_set).map_err(Fault::View)? {
+        match judge_tx(tx, slot, view, rule_set).map_err(Fault::from)? {
             Ok(tx_coverage) => coverage.union(&tx_coverage),
             Err(refused) => return Ok(Err(refused)),
         }
@@ -452,12 +462,22 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
 /// miner transaction without asking the transaction. The pool passes
 /// [`TxSlot::Lone`]; `validate` passes the position. A refusal names the
 /// slot it was given.
+///
+/// The fault is a [`ViewRead`]: the view's own, or a store invariant a
+/// per-height read observed broken (CEN-I12's root at a height I10 just
+/// found recorded answering `AboveTip` — [`crate::Corrupt::HoleBelowTip`]). A
+/// caller treats the second as `validate` does: the writer halt, never a
+/// verdict.
+///
+/// # Errors
+///
+/// The view's fault, or [`ViewRead::Corrupt`] as above.
 pub fn tx_against<'id, V: ChainView<'id>>(
     tx: &Transaction,
     slot: TxSlot,
     view: &V,
     rule_set: &RuleSet,
-) -> Result<Verdict<RuleCoverage>, V::Fault> {
+) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
     // No 4.I row reads the rule set yet; the first that does (a schedule
     // step varying a reference-window constant, Q5) takes it from here.
     let _ = rule_set;
@@ -467,11 +487,32 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Err(refused) => return Ok(Err(refused)),
     };
     // Order: the C++'s `check_tx_inputs` looks up each key image as it
-    // walks the inputs (I7), before the reference-block and membership
-    // reads the later commits add (I10–I13, I15).
-    match rules::run_tx_against::<I7, _>(&cx, view, &mut coverage)? {
+    // walks the inputs (I7), then — on the regular-spend arm — the
+    // reference block (I10), its age (I11) and the anchor at its height
+    // (I12, a definition), before the tree-depth and proof reads the later
+    // commits add (I13, I15).
+    match rules::run_tx_against::<I7, _>(&cx, view, &mut coverage).map_err(ViewRead::View)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
+    }
+    let ref_height =
+        match I10::reference_height(&cx, view, &mut coverage).map_err(ViewRead::View)? {
+            Ok(ref_height) => ref_height,
+            Err(refused) => return Ok(Err(refused)),
+        };
+    if let Some(ref_height) = ref_height {
+        match I11::check(&cx, ref_height, view, &mut coverage).map_err(ViewRead::View)? {
+            Ok(()) => {}
+            Err(refused) => return Ok(Err(refused)),
+        }
+        // Derived and dropped until CEN-I15 (slice 6 commit 8) verifies the
+        // proof against it; `I12::anchor`'s docs carry the staging.
+        let _anchor = I12::anchor(ref_height, view, &mut coverage)?;
+    } else {
+        // Not a regular spend: I11 and I12 have no operand and are vacuous
+        // here, recorded as evaluated, like I10 above.
+        coverage.insert(CenRow::I11);
+        coverage.insert(CenRow::I12);
     }
     Ok(Ok(coverage))
 }
@@ -484,7 +525,7 @@ fn judge_tx<'id, V: ChainView<'id>>(
     slot: TxSlot,
     view: &V,
     rule_set: &RuleSet,
-) -> Result<Verdict<RuleCoverage>, V::Fault> {
+) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
     let mut coverage = match tx_form(tx, slot, rule_set) {
         Ok(coverage) => coverage,
         Err(refused) => return Ok(Err(refused)),

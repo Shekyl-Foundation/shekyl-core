@@ -137,11 +137,13 @@ pub enum Corrupt {
         /// The upper height of the pair whose prefix sum is below the lower's.
         at: BlockHeight,
     },
-    /// `block_at(at)` answered `AboveTip` for a height a rule reads as
-    /// **below** the connecting height — the parent, a window member, the
-    /// seed height, block 0. A conforming store reports a hole below its
-    /// tip as its own fault (SI-7) before a rule can see one; a view that
-    /// answers `AboveTip` there is a view whose tip and rows disagree.
+    /// A per-height read — `block_at(at)`, or `root_at(at)` (CEN-I12) —
+    /// answered `AboveTip` for a height a rule reads as **below** the
+    /// connecting height: the parent, a window member, the seed height,
+    /// block 0, a spend's reference height. A conforming store reports a
+    /// hole below its tip as its own fault (SI-7) before a rule can see
+    /// one; a view that answers `AboveTip` there is a view whose tip and
+    /// rows disagree.
     ///
     /// Until 2026-09-24 four sites carried this as `unreachable!`, each
     /// arguing from SI-7 that the arm had no producer. That is a store

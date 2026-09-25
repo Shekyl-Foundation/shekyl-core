@@ -11,9 +11,10 @@ use super::{emission, refused_listed, refused_lone, spend, with_inputs, KI};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{
-    candidate_on, coinbase, listed, multiple_of_g, serve_credit_only, G, TWO_G,
+    anchored_on, candidate_on, coinbase, listed, multiple_of_g, serve_credit_only, spendable_chain,
+    G, TWO_G,
 };
-use crate::harness::{assert_refused, formed_on, judged, MockChain};
+use crate::harness::{assert_refused, formed_on, judged};
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{TxContext, H17, H7};
 use crate::rules::TxRule;
@@ -107,11 +108,16 @@ fn balanced_bond_post_and_emission_fixtures_pass() {
     }
 }
 
-/// The transaction, listed first, connects.
+/// The transaction, listed first, connects — on the youngest chain that
+/// can list a spend, anchored on it (CEN-I10/I11 read the reference of a
+/// regular spend; an archival shape is left as it is).
 fn refused_listed_never(tx: &Transaction) {
-    let chain = MockChain::default();
+    let chain = spendable_chain();
     chain.with_view(|view| {
-        let formed = formed_on(&chain, candidate_on(&chain, vec![tx.clone()]));
+        let formed = formed_on(
+            &chain,
+            candidate_on(&chain, vec![anchored_on(&chain, tx.clone())]),
+        );
         judged(validate(
             formed,
             &view,

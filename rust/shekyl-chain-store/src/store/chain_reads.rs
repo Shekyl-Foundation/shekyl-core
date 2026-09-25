@@ -71,12 +71,12 @@ use std::borrow::Borrow;
 
 use redb::{Key, ReadTransaction, ReadableTable, TableDefinition, Value, WriteTransaction};
 use shekyl_chain_rules::AtHeight;
-use shekyl_types::KeyImage;
+use shekyl_types::{BlockHash, BlockHeight, KeyImage};
 use shekyl_wire::Block;
 
 use crate::codec::{BlockBody, BlockInfo, Canonical, CodecError, Coded};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCKS, BLOCK_INFO, SPENT_KEYS};
+use crate::schema::{BLOCKS, BLOCK_HEIGHTS, BLOCK_INFO, SPENT_KEYS};
 
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
 
@@ -272,6 +272,23 @@ where
         .decode()
         .map(Some)
         .map_err(|cause| undecodable(cell_name, cause))
+}
+
+/// `block_heights[hash]` — the height a block hash sits at, or `None` if
+/// the chain does not contain it (R2; CEN-I10's read). By hash, so absence
+/// has one meaning and there is no tip to classify against. One body for
+/// both readers: `ReadSnapshot::height_of` on the committed chain and the
+/// validator's `BatchView::height_of` inside a batch (slice 6 commit 5).
+pub(super) fn height_of<T: ReadTables>(
+    txn: &T,
+    hash: &BlockHash,
+) -> Result<Option<BlockHeight>, ReadFault> {
+    cell(
+        txn,
+        BLOCK_HEIGHTS,
+        LmdbHashKey::from(*hash),
+        "block_heights",
+    )
 }
 
 /// `spent_keys` membership — the chain half of CEN-L1 / CEN-I7, read from

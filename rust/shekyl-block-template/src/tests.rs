@@ -10,7 +10,9 @@
 
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
-use shekyl_chain_rules::harness::fixture::{point_at, recorded_with_work, root, spend};
+use shekyl_chain_rules::harness::fixture::{
+    anchored_on, point_at, recorded_with_work, root, spend, spendable_chain,
+};
 use shekyl_chain_rules::harness::{
     assert_refused, expected_seed, judged, MockChain, MockSubstrate,
 };
@@ -227,8 +229,14 @@ fn the_template_on_a_tip_is_admitted_and_judged_by_every_landed_miner_row() {
 fn a_template_listing_bodies_hashes_them_in_order() {
     let params = EconomicParams::default();
     let miner = miner();
-    let chain = chain_of(2);
-    let listed = [spend(point_at(11), 2), spend(point_at(12), 3)];
+    // The youngest chain that can list a spend, and the bodies anchored on
+    // it as a pool would hand them (CEN-I10/I11 read a spend's reference;
+    // the producer lists bodies, it does not anchor them).
+    let chain = spendable_chain();
+    let listed = [
+        anchored_on(&chain, spend(point_at(11), 2)),
+        anchored_on(&chain, spend(point_at(12), 3)),
+    ];
     let template = build(&context(&chain, &params, &miner, &listed)).expect("builds");
     assert_eq!(
         template.block.transaction_hashes,

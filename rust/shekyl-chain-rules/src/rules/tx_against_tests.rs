@@ -9,21 +9,23 @@
 //! (I2's falsifier lives here; I3's is `f2_the_wire_admits_one_transaction_version`).
 
 use crate::census::CenRow;
+use crate::fault::{Corrupt, ViewRead};
 use crate::harness::fixture::{
-    anchored_on, candidate_on, coinbase, listed, listed_on, point, point_at, spend,
-    spendable_chain, TWO_G,
+    anchored_on, candidate_on, coinbase, listed, listed_on, point, point_at, serve_credit_only,
+    spend, spendable_chain, TWO_G,
 };
 use crate::harness::{
-    assert_refused, credited_to_this_falsifier, formed_on, infallible, judged, Faulted,
-    FaultingView, MockChain,
+    assert_refused, credited_to_this_falsifier, defined, formed_on, judged, Faulted, FaultingView,
+    MockChain,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{refused_listed, refused_lone};
-use crate::rules::tx_against::{REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
+use crate::rules::tx_against::{I11, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
 use crate::trust::Trust;
 use crate::validate::{tx_against, validate};
 use crate::verdict::{Locus, TxSlot};
-use shekyl_types::KeyImage;
+use crate::view::{AtHeight, ChainView};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::transaction::CT_TYPE_FCMP;
 use shekyl_wire::{Ct, CtBase, Input, Transaction};
 
@@ -71,7 +73,7 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
     let chain = spendable_chain().with_key_image(KeyImage::from_bytes(KI));
     chain.with_view(|view| {
         assert_refused(
-            infallible(tx_against(
+            defined(tx_against(
                 &listed_on(&chain, KI),
                 TxSlot::Lone,
                 &view,
@@ -83,7 +85,7 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
                 input: 0,
             },
         );
-        let fresh = infallible(tx_against(
+        let fresh = defined(tx_against(
             &listed_on(&chain, point(10)),
             TxSlot::Lone,
             &view,
@@ -162,7 +164,7 @@ fn i7_looks_up_an_archival_shapes_funding_spend_too() {
         .expect("the funding image is an input");
     chain.with_view(|view| {
         assert_refused(
-            infallible(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
             CenRow::I7,
             Locus::Input {
                 slot: TxSlot::Lone,
@@ -206,7 +208,7 @@ fn i7_propagates_a_view_fault() {
     assert_eq!(
         tx_against(&listed(KI), TxSlot::Lone, &view, &RuleSet::GENESIS)
             .expect_err("the view faulted"),
-        Faulted
+        ViewRead::View(Faulted)
     );
 }
 
@@ -294,6 +296,189 @@ fn l1_distinct_images_pass_and_record() {
         ))
         .expect("distinct images");
         assert!(valid.coverage().contains(CenRow::L1));
+    });
+}
+
+// ---- CEN-I10, I11, I12 -------------------------------------------------
+//
+// The mock earns two things here and no more: the window's boundary
+// arithmetic (`I11::window`, predicate logic on two heights) and the fault
+// classifications a driven chain cannot produce (a hole where a root
+// should be). The rows *operating* — a reference the chain does not hold
+// refused, a young reference refused, a real spend's reference found and
+// its anchor read — are witnessed by the driver: the ingest's mutation
+// family (`UnknownReference`, `ReferenceTooRecent`) through the production
+// pipeline against a real store, and every captured chain's real spends
+// (`vectors_tests`). A `MockChain` whose `height_of` answers what a test
+// wants is a fixture constructing the state the rule reads back, and is
+// not used for that.
+
+/// The young edge: a reference exactly `MIN_AGE` below the connecting
+/// height is admitted; one block younger is refused.
+#[test]
+fn i11_admits_a_reference_exactly_min_age_old_and_refuses_one_younger() {
+    let min = REFERENCE_BLOCK_MIN_AGE.to_raw();
+    let connecting = BlockHeight::from_raw(REFERENCE_BLOCK_MAX_AGE.to_raw());
+    let newest = BlockHeight::from_raw(connecting.to_raw() - min);
+    assert_eq!(I11::window(connecting, newest), Ok(()));
+    assert_eq!(
+        I11::window(connecting, BlockHeight::from_raw(newest.to_raw() + 1)),
+        Err(())
+    );
+}
+
+/// The old edge: a reference exactly `MAX_AGE` below is admitted; one
+/// block older is refused. At `connecting == MAX_AGE` the oldest admissible
+/// is genesis and nothing is below it — the C++'s `chain_height > MAX_AGE`
+/// guard, which `checked_sub_count` yielding `Some(0)` reproduces exactly.
+#[test]
+fn i11_admits_a_reference_exactly_max_age_old_and_refuses_one_older() {
+    let max = REFERENCE_BLOCK_MAX_AGE.to_raw();
+    assert_eq!(
+        I11::window(BlockHeight::from_raw(max), BlockHeight::ZERO),
+        Ok(()),
+        "at connecting == MAX_AGE genesis is exactly MAX_AGE old"
+    );
+    assert_eq!(
+        I11::window(BlockHeight::from_raw(max + 1), BlockHeight::from_raw(1)),
+        Ok(())
+    );
+    assert_eq!(
+        I11::window(BlockHeight::from_raw(max + 1), BlockHeight::ZERO),
+        Err(()),
+        "one past MAX_AGE"
+    );
+}
+
+/// A chain too young to hold any admissible reference refuses every
+/// height; the first connecting height that admits one is `MIN_AGE`,
+/// referencing genesis — which is why `spendable_chain` is `MIN_AGE` blocks.
+#[test]
+fn i11_refuses_every_reference_on_a_chain_younger_than_min_age() {
+    let min = REFERENCE_BLOCK_MIN_AGE.to_raw();
+    for connecting in 0..min {
+        assert_eq!(
+            I11::window(BlockHeight::from_raw(connecting), BlockHeight::ZERO),
+            Err(()),
+            "connecting at {connecting}: no reference is MIN_AGE old"
+        );
+    }
+    assert_eq!(
+        I11::window(BlockHeight::from_raw(min), BlockHeight::ZERO),
+        Ok(())
+    );
+    assert_eq!(
+        spendable_chain().tip().map(|tip| tip.height.to_raw() + 1),
+        Some(min),
+        "the harness's spendable chain connects at MIN_AGE"
+    );
+}
+
+/// The three rows through `tx_against` on the harness's own spend: bare,
+/// its reference is the one no chain holds and I10 refuses at the
+/// transaction; anchored, I10 finds it, I11 measures it, I12 reads the
+/// anchor — all three recorded. This is the predicate over the fixture the
+/// harness defines, not a witness that the rows operate on a chain; that
+/// is the driver's (`mutation_tests`, `vectors_tests`).
+#[test]
+fn i10_refuses_the_unrecorded_reference_and_an_anchored_spend_records_the_three_rows() {
+    let chain = spendable_chain();
+    chain.with_view(|view| {
+        assert_refused(
+            defined(tx_against(
+                &listed(KI),
+                TxSlot::Lone,
+                &view,
+                &RuleSet::GENESIS,
+            )),
+            CenRow::I10,
+            Locus::Tx { slot: TxSlot::Lone },
+        );
+        let anchored = defined(tx_against(
+            &listed_on(&chain, KI),
+            TxSlot::Lone,
+            &view,
+            &RuleSet::GENESIS,
+        ))
+        .expect("an anchored spend passes the reference rows");
+        for row in [CenRow::I10, CenRow::I11, CenRow::I12] {
+            assert!(anchored.contains(row), "{row} recorded");
+        }
+    });
+}
+
+/// The reference rows are the regular spend's: a serve-credit-only body has
+/// no reference to look up, and the three are recorded vacuous, as the
+/// coinbase's are (`validate_tests::tx_entry_points_record_the_landed_rows`).
+#[test]
+fn i10_i11_i12_are_vacuous_on_a_serve_credit() {
+    let chain = spendable_chain();
+    chain.with_view(|view| {
+        let coverage = defined(tx_against(
+            &serve_credit_only([0x5e; 32]),
+            TxSlot::Lone,
+            &view,
+            &RuleSet::GENESIS,
+        ))
+        .expect("a serve credit has no reference to judge");
+        for row in [CenRow::I10, CenRow::I11, CenRow::I12] {
+            assert!(coverage.contains(row), "{row} recorded vacuous");
+        }
+    });
+}
+
+/// I12 reads the anchor at a height I10 just found recorded; a view that
+/// answers `AboveTip` there has a hole below its tip. That is a store
+/// invariant observed broken — `ViewRead::Corrupt(HoleBelowTip)`, the
+/// class that halts the writer — never a verdict, and the reason
+/// `tx_against`'s fault is a `ViewRead`. A driven chain cannot produce this
+/// (SI-4 keeps every root below the tip recorded), which is what makes it
+/// the mock's to witness.
+#[test]
+fn i12_a_missing_root_at_the_reference_height_is_corrupt_not_a_verdict() {
+    struct RootlessBelow<'a, 'id> {
+        inner: crate::harness::MockView<'a, 'id>,
+        missing: BlockHeight,
+    }
+    impl<'id> ChainView<'id> for RootlessBelow<'_, 'id> {
+        type Fault = core::convert::Infallible;
+        fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Self::Fault> {
+            self.inner.has_key_image(key_image)
+        }
+        fn block_at(
+            &self,
+            height: BlockHeight,
+        ) -> Result<AtHeight<crate::view::RecordedBlock>, Self::Fault> {
+            self.inner.block_at(height)
+        }
+        fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Self::Fault> {
+            self.inner.height_of(hash)
+        }
+        fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault> {
+            if height == self.missing {
+                return Ok(AtHeight::AboveTip);
+            }
+            self.inner.root_at(height)
+        }
+        fn tip(&self) -> Result<Option<crate::view::Tip>, Self::Fault> {
+            self.inner.tip()
+        }
+    }
+    let chain = spendable_chain();
+    // The anchored spend references genesis (`newest_admissible_reference`
+    // of the connecting height), so genesis's root is the one withheld.
+    let tx = listed_on(&chain, KI);
+    chain.with_view(|inner| {
+        let view = RootlessBelow {
+            inner,
+            missing: BlockHeight::ZERO,
+        };
+        assert_eq!(
+            tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS),
+            Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+                at: BlockHeight::ZERO
+            }))
+        );
     });
 }
 

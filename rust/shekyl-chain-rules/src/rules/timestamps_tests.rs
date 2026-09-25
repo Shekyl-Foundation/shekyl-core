@@ -316,6 +316,13 @@ impl<'id> ChainView<'id> for HoleyView<'_, 'id> {
         self.inner.block_at(height)
     }
 
+    fn height_of(
+        &self,
+        hash: &shekyl_types::BlockHash,
+    ) -> Result<Option<BlockHeight>, Self::Fault> {
+        self.inner.height_of(hash)
+    }
+
     fn root_at(
         &self,
         height: BlockHeight,

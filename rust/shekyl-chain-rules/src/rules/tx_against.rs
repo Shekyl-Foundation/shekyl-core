@@ -30,11 +30,14 @@
 use std::collections::BTreeSet;
 
 use crate::census::CenRow;
+use crate::coverage::RuleCoverage;
+use crate::fault::{Corrupt, ViewRead};
+use crate::rules::tx::TxClass;
 use crate::rules::{BlockContext, BlockRule, Rule, TxAgainstRule, TxContext, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
-use crate::view::ChainView;
-use shekyl_types::{BlockCount, KeyImage};
-use shekyl_wire::Input;
+use crate::view::{AtHeight, ChainView, Tip};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_wire::{Ct, Input};
 
 /// CEN-I11's window, lower edge: a spend's `referenceBlock` is at least
 /// this many blocks below the connecting height (`ref_height ≤
@@ -143,6 +146,179 @@ impl BlockRule for L1 {
             }
         }
         Ok(Ok(()))
+    }
+}
+
+/// The reference a regular spend carries, if this transaction is one: the
+/// `Ct::Fcmp` `reference_block` of a [`TxClass::Spend`]. The archival
+/// classes take the C++'s other arms (`blockchain.cpp:3460–3486`) and are
+/// not this row family's subject; a `Null` CT on a spend is CEN-H15's
+/// refusal in `tx_form`, and here it is nothing to look up.
+fn spend_reference(cx: &TxContext<'_>) -> Option<BlockHash> {
+    if !matches!(cx.class, TxClass::Spend { .. }) {
+        return None;
+    }
+    match &cx.tx.ct {
+        Ct::Fcmp {
+            reference_block, ..
+        } => Some(*reference_block),
+        Ct::Null(_) => None,
+    }
+}
+
+/// CEN-I10: a regular spend's `referenceBlock` is a block on this chain
+/// (`blockchain.cpp:4113` `m_db->block_exists(rv.referenceBlock, &ref_height)`
+/// — a lookup by hash, so the read is [`ChainView::height_of`] and absence
+/// is one thing: not on this chain). The height it answers is the operand
+/// I11 measures and I12 reads the root at, so this row is written the way
+/// D4 is — a rule that **yields** its operand, run once by `tx_against`,
+/// rather than a [`TxAgainstRule`] whose two successors would each repeat
+/// the lookup.
+///
+/// A spend with no reference to look up — `Null` CT — is refused here too:
+/// "is a main-chain block" is false of no block. `tx_form` names it H15
+/// first, so this arm is reachable only through `tx_against` alone.
+pub(crate) struct I10;
+
+impl Rule for I10 {
+    const ROW: CenRow = CenRow::I10;
+}
+
+impl I10 {
+    /// The reference's height for `cx`'s spend, recorded as this row on a
+    /// pass; `Ok(Ok(None))` for a transaction that is not a regular spend
+    /// (nothing to look up — the row is vacuous there and recorded, as
+    /// [`run_tx_against`](crate::rules::run_tx_against) records an
+    /// out-of-scope kind).
+    pub(crate) fn reference_height<'id, V: ChainView<'id>>(
+        cx: &TxContext<'_>,
+        view: &V,
+        coverage: &mut RuleCoverage,
+    ) -> Result<Verdict<Option<BlockHeight>>, V::Fault> {
+        if !matches!(cx.class, TxClass::Spend { .. }) {
+            coverage.insert(Self::ROW);
+            return Ok(Ok(None));
+        }
+        let Some(reference) = spend_reference(cx) else {
+            return Ok(Err(InvalidBlock::new(Self::ROW, cx.locus())));
+        };
+        match view.height_of(&reference)? {
+            Some(ref_height) => {
+                coverage.insert(Self::ROW);
+                Ok(Ok(Some(ref_height)))
+            }
+            None => Ok(Err(InvalidBlock::new(Self::ROW, cx.locus()))),
+        }
+    }
+}
+
+/// CEN-I11: the reference's height is within the window below the
+/// connecting height — at least [`REFERENCE_BLOCK_MIN_AGE`] blocks old and
+/// at most [`REFERENCE_BLOCK_MAX_AGE`] (`blockchain.cpp:4121–4141`). The
+/// C++'s `chain_height` is `m_db->height()`, the block count, which is the
+/// connecting height ([`Tip::connecting_height`]); its two guards are
+/// written here as the two `checked_sub`s they are:
+///
+/// - too recent: `chain_height < MIN_AGE || ref_height > chain_height −
+///   MIN_AGE` — no admissible reference exists at all, or this one is
+///   younger than the newest admissible;
+/// - too old: `chain_height > MAX_AGE && ref_height < chain_height −
+///   MAX_AGE` — the oldest admissible exists (the chain is past the
+///   window's width; at equality the bound is `0` and nothing is below it,
+///   which is the `>` guard's exact meaning) and this one is below it.
+///
+/// The operand is the height I10 yielded, so a reference not on the chain
+/// never reaches this row: I10 refused it. Non-spends are recorded
+/// vacuous by `tx_against` alongside I12.
+pub(crate) struct I11;
+
+impl Rule for I11 {
+    const ROW: CenRow = CenRow::I11;
+}
+
+impl I11 {
+    /// The window as a pure predicate over the two heights — the boundary
+    /// arithmetic, with nothing read: `Ok(())` when `ref_height` is
+    /// admissible for a block connecting at `connecting`, `Err(())` when it
+    /// is too recent or too old. The mock earns its keep on exactly this
+    /// function (rule 50's first job); the rows operating are witnessed by
+    /// the driver.
+    pub(crate) fn window(connecting: BlockHeight, ref_height: BlockHeight) -> Result<(), ()> {
+        let Some(newest) = connecting.checked_sub_count(REFERENCE_BLOCK_MIN_AGE) else {
+            return Err(());
+        };
+        if ref_height > newest {
+            return Err(());
+        }
+        if let Some(oldest) = connecting.checked_sub_count(REFERENCE_BLOCK_MAX_AGE) {
+            if ref_height < oldest {
+                return Err(());
+            }
+        }
+        Ok(())
+    }
+
+    /// Judge `ref_height` (I10's operand) against the view's connecting
+    /// height, recording this row on a pass.
+    pub(crate) fn check<'id, V: ChainView<'id>>(
+        cx: &TxContext<'_>,
+        ref_height: BlockHeight,
+        view: &V,
+        coverage: &mut RuleCoverage,
+    ) -> Result<Verdict<()>, V::Fault> {
+        let connecting = Tip::connecting_height(view.tip()?.as_ref());
+        match Self::window(connecting, ref_height) {
+            Ok(()) => {
+                coverage.insert(Self::ROW);
+                Ok(Ok(()))
+            }
+            Err(()) => Ok(Err(InvalidBlock::new(Self::ROW, cx.locus()))),
+        }
+    }
+}
+
+/// CEN-I12, a **definition**: the membership anchor a regular spend's
+/// proof is verified against is the curve-tree state **at** `ref_height`
+/// — the root after the reference block's parent connected and before the
+/// reference block drained its own leaves — read from the chain's own
+/// per-height record ([`ChainView::root_at`]), never from a header
+/// (`blockchain.cpp:4152` `get_curve_tree_root_at_height(ref_height)`; the
+/// comment above it is the census's wording). Recorded as coverage where
+/// it is derived, the D4 arrangement: nothing about a candidate can fail
+/// a definition, and `implemented(rules::tx_against::I12)` names this
+/// derivation.
+///
+/// Derived after I10 and I11 have passed, so `ref_height` is recorded and
+/// at least `MIN_AGE` below the connecting height. A view that then
+/// answers `AboveTip` for it has a hole below its tip — a store invariant
+/// observed broken from the validator's side, [`Corrupt::HoleBelowTip`],
+/// never a verdict. This is the read that widens `tx_against`'s fault to
+/// [`ViewRead`]: the first view-bound row to read a per-height record.
+///
+/// The anchor's consumer is CEN-I15's proof verification (slice 6 commit
+/// 8, this PR); until it lands the value is derived, recorded and dropped —
+/// staged with its consumer named, so the derivation and its fault
+/// classification are reviewed here, where the operand is defined, and not
+/// inside the verification commit.
+pub(crate) struct I12;
+
+impl Rule for I12 {
+    const ROW: CenRow = CenRow::I12;
+}
+
+impl I12 {
+    /// The anchor for a spend whose reference I10 placed at `ref_height`,
+    /// recorded as this row.
+    pub(crate) fn anchor<'id, V: ChainView<'id>>(
+        ref_height: BlockHeight,
+        view: &V,
+        coverage: &mut RuleCoverage,
+    ) -> Result<CurveTreeRoot, ViewRead<V::Fault>> {
+        coverage.insert(Self::ROW);
+        match view.root_at(ref_height).map_err(ViewRead::View)? {
+            AtHeight::Recorded(root) => Ok(root),
+            AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip { at: ref_height })),
+        }
     }
 }
 

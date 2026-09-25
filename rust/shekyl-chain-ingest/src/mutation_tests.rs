@@ -235,6 +235,15 @@ fn assert_place(mutation: Mutation, locus: Locus) {
             matches!(locus, Locus::Input { .. }),
             "{mutation}: §3.10 names an input, got {locus}"
         ),
+        ExpectedPlace::Listed => assert!(
+            matches!(
+                locus,
+                Locus::Tx {
+                    slot: TxSlot::Listed(_)
+                }
+            ),
+            "{mutation}: §3.10 names a listed transaction, got {locus}"
+        ),
         ExpectedPlace::Unnamed => panic!(
             "{mutation}: {} is Implemented and expected_place is still Unnamed. \
              Name the locus on the mutation when the row is ported.",
@@ -280,7 +289,9 @@ fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
         | Mutation::PowUnderWrongSeed
-        | Mutation::DoubleSpend => panic!(
+        | Mutation::DoubleSpend
+        | Mutation::UnknownReference
+        | Mutation::ReferenceTooRecent => panic!(
             "{mutation}: the census says {} is pending, and the family has no pin for a row \
              that was Implemented at the pin",
             mutation.expected().as_str()
@@ -382,7 +393,9 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
         | Mutation::WrongReward
-        | Mutation::DoubleSpend => {
+        | Mutation::DoubleSpend
+        | Mutation::UnknownReference
+        | Mutation::ReferenceTooRecent => {
             let chain = crate::test_support::chain(n);
             judge(
                 &format!("{mutation:?}").to_lowercase(),
@@ -592,6 +605,9 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_the_two_the_plan_lists() 
             (Mutation::WrongReward, ExpectedPlace::Miner),
             (Mutation::ReorderedBodies, ExpectedPlace::Unnamed),
             (Mutation::DoubleSpend, ExpectedPlace::Input),
+            // Slice 6 commit 5: the reference rows name the transaction.
+            (Mutation::UnknownReference, ExpectedPlace::Listed),
+            (Mutation::ReferenceTooRecent, ExpectedPlace::Listed),
         ]
     );
 }

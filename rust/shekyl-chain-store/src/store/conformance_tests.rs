@@ -44,11 +44,14 @@
 use shekyl_chain_rules::harness::{fixture, MockChain, MockSubstrate};
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, CenRow, ChainView, Corrupt, Fault, FormAttempt, Locus,
-    RecordedBlock, RuleSet, Stale, Substrate, Trust, Verdict,
+    RecordedBlock, RuleSet, Stale, Substrate, Trust, TxSlot, Verdict,
 };
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
+use shekyl_wire::Transaction;
 
-use super::connect_fixtures::{candidate, facts, judge, FixtureSubstrate};
+use super::connect_fixtures::{
+    candidate, facts, judge, spend, spend_at, FixtureSubstrate, FIRST_SPEND_HEIGHT,
+};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 
@@ -273,9 +276,35 @@ fn shapes(len: u64, blocks: &[Candidate]) -> Vec<(&'static str, Candidate, Env)>
 
     // B1: stateless refusal — the view is never consulted; both agree
     // trivially, and the fixture pins that neither view is asked.
-    let mut bad_major = well_formed;
+    let mut bad_major = well_formed.clone();
     bad_major.block.header.major_version = 9;
     out.push(("B1 major version", bad_major, Env::FIXTURE));
+
+    // I10–I12 (slice 6 commit 5), once the chain is old enough to list a
+    // spend: an anchored spend — the reference found by `height_of` on
+    // both views, measured by I11, its root read by I12 — passes on both;
+    // a spend whose reference no chain holds is refused by I10 on both.
+    // `height_of` is the read this file exists to reconcile here, not the
+    // rows' operation on a chain (the ingest's driver holds that).
+    if len >= FIRST_SPEND_HEIGHT {
+        let hashes: Vec<BlockHash> = blocks.iter().map(|b| b.block.hash()).collect();
+        let listing = |body: Transaction| {
+            let mut with_body = well_formed.clone();
+            with_body.block.transaction_hashes = vec![body.hash()];
+            with_body.transactions = vec![body];
+            with_body
+        };
+        out.push((
+            "I10–I12 anchored spend",
+            listing(spend_at(&hashes, len, 9, 2)),
+            Env::FIXTURE,
+        ));
+        out.push((
+            "I10 unrecorded reference",
+            listing(spend(9, 2)),
+            Env::FIXTURE,
+        ));
+    }
     out
 }
 
@@ -300,14 +329,29 @@ fn every_landed_rule_judges_identically_over_batch_view_and_the_mock() {
                 real, mocked,
                 "{name} at len {len}: BatchView vs MockChain disagree"
             );
-            if name == "well-formed" {
+            if name == "well-formed" || name == "I10–I12 anchored spend" {
                 // Otherwise the agreement above is over a chain neither
                 // view could judge — a vacuous comparison (rule 47).
-                assert!(matches!(real, Outcome::Valid { .. }), "len {len}: {real:?}");
+                assert!(
+                    matches!(real, Outcome::Valid { .. }),
+                    "{name} at len {len}: {real:?}"
+                );
+            }
+            if name == "I10 unrecorded reference" {
+                assert_eq!(
+                    real,
+                    Outcome::Refused {
+                        rule: CenRow::I10,
+                        locus: Locus::Tx {
+                            slot: TxSlot::Listed(0),
+                        },
+                    }
+                );
             }
             checked += 1;
         }
-        assert_eq!(checked, 7, "every shape ran at len {len}");
+        let expected = if len >= FIRST_SPEND_HEIGHT { 9 } else { 7 };
+        assert_eq!(checked, expected, "every shape ran at len {len}");
         drop(store);
         cleanup(&path);
     }
@@ -419,6 +463,40 @@ fn the_mock_view_and_the_batch_view_answer_the_same_reads() {
     assert_eq!(real, mocked);
     assert_eq!(real.iter().filter(|r| r.is_some()).count(), 5);
     assert_eq!(real[0].map(|r| r.hash), Some(blocks[0].block.hash()));
+
+    // By hash (CEN-I10): every recorded identity answers its height on both
+    // views, and a hash no chain holds answers `None` on both — the mock's
+    // `height_of` is held to the store's here, not assumed (slice 6
+    // commit 5).
+    let asked: Vec<BlockHash> = blocks
+        .iter()
+        .map(|b| b.block.hash())
+        .chain(core::iter::once(fixture::UNRECORDED_REFERENCE))
+        .collect();
+    let real_heights: Result<Vec<Option<BlockHeight>>, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let mut out = Vec::new();
+        for hash in &asked {
+            out.push(view.height_of(hash)?);
+        }
+        Ok(out)
+    });
+    let real_heights = real_heights.expect("reads");
+    let mocked_heights: Vec<Option<BlockHeight>> = mock.with_view(|view| {
+        asked
+            .iter()
+            .map(|hash| match view.height_of(hash) {
+                Ok(at) => at,
+                Err(never) => match never {},
+            })
+            .collect()
+    });
+    assert_eq!(real_heights, mocked_heights);
+    let expected_heights: Vec<Option<BlockHeight>> = (0..5u64)
+        .map(|h| Some(BlockHeight::from_raw(h)))
+        .chain(core::iter::once(None))
+        .collect();
+    assert_eq!(real_heights, expected_heights, "five recorded, one unknown");
 
     // Roots: SCW-19 keying — `root_at(h)` is the state AT h, written by the
     // connect of h − 1; `root_at(tip + 1)` is recorded, `tip + 2` is not.
