@@ -46,7 +46,14 @@ enforced 154, ratified 128 / 154), policy 0 / 9 — unchanged;
 `check_index_prefix_uniqueness.py` 99 prefixes / 99 rows after `SPL-` and
 `SPL-Q` register. This stamp re-read no code anchor outside
 `DRS_E1_SPOOL.md`'s own cites (each read at source at `a1159f1a2`, §1 /
-§2.1 / §6 there). *Superseded stamp, retained:* `4dc5194de` + the S-ARCH
+§2.1 / §6 there). **Outside this stamp, by declaration:** the
+`CHAIN_RULES_SLICE_6.md` row is advanced on PR branches (#852, #853) whose
+code is not on `dev`; its cell carries its own as-of date and the `git grep`
+it re-verifies against once merged. The unified stamp names a `dev` tree and
+does not move for a branch; it moves with the merge that lands the code
+(the lane's docs commit re-runs the checks then — including
+`check_conformance_coverage.py`, which #853 moves to 125 / 3 / 5). Counts
+above therefore exclude that landing. *Superseded stamp, retained:* `4dc5194de` + the S-ARCH
 increment's tree (2026-09-23) — moved by the S-ARCH increment (DRS-E1 increment 8), which lands
 code in `shekyl-chain-store`, `shekyl-store-codec`, `shekyl-types` and
 `shekyl-archival-retention` and sits on the slice-5 merge, so every check was

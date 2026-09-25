@@ -506,18 +506,22 @@ machinery is mostly there, and the two gaps are production code:
   `form`/`validate`/`connect`. PoW: regtest fixed difficulty 1, every hash
   satisfies; `ProductionSubstrate` or the real-clock mock, per test, stated.
   Tree state: `shekyl_curve_tree` derives roots and layers in Rust.
-- **Gap 1 — no Rust block template.** `construct_miner_tx` /
-  `create_block_template` are C++. **This is TXE-F8** ("the block template
-  has no Rust owner"), already recorded; the driver is the first consumer
-  that makes it claimable. Every piece is Rust already —
-  `shekyl_economics` (reward, emission split, fee burn),
-  `shekyl_crypto_pq::output::construct_output` (the coinbase output the
-  C++ calls through `shekyl_construct_output`), `build_coinbase_extra`,
-  the wire types; nothing composes them.
-- **Gap 2 — `ConnectFacts` derivation.** `connect` takes `Fact<_>` with
-  `Origin::{Derived, PassedThrough}`; today `root_after`,
-  `coins_generated`, `burned` and `long_term_effective_median` are passed
-  through from the C++ trace.
+- **Gap 1 — no Rust block template — CLOSED by commit 1a (#852), records-was.**
+  As found at Round 0: `construct_miner_tx` / `create_block_template` were
+  C++ only — TXE-F8, "the block template has no Rust owner" — with every
+  piece already Rust (`shekyl_economics` for reward, emission split and fee
+  burn; `shekyl_crypto_pq::output::construct_output`, which the C++ calls
+  through `shekyl_construct_output`; `build_coinbase_extra`; the wire
+  types) and nothing composing them. `shekyl-block-template` composes them
+  now (placement ruled below); the driver is its first consumer. **What
+  remains is consumer wiring, not a gap:** `get_block_template`'s Rust
+  handler and the built-in miner (E3), named on the TXE-F8 row.
+- **Gap 2 — `ConnectFacts` derivation — PARTLY CLOSED by commit 1a, the
+  rest named.** As found: `connect` takes `Fact<_>` with
+  `Origin::{Derived, PassedThrough}` and `root_after`, `coins_generated`,
+  `burned` and `long_term_effective_median` were all passed through from
+  the C++ trace. `Composed` (§5.3.2) derives four; the two with no Rust
+  source yet are recorded as such, not passed off as derived.
 
 **Placement, ruled.** Gap 1 → a **new crate, `shekyl-block-template`** —
 named for what it is in production, `create_block_template`'s successor,
