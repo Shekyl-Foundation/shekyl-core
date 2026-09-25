@@ -558,6 +558,7 @@ declaration, not a new set of branches.
 | Stream semantics | TCP | Tor stream | not assessed |
 | Observed identity of an inbound peer | the socket address | "this zone, no address" | not assessed |
 | Deadline inputs (D9) | measured per connector | measured per connector | when a connector exists |
+| Rendezvous arrival priced by onion-service proof-of-work | not applicable — clearnet has no rendezvous | enabled by default (D10). Residual: streams inside an established circuit, bounded by `MaxStreams`. Flood resistance is **not assessed** until the Tor flood test | not assessed |
 
 **Consequences.**
 
@@ -706,22 +707,120 @@ measurement. Rule 26 B9.
 
 ---
 
-## D10 — pre-channel bounds (RULED 2026-09-25)
+## D10 — bounds before a session exists (RULED 2026-09-25)
 
-Per connection that does not yet have a channel: one task, one
-descriptor, at most one flight of buffered bytes. The responder runs
-ML-KEM encapsulation after it has read message 1. What bounds the rate
-of that work is the existing admission-before-channel question. This
-round does not re-solve it; it names the dependency.
+**Context.** A connection costs the node before it has earned anything, in
+two phases: before the channel exists (the transport handshake), and
+between channel established and session established (before the Levin
+handshake completes). The earlier text bounded only clearnet's
+pre-channel state and left the rate to the FOLLOWUPS row on admission
+before the channel exists. Socket admission is this layer's (D4), so
+the rate is this layer's. Tor inbound is a different shape: accepting
+on the forward listener is channel established, so an onion flood lands
+in the gap, and Tor has its own defence.
 
-The transport layer also bounds the time **after** the channel exists and
-before the Levin handshake finishes. Outbound already has the 5 s
-invoke timeout. Inbound does not: a peer that completes the transport
-handshake and then sends nothing holds its slot until the idle timer.
-That deadline is derived under D9, next to PWD-B3's byte cap for
-command 1001. It is not the idle timer.
+**The adversary.** On clearnet, a flooder sends the public 8-byte prefix
+and a 1,216-byte message 1. The encapsulation key must pass ML-KEM's
+range check (all 768 coefficients below 3,329). Random bytes almost
+never do. One valid key can be reused, so each connection costs the
+attacker a TCP handshake and some bytes, and costs us one X25519, one
+ML-KEM encapsulation, a task, and a slot. The inbound ceiling bounds how
+many connections exist at once, not how fast they churn. Per-host caps
+are gone, and a /24 supplies 256 hosts. On Tor, every inbound peer looks
+the same ("this zone, no address"). Each rendezvous circuit can open up
+to `MaxStreams` streams. Each stream is an accept on the forward
+listener, and so a connection in the gap phase.
 
----
+**Ruling.**
+
+1. **What a connection may hold before its channel exists, per
+   connector.** Clearnet: one task, one descriptor, one reserved slot
+   (D8), at most one flight of buffered bytes, and a per-connector
+   deadline (D9). Tor outbound: the pre-channel phase is the SOCKS
+   exchange plus circuit build and rendezvous, bounded by the Tor
+   connector's dial clock (D3). Tor inbound: there is no pre-channel
+   phase. Its first bound is the gap timer (item 5).
+
+2. **Cheapest rejection first.** The responder checks the 8-byte prefix,
+   then exact lengths, then the ML-KEM encapsulation-key range check.
+   Only after all three does it run X25519 and the encapsulation.
+   `noise.rs` currently performs the X25519 Diffie-Hellman before
+   validating the encapsulation key (`ResponderReady::finish`). The key
+   check moves to `read_message1`. Every failure still closes the same
+   way: FIN after zero bytes written. Step 7's C4 measures that.
+
+3. **Clearnet accept rate is owned here.** This document owns the
+   FOLLOWUPS row on connection admission before the channel exists. The
+   mechanism is an accept-rate bound at accept, before any cryptographic
+   work, per connector and per host, because clearnet's declaration says
+   inbound peers have an observable address. Whether to aggregate hosts
+   by subnet is a policy question for measurement. The values come from
+   C5's measured per-connection crypto cost against a stated CPU budget.
+   No number is written before that measurement (rule 26 B9). The bound
+   is clearnet-only: Tor inbound does no Noise work on our side.
+
+4. **Tor is defended by Tor's proof-of-work, not by a daemon-side
+   limiter.** Onion-service PoW is enabled on every onion service we
+   publish: the daemon's p2p onion and the wallet's serving personas.
+   PoW is a property of the service we host. Outbound clients solve a
+   puzzle only when the far service escalates, at a capped cost
+   (SPIKE-F-17). At this pin the daemon does not do that:
+   `ephemeral.rs:289` builds `AddOnion` with no PoW, and `publish`
+   (`blocking.rs:146-151`) takes ports and `max_streams` only.
+   `OnionPow`'s `Default` is `Disabled` (`onion.rs:303`). The ruling
+   changes those: `publish` takes the setting explicitly and defaults
+   to `Enabled`, and the daemon's onion is published that way.
+   `Disabled` stays as an explicit choice for measurement arms. The
+   type's doc comment is corrected, and the crate's KAT is updated so
+   the default renders `PoWDefensesEnabled=1`. If the operator's Tor
+   refuses the PoW arguments, `ADD_ONION` fails. The daemon reports a
+   typed operator error (rule 82) and does not publish. It never
+   retries without PoW. Streams inside an established circuit are
+   bounded by `MaxStreams` per circuit. `MaxStreamsCloseCircuit` is a
+   candidate, decided with the flood test. There is no daemon-side
+   accept limiter on the Tor connector: every Tor inbound peer is
+   indistinguishable, so a limiter an attacker can trip denies service
+   to every honest Tor peer. PoW charges the attacker. Honest clients
+   pay nothing until the service is under attack (SPIKE-F-18). The
+   wallet's serving personas already run with it
+   (`shekyl-tor-control-wallet/src/onion_service.rs:146-163`).
+
+5. **The gap between channel established and session established.**
+   Every connection that has a channel but no session gets a
+   per-connector gap timer, derived under D9. It is never the idle
+   timer. The byte limit in this phase is PWD-B3's cap for command
+   1001. It replaces the inherited 256 KiB
+   (`LEVIN_INITIAL_MAX_PACKET_SIZE`). On Tor inbound, this timer is the
+   first bound a connection meets, beneath PoW and `MaxStreams`.
+
+**The Tor declaration (D7)** adds rendezvous arrival priced by
+onion-service PoW, enabled by default, with the residual that streams
+inside an established circuit are bounded by `MaxStreams`. Flood
+resistance stays **not assessed** until measured. The analysis that
+volumetric flooding is expensive (`ARCHIVAL_SHARD_FETCH.md`, around
+lines 1370-1406) was written for shard serving. Its strongest argument,
+a large response the attacker must receive under Tor flow control, does
+not apply to p2p, where a flooder wants slots and CPU.
+
+**Evidence.** Under a flood (step 7, C6), connections that fail before
+the channel exists never leak a D8 slot, and cryptographic work per
+second stays inside item 3's bound. The Tor flood test is deferred
+until after implementation and is owned by this document: a controlled
+load against the daemon's onion, for rendezvous flooding and for
+streams within one circuit. SP-T3 recorded this as unmeasured. It
+decides `MaxStreamsCloseCircuit` and whether the default queue
+parameters stay. Tuning before that measurement is refused.
+
+**Falsifiers (rule 21). Reopen D10 if:**
+
+- a clearnet pre-channel failure performs cryptographic work that a
+  cheaper check would have rejected;
+- an onion service we publish runs without PoW, by default, by
+  fallback, or by omission;
+- the Tor flood test shows PoW plus `MaxStreams` plus the gap timer
+  failing to keep honest Tor peers served;
+- any connection in the gap phase is bounded only by the idle timer.
+
 
 ## D11 — test gates (RULED 2026-09-25)
 
