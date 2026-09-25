@@ -237,7 +237,7 @@ impl D4 {
         let mut previous: Option<CumulativeDifficulty> = None;
         for h in first..=chain_height.to_raw() {
             let height = BlockHeight::from_raw(h);
-            let block = recorded(view, height).map_err(Fault::View)?;
+            let block = recorded(view, height)?;
             if previous.is_some_and(|p| block.cumulative_difficulty <= p) {
                 return Err(Fault::Corrupt(Corrupt::CumulativeDifficultyNotMonotone {
                     at: height,
@@ -263,11 +263,7 @@ impl D4 {
     ) -> Result<CumulativeDifficulty, Fault<V::Fault>> {
         let parent = match connecting.to_raw().checked_sub(1) {
             None => CumulativeDifficulty::ZERO,
-            Some(h) => {
-                recorded(view, BlockHeight::from_raw(h))
-                    .map_err(Fault::View)?
-                    .cumulative_difficulty
-            }
+            Some(h) => recorded(view, BlockHeight::from_raw(h))?.cumulative_difficulty,
         };
         parent
             .to_raw()

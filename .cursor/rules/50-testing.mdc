@@ -116,6 +116,48 @@ the test passes but verifies nothing. Surface this with property tests
 sampling unfamiliar values, FFI tests calling the production path, or review
 by someone who didn't write the code.
 
+## A fixture that constructs the state a rule reads back is not a test of the rule
+
+A mock that is *told* a value and then *serves* it to the code under test
+closes a loop with nothing inside it. `MockChain` handed `root_at(40) = R`
+and a proof made against `R` passes whether or not `R` is the root of any
+tree, whether or not the leaf the spend claims is in it, whether or not the
+store would compute `R` at height 40. The test exercises the code path and
+proves that the rule reads what it was handed. It is not weaker evidence
+about production behaviour; it is **none**, wearing a green check.
+
+Distrust anything named `Mock*` on sight, because the name marks the place
+where someone chose to construct the conditions instead of producing them.
+A mock earns its keep in exactly two situations, and its doc comment says
+which:
+
+1. **Predicate logic on plain values, where there is no state to fake.** A
+   window's boundary arithmetic, an ordering comparison, a count. The mock
+   is a struct literal with a different name.
+2. **Faults the real substrate cannot be made to exhibit on demand.** "The
+   rule propagates a store fault as a fault, never a verdict" needs a view
+   that fails at height 7; a real store will not.
+
+Everything else — a computed root, a tree depth, a spent set populated to
+make a rule fire, a membership set that exists because a test said so — is
+served-as-given state, and the test that consumes it is the false test
+above. **The witness for any rule that reads derived state is the real
+chain**: captured blocks replayed through the production path against a
+real store, so the state the rule reads was *derived* by the code that
+derives it in production, and a negative fixture is a mutation of a real
+transaction replayed the same way. The dependency-direction belt
+(`check_chain_rules_no_store.sh`) forbids the validator crate from owning
+that chain; the ingest crate, which depends on both, is where the witness
+lives. A rule whose only fixture is mock-served state is **untested for
+parity**, whatever its coverage row says.
+
+The instance that named this (E6 slice 6, 2026-09-24): the verification
+rows — I15's FCMP++ proof, I18's PQC signature, H19's range proof — were
+about to be fixtured against a `MockChain` serving the captured block
+context. The mock's twin-chain conformance test (`shekyl-chain-store`
+§8.8) is not a counter-example: its subject is the mock's fidelity to the
+store's **read API**, not any rule's behaviour.
+
 ## Every vector declares its oracle; only external or independent oracles are KATs
 
 A pinned test vector is a claim about *who vouches for the value*. Three

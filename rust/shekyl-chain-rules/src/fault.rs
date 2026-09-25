@@ -137,6 +137,46 @@ pub enum Corrupt {
         /// The upper height of the pair whose prefix sum is below the lower's.
         at: BlockHeight,
     },
+    /// `block_at(at)` answered `AboveTip` for a height a rule reads as
+    /// **below** the connecting height — the parent, a window member, the
+    /// seed height, block 0. A conforming store reports a hole below its
+    /// tip as its own fault (SI-7) before a rule can see one; a view that
+    /// answers `AboveTip` there is a view whose tip and rows disagree.
+    ///
+    /// Until 2026-09-24 four sites carried this as `unreachable!`, each
+    /// arguing from SI-7 that the arm had no producer. That is a store
+    /// invariant defending a validator panic: if the argument is wrong
+    /// anywhere, a crafted chain state kills the node instead of halting
+    /// the writer. The class that halts — this one — already existed for
+    /// SI-10 and SI-13; a rule that observes SI-7 broken uses it too. The
+    /// validator's job is to refuse or halt, never to die.
+    HoleBelowTip {
+        /// The height that should have been recorded.
+        at: BlockHeight,
+    },
+}
+
+/// What a **parent-side view read** can raise: the view's own fault, or a
+/// store invariant the read observed broken ([`Corrupt`]). Narrower than
+/// [`Fault`] — a read has no stale premise to raise — so a caller that is
+/// a *definition* rather than a `Fault`-returning stage (F20's window,
+/// C3's) matches two arms, not three, and never an arm that cannot occur.
+/// Converts into [`Fault`] by `?` where a stage is the caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewRead<VF> {
+    /// The view faulted.
+    View(VF),
+    /// The view answered, and the answer breaks an invariant.
+    Corrupt(Corrupt),
+}
+
+impl<VF> From<ViewRead<VF>> for Fault<VF> {
+    fn from(read: ViewRead<VF>) -> Self {
+        match read {
+            ViewRead::View(fault) => Self::View(fault),
+            ViewRead::Corrupt(corrupt) => Self::Corrupt(corrupt),
+        }
+    }
 }
 
 /// The bound on redoing `form` after a [`Stale`] fault.
@@ -248,6 +288,10 @@ impl fmt::Display for Corrupt {
             Self::TxCountNotMonotone { at } => write!(
                 f,
                 "cumulative transaction count decreases at height {at:?} (SI-13)"
+            ),
+            Self::HoleBelowTip { at } => write!(
+                f,
+                "no block recorded at height {at:?}, below the connecting height (SI-7)"
             ),
         }
     }

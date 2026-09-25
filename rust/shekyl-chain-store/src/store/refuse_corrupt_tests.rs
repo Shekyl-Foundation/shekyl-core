@@ -149,3 +149,97 @@ fn a_decreasing_tx_count_is_the_fold_belt_observed_by_the_validator() {
     );
     cleanup(&path);
 }
+
+/// A rule's parent-side read answered `AboveTip` below the connecting
+/// height (`Corrupt::HoleBelowTip`, E6 slice 6) is SI-7 — the same
+/// `CellCorrupt { block_info, Absent }` row `chain_reads::absent` arms when
+/// the store itself finds a dense-range row missing — observed from the
+/// rule side this time, and it halts the writer at the connecting height
+/// exactly as the other observed-by-the-validator rows do. Pinned here so
+/// the arm cannot be remapped to another row, or lose the terminal halt,
+/// without this test naming it (#852 review).
+#[test]
+fn a_hole_below_the_tip_seen_by_the_validator_is_si7_and_halts_the_writer() {
+    let path = tmp("connect-refuse-corrupt-hole-below-tip");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new(), Vec::new()]);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::HoleBelowTip {
+                at: BlockHeight::from_raw(1),
+            })
+            .into())
+    });
+    let row = StoreInvariant::CellCorrupt {
+        key: "block_info",
+        fault: CellFault::Absent,
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 7);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(2),
+            row,
+        }
+    );
+    // Halted means halted: the next connect is refused before it reaches
+    // the tables.
+    let again: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let tip = ChainView::tip(&view)?.expect("two blocks").hash;
+        let cand = candidate(2, tip, Vec::new());
+        Ok(batch.connect(judge(&view, cand)?, facts(2, 0), RuleSet::GENESIS)?)
+    });
+    assert!(again.is_err(), "the writer stays halted: {again:?}");
+    cleanup(&path);
+}
+
+/// A producer read opens a batch and aborts it. The slot is released —
+/// `inspect` is not `write`.
+#[test]
+fn inspect_aborts_so_a_later_write_still_runs() {
+    let path = tmp("inspect-aborts");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<Option<BlockHeight>, TestErr> = store.inspect(|batch| {
+        let view = batch.chain_view();
+        Ok(ChainView::tip(&view)?.map(|t| t.height))
+    });
+    assert_eq!(out.expect("inspect"), None);
+    let again: Result<(), TestErr> = store.write(|_batch| Ok(()));
+    assert!(again.is_ok(), "the slot was released: {again:?}");
+    assert_eq!(store.connect_state(), ConnectState::Live);
+    cleanup(&path);
+}
+
+/// Poison inside `inspect` halts the writer and commits nothing, the same
+/// latch `write` arms.
+#[test]
+fn inspect_of_a_hole_halts_the_writer() {
+    let path = tmp("inspect-hole-halts");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.inspect(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::HoleBelowTip {
+                at: BlockHeight::ZERO,
+            })
+            .into())
+    });
+    let row = StoreInvariant::CellCorrupt {
+        key: "block_info",
+        fault: CellFault::Absent,
+    };
+    expect_row(&out, row);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::ZERO,
+            row,
+        }
+    );
+    let again: Result<(), TestErr> = store.write(|_batch| Ok(()));
+    assert!(again.is_err(), "the writer stays halted: {again:?}");
+    cleanup(&path);
+}

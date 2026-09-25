@@ -49,6 +49,21 @@
   different layer-0 chunks, because inputs inside one chunk would hide a reused
   position.
 
+### Consensus validator — a hole below the tip halts the writer, it does not kill the node
+
+**Security-relevant.** Four parent-side reads in `shekyl-chain-rules` (the
+shared `recorded` read, CEN-D3's seed height, CEN-C3's genesis and window
+heights) carried `unreachable!` on a view answering `AboveTip` below the
+connecting height, each argued from the store's SI-7 density. A store
+invariant was defending a validator panic: had the argument been wrong
+anywhere, a crafted chain state would have stopped the node rather than
+been refused. They now raise `Corrupt::HoleBelowTip { at }` — the existing
+class the connector halts the writer on (SI-10, never converted to a
+verdict) — and a constructed SI-7-breaking view pins the fault at the
+stage and at the producer's read. The three `unreachable!` arms that
+remain are type- or compiler-carried and listed in `FOLLOWUPS.md`
+(E6 slice 6, `CHAIN_RULES_SLICE_6.md` §5.3.3).
+
 ### `tx_extra` Rust cutover — one codec, and the coinbase extra gets a consensus grammar
 
 **Consensus.** A new rule, census `CEN-I20` (`GENESIS_TX_WIRE_FORMAT.md`

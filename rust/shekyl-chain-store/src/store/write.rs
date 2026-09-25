@@ -69,12 +69,13 @@ use core::marker::PhantomData;
 use redb::{Key, ReadableTable, TableDefinition, TableHandle, WriteTransaction};
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
-use crate::codec::{post_image, Canonical, ChainState, PropertyCell, UndoEntry};
+use crate::codec::{post_image, Canonical, ChainState, PropertyCell, TotalBurnedCell, UndoEntry};
 use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 
 use shekyl_chain_rules::Corrupt;
+use shekyl_units::AtomicUnits;
 
-use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
+use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
 use super::keyed::{Handles, InsertTable, UpsertTable};
 use super::shared::Shared;
@@ -122,14 +123,16 @@ impl Poison {
 /// and it never leaves the closure it was handed to: the closure sees
 /// `&mut WriteBatch`, and `'id` is bound inside the closure's own type, so
 /// neither the batch nor anything carrying its brand can escape. The
-/// closure returning `Ok` commits; returning `Err` — or unwinding — drops
-/// the batch, and dropping **aborts** (redb rolls back on drop). That is
+/// [`ChainStore::write`](super::ChainStore::write) commits an unpoisoned
+/// `Ok`; [`ChainStore::inspect`](super::ChainStore::inspect) aborts it.
+/// `Err` — or an unwind — drops the batch, and dropping **aborts** (redb
+/// rolls back on drop). That is
 /// the DRS-W8 direction, where a C++ throw left the write transaction live
 /// and poisoned every later block write.
 ///
 /// Dropping also releases the store's write-held flag, so a later
 /// [`write`](super::ChainStore::write) can proceed.
-#[must_use = "a WriteBatch is only ever handed to a `ChainStore::write` closure"]
+#[must_use = "a WriteBatch is only ever handed to a `ChainStore::write` or `inspect` closure"]
 pub struct WriteBatch<'store, 'id> {
     txn: Option<WriteTransaction>,
     apply_policy: ApplyPolicy,
@@ -253,6 +256,17 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             Corrupt::TxCountNotMonotone { at } => StoreInvariant::FoldNotMonotone {
                 cell: "block_info.cumulative_tx_count",
                 height: at.to_raw(),
+            },
+            // A rule read below the connecting height and the view answered
+            // `AboveTip`: the same SI-7 row `chain_reads::absent` arms when
+            // the store itself finds a dense-range row missing — observed
+            // from the rule side this time, which is what made it a
+            // `Corrupt` rather than a panic (E6 slice 6, 2026-09-24). The
+            // height is not on the row; `CellCorrupt` names the cell, and
+            // the connecting height the batch noted is the context.
+            Corrupt::HoleBelowTip { at: _ } => StoreInvariant::CellCorrupt {
+                key: "block_info",
+                fault: CellFault::Absent,
             },
         };
         self.poison.arm(row)
@@ -419,6 +433,25 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         header::get::<C>(&table).map_err(|e| self.poison.note(e))
     }
 
+    /// The batch's view of [`ReadSnapshot::total_burned`]: `Σ fees_burned`
+    /// over the connected chain as this write transaction sees it, `ZERO`
+    /// when nothing has been connected. A producer assembling
+    /// `ChainFacts` reads it here, under the same transaction as the tip
+    /// and the windows it pairs it with, rather than through a snapshot
+    /// taken before the batch opened (#852 review).
+    ///
+    /// [`ReadSnapshot::total_burned`]: super::read::ReadSnapshot::total_burned
+    ///
+    /// # Errors
+    ///
+    /// SI-7 if the cell does not decode (and the batch is poisoned); engine
+    /// errors pass through.
+    pub fn total_burned(&self) -> Result<AtomicUnits, StoreError> {
+        Ok(self
+            .get_property::<TotalBurnedCell>()?
+            .unwrap_or(AtomicUnits::ZERO))
+    }
+
     /// Upsert a typed **chain-state** `properties` cell.
     ///
     /// A `properties` cell is a register — the tip, a policy, a root
@@ -535,9 +568,8 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// ([`StoreCannot::UndoUnsealed`]) is for a closure that swallowed the
     /// failure and returned `Ok`.
     pub(super) fn complete<R, E: From<StoreError>>(self, outcome: Result<R, E>) -> Result<R, E> {
-        if let Some(row) = self.poison.armed() {
-            self.halt_for(row);
-            return Err(StoreError::from(row).into());
+        if let Some(err) = self.halted() {
+            return Err(err);
         }
         let value = outcome?;
         if let Some(height) = self.journal.abandoned() {
@@ -545,6 +577,25 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         }
         self.commit()?;
         Ok(value)
+    }
+
+    /// Finish a batch that must not land: poison still halts the writer,
+    /// and the transaction is aborted on drop either way. The producer's
+    /// read ([`ChainStore::inspect`](super::ChainStore::inspect)) uses this
+    /// so a template read is not a commit.
+    pub(super) fn abandon<R, E: From<StoreError>>(self, outcome: Result<R, E>) -> Result<R, E> {
+        if let Some(err) = self.halted() {
+            return Err(err);
+        }
+        outcome
+    }
+
+    /// Poison wins: the first armed row halts the writer and becomes the
+    /// error, whichever arm the closure took.
+    fn halted<E: From<StoreError>>(&self) -> Option<E> {
+        let row = self.poison.armed()?;
+        self.halt_for(row);
+        Some(StoreError::from(row).into())
     }
 
     /// A violation on a connect, a pop, or a branded `chain_view` read
