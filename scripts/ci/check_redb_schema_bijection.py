@@ -51,6 +51,22 @@
 # the Rust-only map: an entry naming a table not in the X-macro, one that IS
 # defined here, one whose twin no other file defines, one with a token for
 # a reason, or two entries that name one twin, is red.
+#
+# FOLDED INTO ANOTHER TABLE'S RECORD (S-ALT, SAL-2 / SAL-Q6). The fourth
+# direction: an X-macro table whose bytes now live as a FIELD of another
+# table's record in `schema.rs` — `archival_alt_attestation_witness` is
+# `AltBlock::attestation_witness` inside `alt_blocks`. `schema.rs` carries
+# `FOLDED_INTO: &[(&str, &str, &str)]` as `(lmdb_name, host_table, reason)`.
+# Every entry must be in the X-macro, must NOT be defined in `schema.rs`, and
+# its host MUST be defined in `schema.rs`; a censused table missing from
+# `schema.rs` is red unless it is mirrored elsewhere or folded. Its own
+# direction rather than a widening of MIRRORED_ELSEWHERE: a twin table is
+# checked by opening a definition in another file, a host field by the host's
+# definition existing here — different checks, different messages, and one
+# array meaning two relationships is the allowlist-by-name this gate exists to
+# refuse. Self-asserting like the other two: an entry naming a table not in
+# the X-macro, one that IS defined here, one whose host is NOT defined here,
+# or one with a token for a reason, is red.
 import re
 import sys
 from pathlib import Path
@@ -66,6 +82,7 @@ ENTRY_RE = re.compile(r'X\(\s*\w+\s*,\s*"([^"]+)"\s*\)')
 DEF_RE = re.compile(r'(?:Multimap)?TableDefinition::new\("([^"]+)"\)')
 RUST_ONLY_RE = re.compile(r"pub const RUST_ONLY_TABLES\s*:[^=]*=\s*&\[(.*?)\];", re.S)
 MIRRORED_RE = re.compile(r"pub const MIRRORED_ELSEWHERE\s*:[^=]*=\s*&\[(.*?)\];", re.S)
+FOLDED_RE = re.compile(r"pub const FOLDED_INTO\s*:[^=]*=\s*&\[(.*?)\];", re.S)
 # One string literal inside a const-tuple field. A reason may be several,
 # joined, including a `\` newline continuation that the parser elides.
 LIT_RE = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
@@ -142,7 +159,20 @@ def parse_mirrored(schema: str):
     return out
 
 
-def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=()):
+def parse_folded(schema: str):
+    """`FOLDED_INTO` as {lmdb_name: (host_table, reason)}. Raises if the const
+    is absent — since S-ALT one censused table is a field of another's record,
+    so the map is part of the subject."""
+    rows = parse_const_tuples(schema, "FOLDED_INTO", FOLDED_RE, 3)
+    out = {}
+    for name, host, reason in rows:
+        if name in out:
+            raise ValueError(f"FOLDED_INTO: `{name}` listed twice")
+        out[name] = (host, reason)
+    return out
+
+
+def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=(), folded=None):
     """The set arithmetic over the three surfaces plus the Rust-only map.
     Returns the failure list; empty means the surfaces agree."""
     failures = []
@@ -174,7 +204,8 @@ def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=())
               "the two slices disagree about the inventory.")
 
     mirrored = mirrored or {}
-    missing = sorted(set(censused) - set(defined) - set(mirrored))
+    folded = folded or {}
+    missing = sorted(set(censused) - set(defined) - set(mirrored) - set(folded))
     extra = sorted(set(defined) - set(censused))
     if missing:
         failures.append(
@@ -182,7 +213,9 @@ def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=())
             + ", ".join(missing)
             + "\n    Every table in the X-macro must be mapped; a gap here ships a store "
               "missing a table LMDB has. A table whose twin lives in another file of the "
-              "crate is named in MIRRORED_ELSEWHERE with the twin and the reason.")
+              "crate is named in MIRRORED_ELSEWHERE with the twin and the reason; one whose "
+              "bytes are a field of another table's record is named in FOLDED_INTO with the "
+              "host and the reason.")
 
     # FIFTH SURFACE: the mirrored-elsewhere map (S-POOL). Each entry is a
     # censused table with no definition here and a twin defined in the pool
@@ -223,6 +256,43 @@ def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=())
         failures.append(
             f"{len(unreasoned_m)} MIRRORED_ELSEWHERE entr(y/ies) carry no reason (a sentence, "
             f"not a token):\n    " + ", ".join(unreasoned_m))
+
+    # SIXTH SURFACE: the folded map (S-ALT). Each entry is a censused table with
+    # no definition here whose host IS a definition here; anything else is a
+    # stale or invented entry.
+    folded_not_censused = sorted(set(folded) - set(censused))
+    if folded_not_censused:
+        failures.append(
+            f"{len(folded_not_censused)} FOLDED_INTO entr(y/ies) name a table that is NOT in the "
+            f"X-macro:\n    " + ", ".join(folded_not_censused)
+            + "\n    The map is for censused tables folded into a record here; a name LMDB never "
+              "had is not folded, it never existed as a table.")
+    folded_also_here = sorted(set(folded) & set(defined))
+    if folded_also_here:
+        failures.append(
+            f"{len(folded_also_here)} FOLDED_INTO entr(y/ies) name a table that IS defined in "
+            f"schema.rs:\n    " + ", ".join(folded_also_here)
+            + "\n    A table cannot be both a definition and a field of another's record.")
+    hostless = sorted(n for n, (host, _) in folded.items() if host not in defined)
+    if hostless:
+        failures.append(
+            f"{len(hostless)} FOLDED_INTO entr(y/ies) name a host that schema.rs does NOT "
+            f"define:\n    "
+            + ", ".join(f"{n} -> {folded[n][0]}" for n in hostless)
+            + "\n    The host is a definition that exists here; a stale entry is a fold into "
+              "a table that left.")
+    both_ways = sorted(set(folded) & set(mirrored))
+    if both_ways:
+        failures.append(
+            f"{len(both_ways)} table(s) are named in BOTH FOLDED_INTO and MIRRORED_ELSEWHERE:\n    "
+            + ", ".join(both_ways)
+            + "\n    A table has one forwarding address: a twin in another file, or a host "
+              "record here, never both.")
+    unreasoned_f = sorted(n for n, (_, r) in folded.items() if len(r.split()) < 8)
+    if unreasoned_f:
+        failures.append(
+            f"{len(unreasoned_f)} FOLDED_INTO entr(y/ies) carry no reason (a sentence, "
+            f"not a token):\n    " + ", ".join(unreasoned_f))
 
     # FOURTH SURFACE: the Rust-only map. Every extra definition must be named
     # there with a reason; everything named there must be an extra definition.
@@ -276,6 +346,7 @@ def main():
     try:
         rust_only = parse_rust_only(schema)
         mirrored = parse_mirrored(schema)
+        folded = parse_folded(schema)
     except ValueError as e:
         report([str(e)])
     if not POOL_SCHEMA.is_file():
@@ -302,11 +373,13 @@ def main():
     if not classed:
         report([f"{CLASSES.name}: parsed ZERO class entries — third surface missing"])
 
-    report(check(censused, defined, classed, rust_only, mirrored, pool_defined))
+    report(check(censused, defined, classed, rust_only, mirrored, pool_defined, folded))
     here = len(set(defined) & set(censused))
     print(f"redb schema bijection: {len(censused)} censused LMDB tables <-> "
           f"{here} mirrored redb table definitions in schema.rs + {len(mirrored)} mirrored in "
           f"the pool file ({', '.join(f'{n}->{t}' for n, (t, _) in sorted(mirrored.items()))}) "
+          f"+ {len(folded)} folded into a record here "
+          f"({', '.join(f'{n}->{h}' for n, (h, _) in sorted(folded.items()))}) "
           f"<-> {len(classed)} accumulator classes; "
           f"+ {len(rust_only)} Rust-only table(s) with a named reason "
           f"({', '.join(sorted(rust_only))}); {len(defined)} definitions total; "
@@ -450,7 +523,46 @@ pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
             raise SystemExit(f"selftest absent mirrored map: wrong message {e}")
     else:
         raise SystemExit("selftest absent mirrored map: expected a refusal")
-    print("redb schema bijection selftest: 3 clean shapes pass, 14 refusals fire")
+    # The folded direction (S-ALT).
+    folded_ok = {"c": ("a", "the c bytes are a field of a's record for a reason of eight words")}
+    clean_f = check(censused, ["a", "b", "undo_log"], classed, rust_only, {}, [], folded_ok)
+    if clean_f:
+        raise SystemExit("selftest folded clean: expected no failures, got:\n  " + "\n  ".join(clean_f))
+    _expect("folded entry not censused",
+            check(censused, ["a", "b", "c", "undo_log"], classed, rust_only, {}, [],
+                  {"zzz": ("a", "a reason long enough to pass the eight-word floor here")}),
+            "FOLDED_INTO entr(y/ies) name a table that is NOT in the X-macro")
+    _expect("folded entry also defined here",
+            check(censused, ["a", "b", "c", "undo_log"], classed, rust_only, {}, [], folded_ok),
+            "FOLDED_INTO entr(y/ies) name a table that IS defined in schema.rs")
+    _expect("folded entry whose host is not defined",
+            check(censused, ["a", "b", "undo_log"], classed, rust_only, {}, [],
+                  {"c": ("gone", "a reason long enough to pass the eight-word floor here")}),
+            "does NOT define")
+    _expect("folded entry with a token for a reason",
+            check(censused, ["a", "b", "undo_log"], classed, rust_only, {}, [], {"c": ("a", "field")}),
+            "FOLDED_INTO entr(y/ies) carry no reason")
+    _expect("a table both folded and mirrored",
+            check(censused, ["a", "undo_log"], classed, rust_only,
+                  {"c": ("pool_c", both)}, ["pool_c"], folded_ok),
+            "BOTH FOLDED_INTO and MIRRORED_ELSEWHERE")
+    parsed_f = parse_folded('''
+pub const FOLDED_INTO: &[(&str, &str, &str)] = &[
+    // the witness
+    ("archival_alt_attestation_witness", "alt_blocks", "the witness is a field of the alt \\
+     block record"),
+];
+''')
+    if parsed_f != {"archival_alt_attestation_witness": ("alt_blocks", "the witness is a field of the alt block record")}:
+        raise SystemExit(f"selftest folded parse: got {parsed_f!r}")
+    try:
+        parse_folded("pub const OTHER: u8 = 1;")
+    except ValueError as e:
+        if "subject missing" not in str(e):
+            raise SystemExit(f"selftest absent folded map: wrong message {e}")
+    else:
+        raise SystemExit("selftest absent folded map: expected a refusal")
+    print("redb schema bijection selftest: 4 clean shapes pass, 19 refusals fire")
 
 
 if __name__ == "__main__":

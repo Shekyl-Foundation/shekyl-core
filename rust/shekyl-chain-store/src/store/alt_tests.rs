@@ -317,3 +317,49 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     assert!(store.connect_state().is_live(), "a refusal is not a halt");
     cleanup(&path);
 }
+
+/// SAL-15: the alt surface is *not chain state* (§11.2) — a fact every
+/// digest declared and, for `alt_blocks` and its witness, nothing enforced
+/// (`LMDB_WRITE_ATOMICITY_AUDIT.md`, non-canonical class: "declared, not
+/// enforced"). With the witness a field of the alt row there is one table
+/// to test: an AL1 carrying a witness must move no digest. This test exists
+/// because the fold made the boundary testable, not because the fold was
+/// made to close the audit row.
+#[test]
+fn an_alt_block_with_a_witness_moves_no_digest() {
+    let path = tmp("alt-digest-boundary");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let main = connect_chain(&store, &[vec![], vec![spend(9, 1)]]);
+    let before = store
+        .begin_read()
+        .expect("read")
+        .logical_state_digest_v0()
+        .expect("digest");
+
+    let (a, a_bytes) = side_block(1, main[0], 6);
+    let out: Result<(), TestErr> = store
+        .write(|batch| Ok(batch.insert_alt_block(&a, &alt(1, a_bytes, Some(vec![0xC3; 40])))?));
+    out.expect("insert");
+    let snap = store.begin_read().expect("read");
+    assert!(snap.has_alt_block(&a).expect("has"), "the write landed");
+    assert_eq!(
+        snap.logical_state_digest_v0().expect("digest"),
+        before,
+        "an alt block and its witness are outside the digest's domain"
+    );
+
+    // And the removal moves nothing either — the boundary holds in both
+    // directions, as the pool's did.
+    drop(snap);
+    let out: Result<(), TestErr> = store.write(|batch| Ok(batch.remove_alt_block(&a)?));
+    out.expect("remove");
+    assert_eq!(
+        store
+            .begin_read()
+            .expect("read")
+            .logical_state_digest_v0()
+            .expect("digest"),
+        before
+    );
+    cleanup(&path);
+}

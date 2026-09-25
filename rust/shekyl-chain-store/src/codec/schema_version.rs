@@ -135,8 +135,11 @@ use super::{Canonical, CodecError};
 ///   re-specified as one record: the `u128` as one field, the weight's
 ///   zero sentinel as `None`, the block bytes and the reorg-survival
 ///   attestation witness as fields (`SAL-Q2`). One fixture is born
-///   (`alt_block`). No digest family moves: the alt surface is `Excluded`
-///   (§11.2).
+///   (`alt_block`). `archival_alt_attestation_witness` is **folded** into
+///   that record and leaves this catalogue (`FOLDED_INTO`, SAL-2) — every
+///   later table's ordinal moves by one. No digest family moves: the alt
+///   surface is `Excluded` (§11.2), and a write to it moving no digest is
+///   now a test rather than a declaration (SAL-15).
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(13);
 
 /// A layout version as stored in the `schema_version` cell.

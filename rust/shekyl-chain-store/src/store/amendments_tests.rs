@@ -192,11 +192,12 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // (`DRS_E1_SARCH.md` §4 — the plan's "seven" counted the `properties`
     // cell, which is not a table). 22 → 20 at layout 12: S-POOL **evicted**
     // `txpool_meta` and `txpool_blob` to the pool file (`DRS_E1_SPOOL.md`
-    // §4; not shaped here — gone from here). 20 → 19 at layout 13: S-ALT
-    // shaped `alt_blocks` (`DRS_E1_SALT.md` §4). The journals, settlement,
-    // slash-applied, accrual and segment rows and the alt witness table
-    // stay `Unshaped` for their increments.
-    assert_eq!(unshaped, 19, "the §11.1(f) count at this layout");
+    // §4; not shaped here — gone from here). 20 → 18 at layout 13: S-ALT
+    // shaped `alt_blocks` and **folded** `archival_alt_attestation_witness`
+    // into it (`DRS_E1_SALT.md` §4; `FOLDED_INTO`). The journals,
+    // settlement, slash-applied, accrual and segment rows stay `Unshaped`
+    // for their increments.
+    assert_eq!(unshaped, 18, "the §11.1(f) count at this layout");
     cleanup(&path);
 }
 
@@ -367,11 +368,13 @@ fn the_second_rust_only_table_is_catalogued_last_and_named() {
         catalogue_len,
         "txs_pqc_auth_hash is the final catalogue slot"
     );
-    // 45 LMDB mirrors plus the two Rust-only tables (`undo_log`,
-    // `txs_pqc_auth_hash`) at SCHEMA_VERSION 12 — 47 mirrors until S-POOL
+    // 44 LMDB mirrors plus the two Rust-only tables (`undo_log`,
+    // `txs_pqc_auth_hash`) at SCHEMA_VERSION 13 — 47 mirrors until S-POOL
     // moved `txpool_meta` / `txpool_blob` to the pool file (layout 12,
-    // `schema::MIRRORED_ELSEWHERE`).
-    assert_eq!(catalogue_len, 47);
+    // `schema::MIRRORED_ELSEWHERE`), 45 until S-ALT folded
+    // `archival_alt_attestation_witness` into `alt_blocks` (layout 13,
+    // `schema::FOLDED_INTO`).
+    assert_eq!(catalogue_len, 46);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(names, ["undo_log", "txs_pqc_auth_hash"]);
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.
