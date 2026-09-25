@@ -458,8 +458,10 @@ pub(super) fn i9_one_pseudo_out_for_two_inputs() -> Transaction {
 }
 
 pub(super) fn pruned_form_bond_post_with_an_output() -> Transaction {
-    // Two outputs, so I1 (which now precedes H21, as in the C++) is not what
-    // refuses it and the arm's subject — the pruned form — is what is judged.
+    // Two outputs so the fixture satisfies I1 regardless, and the arm's
+    // subject — the pruned form — is what H21 judges. (H21 runs before I1
+    // here as in the C++'s caller order; the output count is kept valid so
+    // no reader has to reason about which of the two would have fired.)
     bond_post_alone(2, None)
 }
 

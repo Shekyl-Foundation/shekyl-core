@@ -845,7 +845,13 @@ per-input growth is mildly *sub*linear: 1.3 KB early, 0.8 KB by 4→8).
 (Re-run 2026-09-24 after the #853 corrections below: bytes identical,
 10.9 ms/input, 254 ms at 22 inputs — the corrections change what the
 proof binds to and which ceiling the cap is read against, not the proof's
-size or its verifier time.)
+size or its verifier time. Second re-run the same day after the auths were
+moved onto the canonical per-input payload hashes — production's two-phase
+form, `pqc_signing_payload_hashes` over the assembled body with
+provisional headers, in place of a prefix-hash stand-in — with the
+verifier's per-input hashing now inside the auth timer: 11.3 ms/input,
+auths 0.22 ms/input, 263 ms at 22. The hashing is noise beside ML-DSA
+verification; the figures above stand.)
 
 **CORRECTED 2026-09-24 (#853 review) — the ceiling.** The first cut of
 this section read the cap against `MAX_TX_SIZE` (1 MB) and reported the
@@ -960,7 +966,7 @@ times the milliseconds reopened nothing above.
 accept nine-input transactions it now refuses. Pre-genesis that is free;
 after genesis it is a hard fork. The window for making it free closes at
 genesis. **And two constants part company at that moment**, both named so
-neither orphans: the consensus cap (`shekyl_wire::MAX_FCMP_INPUTS`, read
+neither orphans: the consensus cap (`shekyl_wire::transaction::MAX_FCMP_INPUTS`, read
 by `rules/tx_inputs.rs::I4`; the C++ `FCMP_MAX_INPUTS_PER_TX` until E4 retires
 it) and the prover/verifier cap (`shekyl_fcmp::MAX_INPUTS`, refused at
 `proof.rs`'s prove and verify entry points). The second moves to whatever

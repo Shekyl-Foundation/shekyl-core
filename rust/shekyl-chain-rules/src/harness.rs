@@ -687,7 +687,9 @@ pub mod fixture {
     /// count (H19's layout half). One [`pqc_auth_filler`] per input, so the
     /// txid is 4-part. The proof bytes are filler: H19's verification and
     /// the 4.I membership rows are not landed, and when they land this
-    /// fixture is theirs to refuse. [`listed`] is the one-output case.
+    /// fixture is theirs to refuse. [`listed`] is the two-output case —
+    /// the fewest CEN-I1 admits (slice 6 commit 2); `spend(ki, 1)` is I1's
+    /// own negative fixture.
     pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
         let n = u64::try_from(outputs).expect("an output count fits in u64");
         let prunable = (outputs > 0).then(|| Prunable {
