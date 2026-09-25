@@ -298,14 +298,19 @@ fn discard_set<T: ReadTables>(
         0
     };
     let hi_height = horizons.first_height_of(e - 1);
-    let lo_id = first_tx_id(txn, lo_height)?;
-    let hi_id = first_tx_id(txn, hi_height)?;
-    // A later height naming fewer ids than an earlier one is SI-13. An
-    // empty window is `start == end`; clamping an inversion to empty would
-    // commit the boundary with `D(E)` skipped.
-    if hi_id < lo_id {
+    // SI-13 is a property of the **listed** fold, so it is checked on the
+    // two raw samples before the coinbase term is added: `listed 100 → 99`
+    // between heights 10 and 30 derives to ids `110 → 129`, and a check on
+    // the derived sums would commit the boundary over a decreasing fold
+    // (Copilot, PR #861). An empty window is `start == end`; an inversion
+    // poisons and rolls the boundary connect back.
+    let lo_listed = listed_before(txn, lo_height)?;
+    let hi_listed = listed_before(txn, hi_height)?;
+    if hi_listed < lo_listed {
         return Err(fold_not_monotone(hi_height));
     }
+    let lo_id = first_tx_id(lo_height, lo_listed)?;
+    let hi_id = first_tx_id(hi_height, hi_listed)?;
     // The last id of shard `k` is `(k+1)·T − 1`. It is `≥ lo_id` iff
     // `k ≥ ⌊lo_id / T⌋`, and `< hi_id` iff `k < ⌊hi_id / T⌋`.
     let start = lo_id / SHARD_TX_COUNT;
@@ -313,25 +318,41 @@ fn discard_set<T: ReadTables>(
     Ok(start..end)
 }
 
-/// `first_tx_id(h)`: the storage id of the first transaction at height `h`.
-/// `0` at genesis; otherwise [`storage_ids_through`] at height `h − 1`
-/// (every id issued before `h`).
-fn first_tx_id<T: ReadTables>(txn: &T, height: u64) -> Result<u64, ReadFault> {
+/// Listed (non-coinbase) transactions recorded **before** height `h`: the
+/// raw `cumulative_tx_count` fold at `h − 1`, and `0` at genesis. The
+/// sample SI-13 is stated over; the coinbase term is added by
+/// [`first_tx_id`], after the check.
+fn listed_before<T: ReadTables>(txn: &T, height: u64) -> Result<u64, ReadFault> {
     let Some(parent) = height.checked_sub(1) else {
         return Ok(0);
     };
-    ids_through(txn, parent)
+    Ok(block_info_at(txn, parent)?.cumulative_tx_count)
 }
 
-/// Storage ids issued through height `h` inclusive. The listed total is
-/// the row; the coinbase term is [`storage_ids_through`].
-fn ids_through<T: ReadTables>(txn: &T, height: u64) -> Result<u64, ReadFault> {
-    let listed = block_info_at(txn, height)?.cumulative_tx_count;
+/// `first_tx_id(h)`: the storage id of the first transaction at height `h`,
+/// from the listed total before it — `0` at genesis; otherwise
+/// [`storage_ids_through`] at `h − 1` (every id issued before `h`).
+fn first_tx_id(height: u64, listed_before: u64) -> Result<u64, ReadFault> {
+    let Some(parent) = height.checked_sub(1) else {
+        return Ok(0);
+    };
+    ids_from(listed_before, parent)
+}
+
+/// Storage ids issued through height `h` inclusive, given the listed total
+/// at `h`: the coinbase term is [`storage_ids_through`].
+fn ids_from(listed: u64, height: u64) -> Result<u64, ReadFault> {
     storage_ids_through(listed, height).ok_or_else(|| {
         ReadFault::Invariant(StoreInvariant::FoldOverflow {
             cell: TX_COUNT_CELL,
         })
     })
+}
+
+/// Storage ids issued through height `h` inclusive, read from the row.
+fn ids_through<T: ReadTables>(txn: &T, height: u64) -> Result<u64, ReadFault> {
+    let listed = block_info_at(txn, height)?.cumulative_tx_count;
+    ids_from(listed, height)
 }
 
 /// SI-13: the listed-transaction fold decreased. `height` is the later sample.
@@ -365,7 +386,8 @@ pub(super) fn h_scarce<T: ReadTables>(
     }
     // Every shard whose last id is below `first_tx_id((E−1)·SEB)` has
     // `close_epoch + 2 ≤ E`; the last of them is `⌊hi_id / T⌋ − 1`.
-    let hi_id = first_tx_id(txn, horizons.first_height_of(e - 1))?;
+    let hi_height = horizons.first_height_of(e - 1);
+    let hi_id = first_tx_id(hi_height, listed_before(txn, hi_height)?)?;
     let Some(last_closed) = (hi_id / SHARD_TX_COUNT).checked_sub(1) else {
         return Ok(None);
     };

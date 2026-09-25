@@ -396,6 +396,49 @@ fn a_decreasing_storage_id_total_refuses_the_boundary() {
     cleanup(&path);
 }
 
+/// The decrease the coinbase term can mask: listed `30 → 25` between
+/// heights 9 and 29 derives to storage totals `40 → 55`, so a check on the
+/// derived sums would pass. SI-13 is a property of the listed fold and is
+/// checked on the raw samples (Copilot, PR #861).
+#[test]
+fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
+    let path = tmp("prune-monotone-masked");
+    let horizons = Horizons::new(
+        SettlementEpochBlocks::new(10).expect("non-zero"),
+        BlockCount::from_raw(3),
+    )
+    .expect("0 < retention < epoch");
+    let store = ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons).expect("create");
+    let mut b = Builder::new();
+    b.connect(&store, 0, 39, |_| Vec::new());
+    drop(store);
+    plant_listed(&path, 9, 30);
+    plant_listed(&path, 29, 25);
+    let store = ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons).expect("reopen");
+    let previous = b.hashes.last().copied().expect("parent");
+    let cand = candidate(40, previous, Vec::new());
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, cand)?, facts(40), RuleSet::GENESIS)?)
+    });
+    assert!(
+        out.is_err(),
+        "40 → 55 in storage ids hides 30 → 25 in the fold"
+    );
+    assert_eq!(tip(&store), 39);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(40),
+            row: StoreInvariant::FoldNotMonotone {
+                cell: "block_info.cumulative_tx_count",
+                height: 30,
+            },
+        }
+    );
+    cleanup(&path);
+}
+
 /// Replace `block_info[height].cumulative_tx_count`. A raw write: the
 /// store's own connect never records a decrease.
 fn plant_listed(path: &std::path::Path, height: u64, listed: u64) {
