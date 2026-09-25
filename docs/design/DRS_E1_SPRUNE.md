@@ -1,6 +1,22 @@
-# DRS-E1 S-PRUNE — the retention prune: plan-doc skeleton (`PDM-Q-F31`)
+# DRS-E1 S-PRUNE — the retention prune: plan and as-built record (`PDM-Q-F31`)
 
-**Status:** OPEN — **SKELETON, not a plan.** Written 2026-09-18 at
+**Status:** LANDED — **implemented 2026-09-25** on the S-PRUNE increment PR
+(four commits off `dev` `fc6d87ca5`; layout **13 → 14**): `shekyl_chain_rules::D_MAX`
+(derived from `archival_reorg_depth_blocks`, `SEB > D_MAX` const-asserted)
+and `journal_horizon`, `shekyl_types::SHARD_TX_COUNT` (`T`); the boundary
+batch inside `connect` (`store/prune.rs`: `D(E)` named by the epoch, whole
+shards' `txs_prunable` + `txs_pqc_auths` discarded through the raw tables,
+undo rows below `tip − retention` retired, the `undo_log_floor` cell);
+`Horizons { epoch, undo_retention }` as the store's session parameter with
+`0 < retention < SEB` refused at open; `pop` refusing below the persisted
+floor; `TxRecord.pqc_auths` as `Option<PqcAuths { Retained, Discarded }>`;
+`h_scarce` on the snapshot and the batch. **As built** — §14: the skeleton's
+`first_tx_id` primitive was off by the coinbases; the §7 pop belt is
+unreachable by arithmetic and was not minted; the `D_max` blocker below was
+rule 22's unfalsifiable shape and is dissolved by the build. Round-0
+findings `SPR-1 … SPR-6` are §14's rows (family registered in
+`IMPLEMENTATION_INDEX.md` §2).
+*Skeleton history, retained:* OPEN — **SKELETON, not a plan.** Written 2026-09-18 at
 `dev@20ebdf1e5`, **re-keyed 2026-09-22 at `dev@5b2d4c6d6` to `PDM-Q2`'s
 re-ruling** (the body horizon is the epoch boundary after the freeze epoch;
 `W` retired), by the pruning charter's lane
@@ -24,11 +40,14 @@ undo-log retention floor this surface inherits from `SCW-7` /
 PROVISIONAL** (`PDM-Q11` RULED 2026-09-17 — shape frozen, `720` provisional,
 home `CEN-E2`). A watermark fixed before that constant is confirmed is picked
 by implementation convenience and inherited as if ruled — R8's shape exactly.
-So the plan may be *written* now, but its watermark section names `D_max` as
+~~So the plan may be *written* now, but its watermark section names `D_max` as
 an operand, not a number, until `PDM-Q11`'s numeric is confirmed; the
-increment does not cut before then. Falsify by: `PDM-Q11`'s section losing
-the word PROVISIONAL, or the row in §3 that today reads `retention ≥ D_max`
-acquiring a literal.
+increment does not cut before then.~~ **DISSOLVED 2026-09-25 (rule 22): the
+falsifier this sentence named could only fire after the work it blocked —
+`D_max` is confirmed by running the mechanisms that consume it, and the
+mechanism is this increment. Built with `D_max` as a parameter
+(`Horizons::undo_retention`, production `D_MAX`); the numeric stays
+PROVISIONAL in `PDM-Q11`, now testable.**
 
 **Family:** none minted here. Findings and questions this document raises
 at pre-flight take DRS-E's next free series (rule 94 §1), not a `PDM-` id.
@@ -78,7 +97,11 @@ discovered downstream — a violated predicate is a refused discard, not a
 corrupted write, and it is evaluated **at discard time**: a reorg across an
 epoch boundary may move `current_epoch` back by one after a discard, and
 that shard is not "wrongly discarded" (Q2; pops are §7's business).
-`first_tx_id(h)` is `block_info[h−1].cumulative_tx_count` for `h ≥ 1` and
+~~`first_tx_id(h)` is `block_info[h−1].cumulative_tx_count` for `h ≥ 1`~~
+**CORRECTED as built (SPR-1):** `first_tx_id(h) = block_info[h−1].cumulative_tx_count + h`
+for `h ≥ 1` — the running total counts a block's **listed** transactions
+(`connect.rs`), while storage ids are dense over every recorded transaction,
+coinbase included, one per block; and
 **`first_tx_id(0) = 0`** (FL-R3-STORE, `BlockInfo`, landed on #772);
 `close_height(k)` is `height((k+1)·T − 1)` — the last **included**
 transaction's height, since `(k+1)·T` is the first of `k+1` and need not
@@ -254,7 +277,18 @@ bytes with no `CenRow`, or an S-PRUNE type imported by the rules crate
 
 ## 7. Pops — the check, and what S-PRUNE does not do
 
-**The pop check reads `close_height` only.** The **floor is the lowest
+**As built (SPR-2): the pop check reads the persisted undo floor; the belt
+below was not minted.** `h_scarce` is a `close_height` below `(E−1)·SEB ≤
+tip − SEB < tip`, so `tip ≤ h_scarce` has no instance under *any*
+retention — not only while `SEB > D_max` — and a defence that cannot fail
+consumes the attention that would find the gap (rule 16). `pop` refuses a
+tip below the `undo_log_floor` cell (`StoreCannot::PopBelowFloor`); the
+inequality `SEB > retention` is still refused at open
+(`StoreCannot::RetentionNotInsideEpoch`) and const-asserted on the
+production pair, because it is what keeps the undo floor above the body
+horizon. `h_scarce` itself is built, as `PDM-Q5`'s band-2 edge
+(`ReadSnapshot::h_scarce`, `WriteBatch::h_scarce`). *The skeleton's text,
+retained as the record of what was posed:* ~~The pop check reads `close_height` only.~~ The **floor is the lowest
 height whose block may be popped**: `h_scarce + 1`, with `h_scarce` the
 `close_height` of the last shard with `close_epoch(k) + 2 ≤ current_epoch`
 (§4; none in epochs 0–1 or before any shard closes, and then the floor is
@@ -342,7 +376,8 @@ have no Rust writer here); what this surface owes it is the function.
   surface deletes its rows — that row re-grades to **`Excluded`** (as
   `txs_prunable` already is; the permanent `txs_pqc_auth_hash` row is the
   append-mostly one) in the plan's own commit, audit §10 row edited with it
-  (`table_classes_match_the_audit_matrix` reads it).
+  (`table_classes_match_the_audit_matrix` reads it). **Done 2026-09-25**
+  (the mechanism commit; `class.rs`, audit §10).
 
 ## 11. The serve-credit transaction and the verifier precondition
 
@@ -365,9 +400,9 @@ have no Rust writer here); what this surface owes it is the function.
 | --- | --- | --- |
 | Body horizon | the epoch boundary after the shard's freeze epoch — `close_epoch(k) + 2 ≤ current_epoch`; the batch's set at `E` is `{k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3}` (additive on `u64`, never `E − 2`); a rule, **no constant, no frontier** | ruled (`PDM-Q2`, 2026-09-22); `W` retired |
 | `SEB` | `settlement_epoch_blocks = 10,000`; `settlement_epoch_at_height(h) = h / SEB` (`consensus_state.rs:27`) | pinned |
-| `D_max` | 720; **`SEB > D_max` const-asserted beside it, on the production constants — the only assertion.** The invariant holds on **every nettype** (rule 71: nettype selects data, the data satisfies the same invariant): the regtest `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override (`constants.rs:257`, today `2..=SETTLEMENT_EPOCH_BLOCKS` in isolation) must not admit `SEB ≤ D_max` — one knob that overrides both and preserves the ratio, or a parse that refuses. `SEB = 2` with `D_max = 720` is a rejected configuration, not a supported one | PROVISIONAL, Round-2 gate (`PDM-Q11`); **constant unbuilt — owed** at `CEN-E2`; **fakechain conformance owed with it** |
-| Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **owed**, minted by this surface's A4 commit, consumed by S-ARCH (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
-| `T` | **200 transactions per shard, PROVISIONAL** — the one consensus constant of the partition, one const-asserted home (the discipline `SHARD_BYTES` carried, FOLLOWUPS `:72`); chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB | ruled (`PDM-Q6` item 5, 2026-09-23); Round-2 gate with `n`, `D_max`, `w_launch` |
+| `D_max` | 720 — **built 2026-09-25 as `shekyl_chain_rules::D_MAX`, derived from `config/consensus_constants.json`'s `archival_reorg_depth_blocks` (one source; its comment names PDM-Q11's gate as a consumer); `SEB > D_MAX` const-asserted beside it, and `0 < retention < SEB` refused at store open for the session pair (SPR-3).** **`SEB > D_max` const-asserted beside it, on the production constants — the only assertion.** The invariant holds on **every nettype** (rule 71: nettype selects data, the data satisfies the same invariant): the regtest `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override (`constants.rs:257`, today `2..=SETTLEMENT_EPOCH_BLOCKS` in isolation) must not admit `SEB ≤ D_max` — one knob that overrides both and preserves the ratio, or a parse that refuses. `SEB = 2` with `D_max = 720` is a rejected configuration, not a supported one | PROVISIONAL numeric, Round-2 gate (`PDM-Q11`); **constant built** (`shekyl_chain_rules::reorg`, the crate CEN-E2 lands in); fakechain: a shortened epoch names its own retention through `Horizons::new` or is refused (rule 71) |
+| Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **built** 2026-09-25 as `shekyl_chain_rules::journal_horizon(tip) -> Option<BlockHeight>` beside `D_MAX`, consumed by S-ARCH when its journal writers land (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
+| `T` | **200 transactions per shard, PROVISIONAL** — the one consensus constant of the partition, one const-asserted home (the discipline `SHARD_BYTES` carried, FOLLOWUPS `:72`); chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB | ruled (`PDM-Q6` item 5, 2026-09-23); **built** 2026-09-25 as `shekyl_types::SHARD_TX_COUNT`; numeric on the Round-2 gate with `n`, `D_max`, `w_launch` |
 | Shard boundaries | `k·T` — no table, no rows, no prefix sum; `close_height(k) = height((k+1)·T − 1)` by binary search over `cumulative_tx_count` | derived, never received (item 5) |
 | `first_tx_id(h)`, `cumulative_tx_count` | `BlockInfo.cumulative_tx_count`; `first_tx_id(0) = 0`; the primitive under `close_height`, and so under `close_epoch` | landed on #772 — **kept** (the horizon expression `first_tx_id(tip − W)` is gone; the primitive is not) |
 | `w_launch` | flat in-window commitment weight through epochs 0–1; superseded by the derived scarce-set median at the first `discard(k)` | **reward leg's** (Q6 item 3 amendment) — on the Round-2 gate with `n`, `D_max`; S-PRUNE's `discard(k)` event defines the scarce set |
@@ -404,3 +439,42 @@ the holdings advertisement is the bond. `--sync-pruned-blocks` **was deleted
 with them (2026-09-21), under `PDM-Q5`'s rejection**
 (trust-the-txid with no anchor), recorded on its own FOLLOWUPS row so the
 reason outlives the engine.
+
+## 14. As built (2026-09-25) — the increment, and what building it found
+
+Four commits on the S-PRUNE increment PR, off `dev` `fc6d87ca5`: (1) the
+constants — `D_MAX`, `SEB > D_MAX`, `journal_horizon`, `SHARD_TX_COUNT`;
+(2) a dev-red fix carried first — `store::alt_tests` spent to one output
+under CEN-I1, which slice 6 landed past it; (3) the mechanism; (4) this
+record. The skeleton's sections stand as the specification; where the
+build disagreed, the section carries the correction in-line and this table
+carries the finding.
+
+| Finding | Statement |
+| --- | --- |
+| **SPR-1** | **`first_tx_id` was off by the coinbases.** §2 wrote `first_tx_id(h) = block_info[h−1].cumulative_tx_count`; that total counts a block's *listed* transactions (`connect.rs`, "the parent's plus this block's listed transactions") while storage ids are dense over every recorded transaction, the miner transaction first. Built as `cumulative_tx_count(h−1) + h` (one coinbase per block). Found by the first test that closed a shard: `D(3)` came back empty. Read at the code, not the plan — the rule-16 corollary, in the plan's own primitive. |
+| **SPR-2** | **The §7 pop belt is unreachable by arithmetic, not by `SEB > D_max`, and was not minted.** `h_scarce` is the `close_height` of a shard with `close_epoch + 2 ≤ E`, so `h_scarce < (E−1)·SEB ≤ tip − SEB < tip` at every tip; `tip ≤ h_scarce` has no instance to build "by hand". A check that cannot fire is not a belt (rule 16); the inequality it was said to depend on is still enforced — at open, as `StoreCannot::RetentionNotInsideEpoch`, and at compile time on the production pair — because it is what keeps the undo floor above the body horizon. `h_scarce` is built for its other consumer, `PDM-Q5`'s band-2 edge. |
+| **SPR-3** | **The retention is a session parameter, not a second constant.** The skeleton's rule-71 ask ("one knob that overrides both and preserves the ratio, or a parse that refuses") is met at the store: `Horizons { epoch, undo_retention }`, `0 < retention < SEB` or the open is refused; `create` / `with_apply_policy` run `D_MAX`, `with_horizons` is the regtest knob. `OTHER_EPOCH = 50` in the header tests had to name a retention — the refusal firing where it should. The retention is not pinned in the header (the `undo_log_floor` cell records what it retired); the schedule is. |
+| **SPR-4** | **The undo floor is persisted; the body frontier is not.** §5.4 of S-CHAIN-W asked S-PRUNE to persist the floor it establishes so `pop` can tell *pruned below* from *lost*; §4 of this plan forbids a stored discard watermark. Both hold: `undo_log_floor` (layout 14, `EngineLocal`) is the journal's retention mark, monotone, written by the batch; the body discard's set is `D(E)`, computed and stored nowhere. `pop` below the cell is `PopBelowFloor`; above it, a missing row is SI-6. |
+| **SPR-5** | **A discarded `pqc_auths` region is a state.** `TxRecord` carried `pqc_auths: Option<SegmentBytes>` with a hash row and no segment classified SI-7 (§7.7 leg ii read pairwise). Under `PDM-Q6` the region is discarded with the shard, so that combination is leg (iii)'s one state: `Option<PqcAuths { Retained, Discarded }>`, `wire_bytes` → `None` for a discarded region, and the pairwise test now asserts *discarded* in one direction and SI-7 (a segment without its permanent hash row) in the other. |
+| **SPR-6** | **`D_max` is derived, not re-typed.** `config/consensus_constants.json` already carries `archival_reorg_depth_blocks = 720` and its comment names PDM-Q11's gate as a consumer; `D_MAX = BlockCount::from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS)` — one source in `config/`, no second 720 to drift. The blocker this file carried ("the increment does not cut before the numeric is confirmed") had a falsifier that could only fire after the increment — rule 22's shape — and is dissolved by the build; the numeric stays PROVISIONAL in `PDM-Q11`, now with a mechanism to test it against. |
+
+**What the tests hold** (`store/prune_tests.rs`, 300-block chains under a
+100-block epoch and a 50-block retention — `T = 200` closes a shard only
+after two hundred transactions, and the shared fixtures pack the height
+into a `u8`, so the module carries its own long-chain header and facts):
+`D(2)` empty and the floor at 150; `D(3)` = shard 0 with its prunable and
+`pqc_auths` regions `Discarded`, hash rows standing, shard 1 held, undo rows
+exactly `[250, 300]`; epochs 0–1 run no batch; fifty-one pops land and the
+fifty-second is `PopBelowFloor { 249, 250 }` with the writer live; the hook
+fires again on a reorg across 300 and the store is the same store;
+`h_scarce` at each epoch, on the batch and the snapshot. `Horizons`'
+refusals; `D_MAX`, `SEB > D_MAX` and `journal_horizon` in
+`shekyl-chain-rules`. 353 + 14 chain-store, 207 chain-rules; every
+`scripts/ci` gate green.
+
+**What stays E4's / E5's / S-ARCH's**, unchanged by this build: the
+journals' retirement at `journal_horizon` (S-ARCH's writers, when they
+land); §11's serve-credit precondition (the E3 cutover ordering; nothing in
+production reads this store yet); the reward leg's `w_launch`.
+

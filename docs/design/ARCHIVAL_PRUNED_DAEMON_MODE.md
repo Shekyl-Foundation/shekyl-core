@@ -1300,7 +1300,12 @@ is therefore a **precondition** of `D_max`, not a sibling, and
 `PDM-Q5`'s ordering item is discharged by this sentence.
 
 **Numeric.** `D_max = 720` blocks (24 h at 120 s), **PROVISIONAL**, on
-the `bond_duration` precedent. The argument for 720 is coordination
+the `bond_duration` precedent. *Built 2026-09-25 as
+`shekyl_chain_rules::D_MAX`, derived from `archival_reorg_depth_blocks`
+(one source, `config/consensus_constants.json`), with `SEB > D_MAX`
+const-asserted beside it and the retention prune consuming it
+(`DRS_E1_SPRUNE.md` §14, SPR-6) — the numeric now has a mechanism to be
+tested against, which is what "provisional until tested" needed.* The argument for 720 is coordination
 with the archival domain's frozen assumptions and is recorded as such
 (record, Q11). Two independent arguments for shallower are recorded beside it
 and are not overridden: (i) 720 sits at the top of the honest-partition

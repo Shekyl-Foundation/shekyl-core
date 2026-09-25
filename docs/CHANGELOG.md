@@ -358,6 +358,27 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
 
 ### Daemon chain store
 
+- **DRS-E1 S-PRUNE — the retention prune: bodies retire by the epoch
+  calendar, the undo journal by `D_max`.** Schema layout **14**. At the
+  connect of the block at every settlement-epoch boundary from epoch 2, the
+  store discards — inside that block's own transaction — the prunable and
+  `pqc_auths` regions of every archival shard whose close epoch lies two
+  behind (`discard(k) ⇔ current_epoch ≥ close_epoch(k) + 2`, `T = 200`
+  transactions per shard): a set named by the epoch and computed from the
+  chain's running transaction total, never from what is present on disk, so
+  every node discards the same shards at the same height whether it was
+  online or not. Hash rows stay; a read of a discarded region answers
+  *discarded*, never a fault, and the whole transaction's wire bytes are
+  reported unavailable rather than recomposed. The pop-undo journal is
+  retired below `tip − D_max` at the same boundary and the store records the
+  lowest height it kept, so a reorg deeper than the retention is refused as
+  a capability limit (`PopBelowFloor`), never mistaken for a corrupt
+  journal. `D_max` is built (720, provisional, derived from the archival
+  reorg depth — one source) with `SEB > D_max` asserted at compile time;
+  the store refuses at open any schedule/retention pair that breaks it, so a
+  shortened regtest epoch must shorten its retention with it. The C++
+  stripe engine was deleted earlier; nothing here is a port of it.
+  Pre-genesis: a daemon store at layout 13 is recreated, not migrated.
 - **DRS-E1 S-ALT — the alternative-chain store, typed, on the consensus
   file; the switch is one transaction.** Schema layout **13**: `alt_blocks`
   becomes `LmdbHashKey → Coded<AltBlock>` — the C++ `alt_block_data_t ‖ blob`
