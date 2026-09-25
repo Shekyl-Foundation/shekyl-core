@@ -271,10 +271,14 @@ impl WriteBatch<'_, '_> {
             .txn()
             .open_table(PROPERTIES)
             .map_err(EngineError::Table)?;
-        Ok(
-            header::get::<UndoLogFloorCell>(&table)?
-                .unwrap_or(BlockHeight::from_raw(GENESIS_FLOOR)),
-        )
+        // A malformed cell is SI-7 and must arm the latch like every other
+        // typed cell read through the batch: `pop` must not leave the
+        // writer live over a floor it cannot read, and a boundary connect
+        // whose caller swallows the error must not commit with the prune
+        // skipped (Copilot, PR #861).
+        header::get::<UndoLogFloorCell>(&table)
+            .map(|floor| floor.unwrap_or(BlockHeight::from_raw(GENESIS_FLOOR)))
+            .map_err(|e| self.arm_if_invariant(e))
     }
 
     /// [`h_scarce`] at `tip`, through this batch. SI-7 poisons the batch.

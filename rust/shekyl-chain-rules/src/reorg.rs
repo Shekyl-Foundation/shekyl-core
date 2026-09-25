@@ -66,17 +66,35 @@ const _: () = assert!(
 
 /// The height below which the seven window-retired archival journals may
 /// be retired (`PDM-Q-F19`, `PDM-Q-F16`): `tip − (CRB + n·SEB + D_max)`,
-/// or `None` while the chain is shorter than that expression.
+/// or `None` while the chain is shorter than that expression — **under the
+/// production schedule and reorg cap**.
 ///
 /// Minted here because `D_max` lives here and `CRB`, `n` and `SEB` live in
 /// `shekyl-archival-retention`; consumed by S-ARCH's journal writers when
 /// they land (they have no Rust writer yet). `shekyl_archival_failure_window_params`
-/// is *not* this — it returns the m-of-n `(m, n, serve_budget)`.
+/// is *not* this — it returns the m-of-n `(m, n, serve_budget)`. A session
+/// running a shortened schedule (the store's `Horizons`) uses
+/// [`journal_horizon_under`] with its own pair.
 #[must_use]
 pub fn journal_horizon(tip: BlockHeight) -> Option<BlockHeight> {
+    journal_horizon_under(tip, SETTLEMENT_EPOCH_BLOCKS, D_MAX)
+}
+
+/// [`journal_horizon`] under a session's schedule: `tip − (CRB + n·SEB +
+/// reorg_cap)` for the `epoch_blocks` and `reorg_cap` the session runs —
+/// the same pair the store refuses at open unless `0 < reorg_cap <
+/// epoch_blocks`. `CRB` and `n` are consensus constants and do not vary
+/// by nettype (rule 71: nettype selects the schedule's data, never the
+/// expression). `None` while the chain is shorter than the window.
+#[must_use]
+pub fn journal_horizon_under(
+    tip: BlockHeight,
+    epoch_blocks: u64,
+    reorg_cap: BlockCount,
+) -> Option<BlockHeight> {
     let window = CHALLENGE_RESOLUTION_BLOCKS
-        .checked_add(u64::from(FAILURE_WINDOW_N).checked_mul(SETTLEMENT_EPOCH_BLOCKS)?)?
-        .checked_add(D_MAX.to_raw())?;
+        .checked_add(u64::from(FAILURE_WINDOW_N).checked_mul(epoch_blocks)?)?
+        .checked_add(reorg_cap.to_raw())?;
     tip.to_raw().checked_sub(window).map(BlockHeight::from_raw)
 }
 
@@ -108,6 +126,30 @@ mod tests {
         assert_eq!(
             journal_horizon(BlockHeight::from_raw(window + 5)),
             Some(BlockHeight::from_raw(5))
+        );
+    }
+
+    #[test]
+    fn a_shortened_session_pair_moves_the_horizon_with_it() {
+        // A 100-block epoch and a 50-block cap: the window is CRB + n·100 + 50.
+        let short = CHALLENGE_RESOLUTION_BLOCKS + u64::from(FAILURE_WINDOW_N) * 100 + 50;
+        let cap = BlockCount::from_raw(50);
+        assert_eq!(
+            journal_horizon_under(BlockHeight::from_raw(short - 1), 100, cap),
+            None
+        );
+        assert_eq!(
+            journal_horizon_under(BlockHeight::from_raw(short + 3), 100, cap),
+            Some(BlockHeight::from_raw(3))
+        );
+        assert_eq!(
+            journal_horizon_under(
+                BlockHeight::from_raw(short + 3),
+                SETTLEMENT_EPOCH_BLOCKS,
+                D_MAX
+            ),
+            journal_horizon(BlockHeight::from_raw(short + 3)),
+            "the production pair is the one-argument form"
         );
     }
 }

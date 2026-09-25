@@ -27,9 +27,11 @@ use shekyl_wire::{Block, BlockHeader, Transaction};
 use super::connect_fixtures::{coinbase, judge, spend};
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
-use crate::codec::{Canonical, SettlementEpochBlocks, UndoLogFloorCell};
+use crate::codec::{
+    Canonical, PropertyCell, PropertyCellBytes, Raw, SettlementEpochBlocks, UndoLogFloorCell,
+};
 use crate::ids::TxStorageId;
-use crate::schema::{BLOCK_INFO, UNDO_LOG};
+use crate::schema::{BLOCK_INFO, PROPERTIES, UNDO_LOG};
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
@@ -456,4 +458,60 @@ fn plant_listed(path: &std::path::Path, height: u64, listed: u64) {
         table.insert(height, encoded.as_encoded()).expect("plant");
     }
     txn.commit().expect("commit");
+}
+
+/// A malformed `undo_log_floor` cell is SI-7 and arms the batch's latch like
+/// every other typed cell read through the batch: `pop` does not leave the
+/// writer live over a floor it cannot read, and a closure that swallows the
+/// error cannot commit (Copilot, PR #861).
+#[test]
+fn a_malformed_undo_floor_cell_poisons_the_batch() {
+    let path = tmp("prune-floor-corrupt");
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
+    let mut b = Builder::new();
+    b.connect(&store, 0, 3, |_| Vec::new());
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut table = txn.open_table(PROPERTIES).expect("properties");
+            table
+                .insert(
+                    UndoLogFloorCell::KEY,
+                    Raw::<PropertyCellBytes>::new(&[0xFF; 3]),
+                )
+                .expect("plant");
+        }
+        txn.commit().expect("commit");
+    }
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("reopen");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let err = batch.pop().expect_err("the floor does not decode");
+        assert!(
+            matches!(
+                err,
+                StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                    key: "undo_log_floor",
+                    fault: CellFault::Undecodable(_),
+                })
+            ),
+            "got {err:?}"
+        );
+        // The closure swallows the error: the poisoned batch must still
+        // refuse to commit.
+        Ok(())
+    });
+    assert!(
+        out.is_err(),
+        "a poisoned batch does not commit on a swallowed SI-7"
+    );
+    assert_eq!(tip(&store), 3, "nothing popped");
+    assert!(
+        !store.connect_state().is_live(),
+        "pop noted the tip as chain work, so the writer halts on the latch"
+    );
+    cleanup(&path);
 }

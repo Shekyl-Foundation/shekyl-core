@@ -152,7 +152,7 @@ pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use fault::{Corrupt, Fault, FormAttempt, Retry, Stale, ViewRead, MAX_FORM_ATTEMPTS};
-pub use reorg::{journal_horizon, D_MAX};
+pub use reorg::{journal_horizon, journal_horizon_under, D_MAX};
 pub use rule_set::{
     AdmissionPolicy, AdmissionPolicyId, DifficultyRule, RuleSchedule, RuleSet, RuleSetId,
 };
