@@ -33,12 +33,14 @@ one of these rules, stop and ask the human first.
    and 141-commit dev drift before being merged, and the merge itself
    became a multi-day project. Do not recreate this pattern.
 
-3. **Never merge `dev` into a feature branch to "keep it current".**
+3. **Don't continuously merge `dev` into a feature branch to "keep it current".**
    This is the failure pattern that produces orphaned branches. If a
    feature branch is falling behind dev, the answer is to land it on dev
    sooner, not to repeatedly merge dev into it. If the branch isn't ready
    to land, the work is too large and must be broken into smaller pieces
    that can each land on dev behind a feature flag or in disabled state.
+   This does NOT mean that merging cannot be done to fix a problem or just prior 
+   to opening a PR to ensure you are on the current dev branch.
 
 4. **Never push to `dev` without the user's explicit instruction for that
    specific push.** "Run the tests and push" is not a standing instruction.
