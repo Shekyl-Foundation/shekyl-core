@@ -16,9 +16,14 @@ slices stay P2P-3's.
 **Vocabulary (ruled 2026-09-25).** A **network** is where a peer lives.
 A **connector** reaches one network. A **capability** is one named
 property against a named adversary, native or added by a **layer**.
-The **transport layer** hosts connectors and layers. Rounds 1 and 2
-called that subsystem "the connector". The filename is
-`P2P_TRANSPORT_LAYER.md` so the old word does not survive in the path.
+**Encryption** is that kind of property: the bytes of the stream cannot
+be read. It benefits confidentiality and does not create it. A peer's
+address and port stay visible, and traffic can still be watched by
+volume and by which other peers are connected. The word confidentiality
+is not a capability. The **transport layer** hosts connectors and
+layers. Rounds 1 and 2 called that subsystem "the connector". The
+filename is `P2P_TRANSPORT_LAYER.md` so the old word does not survive
+in the path.
 
 **Ordering ruling (Rick, 2026-09-25).** The epee TCP server is replaced by
 the transport layer first. The clearnet option is then tested on that
@@ -187,12 +192,15 @@ layer never sees a command. Levin never sees a socket, an event loop, or
 a network's mechanics. The `i_service_endpoint` adapter is this line.
 
 The transport contract, on every network: an ordered, reliable byte
-stream; content confidentiality and integrity against the network
-observer (the bytes cannot be read or altered undetected, and nothing
-more); exactly one close cause (D12); the observed endpoint; the
-connector's declared capabilities, including what each leaves exposed.
-The contract does not address traffic analysis. Connection existence,
-timing, volume, sizes, and cross-connection patterns are outside it.
+stream; encryption of that stream against the network observer, with
+integrity of those bytes (they cannot be read or altered undetected);
+exactly one close cause (D12); the observed endpoint; the connector's
+declared capabilities, including what each leaves exposed. Encryption
+is not confidentiality. The peer's address and port remain available,
+and traffic patterns remain observable by volume and by the other
+connections. The contract does not address traffic analysis. Connection
+existence, timing, volume, sizes, and cross-connection patterns are
+outside it.
 
 The Rust reader already meets the rule. `shekyl-levin`'s reader is
 "socket bytes in, complete Levin messages out" (`reader.rs:6`), with no
@@ -271,8 +279,8 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Rate limit and per-connection speed stats | `network_throttle*`; the pipe's `on_wire` path on the parked branch | Carry the limit. Stats are observed facts reported upward, not a second policy. |
 | Send-queue bounds | 1,000 messages and 100 MiB (`abstract_tcp_server2.h:72-73`) | Carry, with one source. The pipe's `PIPE_PLAINTEXT_BUDGET` was a second copy and is not repeated. |
 | Send backpressure and strand order | Send path in `abstract_tcp_server2.inl` (queue checks near the caps above) | Re-derive. Nonce order equals wire order because there is one writer per direction. A strand is not required to get that. |
-| `--proxy` (clearnet through SOCKS) | `daemon.cpp:156-157` passes `arg_proxy` (`command_line_args.h:97`). `net_node.inl:926-935` sets the public zone's `m_connect = socks_connect` and a proxy address | **Carry, and name it.** Aimed at Tor, this is clearnet addressing reached through Tor exit relays. The peer does not see this node's address. Confidentiality ends at the exit, which is a network-observer position, so the Noise layer is still required. Proxied connections enter the public server via `add_connection`, so the option-on path covers them today. The declaration makes that coverage a property of the stack, not an accident of which server the pipe attached to. |
-| Overlay proxy precondition | `--tx-proxy tor,<ip>:<port>` accepts any address (`net_node.inl:623`) | **Declare the precondition. The disposition of a non-loopback address is D14 item 5.** Tor's native confidentiality holds from the local router onward. A router on another host means plaintext Levin crosses that hop. The Tor connector's declaration states "the hop to the router is loopback", and configuration checks the part it can check. |
+| `--proxy` (clearnet through SOCKS) | `daemon.cpp:156-157` passes `arg_proxy` (`command_line_args.h:97`). `net_node.inl:926-935` sets the public zone's `m_connect = socks_connect` and a proxy address | **Carry, and name it.** Aimed at Tor, this is clearnet addressing reached through Tor exit relays. The peer does not see this node's address. Encryption ends at the exit, which sees the clearnet peer, so the Noise layer is still required on that hop. Proxied connections enter the public server via `add_connection`, so the option-on path covers them today. The declaration makes that coverage a property of the stack, not an accident of which server the pipe attached to. |
+| Overlay proxy precondition | `--tx-proxy tor,<ip>:<port>` accepts any address (`net_node.inl:623`) | **Declare the precondition. The disposition of a non-loopback address is D14 item 5.** Tor's native encryption holds from the local router onward. A router on another host means unencrypted Levin crosses that hop. The Tor connector's declaration states "the hop to the router is loopback", and configuration checks the part it can check. |
 | `--tos-flag` / `IP_TOS` | `net_node.cpp:182`, default `-1`. Applied at `net_node.inl:597` and `set_tos_flag` `:3378-3383` (a `-1` returns without storing). Every socket still calls `setsockopt` at `abstract_tcp_server2.inl:966-976`. The static `m_default_tos` (`connection_basic.cpp:121`) is zero-initialized, so the default path sets TOS to 0 | **Recommended refuse. Ruling is D14 item 7.** A per-operator DSCP is a per-node marker on every packet. The recommendation is no `setsockopt` at all, so TOS stays at the OS default. Step 7 C1 records the DSCP that actually leaves today on the `-1` default, which sets TOS to 0. What the kernel emits is measured, not assumed. |
 | `no_delay(false)` (Nagle) | Set on every socket at `abstract_tcp_server2.inl:977-982` | **Measure before deciding**, under step 7 C9. Nagle changes the record sizes an observer sees, so it is part of the record-length evidence. It is not fixed before that evidence exists. |
 | FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 C4 asserts those failures are indistinguishable from the far side. |
@@ -363,7 +371,7 @@ columns that test the interface. They are not work.
 | Declared per connector | Clearnet | Tor | I2P |
 | --- | --- | --- | --- |
 | Addressing | IPv4/IPv6 + port | onion v3 | `.b32.i2p` |
-| Content confidentiality and integrity against the network observer | none native — **Noise layer added** (hybrid PQ) | native, classical only (accepted); precondition: the hop to the local router (D3) | native; not assessed further |
+| Encryption of the byte stream against the network observer | none native — **Noise layer added** (hybrid PQ). Encryption only: the peer's address and port stay visible, and traffic patterns stay observable | native, classical only (accepted); precondition: the hop to the local router (D3). Encryption only; the rows below say what stays visible | native; not assessed further |
 | This node's address hidden from the peer | no | native | native |
 | This node's address hidden from an observer at one end | no | partially — the observer sees Tor use, not the destination; not assessed further | not assessed |
 | Correlation by an observer at both ends (timing, volume) | **not provided** | **not provided** | **not assessed** |
@@ -377,15 +385,18 @@ Consequences:
 
 - **Clearnet is a connector plus the Noise layer.** Noise is not a
   clearnet special case in code. The stack includes it because clearnet
-  declares no native confidentiality. The option-off path is a stack
+  declares no native encryption. Noise supplies encryption. It benefits
+  confidentiality and does not create it: the peer's IP address and
+  port stay available, and traffic can still be monitored by volume and
+  by the other connections. The option-off path is a stack
   that does not meet the contract. The flip is "enforce the contract".
   There is no mode that accepts both the Noise prefix and plaintext on
   one port. `noise.rs`, `channel.rs`, `prefix.rs`, and `aead.rs` are
   that layer. The HMAC implementation and the NN oracle live on
   `fix/p2p-transport-hmac-oracle`.
-- **`--proxy` is clearnet addressing plus Tor routing** (D3). Endpoint
-  hiding toward the peer, confidentiality ending at the exit. The Noise
-  layer is still required.
+- **`--proxy` is clearnet addressing plus Tor routing** (D3). The peer
+  does not see this node's address. Encryption ends at the exit, so the
+  Noise layer is still required beyond it.
 - **Deadlines are per-connector data** (D9). A network with seconds of
   mixing delay would break one global handshake deadline.
 - **Stream semantics are a capability.** A future message-shaped
@@ -396,10 +407,11 @@ Consequences:
   completed handshake. One we cannot check — an overlay's own
   cryptography — is a trust assumption with its concession. Tor's is
   classical-only.
-- **Meeting the contract is content confidentiality and integrity
-  against the network observer.** It says nothing about traffic
-  analysis, peer graphing, or origin privacy. Those rows name their
-  owner or say they are unowned.
+- **Meeting the contract is encryption of the byte stream, and
+  integrity of those bytes, against the network observer.** It is not
+  confidentiality. It says nothing about traffic analysis, peer
+  graphing, or origin privacy. Those rows name their owner or say they
+  are unowned.
 - **One source.** `RelayZone` / `LinkSecrecy` in
   `rust/shekyl-relay-privacy/src/zone.rs` is a second per-network
   property table for the same networks. The connector declaration is
@@ -642,7 +654,8 @@ Ruled vocabulary and structure, no new implementation tasks:
 - The subsystem is the transport layer. A connector reaches one network.
   The filename is `P2P_TRANSPORT_LAYER.md`.
 - D1's decoupling rule, with the six C++ violations recorded for LV-3.
-- D7's capability table. Clearnet is a connector plus the Noise layer.
+- D7's capability table. Clearnet has no native encryption. The Noise
+  layer adds encryption and does not create confidentiality.
   Unassessed cells say so.
 - `--proxy` and the overlay proxy precondition (D3). The precondition's
   disposition is D14 item 5.
