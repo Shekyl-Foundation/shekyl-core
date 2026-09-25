@@ -338,7 +338,9 @@ neighbor `shekyl-peer-policy` owns the inbound ceiling, not these lists.
 
 ## 14. Scope fences
 
-- No admission-ceiling policy. That is slice 2.
+- No admission-ceiling policy. Socket admission is the transport layer
+  ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md)), which folded
+  slice 2 on 2026-09-25.
 - No policy for which draw to dial next, and no seed-list editing. Slice 3
   calls `draw_gray`, `draw_white`, and `handshake_confirmed`. It does not grow
   a third door. The Foundation fleet is data this slice reads, not a second

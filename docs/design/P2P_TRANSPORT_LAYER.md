@@ -179,9 +179,21 @@ with its bounds. Bytes are presented to the unchanged C++ Levin layer
 through an `i_service_endpoint` adapter until LV-3.
 
 **Out.** The `Connection` type, ownership transfer, the registry, and
-relay dispatch (LV-3 steps a–d). The peerlist, admission policy,
-discovery, and the handshake state machine (P2P-3 slices 1–4). Whether
-Levin framing stays C++ through cutover and moves with LV-3 (D14).
+relay dispatch (LV-3). The peerlist, discovery, and the handshake
+state machine (P2P-3 slices 1, 3, and 4). Session admission stays
+above the seam. Socket admission is this round: P2P-3 slice 2 is
+folded in. Levin framing stays C++ through cutover and moves with
+LV-3 (D14).
+
+**Each layer owns its own admission.** The transport layer owns socket
+admission: may this socket exist? That is the ban list and the inbound
+ceiling, enforced in Rust at accept, from values given to it — the
+operator's ban entries, and the ceiling derived by
+`shekyl-peer-policy`. The session layer (Levin framing and the p2p
+protocol) owns session admission: may this peer have a session? That
+is `network_id`, the self-detection nonce, support flags, and
+PWD-B3's per-command caps, in `handle_handshake`. Neither layer reads
+the other's state to decide.
 
 **Decoupling rule.** Levin framing, the p2p protocol, and the cryptonote
 protocol run over the transport contract and nothing else. The transport
@@ -202,8 +214,8 @@ outside it.
 The Rust reader already meets the rule. `shekyl-levin`'s reader is
 "socket bytes in, complete Levin messages out" (`reader.rs:6`), with no
 socket, zone, or runtime in it. The jumble is in the C++, read at this
-pin. These are facts for LV-3 and the P2P-3 slices, not work for this
-round:
+pin. Items 1–6 are facts for LV-3 and the P2P-3 slices, not work for
+this round. Item 7 is the knot this round untangles.
 
 1. The Levin layer owns connections. The registry, close-by-id, and
    `add_ref`/`release` live in `async_protocol_handler_config`.
@@ -225,6 +237,10 @@ round:
    `src/net`. `enum class zone` hides policy in its order
    (`enums.h:53`, "order from here changes priority of selection for
    origin TXes").
+7. Socket admission walks the Levin registry. `census_inbound`
+   (`net_node.inl:3158`) counts by walking connections because epee's
+   transport keeps no count. This round untangles it: the transport
+   layer keeps the count (D8) and enforces the ceiling at accept.
 
 Three names, kept apart. **Levin framing** is bytes to messages: the
 bucket header, invoke, and notify. The **p2p protocol** is the
@@ -261,7 +277,8 @@ and the mechanism does not. "Refuse" means it does not survive.
 
 | Duty | Read at this pin | Disposition |
 | --- | --- | --- |
-| Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | Carry. The connector calls admission. It does not own the policy. Serves the ceiling admission already owns. |
+| Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator. The transport layer does not own those values. It does not call into C++ admission. |
+| Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. The operator's RPC reaches it through the FFI (`block_host`, `unblock_host`, `get_blocked_hosts`). A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
 | SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **Its own per-connector clock, derived under D9.** It does not inherit the timeout from `src/net/socks`. |
 | SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust. `tokio-socks` 0.5.3 is already a workspace dependency (`shekyl-p-fetch/Cargo.toml:40`, `shekyl-rpc-transport/Cargo.toml:43`). Reusing it adds no supply-chain surface (rule 17). A separate `socks` 0.3.4 crate is in `Cargo.lock` because `ureq` 3.3.0 depends on it, and `shekyl-p-transport` enables `ureq/socks-proxy` via its `tor-socks` feature. The connector uses `tokio-socks`, not that crate. |
@@ -290,13 +307,22 @@ and the mechanism does not. "Refuse" means it does not survive.
 
 ## D4 — seam contract (RULED 2026-09-25)
 
+- **Socket admission is enforced here, at accept, in Rust.** The
+  transport layer does not own the ceiling or the ban entries. It
+  applies the values it is given. It does not call into C++.
+- **Channel established is per connector.** On clearnet it is Split,
+  after message 2. On Tor it is SOCKS CONNECT succeeding, or an accept
+  on the forward listener. The one-flight pre-channel byte limit is
+  clearnet's. Nothing above the transport can see a connection that
+  has no channel.
 - **No C++ object exists before the channel is established.** The
   connector owns the socket from accept or dial. The C++ Levin handler
   and connection context are created when the transport handshake
-  finishes. The Levin handshake clock therefore starts there. The
-  pre-channel byte limit is the size of one flight, not a 256 KiB
-  inherited cap. Nothing above the transport can see a connection that
-  has no channel.
+  finishes. The Levin handshake clock therefore starts there.
+- **`connect` toward `net_node` is synchronous in shape.** It returns
+  after the channel is established, or fails with its D12 cause.
+- **One connection's bytes are delivered in stream order, one delivery
+  at a time.**
 - **The connector supplies only observed endpoints.** For a clearnet
   socket that is the peer address. For Tor and I2P inbound, the
   observed truth is "this zone, no address". It is never the loopback
@@ -304,13 +330,16 @@ and the mechanism does not. "Refuse" means it does not survive.
   established receives that observed endpoint, not `127.0.0.1`.
 - **Tasks, not threads.** Transport-layer tasks post into the C++ executor.
   Delivered buffers are bounded by a read window. A C++ call does not
-  block a connector task. A connector task is never the last owner of
-  a C++ object.
+  block a transport-layer task. A transport-layer task is never the last
+  owner of a C++ object. The C++ object is destroyed on the executor,
+  never on a transport thread.
+- **No keys, handshake hash, or transcript value crosses upward.**
 - **A refused delivery closes the connection.** If the C++ side declines
   a buffer, the connection ends with the D12 cause for that refusal.
-  The connector does not drop the buffer and keep reading.
+  The connector does not drop the buffer and keep reading. A full send
+  queue closes the connection with `SendQueueFull`.
 - **Close from either side is idempotent** and records exactly one
-  cause.
+  cause. On a simultaneous close, the first recorded cause wins.
 - **FFI (rule 40).** Every call names its direction and who owns the
   buffer. A callback context is not a raw `this`.
 
@@ -385,6 +414,7 @@ columns that test the interface. They are not work.
 | Origin of relayed transactions, against peers | **not provided by any connector** — taxed by Dandelion++, not eliminated | same | same |
 | Stream semantics | TCP | Tor stream | streaming library |
 | Observed identity of an inbound peer | the socket address | "this zone, no address" | "this zone, no address" |
+| Inbound peer has a bannable address | yes | no ("this zone, no address") | not assessed |
 | Deadline inputs (D9) | measured per connector | measured per connector | measured per connector |
 
 Consequences:
@@ -472,12 +502,10 @@ ruling here.
 ## D8 — socket count (RULED 2026-09-25)
 
 The transport layer owns the count of live sockets, per network and per
-direction, including sockets that have no channel yet. The Levin
-registry never sees those. Admission (P2P-3 slice 2) can read the
-count instead of walking `foreach_connection` (`net_node.inl:231` and
-the monitor at `:1125`). Whether the monitor thread then goes away is
-slice 2's decision. This round does not build a second count beside
-admission's.
+direction, including sockets that have no channel yet. That count is
+what socket admission reads. The Levin registry is not consulted.
+`census_inbound` (`net_node.inl:3158`) and the monitor walk at `:1125`
+are the knot this replaces. There is no second count.
 
 ---
 
@@ -549,9 +577,11 @@ hand-kept copy.
 | --- | --- |
 | Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `DialFailed`, `ProxyRefused`, `LocalClose` |
 | Channel exists, Levin handshake not done | `LevinHandshakeTimeout`, `LevinHandshakeRejected`, `LocalClose` |
-| Any time after the channel exists | `PeerClosed`, `RecordRejected`, `SessionRefused`, `IoError`, `LocalClose` |
+| Any time after the channel exists | `PeerClosed`, `RecordRejected`, `SessionRefused`, `IoError`, `SendQueueFull`, `LocalClose` |
 
-`AdmissionRefused` is a ban-filter or inbound-ceiling refusal at
+`SendQueueFull` is a send queue that cannot take another buffer. The
+connection closes. It is not a dropped write.
+`AdmissionRefused` is a ban-list or inbound-ceiling refusal at
 accept. `DialFailed` is an outbound TCP connect that did not complete.
 `ProxyRefused` is a SOCKS or overlay failure and carries the reply
 code (an unreachable onion is this cause, not a generic I/O error).
