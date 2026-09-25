@@ -12,6 +12,7 @@
 //! `CellCorrupt` docs describe — because the store's own surface has no
 //! way to damage its header, which is the point.
 
+use shekyl_types::BlockCount;
 use shekyl_units::AtomicUnits;
 
 use super::store_tests::{cleanup, probe_row, tmp, TestErr, EPOCH, OTHER_EPOCH, PROBE};
@@ -116,12 +117,25 @@ fn a_file_reopens_under_its_pinned_schedule_and_refuses_another() {
         pinned: EPOCH,
         session: OTHER_EPOCH,
     };
+    // A 50-block schedule cannot run the production retention (`D_max` ≥
+    // 50), so the session names its own — the pin check is what this test
+    // is about, and it fires after the horizons are admitted.
+    let other_horizons = Horizons::new(OTHER_EPOCH, BlockCount::from_raw(10)).expect("inside");
     assert!(
         matches!(
-            ChainStore::create(&path, OTHER_EPOCH),
+            ChainStore::with_horizons(&path, ApplyPolicy::default(), other_horizons),
             Err(StoreError::Cannot(got)) if got == want
         ),
         "a writable open under another schedule is refused"
+    );
+    assert!(
+        matches!(
+            ChainStore::create(&path, OTHER_EPOCH),
+            Err(StoreError::Cannot(
+                StoreCannot::RetentionNotInsideEpoch { .. }
+            ))
+        ),
+        "the production retention does not fit a 50-block schedule; that refusal comes first"
     );
     assert!(
         matches!(

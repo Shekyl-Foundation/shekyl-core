@@ -48,7 +48,7 @@
 //! domain from the same list), and its key cannot collide with another
 //! cell's without a test in this module failing.
 
-use shekyl_types::SettlementEpoch;
+use shekyl_types::{BlockHeight, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
 use crate::family_set::FamilySet;
@@ -294,6 +294,21 @@ property_cells! {
     /// cell is absent in every store until then, so the digest domain gains
     /// a key and no bytes (DRS-E2's archival coverage arrives with E4,
     /// `DRS_E1_SARCH.md` SAR-11).
+    /// `undo_log_floor` — the lowest height whose `undo_log` row the
+    /// retention prune has kept (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md` §3, §7;
+    /// S-CHAIN-W §5.4's "persists the floor it establishes").
+    ///
+    /// Written by the boundary batch as it retires rows below
+    /// `tip − retention`, monotone (never lowered). `pop` reads it to tell
+    /// *pruned below* (a capability limit,
+    /// [`StoreCannot::PopBelowFloor`](crate::store::StoreCannot::PopBelowFloor))
+    /// from *lost* (a journal that does not describe its tables, SI-6).
+    /// **Absent means nothing has been retired** — the floor is genesis, `1`.
+    /// Engine-local: two correct stores of one chain under different
+    /// retention parameters hold the same chain state and different floors;
+    /// this is not the body discard's frontier (which is named by the epoch
+    /// and stored nowhere, §4) but the undo journal's own retention mark.
+    UndoLogFloorCell { key: "undo_log_floor", scope: EngineLocal, value: BlockHeight },
     ArchivalLastSlashEpochCell {
         key: "archival_last_slash_epoch",
         scope: ChainState,
@@ -388,6 +403,11 @@ mod tests {
                     key: TotalBurnedCell::KEY,
                     scope: TotalBurnedCell::SCOPE,
                     value: AtomicUnits::NAME,
+                },
+                PropertyCellSpec {
+                    key: UndoLogFloorCell::KEY,
+                    scope: UndoLogFloorCell::SCOPE,
+                    value: BlockHeight::NAME,
                 },
                 PropertyCellSpec {
                     key: ArchivalLastSlashEpochCell::KEY,

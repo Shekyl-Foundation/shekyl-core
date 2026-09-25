@@ -209,9 +209,12 @@ pub struct TxRecord {
     /// The pruned segment: version, prefix, ct type, fee / reference block,
     /// committed base — `txs_pruned[id]`.
     pub pruned: SegmentBytes<TxPrunedSegment>,
-    /// The tx-level `pqc_auths` segment — `txs_pqc_auths[id]`; present iff
-    /// the txid is 4-part (`PDM-Q-F26`), i.e. iff `pqc_auth_hash` is.
-    pub pqc_auths: Option<SegmentBytes<TxPqcAuthsSegment>>,
+    /// The tx-level `pqc_auths` region — `Some` iff the txid is 4-part
+    /// (`PDM-Q-F26`), i.e. iff `pqc_auth_hash` is; inside, whether this node
+    /// holds its bytes ([`PqcAuths::Retained`]) or the retention prune has
+    /// discarded them ([`PqcAuths::Discarded`], §7.7 leg (iii) — DRS-E1
+    /// S-PRUNE discards the region by shard with the prunable one).
+    pub pqc_auths: Option<PqcAuths>,
     /// The prunable region's hash — the archival good's unit of
     /// verification (`PDM-Q6` item 1); permanent.
     pub prunable_hash: PrunableHash,
@@ -224,15 +227,37 @@ impl TxRecord {
     /// region: `pruned ‖ pqc_auths ‖ prunable`, the order `db_lmdb.cpp`'s
     /// `get_tx_blob` assembled and `connect` split (STX-8). One line, so it
     /// is written once; a third read for it would be the identity hop.
+    ///
+    /// `None` when the transaction is 4-part and its `pqc_auths` region is
+    /// [`Discarded`](PqcAuths::Discarded): the wire cannot be recomposed
+    /// from this node — fetch the region from an archiver, as for the
+    /// prunable one.
     #[must_use]
-    pub fn wire_bytes(self, prunable: SegmentBytes<TxPrunableSegment>) -> Vec<u8> {
+    pub fn wire_bytes(self, prunable: SegmentBytes<TxPrunableSegment>) -> Option<Vec<u8>> {
         let mut out = self.pruned.into_wire_bytes();
-        if let Some(pqc) = self.pqc_auths {
-            out.extend(pqc.into_wire_bytes());
+        match self.pqc_auths {
+            None => {}
+            Some(PqcAuths::Retained(pqc)) => out.extend(pqc.into_wire_bytes()),
+            Some(PqcAuths::Discarded) => return None,
         }
         out.extend(prunable.into_wire_bytes());
-        out
+        Some(out)
     }
+}
+
+/// Whether this node holds a 4-part transaction's `pqc_auths` region — the
+/// same two arms as [`Prunable`], for the second region the retention prune
+/// discards (`PDM-Q6`: the shard's prunable regions and `pqc_auths` go
+/// together). Matched exhaustively, not convertible to `Option`, for the
+/// same reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use = "`Discarded` is a state the caller must act on, not an absence to skip"]
+pub enum PqcAuths {
+    /// The region is held: `txs_pqc_auths[id]` is present.
+    Retained(SegmentBytes<TxPqcAuthsSegment>),
+    /// The region is not held: `txs_pqc_auth_hash[id]` present, segment
+    /// absent — §7.7 leg (iii)'s one state, discarded or never held.
+    Discarded,
 }
 
 /// Whether this node holds a recorded transaction's prunable region —
@@ -440,13 +465,16 @@ pub(super) fn record_at<T: ReadTables>(
         .table(TXS_PQC_AUTHS)?
         .get(id)?
         .map(|guard| SegmentBytes::new(guard.value().bytes()));
-    // §7.7 leg (ii), pairwise: the segment and its hash row are present
-    // together or absent together.
-    match (&pqc_auths, &pqc_auth_hash) {
+    // §7.7 legs (ii) and (iii) for the pqc region: a segment implies its
+    // hash row (a segment without one is SI-7); a hash row without its
+    // segment is the *discarded* state (DRS-E1 S-PRUNE), never a fault; no
+    // hash row and no segment is a 3-part transaction.
+    let pqc_auths = match (pqc_auths, &pqc_auth_hash) {
         (Some(_), None) => return Err(absent("txs_pqc_auth_hash")),
-        (None, Some(_)) => return Err(absent("txs_pqc_auths")),
-        _ => {}
-    }
+        (Some(bytes), Some(_)) => Some(PqcAuths::Retained(bytes)),
+        (None, Some(_)) => Some(PqcAuths::Discarded),
+        (None, None) => None,
+    };
 
     Ok(Some(TxRecord {
         location,

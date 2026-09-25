@@ -306,6 +306,22 @@ pub enum StoreCannot {
         /// The schedule this session runs.
         session: SettlementEpochBlocks,
     },
+    /// The session's undo-log retention is not strictly inside its
+    /// settlement epoch — zero, or `≥ SEB` (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md`
+    /// §3, §12). The retention prune's pop floor is a belt *because*
+    /// `tip − retention` sits above the body horizon, which is exactly
+    /// `SEB > retention`; a configuration that breaks it is not a valid
+    /// Shekyl configuration on any nettype (rule 71) — a regtest override
+    /// that shortens the epoch shortens the retention with it, or is
+    /// refused here at open. `SETTLEMENT_EPOCH_BLOCKS > D_MAX` is
+    /// const-asserted on the production pair (`shekyl_chain_rules::D_MAX`);
+    /// this is the same inequality on the session's.
+    RetentionNotInsideEpoch {
+        /// The undo-log retention the session asked for.
+        retention: shekyl_types::BlockCount,
+        /// The schedule it runs under.
+        epoch: SettlementEpochBlocks,
+    },
     /// A `ChainValid` judged under one rule set was handed to `connect` at
     /// a height where another is in force (S-CHAIN-W §3.1, SCW-16).
     ///
@@ -509,6 +525,14 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "transaction {tx:?} output {index} has no commitment in its ct base; the store \
                  records nothing for it"
+            ),
+            Self::RetentionNotInsideEpoch { retention, epoch } => write!(
+                f,
+                "undo-log retention {} is not strictly inside the settlement epoch of {} blocks: \
+                 the retention prune needs 0 < retention < SEB (DRS_E1_SPRUNE.md §3); shorten the \
+                 retention with the epoch, or run the production pair",
+                retention.to_raw(),
+                epoch.get()
             ),
             Self::SettlementEpochMismatch { pinned, session } => write!(
                 f,

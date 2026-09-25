@@ -140,7 +140,15 @@ use super::{Canonical, CodecError};
 ///   later table's ordinal moves by one. No digest family moves: the alt
 ///   surface is `Excluded` (§11.2), and a write to it moving no digest is
 ///   now a test rather than a declaration (SAL-15).
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(13);
+/// - `14` — DRS-E1 S-PRUNE (`DRS_E1_SPRUNE.md`): **the retention prune.**
+///   `properties` gains the `undo_log_floor` cell — the lowest height whose
+///   `undo_log` row the boundary batch kept, written monotone as rows below
+///   `tip − retention` are retired, read by `pop` to tell *pruned below*
+///   from *lost*. No table moves; the body discard stores nothing (its set
+///   is named by the epoch). `txs_pqc_auths` re-grades `AppendMostly →
+///   Excluded` in the accumulator matrix: this surface deletes its rows,
+///   and the permanent `txs_pqc_auth_hash` row is the append-mostly one.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(14);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -197,10 +205,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(13));
-        assert_eq!(SCHEMA_VERSION.encode(), [13, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(14));
+        assert_eq!(SCHEMA_VERSION.encode(), [14, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[13, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[14, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

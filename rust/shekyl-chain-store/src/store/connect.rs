@@ -94,6 +94,7 @@ use crate::schema::{
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::header;
 use super::keyed::KeyedTable;
+use super::prune::Pruned;
 use super::view::BatchView;
 use super::write::WriteBatch;
 
@@ -283,6 +284,10 @@ pub struct Connected {
     pub height: BlockHeight,
     /// Entries in the block's `undo_log` row.
     pub journaled: usize,
+    /// What the retention prune retired in this connect's transaction —
+    /// `Some` only at a boundary `E·SEB`, `E ≥ 2` (DRS-E1 S-PRUNE,
+    /// `store/prune.rs`).
+    pub pruned: Option<Pruned>,
 }
 
 impl<'id> WriteBatch<'_, 'id> {
@@ -474,9 +479,16 @@ impl<'id> WriteBatch<'_, 'id> {
         // ---- 9. [E4 hook] accrual row, slash, epoch close ---------------
         // ---- 10. journal -----------------------------------------------
         let journaled = recording.seal()?;
+        // ---- 11. the retention prune (S-PRUNE) -------------------------
+        // After the seal, so the boundary block's undo row carries the
+        // block's writes and none of the prune's (a discard is not
+        // pop-reversible, `prune.rs`); inside this transaction, so a chain
+        // connected past `E·SEB` with `D(E)` un-run is unrepresentable.
+        let pruned = self.prune_at_boundary(height)?;
         Ok(Connected {
             height: BlockHeight::from_raw(height),
             journaled,
+            pruned,
         })
     }
 
