@@ -1,6 +1,7 @@
 # P2P transport layer — Rust connectors in place of epee's TCP server
 
-**Status: OPEN — Round 3, D14 RULED 2026-09-25.** Round 1 was pinned to `dev`
+**Status: CLOSED — Round 4, 2026-09-25.** The design is the spec for
+implementation. Round 1 was pinned to `dev`
 `db2788d164660003948376ba369fa396c5f4c482`. Round 2 re-read that pin.
 The 11 commits `dev` gained after it are S-POOL / chain-store and do
 not touch epee, `src/p2p`, `src/net`, the transport crate, or the
@@ -37,42 +38,40 @@ the pipe would not carry; protocol evidence does not need the pipe.
 | 1 | Crypto core on `fix/p2p-transport-hmac-oracle`; pipe branch parked at `190cbdc3b` | Branch state is the index row, not this table |
 | 2 | Documentation and register corrections | Separate doc PR; not this file |
 | 3 | Pi-4 crypto bench and protocol fuzz | After this round opens; results count at the flip |
-| 4 | This design round | This document |
+| 4 | This design round | Closed. This document is the spec |
 | 5 | Transport-layer implementation, then a differential harness against epee | Code, after the round closes |
 | 6 | Cutover: epee's transport and the pipe deleted | Not a flag day (D11) |
 | 7 | Option evaluation on the transport layer | Evaluation record |
 | 8 | The flip | Flag day (rule 07), only after step 7 |
 
-Owner of the scaffolding-deletion FOLLOWUPS row (step 2 of that list):
-**this document**. The row itself is added in the documentation PR, not
-here. Target of that row: pre-genesis.
+The scaffolding-deletion FOLLOWUPS row is step 2, a separate doc PR.
+Its owner is [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md), which
+is the wire spec and is already on `dev`. Target: pre-genesis. D13 is
+what that row deletes.
 
 ---
 
-## 0. What Round 1 is asking
+## 0. Status
 
-Round 1 records the substrate that was read at the pin, the requirements
-the parked pipe branch taught, and a proposed shape. Dispositions in D3
-are **PROPOSED**. D14 is not decided here.
+The design round is closed. D1 through D15 are ruled. What is not a
+number yet is named in the section that owns it: deadline values (D9),
+the fixed-window size and whether every-record rekey is affordable
+(D14 item 4, gated on C9 and C5). Those measurements do not reopen the
+direction.
 
-Three requirements come from the review of
-`fix/clearnet-pipe-option-testing` at `190cbdc3b` (commits `ea050fc4e`,
-`190cbdc3b`). The transport layer must not repeat them:
+The wire spec is `SHEKYL_P2P_PROTOCOL.md`. It carries the framing
+direction. This document does not.
 
-1. **Failure causes cover the whole connection, both directions.** The
-   pipe reported every post-channel close as `TransportHandshakeFailed`,
-   and only the outbound dial logged a label. Inbound failures were never
-   logged. That is D12.
-2. **One source for the cause table.** The branch kept Rust constants and
-   a C++ `switch` as two copies of the same integers. That is D12.
-3. **A descriptor test counts the socket, not the process.** Counting all
-   of `/proc/self/fd` races with `cargo test`'s other threads. Count the
-   descriptors whose `readlink` is this socket's `socket:[inode]`, and
-   assert one. That is D11.
+Three requirements from the parked pipe branch (`190cbdc3b`) are in
+force. The transport layer does not repeat the mistakes:
+
+1. **Failure causes cover the whole connection, both directions** (D12).
+2. **One source for the cause table** (D12).
+3. **A descriptor test counts the socket, not the process** (D11).
 
 ---
 
-## D0 — substrate read at `db2788d`
+## D0 — substrate read at `db2788d` (the pin)
 
 Verified by reading the files. Line numbers are from that pin.
 
@@ -163,15 +162,15 @@ Sizes that are deletable at cutover, counted at this pin: the two
 `abstract_tcp_server2` files (2,934 lines), `connection_basic` (481
 lines), and `src/net/socks.cpp` + `socks.h` + `socks_connect.cpp` +
 `socks_connect.h` (1,241 lines). The network-throttle sources are in
-the deletion list (D13) and were not line-counted in Round 1.
+the deletion list (D13). They were not line-counted.
 
-p2p is treated as the only production user of this TCP server. Round 1
-does not paste a grep of every caller; D13's deletion check is that
-grep, run at cutover, and it must be empty.
+Under `src/`, `src/p2p/net_node.h` is the only production include of
+this TCP server (D0, above). D13's deletion check is the grep that
+must be empty at cutover.
 
 ---
 
-## D1 — scope
+## D1 — scope (RULED 2026-09-25)
 
 **In.** The transport layer, for every network: listen, dial, SOCKS dial
 for Tor and I2P, the overlay inbound listener, each connector's channel,
@@ -237,7 +236,7 @@ layers is TCP+TLS, or a Tor stream.
 
 ---
 
-## D2 — not a port
+## D2 — not a port (RULED 2026-09-25)
 
 LV-3's guardrail applies here. The transport layer is designed from the
 rulings. `connection<T>` is a non-canonical reference. For every duty
@@ -254,13 +253,13 @@ refused up front, before the inventory argues them back in:
 
 ---
 
-## D3 — duty inventory (PROPOSED)
+## D3 — duty inventory (RULED 2026-09-25)
 
-Round 1's table. Each disposition is proposed for review, not closed.
+The local/remote timer split and `--tos-flag` are refused (D14).
 "Carry" means the duty survives. "Re-derive" means the duty survives
 and the mechanism does not. "Refuse" means it does not survive.
 
-| Duty | Read at this pin | Proposed disposition |
+| Duty | Read at this pin | Disposition |
 | --- | --- | --- |
 | Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | Carry. The connector calls admission. It does not own the policy. Serves the ceiling admission already owns. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
@@ -288,7 +287,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 
 ---
 
-## D4 — seam contract (PROPOSED)
+## D4 — seam contract (RULED 2026-09-25)
 
 - **No C++ object exists before the channel is established.** The
   connector owns the socket from accept or dial. The C++ Levin handler
@@ -339,7 +338,7 @@ plus blocking pools. The transport layer does not add one that way.
 
 ---
 
-## D6 — executor above the transport, until LV-3 (INTERIM)
+## D6 — executor above the transport, until LV-3 (RULED interim)
 
 This is D1 violation 2, kept on purpose until LV-3, not a carried
 design. Levin invoke timeouts take their timer from `get_io_context()`
@@ -354,7 +353,7 @@ two. The socket-bearing context does not survive cutover.
 
 ---
 
-## D7 — capabilities are data (PROPOSED)
+## D7 — capabilities are data (RULED 2026-09-25)
 
 Each connector declares its native capabilities as data. The stack for
 a connection is assembled from that declaration in a fixed order:
@@ -430,7 +429,7 @@ Consequences:
 Behaviour stays uniform within a connector (the TCP-option and close
 decisions in D3), even where connectors differ from each other.
 
-## Network partitions (REQUIREMENT)
+## Network partitions (RULED 2026-09-25)
 
 Decoupling must not erase separations that are privacy properties.
 These partitions exist today, and each one stays:
@@ -469,7 +468,7 @@ ruling here.
 
 ---
 
-## D8 — socket count (PROPOSED)
+## D8 — socket count (RULED 2026-09-25)
 
 The transport layer owns the count of live sockets, per network and per
 direction, including sockets that have no channel yet. The Levin
@@ -481,7 +480,7 @@ admission's.
 
 ---
 
-## D9 — deadlines are derived, and not yet
+## D9 — deadlines are derived per connector (RULED 2026-09-25)
 
 The transport handshake's 15 s on the pipe, the 5 s dial timeout, and
 the 10 s / 5 min inherited timers are not transport-layer constants.
@@ -494,7 +493,7 @@ measurement. Rule 26 B9.
 
 ---
 
-## D10 — pre-channel bounds (PROPOSED)
+## D10 — pre-channel bounds (RULED 2026-09-25)
 
 Per connection that does not yet have a channel: one task, one
 descriptor, at most one flight of buffered bytes. The responder runs
@@ -511,7 +510,7 @@ command 1001. It is not the idle timer.
 
 ---
 
-## D11 — test gates
+## D11 — test gates (RULED 2026-09-25)
 
 These are the gates for the implementation PR, written now so the
 round can reject them.
@@ -538,7 +537,7 @@ round can reject them.
 
 ---
 
-## D12 — one failure cause, both directions (REQUIREMENT)
+## D12 — one failure cause, both directions (RULED 2026-09-25)
 
 Every connection ends with exactly one typed cause, logged once, on
 both the dialing side and the accepting side. The table is defined
@@ -567,12 +566,12 @@ on the pipe. A failure an operator can act on is one of these values
 
 ---
 
-## D13 — deletions at cutover
+## D13 — deletions at cutover (RULED 2026-09-25)
 
 Each of these goes at step 6, after the differential harness passes.
 The check is an `rg` that returns nothing, and that `rg` is written
 into the cutover PR only after a search shows no other consumer.
-Round 1 names the set:
+The set:
 
 - `contrib/epee/include/net/abstract_tcp_server2.h`
 - `contrib/epee/include/net/abstract_tcp_server2.inl`
@@ -633,7 +632,7 @@ police that path. That question is not an open item.
 
 ---
 
-## D15 — falsifiers
+## D15 — falsifiers (RULED 2026-09-25)
 
 Re-cut the transport layer, rather than follow this plan, if any of these
 is observed:
