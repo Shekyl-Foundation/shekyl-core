@@ -4313,6 +4313,7 @@ dependencies = [
  "shekyl-fcmp-proofs",
  "shekyl-levin",
  "shekyl-logging",
+ "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-proofs",
@@ -4459,6 +4460,22 @@ dependencies = [
  "sha3",
  "shekyl-types",
  "ureq",
+]
+
+[[package]]
+name = "shekyl-p2p-transport"
+version = "3.1.0"
+dependencies = [
+ "blake2",
+ "chacha20poly1305",
+ "fips203",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
+ "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
+ "shekyl-levin",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]

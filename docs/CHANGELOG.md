@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Clearnet Noise NNhfs, off by default
+
+- **`--clearnet-transport-encrypt`** (default off) releases the public-zone
+  TCP descriptor to `shekyl-p2p-transport`
+  (`Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`). The pipe is the network
+  layer: Levin, stem, and fluff stay above it and do not grow a clearnet
+  branch. Both ends of a test pair must set the flag. Off, the socket stays
+  the plaintext Levin stream. The flag is a pre-genesis test gate, not a
+  privacy setting, and the off path is deleted before genesis.
+
 ### Wallet RPC — proof verification refuses an unsynchronized daemon
 
 - **`check_tx_proof` / `check_reserve_proof` return `-29305 PROOF_DAEMON_SYNCING`**

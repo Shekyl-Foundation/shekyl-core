@@ -62,6 +62,7 @@ compile_error!(
 // `shekyl_account_*` callers and removed once C++ no longer references
 // them.
 pub mod account_ffi;
+pub mod clearnet_transport_ffi;
 
 // LWMA-1 difficulty-adjustment FFI export. Wraps `shekyl_difficulty::
 // lwma1_next` in a C-ABI surface using the `ShekylU128` two-u64

@@ -61,7 +61,7 @@ const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY
 /// The CBOM table (docs/CRYPTOGRAPHIC_INVENTORY.md §3) is a dated snapshot of
 /// these numbers.
 const PRODUCTION_PINS: [(&str, usize, usize); 6] = [
-    ("1", 30, 0), // PL-D3: +2 (pqc-leaf-key-v1, pqc-leaf-record-v1); DRS-P0d: +3 (chain-digest/v0{,/chain,/spent-elem}); SF-D8: -1 (attestation-nonce-v1 retired); S-CHAIN-W: +1 (chain-store/undo-log/post-image-v1)
+    ("1", 31, 0), // PL-D3: +2 (pqc-leaf-key-v1, pqc-leaf-record-v1); DRS-P0d: +3 (chain-digest/v0{,/chain,/spent-elem}); SF-D8: -1 (attestation-nonce-v1 retired); S-CHAIN-W: +1 (chain-store/undo-log/post-image-v1); PWD-T5: +1 (p2p-wire-prefix-v1)
     ("2", 47, 0), // PL-D3: +2 (pqc-leaf-blind, pqc-leaf-record-blind); fork-(ii) layout: +1 (archival-p msg-sign identity, the 7th P label)
     ("3", 1, 3),
     ("4", 8, 0), // PL-D3: -1 (shekyl-pqc-leaf retired; the leaf key hash is mech 1 now)

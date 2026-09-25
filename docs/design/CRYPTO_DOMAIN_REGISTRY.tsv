@@ -123,6 +123,7 @@
 1	shekyl/chain-digest/v0/chain	rust/shekyl-chain-store/src/digest_v0.rs	CHAIN_CUSTOMIZATION	shekyl-live		DRS-P0d height-ordered chain component
 1	shekyl/chain-digest/v0/spent-elem	rust/shekyl-chain-store/src/digest_v0.rs	SPENT_ELEM_CUSTOMIZATION	shekyl-live		DRS-P0d spent-key XOR leaf
 1	shekyl/chain-store/undo-log/post-image-v1	rust/shekyl-chain-store/src/codec/undo.rs	POST_IMAGE_DST	shekyl-live		S-CHAIN-W (DRS-E1 inc 3): cSHAKE256-32 post-image digest of the value a journaled write left under its key; replay compares it before counting an inverse reversed (SI-6 exact). Part of the undo_log row layout (SCHEMA_VERSION 2)
+1	shekyl/p2p-wire-prefix-v1	rust/shekyl-p2p-transport/src/prefix.rs	WIRE_PREFIX_DST	shekyl-live		PWD-T5: first 8 bytes of cSHAKE256(S = this customization, X = network_id). Used only when --clearnet-transport-encrypt is on; the default plaintext path still starts with LEVIN_SIGNATURE
 #
 # ── Mechanism 2 — HKDF salt + info ───────────
 # distinctness key = salt|info. The three shared infos (spend/view/kem) are

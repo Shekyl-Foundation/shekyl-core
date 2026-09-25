@@ -105,6 +105,7 @@ shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 # shim reaches the Rust-pinned libzstd through these exports, making it the
 # single zstd in the binary (system-libzstd link dropped).
 shekyl-levin = { path = "../shekyl-levin" }
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # Daemon ephemeral-onion posture (`daemon_tor_ffi.rs`, PWD-E7 piece 3): the
 # blocking facade over DaemonTorControl. The facade owns its tokio runtime,
 # so this crate takes no tokio edge of its own.

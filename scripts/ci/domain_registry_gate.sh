@@ -275,7 +275,7 @@ count_pattern() {
 # (shekyl/chain-store/undo-log/post-image-v1, the undo entry's post-image
 # digest) -- plus one inline #[cfg(test)] site: the domain-separation
 # negative control hashes one preimage under an unrelated customization.
-MECH1_EXPECTED=56
+MECH1_EXPECTED=57
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

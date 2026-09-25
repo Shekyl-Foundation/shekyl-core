@@ -4009,6 +4009,40 @@ int32_t shekyl_e2_trace_finish(struct ShekylE2TraceWriter* writer);
 /// Free without a trailer.
 void shekyl_e2_trace_abort(struct ShekylE2TraceWriter* writer);
 
+/// Take ownership of a connected TCP socket. The handshake does not run
+/// until `shekyl_clearnet_start`, so the caller can publish `link` first.
+/// `initiator` is nonzero when this node dialed. Null means the socket was
+/// closed and the pipe was not created. `on_plain` returns 0 when the
+/// session will call `shekyl_clearnet_read_done`, and nonzero when it did not
+/// take the buffer.
+void* shekyl_clearnet_attach(
+    intptr_t native,
+    const uint8_t* network_id,
+    int32_t initiator,
+    int32_t (*on_plain)(void* ctx, const uint8_t* data, size_t len),
+    void (*on_closed)(void* ctx),
+    void (*on_ready)(void* ctx),
+    /// `direction` 0 = bytes read, 1 = bytes written. Returns milliseconds
+    /// the pipe should pause so the global rate limit still applies.
+    int32_t (*on_wire)(void* ctx, int32_t direction, size_t bytes),
+    void* ctx);
+
+/// Let the owner threads begin the handshake. Callbacks may run after this.
+void shekyl_clearnet_start(void* link);
+
+/// Keep `link` alive across a call that does not hold the publication mutex.
+void shekyl_clearnet_pin(void* link);
+void shekyl_clearnet_unpin(void* link);
+
+/// Queue `len` plaintext bytes. 0 on success. Empty `len` queues nothing.
+int32_t shekyl_clearnet_write(void* link, const uint8_t* data, size_t len);
+
+/// Shut the pipe down and join its threads. Consumes `link`.
+void shekyl_clearnet_detach(void* link);
+
+/// One posted plaintext buffer has been handed to the session.
+void shekyl_clearnet_read_done(void* link);
+
 } // extern "C"
 
 /// Owns a Rust-allocated ShekylBuffer for one C++ scope and returns it to
