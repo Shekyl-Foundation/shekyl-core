@@ -867,13 +867,13 @@ impl PqcAuth {
         w.write_all(&self.hybrid_signature)
     }
 
-    /// The PQC **header** — `auth_version ‖ scheme_id ‖ flags(u16 LE) ‖ varint(pk_len) ‖
-    /// hybrid_public_key`, with **no signature bytes**. This is the `pqc_header(i)`
-    /// component of the per-input PQC signing preimage
-    /// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.5 / C++ `tx_pqc_verify.cpp:109-124`): a
-    /// signature signs over its own header, so the header must exclude it. Identical to
-    /// [`Self::write`] up to and including the public key.
-    fn header_write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+    /// The authentication's **header** — `auth_version ‖ scheme_id ‖ flags(u16 LE) ‖
+    /// varint(pk_len) ‖ hybrid_public_key`: what identifies the signer and the
+    /// scheme, and nothing of the signature. It is the input's own component of
+    /// the PQC signing preimage (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.5,
+    /// [`PqcSigningPreimage::payload`]); a signature is not over itself, so the
+    /// header is [`Self::write`] stopped before the signature.
+    fn write_header<W: Write>(&self, w: &mut W) -> io::Result<()> {
         w.write_all(&[self.auth_version, self.scheme_id])?;
         w.write_all(&self.flags.to_le_bytes())?;
         write_varint(self.hybrid_public_key.len(), w)?;
@@ -1358,6 +1358,9 @@ pub struct Transaction {
 mod txid;
 pub use txid::TxidParts;
 
+mod signing_preimage;
+pub use signing_preimage::PqcSigningPreimage;
+
 /// A transaction's bytes as the chain store's three segments.
 ///
 /// `concat(pruned, pqc_auths, prunable)` is exactly [`Transaction::write`]'s
@@ -1401,6 +1404,18 @@ impl Transaction {
         self.ct.write(w)
     }
 
+    /// The **pruned segment** — version, prefix, CT type, fee and reference
+    /// block (FCMP), and the committed base: what a node retains after
+    /// pruning ([`TxSegments::pruned`], the store's `txs_pruned` row) and the
+    /// whole-transaction component of the PQC signing preimage
+    /// ([`PqcSigningPreimage`]). The bytes [`Self::write`] emits before the
+    /// authentications and the prunable region.
+    fn write_pruned<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        write_varint(TX_VERSION, w)?;
+        self.prefix.write(w)?;
+        self.ct.write_base(w)
+    }
+
     /// The transaction's bytes cut into the store's three segments
     /// ([`TxSegments`]). Same bytes as [`Self::write`], split where the
     /// store keeps them.
@@ -1410,9 +1425,7 @@ impl Transaction {
     /// Only what writing into a `Vec` can raise — in practice, none.
     pub fn write_segments(&self) -> io::Result<TxSegments> {
         let mut pruned = Vec::new();
-        write_varint(TX_VERSION, &mut pruned)?;
-        self.prefix.write(&mut pruned)?;
-        self.ct.write_base(&mut pruned)?;
+        self.write_pruned(&mut pruned)?;
         let mut pqc_auths = Vec::new();
         self.ct.write_pqc_auths(&mut pqc_auths)?;
         let mut prunable = Vec::new();
@@ -1530,86 +1543,6 @@ impl Transaction {
             .write(&mut buf)
             .expect("writing to a Vec is infallible");
         PrefixHash::from_bytes(keccak256(&buf))
-    }
-
-    /// Per-input PQC signing-preimage hashes — the `signed_hash(i)` each input's PQC
-    /// auth (ML-DSA + ed25519) signs (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; C++
-    /// `get_transaction_signed_payload`, `tx_pqc_verify.cpp:58-152`):
-    ///
-    /// ```text
-    /// payload(i)     = prefix_blob ‖ ct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
-    /// signed_hash(i) = keccak256(payload(i))
-    /// ```
-    /// - `prefix_blob`    = `varint(TX_VERSION) ‖ TxPrefix::write` (same as [`Self::prefix_hash`]'s input)
-    /// - `ct_base_blob`  = `CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write`
-    ///   (mirrors the [`Ct::Fcmp`] write head exactly — §1.3, referenceBlock in *base*)
-    /// - `prunable_hash`  = `keccak256(Prunable::write)` (the digest, not the blob — §1.4)
-    /// - `pqc_header(i)`  = the i-th auth header, **no signature** (`PqcAuth::header_write` — §1.5)
-    /// - `all_key_hashes` = `‖ over every auth: keccak256(hybrid_public_key)` (binds every
-    ///   input's key into every signature)
-    ///
-    /// Returns one hash per `pqc_auths` entry — `== nvin` for a valid spend, whose arity
-    /// `Transaction::validate` couples (the count is not re-checked here, so a hand-built
-    /// tx with mismatched arity yields one hash per auth regardless). Returns an empty vec
-    /// for any non-spend shape — a `Null` ct, or a fee-only `Fcmp` with no prunable /
-    /// empty `pqc_auths` — which carries no per-input PQC signature.
-    pub fn pqc_signing_payload_hashes(&self) -> Vec<[u8; 32]> {
-        let Ct::Fcmp {
-            fee,
-            reference_block,
-            base,
-            pqc_auths,
-            prunable: Some(prunable),
-        } = &self.ct
-        else {
-            return Vec::new();
-        };
-        if pqc_auths.is_empty() {
-            return Vec::new();
-        }
-
-        // prefix_blob = varint(TX_VERSION) ‖ TxPrefix::write
-        let mut prefix_blob = Vec::new();
-        write_varint(TX_VERSION, &mut prefix_blob).expect("Vec write is infallible");
-        self.prefix
-            .write(&mut prefix_blob)
-            .expect("Vec write is infallible");
-
-        // ct_base_blob = CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write —
-        // byte-for-byte the head `Ct::Fcmp::write` emits before pqc_auths/prunable.
-        let mut ct_base_blob = Vec::new();
-        ct_base_blob.push(CT_TYPE_FCMP);
-        write_varint(*fee, &mut ct_base_blob).expect("Vec write is infallible");
-        ct_base_blob.extend_from_slice(reference_block.as_bytes());
-        base.write(&mut ct_base_blob)
-            .expect("Vec write is infallible");
-
-        // prunable_hash = keccak256(Prunable::write)
-        let mut prunable_blob = Vec::new();
-        prunable
-            .write(&mut prunable_blob)
-            .expect("Vec write is infallible");
-        let prunable_hash = keccak256(&prunable_blob);
-
-        // all_key_hashes = concat over EVERY auth of keccak256(hybrid_public_key)
-        let mut all_key_hashes = Vec::with_capacity(pqc_auths.len() * 32);
-        for auth in pqc_auths {
-            all_key_hashes.extend_from_slice(&keccak256(&auth.hybrid_public_key));
-        }
-
-        pqc_auths
-            .iter()
-            .map(|auth| {
-                let mut payload = Vec::new();
-                payload.extend_from_slice(&prefix_blob);
-                payload.extend_from_slice(&ct_base_blob);
-                payload.extend_from_slice(&prunable_hash);
-                auth.header_write(&mut payload)
-                    .expect("Vec write is infallible");
-                payload.extend_from_slice(&all_key_hashes);
-                keccak256(&payload)
-            })
-            .collect()
     }
 
     /// Parse a transaction from a complete blob, requiring **exact consumption**

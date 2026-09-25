@@ -38,15 +38,16 @@
 //! against the specification, not against the program that produced it:
 //! the same bytes today, and the claim that outlives the C++.
 //!
-//! The Rust leg below holds [`Transaction::pqc_signing_payload_hashes`] to the
-//! fixture. The C++ leg (`tests/unit_tests/pqc_signing_preimage_kat.cpp`)
-//! held the C++ assembly to it while the assembly existed.
+//! The Rust leg below holds [`PqcSigningPreimage`] — the payload bytes, input
+//! by input — and [`Transaction::pqc_signing_payload_hashes`] to the fixture.
+//! The C++ leg (`tests/unit_tests/pqc_signing_preimage_kat.cpp`) held the
+//! C++ assembly to it while the assembly existed.
 
 use std::path::PathBuf;
 
 use serde_json::Value;
 use shekyl_crypto_hash::keccak256;
-use shekyl_wire::Transaction;
+use shekyl_wire::{Ct, PqcSigningPreimage, Transaction};
 
 const FIXTURE: &str = "tests/fixtures/pqc_signing_preimage_v1.json";
 
@@ -249,7 +250,28 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
                 "{name} input {i}: the fixture's own hash is of its own payload"
             );
         }
-        // The derivation of record, against the specification's output.
+        // The derivation of record, against the specification's output:
+        // the payload bytes input by input, then the hashes the production
+        // callers take.
+        if let Some(preimage) = PqcSigningPreimage::of(&tx) {
+            let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
+                panic!("{name}: a preimage exists only for an Fcmp body");
+            };
+            assert_eq!(
+                pqc_auths.len(),
+                payloads.len(),
+                "{name}: one payload per auth"
+            );
+            for (i, (auth, payload)) in pqc_auths.iter().zip(&payloads).enumerate() {
+                assert_eq!(
+                    preimage.payload(auth),
+                    *payload,
+                    "{name} input {i}: payload bytes"
+                );
+            }
+        } else {
+            assert!(payloads.is_empty(), "{name}: no preimage, no payloads");
+        }
         assert_eq!(
             tx.pqc_signing_payload_hashes(),
             hashes,
