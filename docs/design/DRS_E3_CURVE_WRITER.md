@@ -171,9 +171,9 @@ operand is the depth *at* `ref_height`).
   derived root — in the driver, which holds the trace — before the field
   that carried it is deleted.
 - **The pending side dissolved and the position maps typed** (§3.7): three
-  tables deleted, two typed with an SI row over their bijection, one new
+  tables deleted, two typed with an SI row over their bijection (SI-17; SI-16 is the pool's), one new
   small table (`curve_tree_leaf_counts`), a layout bump.
-- **`placeholder_root_after` deleted** (`CTW-Q-C`), in the named commit
+- **`placeholder_root_after` deleted** (with the field, `CTW-Q6`), in the named commit
   (§6, commit 6), falsifier `rg placeholder_root_after rust/` → nothing.
 
 ### 2.2 Out (named, so it is not scope shed by omission)
@@ -373,7 +373,7 @@ is what it actually is.
 | `pending_tree_leaves` | **view** — `f(height, is_miner)` over blocks the store holds (§1 item 7) | **dissolved** (CTW-10); `CTW-Q2` dissolves with it |
 | `pending_tree_drain`, `block_pending_additions` | C++ pop journals | **deleted** (CTW-3); the undo log is ours |
 | `curve_tree_checkpoints` | view of the summary at intervals | **deleted** (§3.5) |
-| `output_to_leaf`, `leaf_to_output` | **fact** — the drain-order assignment, and its inverse | typed `Coded<TreePosition>` / `Coded<GlobalOutputIndex>`; SI-16 over the bijection (CTW-4) |
+| `output_to_leaf`, `leaf_to_output` | **fact** — the drain-order assignment, and its inverse | typed `Coded<TreePosition>` / `Coded<GlobalOutputIndex>`; SI-17 over the bijection (CTW-4) |
 
 Net: three tables deleted, one dissolved, two typed, one new; layout bump;
 `tables.snap` moves by −3 (the bijection gate's set follows).
@@ -408,6 +408,20 @@ name the value differently.** `daa_target_seconds` and
 depth. A curve-tree chunk arity cannot: change it and every proof in
 existence stops verifying, because it is a structural parameter of the proof
 system, not a Shekyl policy choice.
+
+**The two tests are orthogonal, and one existing key shows it.** VC-D7's
+chain question and this one are independent: a chunk arity passes the first
+(a different arity is a different chain) and fails the second, which is why
+the chain question alone would have admitted it. The file already holds
+one key that fails the second — `segment_leaf_count` (25992, "NOT a
+tunable", const-asserted to `leaves_per_segment()`), a freeze-era constant
+(`PDM-Q12` retired the freeze 2026-09-18) that leaves the file when E4 /
+S-ARCH deletes the freeze (the FOLLOWUPS shard-partition row already
+schedules it). Grandfathered and scheduled, not precedent; recorded at the
+key. And CEN-I4's input cap is **not** a counter-example: a network could set
+a different cap, so it passes the second test; its lesson (FOLLOWUPS `:33`)
+was that it arrived from a library unratified — a sourcing failure, the
+CTW-9 shape, not a structural one (corrected on #873 review).
 
 This also answers the sourcing asymmetry the S-PRUNE review raised as its
 minor item (`DRS_E1_SPRUNE.md` SPR-10): the idiom is not chosen by which file
@@ -444,8 +458,8 @@ old.
 | SI-4 | `curve_tree_roots[h+1]` written exactly once per connect | built; unchanged |
 | SI-11 | `curve_tree_leaves` dense over `[0, leaf_count)` | minted → **built**: 3a writes `leaf_count + i` in order; 3c checks `leaves.last() + 1 == leaf_count'` |
 | SI-12 | a grown summary's root is the live root | minted → **built**: 3c checks `meta.root == growth.root_after`; the read's refusal (`curve.rs:132`) becomes reachable |
-| SI-16 (new, CTW-4) | `output_to_leaf` and `leaf_to_output` are inverse bijections over drained outputs | minted and built at 3a |
-| SI-17 (new) | `curve_tree_leaf_counts[h+1] − leaf_counts[h] == growth.drained.len()` | minted and built at 3c |
+| SI-17 (new, CTW-4) | `output_to_leaf` and `leaf_to_output` are inverse bijections over drained outputs | minted and built at 3a |
+| SI-18 (new) | `curve_tree_leaf_counts[h+1] − leaf_counts[h] == growth.drained.len()` | minted and built at 3c |
 
 Every one is a *store* property (holds regardless of what the rules say);
 which root is correct is the validator's (§3.1).
@@ -459,10 +473,10 @@ which root is correct is the validator's (§3.1).
 | **CTW-1** | **The hook comment names a retired step.** `connect.rs:22`, `:409` "→ segment freeze" — retired by `PDM-Q12` and never a phase of *this* store. Corrected before any body lands. |
 | **CTW-2** | **`trim_curve_tree` has no port.** The C++ pop recomposes layers from layer 0 because LMDB's tree writes had no journal. The Rust store journals every write (`open_insert_table`, `write.rs:391`; SCW-7); pop restores 3a–3c's pre-images and derives nothing. A recompose would be a second mechanism for a fact the journal holds (rule 05). |
 | **CTW-3** | **Two of the five pending-side tables are C++ pop journals.** `pending_tree_drain`, `block_pending_additions` — *"tracked by its global output index for exact reversal"* (`blockchain_db.cpp:539`). Dead on arrival under CTW-2; deleted, not typed. |
-| **CTW-4** | **The position maps are a bijection nothing asserts.** Written pairwise, read singly; SI-16 makes the pair a check that can fail at 3a. |
+| **CTW-4** | **The position maps are a bijection nothing asserts.** Written pairwise, read singly; SI-17 makes the pair a check that can fail at 3a. |
 | **CTW-5** | **The corpus is already a root KAT — and the only oracle E3 will ever have.** Every captured chain carries `root_after` per height (RD-Q2's fact tag `0x01`, `DRS_E2_REPLAY_DRIVER.md:417`). Derived-vs-trace at every height of every chain is the strongest verification available, and it is available only while the trace exists (§3.8). |
-| **CTW-6** | **The listed-output spendable age has no Rust home.** `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE = 10` (`cryptonote_config.h:49`) appears in Rust only in `shekyl-curve-tree` and two spikes; `RuleSet` has the miner window and not its sibling (§3.6). |
-| **CTW-7** | **S-CURVE's `TreePosition` move is still owed.** §3.4 defaulted to moving `shekyl_curve_tree::types::TreePosition` to `shekyl-types`; the leaf table is keyed `u64` today (`schema.rs:524`). E3 keys three tables by it and pays. |
+| **CTW-6** | **The listed-output spendable age has two Rust homes and neither is the rules crate.** *First written as "no Rust home" from the C++ define and a `rg SPENDABLE_AGE` over the wrong crates — corrected on #873 review (Copilot): the rule-16 corollary, in a finding about sourcing.* `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE = 10` (`cryptonote_config.h:49`) is mirrored at `shekyl_engine_state::transfer::SPENDABLE_AGE: BlockCount` (the wallet's eligibility height) and at `shekyl_consensus::DEFAULT_LOCK_WINDOW: usize = 10` (`lib.rs:28`); `RuleSet` has the miner window and not its sibling, and `shekyl-chain-rules` depends on neither crate. §3.6 makes `RuleSet` the source; commit 2 decides, in the crate graph's direction, whether the two existing copies derive from it or are const-asserted against it — one value, three names today. |
+| **CTW-7** | **`TreePosition` already lives in `shekyl-types`; what is open is the table key.** *First written as "the move is still owed" from S-CURVE §3.4's prose ("default: move it") — the move landed (`shekyl-types/src/lib.rs:420`; `shekyl_curve_tree::types` re-exports it, `:172`; the store's codec imports it, `codec/curve.rs:48`). Corrected on #873 review (Copilot); rule 16's corollary again.* Open: `curve_tree_leaves` and `leaf_to_output` are keyed `u64` (`schema.rs:524`) while `shekyl-curve-tree` keys by a redb wrapper over the newtype (`types.rs:174`, the orphan-rule shape). Whether E3 keys the three position-keyed tables by such a wrapper or keeps `u64` with the newtype at the read boundary is commit 1's, stated so it is a choice and not an inheritance. |
 | **CTW-8** | **The grow reads only the frontier.** `hash_grow_selene(existing_hash, offset, existing_child_at_offset, new_children)` (`tree.rs:102`). The property the C++'s intermediate-layer prune relied on without stating; what makes §3.5 sound. |
 | **CTW-9** | **The chunk arities arrive from a library.** `SELENE_CHUNK_WIDTH = fcmps::LAYER_ONE_LEN`, `HELIOS_CHUNK_WIDTH = fcmps::LAYER_TWO_LEN` (`shekyl-fcmp/src/tree.rs:48`, `:51`) — the tree's shape, consensus, with no Shekyl-named source and no ratification; `PHASE_2A_SEND_PATH.md:236` restates the equality. The `shekyl_fcmp::MAX_INPUTS` shape (FOLLOWUPS `:33`): a cap nobody ratified became consensus. `CTW-Q7`. |
 | **CTW-10** | **The pending table is a view.** Maturity is `f(height, is_miner)` (§1 item 7); the drain set at `h` is two blocks' outputs the store already holds. The C++ table answered LMDB's constraints (no cheap reverse lookup; exact reversal by output id for its pop). Dissolved; the block data is the authority it always was (§3.7). |
@@ -503,12 +517,12 @@ excuse.
 
 | # | Commit | Cost | What would make it larger |
 | --- | --- | --- | --- |
-| 1 | **Types and tables.** `TreePosition` → `shekyl-types` (CTW-7); position maps typed; `pending_tree_leaves`, `pending_tree_drain`, `block_pending_additions`, `curve_tree_checkpoints` deleted; `curve_tree_leaf_counts` added; layout bump; snapshots; SI-16/17 minted. | S | a hidden reader of a deleted table (falsify: `rg` each name outside `schema.rs` before cutting) |
+| 1 | **Types and tables.** The position-key shape decided (CTW-7); position maps typed; `pending_tree_leaves`, `pending_tree_drain`, `block_pending_additions`, `curve_tree_checkpoints` deleted; `curve_tree_leaf_counts` added; layout bump; snapshots; SI-17/18 minted. | S | a hidden reader of a deleted table (falsify: `rg` each name outside `schema.rs` before cutting) |
 | 2 | **Rule-set data.** `RuleSet::tx_spendable_age` (§3.6) with the C++-define test. | S | none expected |
 | 3 | **`shekyl-fcmp` enters `shekyl-chain-rules`**; `CTW-Q7`'s arity source pinned (§8). | S | a dependency cycle (`shekyl-fcmp` must not reach `shekyl-chain-rules`; verify with `cargo tree`) |
 | 4 | **The derivation.** `ChainView::{tree_frontier, matured_outputs_at, depth_at}` on the trait, `BatchView`, `MockView` (held to each other); `TreeGrowth` derived in `validate`, carried on `ChainValid`; the drain-order test on `spend-1in-2out` (§3.3); a `Fault::View` fixture for an unservable frontier. | **L** | the frontier read's shape (chunk-per-layer over the tuple key is one `range` per layer; if it is not, this commit is where the table shape was wrong) |
 | 5 | **The replay oracle.** The driver asserts `derived == trace` at every height of all four chains (§3.8); the connect stays on the passed-through field this one commit. | M | a divergence from the C++ on any chain — which is the finding this commit exists to produce, and stops the PR until adjudicated against the spec (E2 §0: never toward C++) |
-| 6 | **The phase-3 body** (§3.2) with SI-11/12 built and SI-16/17 built; `ConnectFacts.root_after` deleted; `placeholder_root_after` deleted; `Origin::PassedThrough`'s doc narrowed. | M | `pop` on a grown tree — the journal's restore of `curve_tree_layers` rows written under the tuple key (a `Restorable` impl the table did not need until now) |
+| 6 | **The phase-3 body** (§3.2) with SI-11/12 built and SI-17/18 built; `ConnectFacts.root_after` deleted; `placeholder_root_after` deleted; `Origin::PassedThrough`'s doc narrowed. | M | `pop` on a grown tree — the journal's restore of `curve_tree_layers` rows written under the tuple key (a `Restorable` impl the table did not need until now) |
 | 7 | **Scenario spend.** A `mine_listing` scenario admitting a `shekyl-tx-builder` spend against the grown tree — the object FOLLOWUPS `:706` waits for. | M | the tx-builder's proof against `root_at(ref)` not verifying: that is I15's job, and if it fails here the fault is in the tree, which is the point |
 | 8 | **Docs** (§9). | S | — |
 
@@ -554,8 +568,7 @@ is what makes the next estimate unfalsifiable.
 
 Denominator at the pin: `cargo test -p shekyl-chain-store --lib` 360,
 `-p shekyl-chain-rules --lib` 241, `-p shekyl-chain-ingest` 82;
-`check_redb_schema_bijection.py` / `check_redb_schema_key_types.py` (the set
-moves by −3 + 1); `check_store_invariant_register.py` (SI-16/17); the chain-rules coverage
+`check_redb_schema_bijection.py` / `check_redb_schema_key_types.py` (four tables out, one in: the set moves by −3); `check_store_invariant_register.py` (SI-17/18 — SI-16 is S-POOL's); the chain-rules coverage
 gate **unchanged** — growth is an operand, not a row (§3.1); the doc gates.
 Extended: the E2 conformance run with the root oracle on (commit 5).
 
@@ -599,3 +612,4 @@ LANDED, staying in `design/` while E4's hook phases cite §3.2.
 | 2026-09-26 | **Round 1 RULED on PR #873 (maintainer).** Q1 the verdict, justification corrected (the root's reach, not a rule that checks it; `Composed` assembles, never computes); Q2 dissolved with the pending table (CTW-10 — maturity is `f(height, is_miner)`, verified at `blockchain_db.cpp:554–567`); Q3 neither; Q4 the primitive, `curve_tree_leaf_counts`; Q5 yes, as F6's sibling; Q6 the oracle moves into the driver before the field goes. CTW-9 (library arities) and CTW-11 (drain order as invariant) added from the round; CTW-Q7 posed. §3.7's test — *fact, or a view of facts I already hold?* — recorded as the question asked of every table this lane inherits. Commit table with costs and the signal (§6) written before the work. |
 | 2026-09-26 | **Round 1, second pass (maintainer, PR #873).** CTW-Q7 RULED: Shekyl-named, const-asserted, not in the JSON — the nameable-differently discriminator recorded (§3.9), which also grounds SPR-10's sourcing answer. **Third pass, same day:** `T` stays in the JSON — it passes the discriminator (an archival policy unit a network could size differently); the ruling's sentence pairing `T` with the arities was the review's borrowed grouping, corrected on escalation (§3.9). No `RuleCoverage` row for growth: a rule refuses, growth propagates; growth is an operand of F17 / I12 / I13 / I15, and the instrument is `passed_through` 6 → 5 (§3.1, §7). Commit 5's halt named as a finding, not an overrun (§6). §3.7's fact-or-view table marked transferable. |
 | 2026-09-26 | **Pointers placed for the discriminator and the oracle (maintainer, PR #873).** §3.9's nameable-differently test is now the JSON's second membership test at the file's own `_comment` and in the digest pin's ADDED-key message (`shekyl-rpc-types/build.rs`), so the next lane adding a constant finds the test rather than its nearest neighbour. The grouping variant of rule 16's corollary recorded in the rule. Commit 5 protected in §6: a disagreement is a finding, adjudicated against the spec, never a fixture problem. |
+| 2026-09-26 | **#873 review (Copilot), six findings, all validated at source.** CTW-6 corrected (two Rust homes, neither the rules crate — not "no Rust home"); CTW-7 corrected (`TreePosition` is in `shekyl-types`; the open item is the table key); SI-17/18 (SI-16 is S-POOL's); `CTW-Q-C` → `CTW-Q6`; index Q7 status → ruled; the table-set arithmetic (four out, one in, −3). The JSON's second test reconciled with the file: `segment_leaf_count` grandfathered and scheduled, CEN-I4's cap is not a structural counter-example. Two of the six were the rule-16 corollary inside a finding about sourcing — written from a plan's prose and a C++ define instead of the Rust tree. |
