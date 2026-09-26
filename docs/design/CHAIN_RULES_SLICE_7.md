@@ -176,14 +176,14 @@ after B; `by-construction 11 → 14`.
 ### 3.1 G2 is the row E2 has been waiting for, and it is a gap today — read at the line on review (2026-09-26)
 
 **Where the merkle's leaves come from decides the grading, and they come
-from the declared list.** `shekyl_wire::Block::pow_blob` (`block.rs:233–235`)
+from the declared list.** `shekyl_wire::Block::pow_blob` (`shekyl-wire/src/block.rs:233–235`)
 builds the tree over `[miner_transaction.hash(), transaction_hashes…]` —
 the header's *declared* hashes, never the bodies — so B6 (identity) and D2
 (PoW) bind the declared list. The bodies arrive positionally in
 `Candidate { block, transactions }` and `ValidatedBlock::derive`
-(`block.rs:355–358`) recomputes every identity **from the body**; nothing
+(`shekyl-chain-rules/src/block.rs:353–356`) recomputes every identity **from the body**; nothing
 compares the two. The crate says so itself: `Candidate`'s doc
-(`block.rs:80–83`) — *"nothing about it has been checked, including whether
+(`shekyl-chain-rules/src/block.rs:81–83`) — *"nothing about it has been checked, including whether
 `transactions` are the bodies `block.transaction_hashes` names; that is a
 4.G rule and lands with its slice."* The type does not satisfy G2; it names
 G2 as owed.
@@ -224,7 +224,7 @@ bodies need not be spends, so I15's tree is not a prerequisite) and replays
 the reorder and a substitution through it.
 
 **Grading proposed for Q7:** the *set* is bound by the merkle, the
-*pairing* is not; G2 lands as a form-stage `BlockRule` — `transactions.len()
+*pairing* is not; G2 lands as a `FormRule` — `transactions.len()
 == transaction_hashes.len()` at `Locus::Block`, `hash(body_i) ==
 transaction_hashes[i]` at `Locus::Listed { slot }` for the first mismatch —
 consensus-relevant and disclosed as L1's class caught before its peer path
@@ -414,18 +414,22 @@ the rules.
   `#define` lines (rule 20, marshaling). The alternative — Rust consts
   with a sentinel test against the header — leaves the value with two
   hand-written homes.
-- **Q7 — G2's grade.** §3.1 says commit 2 measures what the store does
-  with a reordered block. If the store records bodies under their own
-  hashes and connects, the row is a *pairing* gap (the set is bound by the
-  merkle) and lands as a `FormRule` with no CHANGELOG security line;
-  if the store can be made to record a body under a hash that is not its
-  own, that is L1's class and is disclosed as such. The measurement
-  decides; the reviewer confirms the two gradings before it is taken.
-- **Q8 — the loci.** G1/G2 at `Locus::Listed { slot }` (the listing is
-  the subject); G7 at `Locus::Input { slot, input }` (the vin carries the
-  triple); G9/G10 at `Locus::Input` likewise; F14 at `Locus::Block`; the
-  definitions record only. Default as stated; E2's §3.10 rows are written
-  from these before the rules exist, as slice 6 did.
+- **Q7 — G2's grade.** §3.1 read the connect path: bodies are keyed by
+  computed identity, so a body under the wrong txid is not how a reorder
+  lands; a reorder or a substitution can still connect, and the
+  `ReorderedBodies` pin has not run. Default, as §3.1 proposes: a
+  `FormRule`, disclosed as L1's class caught before a peer path exists
+  (one CHANGELOG line). Commit 2 still constructs the two-body block,
+  because that pin was `TooFewBodies` on every captured chain. The
+  alternative — treat it as a pairing gap with no security line — is
+  what the first cut of §3.1 said, and the connect read refutes it.
+- **Q8 — the loci.** G1 at `Locus::Listed { slot }`. G2's length
+  mismatch at `Locus::Block`, its first hash mismatch at
+  `Locus::Listed { slot }` (§3.1). G7 at `Locus::Input { slot, input }`
+  (the vin carries the triple); G9/G10 at `Locus::Input` likewise; F14
+  at `Locus::Block`; the definitions record only. Default as stated;
+  E2's §3.10 rows are written from these before the rules exist, as
+  slice 6 did.
 - **Q9 — the divergence going live.** With G6, the Rust validator refuses
   a block whose short-term median exceeds `4 × LTEM` where the C++
   accepts up to `50 ×`. Slice 4 Q1 named this a CSR-3a pass condition.
