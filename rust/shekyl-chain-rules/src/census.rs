@@ -462,7 +462,7 @@ census_rows! {
         // I17 (slice 6 commit 7): the signing preimage, adopted from the wire's
         // one derivation (Q7 (c)) and recorded where `tx_against` derives it.
         I17 implemented(crate::rules::tx_against::I17),
-        I18 pending,
+        I18 implemented(crate::rules::tx_against::I18),
         I19 implemented(crate::rules::tx_extra::I19),
         I20 implemented(crate::rules::tx_extra::I20),
         // 4.J Archival transaction families (all verdicts Rust-side; C++ marshals)

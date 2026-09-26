@@ -36,6 +36,7 @@ use crate::rules::tx::TxClass;
 use crate::rules::{BlockContext, BlockRule, Rule, TxAgainstRule, TxContext, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::{AtHeight, ChainView, Tip};
+use shekyl_crypto_pq::signature::verify_pqc_auth;
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, SigningPayloadHash,
 };
@@ -400,9 +401,8 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
 /// because the two are CEN-I18's and CEN-I15's operands, assembled where
 /// those verification rows run.
 ///
-/// The consumer is CEN-I18's signature verification (slice 6 commit 8,
-/// this PR); until it lands the hashes are derived, recorded and dropped —
-/// staged with the consumer named, as I12's anchor is.
+/// The consumer is CEN-I18's signature verification: [`judge_signatures`]
+/// runs the two as one sequence, this row yielding and I18 verifying.
 pub(crate) struct I17;
 
 impl Rule for I17 {
@@ -422,6 +422,83 @@ impl I17 {
         coverage.insert(Self::ROW);
         cx.tx.pqc_signing_payload_hashes()
     }
+}
+
+/// CEN-I18: every input's hybrid PQC signature — Ed25519 **and** ML-DSA-65,
+/// or the M-of-N multisig container — verifies over that input's
+/// `signed_hash(i)` (`verify_transaction_pqc_auth`, `tx_pqc_verify.cpp`;
+/// gated at `blockchain.cpp:4277–4285` on every non-coinbase transaction
+/// but the serve credit). The verification body is
+/// [`shekyl_crypto_pq::signature::verify_pqc_auth`], **the same function
+/// the daemon's `shekyl_pqc_verify` and daemon-rpc's K13 call** — scheme
+/// dispatch, the tx-auth domains and the container parse live there once,
+/// so the validator, the daemon and the pool cannot disagree on what a
+/// valid slot is. The slot's structural pins (`auth_version`, `flags`,
+/// scheme id, key-blob length) are CEN-I16's, in `tx_form`.
+///
+/// Refuses at the input whose signature does not verify. Vacuous on the
+/// two classes with no `pqc_auths` by construction — the coinbase, and the
+/// serve-credit form, which CEN-H20 forbids them because its
+/// countersignature is CEN-J10's, over the pass record: I17 yields nothing
+/// there and this row verifies nothing, and neither reaches for J10's
+/// object (`i17_reads_none_of_a_serve_credits_pass_record_…`).
+pub(crate) struct I18;
+
+impl Rule for I18 {
+    const ROW: CenRow = CenRow::I18;
+}
+
+impl I18 {
+    /// Verify `pqc_auths[i]` over `hashes[i]` for every input.
+    ///
+    /// The hashes are I17's, one per auth by construction
+    /// ([`shekyl_wire::Transaction::pqc_signing_payload_hashes`]); a body
+    /// for which I17 yielded none while `pqc_auths` is populated — the
+    /// storage-pruned form, which `tx_form` refuses before this stage and
+    /// the wire never carries — has no message for its signatures to be
+    /// over, and is refused at the transaction rather than silently
+    /// verified over nothing.
+    pub(crate) fn check(
+        cx: &TxContext<'_>,
+        hashes: &[SigningPayloadHash],
+        coverage: &mut RuleCoverage,
+    ) -> Verdict<()> {
+        coverage.insert(Self::ROW);
+        let Ct::Fcmp { pqc_auths, .. } = &cx.tx.ct else {
+            return Ok(());
+        };
+        if pqc_auths.len() != hashes.len() {
+            return Err(InvalidBlock::new(Self::ROW, Locus::Tx { slot: cx.slot }));
+        }
+        for (input, (auth, hash)) in pqc_auths.iter().zip(hashes).enumerate() {
+            if verify_pqc_auth(
+                auth.scheme_id,
+                &auth.hybrid_public_key,
+                &auth.hybrid_signature,
+                hash.as_bytes(),
+            )
+            .is_err()
+            {
+                return Err(InvalidBlock::new(
+                    Self::ROW,
+                    Locus::Input {
+                        slot: cx.slot,
+                        input,
+                    },
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// CEN-I17 and CEN-I18 as one sequence: I17 yields every input's signing
+/// hash, I18 verifies each input's signature over it. The D4 arrangement
+/// [`judge_reference`] uses for I10–I12 — the definition row records at
+/// the derivation, the verification row consumes the operand it yielded.
+pub(crate) fn judge_signatures(cx: &TxContext<'_>, coverage: &mut RuleCoverage) -> Verdict<()> {
+    let signed_hashes = I17::signed_hashes(cx, coverage);
+    I18::check(cx, &signed_hashes, coverage)
 }
 
 #[cfg(test)]

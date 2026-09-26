@@ -55,7 +55,7 @@ use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
-use crate::rules::tx_against::{judge_reference, I17, I7, L1};
+use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
 use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9};
 use crate::rules::{self, BlockContext, FormContext};
@@ -497,10 +497,13 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    // In flight for CEN-I18 (slice 6 commit 8): every input's signing
-    // preimage hash (I17, a definition), derived and dropped beside the
-    // derivation as I12's anchor is.
-    let _signed_hashes = I17::signed_hashes(&cx, &mut coverage);
+    // The signature sequence: I17 yields every input's signing hash, I18
+    // verifies each signature over it (`verify_transaction_pqc_auth`, the
+    // last check of the C++'s `check_tx_inputs`, `blockchain.cpp:4277`).
+    match judge_signatures(&cx, &mut coverage) {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
     Ok(Ok(coverage))
 }
 

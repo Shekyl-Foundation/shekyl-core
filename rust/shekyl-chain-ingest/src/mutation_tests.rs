@@ -291,7 +291,8 @@ fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
         | Mutation::PowUnderWrongSeed
         | Mutation::DoubleSpend
         | Mutation::UnknownReference
-        | Mutation::ReferenceTooRecent => panic!(
+        | Mutation::ReferenceTooRecent
+        | Mutation::ForgedSignature => panic!(
             "{mutation}: the census says {} is pending, and the family has no pin for a row \
              that was Implemented at the pin",
             mutation.expected().as_str()
@@ -395,7 +396,8 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
         | Mutation::WrongReward
         | Mutation::DoubleSpend
         | Mutation::UnknownReference
-        | Mutation::ReferenceTooRecent => {
+        | Mutation::ReferenceTooRecent
+        | Mutation::ForgedSignature => {
             let chain = crate::test_support::chain(n);
             judge(
                 &format!("{mutation:?}").to_lowercase(),
@@ -608,6 +610,8 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_the_two_the_plan_lists() 
             // Slice 6 commit 5: the reference rows name the transaction.
             (Mutation::UnknownReference, ExpectedPlace::Listed),
             (Mutation::ReferenceTooRecent, ExpectedPlace::Listed),
+            // Slice 6 commit 8: the signature names its input, as I7 does.
+            (Mutation::ForgedSignature, ExpectedPlace::Input),
         ]
     );
 }

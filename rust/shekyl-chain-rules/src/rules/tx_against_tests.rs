@@ -547,6 +547,125 @@ fn i17_reads_none_of_a_serve_credits_pass_record_and_yields_only_where_pqc_auths
     );
 }
 
+// ---- CEN-I18 ------------------------------------------------------------
+
+/// The fixture substrate is signed (`fixture::signed`, at `anchored_at`):
+/// an anchored spend's every slot verifies through the body the daemon
+/// and K13 call, and `tx_against` records I18 beside I17.
+#[test]
+fn i18_an_anchored_spends_signatures_verify_and_the_row_is_recorded() {
+    let chain = spendable_chain();
+    let tx = listed_on(&chain, KI);
+    let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
+        panic!("a spend is Fcmp");
+    };
+    for (auth, hash) in pqc_auths.iter().zip(tx.pqc_signing_payload_hashes()) {
+        shekyl_crypto_pq::signature::verify_pqc_auth(
+            auth.scheme_id,
+            &auth.hybrid_public_key,
+            &auth.hybrid_signature,
+            hash.as_bytes(),
+        )
+        .expect("the fixture's slot verifies through the shared body");
+    }
+    chain.with_view(|view| {
+        let against = defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS))
+            .expect("a signed, anchored spend passes");
+        assert!(against.contains(CenRow::I18), "recorded through tx_against");
+    });
+}
+
+/// One flipped byte in one input's signature refuses **that input** under
+/// I18 — the E2 driver's `ForgedSignature` place — and the rows before it
+/// (I7, the reference sequence, I17) have already recorded: the refusal is
+/// the signature's, not an earlier row's.
+#[test]
+fn i18_refuses_a_forged_signature_at_its_input() {
+    let chain = spendable_chain();
+    // Two inputs, so the refusal's input index is a discrimination and not
+    // the only value it could take.
+    let mut two = spend(KI, 2);
+    two.prefix.inputs.push(Input::ToKey {
+        amount: 0,
+        key_offsets: Vec::new(),
+        key_image: [0x2b; 32],
+    });
+    if let Ct::Fcmp { pqc_auths, .. } = &mut two.ct {
+        pqc_auths.push(crate::harness::fixture::pqc_auth_filler());
+    }
+    let mut tx = anchored_on(&chain, two);
+    let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct else {
+        panic!("a spend is Fcmp");
+    };
+    assert_eq!(pqc_auths.len(), 2, "both slots signed at anchoring");
+    *pqc_auths[1]
+        .hybrid_signature
+        .last_mut()
+        .expect("a signature") ^= 0x01;
+    chain.with_view(|view| {
+        assert_refused(
+            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+            CenRow::I18,
+            Locus::Input {
+                slot: TxSlot::Lone,
+                input: 1,
+            },
+        );
+    });
+}
+
+/// A signature that is valid — for a different message. Touching the
+/// prefix after signing (here `unlock_time`, a field no view-bound row
+/// reads) changes the pruned segment every slot's message binds, so a
+/// standing signature no longer verifies: refused at input 0, the first
+/// slot judged. This is the binding I17 exists for, witnessed from the
+/// verifying side.
+#[test]
+fn i18_refuses_a_signature_over_a_body_that_has_since_changed() {
+    let chain = spendable_chain();
+    let mut tx = listed_on(&chain, KI);
+    tx.prefix.unlock_time += 1;
+    chain.with_view(|view| {
+        assert_refused(
+            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+            CenRow::I18,
+            Locus::Input {
+                slot: TxSlot::Lone,
+                input: 0,
+            },
+        );
+    });
+}
+
+/// The boundary row 8 pinned before this row started: on the serve-credit
+/// form I18 verifies nothing — corrupt the pass record's countersignature
+/// legs and the verdict does not move — because the form's signature is
+/// CEN-J10's, over the pass record, and I17 yields no message here. A
+/// verifier that reached for J10's object would refuse a corrupt one; this
+/// is the falsifier for "does not reach". Recorded vacuous, not absent
+/// (slice 5 Q2), as the I17 test on the same body explains.
+#[test]
+fn i18_is_vacuous_on_a_serve_credit_and_does_not_reach_for_its_countersignature() {
+    let chain = spendable_chain();
+    let mut corrupt = serve_credit_only([0x5e; 32]);
+    match &mut corrupt.prefix.inputs[0] {
+        Input::ServeCredit { canonical_bytes } => {
+            for byte in &mut canonical_bytes[1..] {
+                *byte ^= 0xFF;
+            }
+        }
+        other => panic!("a serve-credit fixture carries a serve-credit input, not {other:?}"),
+    }
+    chain.with_view(|view| {
+        let coverage = defined(tx_against(&corrupt, TxSlot::Lone, &view, &RuleSet::GENESIS))
+            .expect("J10's object is not this row's; the verdict does not move");
+        assert!(
+            coverage.contains(CenRow::I18),
+            "recorded vacuous, not absent"
+        );
+    });
+}
+
 // ---- CEN-I2, by construction ------------------------------------------
 
 /// CEN-I2 — a non-coinbase transaction's CT is `FcmpPlusPlusPqc` — holds

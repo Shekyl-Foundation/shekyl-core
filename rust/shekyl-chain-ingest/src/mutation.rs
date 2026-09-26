@@ -135,6 +135,11 @@ pub enum Mutation {
     /// mock's (`I11::window`): a chain past `MAX_AGE` is beyond what the
     /// fixture family's `root_after` bytes can build (§3.10).
     ReferenceTooRecent,
+    /// One byte of a listed spend's first `pqc_auths` slot's signature
+    /// flipped. CEN-I18, at that input. The signature is forged and the
+    /// body left alone: a driven chain's spends are signed once, by the
+    /// wallet, and the body-changed-under-a-signature case is the mock's.
+    ForgedSignature,
 }
 
 /// Where [`Mutation::expected`]'s row points when it refuses.
@@ -163,7 +168,7 @@ pub enum ExpectedPlace {
 
 impl Mutation {
     /// Every mutation, in the table's order (§3.10).
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::HeaderVersion,
         Self::Orphan,
         Self::WrongRoot,
@@ -175,6 +180,7 @@ impl Mutation {
         Self::DoubleSpend,
         Self::UnknownReference,
         Self::ReferenceTooRecent,
+        Self::ForgedSignature,
     ];
 
     /// The census row that refuses this mutation — the spec's answer,
@@ -193,6 +199,7 @@ impl Mutation {
             Self::DoubleSpend => CenRow::I7,
             Self::UnknownReference => CenRow::I10,
             Self::ReferenceTooRecent => CenRow::I11,
+            Self::ForgedSignature => CenRow::I18,
         }
     }
 
@@ -207,7 +214,7 @@ impl Mutation {
             | Self::FutureTimestamp
             | Self::StaleTimestamp
             | Self::PowUnderWrongSeed => ExpectedPlace::Block,
-            Self::DoubleSpend => ExpectedPlace::Input,
+            Self::DoubleSpend | Self::ForgedSignature => ExpectedPlace::Input,
             Self::UnknownReference | Self::ReferenceTooRecent => ExpectedPlace::Listed,
             // 4.F named its locus with slice 4 (Q6): the miner transaction.
             Self::WrongReward => ExpectedPlace::Miner,
@@ -323,6 +330,26 @@ impl Mutation {
                 // (I11 refuses): the young edge, from the driver.
                 let parent = candidate.block.header.previous;
                 Self::move_reference(&mut candidate, parent)?;
+            }
+            Self::ForgedSignature => {
+                let mut signatures =
+                    candidate
+                        .transactions
+                        .iter_mut()
+                        .filter_map(|tx| match &mut tx.ct {
+                            Ct::Fcmp { pqc_auths, .. } => pqc_auths.first_mut(),
+                            Ct::Null(_) => None,
+                        });
+                let Some(last) = signatures
+                    .next()
+                    .and_then(|auth| auth.hybrid_signature.last_mut())
+                else {
+                    return Err(Unmutable::NoSignatureToForge);
+                };
+                *last ^= 0x01;
+                // The auths are the txid's third component: one violation
+                // only if the header follows the body.
+                relist(&mut candidate);
             }
         }
         Ok(candidate)
@@ -468,6 +495,10 @@ pub enum Unmutable {
     /// a block that lists no `Fcmp` body.
     #[error("the candidate lists no Fcmp body whose reference could move")]
     NoReferenceToMove,
+    /// [`Mutation::ForgedSignature`] on a block that lists no body with a
+    /// `pqc_auths` slot carrying a signature.
+    #[error("the candidate lists no pqc_auths slot with a signature to forge")]
+    NoSignatureToForge,
     /// CEN-C1 and CEN-C2 do not judge genesis, so a timestamp written
     /// there is not their violation.
     #[error("{0} is exempt at genesis; CEN-C1 and CEN-C2 do not judge height 0")]

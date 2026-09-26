@@ -158,6 +158,7 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::I14,
             CenRow::I16,
             CenRow::I17,
+            CenRow::I18,
             CenRow::I19,
             CenRow::I20,
             CenRow::L1,
