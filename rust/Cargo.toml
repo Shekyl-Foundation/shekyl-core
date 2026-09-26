@@ -228,6 +228,11 @@ members = [
     "shekyl-p-transport",
     "shekyl-p2p-transport",
 
+    # Transport-layer logic (P2P_TRANSPORT_LAYER.md): declarations, socket
+    # counts, the ban list. No sockets. The Noise layer stays
+    # shekyl-p2p-transport.
+    "shekyl-transport-layer",
+
     # Persona serving loop: loopback shard server behind the P onion
     # service (2d-2 serving path; provisional THROWAWAY framing)
     "shekyl-p-serve",
@@ -337,6 +342,7 @@ exclude = [
     "shekyl-archival-retention/fuzz",
     "shekyl-wire/fuzz",
     "shekyl-engine-state/fuzz",
+    "shekyl-p2p-transport/fuzz",
     # FCMP++ research crypto, vendored from the monero-oxide fork (pinned by
     # UPSTREAM_MONERO_OXIDE_COMMIT). The clean upstream-formatted mirror lives on
     # the fork — the EC-membership review artifact; this vendored copy is

@@ -1,0 +1,26 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-transport-layer"
+description = "P2P transport layer logic: connector declarations, socket admission, and the ban list. No sockets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+
+[dev-dependencies]
+proptest = "1"
+shekyl-levin = { path = "../shekyl-levin", default-features = false }
+
+[lints]
+workspace = true

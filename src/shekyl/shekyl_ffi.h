@@ -43,6 +43,10 @@
 #include <cstddef>
 #include <cstdint>
 
+// D12's cause table. Generated from shekyl_transport_layer::CloseKind.
+// Do not add a second copy of these discriminants here.
+#include "close_cause.h"
+
 /// m_pqc_public_key canonical layout: X25519_pub[32] || ML-KEM-768_ek[1184].
 #define SHEKYL_PQC_PUBLIC_KEY_BYTES 1216
 #define SHEKYL_X25519_PK_BYTES 32

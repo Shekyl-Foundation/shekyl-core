@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "rend-spec-v3 onion hostname from an Ed25519 public key (encoding only; no Tor instance)"
+description = "rend-spec-v3 onion hostname from an Ed25519 public key, and the check that a hostname is one (no Tor instance)"
 publish = false
 
 [dependencies]

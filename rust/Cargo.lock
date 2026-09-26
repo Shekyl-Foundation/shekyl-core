@@ -4805,6 +4805,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-transport-layer"
+version = "3.1.0"
+dependencies = [
+ "proptest",
+ "shekyl-levin",
+ "shekyl-onion-v3",
+ "shekyl-p2p-transport",
+ "shekyl-peer-policy",
+ "shekyl-timing-engine",
+]
+
+[[package]]
 name = "shekyl-tx-builder"
 version = "3.1.0"
 dependencies = [
