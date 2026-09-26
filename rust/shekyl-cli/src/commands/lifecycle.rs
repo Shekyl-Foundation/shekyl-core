@@ -6,16 +6,15 @@
 //! Wallet lifecycle commands over the native RPC surface (WI-RPC-2a):
 //! create, open, close, restore, refresh, rescan, status, password.
 
+use crate::outcome::{failed, CommandResult};
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
 use super::{read_password, require_closed, require_open};
 use crate::rpc_client::{params, RpcError, RpcSession};
 
-pub fn cmd_create(rpc: &RpcSession, filename: &str) {
-    if !require_closed(rpc) {
-        return;
-    }
+pub fn cmd_create(rpc: &RpcSession, filename: &str) -> CommandResult {
+    require_closed(rpc)?;
     // Gate the one-time seed display BEFORE creating anything. The server never
     // re-exposes the seed, so a wallet created here whose backup we then cannot
     // safely show (stdout is a pipe/file, or the user declines under tmux)
@@ -28,17 +27,18 @@ pub fn cmd_create(rpc: &RpcSession, filename: &str) {
              For non-interactive or scripted creation, use:\n  \
              shekyl-cli create <name> --seed-out <path> --password-file <path>"
         );
-        return;
+
+        return failed();
     }
     let Some(password) = read_password("New wallet password: ") else {
-        return;
+        return failed();
     };
     let Some(confirm) = read_password("Confirm password: ") else {
-        return;
+        return failed();
     };
     if password != confirm {
         eprintln!("Passwords do not match.");
-        return;
+        return failed();
     }
     drop(confirm);
 
@@ -68,16 +68,15 @@ pub fn cmd_create(rpc: &RpcSession, filename: &str) {
                 crate::display::show_secret("Seed backup", &mut secret);
             }
         }
-        Err(e) => rpc.report("Failed to create wallet", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to create wallet", &e)),
+    };
+    Ok(())
 }
 
-pub fn cmd_open(rpc: &RpcSession, filename: &str) {
-    if !require_closed(rpc) {
-        return;
-    }
+pub fn cmd_open(rpc: &RpcSession, filename: &str) -> CommandResult {
+    require_closed(rpc)?;
     let Some(password) = read_password("Wallet password: ") else {
-        return;
+        return failed();
     };
     let result = rpc.call(
         "open_wallet",
@@ -92,32 +91,37 @@ pub fn cmd_open(rpc: &RpcSession, filename: &str) {
             rpc.set_open(filename);
             println!("Opened wallet: {filename}");
         }
-        Err(e) => rpc.report("Failed to open wallet", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to open wallet", &e)),
+    };
+    Ok(())
 }
 
-pub fn cmd_close(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_close(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
     match rpc.call("close_wallet", json!({})) {
         Ok(_) => {
             rpc.set_closed();
             println!("Wallet closed.");
         }
-        Err(e) => rpc.report("Failed to close wallet", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to close wallet", &e)),
+    };
+    Ok(())
 }
 
-pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
-    if !require_closed(rpc) {
-        return;
+pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) -> CommandResult {
+    require_closed(rpc)?;
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!(
+            "wallet restore in a script would put the seed in the script. \
+             Use: shekyl-cli restore <name> --seed-file <path> --password-file <path>"
+        );
+        return failed();
     }
     // Seed material: wiped on drop like the password, on every path out of
     // this function rather than on the paths somebody remembered to annotate.
     let mnemonic = Zeroizing::new(seed_words.join(" "));
     let Some(password) = read_password("New wallet password: ") else {
-        return;
+        return failed();
     };
 
     eprint!("Restore height (block height the wallet existed at; 0 = scan from genesis): ");
@@ -125,7 +129,7 @@ pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
     let mut height_input = String::new();
     if std::io::stdin().read_line(&mut height_input).is_err() {
         eprintln!("Failed to read restore height.");
-        return;
+        return failed();
     }
     let height_input = height_input.trim();
     let restore_height: u64 = if height_input.is_empty() {
@@ -135,7 +139,7 @@ pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
             Ok(h) => h,
             Err(_) => {
                 eprintln!("Invalid restore height: expected a block height number.");
-                return;
+                return failed();
             }
         }
     };
@@ -154,10 +158,11 @@ pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
         Ok(_) => {
             rpc.set_open(filename);
             println!("Restored wallet: {filename}");
-            println!("Run \"refresh\" to scan the chain for your funds.");
+            println!("Run \"wallet refresh\" to scan the chain for your funds.");
         }
-        Err(e) => rpc.report("Failed to restore wallet", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to restore wallet", &e)),
+    };
+    Ok(())
 }
 
 /// Read an `i64` counter out of a scan result, defaulting to `0`.
@@ -176,10 +181,8 @@ fn print_scan_result(headline: &str, val: &Value) {
     println!("Wallet height: {height}");
 }
 
-pub fn cmd_refresh(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_refresh(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
     println!("Refreshing...");
     match rpc.call("refresh", json!({})) {
         Ok(val) => {
@@ -188,8 +191,9 @@ pub fn cmd_refresh(rpc: &RpcSession) {
                 println!("Note: a chain reorg was detected and rewound (fork height {fork}).");
             }
         }
-        Err(e) => rpc.report("Refresh failed", &e),
-    }
+        Err(e) => return Err(rpc.report("Refresh failed", &e)),
+    };
+    Ok(())
 }
 
 /// `rescan_blockchain` error codes that are refusals raised **before** the
@@ -210,10 +214,8 @@ const RESCAN_PRE_RESET_REFUSALS: [i64; 4] = [-29001, -29200, -29201, -29202];
 /// silently does nothing — a user who typed `hard` because the wallet looked
 /// wrong would otherwise re-run the identical operation and conclude the
 /// wallet is unrecoverable.
-pub fn cmd_rescan(rpc: &RpcSession, hard: bool) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_rescan(rpc: &RpcSession, hard: bool) -> CommandResult {
+    require_open(rpc)?;
     if hard {
         println!(
             "Note: Shekyl has a single rescan — it already rebuilds all scan-derived \
@@ -225,7 +227,7 @@ pub fn cmd_rescan(rpc: &RpcSession, hard: bool) {
     match rpc.call("rescan_blockchain", json!({})) {
         Ok(val) => print_scan_result("Rescan complete", &val),
         Err(e) => {
-            rpc.report("Rescan failed", &e);
+            let reported = rpc.report("Rescan failed", &e);
             // Whether history survived is the only thing the user actually
             // needs from a failed rescan, and the three cases genuinely
             // differ — say which one this was rather than averaging them
@@ -237,30 +239,30 @@ pub fn cmd_rescan(rpc: &RpcSession, hard: bool) {
                 RpcError::Rpc { .. } => {
                     eprintln!(
                         "Your history was already cleared before this failure, and will stay \
-                         empty until a rescan finishes. Run \"rescan\" again once the problem \
-                         above is resolved; nothing is lost that the chain cannot rebuild."
+                         empty until a rescan finishes. Run \"wallet rescan\" again once the \
+                         problem above is resolved; nothing is lost that the chain cannot rebuild."
                     );
                 }
                 RpcError::Transport(_) => {
                     eprintln!(
                         "The connection dropped, so it is unclear how far the rescan got. Run \
-                         \"status\" to see the wallet height, and \"rescan\" again if the \
+                         \"status\" to see the wallet height, and \"wallet rescan\" again if the \
                          history is incomplete."
                     );
                 }
             }
+            return Err(reported);
         }
     }
+    Ok(())
 }
 
 /// `status` — wallet and daemon sync heights. `daemon_down_hint` is the F1
 /// recovery copy (CLI_USABILITY.md §CU-5): the wallet RPC reports an
 /// unreachable daemon as `daemon_height: null`, and this surface owes the
 /// same "start shekyld" line as the paths that dial the daemon directly.
-pub fn cmd_status(rpc: &RpcSession, daemon_down_hint: Option<&str>) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_status(rpc: &RpcSession, daemon_down_hint: Option<&str>) -> CommandResult {
+    require_open(rpc)?;
     match rpc.call("get_height", json!({})) {
         Ok(val) => {
             let wallet = val
@@ -291,26 +293,25 @@ pub fn cmd_status(rpc: &RpcSession, daemon_down_hint: Option<&str>) {
                 }
             }
         }
-        Err(e) => rpc.report("Failed to get status", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to get status", &e)),
+    };
+    Ok(())
 }
 
-pub fn cmd_password(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_password(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
     let Some(old_password) = read_password("Current password: ") else {
-        return;
+        return failed();
     };
     let Some(new_password) = read_password("New password: ") else {
-        return;
+        return failed();
     };
     let Some(confirm) = read_password("Confirm new password: ") else {
-        return;
+        return failed();
     };
     if new_password != confirm {
         eprintln!("Passwords do not match.");
-        return;
+        return failed();
     }
     drop(confirm);
 
@@ -324,6 +325,7 @@ pub fn cmd_password(rpc: &RpcSession) {
 
     match result {
         Ok(_) => println!("Password changed."),
-        Err(e) => rpc.report("Failed to change password", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to change password", &e)),
+    };
+    Ok(())
 }

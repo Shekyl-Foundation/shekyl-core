@@ -278,8 +278,14 @@ mainnet>
 testnet:miner>
 ```
 
-Type `help` for the full command list and `help <command>` for one
-command's usage.
+Type `help` for the command list grouped by subject, and `help <command>`
+for that command's arguments. Tab completes a subject, then its verbs,
+then its flags. Up-arrow recalls earlier commands. A line above the prompt
+shows the CLI version, the local time, and wallet sync: synced, a block
+count behind, no wallet, daemon unreachable, or wallet RPC unreachable.
+A failed wallet-RPC read is not reported as a dead daemon.
+A pipe runs the same commands and stops at the first failure; pass
+`--password-file` with `--wallet`.
 
 Wallet files live under `~/.shekyl/wallets/<network>/` by default, one
 directory per network, so a testnet wallet can never shadow a mainnet one.
@@ -290,14 +296,15 @@ directory per network, so a testnet wallet can never shadow a mainnet one.
 At the prompt:
 
 ```
-mainnet> create mywallet
+mainnet> wallet create mywallet
 ```
 
 You will be prompted for a password, and the wallet's 24-word BIP-39 seed
 phrase (English wordlist) is shown **once** — **write it down on paper
 immediately**. This seed is the only way to recover your funds if your
-wallet file is lost. To keep the seed out of logs and scrollback, `create`
-refuses to print it when output is piped or redirected.
+wallet file is lost. To keep the seed out of logs and scrollback, `wallet create`
+refuses to print it when output is piped or redirected. A script uses
+the `create` subcommand below, not a `wallet create` line.
 
 For scripts there is a non-interactive subcommand that writes the seed to a
 file instead of the terminal (created `0600`, refusing to overwrite):
@@ -315,7 +322,7 @@ Your wallet is automatically a V3 wallet with full post-quantum key material
 At the prompt:
 
 ```
-mainnet> restore mywallet word1 word2 ... word24
+mainnet> wallet restore mywallet word1 word2 ... word24
 ```
 
 or non-interactively, reading the seed from a file:
@@ -337,7 +344,7 @@ separate restore-from-keys flow and no view-only wallet variant.
 At the prompt:
 
 ```
-mainnet> open mywallet
+mainnet> wallet open mywallet
 ```
 
 or open at startup:
@@ -453,7 +460,7 @@ wallet and daemon sync heights.
 Basic transfer (one recipient per transaction):
 
 ```
-mainnet> transfer <amount> <address>
+mainnet> send <amount> <address>
 ```
 
 The wallet automatically constructs an FCMP++ membership proof for each
@@ -461,10 +468,11 @@ spent input, signs with both Ed25519 and ML-DSA-65 (hybrid PQC), and
 broadcasts the transaction.
 
 **Priority** controls the fee (higher priority = higher fee = faster
-confirmation): `0`–`1` economy, `2` standard, `3`+ priority.
+confirmation). `--priority` takes `economy`, `standard`, or `high`.
+The default is `standard`.
 
 ```
-mainnet> transfer <amount> <address> --priority 3
+mainnet> send <amount> <address> --priority standard
 ```
 
 **There is no offline ("air-gapped") signing workflow, by design.** An
@@ -472,7 +480,7 @@ FCMP++ membership proof needs the live curve tree, so an offline signer
 cannot deliver the isolation such a workflow claims — the "cold" half
 would still need current chain data to build a valid transaction. Cold
 *storage* is the seed phrase on paper; a machine that signs is online.
-Every `transfer` shows the built transaction (destination, amount, fee)
+Every `send` shows the built transaction (destination, amount, fee)
 and waits for your confirmation before broadcasting — decline it and
 nothing leaves the wallet.
 
@@ -481,8 +489,8 @@ nothing leaves the wallet.
 The Monero-era sweep family (`sweep_all`, `sweep_below`, `sweep_single`,
 `sweep_unmixable`) does not exist: with a single primary address, no
 accounts, and no mixin rules there is nothing to consolidate toward. To
-move your funds, `transfer` the amount `balance` shows as spendable.
-(`drain` exists but is staking-side: it moves staking funds back to this
+move your funds, `send` the amount `balance` shows as spendable.
+(`stake return` is staking-side: it moves staking funds back to this
 wallet.)
 
 ### Transaction verification and proofs
@@ -492,26 +500,26 @@ binds into the proof; the verifier must supply the identical string:
 
 | Command | Description |
 |---------|-------------|
-| `get_tx_proof <txid> <address> [message]` | Prove a payment to `<address>` (sent or received; open wallet required) |
-| `check_tx_proof <txid> <address> <proof> [message]` | Verify a tx proof (no wallet needed) |
-| `get_reserve_proof [amount] [message]` | Prove unspent reserve (omit the amount to prove the full balance) |
-| `check_reserve_proof <address> <proof> [message]` | Verify a reserve proof (no wallet needed) |
+| `prove payment <txid> <address> [message]` | Prove a payment to `<address>` (sent or received; open wallet required) |
+| `check payment <txid> <address> <proof> [message]` | Verify a tx proof (no wallet needed) |
+| `prove reserve [amount] [message]` | Prove unspent reserve (omit the amount to prove the full balance) |
+| `check reserve <address> <proof> [message]` | Verify a reserve proof (no wallet needed) |
 
 There is no `get_tx_key` / `check_tx_key`: the raw per-tx key is a bearer
 credential over the whole transaction, so its export is rejected in the
-proofs contract (WI-RPC-3) — the scoped `get_tx_proof` / `check_tx_proof`
+proofs contract (WI-RPC-3) — the scoped `prove payment` / `check payment`
 pair covers the use case.
 
 ### Transaction history
 
 ```
-mainnet> transfers
-mainnet> show_transfer <txid>
-mainnet> set_tx_note <txid> <note>
-mainnet> get_tx_note <txid>
+mainnet> tx list
+mainnet> tx show <id>
+mainnet> tx note <txid> <note>
+mainnet> tx note <txid>
 ```
 
-`transfers` lists recent transactions; `abandon <txid>` gives up on a
+`tx list` lists recent transactions; `tx abandon <txid>` gives up on a
 dispatched send (funds stay locked until the network is confirmed to have
 dropped it).
 
@@ -538,8 +546,8 @@ There are **no duration tiers, no lock period, no claim transactions, and no
 minimum stake** — those belonged to an earlier claim-based design that was
 retired before genesis. Your principal stays yours the whole time; the bond
 is an honesty anchor (slashable for misbehavior), not a custody transfer.
-When you are done staking, `unstake` posts the permanent exit and
-`collect_unstaked` returns the released collateral to your balance (PR-C,
+When you are done staking, `stake exit` posts the permanent exit and
+`stake collect` returns the released collateral to your balance (PR-C,
 2026-09-03).
 
 For the economic model, see
@@ -578,14 +586,16 @@ timing and funding footguns that matter for your privacy.
 The full staking surface is live in interactive `shekyl-cli` (type
 `help stake` — or any staking command's name — for usage):
 
-- **Activation:** `stake` makes this wallet a staker (Foundation nodes
-  only: `stake --complete-tree-foundation`, which states its terms and
-  requires a typed phrase).
-- **Status:** `staked_balance`, `staked_outputs`, `staking_info`.
-- **Principal movement:** `stake_in <amount>` adds funds to the staking
-  balance; `drain_balance` shows what can move back; `drain <amount>`
+- **Read:** `stake` shows this wallet's posture and what can move back.
+  `stake balance` and `stake outputs` are the breakdowns. `stake join`
+  names shard ids and does not post until the wallet can send a shard set.
+- **Foundation nodes** are not a prompt command. The hidden startup flag
+  `--complete-tree-foundation` (with `--wallet`) states the terms and
+  requires the phrase. Unbounded disk, no reward.
+- **Principal movement:** `stake add <amount>` adds funds to the staking
+  balance; `stake available` shows what can move back; `stake return <amount>`
   moves it back (fee and destination are automatic).
-- **Exit:** `unstake` posts the permanent exit and `collect_unstaked`
+- **Exit:** `stake exit` posts the permanent exit and `stake collect`
   returns the released collateral, each with the irreversibility
   confirmation the exit warrants (PR-C).
 
@@ -640,8 +650,8 @@ mainnet> mine status         # active/idle, threads, hash rate
 mainnet> mine stop
 ```
 
-`start_mining [threads]`, `stop_mining`, and `mining_status` work as
-aliases for the same verbs.
+`start_mining`, `stop_mining`, and `mining_status` name the new lines and
+do not run. The daemon console, above, still uses those words.
 
 These commands **control** mining on the connected daemon — the daemon
 still does the hashing (no RandomX runs in the wallet process), and the
@@ -1073,13 +1083,13 @@ once, at create/restore time — everything else derives from it. Under
 FCMP++ a view key is not a chain-scanning credential the way it was in
 CryptoNote-era coins, so a view-only wallet would not deliver the
 third-party-auditor use case; balance disclosure to a third party is
-served by reserve proofs (`get_reserve_proof` / `check_reserve_proof`)
+served by reserve proofs (`prove reserve` / `check reserve`)
 with scoped, cryptographic disclosure instead of a standing credential.
 
 ### Changing your password
 
 ```
-mainnet> password
+mainnet> wallet password
 ```
 
 prompts for the current password, then the new one twice.
@@ -1101,21 +1111,21 @@ prompts for the current password, then the new one twice.
 
 ### Wallet balance is wrong or zero
 
-- **Not synced:** Run `refresh` in the wallet. `status` shows the wallet's
+- **Not synced:** Run `wallet refresh`. `status` shows the wallet's
   height next to the daemon's — make sure the daemon is fully synchronised
   first.
-- **Full rescan:** `rescan` rebuilds your transaction history from the
+- **Full rescan:** `wallet rescan` rebuilds your transaction history from the
   chain (transaction keys, notes, payment requests and staking records are
-  kept). This can take a while.
+  kept). This can take a while. `wallet rescan hard` is the same rescan.
 
 ### Transaction not confirming
 
 - Make sure the daemon is synced (`status` in the wallet shows both
   heights; `status` in the daemon console shows peers and sync state).
 - The transaction pool can be checked with `print_pool` in the daemon.
-- Check the transaction's state with `transfers` / `show_transfer <txid>`
+- Check the transaction's state with `tx list` / `tx show <id>`
   in the wallet. A dispatched send that the network has dropped can be
-  given up with `abandon <txid>`.
+  given up with `tx abandon <txid>`.
 
 ### Reading logs
 

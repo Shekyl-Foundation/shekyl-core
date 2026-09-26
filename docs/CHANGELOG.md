@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### CLI wallet shell
+
+- **`shekyl-cli` speaks one command language.** Subjects then verbs
+  (`wallet open`, `tx show`, `stake add`), bare reads (`balance`,
+  `stake`), and product verbs (`send`, `prove`, `check`, `sign`,
+  `verify`). Old spellings diagnose the new line and do not run.
+  Tab completes that grammar. Up-arrow history is saved as you go and
+  omits seeds, proofs, and signatures, including the retired spellings
+  of those lines. A line above the prompt shows the version, the local
+  time, and sync. A pipe runs the same commands and stops on the
+  first failure (`--password-file` with `--wallet`, `--yes` to confirm
+  off a terminal).
+- **Shards are a subject, not a picture.** `shard list all` prints the
+  daemon's coverage list in the daemon's order. `shard show` and
+  `shard fetch` are text. `shard list mine` says the wallet does not
+  report its shard ids yet. `stake join` names ids and does not post.
+- **CompleteTree left the prompt.** `--complete-tree-foundation` is a
+  hidden startup flag. Unbounded disk, no reward. The password is not
+  kept after that call.
+
 ### Consensus validator — census 4.I, the transaction against the chain (DRS-E6 slice 6, commits 3–10)
 
 - **Security.** `CEN-L1` — no key image appears twice among one block's
@@ -36,7 +56,7 @@
   depth read; I15 and H19-verify on the scenario driver producing a spend —
   each a `FOLLOWUPS.md` row with its falsifier.
 - The E2 replay driver's mutation family gains `DoubleSpend` refusing at
-  its input, `UnknownReference`, `ReferenceTooRecent`, `ForgedSignature`.
+  its input,   `UnknownReference`, `ReferenceTooRecent`, `ForgedSignature`.
 
 ### Clearnet Noise NNhfs, off by default
 

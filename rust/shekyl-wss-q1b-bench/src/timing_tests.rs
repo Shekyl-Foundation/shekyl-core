@@ -43,22 +43,24 @@ fn a_never_settling_workload_is_reported_unconverged_not_looped_forever() {
     // 0.000001 %, which is the only reason the running-median criterion passed
     // it: at 5 % a growing running median settles and certifies a throttling
     // board as converged. Disjoint windows must refuse this at 5 %.
+    //
+    // The slowdown is a constant *ratio*, not a fixed number of milliseconds.
+    // Two windows of three samples sit three steps apart, so a 6 % step is a
+    // ~19 % gap between their medians — above the 5 % tolerance on every
+    // iteration, including the last. A fixed millisecond step does the
+    // opposite: the gap is `3 / (n - 1)`, which is 5.08 % at `n = 60`, and
+    // sleep overshoot (a near-constant added to every sample) pushes that
+    // under 5 %. That series is then honestly `converged`, and the assertion
+    // fails because the workload stopped being the thing the assertion names.
+    // 2026-09-26, CI on #872: `stopped_because = converged` with the 2 ms step.
     let n = Cell::new(0u64);
     let series = sustained_within_conditioned(0, DEFAULT_TOLERANCE_PCT, 30.0, 0.05, || {
-        // Each call strictly longer than the last.
-        //
-        // The 2 ms step is load-bearing and MUST NOT be shrunk for speed: this
-        // test's signal is the *relative* gap between consecutive samples, and
-        // under contention sleep overshoot adds a large near-constant term to
-        // every sample, which swamps a small gap. Tried at 1 ms on 2026-09-21
-        // and it made things worse — at load average 17.97 the slowing series
-        // converged, i.e. the test's own premise failed. Two limits bound this
-        // run in opposite directions and the step size sits between them: too
-        // small and the slowdown stops being detectable, too large and
-        // `MAX_ITERATIONS` of it approaches the 30 s wall budget.
         let i = n.get();
         n.set(i + 1);
-        std::thread::sleep(std::time::Duration::from_millis(2 * (i + 1)));
+        // 5 ms × 1.06^i. Sixty of these sum to a few seconds, under the 30 s
+        // wall, so the run ends on the iteration limit rather than the clock.
+        let ms = 5.0_f64 * 1.06_f64.powi(i as i32);
+        std::thread::sleep(std::time::Duration::from_micros((ms * 1000.0) as u64));
     });
     assert!(
         !series.converged,

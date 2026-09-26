@@ -142,6 +142,10 @@ pub fn run_restore(rpc: &RpcSession, args: &RestoreArgs) -> Result<(), BoxErr> {
     Ok(())
 }
 
+pub fn read_password_file(path: &std::path::Path) -> Result<Zeroizing<String>, BoxErr> {
+    read_password_source(Some(path), false)
+}
+
 /// Read a password from a file or stdin into a wiped buffer. Exactly one
 /// source must be given. A single trailing newline (`\n` or `\r\n`) is
 /// stripped — the common shape of `echo "$PW" > file` or a piped line — but no

@@ -462,9 +462,13 @@ impl RpcSession {
             .ok_or_else(|| RpcError::Transport("response missing 'result'".into()))
     }
 
-    /// Print an RPC failure to stderr. Server messages are stable and
-    /// secret-free by contract; `--debug` additionally shows `error.data`.
-    pub fn report(&self, context: &str, err: &RpcError) {
+    /// Print an RPC failure to stderr.
+    ///
+    /// Server messages are stable and secret-free by contract; `--debug`
+    /// additionally shows `error.data`. The returned value is what the
+    /// caller puts in `Err`, so a script stops. Dropping it is a warning.
+    #[must_use = "reporting an RPC error fails the command"]
+    pub fn report(&self, context: &str, err: &RpcError) -> crate::outcome::CommandFailed {
         eprintln!("{context}: {err}");
         if self.debug {
             if let RpcError::Rpc {
@@ -474,6 +478,7 @@ impl RpcSession {
                 eprintln!("[DEBUG] error.data = {data}");
             }
         }
+        crate::outcome::CommandFailed
     }
 
     /// Shut the session down: close any open wallet (best effort) and stop

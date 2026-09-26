@@ -15,14 +15,13 @@
 //! the wire, and the copy talks about "staking funds" and "this wallet",
 //! never personas or slots (rule 81).
 
+use crate::outcome::{failed, CommandResult};
 use serde_json::{json, Value};
 use shekyl_wallet_rpc::types::{
     CollectUnstakedResult, DrainResult, DrainVerdictView, UnstakeResult,
 };
 
-use super::{
-    confirm, confirm_interactive, format_amount, opt_amount, read_password, require_open, transfers,
-};
+use super::{format_amount, opt_amount, require_open, transfers};
 use crate::rpc_client::{params, RpcSession};
 
 /// The exact phrase a foundation stake requires, typed by the operator.
@@ -36,108 +35,59 @@ use crate::rpc_client::{params, RpcSession};
 /// Compared after trimming surrounding whitespace only — a trailing space
 /// or a stray newline from a terminal is not a different intent, while any
 /// other difference is.
-const FOUNDATION_PHRASE: &str = "serve without reward";
+pub const FOUNDATION_PHRASE: &str = "serve without reward";
 
-pub fn cmd_stake(rpc: &RpcSession, foundation: bool) {
-    if !require_open(rpc) {
-        return;
+/// The operator has accepted the Foundation terms.
+///
+/// A terminal run types [`FOUNDATION_PHRASE`] after the warning. A script
+/// passes the same phrase as `--acknowledge`. Either way this returns before
+/// the wallet is opened, so a refusal writes nothing.
+pub fn accept_foundation_terms(
+    script: bool,
+    acknowledge: Option<&str>,
+) -> crate::outcome::CommandResult {
+    use crate::outcome::failed;
+    // The terms print before either check, and before the wallet opens.
+    // A script that already passed `--acknowledge` still has to say them.
+    println!("{}", shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING);
+    if script {
+        return if acknowledge == Some(FOUNDATION_PHRASE) {
+            Ok(())
+        } else {
+            eprintln!(
+                "A script must pass --acknowledge \"{FOUNDATION_PHRASE}\" with \
+                 --complete-tree-foundation. Nothing was written."
+            );
+            failed()
+        };
     }
-    if foundation {
-        cmd_stake_foundation(rpc);
-        return;
+    eprint!("Type exactly: {FOUNDATION_PHRASE}\n> ");
+    let _flushed = std::io::Write::flush(&mut std::io::stderr());
+    let mut typed = String::new();
+    if std::io::stdin().read_line(&mut typed).is_err() || typed.trim() != FOUNDATION_PHRASE {
+        eprintln!("Foundation staking cancelled. Unbounded disk, no reward. Nothing was written.");
+        return failed();
     }
-    println!("Staking bonds your wallet's funds as staking principal.");
-    println!("The bond posts on-chain and the principal locks until releasing.");
-    if !confirm("Make this wallet a staker?") {
-        println!("Staking cancelled.");
-        return;
-    }
-    // Load-bearing, not UX: a mid-session wallet holds no seed, and only a
-    // credentialed reopen re-materializes it for the persona derivation.
-    let Some(password) = read_password("Wallet password: ") else {
-        return;
-    };
-    println!("Staking (this may take a while)...");
-    let result = rpc.call(
-        "stake",
-        params::Stake {
-            password: &password,
-        },
-    );
-
-    match result {
-        Ok(val) => {
-            let slot = val
-                .get("slot")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(-1);
-            let resumed = val
-                .get("resumed")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if resumed {
-                println!("Resumed an in-flight stake (slot {slot}).");
-            } else {
-                println!("Stake sealed (slot {slot}).");
-            }
-            println!("The bond will be dispatched to the network automatically.");
-            println!("Track it with \"staking_info\".");
-        }
-        Err(e) => rpc.report("Failed to stake", &e),
-    }
+    Ok(())
 }
 
-/// `stake --complete-tree-foundation` — the CLI half of D-4's gate.
-///
-/// Prints the terms, requires them typed back, and only then sends the
-/// acknowledgment. The terms are **not** written here: they come from
-/// [`shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING`], the same constant the
-/// `-29506` refusal body carries and the published contract pins, so the
-/// operator reads exactly what a wrapper's user would read. A second copy
-/// in this file is the drift this arrangement exists to prevent.
-fn cmd_stake_foundation(rpc: &RpcSession) {
-    println!("{}", shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING);
-    println!();
-    eprint!("Type exactly: {FOUNDATION_PHRASE}\n> ");
-    drop(std::io::Write::flush(&mut std::io::stderr()));
-    let mut typed = String::new();
-    if std::io::stdin().read_line(&mut typed).is_err() {
-        println!("Foundation staking cancelled.");
-        return;
-    }
-    if typed.trim() != FOUNDATION_PHRASE {
-        // Nothing is sent. The wallet is untouched, and the operator is
-        // told which half failed rather than being left to guess whether
-        // the stake went through.
-        println!("Phrase did not match. Foundation staking cancelled; nothing was sent.");
-        return;
-    }
-
-    let Some(password) = read_password("Wallet password: ") else {
-        return;
-    };
-    println!("Staking as a Foundation CompleteTree node (this may take a while)...");
-    let result = rpc.call(
+/// Post the Foundation CompleteTree bond. The caller checked the phrase and
+/// still holds the password. One `stake` call; the password is the caller's.
+pub fn post_foundation_stake(rpc: &RpcSession, password: &str) -> crate::outcome::CommandResult {
+    match rpc.call(
         "stake",
         params::StakeFoundation {
-            password: &password,
+            password,
             posture: "foundation_complete_tree",
             acknowledge_non_earning_unbounded: true,
         },
-    );
-
-    match result {
-        Ok(val) => {
-            let slot = val
-                .get("slot")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(-1);
-            println!("Foundation CompleteTree stake sealed (slot {slot}).");
-            println!("This node now owes the whole frozen corpus and earns nothing for it.");
-            println!("The bond will be dispatched to the network automatically.");
-            println!("Track it with \"staking_info\".");
+    ) {
+        Ok(_) => {
+            println!("Foundation CompleteTree stake sealed.");
+            println!("This node owes the whole frozen corpus and earns nothing for it.");
+            Ok(())
         }
-        Err(e) => rpc.report("Failed to stake", &e),
+        Err(e) => Err(rpc.report("Failed to stake", &e)),
     }
 }
 
@@ -153,10 +103,8 @@ fn cmd_stake_foundation(rpc: &RpcSession) {
 /// After the disclosure the flow IS the transfer flow — `stake_in` returns a
 /// `build_pending_tx`-shaped reservation, confirmed with the actual fee and
 /// then submitted or discarded through the shared helpers.
-pub fn cmd_stake_in(rpc: &RpcSession, amount: u64) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_stake_in(rpc: &RpcSession, amount: u64, yes: bool) -> CommandResult {
+    require_open(rpc)?;
     println!("Stake-in adds funds to your staking balance with an ordinary transfer");
     println!("from this wallet.");
     println!();
@@ -168,12 +116,11 @@ pub fn cmd_stake_in(rpc: &RpcSession, amount: u64) {
     let response = match rpc.call("stake_in", json!({ "amount": amount.to_string() })) {
         Ok(v) => v,
         Err(e) => {
-            rpc.report("Failed to prepare the stake-in", &e);
-            return;
+            return Err(rpc.report("Failed to prepare the stake-in", &e));
         }
     };
     let Some(built) = transfers::take_built_pending_tx(rpc, &response) else {
-        return;
+        return failed();
     };
 
     // The confirmation must not understate the debit: the transfer carries
@@ -194,11 +141,11 @@ pub fn cmd_stake_in(rpc: &RpcSession, amount: u64) {
     println!("amount above. It stays yours: it becomes part of your staking balance.");
     println!("It is chosen automatically and cannot be shown before sending.");
 
-    if !confirm_interactive("Fund staking with this transfer?", "stake in") {
-        transfers::discard_declined(rpc, &built);
-        return;
+    if let Err(error) = super::confirm_money("Fund staking with this transfer?", "stake add", yes) {
+        transfers::discard_declined(rpc, &built)?;
+        return Err(error);
     }
-    transfers::submit_pending(rpc, &built);
+    transfers::submit_pending(rpc, &built)
 }
 
 /// `drain_balance` — how much staking money can be moved back to this
@@ -208,10 +155,8 @@ pub fn cmd_stake_in(rpc: &RpcSession, amount: u64) {
 /// anchor the drainable set it says so — it NEVER prints a zero, which
 /// would read as "nothing to drain" and be indistinguishable from an
 /// empty pool.
-pub fn cmd_drain_balance(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_drain_balance(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
     match rpc.call("get_drain_balance", json!({})) {
         Ok(val) => match val.get("status").and_then(Value::as_str) {
             Some("ready") => println!(
@@ -220,12 +165,16 @@ pub fn cmd_drain_balance(rpc: &RpcSession) {
             ),
             Some("syncing") => {
                 println!("The drainable amount is not known yet — the wallet is still syncing.");
-                println!("Run \"refresh\" and try again.");
+                println!("Run \"wallet refresh\" and try again.");
             }
-            _ => eprintln!("Malformed get_drain_balance response."),
+            _ => {
+                eprintln!("Malformed get_drain_balance response.");
+                return failed();
+            }
         },
-        Err(e) => rpc.report("Failed to read the drainable balance", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to read the drainable balance", &e)),
+    };
+    Ok(())
 }
 
 /// `drain <amount>` — move staking funds back to this wallet (WI-RPC-5).
@@ -235,16 +184,14 @@ pub fn cmd_drain_balance(rpc: &RpcSession) {
 /// cannot be discarded once sent. No fee or destination is shown as a
 /// choice because none exists (rule 81 / the anti-fingerprint pin): the fee
 /// is set automatically and the funds can only come back to this wallet.
-pub fn cmd_drain(rpc: &RpcSession, amount: u64) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_drain(rpc: &RpcSession, amount: u64, yes: bool) -> CommandResult {
+    require_open(rpc)?;
     // Refused locally, before the confirm prompt: a zero drain would
     // otherwise print "This moves 0.000000000 SKL", ask for confirmation,
     // and fire a request the server refuses as malformed (-32602).
     if amount == 0 {
         println!("Nothing to move: the amount must be greater than zero.");
-        return;
+        return failed();
     }
     println!(
         "This moves {} SKL of your staking funds back to this wallet's balance.",
@@ -253,9 +200,9 @@ pub fn cmd_drain(rpc: &RpcSession, amount: u64) {
     println!("The network fee is set automatically and is paid from the staking");
     println!("funds on top of this amount.");
 
-    if !confirm_interactive("Move these funds?", "drain") {
+    if let Err(error) = super::confirm_money("Move these funds?", "stake return", yes) {
         println!("Drain cancelled; nothing was sent.");
-        return;
+        return Err(error);
     }
 
     println!("Sending (this may take a while)...");
@@ -293,18 +240,18 @@ pub fn cmd_drain(rpc: &RpcSession, amount: u64) {
                 println!("Drain sent (verdict not recognized): {tx_hash}");
             }
         },
-        Err(e) => rpc.report("Failed to drain", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to drain", &e)),
+    };
+    Ok(())
 }
 
-pub fn cmd_staked_balance(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_staked_balance(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
     match rpc.call("get_staked_balance", json!({})) {
         Ok(val) => print_staked_balance(&val, ""),
-        Err(e) => rpc.report("Failed to get staked balance", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to get staked balance", &e)),
+    };
+    Ok(())
 }
 
 fn print_staked_balance(balance: &Value, indent: &str) {
@@ -323,16 +270,14 @@ fn print_staked_balance(balance: &Value, indent: &str) {
     );
 }
 
-pub fn cmd_staked_outputs(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_staked_outputs(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
     match rpc.call("get_staked_outputs", json!({})) {
         Ok(val) => {
             let outputs = val.get("staked_outputs").and_then(|v| v.as_array());
             let Some(outputs) = outputs.filter(|a| !a.is_empty()) else {
                 println!("No staked outputs.");
-                return;
+                return Ok(());
             };
             println!(
                 "{:<14} {:>18} {:>6} {:>14}",
@@ -352,14 +297,13 @@ pub fn cmd_staked_outputs(rpc: &RpcSession) {
                 println!("{gindex:<14} {amount:>18} {slot:>6} {unlock:>14}");
             }
         }
-        Err(e) => rpc.report("Failed to get staked outputs", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to get staked outputs", &e)),
+    };
+    Ok(())
 }
 
-pub fn cmd_staking_info(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_staking_info(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
     match rpc.call("staking_info", json!({})) {
         Ok(val) => {
             let enabled = val
@@ -372,7 +316,7 @@ pub fn cmd_staking_info(rpc: &RpcSession) {
                 // Still printed: omitting the line on a non-staker reads
                 // as though the question were never asked (rule 82).
                 print_serving_posture(&val);
-                return;
+                return Ok(());
             }
             if let Some(balance) = val.get("balance") {
                 println!("Staked balance:");
@@ -399,8 +343,9 @@ pub fn cmd_staking_info(rpc: &RpcSession) {
             // posture rather than living only in the one-time warning.
             print_serving_posture(&val);
         }
-        Err(e) => rpc.report("Failed to get staking info", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to get staking info", &e)),
+    };
+    Ok(())
 }
 
 /// Wire `posture` → the line an operator reads.
@@ -430,19 +375,17 @@ fn serving_posture_display(posture: Option<&str>) -> String {
 /// fee, or target is shown as a choice because none exists: the exit
 /// releases the whole bond, the fee is set automatically, and the wallet
 /// picks the bonded stake to exit (rule 81 — no slot vocabulary).
-pub fn cmd_unstake(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_unstake(rpc: &RpcSession, yes: bool) -> CommandResult {
+    require_open(rpc)?;
     println!("Unstaking posts the permanent exit for this wallet's staked bond.");
     println!("This cannot be undone: once the exit confirms, the bond is closed");
     println!("for good, and staking again later means posting a whole new bond.");
     println!("The released funds return to your staking balance first; collect");
-    println!("them to this wallet afterwards with \"collect_unstaked\".");
+    println!("them to this wallet afterwards with \"stake collect\".");
 
-    if !confirm_interactive("Post the permanent exit?", "unstake") {
-        println!("Unstake cancelled; nothing was sent.");
-        return;
+    if let Err(error) = super::confirm_money("Post the permanent exit?", "stake exit", yes) {
+        println!("Exit cancelled; nothing was sent.");
+        return Err(error);
     }
 
     println!("Posting the exit (this may take a while)...");
@@ -451,7 +394,7 @@ pub fn cmd_unstake(rpc: &RpcSession) {
             Ok(result) => match result.verdict {
                 DrainVerdictView::Broadcast => {
                     println!("Exit posted: {}", result.tx_hash);
-                    println!("When the network confirms it, run \"collect_unstaked\" to move");
+                    println!("When the network confirms it, run \"stake collect\" to move");
                     println!("the released funds back into this wallet's balance.");
                 }
                 // Already confirmed: "wait for confirmation" would contradict
@@ -459,18 +402,22 @@ pub fn cmd_unstake(rpc: &RpcSession) {
                 // wallet's own scan to observe the existing confirmation.
                 DrainVerdictView::AlreadyInChain => {
                     println!("An identical exit is already confirmed: {}", result.tx_hash);
-                    println!("Run \"collect_unstaked\" to move the released funds back into");
+                    println!("Run \"stake collect\" to move the released funds back into");
                     println!("this wallet's balance (it may take a moment for the wallet's");
                     println!("own scan to observe the confirmation).");
                 }
             },
-            Err(_) => eprintln!("Malformed unstake response: {val}"),
+            Err(_) => {
+                eprintln!("Malformed unstake response: {val}");
+                return failed();
+            }
         },
-        Err(e) => rpc.report("Failed to unstake", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to unstake", &e)),
+    };
+    Ok(())
 }
 
-/// `collect_unstaked` — move the released exit collateral back to this
+/// `stake collect` — move the released exit collateral back to this
 /// wallet's balance, one pass at a time (PR-C).
 ///
 /// The amount is not asked for and cannot be shown up front: each pass
@@ -480,17 +427,15 @@ pub fn cmd_unstake(rpc: &RpcSession) {
 /// two-part completion fact (this persona's remainder, plus whether
 /// another exit's pool remains) is what this command renders explicitly
 /// rather than letting "sent" read as "done".
-pub fn cmd_collect_unstaked(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_collect_unstaked(rpc: &RpcSession, yes: bool) -> CommandResult {
+    require_open(rpc)?;
     println!("This collects your released staking funds back into this wallet's");
     println!("balance. The network fee is set automatically and paid from the");
     println!("collected funds; large collections may take more than one pass.");
 
-    if !confirm_interactive("Collect the released funds?", "collect_unstaked") {
+    if let Err(error) = super::confirm_money("Collect the released funds?", "stake collect", yes) {
         println!("Collection cancelled; nothing was sent.");
-        return;
+        return Err(error);
     }
 
     println!("Collecting (this may take a while)...");
@@ -518,7 +463,7 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession) {
                             "This collection is complete, but released funds from \
                              another exit still remain."
                         );
-                        println!("Run \"collect_unstaked\" again once this pass confirms.");
+                        println!("Run \"stake collect\" again once this pass confirms.");
                     } else if remainder == "0" {
                         println!(
                             "Nothing further remains: once this confirms, the \
@@ -530,7 +475,7 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession) {
                              spendable, or beyond this pass's size).",
                             format_amount_str(&remainder)
                         );
-                        println!("Run \"collect_unstaked\" again once this pass confirms.");
+                        println!("Run \"stake collect\" again once this pass confirms.");
                     }
                 }
                 CollectUnstakedResult::NothingLeft => {
@@ -538,10 +483,14 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession) {
                     println!("this wallet (or on their way in a previous pass).");
                 }
             },
-            Err(_) => eprintln!("Malformed collect_unstaked response: {val}"),
+            Err(_) => {
+                eprintln!("Malformed stake collect response: {val}");
+                return failed();
+            }
         },
-        Err(e) => rpc.report("Failed to collect", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to collect", &e)),
+    };
+    Ok(())
 }
 
 /// Render a decimal atomic-units string through the shared display format;
@@ -557,6 +506,30 @@ fn format_amount_str(atomic: &str) -> String {
 fn print_serving_posture(val: &Value) {
     let posture = val.get("posture").and_then(Value::as_str);
     println!("Serving posture:     {}", serving_posture_display(posture));
+}
+
+/// Bare `stake`: this wallet's posture and the returnable amount.
+pub fn cmd_stake_read(rpc: &RpcSession) -> CommandResult {
+    cmd_staking_info(rpc)?;
+    if rpc.is_open() {
+        cmd_drain_balance(rpc)?;
+    }
+    Ok(())
+}
+
+/// `stake join` names a shard set and does not post it. Wallet-RPC `stake`
+/// still takes a posture, not shard ids, and a market call answers -29505.
+pub fn cmd_stake_join(_rpc: &crate::rpc_client::RpcSession, shard_ids: &[u64]) -> CommandResult {
+    let listed = shard_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    eprintln!(
+        "stake join {listed}: nothing was written. Posting a chosen set of \
+         shards is not available yet."
+    );
+    failed()
 }
 
 #[cfg(test)]

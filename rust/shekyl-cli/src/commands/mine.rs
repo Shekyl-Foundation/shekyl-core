@@ -22,6 +22,7 @@
 
 use crate::daemon::{DaemonClient, DaemonInfo};
 use crate::display::short_address;
+use crate::outcome::{failed, CommandResult};
 use crate::rpc_client::RpcSession;
 
 /// The wallet-convenience default thread count: `min(available cores, 4)`.
@@ -32,68 +33,6 @@ fn default_threads() -> u64 {
         .map(std::num::NonZeroUsize::get)
         .unwrap_or(1) as u64;
     cores.min(4)
-}
-
-/// Parsed mining verb. Lives next to the handlers so `resolve` does not grow
-/// another grammar island in the command match.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ParsedMine {
-    Start { threads: Option<u64> },
-    Stop,
-    Status,
-}
-
-/// `mine start [threads|auto]` / `mine stop` / `mine status`. Extra tokens
-/// are a usage diagnostic, never a silent drop (rule 82).
-pub(crate) fn parse_mine(args: &[&str]) -> Result<ParsedMine, String> {
-    match args {
-        ["start"] => Ok(ParsedMine::Start { threads: None }),
-        ["start", token] => Ok(ParsedMine::Start {
-            threads: parse_thread_token(token)?,
-        }),
-        ["stop"] => Ok(ParsedMine::Stop),
-        ["status"] => Ok(ParsedMine::Status),
-        _ => Err(
-            "mine: usage is \"mine start [threads|auto]\", \"mine stop\", \
-             or \"mine status\""
-                .to_owned(),
-        ),
-    }
-}
-
-/// `start_mining [threads|auto]` alias.
-pub(crate) fn parse_start_mining_alias(args: &[&str]) -> Result<ParsedMine, String> {
-    match args {
-        [] => Ok(ParsedMine::Start { threads: None }),
-        [token] => Ok(ParsedMine::Start {
-            threads: parse_thread_token(token)?,
-        }),
-        _ => Err("start_mining: usage is \"start_mining [threads|auto]\"".to_owned()),
-    }
-}
-
-/// `stop_mining` / `mining_status` take no arguments.
-pub(crate) fn parse_noarg_alias(verb: &str, args: &[&str]) -> Result<ParsedMine, String> {
-    if !args.is_empty() {
-        return Err(format!("{verb}: takes no arguments (usage: {verb})"));
-    }
-    match verb {
-        "stop_mining" => Ok(ParsedMine::Stop),
-        "mining_status" => Ok(ParsedMine::Status),
-        _ => Err(format!("{verb}: usage is \"{verb}\"")),
-    }
-}
-
-fn parse_thread_token(raw: &str) -> Result<Option<u64>, String> {
-    match raw {
-        "auto" => Ok(None),
-        other => match other.parse::<u64>() {
-            Ok(n) if n >= 1 => Ok(Some(n)),
-            _ => Err(format!(
-                "mine start: threads must be a positive number or \"auto\", got {raw:?}"
-            )),
-        },
-    }
 }
 
 /// The shared fail-closed gates (CU-3 / §CU-5 F2, F3, F5). Returns the
@@ -194,9 +133,9 @@ pub fn cmd_mine_start(
     daemon: Option<&DaemonClient>,
     network: &str,
     threads: Option<u64>,
-) {
+) -> CommandResult {
     let Some((dc, info)) = gate(rpc, daemon, network) else {
-        return;
+        return failed();
     };
     remind_if_remote(dc);
 
@@ -209,12 +148,12 @@ pub fn cmd_mine_start(
                      Run \"mine stop\" first to change the thread count.",
                     status.threads_count
                 );
-                return;
+                return Ok(());
             }
         }
         Err(e) => {
             eprintln!("{e}");
-            return;
+            return failed();
         }
     }
 
@@ -230,12 +169,12 @@ pub fn cmd_mine_start(
             "The daemon is still syncing ({of_target}) and will not start mining \
              until it is caught up."
         );
-        return;
+        return failed();
     }
 
     let Some(address) = super::balance::primary_address(rpc, "Failed to get the payout address")
     else {
-        return;
+        return failed();
     };
 
     let threads = threads.unwrap_or_else(default_threads);
@@ -251,48 +190,64 @@ pub fn cmd_mine_start(
             );
             println!("{BUILT_IN_MINER_NOTICE}");
         }
-        Err(e) => eprintln!("Failed to start mining: {e}"),
-    }
+        Err(e) => {
+            eprintln!("Failed to start mining: {e}");
+            return failed();
+        }
+    };
+    Ok(())
 }
 
 /// `mine stop` — stop mining on the daemon.
-pub fn cmd_mine_stop(rpc: &RpcSession, daemon: Option<&DaemonClient>, network: &str) {
+pub fn cmd_mine_stop(
+    rpc: &RpcSession,
+    daemon: Option<&DaemonClient>,
+    network: &str,
+) -> CommandResult {
     let Some((dc, _info)) = gate(rpc, daemon, network) else {
-        return;
+        return failed();
     };
 
     match dc.mining_status() {
         Ok(status) => {
             if !status.active {
                 println!("The daemon is not mining.");
-                return;
+                return Ok(());
             }
         }
         Err(e) => {
             eprintln!("{e}");
-            return;
+            return failed();
         }
     }
 
     match dc.stop_mining() {
         Ok(()) => println!("Mining stopped."),
-        Err(e) => eprintln!("Failed to stop mining: {e}"),
-    }
+        Err(e) => {
+            eprintln!("Failed to stop mining: {e}");
+            return failed();
+        }
+    };
+    Ok(())
 }
 
 /// `mine status` — the daemon's mining state. The daemon's `pow_algorithm`
 /// string is deliberately not rendered (CU-3: operators do not need a
 /// protocol-algorithm name; the daemon now always reports RandomX).
-pub fn cmd_mine_status(rpc: &RpcSession, daemon: Option<&DaemonClient>, network: &str) {
+pub fn cmd_mine_status(
+    rpc: &RpcSession,
+    daemon: Option<&DaemonClient>,
+    network: &str,
+) -> CommandResult {
     let Some((dc, _info)) = gate(rpc, daemon, network) else {
-        return;
+        return failed();
     };
 
     match dc.mining_status() {
         Ok(status) => {
             if !status.active {
                 println!("Mining: idle.");
-                return;
+                return Ok(());
             }
             println!("Mining: active");
             println!("  Threads:    {}", status.threads_count);
@@ -304,45 +259,17 @@ pub fn cmd_mine_status(rpc: &RpcSession, daemon: Option<&DaemonClient>, network:
                 println!("  Difficulty: {}", status.difficulty);
             }
         }
-        Err(e) => eprintln!("{e}"),
-    }
+        Err(e) => {
+            eprintln!("{e}");
+            return failed();
+        }
+    };
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_mine, parse_noarg_alias, parse_start_mining_alias, ParsedMine, BUILT_IN_MINER_NOTICE,
-    };
-
-    #[test]
-    fn mine_grammar_accepts_exact_arity_and_rejects_strays() {
-        assert_eq!(
-            parse_mine(&["start"]).unwrap(),
-            ParsedMine::Start { threads: None }
-        );
-        assert_eq!(
-            parse_mine(&["start", "auto"]).unwrap(),
-            ParsedMine::Start { threads: None }
-        );
-        assert_eq!(
-            parse_mine(&["start", "2"]).unwrap(),
-            ParsedMine::Start { threads: Some(2) }
-        );
-        assert_eq!(parse_mine(&["stop"]).unwrap(), ParsedMine::Stop);
-        assert_eq!(parse_mine(&["status"]).unwrap(), ParsedMine::Status);
-
-        for args in [
-            &[][..],
-            &["begin"][..],
-            &["start", "0"][..],
-            &["start", "four"][..],
-            &["start", "2", "extra"][..],
-            &["stop", "now"][..],
-            &["status", "--json"][..],
-        ] {
-            assert!(parse_mine(args).is_err(), "{args:?}");
-        }
-    }
+    use super::BUILT_IN_MINER_NOTICE;
 
     #[test]
     fn built_in_miner_notice_names_the_template_not_a_drop_in_xmrig() {
@@ -358,28 +285,5 @@ mod tests {
             !BUILT_IN_MINER_NOTICE.contains("XMRig"),
             "do not name a miner that speaks a different template dialect"
         );
-    }
-
-    #[test]
-    fn mining_aliases_reject_extra_arguments() {
-        assert_eq!(
-            parse_start_mining_alias(&[]).unwrap(),
-            ParsedMine::Start { threads: None }
-        );
-        assert_eq!(
-            parse_start_mining_alias(&["3"]).unwrap(),
-            ParsedMine::Start { threads: Some(3) }
-        );
-        assert!(parse_start_mining_alias(&["3", "extra"]).is_err());
-        assert_eq!(
-            parse_noarg_alias("stop_mining", &[]).unwrap(),
-            ParsedMine::Stop
-        );
-        assert!(parse_noarg_alias("stop_mining", &["now"]).is_err());
-        assert_eq!(
-            parse_noarg_alias("mining_status", &[]).unwrap(),
-            ParsedMine::Status
-        );
-        assert!(parse_noarg_alias("mining_status", &["--json"]).is_err());
     }
 }
