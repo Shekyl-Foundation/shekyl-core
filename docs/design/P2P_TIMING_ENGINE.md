@@ -316,7 +316,10 @@ handed, not from a reply to `arm`. Owner ids are handed out by the
 handle from an atomic counter, so registering is not a round trip
 either. The handle is a type in this crate. `OwnerId`'s field stays
 private (`OwnerId(u64)`); transport never constructs one. `register`
-takes the id the handle minted in this crate and refuses a duplicate.
+takes the id the handle minted in this crate and refuses a duplicate,
+including an id that was deregistered. A stale hint for that id is
+still in the heap, and reusing the id would let it match the new
+owner's first arming.
 *Records-was: the core assigned ids itself (`Engine::register`,
 `next_id`).* That is the core change. A public constructor on
 `OwnerId` is not part of it. An id the handle minted is handed out by

@@ -114,11 +114,13 @@ not fire: the timing-engine round opened 2026-09-25.
 `hmac_blake2s`. `read_message1` range-checks the encapsulation key and
 `ResponderReady` stores the parsed key. `OnionPow`'s default is
 `Enabled`. `InboundCeiling` is in `shekyl-peer-policy`. The timing
-core is `shekyl-timing-engine`. The service is not in that crate, and
-`Engine::register` still mints `OwnerId`. Connection deadlines are
-owners of the service from the first transport line, so the service —
-including `register` taking the id the handle minted — is the first
-production commit. A Rust ban list is not in the tree. D3 already
+core is `shekyl-timing-engine`. *Records-was, at this pre-flight: the
+service was not in that crate, and `Engine::register` minted
+`OwnerId`.* The service has since landed as `EngineService`.
+`register` takes the id the handle minted and refuses a duplicate,
+including one that was deregistered. Connection deadlines are owners
+of the service from the first transport line, so the service was the
+first production commit. A Rust ban list is not in the tree. D3 already
 rules it; building it is this implementation. `pipe.rs` stays. The
 pipe branch stays `fix/clearnet-pipe-option-testing` at `190cbdc3b`.
 The `io_context` stays until the bridge after cutover. I2P removal is

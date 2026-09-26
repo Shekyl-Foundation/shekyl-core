@@ -79,6 +79,10 @@ enum Terminal {
 struct Slot {
     state: Mutex<SlotState>,
     cvar: Condvar,
+    /// Set while `wait` is blocked, so a test can close only after the
+    /// home is parked. Not a production signal.
+    #[cfg(test)]
+    parked: AtomicBool,
 }
 
 impl Slot {
@@ -86,7 +90,14 @@ impl Slot {
         Self {
             state: Mutex::new(SlotState::Empty),
             cvar: Condvar::new(),
+            #[cfg(test)]
+            parked: AtomicBool::new(false),
         }
+    }
+
+    #[cfg(test)]
+    fn is_parked(&self) -> bool {
+        self.parked.load(Ordering::Acquire)
     }
 
     /// A poisoned lock means a home panicked while holding it. The next
@@ -126,7 +137,11 @@ impl Slot {
                 Some(wake) => return Ok(wake),
                 None => {
                     idle()?;
+                    #[cfg(test)]
+                    self.parked.store(true, Ordering::Release);
                     state = self.cvar.wait(state).expect("slot lock poisoned; aborting");
+                    #[cfg(test)]
+                    self.parked.store(false, Ordering::Release);
                 }
             }
         }
@@ -405,7 +420,9 @@ fn dispatch<C: Clock>(
 ) -> bool {
     match command {
         Command::Shutdown => {
-            while rx.try_recv().is_ok() {}
+            while let Ok(queued) = rx.try_recv() {
+                seal_discarded_register(queued);
+            }
             return false;
         }
         #[cfg(test)]
@@ -422,7 +439,7 @@ fn dispatch<C: Clock>(
             return true;
         }
         other if closed.load(Ordering::Acquire) => {
-            drop(other);
+            seal_discarded_register(other);
             return true;
         }
         Command::Register { id, class, slot } => {
@@ -465,6 +482,15 @@ fn dispatch<C: Clock>(
 
 /// After every command, not once per sleep. A burst must not hold a due
 /// wake until the mailbox has drained.
+/// A `Register` that close drops never enters `deliveries`, so the
+/// worker's shutdown seal would not see its slot. Seal it here or a
+/// home already blocked in `wait_wake` never wakes.
+fn seal_discarded_register(command: Command) {
+    if let Command::Register { slot, .. } = command {
+        slot.seal(Terminal::Closed);
+    }
+}
+
 fn deliver_due<C: Clock>(engine: &mut Engine<C>, deliveries: &HashMap<OwnerId, Arc<Slot>>) {
     for wake in engine.poll() {
         if let Some(slot) = deliveries.get(&wake.owner) {
@@ -740,6 +766,7 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
     use std::sync::mpsc;
     use std::thread;
@@ -927,11 +954,38 @@ mod tests {
             .env("SHEKYL_TIMING_ENGINE_ABORT_CHILD", "1")
             .status()
             .expect("spawn the abort child");
+        #[cfg(unix)]
         assert_eq!(
             status.signal(),
             Some(6),
             "expected SIGABRT from process::abort, got {status:?}"
         );
+        #[cfg(not(unix))]
+        assert!(
+            !status.success(),
+            "expected the child process to abort, got {status:?}"
+        );
+    }
+
+    #[test]
+    fn a_wait_on_a_registration_closed_before_it_is_applied_returns_closed() {
+        let service = EngineService::start_paused(ManualClock::new(Tick::new(0)));
+        let owner = service.handle().register(OwnerClass::Transport).unwrap();
+        let slot = Arc::clone(&owner.slot);
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            tx.send(owner.wait_wake()).expect("test thread alive");
+        });
+        while !slot.is_parked() {
+            thread::yield_now();
+        }
+        service.close();
+        service.release();
+        service.wait_stopped();
+        let result = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("wait_wake blocked after close dropped the registration");
+        assert!(matches!(result, Err(EngineError::Closed)));
     }
 
     /// The second wait is the bug: a wake was in the slot at shutdown, so

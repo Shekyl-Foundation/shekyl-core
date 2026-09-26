@@ -16,7 +16,7 @@
 #![deny(unsafe_code)]
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -382,6 +382,10 @@ pub struct Engine<C: Clock> {
     /// Owners with an outstanding home report.
     pending_count: usize,
     owners: HashMap<OwnerId, Owner>,
+    /// Ids that were registered and then deregistered. An id is minted
+    /// once. Reusing it would let a stale heap hint match the new owner's
+    /// first arming.
+    retired: HashSet<OwnerId>,
     heap: BinaryHeap<Reverse<Hint>>,
     by_class: [ClassLateness; CLASS_COUNT],
 }
@@ -394,6 +398,7 @@ impl<C: Clock> Engine<C> {
             live: 0,
             pending_count: 0,
             owners: HashMap::new(),
+            retired: HashSet::new(),
             heap: BinaryHeap::new(),
             by_class: std::array::from_fn(|_| ClassLateness::default()),
         }
@@ -407,15 +412,15 @@ impl<C: Clock> Engine<C> {
         &mut self.clock
     }
 
-    /// Accept `id`. The handle minted it. An id that is already registered
-    /// is refused. An id that was deregistered may be registered again;
-    /// the handle does not reuse ids, so that path is the core's, not the
-    /// service's.
+    /// Accept `id`. The handle minted it once. An id that is registered,
+    /// or that was deregistered, is refused. A stale hint for a retired
+    /// id stays in the heap until it reaches the front, and it must not
+    /// be able to match a new owner.
     pub fn register(&mut self, id: OwnerId, class: OwnerClass) -> Result<(), EngineError> {
         if self.closed {
             return Err(EngineError::Closed);
         }
-        if self.owners.contains_key(&id) {
+        if self.owners.contains_key(&id) || self.retired.contains(&id) {
             return Err(EngineError::DuplicateOwner);
         }
         self.owners.insert(
@@ -442,6 +447,7 @@ impl<C: Clock> Engine<C> {
         if removed.pending.is_some() {
             self.pending_count -= 1;
         }
+        self.retired.insert(owner);
         self.compact_if_stale();
         Ok(())
     }
@@ -940,7 +946,33 @@ mod tests {
             EngineError::DuplicateOwner
         );
         engine.deregister(id).unwrap();
-        engine.register(id, OwnerClass::Transport).unwrap();
+        assert_eq!(
+            engine.register(id, OwnerClass::Transport).unwrap_err(),
+            EngineError::DuplicateOwner
+        );
+    }
+
+    #[test]
+    fn a_retired_id_cannot_revive_a_stale_hint() {
+        let mut engine = engine_at(0);
+        let first = ids().mint();
+        let second = ids().mint();
+        engine.register(first, OwnerClass::Relay).unwrap();
+        engine.register(second, OwnerClass::Transport).unwrap();
+        engine.arm(first, Tick::new(10)).unwrap();
+        engine.arm(second, Tick::new(20)).unwrap();
+        engine.deregister(first).unwrap();
+        assert_eq!(
+            engine.register(first, OwnerClass::Relay).unwrap_err(),
+            EngineError::DuplicateOwner
+        );
+        engine.clock_mut().set(Tick::new(10));
+        assert!(engine.poll().is_empty());
+        engine.clock_mut().set(Tick::new(20));
+        let wakes = engine.poll();
+        assert_eq!(wakes.len(), 1);
+        assert_eq!(wakes[0].owner, second);
+        assert_eq!(wakes[0].deadline, Tick::new(20));
     }
 
     #[test]
