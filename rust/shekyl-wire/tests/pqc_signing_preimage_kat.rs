@@ -56,6 +56,25 @@ use shekyl_wire::{Ct, PqcSigningPreimage, Transaction};
 
 const FIXTURE: &str = "tests/fixtures/pqc_signing_preimage_v1.json";
 
+/// The fixture's `description`, in one place: what the emitter writes and
+/// what the Rust leg asserts the committed file carries. A correction made
+/// to the fixture's text but not here would be reverted by the next emit
+/// and would not survive; a correction made here but not there would leave
+/// the committed file saying the old thing. Either is red.
+const DESCRIPTION: &str = "Per-input PQC signing preimage KAT. For each transaction: \
+     payloads_hex[i] is the §1.1 payload the i-th input's hybrid signature is \
+     over (pruned segment ‖ keccak256(prunable) ‖ pqc_header(i) ‖ keccak256 of \
+     every input's hybrid public key) and signed_hashes_hex[i] = keccak256 of it. \
+     Every transaction was accepted and connected by a running shekyld. The \
+     payloads are the specification's output for these bytes, captured from the \
+     C++ assembly (tx_pqc_verify.cpp, get_transaction_signed_payload) by the C++ \
+     leg's capture mode before E6 slice 6 commit 7 made shekyl-wire the \
+     derivation of record and deleted that assembly. The serve-credit form has \
+     no preimage (empty lists) because consensus forbids it pqc_auths (CEN-H20): \
+     it is hybrid-signed over the pass record by the bond's registered key, \
+     Ed25519 leg on the vin and ML-DSA leg in the pruned record, verified by \
+     shekyl_archival_verify_serve_credit_vin (CEN-J10), not over this preimage.";
+
 fn hex_str(b: impl AsRef<[u8]>) -> String {
     b.as_ref().iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -192,19 +211,7 @@ fn emit_pqc_signing_preimage_kat_inputs() {
     let doc = serde_json::json!({
         "format_version": 1,
         "specification": "docs/design/FCMP_SPEND_SIGNING_PREIMAGE.md §1.1",
-        "description": "Per-input PQC signing preimage KAT. For each transaction: \
-         payloads_hex[i] is the §1.1 payload the i-th input's hybrid signature is \
-         over (pruned segment ‖ keccak256(prunable) ‖ pqc_header(i) ‖ keccak256 of \
-         every input's hybrid public key) and signed_hashes_hex[i] = keccak256 of it. \
-         Every transaction was accepted and connected by a running shekyld. The \
-         payloads are the specification's output for these bytes, captured from the \
-         C++ assembly (tx_pqc_verify.cpp, get_transaction_signed_payload) by the C++ \
-         leg's capture mode before E6 slice 6 commit 7 made shekyl-wire the \
-         derivation of record and deleted that assembly. The serve-credit form has \
-         no preimage (empty lists) because consensus forbids it pqc_auths (CEN-H20): \
-         it is hybrid-signed over the pass record by the bond's registered key, \
-         Ed25519 leg on the vin and ML-DSA leg in the pruned record, verified by \
-         shekyl_archival_verify_serve_credit_vin (CEN-J10), not over this preimage.",
+        "description": DESCRIPTION,
         "captured_by": "",
         "transactions": entries,
     });
@@ -228,12 +235,29 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
         !doc["captured_by"].as_str().expect("captured_by").is_empty(),
         "the fixture has not been captured: run the C++ leg's capture mode"
     );
+    // The fixture's prose is the emitter's, byte for byte, so a correction
+    // lands in both or in neither — a re-emit is a no-op on these fields.
+    assert_eq!(
+        doc["description"].as_str().expect("description"),
+        DESCRIPTION,
+        "the fixture's description is what the emitter writes"
+    );
     let transactions = doc["transactions"].as_array().expect("transactions");
+    let subjects = subjects();
     assert_eq!(
         transactions.len(),
-        subjects().len(),
+        subjects.len(),
         "every subject is pinned"
     );
+    for (entry, subject) in transactions.iter().zip(&subjects) {
+        assert_eq!(entry["name"].as_str(), Some(subject.name), "subject order");
+        assert_eq!(
+            entry["source"].as_str(),
+            Some(subject.source),
+            "{}: the fixture's provenance is what the emitter writes",
+            subject.name
+        );
+    }
     let mut input_counts = Vec::new();
     for entry in transactions {
         let name = entry["name"].as_str().expect("name");

@@ -473,6 +473,80 @@ fn i17_derives_the_wires_signing_preimage_and_records_the_row() {
     });
 }
 
+/// The serve-credit form has no signing preimage — not because it is
+/// unsigned, but because CEN-H20 forbids it `pqc_auths` and its hybrid
+/// countersignature is CEN-J10's, over the pass record. Two failure modes
+/// are pinned here for I17 and, by the same shape, for I18 (commit 8):
+///
+/// 1. **It does not reach for J10's object.** The derivation is bound to
+///    the class, not to the record: corrupting every byte of the pass record
+///    changes nothing — still zero hashes, still admitted through
+///    `tx_against`. A derivation that read the record would move.
+/// 2. **Zero-yield is exactly the classes with no `pqc_auths` by
+///    construction** — the serve credit and the coinbase — never an in-scope
+///    class that happened to produce nothing: a spend yields one per input.
+///
+/// The row is recorded **vacuous, not absent**, as I10–I12 are on the same
+/// body and as every out-of-scope row is (slice 5 Q2, `rules/mod.rs`): the
+/// bitset says the row was evaluated at this slot, so a block of serve
+/// credits can be complete and the pool cannot mis-declare a kind. What
+/// distinguishes a vacuous record from a judgment is (2): the class, which
+/// this test holds fixed.
+#[test]
+fn i17_reads_none_of_a_serve_credits_pass_record_and_yields_only_where_pqc_auths_are() {
+    let chain = spendable_chain();
+    let intact = serve_credit_only([0x5e; 32]);
+    let mut corrupt = intact.clone();
+    match &mut corrupt.prefix.inputs[0] {
+        Input::ServeCredit { canonical_bytes } => {
+            // Every payload byte flipped; the tag byte stays so the codec's
+            // shape check admits the body and I17 alone is under test.
+            for byte in &mut canonical_bytes[1..] {
+                *byte ^= 0xFF;
+            }
+        }
+        other => panic!("a serve-credit fixture carries a serve-credit input, not {other:?}"),
+    }
+    for (name, tx) in [("intact", &intact), ("corrupt record", &corrupt)] {
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(tx, TxSlot::Lone, &mut coverage)
+            .expect("a serve-credit-only body classifies");
+        assert!(
+            matches!(cx.class, crate::rules::tx::TxClass::ServeCreditOnly { .. }),
+            "{name}: the class the zero-yield follows from"
+        );
+        assert!(
+            I17::signed_hashes(&cx, &mut coverage).is_empty(),
+            "{name}: no pqc_auths, no preimage — the pass record is J10's, unread here"
+        );
+        assert!(
+            coverage.contains(CenRow::I17),
+            "{name}: recorded vacuous, not absent"
+        );
+        chain.with_view(|view| {
+            defined(tx_against(tx, TxSlot::Lone, &view, &RuleSet::GENESIS)).unwrap_or_else(
+                |refused| panic!("{name}: admitted regardless of the record; refused {refused:?}"),
+            );
+        });
+    }
+    // (2): the coinbase is the other body with no `pqc_auths`; a spend yields
+    // one hash per input, so an empty yield can only be one of the two.
+    let mut coverage = RuleCoverage::EMPTY;
+    let cb = coinbase(1);
+    let cx = TxContext::derive(&cb, TxSlot::Miner, &mut coverage).expect("a coinbase classifies");
+    assert!(
+        I17::signed_hashes(&cx, &mut coverage).is_empty(),
+        "the coinbase yields nothing"
+    );
+    let spend = listed_on(&chain, KI);
+    let cx = TxContext::derive(&spend, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    assert_eq!(
+        I17::signed_hashes(&cx, &mut coverage).len(),
+        spend.prefix.inputs.len(),
+        "a spend yields one per input — in scope, never vacuous"
+    );
+}
+
 // ---- CEN-I2, by construction ------------------------------------------
 
 /// CEN-I2 — a non-coinbase transaction's CT is `FcmpPlusPlusPqc` — holds

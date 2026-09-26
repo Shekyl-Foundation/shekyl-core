@@ -30,8 +30,9 @@ use crate::legacy_util::slice_from_ptr;
 use crate::tx_extra_ffi::write_msg;
 
 /// Every input's hash written; `out_count` holds how many (`0` for a body
-/// with no per-input authentication: a coinbase, the serve-credit form, a
-/// storage-pruned spend).
+/// with no `pqc_auths` to sign over: a coinbase, a storage-pruned spend, and
+/// the serve-credit form — which consensus forbids them (CEN-H20) because
+/// its hybrid countersignature is over the pass record instead, CEN-J10).
 pub const SHEKYL_TX_SIGNING_OK: i32 = 0;
 /// A required pointer was null (a non-null `tx` of `tx_len` bytes, `out` of
 /// `32 · out_cap` bytes, `out_count`).

@@ -243,7 +243,8 @@ fn serve_credit_tx(n: usize) -> Transaction {
 }
 
 /// `PDM-Q-F26`: the serve-credit form has **no** third txid component. Its
-/// countersignature rides the vin, `pqc_auths` is empty by mandate, and the
+/// hybrid countersignature is over the pass record (Ed25519 leg on the vin,
+/// ML-DSA leg in the pruned record; CEN-J10), `pqc_auths` is empty by mandate, and the
 /// C++ oracle hashes it 3-part — so `pqc_auth_hash()` is `None`, and the
 /// skeleton reconstruction with `None` is the body's own hash. `None` here is
 /// a fact about the txid's arity, not a discarded value.
