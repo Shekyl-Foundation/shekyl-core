@@ -106,8 +106,8 @@ members = [
     # See docs/design/DAEMON_RELAY_PRIVACY.md §18.
     "shekyl-relay",
 
-    # Timing-engine core (P2P-3 TE). Owners report next_wake; this crate
-    # only stores hints and hands back due wakes. No sockets, no C++ bridge.
+    # Timing engine (P2P-3 TE). The core stores wake hints. The service is
+    # one thread homes send to. No sockets, no C++ bridge.
     # See docs/design/P2P_TIMING_ENGINE.md.
     "shekyl-timing-engine",
 

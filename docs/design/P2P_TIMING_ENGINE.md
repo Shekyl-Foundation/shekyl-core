@@ -9,10 +9,10 @@ row is P2P-3's **TE**. The design is closed. The pre-flight is
 `ca825e8df`, which re-read `dev` `78eef562d` and landed before the
 crate. The engine core is
 `shekyl-timing-engine`: wake hints, an earlier-only arm, one outstanding
-wake per owner, and lateness per class. The engine service and the C++
-bridge are not in that crate. The service's concurrency decisions are
-the addendum below (2026-09-25, not a new round). The bridge waits until
-after the transport cutover.
+wake per owner, and lateness per class. The engine service is
+`EngineService` in that crate. The C++ bridge is not. The service's
+concurrency decisions are the addendum below (2026-09-25, not a new
+round). The bridge waits until after the transport cutover.
 
 Pinned to `fix/p2p-transport-hmac-oracle` `55d7b2b16`. Line numbers
 were read there. Opening the round still discharges D6's third
@@ -304,9 +304,9 @@ interim executor.
 
 The crate is the data structure. The transport layer calls a service
 around it, from its first line. These are the decisions that service is
-built from. The service is not in the crate yet. Invoke aborts stay on
-the bridge. Shutdown steps 2–8 stay with the transport and the bridge;
-step 1 is this service.
+built from. The service is `EngineService` in `shekyl-timing-engine`
+(landed 2026-09-26). Invoke aborts stay on the bridge. Shutdown steps
+2–8 stay with the transport and the bridge; step 1 is this service.
 
 **Owners never wait on the engine.** `arm`, `clear`, and `deregister`
 are fire-and-forget: the send returns when the command is queued, not
@@ -315,11 +315,22 @@ when the engine has applied it. A `Wake` already carries its
 handed, not from a reply to `arm`. Owner ids are handed out by the
 handle from an atomic counter, so registering is not a round trip
 either. The handle is a type in this crate. `OwnerId`'s field stays
-private (`OwnerId(u64)`); transport never constructs one. The core
-today assigns ids itself (`Engine::register`, `next_id`). When the
-service lands, `register` takes the id the handle minted in this crate
-and refuses a duplicate. That is the core change. A public constructor
-on `OwnerId` is not part of it.
+private (`OwnerId(u64)`); transport never constructs one.
+`IdSource::mint` returns an `OwnerMint`, and `register` consumes it.
+The id can be copied off the token. The token cannot be replayed. A
+clone of an `IdSource` shares its counter. `IdSource::new` is a
+different source, and the first token binds the engine to that source.
+A token from any other source is `ForeignMint`, so a second counter
+that starts again at 1 cannot revive a stale hint. One source never
+wraps, so it never reissues an id, and the engine does not keep a set
+of retired ids. A second token for an id the live map still holds is
+`DuplicateOwner`.
+*Records-was: the core assigned ids itself (`Engine::register`,
+`next_id`). Records-was after that: `register` took an `OwnerId` and a
+`retired` set remembered every deregistered id for the life of the
+process.* A public constructor on `OwnerId` is not part of the change.
+The core's bench holds an `IdSource` because it calls `register`
+directly.
 
 **One outstanding wake is the delivery primitive.** Each owner has a
 single wake slot. It is not a queue. Delivery writes the newest `Wake`
@@ -330,7 +341,24 @@ whatever wake is in the slot when it runs, so `note_home` is handed the
 generation the core still holds. Leaving the older wake in the slot
 would make `note_home` return `NoSuchWake` and the newer wake
 unreportable. The home drops the slot's lock before it does any work,
-so the engine thread never waits on the owner.
+so the engine thread never waits on the owner. Close and deregister
+record a terminal mark on that slot even when a wake is already
+waiting. The waiting wake is handed out once. The next poll or wait
+returns `Closed` or `UnknownOwner`. A seal that only wrote the mark
+into an empty slot would, after that wake was taken, leave the slot
+empty and the engine thread already gone, and the next wait would
+block. The handle also checks its own deregistered flag when the slot
+is empty, so a home that has deregistered does not observe `Ok(None)`.
+
+After every command the thread delivers whatever is due, not once per
+sleep. A burst of commands must not hold a due wake until the mailbox
+has drained. Delivering only on the way into the sleep would put that
+wake behind the burst.
+
+A home that panics while holding the slot lock poisons it. The engine
+thread's next deliver then panics on that lock and aborts the process.
+Release builds already abort on any panic, so this is the same outcome,
+not a second failure mode.
 
 **The engine thread sleeps by blocking on the mailbox.** The timeout is
 `next_deadline() - now` when a deadline is armed, and the thread blocks
@@ -344,11 +372,21 @@ owner sends. The engine's earlier-only rule runs when it applies an
 `arm`, so an `arm` that is queued and then discarded has already taken
 a slot in the mailbox. An idle deadline that only moves later would
 send one command per event. The handle knows the deadline it has armed.
-An `arm` that is not strictly earlier is not sent. After a fire or a
-`clear` the handle has no armed deadline, and the next `arm` is sent.
-An `arm` enters the mailbox only when that owner's deadline moves
-earlier, and `clear`, `deregister`, and `note_home` enter when the
-home sends them. That is the traffic. It is not a fixed capacity: a
+An `arm` that is not strictly earlier is not sent. The handle remembers
+the deadline it sent and a token for that arm. The engine thread copies
+the token onto the wake when the arm's generation actually advances; a
+no-op arm leaves the previous token in place. Taking a wake clears the
+handle's memory only when the wake carries that token. That is how the
+handle learns this deadline fired. The reset is on receipt, not when
+the engine fires: until the home takes that wake it still believes the
+old deadline is armed. `clear` and `deregister` clear the memory as
+well. A wake that was already waiting when `clear` ran is still handed
+out once, and it does not forget the arm `clear` just allowed. Without
+the token, taking that older wake would clear the new arm, and the
+next later arm would be sent and then dropped by the engine's
+earlier-only rule. An `arm` enters the mailbox only when that owner's
+deadline moves earlier, and `clear`, `deregister`, and `note_home`
+enter when the home sends them. That is the traffic. It is not a fixed capacity: a
 deadline can keep moving earlier for as long as the connection lives.
 A mailbox that refused an earlier `arm` would drop a gap deadline
 without the owner knowing, so the queue is not given a length that
@@ -381,7 +419,13 @@ lateness from a different zero.
 **After close.** Each handle holds a closed flag. `register`, `arm`,
 `clear`, and `deregister` check it and return `EngineError::Closed`
 without sending. Commands already in the mailbox are dropped, not
-applied. `close` is shutdown step 1.
+applied. A wake already in the slot is still handed out once, and the
+next wait returns `Closed`. `close` is shutdown step 1: it returns
+only after the worker has dropped a deadline that had not already been
+delivered and has sealed every slot. The thread does not exit there.
+It exits when the service is dropped, which is step 8. A poll that
+reads the closed flag before that seal would report `Closed` and then
+a wake; `Closed` is the sealed slot.
 
 **If the engine thread panics, the process aborts.** A dead engine
 leaves every gap timer and handshake deadline unarmed, so a flood holds
