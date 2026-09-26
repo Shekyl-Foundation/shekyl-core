@@ -45,10 +45,13 @@ verification half). In the C++ this is `Blockchain::check_tx_inputs`
 (`blockchain.cpp:3360–4289` at `4dc5194de`) plus `verify_transaction_pqc_auth`
 (`tx_pqc_verify.cpp:162–243`), run at pool admission and at connect. In
 Rust the home is
-[`tx_against`](../../rust/shekyl-chain-rules/src/validate.rs)
-(`tx_against(tx, view, rule_set) -> Result<Verdict<RuleCoverage>, V::Fault>`),
-today `Ok(Ok(EMPTY))` — the last of the crate's four entry points still a
-stub.
+[`tx_against`](../../rust/shekyl-chain-rules/src/validate.rs) — since
+commits 4 and 5, `tx_against(tx, slot, view, rule_set) ->
+Result<Verdict<RuleCoverage>, ViewRead<V::Fault>>`, running I7 and the two
+D4 sequences `judge_reference` (I10 → I11 → I12) and `judge_signatures`
+(I17 → I18). *Records-was, at Round 0:* `tx_against(tx, view, rule_set)
+-> Result<Verdict<RuleCoverage>, V::Fault>`, `Ok(Ok(EMPTY))` — the last of
+the crate's four entry points still a stub.
 
 Not every 4.I row is view-bound. The census's 4.I is *"the FCMP++ input
 path"* as the C++ organises it, and that path holds stateless checks the
