@@ -22,9 +22,10 @@
 //!   beside the connector, **not** as test support — as test support it
 //!   would be a second implementation the daemon redoes; here it is the
 //!   boundary advancing, and when a row lands (F14b prices the reward on
-//!   the verdict, S-CURVE grows the tree, G6 derives the median) one
-//!   field's [`Origin`] flips from `PassedThrough` to `Derived` inside a
-//!   function that already exists.
+//!   the verdict, G6 derives the median) one field's [`Origin`] flips from
+//!   `PassedThrough` to `Derived` inside a function that already exists —
+//!   or, as DRS-E3 did for the root, the field leaves `ConnectFacts`
+//!   because the verdict carries the value itself.
 //!
 //! # What `Composed` composes, and what it passes through
 //!
@@ -53,8 +54,12 @@
 //! | `long_term_weight` | `shekyl_economics::long_term_weight(median, weight)` | composed (over a median that has no source yet) | CEN-G6/G6b |
 //! | `coins_generated` | the parent's record advanced by the producer's priced reward through `shekyl_economics::advance_already_generated` | composed — **one source, one owner, one addition**: the reward is the template's, which is `shekyl-economics`'; the only ingest-local logic is the `+` | CEN-F13/F14/F14b: the verdict carries the priced reward |
 //! | `burned` | the producer's priced burn (`shekyl-economics` in the template) | composed by the producer | CEN-F17/G11 |
-//! | `root_after` | the caller's | no source yet — nothing here grows the tree | CEN-B5/I12 through S-CURVE (E3 writes the tree) |
 //! | `long_term_effective_median` | the caller's | no source yet — G6 is slice 7 | CEN-G6/G6b |
+//!
+//! `root_after` sat in this table as *no source yet* until DRS-E3
+//! (2026-09-26): `validate` now derives the drain and the root over the
+//! view and `connect` records the verdict's, so the field left
+//! `ConnectFacts` altogether rather than flipping to `Derived` here.
 //!
 //! The caller's priced figures ([`Priced`]) come from whoever built the
 //! block: the scenario driver hands over what `shekyl-block-template`
@@ -69,7 +74,7 @@
 use shekyl_chain_rules::{recorded, ChainValid, ChainView, Corrupt, ViewRead};
 use shekyl_chain_store::store::{ConnectFacts, Fact};
 use shekyl_economics::{advance_already_generated, long_term_weight};
-use shekyl_types::{BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight};
+use shekyl_types::{BlockHeight, BlockWeight, LongTermWeight};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
@@ -144,8 +149,6 @@ pub struct Priced {
     pub block_reward: AtomicUnits,
     /// This block's destroyed amount (CEN-F17's `actually_destroyed`).
     pub burned: AtomicUnits,
-    /// The tree state after this block's drain (CEN-B5's next operand).
-    pub root_after: CurveTreeRoot,
     /// The long-term median in force for this block (CEN-G6's operand).
     pub long_term_effective_median: LongTermWeight,
 }
@@ -237,7 +240,6 @@ impl<P: PricedAt> FactsFor for Composed<P> {
             long_term_weight: Fact::passed_through(long_term),
             coins_generated: Fact::passed_through(coins_generated),
             burned: Fact::passed_through(priced.burned),
-            root_after: Fact::passed_through(priced.root_after),
             long_term_effective_median: Fact::passed_through(priced.long_term_effective_median),
         })
     }

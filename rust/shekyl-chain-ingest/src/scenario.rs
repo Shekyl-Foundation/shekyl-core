@@ -37,9 +37,11 @@
 //! validator, the store, the facts fold. Under a [`ProductionSubstrate`]
 //! the PoW is real RandomX at the fixed regtest difficulty; the default
 //! [`Clocked`] over the harness longhash keeps the clock deterministic and
-//! the hash free. Placeholder, and said so where it is set: `root_after`
-//! (nothing here grows the tree — S-CURVE), the long-term median and the
-//! effective median weight (G6, slice 7), the frozen-segment count (E4).
+//! the hash free. Placeholder, and said so where it is set: the long-term
+//! median and the effective median weight (G6, slice 7), the frozen-segment
+//! count (E4). The curve-tree root stopped being one with DRS-E3: the
+//! validator derives it and the store records it, and the next template
+//! reads it off the store as it always did.
 //! Each is the caller's pass-through in [`Priced`] and the template's
 //! context, exactly as the E2 trace supplied it, and each is a line that
 //! becomes a derivation when its owner lands.
@@ -59,12 +61,9 @@ use shekyl_chain_rules::{
     form, seed_height, Candidate, CenRow, FormAttempt, InvalidBlock, RuleSet, Substrate,
     EMISSION_SPLIT_EPOCH,
 };
-use shekyl_crypto_hash::keccak256;
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_economics::{EconomicParams, FrozenSegmentCount, FULL_REWARD_ZONE};
-use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, LongTermWeight, PowHash, Timestamp,
-};
+use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, LongTermWeight, PowHash, Timestamp};
 use shekyl_wire::Transaction;
 
 use crate::connector::{
@@ -155,19 +154,6 @@ impl PricedAt for Ledger {
             .get(&height.to_raw())
             .copied()
     }
-}
-
-/// The root the driver passes through as the state after `height`'s drain.
-/// **Placeholder**: nothing here grows the curve tree (S-CURVE is E3's);
-/// what matters to the rules that have landed is that the next header
-/// carries what the store recorded (CEN-B5), which holds because the next
-/// template reads `root_at` off the store. Derived from the height so it
-/// is deterministic and distinct per block.
-#[must_use]
-pub fn placeholder_root_after(height: BlockHeight) -> CurveTreeRoot {
-    let mut preimage = *b"shekyl-scenario-root-after\0\0\0\0\0\0";
-    preimage[26..].copy_from_slice(&height.to_raw().to_le_bytes()[..6]);
-    CurveTreeRoot::from_bytes(keccak256(&preimage))
 }
 
 /// One mined block: what the template priced and what the validator
@@ -302,7 +288,6 @@ where
             Priced {
                 block_reward: template.block_reward,
                 burned: template.fees_burned,
-                root_after: placeholder_root_after(height),
                 // G6 (slice 7): until the median is derived it is the
                 // zone, the value the C++ floors a short chain's median to.
                 long_term_effective_median: LongTermWeight::from_raw(FULL_REWARD_ZONE),

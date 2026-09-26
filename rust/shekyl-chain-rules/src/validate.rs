@@ -356,11 +356,7 @@ pub fn validate<'id, V: ChainView<'id>>(
     // passed — but the derivation the verdict carries because the root
     // determines future validity (`CTW-Q1`). Runs after every refusal
     // could have fired so a refused block never grows anything.
-    let growth = drain::drain(view, connecting, rule_set)?;
-    let root_after = match &growth {
-        Some(growth) => growth.root,
-        None => drain::unchanged_root(view, connecting)?,
-    };
+    let (root_after, drained) = drain::tree_after(view, connecting, rule_set)?;
 
     let hash = formed.hash();
     let (candidate, _stateless) = formed.into_parts();
@@ -370,7 +366,7 @@ pub fn validate<'id, V: ChainView<'id>>(
         target,
         cumulative_difficulty,
         root_after,
-        growth,
+        drained,
     );
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }

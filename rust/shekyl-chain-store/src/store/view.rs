@@ -30,7 +30,7 @@
 //! keys exactly that state at `h`: block `h − 1`'s connect writes its
 //! post-drain root as `store_curve_tree_root_at_height(prev_height + 1, …)`
 //! (`src/blockchain_db/blockchain_db.cpp:664`), and so does this store's
-//! `connect` (`curve_tree_roots[h + 1]` from `ConnectFacts::root_after`).
+//! `connect` (`curve_tree_roots[h + 1]` from the verdict's `root_after`).
 //! So this view reads key `h`, never `h + 1` — reading `h + 1` would hand a
 //! rule the *next* anchor (S-CHAIN-W SCW-19). The test holds both ends.
 //!

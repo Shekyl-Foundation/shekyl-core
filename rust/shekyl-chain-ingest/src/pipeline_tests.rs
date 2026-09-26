@@ -34,7 +34,8 @@ use crate::source::{IngestEvent, SequenceNo, Sequenced};
 use crate::test_support::{anchor, at};
 use crate::test_support::{
     block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg, expected_state, h,
-    key_image, open_store, reorg, spend, tmp, trace_of, Family, Scripted, FIRST_SPEND_HEIGHT,
+    key_image, open_store, reorg, spend, tmp, trace_of, Family, GrownTree, Scripted,
+    FIRST_SPEND_HEIGHT,
 };
 use crate::trace::Trace;
 
@@ -415,7 +416,13 @@ async fn a_refusal_ends_the_run_and_is_a_disagreement_the_report_names() {
     let path = tmp("pipeline-refusal");
     let main = chain(3);
     // Block 2 chained on a wrong parent: A2 refuses it.
-    let orphan = block_with_nonce(2, BlockHash::from_bytes([0x77; 32]), &[], 5);
+    let orphan = block_with_nonce(
+        CurveTreeRoot::EMPTY,
+        2,
+        BlockHash::from_bytes([0x77; 32]),
+        &[],
+        5,
+    );
     let trace = Arc::new(trace_of(&main, false));
     let events = vec![
         IngestEvent::Extend(Box::new(candidate(&main[0].0, &main[0].1))),
@@ -627,8 +634,11 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
         anchor(hashes, height, spend(key_image(Family::Fork, height)))
     };
     let mut fork_hashes = main_hashes[..=at(f)].to_vec();
+    // The fork's tree is the main chain's through `f`, then its own.
+    let mut fork_tree = GrownTree::over(&main[..=at(f)]);
     let fork_a_spend = fork_spend(&fork_hashes, f + 1);
     let fork_a = block_with_nonce(
+        fork_tree.root_going_into(f + 1),
         f + 1,
         main_hashes[at(f)],
         core::slice::from_ref(&fork_a_spend),
@@ -636,8 +646,10 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     );
     assert_ne!(fork_a.hash(), main_hashes[at(f + 1)]);
     fork_hashes.push(fork_a.hash());
+    fork_tree.push(&fork_a, core::slice::from_ref(&fork_a_spend));
     let fork_b_spend = fork_spend(&fork_hashes, f + 2);
     let fork_b = block_with_nonce(
+        fork_tree.root_going_into(f + 2),
         f + 2,
         fork_a.hash(),
         core::slice::from_ref(&fork_b_spend),
@@ -928,9 +940,13 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
     let chain = chain(3);
     let trace = {
         let mut w = TraceWriter::new(Vec::new()).expect("header");
+        let tree = GrownTree::over(&chain);
         for hh in 0..3u64 {
-            w.push_facts(h(hh), &crate::test_support::facts_at(hh))
-                .expect("facts");
+            w.push_facts(
+                h(hh),
+                &crate::test_support::facts_at(hh, tree.root_after(hh)),
+            )
+            .expect("facts");
         }
         w.push_checkpoint(&[0xEE; 32]).expect("a wrong checkpoint");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))

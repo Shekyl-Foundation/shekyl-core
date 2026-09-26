@@ -46,8 +46,8 @@ pub enum StoreInvariant {
     /// tx).
     TxHashNotFresh,
     /// **SI-4** — the curve-tree root at height *h*+1 is written exactly
-    /// once per connect and is the root the consensus transition handed
-    /// `connect` (`ConnectFacts::root_after`).
+    /// once per connect and is the root the verdict derived
+    /// (`ValidatedBlock::root_after`, DRS-E3 `CTW-Q1`).
     RootRewritten,
     /// **SI-6** — the undo log's top entry is the tip height, and a pop
     /// consumes exactly that entry.
@@ -145,8 +145,10 @@ pub enum StoreInvariant {
     /// bound; here the reads assert it instead of assuming it (DRS-E1
     /// S-CURVE §3.3, SCU-3).
     ///
-    /// Armed by the reads, since the grow path (DRS-E3) is not yet built.
-    /// The two observations are different and the payload says which one
+    /// Armed by the reads and by the writer (`grow.rs`, DRS-E3: a growth
+    /// that does not continue the tree the store holds is refused before a
+    /// row is written). The two observations are different and the payload
+    /// says which one
     /// fired: [`LeafDensity::Length`] is the summary read comparing the
     /// count with the table's length, [`LeafDensity::Hole`] is the leaf
     /// walk naming the first missing position in the range it was asked
@@ -164,8 +166,9 @@ pub enum StoreInvariant {
     /// `curve_tree_roots[tip + 1]` (or [`shekyl_types::CurveTreeRoot::EMPTY`]
     /// when the chain has no tip). The summary read compares them.
     ///
-    /// The grow path (DRS-E3) is what replaces EMPTY. Until it does, a
-    /// connected chain keeps the seal's row and this belt stays quiet.
+    /// The grow path (DRS-E3, `grow.rs`) replaces EMPTY at the first
+    /// connect whose drain appends a leaf; a chain in which nothing has
+    /// matured keeps the seal's row and this belt stays quiet.
     SummaryRootDiverged,
     /// **SI-15** — every `archival_serve_credit` row belongs to a persona
     /// with a bond record. The connect hook that writes a pass bit refuses
@@ -188,6 +191,18 @@ pub enum StoreInvariant {
         /// The transaction whose two rows disagree.
         txid: shekyl_types::TxHash,
     },
+    /// **SI-17** — `output_to_leaf` and `leaf_to_output` are inverse
+    /// bijections over the drained outputs: one position per drained
+    /// output, one output per position, neither written twice. Armed by
+    /// the connect's phase 3 when a verdict's drain names a different
+    /// number of outputs than leaves, or when either map already holds the
+    /// key it is about to insert (DRS-E3 `CTW-4`, §3.7).
+    PositionMapsNotBijective,
+    /// **SI-18** — `curve_tree_leaf_counts[h + 1]` is written exactly once
+    /// per connect, and is the count the verdict's drain left. Armed when
+    /// the row is already present at the connecting height's successor —
+    /// the tip moved without its count row, or a write bypassed `connect`.
+    LeafCountRewritten,
 }
 
 /// What an SI-11 read observed. One invariant, two observations: a length
@@ -223,6 +238,8 @@ impl StoreInvariant {
             Self::IdNotFresh => 9,
             Self::ServeCreditWithoutBond { .. } => 15,
             Self::PoolEntryUnpaired { .. } => 16,
+            Self::PositionMapsNotBijective => 17,
+            Self::LeafCountRewritten => 18,
         }
     }
 }
@@ -298,6 +315,15 @@ impl core::fmt::Display for StoreInvariant {
                 "pool entry {txid} has a row in one of pool_meta / pool_blob and not the other; \
                  a write bypassed the pool store"
             ),
+            Self::PositionMapsNotBijective => f.write_str(
+                "output_to_leaf / leaf_to_output would stop being inverse bijections: a drained \
+                 output or a leaf position is already mapped, or the drain names a different \
+                 number of outputs than leaves",
+            ),
+            Self::LeafCountRewritten => f.write_str(
+                "curve_tree_leaf_counts already holds a row at the connecting height's successor; \
+                 the count is written once per connect",
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -330,6 +356,8 @@ impl core::error::Error for StoreInvariant {
             | Self::SummaryRootDiverged
             | Self::ServeCreditWithoutBond { .. }
             | Self::PoolEntryUnpaired { .. }
+            | Self::PositionMapsNotBijective
+            | Self::LeafCountRewritten
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

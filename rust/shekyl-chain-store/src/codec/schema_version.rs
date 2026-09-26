@@ -158,6 +158,10 @@ use super::{Canonical, CodecError};
 ///   (`TreePosition` / `GlobalOutputIndex`, the drain-order bijection,
 ///   SI-17). `curve_tree_leaf_counts` is born, Rust-only: the count at each
 ///   height, keyed as the roots are (`CTW-Q4`). No digest family moves.
+///   The same increment (commit 5) deletes `root_after` from `ConnectFacts`
+///   — `validate` derives it, `connect` records the verdict's — so
+///   `FACT_FIELDS` loses its name and the `passed_through_facts` vocabulary
+///   shrinks 6 → 5 under this one bump (the `7` mechanism, second instance).
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(15);
 
 /// A layout version as stored in the `schema_version` cell.

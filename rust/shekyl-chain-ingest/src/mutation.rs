@@ -132,8 +132,8 @@ pub enum Mutation {
     /// A listed spend's `referenceBlock` is the candidate's own parent — a
     /// block the chain holds, one block old, `MIN_AGE − 1` too young.
     /// CEN-I11, at the transaction. The old edge of the window is the
-    /// mock's (`I11::window`): a chain past `MAX_AGE` is beyond what the
-    /// fixture family's `root_after` bytes can build (§3.10).
+    /// mock's (`I11::window`): a chain past `MAX_AGE` is longer than the
+    /// mutation fixtures build (§3.10).
     ReferenceTooRecent,
     /// One byte of a listed spend's first `pqc_auths` slot's signature
     /// flipped. CEN-I18, at that input. The signature is forged and the

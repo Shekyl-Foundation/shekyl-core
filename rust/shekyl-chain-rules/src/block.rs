@@ -14,7 +14,7 @@ use shekyl_types::{
     BlockHash, CurveTreeRoot, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash,
 };
 
-use crate::tree_growth::TreeGrowth;
+use crate::drain::Drain;
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use crate::coverage::RuleCoverage;
@@ -333,9 +333,10 @@ pub struct ValidatedBlock {
     /// store persists what it is handed. Equal to `root_at(height)` when
     /// nothing matured at this height.
     root_after: CurveTreeRoot,
-    /// What the drain at this height appended, or `None` when no output
-    /// matured (the tree and its root are unchanged).
-    growth: Option<TreeGrowth>,
+    /// What the drain at this height appended — outputs in drain order and
+    /// their growth — or `None` when no output matured (the tree and its
+    /// root are unchanged).
+    drain: Option<Drain>,
 }
 
 impl ValidatedBlock {
@@ -357,7 +358,7 @@ impl ValidatedBlock {
         target: Target,
         cumulative_difficulty: CumulativeDifficulty,
         root_after: CurveTreeRoot,
-        growth: Option<TreeGrowth>,
+        drain: Option<Drain>,
     ) -> Self {
         let Candidate {
             block,
@@ -374,7 +375,7 @@ impl ValidatedBlock {
             target,
             cumulative_difficulty,
             root_after,
-            growth,
+            drain,
         }
     }
 
@@ -384,12 +385,13 @@ impl ValidatedBlock {
         self.root_after
     }
 
-    /// What the drain at this height appended — the leaves in position
-    /// order and every layer chunk their growth wrote — or `None` when no
-    /// output matured here. `connect` writes exactly this (DRS-E3 §3.2).
+    /// What the drain at this height appended — the matured outputs in
+    /// drain order, the leaves in position order and every layer chunk
+    /// their growth wrote — or `None` when no output matured here.
+    /// `connect` writes exactly this (DRS-E3 §3.2).
     #[must_use]
-    pub const fn growth(&self) -> Option<&TreeGrowth> {
-        self.growth.as_ref()
+    pub const fn drain(&self) -> Option<&Drain> {
+        self.drain.as_ref()
     }
 
     /// The difficulty this block was judged against (CEN-D4, D6).

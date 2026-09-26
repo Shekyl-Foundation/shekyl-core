@@ -51,18 +51,27 @@ pub(super) fn spend(key_image: usize, outputs: usize) -> Transaction {
     fixture::spend(fixture::point(key_image), outputs)
 }
 
-/// The root the header at `height` must carry under CEN-B5: the tree state
-/// *at* `height` — the `root_after` the connect of `height − 1` wrote
-/// (`facts(height − 1)`), or the empty tree at genesis. Kept in one place
-/// with `facts` so the two cannot drift.
-pub(super) fn root_at_height(height: u64) -> CurveTreeRoot {
-    match height.checked_sub(1) {
-        None => CurveTreeRoot::EMPTY,
-        Some(parent) => facts(parent, 0).root_after.value,
-    }
+/// A candidate for a height **nothing has drained into**: its header carries
+/// the empty tree, which is what CEN-B5 requires while `root_at(height)` is
+/// `EMPTY` — every height below `mined_money_unlock_window` on a chain whose
+/// listed outputs (if any) are younger than `tx_spendable_age`. Since
+/// DRS-E3 the root is the validator's derivation, recorded by `connect`,
+/// so a fixture cannot compute it from the height alone: a candidate for a
+/// grown height reads the root off the store ([`root_going_into`] on a
+/// snapshot, `view.root_at(height)` inside a batch) and builds with
+/// [`candidate_over`]. [`connect_chain`] does exactly that per block.
+pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transaction>) -> Candidate {
+    candidate_over(CurveTreeRoot::EMPTY, height, previous, listed)
 }
 
-pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transaction>) -> Candidate {
+/// [`candidate`] whose header carries `root` — the tree state going into
+/// `height` as the store recorded it.
+pub(super) fn candidate_over(
+    root: CurveTreeRoot,
+    height: u64,
+    previous: BlockHash,
+    listed: Vec<Transaction>,
+) -> Candidate {
     let block = Block {
         header: BlockHeader {
             major_version: 1,
@@ -70,7 +79,7 @@ pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transactio
             timestamp: 1_000 + height * 60,
             previous,
             nonce: 7,
-            curve_tree_root: root_at_height(height),
+            curve_tree_root: root,
             attestation_root: AttestationRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: coinbase(height),
@@ -79,15 +88,25 @@ pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transactio
     Candidate::new(block, listed)
 }
 
+/// The root a header connecting at `height` must carry: `root_at(height)`
+/// as the committed store holds it (`AboveTip` is a fixture bug, named).
+pub(super) fn root_going_into(store: &ChainStore, height: u64) -> CurveTreeRoot {
+    let snap = store.begin_read().expect("read");
+    match snap
+        .root_at(BlockHeight::from_raw(height))
+        .expect("root read")
+    {
+        AtHeight::Recorded(root) => root,
+        AtHeight::AboveTip => panic!("no root recorded going into height {height}"),
+    }
+}
+
 pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
     ConnectFacts {
         weight: Fact::passed_through(BlockWeight::from_raw(1_000 + height)),
         long_term_weight: Fact::passed_through(LongTermWeight::from_raw(900 + height)),
         coins_generated: Fact::passed_through(AtomicUnits::from_raw((height + 1) * 1_000_000)),
         burned: Fact::passed_through(AtomicUnits::from_raw(burned)),
-        root_after: Fact::passed_through(CurveTreeRoot::from_bytes(
-            [0xc0 + u8::try_from(height).expect("small"); 32],
-        )),
         // Distinct per height, so a test that reads it back can tell `h`
         // from `h ± 1` (the SCR-19 indexing rule as a test, §3.6).
         long_term_effective_median: Fact::passed_through(LongTermWeight::from_raw(
@@ -276,9 +295,11 @@ pub(super) fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Tran
 
 /// Connect `listed` as consecutive blocks from genesis in one batch,
 /// handing each `facts(h, 0)`. Every listed transaction is anchored on the
-/// chain as it is built ([`anchor`]), so a caller lists bare [`spend`]s
-/// and the reference is written where the hashes are known. Returns each
-/// block's hash.
+/// chain as it is built ([`anchor`]), and every header carries the root
+/// the store recorded going into its height (`view.root_at(h)`, the
+/// derived root of the previous connect — CEN-B5), so a caller lists bare
+/// [`spend`]s and the reference and the root are written where they are
+/// known. Returns each block's hash.
 pub(super) fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<BlockHash> {
     connect_chain_with_burn(store, listed, 0)
 }
@@ -303,28 +324,24 @@ pub(super) fn connect_chain_anchored(
 ) -> (Vec<BlockHash>, Vec<Vec<Transaction>>) {
     let mut hashes: Vec<BlockHash> = Vec::new();
     let mut anchored = Vec::new();
-    let mut previous = BlockHash::NULL;
-    let mut cands = Vec::new();
-    for (h, txs) in listed.iter().enumerate() {
-        let h = h as u64;
-        let txs: Vec<Transaction> = txs
-            .iter()
-            .map(|tx| anchor(&hashes, h, tx.clone()))
-            .collect();
-        anchored.push(txs.clone());
-        let cand = candidate(h, previous, txs);
-        previous = cand.block.hash();
-        hashes.push(previous);
-        cands.push(cand);
-    }
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        for (h, cand) in cands.into_iter().enumerate() {
-            batch.connect(
-                judge(&view, cand)?,
-                facts(h as u64, burned),
-                RuleSet::GENESIS,
-            )?;
+        let mut previous = BlockHash::NULL;
+        for (h, txs) in listed.iter().enumerate() {
+            let h = h as u64;
+            let txs: Vec<Transaction> = txs
+                .iter()
+                .map(|tx| anchor(&hashes, h, tx.clone()))
+                .collect();
+            anchored.push(txs.clone());
+            let root = match view.root_at(BlockHeight::from_raw(h))? {
+                AtHeight::Recorded(root) => root,
+                AtHeight::AboveTip => panic!("no root recorded going into height {h}"),
+            };
+            let cand = candidate_over(root, h, previous, txs);
+            previous = cand.block.hash();
+            hashes.push(previous);
+            batch.connect(judge(&view, cand)?, facts(h, burned), RuleSet::GENESIS)?;
         }
         Ok(())
     });

@@ -6,16 +6,17 @@
 //! S-CURVE (`DRS_E1_SCURVE.md` §3): the three curve-tree reads on
 //! `ReadSnapshot`.
 //!
-//! No writer for `curve_tree_meta` / `curve_tree_leaves` exists yet (the
-//! grow path is DRS-E3's), so every planted state is written raw — the
-//! shape a file the grow path produced will have — and every fault is
-//! planted raw as well, then asserted on a fresh snapshot: the reads
-//! classify what is *in the file*, and a read never arms the halt.
+//! The writer (`grow.rs`, DRS-E3) only ever produces conforming files, so
+//! every state and every fault here is planted raw — the shape a file the
+//! grow path produced would have, or the shape a bypassing write left —
+//! then asserted on a fresh snapshot: the reads classify what is *in the
+//! file*, and a read never arms the halt. The written tree's own tests
+//! are `leaf_read_tests`.
 
 use shekyl_chain_rules::AtHeight;
 use shekyl_types::{BlockHeight, CurveTreeRoot, TreeLeaf, TreePosition};
 
-use super::connect_fixtures::{connect_chain, root_at_height};
+use super::connect_fixtures::connect_chain;
 use super::error::{CellFault, LeafDensity, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -46,9 +47,10 @@ fn connect_three(path: &std::path::Path) {
 }
 
 /// `curve_tree_roots[tip + 1]` after [`connect_three`]: tip is 2, so key 3,
-/// the root the connect of block 2 wrote.
+/// the root the connect of block 2 wrote — the verdict's derivation, which
+/// is the empty tree because nothing has matured three blocks in (DRS-E3).
 fn live_root_after_three() -> CurveTreeRoot {
-    root_at_height(3)
+    CurveTreeRoot::EMPTY
 }
 
 /// Write `state` over the seal's summary and leaves at `0..leaf_count`.
@@ -271,11 +273,13 @@ fn root_at_reads_key_h_through_the_live_root_and_refuses_above_it() {
     connect_chain(&store, &[vec![], vec![], vec![]]);
     let snap = store.begin_read().expect("read");
     // Rows 1..=tip + 1 are what the connects wrote: the state going into
-    // each height, and `tip + 1` the live root.
+    // each height, and `tip + 1` the live root — every one the empty tree,
+    // because nothing has matured three blocks in (the derived root since
+    // DRS-E3); row 0 is the definition, not a row.
     for h in 0..=3u64 {
         assert_eq!(
             snap.root_at(BlockHeight::from_raw(h)).expect("read"),
-            AtHeight::Recorded(root_at_height(h)),
+            AtHeight::Recorded(CurveTreeRoot::EMPTY),
             "height {h}"
         );
     }

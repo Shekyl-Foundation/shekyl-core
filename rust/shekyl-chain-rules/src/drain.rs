@@ -35,12 +35,27 @@
 //! it; the store persists what it is handed).
 
 use shekyl_fcmp::tree::construct_leaf;
-use shekyl_types::{BlockHeight, CurveTreeRoot, TreeLeaf};
+use shekyl_types::{BlockHeight, CurveTreeRoot, GlobalOutputIndex, TreeLeaf};
 
 use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::tree_growth::{grow, TreeGrowth};
 use crate::view::{AtHeight, BlockOutputs, ChainView, LeafSource};
+
+/// What a block's connect appends to the tree: the matured outputs **in
+/// drain order** and the growth their leaves produce. `outputs[i]` is the
+/// output whose leaf sits at position `growth.leaf_count_before + i` —
+/// the pair the position maps record (`output_to_leaf`, `leaf_to_output`;
+/// SI-17), carried on the verdict so the writer records the order the
+/// derivation used rather than re-deriving it (§3.3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Drain {
+    /// The drained outputs' chain-wide indices, in drain order. Same
+    /// length as `growth.leaves`.
+    pub outputs: Vec<GlobalOutputIndex>,
+    /// The leaves, the layer chunks they change, and the root.
+    pub growth: TreeGrowth,
+}
 
 /// The tree after the block at `connecting` drains: the growth its matured
 /// outputs produce, or `None` when none matured — in which case the root
@@ -56,45 +71,25 @@ pub(crate) fn drain<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
     rule_set: &RuleSet,
-) -> Result<Option<TreeGrowth>, ViewRead<V::Fault>> {
+) -> Result<Option<Drain>, ViewRead<V::Fault>> {
     let sources = sources(connecting, rule_set);
+    let mut outputs: Vec<GlobalOutputIndex> = Vec::new();
     let mut leaves: Vec<TreeLeaf> = Vec::new();
     if let Some(height) = sources.coinbase_of {
-        let outputs = recorded_outputs(view, height)?;
-        extend(&mut leaves, &outputs.coinbase)?;
+        let recorded = recorded_outputs(view, height)?;
+        extend(&mut outputs, &mut leaves, &recorded.coinbase)?;
     }
     if let Some(height) = sources.listed_of {
-        let outputs = recorded_outputs(view, height)?;
-        extend(&mut leaves, &outputs.listed)?;
+        let recorded = recorded_outputs(view, height)?;
+        extend(&mut outputs, &mut leaves, &recorded.listed)?;
     }
     if leaves.is_empty() {
         return Ok(None);
     }
     let frontier = view.tree_frontier().map_err(ViewRead::View)?;
-    grow(&frontier, &leaves)
-        .map(Some)
-        .map_err(|fault| ViewRead::Corrupt(Corrupt::TreeUnservable { fault }))
-}
-
-/// The recorded outputs whose leaves the drain at `connecting` appends,
-/// **in drain order** — the coinbase sources first, then the listed. The
-/// same list [`drain`] constructs leaves from, exposed so a writer can
-/// record `output_to_leaf` / `leaf_to_output` against the positions
-/// `leaf_count_before + i` without re-deriving the order (§3.3).
-pub fn drained_outputs<'id, V: ChainView<'id>>(
-    view: &V,
-    connecting: BlockHeight,
-    rule_set: &RuleSet,
-) -> Result<Vec<LeafSource>, ViewRead<V::Fault>> {
-    let sources = sources(connecting, rule_set);
-    let mut drained = Vec::new();
-    if let Some(height) = sources.coinbase_of {
-        drained.extend(recorded_outputs(view, height)?.coinbase);
-    }
-    if let Some(height) = sources.listed_of {
-        drained.extend(recorded_outputs(view, height)?.listed);
-    }
-    Ok(drained)
+    let growth = grow(&frontier, &leaves)
+        .map_err(|fault| ViewRead::Corrupt(Corrupt::TreeUnservable { fault }))?;
+    Ok(Some(Drain { outputs, growth }))
 }
 
 /// The two heights whose outputs mature at `connecting`: the block whose
@@ -116,10 +111,29 @@ pub(crate) fn sources(connecting: BlockHeight, rule_set: &RuleSet) -> DrainSourc
     }
 }
 
+/// The tree after the block at `connecting` connects: its root, and the
+/// drain that produced it when anything matured. What `validate` derives
+/// for the verdict (`ValidatedBlock::{root_after, drain}`), exposed so a
+/// fixture that builds a chain can carry the root the next header must
+/// (CEN-B5) without a second definition of the drain — one derivation,
+/// driven over whatever [`ChainView`] holds the blocks.
+pub fn tree_after<'id, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+    rule_set: &RuleSet,
+) -> Result<(CurveTreeRoot, Option<Drain>), ViewRead<V::Fault>> {
+    let drained = drain(view, connecting, rule_set)?;
+    let root = match &drained {
+        Some(drain) => drain.growth.root,
+        None => unchanged_root(view, connecting)?,
+    };
+    Ok((root, drained))
+}
+
 /// The root the verdict carries when the drain appended nothing: the tree
 /// at `connecting`, which a conforming view has recorded (`root_at(0)` is
 /// [`CurveTreeRoot::EMPTY`] by definition, SCW-19).
-pub(crate) fn unchanged_root<'id, V: ChainView<'id>>(
+fn unchanged_root<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
 ) -> Result<CurveTreeRoot, ViewRead<V::Fault>> {
@@ -145,12 +159,17 @@ fn recorded_outputs<'id, V: ChainView<'id>>(
     }
 }
 
-fn extend<VF>(leaves: &mut Vec<TreeLeaf>, sources: &[LeafSource]) -> Result<(), ViewRead<VF>> {
+fn extend<VF>(
+    outputs: &mut Vec<GlobalOutputIndex>,
+    leaves: &mut Vec<TreeLeaf>,
+    sources: &[LeafSource],
+) -> Result<(), ViewRead<VF>> {
     for source in sources {
         let leaf = construct_leaf(&source.key, &source.commitment, &source.pqc_leaf_commitment)
             .ok_or(ViewRead::Corrupt(Corrupt::LeafNotConstructible {
                 output: source.output,
             }))?;
+        outputs.push(source.output);
         leaves.push(TreeLeaf::from_bytes(leaf));
     }
     Ok(())

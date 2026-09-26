@@ -9,16 +9,16 @@
 //! What this file pins is the **read side and the derivation**: a
 //! recorded block's outputs come back as leaf sources in output order, the
 //! drain at `h` takes block `h − 60`'s coinbase then block `h − 10`'s
-//! listed outputs, and the verdict carries a non-empty root over them.
-//! The tree is not written yet — the phase-3 body is commit 5 — so the
-//! frontier here is still `EMPTY` and every derived growth starts at leaf
-//! `0`; commit 5's tests take over the "before" side.
+//! listed outputs, and the verdict carries a non-empty root over them,
+//! continuing the tree the connects before it wrote (`grow.rs`, commit 5):
+//! the frontier and the per-height count are the store's own rows, and a
+//! derived growth starts where they say the tree ends.
 
-use shekyl_chain_rules::{AtHeight, ChainView, RuleSet, TreeFrontier};
+use shekyl_chain_rules::{AtHeight, ChainView};
 use shekyl_types::{BlockHeight, CurveTreeRoot, GlobalOutputIndex};
 
 use super::connect_fixtures::{
-    candidate, connect_chain, judge, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
+    candidate, candidate_over, connect_chain, judge, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -27,9 +27,10 @@ fn h(height: u64) -> BlockHeight {
     BlockHeight::from_raw(height)
 }
 
-/// Heights `0..=62` — the fixture `facts` root fits a byte up to `63`.
-/// A two-output spend sits in block `53`, so a connect at `63` drains
-/// block `3`'s coinbase and block `53`'s three outputs.
+/// Heights `0..=62`. A two-output spend sits in block `53`, so a connect at
+/// `63` drains block `3`'s coinbase and block `53`'s two listed outputs —
+/// after the connects at `60`, `61`, `62` drained blocks `0`, `1`, `2`'s
+/// coinbases (the tree's first three leaves).
 const TIP: u64 = 62;
 const SPEND_HEIGHT: u64 = 53;
 const _: () = assert!(SPEND_HEIGHT >= FIRST_SPEND_HEIGHT);
@@ -95,38 +96,65 @@ fn outputs_at_returns_a_blocks_outputs_as_leaf_sources_in_output_order() {
 }
 
 #[test]
-fn the_verdict_derives_the_drain_in_drain_order_over_an_unwritten_tree() {
+fn the_verdict_derives_the_drain_in_drain_order_over_the_written_tree() {
     let path = tmp("leaf-derive");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let hashes = connect_chain(&store, &listing());
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        // Commit 5 writes the tree; until then the store's frontier is the
-        // seal's, and a derived growth starts at position 0.
-        assert_eq!(view.tree_frontier()?, TreeFrontier::EMPTY);
+        // The connects at 60, 61, 62 drained three coinbases: the frontier
+        // is a leaf chunk and the root layer over it, and the count going
+        // into 63 is 3. Heights 0..=60 went in with an empty tree (SI-18:
+        // the count row is written every connect, moving only when
+        // something drained).
+        let frontier = view.tree_frontier()?;
+        assert_eq!(frontier.leaf_count, 3);
+        assert_eq!(frontier.layer_count(), 2);
         assert_eq!(view.leaf_count_at(h(0))?, AtHeight::Recorded(0));
+        assert_eq!(view.leaf_count_at(h(60))?, AtHeight::Recorded(0));
+        assert_eq!(view.leaf_count_at(h(61))?, AtHeight::Recorded(1));
+        assert_eq!(view.leaf_count_at(h(TIP + 1))?, AtHeight::Recorded(3));
         assert_eq!(view.leaf_count_at(h(TIP + 2))?, AtHeight::AboveTip);
-        assert_eq!(view.depth_at(h(0))?, AtHeight::Recorded(0));
+        assert_eq!(view.depth_at(h(60))?, AtHeight::Recorded(0));
+        assert_eq!(view.depth_at(h(TIP + 1))?, AtHeight::Recorded(1));
+        // The roots moved with the count (SI-4 / SI-12): unchanged through
+        // 60, then a new root per drain.
+        assert_eq!(
+            view.root_at(h(60))?,
+            AtHeight::Recorded(CurveTreeRoot::EMPTY)
+        );
+        let AtHeight::Recorded(into_61) = view.root_at(h(61))? else {
+            panic!("recorded");
+        };
+        let AtHeight::Recorded(into_63) = view.root_at(h(TIP + 1))? else {
+            panic!("recorded");
+        };
+        assert_ne!(into_61, CurveTreeRoot::EMPTY);
+        assert_ne!(into_61, into_63);
 
         let connecting = TIP + 1;
         let previous = hashes[usize::try_from(TIP).expect("small")];
-        let verdict = judge(&view, candidate(connecting, previous, Vec::new()))?;
+        let verdict = judge(
+            &view,
+            candidate_over(into_63, connecting, previous, Vec::new()),
+        )?;
         let block = verdict.block();
-        let growth = block
-            .growth()
+        let drain = block
+            .drain()
             .expect("block 3's coinbase and block 53's listed matured");
-        assert_eq!(growth.leaf_count_before, 0);
-        assert_eq!(growth.leaves.len(), 3, "one coinbase + two listed");
-        assert_eq!(growth.depth, 1);
-        assert_eq!(block.root_after(), growth.root);
-        assert_ne!(block.root_after(), CurveTreeRoot::EMPTY);
+        assert_eq!(
+            drain.growth.leaf_count_before, 3,
+            "continues the written tree"
+        );
+        assert_eq!(drain.growth.leaves.len(), 3, "one coinbase + two listed");
+        assert_eq!(drain.growth.depth, 1);
+        assert_eq!(block.root_after(), drain.growth.root);
+        assert_ne!(block.root_after(), into_63);
         // Drain order (§3.3): block 3's coinbase (global 3) is leaf 0;
         // block 53's listed outputs (54, 55) follow. Block 53's coinbase
         // and block 3's (empty) listed half are not in this drain.
-        let drained = shekyl_chain_rules::drained_outputs(&view, h(connecting), &RuleSet::GENESIS)
-            .expect("reads");
         assert_eq!(
-            drained.iter().map(|s| s.output).collect::<Vec<_>>(),
+            drain.outputs,
             [3, SPEND_HEIGHT + 1, SPEND_HEIGHT + 2]
                 .map(GlobalOutputIndex::from_raw)
                 .to_vec()
@@ -146,7 +174,7 @@ fn before_any_window_elapses_the_verdict_carries_the_root_forward_unchanged() {
         let view = batch.chain_view();
         let verdict = judge(&view, candidate(5, hashes[4], Vec::new()))?;
         let block = verdict.block();
-        assert!(block.growth().is_none());
+        assert!(block.drain().is_none());
         assert_eq!(
             AtHeight::Recorded(block.root_after()),
             view.root_at(h(5))?,

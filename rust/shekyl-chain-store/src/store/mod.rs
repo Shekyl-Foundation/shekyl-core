@@ -94,6 +94,7 @@ mod chain_reads;
 mod connect;
 mod curve_reads;
 mod error;
+mod grow;
 mod halt;
 mod header;
 mod invariant;

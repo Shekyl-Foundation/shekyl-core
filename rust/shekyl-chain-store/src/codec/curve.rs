@@ -144,9 +144,10 @@ pub struct CurveTreeState {
     /// The root stored with this summary. The seal writes [`Self::EMPTY`],
     /// and `connect` records `curve_tree_roots` whether or not the tree has
     /// grown (SI-4), so an EMPTY row is not a claim about the live root.
-    /// Once the grow path replaces EMPTY, this field is that live root
-    /// (`curve_tree_roots[tip + 1]`, or [`CurveTreeRoot::EMPTY`] on an empty
-    /// chain) and the summary read refuses a disagreement (SI-12).
+    /// Once the grow path (`store/grow.rs`, DRS-E3) replaces EMPTY, this
+    /// field is that live root (`curve_tree_roots[tip + 1]`, or
+    /// [`CurveTreeRoot::EMPTY`] on an empty chain) and the summary read
+    /// refuses a disagreement (SI-12).
     pub root: CurveTreeRoot,
     /// Layers above the leaf layer.
     pub depth: TreeDepth,

@@ -330,7 +330,7 @@ impl Fixtures for PassedThroughFacts {
             ("burned", PassedThroughFacts::of_positions([3])),
             // Every field: the six-name spelling is the layout —
             // `cumulative_difficulty` left at SCHEMA_VERSION 7 (E6 slice 2).
-            ("all", PassedThroughFacts::of_positions(0..6)),
+            ("all", PassedThroughFacts::of_positions(0..5)),
         ]
     }
 }

@@ -50,8 +50,9 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     assert_eq!(connected.height, BlockHeight::ZERO);
     // miner tx: spent_keys 0, tx_indices 1, txs_pruned 1, txs_prunable 1,
     // txs_prunable_hash 1, output_txs 1, output_amounts 1, tx_outputs 1;
-    // root 1; blocks 1, block_heights 1, block_info 1; hf_versions 1.
-    assert_eq!(connected.journaled, 12, "no pqc_auths row, no burn rows");
+    // leaf count 1 (DRS-E3, every connect); root 1; blocks 1,
+    // block_heights 1, block_info 1; hf_versions 1.
+    assert_eq!(connected.journaled, 13, "no pqc_auths row, no burn rows");
 
     let miner = &block.miner_transaction;
     let miner_hash = Hash32::from(miner.hash());
@@ -122,8 +123,8 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .value()
             .decode()
             .expect("decodes"),
-        CurveTreeRoot::from_bytes([0xc0; 32]),
-        "the root after genesis is keyed at 1"
+        CurveTreeRoot::EMPTY,
+        "the root after genesis is keyed at 1 — the verdict's, and nothing has matured"
     );
     assert!(snap
         .open_table(CURVE_TREE_ROOTS)
@@ -259,7 +260,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .value()
         .decode()
         .expect("decodes");
-    assert_eq!(undo.0.len(), 12);
+    assert_eq!(undo.0.len(), 13);
     cleanup(&path);
 }
 
@@ -295,9 +296,10 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     // txs_prunable_hash, output_txs, member, tx_outputs) + spend 12 (1 key
     // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
     // and txs_pqc_auth_hash row + 2 outputs × (output_txs + member) +
-    // tx_outputs) + root 1 + block 3 + hf 1 + block_burn 1 + total_burned 1
-    // = 26.
-    assert_eq!(c1.journaled, 26);
+    // tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 + block_burn 1 +
+    // total_burned 1 = 27. Nothing has matured at this height, so the tree
+    // tables write no row.
+    assert_eq!(c1.journaled, 27);
     // Dense store ids: one coinbase per block through the spend block
     // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
     // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.
@@ -793,7 +795,6 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         long_term_weight: Fact::derived(shekyl_types::LongTermWeight::from_raw(900)),
         coins_generated: Fact::derived(AtomicUnits::from_raw(1_000_000)),
         burned: Fact::derived(AtomicUnits::ZERO),
-        root_after: Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32])),
         long_term_effective_median: Fact::derived(shekyl_types::LongTermWeight::from_raw(300_000)),
     };
     let g = candidate(0, BlockHash::NULL, Vec::new());
@@ -856,7 +857,6 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
     // A committed pass-through connect stamps exactly the passed fields.
     let mut partial = facts(1, 0);
     partial.burned = Fact::derived(AtomicUnits::ZERO);
-    partial.root_after = Fact::derived(CurveTreeRoot::from_bytes([0xc1; 32]));
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, b1)?, partial, RuleSet::GENESIS)?)
@@ -951,25 +951,25 @@ fn passed_through_names_the_rows_that_delete_each_fact() {
             "long_term_weight",
             "coins_generated",
             "burned",
-            "root_after",
             "long_term_effective_median"
         ],
-        "six: cumulative_difficulty left with E6 slice 2 (CEN-D4 derives it)"
+        "five: cumulative_difficulty left with E6 slice 2 (CEN-D4 derives it), root_after \
+         with DRS-E3 (validate derives it)"
     );
     let mut some = all;
     some.coins_generated = Fact::derived(AtomicUnits::from_raw(1_000_000));
-    some.root_after = Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32]));
+    some.burned = Fact::derived(AtomicUnits::ZERO);
     let remaining: Vec<DeletedBy> = some.passed_through().collect();
-    assert_eq!(remaining.len(), 4);
+    assert_eq!(remaining.len(), 3);
     assert!(remaining
         .iter()
         .all(|d| !d.rows.is_empty() && !d.slice.is_empty()));
-    assert!(remaining
+    assert!(ConnectFacts::DELETED_BY
         .iter()
         .any(|d| d.field == "burned" && d.rows.contains(&"CEN-F17")));
     assert_eq!(
         ConnectFacts::DELETED_BY.len(),
-        6,
-        "seven until E6 slice 2 derived cumulative_difficulty"
+        5,
+        "seven until E6 slice 2 derived cumulative_difficulty; six until DRS-E3 derived root_after"
     );
 }

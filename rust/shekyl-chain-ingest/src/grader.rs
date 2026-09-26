@@ -567,23 +567,22 @@ mod tests {
             Some(GradedAcceptance::AcceptedAsCorrect)
         );
         assert_eq!(a1.component, ComponentEvidence::Real { identical: true });
-        // B5: a consumer of the borrowed root — its verdict counts (clause 1),
-        // but it is also a producer per DELETED_BY (root_after), so its
-        // component is borrowed (clause 2). Both in one row, as ruled.
+        // B5: until DRS-E3 a consumer of the *borrowed* root — a producer
+        // per DELETED_BY (`root_after`), so its component clause was never
+        // evidence. `validate` now derives the root and the field is gone
+        // from DELETED_BY, so the grader — reading the store's own
+        // declaration — reports the component real and identical: the
+        // derived tree's root agreed with the daemon's digest. Both clauses
+        // count.
         let b5 = row(&g, "CEN-B5");
         assert_eq!(
             b5.verdict_acceptance,
             Some(GradedAcceptance::AcceptedAsCorrect)
         );
+        assert_eq!(b5.component, ComponentEvidence::Real { identical: true });
         assert_eq!(
-            b5.component,
-            ComponentEvidence::Borrowed {
-                field: "root_after"
-            }
-        );
-        assert!(
-            b5.component_acceptance.is_none(),
-            "a borrowed value is never evidence"
+            b5.component_acceptance,
+            Some(GradedAcceptance::AcceptedAsCorrect)
         );
         // G6: DIVERGENT producer, not exercised: nothing graded, nothing owed.
         let g6 = row(&g, "CEN-G6");
@@ -598,7 +597,10 @@ mod tests {
             Some(GradedAcceptance::RegressionSignalOnly)
         );
         assert_eq!(g.derived_and_conformant, 2);
-        assert_eq!(g.borrowed, 2);
+        assert_eq!(
+            g.borrowed, 1,
+            "G6 remains; B5 stopped borrowing with DRS-E3"
+        );
         assert_eq!(g.not_exercised, 4);
     }
 

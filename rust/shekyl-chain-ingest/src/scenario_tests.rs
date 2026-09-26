@@ -7,7 +7,7 @@
 //! admitted, whose record is what the owners priced.
 
 use shekyl_chain_rules::CenRow;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, CurveTreeRoot};
 
 use super::{Scenario, RULES};
 use crate::connector::HashAt;
@@ -58,12 +58,10 @@ async fn a_mined_chain_is_admitted_block_by_block_and_the_record_is_the_owners()
     assert_eq!(facts.parent_coins_generated.to_raw(), priced);
     // Empty blocks: the volume window counts none, over min(h, W) blocks.
     assert_eq!(facts.tx_volume, shekyl_economics::TxVolume::window(0, 6));
-    // The next header will carry the placeholder root the driver recorded
-    // after block 5 — CEN-B5 by the same read the template performs.
-    assert_eq!(
-        facts.curve_tree_root,
-        super::placeholder_root_after(BlockHeight::from_raw(5))
-    );
+    // The next header will carry the root the store recorded after block
+    // 5 — the verdict's derivation, the empty tree this early — CEN-B5 by
+    // the same read the template performs.
+    assert_eq!(facts.curve_tree_root, CurveTreeRoot::EMPTY);
     // Timestamps ascend by the interval; the median exists.
     assert!(facts.median_timestamp.is_some());
     let stamps: Vec<u64> = mined

@@ -28,9 +28,9 @@
 //!   No caller compares a root against `hash_init` here.
 //! - **EMPTY is the seal's row, not the live root.** `connect` records
 //!   `curve_tree_roots` on every connect, grown or not (SI-4). The grow
-//!   path (DRS-E3) is what replaces EMPTY. Until it does, C1 returns EMPTY
-//!   on a chain whose live root has already moved. Once the summary is not
-//!   EMPTY, its root must be that live root (**SI-12**).
+//!   path (DRS-E3, `grow.rs`) replaces EMPTY at the first connect whose
+//!   drain appends a leaf; before that the live root is EMPTY too. Once the
+//!   summary is not EMPTY, its root must be that live root (**SI-12**).
 //! - **A root above `tip + 1`** is [`AtHeight::AboveTip`]; a missing row at
 //!   or below it is SI-7. Row 0 is the empty tree by definition and is not
 //!   stored.
@@ -40,15 +40,15 @@
 //!   **SI-11** ([`LeafDensity::Length`]). The C++ collapsed both, and a
 //!   short read, into one `false`.
 //!
-//! # The belts are armed here, not at a writer
+//! # The belts are armed here as well as at the writer
 //!
-//! The grow path is DRS-E3's and not yet built, so the reads carry them.
 //! C1 compares the summary's count with the leaf table's length
 //! ([`LeafDensity::Length`]) and, once the summary is grown, its root with
 //! the live root (SI-12). C3 names the first position in range with no row
-//! ([`LeafDensity::Hole`]). When E3 lands, its batch moves the count, the
-//! rows, and the summary root together, and these belts become the second
-//! check, as SI-9's read-side belt is for `output_txs`.
+//! ([`LeafDensity::Hole`]). The writer (`grow.rs`, DRS-E3) moves the count,
+//! the rows, and the summary root together in one batch and refuses a
+//! growth that does not continue the tree it holds; these belts are the
+//! second check, as SI-9's read-side belt is for `output_txs`.
 
 use core::ops::Range;
 
@@ -92,9 +92,9 @@ const fn hole_at(position: TreePosition) -> ReadFault {
 /// table's length is SI-11 [`LeafDensity::Length`] (module docs).
 pub(super) fn summary<T: ReadTables>(txn: &T) -> Result<CurveTreeState, ReadFault> {
     let state = summary_row(txn)?;
-    // EMPTY is the seal's row. connect records roots before the grow path
-    // replaces it, so this row does not claim to be the live root. A
-    // summary the grow path has written does.
+    // EMPTY is the seal's row. connect records roots whether or not the
+    // grow path has replaced it, so this row does not claim to be the live
+    // root. A summary the grow path has written does.
     if state != CurveTreeState::EMPTY {
         let tip = chain_reads::tip_of(txn)?.map(|(height, _)| height);
         if live_root(txn, tip)? != state.root {

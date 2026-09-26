@@ -6,7 +6,16 @@
 //! Fixtures shared by the artifact, corpus and pipeline tests: a chain the
 //! landed rules accept under the mock substrate, its corpus bytes, and a
 //! trace whose facts the chain's headers agree with (CEN-B5: the header
-//! root at `h` is `root_after(h − 1)`).
+//! root at `h` is the root after `h − 1`'s drain).
+//!
+//! Since DRS-E3 the root is the validator's derivation — the curve tree
+//! grown over the outputs that matured — and no function of the height can
+//! supply it. [`GrownTree`] is the fixture's tree: a `ChainView` over the
+//! blocks built so far, advanced by the production `tree_after` as each
+//! block is added, so a chain's headers and its trace carry the roots the
+//! store will derive when it connects them. One derivation (the rules
+//! crate's), driven over a fixture view; not a second definition of the
+//! drain.
 //!
 //! Every key image a fixture spends encodes the **whole height** and a
 //! family tag ([`key_image`]), so no chain or fork length collides on
@@ -14,18 +23,25 @@
 //! image, and a fork past 96 blocks overflow the byte — caps a test would
 //! meet as a store halt, misattributed to the pipeline).
 
-use std::collections::VecDeque;
+use core::convert::Infallible;
+use std::collections::{BTreeMap, VecDeque};
 
 use shekyl_chain_rules::harness::fixture;
+use shekyl_chain_rules::{
+    tree_after, AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, RuleSet, Tip,
+    TreeFrontier,
+};
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage, LongTermWeight,
+    AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, GlobalOutputIndex,
+    KeyImage, LongTermWeight,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Input, Transaction};
+use shekyl_wire::tx_extra::{admitted_leaf_blob, parse, pqc_leaf_entries_per_output};
+use shekyl_wire::{Block, BlockHeader, Ct, Input, Transaction};
 
 use crate::corpus::{CorpusNet, CorpusWriter};
 use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
@@ -66,21 +82,168 @@ pub fn h(n: u64) -> BlockHeight {
     BlockHeight::from_raw(n)
 }
 
-/// The curve-tree root the chain records **at** `height`: the empty tree
-/// at genesis, else a function of the height so chains are not capped by a
-/// byte (the store fixtures' `0xc0 + h` caps at 63).
-pub fn root_at(height: u64) -> CurveTreeRoot {
-    match height.checked_sub(1) {
-        None => CurveTreeRoot::EMPTY,
-        Some(parent) => root_after(parent),
+/// The curve tree a synthetic chain grows (module docs): the outputs of
+/// every block built so far, the root and leaf count going into each
+/// height, and the layer chunks — advanced by the production derivation
+/// (`shekyl_chain_rules::tree_after`) as blocks are pushed, exactly as
+/// `connect` will advance the store's when it connects them.
+#[derive(Default)]
+pub struct GrownTree {
+    /// `outputs[h]` — block `h`'s outputs as leaf sources, global indices
+    /// assigned dense in connect order (miner first, then listed).
+    outputs: Vec<BlockOutputs>,
+    /// `roots[h]` — the root going into `h`; `roots[0]` is the empty tree.
+    roots: Vec<CurveTreeRoot>,
+    /// `leaf_counts[h]` — the leaf count going into `h`.
+    leaf_counts: Vec<u64>,
+    /// `(layer, chunk)` → hash, every chunk any grow wrote.
+    layers: BTreeMap<(u8, u64), [u8; 32]>,
+    next_output: u64,
+}
+
+impl GrownTree {
+    /// An empty tree with no blocks.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            roots: vec![CurveTreeRoot::EMPTY],
+            leaf_counts: vec![0],
+            ..Self::default()
+        }
+    }
+
+    /// The tree after every block of `chain`, in order.
+    #[must_use]
+    pub fn over(chain: &[(Block, Vec<Transaction>)]) -> Self {
+        let mut tree = Self::new();
+        for (block, txs) in chain {
+            tree.push(block, txs);
+        }
+        tree
+    }
+
+    /// How many blocks have been pushed — the next connecting height.
+    #[must_use]
+    pub fn built(&self) -> u64 {
+        self.outputs.len() as u64
+    }
+
+    /// The root the header connecting at `height` must carry (CEN-B5):
+    /// the root going into `height`.
+    #[must_use]
+    pub fn root_going_into(&self, height: u64) -> CurveTreeRoot {
+        self.roots[at(height)]
+    }
+
+    /// The root after block `height`'s drain — what its connect writes at
+    /// `height + 1`.
+    #[must_use]
+    pub fn root_after(&self, height: u64) -> CurveTreeRoot {
+        self.roots[at(height + 1)]
+    }
+
+    /// Connect `block` at the next height: derive its drain over the tree
+    /// as it stands, apply the growth, then register its outputs.
+    pub fn push(&mut self, block: &Block, txs: &[Transaction]) {
+        let height = h(self.built());
+        let (root, drain) = tree_after(self, height, &RuleSet::GENESIS)
+            .expect("a fixture chain's view is complete and its points decompress");
+        let mut leaf_count = self.leaf_counts[at(height.to_raw())];
+        if let Some(drain) = drain {
+            for write in &drain.growth.layer_writes {
+                self.layers.insert((write.layer, write.chunk), write.hash);
+            }
+            leaf_count = drain.growth.leaf_count_after();
+        }
+        self.roots.push(root);
+        self.leaf_counts.push(leaf_count);
+        let coinbase = self.register(&block.miner_transaction);
+        let listed = txs.iter().flat_map(|tx| self.register(tx)).collect();
+        self.outputs.push(BlockOutputs { coinbase, listed });
+    }
+
+    /// One transaction's outputs as leaf sources, assigned the next global
+    /// indices — the store's own keying (SOK-2, dense in connect order).
+    fn register(&mut self, tx: &Transaction) -> Vec<LeafSource> {
+        let commitments = match &tx.ct {
+            Ct::Null(base) | Ct::Fcmp { base, .. } => &base.commitments,
+        };
+        let fields = parse(&tx.prefix.extra).expect("fixture extra parses");
+        let blob =
+            admitted_leaf_blob(&fields, tx.prefix.outputs.len()).expect("fixture leaf field");
+        let entries = pqc_leaf_entries_per_output(&blob).expect("whole entries");
+        tx.prefix
+            .outputs
+            .iter()
+            .zip(commitments)
+            .zip(entries)
+            .map(|((output, commitment), entry)| {
+                let index = GlobalOutputIndex::from_raw(self.next_output);
+                self.next_output += 1;
+                let mut pqc_leaf_commitment = [0u8; 32];
+                pqc_leaf_commitment.copy_from_slice(&entry[..32]);
+                LeafSource {
+                    output: index,
+                    key: output.key,
+                    commitment: *commitment,
+                    pqc_leaf_commitment,
+                }
+            })
+            .collect()
+    }
+
+    fn recorded<T: Clone>(rows: &[T], height: BlockHeight) -> AtHeight<T> {
+        usize::try_from(height.to_raw())
+            .ok()
+            .and_then(|i| rows.get(i))
+            .map_or(AtHeight::AboveTip, |row| AtHeight::Recorded(row.clone()))
     }
 }
 
-/// `root_after(h)` — what block `h`'s connect writes at `h + 1`.
-pub fn root_after(height: u64) -> CurveTreeRoot {
-    let mut bytes = [0x5cu8; 32];
-    bytes[..8].copy_from_slice(&(height + 1).to_le_bytes());
-    CurveTreeRoot::from_bytes(bytes)
+/// Only what `tree_after` reads is answered from the tree; the block-side
+/// reads are not this view's job (the pipeline's store answers those).
+impl<'id> ChainView<'id> for GrownTree {
+    type Fault = Infallible;
+
+    fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
+        Ok(false)
+    }
+
+    fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
+
+    fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+        Ok(None)
+    }
+
+    fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
+        Ok(Self::recorded(&self.roots, height))
+    }
+
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        Ok(None)
+    }
+
+    fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+        let leaf_count = *self.leaf_counts.last().expect("never empty");
+        let last_chunks = TreeFrontier::last_chunk_indices(leaf_count)
+            .into_iter()
+            .map(|key| self.layers[&key])
+            .collect();
+        Ok(TreeFrontier {
+            leaf_count,
+            last_chunks,
+        })
+    }
+
+    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+        Ok(Self::recorded(&self.leaf_counts, height))
+    }
+
+    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+        Ok(Self::recorded(&self.outputs, height))
+    }
 }
 
 /// The miner transaction for `height`: the rules harness's, which since
@@ -154,8 +317,11 @@ pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction
     fixture::anchored_at(hashes, height, tx)
 }
 
-/// A block at `height` on `previous`, listing `listed`, with `nonce`.
+/// A block at `height` on `previous`, listing `listed`, with `nonce`, whose
+/// header carries `root` — the tree state going into `height`
+/// ([`GrownTree::root_going_into`]; CEN-B5).
 pub fn block_with_nonce(
+    root: CurveTreeRoot,
     height: u64,
     previous: BlockHash,
     listed: &[Transaction],
@@ -168,7 +334,7 @@ pub fn block_with_nonce(
             timestamp: 1_000 + height * 60,
             previous,
             nonce,
-            curve_tree_root: root_at(height),
+            curve_tree_root: root,
             attestation_root: AttestationRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: coinbase(height),
@@ -176,8 +342,13 @@ pub fn block_with_nonce(
     }
 }
 
-pub fn block(height: u64, previous: BlockHash, listed: &[Transaction]) -> Block {
-    block_with_nonce(height, previous, listed, 7)
+pub fn block(
+    root: CurveTreeRoot,
+    height: u64,
+    previous: BlockHash,
+    listed: &[Transaction],
+) -> Block {
+    block_with_nonce(root, height, previous, listed, 7)
 }
 
 /// A chain listing `listed[h]` at height `h`, each block on the last.
@@ -186,12 +357,15 @@ pub fn chain_listing(listed: Vec<Vec<Transaction>>) -> Vec<(Block, Vec<Transacti
 }
 
 /// [`chain_listing`] with the block builder supplied — a mined chain hands
-/// one that searches nonces (the mutation family's D1 case).
+/// one that searches nonces (the mutation family's D1 case). Each block is
+/// anchored on the chain so far and `make` receives the root the tree has
+/// going into its height ([`GrownTree`], advanced per block).
 pub fn chain_listing_with(
     listed: Vec<Vec<Transaction>>,
-    mut make: impl FnMut(u64, BlockHash, &[Transaction]) -> Block,
+    mut make: impl FnMut(CurveTreeRoot, u64, BlockHash, &[Transaction]) -> Block,
 ) -> Vec<(Block, Vec<Transaction>)> {
     let mut hashes: Vec<BlockHash> = Vec::new();
+    let mut tree = GrownTree::new();
     listed
         .into_iter()
         .enumerate()
@@ -199,7 +373,8 @@ pub fn chain_listing_with(
             let hh = hh as u64;
             let txs: Vec<Transaction> = txs.into_iter().map(|tx| anchor(&hashes, hh, tx)).collect();
             let previous = hashes.last().copied().unwrap_or(BlockHash::NULL);
-            let b = make(hh, previous, &txs);
+            let b = make(tree.root_going_into(hh), hh, previous, &txs);
+            tree.push(&b, &txs);
             hashes.push(b.hash());
             (b, txs)
         })
@@ -249,6 +424,8 @@ pub fn reorg(main_len: u64, to: u64, fork_len: u64) -> Reorg {
     let mut after: Vec<(Block, Vec<Transaction>)> =
         main[..=usize::try_from(to).expect("small")].to_vec();
     let mut hashes: Vec<BlockHash> = after.iter().map(|(b, _)| b.hash()).collect();
+    // The fork's tree is the main chain's through `to`, then its own.
+    let mut tree = GrownTree::over(&after);
     for i in 0..fork_len {
         let height = to + 1 + i;
         // A fork block lists a spend where a main block would (CEN-I11's
@@ -263,11 +440,13 @@ pub fn reorg(main_len: u64, to: u64, fork_len: u64) -> Reorg {
             )]
         };
         let b = block_with_nonce(
+            tree.root_going_into(height),
             height,
             *hashes.last().expect("non-empty"),
             &txs,
             99 + u32::try_from(i).expect("small"),
         );
+        tree.push(&b, &txs);
         hashes.push(b.hash());
         after.push((b, txs));
     }
@@ -322,14 +501,18 @@ pub fn corpus_from(first: BlockHeight, chain: &[(Block, Vec<Transaction>)]) -> V
     w.finish().expect("count").into_inner()
 }
 
-/// Facts for `height`, agreeing with [`root_after`].
-pub fn facts_at(height: u64) -> Facts {
+/// Facts for `height`, whose recorded root after the drain is `root_after`
+/// — the tree's ([`GrownTree::root_after`]) for a chain the store will
+/// connect, so the trace carries what the store derives (the derived-vs-
+/// trace comparison holds trivially on a synthetic chain; the captured
+/// chains are where it is a comparison).
+pub fn facts_at(height: u64, root_after: CurveTreeRoot) -> Facts {
     Facts {
         weight: BlockWeight::from_raw(1_000 + height),
         long_term_weight: LongTermWeight::from_raw(900 + height),
         coins_generated: AtomicUnits::from_raw((height + 1) * 1_000_000),
         burned: AtomicUnits::from_raw(0),
-        root_after: root_after(height),
+        root_after,
         long_term_effective_median: LongTermWeight::from_raw(300_000 + 7 * height),
         cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height) + 1),
     }
@@ -354,8 +537,10 @@ pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<[u8; 32]> {
 /// from the chain itself, the way the daemon's walker would from LMDB.
 pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace {
     let mut w = TraceWriter::new(Vec::new()).expect("header");
+    let tree = GrownTree::over(chain);
     for (hh, _) in chain.iter().enumerate() {
-        w.push_facts(h(hh as u64), &facts_at(hh as u64))
+        let hh = hh as u64;
+        w.push_facts(h(hh), &facts_at(hh, tree.root_after(hh)))
             .expect("facts");
     }
     if checkpoint && !chain.is_empty() {
@@ -369,7 +554,12 @@ pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace 
 pub fn expected_state(chain: &[(Block, Vec<Transaction>)]) -> Digest {
     let hashes: Vec<[u8; 32]> = chain.iter().map(|(b, _)| b.hash().to_bytes()).collect();
     let last = chain.len() as u64 - 1;
-    digest_v0(&hashes, &spent_keys_of(chain), root_after(last).as_bytes())
+    let tree = GrownTree::over(chain);
+    digest_v0(
+        &hashes,
+        &spent_keys_of(chain),
+        tree.root_after(last).as_bytes(),
+    )
 }
 
 pub fn open_store(path: &std::path::Path) -> ChainStore {

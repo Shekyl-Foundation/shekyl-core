@@ -19,10 +19,13 @@
 //!  1. belts        parent = recorded tip (SI-2); rule set in force (B3)
 //!  2. transactions miner tx then listed → tx_indices, txs_*, tx_outputs,
 //!                  output_txs, output_amounts, spent_keys (SI-3, SI-9, SI-1)
-//!  3. [E3 hook]    pending leaves → drain → grow → segment freeze
-//!  4. root         curve_tree_roots[h + 1] = facts.root_after (SI-4) — every
-//!                  connect, grown or not (the C++ write at :663–:664 is
-//!                  outside the growth gate; SCW-19)
+//!  3. tree         the verdict's drain → curve_tree_leaves, the position
+//!                  maps, curve_tree_layers, curve_tree_meta (SI-11/12/17);
+//!                  curve_tree_leaf_counts[h + 1] every connect (SI-18) —
+//!                  `grow.rs`, DRS-E3
+//!  4. root         curve_tree_roots[h + 1] = the verdict's root_after (SI-4)
+//!                  — every connect, grown or not (the C++ write at
+//!                  :663–:664 is outside the growth gate; SCW-19)
 //!  5. [E4 hook]    attestation witness
 //!  6. block        blocks[h], block_heights[hash], block_info[h] (SI-2)
 //!  7. rule set     hf_versions[h] = in_force (the CEN-B3 belt)
@@ -32,8 +35,9 @@
 //! 10. journal      undo_log[h] (SI-6)
 //! ```
 //!
-//! A `[hook]` phase has no body here; E3 / E4 land bodies, not new phases.
-//! `pop` has no phase list — it is the reverse replay of step 10's row.
+//! A `[hook]` phase has no body here; E4 lands bodies, not new phases (E3's
+//! body landed in phase 3). `pop` has no phase list — it is the reverse
+//! replay of step 10's row.
 //!
 //! # What the connect stamps (§3.8)
 //!
@@ -72,8 +76,8 @@
 
 use shekyl_chain_rules::{ChainValid, RuleSet, TxIdentity};
 use shekyl_types::{
-    BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
-    OneTimePubkey, OutputIndexInTx,
+    BlockHash, BlockHeight, BlockWeight, CommitmentBytes, LongTermWeight, OneTimePubkey,
+    OutputIndexInTx,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
@@ -178,13 +182,6 @@ pub struct ConnectFacts {
     /// absent-reads-as-0 convention and the `blockchain.cpp:6148` guard,
     /// kept so the digest domain and the undo row match.
     pub burned: Fact<AtomicUnits>,
-    /// The tree root **after this block's drain** — the state the *next*
-    /// header must carry (CEN-B5) and a spend referencing `h + 1` anchors to
-    /// (CEN-I12); recorded at `curve_tree_roots[h + 1]` on every connect
-    /// (SI-4: one row per connect), grown or not. Not this block's own
-    /// header root: that is the state *before* its drain, already at key `h`
-    /// from the parent's connect (SCW-19).
-    pub root_after: Fact<CurveTreeRoot>,
     /// The long-term weight median **in force for** this block — the value
     /// it was validated and fee-floored against, the ring's `rm` at its
     /// iteration (`relay_floor_ring.cpp:196`–`:200`), **not** the recompute
@@ -198,7 +195,7 @@ pub struct ConnectFacts {
 impl ConnectFacts {
     /// The fields, each with the rows that will derive it, in declaration
     /// order. The table `DRS_E1_SCHAIN_W.md` §3.2 carries, as data.
-    pub const DELETED_BY: [DeletedBy; 6] = [
+    pub const DELETED_BY: [DeletedBy; 5] = [
         DeletedBy {
             field: "weight",
             rows: &["CEN-G6", "CEN-G6b"],
@@ -223,11 +220,11 @@ impl ConnectFacts {
             rows: &["CEN-F17", "CEN-G11"],
             slice: "4 (4.F)",
         },
-        DeletedBy {
-            field: "root_after",
-            rows: &["CEN-B5", "CEN-I12"],
-            slice: "1 / 6, through the curve-tree crate (S-CURVE grows it)",
-        },
+        // `root_after` — deleted by DRS-E3 (`CTW-Q1`), 2026-09-26: `validate`
+        // derives the drain and the root over the view; `connect` records
+        // `ValidatedBlock::root_after`. The entry named CEN-B5 / CEN-I12 as
+        // the deleting rows; those rules *read* the root, and the field went
+        // when the writer that produces it landed, not when a rule did.
         DeletedBy {
             field: "long_term_effective_median",
             rows: &["CEN-G6", "CEN-G6b"],
@@ -235,13 +232,12 @@ impl ConnectFacts {
         },
     ];
 
-    const fn origins(&self) -> [Origin; 6] {
+    const fn origins(&self) -> [Origin; 5] {
         [
             self.weight.origin,
             self.long_term_weight.origin,
             self.coins_generated.origin,
             self.burned.origin,
-            self.root_after.origin,
             self.long_term_effective_median.origin,
         ]
     }
@@ -406,10 +402,17 @@ impl<'id> WriteBatch<'_, 'id> {
             rct_outputs += self.record_tx(height, *identity, tx, false)?;
         }
 
-        // ---- 3. [E3 hook] pending leaves → drain → grow → segment freeze --
+        // ---- 3. tree (DRS-E3; `grow.rs`) --------------------------------
+        self.record_drain(height, &valid)?;
+
         // ---- 4. root ---------------------------------------------------
+        // The verdict's, derived by `validate` over this batch's view
+        // (`CTW-Q1`: the root determines future validity, so the authority
+        // over validity derives it). The store records it; the next
+        // header must carry it (CEN-B5) and a spend referencing `h + 1`
+        // anchors to it (CEN-I12).
         self.open_insert_table(CURVE_TREE_ROOTS, StoreInvariant::RootRewritten)?
-            .insert(height + 1, facts.root_after.value.encoded().as_encoded())?;
+            .insert(height + 1, block.root_after().encoded().as_encoded())?;
 
         // ---- 5. [E4 hook] attestation witness --------------------------
         // ---- 6. block --------------------------------------------------

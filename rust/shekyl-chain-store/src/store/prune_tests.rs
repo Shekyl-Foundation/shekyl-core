@@ -16,15 +16,16 @@
 //! for long chains, with the same shape.
 
 use redb::ReadableTable;
-use shekyl_chain_rules::{Candidate, RuleSet};
+use shekyl_chain_rules::{AtHeight, Candidate, ChainView, RuleSet};
 use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
-    LongTermWeight, SHARD_TX_COUNT,
+    BlockCount, BlockHash, BlockHeight, BlockWeight, LongTermWeight, SHARD_TX_COUNT,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Transaction};
+use shekyl_wire::Transaction;
 
-use super::connect_fixtures::{anchor, coinbase, judge_under, spend};
+use super::connect_fixtures::{
+    anchor, candidate, candidate_over, judge_under, root_going_into, spend,
+};
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
 use crate::codec::{
@@ -50,36 +51,16 @@ fn horizons() -> Horizons {
     .expect("cap ≤ retention < epoch")
 }
 
-/// A curve root that is a function of the height, wide enough for long
-/// chains (the shared fixture packs the height into one byte).
-fn root_of(height: u64) -> CurveTreeRoot {
-    let mut bytes = [0xc0; 32];
-    bytes[..8].copy_from_slice(&height.to_le_bytes());
-    CurveTreeRoot::from_bytes(bytes)
-}
-
-fn root_before(height: u64) -> CurveTreeRoot {
-    match height.checked_sub(1) {
-        None => CurveTreeRoot::EMPTY,
-        Some(parent) => root_of(parent),
-    }
-}
-
-fn candidate(height: u64, previous: BlockHash, listed: Vec<Transaction>) -> Candidate {
-    let block = Block {
-        header: BlockHeader {
-            major_version: 1,
-            minor_version: 0,
-            timestamp: 1_000 + height * 60,
-            previous,
-            nonce: 7,
-            curve_tree_root: root_before(height),
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
-        },
-        miner_transaction: coinbase(height),
-        transaction_hashes: listed.iter().map(Transaction::hash).collect(),
-    };
-    Candidate::new(block, listed)
+/// A candidate for `height` on the committed `store`: its header carries
+/// the root the store recorded going into `height` (CEN-B5; the derived
+/// root since DRS-E3, so no function of the height can supply it).
+fn candidate_on(
+    store: &ChainStore,
+    height: u64,
+    previous: BlockHash,
+    listed: Vec<Transaction>,
+) -> Candidate {
+    candidate_over(root_going_into(store, height), height, previous, listed)
 }
 
 fn facts(height: u64) -> ConnectFacts {
@@ -88,7 +69,6 @@ fn facts(height: u64) -> ConnectFacts {
         long_term_weight: Fact::passed_through(LongTermWeight::from_raw(900 + height)),
         coins_generated: Fact::passed_through(AtomicUnits::from_raw((height + 1) * 1_000_000)),
         burned: Fact::passed_through(AtomicUnits::from_raw(0)),
-        root_after: Fact::passed_through(root_of(height)),
         long_term_effective_median: Fact::passed_through(LongTermWeight::from_raw(
             300_000 + 7 * height,
         )),
@@ -130,22 +110,24 @@ impl Builder {
         to: u64,
         listed: impl Fn(u64) -> Vec<Transaction>,
     ) -> Vec<Connected> {
-        let mut cands = Vec::new();
-        for h in from..=to {
-            let previous = self.hashes.last().copied().unwrap_or(BlockHash::NULL);
-            let txs: Vec<Transaction> = listed(h)
-                .into_iter()
-                .map(|tx| anchor(&self.hashes, h, tx))
-                .collect();
-            let cand = candidate(h, previous, txs.clone());
-            self.hashes.push(cand.block.hash());
-            self.listed.push(txs);
-            cands.push(cand);
-        }
         let out: Result<Vec<Connected>, TestErr> = store.write(|batch| {
             let view = batch.chain_view();
             let mut out = Vec::new();
-            for (h, cand) in (from..=to).zip(cands) {
+            for h in from..=to {
+                let previous = self.hashes.last().copied().unwrap_or(BlockHash::NULL);
+                let txs: Vec<Transaction> = listed(h)
+                    .into_iter()
+                    .map(|tx| anchor(&self.hashes, h, tx))
+                    .collect();
+                // The header carries the root the store recorded going
+                // into `h` — this batch's own previous connect (CEN-B5).
+                let root = match view.root_at(BlockHeight::from_raw(h))? {
+                    AtHeight::Recorded(root) => root,
+                    AtHeight::AboveTip => panic!("no root recorded going into height {h}"),
+                };
+                let cand = candidate_over(root, h, previous, txs.clone());
+                self.hashes.push(cand.block.hash());
+                self.listed.push(txs);
                 out.push(batch.connect(
                     judge_under(&view, cand, &self.rules)?,
                     facts(h),
@@ -405,7 +387,7 @@ fn a_decreasing_storage_id_total_refuses_the_boundary() {
     plant_listed(&path, 9, 5_000);
     let store = ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons).expect("reopen");
     let previous = b.hashes.last().copied().expect("parent");
-    let cand = candidate(40, previous, Vec::new());
+    let cand = candidate_on(&store, 40, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge_under(&view, cand, &SHORT)?, facts(40), SHORT)?)
@@ -449,7 +431,7 @@ fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
     plant_listed(&path, 29, 25);
     let store = ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons).expect("reopen");
     let previous = b.hashes.last().copied().expect("parent");
-    let cand = candidate(40, previous, Vec::new());
+    let cand = candidate_on(&store, 40, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge_under(&view, cand, &SHORT)?, facts(40), SHORT)?)
@@ -611,9 +593,9 @@ fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary(
     let store =
         ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("reopen");
     let previous = *b2.hashes.last().expect("399 connected");
+    let cand = candidate_on(&store, 400, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let cand = candidate(400, previous, Vec::new());
         Ok(batch.connect(judge_under(&view, cand, &RULES)?, facts(400), RULES)?)
     });
     assert_eq!(

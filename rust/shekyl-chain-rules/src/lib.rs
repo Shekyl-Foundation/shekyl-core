@@ -153,7 +153,7 @@ pub use anchors::{Anchor, ReleaseAnchors};
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
-pub use drain::drained_outputs;
+pub use drain::{tree_after, Drain};
 pub use fault::{
     Corrupt, Fault, FormAttempt, PerHeightRecord, Retry, Stale, ViewRead, MAX_FORM_ATTEMPTS,
 };
