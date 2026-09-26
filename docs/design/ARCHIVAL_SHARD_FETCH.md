@@ -910,7 +910,7 @@ surface (added 2026-09-13).** The loopback acceptance test signs with
 an injected key. A key-injection path that survives into a production
 build is how a persona ends up signing with a test key, so the
 affordance takes the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` shape
-(`shekyl-archival-retention/src/constants.rs:204`): armed explicitly
+(`shekyl-archival-retention/src/constants.rs:230`): armed explicitly
 by the test, pinned, refused loudly on a bad value, and **asserted
 absent in release builds** by a gate that fails when the arming symbol
 is reachable there (rule 47 — the gate proves the subject exists in

@@ -20,12 +20,17 @@ use shekyl_peer_policy::DropVerdict;
 /// `shekyl_archival_settlement_epoch_arm_regtest`: armed (or the variable
 /// is unset and the genesis pin latched).
 pub const SHEKYL_ARCHIVAL_SEB_ARM_OK: u8 = 0;
-/// The lever is set but is not an integer in the accepted range — an
-/// operator input error; fix the value or unset the variable.
+/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is set but is not an integer strictly
+/// above the reorg cap in force and at most the genesis pin — an operator
+/// input error; fix the value, lower `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`
+/// with it, or unset the variable.
 pub const SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID: u8 = 1;
 /// The schedule had already latched before arming ran — an
 /// initialization-order defect in the arming process, not a bad value.
 pub const SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE: u8 = 2;
+/// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` is set but is not an integer in
+/// `1..=ARCHIVAL_REORG_DEPTH_BLOCKS` — an operator input error.
+pub const SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP: u8 = 3;
 
 /// Success.
 pub const SHEKYL_ARCHIVAL_VERIFY_OK: u8 = 0;

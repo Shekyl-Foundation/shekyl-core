@@ -138,11 +138,21 @@ pub(super) fn formed<'id, V: ChainView<'id>>(
     view: &V,
     candidate: Candidate,
 ) -> Result<StructurallyValid, V::Fault> {
+    formed_under(view, candidate, &RuleSet::GENESIS)
+}
+
+/// [`formed`] under an explicit rule set (a Fakechain set for tests that
+/// run a shortened schedule).
+pub(super) fn formed_under<'id, V: ChainView<'id>>(
+    view: &V,
+    candidate: Candidate,
+    rules: &RuleSet,
+) -> Result<StructurallyValid, V::Fault> {
     let seed = expected_seed(view)?;
     Ok(
         match form(
             candidate,
-            &RuleSet::GENESIS,
+            rules,
             &FixtureSubstrate,
             seed,
             FormAttempt::FIRST,
@@ -161,10 +171,19 @@ pub(super) fn judge<'b, 'id>(
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+    judge_under(view, candidate, &RuleSet::GENESIS)
+}
+
+/// [`judge`] under an explicit rule set.
+pub(super) fn judge_under<'b, 'id>(
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+    rules: &RuleSet,
+) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
     match validate(
-        formed(view, candidate)?,
+        formed_under(view, candidate, rules)?,
         view,
-        &RuleSet::GENESIS,
+        rules,
         &Trust::UNANCHORED,
     ) {
         Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),

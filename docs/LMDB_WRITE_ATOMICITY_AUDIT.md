@@ -1129,7 +1129,7 @@ every row of the table that follows:
 | `txpool_blob` | `add/remove_txpool_tx` (`LockedTXN`); reset-kept | §4/§5b | excluded | excluded |
 | `txpool_meta` | `add/update/remove_txpool_tx` (`LockedTXN`); reset-kept | §4/§5b | excluded | excluded |
 | `txs` | **none** — opened (`:1662`), never written or read through its handle; finding DRS-W4 | §9 | excluded | excluded |
-| `txs_pqc_auths` | `add_transaction_data` / `remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a | uncovered | append-mostly |
+| `txs_pqc_auths` | `add_transaction_data` / `remove_transaction_data` (v11: kept by the depth prune); **discarded by shard on the redb store (DRS-E1 S-PRUNE, 2026-09-25, `store/prune.rs`) — re-graded append-mostly → excluded with it; the permanent `txs_pqc_auth_hash` row is the append-mostly one** | §2/§3/§5a | uncovered | excluded |
 | `txs_prunable` | `add/remove_transaction_data`; `prune_worker`, `prune_tx_data` (own txns) | §2/§3/§5a | uncovered | excluded |
 | `txs_prunable_hash` | `add/remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a | uncovered | append-mostly |
 | `txs_pruned` | `add_transaction_data` / `remove_transaction_data` | §2/§3 | uncovered | append-mostly |

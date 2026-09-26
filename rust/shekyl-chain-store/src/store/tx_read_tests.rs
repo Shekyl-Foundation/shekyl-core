@@ -126,7 +126,11 @@ fn tx_record_carries_the_permanent_half_and_recomposes_the_wire_bytes() {
         assert_eq!(
             record.pqc_auths.is_some(),
             parts.pqc_auth_hash.is_some(),
-            "§7.7 leg (ii): the pqc_auths segment is present iff the txid is 4-part"
+            "§7.7 leg (ii): the pqc_auths region is present iff the txid is 4-part"
+        );
+        assert!(
+            !matches!(record.pqc_auths, Some(PqcAuths::Discarded)),
+            "a freshly connected 4-part transaction's pqc_auths region is retained"
         );
         assert_eq!(record.pruned.clone().into_wire_bytes(), segments.pruned);
         // T3 + T4 compose to `get_tx_blob`'s `pruned ‖ pqc_auths ‖ prunable`
@@ -139,7 +143,7 @@ fn tx_record_carries_the_permanent_half_and_recomposes_the_wire_bytes() {
         assert_eq!(prunable.clone().into_wire_bytes(), segments.prunable);
         let mut wire = Vec::new();
         tx.write(&mut wire).expect("write");
-        assert_eq!(record.wire_bytes(prunable), wire);
+        assert_eq!(record.wire_bytes(prunable), Some(wire));
     }
     assert_eq!(
         snap.tx_record(&TxHash::from_bytes([0xee; 32]))
@@ -189,7 +193,7 @@ fn a_recorded_transaction_missing_its_prunable_hash_row_is_si7_not_a_log_line() 
 }
 
 #[test]
-fn a_pqc_auth_hash_row_without_its_segment_is_si7_pairwise() {
+fn a_pqc_auth_hash_row_without_its_segment_is_discarded_and_a_segment_without_its_row_is_si7() {
     let path = tmp("tx-record-pqc-pair");
     let (store, _, _, with_pqc) = tx_chain(&path);
     let hash = hash_of(&with_pqc);
@@ -212,11 +216,24 @@ fn a_pqc_auth_hash_row_without_its_segment_is_si7_pairwise() {
     }
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
-    let err = snap
-        .tx_record(&hash)
-        .expect_err("segment and hash row disagree");
-    assert!(is_si7_absent(&err, "txs_pqc_auths"), "got {err:?}");
-    // The reverse disagreement names the other table.
+    // Hash row present, segment absent: §7.7 leg (iii)'s one state — the
+    // retention prune discards `pqc_auths` by shard (DRS-E1 S-PRUNE), so
+    // this is *discarded*, never a fault, and the wire cannot be recomposed
+    // from this node.
+    let record = snap.tx_record(&hash).expect("read").expect("recorded");
+    assert_eq!(record.pqc_auths, Some(PqcAuths::Discarded));
+    let AtIndex::Recorded(Prunable::Retained(prunable)) =
+        snap.tx_prunable(record.location.id).expect("read")
+    else {
+        panic!("the prunable region was not touched");
+    };
+    assert_eq!(
+        record.wire_bytes(prunable),
+        None,
+        "a discarded region has no wire bytes here"
+    );
+    // The reverse disagreement — a segment with no hash row — is SI-7:
+    // the hash rows are permanent and nothing may delete one.
     drop(snap);
     drop(store);
     {

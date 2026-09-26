@@ -72,6 +72,49 @@ use core::fmt;
 /// refused before any allocation is sized from the count.
 pub const MAX_HOLDINGS_SHARDS: usize = 4096;
 
+/// `T` — transactions per archival shard: shard `k` is the storage ids
+/// `[k·T, (k+1)·T)`, `k = ⌊tx_id / T⌋` (`PDM-Q6` item 5, RULED
+/// 2026-09-23; `DRS_E1_SPRUNE.md` §2). The one consensus constant of the
+/// partition: no boundary table, no length rows, no byte lengths.
+///
+/// A storage id is not `cumulative_tx_count`. That field counts listed
+/// transactions. [`storage_ids_through`] adds one coinbase per block;
+/// `first_tx_id(h)` for `h ≥ 1` is that total at height `h − 1`, and
+/// `first_tx_id(0)` is `0`. Every node derives the same shard set from
+/// that total and `T`.
+///
+/// **PROVISIONAL numeric** (Round-2 gate with `n`, `D_max`, `w_launch`):
+/// chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB. Sourced
+/// from `config/consensus_constants.json` (`archival_shard_tx_count`, via
+/// this crate's `build.rs`) like the gate's other numerics, and exposed
+/// here, the shard vocabulary's home, so the store's discard (`⌊id / T⌋`)
+/// and the archiver's holdings name one `T`. A second home for `T` — a
+/// literal in a shipped crate, or a shard boundary derived from anything
+/// but `cumulative_tx_count` and this — is the FOLLOWUPS row's falsifier.
+pub const SHARD_TX_COUNT: u64 = ARCHIVAL_SHARD_TX_COUNT;
+
+include!(concat!(
+    env!("OUT_DIR"),
+    "/consensus_constants_generated.rs"
+));
+
+const _: () = assert!(SHARD_TX_COUNT > 0, "a shard holds at least one transaction");
+
+/// Storage ids issued through `height` inclusive.
+///
+/// `listed` is `cumulative_tx_count` at that height: non-coinbase
+/// transactions only. Each block records one miner transaction before its
+/// listed transactions (CEN-F), so the ids through `height` are `listed`
+/// plus the `height + 1` blocks in `0..=height`. `None` when the sum
+/// overflows. `first_tx_id(h)` for `h ≥ 1` is this function at `h − 1`.
+#[must_use]
+pub const fn storage_ids_through(listed: u64, height: u64) -> Option<u64> {
+    let Some(blocks) = height.checked_add(1) else {
+        return None;
+    };
+    listed.checked_add(blocks)
+}
+
 /// Upper bound on a bond record's standing-log entries. **Genesis-frozen
 /// consensus constant, not a codec tunable:** Release verify rejects a
 /// record at this cap (`IntervalLogFull`, the connect's clean interval-close
@@ -396,6 +439,17 @@ mod tests {
             })
         );
         assert!(ShardSet::empty().is_empty());
+    }
+
+    #[test]
+    fn storage_ids_count_one_coinbase_per_block() {
+        // Height 0, no listed transactions: the genesis coinbase is id 0,
+        // and one id has been issued.
+        assert_eq!(storage_ids_through(0, 0), Some(1));
+        // The prune fixture: through height 199, one listed spend and 200
+        // coinbases — 201 ids issued, so the first id at height 200 is 201.
+        assert_eq!(storage_ids_through(1, 199), Some(201));
+        assert_eq!(storage_ids_through(u64::MAX, 0), None);
     }
 
     #[test]

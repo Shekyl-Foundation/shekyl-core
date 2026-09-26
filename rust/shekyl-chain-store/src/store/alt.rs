@@ -55,7 +55,6 @@ use crate::lmdb_order::LmdbHashKey;
 use crate::schema::ALT_BLOCKS;
 
 use super::alt_reads::{self, key, AltEntry, ALT_BLOCKS_CELL};
-use super::chain_reads::ReadFault;
 use super::error::{AltCannot, EngineError, StoreError};
 use super::keyed::check_row;
 use super::write::WriteBatch;
@@ -182,16 +181,5 @@ impl WriteBatch<'_, '_> {
     /// decode or whose block does not hash to its key; engine faults.
     pub fn alt_blocks(&self) -> Result<Vec<AltEntry>, StoreError> {
         alt_reads::alt_blocks(self.txn()).map_err(|f| self.arm_read_fault(f))
-    }
-
-    /// The batch-side policy for a classified read fault: an invariant
-    /// violation arms the batch's poison (the switch must not commit), an
-    /// engine fault passes through. Poison without a height hint aborts
-    /// this batch and leaves the writer live — alt rows are not chain work.
-    fn arm_read_fault(&self, fault: ReadFault) -> StoreError {
-        match fault {
-            ReadFault::Engine(e) => e.into(),
-            ReadFault::Invariant(row) => self.arm_if_invariant(row.into()),
-        }
     }
 }

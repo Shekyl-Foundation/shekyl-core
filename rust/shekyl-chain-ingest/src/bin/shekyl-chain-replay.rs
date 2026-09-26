@@ -443,7 +443,7 @@ mod tests {
         let ok = ChainRules::new(Chain::Regtest, NonZeroU128::new(7)).expect("regtest");
         assert_eq!(
             ok.in_force(BlockHeight::from_raw(3)),
-            shekyl_chain_rules::RuleSet::fakechain(NonZeroU128::new(7).expect("nz"))
+            shekyl_chain_rules::RuleSet::fakechain(NonZeroU128::new(7), shekyl_chain_rules::D_MAX)
         );
     }
 

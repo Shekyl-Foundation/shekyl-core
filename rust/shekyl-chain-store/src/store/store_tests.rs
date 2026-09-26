@@ -31,6 +31,13 @@ pub(super) const OTHER_EPOCH: SettlementEpochBlocks = match SettlementEpochBlock
     None => unreachable!(),
 };
 
+/// The production session pair: `EPOCH` with `D_max`. The retention fits,
+/// which is the pair [`ChainStore::open_read_only`](super::ChainStore::open_read_only)
+/// is given when a test is not exercising a shortened epoch.
+pub(super) fn production_horizons() -> Horizons {
+    Horizons::production(EPOCH).expect("SEB > D_MAX")
+}
+
 /// A caller's error type over the store's: what `write`'s `E` is for. A
 /// closure that wants to abort on purpose returns `Abort`; there is no
 /// abort verb because `Err` *is* the abort.
@@ -188,7 +195,7 @@ fn a_store_failure_converts_into_the_callers_error_type() {
     // store's failures in one enum without the store knowing the verdict.
     let path = tmp("convert");
     drop(ChainStore::create(&path, EPOCH).expect("create"));
-    let ro = ChainStore::open_read_only(&path, EPOCH).expect("ro");
+    let ro = ChainStore::open_read_only(&path, production_horizons()).expect("ro");
     assert_eq!(
         ro.write(|_| Ok::<(), TestErr>(())),
         Err(TestErr::Store(
@@ -474,7 +481,7 @@ fn a_read_only_store_refuses_at_the_single_refusal_point() {
         let store = ChainStore::create(&path, EPOCH).expect("create");
         store.write(|_| Ok::<(), StoreError>(())).expect("commit");
     }
-    let store = ChainStore::open_read_only(&path, EPOCH).expect("open ro");
+    let store = ChainStore::open_read_only(&path, production_horizons()).expect("open ro");
     assert!(store.is_read_only());
     assert!(matches!(
         store.write(|_| Ok::<(), StoreError>(())),
@@ -524,7 +531,10 @@ fn a_second_writable_open_is_refused_while_a_writer_is_live() {
 fn a_read_only_open_is_refused_while_a_writer_is_live() {
     let path = tmp("lock-w-r");
     let live = ChainStore::create(&path, EPOCH).expect("create");
-    assert!(is_already_open(&ChainStore::open_read_only(&path, EPOCH)));
+    assert!(is_already_open(&ChainStore::open_read_only(
+        &path,
+        production_horizons()
+    )));
     drop(live);
     cleanup(&path);
 }
@@ -533,7 +543,7 @@ fn a_read_only_open_is_refused_while_a_writer_is_live() {
 fn a_writable_open_is_refused_while_a_reader_is_live() {
     let path = tmp("lock-r-w");
     drop(ChainStore::create(&path, EPOCH).expect("create"));
-    let reader = ChainStore::open_read_only(&path, EPOCH).expect("open ro");
+    let reader = ChainStore::open_read_only(&path, production_horizons()).expect("open ro");
     assert!(
         is_already_open(&ChainStore::create(&path, EPOCH)),
         "a reader's provenance is read once at open; a writer admitted behind it could widen the cell"
@@ -548,8 +558,9 @@ fn two_read_only_handles_coexist() {
     // so neither's mirror can be moved by the other.
     let path = tmp("lock-r-r");
     drop(ChainStore::create(&path, EPOCH).expect("create"));
-    let first = ChainStore::open_read_only(&path, EPOCH).expect("first ro");
-    let second = ChainStore::open_read_only(&path, EPOCH).expect("second ro alongside the first");
+    let first = ChainStore::open_read_only(&path, production_horizons()).expect("first ro");
+    let second = ChainStore::open_read_only(&path, production_horizons())
+        .expect("second ro alongside the first");
     assert_eq!(first.provenance(), second.provenance());
     drop((first, second));
     cleanup(&path);
@@ -560,7 +571,7 @@ fn open_read_only_refuses_a_store_that_does_not_exist() {
     let path = tmp("absent");
     drop(std::fs::remove_file(&path));
     assert!(matches!(
-        ChainStore::open_read_only(&path, EPOCH),
+        ChainStore::open_read_only(&path, production_horizons()),
         Err(StoreError::Engine(EngineError::Open(_)))
     ));
     assert!(!path.exists(), "a read-only open must not create the store");

@@ -311,7 +311,7 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
     // (caught live by the PR-4c emission e2e's first daemon spawn).
     if (m_nettype != FAKECHAIN)
     {
-      MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on a public network: the settlement-epoch schedule is consensus-critical and the override is a fakechain-only (regtest) lever; refusing to start. Unset SHEKYL_SETTLEMENT_EPOCH_BLOCKS to run this node.");
+      MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS / SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS override active on a public network: the settlement schedule and the reorg cap are consensus-critical and the overrides are fakechain-only (regtest) levers; refusing to start. Unset them to run this node.");
       return false;
     }
     // FAKECHAIN: arm the override. An unarmed process ignores the lever
@@ -327,13 +327,16 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
       // a daemon-side initialization-order defect the operator cannot fix
       // by editing the variable.
       const char *raw = getenv("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
+      const char *raw_cap = getenv("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS");
       if (arm_rc == SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE)
         MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " could not be armed: the settlement-epoch schedule had already latched before this gate ran. The value is fine; this is an initialization-order defect in the daemon (arming must precede every epoch-arithmetic call, including the genesis add). Refusing to start — please report it.");
+      else if (arm_rc == SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP)
+        MERROR("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS=" << (raw_cap ? raw_cap : "?") << " is not a valid override: expected an integer between 1 and the genesis reorg depth; refusing to start. Fix the value or unset the variable.");
       else
-        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override: expected an integer between 2 and the genesis settlement-epoch length; refusing to start. Fix the value or unset the variable.");
+        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override: expected an integer strictly above the reorg cap in force (" << (raw_cap ? raw_cap : "the genesis reorg depth") << ") and at most the genesis settlement-epoch length — a fakechain whose epoch is not above its reorg cap is a configuration mainnet cannot reach; refusing to start. Lower SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS with the epoch, fix the value, or unset the variable.");
       return false;
     }
-    MWARNING("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks instead of the genesis-pinned schedule — epoch closes, serve-credit windows, and emission claims computed under this schedule are valid only among fakechain nodes running the same override");
+    MWARNING("regtest schedule override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks and the reorg cap is " << shekyl_archival_reorg_depth_blocks() << " instead of the genesis pins — epoch closes, serve-credit windows, emission claims and the reorg depth computed under this schedule are valid only among fakechain nodes running the same override");
   }
 
   if (m_hardfork == nullptr)

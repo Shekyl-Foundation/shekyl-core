@@ -358,6 +358,42 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
 
 ### Daemon chain store
 
+- **DRS-E1 S-PRUNE — the retention prune: bodies retire by the epoch
+  calendar, the undo journal by `D_max`.** Schema layout **14**. At the
+  connect of the block at every settlement-epoch boundary from epoch 2, the
+  store discards — inside that block's own transaction — the prunable and
+  `pqc_auths` regions of every archival shard whose close epoch lies two
+  behind (`discard(k) ⇔ current_epoch ≥ close_epoch(k) + 2`, `T = 200`
+  transactions per shard): a set named by the epoch and computed from the
+  storage-id total (listed transactions plus one coinbase per block,
+  `storage_ids_through`), never from what is present on disk, so
+  every node discards the same shards at the same height whether it was
+  online or not. Hash rows stay; a read of a discarded region answers
+  *discarded*, never a fault, and the whole transaction's wire bytes are
+  reported unavailable rather than recomposed. A decreasing storage-id
+  total is SI-13 and the boundary connect does not commit. The pop-undo journal is
+  retired below `tip − D_max` at the same boundary and the store records the
+  lowest height it kept, so a reorg deeper than the retention is refused as
+  a capability limit (`PopBelowFloor`), never mistaken for a corrupt
+  journal; the recorded floor is checked against the journal at every pop
+  and boundary, and a disagreement is SI-6. `D_max` is built (720,
+  provisional, inheriting `archival_reorg_depth_blocks` — a key that is also
+  the pass-anchor depth, recorded as inherited until E4 splits it) with
+  `SEB > D_max` asserted at compile time, **as rule-set data**: the reorg
+  cap is a field of the consensus rule set (`RuleSet::reorg_cap`; the
+  genesis set carries `D_max`, a Fakechain set names its own), and the
+  store's undo retention must cover the in-force set's cap — refused at
+  open and at every connect otherwise. **Regtest operators:** the
+  `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever now refuses an epoch that is not
+  strictly above the reorg cap, and a second fakechain-only lever,
+  `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` (`1..=720`), lowers the cap with it;
+  a daemon on a public network refuses to start if either is present. `T`
+  (`archival_shard_tx_count = 200`) joins `config/consensus_constants.json`
+  as the shard partition's one source, so the `get_version`
+  consensus-constants digest moves (a key was added; the value every node
+  already ran). The C++ stripe engine was deleted earlier; nothing here is a
+  port of it.
+  Pre-genesis: a daemon store at layout 13 is recreated, not migrated.
 - **DRS-E1 S-ALT — the alternative-chain store, typed, on the consensus
   file; the switch is one transaction.** Schema layout **13**: `alt_blocks`
   becomes `LmdbHashKey → Coded<AltBlock>` — the C++ `alt_block_data_t ‖ blob`

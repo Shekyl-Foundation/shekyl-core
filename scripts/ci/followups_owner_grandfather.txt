@@ -314,7 +314,6 @@ Repair backlog as one query (DRS §7.6 item 1)
 Daemon shard-fetch client (`SF-` round): sub-PR 1 BUILT 2026-09-13 as one PR stacked on #734; §9.1 (c) DONE 2026-09-16 (`N = 8`) — what remains
 Re-examine the C++-anchored CI gates at the LMDB cutover
 E6 shaping under `PDM-Q5` / `PDM-Q3`: a below-anchor `RuleSet`, and `ChainView` without a recorded-body accessor
-S-PRUNE needs a rule-26 plan doc before its first increment
 Skeleton block payload grows `pqc_auth_hash`
 Journal horizon asserted at the journals' retirement site
 The archiver serving-store rebuild — a wallet-lane design round, unbuilt by design

@@ -240,6 +240,16 @@ pub extern "C" fn shekyl_archival_settlement_epoch_blocks() -> u64 {
     effective_settlement_epoch_blocks()
 }
 
+/// The effective reorg cap in blocks (the genesis-pinned `D_max`, 720, or
+/// the armed `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` override — the
+/// fakechain-only regtest lever beside the epoch's). The cap the daemon's
+/// Fakechain rule set names; C++ reads it only to report the schedule in
+/// force.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_reorg_depth_blocks() -> u64 {
+    shekyl_archival_retention::effective_archival_reorg_depth_blocks()
+}
+
 /// True iff a `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override is active (the
 /// effective schedule differs from the genesis default — which requires
 /// this process to have **armed** via
@@ -262,13 +272,15 @@ pub extern "C" fn shekyl_archival_settlement_epoch_override_present() -> bool {
     shekyl_archival_retention::settlement_epoch_override_present()
 }
 
-/// Arm the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override for the daemon's
-/// FAKECHAIN startup path, latching the validated override (or the genesis
-/// pin when the variable is unset). An unarmed process ignores the lever
-/// entirely, so arming is the single gate a regtest schedule passes
-/// through.
+/// Arm the regtest schedule levers — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
+/// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` — for the daemon's FAKECHAIN
+/// startup path, latching the validated pair (or the genesis pins when
+/// unset). An unarmed process ignores the levers entirely, so arming is the
+/// single gate a regtest schedule passes through; the epoch is parsed
+/// against the cap, so `SEB ≤ cap` is refused here
+/// (`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q2 item 5).
 ///
-/// Returns a **cause code**, not a bool: the two refusals need different
+/// Returns a **cause code**, not a bool: the refusals need different
 /// remedies and sending an operator after the wrong one costs real
 /// debugging time (a levered daemon dying on
 /// [`SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE`] is a daemon-side
@@ -279,6 +291,7 @@ pub extern "C" fn shekyl_archival_settlement_epoch_arm_regtest() -> u8 {
     match shekyl_archival_retention::arm_settlement_epoch_override_for_regtest() {
         Ok(_) => SHEKYL_ARCHIVAL_SEB_ARM_OK,
         Err(E::Invalid { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID,
+        Err(E::InvalidReorgCap { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP,
         Err(E::ArmedTooLate { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE,
     }
 }
