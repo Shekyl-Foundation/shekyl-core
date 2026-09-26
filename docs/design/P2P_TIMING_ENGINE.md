@@ -304,9 +304,9 @@ interim executor.
 
 The crate is the data structure. The transport layer calls a service
 around it, from its first line. These are the decisions that service is
-built from. The service is not in the crate yet. Invoke aborts stay on
-the bridge. Shutdown steps 2–8 stay with the transport and the bridge;
-step 1 is this service.
+built from. The service is `EngineService` in `shekyl-timing-engine`
+(landed 2026-09-26). Invoke aborts stay on the bridge. Shutdown steps
+2–8 stay with the transport and the bridge; step 1 is this service.
 
 **Owners never wait on the engine.** `arm`, `clear`, and `deregister`
 are fire-and-forget: the send returns when the command is queued, not
@@ -315,11 +315,13 @@ when the engine has applied it. A `Wake` already carries its
 handed, not from a reply to `arm`. Owner ids are handed out by the
 handle from an atomic counter, so registering is not a round trip
 either. The handle is a type in this crate. `OwnerId`'s field stays
-private (`OwnerId(u64)`); transport never constructs one. The core
-today assigns ids itself (`Engine::register`, `next_id`). When the
-service lands, `register` takes the id the handle minted in this crate
-and refuses a duplicate. That is the core change. A public constructor
-on `OwnerId` is not part of it.
+private (`OwnerId(u64)`); transport never constructs one. `register`
+takes the id the handle minted in this crate and refuses a duplicate.
+*Records-was: the core assigned ids itself (`Engine::register`,
+`next_id`).* That is the core change. A public constructor on
+`OwnerId` is not part of it. An id the handle minted is handed out by
+`IdSource` in the same crate. The core's bench uses that source
+because it calls `register` directly.
 
 **One outstanding wake is the delivery primitive.** Each owner has a
 single wake slot. It is not a queue. Delivery writes the newest `Wake`
@@ -344,9 +346,13 @@ owner sends. The engine's earlier-only rule runs when it applies an
 `arm`, so an `arm` that is queued and then discarded has already taken
 a slot in the mailbox. An idle deadline that only moves later would
 send one command per event. The handle knows the deadline it has armed.
-An `arm` that is not strictly earlier is not sent. After a fire or a
-`clear` the handle has no armed deadline, and the next `arm` is sent.
-An `arm` enters the mailbox only when that owner's deadline moves
+An `arm` that is not strictly earlier is not sent. The handle's memory
+of that deadline resets when the home takes the wake — that is how it
+learns the deadline fired — and on `clear` and `deregister`. The reset
+is on receipt, not when the engine fires: until the home takes the
+wake it still believes the old deadline is armed. Without the reset,
+the next legitimate arm, including a later one, is suppressed. An
+`arm` enters the mailbox only when that owner's deadline moves
 earlier, and `clear`, `deregister`, and `note_home` enter when the
 home sends them. That is the traffic. It is not a fixed capacity: a
 deadline can keep moving earlier for as long as the connection lives.

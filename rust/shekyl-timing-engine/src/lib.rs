@@ -3,11 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The timing-engine core from `P2P_TIMING_ENGINE.md`.
+//! The timing engine from `P2P_TIMING_ENGINE.md`.
 //!
-//! An owner lives somewhere else and polls itself there. This crate stores
-//! wake hints ordered by time, and hands back the ones that are due. A newer
-//! arming drops the older one by generation. The clock is passed in.
+//! The core stores wake hints ordered by time and hands back the ones that
+//! are due. A newer arming drops the older one by generation. The clock is
+//! passed in. [`EngineService`] is the thread around that core: homes send
+//! commands and never wait for them to be applied.
 //!
 //! A [`Tick`] is nanoseconds since the clock's origin. [`MonotonicClock`] is
 //! the production clock. [`ManualClock`] is the one tests move by hand.
@@ -16,7 +17,9 @@
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
-use std::time::Instant;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Nanoseconds since the clock's origin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -36,30 +39,60 @@ impl Tick {
     }
 }
 
-/// Something that can say what time it is, and nothing else.
+/// Something that can say what time it is.
+///
+/// `wait_for` is how the service thread sleeps. `set_now` is how a test
+/// moves a hand clock. A clock that advances by itself ignores `set_now`.
 pub trait Clock {
     fn now(&self) -> Tick;
+
+    /// How long to sleep before `deadline`.
+    ///
+    /// `Some(Duration::ZERO)` means the deadline is already due.
+    /// `Some(wait)` means this clock moves by itself. `None` means it does
+    /// not: block until the next command.
+    fn wait_for(&self, deadline: Tick) -> Option<Duration>;
+
+    fn set_now(&self, now: Tick) {
+        let _ = now;
+    }
 }
 
 /// A clock the test moves by hand. Not behind a cargo feature.
+///
+/// A clone shares the instant. Homes and the engine read the same one.
 #[derive(Clone, Debug)]
 pub struct ManualClock {
-    now: Tick,
+    now: Arc<AtomicU64>,
 }
 
 impl ManualClock {
-    pub const fn new(now: Tick) -> Self {
-        Self { now }
+    pub fn new(now: Tick) -> Self {
+        Self {
+            now: Arc::new(AtomicU64::new(now.get())),
+        }
     }
 
-    pub fn set(&mut self, now: Tick) {
-        self.now = now;
+    pub fn set(&self, now: Tick) {
+        self.set_now(now);
     }
 }
 
 impl Clock for ManualClock {
     fn now(&self) -> Tick {
-        self.now
+        Tick::new(self.now.load(Ordering::Acquire))
+    }
+
+    fn wait_for(&self, deadline: Tick) -> Option<Duration> {
+        if deadline.get() <= self.now().get() {
+            Some(Duration::ZERO)
+        } else {
+            None
+        }
+    }
+
+    fn set_now(&self, now: Tick) {
+        self.now.store(now.get(), Ordering::Release);
     }
 }
 
@@ -91,6 +124,16 @@ impl Clock for MonotonicClock {
     fn now(&self) -> Tick {
         let nanos = self.origin.elapsed().as_nanos();
         Tick(u64::try_from(nanos).unwrap_or(u64::MAX))
+    }
+
+    fn wait_for(&self, deadline: Tick) -> Option<Duration> {
+        let now = self.now().get();
+        let deadline = deadline.get();
+        if deadline <= now {
+            Some(Duration::ZERO)
+        } else {
+            Some(Duration::from_nanos(deadline - now))
+        }
     }
 }
 
@@ -137,9 +180,40 @@ impl OwnerClass {
     }
 }
 
-/// One owner. Minted by [`Engine::register`].
+/// One owner. Minted by [`IdSource`], which the service handle holds.
+///
+/// The field stays private. There is no public constructor. [`Engine::register`]
+/// accepts an id and refuses one that is already registered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OwnerId(u64);
+
+/// Hands out [`OwnerId`]s from an atomic counter, starting at 1.
+///
+/// The service handle holds one, so registering is not a round trip.
+/// The core's own bench holds one too, because it calls [`Engine::register`]
+/// directly. Ids are not reused.
+#[derive(Clone, Debug)]
+pub struct IdSource {
+    next: Arc<AtomicU64>,
+}
+
+impl IdSource {
+    pub fn new() -> Self {
+        Self {
+            next: Arc::new(AtomicU64::new(1)),
+        }
+    }
+
+    pub fn mint(&self) -> OwnerId {
+        OwnerId(self.next.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for IdSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// One arming. A later arming of the same owner makes the earlier one stale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -253,6 +327,8 @@ fn record_sample(sum: &mut u64, max: &mut u64, buckets: &mut [u64; LATENESS_BUCK
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EngineError {
     UnknownOwner,
+    /// This id is already registered.
+    DuplicateOwner,
     Closed,
     /// `polled_at` is before the wake was handed out.
     HomeBeforeFire,
@@ -300,7 +376,6 @@ struct PendingHome {
 /// Wake hints. The clock is owned here so a test clock cannot be a feature flag.
 pub struct Engine<C: Clock> {
     clock: C,
-    next_id: u64,
     closed: bool,
     /// Owners whose `deadline` is `Some`. Maintained, never scanned.
     live: usize,
@@ -315,7 +390,6 @@ impl<C: Clock> Engine<C> {
     pub fn new(clock: C) -> Self {
         Self {
             clock,
-            next_id: 1,
             closed: false,
             live: 0,
             pending_count: 0,
@@ -333,12 +407,17 @@ impl<C: Clock> Engine<C> {
         &mut self.clock
     }
 
-    pub fn register(&mut self, class: OwnerClass) -> Result<OwnerId, EngineError> {
+    /// Accept `id`. The handle minted it. An id that is already registered
+    /// is refused. An id that was deregistered may be registered again;
+    /// the handle does not reuse ids, so that path is the core's, not the
+    /// service's.
+    pub fn register(&mut self, id: OwnerId, class: OwnerClass) -> Result<(), EngineError> {
         if self.closed {
             return Err(EngineError::Closed);
         }
-        let id = OwnerId(self.next_id);
-        self.next_id += 1;
+        if self.owners.contains_key(&id) {
+            return Err(EngineError::DuplicateOwner);
+        }
         self.owners.insert(
             id,
             Owner {
@@ -348,7 +427,7 @@ impl<C: Clock> Engine<C> {
                 pending: None,
             },
         );
-        Ok(id)
+        Ok(())
     }
 
     /// Forget an owner. Its one outstanding wake goes with it. Hints still
@@ -583,6 +662,10 @@ impl<C: Clock> Engine<C> {
     }
 }
 
+mod service;
+
+pub use service::{EngineService, Handle, OwnerHandle};
+
 #[cfg(test)]
 mod model;
 
@@ -594,8 +677,15 @@ mod tests {
         Engine::new(ManualClock::new(Tick::new(now)))
     }
 
+    fn ids() -> &'static IdSource {
+        static IDS: std::sync::OnceLock<IdSource> = std::sync::OnceLock::new();
+        IDS.get_or_init(IdSource::new)
+    }
+
     fn owner(engine: &mut Engine<ManualClock>) -> OwnerId {
-        engine.register(OwnerClass::Housekeeping).unwrap()
+        let id = ids().mint();
+        engine.register(id, OwnerClass::Housekeeping).unwrap();
+        id
     }
 
     #[test]
@@ -744,7 +834,8 @@ mod tests {
     #[test]
     fn home_delay_matches_the_generation() {
         let mut engine = engine_at(10);
-        let id = engine.register(OwnerClass::TimedSync).unwrap();
+        let id = ids().mint();
+        engine.register(id, OwnerClass::TimedSync).unwrap();
         let generation = engine.arm(id, Tick::new(10)).unwrap();
         let wake = engine.poll()[0];
         engine.note_home(id, generation, Tick::new(14)).unwrap();
@@ -827,7 +918,9 @@ mod tests {
         assert!(engine.poll().is_empty());
         assert_eq!(engine.next_deadline(), None);
         assert_eq!(
-            engine.register(OwnerClass::Relay).unwrap_err(),
+            engine
+                .register(ids().mint(), OwnerClass::Relay)
+                .unwrap_err(),
             EngineError::Closed
         );
         assert_eq!(
@@ -835,6 +928,30 @@ mod tests {
             EngineError::Closed
         );
         assert_eq!(engine.clear(id).unwrap_err(), EngineError::Closed);
+    }
+
+    #[test]
+    fn register_refuses_an_id_that_is_already_live() {
+        let mut engine = engine_at(0);
+        let id = ids().mint();
+        engine.register(id, OwnerClass::Relay).unwrap();
+        assert_eq!(
+            engine.register(id, OwnerClass::Transport).unwrap_err(),
+            EngineError::DuplicateOwner
+        );
+        engine.deregister(id).unwrap();
+        engine.register(id, OwnerClass::Transport).unwrap();
+    }
+
+    #[test]
+    fn a_closed_engine_reports_closed_before_duplicate() {
+        let mut engine = engine_at(0);
+        let id = owner(&mut engine);
+        engine.close();
+        assert_eq!(
+            engine.register(id, OwnerClass::Relay).unwrap_err(),
+            EngineError::Closed
+        );
     }
 
     #[test]

@@ -5,14 +5,19 @@
 
 //! A scanned list, obviously correct, run beside the heap.
 
-use super::{Engine, EngineError, Generation, ManualClock, OwnerClass, OwnerId, Tick};
+use super::{Engine, EngineError, Generation, IdSource, ManualClock, OwnerClass, OwnerId, Tick};
 use proptest::prelude::*;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 enum Op {
     Register(u8),
-    Arm { slot: u8, deadline: u32 },
+    /// Register an id that is already live.
+    RegisterDuplicate(u8),
+    Arm {
+        slot: u8,
+        deadline: u32,
+    },
     Clear(u8),
     Deregister(u8),
     Advance(u16),
@@ -26,6 +31,7 @@ enum Op {
 fn op_strategy() -> impl Strategy<Value = Op> {
     prop_oneof![
         2 => any::<u8>().prop_map(Op::Register),
+        2 => any::<u8>().prop_map(Op::RegisterDuplicate),
         8 => (any::<u8>(), any::<u32>()).prop_map(|(slot, deadline)| Op::Arm {
             slot,
             deadline: deadline % 10_000,
@@ -80,6 +86,26 @@ impl Reference {
             closed: false,
             owners: HashMap::new(),
         }
+    }
+
+    fn register(&mut self, id: u64, class: OwnerClass) -> Result<(), EngineError> {
+        if self.closed {
+            return Err(EngineError::Closed);
+        }
+        if self.owners.contains_key(&id) {
+            return Err(EngineError::DuplicateOwner);
+        }
+        self.owners.insert(
+            id,
+            RefOwner {
+                class,
+                generation: 0,
+                deadline: None,
+                pending_generation: None,
+                pending_fired: None,
+            },
+        );
+        Ok(())
     }
 
     fn live_count(&self) -> usize {
@@ -151,29 +177,29 @@ proptest! {
 fn run(ops: &[Op]) {
     let mut engine = Engine::new(ManualClock::new(Tick::new(0)));
     let mut reference = Reference::new();
+    let source = IdSource::new();
     let mut ids: Vec<OwnerId> = Vec::new();
 
     for op in ops {
         match *op {
             Op::Register(class) => {
                 let class = OwnerClass::from_index(class);
-                let result = engine.register(class);
-                if reference.closed {
-                    assert_eq!(result.unwrap_err(), EngineError::Closed);
-                } else {
-                    let id = result.unwrap();
-                    reference.owners.insert(
-                        id.0,
-                        RefOwner {
-                            class,
-                            generation: 0,
-                            deadline: None,
-                            pending_generation: None,
-                            pending_fired: None,
-                        },
-                    );
+                let id = source.mint();
+                let result = engine.register(id, class);
+                let expected = reference.register(id.0, class);
+                assert_eq!(result, expected);
+                if result.is_ok() {
                     ids.push(id);
                 }
+            }
+            Op::RegisterDuplicate(slot) => {
+                let Some(id) = registered(&ids, slot) else {
+                    continue;
+                };
+                let result = engine.register(id, OwnerClass::Transport);
+                let expected = reference.register(id.0, OwnerClass::Transport);
+                assert_eq!(result, expected);
+                assert_eq!(result.unwrap_err(), EngineError::DuplicateOwner);
             }
             Op::Arm { slot, deadline } => {
                 let Some(id) = registered(&ids, slot) else {

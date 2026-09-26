@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-timing-engine"
-description = "P2P timing-engine core: time-ordered wake hints, generation drop, and lateness. No sockets and no event loop."
+description = "P2P timing engine: time-ordered wake hints and the one-thread service around them. No sockets and no async runtime."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
