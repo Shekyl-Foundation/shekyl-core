@@ -50,12 +50,28 @@ enum Command {
     #[cfg(test)]
     Barrier(Sender<()>),
     #[cfg(test)]
+    Lateness {
+        class: OwnerClass,
+        reply: Sender<crate::ClassLateness>,
+    },
+    #[cfg(test)]
     Panic,
 }
 
+/// A pending wake and the terminal mark are independent. Close or
+/// deregister while a wake is sitting in the slot must not drop the
+/// wake, and must not leave the slot empty with nobody left to seal it.
+#[derive(Clone, Copy)]
 enum SlotState {
     Empty,
     Wake(Wake),
+    Closed,
+    Gone,
+    WakeThenClosed(Wake),
+    WakeThenGone(Wake),
+}
+
+enum Terminal {
     Closed,
     Gone,
 }
@@ -73,22 +89,60 @@ impl Slot {
         }
     }
 
+    /// A poisoned lock means a home panicked while holding it. The next
+    /// deliver on this thread then panics, and the process aborts. Release
+    /// builds already abort on any panic, so this is the same outcome.
+    fn lock(&self) -> std::sync::MutexGuard<'_, SlotState> {
+        self.state.lock().expect("slot lock poisoned; aborting")
+    }
+
     fn deliver(&self, wake: Wake) {
-        let mut state = self.state.lock().expect("slot lock");
-        if matches!(*state, SlotState::Closed | SlotState::Gone) {
-            return;
-        }
-        let notify = matches!(*state, SlotState::Empty);
-        *state = SlotState::Wake(wake);
-        if notify {
-            self.cvar.notify_one();
+        let mut state = self.lock();
+        match *state {
+            SlotState::Empty => {
+                *state = SlotState::Wake(wake);
+                self.cvar.notify_one();
+            }
+            SlotState::Wake(_) => *state = SlotState::Wake(wake),
+            SlotState::Closed
+            | SlotState::Gone
+            | SlotState::WakeThenClosed(_)
+            | SlotState::WakeThenGone(_) => {}
         }
     }
 
     fn poll(&self) -> Result<Option<Wake>, EngineError> {
-        let mut state = self.state.lock().expect("slot lock");
-        match std::mem::replace(&mut *state, SlotState::Empty) {
+        let mut state = self.lock();
+        Self::take(&mut state)
+    }
+
+    /// Block until a wake is handed out, the slot is terminal, or `idle`
+    /// says the handle itself is done. `idle` runs while the slot lock is
+    /// held, so a seal cannot land between the check and the wait.
+    fn wait(&self, idle: impl Fn() -> Result<(), EngineError>) -> Result<Wake, EngineError> {
+        let mut state = self.lock();
+        loop {
+            match Self::take(&mut state)? {
+                Some(wake) => return Ok(wake),
+                None => {
+                    idle()?;
+                    state = self.cvar.wait(state).expect("slot lock poisoned; aborting");
+                }
+            }
+        }
+    }
+
+    fn take(state: &mut SlotState) -> Result<Option<Wake>, EngineError> {
+        match std::mem::replace(state, SlotState::Empty) {
             SlotState::Wake(wake) => Ok(Some(wake)),
+            SlotState::WakeThenClosed(wake) => {
+                *state = SlotState::Closed;
+                Ok(Some(wake))
+            }
+            SlotState::WakeThenGone(wake) => {
+                *state = SlotState::Gone;
+                Ok(Some(wake))
+            }
             SlotState::Closed => {
                 *state = SlotState::Closed;
                 Err(EngineError::Closed)
@@ -101,32 +155,17 @@ impl Slot {
         }
     }
 
-    fn wait(&self) -> Result<Wake, EngineError> {
-        let mut state = self.state.lock().expect("slot lock");
-        loop {
-            match std::mem::replace(&mut *state, SlotState::Empty) {
-                SlotState::Wake(wake) => return Ok(wake),
-                SlotState::Closed => {
-                    *state = SlotState::Closed;
-                    return Err(EngineError::Closed);
-                }
-                SlotState::Gone => {
-                    *state = SlotState::Gone;
-                    return Err(EngineError::UnknownOwner);
-                }
-                SlotState::Empty => {
-                    state = self.cvar.wait(state).expect("slot lock");
-                }
-            }
-        }
-    }
-
-    fn seal(&self, next: SlotState) {
-        let mut state = self.state.lock().expect("slot lock");
-        if matches!(*state, SlotState::Empty) {
-            *state = next;
-            self.cvar.notify_all();
-        }
+    fn seal(&self, terminal: Terminal) {
+        let mut state = self.lock();
+        let next = match (*state, terminal) {
+            (SlotState::Empty, Terminal::Closed) => SlotState::Closed,
+            (SlotState::Empty, Terminal::Gone) => SlotState::Gone,
+            (SlotState::Wake(wake), Terminal::Closed) => SlotState::WakeThenClosed(wake),
+            (SlotState::Wake(wake), Terminal::Gone) => SlotState::WakeThenGone(wake),
+            _ => return,
+        };
+        *state = next;
+        self.cvar.notify_all();
     }
 }
 
@@ -311,7 +350,7 @@ fn worker<C: Clock>(
         }
     }
     for slot in deliveries.values() {
-        slot.seal(SlotState::Closed);
+        slot.seal(Terminal::Closed);
     }
     engine.close();
 }
@@ -377,6 +416,11 @@ fn dispatch<C: Clock>(
             ignore(reply.send(()));
             return true;
         }
+        #[cfg(test)]
+        Command::Lateness { class, reply } => {
+            ignore(reply.send(engine.lateness(class).clone()));
+            return true;
+        }
         other if closed.load(Ordering::Acquire) => {
             drop(other);
             return true;
@@ -400,7 +444,7 @@ fn dispatch<C: Clock>(
         Command::Deregister { id } => {
             ignore(engine.deregister(id));
             if let Some(slot) = deliveries.remove(&id) {
-                slot.seal(SlotState::Gone);
+                slot.seal(Terminal::Gone);
             }
         }
         Command::NoteHome {
@@ -419,6 +463,8 @@ fn dispatch<C: Clock>(
     true
 }
 
+/// After every command, not once per sleep. A burst must not hold a due
+/// wake until the mailbox has drained.
 fn deliver_due<C: Clock>(engine: &mut Engine<C>, deliveries: &HashMap<OwnerId, Arc<Slot>>) {
     for wake in engine.poll() {
         if let Some(slot) = deliveries.get(&wake.owner) {
@@ -555,23 +601,37 @@ impl<C: Clock> OwnerHandle<C> {
     }
 
     /// The wake in the slot, if the engine has delivered one.
+    ///
+    /// A wake already waiting is handed out once, even after close or
+    /// deregister. The next call then returns [`EngineError::Closed`] or
+    /// [`EngineError::UnknownOwner`]. An empty slot checks this handle's
+    /// own flags, so a deregistered home does not see `Ok(None)`.
     pub fn poll_wake(&self) -> Result<Option<Wake>, EngineError> {
         match self.slot.poll()? {
             Some(wake) => {
                 self.observe(&wake);
                 Ok(Some(wake))
             }
-            None if self.closed.load(Ordering::Acquire) => Err(EngineError::Closed),
-            None => Ok(None),
+            None => self.idle().map(|()| None),
         }
     }
 
     /// Block until a wake is delivered, the owner is deregistered, or the
     /// service is closed.
     pub fn wait_wake(&self) -> Result<Wake, EngineError> {
-        let wake = self.slot.wait()?;
+        let wake = self.slot.wait(|| self.idle())?;
         self.observe(&wake);
         Ok(wake)
+    }
+
+    fn idle(&self) -> Result<(), EngineError> {
+        if self.deregistered.load(Ordering::Acquire) {
+            Err(EngineError::UnknownOwner)
+        } else if self.closed.load(Ordering::Acquire) {
+            Err(EngineError::Closed)
+        } else {
+            Ok(())
+        }
     }
 
     fn observe(&self, wake: &Wake) {
@@ -664,6 +724,17 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
 
     fn arms_applied(&self) -> usize {
         self.counts.arms.load(Ordering::Relaxed)
+    }
+
+    fn lateness(&self, class: OwnerClass) -> crate::ClassLateness {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.tx
+            .send(Command::Lateness {
+                class,
+                reply: reply_tx,
+            })
+            .expect("engine thread alive");
+        reply_rx.recv().expect("engine thread replied")
     }
 }
 
@@ -861,5 +932,109 @@ mod tests {
             Some(6),
             "expected SIGABRT from process::abort, got {status:?}"
         );
+    }
+
+    /// The second wait is the bug: a wake was in the slot at shutdown, so
+    /// seal used to leave the slot empty after that wake was taken, and
+    /// the engine thread was already gone.
+    fn both_waits(
+        owner: OwnerHandle<ManualClock>,
+    ) -> (Result<Wake, EngineError>, Result<Wake, EngineError>) {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let first = owner.wait_wake();
+            let second = owner.wait_wake();
+            tx.send((first, second)).expect("test thread alive");
+        });
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("wait_wake blocked after the owner was finished")
+    }
+
+    #[test]
+    fn a_wake_pending_at_close_is_handed_out_once() {
+        let service = EngineService::start(ManualClock::new(Tick::new(0)));
+        let owner = service.handle().register(OwnerClass::Transport).unwrap();
+        owner.arm(Tick::new(1)).unwrap();
+        service.barrier();
+        service.advance(Tick::new(1));
+        service.barrier();
+        service.close();
+        service.wait_stopped();
+        let (first, second) = both_waits(owner);
+        assert_eq!(first.expect("the pending wake").deadline, Tick::new(1));
+        assert!(matches!(second, Err(EngineError::Closed)));
+    }
+
+    #[test]
+    fn a_wake_pending_at_deregister_is_handed_out_once() {
+        let service = EngineService::start(ManualClock::new(Tick::new(0)));
+        let owner = service.handle().register(OwnerClass::Transport).unwrap();
+        owner.arm(Tick::new(1)).unwrap();
+        service.barrier();
+        service.advance(Tick::new(1));
+        service.barrier();
+        owner.deregister().unwrap();
+        service.barrier();
+        let (first, second) = both_waits(owner);
+        assert_eq!(first.expect("the pending wake").deadline, Tick::new(1));
+        assert!(matches!(second, Err(EngineError::UnknownOwner)));
+    }
+
+    #[test]
+    fn a_deregistered_handle_does_not_poll_an_empty_slot_as_idle() {
+        let service = EngineService::start_paused(ManualClock::new(Tick::new(0)));
+        let owner = service.handle().register(OwnerClass::Relay).unwrap();
+        owner.deregister().unwrap();
+        assert!(matches!(owner.poll_wake(), Err(EngineError::UnknownOwner)));
+        service.close();
+        service.release();
+        service.wait_stopped();
+    }
+
+    #[test]
+    fn taking_a_wake_records_the_home_delay() {
+        let service = EngineService::start(ManualClock::new(Tick::new(0)));
+        let owner = service.handle().register(OwnerClass::Transport).unwrap();
+        owner.arm(Tick::new(10)).unwrap();
+        service.barrier();
+        service.advance(Tick::new(10));
+        service.barrier();
+        service.advance(Tick::new(25));
+        service.barrier();
+        let wake = owner.poll_wake().unwrap().expect("wake");
+        assert_eq!(wake.fired_at, Tick::new(10));
+        let totals = service.lateness(OwnerClass::Transport);
+        assert_eq!(totals.fires, 1);
+        assert_eq!(totals.home_reports, 1);
+        assert_eq!(totals.home_delay, 15);
+    }
+
+    #[test]
+    fn an_arm_then_a_clear_run_in_that_order() {
+        let service = EngineService::start(ManualClock::new(Tick::new(0)));
+        let owner = service.handle().register(OwnerClass::Transport).unwrap();
+        owner.arm(Tick::new(100)).unwrap();
+        owner.clear().unwrap();
+        service.barrier();
+        assert_eq!(service.arms_applied(), 1);
+        service.advance(Tick::new(100));
+        service.barrier();
+        assert!(matches!(owner.poll_wake(), Ok(None)));
+    }
+
+    #[test]
+    fn a_second_wake_replaces_the_one_still_in_the_slot() {
+        let service = EngineService::start(ManualClock::new(Tick::new(0)));
+        let owner = service.handle().register(OwnerClass::Transport).unwrap();
+        owner.arm(Tick::new(10)).unwrap();
+        service.barrier();
+        service.advance(Tick::new(10));
+        service.barrier();
+        owner.arm(Tick::new(4)).unwrap();
+        service.barrier();
+        let wake = owner.poll_wake().unwrap().expect("the replacement");
+        assert_eq!(wake.deadline, Tick::new(4));
+        assert!(matches!(owner.poll_wake(), Ok(None)));
+        assert_eq!(service.lateness(OwnerClass::Transport).replaced_wakes, 1);
     }
 }

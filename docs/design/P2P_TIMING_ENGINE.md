@@ -332,7 +332,24 @@ whatever wake is in the slot when it runs, so `note_home` is handed the
 generation the core still holds. Leaving the older wake in the slot
 would make `note_home` return `NoSuchWake` and the newer wake
 unreportable. The home drops the slot's lock before it does any work,
-so the engine thread never waits on the owner.
+so the engine thread never waits on the owner. Close and deregister
+record a terminal mark on that slot even when a wake is already
+waiting. The waiting wake is handed out once. The next poll or wait
+returns `Closed` or `UnknownOwner`. A seal that only wrote the mark
+into an empty slot would, after that wake was taken, leave the slot
+empty and the engine thread already gone, and the next wait would
+block. The handle also checks its own deregistered flag when the slot
+is empty, so a home that has deregistered does not observe `Ok(None)`.
+
+After every command the thread delivers whatever is due, not once per
+sleep. A burst of commands must not hold a due wake until the mailbox
+has drained. Delivering only on the way into the sleep would put that
+wake behind the burst.
+
+A home that panics while holding the slot lock poisons it. The engine
+thread's next deliver then panics on that lock and aborts the process.
+Release builds already abort on any panic, so this is the same outcome,
+not a second failure mode.
 
 **The engine thread sleeps by blocking on the mailbox.** The timeout is
 `next_deadline() - now` when a deadline is armed, and the thread blocks
@@ -387,7 +404,8 @@ lateness from a different zero.
 **After close.** Each handle holds a closed flag. `register`, `arm`,
 `clear`, and `deregister` check it and return `EngineError::Closed`
 without sending. Commands already in the mailbox are dropped, not
-applied. `close` is shutdown step 1.
+applied. A wake already in the slot is still handed out once, and the
+next wait returns `Closed`. `close` is shutdown step 1.
 
 **If the engine thread panics, the process aborts.** A dead engine
 leaves every gap timer and handshake deadline unarmed, so a flood holds
