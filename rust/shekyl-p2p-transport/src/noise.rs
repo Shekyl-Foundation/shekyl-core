@@ -137,10 +137,13 @@ pub(crate) struct Responder {
 }
 
 /// Responder after message 1. The next call writes message 2.
+///
+/// `remote_ek` is the encapsulation key `read_message1` already accepted.
+/// An invalid key cannot be represented here.
 pub(crate) struct ResponderReady {
     sym: Sym,
     remote_e: [u8; 32],
-    remote_ek: [u8; ML_KEM_768_EK_LEN],
+    remote_ek: ml_kem_768::EncapsKey,
 }
 
 /// Both messages are done. `INITIATOR` selects which `Split` half is send.
@@ -251,16 +254,18 @@ impl Responder {
         if message1.len() != MESSAGE1_LEN {
             return Err(HandshakeError::Length);
         }
-        let mut remote_ek = [0u8; ML_KEM_768_EK_LEN];
-        remote_ek.copy_from_slice(&message1[32..]);
+        let mut remote_ek_bytes = [0u8; ML_KEM_768_EK_LEN];
+        remote_ek_bytes.copy_from_slice(&message1[32..]);
         // D10.2: the encapsulation-key range check is the third rejection,
         // after the prefix and the length. It runs before the transcript and
-        // before the X25519 Diffie-Hellman in `finish`.
-        ml_kem_768::EncapsKey::try_from_bytes(remote_ek).map_err(|_| HandshakeError::Kem)?;
+        // before the X25519 Diffie-Hellman in `finish`. The parsed key is
+        // what `ResponderReady` stores, so `finish` does not parse it again.
+        let remote_ek = ml_kem_768::EncapsKey::try_from_bytes(remote_ek_bytes)
+            .map_err(|_| HandshakeError::Kem)?;
         let mut remote_e = [0u8; 32];
         remote_e.copy_from_slice(&message1[..32]);
         self.sym.mix_hash(&remote_e);
-        self.sym.mix_hash(&remote_ek);
+        self.sym.mix_hash(&remote_ek_bytes);
         let payload = self.sym.decrypt_and_hash(&[])?;
         if !payload.is_empty() {
             return Err(HandshakeError::State);
@@ -307,10 +312,6 @@ impl ResponderReady {
         let mut msg = Vec::with_capacity(MESSAGE2_LEN);
         msg.extend_from_slice(&epub);
         self.sym.mix_hash(&epub);
-        // Already checked in `read_message1`. Parsing again here keeps a
-        // bad key from reaching the Diffie-Hellman if that check is skipped.
-        let ek = ml_kem_768::EncapsKey::try_from_bytes(self.remote_ek)
-            .map_err(|_| HandshakeError::Kem)?;
         #[cfg(test)]
         RESPONDER_DH.with(|count| count.set(count.get() + 1));
         let shared = eph.diffie_hellman(&PublicKey::from(self.remote_e));
@@ -320,7 +321,8 @@ impl ResponderReady {
         self.sym.mix_key(shared.as_bytes());
         #[cfg(test)]
         let ck_after_ee = Zeroizing::new(*self.sym.ck);
-        let (ss, ct) = ek
+        let (ss, ct) = self
+            .remote_ek
             .try_encaps_with_rng(rng)
             .map_err(|_| HandshakeError::Kem)?;
         let encrypted = self.sym.encrypt_and_hash(&ct.into_bytes())?;
@@ -523,20 +525,6 @@ mod tests {
             RESPONDER_DH.with(|count| count.get()),
             before,
             "a rejected key must not reach the responder Diffie-Hellman"
-        );
-    }
-
-    #[test]
-    fn finish_rejects_a_replaced_encapsulation_key_before_diffie_hellman() {
-        let (_ini, message1) = Initiator::new(&nid()).unwrap();
-        let mut ready = Responder::new(&nid()).read_message1(&message1).unwrap();
-        ready.remote_ek.fill(0xff);
-        let before = RESPONDER_DH.with(|count| count.get());
-        assert!(matches!(ready.write_message2(), Err(HandshakeError::Kem)));
-        assert_eq!(
-            RESPONDER_DH.with(|count| count.get()),
-            before,
-            "finish must reject the key before the Diffie-Hellman"
         );
     }
 

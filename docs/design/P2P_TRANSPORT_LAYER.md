@@ -754,7 +754,9 @@ listener, and so a connection in the gap phase.
    *Records-was, at the 2026-09-25 pin:* `ResponderReady::finish` ran
    the X25519 Diffie-Hellman before validating the encapsulation key.
    **Landed:** the range check is in `read_message1`, and a malformed
-   key returns before any responder Diffie-Hellman. Every failure still
+   key returns before any responder Diffie-Hellman. `ResponderReady`
+   stores the parsed key, so `finish` does not parse it again. Every
+   failure still
    closes the same way: FIN after zero bytes written. Step 7 measures
    that.
 
