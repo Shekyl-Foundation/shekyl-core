@@ -11,6 +11,7 @@ pub mod commands;
 pub mod daemon;
 pub mod display;
 pub mod grammar;
+pub mod outcome;
 pub mod resolve;
 pub mod rpc_client;
 pub mod session;

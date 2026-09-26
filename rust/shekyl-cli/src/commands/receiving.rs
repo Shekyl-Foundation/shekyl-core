@@ -15,12 +15,16 @@ use serde_json::{json, Value};
 use shekyl_types::Timestamp;
 
 use super::{format_amount, format_amount_str, opt_amount, require_open};
+use crate::outcome::{failed, CommandResult};
 use crate::rpc_client::RpcSession;
 
-pub fn cmd_request_new(rpc: &RpcSession, amount: u64, label: &str, expiry: Option<Timestamp>) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_request_new(
+    rpc: &RpcSession,
+    amount: u64,
+    label: &str,
+    expiry: Option<Timestamp>,
+) -> CommandResult {
+    require_open(rpc)?;
     let mut params = json!({
         "label": label,
         "amount": amount.to_string(),
@@ -40,41 +44,19 @@ pub fn cmd_request_new(rpc: &RpcSession, amount: u64, label: &str, expiry: Optio
             println!("  URI:        {uri}");
             println!("Share the URI with the payer; \"requests list\" tracks its state.");
         }
-        Err(e) => rpc.report("Failed to create payment request", &e),
-    }
-}
-
-/// Map the CLI filter word onto the wire enum. Defaults to `ALL`.
-/// Case-insensitive: `ALL` / `Pending` are accepted like `all` / `pending`.
-fn filter_param(filter: Option<&str>) -> Result<&'static str, String> {
-    match filter.map(str::to_ascii_lowercase).as_deref() {
-        None | Some("all") => Ok("ALL"),
-        Some("pending") => Ok("PENDING"),
-        Some("matched") => Ok("MATCHED"),
-        Some(_) => Err(format!(
-            "unknown filter {:?}: expected pending, matched, or all",
-            filter.unwrap_or_default()
-        )),
-    }
-}
-
-pub fn cmd_requests_list(rpc: &RpcSession, filter: Option<&str>) {
-    if !require_open(rpc) {
-        return;
-    }
-    let wire_filter = match filter_param(filter) {
-        Ok(f) => f,
-        Err(msg) => {
-            eprintln!("requests list: {msg}");
-            return;
-        }
+        Err(e) => return Err(rpc.report("Failed to create payment request", &e)),
     };
-    match rpc.call("list_payment_requests", json!({ "filter": wire_filter })) {
+    Ok(())
+}
+
+pub fn cmd_requests_list(rpc: &RpcSession, filter: crate::resolve::RequestFilter) -> CommandResult {
+    require_open(rpc)?;
+    match rpc.call("list_payment_requests", json!({ "filter": filter.wire() })) {
         Ok(val) => {
             let requests = val.get("payment_requests").and_then(|v| v.as_array());
             let Some(requests) = requests.filter(|a| !a.is_empty()) else {
                 println!("No payment requests.");
-                return;
+                return Ok(());
             };
             println!(
                 "{:<16} {:<10} {:>18} {:>10}  Label",
@@ -84,8 +66,9 @@ pub fn cmd_requests_list(rpc: &RpcSession, filter: Option<&str>) {
                 print_request_row(r);
             }
         }
-        Err(e) => rpc.report("Failed to list payment requests", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to list payment requests", &e)),
+    };
+    Ok(())
 }
 
 fn print_request_row(r: &Value) {
@@ -115,10 +98,8 @@ pub fn cmd_make_uri(
     address: Option<&str>,
     amount: Option<u64>,
     label: Option<&str>,
-) {
-    if !require_open(rpc) {
-        return;
-    }
+) -> CommandResult {
+    require_open(rpc)?;
     let mut params = json!({});
     if let Some(a) = address {
         params["address"] = json!(a);
@@ -132,16 +113,18 @@ pub fn cmd_make_uri(
     match rpc.call("make_uri", params) {
         Ok(val) => match val.get("uri").and_then(|v| v.as_str()) {
             Some(uri) => println!("{uri}"),
-            None => eprintln!("Malformed make_uri response."),
+            None => {
+                eprintln!("Malformed make_uri response.");
+                return failed();
+            }
         },
-        Err(e) => rpc.report("Failed to make URI", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to make URI", &e)),
+    };
+    Ok(())
 }
 
-pub fn cmd_parse_uri(rpc: &RpcSession, uri: &str) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_parse_uri(rpc: &RpcSession, uri: &str) -> CommandResult {
+    require_open(rpc)?;
     match rpc.call("parse_uri", json!({ "uri": uri })) {
         Ok(val) => {
             // Every string field here is decoded from an attacker-controlled
@@ -162,30 +145,21 @@ pub fn cmd_parse_uri(rpc: &RpcSession, uri: &str) {
                 println!("Expiry:  unix {expiry}");
             }
         }
-        Err(e) => rpc.report("Failed to parse URI", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to parse URI", &e)),
+    };
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::filter_param;
+    use crate::resolve::RequestFilter;
 
-    /// CLI filter words map onto the OpenAPI `PaymentRequestFilter` enum;
-    /// anything else refuses client-side without an RPC round-trip.
+    /// The CLI filter is the OpenAPI `PaymentRequestFilter` enum. A word
+    /// outside that set cannot be represented.
     #[test]
-    fn filter_words_map_onto_the_wire_enum() {
-        assert_eq!(filter_param(None).unwrap(), "ALL");
-        assert_eq!(filter_param(Some("all")).unwrap(), "ALL");
-        assert_eq!(filter_param(Some("pending")).unwrap(), "PENDING");
-        assert_eq!(filter_param(Some("matched")).unwrap(), "MATCHED");
-        assert!(filter_param(Some("bogus")).is_err());
-    }
-
-    /// Correctly-spelled filter words are accepted regardless of case.
-    #[test]
-    fn filter_words_are_case_insensitive() {
-        assert_eq!(filter_param(Some("ALL")).unwrap(), "ALL");
-        assert_eq!(filter_param(Some("Pending")).unwrap(), "PENDING");
-        assert_eq!(filter_param(Some("MATCHED")).unwrap(), "MATCHED");
+    fn filters_map_onto_the_wire_enum() {
+        assert_eq!(RequestFilter::Pending.wire(), "PENDING");
+        assert_eq!(RequestFilter::Matched.wire(), "MATCHED");
+        assert_eq!(RequestFilter::All.wire(), "ALL");
     }
 }

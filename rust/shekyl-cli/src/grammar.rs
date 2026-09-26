@@ -5,14 +5,15 @@
 
 //! Parse a prompt line into a [`ResolvedCommand`].
 //!
-//! Canonical tokens only. A retired spelling prints the new line and does
-//! not run. Monero-deleted commands keep their own refusals.
+//! The command path comes from [`crate::catalog`]. This module only reads
+//! the arguments that path leaves behind. A retired spelling prints the
+//! new line and does not run. Monero-deleted commands keep their own
+//! refusals.
 
-use crate::catalog;
-use crate::commands::mine::{self, ParsedMine};
+use crate::catalog::{self, split_flags, usage, CommandId, Split, Walk};
 use crate::resolve::{
-    diag, parse_flag, parse_flag_str, parse_invoice_expiry, raw_remainder, reject_removed_command,
-    reject_removed_flags, strip_flag_with_value, unix_now, FlagValue, ResolvedCommand,
+    diag, parse_flag_str, parse_invoice_expiry, raw_remainder, reject_removed_command,
+    reject_removed_flags, unix_now, FeePriority, FlagValue, RequestFilter, ResolvedCommand,
 };
 
 /// Parse one line. Empty input is an unknown command with an empty name,
@@ -25,210 +26,259 @@ pub fn parse(input: &str) -> ResolvedCommand {
     if let Some(msg) = reject_removed_flags(&tokens) {
         return diag(msg);
     }
-    if tokens.contains(&"--no-confirm") {
+    if tokens
+        .iter()
+        .any(|token| *token == "--no-confirm" || token.starts_with("--no-confirm="))
+    {
         return diag("--no-confirm → --yes");
     }
     if let Some(msg) = reject_removed_command(tokens[0], &tokens[1..]) {
         return diag(msg);
     }
-    if let Some(msg) = catalog::retired(&tokens) {
+    if let Some(msg) = catalog::retired_message(&tokens) {
         return diag(msg);
     }
-    dispatch(input, &tokens)
-}
-
-#[allow(clippy::unnested_or_patterns)]
-fn dispatch(input: &str, tokens: &[&str]) -> ResolvedCommand {
-    match tokens {
-        ["help"] => ResolvedCommand::Help,
-        ["help", rest @ ..] => ResolvedCommand::HelpCommand {
-            topic: rest.join(" "),
-        },
-        ["exit" | "quit"] => ResolvedCommand::Exit,
-        ["balance"] => ResolvedCommand::Balance,
-        ["status"] => ResolvedCommand::Status,
-        ["chain"] => ResolvedCommand::ChainHealth,
-        ["version"] => ResolvedCommand::Version,
-        ["wallet"] => ResolvedCommand::Wallet,
-        ["stake"] => ResolvedCommand::Stake,
-        ["address", rest @ ..] => parse_address(rest),
-        ["fee", rest @ ..] => parse_fee(rest),
-        ["send", rest @ ..] => parse_send(rest),
-        ["wallet", rest @ ..] => parse_wallet(rest),
-        ["tx", rest @ ..] => parse_tx(input, rest),
-        ["request", rest @ ..] => parse_request(rest),
-        ["uri", rest @ ..] => parse_uri(rest),
-        ["stake", rest @ ..] => parse_stake(rest),
-        ["shard", rest @ ..] => parse_shard(rest),
-        ["mine", rest @ ..] => match mine::parse_mine(rest) {
-            Ok(parsed) => resolved_mine(parsed),
-            Err(message) => diag(message),
-        },
-        ["prove", rest @ ..] => parse_prove(input, rest),
-        ["check", rest @ ..] => parse_check(input, rest),
-        ["sign", rest @ ..] => parse_sign(input, rest),
-        ["verify", rest @ ..] => parse_verify(input, rest),
-        [] => ResolvedCommand::Unknown { cmd: String::new() },
-        [other, ..] => ResolvedCommand::Unknown {
-            cmd: (*other).to_string(),
-        },
+    match catalog::walk(&tokens) {
+        Walk::Ready { id, rest } => parse_ready(id, input, rest),
+        Walk::NeedVerb { id } => diag(catalog::need_verb(id)),
+        Walk::UnknownVerb { id, word } => diag(catalog::unknown_verb(id, word)),
+        Walk::Unknown { word } => ResolvedCommand::Unknown { cmd: word },
     }
 }
 
-fn resolved_mine(parsed: ParsedMine) -> ResolvedCommand {
-    match parsed {
-        ParsedMine::Start { threads } => ResolvedCommand::MineStart { threads },
-        ParsedMine::Stop => ResolvedCommand::MineStop,
-        ParsedMine::Status => ResolvedCommand::MineStatus,
+#[allow(clippy::enum_glob_use)]
+fn parse_ready(id: CommandId, input: &str, args: &[&str]) -> ResolvedCommand {
+    use CommandId::*;
+    match id {
+        Help => parse_help(args),
+        Exit => bare(id, args, ResolvedCommand::Exit),
+        Balance => bare(id, args, ResolvedCommand::Balance),
+        Status => bare(id, args, ResolvedCommand::Status),
+        Chain => bare(id, args, ResolvedCommand::ChainHealth),
+        Version => bare(id, args, ResolvedCommand::Version),
+        Wallet => bare(id, args, ResolvedCommand::Wallet),
+        Stake => bare(id, args, ResolvedCommand::Stake),
+        WalletCreate => one_word(id, args, |name| ResolvedCommand::Create {
+            filename: name.to_string(),
+        }),
+        WalletOpen => one_word(id, args, |name| ResolvedCommand::Open {
+            filename: name.to_string(),
+        }),
+        WalletClose => bare(id, args, ResolvedCommand::Close),
+        WalletRestore => parse_restore(args),
+        WalletPassword => bare(id, args, ResolvedCommand::Password),
+        WalletRefresh => bare(id, args, ResolvedCommand::Refresh),
+        WalletRescan => parse_rescan(args),
+        Address => parse_address(args),
+        Fee => parse_fee(args),
+        Send => parse_send(args),
+        TxList => parse_tx_list(args),
+        TxShow => one_word(id, args, |txid| ResolvedCommand::ShowTransfer {
+            txid: txid.to_string(),
+        }),
+        TxNote => parse_tx_note(input, args),
+        TxAbandon => one_word(id, args, |txid| ResolvedCommand::Abandon {
+            txid: txid.to_string(),
+        }),
+        RequestNew => parse_request_new(args),
+        RequestList => parse_request_list(args),
+        UriMake => parse_uri_make(args),
+        UriRead => one_word(id, args, |uri| ResolvedCommand::ParseUri {
+            uri: uri.to_string(),
+        }),
+        StakeBalance => bare(id, args, ResolvedCommand::StakedBalance),
+        StakeOutputs => bare(id, args, ResolvedCommand::StakedOutputs),
+        StakeAvailable => bare(id, args, ResolvedCommand::DrainBalance),
+        StakeAdd => parse_amount_yes(id, args, |amount, yes| ResolvedCommand::StakeIn {
+            amount,
+            yes,
+        }),
+        StakeReturn => parse_amount_yes(id, args, |amount, yes| ResolvedCommand::Drain {
+            amount,
+            yes,
+        }),
+        StakeExit => parse_yes_only(id, args, |yes| ResolvedCommand::Unstake { yes }),
+        StakeCollect => parse_yes_only(id, args, |yes| ResolvedCommand::CollectUnstaked { yes }),
+        StakeJoin => parse_stake_join(args),
+        ShardListAll => bare(id, args, ResolvedCommand::ShardListAll),
+        ShardListMine => bare(id, args, ResolvedCommand::ShardListMine),
+        ShardShow => one_id(id, args, |shard_id| ResolvedCommand::ShardShow { shard_id }),
+        ShardFetch => one_id(id, args, |shard_id| ResolvedCommand::ShardFetch {
+            shard_id,
+        }),
+        MineStart => parse_mine_start(args),
+        MineStop => bare(id, args, ResolvedCommand::MineStop),
+        MineStatus => bare(id, args, ResolvedCommand::MineStatus),
+        ProvePayment => parse_prove_payment(input, args),
+        ProveReserve => parse_prove_reserve(input, args),
+        CheckPayment => parse_check_payment(input, args),
+        CheckReserve => parse_check_reserve(input, args),
+        Sign => parse_sign(input),
+        Verify => parse_verify(input, args),
+        // Subjects. `walk` asks for a verb before this match; the arm keeps
+        // the match exhaustive if that ever changes.
+        Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check => {
+            diag(catalog::need_verb(id))
+        }
     }
 }
 
-fn parse_wallet(args: &[&str]) -> ResolvedCommand {
+fn bare(id: CommandId, args: &[&str], command: ResolvedCommand) -> ResolvedCommand {
+    if args.is_empty() {
+        command
+    } else {
+        diag(usage(id))
+    }
+}
+
+fn one_word(
+    id: CommandId,
+    args: &[&str],
+    build: impl FnOnce(&str) -> ResolvedCommand,
+) -> ResolvedCommand {
     match args {
-        ["create", name] => ResolvedCommand::Create {
-            filename: (*name).to_string(),
+        [word] => build(word),
+        _ => diag(usage(id)),
+    }
+}
+
+fn one_id(
+    id: CommandId,
+    args: &[&str],
+    build: impl FnOnce(u64) -> ResolvedCommand,
+) -> ResolvedCommand {
+    match args {
+        [raw] => match raw.parse::<u64>() {
+            Ok(shard_id) => build(shard_id),
+            Err(_) => diag(format!("{}: {raw:?} is not a shard id", usage(id))),
         },
-        ["open", name] => ResolvedCommand::Open {
-            filename: (*name).to_string(),
-        },
-        ["close"] => ResolvedCommand::Close,
-        ["restore", name, ..] if args.len() >= 3 => ResolvedCommand::Restore {
-            filename: (*name).to_string(),
-            seed_words: args[2..].iter().map(|s| (*s).to_string()).collect(),
-        },
-        ["password"] => ResolvedCommand::Password,
-        ["refresh"] => ResolvedCommand::Refresh,
-        ["rescan"] => ResolvedCommand::Rescan { hard: false },
-        _ => diag(
-            "wallet: usage is create <name>, open <name>, close, restore <name> <seed...>, \
-             password, refresh, rescan, or wallet",
-        ),
+        _ => diag(usage(id)),
+    }
+}
+
+fn flags<'a>(id: CommandId, args: &'a [&'a str]) -> Result<Split<'a>, ResolvedCommand> {
+    split_flags(args, catalog::flags_of(id)).map_err(diag)
+}
+
+fn parse_help(args: &[&str]) -> ResolvedCommand {
+    if args.is_empty() {
+        ResolvedCommand::Help
+    } else {
+        ResolvedCommand::HelpCommand {
+            topic: args.join(" "),
+        }
+    }
+}
+
+fn parse_restore(args: &[&str]) -> ResolvedCommand {
+    if args.len() >= 2 {
+        ResolvedCommand::Restore {
+            filename: args[0].to_string(),
+            seed_words: args[1..].iter().map(|word| (*word).to_string()).collect(),
+        }
+    } else {
+        diag(usage(CommandId::WalletRestore))
+    }
+}
+
+fn parse_rescan(args: &[&str]) -> ResolvedCommand {
+    match args {
+        [] => ResolvedCommand::Rescan { hard: false },
+        ["hard"] => ResolvedCommand::Rescan { hard: true },
+        _ => diag(usage(CommandId::WalletRescan)),
     }
 }
 
 fn parse_address(args: &[&str]) -> ResolvedCommand {
-    let full = args.contains(&"--full");
-    let out = match parse_flag_str(args, "--out") {
-        FlagValue::Absent => None,
-        FlagValue::Set(p) => Some(p),
-        FlagValue::Invalid(_) => return diag("address: --out expects a path"),
+    let split = match flags(CommandId::Address, args) {
+        Ok(split) => split,
+        Err(command) => return command,
     };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::Address));
+    }
+    let full = split.has("--full");
+    let out = split.value("--out").map(str::to_owned);
     if full && out.is_some() {
         return diag("address: use --full or --out <path>, not both");
-    }
-    let mut i = 0;
-    while i < args.len() {
-        match args[i] {
-            "--full" => {}
-            "--out" => i += 1,
-            a if a.starts_with("--out=") => {}
-            other => {
-                return diag(format!(
-                    "address: unexpected argument {other:?} (usage: address [--full | --out <path>])"
-                ));
-            }
-        }
-        i += 1;
     }
     ResolvedCommand::Address { full, out }
 }
 
 fn parse_fee(args: &[&str]) -> ResolvedCommand {
-    let count = |flag| match parse_flag::<u64>(args, flag) {
-        FlagValue::Absent => Ok(None),
-        FlagValue::Set(v) => Ok(Some(i64::try_from(v).unwrap_or(i64::MAX))),
-        FlagValue::Invalid(v) => Err(format!("fee: {flag} expects a count, got {v:?}")),
+    let split = match flags(CommandId::Fee, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::Fee));
+    }
+    let count = |name: &str| -> Result<Option<i64>, String> {
+        match split.value(name) {
+            None => Ok(None),
+            Some(raw) => match raw.parse::<u64>() {
+                Ok(value) => match i64::try_from(value) {
+                    Ok(value) => Ok(Some(value)),
+                    Err(_) => Err(format!("fee: {name} is too large")),
+                },
+                Err(_) => Err(format!("fee: {name} expects a count, got {raw:?}")),
+            },
+        }
     };
     match (count("--inputs"), count("--outputs")) {
         (Ok(n_inputs), Ok(n_outputs)) => ResolvedCommand::Fee {
             n_inputs,
             n_outputs,
         },
-        (Err(msg), _) | (_, Err(msg)) => diag(msg),
+        (Err(message), _) | (_, Err(message)) => diag(message),
     }
 }
 
 fn parse_send(args: &[&str]) -> ResolvedCommand {
-    let yes = args.contains(&"--yes");
-    let priority = match parse_flag_str(args, "--priority") {
-        FlagValue::Absent => None,
-        FlagValue::Set(word) => match priority_tier(&word) {
-            Some(tier) => Some(tier.to_owned()),
-            None => {
-                return diag(format!(
-                    "send: --priority expects economy, standard, or high, got {word:?}"
-                ));
-            }
-        },
-        FlagValue::Invalid(_) => {
-            return diag("send: --priority expects economy, standard, or high");
+    let split = match flags(CommandId::Send, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let priority = match split.value("--priority") {
+        None | Some("standard") => FeePriority::Standard,
+        Some("economy") => FeePriority::Economy,
+        Some("high") => FeePriority::High,
+        Some(word) => {
+            return diag(format!(
+                "send: --priority expects economy, standard, or high, got {word:?}"
+            ));
         }
     };
-    let positional = strip_known(args, &["--yes", "--priority"]);
-    if positional.len() >= 2 {
-        if let Some(amount) = crate::commands::parse_amount(positional[0]) {
-            ResolvedCommand::Transfer {
-                dest: positional[1].to_string(),
+    match split.positional.as_slice() {
+        [amount, dest] => match crate::commands::parse_amount(amount) {
+            Some(amount) => ResolvedCommand::Transfer {
+                dest: (*dest).to_string(),
                 amount,
                 priority,
-                yes,
-            }
-        } else {
-            diag(format!("send: invalid amount {:?}", positional[0]))
-        }
-    } else {
-        diag("send: need <amount> <address>")
-    }
-}
-
-fn priority_tier(word: &str) -> Option<&'static str> {
-    match word {
-        "economy" => Some("ECONOMY"),
-        "standard" => Some("STANDARD"),
-        "high" => Some("PRIORITY"),
-        _ => None,
-    }
-}
-
-fn parse_tx(input: &str, args: &[&str]) -> ResolvedCommand {
-    match args {
-        ["list", rest @ ..] => parse_tx_list(rest),
-        ["show", id] => ResolvedCommand::ShowTransfer {
-            txid: (*id).to_string(),
-        },
-        ["note", txid] => ResolvedCommand::GetTxNote {
-            txid: (*txid).to_string(),
-        },
-        ["note", txid, ..] => match raw_remainder(input, 3) {
-            Some(note) => ResolvedCommand::SetTxNote {
-                txid: (*txid).to_string(),
-                note: note.to_string(),
+                yes: split.has("--yes"),
             },
-            None => diag("tx note: need <txid> to show, or <txid> <text...> to set"),
+            None => diag(format!("send: invalid amount {amount:?}")),
         },
-        ["abandon", txid] => ResolvedCommand::Abandon {
-            txid: (*txid).to_string(),
-        },
-        _ => diag("tx: usage is list, show <id>, note <txid> [<text...>], or abandon <txid>"),
+        _ => diag("send: need <amount> <address>"),
     }
 }
 
 fn parse_tx_list(args: &[&str]) -> ResolvedCommand {
-    let incoming = args.contains(&"--in");
-    let outgoing = args.contains(&"--out");
-    let unmatched = args.contains(&"--unmatched");
+    let split = match flags(CommandId::TxList, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::TxList));
+    }
+    let incoming = split.has("--in");
+    let outgoing = split.has("--out");
+    let unmatched = split.has("--unmatched");
     if incoming && outgoing {
         return diag("tx list: use --in or --out, not both");
     }
     if unmatched && outgoing {
         return diag("tx list: --unmatched is incoming only; drop --out");
-    }
-    let stray = strip_known(args, &["--in", "--out", "--unmatched"]);
-    if !stray.is_empty() {
-        return diag(format!(
-            "tx list: unexpected argument {:?} (usage: tx list [--in | --out] [--unmatched])",
-            stray[0]
-        ));
     }
     ResolvedCommand::Transfers {
         incoming,
@@ -237,11 +287,19 @@ fn parse_tx_list(args: &[&str]) -> ResolvedCommand {
     }
 }
 
-fn parse_request(args: &[&str]) -> ResolvedCommand {
-    match args.first().copied() {
-        Some("new") => parse_request_new(&args[1..]),
-        Some("list") => parse_request_list(&args[1..]),
-        _ => diag("request: usage is new <amount> <label> or list [--matched | --all]"),
+fn parse_tx_note(input: &str, args: &[&str]) -> ResolvedCommand {
+    match args {
+        [txid] => ResolvedCommand::GetTxNote {
+            txid: (*txid).to_string(),
+        },
+        [txid, ..] => match raw_remainder(input, 3) {
+            Some(note) => ResolvedCommand::SetTxNote {
+                txid: (*txid).to_string(),
+                note: note.to_string(),
+            },
+            None => diag(usage(CommandId::TxNote)),
+        },
+        _ => diag(usage(CommandId::TxNote)),
     }
 }
 
@@ -256,81 +314,73 @@ fn parse_request_new(args: &[&str]) -> ResolvedCommand {
                 ));
             }
         },
-        FlagValue::Invalid(v) => {
+        FlagValue::Invalid(raw) => {
             return diag(format!(
-                "request new: --expiry expects unix seconds or a duration (1h, 30m, 7d), got {v:?}"
+                "request new: --expiry expects unix seconds or a duration (1h, 30m, 7d), got {raw:?}"
             ));
         }
     };
-    let filtered = strip_flag_with_value(args, "--expiry");
-    if filtered.len() >= 2 {
-        if let Some(amount) = crate::commands::parse_amount(filtered[0]) {
+    let split = match flags(CommandId::RequestNew, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if split.positional.len() >= 2 {
+        if let Some(amount) = crate::commands::parse_amount(split.positional[0]) {
             ResolvedCommand::RequestNew {
                 amount,
-                label: filtered[1..].join(" "),
+                label: split.positional[1..].join(" "),
                 expiry,
             }
         } else {
-            diag(format!("request new: invalid amount {:?}", filtered[0]))
+            diag(format!(
+                "request new: invalid amount {:?}",
+                split.positional[0]
+            ))
         }
     } else {
-        diag("request new: need <amount> <label> [--expiry <unix|duration>]")
+        diag(usage(CommandId::RequestNew))
     }
 }
 
 fn parse_request_list(args: &[&str]) -> ResolvedCommand {
-    let matched = args.contains(&"--matched");
-    let all = args.contains(&"--all");
+    let split = match flags(CommandId::RequestList, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::RequestList));
+    }
+    let matched = split.has("--matched");
+    let all = split.has("--all");
     if matched && all {
         return diag("request list: use --matched or --all, not both");
     }
-    if !strip_known(args, &["--matched", "--all"]).is_empty() {
-        return diag("request list: usage is request list [--matched | --all]");
-    }
     let filter = if all {
-        Some("all".to_owned())
+        RequestFilter::All
     } else if matched {
-        Some("matched".to_owned())
+        RequestFilter::Matched
     } else {
-        Some("pending".to_owned())
+        RequestFilter::Pending
     };
     ResolvedCommand::RequestsList { filter }
 }
 
-fn parse_uri(args: &[&str]) -> ResolvedCommand {
-    match args.first().copied() {
-        Some("make") => parse_uri_make(&args[1..]),
-        Some("read") => match args.get(1) {
-            Some(uri) if args.len() == 2 => ResolvedCommand::ParseUri {
-                uri: (*uri).to_string(),
-            },
-            _ => diag("uri read: need <uri>"),
-        },
-        _ => diag("uri: usage is make or read <uri>"),
-    }
-}
-
 fn parse_uri_make(args: &[&str]) -> ResolvedCommand {
-    let str_flag = |flag: &str| match parse_flag_str(args, flag) {
-        FlagValue::Absent => Ok(None),
-        FlagValue::Set(v) => Ok(Some(v)),
-        FlagValue::Invalid(_) => Err(format!("uri make: {flag} expects a value")),
+    let split = match flags(CommandId::UriMake, args) {
+        Ok(split) => split,
+        Err(command) => return command,
     };
-    let address = match str_flag("--address") {
-        Ok(v) => v,
-        Err(m) => return diag(m),
-    };
-    let label = match str_flag("--label") {
-        Ok(v) => v,
-        Err(m) => return diag(m),
-    };
-    let amount = match str_flag("--amount") {
-        Ok(None) => None,
-        Ok(Some(raw)) => match crate::commands::parse_amount(&raw) {
-            Some(v) => Some(v),
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::UriMake));
+    }
+    let address = split.value("--address").map(str::to_owned);
+    let label = split.value("--label").map(str::to_owned);
+    let amount = match split.value("--amount") {
+        None => None,
+        Some(raw) => match crate::commands::parse_amount(raw) {
+            Some(amount) => Some(amount),
             None => return diag(format!("uri make: invalid amount {raw:?}")),
         },
-        Err(m) => return diag(m),
     };
     ResolvedCommand::MakeUri {
         address,
@@ -339,42 +389,50 @@ fn parse_uri_make(args: &[&str]) -> ResolvedCommand {
     }
 }
 
-fn parse_stake(args: &[&str]) -> ResolvedCommand {
-    match args.first().copied() {
-        Some("balance") if args.len() == 1 => ResolvedCommand::StakedBalance,
-        Some("outputs") if args.len() == 1 => ResolvedCommand::StakedOutputs,
-        Some("available") if args.len() == 1 => ResolvedCommand::DrainBalance,
-        Some("add") => parse_amount_yes("stake add", &args[1..], |amount, yes| {
-            ResolvedCommand::StakeIn { amount, yes }
-        }),
-        Some("return") => parse_amount_yes("stake return", &args[1..], |amount, yes| {
-            ResolvedCommand::Drain { amount, yes }
-        }),
-        Some("exit") => parse_yes_only("stake exit", &args[1..], |yes| ResolvedCommand::Unstake {
-            yes,
-        }),
-        Some("collect") => parse_yes_only("stake collect", &args[1..], |yes| {
-            ResolvedCommand::CollectUnstaked { yes }
-        }),
-        Some("join") => parse_stake_join(&args[1..]),
-        Some(other) => diag(format!(
-            "stake: no verb {other:?}. Usage: stake, balance, outputs, available, \
-             add <amount>, return <amount>, exit, collect, join <shard-id>..."
-        )),
-        None => ResolvedCommand::Stake,
+fn parse_amount_yes(
+    id: CommandId,
+    args: &[&str],
+    build: impl FnOnce(u64, bool) -> ResolvedCommand,
+) -> ResolvedCommand {
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    match split.positional.as_slice() {
+        [one] => match crate::commands::parse_amount(one) {
+            Some(amount) => build(amount, split.has("--yes")),
+            None => diag(format!("{}: invalid amount {one:?}", usage(id))),
+        },
+        _ => diag(usage(id)),
+    }
+}
+
+fn parse_yes_only(
+    id: CommandId,
+    args: &[&str],
+    build: impl FnOnce(bool) -> ResolvedCommand,
+) -> ResolvedCommand {
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if split.positional.is_empty() {
+        build(split.has("--yes"))
+    } else {
+        diag(usage(id))
     }
 }
 
 fn parse_stake_join(args: &[&str]) -> ResolvedCommand {
-    let positional = strip_known(args, &["--yes"]);
-    if positional.is_empty() {
-        return diag("stake join: need one or more <shard-id>");
+    let split = match flags(CommandId::StakeJoin, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if split.positional.is_empty() {
+        return diag(usage(CommandId::StakeJoin));
     }
-    if positional.len() != args.iter().filter(|a| !a.starts_with("--")).count() {
-        return diag("stake join: the only flag is --yes, and it does not post a bond yet");
-    }
-    let mut ids = Vec::with_capacity(positional.len());
-    for raw in positional {
+    let mut ids: Vec<u64> = Vec::with_capacity(split.positional.len());
+    for raw in &split.positional {
         match raw.parse::<u64>() {
             Ok(id) => {
                 if ids.contains(&id) {
@@ -388,70 +446,41 @@ fn parse_stake_join(args: &[&str]) -> ResolvedCommand {
     ResolvedCommand::StakeJoin { shard_ids: ids }
 }
 
-fn parse_amount_yes(
-    verb: &str,
-    args: &[&str],
-    build: impl FnOnce(u64, bool) -> ResolvedCommand,
-) -> ResolvedCommand {
-    let yes = args.contains(&"--yes");
-    let positional = strip_known(args, &["--yes"]);
-    match positional.as_slice() {
-        [one] => match crate::commands::parse_amount(one) {
-            Some(amount) => build(amount, yes),
-            None => diag(format!("{verb}: invalid amount {one:?}")),
+fn parse_mine_start(args: &[&str]) -> ResolvedCommand {
+    let threads = match args {
+        [] | ["auto"] => None,
+        [token] => match token.parse::<u64>() {
+            Ok(count) if count >= 1 => Some(count),
+            _ => {
+                return diag(format!(
+                    "mine start: threads must be a positive number or \"auto\", got {token:?}"
+                ));
+            }
         },
-        _ => diag(format!("{verb}: need exactly <amount>")),
-    }
+        _ => return diag(usage(CommandId::MineStart)),
+    };
+    ResolvedCommand::MineStart { threads }
 }
 
-fn parse_yes_only(
-    verb: &str,
-    args: &[&str],
-    build: impl FnOnce(bool) -> ResolvedCommand,
-) -> ResolvedCommand {
-    let yes = args.contains(&"--yes");
-    if strip_known(args, &["--yes"]).is_empty() && args.iter().all(|a| *a == "--yes") {
-        build(yes)
-    } else {
-        diag(format!("{verb}: takes no arguments other than --yes"))
+fn parse_prove_payment(input: &str, args: &[&str]) -> ResolvedCommand {
+    if let Some(message) = refuse_flag("prove", args) {
+        return diag(message);
     }
-}
-
-fn parse_shard(args: &[&str]) -> ResolvedCommand {
-    match args {
-        ["list", "all"] => ResolvedCommand::ShardListAll,
-        ["list", "mine"] => ResolvedCommand::ShardListMine,
-        ["list"] => diag("shard list → shard list all | shard list mine"),
-        ["show", id] => match id.parse::<u64>() {
-            Ok(shard_id) => ResolvedCommand::ShardShow { shard_id },
-            Err(_) => diag(format!("shard show: {id:?} is not a shard id")),
-        },
-        ["fetch", id] => match id.parse::<u64>() {
-            Ok(shard_id) => ResolvedCommand::ShardFetch { shard_id },
-            Err(_) => diag(format!("shard fetch: {id:?} is not a shard id")),
-        },
-        _ => diag("shard: usage is list all, list mine, show <id>, or fetch <id>"),
-    }
-}
-
-fn parse_prove(input: &str, args: &[&str]) -> ResolvedCommand {
-    if args.iter().any(|a| a.starts_with('-')) {
-        return diag(
-            "prove: this command takes no flags — a flag-shaped word would bind into the message",
-        );
-    }
-    match args.first().copied() {
-        Some("payment") if args.len() >= 3 => ResolvedCommand::GetTxProof {
-            txid: args[1].to_string(),
-            address: args[2].to_string(),
+    if args.len() >= 2 {
+        ResolvedCommand::GetTxProof {
+            txid: args[0].to_string(),
+            address: args[1].to_string(),
             message: raw_remainder(input, 4).map(str::to_owned),
-        },
-        Some("reserve") => parse_prove_reserve(input, &args[1..]),
-        _ => diag("prove: usage is payment <txid> <address> [message...] or reserve [amount] [message...]"),
+        }
+    } else {
+        diag(usage(CommandId::ProvePayment))
     }
 }
 
 fn parse_prove_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
+    if let Some(message) = refuse_flag("prove", args) {
+        return diag(message);
+    }
     match args.first() {
         Some(first) => match crate::commands::parse_amount(first) {
             Some(amount) => ResolvedCommand::GetReserveProof {
@@ -470,42 +499,57 @@ fn parse_prove_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
     }
 }
 
-fn parse_check(input: &str, args: &[&str]) -> ResolvedCommand {
-    if args.iter().any(|a| a.starts_with('-')) {
-        return diag(
-            "check: this command takes no flags — a flag-shaped word would bind into the message",
-        );
+fn parse_check_payment(input: &str, args: &[&str]) -> ResolvedCommand {
+    if let Some(message) = refuse_flag("check", args) {
+        return diag(message);
     }
-    match args.first().copied() {
-        Some("payment") if args.len() >= 4 => ResolvedCommand::CheckTxProof {
-            txid: args[1].to_string(),
-            address: args[2].to_string(),
-            proof: args[3].to_string(),
-            message: raw_remainder(input, 5).map(str::to_owned),
-        },
-        Some("reserve") if args.len() >= 3 => ResolvedCommand::CheckReserveProof {
+    if args.len() >= 3 {
+        ResolvedCommand::CheckTxProof {
+            txid: args[0].to_string(),
             address: args[1].to_string(),
             proof: args[2].to_string(),
-            message: raw_remainder(input, 4).map(str::to_owned),
-        },
-        Some("payment") => diag("check payment: need <txid> <address> <proof> [message...]"),
-        Some("reserve") => diag("check reserve: need <address> <proof> [message...]"),
-        _ => diag("check: usage is payment <txid> <address> <proof> or reserve <address> <proof>"),
+            message: raw_remainder(input, 5).map(str::to_owned),
+        }
+    } else {
+        diag(usage(CommandId::CheckPayment))
     }
 }
 
-fn parse_sign(input: &str, _args: &[&str]) -> ResolvedCommand {
+fn parse_check_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
+    if let Some(message) = refuse_flag("check", args) {
+        return diag(message);
+    }
+    if args.len() >= 2 {
+        ResolvedCommand::CheckReserveProof {
+            address: args[0].to_string(),
+            proof: args[1].to_string(),
+            message: raw_remainder(input, 4).map(str::to_owned),
+        }
+    } else {
+        diag(usage(CommandId::CheckReserve))
+    }
+}
+
+fn refuse_flag(verb: &str, args: &[&str]) -> Option<String> {
+    args.iter().find(|arg| arg.starts_with('-')).map(|_| {
+        format!(
+            "{verb}: this command takes no flags — a flag-shaped word would bind into the message"
+        )
+    })
+}
+
+fn parse_sign(input: &str) -> ResolvedCommand {
     match raw_remainder(input, 1) {
         Some(message) => ResolvedCommand::Sign {
             message: message.to_string(),
         },
-        None => diag("sign: need <message...>"),
+        None => diag(usage(CommandId::Sign)),
     }
 }
 
 fn parse_verify(input: &str, args: &[&str]) -> ResolvedCommand {
     if args.len() < 3 {
-        return diag("verify: need <address> <signature> <message...>");
+        return diag(usage(CommandId::Verify));
     }
     match raw_remainder(input, 3) {
         Some(message) => ResolvedCommand::Verify {
@@ -513,33 +557,8 @@ fn parse_verify(input: &str, args: &[&str]) -> ResolvedCommand {
             signature: args[1].to_string(),
             message: message.to_string(),
         },
-        None => diag("verify: need <address> <signature> <message...>"),
+        None => diag(usage(CommandId::Verify)),
     }
-}
-
-fn strip_known<'a>(args: &[&'a str], flags: &[&str]) -> Vec<&'a str> {
-    let mut out = Vec::new();
-    let mut skip = false;
-    for arg in args {
-        if skip {
-            skip = false;
-            continue;
-        }
-        if flags.contains(arg) {
-            if *arg == "--priority" || *arg == "--out" || *arg == "--expiry" {
-                skip = true;
-            }
-            continue;
-        }
-        if flags
-            .iter()
-            .any(|flag| arg.starts_with(&format!("{flag}=")))
-        {
-            continue;
-        }
-        out.push(*arg);
-    }
-    out
 }
 
 #[cfg(test)]
@@ -557,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn send_priority_words() {
+    fn send_takes_exactly_two_positionals_and_named_priority() {
         match parse("send 1.5 addr --priority economy") {
             ResolvedCommand::Transfer {
                 amount,
@@ -566,13 +585,21 @@ mod tests {
                 ..
             } => {
                 assert_eq!(amount, 1_500_000_000);
-                assert_eq!(priority.as_deref(), Some("ECONOMY"));
+                assert_eq!(priority, FeePriority::Economy);
                 assert!(!yes);
             }
             other => panic!("{other:?}"),
         }
         assert!(matches!(
             parse("send 1 addr --priority 2"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        assert!(matches!(
+            parse("send 1 addr typo"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        assert!(matches!(
+            parse("uri make garbage"),
             ResolvedCommand::Diagnostic { .. }
         ));
     }
@@ -590,6 +617,10 @@ mod tests {
             ResolvedCommand::StakeJoin { shard_ids } => assert_eq!(shard_ids, vec![4, 9]),
             other => panic!("{other:?}"),
         }
+        assert!(matches!(
+            parse("stake join 4 --yes"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
         match parse("stake foundation") {
             ResolvedCommand::Diagnostic { message } => {
                 assert!(message.contains("startup flag"), "{message}");
@@ -676,6 +707,46 @@ mod tests {
         assert!(matches!(
             parse("get_balance"),
             ResolvedCommand::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn rescan_hard_still_reaches_the_single_rescan() {
+        assert!(matches!(
+            parse("wallet rescan"),
+            ResolvedCommand::Rescan { hard: false }
+        ));
+        assert!(matches!(
+            parse("wallet rescan hard"),
+            ResolvedCommand::Rescan { hard: true }
+        ));
+        assert!(matches!(
+            parse("wallet rescan soft"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+    }
+
+    #[test]
+    fn mine_start_accepts_a_count_or_auto() {
+        assert!(matches!(
+            parse("mine start"),
+            ResolvedCommand::MineStart { threads: None }
+        ));
+        assert!(matches!(
+            parse("mine start auto"),
+            ResolvedCommand::MineStart { threads: None }
+        ));
+        assert!(matches!(
+            parse("mine start 2"),
+            ResolvedCommand::MineStart { threads: Some(2) }
+        ));
+        assert!(matches!(
+            parse("mine start 0"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        assert!(matches!(
+            parse("mine stop now"),
+            ResolvedCommand::Diagnostic { .. }
         ));
     }
 }

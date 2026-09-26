@@ -15,6 +15,42 @@
 
 use shekyl_types::Timestamp;
 
+/// Named send-fee tier. The wire spellings are the OpenAPI `FeePriority` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeePriority {
+    Economy,
+    Standard,
+    High,
+}
+
+impl FeePriority {
+    pub(crate) fn wire(self) -> &'static str {
+        match self {
+            Self::Economy => "ECONOMY",
+            Self::Standard => "STANDARD",
+            Self::High => "PRIORITY",
+        }
+    }
+}
+
+/// Which payment requests `request list` asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestFilter {
+    Pending,
+    Matched,
+    All,
+}
+
+impl RequestFilter {
+    pub(crate) fn wire(self) -> &'static str {
+        match self {
+            Self::Pending => "PENDING",
+            Self::Matched => "MATCHED",
+            Self::All => "ALL",
+        }
+    }
+}
+
 /// A fully-resolved command ready for execution.
 #[derive(Debug)]
 pub enum ResolvedCommand {
@@ -53,9 +89,9 @@ pub enum ResolvedCommand {
     Transfer {
         dest: String,
         amount: u64,
-        /// RPC tier name (`ECONOMY` / `STANDARD` / `PRIORITY`). `None` is
-        /// the server default.
-        priority: Option<String>,
+        /// Wire tier. An absent `--priority` is [`FeePriority::Standard`],
+        /// which is the server default the CLI used to leave unnamed.
+        priority: FeePriority,
         /// Script-only confirmation skip. On a TTY it is not honored.
         yes: bool,
     },
@@ -93,9 +129,8 @@ pub enum ResolvedCommand {
         expiry: Option<Timestamp>,
     },
     RequestsList {
-        filter: Option<String>,
+        filter: RequestFilter,
     },
-    HistoryIncomingUnattributed,
     MakeUri {
         address: Option<String>,
         amount: Option<u64>,
@@ -116,7 +151,6 @@ pub enum ResolvedCommand {
     },
     StakedBalance,
     StakedOutputs,
-    StakingInfo,
 
     // -- Archival principal staking actions (WI-RPC-5) --
     /// `stake_in <amount>` — fund the staking balance with an ordinary
@@ -374,19 +408,6 @@ pub(crate) fn flag_value<'a>(args: &[&'a str], flag: &str) -> Option<&'a str> {
     None
 }
 
-/// Parse an optional flag value into a typed 3-state outcome. A present-but-
-/// unparseable value (including a flag given with no value) surfaces as
-/// `Invalid` — never a silent absence.
-pub(crate) fn parse_flag<T: std::str::FromStr>(args: &[&str], flag: &str) -> FlagValue<T> {
-    match flag_value(args, flag) {
-        None => FlagValue::Absent,
-        Some(raw) => match raw.parse::<T>() {
-            Ok(v) => FlagValue::Set(v),
-            Err(_) => FlagValue::Invalid(raw.to_owned()),
-        },
-    }
-}
-
 pub(crate) fn unix_now() -> Timestamp {
     Timestamp::from_raw(
         std::time::SystemTime::now()
@@ -434,41 +455,12 @@ pub(crate) fn diag(message: impl Into<String>) -> ResolvedCommand {
     }
 }
 
-/// Like [`parse_flag`] but for string-valued flags: a present-but-empty value
-/// (`--flag`, `--flag=`, or `--flag ""`) is `Invalid`, not an accepted empty
-/// string — so it surfaces as a parse-time diagnostic instead of an empty value
-/// crossing the wire (rule 82). `String`'s infallible `FromStr` makes the
-/// generic `parse_flag` unable to reject empties, hence the dedicated form.
+/// A string flag. A present-but-empty value (`--flag`, `--flag=`) is
+/// `Invalid`, not an accepted empty string (rule 82).
 pub(crate) fn parse_flag_str(args: &[&str], flag: &str) -> FlagValue<String> {
     match flag_value(args, flag) {
         None => FlagValue::Absent,
         Some("") => FlagValue::Invalid(String::new()),
         Some(v) => FlagValue::Set(v.to_owned()),
     }
-}
-
-/// Remove `flag` and its value from `args`, handling both `--flag value` (two
-/// tokens) and `--flag=value` (one token) so a stripped flag never leaks its
-/// value into the positional args.
-pub(crate) fn strip_flag_with_value<'a>(args: &[&'a str], flag: &str) -> Vec<&'a str> {
-    let mut out = Vec::new();
-    let mut skip_next = false;
-    for arg in args {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if *arg == flag {
-            skip_next = true;
-            continue;
-        }
-        if arg
-            .strip_prefix(flag)
-            .is_some_and(|rest| rest.starts_with('='))
-        {
-            continue;
-        }
-        out.push(*arg);
-    }
-    out
 }

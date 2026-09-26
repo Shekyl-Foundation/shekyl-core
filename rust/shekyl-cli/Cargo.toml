@@ -33,6 +33,10 @@ dirs = "6"
 ureq = { version = "3", default-features = false, features = ["rustls", "socks-proxy"] }
 tracing = "0.1"
 shekyl-logging = { path = "../shekyl-logging" }
+# Already locked through shekyl-logging. A direct edge so the status line
+# can ask the system clock for local civil time (`localtime_r` inside
+# `OffsetDateTime::now_local`) instead of a hand-rolled calendar.
+time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }
 shekyl-units = { path = "../shekyl-units" }
 
 # WP-W2: the self-hosted transport's dial (`open_verified`, which runs the

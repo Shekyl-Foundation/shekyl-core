@@ -9,14 +9,15 @@
   `stake`), and product verbs (`send`, `prove`, `check`, `sign`,
   `verify`). Old spellings diagnose the new line and do not run.
   Tab completes that grammar. Up-arrow history is saved as you go and
-  omits seeds, proofs, and signatures. A bottom line shows the version,
-  the time, and sync. A pipe runs the same commands and stops on the
+  omits seeds, proofs, and signatures, including the retired spellings
+  of those lines. A line above the prompt shows the version, the local
+  time, and sync. A pipe runs the same commands and stops on the
   first failure (`--password-file` with `--wallet`, `--yes` to confirm
   off a terminal).
 - **Shards are a subject, not a picture.** `shard list all` prints the
-  daemon's pay-ordered coverage list. `shard show` and `shard fetch`
-  are text. `shard list mine` says the wallet does not report its shard
-  ids yet. `stake join` names ids and does not post.
+  daemon's coverage list in the daemon's order. `shard show` and
+  `shard fetch` are text. `shard list mine` says the wallet does not
+  report its shard ids yet. `stake join` names ids and does not post.
 - **CompleteTree left the prompt.** `--complete-tree-foundation` is a
   hidden startup flag. Unbounded disk, no reward. The password is not
   kept after that call.

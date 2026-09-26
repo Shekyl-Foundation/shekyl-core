@@ -130,8 +130,6 @@ pub struct RpcSession {
     open_wallet: RefCell<Option<String>>,
     /// When set, RPC error reports include the structured `error.data`.
     pub debug: bool,
-    /// Set when a command should fail a script. Cleared by [`Self::take_failed`].
-    failed: Cell<bool>,
 }
 
 /// Initial capacity for a serialized request.
@@ -316,7 +314,6 @@ impl RpcSession {
             next_id: Cell::new(1),
             open_wallet: RefCell::new(None),
             debug,
-            failed: Cell::new(false),
         })
     }
 
@@ -342,7 +339,6 @@ impl RpcSession {
             next_id: Cell::new(1),
             open_wallet: RefCell::new(None),
             debug,
-            failed: Cell::new(false),
         };
         // A remote server may already have a wallet open (opened by the
         // operator or another client). Probe once so is_open()/require_open()
@@ -396,16 +392,6 @@ impl RpcSession {
     /// Record that no wallet is open.
     pub fn set_closed(&self) {
         *self.open_wallet.borrow_mut() = None;
-    }
-
-    /// Mark the current command as failed so a script stops.
-    pub fn fail(&self) {
-        self.failed.set(true);
-    }
-
-    /// Whether the command just run failed, clearing the flag.
-    pub fn take_failed(&self) -> bool {
-        self.failed.replace(false)
     }
 
     /// Perform a JSON-RPC call and return the `result` value.
@@ -476,10 +462,13 @@ impl RpcSession {
             .ok_or_else(|| RpcError::Transport("response missing 'result'".into()))
     }
 
-    /// Print an RPC failure to stderr. Server messages are stable and
-    /// secret-free by contract; `--debug` additionally shows `error.data`.
-    pub fn report(&self, context: &str, err: &RpcError) {
-        self.fail();
+    /// Print an RPC failure to stderr.
+    ///
+    /// Server messages are stable and secret-free by contract; `--debug`
+    /// additionally shows `error.data`. The returned value is what the
+    /// caller puts in `Err`, so a script stops. Dropping it is a warning.
+    #[must_use = "reporting an RPC error fails the command"]
+    pub fn report(&self, context: &str, err: &RpcError) -> crate::outcome::CommandFailed {
         eprintln!("{context}: {err}");
         if self.debug {
             if let RpcError::Rpc {
@@ -489,6 +478,7 @@ impl RpcSession {
                 eprintln!("[DEBUG] error.data = {data}");
             }
         }
+        crate::outcome::CommandFailed
     }
 
     /// Shut the session down: close any open wallet (best effort) and stop

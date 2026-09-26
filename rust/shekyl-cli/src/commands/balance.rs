@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::{format_amount_str, require_open};
 use crate::display::short_address;
+use crate::outcome::{failed, CommandResult};
 use crate::rpc_client::RpcSession;
 
 /// Fetch this wallet's primary address. `fail` is the report prefix on an
@@ -23,16 +24,14 @@ pub(crate) fn primary_address(rpc: &RpcSession, fail: &str) -> Option<String> {
             }
         },
         Err(e) => {
-            rpc.report(fail, &e);
+            let _reported = rpc.report(fail, &e);
             None
         }
     }
 }
 
-pub fn cmd_balance(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_balance(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
     match rpc.call("get_balance", json!({})) {
         Ok(val) => {
             let field = |name: &str| {
@@ -65,7 +64,7 @@ pub fn cmd_balance(rpc: &RpcSession) {
             {
                 println!(
                     "  Unspendable:        {} SKL  (received but unspendable — \
-                     see `transfers` rows in state UNSPENDABLE)",
+                     see \"tx list\" rows in state UNSPENDABLE)",
                     format_amount_str(unspendable)
                 );
             }
@@ -75,8 +74,9 @@ pub fn cmd_balance(rpc: &RpcSession) {
                 staking_field("claimable_rewards")
             );
         }
-        Err(e) => rpc.report("Failed to get balance", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to get balance", &e)),
+    };
+    Ok(())
 }
 
 /// `address [--full | --out <path>]` (CU-4). Hybrid addresses run to
@@ -85,12 +85,10 @@ pub fn cmd_balance(rpc: &RpcSession) {
 /// `--out <path>` (written to a new 0600 file, never overwriting — the same
 /// file-creation shape as `--seed-out`; an address is public, the uniform
 /// handling is for consistency, not secrecy).
-pub fn cmd_address(rpc: &RpcSession, full: bool, out: Option<&str>) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_address(rpc: &RpcSession, full: bool, out: Option<&str>) -> CommandResult {
+    require_open(rpc)?;
     let Some(address) = primary_address(rpc, "Failed to get address") else {
-        return;
+        return failed();
     };
 
     if let Some(path) = out {
@@ -102,20 +100,25 @@ pub fn cmd_address(rpc: &RpcSession, full: bool, out: Option<&str>) {
                 Ok(())
             },
         );
-        match write {
-            Ok(()) => println!(
-                "Full address ({} characters) written to {}.",
-                address.chars().count(),
-                path.display()
-            ),
-            Err(e) => eprintln!("{e}"),
-        }
-        return;
+        return match write {
+            Ok(()) => {
+                println!(
+                    "Full address ({} characters) written to {}.",
+                    address.chars().count(),
+                    path.display()
+                );
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                failed()
+            }
+        };
     }
 
     if full {
         println!("{address}");
-        return;
+        return Ok(());
     }
 
     println!("{}", short_address(&address));
@@ -125,15 +128,14 @@ pub fn cmd_address(rpc: &RpcSession, full: bool, out: Option<&str>) {
          writes it to a file)",
         address.chars().count()
     );
+    Ok(())
 }
 
 /// One-round-trip wallet summary over `get_wallet_info` (WI-RPC-4).
 /// The REPL command is `wallet` (renamed from `engine_info`, CU-2; the old
 /// name is a hidden alias).
-pub fn cmd_wallet(rpc: &RpcSession) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_wallet(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
     match rpc.call("get_wallet_info", json!({})) {
         Ok(val) => {
             let s = |name: &str| val.get(name).and_then(|v| v.as_str()).unwrap_or("?");
@@ -188,6 +190,7 @@ pub fn cmd_wallet(rpc: &RpcSession) {
                 }
             }
         }
-        Err(e) => rpc.report("Failed to get wallet info", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to get wallet info", &e)),
+    };
+    Ok(())
 }

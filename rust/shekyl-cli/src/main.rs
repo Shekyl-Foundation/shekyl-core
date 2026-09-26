@@ -466,6 +466,15 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if cli.complete_tree_foundation && cli.wallet.is_none() {
+        eprintln!(
+            "--complete-tree-foundation needs --wallet <name>. \
+             Unbounded disk, no reward. Nothing was written."
+        );
+        rpc.shutdown();
+        std::process::exit(1);
+    }
+
     if let Some(ref filename) = cli.wallet {
         let script = !std::io::IsTerminal::is_terminal(&std::io::stdin());
         if script && cli.password_file.is_none() {
@@ -476,81 +485,36 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
             rpc.shutdown();
             std::process::exit(1);
         }
-        let opened = {
-            let password = match &cli.password_file {
-                Some(path) => commands::scripted::read_password_file(path)?,
-                None => prompt_password("Wallet password: ")?,
-            };
-            if cli.complete_tree_foundation {
-                let phrase_ok = if script {
-                    cli.acknowledge.as_deref() == Some(commands::FOUNDATION_PHRASE)
-                } else {
-                    println!("{}", shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING);
-                    eprint!("Type exactly: {}\n> ", commands::FOUNDATION_PHRASE);
-                    let _flushed = std::io::Write::flush(&mut std::io::stderr());
-                    let mut typed = String::new();
-                    if std::io::stdin().read_line(&mut typed).is_err() {
-                        false
-                    } else {
-                        typed.trim() == commands::FOUNDATION_PHRASE
-                    }
-                };
-                if !phrase_ok {
-                    eprintln!(
-                        "Foundation staking cancelled. Unbounded disk, no reward. Nothing was written."
-                    );
-                    drop(password);
-                    rpc.shutdown();
-                    std::process::exit(1);
-                }
-                let opened = rpc.call(
-                    "open_wallet",
-                    rpc_client::params::NamedPassword {
-                        name: filename,
-                        password: &password,
-                    },
-                );
-                if let Err(e) = opened {
-                    rpc.report("Failed to open wallet", &e);
-                    drop(password);
-                    rpc.shutdown();
-                    std::process::exit(1);
-                }
-                rpc.set_open(filename);
-                let staked = rpc.call(
-                    "stake",
-                    rpc_client::params::StakeFoundation {
-                        password: &password,
-                        posture: "foundation_complete_tree",
-                        acknowledge_non_earning_unbounded: true,
-                    },
-                );
-                drop(password);
-                match staked {
-                    Ok(_) => println!("Foundation CompleteTree stake sealed."),
-                    Err(e) => {
-                        rpc.report("Failed to stake", &e);
-                        rpc.shutdown();
-                        std::process::exit(1);
-                    }
-                }
-                return commands::repl(rpc, daemon_client.as_ref(), cli.network_name());
+        if cli.complete_tree_foundation {
+            let accepted = commands::accept_foundation_terms(script, cli.acknowledge.as_deref());
+            if accepted.is_err() {
+                rpc.shutdown();
+                std::process::exit(1);
             }
-            rpc.call(
-                "open_wallet",
-                rpc_client::params::NamedPassword {
-                    name: filename,
-                    password: &password,
-                },
-            )
+        }
+        let password = match &cli.password_file {
+            Some(path) => commands::scripted::read_password_file(path)?,
+            None => prompt_password("Wallet password: ")?,
         };
-        match opened {
-            Ok(_) => {
-                rpc.set_open(filename);
-                println!("Opened wallet: {filename}");
-            }
-            Err(e) => {
-                rpc.report("Failed to open wallet", &e);
+        let opened = rpc.call(
+            "open_wallet",
+            rpc_client::params::NamedPassword {
+                name: filename,
+                password: &password,
+            },
+        );
+        if let Err(e) = opened {
+            let _reported = rpc.report("Failed to open wallet", &e);
+            drop(password);
+            rpc.shutdown();
+            std::process::exit(1);
+        }
+        rpc.set_open(filename);
+        println!("Opened wallet: {filename}");
+        if cli.complete_tree_foundation {
+            let staked = commands::post_foundation_stake(&rpc, &password);
+            drop(password);
+            if staked.is_err() {
                 rpc.shutdown();
                 std::process::exit(1);
             }
