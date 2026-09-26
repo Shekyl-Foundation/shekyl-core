@@ -64,6 +64,8 @@ enum Command {
         generation: Generation,
         polled_at: Tick,
     },
+    /// Shutdown step 1. The thread stays up. [`Command::Shutdown`] is step 8.
+    Close(Sender<()>),
     Shutdown,
     #[cfg(test)]
     Advance(Tick),
@@ -424,12 +426,22 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
         }
     }
 
-    /// Shutdown step 1. Later `register`, `arm`, `clear`, and `deregister`
-    /// return [`EngineError::Closed`] and send nothing. A command already
-    /// in the mailbox is dropped, not applied.
+    /// Shutdown step 1. Stops new commands and drops a deadline that has
+    /// not already been delivered. Returns only after the worker has
+    /// sealed every slot, so a later poll cannot observe `Closed` and
+    /// then a wake. The thread stays up until this service is dropped,
+    /// which is step 8.
     pub fn close(&self) {
         self.closed.store(true, Ordering::Release);
-        drop(self.tx.send(Command::Shutdown));
+        let (ack_tx, ack_rx) = mpsc::channel();
+        if self.tx.send(Command::Close(ack_tx)).is_err() {
+            return;
+        }
+        // A test may be holding the worker in front of the mailbox. Release
+        // that hold before waiting, or this call cannot be answered.
+        #[cfg(test)]
+        self.gate.release();
+        ignore(ack_rx.recv());
     }
 }
 
@@ -522,6 +534,11 @@ fn dispatch<C: Clock>(
     #[cfg(test)] counts: &Counts,
 ) -> bool {
     match command {
+        Command::Close(ack) => {
+            finish_close(engine, deliveries);
+            ignore(ack.send(()));
+            return true;
+        }
         Command::Shutdown => {
             while let Ok(queued) = rx.try_recv() {
                 seal_unapplied(queued);
@@ -604,6 +621,13 @@ fn dispatch<C: Clock>(
     true
 }
 
+fn finish_close<C: Clock>(engine: &mut Engine<C>, deliveries: &HashMap<OwnerId, OwnerSlot>) {
+    for owner in deliveries.values() {
+        owner.slot.seal(Terminal::Closed);
+    }
+    engine.close();
+}
+
 /// A `Register` that is not applied never enters `deliveries`. Seal its
 /// slot here, or a home already blocked in `wait` never wakes.
 fn seal_unapplied(command: Command) {
@@ -639,8 +663,12 @@ fn enqueue(tx: &Sender<Command>, closed: &AtomicBool, command: Command) -> Resul
     tx.send(command).map_err(|_| EngineError::Closed)
 }
 
-/// Mints owner ids and registers them. Clone it onto each home's thread.
-pub struct Handle<C: Clock> {
+/// Mints owner ids and registers them.
+///
+/// Clone it onto each home's thread. A clone shares the [`IdSource`], so
+/// the homes of one service do not start a second counter.
+#[derive(Clone)]
+pub struct Handle<C: Clock + Clone> {
     tx: Sender<Command>,
     closed: Arc<AtomicBool>,
     ids: IdSource,
@@ -747,7 +775,10 @@ impl<C: Clock> OwnerHandle<C> {
     /// A wake already waiting is handed out once, even after close or
     /// deregister. The next call then returns [`EngineError::Closed`] or
     /// [`EngineError::UnknownOwner`]. An empty slot checks this handle's
-    /// own flags, so a deregistered home does not see `Ok(None)`.
+    /// own deregistered flag, so that home does not see `Ok(None)`.
+    /// `Closed` comes from the sealed slot, not from the flag alone: the
+    /// flag is set before the worker has finished delivering, and reading
+    /// it early would report `Closed` and then a wake.
     pub fn poll_wake(&self) -> Result<Option<Wake>, EngineError> {
         match self.slot.poll()? {
             Some(delivered) => {
@@ -777,7 +808,11 @@ impl<C: Clock> OwnerHandle<C> {
     }
 
     fn idle(&self) -> Result<(), EngineError> {
-        self.ensure_open()
+        if self.deregistered.load(Ordering::Acquire) {
+            Err(EngineError::UnknownOwner)
+        } else {
+            Ok(())
+        }
     }
 
     fn observe(&self, delivered: &Delivered) {
@@ -824,6 +859,7 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
     }
 
     fn wait_stopped(&self) {
+        drop(self.tx.send(Command::Shutdown));
         if let Some(thread) = self.thread.lock().expect("thread lock").take() {
             drop(thread.join());
         }

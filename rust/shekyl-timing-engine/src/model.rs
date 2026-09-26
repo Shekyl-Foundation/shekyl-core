@@ -199,7 +199,8 @@ fn run(ops: &[Op]) {
                 let Some(id) = registered(&ids, slot) else {
                     continue;
                 };
-                let result = engine.register(OwnerMint::duplicate(id), OwnerClass::Transport);
+                let result =
+                    engine.register(OwnerMint::duplicate(&source, id), OwnerClass::Transport);
                 let expected = reference.register(id.0, OwnerClass::Transport);
                 assert_eq!(result, expected);
                 assert_eq!(result.unwrap_err(), EngineError::DuplicateOwner);

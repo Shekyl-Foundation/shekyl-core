@@ -272,10 +272,39 @@ fn register_refuses_an_id_that_is_already_live() {
     engine.register(minted, OwnerClass::Relay).unwrap();
     assert_eq!(
         engine
-            .register(OwnerMint::duplicate(id), OwnerClass::Transport)
+            .register(OwnerMint::duplicate(ids(), id), OwnerClass::Transport)
             .unwrap_err(),
         EngineError::DuplicateOwner
     );
+}
+
+#[test]
+fn a_second_source_cannot_revive_a_stale_hint() {
+    let mut engine = engine_at(0);
+    let home = IdSource::new();
+    let other = IdSource::new();
+    let first = home.mint().expect("id space");
+    let second = home.mint().expect("id space");
+    let first_id = first.id();
+    let second_id = second.id();
+    engine.register(first, OwnerClass::Relay).unwrap();
+    engine.register(second, OwnerClass::Transport).unwrap();
+    engine.arm(first_id, Tick::new(10)).unwrap();
+    engine.arm(second_id, Tick::new(20)).unwrap();
+    engine.deregister(first_id).unwrap();
+    let revived = other.mint().expect("the other counter starts at 1");
+    assert_eq!(revived.id(), first_id);
+    assert_eq!(
+        engine.register(revived, OwnerClass::Relay).unwrap_err(),
+        EngineError::ForeignMint
+    );
+    engine.clock_mut().set(Tick::new(10));
+    assert!(engine.poll().is_empty());
+    engine.clock_mut().set(Tick::new(20));
+    let wakes = engine.poll();
+    assert_eq!(wakes.len(), 1);
+    assert_eq!(wakes[0].owner, second_id);
+    assert_eq!(wakes[0].deadline, Tick::new(20));
 }
 
 #[test]
@@ -318,7 +347,7 @@ fn a_closed_engine_reports_closed_before_duplicate() {
     engine.close();
     assert_eq!(
         engine
-            .register(OwnerMint::duplicate(id), OwnerClass::Relay)
+            .register(OwnerMint::duplicate(ids(), id), OwnerClass::Relay)
             .unwrap_err(),
         EngineError::Closed
     );

@@ -188,53 +188,68 @@ impl OwnerClass {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OwnerId(u64);
 
-/// One-shot right to register an [`OwnerId`].
+/// One-shot right to register an [`OwnerId`] from one [`IdSource`].
 ///
 /// [`IdSource::mint`] is the only production constructor. [`Engine::register`]
-/// consumes the token. The id can be copied off; the token cannot. A stale
-/// heap hint therefore cannot be revived by registering that id again.
+/// consumes the token. The id can be copied off; the token cannot. A second
+/// [`IdSource`] has a different identity, and an engine that has accepted
+/// one source refuses the other, so a stale hint cannot be revived by a
+/// counter that starts again at 1.
 #[derive(Debug)]
-pub struct OwnerMint(OwnerId);
+pub struct OwnerMint {
+    source: u64,
+    id: OwnerId,
+}
 
 impl OwnerMint {
     /// The id this token registers. Copying it does not copy the token.
     pub fn id(&self) -> OwnerId {
-        self.0
+        self.id
     }
 
-    /// End the token and return its id.
-    fn take(self) -> OwnerId {
-        self.0
+    /// End the token and return its source and id.
+    fn take(self) -> (u64, OwnerId) {
+        (self.source, self.id)
     }
 
-    /// A second token for an id the live map may already hold.
+    /// A second token for an id the live map may already hold, from the
+    /// same source.
     ///
-    /// Production minting cannot build one. Passing an id that was
-    /// deregistered would revive its stale hint: the map no longer holds
-    /// it, and this token is the hole the type otherwise closes. Tests
-    /// use it only for an id that is still live.
+    /// Production minting cannot build one. Tests use it only for an id
+    /// that is still live.
     #[cfg(test)]
-    fn duplicate(id: OwnerId) -> Self {
-        Self(id)
+    fn duplicate(source: &IdSource, id: OwnerId) -> Self {
+        Self {
+            source: source.identity,
+            id,
+        }
     }
 }
 
 /// Hands out [`OwnerMint`]s from an atomic counter, starting at 1.
 ///
-/// The service handle holds one, so registering is not a round trip.
-/// The core's own bench holds one too, because it calls [`Engine::register`]
-/// directly. The counter stops when the next mint would wrap, so an id
-/// is never issued twice.
+/// A clone shares the counter and the identity. [`IdSource::new`] is a
+/// different source. The service handle holds one, so registering is not
+/// a round trip. The core's own bench holds one too, because it calls
+/// [`Engine::register`] directly. The counter stops when the next mint
+/// would wrap, so one source never issues an id twice.
 #[derive(Clone, Debug)]
 pub struct IdSource {
+    identity: u64,
     /// Next id to issue. `0` means the space is exhausted: `0` itself is
     /// never an id, and it is what remains after `u64::MAX` is issued.
     next: Arc<AtomicU64>,
 }
 
+fn next_source_identity() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 impl IdSource {
     pub fn new() -> Self {
         Self {
+            identity: next_source_identity(),
             next: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -257,7 +272,10 @@ impl IdSource {
                 )
                 .is_ok()
             {
-                return Ok(OwnerMint(OwnerId(current)));
+                return Ok(OwnerMint {
+                    source: self.identity,
+                    id: OwnerId(current),
+                });
             }
         }
     }
@@ -266,6 +284,7 @@ impl IdSource {
     #[cfg(test)]
     fn with_next(next: u64) -> Self {
         Self {
+            identity: next_source_identity(),
             next: Arc::new(AtomicU64::new(next)),
         }
     }
@@ -392,6 +411,9 @@ pub enum EngineError {
     /// This id is already in the live map. A second [`OwnerMint`] for it
     /// was consumed.
     DuplicateOwner,
+    /// The token was minted by a different [`IdSource`] from the one this
+    /// engine has already accepted.
+    ForeignMint,
     /// [`IdSource`] has issued `u64::MAX` and will not wrap.
     IdsExhausted,
     Closed,
@@ -446,6 +468,9 @@ pub struct Engine<C: Clock> {
     live: usize,
     /// Owners with an outstanding home report.
     pending_count: usize,
+    /// The [`IdSource`] whose tokens this engine accepts. Set by the first
+    /// successful register. One `u64`, not a record of every id.
+    bound_source: Option<u64>,
     owners: HashMap<OwnerId, Owner>,
     heap: BinaryHeap<Reverse<Hint>>,
     by_class: [ClassLateness; CLASS_COUNT],
@@ -458,6 +483,7 @@ impl<C: Clock> Engine<C> {
             closed: false,
             live: 0,
             pending_count: 0,
+            bound_source: None,
             owners: HashMap::new(),
             heap: BinaryHeap::new(),
             by_class: std::array::from_fn(|_| ClassLateness::default()),
@@ -475,18 +501,24 @@ impl<C: Clock> Engine<C> {
     /// Consume `minted` and accept its id.
     ///
     /// The token is spent on every path, including [`EngineError::Closed`].
-    /// A stale hint for a deregistered id stays in the heap until it
-    /// reaches the front, and it cannot match a new owner because that
-    /// owner holds a different id. A second token for an id the map still
-    /// holds is [`EngineError::DuplicateOwner`].
+    /// The first token binds this engine to that [`IdSource`]. A token from
+    /// any other source is [`EngineError::ForeignMint`], so a second counter
+    /// that starts again at 1 cannot revive a stale hint. A second token for
+    /// an id the map still holds is [`EngineError::DuplicateOwner`].
     pub fn register(&mut self, minted: OwnerMint, class: OwnerClass) -> Result<(), EngineError> {
-        let id = minted.take();
+        let (source, id) = minted.take();
         if self.closed {
             return Err(EngineError::Closed);
+        }
+        if let Some(bound) = self.bound_source {
+            if bound != source {
+                return Err(EngineError::ForeignMint);
+            }
         }
         if self.owners.contains_key(&id) {
             return Err(EngineError::DuplicateOwner);
         }
+        self.bound_source = Some(source);
         self.owners.insert(
             id,
             Owner {

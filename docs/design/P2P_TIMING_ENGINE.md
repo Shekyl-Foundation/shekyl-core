@@ -317,10 +317,14 @@ handle from an atomic counter, so registering is not a round trip
 either. The handle is a type in this crate. `OwnerId`'s field stays
 private (`OwnerId(u64)`); transport never constructs one.
 `IdSource::mint` returns an `OwnerMint`, and `register` consumes it.
-The id can be copied off the token. The token cannot be replayed, so
-a stale heap hint cannot match a new owner's first arming. The counter
-stops at the end of the `u64` space instead of wrapping. A second
-token for an id the live map still holds is `DuplicateOwner`.
+The id can be copied off the token. The token cannot be replayed. A
+clone of an `IdSource` shares its counter. `IdSource::new` is a
+different source, and the first token binds the engine to that source.
+A token from any other source is `ForeignMint`, so a second counter
+that starts again at 1 cannot revive a stale hint. One source never
+wraps, so it never reissues an id, and the engine does not keep a set
+of retired ids. A second token for an id the live map still holds is
+`DuplicateOwner`.
 *Records-was: the core assigned ids itself (`Engine::register`,
 `next_id`). Records-was after that: `register` took an `OwnerId` and a
 `retired` set remembered every deregistered id for the life of the
@@ -416,7 +420,12 @@ lateness from a different zero.
 `clear`, and `deregister` check it and return `EngineError::Closed`
 without sending. Commands already in the mailbox are dropped, not
 applied. A wake already in the slot is still handed out once, and the
-next wait returns `Closed`. `close` is shutdown step 1.
+next wait returns `Closed`. `close` is shutdown step 1: it returns
+only after the worker has dropped a deadline that had not already been
+delivered and has sealed every slot. The thread does not exit there.
+It exits when the service is dropped, which is step 8. A poll that
+reads the closed flag before that seal would report `Closed` and then
+a wake; `Closed` is the sealed slot.
 
 **If the engine thread panics, the process aborts.** A dead engine
 leaves every gap timer and handshake deadline unarmed, so a flood holds

@@ -135,7 +135,7 @@ fn a_waiting_wake_does_not_forget_a_same_tick_rearm() {
 fn every_handle_refuses_once_the_service_is_closed() {
     let service = EngineService::start(ManualClock::new(Tick::new(0)));
     let first = service.handle();
-    let second = service.handle();
+    let second = first.clone();
     let owner = first.register(OwnerClass::Relay).unwrap();
     service.barrier();
     service.close();
@@ -267,6 +267,39 @@ fn engine_thread_panic_aborts_the_process() {
         !status.success(),
         "expected the child process to abort, got {status:?}"
     );
+}
+
+#[test]
+fn a_deadline_that_has_not_fired_is_dropped_at_close() {
+    let service = EngineService::start(ManualClock::new(Tick::new(0)));
+    let owner = service.handle().register(OwnerClass::Transport).unwrap();
+    owner.arm(Tick::new(100)).unwrap();
+    service.barrier();
+    service.close();
+    assert!(matches!(owner.poll_wake(), Err(EngineError::Closed)));
+    assert!(matches!(owner.poll_wake(), Err(EngineError::Closed)));
+}
+
+#[test]
+fn after_close_returns_a_poll_stays_closed() {
+    let service = EngineService::start(ManualClock::new(Tick::new(0)));
+    let owner = service.handle().register(OwnerClass::Transport).unwrap();
+    owner.arm(Tick::new(50)).unwrap();
+    service.barrier();
+    service.advance(Tick::new(50));
+    service.close();
+    let first = owner.poll_wake();
+    let second = owner.poll_wake();
+    match first {
+        Ok(Some(wake)) => {
+            assert_eq!(wake.deadline, Tick::new(50));
+            assert!(matches!(second, Err(EngineError::Closed)));
+        }
+        Err(EngineError::Closed) => {
+            assert!(matches!(second, Err(EngineError::Closed)));
+        }
+        other => panic!("close returned and then the slot changed: {other:?}"),
+    }
 }
 
 #[test]
