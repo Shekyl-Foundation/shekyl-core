@@ -189,6 +189,25 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         manifest.tip_height,
         dir.display()
     );
+    // CTW-5 (DRS-E3): the derived root is held to the trace's recorded
+    // root at **every** connected height, never a sample. The count is
+    // asserted first (rule 47): a comparison that ran over nothing is not
+    // a comparison.
+    assert_eq!(
+        report.roots.compared, manifest.block_count,
+        "{}: {} of {} heights had a recorded root to compare against",
+        manifest.shape, report.roots.compared, manifest.block_count
+    );
+    assert!(
+        report.roots.diverged.is_empty(),
+        "{} ({}): the derived curve-tree root differs from the daemon's at {} height(s), first at \
+         {:?} — a FINDING, adjudicated against the spec (E2 §0), never a fixture problem: the \
+         chain is one the C++ accepted and the root is the validator's derivation",
+        manifest.shape,
+        manifest.generator,
+        report.roots.diverged.len(),
+        report.roots.diverged.first()
+    );
     let (h0, connected_genesis) = report.connected[0];
     assert_eq!(h0, BlockHeight::from_raw(0));
     assert_eq!(
@@ -298,10 +317,12 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
         hold(&dir, &manifest, &report);
         eprintln!(
-            "{}: {} blocks connected, digest MATCH at {}, rows exercised: {}",
+            "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, rows \
+             exercised: {}",
             manifest.shape,
             report.connected.len(),
             manifest.tip_height,
+            report.roots.compared,
             report.exercised.len()
         );
     }

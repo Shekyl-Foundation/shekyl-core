@@ -119,6 +119,14 @@ pub struct RunReport {
     /// The redb-side digest at the trace's covered-tip checkpoint, beside
     /// the trace's expectation, when that height connected.
     pub checkpoint: Option<Checkpoint>,
+    /// The derived-vs-trace root comparison, per connected height the trace
+    /// has facts for (DRS-E3 CTW-5, `DRS_E3_CURVE_WRITER.md` §3.8): how many
+    /// heights were compared, and every one that disagreed. **Every**
+    /// covered height, never a sample — this comparison exists only while
+    /// the LMDB trace does. Zero compared on a trace with facts is a run
+    /// that connected nothing, which the connected count already says; a
+    /// gate over this field asserts the count first (rule 47).
+    pub roots: RootComparisons,
     /// The RandomX measurement (RD-F11), as of the run's end.
     pub metrics: MetricsArtifact,
     /// One entry per committed `Rewind`: the digest **after the pop**, at
@@ -126,6 +134,34 @@ pub struct RunReport {
     /// pop-symmetry check through the actor (the state at `to` must be the
     /// state the chain had when `to` was first the tip).
     pub switches: Vec<Switch>,
+}
+
+/// The per-height root oracle's tally (`RunReport::roots`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RootComparisons {
+    /// Connected heights whose trace facts carried a root to compare.
+    pub compared: u64,
+    /// Every height where the derived root was not the recorded one.
+    pub diverged: Vec<RootDivergence>,
+}
+
+impl RootComparisons {
+    /// Whether every compared root agreed; `None` when none was compared.
+    #[must_use]
+    pub fn identical(&self) -> Option<bool> {
+        (self.compared > 0).then_some(self.diverged.is_empty())
+    }
+}
+
+/// One height where the store's derived root differed from the trace's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RootDivergence {
+    /// The connected height whose drain produced the root.
+    pub at: BlockHeight,
+    /// The verdict's derivation, recorded at `curve_tree_roots[at + 1]`.
+    pub ours: shekyl_types::CurveTreeRoot,
+    /// The trace's `root_after` — what the C++ grower left.
+    pub theirs: shekyl_types::CurveTreeRoot,
 }
 
 /// The covered-tip checkpoint, compared.
@@ -176,6 +212,14 @@ pub enum Disagreement {
         /// The checkpoint height.
         at: BlockHeight,
     },
+    /// The derived curve-tree root after a block differed from the root
+    /// the trace recorded for it (DRS-E3 CTW-5). Adjudicated against the
+    /// spec, never patched around: the fixtures are chains the C++
+    /// accepted and the root is the validator's.
+    RootDiverged {
+        /// The connected height.
+        at: BlockHeight,
+    },
 }
 
 impl RunReport {
@@ -186,22 +230,40 @@ impl RunReport {
     }
 
     /// What the grader reads (RD-Q9), derived from the report so the two
-    /// cannot disagree: exercised rows, the refusal, digest agreement.
+    /// cannot disagree: exercised rows, the refusal, and whether every
+    /// comparison of the store's state against the trace agreed — the
+    /// covered-tip digest **and** every per-height root (CTW-5), folded as
+    /// *all agreed*; `None` when nothing was compared.
     #[must_use]
     pub fn observations(&self) -> Observations {
+        let compared = [
+            self.checkpoint.as_ref().map(Checkpoint::identical),
+            self.roots.identical(),
+        ];
+        let digest_identical = compared
+            .iter()
+            .flatten()
+            .copied()
+            .reduce(|all, one| all && one);
         Observations {
             exercised: self.exercised.clone(),
             refused: self
                 .refused
                 .as_ref()
                 .map(|(height, verdict)| (verdict.rule.as_str(), *height)),
-            digest_identical: self.checkpoint.as_ref().map(Checkpoint::identical),
+            digest_identical,
         }
     }
 
     /// Every way the run disagreed with the chain, in the order they can
-    /// occur: a checkpoint that diverged, a refusal that ended the run.
+    /// occur: a root that diverged at a height, a checkpoint that diverged,
+    /// a refusal that ended the run.
     pub fn disagreements(&self) -> impl Iterator<Item = Disagreement> + '_ {
+        let roots = self
+            .roots
+            .diverged
+            .iter()
+            .map(|d| Disagreement::RootDiverged { at: d.at });
         let diverged = self
             .checkpoint
             .as_ref()
@@ -214,7 +276,7 @@ impl RunReport {
                 height: *height,
                 verdict: *verdict,
             });
-        diverged.into_iter().chain(refused)
+        roots.chain(diverged).chain(refused)
     }
 }
 
@@ -583,6 +645,23 @@ where
         self.report
             .connected
             .extend(applied.connected.iter().copied());
+        // CTW-5: the derived root against the trace's, at every connected
+        // height the trace covers. The trace's root is the comparison
+        // input, not a fact the store was handed (it left `ConnectFacts`
+        // with DRS-E3); a disagreement is recorded, never patched.
+        for (at, ours) in &applied.roots {
+            if let Some(facts) = self.trace.borrow(*at) {
+                let theirs = facts.value().root_after;
+                self.report.roots.compared += 1;
+                if *ours != theirs {
+                    self.report.roots.diverged.push(RootDivergence {
+                        at: *at,
+                        ours: *ours,
+                        theirs,
+                    });
+                }
+            }
+        }
         if let Some(at) = self.checkpoint_at {
             if applied.connected.iter().any(|(h, _)| *h == at) {
                 let ours = self.connector.ask(Digest).await.map_err(collapse)?;

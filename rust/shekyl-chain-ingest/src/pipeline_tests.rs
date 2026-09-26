@@ -991,6 +991,73 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
     cleanup(&path);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
+    // The root oracle's negative control (rule 47; DRS-E3 CTW-5): a trace
+    // whose recorded `root_after` at one interior height is not what the
+    // validator derives DIVERGEs at that height — with the checkpoint
+    // still matching, because the digest carries only the *live* root —
+    // and the observation folds it in so a graded run does not pass. This
+    // is exactly the disagreement the covered-tip checkpoint cannot see.
+    use crate::grader::{grade_run, Register};
+    use crate::pipeline::Disagreement;
+    use crate::trace::{Trace, TraceWriter};
+    use shekyl_types::CurveTreeRoot;
+    let path = tmp("pipeline-root-oracle-control");
+    let chain = chain(3);
+    let tree = GrownTree::over(&chain);
+    let wrong = CurveTreeRoot::from_bytes([0xEE; 32]);
+    let trace = {
+        let mut w = TraceWriter::new(Vec::new()).expect("header");
+        for hh in 0..3u64 {
+            let root = if hh == 1 { wrong } else { tree.root_after(hh) };
+            w.push_facts(h(hh), &crate::test_support::facts_at(hh, root))
+                .expect("facts");
+        }
+        w.push_checkpoint(&expected_state(&chain))
+            .expect("the true checkpoint");
+        Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
+    };
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the run itself completes; the verdict is the grader's");
+    assert!(
+        report.checkpoint.expect("covered tip").identical(),
+        "the tip digest agrees: the interior root is invisible to it"
+    );
+    assert_eq!(report.roots.compared, 3, "every connected height compared");
+    assert_eq!(
+        report.roots.diverged,
+        vec![crate::pipeline::RootDivergence {
+            at: h(1),
+            ours: tree.root_after(1),
+            theirs: wrong,
+        }]
+    );
+    assert_eq!(
+        report.disagreements().collect::<Vec<_>>(),
+        vec![Disagreement::RootDiverged { at: h(1) }]
+    );
+    let obs = report.observations();
+    assert_eq!(obs.digest_identical, Some(false), "folded: not all agreed");
+    let register = Register::from_json(
+        r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-B5","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
+    )
+    .expect("register");
+    assert!(!grade_run(&register, &obs).passes());
+    cleanup(&path);
+}
+
 /// The store side of the negative control: replay a chain whose trace
 /// checkpoint matches, then mutate **one row of one digested family** in
 /// raw redb and read the digest again. Each family must move the digest on

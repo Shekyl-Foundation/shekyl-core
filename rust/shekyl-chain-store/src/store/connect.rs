@@ -249,10 +249,11 @@ impl ConnectFacts {
     /// `count()` is **the set of facts the store does not derive**, not a
     /// progress bar: it grows as facts are discovered (S-CHAIN-R added
     /// `long_term_effective_median`, so it rose from six to seven when that
-    /// landed — `DRS_E1_SCHAIN_R.md` §3.6) and shrinks as E6 lands the rows
-    /// that derive them (E6 slice 2 deleted `cumulative_difficulty`, seven
-    /// back to six). An increase is not a regression; the items are the
-    /// critical path.
+    /// landed — `DRS_E1_SCHAIN_R.md` §3.6) and shrinks as the rows or the
+    /// writers that derive them land (E6 slice 2 deleted
+    /// `cumulative_difficulty`, seven back to six; DRS-E3 deleted
+    /// `root_after`, six to five). An increase is not a regression; the
+    /// items are the critical path.
     pub fn passed_through(&self) -> impl Iterator<Item = DeletedBy> + '_ {
         Self::DELETED_BY
             .into_iter()

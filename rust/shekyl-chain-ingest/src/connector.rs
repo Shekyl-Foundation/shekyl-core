@@ -62,7 +62,7 @@ use shekyl_chain_rules::{
     Retry, Stale, StructurallyValid, Verdict, ViewRead,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
 
 use crate::facts::{FactsFault, FactsFor};
 use crate::schedule::ChainRules;
@@ -171,6 +171,12 @@ pub enum RunFault {
 pub struct Applied {
     /// Connected blocks, in order.
     pub connected: Vec<(BlockHeight, BlockHash)>,
+    /// The curve-tree root **after** each connected block's drain — the
+    /// verdict's derivation (`ValidatedBlock::root_after`, DRS-E3), one per
+    /// entry of `connected`, in the same order. The replay compares each
+    /// against the trace's recorded root at that height (CTW-5): the
+    /// per-height oracle the LMDB trace makes possible while it exists.
+    pub roots: Vec<(BlockHeight, CurveTreeRoot)>,
     /// The census rows the connected blocks' verdicts exercised — the
     /// union of each `ChainValid`'s coverage, for the grader's clause (1).
     pub exercised: BTreeSet<&'static str>,
@@ -391,11 +397,13 @@ impl<F: FactsFor + Send + Sync + 'static> Message<Apply> for Connector<F> {
                             }
                         };
                         let hash = valid.block().hash();
+                        let root_after = valid.block().root_after();
                         applied
                             .exercised
                             .extend(valid.coverage().iter().map(CenRow::as_str));
                         batch.connect(valid, facts, in_force)?;
                         applied.connected.push((height, hash));
+                        applied.roots.push((height, root_after));
                     }
                     Ok(Err(refused)) => {
                         applied.refused = Some((height, refused));
