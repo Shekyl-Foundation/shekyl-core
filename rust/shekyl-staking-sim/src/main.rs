@@ -1971,7 +1971,7 @@ fn main() {
 mod tests {
     use crate::metrics::gini;
     use crate::model::{bond_age, bond_duration, g_age, r_target, World};
-    use crate::model::{Actor, Shard};
+    use crate::model::{Actor, CompositionParams, Shard};
     use crate::participation::{foundation_floor, foundation_floor_aged};
 
     #[test]
@@ -2045,10 +2045,12 @@ mod tests {
             Shard {
                 age: 0.98,
                 size_seed: 0.0,
+                size: 1.0,
             },
             Shard {
                 age: 0.2,
                 size_seed: 0.0,
+                size: 1.0,
             },
         ];
         let actors = vec![Actor {
@@ -2062,7 +2064,13 @@ mod tests {
         w.locks[0][0] = 3;
         w.holdings[0][1] = true;
         w.locks[0][1] = 0;
-        w.advance_epoch(0.05);
+        w.advance_epoch(
+            0.05,
+            &CompositionParams {
+                spread: 1.0,
+                decorrelated: false,
+            },
+        );
         // Shard 0 crossed age 1.0 → retired/recycled: age reset, holding+lock cleared.
         assert!((w.shards[0].age - 0.0).abs() < 1e-12);
         assert!(!w.holdings[0][0]);

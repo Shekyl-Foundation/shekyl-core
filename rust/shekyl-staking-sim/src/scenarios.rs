@@ -656,6 +656,7 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
             .map(|_| Shard {
                 age: 0.0,
                 size_seed: 0.0,
+                size: cfg.composition().size_at_birth(0.0),
             })
             .collect()
     } else {
@@ -670,7 +671,17 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
                 } else {
                     0.0
                 };
-                Shard { age, size_seed }
+                // Size is fixed at birth. In this static snapshot a shard's age IS its
+                // birth era (ages never advance), so this reproduces the age-keyed read
+                // exactly; under a dynamic window it is what keeps a shard's bytes from
+                // changing as it ages.
+                let comp = cfg.composition();
+                let size = comp.size_at_birth(comp.birth_key(age, size_seed));
+                Shard {
+                    age,
+                    size_seed,
+                    size,
+                }
             })
             .collect()
     };
@@ -1052,7 +1063,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
         // agents react. Skip on the first epoch so the initial distribution settles.
         if cfg.dynamic && ep > 0 {
-            world.advance_epoch(cfg.epoch_aging);
+            world.advance_epoch(cfg.epoch_aging, &cfg.composition());
         }
 
         // L12 chain growth: append fresh hot shards until the window reaches its
@@ -1061,7 +1072,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         if cfg.bootstrap && ep > 0 && world.shards.len() < cfg.n_shard {
             let room = cfg.n_shard - world.shards.len();
             for _ in 0..cfg.shard_growth_per_epoch.min(room) {
-                world.append_shard(0.0);
+                world.append_shard(0.0, &cfg.composition());
             }
         }
 
