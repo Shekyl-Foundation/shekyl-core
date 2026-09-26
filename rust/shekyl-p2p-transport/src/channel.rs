@@ -116,7 +116,8 @@ impl SendHalf {
         out
     }
 
-    pub(crate) fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, RecordError> {
+    /// Seal `plaintext` as records. An empty slice is not a record.
+    pub fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, RecordError> {
         if plaintext.is_empty() {
             return Ok(Vec::new());
         }

@@ -170,9 +170,12 @@ In this increment:
   when an entry is looked up. A new ban closes live sockets to that
   host. Nothing in the RPC calls it yet. That call is the seam, when
   Rust owns the sockets.
-- One `CloseCause` is the D12 table. `src/shekyl/close_cause.h` is
-  generated from that enum and included by `shekyl_ffi.h`. The test
-  fails if the header drifts. There is no second table to edit.
+- One `CloseCause` is the D12 table. The discriminants in
+  `src/shekyl/close_cause.h` are generated from that enum, and the
+  header's size and field offsets are the `repr(C)` struct's.
+  `shekyl_ffi.h` includes it. The test fails if the header drifts, and
+  the C++ build fails if the typedef no longer matches that layout.
+  There is no second table to edit.
 
 Not in this increment: sockets, the D5 runtime constructor, a thread
 count, a deadline, an accept rate, the seam, the differential harness,

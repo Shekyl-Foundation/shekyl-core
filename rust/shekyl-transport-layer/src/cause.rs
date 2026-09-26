@@ -12,15 +12,19 @@ pub enum Phase {
     BeforeChannel,
     /// The channel exists and the Levin handshake is not done.
     Gap,
-    /// The Levin handshake is done. This row does not include [`Phase::Gap`].
+    /// The Levin handshake is done.
     AfterChannel,
 }
 
+/// Which row of the D12 table a cause belongs to.
+///
+/// [`PhaseClass::ChannelExists`] is the third row: any time after the
+/// channel exists, which includes [`Phase::Gap`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PhaseClass {
     BeforeChannel,
     Gap,
-    AfterChannel,
+    ChannelExists,
     Every,
 }
 
@@ -61,7 +65,9 @@ macro_rules! close_kinds {
                     PhaseClass::Every => true,
                     PhaseClass::BeforeChannel => matches!(phase, Phase::BeforeChannel),
                     PhaseClass::Gap => matches!(phase, Phase::Gap),
-                    PhaseClass::AfterChannel => matches!(phase, Phase::AfterChannel),
+                    PhaseClass::ChannelExists => {
+                        matches!(phase, Phase::Gap | Phase::AfterChannel)
+                    }
                 }
             }
         }
@@ -77,21 +83,38 @@ close_kinds! {
     (6, ProxyRefused, BeforeChannel, "SHEKYL_CLOSE_PROXY_REFUSED"),
     (7, LevinHandshakeTimeout, Gap, "SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT"),
     (8, LevinHandshakeRejected, Gap, "SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED"),
-    (9, PeerClosed, AfterChannel, "SHEKYL_CLOSE_PEER_CLOSED"),
-    (10, RecordRejected, AfterChannel, "SHEKYL_CLOSE_RECORD_REJECTED"),
-    (11, SessionRefused, AfterChannel, "SHEKYL_CLOSE_SESSION_REFUSED"),
-    (12, IoError, AfterChannel, "SHEKYL_CLOSE_IO_ERROR"),
-    (13, SendQueueFull, AfterChannel, "SHEKYL_CLOSE_SEND_QUEUE_FULL"),
+    (9, PeerClosed, ChannelExists, "SHEKYL_CLOSE_PEER_CLOSED"),
+    (10, RecordRejected, ChannelExists, "SHEKYL_CLOSE_RECORD_REJECTED"),
+    (11, SessionRefused, ChannelExists, "SHEKYL_CLOSE_SESSION_REFUSED"),
+    (12, IoError, ChannelExists, "SHEKYL_CLOSE_IO_ERROR"),
+    (13, SendQueueFull, ChannelExists, "SHEKYL_CLOSE_SEND_QUEUE_FULL"),
     (14, LocalClose, Every, "SHEKYL_CLOSE_LOCAL_CLOSE"),
 }
 
 /// One close cause. `reply_code` is the overlay reply for
 /// [`CloseKind::ProxyRefused`] and zero for every other kind.
+///
+/// `repr(C)` is the layout `shekyl_close_cause` projects. The header's
+/// size and field offsets are these constants, so a Rust layout change
+/// and a C typedef that no longer matches both fail.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CloseCause {
     kind: CloseKind,
     reply_code: u16,
 }
+
+const CLOSE_CAUSE_SIZE: usize = 4;
+const CLOSE_CAUSE_ALIGN: usize = 2;
+const CLOSE_CAUSE_KIND_OFFSET: usize = 0;
+const CLOSE_CAUSE_REPLY_OFFSET: usize = 2;
+
+const _: () = {
+    assert!(std::mem::size_of::<CloseCause>() == CLOSE_CAUSE_SIZE);
+    assert!(std::mem::align_of::<CloseCause>() == CLOSE_CAUSE_ALIGN);
+    assert!(std::mem::offset_of!(CloseCause, kind) == CLOSE_CAUSE_KIND_OFFSET);
+    assert!(std::mem::offset_of!(CloseCause, reply_code) == CLOSE_CAUSE_REPLY_OFFSET);
+};
 
 impl CloseCause {
     /// A cause other than [`CloseKind::ProxyRefused`].
@@ -144,10 +167,12 @@ const HEADER_PREAMBLE: &str = "\
 #ifndef SHEKYL_CLOSE_CAUSE_H
 #define SHEKYL_CLOSE_CAUSE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* One close cause. reply_code is the overlay reply for
-   SHEKYL_CLOSE_PROXY_REFUSED and zero for every other kind. */
+   SHEKYL_CLOSE_PROXY_REFUSED and zero for every other kind.
+   The size and offsets below are CloseCause's. */
 typedef struct shekyl_close_cause {
     uint8_t kind;
     uint16_t reply_code;
@@ -155,12 +180,28 @@ typedef struct shekyl_close_cause {
 
 ";
 
-/// The C header `shekyl_ffi.h` includes. Built from [`CloseKind::ALL`].
+/// The C header `shekyl_ffi.h` includes. Discriminants come from
+/// [`CloseKind::ALL`]. Size and offsets come from [`CloseCause`].
 #[must_use]
 pub fn c_header() -> String {
     let mut out = String::from(HEADER_PREAMBLE);
+    use std::fmt::Write as _;
+    writeln!(
+        out,
+        "\
+#if defined(__cplusplus)
+static_assert(sizeof(shekyl_close_cause) == {CLOSE_CAUSE_SIZE}, \"close cause size\");
+static_assert(offsetof(shekyl_close_cause, kind) == {CLOSE_CAUSE_KIND_OFFSET}, \"close cause kind\");
+static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OFFSET}, \"close cause reply_code\");
+#else
+_Static_assert(sizeof(shekyl_close_cause) == {CLOSE_CAUSE_SIZE}, \"close cause size\");
+_Static_assert(offsetof(shekyl_close_cause, kind) == {CLOSE_CAUSE_KIND_OFFSET}, \"close cause kind\");
+_Static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OFFSET}, \"close cause reply_code\");
+#endif
+",
+    )
+    .expect("header write");
     for kind in CloseKind::ALL {
-        use std::fmt::Write as _;
         writeln!(out, "#define {} {}", kind.c_name(), kind.code()).expect("header write");
     }
     out.push_str("#endif\n");
@@ -195,6 +236,11 @@ mod tests {
         let gap = [
             CloseKind::LevinHandshakeTimeout,
             CloseKind::LevinHandshakeRejected,
+            CloseKind::PeerClosed,
+            CloseKind::RecordRejected,
+            CloseKind::SessionRefused,
+            CloseKind::IoError,
+            CloseKind::SendQueueFull,
             CloseKind::LocalClose,
         ];
         let after = [
@@ -237,8 +283,12 @@ mod tests {
         assert!(CloseKind::LocalClose.applies_in(Phase::Gap));
         assert!(CloseKind::LocalClose.applies_in(Phase::AfterChannel));
         assert!(!CloseKind::DialFailed.applies_in(Phase::AfterChannel));
+        assert!(!CloseKind::DialFailed.applies_in(Phase::Gap));
         assert!(!CloseKind::PeerClosed.applies_in(Phase::BeforeChannel));
-        assert!(!CloseKind::PeerClosed.applies_in(Phase::Gap));
+        assert!(CloseKind::PeerClosed.applies_in(Phase::Gap));
+        assert!(CloseKind::PeerClosed.applies_in(Phase::AfterChannel));
+        assert!(CloseKind::LevinHandshakeTimeout.applies_in(Phase::Gap));
+        assert!(!CloseKind::LevinHandshakeTimeout.applies_in(Phase::AfterChannel));
     }
 
     #[test]

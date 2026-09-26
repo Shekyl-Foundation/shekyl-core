@@ -10,8 +10,9 @@
 //! them, and it does not implement stem, fluff, or Levin.
 //!
 //! Tor and I2P are other network pipes. They are not built here.
-//! `read_message1`, `read_message2`, and `open_one` are public for the D11
-//! fuzz targets. This crate stays the Noise layer.
+//! `read_message1`, `read_message2`, `SendHalf::seal`, and `open_one` are
+//! the Noise layer's public record path. The D11 fuzz targets call those
+//! same methods. This crate stays the Noise layer.
 
 mod aead;
 mod channel;
