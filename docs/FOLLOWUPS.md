@@ -14,6 +14,18 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **No authority exists for an honest server's sustained egress over Tor on the rule-76 floor device (`SHT-5`).** The only transport figure in the tree is a requester-side burst floor near 180 KB/s, "a floor from a null result, not a sustained figure" (`ARCHIVAL_SHARD_FETCH.md`:1079). `U1b` — whether a `P` on a Pi 4 can serve its epoch's challenge, organic and band-2 reads at the selected `T` — is a bound with no value, and it cannot be closed by reasoning. A measurement at the drawable-pair count the epoch implies would close it.
+  - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §3 `U1b`
+  - Target: pre-genesis
+
+- **`SF-D7` still states the whole-shard materialise premise that `PDM-Q6` item 5 retired (`SHT-3`).** `ARCHIVAL_SHARD_FETCH.md`:183 reads *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"*, while item 5 kept `SF-D1`'s whole-shard *read* and retired its *materialise*, refuting F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`.
+  - Owner: [`ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) `SF-D7`
+  - Target: pre-genesis
+
+- **The `PDM-Q-F34` coverage arms the composition round did not run.** Three: the dynamic window with an era-density schedule, so a heavy era ages into the deep band with its bytes intact and is graded against `r_target_deep` with the `g(age)` premium (expressible since size-at-birth landed); a `storage_unit_cost` sweep at fixed `S`, which is what separates the cost signal from the capacity leg; and the per-band gate read — max over pre-registered age × cost bands, aggregate reported but not graded, since the aggregate certifies a failing band. The first is owed **after** `SHT-Q1`, because the domain decides what a "heavy era" is.
+  - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19
+  - Target: pre-genesis
+
 - **Delete the clearnet pipe scaffolding at transport cutover.** `pipe.rs`, the descriptor-handoff FFI, and epee's `network_pipe_ops` are the interim host. The transport layer replaces them; they are not a test host for the option. The deletion set is D13 of the transport-layer design.
   - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
   - Target: pre-genesis
