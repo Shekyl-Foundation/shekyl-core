@@ -24,6 +24,8 @@
   "max_settlement_epochs_per_emission": 15,
   "max_claim_age_w": 26,
   "retention_horizon_blocks": 420000,
+
+  "_comment_archival_reorg_depth_blocks": "ONE SETTING DOING TWO JOBS WITH DIFFERENT REQUIREMENTS, recorded as inherited per rule 05 until it is split (S-PRUNE review 2026-09-25, DRS_E1_SPRUNE.md SPR-6 / SPR-Q1; FOLLOWUPS row 'Split archival_reorg_depth_blocks'). Job 1 — the PASS-ANCHOR DEPTH (owner: E4 / pass admission; ARCHIVAL_SHARD_FETCH.md SF-D8, rust/shekyl-archival-retention/src/pass_anchor.rs PASS_ANCHOR_DEPTH_BLOCKS): how far back a requester anchors so an admitted pass survives any legal reorg; requirement DEPTH >= reorg cap (+ L). This is the job the value was tuned for and the one the _comment_archival_timing text below describes. Job 2 — the REORG CAP D_max (owner: consensus; ARCHIVAL_PRUNED_DAEMON_MODE.md PDM-Q11, CEN-E2, shekyl_chain_rules::D_MAX and RuleSet::reorg_cap): how deep a reorg the validator accepts and the store must be able to revert — a detectability/finality boundary, PROVISIONAL 720 on Q11's own requirement. D_MAX INHERITS this value; it is not derived from it and the two are not one number by rationale (the depth's requirement is >= cap, not = cap). The split gives the depth its own key on E4's requirement and asserts PASS_ANCHOR_DEPTH_BLOCKS >= reorg_cap on the production pair and at arm on every nettype (the SEB > D_MAX shape). Also read by SP-R0 arm #1's prune-permanence ingest ceiling (below).",
   "archival_reorg_depth_blocks": 720,
   "release_cooldown_epochs": 2,
   "challenge_resolution_blocks": 10000,

@@ -1315,8 +1315,10 @@ is therefore a **precondition** of `D_max`, not a sibling, and
 
 **Numeric.** `D_max = 720` blocks (24 h at 120 s), **PROVISIONAL**, on
 the `bond_duration` precedent. *Built 2026-09-25 as
-`shekyl_chain_rules::D_MAX`, derived from `archival_reorg_depth_blocks`
-(one source, `config/consensus_constants.json`), with `SEB > D_MAX`
+`shekyl_chain_rules::D_MAX`, **inheriting** `archival_reorg_depth_blocks`
+(`config/consensus_constants.json`; a key doing two jobs — the pass-anchor
+depth it was tuned for and this cap — recorded as inherited per rule 05
+until E4 splits it, FOLLOWUPS "Split `archival_reorg_depth_blocks`"), with `SEB > D_MAX`
 const-asserted beside it and the retention prune consuming it
 (`DRS_E1_SPRUNE.md` §14, SPR-6) — the numeric now has a mechanism to be
 tested against, which is what "provisional until tested" needed. The cap

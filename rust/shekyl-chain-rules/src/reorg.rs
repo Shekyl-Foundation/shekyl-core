@@ -21,16 +21,25 @@
 //! # Where the numeric comes from
 //!
 //! `config/consensus_constants.json` already carries
-//! `archival_reorg_depth_blocks = 720` — the pass-countersignature anchor
-//! depth, whose own comment names "PDM-Q11's `D_max` reorg gate" as a
-//! consumer: a reorg deeper than that depth moves a canonical anchor hash
-//! and invalidates admitted passes. So the cap **is** that depth, derived
-//! rather than re-typed — one source in `config/`, no second 720 to drift
-//! (`PDM-Q11`'s "`D_max = 720` on the `bond_duration` precedent" is the
-//! same number for the same reason). The numeric stays PROVISIONAL until
-//! the mechanisms that consume it have run against it; **building them is
-//! what makes it testable** — which is why this constant lands with the
-//! retention prune (DRS-E1 S-PRUNE) rather than after it.
+//! `archival_reorg_depth_blocks = 720`, and this constant **inherits** it
+//! (rule 05: a value shared between jobs is inherited, never derived;
+//! record it as such until it is split). That key does two jobs with
+//! different requirements: it is the **pass-anchor depth** — how far back a
+//! requester anchors so an admitted pass survives any legal reorg, owner
+//! E4 / pass admission (`SF-D8`, `pass_anchor.rs`
+//! `PASS_ANCHOR_DEPTH_BLOCKS`), requirement *depth ≥ cap (+ L)* — and it is
+//! the **reorg cap**, owner consensus (`PDM-Q11`, `CEN-E2`), a
+//! detectability boundary on Q11's own requirement. The value was tuned
+//! for the first job (the key predates Q11; its comment names the cap as a
+//! consumer), so the two are not one number by rationale: the depth's
+//! requirement is `≥ cap`, not `= cap`. The split — the depth on its own
+//! key, `PASS_ANCHOR_DEPTH_BLOCKS ≥ reorg_cap` asserted on the production
+//! pair and at arm on every nettype, the `SEB > D_max` shape — is E4's
+//! (FOLLOWUPS, "Split `archival_reorg_depth_blocks`"); S-PRUNE reads the
+//! cap only. The numeric stays PROVISIONAL until the mechanisms that
+//! consume it have run against it; **building them is what makes it
+//! testable** — which is why this constant lands with the retention prune
+//! (DRS-E1 S-PRUNE) rather than after it.
 //!
 //! # `SEB > D_max`, asserted where the constants are
 //!
@@ -54,8 +63,8 @@ use shekyl_types::{BlockCount, BlockHeight};
 
 /// The genesis rule set's reorg cap: the deepest reorganisation a node on
 /// the issued rules is built to follow (`PDM-Q11`, shape frozen; numeric
-/// **PROVISIONAL**, derived from `archival_reorg_depth_blocks` — module
-/// docs). Consumers read the cap **in force** through
+/// **PROVISIONAL**, *inherited* from `archival_reorg_depth_blocks`, a key
+/// doing two jobs — module docs). Consumers read the cap **in force** through
 /// [`RuleSet::reorg_cap`](crate::RuleSet::reorg_cap); this constant is that
 /// field's value on `GENESIS` and the production pair's term in the
 /// `SEB > D_max` assertion below.

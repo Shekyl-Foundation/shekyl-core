@@ -377,7 +377,8 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   a capability limit (`PopBelowFloor`), never mistaken for a corrupt
   journal; the recorded floor is checked against the journal at every pop
   and boundary, and a disagreement is SI-6. `D_max` is built (720,
-  provisional, derived from the archival reorg depth — one source) with
+  provisional, inheriting `archival_reorg_depth_blocks` — a key that is also
+  the pass-anchor depth, recorded as inherited until E4 splits it) with
   `SEB > D_max` asserted at compile time, **as rule-set data**: the reorg
   cap is a field of the consensus rule set (`RuleSet::reorg_cap`; the
   genesis set carries `D_max`, a Fakechain set names its own), and the
