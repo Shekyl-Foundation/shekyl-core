@@ -239,9 +239,10 @@ pub unsafe extern "C" fn shekyl_daemon_tor_start(
 /// memory, `Flags=DiscardPK`, `PoWDefensesEnabled=1`), forwarding
 /// `virtual_port` (what peers dial) to `127.0.0.1:local_port` (the daemon's
 /// already-bound inbound listener), with `MaxStreams=max_streams` per
-/// rendezvous circuit. A Tor that rejects the proof-of-work arguments
-/// (control status 512) fails the publish. There is no second attempt
-/// without proof-of-work.
+/// rendezvous circuit. A Tor that rejects a proof-of-work argument
+/// (control status 512 or 513, and the reply names that argument) fails
+/// the publish. Any other 512 is an ordinary publish failure. There is
+/// no second attempt without proof-of-work.
 ///
 /// Outputs (NUL-terminated):
 /// - `out_service_id` (≥ 57 bytes): the 56-char service id, no `.onion`.

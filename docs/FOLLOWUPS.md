@@ -830,7 +830,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Implement 2004 byte-budget truncation continuation — the shipped requester severs a truncating responder.** Verified at source (review round of #616): `handle_response_get_objects` erases only delivered hashes, never consumes `missed_ids` (responder-filled, `cryptonote_protocol_handler.inl:1053`), and drops the peer whenever `m_requested_objects` is non-empty afterwards (`:1174-1202`) — so the ruled byte-budget responder gets disconnected on every truncated batch by today's code. The P2P-3 implementation must: *(1)* mark **deferred-by-budget** distinctly from `missed_ids`' **genuinely-unavailable** (conflation poisons availability bookkeeping); *(2)* re-request the deferred remainder; *(3)* **narrow, never delete** the not-all-returned drop — it is the withholding detector and keeps firing on any shortfall that is not budget-marked. PWC-A2's byte-budget value item is the sizing half; this is the semantics half. — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-B3
   - Target: pre-genesis
 
-- **Build the pre-channel admission D10 already rules:** a clearnet accept-rate bound before any cryptographic work, and onion-service proof-of-work on every published onion. The number waits on the measured per-connection crypto cost. There is no daemon-side Tor accept limiter.
+- **Build the clearnet accept-rate bound D10.3 rules, before any cryptographic work.** The per-connection cost is measured (C5). The rate waits on a stated CPU budget. Onion-service proof-of-work on every published onion is landed (D10.4). There is no daemon-side Tor accept limiter.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D10
   - Target: pre-genesis
 

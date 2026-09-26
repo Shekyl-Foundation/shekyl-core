@@ -308,9 +308,10 @@ impl DaemonTorControl {
     /// the zone. (If the failure was tor dying, [`Self::is_alive`] and the
     /// caller's liveness sweep observe that separately.)
     /// `pow` is explicit. The daemon passes [`OnionPow::Enabled`].
-    /// [`OnionPow::Disabled`] is a measurement arm. A status-512 reply on a
-    /// PoW publish is [`DaemonTorPublishError::PowRefused`]: this function
-    /// returns it and does not send another `ADD_ONION`.
+    /// [`OnionPow::Disabled`] is a measurement arm. A 512 or 513 whose reply
+    /// names a PoW argument is [`DaemonTorPublishError::PowRefused`]. Any
+    /// other rejection is an ordinary publish failure. This function returns
+    /// either one and does not send another `ADD_ONION`.
     pub async fn publish(
         &self,
         virtual_port: u16,
