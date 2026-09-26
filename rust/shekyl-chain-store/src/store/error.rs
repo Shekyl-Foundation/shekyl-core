@@ -178,7 +178,7 @@ impl core::error::Error for EngineError {
 /// block — the block was not judged — and not a coherence failure — the
 /// file is as it was. The third class exists so a refusal is never mapped
 /// onto either of the other two (C2-R8 §3.1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoreCannot {
     /// The file exists but carries no `schema_version` cell.
     ///
@@ -306,6 +306,34 @@ pub enum StoreCannot {
         /// The schedule this session runs.
         session: SettlementEpochBlocks,
     },
+    /// The session's undo-log retention is not strictly inside its
+    /// settlement epoch — zero, or `≥ SEB` (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md`
+    /// §3, §12). `tip − retention` has to sit above the body horizon, which
+    /// is `SEB > retention`. The body-horizon pop arm is not minted
+    /// (`store/prune.rs`); this refusal is what keeps that ordering. A
+    /// regtest override that shortens the epoch shortens the retention with
+    /// it. `SETTLEMENT_EPOCH_BLOCKS > D_MAX` is const-asserted on the
+    /// production pair (`shekyl_chain_rules::D_MAX`); this is the same
+    /// inequality on the session's, writer and reader.
+    RetentionNotInsideEpoch {
+        /// The undo-log retention the session asked for.
+        retention: shekyl_types::BlockCount,
+        /// The schedule it runs under.
+        epoch: SettlementEpochBlocks,
+    },
+    /// The session's undo-log retention is below the reorg cap of the rule
+    /// set it runs under (S-CHAIN-W SCW-7: retention `≥ D_max`, or a legal
+    /// reorg returns [`PopBelowFloor`](Self::PopBelowFloor)). Refused at
+    /// open against the cap the caller names, and by `connect` against the
+    /// set in force at every height — a Fakechain regtest runs a rule set
+    /// whose cap fits its retention, never a store field the validator
+    /// defers to (PR #861 review).
+    RetentionBelowReorgCap {
+        /// The undo-log retention the session asked for.
+        retention: shekyl_types::BlockCount,
+        /// The in-force rule set's cap.
+        reorg_cap: shekyl_types::BlockCount,
+    },
     /// A `ChainValid` judged under one rule set was handed to `connect` at
     /// a height where another is in force (S-CHAIN-W §3.1, SCW-16).
     ///
@@ -318,10 +346,14 @@ pub enum StoreCannot {
         height: u64,
         /// The rule set the verdict was minted under — the set, not its id:
         /// two Fakechain sets share `RuleSetId::GENESIS`, and the refusal
-        /// must be able to say which differed (RD-Q10).
-        judged: RuleSet,
+        /// must be able to say which differed (RD-Q10). Boxed, as
+        /// `shekyl_chain_rules::Stale::RuleSet`'s are: two sets by value
+        /// sized every `Result` in the store past clippy's 128 bytes once
+        /// `reorg_cap` joined `RuleSet` (PR #861); `StoreCannot` is `Clone`,
+        /// not `Copy`, for this box.
+        judged: Box<RuleSet>,
         /// The rule set the caller says is in force at `height`.
-        in_force: RuleSet,
+        in_force: Box<RuleSet>,
     },
     /// `pop` on a store with no block recorded.
     ChainEmpty,
@@ -509,6 +541,25 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "transaction {tx:?} output {index} has no commitment in its ct base; the store \
                  records nothing for it"
+            ),
+            Self::RetentionNotInsideEpoch { retention, epoch } => write!(
+                f,
+                "undo-log retention {} is not strictly inside the settlement epoch of {} blocks: \
+                 the retention prune needs 0 < retention < SEB (DRS_E1_SPRUNE.md §3); shorten the \
+                 retention with the epoch, or run the production pair",
+                retention.to_raw(),
+                epoch.get()
+            ),
+            Self::RetentionBelowReorgCap {
+                retention,
+                reorg_cap,
+            } => write!(
+                f,
+                "undo-log retention {} is below the in-force rule set's reorg cap of {}: a legal \
+                 reorg would meet PopBelowFloor (S-CHAIN-W SCW-7); raise the retention, or run a \
+                 Fakechain rule set whose cap fits it",
+                retention.to_raw(),
+                reorg_cap.to_raw()
             ),
             Self::SettlementEpochMismatch { pinned, session } => write!(
                 f,

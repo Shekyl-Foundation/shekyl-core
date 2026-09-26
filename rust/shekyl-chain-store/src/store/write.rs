@@ -72,6 +72,9 @@ use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{post_image, Canonical, ChainState, PropertyCell, TotalBurnedCell, UndoEntry};
 use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 
+use super::chain_reads::ReadFault;
+use super::prune::Horizons;
+
 use shekyl_chain_rules::{Corrupt, PerHeightRecord};
 use shekyl_units::AtomicUnits;
 
@@ -136,6 +139,7 @@ impl Poison {
 pub struct WriteBatch<'store, 'id> {
     txn: Option<WriteTransaction>,
     apply_policy: ApplyPolicy,
+    horizons: Horizons,
     shared: &'store Shared,
     poison: Poison,
     journal: Journal,
@@ -147,10 +151,12 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         txn: WriteTransaction,
         apply_policy: ApplyPolicy,
         shared: &'store Shared,
+        horizons: Horizons,
     ) -> Self {
         Self {
             txn: Some(txn),
             apply_policy,
+            horizons,
             shared,
             poison: Poison::default(),
             journal: Journal::default(),
@@ -174,6 +180,13 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     #[must_use]
     pub const fn apply_policy(&self) -> ApplyPolicy {
         self.apply_policy
+    }
+
+    /// The schedule and undo-log retention this batch prunes under
+    /// (`store/prune.rs`). Bound at construction like the policy.
+    #[must_use]
+    pub const fn horizons(&self) -> Horizons {
+        self.horizons
     }
 
     pub(super) fn txn(&self) -> &WriteTransaction {
@@ -202,6 +215,21 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         match e {
             StoreError::InvariantViolated(row) => self.poison.arm(row),
             other => other,
+        }
+    }
+
+    /// The batch-side policy for a classified read fault (`chain_reads`):
+    /// an invariant violation arms the fatal latch — a batch that read a
+    /// corrupt row must not commit — and an engine fault passes through.
+    /// The snapshot's policy is `ReadFault::into_plain`; this is the other
+    /// half, in one place for every surface that reads through the batch
+    /// (the alt store, the retention prune). Poison without a height hint
+    /// aborts the batch and leaves the writer live — those rows are not
+    /// chain work.
+    pub(super) fn arm_read_fault(&self, fault: ReadFault) -> StoreError {
+        match fault {
+            ReadFault::Engine(e) => e.into(),
+            ReadFault::Invariant(row) => self.arm_if_invariant(row.into()),
         }
     }
 

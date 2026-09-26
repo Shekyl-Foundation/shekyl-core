@@ -314,7 +314,7 @@ fn a_recorded_block_with_no_work_is_still_a_valid_short_chain() {
 
 #[test]
 fn cen_d7_a_fakechain_rule_set_fixes_the_target_and_forces_one_at_genesis() {
-    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7), crate::D_MAX);
     // Past the window the DAA would derive something else entirely; the
     // fixed set says 7 regardless.
     let (chain, _, _) = worked_chain(N_USIZE + 3);
@@ -377,14 +377,14 @@ fn cen_d7_no_public_network_schedule_can_name_a_fixed_target() {
 #[test]
 fn cen_d7_the_rule_set_id_is_no_longer_a_proxy_for_the_rule_set() {
     // The caveat, pinned: same id, different rules.
-    let fixed = RuleSet::fakechain(core::num::NonZeroU128::new(3).expect("non-zero"));
+    let fixed = RuleSet::fakechain(core::num::NonZeroU128::new(3), crate::D_MAX);
     assert_eq!(fixed.id(), RuleSet::GENESIS.id());
     assert_ne!(fixed, RuleSet::GENESIS);
 }
 
 #[test]
 fn cen_d7_fakechain_validate_mints_past_n() {
-    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7), crate::D_MAX);
     let (chain, _, _) = worked_chain(N_USIZE + 3);
     let candidate = crate::harness::fixture::candidate_on(&chain, Vec::new());
     let seed = crate::harness::expected_seed(&chain);

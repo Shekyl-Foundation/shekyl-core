@@ -160,7 +160,7 @@ pub const TABLE_CLASSES: &[(&str, AccumulatorClass)] = &[
     ("txpool_blob", AccumulatorClass::Excluded),
     ("txpool_meta", AccumulatorClass::Excluded),
     ("txs", AccumulatorClass::Excluded),
-    ("txs_pqc_auths", AccumulatorClass::AppendMostly),
+    ("txs_pqc_auths", AccumulatorClass::Excluded),
     ("txs_prunable", AccumulatorClass::Excluded),
     ("txs_prunable_hash", AccumulatorClass::AppendMostly),
     ("txs_pruned", AccumulatorClass::AppendMostly),

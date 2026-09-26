@@ -172,9 +172,14 @@ impl<'store> ReadSnapshot<'store> {
     }
 
     /// The transaction, for a read surface whose methods live with their
-    /// bodies (`alt_reads`) rather than in this file.
+    /// bodies (`alt_reads`, `prune`) rather than in this file.
     pub(super) fn txn(&self) -> &ReadTransaction {
         &self.txn
+    }
+
+    /// The session horizons, for a read that lives with the prune.
+    pub(super) fn horizons(&self) -> super::Horizons {
+        self.store.horizons()
     }
 
     /// Open a table for reading — the raw handle, **crate-private** (Q3,
@@ -682,10 +687,12 @@ impl ReadSnapshot<'_> {
     /// # Errors
     ///
     /// A recorded transaction missing its pruned segment or its prunable
-    /// hash row, or a `pqc_auths` segment and hash row that disagree on
-    /// presence, is **SI-7** with the table named (§7.7 legs (i)–(ii));
-    /// a present index whose `tx_id` is at or past the dense count is
-    /// **SI-9**; an undecodable row is SI-7; engine errors pass through.
+    /// hash row, or a `pqc_auths` segment without its hash row, is **SI-7**
+    /// (§7.7 legs (i)–(ii)). A hash row without its segment is
+    /// [`PqcAuths::Discarded`](super::PqcAuths::Discarded) — the retention
+    /// prune's one state for that region, not a fault. A present index
+    /// whose `tx_id` is at or past the dense count is **SI-9**; an
+    /// undecodable row is SI-7; engine errors pass through.
     pub fn tx_record(&self, hash: &TxHash) -> Result<Option<TxRecord>, StoreError> {
         tx_reads::record_at(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
     }

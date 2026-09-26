@@ -4490,6 +4490,7 @@ version = "3.1.0"
 dependencies = [
  "blake2",
  "chacha20poly1305",
+ "criterion",
  "fips203",
  "rand 0.8.6",
  "rand_core 0.6.4",
@@ -4744,6 +4745,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-timing-engine"
+version = "3.1.0"
+dependencies = [
+ "criterion",
+ "proptest",
+]
+
+[[package]]
 name = "shekyl-tor-control-client"
 version = "3.1.0"
 dependencies = [
@@ -4849,6 +4858,7 @@ dependencies = [
  "postcard",
  "postcard-schema",
  "serde",
+ "serde_json",
  "zeroize",
 ]
 

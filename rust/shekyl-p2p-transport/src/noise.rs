@@ -21,6 +21,8 @@ use rand_core::OsRng;
 #[cfg(test)]
 use rand_core::{CryptoRng, RngCore};
 use shekyl_crypto_pq::kem::{ML_KEM_768_CT_LEN, ML_KEM_768_EK_LEN};
+#[cfg(test)]
+use std::cell::Cell;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
@@ -31,6 +33,19 @@ use crate::prefix::NetworkId;
 pub const PROTOCOL_NAME: &[u8] = b"Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s";
 pub const MESSAGE1_LEN: usize = 32 + ML_KEM_768_EK_LEN;
 pub const MESSAGE2_LEN: usize = 32 + ML_KEM_768_CT_LEN + TAG_LEN + TAG_LEN;
+
+// Every responder Diffie-Hellman goes through `responder_dh`, which counts
+// the call. A malformed encapsulation key must not move the count.
+#[cfg(test)]
+thread_local! {
+    static RESPONDER_DH: Cell<u64> = const { Cell::new(0) };
+}
+
+fn responder_dh(eph: &StaticSecret, remote_e: &[u8; 32]) -> x25519_dalek::SharedSecret {
+    #[cfg(test)]
+    RESPONDER_DH.with(|count| count.set(count.get() + 1));
+    eph.diffie_hellman(&PublicKey::from(*remote_e))
+}
 
 #[derive(Debug)]
 pub(crate) enum HandshakeError {
@@ -128,10 +143,13 @@ pub(crate) struct Responder {
 }
 
 /// Responder after message 1. The next call writes message 2.
+///
+/// `remote_ek` is the encapsulation key `read_message1` already accepted.
+/// An invalid key cannot be represented here.
 pub(crate) struct ResponderReady {
     sym: Sym,
     remote_e: [u8; 32],
-    remote_ek: [u8; ML_KEM_768_EK_LEN],
+    remote_ek: ml_kem_768::EncapsKey,
 }
 
 /// Both messages are done. `INITIATOR` selects which `Split` half is send.
@@ -242,12 +260,19 @@ impl Responder {
         if message1.len() != MESSAGE1_LEN {
             return Err(HandshakeError::Length);
         }
+        let mut remote_ek_bytes = [0u8; ML_KEM_768_EK_LEN];
+        remote_ek_bytes.copy_from_slice(&message1[32..]);
+        // D10.2: the encapsulation-key range check is the third rejection,
+        // after the prefix and the length. It runs before the transcript and
+        // before the X25519 Diffie-Hellman in `finish`. The parsed key is
+        // what `ResponderReady` stores, so `finish` does not parse it again.
+        // The transcript hashes the wire bytes, not the array `try_from_bytes` takes.
+        let remote_ek = ml_kem_768::EncapsKey::try_from_bytes(remote_ek_bytes)
+            .map_err(|_| HandshakeError::Kem)?;
         let mut remote_e = [0u8; 32];
         remote_e.copy_from_slice(&message1[..32]);
-        self.sym.mix_hash(&remote_e);
-        let mut remote_ek = [0u8; ML_KEM_768_EK_LEN];
-        remote_ek.copy_from_slice(&message1[32..]);
-        self.sym.mix_hash(&remote_ek);
+        self.sym.mix_hash(&message1[..32]);
+        self.sym.mix_hash(&message1[32..]);
         let payload = self.sym.decrypt_and_hash(&[])?;
         if !payload.is_empty() {
             return Err(HandshakeError::State);
@@ -294,16 +319,15 @@ impl ResponderReady {
         let mut msg = Vec::with_capacity(MESSAGE2_LEN);
         msg.extend_from_slice(&epub);
         self.sym.mix_hash(&epub);
-        let shared = eph.diffie_hellman(&PublicKey::from(self.remote_e));
+        let shared = responder_dh(&eph, &self.remote_e);
         if !shared.was_contributory() {
             return Err(HandshakeError::Decrypt);
         }
         self.sym.mix_key(shared.as_bytes());
         #[cfg(test)]
         let ck_after_ee = Zeroizing::new(*self.sym.ck);
-        let ek = ml_kem_768::EncapsKey::try_from_bytes(self.remote_ek)
-            .map_err(|_| HandshakeError::Kem)?;
-        let (ss, ct) = ek
+        let (ss, ct) = self
+            .remote_ek
             .try_encaps_with_rng(rng)
             .map_err(|_| HandshakeError::Kem)?;
         let encrypted = self.sym.encrypt_and_hash(&ct.into_bytes())?;
@@ -430,11 +454,17 @@ mod tests {
     fn message_lengths_and_roundtrip() {
         let (ini, m1) = Initiator::new(&nid()).unwrap();
         assert_eq!(m1.len(), MESSAGE1_LEN);
+        let before = RESPONDER_DH.with(|count| count.get());
         let (resp, m2) = Responder::new(&nid())
             .read_message1(&m1)
             .unwrap()
             .write_message2()
             .unwrap();
+        assert_eq!(
+            RESPONDER_DH.with(|count| count.get()),
+            before + 1,
+            "a successful message 2 runs the responder Diffie-Hellman once"
+        );
         assert_eq!(m2.len(), MESSAGE2_LEN);
         let mut a_send = ini.read_message2(&m2).unwrap().split().0;
         let mut b_recv = resp.split().1;
@@ -491,6 +521,22 @@ mod tests {
             ready.write_message2(),
             Err(HandshakeError::Decrypt)
         ));
+    }
+
+    #[test]
+    fn a_malformed_encapsulation_key_is_rejected_before_diffie_hellman() {
+        let mut bad = vec![0u8; MESSAGE1_LEN];
+        bad[32..].fill(0xff);
+        let before = RESPONDER_DH.with(|count| count.get());
+        assert!(matches!(
+            Responder::new(&nid()).read_message1(&bad),
+            Err(HandshakeError::Kem)
+        ));
+        assert_eq!(
+            RESPONDER_DH.with(|count| count.get()),
+            before,
+            "a rejected key must not reach the responder Diffie-Hellman"
+        );
     }
 
     #[test]

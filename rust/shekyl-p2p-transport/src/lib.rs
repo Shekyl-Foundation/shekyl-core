@@ -17,6 +17,11 @@ mod noise;
 mod pipe;
 mod prefix;
 
+/// Timing hooks for the C5 Pi-4 run. Not a wire API. Built only for that bench.
+#[cfg(feature = "c5-bench")]
+#[doc(hidden)]
+pub mod c5_bench;
+
 pub use noise::{MESSAGE1_LEN, MESSAGE2_LEN, PROTOCOL_NAME};
 pub use pipe::{
     ClosedCallback, Pipe, PipeError, PipeHooks, PlainCallback, ReadyCallback, WireCallback,

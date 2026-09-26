@@ -50,7 +50,7 @@ use crate::rule_set::RuleSet;
 /// What `validate` can fail with: the view's own fault, or one of the two
 /// kinds this crate defines. Matched arm by arm — `?` on the caller's side
 /// propagates the whole enum, never a part of it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Fault<V> {
     /// The view's substrate could not answer. Opaque; the store's own
     /// error for its projection.
@@ -66,7 +66,7 @@ pub enum Fault<V> {
 }
 
 /// A premise `form` was given that the committing view refutes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stale {
     /// The seed `form` computed the longhash under is not the block id at
     /// the seed height on the chain this block is connecting onto (CEN-D3).
@@ -87,23 +87,25 @@ pub enum Stale {
     /// the id alone cannot tell `GENESIS` from `fakechain(n)`, or two
     /// different `n`.
     ///
-    /// **This arm is what sizes [`Fault`]** (112 bytes at slice 5 with
+    /// **This arm is what sized [`Fault`]** (112 bytes at slice 5 with
     /// `RuleSet` at 48): it carries two rule sets by value, so every byte
-    /// `RuleSet` gains is charged twice here. That is the first cost slice 2
-    /// Q10 has presented — making the rule set runtime-parameterised made
+    /// `RuleSet` gains was charged twice here. That is the first cost slice
+    /// 2 Q10 has presented — making the rule set runtime-parameterised made
     /// `RuleSetId` stop being a key, and anything that round-trips a rule
     /// set must carry the value. Not a reason to reverse Q10 (the
     /// fixed-difficulty lever being impossible on public nets *by type* is
-    /// worth more than a struct's width); a reason to know where the next
-    /// size problem in this crate comes from. If it ever matters, the fix is
-    /// **boxing this payload**, which keeps the by-value comparison the
-    /// Fakechain caveat requires — not shrinking `RuleSet`, and not keeping
-    /// limits off it that a schedule step could vary (slice 5 Q5, corrected).
+    /// worth more than a struct's width). It mattered when `reorg_cap`
+    /// joined the set (PR #861: `RuleSet` 56, `Fault` past clippy's 128) and
+    /// the fix is the one written here in advance — **the payload is
+    /// boxed**, which keeps the by-value comparison the Fakechain caveat
+    /// requires — not shrinking `RuleSet`, and not keeping limits off it
+    /// that a schedule step could vary (slice 5 Q5, corrected). `Fault` and
+    /// `Stale` are `Clone`, not `Copy`, for this box.
     RuleSet {
         /// What `form` was given.
-        formed_under: RuleSet,
+        formed_under: Box<RuleSet>,
         /// What `validate` was given.
-        in_force: RuleSet,
+        in_force: Box<RuleSet>,
         /// Whether `form` may be run again.
         retry: Retry,
     },

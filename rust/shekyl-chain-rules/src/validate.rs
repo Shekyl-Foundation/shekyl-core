@@ -285,8 +285,8 @@ pub fn validate<'id, V: ChainView<'id>>(
     // verdict — and the retry is bounded by the attempt the token carries.
     if formed.rule_set() != *rule_set {
         return Err(Fault::Stale(Stale::RuleSet {
-            formed_under: formed.rule_set(),
-            in_force: *rule_set,
+            formed_under: Box::new(formed.rule_set()),
+            in_force: Box::new(*rule_set),
             retry: formed.attempt().next(),
         }));
     }

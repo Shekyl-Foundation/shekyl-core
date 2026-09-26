@@ -255,7 +255,7 @@ row only `if (!attestation_witness.empty())`, and the bytes arrive on
 `block_connect_supplement`, which is zero-initialised on the ordinary connect
 path; the populated producers are p2p and verifying import. So a mined corpus
 forces no row by default, and the alt-chain counterpart at
-`blockchain.cpp:2368` is empty for the same reason.
+`blockchain.cpp:2371` is empty for the same reason.
 
 **Attaching arbitrary bytes does not work, and is a named reject shape.**
 `verify_block_attestation` (`blockchain.cpp:2126`) is a hard gate on the
@@ -463,9 +463,11 @@ widen TLB than maintain a sibling, and takes the consequence on that side.
 
 The corpus needs short epochs, and the existing lever is the
 `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override
-(`rust/shekyl-archival-retention/src/constants.rs:202` onward), which refuses
-in two typed ways: `Invalid` (`:218`) and `ArmedTooLate` — arming after the
-latch.
+(`rust/shekyl-archival-retention/src/constants.rs:230` onward), which refuses
+in three typed ways: `Invalid` (`:246` — the epoch is parsed against the
+reorg cap in force and must be strictly above it, so a short epoch lowers
+`SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` with it; S-PRUNE SPR-9),
+`InvalidReorgCap` (`:263`) and `ArmedTooLate` — arming after the latch.
 
 A gtest binary runs every test in one process, so any earlier test, fixture, or
 static initialiser that touches epoch arithmetic latches the value first and

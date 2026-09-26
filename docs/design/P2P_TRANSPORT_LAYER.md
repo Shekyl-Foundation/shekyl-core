@@ -712,6 +712,20 @@ single global handshake deadline would break on a network whose mixing
 delay is seconds. No deadline is written into this document before that
 measurement. Rule 26 B9.
 
+Pi-4 C5 run, 2026-09-26, `skl-pi` (aarch64, 4 cores), about 90 seconds:
+[`p2p_c5_pi4_20260926T005507Z.txt`](../benchmarks/p2p_c5_pi4_20260926T005507Z.txt).
+Initiator 928 µs, responder 685 µs, one rekey 5.06 µs, seal/open of
+65,535 bytes 889 µs. The responder figure is the per-connection cost
+D10.3's clearnet accept-rate bound is derived from. The bound waits on
+a stated CPU budget. No rate is written here. Deadlines are not written
+here either.
+
+One rekey is 5.06 µs against 889 µs to seal and open a 65,535-byte
+record, under one percent at that size. Fixed windows are smaller than
+that record, and the ratio grows as the window shrinks. Whether
+every-record rekey is affordable is decided with the window size from
+C9, not from this size alone.
+
 ---
 
 ## D10 — bounds before a session exists (RULED 2026-09-25)
@@ -751,10 +765,14 @@ listener, and so a connection in the gap phase.
 2. **Cheapest rejection first.** The responder checks the 8-byte prefix,
    then exact lengths, then the ML-KEM encapsulation-key range check.
    Only after all three does it run X25519 and the encapsulation.
-   `noise.rs` currently performs the X25519 Diffie-Hellman before
-   validating the encapsulation key (`ResponderReady::finish`). The key
-   check moves to `read_message1`. Every failure still closes the same
-   way: FIN after zero bytes written. Step 7 measures that.
+   *Records-was, at the 2026-09-25 pin:* `ResponderReady::finish` ran
+   the X25519 Diffie-Hellman before validating the encapsulation key.
+   **Landed:** the range check is in `read_message1`, and a malformed
+   key returns before any responder Diffie-Hellman. `ResponderReady`
+   stores the parsed key, so `finish` does not parse it again. Every
+   failure still
+   closes the same way: FIN after zero bytes written. Step 7 measures
+   that.
 
 3. **Clearnet accept rate is owned here.** This document owns the
    FOLLOWUPS row on connection admission before the channel exists. The
@@ -763,20 +781,25 @@ listener, and so a connection in the gap phase.
    inbound peers have an observable address. Whether to aggregate hosts
    by subnet is a policy question for measurement. The values come from
    the measured per-connection crypto cost against a stated CPU budget.
-   No number is written before that measurement (rule 26 B9). The bound
-   is clearnet-only: Tor inbound does no Noise work on our side.
+   No number is written before that measurement (rule 26 B9). The
+   responder side of a handshake is 685 µs on the Pi 4 (C5, 2026-09-26).
+   That is the per-connection cost. The accept-rate values still wait
+   on the stated CPU budget. The bound is clearnet-only: Tor inbound
+   does no Noise work on our side.
 
 4. **Tor is defended by Tor's proof-of-work, not by a daemon-side
    limiter.** Onion-service PoW is enabled on every onion service we
    publish: the daemon's p2p onion and the wallet's serving personas.
    PoW is a property of the service we host. Outbound clients solve a
    puzzle only when the far service escalates, at a capped cost
-   (SPIKE-F-17). At this pin the daemon does not do that:
-   `ephemeral.rs:289` builds `AddOnion` with no PoW, and `publish`
-   (`blocking.rs:146-151`) takes ports and `max_streams` only.
-   `OnionPow`'s `Default` is `Disabled` (`onion.rs:303`). The ruling
-   changes those: `publish` takes the setting explicitly and defaults
-   to `Enabled`, and the daemon's onion is published that way.
+   (SPIKE-F-17). *Records-was, at the 2026-09-25 pin:* the daemon did
+   not do that. `ephemeral.rs` built `AddOnion` with no PoW, `publish`
+   took ports and `max_streams` only, and `OnionPow`'s `Default` was
+   `Disabled`. **Landed:** `publish` takes the setting explicitly, the
+   default is `Enabled`, and the daemon's onion is published with
+   `OnionPow::Enabled`. `PowRefused` is a 512 or 513 whose reply names a
+   PoW argument. Any other 512 is an ordinary publish failure. Neither
+   is retried without PoW.
    `Disabled` stays as an explicit choice for measurement arms. The
    type's doc comment is corrected, and the crate's KAT is updated so
    the default renders `PoWDefensesEnabled=1`. If the operator's Tor
@@ -958,7 +981,11 @@ over together.
    and a later memory capture then exposes every transaction that key
    sealed. If that benchmark shows the cost is a meaningful fraction
    of seal cost, the interval is derived from the measured record
-   rates instead.
+   rates instead. C5 (2026-09-26) measured one rekey at 5.06 µs and
+   seal/open of a 65,535-byte record at 889 µs, under one percent at
+   that size. Fixed windows are smaller, so that ratio is not the
+   decision. Every-record rekey and the window size (C9) are decided
+   together. Neither is chosen in this record.
 5. **The local/remote timer split is refused** (D3).
 6. **`--tos-flag` is refused** (D3). No `setsockopt` for the Type of
    Service byte.

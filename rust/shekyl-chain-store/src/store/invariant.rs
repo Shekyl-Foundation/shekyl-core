@@ -345,11 +345,26 @@ pub enum UndoFault {
         /// The height of the journal's highest row.
         top: u64,
     },
-    /// `pop` found a block recorded at the tip and **no** journal row for
-    /// it. Nothing deletes undo rows until S-PRUNE lands (which persists
-    /// the floor it establishes), so this is a journal that does not
-    /// describe its tables, not a retention limit.
+    /// `pop` found a block recorded at the tip, the tip at or above the
+    /// persisted `undo_log_floor`, and **no** journal row for it. The
+    /// retention prune keeps every row from the floor to the tip, so this
+    /// is a journal that does not describe its tables, not a retention
+    /// limit (below the floor is `StoreCannot::PopBelowFloor`).
     NoRowForTip,
+    /// The journal's lowest row is at `first`, but the persisted
+    /// `undo_log_floor` says `floor`. The cell and the table record the
+    /// same fact — rows are contiguous from the floor to the tip — and the
+    /// cell is kept because the table cannot name the floor once every
+    /// retained row has been popped (SPR-4); whenever the table is
+    /// non-empty the two must agree, and this is the check that can fail
+    /// (rule 16). Checked at `pop` and at every boundary after rows are
+    /// retired.
+    FloorMismatch {
+        /// The journal's lowest key.
+        first: u64,
+        /// The persisted floor.
+        floor: u64,
+    },
     /// Replaying entry `index` (in write order) found its target key or
     /// member not in the state the entry left it in — absent where the
     /// entry inserted, or, for a restore, absent where it replaced.
@@ -379,8 +394,13 @@ impl core::fmt::Display for UndoFault {
                 "the journal's top row is at height {top}, not at the tip"
             ),
             Self::NoRowForTip => f.write_str(
-                "a block is recorded at the tip but the journal has no row for it (nothing prunes \
-                 undo rows yet)",
+                "a block is recorded at the tip, inside the undo retention, but the journal has \
+                 no row for it",
+            ),
+            Self::FloorMismatch { first, floor } => write!(
+                f,
+                "the journal's lowest row is at height {first} but the persisted undo floor is \
+                 {floor}"
             ),
             Self::EntryNotReversible { index } => write!(
                 f,
