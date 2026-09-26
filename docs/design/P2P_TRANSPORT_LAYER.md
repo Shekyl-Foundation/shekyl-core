@@ -1,6 +1,6 @@
 # P2P transport layer — Rust connectors in place of epee's TCP server
 
-**Status: CLOSED — Round 4, 2026-09-25. D3 RULED. D6 RULED.** The design is the spec for
+**Status: CLOSED — Round 4, 2026-09-25. D1–D15 RULED.** The design is the spec for
 implementation. Round 1 was pinned to `dev`
 `db2788d164660003948376ba369fa396c5f4c482`. Round 2 re-read that pin.
 The 11 commits `dev` gained after it are S-POOL / chain-store and do
