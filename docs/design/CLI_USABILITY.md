@@ -119,8 +119,10 @@ change.
   shape); bare `help` keeps the categorized listing.
 - `start_mining` typed with no `mine` surface present was a bare
   "Unknown command" while `USER_GUIDE.md` taught it — the motivating
-  rule-82 instance. With CU-3 the name is a live alias; the near-miss
-  diagnostics in §4 cover the rest.
+  rule-82 instance. CU-3 (2026-09-11) made the name a live alias.
+  CU-7 (2026-09-26) retired it: `start_mining`, `stop_mining`, and
+  `mining_status` diagnose and name `mine start`, `mine stop`, and
+  `mine status`, and do not run.
 
 ### CU-3 — Control mining from the wallet (daemon still hashes)
 
@@ -141,8 +143,9 @@ REPL verbs:
   address (short form per CU-4), difficulty. The daemon's
   `pow_algorithm` string is **not** rendered (operators do not need a
   protocol-algorithm name; the daemon always reports RandomX).
-- Aliases: `start_mining [threads]` / `stop_mining` / `mining_status`
-  (Monero muscle memory; also what `USER_GUIDE.md` had been teaching).
+- `start_mining`, `stop_mining`, and `mining_status` do not run
+  (CU-7, 2026-09-26). Each diagnoses and names `mine start`,
+  `mine stop`, or `mine status`.
 
 Gates, all fail-closed before any daemon call:
 
@@ -197,7 +200,7 @@ Enumerated here before code (rule 82); each path says what to run next.
 | F5 | No wallet open | `mine *` (and existing `require_open` sites) | `open <name>` / `create <name>` |
 | F6 | Already mining | `mine start` | Current thread count + `mine stop` first (daemon reports the state; the CLI relays it, no error tone) |
 | F7 | Daemon not synced | `mine start` | Refuse with height copy. The daemon will not mine until it is caught up (`CHECK_CORE_READY` / `BUSY`); there is no confirmation that can succeed. |
-| F8 | `start_mining` (or `mine`) typo'd / partial / extra args | parser | Usage diagnostic naming `mine start [threads]`, never bare "Unknown command" |
+| F8 | retired `start_mining` / `stop_mining` / `mining_status`, or a partial `mine` (CU-7, 2026-09-26: the retired line does not run) | parser | Diagnostic naming `mine start [threads]`, `mine stop`, or `mine status`; never bare "Unknown command" |
 | F9 | Password/seed TTY rules | existing `display.rs` / `--password-stdin` surfaces | Already correct; unchanged |
 
 ### CU-6 — Docs (rule 91)

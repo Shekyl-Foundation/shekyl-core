@@ -140,6 +140,9 @@ pub(crate) enum FlagKind {
     /// Present or absent.
     Switch,
     /// The next token, or `--flag=value`.
+    ///
+    /// A following `--...` token is a missing value, not the value. A value
+    /// that itself starts with `--` is written `--flag=--name`.
     Value,
     /// A value drawn from a closed set. Tab offers the set.
     OneOf(&'static [&'static str]),
@@ -588,6 +591,9 @@ pub(crate) fn split_flags<'a>(
                 FlagKind::Switch => record(flag, None, &mut switches, &mut values)?,
                 FlagKind::Value | FlagKind::OneOf(_) => {
                     let raw = args.get(index + 1).copied().unwrap_or("");
+                    if raw.is_empty() || raw.starts_with("--") {
+                        return Err(missing_flag_value(flag));
+                    }
                     let value = nonempty(flag, raw)?;
                     record(flag, Some(value), &mut switches, &mut values)?;
                     index += 1;
@@ -611,6 +617,13 @@ fn known_flag<'a>(flags: &'a [Flag], name: &str) -> Result<&'a Flag, String> {
         .iter()
         .find(|flag| flag.name == name)
         .ok_or_else(|| format!("unexpected flag {name}"))
+}
+
+fn missing_flag_value(flag: &Flag) -> String {
+    match flag.kind {
+        FlagKind::OneOf(words) => format!("{} expects {}", flag.name, words.join(", ")),
+        _ => format!("{} expects a value", flag.name),
+    }
 }
 
 fn nonempty<'a>(flag: &Flag, raw: &'a str) -> Result<&'a str, String> {

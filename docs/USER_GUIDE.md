@@ -281,7 +281,9 @@ testnet:miner>
 Type `help` for the command list grouped by subject, and `help <command>`
 for that command's arguments. Tab completes a subject, then its verbs,
 then its flags. Up-arrow recalls earlier commands. A line above the prompt
-shows the CLI version, the local time, and whether the wallet is synced.
+shows the CLI version, the local time, and wallet sync: synced, a block
+count behind, no wallet, daemon unreachable, or wallet RPC unreachable.
+A failed wallet-RPC read is not reported as a dead daemon.
 A pipe runs the same commands and stops at the first failure; pass
 `--password-file` with `--wallet`.
 
@@ -458,7 +460,7 @@ wallet and daemon sync heights.
 Basic transfer (one recipient per transaction):
 
 ```
-mainnet> transfer <amount> <address>
+mainnet> send <amount> <address>
 ```
 
 The wallet automatically constructs an FCMP++ membership proof for each
@@ -466,7 +468,8 @@ spent input, signs with both Ed25519 and ML-DSA-65 (hybrid PQC), and
 broadcasts the transaction.
 
 **Priority** controls the fee (higher priority = higher fee = faster
-confirmation): `0`–`1` economy, `2` standard, `3`+ priority.
+confirmation). `--priority` takes `economy`, `standard`, or `high`.
+The default is `standard`.
 
 ```
 mainnet> send <amount> <address> --priority standard

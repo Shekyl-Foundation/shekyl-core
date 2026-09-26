@@ -300,7 +300,7 @@ fn sync_view(rpc: &RpcSession) -> crate::status::SyncView {
             let daemon = val.get("daemon_height").and_then(serde_json::Value::as_i64);
             crate::status::classify(true, daemon, wallet)
         }
-        Err(_) => crate::status::SyncView::DaemonUnreachable,
+        Err(_) => crate::status::SyncView::WalletRpcUnreachable,
     }
 }
 

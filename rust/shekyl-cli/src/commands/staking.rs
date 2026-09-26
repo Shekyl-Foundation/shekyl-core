@@ -47,6 +47,9 @@ pub fn accept_foundation_terms(
     acknowledge: Option<&str>,
 ) -> crate::outcome::CommandResult {
     use crate::outcome::failed;
+    // The terms print before either check, and before the wallet opens.
+    // A script that already passed `--acknowledge` still has to say them.
+    println!("{}", shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING);
     if script {
         return if acknowledge == Some(FOUNDATION_PHRASE) {
             Ok(())
@@ -58,7 +61,6 @@ pub fn accept_foundation_terms(
             failed()
         };
     }
-    println!("{}", shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING);
     eprint!("Type exactly: {FOUNDATION_PHRASE}\n> ");
     let _flushed = std::io::Write::flush(&mut std::io::stderr());
     let mut typed = String::new();

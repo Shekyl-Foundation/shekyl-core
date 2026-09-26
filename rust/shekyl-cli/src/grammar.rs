@@ -23,15 +23,6 @@ pub fn parse(input: &str) -> ResolvedCommand {
     if tokens.is_empty() {
         return ResolvedCommand::Unknown { cmd: String::new() };
     }
-    if let Some(msg) = reject_removed_flags(&tokens) {
-        return diag(msg);
-    }
-    if tokens
-        .iter()
-        .any(|token| *token == "--no-confirm" || token.starts_with("--no-confirm="))
-    {
-        return diag("--no-confirm → --yes");
-    }
     if let Some(msg) = reject_removed_command(tokens[0], &tokens[1..]) {
         return diag(msg);
     }
@@ -39,11 +30,37 @@ pub fn parse(input: &str) -> ResolvedCommand {
         return diag(msg);
     }
     match catalog::walk(&tokens) {
-        Walk::Ready { id, rest } => parse_ready(id, input, rest),
+        Walk::Ready { id, rest } => {
+            if let Some(msg) = removed_flag_in_options(id, &tokens) {
+                return diag(msg);
+            }
+            parse_ready(id, input, rest)
+        }
         Walk::NeedVerb { id } => diag(catalog::need_verb(id)),
         Walk::UnknownVerb { id, word } => diag(catalog::unknown_verb(id, word)),
         Walk::Unknown { word } => ResolvedCommand::Unknown { cmd: word },
     }
+}
+
+/// Removed flags and `--no-confirm`, looked for only where a token is an
+/// option. `sign`, `verify`, and `tx note` take a free-form tail, and a
+/// word in that tail is the message, including one that looks like a flag.
+fn removed_flag_in_options(id: CommandId, tokens: &[&str]) -> Option<String> {
+    let options = match id {
+        CommandId::Sign => &tokens[..1.min(tokens.len())],
+        CommandId::Verify | CommandId::TxNote => &tokens[..3.min(tokens.len())],
+        _ => tokens,
+    };
+    if let Some(msg) = reject_removed_flags(options) {
+        return Some(msg);
+    }
+    if options
+        .iter()
+        .any(|token| *token == "--no-confirm" || token.starts_with("--no-confirm="))
+    {
+        return Some("--no-confirm → --yes".to_string());
+    }
+    None
 }
 
 #[allow(clippy::enum_glob_use)]
@@ -748,5 +765,54 @@ mod tests {
             parse("mine stop now"),
             ResolvedCommand::Diagnostic { .. }
         ));
+    }
+
+    #[test]
+    fn a_value_flag_does_not_consume_the_next_flag() {
+        match parse("address --out --full") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("expects a value"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse("address --out=--full") {
+            ResolvedCommand::Address { full, out } => {
+                assert!(!full);
+                assert_eq!(out.as_deref(), Some("--full"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_free_form_tail_keeps_flag_shaped_words() {
+        match parse("sign release --no-confirm") {
+            ResolvedCommand::Sign { message } => assert_eq!(message, "release --no-confirm"),
+            other => panic!("{other:?}"),
+        }
+        match parse("verify addr sig release --account") {
+            ResolvedCommand::Verify { message, .. } => {
+                assert_eq!(message, "release --account");
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse("tx note abc mentions --account") {
+            ResolvedCommand::SetTxNote { note, .. } => {
+                assert_eq!(note, "mentions --account");
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse("send 1 addr --no-confirm") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("--yes"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse("send 1 addr --account") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("removed flag"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

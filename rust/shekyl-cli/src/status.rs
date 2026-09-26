@@ -15,6 +15,10 @@ use time::OffsetDateTime;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncView {
     NoWallet,
+    /// `get_height` itself failed. The wallet RPC did not answer, so the
+    /// line does not name the daemon.
+    WalletRpcUnreachable,
+    /// A successful `get_height` whose `daemon_height` is null.
     DaemonUnreachable,
     Behind(u64),
     Synced,
@@ -24,6 +28,7 @@ impl SyncView {
     pub fn label(&self) -> String {
         match self {
             Self::NoWallet => "no wallet".to_owned(),
+            Self::WalletRpcUnreachable => "wallet RPC unreachable".to_owned(),
             Self::DaemonUnreachable => "daemon unreachable".to_owned(),
             Self::Behind(n) => format!("{n} blocks behind"),
             Self::Synced => "synced".to_owned(),
@@ -95,6 +100,25 @@ mod tests {
         assert!(line.contains("shekyl-cli 3.1.0"));
         assert!(line.contains("synced"));
         assert!(!format_line("3.1.0", "t", &SyncView::DaemonUnreachable).contains("synced"));
+        let wallet_rpc = format_line("3.1.0", "t", &SyncView::WalletRpcUnreachable);
+        assert!(wallet_rpc.contains("wallet RPC unreachable"));
+        assert!(!wallet_rpc.contains("daemon"));
+    }
+
+    #[test]
+    fn local_clock_still_reads_after_another_thread_exists() {
+        // `time` 0.3.47 obtains the offset with `localtime_r` on Unix and
+        // `SystemTimeToTzSpecificLocalTime` on Windows. Neither refuses
+        // because another thread exists, so the status line stays local
+        // after the self-hosted session starts its Tokio runtime. A later
+        // crate that brings the old refusal back must not relabel the
+        // clock UTC without this test failing.
+        std::thread::spawn(|| {}).join().expect("thread");
+        let clock = local_clock();
+        assert!(
+            !clock.ends_with(" UTC"),
+            "local clock fell back after a second thread: {clock}"
+        );
     }
 
     #[test]
