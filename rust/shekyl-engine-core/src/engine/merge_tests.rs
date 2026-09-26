@@ -27,7 +27,7 @@ fn make_recovered_output(seed: u8, global_index: u64) -> RecoveredWalletOutput {
     let scalar = Scalar::from_bytes_mod_order(bytes);
     let key = &scalar * ED25519_BASEPOINT_TABLE;
     let base = WalletOutput::new_for_test(
-        [seed; 32],
+        TxHash::from_bytes([seed; 32]),
         0,
         global_index,
         key,
@@ -47,14 +47,22 @@ fn empty_state() -> (LedgerBlock, LedgerIndexes) {
 #[test]
 fn apply_scan_result_accepts_birthday_anchored_start() {
     let (mut ledger, mut indexes) = empty_state();
-    let parent = [0x55; 32];
-    super::super::scan_floor::anchor_ledger_block(&mut ledger, 999, parent)
-        .expect("anchor at birthday boundary");
+    let parent = BlockHash::from_bytes([0x55; 32]);
+    super::super::scan_floor::anchor_ledger_block(
+        &mut ledger,
+        shekyl_types::BlockHeight::from_raw(999),
+        parent,
+    )
+    .expect("anchor at birthday boundary");
 
     let result = ScanResult {
-        processed_height_range: 1000..1001,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1000)
+            ..shekyl_types::BlockHeight::from_raw(1001),
         parent_hash: Some(parent),
-        block_hashes: vec![(1000, [0x66; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1000),
+            BlockHash::from_bytes([0x66; 32]),
+        )],
         new_transfers: vec![],
         spent_key_images: vec![],
         reorg_rewind: None,
@@ -63,15 +71,15 @@ fn apply_scan_result_accepts_birthday_anchored_start() {
         bond_sightings: Vec::new(),
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("birthday merge");
-    assert_eq!(ledger.height(), 1000);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(1000));
 }
 
 #[test]
 fn apply_empty_at_start_one_succeeds() {
     let (mut ledger, mut indexes) = empty_state();
-    let result = ScanResult::empty_at(1, None);
+    let result = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
     apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("empty result merges");
-    assert_eq!(ledger.height(), 0);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(0));
 }
 
 /// A `ScanResult` reaching the LedgerBlock-scoped body with sightings
@@ -82,13 +90,17 @@ fn apply_empty_at_start_one_succeeds() {
 #[test]
 fn apply_refuses_a_result_with_attached_bond_sightings() {
     let (mut ledger, mut indexes) = empty_state();
-    let mut result = ScanResult::empty_at(1, None);
-    result.processed_height_range = 1..2;
-    result.block_hashes = vec![(1, [0x11; 32])];
+    let mut result = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
+    result.processed_height_range =
+        shekyl_types::BlockHeight::from_raw(1)..shekyl_types::BlockHeight::from_raw(2);
+    result.block_hashes = vec![(
+        shekyl_types::BlockHeight::from_raw(1),
+        BlockHash::from_bytes([0x11; 32]),
+    )];
     result
         .bond_sightings
         .push(crate::scan::BondSightingObserved {
-            block_height: 1,
+            block_height: shekyl_types::BlockHeight::from_raw(1),
             slot: 0,
         });
     let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
@@ -96,18 +108,22 @@ fn apply_refuses_a_result_with_attached_bond_sightings() {
         matches!(err, RefreshError::MalformedScanResult { .. }),
         "got {err:?}"
     );
-    assert_eq!(ledger.height(), 0, "refusal must not advance the tip");
+    assert_eq!(
+        ledger.height(),
+        shekyl_types::BlockHeight::from_raw(0),
+        "refusal must not advance the tip"
+    );
 }
 
 #[test]
 fn apply_rejects_wrong_start_height() {
     let (mut ledger, mut indexes) = empty_state();
-    let result = ScanResult::empty_at(5, None);
+    let result = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(5), None);
     let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
     match err {
         RefreshError::ConcurrentMutation { wallet, result } => {
-            assert_eq!(wallet, 0);
-            assert_eq!(result, 5);
+            assert_eq!(wallet, shekyl_types::BlockHeight::from_raw(0));
+            assert_eq!(result, shekyl_types::BlockHeight::from_raw(5));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -116,7 +132,10 @@ fn apply_rejects_wrong_start_height() {
 #[test]
 fn apply_rejects_some_parent_hash_at_genesis() {
     let (mut ledger, mut indexes) = empty_state();
-    let result = ScanResult::empty_at(1, Some([0xAA; 32]));
+    let result = ScanResult::empty_at(
+        shekyl_types::BlockHeight::from_raw(1),
+        Some(BlockHash::from_bytes([0xAA; 32])),
+    );
     let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
     assert!(matches!(err, RefreshError::ConcurrentMutation { .. }));
 }
@@ -125,9 +144,23 @@ fn apply_rejects_some_parent_hash_at_genesis() {
 fn apply_advances_synced_height_for_blocks_without_events() {
     let (mut ledger, mut indexes) = empty_state();
     let result = ScanResult {
-        processed_height_range: 1..4,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(4),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32]), (3, [0x33; 32])],
+        block_hashes: vec![
+            (
+                shekyl_types::BlockHeight::from_raw(1),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(2),
+                BlockHash::from_bytes([0x22; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(3),
+                BlockHash::from_bytes([0x33; 32]),
+            ),
+        ],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -136,19 +169,32 @@ fn apply_advances_synced_height_for_blocks_without_events() {
         bond_sightings: Vec::new(),
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
-    assert_eq!(ledger.height(), 3);
-    assert_eq!(ledger.block_hash_at(1), Some(&[0x11; 32]));
-    assert_eq!(ledger.block_hash_at(2), Some(&[0x22; 32]));
-    assert_eq!(ledger.block_hash_at(3), Some(&[0x33; 32]));
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(3));
+    assert_eq!(
+        ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(1)),
+        Some(&[0x11; 32])
+    );
+    assert_eq!(
+        ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(2)),
+        Some(&[0x22; 32])
+    );
+    assert_eq!(
+        ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(3)),
+        Some(&[0x33; 32])
+    );
 }
 
 #[test]
 fn apply_detects_parent_hash_mismatch() {
     let (mut ledger, mut indexes) = empty_state();
     let first = ScanResult {
-        processed_height_range: 1..2,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -160,9 +206,13 @@ fn apply_detects_parent_hash_mismatch() {
 
     // Second batch claims a different parent hash for height 1 — must be rejected.
     let second = ScanResult {
-        processed_height_range: 2..3,
-        parent_hash: Some([0xFF; 32]),
-        block_hashes: vec![(2, [0x22; 32])],
+        processed_height_range: shekyl_types::BlockHeight::from_raw(2)
+            ..shekyl_types::BlockHeight::from_raw(3),
+        parent_hash: Some(BlockHash::from_bytes([0xFF; 32])),
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(2),
+            BlockHash::from_bytes([0x22; 32]),
+        )],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -172,16 +222,24 @@ fn apply_detects_parent_hash_mismatch() {
     };
     let err = apply_scan_result_to_state(&mut ledger, &mut indexes, second).unwrap_err();
     assert!(matches!(err, RefreshError::ConcurrentMutation { .. }));
-    assert_eq!(ledger.height(), 1, "ledger unchanged on rejection");
+    assert_eq!(
+        ledger.height(),
+        shekyl_types::BlockHeight::from_raw(1),
+        "ledger unchanged on rejection"
+    );
 }
 
 #[test]
 fn apply_accepts_matching_parent_hash() {
     let (mut ledger, mut indexes) = empty_state();
     let first = ScanResult {
-        processed_height_range: 1..2,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -192,9 +250,13 @@ fn apply_accepts_matching_parent_hash() {
     apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
 
     let second = ScanResult {
-        processed_height_range: 2..3,
-        parent_hash: Some([0x11; 32]),
-        block_hashes: vec![(2, [0x22; 32])],
+        processed_height_range: shekyl_types::BlockHeight::from_raw(2)
+            ..shekyl_types::BlockHeight::from_raw(3),
+        parent_hash: Some(BlockHash::from_bytes([0x11; 32])),
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(2),
+            BlockHash::from_bytes([0x22; 32]),
+        )],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -203,7 +265,7 @@ fn apply_accepts_matching_parent_hash() {
         bond_sightings: Vec::new(),
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("second merge ok");
-    assert_eq!(ledger.height(), 2);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(2));
 }
 
 #[test]
@@ -211,11 +273,21 @@ fn apply_ingests_detected_transfer_and_marks_spent() {
     let (mut ledger, mut indexes) = empty_state();
     let output = make_recovered_output(1, 100);
     let result = ScanResult {
-        processed_height_range: 1..3,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(3),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+        block_hashes: vec![
+            (
+                shekyl_types::BlockHeight::from_raw(1),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(2),
+                BlockHash::from_bytes([0x22; 32]),
+            ),
+        ],
         new_transfers: vec![DetectedTransfer {
-            block_height: 1,
+            block_height: shekyl_types::BlockHeight::from_raw(1),
             output,
         }],
         spent_key_images: Vec::new(),
@@ -226,7 +298,10 @@ fn apply_ingests_detected_transfer_and_marks_spent() {
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
     assert_eq!(ledger.transfers().len(), 1);
-    assert_eq!(ledger.transfers()[0].block_height, 1);
+    assert_eq!(
+        ledger.transfers()[0].block_height,
+        shekyl_types::BlockHeight::from_raw(1)
+    );
 
     // The test fixture's `RecoveredWalletOutput` carries a zeroed
     // key image (see `RecoveredWalletOutput::new_for_test`), so
@@ -239,12 +314,16 @@ fn apply_ingests_detected_transfer_and_marks_spent() {
     indexes.set_key_image(&mut ledger, 0, key_image);
 
     let result = ScanResult {
-        processed_height_range: 3..4,
-        parent_hash: Some([0x22; 32]),
-        block_hashes: vec![(3, [0x33; 32])],
+        processed_height_range: shekyl_types::BlockHeight::from_raw(3)
+            ..shekyl_types::BlockHeight::from_raw(4),
+        parent_hash: Some(BlockHash::from_bytes([0x22; 32])),
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(3),
+            BlockHash::from_bytes([0x33; 32]),
+        )],
         new_transfers: Vec::new(),
         spent_key_images: vec![KeyImageObserved {
-            block_height: 3,
+            block_height: shekyl_types::BlockHeight::from_raw(3),
             key_image,
             containing_tx_hash: shekyl_types::TxHash::from_bytes([0xDD; 32]),
         }],
@@ -255,7 +334,10 @@ fn apply_ingests_detected_transfer_and_marks_spent() {
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("spend merge ok");
     assert!(ledger.transfers()[0].spent);
-    assert_eq!(ledger.transfers()[0].spent_height, Some(3));
+    assert_eq!(
+        ledger.transfers()[0].spent_height,
+        Some(shekyl_types::BlockHeight::from_raw(3))
+    );
 }
 
 /// Cross-batch invariant pin (PERF_MERGE_INSERTION_INDICES_PREFLIGHT
@@ -274,20 +356,30 @@ fn apply_scan_result_to_state_returns_indices_of_new_transfers() {
     // 1 at h=2). Returned Vec must be the 3 freshly appended
     // indices, monotonically increasing.
     let first = ScanResult {
-        processed_height_range: 1..3,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(3),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+        block_hashes: vec![
+            (
+                shekyl_types::BlockHeight::from_raw(1),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(2),
+                BlockHash::from_bytes([0x22; 32]),
+            ),
+        ],
         new_transfers: vec![
             DetectedTransfer {
-                block_height: 1,
+                block_height: shekyl_types::BlockHeight::from_raw(1),
                 output: make_recovered_output(1, 100),
             },
             DetectedTransfer {
-                block_height: 1,
+                block_height: shekyl_types::BlockHeight::from_raw(1),
                 output: make_recovered_output(2, 101),
             },
             DetectedTransfer {
-                block_height: 2,
+                block_height: shekyl_types::BlockHeight::from_raw(2),
                 output: make_recovered_output(3, 102),
             },
         ],
@@ -306,11 +398,15 @@ fn apply_scan_result_to_state_returns_indices_of_new_transfers() {
     // previous merge's hash. Returned Vec must reflect the
     // post-prior-merge offset (start at 3, not 0).
     let second = ScanResult {
-        processed_height_range: 3..4,
-        parent_hash: Some([0x22; 32]),
-        block_hashes: vec![(3, [0x33; 32])],
+        processed_height_range: shekyl_types::BlockHeight::from_raw(3)
+            ..shekyl_types::BlockHeight::from_raw(4),
+        parent_hash: Some(BlockHash::from_bytes([0x22; 32])),
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(3),
+            BlockHash::from_bytes([0x33; 32]),
+        )],
         new_transfers: vec![DetectedTransfer {
-            block_height: 3,
+            block_height: shekyl_types::BlockHeight::from_raw(3),
             output: make_recovered_output(4, 103),
         }],
         spent_key_images: Vec::new(),
@@ -327,9 +423,13 @@ fn apply_scan_result_to_state_returns_indices_of_new_transfers() {
     // Third merge: no new transfers, just an empty bookkeeping
     // advance. Returned Vec is empty.
     let third = ScanResult {
-        processed_height_range: 4..5,
-        parent_hash: Some([0x33; 32]),
-        block_hashes: vec![(4, [0x44; 32])],
+        processed_height_range: shekyl_types::BlockHeight::from_raw(4)
+            ..shekyl_types::BlockHeight::from_raw(5),
+        parent_hash: Some(BlockHash::from_bytes([0x33; 32])),
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(4),
+            BlockHash::from_bytes([0x44; 32]),
+        )],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -349,13 +449,19 @@ fn apply_handles_reorg_rewind_before_per_height_events() {
     // Build wallet up to height 5 with one output at height 3.
     let output = make_recovered_output(2, 200);
     let first = ScanResult {
-        processed_height_range: 1..6,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(6),
         parent_hash: None,
         block_hashes: (1u64..6)
-            .map(|h| (h, [u8::try_from(h).unwrap(); 32]))
+            .map(|h| {
+                (
+                    shekyl_types::BlockHeight::from_raw(h),
+                    BlockHash::from_bytes([u8::try_from(h).unwrap(); 32]),
+                )
+            })
             .collect(),
         new_transfers: vec![DetectedTransfer {
-            block_height: 3,
+            block_height: shekyl_types::BlockHeight::from_raw(3),
             output,
         }],
         spent_key_images: Vec::new(),
@@ -365,32 +471,57 @@ fn apply_handles_reorg_rewind_before_per_height_events() {
         bond_sightings: Vec::new(),
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first ok");
-    assert_eq!(ledger.height(), 5);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(5));
     assert_eq!(ledger.transfers().len(), 1);
 
     // Reorg rewinds to fork_height = 3 (drops the height-3 output and
     // heights ≥ 3), then re-ingests heights 3..6 with new hashes.
     let new_output = make_recovered_output(3, 201);
     let second = ScanResult {
-        processed_height_range: 3..6,
-        parent_hash: Some([2u8; 32]),
-        block_hashes: vec![(3, [0xA3; 32]), (4, [0xA4; 32]), (5, [0xA5; 32])],
+        processed_height_range: shekyl_types::BlockHeight::from_raw(3)
+            ..shekyl_types::BlockHeight::from_raw(6),
+        parent_hash: Some(BlockHash::from_bytes([2u8; 32])),
+        block_hashes: vec![
+            (
+                shekyl_types::BlockHeight::from_raw(3),
+                BlockHash::from_bytes([0xA3; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(4),
+                BlockHash::from_bytes([0xA4; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(5),
+                BlockHash::from_bytes([0xA5; 32]),
+            ),
+        ],
         new_transfers: vec![DetectedTransfer {
-            block_height: 4,
+            block_height: shekyl_types::BlockHeight::from_raw(4),
             output: new_output,
         }],
         spent_key_images: Vec::new(),
-        reorg_rewind: Some(ReorgRewind { fork_height: 3 }),
+        reorg_rewind: Some(ReorgRewind {
+            fork_height: shekyl_types::BlockHeight::from_raw(3),
+        }),
         block_leaves: Vec::new(),
         block_curve_tree_roots: Vec::new(),
         bond_sightings: Vec::new(),
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("reorg ok");
-    assert_eq!(ledger.height(), 5);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(5));
     assert_eq!(ledger.transfers().len(), 1);
-    assert_eq!(ledger.transfers()[0].block_height, 4);
-    assert_eq!(ledger.block_hash_at(3), Some(&[0xA3; 32]));
-    assert_eq!(ledger.block_hash_at(4), Some(&[0xA4; 32]));
+    assert_eq!(
+        ledger.transfers()[0].block_height,
+        shekyl_types::BlockHeight::from_raw(4)
+    );
+    assert_eq!(
+        ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(3)),
+        Some(&[0xA3; 32])
+    );
+    assert_eq!(
+        ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(4)),
+        Some(&[0xA4; 32])
+    );
 }
 
 #[test]
@@ -398,9 +529,13 @@ fn apply_rejects_short_block_hashes_as_malformed() {
     // Range [1..3) demands two entries; only one supplied.
     let (mut ledger, mut indexes) = empty_state();
     let result = ScanResult {
-        processed_height_range: 1..3,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(3),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -418,9 +553,19 @@ fn apply_rejects_duplicate_block_hash_height() {
     // would silently overwrite without the duplicate check.
     let (mut ledger, mut indexes) = empty_state();
     let result = ScanResult {
-        processed_height_range: 1..3,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(3),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (1, [0x99; 32])],
+        block_hashes: vec![
+            (
+                shekyl_types::BlockHeight::from_raw(1),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(1),
+                BlockHash::from_bytes([0x99; 32]),
+            ),
+        ],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -446,7 +591,10 @@ fn index_block_leaves_rejects_duplicate_height() {
     // silently keep the last and feed the curve tree an unintended leaf
     // set; the explicit check surfaces it as `MalformedScanResult` (O5
     // untrusted-`ScanResult` defense, mirroring the `block_hashes` check).
-    let dup = vec![(4u64, Vec::new()), (4u64, Vec::new())];
+    let dup = vec![
+        (shekyl_types::BlockHeight::from_raw(4), Vec::new()),
+        (shekyl_types::BlockHeight::from_raw(4), Vec::new()),
+    ];
     let err = index_block_leaves(dup).unwrap_err();
     match err {
         RefreshError::MalformedScanResult { reason } => {
@@ -461,7 +609,11 @@ fn index_block_leaves_rejects_duplicate_height() {
 
 #[test]
 fn index_block_leaves_accepts_distinct_heights() {
-    let ok = vec![(1u64, Vec::new()), (2u64, Vec::new()), (3u64, Vec::new())];
+    let ok = vec![
+        (shekyl_types::BlockHeight::from_raw(1), Vec::new()),
+        (shekyl_types::BlockHeight::from_raw(2), Vec::new()),
+        (shekyl_types::BlockHeight::from_raw(3), Vec::new()),
+    ];
     let map = index_block_leaves(ok).expect("distinct heights index cleanly");
     assert_eq!(map.len(), 3);
 }
@@ -475,12 +627,18 @@ fn apply_rejects_reorg_fork_height_zero_as_malformed() {
     // `handle_reorg(.., 0)` (O5 untrusted-`ScanResult` defense).
     let (mut ledger, mut indexes) = empty_state();
     let result = ScanResult {
-        processed_height_range: 0..1,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(0)
+            ..shekyl_types::BlockHeight::from_raw(1),
         parent_hash: None,
-        block_hashes: vec![(0, [0x00; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(0),
+            BlockHash::from_bytes([0x00; 32]),
+        )],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
-        reorg_rewind: Some(ReorgRewind { fork_height: 0 }),
+        reorg_rewind: Some(ReorgRewind {
+            fork_height: shekyl_types::BlockHeight::from_raw(0),
+        }),
         block_leaves: Vec::new(),
         block_curve_tree_roots: Vec::new(),
         bond_sightings: Vec::new(),
@@ -502,9 +660,19 @@ fn apply_rejects_out_of_range_block_hash() {
     // Range [1..3) but a block_hashes entry is at height 5.
     let (mut ledger, mut indexes) = empty_state();
     let result = ScanResult {
-        processed_height_range: 1..3,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(3),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (5, [0x55; 32])],
+        block_hashes: vec![
+            (
+                shekyl_types::BlockHeight::from_raw(1),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(5),
+                BlockHash::from_bytes([0x55; 32]),
+            ),
+        ],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -522,11 +690,21 @@ fn apply_rejects_out_of_range_transfer() {
     let (mut ledger, mut indexes) = empty_state();
     let output = make_recovered_output(4, 400);
     let result = ScanResult {
-        processed_height_range: 1..3,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(3),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+        block_hashes: vec![
+            (
+                shekyl_types::BlockHeight::from_raw(1),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(2),
+                BlockHash::from_bytes([0x22; 32]),
+            ),
+        ],
         new_transfers: vec![DetectedTransfer {
-            block_height: 7,
+            block_height: shekyl_types::BlockHeight::from_raw(7),
             output,
         }],
         spent_key_images: Vec::new(),
@@ -544,12 +722,22 @@ fn apply_rejects_out_of_range_key_image() {
     // Range [1..3) but a key image claims height 9.
     let (mut ledger, mut indexes) = empty_state();
     let result = ScanResult {
-        processed_height_range: 1..3,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(3),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+        block_hashes: vec![
+            (
+                shekyl_types::BlockHeight::from_raw(1),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(2),
+                BlockHash::from_bytes([0x22; 32]),
+            ),
+        ],
         new_transfers: Vec::new(),
         spent_key_images: vec![KeyImageObserved {
-            block_height: 9,
+            block_height: shekyl_types::BlockHeight::from_raw(9),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xCC; 32]),
             containing_tx_hash: shekyl_types::TxHash::from_bytes([0xDD; 32]),
         }],
@@ -568,9 +756,13 @@ fn apply_rejects_events_against_empty_range() {
     // says an empty range carries no events.
     let (mut ledger, mut indexes) = empty_state();
     let result = ScanResult {
-        processed_height_range: 1..1,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(1),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -589,6 +781,7 @@ use std::collections::HashMap;
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
 
 use super::populate_engine_handle_fields;
+use shekyl_types::{BlockHash, TxHash};
 
 fn ciphertext_for_seed(seed: u8) -> HybridCiphertext {
     let mut x25519 = [0u8; 32];
@@ -614,11 +807,15 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     let internal_idx = output.wallet_output().index_in_transaction();
 
     let result = ScanResult {
-        processed_height_range: 1..2,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: vec![DetectedTransfer {
-            block_height: 1,
+            block_height: shekyl_types::BlockHeight::from_raw(1),
             output,
         }],
         spent_key_images: Vec::new(),
@@ -634,7 +831,10 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     let td = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
+        .find(|t| {
+            t.tx_hash == tx_hash
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
+        })
         .expect("merged transfer present");
     assert!(td.source_ciphertext.is_none());
     assert!(td.output_handle.is_none());
@@ -642,14 +842,23 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     let view_secret = [0x55u8; 32];
     let ct = ciphertext_for_seed(0xAA);
     let mut residue = HashMap::new();
-    residue.insert((tx_hash, internal_idx), ct.clone());
+    residue.insert(
+        (
+            tx_hash,
+            shekyl_types::OutputIndexInTx::from_raw(internal_idx),
+        ),
+        ct.clone(),
+    );
 
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
     let td = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
+        .find(|t| {
+            t.tx_hash == tx_hash
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
+        })
         .expect("merged transfer still present");
     let stored_ct = td
         .source_ciphertext
@@ -659,7 +868,7 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     assert_eq!(stored_ct.ml_kem, ct.ml_kem);
 
     let stored_handle = td.output_handle.as_ref().expect("output_handle set");
-    let expected_handle = derive_output_handle(&view_secret, &tx_hash, internal_idx);
+    let expected_handle = derive_output_handle(&view_secret, tx_hash.as_bytes(), internal_idx);
     assert_eq!(*stored_handle, expected_handle);
 }
 
@@ -676,16 +885,20 @@ fn populate_engine_handle_fields_skips_unmatched_transfers() {
     let unmatched_idx = unmatched.wallet_output().index_in_transaction();
 
     let result = ScanResult {
-        processed_height_range: 1..2,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: vec![
             DetectedTransfer {
-                block_height: 1,
+                block_height: shekyl_types::BlockHeight::from_raw(1),
                 output: matched,
             },
             DetectedTransfer {
-                block_height: 1,
+                block_height: shekyl_types::BlockHeight::from_raw(1),
                 output: unmatched,
             },
         ],
@@ -699,13 +912,22 @@ fn populate_engine_handle_fields_skips_unmatched_transfers() {
 
     let view_secret = [0x77u8; 32];
     let mut residue = HashMap::new();
-    residue.insert((matched_tx, matched_idx), ciphertext_for_seed(0x01));
+    residue.insert(
+        (
+            matched_tx,
+            shekyl_types::OutputIndexInTx::from_raw(matched_idx),
+        ),
+        ciphertext_for_seed(0x01),
+    );
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
     let m = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &matched_tx && t.internal_output_index == matched_idx)
+        .find(|t| {
+            t.tx_hash == matched_tx
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(matched_idx)
+        })
         .expect("matched transfer present");
     assert!(m.source_ciphertext.is_some());
     assert!(m.output_handle.is_some());
@@ -713,7 +935,10 @@ fn populate_engine_handle_fields_skips_unmatched_transfers() {
     let u = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &unmatched_tx && t.internal_output_index == unmatched_idx)
+        .find(|t| {
+            t.tx_hash == unmatched_tx
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(unmatched_idx)
+        })
         .expect("unmatched transfer present");
     assert!(u.source_ciphertext.is_none());
     assert!(u.output_handle.is_none());
@@ -728,11 +953,15 @@ fn populate_engine_handle_fields_is_idempotent() {
     let tx_hash = output.wallet_output().transaction();
     let internal_idx = output.wallet_output().index_in_transaction();
     let result = ScanResult {
-        processed_height_range: 1..2,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: vec![DetectedTransfer {
-            block_height: 1,
+            block_height: shekyl_types::BlockHeight::from_raw(1),
             output,
         }],
         spent_key_images: Vec::new(),
@@ -746,7 +975,13 @@ fn populate_engine_handle_fields_is_idempotent() {
     let view_secret = [0xAAu8; 32];
     let ct1 = ciphertext_for_seed(0x33);
     let mut residue = HashMap::new();
-    residue.insert((tx_hash, internal_idx), ct1.clone());
+    residue.insert(
+        (
+            tx_hash,
+            shekyl_types::OutputIndexInTx::from_raw(internal_idx),
+        ),
+        ct1.clone(),
+    );
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
     // Second call with a different ciphertext for the same key
@@ -755,13 +990,22 @@ fn populate_engine_handle_fields_is_idempotent() {
     // Both fields populated by call 1 ⇒ both skipped by call 2.
     let ct2 = ciphertext_for_seed(0xBB);
     let mut residue2 = HashMap::new();
-    residue2.insert((tx_hash, internal_idx), ct2);
+    residue2.insert(
+        (
+            tx_hash,
+            shekyl_types::OutputIndexInTx::from_raw(internal_idx),
+        ),
+        ct2,
+    );
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue2, &inserted);
 
     let td = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
+        .find(|t| {
+            t.tx_hash == tx_hash
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
+        })
         .expect("merged transfer present");
     let stored_ct = td
         .source_ciphertext
@@ -791,16 +1035,20 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let tx_hash_b = output_b.wallet_output().transaction();
     let internal_idx_b = output_b.wallet_output().index_in_transaction();
     let result = ScanResult {
-        processed_height_range: 1..2,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: vec![
             DetectedTransfer {
-                block_height: 1,
+                block_height: shekyl_types::BlockHeight::from_raw(1),
                 output: output_a,
             },
             DetectedTransfer {
-                block_height: 1,
+                block_height: shekyl_types::BlockHeight::from_raw(1),
                 output: output_b,
             },
         ],
@@ -819,11 +1067,14 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let sentinel_ct = ciphertext_for_seed(0xEE);
     let sentinel_handle = derive_output_handle(&[0xCC; 32], &[0xCC; 32], 0xCC);
     for td in &mut ledger.transfers {
-        if td.tx_hash.as_bytes() == &tx_hash_a && td.internal_output_index == internal_idx_a {
+        if td.tx_hash == tx_hash_a
+            && td.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx_a)
+        {
             // Transfer A: source_ciphertext pre-populated, output_handle still None.
             td.source_ciphertext = Some(sentinel_ct.clone());
             td.output_handle = None;
-        } else if td.tx_hash.as_bytes() == &tx_hash_b && td.internal_output_index == internal_idx_b
+        } else if td.tx_hash == tx_hash_b
+            && td.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx_b)
         {
             // Transfer B: output_handle pre-populated, source_ciphertext still None.
             td.source_ciphertext = None;
@@ -835,14 +1086,30 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let real_ct_a = ciphertext_for_seed(0x55);
     let real_ct_b = ciphertext_for_seed(0x66);
     let mut residue = HashMap::new();
-    residue.insert((tx_hash_a, internal_idx_a), real_ct_a.clone());
-    residue.insert((tx_hash_b, internal_idx_b), real_ct_b.clone());
+    residue.insert(
+        (
+            tx_hash_a,
+            shekyl_types::OutputIndexInTx::from_raw(internal_idx_a),
+        ),
+        real_ct_a.clone(),
+    );
+    residue.insert(
+        (
+            tx_hash_b,
+            shekyl_types::OutputIndexInTx::from_raw(internal_idx_b),
+        ),
+        real_ct_b.clone(),
+    );
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
     let td_a = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash_a && t.internal_output_index == internal_idx_a)
+        .find(|t| {
+            t.tx_hash == tx_hash_a
+                && t.internal_output_index
+                    == shekyl_types::OutputIndexInTx::from_raw(internal_idx_a)
+        })
         .expect("transfer A present");
     // A: source_ciphertext kept (sentinel, not real_ct_a); output_handle filled.
     let stored_ct_a = td_a
@@ -853,7 +1120,7 @@ fn populate_engine_handle_fields_respects_partial_population() {
         stored_ct_a.x25519, sentinel_ct.x25519,
         "pre-populated source_ciphertext must not be overwritten"
     );
-    let derived_handle_a = derive_output_handle(&view_secret, &tx_hash_a, internal_idx_a);
+    let derived_handle_a = derive_output_handle(&view_secret, tx_hash_a.as_bytes(), internal_idx_a);
     assert_eq!(
         td_a.output_handle.expect("output_handle filled"),
         derived_handle_a,
@@ -863,7 +1130,11 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let td_b = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash_b && t.internal_output_index == internal_idx_b)
+        .find(|t| {
+            t.tx_hash == tx_hash_b
+                && t.internal_output_index
+                    == shekyl_types::OutputIndexInTx::from_raw(internal_idx_b)
+        })
         .expect("transfer B present");
     // B: output_handle kept (sentinel, not derived); source_ciphertext filled.
     assert_eq!(
@@ -919,13 +1190,17 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
         .map(|i| make_recovered_output(0xA0, i + 100))
         .collect();
     let first = ScanResult {
-        processed_height_range: 1..2,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: prior_outputs
             .into_iter()
             .map(|output| DetectedTransfer {
-                block_height: 1,
+                block_height: shekyl_types::BlockHeight::from_raw(1),
                 output,
             })
             .collect(),
@@ -953,11 +1228,15 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
     let new_tx = new_output.wallet_output().transaction();
     let new_idx = new_output.wallet_output().index_in_transaction();
     let second = ScanResult {
-        processed_height_range: 2..3,
-        parent_hash: Some([0x11; 32]),
-        block_hashes: vec![(2, [0x22; 32])],
+        processed_height_range: shekyl_types::BlockHeight::from_raw(2)
+            ..shekyl_types::BlockHeight::from_raw(3),
+        parent_hash: Some(BlockHash::from_bytes([0x11; 32])),
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(2),
+            BlockHash::from_bytes([0x22; 32]),
+        )],
         new_transfers: vec![DetectedTransfer {
-            block_height: 2,
+            block_height: shekyl_types::BlockHeight::from_raw(2),
             output: new_output,
         }],
         spent_key_images: Vec::new(),
@@ -973,7 +1252,10 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
 
     let view_secret = [0xCCu8; 32];
     let mut residue = HashMap::new();
-    residue.insert((new_tx, new_idx), ciphertext_for_seed(0xB0));
+    residue.insert(
+        (new_tx, shekyl_types::OutputIndexInTx::from_raw(new_idx)),
+        ciphertext_for_seed(0xB0),
+    );
     // Prior-key residue entries: read the ACTUAL prior
     // transfers' `(tx_hash, internal_output_index)` keys from
     // the ledger after the first merge, rather than relying
@@ -985,11 +1267,11 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
     // gets a residue entry. Under O(n), every prior matches
     // and gets populated; under O(k), priors are never
     // visited so the residue match is unreachable.
-    let prior_keys: Vec<([u8; 32], u64)> = ledger
+    let prior_keys: Vec<(shekyl_types::TxHash, shekyl_types::OutputIndexInTx)> = ledger
         .transfers()
         .iter()
         .take(100)
-        .map(|td| (td.tx_hash.to_bytes(), td.internal_output_index))
+        .map(|td| (td.tx_hash, td.internal_output_index))
         .collect();
     for (i, key) in prior_keys.iter().enumerate() {
         residue.insert(*key, ciphertext_for_seed(u8::try_from(i & 0xFF).unwrap()));
@@ -1028,7 +1310,7 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
     assert!(new.output_handle.is_some());
     assert_eq!(
         new.output_handle.expect("output_handle filled"),
-        derive_output_handle(&view_secret, &new_tx, new_idx),
+        derive_output_handle(&view_secret, new_tx.as_bytes(), new_idx),
     );
 }
 
@@ -1039,11 +1321,15 @@ fn populate_engine_handle_fields_no_op_on_empty_residue() {
     let tx_hash = output.wallet_output().transaction();
     let internal_idx = output.wallet_output().index_in_transaction();
     let result = ScanResult {
-        processed_height_range: 1..2,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: vec![DetectedTransfer {
-            block_height: 1,
+            block_height: shekyl_types::BlockHeight::from_raw(1),
             output,
         }],
         spent_key_images: Vec::new(),
@@ -1055,13 +1341,17 @@ fn populate_engine_handle_fields_no_op_on_empty_residue() {
     let inserted = apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
 
     let view_secret = [0u8; 32];
-    let residue: HashMap<([u8; 32], u64), HybridCiphertext> = HashMap::new();
+    let residue: HashMap<(shekyl_types::TxHash, shekyl_types::OutputIndexInTx), HybridCiphertext> =
+        HashMap::new();
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
     let td = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
+        .find(|t| {
+            t.tx_hash == tx_hash
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
+        })
         .expect("merged transfer present");
     assert!(td.source_ciphertext.is_none());
     assert!(td.output_handle.is_none());

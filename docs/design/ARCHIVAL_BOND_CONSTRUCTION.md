@@ -15,6 +15,30 @@ contract construction must satisfy; this side does not.
 
 ## 1. Why this doc exists
 
+> **Correction 2026-09-11 — the paragraph below is a record of 2026-07, not a
+> description of the tree. All four things it says do not exist now do.** It reads
+> "Construction side genuinely does not exist yet -- there is no builder, no
+> `TxRequest` variant, no `bond_credit` handling in the RCT balance, and no
+> `P`-identity derivation." Each clause is refuted on `dev`:
+>
+> | clause | where it lives now |
+> | --- | --- |
+> | builder | `rust/shekyl-archival-bond-builder/` (crate + `tests/`), and `rust/shekyl-engine-core/src/engine/bond_assembly.rs` |
+> | `TxRequest` | `rust/shekyl-engine-core/src/engine/pending.rs:299` |
+> | `bond_credit` in the balance | `rust/shekyl-archival-retention/src/bond_ct_balance.rs` |
+> | `P`-identity derivation | `rust/shekyl-archival-retention/src/id.rs:20` `p_canonical_id_from_hybrid_pubkey`, with a KAT at `rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs` |
+>
+> **This document already says so, 560 lines further down:** §"Status" records
+> **DISCHARGED 2026-08-16** by the CompleteTree activation round — *"The builder
+> landed."* So the file has contradicted itself about whether its own subject
+> exists, and the half a reader meets first is the wrong one.
+>
+> The paragraph is **banner-corrected rather than rewritten**: it is the genuine
+> record of the motivating state, and §1 is titled "Why this doc exists" — the
+> reasoning for opening the round is not made wrong by the round succeeding. What
+> was wrong is that it carried no date while sitting where it is read first. Follow
+> the Status section for landing state; this section is history.
+
 The archival bond record format is **genesis-frozen** and **permanent**: a
 bond posted at genesis is keyed by `p_canonical_id` and its `bond_spend_pk` is
 immutable for the record's life (`ARCHIVAL_BOND_GATE4.md` §4.1). Construction
@@ -31,7 +55,7 @@ unbuilt, permanent code.
 
 ### In scope (this design)
 
-- The full architecture for all four `BondPostKind`s (`JoinMarket`, `Rebond`,
+- The full architecture for all four `BondPostKind`s (`JoinMarket`, `Reinstate`,
   `Release`, `HoldingsUpdate`), so the JoinMarket-first implementation does not
   paint into a corner.
 - The `archival_p` key-derivation primitive (`P` identity + `bond_spend_pk`),
@@ -44,7 +68,7 @@ JoinMarket is the only kind with a complete verify counterpart today
 ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)
 `verify_join_market_bond_post`;
 [`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_ct_balance.rs)).
-Rebond / Release / HoldingsUpdate have wire types
+Reinstate / Release / HoldingsUpdate have wire types
 ([`bond_wire.rs`](../../rust/shekyl-archival-retention/src/bond_wire.rs)
 `BondPostKind`) but **no verify implementation** ("V3.0 open"). Their
 construction is **provisional** until paired with the verify-side work -- see
@@ -57,7 +81,7 @@ Section 9.
   and it is named here as a sequenced dependency, not buried as an out-of-scope
   bullet.
 - Off-chain announce/backing-presentation wire (separate gate-6 §7 item).
-- HoldingsUpdate / Rebond / Release verify-side (their own PRs).
+- HoldingsUpdate / Reinstate / Release verify-side (their own PRs).
 
 ## 3. The honest milestone for this unit
 
@@ -405,7 +429,7 @@ the standard weight-priced floor fee; there is no fee-less class (gate-4
    way; the type is origin-edge hygiene at the wallet layer, the coin-pool
    sibling of `P`'s dedicated Arti client (§9's transport split).
 2. **Exit-fee reserve.** Mid-life constructors (claim fee inputs, both
-   `HoldingsUpdate` directions, `Rebond`) never spend the pool below
+   `HoldingsUpdate` directions, `Reinstate`) never spend the pool below
    `EXIT_FEE_RESERVE_ATOMIC` — a pessimistically-margined weight-priced
    `Release` fee — so the terminal post is always fundable. Spend-time
    invariant only; the cover **draw** is never consulted or narrowed by it
@@ -468,7 +492,7 @@ submit fact set (2026-08-29), and PR-B's dispatch seam + daemon walk,
 each narrowing without lifting — was **lifted by PR-C (2026-09-03)**:
 `StakeFacade::unstake` drives `Engine::submit_release` from wallet-RPC and
 the CLI, and `collect_unstaked`'s terminal sweep completes the arc
-(reconciliation in `wallet_rpc.yaml`'s PR-C census). **`Rebond` and `HoldingsUpdate` remain
+(reconciliation in `wallet_rpc.yaml`'s PR-C census). **`Reinstate` and `HoldingsUpdate` remain
 provisional** — both have verify arms, neither has a producer — and for them the
 paragraph below stands unchanged: construction is **a hypothesis validated only
 on paper**, **reopenable** when that work begins, and the deferred architecture
@@ -485,12 +509,12 @@ exists to track.
 | JoinMarket | `P_pubkey` | `verify_join_market_bond_post` | PR 1 (KAT-validated) |
 | HoldingsUpdate add | `P_pubkey` | `verify_holdings_update_add` | provisional — no producer |
 | HoldingsUpdate drop | `bond_spend_pk` | `verify_holdings_update_drop` | provisional — no producer (operator-guide footguns live here) |
-| Rebond | `P_pubkey` | `verify_rebond_bond_post` | provisional — no producer |
+| Reinstate | `P_pubkey` | `verify_reinstate_bond_post` | provisional — no producer |
 | Release | `bond_spend_pk` | `verify_release_bond_post` | PR-P4 — `build_release_vin` (KAT-validated) + `AssembleRelease` (full tx; auth under `bond_spend_pk`). **Built, not reachable:** no RPC method or CLI verb; slice 3's engine walk has landed and did not lift it |
 
 The `Auth key` column is unchanged and remains correct: `Release` and
 `HoldingsUpdate drop` authorize under the record's committed `bond_spend_pk`,
-which consensus pins in `archival_debit_auth_pin` — never the identity key. SA-2b
+which consensus pins in `archival_cold_authority_pin` (the composed gate; `requires_cold_authority` selects, `debit_auth_pin` compares) — never the identity key. SA-2b
 moved that key off the vin, not out of the requirement.
 
 ### 9.1 `CompleteTree` is a foundation-only constructor, structurally (naive-optimizer footgun)

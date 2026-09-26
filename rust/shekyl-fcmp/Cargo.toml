@@ -47,6 +47,13 @@ serde.workspace = true
 
 [dev-dependencies]
 rand = "0.8"
+# `CurveTreeRoot::EMPTY` is pinned as bytes in `shekyl-types` so the store
+# can name the empty tree without this crate; `tests/empty_root_kat.rs` is
+# what stops that pin drifting from `SELENE_HASH_INIT` (S-CHAIN-W §3.4).
+shekyl-types = { path = "../shekyl-types" }
+# `PqcKeyScalar`'s manual `Deserialize` is a refuse-don't-reduce boundary
+# check; its refusal test exercises it through a real serde format.
+serde_json = "1"
 modular-frost = { version = "0.11", features = ["ed25519", "tests"] }
 dkg-pedpop = "0.6"
 transcript = { package = "flexible-transcript", version = "0.3", features = ["recommended"] }

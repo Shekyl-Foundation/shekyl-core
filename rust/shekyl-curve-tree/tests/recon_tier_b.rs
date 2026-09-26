@@ -25,10 +25,10 @@
 
 use serde_json::Value;
 use shekyl_curve_tree::recon::{
-    assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, per_output_h_pqc,
-    root_from_scalars, TxOutputs,
+    assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
+    TxOutputs,
 };
-use shekyl_curve_tree::{OutputIdentity, TargetKind};
+use shekyl_curve_tree::{BlockHeight, CommitmentBytes, OneTimePubkey, OutputIdentity, TargetKind};
 
 const FIXTURE_B: &str = include_str!("fixtures/ct2_tier_b.json");
 
@@ -77,18 +77,24 @@ struct BlockFix {
 
 fn decode_tx(t: &Value) -> TxFix {
     let blob = decode_hex(t["pqc_leaf_hashes"].as_str().expect("0x07 blob hex"));
-    // The recon-owned half of the daemon's extract_leaf_hashes (%32 check +
-    // per-output slice).
-    let leaf_hashes = extract_leaf_hashes(Some(&blob));
+    // The recon-owned slice of the `0x07` payload: one 64-byte `CM ‖ record`
+    // entry per output; the leaf commitment point is its first 32 bytes.
+    let n_outputs = t["outputs"].as_array().expect("outputs array").len();
+    let commitments = extract_leaf_commitments(Some(&blob), n_outputs).expect("0x07 entries");
     let outputs = t["outputs"]
         .as_array()
         .expect("outputs array")
         .iter()
-        .enumerate()
-        .map(|(i, o)| OutputIdentity {
-            output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
-            commitment: o["commitment"].as_str().map(decode_hex32),
-            h_pqc: per_output_h_pqc(&leaf_hashes, i),
+        .zip(commitments)
+        .map(|(o, cm)| OutputIdentity {
+            output_key: OneTimePubkey::from_bytes(decode_hex32(
+                o["output_key"].as_str().expect("O hex"),
+            )),
+            commitment: o["commitment"]
+                .as_str()
+                .map(decode_hex32)
+                .map(CommitmentBytes::from_bytes),
+            cm,
             target: target_kind(o["target"].as_str().expect("target")),
         })
         .collect();
@@ -149,8 +155,14 @@ fn reconstruct_roots(blocks: &[BlockFix]) -> Vec<[u8; 32]> {
                 outputs: &t.outputs,
             })
             .collect();
-        gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries);
-        let drained_through = blk.height.saturating_sub(1);
+        gindex = collect_block_leaves(
+            BlockHeight::from_raw(blk.height),
+            &txs,
+            gindex,
+            &mut entries,
+        )
+        .expect("KAT chain has no bad published point");
+        let drained_through = BlockHeight::from_raw(blk.height.saturating_sub(1));
         let scalars = assemble_leaf_stream(&entries, drained_through);
         roots.push(root_from_scalars(&scalars));
     }
@@ -224,10 +236,10 @@ fn reorg_with_spend_mixed_leaves() {
 #[test]
 #[ignore = "Tier B: needs a hand-crafted C++ daemon duplicate/malformed 0x07 oracle (no regtest)"]
 fn scanner_extra_0x07_matches_daemon_on_adversarial_extra() {
-    // Scanner parse is `shekyl_scanner::extra::Extra`; validate stage is
-    // `recon::extract_leaf_hashes` (the %32 check). Cross-crate seam — no scanner
-    // dep here.
-    let hashes = extract_leaf_hashes(Some(&[0u8; 33]));
-    std::hint::black_box(hashes);
+    // Scanner parse is `shekyl_scanner::extra::Extra`; the slice stage is
+    // `recon::extract_leaf_commitments` (the %64 check, now an error rather
+    // than a zero fallback). Cross-crate seam — no scanner dep here.
+    let entries = extract_leaf_commitments(Some(&[0u8; 65]), 1);
+    assert!(std::hint::black_box(entries).is_err());
     todo!("daemon duplicate/malformed 0x07 oracle pending");
 }

@@ -307,7 +307,7 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
         // length on JoinMarket, so an empty key here is unreachable through
         // ANY parse path — including pool/blob reloads via boost archives.
         put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key,
-          bond.bond_spend_pk, join_epoch,
+          bond.bond_spend_pk, bond.endpoint, join_epoch,
           bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),
           bond.holdings.shard_ids);
         const uint64_t bonded_total = get_total_bonded_atomic();
@@ -326,37 +326,18 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
         // converts from its N+1 chain-height convention (see pop_block).
         apply_archival_unbond(block_height, bond.p_canonical_id, bond.bond_debit);
       }
-      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
+      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Reinstate))
       {
-        // HoldingsUpdate connect (gate-4 §4.4): the record stays Bonded — one
-        // shard is added or dropped. Direction is verify-pinned (add: +FLOOR
-        // credit, no debit; drop: -FLOOR debit, no credit), so bond_debit == 0
-        // selects the add arm. Both writers journal the record pre-image and
-        // apply the Rust fold's counter movement with the per-post live-counter
-        // threading inside. The vin's holdings carry the POST shard set.
-        if (bond.bond_debit == 0)
-          apply_archival_holdings_update_add(block_height, bond.p_canonical_id,
-            bond.holdings.shard_ids);
-        else
-          apply_archival_holdings_update_drop(block_height, bond.p_canonical_id,
-            bond.holdings.shard_ids);
-      }
-      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Rebond))
-      {
-        // Rebond connect (gate-4 §3.4; P2B-9 reinstatement): the record stays
-        // Bonded — the open bad interval closes in place at E_rebond + 1 and
-        // the verified superset re-spec lands (carried shards keep add-epochs,
-        // added take E_rebond). The writer journals the pre-image (including
-        // the closed interval's identity) and applies the Rust fold's counter
-        // movement with the per-post live-counter threading inside. The vin's
-        // holdings carry the POST shard set.
-        apply_archival_rebond(block_height, bond.p_canonical_id,
+        // Reinstate connect: the record stays Bonded. Holdings do not move
+        // (immutable-bond 2026-09-20). The open bad interval closes in place at
+        // E_reinstate + 1. The writer journals the closed interval's identity.
+        apply_archival_reinstate(block_height, bond.p_canonical_id,
           bond.holdings.shard_ids);
       }
       else
       {
         throw std::runtime_error(
-          "FATAL: bond-post connect supports JoinMarket, Release, HoldingsUpdate, and Rebond only");
+          "FATAL: bond-post connect supports JoinMarket, Release, and Reinstate only");
       }
     }
     else if (std::holds_alternative<txin_archival_reward_emission>(tx_input))
@@ -509,7 +490,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     uint64_t next_output_seq = get_num_outputs(0) - this_block_output_count;
 
     // CEN-I19: the store applies the SAME shape rule admission applies -- one
-    // rule, one implementation (`check_tx_extra_pqc_field_shape`, over
+    // rule, one implementation (`check_tx_extra_shape`, over
     // shekyl-wire's `check_pqc_field_shape`), so any path reaching add_block
     // without admission fails closed instead of storing a leaf the rule
     // forbids. Re-deriving parts of the rule here is what went wrong before:
@@ -525,36 +506,47 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     // leaves whose post-quantum binding was to nothing, invisibly. Everything
     // below is unreachable for an admitted transaction and aborts rather than
     // falling back (CEN-L11 pattern).
-    auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
-      std::string why;
-      if (!check_tx_extra_pqc_field_shape(tx, why))
+    //
+    // One read: shekyl-wire parses the extra, applies the rule over its own
+    // parse and hands back the 0x07 blob (TX_EXTRA_RUST_CUTOVER.md §3) --
+    // there is no second parse for the shape check to disagree with, and the
+    // "accepted but absent" arm the three-pass form had to guard cannot occur.
+    auto extract_leaf_entries = [](const transaction& tx) -> std::vector<uint8_t> {
+      char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
+      ShekylOwnedBuffer blob;
+      const int32_t rc = shekyl_tx_extra_leaf_entries(
+        tx.extra.empty() ? nullptr : tx.extra.data(), tx.extra.size(),
+        tx.vout.size(), is_coinbase(tx), &blob.buf, msg, sizeof(msg));
+      if (rc != SHEKYL_TX_EXTRA_OK)
+      {
+        msg[sizeof(msg) - 1] = '\0';
+        const std::string why = msg[0] != '\0'
+          ? std::string(msg)
+          : (rc == SHEKYL_TX_EXTRA_MALFORMED
+              ? std::string("tx_extra does not parse")
+              : "tx_extra leaf read failed with code " + std::to_string(rc));
         throw DB_ERROR(("curve-tree leaf: " + why + " at DB add for tx "
           + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
           + " (validated at admission?)").c_str());
-      // Rule-conformant and leafless: no outputs, therefore no fields, no leaf.
-      if (tx.vout.empty())
-        return {};
-      std::vector<tx_extra_field> fields;
-      if (!parse_tx_extra(tx.extra, fields))
-        throw DB_ERROR("curve-tree leaf: tx_extra parses for the shape check but not here (bug)");
-      tx_extra_pqc_leaf_hashes lh;
-      if (!find_tx_extra_field_by_type(fields, lh))
-        throw DB_ERROR("curve-tree leaf: the shape check accepted a tx whose 0x07 field is absent (bug)");
-      // Exactly one field of exactly 32 * vout.size() bytes, per the rule just
-      // applied -- so the first match IS the only match.
-      return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
+      }
+      // Exactly one field of exactly SHEKYL_PQC_LEAF_ENTRY_BYTES * vout.size() bytes
+      // whose every entry begins with an admissible commitment point, per the
+      // rule just applied; empty for a leafless (zero-output) transaction.
+      return std::vector<uint8_t>(blob.data(), blob.data() + blob.size());
     };
 
     // All outputs are deferred: compute leaf, determine maturity, add to pending.
     // Each output is tracked by its global output index for exact reversal.
     auto collect_outputs = [&](const transaction& tx, bool is_miner) {
-      const auto leaf_hash_blob = extract_leaf_hashes(tx);
+      const auto leaf_entry_blob = extract_leaf_entries(tx);
 
       for (uint64_t i = 0; i < tx.vout.size(); ++i) {
         const OutputIndex this_output{next_output_seq++};
         const auto& vout = tx.vout[i];
-        // extract_leaf_hashes pinned the blob to exactly one hash per output.
-        const uint8_t* h_pqc = leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES;
+        // extract_leaf_entries pinned the blob to exactly one 64-byte entry per
+        // output; the leaf constructor takes the commitment point at its front
+        // (PL-D3) and extracts the x-coordinate itself.
+        const uint8_t* leaf_entry = leaf_entry_blob.data() + i * SHEKYL_PQC_LEAF_ENTRY_BYTES;
 
         crypto::public_key output_key;
         uint64_t maturity_raw;
@@ -599,15 +591,18 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         const MaturityHeight mat{maturity_raw};
         uint8_t leaf[128];
         // CEN-L11: the verdict is checked, not discarded. construct_leaf fails
-        // only when the output key or the commitment is not a canonical,
-        // prime-order, non-identity point — and both are gated upstream on
-        // both paths (shekyl_check_output_keys via check_outs_valid;
-        // shekyl_check_commitment_masks via check_commitment_mask_valid, with
-        // the coinbase legs in prevalidate_miner_transaction). So this is
-        // unreachable, and it aborts rather than silently omitting the output.
+        // only when the output key, the commitment or the 0x07 commitment
+        // point CM is not a canonical, prime-order, non-identity point — and
+        // all three are gated upstream on both paths (shekyl_check_output_keys
+        // via check_outs_valid; shekyl_check_commitment_masks via
+        // check_commitment_mask_valid, with the coinbase legs in
+        // prevalidate_miner_transaction; CM by the PL-D3 content rule in
+        // shekyl_tx_extra_shape_of, code 10, at relay and connect).
+        // So this is unreachable, and it aborts rather than silently omitting
+        // the output.
         if (!shekyl_construct_curve_tree_leaf(
               reinterpret_cast<const uint8_t*>(&output_key),
-              commitment.bytes, h_pqc, leaf))
+              commitment.bytes, leaf_entry, leaf))
           throw DB_ERROR(("curve-tree leaf construction failed at DB add (vout index "
             + std::to_string(i) + " of tx "
             + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
@@ -659,7 +654,8 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   }
 
   // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): the
-  // prunable admission bytes (r + pass signatures) ride this same write txn,
+  // prunable admission bytes (count ‖ (nonce ‖ anchor_height ‖ signature) per
+  // pass, SF-D8 v2) ride this same write txn,
   // keyed via archival_attestation_witness_key(prev_height) — the SAME height
   // store_curve_tree_root_at_height uses above. An empty witness (interim /
   // all-miss) writes no row: absent key reads as "no witness".
@@ -774,28 +770,18 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // holdings, interval log) are disjoint from the emission journal's
   // (claimed set, first_paying), so those two reverts compose in any order.
   revert_archival_unbonds_at_height(removed_block_height - 1);
-  // HoldingsUpdate pre-image restore (gate-4 §4.4/§5): same journal-key
-  // convention (block index N = removed_block_height - 1) and the same
-  // vin-carries-POST-state reason it cannot drive its own restore. ORDER IS
-  // LOAD-BEARING: the slash journal restores the very same record fields
-  // (bonded_total, held_shard_ids, shard_add_epochs), and within a block the
-  // txs (HoldingsUpdate) connect before the epoch-deadline slash hook — so
-  // the pop must revert the slash FIRST (above) for this pop fold's
-  // exactly-one-FLOOR delta check to see the post-HoldingsUpdate state it
-  // journaled against. Reordering these two reverts (or adding a journal
-  // that touches these fields between them) makes holdings_update_pop see a
-  // FLOOR ± slashed_amount delta and abort the pop with NotSingleShardDelta.
-  // Only the emission journal's fields (claimed set, first_paying) are
-  // disjoint from this one's.
+  // HoldingsUpdate is REJECTED (immutable-bond 2026-09-20). The revert is a
+  // named no-op so pop order stays explicit (slash, then this slot, then
+  // reinstate). No journal rows are written.
   revert_archival_holdings_updates_at_height(removed_block_height - 1);
-  // Rebond pre-image restore (gate-4 §3.4/§5; P2B-9): same journal-key
+  // Reinstate pre-image restore (gate-4 §3.4/§5; P2B-9): same journal-key
   // convention (block index N = removed_block_height - 1). Runs AFTER the
   // slash revert: both journals touch bad_intervals, and within a block the
   // connect order was tx-connect before slash-processing, so the pop mirrors
   // it in reverse — the slash revert strips any interval its own rows appended
-  // before the rebond revert re-opens the journaled closed interval. The
+  // before the reinstate revert re-opens the journaled closed interval. The
   // restored holdings/balance fields are disjoint from the other journals'.
-  revert_archival_rebonds_at_height(removed_block_height - 1);
+  revert_archival_reinstates_at_height(removed_block_height - 1);
   // Mirror of the accrual write in add_block, keyed at the block's INDEX
   // N = removed_block_height - 1 (the claim-journal convention above, not
   // the hook convention). Runs inside the same wtxn as the pop — key
@@ -948,7 +934,7 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash, uint64_t bloc
     {
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
       // Only JoinMarket pops here (vin-driven: the record is deleted whole).
-      // Release, HoldingsUpdate, and Rebond pop via the height-keyed pre-image
+      // Release, HoldingsUpdate, and Reinstate pop via the height-keyed pre-image
       // journals in pop_block — the vin carries the post-connect state, so it
       // cannot drive the restore.
       if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
@@ -1688,7 +1674,8 @@ bool BlockchainDB::get_archival_shard_segment_at_height(uint64_t /*shard_id*/, u
 
 void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
   const std::vector<uint8_t>& /*hybrid_pubkey*/,
-  const std::vector<uint8_t>& /*bond_spend_pk*/, uint64_t /*join_settlement_epoch*/,
+  const std::vector<uint8_t>& /*bond_spend_pk*/, const crypto::public_key& /*endpoint*/,
+  uint64_t /*join_settlement_epoch*/,
   uint64_t /*bonded_total_atomic*/, uint8_t /*holdings_kind*/,
   const std::vector<uint64_t>& /*held_shard_ids*/,
   const std::vector<std::pair<uint64_t, uint64_t>>& /*bad_intervals*/)
@@ -1770,18 +1757,22 @@ void BlockchainDB::revert_archival_holdings_updates_at_height(uint64_t /*block_h
 {
 }
 
-void BlockchainDB::apply_archival_rebond(uint64_t /*block_height*/,
+void BlockchainDB::apply_archival_reinstate(uint64_t /*block_height*/,
   const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*post_shard_ids*/)
 {
 }
 
-void BlockchainDB::revert_archival_rebonds_at_height(uint64_t /*block_height*/)
+void BlockchainDB::revert_archival_reinstates_at_height(uint64_t /*block_height*/)
 {
 }
 
 bool BlockchainDB::archival_shard_freeze_height(uint64_t /*shard_id*/, uint64_t& /*out*/) const
 {
   return false;
+}
+
+void BlockchainDB::fold_archival_market_bonded_counts(std::vector<uint64_t>& /*bonded_count*/) const
+{
 }
 
 std::vector<uint64_t> BlockchainDB::archival_bond_last_served_epochs(

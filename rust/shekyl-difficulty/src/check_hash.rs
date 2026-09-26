@@ -62,14 +62,17 @@ fn high64(v: u128) -> u64 {
     ])
 }
 
+use crate::Difficulty;
+
 /// Returns `true` iff `hash` (read little-endian) satisfies `difficulty`.
 ///
 /// Equivalent to the inherited `cryptonote::check_hash`: passes iff
 /// `(hash as 256-bit LE integer) * difficulty < 2^256`. Pure,
-/// panic-free, and total over every `(hash, difficulty)`. A
-/// `difficulty` of `0` always passes (see module docs).
+/// panic-free, and total over every `(hash, difficulty)`.
+/// [`Difficulty::ZERO`] always passes (see module docs).
 #[must_use]
-pub fn check_hash(hash: &[u8; 32], difficulty: u128) -> bool {
+pub fn check_hash(hash: &[u8; 32], difficulty: Difficulty) -> bool {
+    let difficulty = difficulty.to_raw();
     // Hash as four little-endian u64 limbs (limb 0 = least significant).
     let h = [
         u64::from_le_bytes([
@@ -129,6 +132,11 @@ pub fn check_hash(hash: &[u8; 32], difficulty: u128) -> bool {
 #[cfg(test)]
 mod tests {
     use super::check_hash;
+    use crate::Difficulty;
+
+    fn d(v: u128) -> Difficulty {
+        Difficulty::from_raw(v)
+    }
 
     fn h_from_le_words(w: [u64; 4]) -> [u8; 32] {
         let mut out = [0u8; 32];
@@ -140,29 +148,29 @@ mod tests {
 
     #[test]
     fn difficulty_zero_always_passes() {
-        assert!(check_hash(&[0u8; 32], 0));
-        assert!(check_hash(&[0xffu8; 32], 0));
-        assert!(check_hash(&h_from_le_words([1, 2, 3, 4]), 0));
+        assert!(check_hash(&[0u8; 32], d(0)));
+        assert!(check_hash(&[0xffu8; 32], d(0)));
+        assert!(check_hash(&h_from_le_words([1, 2, 3, 4]), d(0)));
     }
 
     #[test]
     fn all_zero_hash_passes_any_difficulty() {
-        assert!(check_hash(&[0u8; 32], 1));
-        assert!(check_hash(&[0u8; 32], u128::MAX));
+        assert!(check_hash(&[0u8; 32], d(1)));
+        assert!(check_hash(&[0u8; 32], d(u128::MAX)));
     }
 
     #[test]
     fn hash_one_difficulty_one_passes() {
         // 1 * 1 = 1 < 2^256.
-        assert!(check_hash(&h_from_le_words([1, 0, 0, 0]), 1));
+        assert!(check_hash(&h_from_le_words([1, 0, 0, 0]), d(1)));
     }
 
     #[test]
     fn all_ones_hash_overflows_for_difficulty_two() {
         // (2^256 - 1) * 2 = 2^257 - 2 >= 2^256, must fail.
-        assert!(!check_hash(&[0xffu8; 32], 2));
+        assert!(!check_hash(&[0xffu8; 32], d(2)));
         // ... but passes for difficulty 1 (2^256 - 1 < 2^256).
-        assert!(check_hash(&[0xffu8; 32], 1));
+        assert!(check_hash(&[0xffu8; 32], d(1)));
     }
 
     #[test]
@@ -170,9 +178,9 @@ mod tests {
         // hash = 2^192 (top limb = 1). With difficulty 2^64 the product
         // is 2^256, which is NOT < 2^256 -> fail.
         let hash = h_from_le_words([0, 0, 0, 1]);
-        assert!(!check_hash(&hash, 1u128 << 64));
+        assert!(!check_hash(&hash, d(1u128 << 64)));
         // difficulty (2^64 - 1): product = 2^192 * (2^64 - 1) < 2^256 -> pass.
-        assert!(check_hash(&hash, (1u128 << 64) - 1));
+        assert!(check_hash(&hash, d((1u128 << 64) - 1)));
     }
 
     #[test]
@@ -181,8 +189,8 @@ mod tests {
         // difficulty 2 -> product = 2^256 -> fail.
         let mut hash = [0u8; 32];
         hash[31] = 0x80; // top bit of the 256-bit LE integer
-        assert!(!check_hash(&hash, 2));
+        assert!(!check_hash(&hash, d(2)));
         // difficulty 1 -> 2^255 < 2^256 -> pass.
-        assert!(check_hash(&hash, 1));
+        assert!(check_hash(&hash, d(1)));
     }
 }

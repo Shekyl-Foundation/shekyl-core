@@ -857,6 +857,59 @@ fn every_v2_sibling_is_its_v1_capture_minus_only_the_identifier() {
     }
 }
 
+/// Every `_v3` p2p sibling is its `_v2` minus exactly the stripe-engine
+/// fields 3.35 removed (`PDM-Q7`): `pruning_seed` on peers and connections,
+/// `next_needed_pruning_seed` on `sync_info` — nothing else moved. Same
+/// discipline as the `_v2` delta above: a derived vector is kept honest by
+/// its subtraction, not by eyeballing.
+#[test]
+fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
+    fn strip(value: &Value, fields: &[&str]) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .filter(|(k, _)| !fields.contains(&k.as_str()))
+                    .map(|(k, v)| (k.clone(), strip(v, fields)))
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(items.iter().map(|v| strip(v, fields)).collect()),
+            other => other.clone(),
+        }
+    }
+    const FIELDS: &[&str] = &["pruning_seed", "next_needed_pruning_seed"];
+    let deltas: [(&str, &str); 4] = [
+        (
+            include_str!("vectors/rpc/get_peer_list_v2.json"),
+            include_str!("vectors/rpc/get_peer_list_v3.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_connections_v2.json"),
+            include_str!("vectors/rpc/get_connections_v3.json"),
+        ),
+        (
+            include_str!("vectors/rpc/sync_info_v2.json"),
+            include_str!("vectors/rpc/sync_info_v3.json"),
+        ),
+        (
+            include_str!("vectors/rpc/sync_info_empty_v1.json"),
+            include_str!("vectors/rpc/sync_info_empty_v2.json"),
+        ),
+    ];
+    for (before_raw, after_raw) in deltas {
+        let before = parsed(before_raw);
+        let after = parsed(after_raw);
+        assert_eq!(
+            strip(&before, FIELDS),
+            after,
+            "the derived sibling is not its predecessor minus only the stripe fields"
+        );
+        assert_ne!(
+            before, after,
+            "the delta is vacuous: no stripe field to subtract"
+        );
+    }
+}
+
 /// The whole `get_version` vector chain, not just its newest pair.
 ///
 /// **This used to pin one pair and was renamed at each bump**, on the
@@ -873,7 +926,7 @@ fn every_v2_sibling_is_its_v1_capture_minus_only_the_identifier() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 5] = [
+    let links: [(&str, &str); 13] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -894,6 +947,38 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v5.json"),
             include_str!("vectors/rpc/get_version_synced_v6.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v6.json"),
+            include_str!("vectors/rpc/get_version_synced_v7.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v7.json"),
+            include_str!("vectors/rpc/get_version_synced_v8.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v8.json"),
+            include_str!("vectors/rpc/get_version_synced_v9.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v9.json"),
+            include_str!("vectors/rpc/get_version_synced_v10.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v10.json"),
+            include_str!("vectors/rpc/get_version_synced_v11.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v11.json"),
+            include_str!("vectors/rpc/get_version_synced_v12.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v12.json"),
+            include_str!("vectors/rpc/get_version_synced_v13.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v13.json"),
+            include_str!("vectors/rpc/get_version_synced_v14.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -904,15 +989,28 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     };
 
     // Per link, the members that bump is allowed to introduce. Empty for a
-    // pure version bump. VC-2 adds the identity tuple at the last link, and
-    // naming them here is what keeps "differs by exactly the version" a real
-    // invariant rather than one weakened until it stopped failing.
-    const ADDED_AT_LINK: [&[&str]; 5] = [
-        &[],
-        &[],
-        &[],
-        &[],
-        &["consensus_constants_digest", "nettype", "genesis_hash"],
+    // pure version bump. VC-2 adds the identity tuple on the 3.29 link
+    // (newer vector `get_version_synced_v6`), and naming the members here is
+    // what keeps "differs by exactly the version" a real invariant rather
+    // than one weakened until it stopped failing.
+    //
+    // The trailing comment names the minor the *newer* vector carries.
+    // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
+    // on its element, so it cannot attach to the neighbor.
+    const ADDED_AT_LINK: [&[&str]; 13] = [
+        &[],                                                        // 3.25
+        &[],                                                        // 3.26
+        &[],                                                        // 3.27
+        &[],                                                        // 3.28
+        &["consensus_constants_digest", "nettype", "genesis_hash"], // 3.29 (VC-2)
+        &[], // 3.30 (FL-R25 removes a fee slot; get_version gains nothing)
+        &[], // 3.31 (coverage/fetch RPC; get_version gains nothing)
+        &[], // 3.32 (calc_pow drops leftover major_version; get_version gains nothing)
+        &[], // 3.33 (get_output_histogram deleted; get_version gains nothing)
+        &[], // 3.34 (get_curve_tree_path removed, SOK-10 Q7 → A; get_version gains nothing)
+        &[], // 3.35 (pruning_seed deleted from the p2p readouts, PDM-Q7; get_version gains nothing)
+        &[], // 3.36 (get_info drops tx_prune_height with the C++ tx-data prune; get_version gains nothing)
+        &[], // 3.37 (get_block_template bounds reserve_size / extra_nonce to the fixed 8-byte coinbase nonce, TXE-Q6′; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1045,7 +1143,6 @@ fn vector_connection() -> ConnectionInfo {
         support_flags: 3,
         connection_id: "151c232a31383f464d545b626970777e".to_owned(),
         height: 1_234_567,
-        pruning_seed: 384,
         address_type: 1,
     }
 }
@@ -1099,7 +1196,7 @@ fn get_peer_list_request_defaults_match_the_oracle() {
     );
 }
 
-/// The three address arms in one document, and both `pruning_seed` states.
+/// The three address arms in one document.
 #[test]
 fn get_peer_list_matches_the_oracle() {
     let built = GetPeerListResponse {
@@ -1111,16 +1208,13 @@ fn get_peer_list_matches_the_oracle() {
                 ip: 0x0700_200a,
                 port: 18080,
                 last_seen: 1_750_000_001,
-                pruning_seed: 0,
             },
-            // ipv6: `host` is the bare host, `ip` stays zero, and this is the
-            // pruned entry — so `pruning_seed` appears here and nowhere else.
+            // ipv6: `host` is the bare host, `ip` stays zero.
             Peer {
                 host: "2001:db8::1".to_owned(),
                 ip: 0,
                 port: 18081,
                 last_seen: 1_750_000_002,
-                pruning_seed: 384,
             },
         ],
         gray_list: vec![Peer {
@@ -1128,18 +1222,19 @@ fn get_peer_list_matches_the_oracle() {
             ip: 0,
             port: 0,
             last_seen: 1_750_000_003,
-            pruning_seed: 0,
         }],
     };
     // _v2 = _v1 minus the identifier fields 3.28 removed (PWD-I1) — derived,
     // not recaptured: the C++ oracle for this method is gone (RK-5a), so the
     // chain's memory continues from the Rust emitter's own prior contract.
-    assert_parity(include_str!("vectors/rpc/get_peer_list_v2.json"), &built);
+    // _v3 = _v2 minus `pruning_seed` (3.35, `PDM-Q7`) — derived the same way,
+    // and held to its delta below.
+    assert_parity(include_str!("vectors/rpc/get_peer_list_v3.json"), &built);
 
     // `ip` is a JSON *number* here. `get_connections` carries a field of the
     // same name that is a *string*, and the pair of assertions is what keeps
     // a future edit from unifying them.
-    let doc = parsed(include_str!("vectors/rpc/get_peer_list_v2.json"));
+    let doc = parsed(include_str!("vectors/rpc/get_peer_list_v3.json"));
     assert!(
         doc["white_list"][0]["ip"].is_number(),
         "peer.ip is a number"
@@ -1169,9 +1264,9 @@ fn get_connections_matches_the_oracle() {
         status: RpcStatus::ok(),
         connections: vec![vector_connection()],
     };
-    assert_parity(include_str!("vectors/rpc/get_connections_v2.json"), &built);
+    assert_parity(include_str!("vectors/rpc/get_connections_v3.json"), &built);
 
-    let doc = parsed(include_str!("vectors/rpc/get_connections_v2.json"));
+    let doc = parsed(include_str!("vectors/rpc/get_connections_v3.json"));
     let entry = doc["connections"][0].as_object().expect("object");
     // `ip` is a string here — the counterpart of the `peer.ip` assertion.
     assert!(entry["ip"].is_string(), "connection_info.ip is a string");
@@ -1203,7 +1298,6 @@ fn sync_info_matches_the_oracle() {
         status: RpcStatus::ok(),
         height: 1_234_567,
         target_height: 1_234_600,
-        next_needed_pruning_seed: 1,
         peers: vec![SyncInfoPeer {
             info: vector_connection(),
         }],
@@ -1218,11 +1312,11 @@ fn sync_info_matches_the_oracle() {
         }],
         overview: "[<...m_o]".to_owned(),
     };
-    assert_parity(include_str!("vectors/rpc/sync_info_v2.json"), &built);
+    assert_parity(include_str!("vectors/rpc/sync_info_v3.json"), &built);
 
     // The nesting is the wire's: a `sync_info` peer wraps the connection
     // under `info`, where `get_connections` carries it directly.
-    let doc = parsed(include_str!("vectors/rpc/sync_info_v2.json"));
+    let doc = parsed(include_str!("vectors/rpc/sync_info_v3.json"));
     assert_eq!(
         doc["peers"][0].as_object().expect("object").len(),
         1,
@@ -1242,13 +1336,12 @@ fn sync_info_empty_matches_the_oracle() {
         status: RpcStatus::ok(),
         height: 1,
         target_height: 0,
-        next_needed_pruning_seed: 1,
         peers: Vec::new(),
         spans: Vec::new(),
         overview: "[]".to_owned(),
     };
-    assert_parity(include_str!("vectors/rpc/sync_info_empty_v1.json"), &built);
-    let doc = parsed(include_str!("vectors/rpc/sync_info_empty_v1.json"));
+    assert_parity(include_str!("vectors/rpc/sync_info_empty_v2.json"), &built);
+    let doc = parsed(include_str!("vectors/rpc/sync_info_empty_v2.json"));
     assert!(doc["overview"].is_string(), "overview is a string");
     let obj = doc.as_object().expect("object");
     assert!(!obj.contains_key("peers") && !obj.contains_key("spans"));
@@ -1455,5 +1548,36 @@ fn fee_v2_is_v1_minus_exactly_the_redundant_scalar() {
         derived,
         parsed(include_str!("vectors/rpc/get_fee_estimate_v2.json")),
         "`_v2` differs by that field and nothing else"
+    );
+}
+
+/// `_v3` is `_v2` with slot 2 removed — a TRANSFORM pair, because no
+/// subtraction of a *field* from `_v2` produces `_v3`: the change is to
+/// an array's arity, inside one field.
+///
+/// The captured values are four DISTINCT numbers, which no real daemon
+/// ever emitted (slot 2 mirrored slot 1). The transform drops slot 2 by
+/// POSITION rather than by looking for a duplicate, so `_v3` cannot
+/// become its own authority: hand-edit either file and this goes red.
+#[test]
+fn fee_v3_is_v2_with_the_bridge_slot_removed() {
+    let v2 = parsed(include_str!("vectors/rpc/get_fee_estimate_v2.json"));
+    let fees = v2["fees"]
+        .as_array()
+        .expect("v2 carries a fees array")
+        .clone();
+    assert_eq!(
+        fees.len(),
+        4,
+        "the pair only means anything if `_v2` is the four-slot shape"
+    );
+
+    let mut derived = v2;
+    derived["fees"] =
+        serde_json::Value::Array(vec![fees[0].clone(), fees[1].clone(), fees[3].clone()]);
+    assert_eq!(
+        derived,
+        parsed(include_str!("vectors/rpc/get_fee_estimate_v3.json")),
+        "`_v3` is `_v2` minus slot 2 and nothing else"
     );
 }

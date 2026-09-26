@@ -36,12 +36,13 @@ namespace cryptonote
 {
 
 /**
- * @brief Get the maximum transaction weight for a given hardfork
+ * @brief Maximum transaction weight.
  *
- * @param hf_version hard fork version
+ * Half the minimum block weight, less the coinbase reserve. Not version-dispatched.
+ *
  * @return the maximum unconditional transaction weight
  */
-uint64_t get_transaction_weight_limit(uint8_t hf_version);
+uint64_t get_transaction_weight_limit();
 
 /**
  * @brief Verify the semantics of a group of FCMP++ signatures as a batch (if applicable)
@@ -81,7 +82,8 @@ struct block_connect_supplement
 {
     pool_supplement pool;
     // Per-block credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2).
-    // Opaque Rust-canonical bytes (count ‖ pass signatures). Empty until the
+    // Opaque Rust-canonical bytes (count ‖ (nonce ‖ anchor_height ‖ signature)
+    // per pass, SF-D8 v2). Empty until the
     // transport populates it; empty means "no witness supplied" and stores no
     // side-table row on main-chain add.
     blobdata attestation_witness;

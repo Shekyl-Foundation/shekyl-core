@@ -15,7 +15,7 @@
 //!   C = z*G + amount*H
 //!   enc_amount = amount_le XOR k_amount[..8]
 //!   pqc_kp = ML-DSA-65.KeyGen(ml_dsa_seed)
-//!   h_pqc = PqcLeafHash(pqc_kp.pk)
+//!   pqc_leaf = { CM = H_ℓ(hybrid_pk)·G_k + r·J, record = cSHAKE256(pk ‖ r_h) }   (PL-D3 / PL-D3a)
 //!
 //! Scanning (recipient, FA-6):
 //!   ml_kem_ss = ML-KEM.Decap(ml_kem_dk, kem_ct.ml_kem)  [every output]
@@ -62,14 +62,15 @@ pub(crate) fn ml_kem_ss_wiped_on_last_prefilter_reject() -> bool {
 }
 
 use crate::derivation::{
-    derive_kem_seed, derive_output_secrets, derive_view_tag_prefilter, hash_pqc_public_key,
-    keygen_from_seed, OutputSecrets,
+    derive_kem_seed, derive_output_secrets, derive_view_tag_prefilter, keygen_from_seed,
+    OutputSecrets,
 };
 use crate::kem::MlKemDecapsKey;
 use crate::kem::{
     combine_shared_secrets, SharedSecret, ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN,
 };
 use crate::label::{decrypt_label_plaintext, encrypt_label_plaintext, sentinel_plaintext};
+use crate::leaf_commitment::{pqc_leaf_commitment, PqcLeafCommitment};
 use crate::CryptoError;
 
 pub use crate::encrypted_output_field::EncryptedOutputField;
@@ -112,9 +113,9 @@ pub struct OutputData {
     /// ML-DSA-65 public key for this output.
     #[zeroize(skip)]
     pub pqc_public_key: Vec<u8>,
-    /// PQC leaf hash H(pqc_pk) for the curve tree.
-    #[zeroize(skip)]
-    pub h_pqc: [u8; 32],
+    /// The PQC leaf commitment `CM ‖ record` published in `tx_extra` `0x07`, with
+    /// its blinds (`PL-D3`, `PL-D3a`). `CM`'s x-coordinate is the leaf's 4th scalar.
+    pub pqc_leaf: PqcLeafCommitment,
     /// HKDF-derived y scalar (sender keeps for coinbase self-spend).
     pub y: [u8; 32],
     /// HKDF-derived commitment mask z.
@@ -217,9 +218,10 @@ pub struct ScannedOutput {
     pub pqc_public_key: Vec<u8>,
     /// ML-DSA-65 secret key for this output.
     pub pqc_secret_key: Vec<u8>,
-    /// PQC leaf hash H(pqc_pk).
-    #[zeroize(skip)]
-    pub h_pqc: [u8; 32],
+    /// The PQC leaf commitment the recipient re-derives (`PL-D3`); the wallet
+    /// compares its `point ‖ record` with the published `0x07` entry and treats a
+    /// mismatch as received-but-unspendable (round doc §6.2).
+    pub pqc_leaf: PqcLeafCommitment,
 }
 
 // CLIPPY: pqc_public_key intentionally omitted (bulky, derivable from pqc_secret_key).
@@ -229,7 +231,7 @@ impl std::fmt::Debug for ScannedOutput {
         f.debug_struct("ScannedOutput")
             .field("amount", &"[REDACTED]")
             .field("amount_tag", &self.amount_tag)
-            .field("h_pqc", &self.h_pqc)
+            .field("pqc_leaf_point", &self.pqc_leaf.point)
             .field("y", &"[REDACTED]")
             .field("z", &"[REDACTED]")
             .field("k_amount", &"[REDACTED]")
@@ -391,8 +393,7 @@ pub fn construct_output_with_label_plaintext(
     // --- PQC keypair ---
 
     let (pqc_pk, _pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
-    let h_pqc = compute_hybrid_h_pqc(&secrets)?;
-
+    let pqc_leaf = compute_pqc_leaf(&secrets, &pqc_pk, &combined_ss.0, output_index)?;
     Ok(OutputData {
         output_key,
         commitment,
@@ -402,7 +403,7 @@ pub fn construct_output_with_label_plaintext(
         kem_ciphertext_x25519: eph_mont_pub.0,
         kem_ciphertext_ml_kem: ml_ct_bytes.to_vec(),
         pqc_public_key: pqc_pk,
-        h_pqc,
+        pqc_leaf,
         y: secrets.y,
         z: secrets.z,
         k_amount: secrets.k_amount,
@@ -748,8 +749,7 @@ pub fn scan_output_with_ml_kem_dk(
     // --- PQC keypair derivation ---
 
     let (pqc_pk, pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
-    let h_pqc = compute_hybrid_h_pqc(&secrets)?;
-
+    let pqc_leaf = compute_pqc_leaf(&secrets, &pqc_pk, &combined_ss.0, output_index)?;
     Ok(ScannedOutput {
         y: secrets.y,
         z: secrets.z,
@@ -760,7 +760,7 @@ pub fn scan_output_with_ml_kem_dk(
         label_tag: secrets.label_tag,
         pqc_public_key: pqc_pk,
         pqc_secret_key: pqc_sk,
-        h_pqc,
+        pqc_leaf,
     })
 }
 
@@ -803,7 +803,7 @@ pub struct RecoveredOutput {
     pub combined_ss: [u8; 64],
     pub pqc_public_key: Vec<u8>,
     pub pqc_secret_key: Vec<u8>,
-    pub h_pqc: [u8; 32],
+    pub pqc_leaf: PqcLeafCommitment,
 }
 
 // CLIPPY: omitted fields are secrets intentionally redacted for safe debug output.
@@ -962,8 +962,7 @@ pub fn scan_output_recover_with_ml_kem_dk(
 
     // --- PQC keypair derivation ---
     let (pqc_pk, pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
-    let h_pqc = compute_hybrid_h_pqc(&secrets)?;
-
+    let pqc_leaf = compute_pqc_leaf(&secrets, &pqc_pk, &combined_ss.0, output_index)?;
     Ok(RecoveredOutput {
         ho: secrets.ho,
         y: secrets.y,
@@ -977,7 +976,7 @@ pub fn scan_output_recover_with_ml_kem_dk(
         combined_ss: combined_ss.0,
         pqc_public_key: pqc_pk,
         pqc_secret_key: pqc_sk,
-        h_pqc,
+        pqc_leaf,
     })
 }
 
@@ -1351,11 +1350,11 @@ pub fn compute_output_key_image(
     Ok(result)
 }
 
-/// Compute key image from pre-derived `ho` (for `tx_source_entry` boundary).
+/// Compute key image from a pre-derived `ho`.
 ///
-/// Same as `compute_output_key_image` but takes `ho` directly instead of
-/// `combined_ss`. Used at the single site where `ho` has already crossed
-/// the wallet -> tx_utils boundary via `tx_source_entry`.
+/// Same arithmetic as [`compute_output_key_image`], which derives `ho` itself
+/// and is what the scanner and the engine call. This entry exists for the one
+/// site that already holds `ho`: `shekyl_scan_and_recover`.
 pub fn compute_output_key_image_from_ho(
     ho: &[u8; 32],
     spend_secret: &[u8; 32],
@@ -1407,30 +1406,37 @@ fn keygen_from_seed_bytes(ml_dsa_seed: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), 
     Ok((pk_bytes, sk_bytes))
 }
 
-/// Compute h_pqc from the full hybrid public key (Ed25519 + ML-DSA),
-/// matching what the verifier computes from `tx.pqc_auths[i].hybrid_public_key`.
-fn compute_hybrid_h_pqc(secrets: &OutputSecrets) -> Result<[u8; 32], CryptoError> {
+/// Build the output's PQC leaf commitment from the full hybrid public key
+/// (Ed25519 + ML-DSA) — the same canonical bytes the spend reveals in
+/// `tx.pqc_auths[i].hybrid_public_key`, so the verifier's `K = k·G_k` opens it.
+///
+/// Takes the caller's already-serialized ML-DSA public key rather than
+/// re-running keygen: every call site derives the keypair from
+/// `secrets.ml_dsa_seed` one line earlier, and FIPS 204 keygen is
+/// deterministic, so a second keygen here could only reproduce those bytes.
+fn compute_pqc_leaf(
+    secrets: &OutputSecrets,
+    ml_dsa_pk_bytes: &[u8],
+    combined_ss: &[u8],
+    output_index: u64,
+) -> Result<PqcLeafCommitment, CryptoError> {
     use crate::signature::HybridPublicKey;
     use ed25519_dalek::SigningKey;
-
-    let (ml_pk, _ml_sk) = keygen_from_seed(&secrets.ml_dsa_seed)?;
 
     let ed_signing = SigningKey::from_bytes(&secrets.ed25519_pqc_seed);
     let ed_verifying = ed_signing.verifying_key();
 
     let hybrid_pk = HybridPublicKey {
         ed25519: ed_verifying.to_bytes(),
-        ml_dsa: {
-            use fips204::traits::SerDes;
-            ml_pk.into_bytes().to_vec()
-        },
+        ml_dsa: ml_dsa_pk_bytes.to_vec(),
     };
 
     let pk_bytes = hybrid_pk
         .to_canonical_bytes()
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid PK encoding: {e}")))?;
 
-    Ok(hash_pqc_public_key(&pk_bytes))
+    pqc_leaf_commitment(combined_ss, output_index, &pk_bytes)
+        .map_err(|e| CryptoError::KeyGenerationFailed(format!("PQC leaf commitment guard: {e:?}")))
 }
 
 #[cfg(test)]
@@ -1468,7 +1474,8 @@ mod tests {
         assert_ne!(out.output_key, [0u8; 32], "O must not be zero");
         assert_ne!(out.commitment, [0u8; 32], "C must not be zero");
         assert!(!out.pqc_public_key.is_empty(), "PQC pk must be non-empty");
-        assert_ne!(out.h_pqc, [0u8; 32], "h_pqc must not be zero");
+        assert_ne!(out.pqc_leaf.point, [0u8; 32], "CM must not be zero");
+        assert_ne!(out.pqc_leaf.record, [0u8; 32], "record must not be zero");
 
         let scanned = scan_output(
             &recipient_sk.x25519,
@@ -1498,7 +1505,15 @@ mod tests {
             scanned.pqc_public_key, out.pqc_public_key,
             "PQC pk must match"
         );
-        assert_eq!(scanned.h_pqc, out.h_pqc, "h_pqc must match");
+        assert_eq!(
+            scanned.pqc_leaf.entry(),
+            out.pqc_leaf.entry(),
+            "PQC leaf entry must match"
+        );
+        assert_eq!(
+            scanned.pqc_leaf.blind, out.pqc_leaf.blind,
+            "blind r must match"
+        );
         assert!(
             !scanned.pqc_secret_key.is_empty(),
             "PQC sk must be non-empty"
@@ -1830,8 +1845,8 @@ mod tests {
             "different indices must produce different C"
         );
         assert_ne!(
-            out0.h_pqc, out1.h_pqc,
-            "different indices must produce different h_pqc"
+            out0.pqc_leaf.point, out1.pqc_leaf.point,
+            "different indices must produce different CM"
         );
     }
 
@@ -1897,23 +1912,32 @@ mod tests {
             .verify(&hybrid_pk, domain, msg, &hybrid_sig)
             .expect("signature must verify");
 
-        // h_pqc from construct/scan must match what the verifier computes
-        // from the signing path's hybrid public key.
-        let h_pqc_from_sign = crate::derivation::hash_pqc_public_key(&auth.hybrid_public_key);
+        // The commitment from construct/scan must open to the key the spend
+        // reveals: K = k(pk)·G_k and CM = K + r·J (PL-D3).
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+        let k_point = CompressedEdwardsY(crate::leaf_commitment::pqc_key_point(
+            &auth.hybrid_public_key,
+        ))
+        .decompress()
+        .unwrap();
+        let r = Scalar::from_bytes_mod_order(out.pqc_leaf.blind);
+        let cm = k_point + (*shekyl_curve_generators::PQC_LEAF_COMMITMENT_J * r);
         assert_eq!(
-            scanned.h_pqc, out.h_pqc,
-            "scanner h_pqc must match sender h_pqc"
+            scanned.pqc_leaf.entry(),
+            out.pqc_leaf.entry(),
+            "scanner PQC leaf must match sender PQC leaf"
         );
         assert_eq!(
-            out.h_pqc, h_pqc_from_sign,
-            "construct h_pqc must match hash of signing hybrid pk"
+            out.pqc_leaf.point,
+            cm.compress().to_bytes(),
+            "construct CM must open to K(signing hybrid pk) under r"
         );
     }
 
     #[test]
-    fn h_pqc_matches_hybrid_pk_hash() {
-        use crate::derivation::{derive_pqc_leaf_hash, hash_pqc_public_key};
+    fn pqc_leaf_matches_hybrid_pk() {
         use crate::kem::combine_shared_secrets;
+        use crate::leaf_commitment::{derive_pqc_leaf, pqc_leaf_commitment};
 
         let kem = HybridX25519MlKem;
         let (pk, sk) = kem.keypair_generate().unwrap();
@@ -1924,13 +1948,6 @@ mod tests {
             .to_bytes();
 
         let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 500, 0).unwrap();
-
-        // h_pqc must NOT equal hash of just ML-DSA pk (that was the old bug)
-        let h_pqc_ml_dsa_only = hash_pqc_public_key(&out.pqc_public_key);
-        assert_ne!(
-            out.h_pqc, h_pqc_ml_dsa_only,
-            "h_pqc must hash the full hybrid pk, not just ML-DSA"
-        );
 
         let scanned = scan_output(
             &sk.x25519,
@@ -1950,11 +1967,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            scanned.h_pqc, out.h_pqc,
-            "scanner h_pqc must match sender h_pqc"
+            scanned.pqc_leaf.entry(),
+            out.pqc_leaf.entry(),
+            "scanner PQC leaf must match sender PQC leaf"
         );
 
-        // Also verify via derive_pqc_leaf_hash (the standalone derivation path)
+        // Also verify via derive_pqc_leaf (the standalone owner-side derivation)
         let view_scalar = Scalar::from_bytes_mod_order(sk.x25519);
         let eph_mont = MontgomeryPoint(out.kem_ciphertext_x25519);
         let x25519_raw_ss = view_scalar * eph_mont;
@@ -1965,10 +1983,30 @@ mod tests {
         let ct = ml_kem_768::CipherText::try_from_bytes(ct_bytes).unwrap();
         let ml_ss = dk.try_decaps(&ct).unwrap();
         let combined_ss = combine_shared_secrets(&x25519_raw_ss.0, &ml_ss.into_bytes()).unwrap();
-        let h_pqc_derived = derive_pqc_leaf_hash(&combined_ss.0, 0).unwrap();
+        let derived = derive_pqc_leaf(&combined_ss.0, 0).unwrap();
         assert_eq!(
-            out.h_pqc, h_pqc_derived,
-            "h_pqc must match derive_pqc_leaf_hash"
+            out.pqc_leaf.entry(),
+            derived.entry(),
+            "PQC leaf must match derive_pqc_leaf"
+        );
+
+        // The commitment must be to the full hybrid pk, not just the ML-DSA pk
+        // (the old bug). Built from the REAL combined_ss and the same index, so
+        // the blind r cancels by construction — the control below proves it —
+        // and the point inequality can only come from the key axis.
+        let ml_only = pqc_leaf_commitment(&combined_ss.0, 0, &out.pqc_public_key).unwrap();
+        assert_eq!(
+            ml_only.blind, out.pqc_leaf.blind,
+            "control: r derives from (combined_ss, index) alone, so the \
+             ML-DSA-only commitment must reuse the same blind"
+        );
+        assert_ne!(
+            out.pqc_leaf.point, ml_only.point,
+            "CM must commit to the full hybrid pk, not just ML-DSA"
+        );
+        assert_eq!(
+            out.pqc_leaf.counter, 0,
+            "guard counter is 0 for a normal output"
         );
     }
 
@@ -2014,7 +2052,11 @@ mod tests {
             out1.pqc_public_key, out2.pqc_public_key,
             "PQC pk must be deterministic"
         );
-        assert_eq!(out1.h_pqc, out2.h_pqc, "h_pqc must be deterministic");
+        assert_eq!(
+            out1.pqc_leaf.entry(),
+            out2.pqc_leaf.entry(),
+            "PQC leaf must be deterministic"
+        );
         assert_eq!(out1.y, out2.y, "y must be deterministic");
         assert_eq!(out1.z, out2.z, "z must be deterministic");
         assert_eq!(

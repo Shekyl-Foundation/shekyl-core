@@ -172,8 +172,22 @@ jobs:
       # toolchain; wiring a cargo-metadata gate there works only because the
       # GitHub-hosted image happens to ship cargo, the same "image has it,
       # container does not" class this job already paid for with clang.
-      - name: test-only features stay on dev-dependency edges
-        run: python3 scripts/ci/check_test_only_features.py
+      - name: test-only features stay on dev-dependency edges; consumer-owned features die with their consumer
+        # `--selftest` first: the consumer-owned registry may be empty, and the
+        # selftest is what keeps that limb from passing vacuously (rule 47).
+        run: |
+          python3 scripts/ci/check_test_only_features.py --selftest
+          python3 scripts/ci/check_test_only_features.py
+      # Same placement reason as the step above: this reads `cargo tree`.
+      # shekyl-chain-rules (DRS-E6) must reach neither `redb` nor
+      # `shekyl-chain-store` anywhere in its resolved graph, normal or dev
+      # edges — the crate's compile_fail doctests see only a direct `use`, and
+      # the coverage gate only its own Cargo.toml; transitive arrival through
+      # an adopted crate is what this belt exists for (CHAIN_RULES_CRATE.md
+      # §6.5, G1). Fails closed: a cargo failure is a failure, not an empty
+      # graph; each banned name is asserted to be a real workspace package.
+      - name: "chain-rules: no store handle in the resolved graph (G1)"
+        run: scripts/ci/check_chain_rules_no_store.sh
       - name: verify x86_64 architecture
         run: |
           ARCH=$(uname -m)
@@ -197,6 +211,10 @@ jobs:
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
             rust/shekyl-archival-retention/fuzz/fuzz_targets/fuzz_serve_credit_gate.rs
             rust/shekyl-archival-retention/fuzz/fuzz_targets/fuzz_serve_credit_block_unique.rs
+            rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_extra_parse.rs
+            rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message1.rs
+            rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message2.rs
+            rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_open_one.rs
           )
           MISSING=0
           for target in "${REQUIRED_TARGETS[@]}"; do
@@ -380,7 +398,7 @@ jobs:
         run: >-
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
           -p shekyl-tor-control-wallet -p shekyl-tor-control-client -p shekyl-p-serve -p shekyl-p-host
-          -p shekyl-operator-alarm -p shekyl-economics
+          -p shekyl-operator-alarm -p shekyl-economics -p shekyl-store-codec
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

@@ -14,21 +14,43 @@ publish = false
 # one side only), which for a measurement rig means measuring something other
 # than what ships. It now drives `shekyl_p_serve` behind a fixture
 # `ShardProvider`, so the inbound-hardening shape under test is the shipped one.
-shekyl-p-serve = { path = "../shekyl-p-serve" }
+# `test-signer` arms the ephemeral attestation key the personas countersign
+# with (`SF-D8`): this crate is a DISPOSABLE measurement rig, not a production
+# graph, and `scripts/ci/check_p_fetch_dep_cut.py` asserts the feature stays
+# out of every graph that ships.
+shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
 # The harness's own async plumbing (bring-up, timed fetches, teardown). The v3
-# onion encoding that used to live here (and its ed25519-dalek/sha3/sha2/zeroize
-# deps) relocated to `shekyl-tor-control-client::onion_identity` — SPIKE-F-4 completed — so the
-# spike carries no crypto deps of its own now.
+# onion encoding that used to live here (and its ed25519-dalek/sha3/sha2
+# deps) relocated to `shekyl-tor-control-client::onion_identity` — SPIKE-F-4
+# completed. `zeroize` stays as a direct dep for the apparatus master seed.
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "time", "macros", "sync"] }
 # Speaks the control protocol directly (ADD_ONION, managed launch) — the client
 # crate, not the wallet supervisor.
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+# The per-apparatus onion-identity master seed (`harness::fresh_apparatus_seed`)
+# is a cryptographic secret: wrap it in `Zeroizing` at mint (rule 35). Direct
+# dep, same workspace pin as the rest of the tree — not a leftover of the
+# relocated onion-encoding stack.
+zeroize = { workspace = true }
 # The harness holds the control actor's `ActorRef` to issue ADD_ONION; kameo is
 # the workspace's actor stack, already pinned there.
 kameo = { workspace = true }
-# The client leg: per-persona SOCKS isolation + the bounded `blocking_get`.
-shekyl-p-transport = { path = "../shekyl-p-transport" }
-# `PCanonicalId` / `PSlot` — the persona identity the derivation binds to.
+# The per-apparatus derivation seed (`harness::fresh_apparatus_seed`): OS
+# entropy, so no two apparatus instances ever publish the same `.onion`. Same
+# crate and pin as `shekyl-p-fetch`'s request nonce.
+getrandom = "0.2"
+# The client leg: the **production** daemon fetch client (`SF-D5` header,
+# `SF-D8` countersignature verify, `SF-D6` typed outcomes). `shekyl-p-transport`
+# used to sit here; its `blocking_get` cannot carry the request header, so every
+# fetch through it was the identical 404 once (a) landed. This crate is the one
+# place both halves of the `SF-D4` dep cut are linked on purpose — it is a rig,
+# not a shipped root, and `check_p_fetch_dep_cut.py` reads its roots from
+# `BuildRust.cmake`, which never names this crate.
+shekyl-p-fetch = { path = "../shekyl-p-fetch" }
+# `PASS_ANCHOR_DEPTH_BLOCKS` — the one burial depth both sides of the apparatus
+# anchor against, read from the same constant the verifier reads.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `PSlot` — the persona identity the derivation binds to.
 shekyl-types = { path = "../shekyl-types" }
 # `derive_p_hs_id_seed` (+ `DerivationNetwork` / `SeedFormat`) — the production
 # GF-9 HS-identity seed the onion encoding consumes (SPIKE-F-4 relocation).
@@ -63,7 +85,8 @@ name = "extract-shard"
 path = "bins/extract_shard.rs"
 
 [dev-dependencies]
-# The live apparatus test drives the harness on a tokio runtime.
+# The live apparatus test drives the harness on a tokio runtime; the loopback
+# client-leg test runs a SOCKS5h shim on it.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 [lints]

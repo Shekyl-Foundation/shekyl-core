@@ -76,7 +76,6 @@
 
 #include "string_tools.h"
 #include "common/util.h"
-#include "common/pruning.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "crypto/crypto.h"
 #include "profile_tools.h"
@@ -142,7 +141,25 @@ using namespace crypto;
 // epoch close backfilled the key. Refused at open instead; the bump also
 // keeps a V11 binary (which reads no receipts) out of a V12 datadir.
 // Delete and resync.
-#define VERSION 12
+// V13: the JoinMarket serving endpoint (EU-D3) — layout. The `archival_bond`
+// value gains the 32-byte serving endpoint column after `bond_spend_pk`
+// (kVersion 6→7; every V12 record fails decode's version pin, so a V12
+// datadir cannot be read). No new table. Pre-genesis: delete and resync.
+// V14: PL-D3 (docs/design/FCMP_SPEND_LINKABILITY.md §6.2) — content. The
+// curve-tree leaf's 4th scalar is the x-coordinate of the output's PQC leaf
+// commitment, not the key hash; every stored leaf, layer hash and root a V13
+// datadir holds was built from a derivation no current node reproduces. Same
+// byte layout (128-byte leaves), so only the version pin makes the stale tree
+// loud. Pre-genesis: delete and resync.
+// V15: two tables leave the X-macro — `txs_prunable_tip` (the stripe engine's
+// tip index; write-never since PDM-Q7 deleted the engine) and `output_metadata`
+// (the C++ tx-data prune's post-discard scan cache, whose read chain was dead
+// two levels deep). Layout, not content: a V14 env has two named DBs a V15
+// binary never opens, and V15's `maxdbs` ceiling is derived from a shorter
+// list. The discard that replaces both is S-PRUNE, Rust, on the redb store
+// (DRS_E1_SPRUNE.md) — nothing here is carried into it. Pre-genesis: delete
+// and resync.
+#define VERSION 15
 
 namespace
 {
@@ -279,7 +296,6 @@ namespace
  * txs_pqc_auths    txn ID       pqc_auths slice (v3+ non-coinbase), optional
  * txs_prunable     txn ID       prunable txn blob
  * txs_prunable_hash txn ID      prunable txn hash
- * txs_prunable_tip txn ID       height
  * tx_indices       txn hash     {txn ID, metadata}
  * tx_outputs       txn ID       [txn amount output indices]
  *
@@ -324,7 +340,6 @@ namespace
   X(LMDB_TXS_PQC_AUTHS,                     "txs_pqc_auths") \
   X(LMDB_TXS_PRUNABLE,                      "txs_prunable") \
   X(LMDB_TXS_PRUNABLE_HASH,                 "txs_prunable_hash") \
-  X(LMDB_TXS_PRUNABLE_TIP,                  "txs_prunable_tip") \
   X(LMDB_TX_INDICES,                        "tx_indices") \
   X(LMDB_TX_OUTPUTS,                        "tx_outputs") \
   \
@@ -354,7 +369,7 @@ namespace
   X(LMDB_ARCHIVAL_EMISSION_CLAIM_LOG,       "archival_emission_claim_log") \
   X(LMDB_ARCHIVAL_BOND_UNBOND_LOG,          "archival_bond_unbond_log") \
   X(LMDB_ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG, "archival_bond_holdings_update_log") \
-  X(LMDB_ARCHIVAL_BOND_REBOND_LOG,          "archival_bond_rebond_log") \
+  X(LMDB_ARCHIVAL_BOND_REINSTATE_LOG,          "archival_bond_reinstate_log") \
   X(LMDB_ARCHIVAL_R_MARKET,                 "archival_r_market") \
   X(LMDB_ARCHIVAL_SIGMA_WORK,               "archival_sigma_work") \
   X(LMDB_ARCHIVAL_EPOCH_CLOSE_LOG,          "archival_epoch_close_log") \
@@ -373,7 +388,6 @@ namespace
   X(LMDB_CURVE_TREE_CHECKPOINTS,            "curve_tree_checkpoints") \
   X(LMDB_CURVE_TREE_ROOTS,                  "curve_tree_roots") \
   \
-  X(LMDB_OUTPUT_METADATA,                   "output_metadata") \
   /* end of list */
 
 #define SHEKYL_LMDB_TABLE_DECL(sym, name) const char* const sym = name;
@@ -1071,7 +1085,6 @@ uint64_t BlockchainLMDB::add_transaction_data(const crypto::hash& blk_hash, cons
   CURSOR(txs_pqc_auths)
   CURSOR(txs_prunable)
   CURSOR(txs_prunable_hash)
-  CURSOR(txs_prunable_tip)
   CURSOR(tx_indices)
 
   MDB_val_set(val_tx_id, tx_id);
@@ -1153,14 +1166,6 @@ uint64_t BlockchainLMDB::add_transaction_data(const crypto::hash& blk_hash, cons
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to add prunable tx blob to db transaction: ", result).c_str()));
 
-  if (get_blockchain_pruning_seed())
-  {
-    MDB_val_set(val_height, m_height);
-    result = mdb_cursor_put(m_cur_txs_prunable_tip, &val_tx_id, &val_height, 0);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to add prunable tx id to db transaction: ", result).c_str()));
-  }
-
   if (tx.version > 1)
   {
     MDB_val_set(val_prunable_hash, tx_prunable_hash);
@@ -1187,7 +1192,6 @@ void BlockchainLMDB::remove_transaction_data(const crypto::hash& tx_hash, const 
   CURSOR(txs_pqc_auths)
   CURSOR(txs_prunable)
   CURSOR(txs_prunable_hash)
-  CURSOR(txs_prunable_tip)
   CURSOR(tx_outputs)
 
   MDB_val_set(val_h, tx_hash);
@@ -1222,16 +1226,6 @@ void BlockchainLMDB::remove_transaction_data(const crypto::hash& tx_hash, const 
   }
   else if (result != MDB_NOTFOUND)
       throw1(DB_ERROR(lmdb_error("Failed to locate prunable tx for removal: ", result).c_str()));
-
-  result = mdb_cursor_get(m_cur_txs_prunable_tip, &val_tx_id, NULL, MDB_SET);
-  if (result && result != MDB_NOTFOUND)
-      throw1(DB_ERROR(lmdb_error("Failed to locate tx id for removal: ", result).c_str()));
-  if (result == 0)
-  {
-    result = mdb_cursor_del(m_cur_txs_prunable_tip, 0);
-    if (result)
-        throw1(DB_ERROR(lmdb_error("Error adding removal of tx id to db transaction", result).c_str()));
-  }
 
   if (tx.version > 1)
   {
@@ -1664,8 +1658,6 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   lmdb_db_open(txn, LMDB_TXS_PQC_AUTHS, MDB_INTEGERKEY | MDB_CREATE, m_txs_pqc_auths, "Failed to open db handle for m_txs_pqc_auths");
   lmdb_db_open(txn, LMDB_TXS_PRUNABLE, MDB_INTEGERKEY | MDB_CREATE, m_txs_prunable, "Failed to open db handle for m_txs_prunable");
   lmdb_db_open(txn, LMDB_TXS_PRUNABLE_HASH, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_CREATE, m_txs_prunable_hash, "Failed to open db handle for m_txs_prunable_hash");
-  if (!(mdb_flags & MDB_RDONLY))
-    lmdb_db_open(txn, LMDB_TXS_PRUNABLE_TIP, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_CREATE, m_txs_prunable_tip, "Failed to open db handle for m_txs_prunable_tip");
   lmdb_db_open(txn, LMDB_TX_INDICES, MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_tx_indices, "Failed to open db handle for m_tx_indices");
   lmdb_db_open(txn, LMDB_TX_OUTPUTS, MDB_INTEGERKEY | MDB_CREATE, m_tx_outputs, "Failed to open db handle for m_tx_outputs");
 
@@ -1709,8 +1701,8 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   lmdb_db_open(txn, LMDB_ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG, MDB_CREATE,
     m_archival_bond_holdings_update_log,
     "Failed to open db handle for m_archival_bond_holdings_update_log");
-  lmdb_db_open(txn, LMDB_ARCHIVAL_BOND_REBOND_LOG, MDB_CREATE, m_archival_bond_rebond_log,
-    "Failed to open db handle for m_archival_bond_rebond_log");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_BOND_REINSTATE_LOG, MDB_CREATE, m_archival_bond_reinstate_log,
+    "Failed to open db handle for m_archival_bond_reinstate_log");
   lmdb_db_open(txn, LMDB_ARCHIVAL_R_MARKET, MDB_CREATE, m_archival_r_market,
     "Failed to open db handle for m_archival_r_market");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SIGMA_WORK, MDB_CREATE, m_archival_sigma_work,
@@ -1754,16 +1746,12 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   lmdb_db_open(txn, LMDB_CURVE_TREE_CHECKPOINTS, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_checkpoints, "Failed to open db handle for m_curve_tree_checkpoints");
   lmdb_db_open(txn, LMDB_CURVE_TREE_ROOTS, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_roots, "Failed to open db handle for m_curve_tree_roots");
 
-  lmdb_db_open(txn, LMDB_OUTPUT_METADATA, MDB_INTEGERKEY | MDB_CREATE, m_output_metadata, "Failed to open db handle for m_output_metadata");
-
   mdb_set_dupsort(txn, m_spent_keys, compare_hash32);
   mdb_set_dupsort(txn, m_block_heights, compare_hash32);
   mdb_set_dupsort(txn, m_tx_indices, compare_hash32);
   mdb_set_dupsort(txn, m_output_amounts, compare_uint64);
   mdb_set_dupsort(txn, m_output_txs, compare_uint64);
   mdb_set_dupsort(txn, m_block_info, compare_uint64);
-  if (!(mdb_flags & MDB_RDONLY))
-    mdb_set_dupsort(txn, m_txs_prunable_tip, compare_uint64);
   mdb_set_compare(txn, m_txs_prunable, compare_uint64);
   mdb_set_compare(txn, m_txs_pqc_auths, compare_uint64);
   mdb_set_dupsort(txn, m_txs_prunable_hash, compare_uint64);
@@ -2280,339 +2268,6 @@ cryptonote::blobdata BlockchainLMDB::get_txpool_tx_blob(const crypto::hash& txid
   if (!get_txpool_tx_blob(txid, bd, tx_category))
     throw1(DB_ERROR("Tx not found in txpool: "));
   return bd;
-}
-
-uint32_t BlockchainLMDB::get_blockchain_pruning_seed() const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX_RDONLY();
-  RCURSOR(properties)
-  MDB_val_str(k, "pruning_seed");
-  MDB_val v;
-  int result = mdb_cursor_get(m_cur_properties, &k, &v, MDB_SET);
-  if (result == MDB_NOTFOUND)
-    return 0;
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to retrieve pruning seed: ", result).c_str()));
-  if (v.mv_size != sizeof(uint32_t))
-    throw0(DB_ERROR("Failed to retrieve or create pruning seed: unexpected value size"));
-  uint32_t pruning_seed;
-  memcpy(&pruning_seed, v.mv_data, sizeof(pruning_seed));
-  TXN_POSTFIX_RDONLY();
-  return pruning_seed;
-}
-
-static bool is_v1_tx(MDB_cursor *c_txs_pruned, MDB_val *tx_id)
-{
-  MDB_val v;
-  int ret = mdb_cursor_get(c_txs_pruned, tx_id, &v, MDB_SET);
-  if (ret)
-    throw0(DB_ERROR(lmdb_error("Failed to find transaction pruned data: ", ret).c_str()));
-  if (v.mv_size == 0)
-    throw0(DB_ERROR("Invalid transaction pruned data"));
-  return cryptonote::is_v1_tx(cryptonote::blobdata_ref{(const char*)v.mv_data, v.mv_size});
-}
-
-enum { prune_mode_prune, prune_mode_update, prune_mode_check };
-
-bool BlockchainLMDB::prune_worker(int mode, uint32_t pruning_seed)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  const uint32_t log_stripes = tools::get_pruning_log_stripes(pruning_seed);
-  if (log_stripes && log_stripes != CRYPTONOTE_PRUNING_LOG_STRIPES)
-    throw0(DB_ERROR("Pruning seed not in range"));
-  pruning_seed = tools::get_pruning_stripe(pruning_seed);
-  if (pruning_seed > (1ul << CRYPTONOTE_PRUNING_LOG_STRIPES))
-    throw0(DB_ERROR("Pruning seed not in range"));
-  check_open();
-
-  TIME_MEASURE_START(t);
-
-  size_t n_total_records = 0, n_prunable_records = 0, n_pruned_records = 0, commit_counter = 0;
-  uint64_t n_bytes = 0;
-
-  mdb_txn_safe txn;
-  auto result = mdb_txn_begin(m_env, NULL, 0, txn);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-
-  MDB_stat db_stats;
-  if ((result = mdb_stat(txn, m_txs_prunable, &db_stats)))
-    throw0(DB_ERROR(lmdb_error("Failed to query m_txs_prunable: ", result).c_str()));
-  const size_t pages0 = db_stats.ms_branch_pages + db_stats.ms_leaf_pages + db_stats.ms_overflow_pages;
-
-  MDB_val_str(k, "pruning_seed");
-  MDB_val v;
-  result = mdb_get(txn, m_properties, &k, &v);
-  bool prune_tip_table = false;
-  if (result == MDB_NOTFOUND)
-  {
-    // not pruned yet
-    if (mode != prune_mode_prune)
-    {
-      txn.abort();
-      TIME_MEASURE_FINISH(t);
-      MDEBUG("Pruning not enabled, nothing to do");
-      return true;
-    }
-    if (pruning_seed == 0)
-      pruning_seed = tools::get_random_stripe();
-    pruning_seed = tools::make_pruning_seed(pruning_seed, CRYPTONOTE_PRUNING_LOG_STRIPES);
-    v.mv_data = &pruning_seed;
-    v.mv_size = sizeof(pruning_seed);
-    result = mdb_put(txn, m_properties, &k, &v, 0);
-    if (result)
-      throw0(DB_ERROR("Failed to save pruning seed"));
-    prune_tip_table = false;
-  }
-  else if (result == 0)
-  {
-    // pruned already
-    if (v.mv_size != sizeof(uint32_t))
-      throw0(DB_ERROR("Failed to retrieve or create pruning seed: unexpected value size"));
-    const uint32_t data = *(const uint32_t*)v.mv_data;
-    if (pruning_seed == 0)
-      pruning_seed = tools::get_pruning_stripe(data);
-    if (tools::get_pruning_stripe(data) != pruning_seed)
-      throw0(DB_ERROR("Blockchain already pruned with different seed"));
-    if (tools::get_pruning_log_stripes(data) != CRYPTONOTE_PRUNING_LOG_STRIPES)
-      throw0(DB_ERROR("Blockchain already pruned with different base"));
-    pruning_seed = tools::make_pruning_seed(pruning_seed, CRYPTONOTE_PRUNING_LOG_STRIPES);
-    prune_tip_table = (mode == prune_mode_update);
-  }
-  else
-  {
-    throw0(DB_ERROR(lmdb_error("Failed to retrieve or create pruning seed: ", result).c_str()));
-  }
-
-  if (mode == prune_mode_check)
-    MINFO("Checking blockchain pruning...");
-  else
-    MINFO("Pruning blockchain...");
-
-  MDB_cursor *c_txs_pruned, *c_txs_prunable, *c_txs_prunable_tip;
-  result = mdb_cursor_open(txn, m_txs_pruned, &c_txs_pruned);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_pruned: ", result).c_str()));
-  result = mdb_cursor_open(txn, m_txs_prunable, &c_txs_prunable);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_prunable: ", result).c_str()));
-  result = mdb_cursor_open(txn, m_txs_prunable_tip, &c_txs_prunable_tip);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_prunable_tip: ", result).c_str()));
-  const uint64_t blockchain_height = height();
-
-  if (prune_tip_table)
-  {
-    MDB_cursor_op op = MDB_FIRST;
-    while (1)
-    {
-      int ret = mdb_cursor_get(c_txs_prunable_tip, &k, &v, op);
-      op = MDB_NEXT;
-      if (ret == MDB_NOTFOUND)
-        break;
-      if (ret)
-        throw0(DB_ERROR(lmdb_error("Failed to enumerate transactions: ", ret).c_str()));
-
-      uint64_t block_height;
-      memcpy(&block_height, v.mv_data, sizeof(block_height));
-      if (block_height + CRYPTONOTE_PRUNING_TIP_BLOCKS < blockchain_height)
-      {
-        ++n_total_records;
-        if (!tools::has_unpruned_block(block_height, blockchain_height, pruning_seed) && !is_v1_tx(c_txs_pruned, &k))
-        {
-          ++n_prunable_records;
-          result = mdb_cursor_get(c_txs_prunable, &k, &v, MDB_SET);
-          if (result == MDB_NOTFOUND)
-            MDEBUG("Already pruned at height " << block_height << "/" << blockchain_height);
-          else if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to find transaction prunable data: ", result).c_str()));
-          else
-          {
-            MDEBUG("Pruning at height " << block_height << "/" << blockchain_height);
-            ++n_pruned_records;
-            ++commit_counter;
-            n_bytes += k.mv_size + v.mv_size;
-            result = mdb_cursor_del(c_txs_prunable, 0);
-            if (result)
-              throw0(DB_ERROR(lmdb_error("Failed to delete transaction prunable data: ", result).c_str()));
-          }
-        }
-        result = mdb_cursor_del(c_txs_prunable_tip, 0);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to delete transaction tip data: ", result).c_str()));
-
-        if (mode != prune_mode_check && commit_counter >= 4096)
-        {
-          MDEBUG("Committing txn at checkpoint...");
-          txn.commit();
-          result = mdb_txn_begin(m_env, NULL, 0, txn);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-          result = mdb_cursor_open(txn, m_txs_pruned, &c_txs_pruned);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_pruned: ", result).c_str()));
-          result = mdb_cursor_open(txn, m_txs_prunable, &c_txs_prunable);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_prunable: ", result).c_str()));
-          result = mdb_cursor_open(txn, m_txs_prunable_tip, &c_txs_prunable_tip);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_prunable_tip: ", result).c_str()));
-          commit_counter = 0;
-        }
-      }
-    }
-  }
-  else
-  {
-    MDB_cursor *c_tx_indices;
-    result = mdb_cursor_open(txn, m_tx_indices, &c_tx_indices);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to open a cursor for tx_indices: ", result).c_str()));
-    MDB_cursor_op op = MDB_FIRST;
-    while (1)
-    {
-      int ret = mdb_cursor_get(c_tx_indices, &k, &v, op);
-      op = MDB_NEXT;
-      if (ret == MDB_NOTFOUND)
-        break;
-      if (ret)
-        throw0(DB_ERROR(lmdb_error("Failed to enumerate transactions: ", ret).c_str()));
-
-      ++n_total_records;
-      //const txindex *ti = (const txindex *)v.mv_data;
-      txindex ti;
-      memcpy(&ti, v.mv_data, sizeof(ti));
-      const uint64_t block_height = ti.data.block_id;
-      if (block_height + CRYPTONOTE_PRUNING_TIP_BLOCKS >= blockchain_height)
-      {
-        MDB_val_set(kp, ti.data.tx_id);
-        MDB_val_set(vp, block_height);
-        if (mode == prune_mode_check)
-        {
-          result = mdb_cursor_get(c_txs_prunable_tip, &kp, &vp, MDB_SET);
-          if (result && result != MDB_NOTFOUND)
-            throw0(DB_ERROR(lmdb_error("Error looking for transaction prunable data: ", result).c_str()));
-          if (result == MDB_NOTFOUND)
-            MERROR("Transaction not found in prunable tip table for height " << block_height << "/" << blockchain_height <<
-                ", seed " << epee::string_tools::to_string_hex(pruning_seed));
-        }
-        else
-        {
-          result = mdb_cursor_put(c_txs_prunable_tip, &kp, &vp, 0);
-          if (result && result != MDB_NOTFOUND)
-            throw0(DB_ERROR(lmdb_error("Error looking for transaction prunable data: ", result).c_str()));
-        }
-      }
-      MDB_val_set(kp, ti.data.tx_id);
-      if (!tools::has_unpruned_block(block_height, blockchain_height, pruning_seed) && !is_v1_tx(c_txs_pruned, &kp))
-      {
-        result = mdb_cursor_get(c_txs_prunable, &kp, &v, MDB_SET);
-        if (result && result != MDB_NOTFOUND)
-          throw0(DB_ERROR(lmdb_error("Error looking for transaction prunable data: ", result).c_str()));
-        if (mode == prune_mode_check)
-        {
-          if (result != MDB_NOTFOUND)
-            MERROR("Prunable data found for pruned height " << block_height << "/" << blockchain_height <<
-                ", seed " << epee::string_tools::to_string_hex(pruning_seed));
-        }
-        else
-        {
-          ++n_prunable_records;
-          if (result == MDB_NOTFOUND)
-            MDEBUG("Already pruned at height " << block_height << "/" << blockchain_height);
-          else
-          {
-            MDEBUG("Pruning at height " << block_height << "/" << blockchain_height);
-            ++n_pruned_records;
-            n_bytes += kp.mv_size + v.mv_size;
-            result = mdb_cursor_del(c_txs_prunable, 0);
-            if (result)
-              throw0(DB_ERROR(lmdb_error("Failed to delete transaction prunable data: ", result).c_str()));
-            ++commit_counter;
-          }
-        }
-      }
-      else
-      {
-        if (mode == prune_mode_check)
-        {
-          MDB_val_set(kp, ti.data.tx_id);
-          result = mdb_cursor_get(c_txs_prunable, &kp, &v, MDB_SET);
-          if (result && result != MDB_NOTFOUND)
-            throw0(DB_ERROR(lmdb_error("Error looking for transaction prunable data: ", result).c_str()));
-          if (result == MDB_NOTFOUND)
-            MERROR("Prunable data not found for unpruned height " << block_height << "/" << blockchain_height <<
-                ", seed " << epee::string_tools::to_string_hex(pruning_seed));
-        }
-      }
-
-      if (mode != prune_mode_check && commit_counter >= 4096)
-      {
-        MDEBUG("Committing txn at checkpoint...");
-        txn.commit();
-        result = mdb_txn_begin(m_env, NULL, 0, txn);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-        result = mdb_cursor_open(txn, m_txs_pruned, &c_txs_pruned);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_pruned: ", result).c_str()));
-        result = mdb_cursor_open(txn, m_txs_prunable, &c_txs_prunable);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_prunable: ", result).c_str()));
-        result = mdb_cursor_open(txn, m_txs_prunable_tip, &c_txs_prunable_tip);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_prunable_tip: ", result).c_str()));
-        result = mdb_cursor_open(txn, m_tx_indices, &c_tx_indices);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for tx_indices: ", result).c_str()));
-        MDB_val val;
-        val.mv_size = sizeof(ti);
-        val.mv_data = (void *)&ti;
-        result = mdb_cursor_get(c_tx_indices, (MDB_val*)&zerokval, &val, MDB_GET_BOTH);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to restore cursor for tx_indices: ", result).c_str()));
-        commit_counter = 0;
-      }
-    }
-    mdb_cursor_close(c_tx_indices);
-  }
-
-  if ((result = mdb_stat(txn, m_txs_prunable, &db_stats)))
-    throw0(DB_ERROR(lmdb_error("Failed to query m_txs_prunable: ", result).c_str()));
-  const size_t pages1 = db_stats.ms_branch_pages + db_stats.ms_leaf_pages + db_stats.ms_overflow_pages;
-  const size_t db_bytes = (pages0 - pages1) * db_stats.ms_psize;
-
-  mdb_cursor_close(c_txs_prunable_tip);
-  mdb_cursor_close(c_txs_prunable);
-  mdb_cursor_close(c_txs_pruned);
-
-  txn.commit();
-
-  TIME_MEASURE_FINISH(t);
-
-  MINFO((mode == prune_mode_check ? "Checked" : "Pruned") << " blockchain in " <<
-      t << " ms: " << (n_bytes/1024.0f/1024.0f) << " MB (" << db_bytes/1024.0f/1024.0f << " MB) pruned in " <<
-      n_pruned_records << " records (" << pages0 - pages1 << "/" << pages0 << " " << db_stats.ms_psize << " byte pages), " <<
-      n_prunable_records << "/" << n_total_records << " pruned records");
-  return true;
-}
-
-bool BlockchainLMDB::prune_blockchain(uint32_t pruning_seed)
-{
-  return prune_worker(prune_mode_prune, pruning_seed);
-}
-
-bool BlockchainLMDB::update_pruning()
-{
-  return prune_worker(prune_mode_update, 0);
-}
-
-bool BlockchainLMDB::check_pruning()
-{
-  return prune_worker(prune_mode_check, 0);
 }
 
 bool BlockchainLMDB::for_all_txpool_txes(std::function<bool(const crypto::hash&, const txpool_tx_meta_t&, const cryptonote::blobdata_ref*)> f, bool include_blob, relay_category category) const
@@ -4529,99 +4184,6 @@ void BlockchainLMDB::get_output_tx_and_index(const uint64_t& amount, const std::
   LOG_PRINT_L3("db3: " << db3);
 }
 
-std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> BlockchainLMDB::get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX_RDONLY();
-  RCURSOR(output_amounts);
-
-  std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> histogram;
-  MDB_val k;
-  MDB_val v;
-
-  if (amounts.empty())
-  {
-    MDB_cursor_op op = MDB_FIRST;
-    while (1)
-    {
-      int ret = mdb_cursor_get(m_cur_output_amounts, &k, &v, op);
-      op = MDB_NEXT_NODUP;
-      if (ret == MDB_NOTFOUND)
-        break;
-      if (ret)
-        throw0(DB_ERROR(lmdb_error("Failed to enumerate outputs: ", ret).c_str()));
-      mdb_size_t num_elems = 0;
-      mdb_cursor_count(m_cur_output_amounts, &num_elems);
-      uint64_t amount = *(const uint64_t*)k.mv_data;
-      if (num_elems >= min_count)
-        histogram[amount] = std::make_tuple(num_elems, 0, 0);
-    }
-  }
-  else
-  {
-    for (const auto &amount: amounts)
-    {
-      MDB_val_copy<uint64_t> k(amount);
-      int ret = mdb_cursor_get(m_cur_output_amounts, &k, &v, MDB_SET);
-      if (ret == MDB_NOTFOUND)
-      {
-        if (0 >= min_count)
-          histogram[amount] = std::make_tuple(0, 0, 0);
-      }
-      else if (ret == MDB_SUCCESS)
-      {
-        mdb_size_t num_elems = 0;
-        mdb_cursor_count(m_cur_output_amounts, &num_elems);
-        if (num_elems >= min_count)
-          histogram[amount] = std::make_tuple(num_elems, 0, 0);
-      }
-      else
-      {
-        throw0(DB_ERROR(lmdb_error("Failed to enumerate outputs: ", ret).c_str()));
-      }
-    }
-  }
-
-  if (unlocked || recent_cutoff > 0) {
-    const uint64_t blockchain_height = height();
-    for (std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>>::iterator i = histogram.begin(); i != histogram.end(); ++i) {
-      uint64_t amount = i->first;
-      uint64_t num_elems = std::get<0>(i->second);
-      while (num_elems > 0) {
-        const tx_out_index toi = get_output_tx_and_index(amount, num_elems - 1);
-        const uint64_t height = get_tx_block_height(toi.first);
-        if (height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE <= blockchain_height)
-          break;
-        --num_elems;
-      }
-      // modifying second does not invalidate the iterator
-      std::get<1>(i->second) = num_elems;
-
-      if (recent_cutoff > 0)
-      {
-        uint64_t recent = 0;
-        while (num_elems > 0) {
-          const tx_out_index toi = get_output_tx_and_index(amount, num_elems - 1);
-          const uint64_t height = get_tx_block_height(toi.first);
-          const uint64_t ts = get_block_timestamp(height);
-          if (ts < recent_cutoff)
-            break;
-          --num_elems;
-          ++recent;
-        }
-        // modifying second does not invalidate the iterator
-        std::get<2>(i->second) = recent;
-      }
-    }
-  }
-
-  TXN_POSTFIX_RDONLY();
-
-  return histogram;
-}
-
 bool BlockchainLMDB::get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -5016,8 +4578,7 @@ void BlockchainLMDB::set_settlement_epoch_blocks_pin(uint64_t blocks)
   check_open();
 
   // Init-time write (Blockchain::init, before any block-add txn exists), so
-  // this manages its own short transaction — the same shape as
-  // prune_worker's pruning_seed write.
+  // this manages its own short transaction.
   mdb_txn_safe txn;
   if (auto result = mdb_txn_begin(m_env, NULL, 0, txn))
     throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
@@ -5393,7 +4954,7 @@ namespace {
 // ─── Height-keyed archival journal helpers ─────────────────────────────────
 //
 // Five archival journals (slash log, emission-claim log, release log,
-// holdings-update log, rebond log) share the same BE(height)‖BE(seq) row
+// holdings-update log, reinstate log) share the same BE(height)‖BE(seq) row
 // layout and the same three sub-operations: probe the next free seq for a
 // height, read every row at a height, delete every row at a height. `KeyT`
 // is the row-key type (constructed from (height, seq)); the write-txn and
@@ -5549,7 +5110,8 @@ bool BlockchainLMDB::get_archival_shard_segment_at_height(uint64_t shard_id, uin
 
 void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   const std::vector<uint8_t>& hybrid_pubkey,
-  const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
+  const std::vector<uint8_t>& bond_spend_pk, const crypto::public_key& endpoint,
+  uint64_t join_settlement_epoch,
   uint64_t bonded_total_atomic, uint8_t holdings_kind,
   const std::vector<uint64_t>& held_shard_ids,
   const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals)
@@ -5563,6 +5125,11 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   // Release + re-JoinMarket). Every later bond_debit's pqc auth verifies
   // against this copy, never the identity key.
   bond.bond_spend_pk = bond_spend_pk;
+  // EU-D3: the serving endpoint the vin carried, committed like bond_spend_pk
+  // — once, immutable for the record's life (a new onion address is a new
+  // persona). This is the one conversion from the vin's crypto type to the
+  // codec's byte array.
+  std::memcpy(bond.endpoint.data(), endpoint.data, bond.endpoint.size());
   bond.join_settlement_epoch = join_settlement_epoch;
   bond.bonded_total_atomic = bonded_total_atomic;
   bond.holdings_kind = holdings_kind;
@@ -5747,7 +5314,7 @@ bool BlockchainLMDB::archival_baseline_observed_at_epoch(uint64_t block_height,
   // epoch this returns false for, which is what scopes the window to the pair's
   // current continuous challengeable run. Three consensus boundaries fall out
   // of that, none special-cased: before E_join + 1 and inside a bad interval
-  // good_through is false (so a slash -> Rebond reinstatement starts the window
+  // good_through is false (so a slash -> Reinstate reinstatement starts the window
   // clean); at or before the shard's E_add the as-of-H_fire holdings read is
   // false (the partial add epoch is forfeited in both directions, P2B-7 Pin 5).
 
@@ -6700,211 +6267,96 @@ void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
     static_cast<uint32_t>(rows.size()), "archival bond release log");
 }
 
-namespace {
-// Rebuild the index-parallel add-epoch array for a POST holdings set from the
-// pre-connect (shard_id -> add_epoch) association. The association is indexed
-// once (O(n)) so a large post set does not force a quadratic per-shard scan at
-// the 4096 holdings cap. The mapping is exact — a POST shard with no pre-image
-// entry (and no override) is a fold/record desync, so it aborts loud rather
-// than inventing an epoch.
-std::vector<uint64_t> rebuild_shard_add_epochs(
-  const std::vector<uint64_t>& post_shard_ids,
-  const std::vector<uint64_t>& prev_shard_ids,
-  const std::vector<uint64_t>& prev_add_epochs,
-  const std::vector<uint64_t>& override_shard_ids, uint64_t override_add_epoch)
+void BlockchainLMDB::apply_archival_holdings_update_add(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*post_shard_ids*/)
 {
-  std::unordered_map<uint64_t, uint64_t> prev_add_epoch_of;
-  prev_add_epoch_of.reserve(prev_shard_ids.size());
-  for (size_t i = 0; i < prev_shard_ids.size(); ++i)
-    prev_add_epoch_of.emplace(prev_shard_ids[i], prev_add_epochs[i]);
-  // The common no-override path (HoldingsUpdate-drop, standing-only Rebond)
-  // skips populating the lookup set — an empty set answers every query false
-  // without paying its buckets.
-  std::unordered_set<uint64_t> overrides;
-  if (!override_shard_ids.empty())
-    overrides.insert(override_shard_ids.begin(), override_shard_ids.end());
-
-  std::vector<uint64_t> out;
-  out.reserve(post_shard_ids.size());
-  for (const uint64_t s : post_shard_ids)
-  {
-    if (!overrides.empty() && overrides.count(s))
-    {
-      out.push_back(override_add_epoch);
-      continue;
-    }
-    const auto it = prev_add_epoch_of.find(s);
-    if (it == prev_add_epoch_of.end())
-      throw std::runtime_error(
-        "FATAL: bond-post carried shard missing from pre-image add-epochs");
-    out.push_back(it->second);
-  }
-  return out;
+  throw std::runtime_error(
+    "FATAL: HoldingsUpdate is REJECTED (immutable-bond 2026-09-20)");
 }
-} // namespace
 
-// Shared bond-record connect-writer scaffold (gate-4 §4.4 / §3.4): txn guard,
-// record load, v6 desync check, pre-image capture, live-counter read, the
-// kind-specific Rust fold via `fold`, the optional in-place interval close,
-// then the coupled-array rebuild + record/counter writes + the kind's journal
-// append. HoldingsUpdate add/drop and Rebond differ ONLY in the fold and the
-// journal row they supply; single-sourcing the scaffold means a
-// journal/ordering/invariant change cannot land on one bond-post kind and
-// silently miss another (the kinds must stay reorg-twinned with their pops).
-void BlockchainLMDB::apply_archival_bond_record_update(uint64_t block_height,
-  const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids,
-  const char* arm, const bond_record_fold_t& fold, const bond_record_journal_t& journal)
+void BlockchainLMDB::apply_archival_holdings_update_drop(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*post_shard_ids*/)
+{
+  throw std::runtime_error(
+    "FATAL: HoldingsUpdate is REJECTED (immutable-bond 2026-09-20)");
+}
+
+void BlockchainLMDB::revert_archival_holdings_updates_at_height(uint64_t /*block_height*/)
+{
+  // Kind deleted; no journal rows are written. Kept as a named no-op so pop
+  // order stays explicit (slash, then this slot, then reinstate).
+}
+
+void BlockchainLMDB::apply_archival_reinstate(uint64_t block_height,
+  const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
   if (!m_write_txn)
-    throw std::runtime_error(std::string("FATAL: archival ") + arm
-      + " requires active write txn");
+    throw std::runtime_error("FATAL: archival reinstate requires active write txn");
 
   shekyl::db::ArchivalBondValue bond{};
   if (!load_archival_bond_value(p_id, bond))
-    throw std::runtime_error(std::string("FATAL: archival ") + arm + " without bond record");
+    throw std::runtime_error("FATAL: archival reinstate without bond record");
   if (bond.held_shard_ids.size() != bond.shard_add_epochs.size())
     throw std::runtime_error("FATAL: bond record shard id / add-epoch length desync");
 
-  // Capture the pre-image of the mutated fields before mutating (the emission
-  // WS-2 §6.3 shape); the journal row itself is put AFTER the record/counter
-  // writes below — the same atomic txn, so the ordering is a readability
-  // contract, not a durability one. The vin carries the POST holdings, so the
-  // pre-state shard set and add-epochs are not reconstructible at pop without
-  // this capture.
-  BondRecordPreImage pre{};
-  pre.pre_bonded_total = bond.bonded_total_atomic;
-  pre.pre_shard_ids = bond.held_shard_ids;
-  pre.pre_shard_add_epochs = bond.shard_add_epochs;
+  const std::vector<uint64_t> intervals_flat = archival_bad_intervals_flat(bond);
+  const uint64_t reinstate_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
+  uint64_t closed_idx = 0;
+  uint64_t interval_end = 0;
+  const uint8_t rc = shekyl_archival_reinstate_connect(
+    bond.bonded_total_atomic,
+    bond.held_shard_ids.empty() ? nullptr : bond.held_shard_ids.data(),
+    bond.held_shard_ids.size(),
+    intervals_flat.empty() ? nullptr : intervals_flat.data(),
+    bond.bad_intervals.size(),
+    post_shard_ids.empty() ? nullptr : post_shard_ids.data(),
+    post_shard_ids.size(),
+    reinstate_epoch,
+    &closed_idx, &interval_end);
+  if (rc != SHEKYL_ARCHIVAL_REINSTATE_APPLY_OK)
+    throw std::runtime_error(std::string("FATAL: archival reinstate connect fold failed (code ")
+      + std::to_string(static_cast<unsigned>(rc)) + ")");
+  if (closed_idx >= bond.bad_intervals.size())
+    throw std::runtime_error("FATAL: archival reinstate fold returned an out-of-range interval index");
 
-  // Counter-threading (§3.5): read the LIVE total per post, immediately before
-  // the fold — never a caller-hoisted per-block value.
-  const uint64_t total_bonded = get_total_bonded_atomic();
-  BondRecordFoldOuts outs{};
-  const uint8_t fold_rc = fold(bond, total_bonded, outs);
-  if (fold_rc != 0)
-    throw std::runtime_error(std::string("FATAL: archival ") + arm
-      + " connect fold failed (code " + std::to_string(static_cast<unsigned>(fold_rc)) + ")");
-
-  // Optional in-place interval close (Rebond Pin 3): the fold names the one
-  // open interval; its pre-close start_epoch rides the pre-image so the pop
-  // re-opens exactly that entry.
-  if (outs.has_interval_close)
-  {
-    if (outs.closed_interval_index >= bond.bad_intervals.size())
-      throw std::runtime_error(std::string("FATAL: archival ") + arm
-        + " fold returned an out-of-range interval index");
-    pre.closed_interval_start =
-      bond.bad_intervals[outs.closed_interval_index].start_epoch;
-    bond.bad_intervals[outs.closed_interval_index].end_exclusive =
-      outs.interval_end_exclusive;
-  }
-
-  // Write exactly what the fold dictates: held_shard_ids = post, and the
-  // index-parallel add-epochs rebuilt (carried shards keep theirs; the fold's
-  // override shards take its override epoch).
-  bond.shard_add_epochs = rebuild_shard_add_epochs(post_shard_ids,
-    pre.pre_shard_ids, pre.pre_shard_add_epochs, outs.override_shard_ids,
-    outs.override_add_epoch);
-  bond.bonded_total_atomic = outs.new_bonded_total;
-  bond.held_shard_ids = post_shard_ids;
-  put_archival_bond_value(p_id, bond);
-  set_total_bonded_atomic(outs.new_total_bonded);
-
-  journal(pre, outs);
-}
-
-void BlockchainLMDB::put_archival_holdings_update_journal(uint64_t block_height,
-  const crypto::hash& p_id, const BondRecordPreImage& pre)
-{
-  shekyl::db::ArchivalBondHoldingsUpdateRevertValue log_entry{};
+  shekyl::db::ArchivalBondReinstateRevertValue log_entry{};
   std::memcpy(log_entry.p_id, p_id.data, 32);
-  log_entry.pre_bonded_total = pre.pre_bonded_total;
-  log_entry.pre_shard_ids = pre.pre_shard_ids;
-  log_entry.pre_shard_add_epochs = pre.pre_shard_add_epochs;
-  const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalBondHoldingsUpdateLogKey>(
-    *m_write_txn, m_archival_bond_holdings_update_log, block_height,
-    "archival bond holdings-update log");
-  archival_journal_put<shekyl::db::ArchivalBondHoldingsUpdateLogKey>(
-    *m_write_txn, m_archival_bond_holdings_update_log, block_height, seq, log_entry.encode(),
-    "archival bond holdings-update log");
+  log_entry.pre_bonded_total = bond.bonded_total_atomic;
+  log_entry.closed_interval_index = static_cast<uint32_t>(closed_idx);
+  log_entry.closed_interval_start = bond.bad_intervals[closed_idx].start_epoch;
+  log_entry.pre_shard_ids = bond.held_shard_ids;
+  log_entry.pre_shard_add_epochs = bond.shard_add_epochs;
+
+  bond.bad_intervals[closed_idx].end_exclusive = interval_end;
+  put_archival_bond_value(p_id, bond);
+
+  const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalBondReinstateLogKey>(
+    *m_write_txn, m_archival_bond_reinstate_log, block_height, "archival bond reinstate log");
+  archival_journal_put<shekyl::db::ArchivalBondReinstateLogKey>(
+    *m_write_txn, m_archival_bond_reinstate_log, block_height, seq, log_entry.encode(),
+    "archival bond reinstate log");
 }
 
-void BlockchainLMDB::apply_archival_holdings_update_add(uint64_t block_height,
-  const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids)
-{
-  const uint64_t add_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
-  apply_archival_bond_record_update(block_height, p_id, post_shard_ids,
-    "holdings-update-add",
-    [&](const shekyl::db::ArchivalBondValue& bond, uint64_t total_bonded,
-      BondRecordFoldOuts& outs) -> uint8_t {
-      uint64_t added_shard_id = 0;
-      uint64_t add_epoch_out = 0;
-      const uint8_t rc = shekyl_archival_holdings_update_add_connect(
-        bond.bonded_total_atomic,
-        bond.held_shard_ids.empty() ? nullptr : bond.held_shard_ids.data(),
-        bond.held_shard_ids.size(),
-        post_shard_ids.empty() ? nullptr : post_shard_ids.data(),
-        post_shard_ids.size(),
-        total_bonded, add_epoch,
-        &added_shard_id, &add_epoch_out, &outs.new_bonded_total, &outs.new_total_bonded);
-      // The added shard takes E_add as its coupled add-epoch. Record stays
-      // Bonded (ShardSetCompact) — no interval, no clean close (grace-tail).
-      outs.override_shard_ids = {added_shard_id};
-      outs.override_add_epoch = add_epoch_out;
-      return rc;
-    },
-    [&](const BondRecordPreImage& pre, const BondRecordFoldOuts&) {
-      put_archival_holdings_update_journal(block_height, p_id, pre);
-    });
-}
-
-void BlockchainLMDB::apply_archival_holdings_update_drop(uint64_t block_height,
-  const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids)
-{
-  apply_archival_bond_record_update(block_height, p_id, post_shard_ids,
-    "holdings-update-drop",
-    [&](const shekyl::db::ArchivalBondValue& bond, uint64_t total_bonded,
-      BondRecordFoldOuts& outs) -> uint8_t {
-      uint64_t dropped_shard_id = 0;
-      uint64_t refund_atomic = 0;
-      const uint8_t rc = shekyl_archival_holdings_update_drop_connect(
-        bond.bonded_total_atomic,
-        bond.held_shard_ids.empty() ? nullptr : bond.held_shard_ids.data(),
-        bond.held_shard_ids.size(),
-        post_shard_ids.empty() ? nullptr : post_shard_ids.data(),
-        post_shard_ids.size(),
-        total_bonded,
-        &dropped_shard_id, &outs.new_bonded_total, &outs.new_total_bonded, &refund_atomic);
-      // refund_atomic (== FLOOR) is the released collateral the vin's
-      // bond_debit returns to circulation, CT-balanced on the wire — not a
-      // ledger write here. Every POST shard is carried (the dropped one is
-      // gone) — no override.
-      (void)refund_atomic;
-      return rc;
-    },
-    [&](const BondRecordPreImage& pre, const BondRecordFoldOuts&) {
-      put_archival_holdings_update_journal(block_height, p_id, pre);
-    });
-}
-
-void BlockchainLMDB::revert_archival_holdings_updates_at_height(uint64_t block_height)
+void BlockchainLMDB::revert_archival_reinstates_at_height(uint64_t block_height)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
   if (!m_write_txn)
-    throw std::runtime_error("FATAL: archival holdings-update revert requires active write txn");
+    throw std::runtime_error("FATAL: archival reinstate revert requires active write txn");
 
-  const std::vector<shekyl::db::ArchivalBondHoldingsUpdateRevertValue> rows =
-    archival_journal_read<shekyl::db::ArchivalBondHoldingsUpdateLogKey,
-      shekyl::db::ArchivalBondHoldingsUpdateRevertValue>(
-      *m_write_txn, m_archival_bond_holdings_update_log, block_height,
-      "archival bond holdings-update log");
+  const std::vector<shekyl::db::ArchivalBondReinstateRevertValue> rows =
+    archival_journal_read<shekyl::db::ArchivalBondReinstateLogKey,
+      shekyl::db::ArchivalBondReinstateRevertValue>(
+      *m_write_txn, m_archival_bond_reinstate_log, block_height, "archival bond reinstate log");
 
-  // Restore in reverse connect order (§5). The record stays Bonded throughout,
-  // so there is no Exited/clean-close check — the pop fold only guards that the
-  // tip and pre-image balances differ by exactly one FLOOR.
+  const uint64_t reinstate_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
+
+  // Restore in reverse connect order (§5). Reinstate is zero-money: connect
+  // does not move total_bonded_atomic. The pop fold belts that the tip
+  // bonded_total still equals the journaled pre-image; C++ re-opens the
+  // journaled interval.
   for (auto it = rows.rbegin(); it != rows.rend(); ++it)
   {
     crypto::hash p_id{};
@@ -6912,150 +6364,38 @@ void BlockchainLMDB::revert_archival_holdings_updates_at_height(uint64_t block_h
 
     shekyl::db::ArchivalBondValue bond{};
     if (!load_archival_bond_value(p_id, bond))
-      throw std::runtime_error("FATAL: archival holdings-update revert without bond record");
+      throw std::runtime_error("FATAL: archival reinstate revert without bond record");
 
-    const uint64_t total_bonded = get_total_bonded_atomic();
-    uint64_t new_total_bonded = 0;
-    const uint8_t fold_rc = shekyl_archival_holdings_update_pop(
-      bond.bonded_total_atomic, it->pre_bonded_total, total_bonded, &new_total_bonded);
-    if (fold_rc != SHEKYL_ARCHIVAL_HU_APPLY_OK)
-      throw std::runtime_error("FATAL: archival holdings-update pop fold failed (code "
-        + std::to_string(static_cast<unsigned>(fold_rc)) + ")");
-
-    // Restore exactly the mutated fields from the pre-image; holdings_kind
-    // (stays ShardSetCompact) and bad_intervals (untouched by the connect) were
-    // never journaled and need no restore.
-    bond.bonded_total_atomic = it->pre_bonded_total;
-    bond.held_shard_ids = it->pre_shard_ids;
-    bond.shard_add_epochs = it->pre_shard_add_epochs;
-    put_archival_bond_value(p_id, bond);
-    set_total_bonded_atomic(new_total_bonded);
-  }
-
-  archival_journal_delete<shekyl::db::ArchivalBondHoldingsUpdateLogKey>(
-    *m_write_txn, m_archival_bond_holdings_update_log, block_height,
-    static_cast<uint32_t>(rows.size()), "archival bond holdings-update log");
-}
-
-void BlockchainLMDB::apply_archival_rebond(uint64_t block_height,
-  const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids)
-{
-  const uint64_t rebond_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
-  apply_archival_bond_record_update(block_height, p_id, post_shard_ids, "rebond",
-    [&](const shekyl::db::ArchivalBondValue& bond, uint64_t total_bonded,
-      BondRecordFoldOuts& outs) -> uint8_t {
-      // Marshal the interval log as flattened (start, end_exclusive) pairs —
-      // the fold owns the open-interval selection and the E_rebond + 1 close.
-      const std::vector<uint64_t> intervals_flat = archival_bad_intervals_flat(bond);
-      std::vector<uint64_t> added(post_shard_ids.size(), 0);
-      size_t added_len = 0;
-      uint64_t add_epoch = 0;
-      uint64_t closed_idx = 0;
-      uint64_t interval_end = 0;
-      const uint8_t rc = shekyl_archival_rebond_connect(
-        bond.bonded_total_atomic,
-        bond.held_shard_ids.empty() ? nullptr : bond.held_shard_ids.data(),
-        bond.held_shard_ids.size(),
-        intervals_flat.empty() ? nullptr : intervals_flat.data(),
-        bond.bad_intervals.size(),
-        post_shard_ids.empty() ? nullptr : post_shard_ids.data(),
-        post_shard_ids.size(),
-        total_bonded, rebond_epoch,
-        added.empty() ? nullptr : added.data(), added.size(), &added_len,
-        &add_epoch, &closed_idx, &interval_end,
-        &outs.new_bonded_total, &outs.new_total_bonded);
-      if (rc != SHEKYL_ARCHIVAL_REBOND_APPLY_OK)
-        return rc;
-      added.resize(added_len);
-      // Added shards (post ∖ current) take E_rebond as their coupled
-      // add-epoch (Pin 7); the open interval closes IN PLACE at E_rebond + 1
-      // (Pin 3 — the record stays Bonded, standing resumes at E_rebond + 1).
-      outs.override_shard_ids = std::move(added);
-      outs.override_add_epoch = add_epoch;
-      outs.has_interval_close = true;
-      outs.closed_interval_index = closed_idx;
-      outs.interval_end_exclusive = interval_end;
-      return rc;
-    },
-    [&](const BondRecordPreImage& pre, const BondRecordFoldOuts& outs) {
-      // The closed interval's identity rides the journal row so the pop
-      // re-opens exactly that entry; pre_bonded_total == 0 is legal (terminal
-      // reinstatement).
-      shekyl::db::ArchivalBondRebondRevertValue log_entry{};
-      std::memcpy(log_entry.p_id, p_id.data, 32);
-      log_entry.pre_bonded_total = pre.pre_bonded_total;
-      log_entry.closed_interval_index =
-        static_cast<uint32_t>(outs.closed_interval_index);
-      log_entry.closed_interval_start = pre.closed_interval_start;
-      log_entry.pre_shard_ids = pre.pre_shard_ids;
-      log_entry.pre_shard_add_epochs = pre.pre_shard_add_epochs;
-      const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalBondRebondLogKey>(
-        *m_write_txn, m_archival_bond_rebond_log, block_height, "archival bond rebond log");
-      archival_journal_put<shekyl::db::ArchivalBondRebondLogKey>(
-        *m_write_txn, m_archival_bond_rebond_log, block_height, seq, log_entry.encode(),
-        "archival bond rebond log");
-    });
-}
-
-void BlockchainLMDB::revert_archival_rebonds_at_height(uint64_t block_height)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-  if (!m_write_txn)
-    throw std::runtime_error("FATAL: archival rebond revert requires active write txn");
-
-  const std::vector<shekyl::db::ArchivalBondRebondRevertValue> rows =
-    archival_journal_read<shekyl::db::ArchivalBondRebondLogKey,
-      shekyl::db::ArchivalBondRebondRevertValue>(
-      *m_write_txn, m_archival_bond_rebond_log, block_height, "archival bond rebond log");
-
-  const uint64_t rebond_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
-
-  // Restore in reverse connect order (§5). The record stays Bonded throughout;
-  // the pop fold guards the counter delta (a non-negative whole number of
-  // FLOORs — zero for standing-only) and the identity belts below pin the
-  // re-opened interval to the connect's product.
-  for (auto it = rows.rbegin(); it != rows.rend(); ++it)
-  {
-    crypto::hash p_id{};
-    std::memcpy(p_id.data, it->p_id, 32);
-
-    shekyl::db::ArchivalBondValue bond{};
-    if (!load_archival_bond_value(p_id, bond))
-      throw std::runtime_error("FATAL: archival rebond revert without bond record");
-
-    const uint64_t total_bonded = get_total_bonded_atomic();
-    uint64_t new_total_bonded = 0;
-    const uint8_t fold_rc = shekyl_archival_rebond_pop(
-      bond.bonded_total_atomic, it->pre_bonded_total, total_bonded, &new_total_bonded);
-    if (fold_rc != SHEKYL_ARCHIVAL_REBOND_APPLY_OK)
-      throw std::runtime_error("FATAL: archival rebond pop fold failed (code "
+    const uint8_t fold_rc = shekyl_archival_reinstate_pop(
+      bond.bonded_total_atomic, it->pre_bonded_total);
+    if (fold_rc != SHEKYL_ARCHIVAL_REINSTATE_APPLY_OK)
+      throw std::runtime_error("FATAL: archival reinstate pop fold failed (code "
         + std::to_string(static_cast<unsigned>(fold_rc)) + ")");
 
     // Re-open the journaled interval: the entry must exist, carry the
-    // journaled start, and be the connect's close (end == E_rebond + 1) —
+    // journaled start, and be the connect's close (end == E_reinstate + 1) —
     // anything else means the journal does not describe this record's tip
     // state (desync), which must be loud, not papered over.
     const size_t idx = it->closed_interval_index;
     if (idx >= bond.bad_intervals.size()
       || bond.bad_intervals[idx].start_epoch != it->closed_interval_start
-      || bond.bad_intervals[idx].end_exclusive != rebond_epoch + 1)
+      || bond.bad_intervals[idx].end_exclusive != reinstate_epoch + 1)
       throw std::runtime_error(
-        "FATAL: archival rebond revert interval desync (journal does not match tip)");
+        "FATAL: archival reinstate revert interval desync (journal does not match tip)");
     bond.bad_intervals[idx].end_exclusive = std::numeric_limits<uint64_t>::max();
 
-    // Restore exactly the mutated fields from the pre-image; holdings_kind
-    // (stays ShardSetCompact) and the other intervals were never touched.
+    // Restore the journaled pre-image fields; holdings_kind (stays
+    // ShardSetCompact) and the other intervals were never touched. Connect
+    // did not move the global counter, so this arm does not write it.
     bond.bonded_total_atomic = it->pre_bonded_total;
     bond.held_shard_ids = it->pre_shard_ids;
     bond.shard_add_epochs = it->pre_shard_add_epochs;
     put_archival_bond_value(p_id, bond);
-    set_total_bonded_atomic(new_total_bonded);
   }
 
-  archival_journal_delete<shekyl::db::ArchivalBondRebondLogKey>(
-    *m_write_txn, m_archival_bond_rebond_log, block_height,
-    static_cast<uint32_t>(rows.size()), "archival bond rebond log");
+  archival_journal_delete<shekyl::db::ArchivalBondReinstateLogKey>(
+    *m_write_txn, m_archival_bond_reinstate_log, block_height,
+    static_cast<uint32_t>(rows.size()), "archival bond reinstate log");
 }
 
 bool BlockchainLMDB::archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const
@@ -7080,6 +6420,45 @@ bool BlockchainLMDB::archival_shard_freeze_height(uint64_t shard_id, uint64_t& o
     return false;
   out = segment.freeze_height;
   return true;
+}
+
+void BlockchainLMDB::fold_archival_market_bonded_counts(std::vector<uint64_t>& bonded_count) const
+{
+  // Bond-record cursor only. Shard bodies are below prune; ranking is Rust.
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (bonded_count.empty())
+    return;
+
+  TXN_PREFIX_RDONLY();
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(m_txn, m_archival_bond, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_bond cursor for coverage fold: ", rc).c_str()));
+
+  MDB_val k, v;
+  rc = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
+  while (rc == 0)
+  {
+    if (k.mv_size != 32)
+      throw std::runtime_error("FATAL: archival_bond key size mismatch during coverage fold");
+    shekyl::db::ArchivalBondValue bond{};
+    if (!shekyl::db::ArchivalBondValue::decode(v.mv_data, v.mv_size, bond))
+      throw std::runtime_error("FATAL: archival_bond decode failed during coverage fold");
+    if (!bond.is_complete_tree())
+    {
+      for (const uint64_t shard_id : bond.held_shard_ids)
+      {
+        if (shard_id < bonded_count.size())
+          bonded_count[static_cast<size_t>(shard_id)] += 1;
+      }
+    }
+    rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
+  }
+  mdb_cursor_close(cur);
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_bond coverage fold cursor failed: ", rc).c_str()));
+  TXN_POSTFIX_RDONLY();
 }
 
 std::vector<uint64_t> BlockchainLMDB::archival_bond_last_served_epochs(
@@ -7443,7 +6822,8 @@ void BlockchainLMDB::set_archival_settlement(const crypto::hash& p_id, uint64_t 
 }
 
 bool BlockchainLMDB::get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-  uint64_t settlement_epoch, std::array<uint8_t, 3>& out_row) const
+  uint64_t settlement_epoch,
+  std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
@@ -9578,24 +8958,6 @@ uint64_t BlockchainLMDB::get_curve_tree_leaf_count() const
   return count;
 }
 
-bool BlockchainLMDB::get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-  if (!hash_out) return false;
-
-  TXN_PREFIX_RDONLY();
-  uint64_t key = ct_layer_chunk_key(layer, chunk);
-  MDB_val k = {sizeof(key), (void *)&key};
-  MDB_val v;
-  int result = mdb_get(m_txn, m_curve_tree_layers, &k, &v);
-  bool found = (result == 0 && v.mv_size == 32);
-  if (found)
-    memcpy(hash_out, v.mv_data, 32);
-  TXN_POSTFIX_RDONLY();
-  return found;
-}
-
 bool BlockchainLMDB::get_curve_tree_leaf_by_tree_position(uint64_t tree_position, uint8_t* leaf_out) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -9716,7 +9078,8 @@ void BlockchainLMDB::remove_curve_tree_root_at_height(uint64_t block_height)
 }
 
 // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): prunable
-// admission bytes (r + pass signatures), height-keyed (native uint64,
+// admission bytes (count ‖ (nonce ‖ anchor_height ‖ signature) per pass,
+// SF-D8 v2), height-keyed (native uint64,
 // MDB_INTEGERKEY), opaque at this layer. Mirrors the curve-tree root primitives
 // above — same key shape, same write-txn discipline.
 void BlockchainLMDB::store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness)
@@ -9921,8 +9284,11 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
 
   // Find the previous checkpoint to determine which leaf range was already
   // covered.  We only prune layer entries for chunks that are fully below
-  // the previous checkpoint (those hashes are redundant -- they can be
-  // recomputed from leaves if ever needed again).
+  // the previous checkpoint.  Those hashes are redundant: layer 0 (the
+  // leaf-chunk hash layer) is never pruned, and the only upper-layer
+  // rebuild in this store -- trim_curve_tree -- recomposes layers
+  // 1..depth-2 from layer 0, not from m_curve_tree_leaves.  Nothing reads
+  // the leaf table to regenerate a pruned layer (PDM-Q-F7).
   uint64_t prev_checkpoint_height = 0;
   uint64_t prev_leaf_count = 0;
   {
@@ -9967,7 +9333,7 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
   // Prune intermediate layers (1 through depth-2).  For each layer, only
   // delete chunk entries whose index is strictly below the chunk boundary
   // implied by prev_leaf_count.  These chunks are fully "sealed" by the
-  // previous checkpoint and can be recomputed from leaves.
+  // previous checkpoint and are recomposable from layer 0, which is kept.
   uint64_t pruned_count = 0;
   uint64_t child_boundary = prev_leaf_count / CT_SELENE_CHUNK_WIDTH;
 
@@ -10042,254 +9408,10 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
   LOG_PRINT_L2("Pruned " << pruned_count << " intermediate layer entries below prev checkpoint " << prev_checkpoint_height);
 }
 
-// ─── Output Metadata Pruning ──────────────────────────────────────────────────
-
-void BlockchainLMDB::store_output_metadata(uint64_t global_output_index, const output_pruning_metadata_t& meta)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  MDB_val k = {sizeof(global_output_index), (void *)&global_output_index};
-  MDB_val v = {sizeof(output_pruning_metadata_t), (void *)&meta};
-
-  int result = mdb_put(*m_write_txn, m_output_metadata, &k, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to store output metadata: ", result).c_str()));
-}
-
-bool BlockchainLMDB::get_output_metadata(uint64_t global_output_index, output_pruning_metadata_t& meta) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX_RDONLY();
-
-  MDB_val k = {sizeof(global_output_index), (void *)&global_output_index};
-  MDB_val v;
-
-  int result = mdb_get(m_txn, m_output_metadata, &k, &v);
-  if (result == MDB_NOTFOUND)
-    return false;
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to get output metadata: ", result).c_str()));
-  if (v.mv_size != sizeof(output_pruning_metadata_t))
-    throw0(DB_ERROR("Unexpected output metadata size"));
-
-  memcpy(&meta, v.mv_data, sizeof(output_pruning_metadata_t));
-  TXN_POSTFIX_RDONLY();
-  return true;
-}
-
-bool BlockchainLMDB::is_output_pruned(uint64_t global_output_index) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  output_pruning_metadata_t meta;
-  if (!get_output_metadata(global_output_index, meta))
-    return false;
-  return meta.pruned != 0;
-}
-
-uint64_t BlockchainLMDB::read_tx_prune_next_block_height() const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  uint64_t next = 0;
-  TXN_PREFIX_RDONLY();
-  MDB_val v;
-  MDB_val_str(k_new, "tx_prune_next_block");
-  int r = mdb_get(m_txn, m_properties, &k_new, &v);
-  if (r == 0 && v.mv_size == sizeof(uint64_t))
-    memcpy(&next, v.mv_data, sizeof(uint64_t));
-  else
-  {
-    MDB_val_str(k_old, "last_pruned_tx_data_height");
-    r = mdb_get(m_txn, m_properties, &k_old, &v);
-    if (r == 0 && v.mv_size == sizeof(uint64_t))
-    {
-      uint64_t legacy_last_inclusive = 0;
-      memcpy(&legacy_last_inclusive, v.mv_data, sizeof(uint64_t));
-      next = legacy_last_inclusive + 1;
-    }
-  }
-  TXN_POSTFIX_RDONLY();
-  return next;
-}
-
-void BlockchainLMDB::write_tx_prune_next_block_height(MDB_txn* wtxn, uint64_t next_block)
-{
-  MDB_val_str(wk, "tx_prune_next_block");
-  MDB_val wv = {sizeof(next_block), (void *)&next_block};
-  if (int err = mdb_put(wtxn, m_properties, &wk, &wv, 0))
-    throw0(DB_ERROR(lmdb_error("tx_prune_next_block watermark: ", err).c_str()));
-  MDB_val_str(wk_old, "last_pruned_tx_data_height");
-  (void)mdb_del(wtxn, m_properties, &wk_old, NULL);
-}
-
-uint64_t BlockchainLMDB::get_last_pruned_tx_data_height() const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  const uint64_t next = read_tx_prune_next_block_height();
-  return next > 0 ? next - 1 : 0;
-}
-
 bool BlockchainLMDB::tx_has_verification_data(const crypto::hash& tx_hash) const
 {
   cryptonote::blobdata bd;
   return get_prunable_tx_blob(tx_hash, bd);
-}
-
-bool BlockchainLMDB::prune_tx_data(uint64_t depth)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  if (depth == 0)
-    depth = CRYPTONOTE_TX_PRUNE_DEPTH;
-
-  const uint64_t blockchain_height = height();
-  if (blockchain_height <= depth)
-    return true;
-
-  const uint64_t prune_below_height = blockchain_height - depth;
-
-  const uint64_t next_block = read_tx_prune_next_block_height();
-  if (next_block >= prune_below_height)
-  {
-    LOG_PRINT_L2("prune_tx_data: already pruned through block " << (next_block > 0 ? next_block - 1 : 0)
-                 << ", next block " << next_block << ", target exclusive " << prune_below_height
-                 << " -- nothing to do");
-    return true;
-  }
-
-  uint64_t h = next_block;
-  LOG_PRINT_L1("prune_tx_data: pruning transactions in blocks " << h
-               << " .. " << prune_below_height
-               << " (reorg depth " << depth << ")");
-
-  mdb_txn_safe *const saved_write = m_write_txn;
-  struct write_txn_restorer {
-    mdb_txn_safe **slot;
-    mdb_txn_safe *old;
-    ~write_txn_restorer() { *slot = old; }
-  } restorer{&m_write_txn, saved_write};
-
-  while (h < prune_below_height)
-  {
-    mdb_txn_safe wtxn(false);
-    if (int err = mdb_txn_begin(m_env, NULL, 0, wtxn))
-      throw0(DB_ERROR(lmdb_error("prune_tx_data: failed to begin write txn: ", err).c_str()));
-    m_write_txn = &wtxn;
-
-    MDB_stat st{};
-    if (int err = mdb_stat(wtxn, m_blocks, &st))
-    {
-      m_write_txn = saved_write;
-      throw0(DB_ERROR(lmdb_error("prune_tx_data: mdb_stat m_blocks: ", err).c_str()));
-    }
-    const uint64_t chain_h = st.ms_entries;
-    if (chain_h <= depth)
-    {
-      wtxn.commit();
-      m_write_txn = saved_write;
-      return true;
-    }
-    const uint64_t safe_below = chain_h - depth;
-    const uint64_t batch_end = std::min<uint64_t>({h + 256, prune_below_height, safe_below});
-    if (h >= batch_end)
-    {
-      wtxn.commit();
-      m_write_txn = saved_write;
-      return true;
-    }
-
-    auto prune_tx_outputs = [&](uint64_t tx_id, const cryptonote::transaction& tx, uint64_t block_height) {
-      (void)block_height;
-      std::vector<std::vector<uint64_t>> aoi = get_tx_amount_output_indices(tx_id, 1);
-      if (aoi.empty())
-        return;
-      const std::vector<uint64_t>& outs = aoi[0];
-      const size_t n = std::min(outs.size(), tx.vout.size());
-      for (size_t i = 0; i < n; ++i)
-      {
-        // Match BlockchainDB::add_transaction: RCT coinbase outputs are indexed under amount 0.
-        uint64_t amount = tx.vout[i].amount;
-        if (!tx.vin.empty() && std::holds_alternative<cryptonote::txin_gen>(tx.vin[0]) && tx.version >= 2)
-          amount = 0;
-        const uint64_t gidx = outs[i];
-        output_data_t od = get_output_key(amount, gidx, true);
-        output_pruning_metadata_t meta{};
-        meta.pubkey = od.pubkey;
-        meta.commitment = od.commitment;
-        meta.unlock_time = od.unlock_time;
-        meta.height = od.height;
-        meta.pruned = 1;
-        store_output_metadata(gidx, meta);
-      }
-      MDB_val ktx{};
-      ktx.mv_data = &tx_id;
-      ktx.mv_size = sizeof(tx_id);
-      // Drop the prunable *bytes* only. The hash stays: it is an operand of
-      // the txid (`get_pruned_transaction_hash`), and keeping it after
-      // dropping the body is why `txs_prunable_hash` exists. `txs_pqc_auths`
-      // is the second unprunable segment (`docs/LMDB_SCHEMA.md`); there is
-      // no pqc_auth_hash table, so deleting it would make a v3 tx fall
-      // through to the v2 3-part mix and become unnameable. Full bodies
-      // live in shard archival (`docs/V3_STAKER_ARCHIVAL.md` set C), not
-      // on a pruned node.
-      (void)mdb_del(wtxn, m_txs_prunable, &ktx, NULL);
-    };
-
-    for (; h < batch_end; ++h)
-    {
-      cryptonote::block blk = get_block_from_height(h);
-
-      const crypto::hash miner_h = cryptonote::get_transaction_hash(blk.miner_tx);
-      try
-      {
-        const uint64_t miner_id = get_tx_id(miner_h);
-        cryptonote::transaction mtx;
-        if (!get_pruned_tx(miner_h, mtx))
-          throw0(DB_ERROR("prune_tx_data: failed to load miner tx"));
-        prune_tx_outputs(miner_id, mtx, h);
-      }
-      catch (const TX_DNE&)
-      {
-        throw0(DB_ERROR(("prune_tx_data: miner tx missing at height " + std::to_string(h) +
-                         "; refusing to advance prune watermark on partial batch").c_str()));
-      }
-
-      for (const crypto::hash& txh : blk.tx_hashes)
-      {
-        try
-        {
-          const uint64_t tid = get_tx_id(txh);
-          cryptonote::transaction tx;
-          if (!get_pruned_tx(txh, tx))
-            throw0(DB_ERROR("prune_tx_data: failed to load tx"));
-          prune_tx_outputs(tid, tx, h);
-        }
-        catch (const TX_DNE&)
-        {
-          throw0(DB_ERROR(("prune_tx_data: tx " + epee::string_tools::pod_to_hex(txh) +
-                           " not found at height " + std::to_string(h) +
-                           "; refusing to advance prune watermark on partial batch").c_str()));
-        }
-      }
-    }
-
-    {
-      write_tx_prune_next_block_height(wtxn, h);
-    }
-
-    wtxn.commit();
-    m_write_txn = saved_write;
-  }
-
-  m_write_txn = saved_write;
-  return true;
 }
 
 void BlockchainLMDB::migrate(const uint32_t oldversion)

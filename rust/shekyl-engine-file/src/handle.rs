@@ -71,6 +71,7 @@ use shekyl_engine_prefs::{
 use shekyl_engine_state::{
     BookkeepingBlock, LedgerBlock, StakingBlock, SyncStateBlock, TxMetaBlock, WalletLedger,
 };
+use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::atomic::{atomic_write_file, atomic_write_file_with};
 use crate::capability::Capability;
@@ -529,7 +530,7 @@ impl WalletFile {
                     LedgerBlock::empty(),
                     BookkeepingBlock::empty(),
                     TxMetaBlock::empty(),
-                    SyncStateBlock::new(restore_from_height, None),
+                    SyncStateBlock::new(BlockHeight::from_raw(restore_from_height), None),
                     StakingBlock::empty(),
                 );
                 OpenOutcome::StateLost {
@@ -1093,7 +1094,7 @@ impl WalletFile {
     /// session.
     ///
     /// [`NetworkSafetyConstants::max_reorg_depth`]: shekyl_engine_state::NetworkSafetyConstants::max_reorg_depth
-    pub fn effective_max_reorg_depth(&self) -> u64 {
+    pub fn effective_max_reorg_depth(&self) -> BlockCount {
         self.overrides.effective_max_reorg_depth(self.network)
     }
 
@@ -1101,14 +1102,14 @@ impl WalletFile {
     /// that do not have a persisted `SyncStateBlock` to anchor them
     /// (fresh wallet, lost-`.wallet` recovery, explicit rescan).
     /// See `docs/WALLET_PREFS.md` §3.3.
-    pub fn effective_skip_to_height(&self) -> u64 {
+    pub fn effective_skip_to_height(&self) -> BlockHeight {
         self.overrides.effective_skip_to_height(self.network)
     }
 
     /// Refresh cursor used when the wallet opens without a
     /// `SyncStateBlock`. Mirrors `effective_skip_to_height` but
     /// scoped to the recovery path per the audit doc §3.3.
-    pub fn effective_refresh_from_block_height(&self) -> u64 {
+    pub fn effective_refresh_from_block_height(&self) -> BlockHeight {
         self.overrides
             .effective_refresh_from_block_height(self.network)
     }
@@ -1822,7 +1823,7 @@ mod tests {
                 assert_eq!(restore_from_height, u64::from(RESTORE_HINT));
                 assert_eq!(
                     ledger.sync_state.restore_from_height,
-                    u64::from(RESTORE_HINT),
+                    BlockHeight::from_raw(u64::from(RESTORE_HINT)),
                     "fresh ledger must inherit restore_height_hint from keys file"
                 );
                 // Fresh ledger: no transfers, no tx_meta, no bookkeeping.
@@ -2045,7 +2046,7 @@ mod tests {
         }
 
         let overrides = SafetyOverrides {
-            max_reorg_depth: Some(2),
+            max_reorg_depth: Some(BlockCount::from_raw(2)),
             skip_to_height: Some(12_345),
             refresh_from_block_height: None,
         };
@@ -2055,8 +2056,11 @@ mod tests {
         // Overrides survive on the handle.
         assert_eq!(handle.overrides(), overrides);
         // Overridden fields take the override's value.
-        assert_eq!(handle.effective_max_reorg_depth(), 2);
-        assert_eq!(handle.effective_skip_to_height(), 12_345);
+        assert_eq!(handle.effective_max_reorg_depth(), BlockCount::from_raw(2));
+        assert_eq!(
+            handle.effective_skip_to_height(),
+            BlockHeight::from_raw(12_345)
+        );
         // Non-overridden field still reads the network default.
         let k = NetworkSafetyConstants::for_network(TEST_NETWORK);
         assert_eq!(

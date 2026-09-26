@@ -13,7 +13,7 @@
 use shekyl_archival_retention::{
     HoldingsDescriptor, HoldingsKind, ShardSet, RELEASE_COOLDOWN_EPOCHS,
 };
-use shekyl_types::ChainCount;
+use shekyl_types::{BlockHash, ChainCount};
 
 use crate::engine::emission_source::{BondContext, ClaimSourceFor, EmissionClaimSource};
 
@@ -141,7 +141,7 @@ fn exit_funding(slot: u32) -> (Vec<FundingInputContext>, TreeContext) {
     let depth = 2u8;
     let (c1_layers, c2_layers, tree_root) = consistent_synthetic_path(&leaf_chunk, depth);
     let tree_ctx = TreeContext {
-        reference_block: [7u8; 32],
+        reference_block: BlockHash::from_bytes([7u8; 32]),
         tree_root,
         tree_depth: depth,
     };
@@ -319,7 +319,7 @@ async fn an_exit_with_no_funding_inputs_is_refused_by_name() {
 /// This is the one place a `Release` diverges from every credit post. The
 /// daemon walk (`e2e_release_accepted_and_connected`) now drives the pin
 /// end-to-end over real RPC, but it is `#[ignore]`d and daemon-gated, so
-/// this KAT stays the assertion every `cargo test` run makes. `archival_debit_auth_pin`
+/// this KAT stays the assertion every `cargo test` run makes. `archival_cold_authority_pin`
 /// (`src/cryptonote_core/blockchain.cpp`) rejects a debit whose `pqc_auths`
 /// slot key is not the record's COMMITTED `bond_spend_pk`, and names the
 /// identity key as forbidden by construction — a compromised serving host
@@ -423,7 +423,7 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
     );
     assert_ne!(
         &auth.hybrid_public_key, identity_pk,
-        "the identity key never authorizes a value-out (archival_debit_auth_pin)"
+        "the identity key never authorizes a value-out (archival_cold_authority_pin)"
     );
     // …and the signature was made with the SECRET half of that key.
     //
@@ -446,7 +446,7 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
         .verify(
             &pk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            &payload_hashes[bond_idx],
+            payload_hashes[bond_idx].as_bytes(),
             &sig,
         )
         .expect("the debit auth must verify under bond_spend_pk");

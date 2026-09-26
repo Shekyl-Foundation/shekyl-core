@@ -1,0 +1,101 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-chain-rules"
+description = "Consensus validation: form (stateless) then validate (view-bound) → ChainValid or InvalidBlock. No store handle (DRS-E6)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The crate's defining property is what is *absent* here: no `redb`, no
+# `shekyl-chain-store`, directly or transitively, in any dependency section
+# (CHAIN_RULES_CRATE.md G1). `check_chain_rules_coverage.py` refuses either
+# token in this file; `check_chain_rules_no_store.sh` (rust-audit-test.yml)
+# refuses either package anywhere in the resolved `cargo tree` closure. Every
+# rule must stay unit-testable against a mock view with no database
+# (CONSENSUS_C2_R8_STORE_PLACEMENT.md §9.1) — a dependency that reaches a
+# store is the inversion R8 banned.
+[dependencies]
+# Chain identities and the recorded facts a rule reads: BlockHeight,
+# BlockHash, TxHash, KeyImage, CurveTreeRoot.
+shekyl-types = { path = "../shekyl-types" }
+shekyl-units = { path = "../shekyl-units" }
+# The candidate's own shape — Block, BlockHeader, Transaction — and the
+# consensus hash identities (`Block::hash`, `Transaction::hash`) CEN-B6
+# defines. Deps: shekyl-crypto-hash, shekyl-curve-generators; no store.
+shekyl-wire = { path = "../shekyl-wire" }
+# `Network`, the one nettype enum in the workspace: it selects a
+# `RuleSchedule` (rule 71 — data, never control flow). Default features only;
+# `serde` stays off.
+shekyl-address = { path = "../shekyl-address" }
+# The 4.C/4.D bodies (LWMA-1, MTP/FTL, check_hash) and the difficulty
+# newtypes — adopted, not re-derived (slice 2, Q2). Depends on shekyl-types
+# alone; the G1 belt's closure grows by exactly this crate.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+shekyl-economics = { path = "../shekyl-economics" }
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
+# CEN-H21/H22's balances (slice 5): the bond-post / emission CT balance with
+# its credit-xor-debit rigidity is single-sourced in this crate's
+# `bond_ct_balance` — the body the C++ reaches through
+# `shekyl_archival_verify_bond_post_ct_balance` — and a second copy of the
+# term rule here would be the two-sources class the slice exists to close.
+# Slice 8 (4.J) adopts the rest of it.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# CEN-I16 (slice 6): the two hybrid scheme identifiers, read from the crate
+# that owns the signature scheme (`HYBRID_SCHEME_ID_ED25519_ML_DSA_65`,
+# `HYBRID_SCHEME_ID_MULTISIG`) rather than restated as `1` and `2`. Already
+# in the closure through shekyl-ct-balance; this names the edge.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Optional: the `harness` feature's `fixture::point_at` only (see the
+# feature's note). Never enabled on the production surface.
+curve25519-dalek = { version = "4", optional = true }
+
+[features]
+# The negative-fixture harness (`harness.rs`: `MockChain`, `MockSubstrate`,
+# fixtures) as a library surface for ONE consumer: the store's
+# mock-vs-`BatchView` conformance test (slice 2 F11). G1 forbids this crate
+# from depending on the store, so the test that reconciles the mock against
+# the real view must live on the store side and reach the mock from here.
+# Test-only in effect — enabled from `shekyl-chain-store`'s dev-dependencies;
+# never from a normal dependency. Nothing here is a production API.
+#
+# The feature pulls in `curve25519-dalek` for ONE fixture function,
+# `fixture::point_at(k) = k·G`: the ingest's seed-epoch chains spend a
+# fresh key image per block for two thousand blocks, which no pinned table
+# should grow to (slice 5, 2026-09-23). The harness derives; the production
+# surface — which never enables this feature — only ever *verifies*, through
+# `shekyl-ct-balance`. The pinned `POINTS` are `point_at`'s first sixteen,
+# and the gate holds the two equal.
+harness = ["dep:curve25519-dalek"]
+
+[build-dependencies]
+# Build-script only: read `config/consensus_constants.json` for the two
+# reference-window ages. Not a normal dependency — the script's graph is
+# not linked into the crate (G1's belt excludes build edges).
+serde_json = "1"
+
+[dev-dependencies]
+# The shared C2-R3 boundary vectors (`docs/test_vectors/MTP_BOUNDARY_V1.json`)
+# are driven through the 4.C rules as well as through `shekyl-difficulty`.
+# Already pinned in the workspace lockfile; test-only.
+serde_json = "1"
+# The genesis pins are derived in test, not restated (slice 4 Q3): the
+# genesis tool rebuilds each network's block from cryptonote_config.h's
+# pins, and the client identity's copy of the hashes (VC-D18) must agree
+# with the table. Both workspace members; test-only.
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# The balance rows' positive fixtures (H21, H22, slice 5) need a mask of the
+# form `k·G + a·H`, which is curve arithmetic the crate itself never does —
+# the production rules only *verify*, through `shekyl-ct-balance`. Test-only;
+# `a·H` comes from `shekyl_ct_balance::amount_commitment` so the fixture uses
+# the crate's own `H`, and this dependency contributes `k·G` and the sum.
+# Already a workspace dependency (ct-balance pins the same major).
+curve25519-dalek = "4"
+
+[lints]
+workspace = true

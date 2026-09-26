@@ -154,9 +154,7 @@ pub(crate) enum SubmitSuccess {
 /// take its 3/4-part `hash()` — **the id the daemon computes**, not a flat
 /// `keccak256` of the bytes (which only the in-process test doubles ever agreed with).
 pub(crate) fn canonical_tx_id_opt(tx_bytes: &[u8]) -> Option<TxHash> {
-    Transaction::from_bytes(tx_bytes)
-        .ok()
-        .map(|tx| TxHash::from_bytes(tx.hash()))
+    Transaction::from_bytes(tx_bytes).ok().map(|tx| tx.hash())
 }
 
 /// Realized fee of the wallet's own built bytes — the wire tx's
@@ -734,7 +732,7 @@ mod tests {
         use crate::engine::test_support::make_synthetic_block;
 
         let mut tx_bytes = Vec::new();
-        make_synthetic_block(0, [0u8; 32])
+        make_synthetic_block(0, shekyl_types::BlockHash::NULL)
             .block
             .miner_transaction
             .write(&mut tx_bytes)
@@ -817,7 +815,7 @@ mod tests {
         use crate::engine::test_support::make_synthetic_block;
 
         let mut tx_bytes = Vec::new();
-        make_synthetic_block(0, [0u8; 32])
+        make_synthetic_block(0, shekyl_types::BlockHash::NULL)
             .block
             .miner_transaction
             .write(&mut tx_bytes)

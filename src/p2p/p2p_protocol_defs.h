@@ -52,23 +52,28 @@ namespace nodetool
   // was a durable identifier keyed to an address — the shape the design
   // forbids — and it was self-asserted, so it identified nothing anyway.
   // The address IS the entry: a hypothesis about where a peer can be dialed.
+  //
+  // It carries no pruning_seed either (PDM-Q7, 2026-09-21): the stripe
+  // engine is deleted, and the field was the same shape as the id above —
+  // durable, address-keyed, self-asserted, gossiped in every peerlist — with
+  // eight accepted non-zero values against a uniformly-zero honest fleet,
+  // i.e. free markers for topology tracing. A received entry that still
+  // carries the key is decoded with the key ignored (KV_SERIALIZE_OPT on the
+  // old side; epee skips unknown keys on this side).
   template<typename AddressType>
   struct peerlist_entry_base
   {
     AddressType adr;
     int64_t last_seen;
-    uint32_t pruning_seed;
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE(adr)
       KV_SERIALIZE_OPT(last_seen, (int64_t)0)
-      KV_SERIALIZE_OPT(pruning_seed, (uint32_t)0)
     END_KV_SERIALIZE_MAP()
 
     BEGIN_SERIALIZE()
       FIELD(adr)
       VARINT_FIELD(last_seen)
-      VARINT_FIELD(pruning_seed)
     END_SERIALIZE()
   };
   typedef peerlist_entry_base<epee::net_utils::network_address> peerlist_entry;
@@ -86,7 +91,6 @@ namespace nodetool
     for(const peerlist_entry& pe: pl)
     {
       ss << pe.adr.str()
-        << " \tpruning seed " << pe.pruning_seed
         << " \tlast_seen: " << (pe.last_seen == 0 ? std::string("never") : epee::misc_utils::get_time_interval_string(now_time - pe.last_seen))
         << std::endl;
     }
@@ -166,13 +170,15 @@ namespace nodetool
     {
       basic_node_data node_data;
       t_playload_type payload_data;
-      // Self-detection nonce (SHEKYL_P2P_PROTOCOL.md, PWD-T1's token carried
-      // interim on this request until the Noise handshake lands): 32 bytes
-      // of CSPRNG output, in the clear — its only job is to be recognised
-      // by the node that emitted it. Inserted into the dialing zone's
-      // in-flight set immediately before this request is written; an
-      // arriving handshake carrying a nonce this node recently emitted IS
-      // this node. Windows are per zone; comparison is within-zone only —
+      // Self-detection nonce (SHEKYL_P2P_PROTOCOL.md §3.5, *Two handshakes*,
+      // PWD-T1): 32 bytes of CSPRNG output on the Levin handshake request.
+      // Session content — it stays here on every zone, and does not ride the
+      // transport handshake. On clearnet the Noise channel encrypts it; the
+      // counterparty still sees it, which is the point. Its only job is to
+      // be recognised by the node that emitted it. Inserted into the dialing
+      // zone's in-flight set immediately before this request is written; an
+      // arriving request carrying a nonce this node emitted IS this node.
+      // Windows are per zone; comparison is within-zone only —
       // a global window would let a peer dialed on one zone replay the
       // nonce into another zone's listener and use the drop as a
       // cross-zone correlation oracle.

@@ -13,16 +13,52 @@
 
 use super::*;
 use shekyl_archival_retention::{
-    attestation_nonce, attestation_root, empty_attestation_root, p_canonical_id_from_hybrid_pubkey,
-    AttestationHeader, AttestationKind, BlockAttestationWitness, PassRecord,
-    ATTESTATION_HEADER_LEN, MAX_ATTESTATION_RECORDS,
+    attestation_root, empty_attestation_root, p_canonical_id_from_hybrid_pubkey,
+    pass_countersignature_message, AttestationHeader, AttestationKind, BlockAttestationWitness,
+    PassRecord, PassWitness, ATTESTATION_HEADER_LEN, MAX_ATTESTATION_RECORDS,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_NONCE_LEN,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SignatureScheme};
+use shekyl_types::BlockHeight;
 
 const SHARD: u64 = 42;
 const EPOCH: u64 = 1000;
-const R: [u8; 32] = [7u8; 32];
-const CB: [u8; 32] = [9u8; 32];
+/// The connecting block's validated predecessor height `h`, comfortably above the anchor
+/// threshold: its window is `[h − depth − L, h − depth]`.
+const HEIGHT: u64 = 7777;
+/// The requester's anchor: `tip − depth` at request time, which lands at the top of the window
+/// for a block whose predecessor is `HEIGHT`.
+const ANCHOR: u64 = HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
+/// The requester-random nonce the pass record carries (SF-D8). Fixed here so each test perturbs
+/// exactly one field.
+const NONCE: [u8; PASS_NONCE_LEN] = [7u8; PASS_NONCE_LEN];
+
+/// A deterministic stand-in for the connecting chain: the block hash at `height`. The verifier
+/// never reads a chain — the test plays C++ and fills the window table from this.
+fn chain_hash(height: u64) -> [u8; PASS_ANCHOR_HASH_LEN] {
+    let mut h = [0u8; PASS_ANCHOR_HASH_LEN];
+    h[..8].copy_from_slice(&height.to_le_bytes());
+    h[8] = 0xF1;
+    h
+}
+
+/// The table C++ fills for a block whose predecessor is `predecessor_height`, sized by asking
+/// [`shekyl_archival_pass_anchor_window`] — the same round trip the daemon makes. Empty below
+/// the threshold.
+fn window_table(predecessor_height: u64) -> Vec<[u8; PASS_ANCHOR_HASH_LEN]> {
+    let mut first = 0u64;
+    let mut len = 0usize;
+    let code = unsafe {
+        shekyl_archival_pass_anchor_window(predecessor_height, &raw mut first, &raw mut len)
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+    if len == 0 {
+        assert_eq!(first, 0);
+        return Vec::new();
+    }
+    (0..len as u64).map(|i| chain_hash(first + i)).collect()
+}
 
 struct Scenario {
     witness: Vec<u8>,
@@ -49,18 +85,25 @@ fn one_pass(
     claimed_p_id: [u8; 32],
     claimed_pubkey: Vec<u8>,
 ) -> Scenario {
-    let nonce = attestation_nonce(&R, &CB, &claimed_p_id, SHARD, EPOCH);
+    let msg = pass_countersignature_message(
+        &NONCE,
+        BlockHeight::from_raw(ANCHOR),
+        &chain_hash(ANCHOR),
+        SHARD,
+    );
     let sig = HybridEd25519MlDsa
         .sign(
             signing_sk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-            &nonce,
+            &msg,
         )
         .expect("sign");
     let record = PassRecord {
         p_id: claimed_p_id,
         shard_id: SHARD,
         settlement_epoch: EPOCH,
+        nonce: NONCE,
+        anchor_height: BlockHeight::from_raw(ANCHOR),
         signature: sig.clone(),
     };
     let header = AttestationHeader {
@@ -71,7 +114,11 @@ fn one_pass(
     };
     Scenario {
         witness: BlockAttestationWitness {
-            pass_signatures: vec![sig],
+            passes: vec![PassWitness {
+                nonce: NONCE,
+                anchor_height: BlockHeight::from_raw(ANCHOR),
+                signature: sig,
+            }],
         }
         .to_canonical_bytes()
         .expect("witness bytes"),
@@ -96,18 +143,41 @@ fn pair(p_id: [u8; 32], pubkey: &[u8]) -> ShekylArchivalPidPubkey {
 
 /// FFI verify over explicit bytes/pairs so each test perturbs one field. All slices are kept
 /// alive by the caller for the duration of the call.
-fn call(
+fn call(root: [u8; 32], headers: &[u8], witness: &[u8], pairs: &[ShekylArchivalPidPubkey]) -> u8 {
+    call_at_height(HEIGHT, root, headers, witness, pairs)
+}
+
+/// Same as [`call`] but with the predecessor height chosen, for the tests that vary it. The
+/// anchor table is filled the way C++ fills it — from the chain, for exactly that height.
+fn call_at_height(
+    predecessor_height: u64,
     root: [u8; 32],
-    cb_readable: u8,
+    headers: &[u8],
+    witness: &[u8],
+    pairs: &[ShekylArchivalPidPubkey],
+) -> u8 {
+    let table = window_table(predecessor_height);
+    call_with_table(predecessor_height, &table, root, headers, witness, pairs)
+}
+
+/// The fully explicit form: the caller supplies the anchor table, for the tests that perturb it.
+fn call_with_table(
+    predecessor_height: u64,
+    table: &[[u8; PASS_ANCHOR_HASH_LEN]],
+    root: [u8; 32],
     headers: &[u8],
     witness: &[u8],
     pairs: &[ShekylArchivalPidPubkey],
 ) -> u8 {
     let ctx = ShekylArchivalAttestationVerifyCtx {
-        prev_block_hash: R,
         attestation_root: root,
-        cb_out_key: CB,
-        cb_out_key_readable: cb_readable,
+        predecessor_height,
+        anchor_hashes_ptr: if table.is_empty() {
+            std::ptr::null()
+        } else {
+            table.as_ptr()
+        },
+        anchor_hashes_len: table.len(),
         headers_readable: 1,
         headers_ptr: if headers.is_empty() {
             std::ptr::null()
@@ -141,7 +211,7 @@ fn valid_block_verifies() {
     let s = one_pass(&sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &s.pubkey)];
     assert_eq!(
-        call(s.root, 1, &s.headers, &s.witness, &pairs),
+        call(s.root, &s.headers, &s.witness, &pairs),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
     );
 }
@@ -150,7 +220,7 @@ fn valid_block_verifies() {
 fn empty_block_verifies_against_empty_root() {
     // No headers, empty witness, no pairs — the pre-cutover state, reproduced.
     assert_eq!(
-        call(empty_attestation_root(), 1, &[], &[], &[]),
+        call(empty_attestation_root(), &[], &[], &[]),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
     );
 }
@@ -160,13 +230,13 @@ fn empty_block_verifies_against_empty_root() {
 /// block shape the new verify recomputes `attestation_root(&[]) == empty_attestation_root()`
 /// (identical by construction) and must reject a non-empty mined root the same way. With the
 /// accept case above, this reproduces the interim EXACTLY on the empty shape — the claim that
-/// licenses deleting it (distinct from the populated KAT that licenses the verify).
+/// licenses deleting it (distinct from the populated pinned fixture that licenses the verify).
 #[test]
 fn empty_block_nonempty_root_is_root_mismatch() {
     let mut wrong = empty_attestation_root();
     wrong[0] ^= 0x01;
     assert_eq!(
-        call(wrong, 1, &[], &[], &[]),
+        call(wrong, &[], &[], &[]),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH
     );
 }
@@ -185,7 +255,7 @@ fn empty_headers_nonempty_witness_is_malformed_witness() {
     let (pubkey, p_id, sk) = real_p();
     let s = one_pass(&sk, p_id, pubkey); // reused only for a real one-signature witness
     assert_eq!(
-        call(empty_attestation_root(), 1, &[], &s.witness, &[]),
+        call(empty_attestation_root(), &[], &s.witness, &[]),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS
     );
 }
@@ -198,7 +268,7 @@ fn wrong_mined_root_is_root_mismatch() {
     let mut wrong = s.root;
     wrong[0] ^= 0x01;
     assert_eq!(
-        call(wrong, 1, &s.headers, &s.witness, &pairs),
+        call(wrong, &s.headers, &s.witness, &pairs),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH
     );
 }
@@ -213,7 +283,7 @@ fn forged_signature_is_countersig_invalid() {
     let s = one_pass(&other_sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &s.pubkey)];
     assert_eq!(
-        call(s.root, 1, &s.headers, &s.witness, &pairs),
+        call(s.root, &s.headers, &s.witness, &pairs),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID
     );
 }
@@ -224,7 +294,7 @@ fn missing_bond_is_bond_absent() {
     let s = one_pass(&sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &[])]; // empty pubkey == bond-absent marker
     assert_eq!(
-        call(s.root, 1, &s.headers, &s.witness, &pairs),
+        call(s.root, &s.headers, &s.witness, &pairs),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT
     );
 }
@@ -236,7 +306,7 @@ fn wrong_pubkey_length_is_malformed_pubkey() {
     let short = vec![0u8; 10]; // neither 0 nor HYBRID_PUBKEY_CANONICAL_BYTES
     let pairs = [pair(s.p_id, &short)];
     assert_eq!(
-        call(s.root, 1, &s.headers, &s.witness, &pairs),
+        call(s.root, &s.headers, &s.witness, &pairs),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY
     );
 }
@@ -247,7 +317,7 @@ fn extra_pair_is_set_mismatch() {
     let s = one_pass(&sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &s.pubkey), pair([0xEE; 32], &s.pubkey)]; // extra pair, no pass record
     assert_eq!(
-        call(s.root, 1, &s.headers, &s.witness, &pairs),
+        call(s.root, &s.headers, &s.witness, &pairs),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH
     );
 }
@@ -257,7 +327,7 @@ fn missing_pair_is_set_mismatch() {
     let (pubkey, p_id, sk) = real_p();
     let s = one_pass(&sk, p_id, pubkey);
     assert_eq!(
-        call(s.root, 1, &s.headers, &s.witness, &[]),
+        call(s.root, &s.headers, &s.witness, &[]),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH
     );
 }
@@ -268,7 +338,7 @@ fn duplicate_pair_is_set_mismatch() {
     let s = one_pass(&sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &s.pubkey), pair(s.p_id, &s.pubkey)]; // same p_id twice
     assert_eq!(
-        call(s.root, 1, &s.headers, &s.witness, &pairs),
+        call(s.root, &s.headers, &s.witness, &pairs),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH
     );
 }
@@ -277,7 +347,7 @@ fn duplicate_pair_is_set_mismatch() {
 fn header_count_over_cap_is_cap_exceeded() {
     let big = vec![0u8; (MAX_ATTESTATION_RECORDS + 1) * ATTESTATION_HEADER_LEN];
     assert_eq!(
-        call(empty_attestation_root(), 1, &big, &[], &[]),
+        call(empty_attestation_root(), &big, &[], &[]),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED
     );
 }
@@ -286,7 +356,7 @@ fn header_count_over_cap_is_cap_exceeded() {
 fn non_multiple_header_blob_is_malformed_headers() {
     let bad = vec![0u8; ATTESTATION_HEADER_LEN + 1];
     assert_eq!(
-        call(empty_attestation_root(), 1, &bad, &[], &[]),
+        call(empty_attestation_root(), &bad, &[], &[]),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS
     );
 }
@@ -296,7 +366,7 @@ fn bad_kind_byte_is_malformed_headers() {
     let mut hdr = vec![0u8; ATTESTATION_HEADER_LEN];
     hdr[ATTESTATION_HEADER_LEN - 1] = 2; // kind neither miss(0) nor pass(1)
     assert_eq!(
-        call(empty_attestation_root(), 1, &hdr, &[], &[]),
+        call(empty_attestation_root(), &hdr, &[], &[]),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS
     );
 }
@@ -308,7 +378,7 @@ fn truncated_witness_is_malformed_witness() {
     let pairs = [pair(s.p_id, &s.pubkey)];
     let short = &s.witness[..s.witness.len() - 1];
     assert_eq!(
-        call(s.root, 1, &s.headers, short, &pairs),
+        call(s.root, &s.headers, short, &pairs),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS
     );
 }
@@ -320,27 +390,12 @@ fn sig_count_not_matching_pass_headers_is_malformed_witness() {
     let s = one_pass(&sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &s.pubkey)];
     assert_eq!(
-        call(s.root, 1, &s.headers, &[], &pairs),
+        call(s.root, &s.headers, &[], &pairs),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS
     );
 }
 
-/// The second deliberate divergence from the interim, on the same empty shape. The
-/// interim never reads the coinbase, so it accepts an empty-root block whose `vout[0]` is
-/// unreadable and leaves the rejection to `prevalidate_miner_transaction`; the verify checks the
-/// C++-supplied cb-key-readable flag up front and rejects with CBKEY_UNREADABLE. Like the witness
-/// divergence this only fires on an already-invalid block (a valid coinbase always has a readable
-/// key `vout[0]`), so no valid block's verdict changes -- the verify is merely strictly stricter,
-/// failing fast where the interim deferred.
-#[test]
-fn unreadable_coinbase_key_is_cbkey_unreadable() {
-    assert_eq!(
-        call(empty_attestation_root(), 0, &[], &[], &[]),
-        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE
-    );
-}
-
-/// The third (and last) deliberate divergence from the interim, and the only one that fires on
+/// The second (and last) deliberate divergence from the interim, and the only one that fires on
 /// a shape the inherited consensus treats as valid: a coinbase `tx_extra` that fails to parse.
 /// The interim never reads the extra, so it accepts such a block iff its mined root is the
 /// empty root. But unreadable headers are NOT the committed empty set -- attestation-shaped
@@ -351,11 +406,12 @@ fn unreadable_coinbase_key_is_cbkey_unreadable() {
 /// pre-genesis inversion), pinned here so the tightening stays deliberate.
 #[test]
 fn unreadable_headers_is_headers_unreadable() {
+    let table = window_table(HEIGHT);
     let ctx = ShekylArchivalAttestationVerifyCtx {
-        prev_block_hash: R,
         attestation_root: empty_attestation_root(),
-        cb_out_key: CB,
-        cb_out_key_readable: 1,
+        predecessor_height: HEIGHT,
+        anchor_hashes_ptr: table.as_ptr(),
+        anchor_hashes_len: table.len(),
         headers_readable: 0,
         headers_ptr: std::ptr::null(),
         headers_len: 0,
@@ -386,7 +442,8 @@ fn verdict_codes_are_pinned() {
     assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH, 5);
     assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID, 6);
     assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT, 7);
-    assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE, 8);
+    // 8 (CBKEY_UNREADABLE) and 12 (PREVHASH_UNPOPULATED) are RETIRED by SF-D8 — no constant,
+    // numbers never reused; see the code table in attestation.rs.
     assert_eq!(
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH,
         9
@@ -395,6 +452,18 @@ fn verdict_codes_are_pinned() {
     assert_eq!(
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE,
         11
+    );
+    assert_eq!(
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE,
+        13
+    );
+    assert_eq!(
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ANCHOR_OUT_OF_WINDOW,
+        14
+    );
+    assert_eq!(
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD,
+        15
     );
 }
 
@@ -520,84 +589,179 @@ fn pass_ids_null_out_len_is_null_ptr() {
     assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR);
 }
 
-/// Same as [`call`] but with the anchor chosen, for the two tests that vary it.
-fn call_with_prev(
-    prev_block_hash: [u8; 32],
-    root: [u8; 32],
-    headers: &[u8],
-    witness: &[u8],
-    pairs: &[ShekylArchivalPidPubkey],
-) -> u8 {
-    let ctx = ShekylArchivalAttestationVerifyCtx {
-        prev_block_hash,
-        attestation_root: root,
-        cb_out_key: CB,
-        cb_out_key_readable: 1,
-        headers_readable: 1,
-        headers_ptr: if headers.is_empty() {
-            std::ptr::null()
-        } else {
-            headers.as_ptr()
-        },
-        headers_len: headers.len(),
-        pairs_ptr: if pairs.is_empty() {
-            std::ptr::null()
-        } else {
-            pairs.as_ptr()
-        },
-        pairs_len: pairs.len(),
-    };
-    unsafe {
-        shekyl_archival_verify_attestation(
-            if witness.is_empty() {
-                std::ptr::null()
-            } else {
-                witness.as_ptr()
-            },
-            witness.len(),
-            &raw const ctx,
-        )
-    }
-}
-
-/// GENESIS REGRESSION. An all-zero `prev_block_hash` with **no pass records**
-/// must verify OK, not trip the unpopulated-field sentinel.
-///
-/// The genesis block's `prev_id` **is** all-zeros, and genesis reaches this path:
-/// `top_block_hash()` returns `null_hash` on an empty chain, so
-/// `bl.prev_id == get_tail_id()` holds and `add_new_block` routes genesis to
-/// `handle_block_to_main_chain` → `verify_block_attestation`. An earlier cut of
-/// this change gated on the ctx unconditionally and would have **rejected
-/// genesis**, so the chain could never have initialised.
-///
-/// `prev_id` is the block *object* hash, not the RandomX PoW value, so nothing
-/// about mining excludes an all-zero id — the PoW-difficulty intuition does not
-/// apply. The unit suite missed this because no test drives a full
-/// `Blockchain::init`; this is the pin that would have.
+/// `predecessor_height == 0` with **no pass records** verifies OK. Genesis reaches this path
+/// (`top_block_hash()` is `null_hash` on an empty chain, so `add_new_block` routes genesis through
+/// `handle_block_to_main_chain` → `verify_block_attestation`), and block 1's predecessor height is
+/// a real `0`. Below the anchor threshold no window exists, so C++ passes an empty table (what
+/// `shekyl_archival_pass_anchor_window` told it) and a record-less block is fine.
 #[test]
-fn genesis_all_zero_prev_hash_with_no_records_verifies_ok() {
+fn height_zero_with_no_records_verifies_ok() {
     assert_eq!(
-        call_with_prev([0u8; 32], empty_attestation_root(), &[], &[], &[]),
+        call_at_height(0, empty_attestation_root(), &[], &[], &[]),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK,
-        "genesis (all-zero prev_id, zero records) must verify; rejecting it halts the \
+        "genesis (predecessor height 0, zero records) must verify; rejecting it halts the \
          chain at initialisation"
     );
 }
 
-/// The other half: with a record present the anchor IS consumed, so all-zeros is
-/// the caller having failed to populate it and must be refused.
-///
-/// Negative control for the test above — remove the `!records.is_empty()` scope
-/// and the genesis test goes red; remove the check entirely and this one does.
+/// The window is keyed off the predecessor height, so a valid record presented under a different
+/// connecting height is refused — by the class the height difference produces. One block later
+/// the anchor is still inside the window (that is what `L ≥ 2` buys an honest fetch spanning a
+/// block boundary) and the same chain hash sits at that height, so it still verifies; `L + 1`
+/// blocks later the anchor has aged out (`ANCHOR_OUT_OF_WINDOW`); and an unpopulated height reads
+/// as `0`, below the threshold, where any pass record is `BELOW_ANCHOR_THRESHOLD` — the reason
+/// v2 needs no unpopulated sentinel.
 #[test]
-fn all_zero_prev_hash_with_a_record_is_refused() {
+fn predecessor_height_moves_the_window() {
     let (pubkey, p_id, sk) = real_p();
     let s = one_pass(&sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &s.pubkey)];
+    for later in 1..=PASS_ANCHOR_LAG_BLOCKS.to_raw() {
+        assert_eq!(
+            call_at_height(HEIGHT + later, s.root, &s.headers, &s.witness, &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK,
+            "anchor still inside the window {later} block(s) later"
+        );
+    }
     assert_eq!(
-        call_with_prev([0u8; 32], s.root, &s.headers, &s.witness, &pairs),
-        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED,
-        "a record consumes the anchor, so an unpopulated one must be refused"
+        call_at_height(
+            HEIGHT + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1,
+            s.root,
+            &s.headers,
+            &s.witness,
+            &pairs
+        ),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ANCHOR_OUT_OF_WINDOW
+    );
+    assert_eq!(
+        call_at_height(HEIGHT - 1, s.root, &s.headers, &s.witness, &pairs),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ANCHOR_OUT_OF_WINDOW,
+        "an anchor above the window (P signed for a block that did not yet exist) is refused"
+    );
+    assert_eq!(
+        call_at_height(0, s.root, &s.headers, &s.witness, &pairs),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD,
+        "an unpopulated height must fail closed"
+    );
+}
+
+/// The chain hash the verifier reads is the connecting chain's, not the requester's claim: the
+/// same record verified against a window whose hash at the anchor height differs (a fork above the
+/// fork point, or a fabricated header hash) is a countersignature failure — the record carries no
+/// hash, so nothing but the signature can disagree.
+#[test]
+fn different_chain_hash_at_anchor_is_countersig_invalid() {
+    let (pubkey, p_id, sk) = real_p();
+    let s = one_pass(&sk, p_id, pubkey);
+    let pairs = [pair(s.p_id, &s.pubkey)];
+    let mut table = window_table(HEIGHT);
+    let idx = usize::try_from(
+        ANCHOR - (HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw() - PASS_ANCHOR_LAG_BLOCKS.to_raw()),
+    )
+    .expect("window index fits usize");
+    table[idx][9] ^= 0x01;
+    assert_eq!(
+        call_with_table(HEIGHT, &table, s.root, &s.headers, &s.witness, &pairs),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID
+    );
+    // Perturbing a DIFFERENT height's hash leaves this record alone — one indexed lookup.
+    let mut other = window_table(HEIGHT);
+    other[0][9] ^= 0x01;
+    assert_eq!(
+        call_with_table(HEIGHT, &other, s.root, &s.headers, &s.witness, &pairs),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
+    );
+}
+
+/// The anchor table's shape is checked on EVERY block, records or not: a wrong-length table at or
+/// above the threshold, or a non-empty table below it, is `MALFORMED_ANCHOR_TABLE` — the
+/// marshaling-drift verdict, so a C++ that sized the table wrong is loud on its first block rather
+/// than on the first block that carries a pass record.
+#[test]
+fn anchor_table_shape_is_checked_on_every_block() {
+    let full = window_table(HEIGHT);
+    assert_eq!(full.len(), PASS_ANCHOR_WINDOW_LEN);
+    let short = &full[..PASS_ANCHOR_WINDOW_LEN - 1];
+    assert_eq!(
+        call_with_table(HEIGHT, short, empty_attestation_root(), &[], &[], &[]),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE
+    );
+    let mut long = full.clone();
+    long.push(chain_hash(0));
+    assert_eq!(
+        call_with_table(HEIGHT, &long, empty_attestation_root(), &[], &[], &[]),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE
+    );
+    assert_eq!(
+        call_with_table(HEIGHT, &[], empty_attestation_root(), &[], &[], &[]),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE,
+        "an empty table at a height that has a window is malformed, not 'no records'"
+    );
+    // Below the threshold the only right shape is empty.
+    assert_eq!(
+        call_with_table(
+            PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT.to_raw() - 1,
+            &full,
+            empty_attestation_root(),
+            &[],
+            &[],
+            &[]
+        ),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE
+    );
+    assert_eq!(
+        call_with_table(
+            PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT.to_raw() - 1,
+            &[],
+            empty_attestation_root(),
+            &[],
+            &[],
+            &[]
+        ),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
+    );
+}
+
+/// Step 0's threshold, pinned at both sides through the FFI: `depth + L − 1` has no window,
+/// `depth + L` has one starting at height 0 — the genesis boundary, the same 723 / 724 pair the
+/// retention crate pins.
+#[test]
+fn anchor_window_threshold_is_pinned_at_723_and_724() {
+    assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT.to_raw(), 724);
+    let mut first = 99u64;
+    let mut len = 99usize;
+    let below = unsafe { shekyl_archival_pass_anchor_window(723, &raw mut first, &raw mut len) };
+    assert_eq!(below, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+    assert_eq!((first, len), (0, 0));
+    let at = unsafe { shekyl_archival_pass_anchor_window(724, &raw mut first, &raw mut len) };
+    assert_eq!(at, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+    assert_eq!((first, len), (0, PASS_ANCHOR_WINDOW_LEN));
+    let far = unsafe { shekyl_archival_pass_anchor_window(HEIGHT, &raw mut first, &raw mut len) };
+    assert_eq!(far, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+    assert_eq!(
+        (first, len),
+        (
+            HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw() - PASS_ANCHOR_LAG_BLOCKS.to_raw(),
+            PASS_ANCHOR_WINDOW_LEN
+        )
+    );
+    let null =
+        unsafe { shekyl_archival_pass_anchor_window(HEIGHT, std::ptr::null_mut(), &raw mut len) };
+    assert_eq!(null, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR);
+}
+
+/// The witness nonce is committed by the root (`nonce ‖ signature` per entry), so a swapped nonce
+/// is a ROOT_MISMATCH before any signature is evaluated — the marshaling-drift gate fires first.
+#[test]
+fn tampered_witness_nonce_is_root_mismatch() {
+    let (pubkey, p_id, sk) = real_p();
+    let s = one_pass(&sk, p_id, pubkey);
+    let pairs = [pair(s.p_id, &s.pubkey)];
+    let mut w = s.witness.clone();
+    w[8] ^= 0x01; // first nonce byte, after the 8-byte count prefix
+    assert_eq!(
+        call(s.root, &s.headers, &w, &pairs),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH
     );
 }
 
@@ -630,30 +794,102 @@ fn pass_ids_feeds_step2_coverage() {
     assert_eq!(ids, vec![s.p_id]);
     let pairs: Vec<_> = ids.iter().map(|id| pair(*id, &s.pubkey)).collect();
     assert_eq!(
-        call(s.root, 1, &s.headers, &s.witness, &pairs),
+        call(s.root, &s.headers, &s.witness, &pairs),
         SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
     );
 }
 
-/// Emits a frozen valid one-pass vector for the cross-language C++ KAT
-/// (tests/unit_tests/archival_attestation_verify.cpp), which feeds these exact bytes back through
-/// the C-side structs and asserts the same verdicts — the check that the C++ `#[repr(C)]` mirrors
-/// marshal identically to the Rust definitions. `#[ignore]`d because it asserts nothing; it is a
-/// generator. The C++ vectors are a captured snapshot (the keypair is random); regenerate and
-/// re-paste only if the genesis-frozen wire format changes:
-///   cargo test -p shekyl-ffi emit_attestation_verify_kat -- --ignored --nocapture
+/// The deterministic SF-D8 v2 fixture, shared with `shekyl-archival-retention`'s
+/// `attestation_wire_kat.rs` and the C++ cross-language test
+/// (`tests/unit_tests/archival_attestation_verify.cpp`), which reads the same file. Rule-50
+/// oracle tier: **self-pinned (3)** — a drift tripwire, not a KAT, hence `pinned_*` names
+/// throughout. Regenerated only by the armed regenerator in
+/// `shekyl-archival-retention/tests/attestation_wire_kat.rs` (rule 50 decision-log citation).
+const V2_FIXTURE: &str = include_str!(
+    "../../../shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json"
+);
+
+fn fixture() -> serde_json::Value {
+    serde_json::from_str(V2_FIXTURE).expect("fixture parses")
+}
+
+fn fixture_hex(kat: &serde_json::Value, key: &str) -> Vec<u8> {
+    hex::decode(kat[key].as_str().unwrap_or_else(|| panic!("{key} missing")))
+        .unwrap_or_else(|_| panic!("{key} not hex"))
+}
+
+fn fixture_32(kat: &serde_json::Value, key: &str) -> [u8; 32] {
+    fixture_hex(kat, key).try_into().expect("32 bytes")
+}
+
+/// The pinned vector verifies through the FFI exactly as it does through the retention crate:
+/// this is the C ABI half of the cross-language pin — the same bytes the C++ test marshals through
+/// the `#[repr(C)]` mirrors must reach `OK` here first.
 #[test]
-#[ignore = "vector emitter for the C++ cross-language KAT; asserts nothing — run with --ignored --nocapture to regenerate"]
-fn emit_attestation_verify_kat() {
-    fn hex(b: &[u8]) -> String {
-        b.iter().map(|x| format!("{x:02x}")).collect()
-    }
-    let (pubkey, p_id, sk) = real_p();
-    let s = one_pass(&sk, p_id, pubkey);
-    println!("KAT head* = {}", hex(&s.headers));
-    println!("KAT witn* = {}", hex(&s.witness));
-    println!("KAT pubk* = {}", hex(&s.pubkey));
-    println!("KAT p_id* = {}", hex(&s.p_id));
-    println!("KAT root* = {}", hex(&s.root));
-    println!("KAT cbky* = {}", hex(&CB));
+fn pinned_v2_fixture_verifies_through_ffi() {
+    let kat = fixture();
+    let headers = fixture_hex(&kat, "header_hex");
+    let witness = fixture_hex(&kat, "witness_hex");
+    let pubkey = fixture_hex(&kat, "hybrid_public_key_hex");
+    let p_id = fixture_32(&kat, "p_id_hex");
+    let root = fixture_32(&kat, "attestation_root_hex");
+    let height = kat["predecessor_height"].as_u64().expect("height");
+    let first = kat["anchor_window_first_height"].as_u64().expect("first");
+    let table: Vec<[u8; PASS_ANCHOR_HASH_LEN]> = kat["anchor_window_hashes_hex"]
+        .as_array()
+        .expect("window table")
+        .iter()
+        .map(|v| {
+            hex::decode(v.as_str().expect("hex"))
+                .expect("hex")
+                .try_into()
+                .expect("32 bytes")
+        })
+        .collect();
+    // The fixture's table is the one step 0 asks C++ for.
+    let mut got_first = 0u64;
+    let mut got_len = 0usize;
+    let code =
+        unsafe { shekyl_archival_pass_anchor_window(height, &raw mut got_first, &raw mut got_len) };
+    assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+    assert_eq!((got_first, got_len), (first, table.len()));
+    assert_eq!(
+        p_id,
+        *p_canonical_id_from_hybrid_pubkey(&pubkey).as_bytes(),
+        "fixture p_id is the fixture pubkey's canonical id"
+    );
+    let pairs = [pair(p_id, &pubkey)];
+    assert_eq!(
+        call_with_table(height, &table, root, &headers, &witness, &pairs),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
+    );
+    // Every SF-D8 term is load-bearing at the FFI boundary too: the chain hash at the anchor
+    // height (a fork or a fabricated header), the window (a stale anchor), and the root.
+    let anchor = kat["anchor_height"].as_u64().expect("anchor");
+    let mut forked = table.clone();
+    forked[usize::try_from(anchor - first).expect("window index fits usize")][0] ^= 0x01;
+    assert_eq!(
+        call_with_table(height, &forked, root, &headers, &witness, &pairs),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID
+    );
+    let aged: Vec<_> = (0..table.len() as u64)
+        .map(|i| chain_hash(first + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1 + i))
+        .collect();
+    assert_eq!(
+        call_with_table(
+            height + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1,
+            &aged,
+            root,
+            &headers,
+            &witness,
+            &pairs
+        ),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ANCHOR_OUT_OF_WINDOW
+    );
+    let mut wrong_root = root;
+    wrong_root[0] ^= 0x01;
+    assert_eq!(
+        call_with_table(height, &table, wrong_root, &headers, &witness, &pairs),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH
+    );
 }

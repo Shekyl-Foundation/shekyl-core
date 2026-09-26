@@ -56,7 +56,7 @@ pub(crate) fn bond_post_observations(
 ) -> impl Iterator<Item = BondPostObservation> + '_ {
     tx.prefix.inputs.iter().filter_map(|input| match input {
         Input::BondPost(bp) => Some(BondPostObservation {
-            p_canonical_id: PCanonicalId::from_bytes(bp.p_canonical_id),
+            p_canonical_id: bp.p_canonical_id,
             post_kind: post_kind_byte(&bp.kind),
         }),
         _ => None,
@@ -105,7 +105,7 @@ pub(crate) fn match_watch<'a>(
 /// the sighting bridge would wedge.
 pub(crate) fn sightings_in<'a>(
     tx: &'a Transaction,
-    height: u64,
+    height: shekyl_types::BlockHeight,
     watch: &'a BTreeMap<PCanonicalId, u32>,
 ) -> impl Iterator<Item = BondSightingObserved> + 'a {
     match_watch(tx, watch).filter_map(move |(obs, slot)| {
@@ -251,7 +251,7 @@ pub(crate) fn adopt_bond_sightings(
     if sightings.is_empty() {
         return Vec::new();
     }
-    let mut batch_first: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut batch_first: BTreeMap<u32, shekyl_types::BlockHeight> = BTreeMap::new();
     for s in sightings {
         batch_first
             .entry(s.slot)
@@ -261,7 +261,7 @@ pub(crate) fn adopt_bond_sightings(
     let mut newly_adopted = Vec::new();
     let mut sighted_high: Option<u32> = None;
     for (&slot, &height) in &batch_first {
-        staking.record_first_sighting(slot, shekyl_types::BlockHeight::from_raw(height));
+        staking.record_first_sighting(slot, height);
         if !staking.bonded_slots.contains(&slot) {
             let pos = staking.bonded_slots.partition_point(|&b| b < slot);
             staking.bonded_slots.insert(pos, slot);
@@ -294,7 +294,7 @@ mod tests {
 
     fn sighting(slot: u32, height: u64) -> crate::scan::BondSightingObserved {
         crate::scan::BondSightingObserved {
-            block_height: height,
+            block_height: shekyl_types::BlockHeight::from_raw(height),
             slot,
         }
     }
@@ -334,7 +334,11 @@ mod tests {
             "cursor raised one past the highest sighting"
         );
         assert_eq!(
-            staking.bond_sightings.get(&2).map(|h| h.to_raw()),
+            staking
+                .bond_sightings
+                .get(&2)
+                .copied()
+                .map(shekyl_types::BlockHeight::to_raw),
             Some(130),
             "first-sighting height recorded"
         );
@@ -369,13 +373,34 @@ mod tests {
         let mut staking = shekyl_engine_state::StakingBlock::empty();
         // One batch, high then low: the batch min wins, not the first row.
         adopt_bond_sightings(&mut staking, &[sighting(0, 90), sighting(0, 40)]);
-        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(40));
+        assert_eq!(
+            staking
+                .bond_sightings
+                .get(&0)
+                .copied()
+                .map(shekyl_types::BlockHeight::to_raw),
+            Some(40)
+        );
         assert_eq!(staking.bonded_slots, vec![0]);
         // Later batches — higher OR lower — leave the committed row alone.
         adopt_bond_sightings(&mut staking, &[sighting(0, 80)]);
-        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(40));
+        assert_eq!(
+            staking
+                .bond_sightings
+                .get(&0)
+                .copied()
+                .map(shekyl_types::BlockHeight::to_raw),
+            Some(40)
+        );
         adopt_bond_sightings(&mut staking, &[sighting(0, 10)]);
-        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(40));
+        assert_eq!(
+            staking
+                .bond_sightings
+                .get(&0)
+                .copied()
+                .map(shekyl_types::BlockHeight::to_raw),
+            Some(40)
+        );
         assert_eq!(staking.bonded_slots, vec![0]);
     }
 
@@ -399,23 +424,25 @@ mod tests {
     #[test]
     fn validate_bond_sightings_rejects_contract_violations() {
         let staking = staking_with_cached_slots(&[0]);
-        let mut empty_range = ScanResult::empty_at(1, None);
+        let mut empty_range = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
         empty_range.bond_sightings.push(sighting(0, 5));
         assert!(matches!(
             validate_bond_sightings(&empty_range, &staking),
             Err(RefreshError::MalformedScanResult { .. })
         ));
 
-        let mut out_of_range = ScanResult::empty_at(1, None);
-        out_of_range.processed_height_range = 10..20;
+        let mut out_of_range = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
+        out_of_range.processed_height_range =
+            shekyl_types::BlockHeight::from_raw(10)..shekyl_types::BlockHeight::from_raw(20);
         out_of_range.bond_sightings.push(sighting(0, 25));
         assert!(matches!(
             validate_bond_sightings(&out_of_range, &staking),
             Err(RefreshError::MalformedScanResult { .. })
         ));
 
-        let mut ok = ScanResult::empty_at(1, None);
-        ok.processed_height_range = 10..20;
+        let mut ok = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
+        ok.processed_height_range =
+            shekyl_types::BlockHeight::from_raw(10)..shekyl_types::BlockHeight::from_raw(20);
         ok.bond_sightings.push(sighting(0, 15));
         assert!(validate_bond_sightings(&ok, &staking).is_ok());
     }
@@ -428,8 +455,9 @@ mod tests {
     #[test]
     fn validate_bond_sightings_rejects_a_slot_not_in_the_probe_cache() {
         let staking = staking_with_cached_slots(&[0]);
-        let mut unknown = ScanResult::empty_at(1, None);
-        unknown.processed_height_range = 10..20;
+        let mut unknown = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
+        unknown.processed_height_range =
+            shekyl_types::BlockHeight::from_raw(10)..shekyl_types::BlockHeight::from_raw(20);
         unknown.bond_sightings.push(sighting(999, 15));
         let err = validate_bond_sightings(&unknown, &staking).expect_err("unknown slot");
         match err {

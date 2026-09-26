@@ -48,16 +48,9 @@
 
 use ed25519_dalek::VerifyingKey;
 use sha2::{Digest as _, Sha512};
-use sha3::Sha3_256;
 use zeroize::Zeroizing;
 
 use crate::control::onion::{OnionKey, ServiceId, ONION_KEY_BYTES};
-
-/// Version byte of a v3 onion address (rend-spec-v3 §6).
-const ONION_ADDRESS_VERSION: u8 = 0x03;
-
-/// Domain-separation prefix for the v3 address checksum (rend-spec-v3 §6).
-const ONION_CHECKSUM_PREFIX: &[u8] = b".onion checksum";
 
 /// A persona's onion identity: the **expanded** serving key plus the public
 /// service id it implies — derived **once** in the wallet context and handed
@@ -98,6 +91,8 @@ const ONION_CHECKSUM_PREFIX: &[u8] = b".onion checksum";
 /// `Arc<OnionIdentity>` at the call site.
 pub struct OnionIdentity {
     expanded: Zeroizing<[u8; ONION_KEY_BYTES]>,
+    /// Ed25519 public key (the JoinMarket serving endpoint). Public, unwrapped.
+    public_key: [u8; 32],
     service_id: ServiceId,
 }
 
@@ -125,11 +120,20 @@ impl OnionIdentity {
     pub fn from_hs_id_seed(seed: &[u8; 32]) -> Self {
         let expanded = expand_seed(seed);
         let verifying = verifying_key_from_seed(seed);
-        let service_id = service_id_from_pubkey(verifying.as_bytes());
+        let public_key = verifying.to_bytes();
+        let service_id = service_id_from_pubkey(&public_key);
         Self {
             expanded,
+            public_key,
             service_id,
         }
+    }
+
+    /// Raw 32-byte ed25519 public key (JoinMarket serving endpoint).
+    /// The secret half stays behind [`Self::mint_onion_key`].
+    #[must_use]
+    pub fn public_key(&self) -> [u8; 32] {
+        self.public_key
     }
 
     /// The `.onion` service id this key publishes at — authoritative because
@@ -192,72 +196,22 @@ fn verifying_key_from_seed(seed: &[u8; 32]) -> VerifyingKey {
     signing.verifying_key()
 }
 
-/// The v3 `.onion` service id for an ed25519 public key (rend-spec-v3 §6):
-/// `base32(pubkey ‖ SHA3-256(".onion checksum" ‖ pubkey ‖ version)[..2] ‖ version)`.
+/// The v3 `.onion` service id for an ed25519 public key.
 ///
 /// Computed independently of tor, precisely so the publish path can
 /// fail-stop when tor's reported `ServiceID` differs from the address the
-/// persona advertises.
+/// persona advertises. The transform is `shekyl-onion-v3` — the same
+/// function the daemon fetch client uses to dial the bond-record
+/// endpoint — so the address a persona publishes and the address a
+/// daemon derives cannot drift.
 fn service_id_from_pubkey(pubkey: &[u8; 32]) -> ServiceId {
-    let mut hasher = Sha3_256::new();
-    sha3::Digest::update(&mut hasher, ONION_CHECKSUM_PREFIX);
-    sha3::Digest::update(&mut hasher, pubkey);
-    sha3::Digest::update(&mut hasher, [ONION_ADDRESS_VERSION]);
-    let checksum = hasher.finalize();
-
-    let mut raw = [0u8; 35];
-    raw[..32].copy_from_slice(pubkey);
-    raw[32..34].copy_from_slice(&checksum[..2]);
-    raw[34] = ONION_ADDRESS_VERSION;
-
-    ServiceId::parse(&base32_lower(&raw)).expect("a 35-byte v3 address encodes to 56 base32 chars")
-}
-
-/// RFC 4648 base32, lowercase, unpadded.
-///
-/// Hand-rolled for the same reason as the base64 in `control::onion`: one
-/// fixed-width call site, the alphabet is the load-bearing property, and it
-/// is pinned by RFC 4648 vectors below. 35 bytes is a whole number of
-/// 5-byte groups (7 × 5), so no padding case arises for the real input —
-/// the general path is written and tested anyway rather than assuming the
-/// caller.
-fn base32_lower(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
-    let mut out = String::with_capacity(data.len().div_ceil(5) * 8);
-    let mut acc: u32 = 0;
-    let mut bits: u32 = 0;
-    for &b in data {
-        acc = (acc << 8) | u32::from(b);
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            out.push(ALPHABET[((acc >> bits) & 0x1f) as usize] as char);
-        }
-    }
-    if bits > 0 {
-        out.push(ALPHABET[((acc << (5 - bits)) & 0x1f) as usize] as char);
-    }
-    out
+    ServiceId::parse(&shekyl_onion_v3::v3_service_id(pubkey))
+        .expect("a 35-byte v3 address encodes to 56 base32 chars")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base32_matches_rfc4648_vectors() {
-        // RFC 4648 §10, lowercased and unpadded — the address alphabet. A
-        // drift here yields a syntactically valid but *wrong* .onion, which
-        // would fail only as an unreachable service, so it is pinned to
-        // exact bytes.
-        assert_eq!(base32_lower(b""), "");
-        assert_eq!(base32_lower(b"f"), "my");
-        assert_eq!(base32_lower(b"fo"), "mzxq");
-        assert_eq!(base32_lower(b"foo"), "mzxw6");
-        assert_eq!(base32_lower(b"foob"), "mzxw6yq");
-        assert_eq!(base32_lower(b"fooba"), "mzxw6ytb");
-        assert_eq!(base32_lower(b"foobar"), "mzxw6ytboi");
-    }
 
     #[test]
     fn expansion_clamps_and_is_not_a_reduced_scalar() {
@@ -290,6 +244,19 @@ mod tests {
             identity.service_id().as_str(),
             "efjprum3peosirjsilqv6lvlns3476t3njpngaexsyhangeb3mjo7sad",
             "the v3 address for the fixed seed"
+        );
+    }
+
+    #[test]
+    fn public_key_is_the_service_ids_preimage() {
+        // The wire carries the key (EU-D3); the address is a display form a
+        // reader reconstructs. If these ever disagree, the endpoint a bond
+        // advertises is not the address tor serves.
+        let id = OnionIdentity::from_hs_id_seed(&[7u8; 32]);
+        assert_eq!(service_id_from_pubkey(&id.public_key()), *id.service_id());
+        assert_eq!(
+            id.public_key(),
+            verifying_key_from_seed(&[7u8; 32]).to_bytes()
         );
     }
 

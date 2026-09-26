@@ -48,7 +48,7 @@ namespace cryptonote
   {
     cryptonote_connection_context(): m_state(state_before_handshake), m_remote_blockchain_height(0), m_last_response_height(0),
         m_expected_heights_start(0), m_last_request_time(boost::date_time::not_a_date_time), m_callback_request_count(0),
-        m_last_known_hash(crypto::null_hash), m_pruning_seed(0), m_score(0),
+        m_last_known_hash(crypto::null_hash), m_score(0),
         m_expect_response(0), m_expect_height(0), m_num_requested(0) {}
 
     enum state
@@ -91,7 +91,7 @@ namespace cryptonote
     };
 
     static constexpr int handshake_command() noexcept { return 1001; }
-    bool handshake_complete() const noexcept { return m_state != state_before_handshake; }
+    bool session_established() const noexcept { return m_state != state_before_handshake; }
 
     //! \return Payload cap for this `(command, flags)` pair, or `nullopt`
     //! if the header is unrecognised at ingress (PWD-B3a). `nullopt` is
@@ -116,12 +116,10 @@ namespace cryptonote
     boost::posix_time::ptime m_last_request_time;
     copyable_atomic m_callback_request_count; //in debug purpose: problem with double callback rise
     crypto::hash m_last_known_hash;
-    uint32_t m_pruning_seed;
     int32_t m_score;
     int m_expect_response;
     uint64_t m_expect_height;
     size_t m_num_requested;
-    copyable_atomic m_new_stripe_notification{0};
     copyable_atomic m_idle_peer_notification{0};
   };
 

@@ -1,12 +1,25 @@
 # Daemon RPC — Phase 2: the KV cutover (native Rust handlers over facts FFI)
 
-**Status:** **RK-1 through RK-4b landed** (the pattern slice, PR #534; count
+**Status:** **RK-1 through RK-5b landed** (the pattern slice, PR #534; count
 + hash-by-height, PR #540; the block-header projection, PR #541; whole blocks,
 PR #548; the `.bin` mechanism, PR #555; the last binary endpoint and the FFI
-bridge's deletion, PR #562) — per-slice shas in the §2 slice table. **RK-4c** (the transaction read set) is
-**landed on this branch**, PR #576, sha stamped at merge — the tense the §2
-rows use, which is written as of the merge this document lands with. Design
-**open for RK-5**. Census and binding
+bridge's deletion, PR #562; the transaction read set, PR #576 `8ba1aae3d`; the
+p2p seam, PR #585 `d468625e0`; the header projection's remainder, PR #619
+`2dba46537`) — per-slice shas in the §2 slice table. Design
+**open for RK-5c**.
+
+> **Correction (2026-09-11).** This banner read "RK-1 through RK-4b landed
+> … Design **open for RK-5**" and carried RK-4c in a "landed on this branch,
+> sha stamped at merge" tense that never got stamped. RK-4c, RK-5a and
+> **RK-5b** had all merged; RK-5b landed in PR #619 and its five methods
+> dispatch natively today (`handlers/json_rpc.rs`), with none of them left in
+> `core_rpc_ffi.cpp`'s table. The rule-94 index
+> ([`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2) was correct
+> throughout — it is the tracking surface; this banner had drifted from it.
+> The §2 rows for RK-4c, RK-5a and RK-5b are corrected in the same commit.
+> Landed-slice shas are now written, not promised.
+
+Census and binding
 decisions verified at source against `dev` **`077d97c4e`** (PR #528 merge);
 every `file:line` below was read at that commit. RK-2's own census rows and
 consumer set were re-verified at **`c5ca208e9`** (PR #534 merge), the commit
@@ -109,15 +122,15 @@ calls in the handler (`core_rpc_server.cpp`).
 | **RK-3b** — **landed** (PR #548, `3ed8baf08`) | Whole blocks | `get_block` (+ `getblock`) — header + blob + json + tx hashes, and the console's `print_block_by_hash` / `_by_height`, which read **only** this method | 22 | header facts + block blob + tx-hash list + **the epee-rendered `json` string** (RK-D11) | W C K R P |
 | **RK-4a** — **landed** (PR #555, `bbed0ad71`) | The `.bin` mechanism, proved small | `/get_o_indexes.bin` | 12 | `get_tx_outputs_gindexs` | W (`shekyl-rpc-client`) |
 | **RK-4b** — **landed** (PR #562, `85426f289`) | The remaining live binary endpoint | `/get_blocks_by_height.bin` `/getblocks_by_height.bin` | 15 | `get_blocks_by_height` | E (the engine's timing rig) |
-| **RK-4c** — **landed** (this branch; PR #576, sha stamped at merge) | The transaction read set (the wallet's proofs path) | `/get_transactions` `/gettransactions` (+ the console's `print_transaction`) · `/is_key_image_spent` (+ the console's `is_key_image_spent`) — each console command reads **only** its own method | 31 + 8 | `get_split_transactions_blobs`, `get_pool_transactions_info`, `are_key_images_spent[_in_pool]` | W K P F R |
+| **RK-4c** — **landed** (PR #576, `8ba1aae3d`) | The transaction read set (the wallet's proofs path) | `/get_transactions` `/gettransactions` (+ the console's `print_transaction`) · `/is_key_image_spent` (+ the console's `is_key_image_spent`) — each console command reads **only** its own method | 31 + 8 | `get_split_transactions_blobs`, `get_pool_transactions_info`, `are_key_images_spent[_in_pool]` | W K P F R |
 | **RK-4x** — **ruled: deleted** | `/get_blocks.bin` `/getblocks.bin` · `/get_hashes.bin` · `/gethashes.bin` | wallet2's batch sync, and wallet2 is gone. Retired rather than migrated, with `get_pool_info` and the pool's departure history behind it. Reopen clause in `DAEMON_RPC_RUST.md` | — (44 fields deleted, not ported) | — | none |
-| **RK-5a** — **landed** (this branch; PR #585, sha stamped at merge) | The **p2p seam**, proved small | `sync_info` · `/get_net_stats` · `/get_peer_list` · `get_connections` — the methods whose facts are p2p-only | 11 + 7 + 10 + 7 (+ `connection_info`) | `get_public_*_count`, peerlist, throttle stats — **as scalars**, see §3.2; plus the `shekyl_rpc_chain_tip` retrofit | K P F |
-| **RK-5b** | The header projection's remainder | `get_last_block_header` · `get_block_header_by_hash` · `get_block_headers_range` · `hard_fork_info` · `get_fee_estimate` | 8 + 11 + 10 + 15 + 10 | `fill_block_header_response`'s three, hard-fork voting info, `get_dynamic_base_fee_estimate_*` | W C K P |
+| **RK-5a** — **landed** (PR #585, `d468625e0`) | The **p2p seam**, proved small | `sync_info` · `/get_net_stats` · `/get_peer_list` · `get_connections` — the methods whose facts are p2p-only | 11 + 7 + 10 + 7 (+ `connection_info`) | `get_public_*_count`, peerlist, throttle stats — **as scalars**, see §3.2; plus the `shekyl_rpc_chain_tip` retrofit | K P F |
+| **RK-5b** — **landed** (PR #619, `2dba46537`) | The header projection's remainder | `get_last_block_header` · `get_block_header_by_hash` · `get_block_headers_range` · `hard_fork_info` · `get_fee_estimate` | 8 + 11 + 10 + 15 + 10 | `fill_block_header_response`'s three, hard-fork voting info, `get_dynamic_base_fee_estimate_*` | W C K P |
 | **RK-5c** | **`get_info`, the hub — and every console command that reads it** | `/get_info` `/getinfo` · `get_info` | 48 + 24 | 7 core reads, 5 p2p reads (scalars), ~20 bare getters | W C G K P F |
 | **RK-6** | Mempool | `/get_transaction_pool` · `/get_transaction_pool_hashes` (its `.bin` sibling is **retired**, not pending — see §5; do not re-add it) · `/get_transaction_pool_stats` · `get_txpool_backlog` · `flush_txpool` · `relay_tx` | 8 + 7 + 7 + 26 + 7 + 7 | pool reads, `flush_txes_from_pool`, `get_protocol().relay_transactions` | K P |
-| **RK-7** | Mining (consensus-adjacent → rule 26 pre-flight) | `get_block_template` · `submit_block` · `calc_pow` · `get_miner_data` · `generateblocks` · `/start_mining` `/stop_mining` `/mining_status` `/set_log_hash_rate` | 22 + 4 + 7 + 19 + 12 + 10 + 6 + 21 + 7 | `get_block_template`, `handle_block_found`, `check_incoming_block_size`, `get_miner()`, `get_miner_data` | K R P (`add_aux_pow` struck 2026-09-07: the method is deleted with the merge-mining shed, rule 60 — its 17 fields leave this row's count) |
-| **RK-8** | Admin + chain maintenance | `/set_log_level` `/set_log_categories` · `/get_limit` `/set_limit` · `/in_peers` `/out_peers` · `set_bans` `get_bans` `banned` · `/save_bc` · `/stop_daemon` · `/pop_blocks` · `prune_blockchain` · `flush_cache` · `get_alternate_chains` · `get_coinbase_tx_sum` · `get_output_histogram` | 7 + 30 + 8 + 10 + 9 + 9 + 13 + 12 + 8 + 6 + 6 + 8 + 9 + 7 + 17 + 14 + 18 | throttle, p2p limits/bans, `store_blockchain`, `send_stop_signal`, `pop_blocks`, pruning, alt chains, histogram | K P R |
-| **RK-9** | Curve tree + archival | `get_curve_tree_path` · `get_curve_tree_info` · `get_curve_tree_checkpoint` · `get_archival_emission_claim_source` · `inject_archival_serve_credit` (regtest) | 19 + 10 + 11 + 40 + 35 | `get_db()` reads; the logic is already Rust (`shekyl-curve-tree`, `shekyl-archival-*`) | W G R |
+| **RK-7** | Mining (consensus-adjacent → rule 26 pre-flight) | `get_block_template` · `submit_block` · `calc_pow` · `get_miner_data` · `generateblocks` · `/start_mining` `/stop_mining` `/mining_status` `/set_log_hash_rate` | 22 + 4 + 6 + 19 + 12 + 10 + 6 + 21 + 7 | `get_block_template`, `handle_block_found`, `check_incoming_block_size`, `get_miner()`, `get_miner_data` | K R P (`add_aux_pow` struck 2026-09-07: the method is deleted with the merge-mining shed, rule 60 — its 17 fields leave this row's count; `calc_pow.major_version` struck 2026-09-16: leftover schema operand after RandomX-only longhash — 7 → 6) |
+| **RK-8** | Admin + chain maintenance | `/set_log_level` `/set_log_categories` · `/get_limit` `/set_limit` · `/in_peers` `/out_peers` · `set_bans` `get_bans` `banned` · `/save_bc` · `/stop_daemon` · `/pop_blocks` · ~~`prune_blockchain`~~ (**REJECTED 2026-09-18 by `PDM-Q7`** — the stripe engine is removed completely; the name stays here so it is not re-minted, rule 23; not ported; **C++ handler, dispatch and console commands deleted 2026-09-21**, 3.35) · `flush_cache` · `get_alternate_chains` · `get_coinbase_tx_sum` · ~~`get_output_histogram`~~ (**REJECTED 2026-09-18 by `SOK-Q3`, DELETED by this PR** — a statistical disclosure surface with no consumer on a ringless chain: per-amount output counts over caller-chosen unlock and recency windows; removed with its `shekyld` CLI command `output_histogram` and the callerless store chain, `CORE_RPC_VERSION` 3.33; the name stays here so it is not re-minted, rule 23; not ported) | 7 + 30 + 8 + 10 + 9 + 9 + 13 + 12 + 8 + 6 + 6 + 8 + 7 + 17 + 14 + 18 (`prune_blockchain`'s 9 fields leave this row's count with the method, RK-7's convention) | throttle, p2p limits/bans, `store_blockchain`, `send_stop_signal`, `pop_blocks`, alt chains (the `pruning` fact left with `prune_blockchain`) | K P R |
+| **RK-9** | Curve tree + archival | ~~`get_curve_tree_path`~~ (removed 2026-09-18, RPC 3.34 — `SOK-10` Q7 → A, path-FFI lane; its 19 fields leave this row's count) · `get_curve_tree_info` · `get_curve_tree_checkpoint` · `get_archival_emission_claim_source` · `inject_archival_serve_credit` (regtest) · `get_archival_shard_coverage` · `request_archival_shard` | 19 + 10 + 11 + 40 + 35 + 14 + 8 | `get_db()` reads; ranking/fetch logic is already Rust (`shekyl-curve-tree`, `shekyl-archival-*`, `shekyl_archival_order_shard_coverage`). C++ stays marshal-only until this slice (RK-D1/D2; rule 20). Coverage payload is 8 response + 6-field row; fetch is 1 request + 7 response. Consumers: GUI picker (G) + daemon fetch scheduler. | W G R |
 | **RK-C** | Console retirement | `rpc_command_executor.cpp` / `command_parser_executor.cpp` / `command_server.cpp` → Rust; `src/daemon/rpc_client.h` dies | — | — | K |
 | **RK-W** | Wire cleanup (after RK-X) | Redesign the surface once the handlers are all Rust: retire `status`-as-error-channel in favour of typed errors, drop OPT-omission quirks and positional JSON-RPC, collapse aliases (including the `on_`-prefixed names — `on_get_block_hash` is a C++ handler name that leaked onto the wire, and the bare `get_block_hash` a client would reach for has never been served); every in-tree client updated in the same PR; `CORE_RPC_VERSION` 4.0 | — | — | W C G K P |
 | **RK-X** | Final deletion | `core_rpc_server.{h,cpp}`, `core_rpc_server_commands_defs.h`, `core_rpc_ffi.cpp` dispatch tables, `rpc_handler.*`, `message_data_structs.h`'s RPC half, `json_object.cpp`'s RPC (de)serializers; FOLLOWUPS dual-list closed | 872 → 0 | — | — |
@@ -282,7 +295,7 @@ one Rust gates.
 | 1532 | `on_get_last_block_header` | `fill_pow_hash && !restricted` | Field trim, intended, and already the policy RK-3 pinned as `pow_hash_entitled` |
 | 1548 | `on_get_block_header_by_hash` | 1000-hash cap; the same pow-hash trim | Cap fires; trim as above |
 | 1619 | `on_get_block_headers_range` | range cap; the same pow-hash trim | Cap fires; trim as above |
-| 1880 | `on_get_output_histogram` | refuses the all-amounts query, clamps `recent_cutoff` | Cost guards, intended. A restricted caller can no longer ask the expensive form — which is the point of them |
+| 1880 | `on_get_output_histogram` | refuses the all-amounts query, clamps `recent_cutoff` | Cost guards, intended. A restricted caller can no longer ask the expensive form — which is the point of them. **Handler REJECTED 2026-09-18 (`SOK-Q3`), DELETED by this PR — this row is records-was.** No WE handler now refuses a restricted caller into `res.status`. The remaining result-envelope witness is `jsonrpc_we_carries_handler_status_through_the_result_envelope` (`get_coinbase_tx_sum`'s cap on the admin listener). |
 | 2071 | `on_relay_tx` | *(deleted)* | The only Rust-gated method in this table, so the check could not hold in any reachable state. Removed under rule 15 rather than kept as defence it never provided; see §7 |
 
 Two further bridged invocations are converted with no disposition owed:

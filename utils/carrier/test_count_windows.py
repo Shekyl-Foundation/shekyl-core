@@ -4,6 +4,7 @@
 # Tests for count_windows.py. The load-bearing assertions are:
 #
 #   * a framed WINDOW_BYTES message (m_cb = WINDOW_BODY) is counted
+#   * HEADER_SIZE is the live 29-byte PWD-B5 layout (not the pre-B5 33)
 #   * m_cb of WINDOW_BYTES is not (that was the false filter)
 #   * WINDOW_BODY ± 1 are not (the filter is exact, not a band)
 #   * proxy→node (src port 9050) is ignored
@@ -41,8 +42,7 @@ def levin_msg(body_len, extra_prefix=b""):
             ]
         )
         + struct.pack("<I", 2002)  # command (unused by the counter)
-        + struct.pack("<i", 0)
-        + struct.pack("<I", 1)  # REQUEST
+        + struct.pack("<I", 1)  # flags (REQUEST); PWD-B5: no return_code
         + struct.pack("<I", 1)  # protocol v1
     )
     assert len(hdr) == cw.HEADER_SIZE
@@ -124,6 +124,28 @@ class CountWindows(unittest.TestCase):
         self.assertEqual(s["payload_bytes"], cw.WINDOW_BYTES)
         self.assertEqual(s["window_body_bytes"], cw.WINDOW_BODY)
 
+    def test_live_29_byte_header_is_pinned(self):
+        # levin_msg() follows HEADER_SIZE, so it cannot catch a silent
+        # revert to 33 — that was Arm B's first-pass windows=0. This
+        # fixture is the live PWD-B5 wire, independent of the constant.
+        body_len = 20451
+        hdr = (
+            cw.LEVIN_SIGNATURE
+            + struct.pack("<Q", body_len)
+            + bytes([0])
+            + struct.pack("<I", 2002)
+            + struct.pack("<I", 1)  # flags; no return_code
+            + struct.pack("<I", 1)
+        )
+        self.assertEqual(len(hdr), 29)
+        blob = hdr + (b"\xab" * body_len)
+        self.assertEqual(len(blob), 20480)
+        pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, blob, 1000.0)
+        s, _ = self._run(pkts)
+        self.assertEqual(s["n"], 1)
+        self.assertEqual(cw.HEADER_SIZE, 29)
+        self.assertEqual(cw.WINDOW_BODY, 20451)
+
     def test_one_byte_short_is_excluded(self):
         blob = levin_msg(cw.WINDOW_BODY - 1)
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, blob, 1000.0)
@@ -138,7 +160,8 @@ class CountWindows(unittest.TestCase):
 
     def test_mcb_equal_to_window_bytes_is_excluded(self):
         # The old filter treated WINDOW_BYTES as m_cb. noise_notify never
-        # emits that: it would be a 20 513-byte frame, not a window.
+        # emits that: it would be a 20 509-byte frame (HEADER_SIZE + 20 480),
+        # not a window.
         blob = levin_msg(cw.WINDOW_BYTES)
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, blob, 1000.0)
         s, _ = self._run(pkts)
@@ -270,7 +293,8 @@ class CountWindows(unittest.TestCase):
         s, _ = self._run(pkts)
         encoded = json.loads(json.dumps(s))
         self.assertEqual(encoded["window_bytes"], 20480)
-        self.assertEqual(encoded["window_body_bytes"], 20447)
+        self.assertEqual(encoded["window_body_bytes"], 20451)
+        self.assertEqual(cw.HEADER_SIZE, 29)
         self.assertEqual(encoded["n"], 1)
 
 

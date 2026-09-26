@@ -104,3 +104,32 @@ TEST(rpc_target_wire_contract, get_info_target)
       << "get_info wire response must carry `\"target\": 120`; got:\n"
       << json;
 }
+
+// RPC 3.32: calc_pow dropped leftover Cryptonight `major_version`. The
+// get_version v9 fixture only pins the packed constant; this is the gate
+// that turns red if the field is reintroduced. Extra keys stay ignored
+// by epee, so a client that still sends the field must still parse.
+TEST(rpc_target_wire_contract, calc_pow_request_has_no_major_version)
+{
+  cryptonote::COMMAND_RPC_CALCPOW::request req{};
+  req.height = 1;
+  req.block_blob = "00";
+  req.seed_hash = std::string(64, '0');
+
+  std::string json;
+  ASSERT_TRUE(epee::serialization::store_t_to_json(req, json));
+  EXPECT_EQ(json.find("major_version"), std::string::npos)
+      << "calc_pow must not emit leftover major_version; got:\n"
+      << json;
+  EXPECT_NE(json.find("\"height\""), std::string::npos) << json;
+  EXPECT_NE(json.find("\"block_blob\""), std::string::npos) << json;
+  EXPECT_NE(json.find("\"seed_hash\""), std::string::npos) << json;
+
+  cryptonote::COMMAND_RPC_CALCPOW::request loaded{};
+  ASSERT_TRUE(epee::serialization::load_t_from_json(
+      loaded,
+      "{\"height\":7,\"block_blob\":\"ab\",\"seed_hash\":\"cd\",\"major_version\":99}"));
+  EXPECT_EQ(loaded.height, 7u);
+  EXPECT_EQ(loaded.block_blob, "ab");
+  EXPECT_EQ(loaded.seed_hash, "cd");
+}

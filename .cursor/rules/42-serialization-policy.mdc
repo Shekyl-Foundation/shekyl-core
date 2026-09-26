@@ -1,11 +1,68 @@
 ---
-description: Every on-disk wire-format change to a persisted Rust block must be paired with a version-constant bump in the same commit. The schema snapshot CI enforces this mechanically.
+description: Every on-disk wire-format change to a persisted Rust block must be paired with a version-constant bump in the same commit. The schema-snapshot CI enforces this mechanically for the wallet crates (postcard schema snapshots, one constant per block) and for rust/shekyl-chain-store (canonical-codec fixture snapshots, one SCHEMA_VERSION for the store).
 globs:
   - rust/shekyl-engine-state/**
   - rust/shekyl-engine-file/**
+  - rust/shekyl-chain-store/**
 ---
 
 # Serialization policy
+
+## Two ratchets, one workflow
+
+The wallet and the daemon chain store are both gated by
+[`schema-snapshot.yml`](../../.github/workflows/schema-snapshot.yml), by
+different mechanisms shaped to what each persists:
+
+| Tree | What is snapshotted | Snapshot dir | Version constant | Regenerate |
+|---|---|---|---|---|
+| `rust/shekyl-engine-state/**` | the `postcard_schema::Schema` of each persisted block | `rust/shekyl-engine-state/schemas/*.snap` | one per block (table below) | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state schema_snapshot` |
+| `rust/shekyl-chain-store/**` | the fixture **encodings** of each `codec::Canonical` impl, the **table catalogue** (name, shape, key/value type per `schema.rs` definition), and the **property-cell catalogue** (key, scope, value-codec name per `property_cells!` row) | `rust/shekyl-chain-store/schemas/*.snap` | `SCHEMA_VERSION` in `src/codec/schema_version.rs`, for the whole store | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests` |
+
+The chain store snapshots bytes rather than a type schema because its codecs
+are hand-written fixed-width encodings, not serde derives, and because the
+same bytes are the state digest's fold input
+([`DAEMON_REDB_STORE.md`](../../docs/design/DAEMON_REDB_STORE.md) §11.1(b)):
+a codec move is a consensus-oracle move, so the gate pins the output, not the
+declaration. Two catalogues cover the rest of §11.1(b), where layout moves
+without any codec's bytes moving: `schemas/tables.snap` (a table added,
+removed or re-keyed — an old binary trips over it at `open_table`) and
+`schemas/properties.snap` (a `properties` cell added, re-keyed, re-scoped
+or re-typed — a new `ChainState` cell is digest-domain growth even when its
+value codec already has a fixture). It has **one** version constant because
+the store rebuilds rather than migrates (§11.1(a)) — any snapshot change
+under `rust/shekyl-chain-store/schemas/` requires `SCHEMA_VERSION` to be
+**numerically greater** at the PR head than at its base, with no per-codec
+registry to keep in sync. Meta-tests in
+[`snapshot_tests.rs`](../../rust/shekyl-chain-store/src/codec/snapshot_tests.rs)
+hold the gate's own subject (rule 47): every `impl Canonical for` in the crate
+has a snapshot and vice versa, every fixture encodes to its codec's
+`FIXED_WIDTH`, every `TableDefinition` / `MultimapTableDefinition` in
+`schema.rs` is inside the `tables!` invocation the table catalogue is emitted
+from, every `key: "…"` in `property.rs` is a `PROPERTY_CELLS` row, the
+assertion is armed unless `UPDATE_SNAPSHOTS` is set (in which case exactly
+one test fails loudly), and the workflow file still runs this module by name
+and reads `SCHEMA_VERSION` with the declaration grammar the source uses.
+
+**A codec snapshot's input is constructed inline, never a shared fixture.**
+The snapshot's subject is the encoding. Build its input from a fixture some
+other crate owns and the subject becomes the fixture: every legitimate change
+to that fixture reads as a codec change, the paired-bump gate above demands a
+`SCHEMA_VERSION` bump for a codec nobody touched, and someone under time
+pressure supplies it — the version has now moved for a fixture edit, which
+is the one thing the gate exists to make impossible. Observed 2026-09-25:
+`codec::alt::test_block_bytes` embedded `shekyl_chain_rules::harness::
+fixture::coinbase`; E6 slice 6 gave every harness coinbase its `tx_extra`
+(CEN-I19/I20) and `schemas/alt_block.snap` moved with a codec whose layout
+had not. The block is built inline now and the snapshot is byte-identical.
+A snapshot fixture may *use* shared constants (a point, a hash) whose value
+no rule will ever move; it may not use a shared *transaction or block*,
+which rules move.
+
+History: from `DRS-0` (2026-09-13) to `DRS-E1` increment 2 the chain-store
+glob was attached to this rule with **no gate behind it**, and said so here.
+That paragraph is gone because its subject is; the FOLLOWUPS row that carried
+the gap closed with the gate.
 
 Persisted blocks in Rust — today the six inside
 `rust/shekyl-engine-state/` (`WalletLedger`, `LedgerBlock`,
@@ -68,6 +125,18 @@ inner block bumps that block's constant; a change that restructures
 the bundle envelope bumps `WALLET_LEDGER_FORMAT_VERSION`; a change
 that does both bumps both.
 
+The chain store's pairing is one row, deliberately:
+
+| Store | Version constant | Source file |
+|---|---|---|
+| every `codec::Canonical` impl in `shekyl-chain-store` | `SCHEMA_VERSION` | `rust/shekyl-chain-store/src/codec/schema_version.rs` |
+
+`SCHEMA_VERSION` is sealed into a fresh store's first transaction and any
+other value on reopen is a refusal, not a migration. Its declaration carries
+a History list; the bump edits the list in the same commit (rule 91's
+"a constant's doc is part of the edit"), and a meta-test checks the current
+value has an entry.
+
 ## What counts as a wire-format change
 
 Any of these, on any persisted block, requires a constant bump:
@@ -126,6 +195,28 @@ snapshot structurally cannot see (since `Zeroizing<[u8; 32]>` and
    either side of that file's unified diff. PRs that change a `.snap`
    without bumping the paired constant fail the workflow with a
    GitHub annotation on the offending file.
+
+### Chain-store codec snapshot (DRS-E1 increment 2)
+
+The same workflow, the same shape, one tree over:
+
+1. `cargo test -p shekyl-chain-store codec::snapshot_tests` — for each
+   `codec::Canonical` impl, encodes a fixed fixture set and asserts
+   the hex matches the committed `.snap` under
+   `rust/shekyl-chain-store/schemas/`; also asserts each fixture
+   decodes back to itself and encodes to exactly `FIXED_WIDTH` bytes.
+   Renders `schema::catalogue()` against `tables.snap` and
+   `PROPERTY_CELLS` against `properties.snap`. Drift fails with a
+   unified diff and the rebuild-not-migrate instructions.
+2. `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests`
+   — regenerates. The `codec_snapshot_assertions_are_armed` test fails
+   under this variable on purpose, so a CI run with it set cannot pass.
+3. The workflow's bump job: if any `.snap` under the chain-store
+   `schemas/` directory is in the PR diff, the value of
+   `SCHEMA_VERSION` parsed from `src/codec/schema_version.rs` at the
+   PR head must be greater than the value parsed at the PR base (or
+   the file must be born in the PR). A rewrite of the declaration line
+   that leaves the number alone does not pass.
 
 ### Zeroizing-field grep (commit 5 — §3.5)
 

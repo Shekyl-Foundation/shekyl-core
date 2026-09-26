@@ -50,6 +50,16 @@ Examples:
   (`shekyl-engine-state` for V3.0) because the wallet allocates
   and persists subaddress positions. Cryptographic crates that
   consume the state's bytes do not own the type.
+- **A type both stores need lives in `shekyl-types`; the computation
+  lives in the owning crate.** The daemon store (`shekyl-chain-store`)
+  and the wallet-side store (`shekyl-curve-tree`) key and hold the same
+  chain facts and neither may depend on the other's graph. `KeyImage`,
+  `CurveTreeRoot` and (ruled 2026-09-21, S-CURVE `SCU-Q2`)
+  `TreePosition` / `TreeLeaf` each reached this answer by the same
+  argument; the sentence is here so the fourth instance is a lookup,
+  not a question. The arithmetic over those bytes — the curve-tree
+  hash, the path assembly — stays in `shekyl-curve-tree` /
+  `shekyl-fcmp`; `shekyl-types` holds the word, never the computation.
 
 ## State-shaped types whose bytes are cryptographically consumed
 

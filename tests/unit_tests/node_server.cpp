@@ -87,7 +87,7 @@ public:
   void pause_mine(){}
   void resume_mine(){}
   bool on_idle(){return true;}
-  bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, bool clip_pruned, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){return true;}
+  bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){return true;}
   bool handle_get_objects(cryptonote::NOTIFY_REQUEST_GET_OBJECTS::request& arg, cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::request& rsp, cryptonote::cryptonote_connection_context& context){return true;}
   cryptonote::blockchain_storage &get_blockchain_storage() { throw std::runtime_error("Called invalid member function: please never call get_blockchain_storage on the TESTING class test_core."); }
   bool get_test_drop_download() const {return true;}
@@ -107,7 +107,6 @@ public:
   bool cleanup_handle_incoming_blocks(bool force_sync = false) { return true; }
   bool check_incoming_block_size_result = true;
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return check_incoming_block_size_result; }
-  bool update_checkpoints(const bool skip_dns = false) { return true; }
   uint64_t get_target_blockchain_height() const { return 1; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
   virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, epee::net_utils::zone) {}
@@ -129,8 +128,6 @@ public:
   uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return 0; }
   cryptonote::difficulty_type get_block_cumulative_difficulty(uint64_t height) const { return 0; }
   bool pad_transactions() { return false; }
-  uint32_t get_blockchain_pruning_seed() const { return 0; }
-  bool prune_blockchain(uint32_t pruning_seed = 0) { return true; }
   bool get_txpool_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes) { return false; }
   bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const { return false; }
   crypto::hash get_block_id_by_height(uint64_t height) const { return crypto::null_hash; }
@@ -254,10 +251,10 @@ TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
   cprotocol.set_p2p_endpoint(&server);
 
   std::vector<nodetool::peerlist_entry> peers;
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 100, 0});   // kept
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100, 0});   // ip 0: dropped
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100, 0});       // port 0: dropped
-  peers.push_back({net::tor_address::unknown(), 100, 0});                 // tor port 0: kept
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 100});   // kept
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100});   // ip 0: dropped
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100});       // port 0: dropped
+  peers.push_back({net::tor_address::unknown(), 100});                 // tor port 0: kept
 
   ASSERT_TRUE(server.sanitize_peerlist(peers));
 
@@ -604,6 +601,13 @@ TEST(node_server, bind_same_p2p_port)
   EXPECT_TRUE(init(new_node(), port_another));
 }
 
+// Chain lengths the race test drives the two daemons to. They were the
+// stripe-engine constants (a stripe, and the unpruned tip window) when the
+// test was inherited; the engine is deleted (PDM-Q7) and these are now just
+// "enough blocks" for the sync race to have something to race over.
+constexpr uint64_t RACE_SYNC_BLOCKS = 4096;
+constexpr uint64_t RACE_TIP_BLOCKS = 5500;
+
 TEST(cryptonote_protocol_handler, race_condition)
 {
   GTEST_SKIP() << "Flaky race-condition stress test; skipped for deterministic CI signal.";
@@ -689,7 +693,16 @@ TEST(cryptonote_protocol_handler, race_condition)
     block.miner_tx.version = 3;
     block.miner_tx.unlock_time = height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
     block.miner_tx.vin.push_back(cryptonote::txin_gen{height});
-    cryptonote::add_tx_pub_key_to_extra(block.miner_tx, {});
+    {
+      // A pubkey + zero-nonce coinbase extra through the one writer (this
+      // hand-built block has always lacked the per-output PQC fields; the
+      // test it serves is GTEST_SKIP'd).
+      const uint8_t zero_key[32] = {0};
+      const uint8_t nonce[SHEKYL_COINBASE_NONCE_BYTES] = {0};
+      ShekylOwnedBuffer extra;
+      shekyl_coinbase_extra(zero_key, nonce, nullptr, 0, nullptr, 0, 0, &extra.buf, nullptr, 0);
+      block.miner_tx.extra.assign(extra.data(), extra.data() + extra.size());
+    }
     cryptonote::get_block_reward(
       db.get_block_weight(height - 1),
       {},
@@ -839,9 +852,6 @@ TEST(cryptonote_protocol_handler, race_condition)
       else
         return {};
     }
-    virtual void add_used_stripe_peer(const contexts::cryptonote&) override {}
-    virtual void clear_used_stripe_peers() override {}
-    virtual void remove_used_stripe_peer(const contexts::cryptonote&) override {}
     virtual void for_each_connection(callback_t f) override {
       if (shared_state)
         shared_state->foreach_connection([&f](context_t &context){
@@ -1113,7 +1123,7 @@ TEST(cryptonote_protocol_handler, race_condition)
     events.prepare.wait();
     daemon.main.core->get_blockchain_storage().add_block_notify(
       [&events](height_t height, span::blocks blocks){
-        if (height >= CRYPTONOTE_PRUNING_STRIPE_SIZE)
+        if (height >= RACE_SYNC_BLOCKS)
           events.sync.raise();
       }
     );
@@ -1126,7 +1136,7 @@ TEST(cryptonote_protocol_handler, race_condition)
           daemon.alt.core->get_current_blockchain_height() - 1
         ),
       };
-      while (daemon.alt.core->get_current_blockchain_height() < CRYPTONOTE_PRUNING_STRIPE_SIZE + CRYPTONOTE_PRUNING_TIP_BLOCKS) {
+      while (daemon.alt.core->get_current_blockchain_height() < RACE_SYNC_BLOCKS + RACE_TIP_BLOCKS) {
         block_t block;
         diff_t diff;
         reward_t reward;
@@ -1134,7 +1144,7 @@ TEST(cryptonote_protocol_handler, race_condition)
         stat.diff += diff;
         stat.reward = stat.reward < (SHEKYL_EMISSION_CURVE_ASYMPTOTE - stat.reward) ? stat.reward + reward : SHEKYL_EMISSION_CURVE_ASYMPTOTE;
         add_block(*daemon.alt.core, block, stat);
-        if (daemon.main.core->get_current_blockchain_height() + 1 < CRYPTONOTE_PRUNING_STRIPE_SIZE)
+        if (daemon.main.core->get_current_blockchain_height() + 1 < RACE_SYNC_BLOCKS)
           add_block(*daemon.main.core, block, stat);
       }
     }
@@ -1219,7 +1229,6 @@ TEST(node_server, race_condition)
     using span_t = epee::span<const uint8_t>;
     using blobs_t = epee::span<const cryptonote::blobdata>;
     using block_queue_t = cryptonote::block_queue;
-    using stripes_t = std::pair<uint32_t, uint32_t>;
     using byte_stream_t = epee::byte_stream;
     struct core_events_t: cryptonote::i_core_events {
       uint64_t get_current_blockchain_height() const override { return {}; }
@@ -1309,7 +1318,6 @@ TEST(node_server, race_condition)
     bool no_sync() const { return {}; }
     void set_no_sync(bool value) {}
     string_t get_peers_overview() const { return {}; }
-    stripes_t get_next_needed_pruning_stripe() const { return {}; }
     bool needs_new_sync_connections(epee::net_utils::zone zone) const { return {}; }
     bool is_busy_syncing() { return {}; }
   };
@@ -2399,7 +2407,6 @@ TEST(block_sync_span_lifecycle, an_incorrect_height_span_leaves_the_queue_with_i
   const crypto::hash parent = a_parent_hash();
   auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
   const auto reserved = queue.reserve_span(50, 50, 1, liar, unknown_tor,
-    /*sync_pruned_blocks=*/true, /*local_pruning_seed=*/0, /*pruning_seed=*/0,
     /*blockchain_height=*/51, {{parent, 0}}, boost::date_time::min_date_time);
   ASSERT_EQ(50u, reserved.first);
   queue.add_blocks(50, {one_block(parent)}, liar, unknown_tor, 1.0f, 1);
@@ -2737,4 +2744,127 @@ TEST(node_server, announced_port_is_derived_from_listener_and_zone)
   EXPECT_EQ(0u, announced("48087", "0"))
     << "a node that refuses every inbound connection must not announce a port "
        "for peers to attract themselves to";
+}
+
+// ---------------------------------------------------------------------------
+// PWD-I7 — the inbound SAFETY bound
+//
+// `--in-peers` used to narrow its `-1` sentinel straight into a `uint32_t`,
+// so an unset flag meant a ceiling of UINT32_MAX and the check never fired.
+// That became the only inbound bound when the per-host cap was deleted.
+//
+// The replacement is a decision Rust returns from a descriptor probe.
+// These tests pin the C++ half: an unset `--in-peers` stores that decision,
+// and an explicit value — including `0` — is stored as given. `0` is a legal
+// operator choice meaning "refuse every inbound connection" and cannot
+// double as "unset", which is why the descriptor is signed.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+  struct in_peers_fixture
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+
+    in_peers_fixture(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+
+    // The PRODUCTION init path: the real descriptor through the real parser.
+    // `in_peers < 0` leaves the flag unset, so the sentinel stands.
+    bool init(const char* port, const int in_peers)
+    {
+      boost::program_options::options_description desc_options("Command line options");
+      cryptonote::core::init_options(desc_options);
+      Server::init_options(desc_options);
+
+      const char* argv[2] = {nullptr, nullptr};
+      boost::program_options::variables_map vm;
+      boost::program_options::store(
+        boost::program_options::parse_command_line(1, argv, desc_options), vm);
+
+      // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
+      vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+        boost::program_options::variable_value(std::string("127.0.0.2"), false);
+      vm.find(nodetool::arg_p2p_bind_port.name)->second =
+        boost::program_options::variable_value(std::string(port), false);
+      if (in_peers >= 0)
+        vm.find(nodetool::arg_in_peers.name)->second =
+          boost::program_options::variable_value(static_cast<std::int64_t>(in_peers), false);
+
+      boost::program_options::notify(vm);
+      return server->init(vm);
+    }
+  };
+}
+
+TEST(node_server, in_peers_sentinel_resolves_to_a_bounded_ceiling)
+{
+  // Red edit: make `apply_inbound_ceiling` return before storing a bounded
+  // decision, so the unset sentinel stays at the counter maximum. This fails.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48090", -1));
+
+  const uint32_t ceiling = d.server->get_max_in_public_peers();
+  EXPECT_NE(std::numeric_limits<uint32_t>::max(), ceiling)
+    << "an unset --in-peers must not resolve to an unbounded interval";
+  EXPECT_GT(ceiling, 0u)
+    << "a machine with a normal descriptor limit has inbound headroom";
+}
+
+TEST(node_server, in_peers_explicit_value_bypasses_the_derivation)
+{
+  // The operator's number is not a starting point for the bound -- it IS the
+  // bound. A derivation that overrode it would silently discard the one
+  // input that is a choice rather than a reading.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48091", 50));
+  EXPECT_EQ(50u, d.server->get_max_in_public_peers());
+}
+
+TEST(node_server, in_peers_zero_is_a_choice_and_not_the_sentinel)
+{
+  // The reason the descriptor is SIGNED. `0` means "refuse every inbound
+  // connection", which is legal and distinct from "unset"; an unsigned type
+  // could not carry both and the sentinel would have to steal a real value.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48092", 0));
+  EXPECT_EQ(0u, d.server->get_max_in_public_peers())
+    << "--in-peers 0 must survive as itself, not be re-derived";
+}
+
+TEST(node_server, in_peers_ceiling_re_derives_when_the_outbound_reserve_changes)
+{
+  // The outbound cap is a TERM in the inbound ceiling's reservation, so a
+  // runtime `out_peers` change invalidates a ceiling derived against the old
+  // one. Without the re-derive, raising out_peers leaves inbound reserved
+  // against a smaller outbound budget and live outbound plus inbound can
+  // exceed the descriptor limit — the exhaustion the ceiling exists to stop.
+  //
+  // Red edit: drop the `apply_inbound_ceiling` call at the end of
+  // `change_max_out_public_peers`. The ceiling then does not move and the
+  // first expectation fails.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48093", -1));
+
+  const uint32_t before = d.server->get_max_in_public_peers();
+  ASSERT_GT(before, 0u) << "the derivation must have produced a real ceiling";
+
+  // Raise the outbound reserve. Every extra promised outbound descriptor is
+  // one fewer the process may spend on inbound.
+  const size_t raised = 256;
+  d.server->change_max_out_public_peers(raised);
+  const uint32_t after = d.server->get_max_in_public_peers();
+
+  EXPECT_LT(after, before)
+    << "raising the outbound reserve must lower the inbound ceiling";
+
+  // And back down again: the reserve is recomputed, not ratcheted.
+  d.server->change_max_out_public_peers(8);
+  EXPECT_GT(d.server->get_max_in_public_peers(), after)
+    << "lowering the outbound reserve must return the headroom";
 }

@@ -19,7 +19,7 @@ reported it as a clean signal.
 ## Where this has already bitten
 
 Promoted from the RandomX v2 T18 mutation-regime round
-([`docs/design/RANDOMX_V2_MUTATION_REGIME.md`](../../docs/design/RANDOMX_V2_MUTATION_REGIME.md)
+([`docs/completed/RANDOMX_V2_MUTATION_REGIME.md`](../../docs/completed/RANDOMX_V2_MUTATION_REGIME.md)
 §13), which found six instances of the shape and three more in its own
 proposed fixes:
 
@@ -68,6 +68,33 @@ not separate tricks:
   [`46-shell-gate-exits`](46-shell-gate-exits.mdc). A swallowed exit
   status is this same failure at the last step: the gate ran, judged,
   and the judgement never reached anyone.
+
+## Run the "cannot fail" test against the adversarial input space
+
+The converse question — *is this a gate that can never go red?* — has a
+trap in it. A refusal that is unreachable on every **valid** input is not
+dead; it may be doing exactly its job, because refusals exist for the
+**invalid** input space. Ask "can this fail?" over the inputs an
+adversary, a corrupt store, or a non-conforming peer can produce, not over
+the inputs a correct system produces.
+
+Observed (E6 slice 2, 2026-09-19): the pre-flight judged CEN-D6's
+zero-difficulty refusal unreachable — LWMA-1 floors its output and the
+genesis constant is positive — and, applying slice 1's "a check that
+always passes is a gate that cannot fail" reasoning (CEN-B6), proposed
+folding it into a type with no refusing arm. The implementation then met
+a view recording **no work across a full window**: LWMA-1 derived zero and
+the arm refused it. On a conforming chain the arm never fires; on the
+non-conforming view it is the only thing standing between corrupt data and
+a `Target` CEN-D1 would compare against. The slice-1 reasoning would have
+deleted it.
+
+So the two tests are different and both apply: a gate must be able to go
+red when its **subject is absent** (above), and a refusal must be judged
+reachable or dead over the **inputs it exists to refuse**, never over the
+happy path alone. A check that truly cannot fail over the adversarial
+space is the thing to fold into a type; one that cannot fail only over the
+valid space is a refusal, and stays.
 
 ## Scope, and what this is not
 

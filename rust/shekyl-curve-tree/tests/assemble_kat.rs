@@ -25,8 +25,9 @@
 
 use serde_json::Value;
 use shekyl_curve_tree::{
-    AssembleInput, AssembledPath, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex,
-    RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
+    AssembleInput, AssembledPath, BlockHash, BlockHeight, BlockLeaves, ChunkLeaf, CommitmentBytes,
+    CurveTreeClient, CurveTreeRoot, Gindex, OneTimePubkey, RawOutput, ReferenceBlock, TargetKind,
+    TxLeafInputs,
 };
 use shekyl_fcmp::tree::{
     ed25519_point_to_selene_scalar, hash_grow_helios, hash_grow_selene, helios_hash_init,
@@ -77,8 +78,13 @@ fn decode_block(b: &Value) -> Block {
         .expect("outputs array")
         .iter()
         .map(|o| RawOutput {
-            output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
-            commitment: o["commitment"].as_str().map(decode_hex32),
+            output_key: OneTimePubkey::from_bytes(decode_hex32(
+                o["output_key"].as_str().expect("O hex"),
+            )),
+            commitment: o["commitment"]
+                .as_str()
+                .map(decode_hex32)
+                .map(CommitmentBytes::from_bytes),
             target: target_kind(o["target"].as_str().expect("target")),
         })
         .collect();
@@ -111,12 +117,12 @@ fn client_over(blocks: &[Block]) -> CurveTreeClient {
     for blk in blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blk.blob),
+            leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(blk.height),
+                height: BlockHeight::from_raw(blk.height),
                 txs: &txs,
             })
             .unwrap();
@@ -149,7 +155,7 @@ fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
         .unwrap_or_else(|| panic!("block {target_height} in fixture"));
     let raw = block.outputs[0];
     AssembleInput {
-        gindex: Gindex(coinbase_gindex(blocks, target_height)),
+        gindex: Gindex::from_raw(coinbase_gindex(blocks, target_height)),
         output_key: raw.output_key,
         commitment: raw.commitment.expect("coinbase output has a commitment"),
     }
@@ -160,10 +166,10 @@ fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
 fn leaf_node_point(chunk: &[ChunkLeaf]) -> [u8; 32] {
     let mut scalars = Vec::with_capacity(chunk.len() * 4);
     for cl in chunk {
-        scalars.push(ed25519_point_to_selene_scalar(&cl.output_key).expect("O.x"));
+        scalars.push(ed25519_point_to_selene_scalar(cl.output_key.as_bytes()).expect("O.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.key_image_gen).expect("I.x"));
-        scalars.push(ed25519_point_to_selene_scalar(&cl.commitment).expect("C.x"));
-        scalars.push(cl.h_pqc);
+        scalars.push(ed25519_point_to_selene_scalar(cl.commitment.as_bytes()).expect("C.x"));
+        scalars.push(cl.cm_x);
     }
     hash_grow_selene(&selene_hash_init(), 0, &ZERO, &scalars).expect("leaf node")
 }
@@ -206,9 +212,9 @@ fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &Refe
     // The branches re-hash to the consensus root.
     assert_eq!(
         recompute_root(&path),
-        reference.curve_tree_root,
+        reference.curve_tree_root.to_bytes(),
         "recomputed root must equal the consensus header root at height {}",
-        reference.height.0,
+        reference.height.to_raw(),
     );
     assert_eq!(path.tree.tree_root, reference.curve_tree_root);
 
@@ -250,16 +256,16 @@ fn assembled_path_recomputes_to_consensus_root() {
     // assertion in `check_path` is a genuine check (not satisfied by a zeroed
     // or root-swapped value).
     let reference = ReferenceBlock {
-        height: BlockHeight(tip.height),
-        curve_tree_root: tip.root,
-        block_hash: [0xABu8; 32],
+        height: BlockHeight::from_raw(tip.height),
+        curve_tree_root: CurveTreeRoot::from_bytes(tip.root),
+        block_hash: BlockHash::from_bytes([0xABu8; 32]),
     };
 
     // A coinbase at block `b` is drained at `reference.height` iff
     // `b <= reference.height - 61`. Pick the founder (leaf position 0, the
     // first leaf node) and a mid-tree output (a non-zero leaf-node index that
     // exercises the internal-layer branch slicing).
-    let last_drained = reference.height.0.saturating_sub(61);
+    let last_drained = reference.height.to_raw().saturating_sub(61);
     assert!(
         last_drained >= 1,
         "fixture must mine past the freeze lag so a non-empty tree exists",
@@ -279,9 +285,9 @@ fn assemble_path_rejects_undrained_output() {
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
-        height: BlockHeight(tip.height),
-        curve_tree_root: tip.root,
-        block_hash: [0u8; 32],
+        height: BlockHeight::from_raw(tip.height),
+        curve_tree_root: CurveTreeRoot::from_bytes(tip.root),
+        block_hash: BlockHash::NULL,
     };
 
     // The tip's own coinbase has not matured (let alone drained) at the tip, so
@@ -307,13 +313,13 @@ fn assemble_path_rejects_root_mismatch() {
     // A reference carrying the wrong consensus root must fail the integrity
     // gate before any path is assembled.
     let bad = ReferenceBlock {
-        height: BlockHeight(tip.height),
-        curve_tree_root: [0xFFu8; 32],
-        block_hash: [0u8; 32],
+        height: BlockHeight::from_raw(tip.height),
+        curve_tree_root: CurveTreeRoot::from_bytes([0xFFu8; 32]),
+        block_hash: BlockHash::NULL,
     };
     match client.assemble_path(&founder, &bad) {
         Err(shekyl_curve_tree::ClientError::RootMismatch { height, .. }) => {
-            assert_eq!(height, BlockHeight(tip.height));
+            assert_eq!(height, BlockHeight::from_raw(tip.height));
         }
         other => panic!("expected RootMismatch, got {other:?}"),
     }
@@ -326,18 +332,18 @@ fn assemble_path_rejects_identity_mismatch() {
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
-        height: BlockHeight(tip.height),
-        curve_tree_root: tip.root,
-        block_hash: [0u8; 32],
+        height: BlockHeight::from_raw(tip.height),
+        curve_tree_root: CurveTreeRoot::from_bytes(tip.root),
+        block_hash: BlockHash::NULL,
     };
 
     // A genuinely drained coinbase, but with the expected output_key tampered:
     // the gindex resolves to the real leaf, then the post-resolution (O, C)
     // check rejects it (X3 — the tree-vs-scanner numbering-desync guard).
-    let last_drained = reference.height.0.saturating_sub(61);
+    let last_drained = reference.height.to_raw().saturating_sub(61);
     let mut tampered = coinbase_input(&blocks, last_drained);
     let real_key = tampered.output_key;
-    tampered.output_key = [0x99u8; 32];
+    tampered.output_key = OneTimePubkey::from_bytes([0x99u8; 32]);
     assert_ne!(tampered.output_key, real_key, "tamper must change the key");
 
     match client.assemble_path(&tampered, &reference) {
@@ -348,7 +354,7 @@ fn assemble_path_rejects_identity_mismatch() {
             ..
         }) => {
             assert_eq!(gindex, tampered.gindex);
-            assert_eq!(expected_output_key, [0x99u8; 32]);
+            assert_eq!(expected_output_key, OneTimePubkey::from_bytes([0x99u8; 32]));
             assert_eq!(got_output_key, real_key);
         }
         other => panic!("expected IdentityMismatch, got {other:?}"),

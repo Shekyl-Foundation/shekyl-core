@@ -27,6 +27,8 @@ where
     pub(crate) T_table: GeneratorTable<<C::C1 as Ciphersuite>::F, C::OcParameters>,
     pub(crate) U_table: GeneratorTable<<C::C1 as Ciphersuite>::F, C::OcParameters>,
     pub(crate) V_table: GeneratorTable<<C::C1 as Ciphersuite>::F, C::OcParameters>,
+    /// The PQC leaf-commitment blind generator `J` (`CM = k·G_k + r·J`; Shekyl `PL-D3`).
+    pub(crate) J_table: GeneratorTable<<C::C1 as Ciphersuite>::F, C::OcParameters>,
     pub(crate) H_1_table: GeneratorTable<<C::C2 as Ciphersuite>::F, C::C1Parameters>,
     pub(crate) H_2_table: GeneratorTable<<C::C1 as Ciphersuite>::F, C::C2Parameters>,
 }
@@ -48,6 +50,7 @@ where
         T: <<C as FcmpCurves>::OC as Ciphersuite>::G,
         U: <<C as FcmpCurves>::OC as Ciphersuite>::G,
         V: <<C as FcmpCurves>::OC as Ciphersuite>::G,
+        J: <<C as FcmpCurves>::OC as Ciphersuite>::G,
     ) -> Self {
         let oc_curve_spec = CurveSpec {
             a: <<C::OC as Ciphersuite>::G>::a(),
@@ -61,6 +64,8 @@ where
         let U_table = GeneratorTable::new(&oc_curve_spec, u_x, u_y);
         let (v_x, v_y) = <<C as FcmpCurves>::OC as Ciphersuite>::G::to_xy(V).unwrap();
         let V_table = GeneratorTable::new(&oc_curve_spec, v_x, v_y);
+        let (j_x, j_y) = <<C as FcmpCurves>::OC as Ciphersuite>::G::to_xy(J).unwrap();
+        let J_table = GeneratorTable::new(&oc_curve_spec, j_x, j_y);
 
         let c1_curve_spec = CurveSpec {
             a: <<C::C1 as Ciphersuite>::G>::a(),
@@ -87,6 +92,7 @@ where
             T_table,
             U_table,
             V_table,
+            J_table,
             H_1_table,
             H_2_table,
         }

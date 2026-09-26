@@ -1,7 +1,7 @@
 //! FFI integration test: construct output -> scan -> build tree -> sign -> verify.
 //!
 //! Exercises the full `shekyl_sign_fcmp_transaction` -> `shekyl_fcmp_verify` cycle
-//! through C-ABI FFI calls, following the same pattern as `cache_ffi_round_trip.rs`.
+//! through C-ABI FFI calls.
 
 #![allow(
     clippy::borrow_as_ptr,
@@ -11,9 +11,9 @@
 
 use shekyl_ffi::{
     shekyl_buffer_free, shekyl_construct_curve_tree_leaf, shekyl_construct_output,
-    shekyl_curve_tree_hash_grow_selene, shekyl_fcmp_verify, shekyl_kem_keypair_generate,
-    shekyl_output_data_free, shekyl_scan_and_recover, shekyl_sign_fcmp_transaction, ShekylBuffer,
-    ShekylOutputData,
+    shekyl_curve_tree_hash_grow_selene, shekyl_fcmp_pqc_key_scalar, shekyl_fcmp_verify,
+    shekyl_kem_keypair_generate, shekyl_output_data_free, shekyl_scan_and_recover,
+    shekyl_sign_fcmp_transaction, ShekylBuffer, ShekylOutputData,
 };
 
 use ciphersuite::group::GroupEncoding;
@@ -109,7 +109,7 @@ struct ConstructedOutput {
     view_tag: u8,
     kem_ct_x25519: [u8; 32],
     kem_ct_ml_kem: Vec<u8>,
-    h_pqc: [u8; 32],
+    pqc_leaf: [u8; 64],
     y: [u8; 32],
     z: [u8; 32],
 }
@@ -151,7 +151,7 @@ fn construct_output_ffi(
         view_tag: data.view_tag_prefilter,
         kem_ct_x25519: data.kem_ciphertext_x25519,
         kem_ct_ml_kem,
-        h_pqc: data.h_pqc,
+        pqc_leaf: data.pqc_leaf,
         y: data.y,
         z: data.z,
     };
@@ -179,7 +179,7 @@ struct ScannedSecrets {
     amount: u64,
     key_image: [u8; 32],
     combined_ss: [u8; 64],
-    h_pqc: [u8; 32],
+    pqc_leaf: [u8; 64],
     pqc_pk: Vec<u8>,
     pqc_sk: Vec<u8>,
 }
@@ -217,7 +217,7 @@ fn scan_output_ffi(
         ptr: std::ptr::null_mut(),
         len: 0,
     };
-    let mut h_pqc = [0u8; 32];
+    let mut pqc_leaf = [0u8; 64];
 
     let ok = unsafe {
         shekyl_scan_and_recover(
@@ -248,7 +248,7 @@ fn scan_output_ffi(
             combined_ss.as_mut_ptr(),
             &raw mut pqc_pk_buf,
             &raw mut pqc_sk_buf,
-            &raw mut h_pqc,
+            &raw mut pqc_leaf,
         )
     };
     assert!(ok, "shekyl_scan_and_recover failed");
@@ -265,7 +265,7 @@ fn scan_output_ffi(
         amount,
         key_image,
         combined_ss,
-        h_pqc,
+        pqc_leaf,
         pqc_pk,
         pqc_sk,
     }
@@ -275,13 +275,18 @@ fn scan_output_ffi(
 ///
 /// The root is the Selene hash of the single leaf chunk. With layers=1
 /// the root IS the leaf-layer hash, so no branch layers are needed.
-fn build_selene_root(output_key: &[u8; 32], commitment: &[u8; 32], h_pqc: &[u8; 32]) -> [u8; 32] {
+/// `pqc_leaf_commitment` is the 32-byte point at the front of the 0x07 entry.
+fn build_selene_root(
+    output_key: &[u8; 32],
+    commitment: &[u8; 32],
+    pqc_leaf_commitment: &[u8; 32],
+) -> [u8; 32] {
     let mut leaf = [0u8; 128];
     let ok = unsafe {
         shekyl_construct_curve_tree_leaf(
             output_key.as_ptr(),
             commitment.as_ptr(),
-            h_pqc.as_ptr(),
+            pqc_leaf_commitment.as_ptr(),
             leaf.as_mut_ptr(),
         )
     };
@@ -334,7 +339,27 @@ fn build_test_case(iteration: u32) {
     );
 
     eprintln!("  [signing_round_trip] iteration {iteration}: building curve tree...");
-    let tree_root = build_selene_root(&input_out.output_key, &input_out.commitment, &scanned.h_pqc);
+    // The published entry's commitment point (PL-D3); the leaf holds CM.x.
+    let cm: [u8; 32] = scanned.pqc_leaf[..32].try_into().expect("entry point");
+    let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&cm).expect("CM decompresses");
+    let tree_root = build_selene_root(&input_out.output_key, &input_out.commitment, &cm);
+    // The verifier's per-input value: k = H_l(hybrid_pk), through the FFI,
+    // over the key the spend REVEALS — the canonical hybrid encoding derived
+    // from `combined_ss` — not the ML-DSA-only `pqc_pk` the scan hands back
+    // (the leaf commits to the hybrid key; the other string fails to verify).
+    let hybrid_pk = unsafe {
+        shekyl_ffi::shekyl_derive_pqc_public_key(scanned.combined_ss.as_ptr(), input_output_index)
+    };
+    assert!(
+        !hybrid_pk.ptr.is_null() && hybrid_pk.len > 0,
+        "shekyl_derive_pqc_public_key failed"
+    );
+    let mut pqc_key = [0u8; 32];
+    assert!(
+        unsafe { shekyl_fcmp_pqc_key_scalar(hybrid_pk.ptr, hybrid_pk.len, pqc_key.as_mut_ptr()) },
+        "shekyl_fcmp_pqc_key_scalar failed"
+    );
+    unsafe { shekyl_buffer_free(hybrid_pk.ptr, hybrid_pk.len) };
 
     let hp_of_o_point = shekyl_curve_generators::biased_hash_to_point(input_out.output_key);
     let hp_of_o: [u8; 32] = hp_of_o_point.compress().to_bytes();
@@ -356,19 +381,17 @@ fn build_test_case(iteration: u32) {
         "output_key": hex_encode(&input_out.output_key),
         "key_image_gen": hex_encode(&hp_of_o),
         "commitment": hex_encode(&input_out.commitment),
-        "h_pqc": hex_encode(&scanned.h_pqc),
+        "cm_x": hex_encode(&cm_x),
     });
 
     let inputs_json = serde_json::json!([{
         "ki": hex_encode(&scanned.key_image),
         "combined_ss": hex_encode(&scanned.combined_ss),
         "output_index": input_output_index,
-        "hp_of_O": hex_encode(&scanned.h_pqc),
         "amount": input_amount,
         "commitment_mask": hex_encode(&scanned.z),
         "commitment": hex_encode(&input_out.commitment),
         "output_key": hex_encode(&input_out.output_key),
-        "h_pqc": hex_encode(&scanned.h_pqc),
         "leaf_chunk": [leaf_entry_json],
         "c1_layers": [],
         "c2_layers": [],
@@ -516,7 +539,7 @@ fn build_test_case(iteration: u32) {
             1,
             pseudo_out.as_ptr(),
             1,
-            scanned.h_pqc.as_ptr(),
+            pqc_key.as_ptr(),
             1,
             tree_root.as_ptr(),
             verify_layers,

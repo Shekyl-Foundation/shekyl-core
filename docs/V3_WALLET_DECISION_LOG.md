@@ -39,6 +39,82 @@ the original reasoning and assume it was arbitrary.
 
 ---
 
+## 2026-09-20 — A persona's bond is immutable for its life
+
+**Decision.** A persona's bond is **immutable for its life**. The holdings set
+is fixed at the bond post and never mutates. The only holdings-change
+mechanism is **persona rotation** under the two-active overlap: the new
+persona bonds the new set, the old releases and drains — two events of two
+pseudonyms, decorrelated, with the overlap covering serving continuity and the
+release cooldown. `Reinstate` (né `Rebond`) survives as the sole in-place
+record operation: zero-money, post-slash, and not a change of holdings.
+
+**Rationale.** Clustering requires **same-class repetition**; a single event
+cannot be clustered. The design caps `P`-authored same-class events at **one
+per class per persona lifetime** (fund, bond, release, drain), bond amounts
+are **quantized** at `|S| · FLOOR` so the amount dimension carries no operator
+signal, and serving is **miner-authored** (the credit wire rides coinbases) —
+so a persona's authored chain footprint is ~four transactions of four distinct
+classes. **An incremental-update stream is the clusterable object, and this
+ruling makes it unconstructible.** That paragraph is the protection: without
+it, incremental holdings updates return as an obvious efficiency PR and
+silently destroy the property.
+
+**History.** Proposed early and **tabled** while shard selection was still
+open, because system-assigned shards forced involuntary incremental mutation —
+the objection was real and, on the design as it then stood, fatal. Shard
+**self-selection** (market picker with the Foundation complete-tree floor)
+removed the objection's premise; it did not weaken, its subject ceased to
+exist. Reopened and ratified 2026-09-20.
+
+**On the shape of that resolution, recorded because the pattern is reusable.**
+The idea was right, the objection was real, and the objection belonged
+*entirely* to a design that has since been ruled away. That is the tabling
+discipline working exactly as intended: **the fence was not indecision, it was
+a dependency.** A ruling deferred against a named open question can be taken
+cleanly the moment that question closes; a ruling argued to a verdict against
+a premise that is itself in flight cannot be.
+
+**Where it is recorded.** The principle and its protection paragraph in
+[`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) §"A bond is immutable for its
+life" (doctrine class); the lifecycle mechanics, the rule-15 deletion set and
+the residuals in
+[`design/PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
+§5.3.
+
+**Scope.** This entry records the ruling. **No code moves with it** — the
+deletion set is enumerated in PSL §5.3.2 and each deletion is separately
+authorized.
+## 2026-09-20 — `Rebond` is renamed `Reinstate`; `HoldingsUpdate` is REJECTED
+
+**Decision.** The archival bond-post kind `Rebond` becomes `Reinstate`
+everywhere in code and in living documents. The wire discriminant stays `1`
+and every FFI error-code number is unchanged. Post-holdings must **equal**
+the record's current holdings; both terms are 0. Discriminant `3`
+(`HoldingsUpdate`) is REJECTED: in-place holdings mutation is a clusterable
+same-class stream, so a persona's bond is fixed at join. Holdings change is
+persona rotation. The name stays in the discriminant table as unassigned so
+it cannot be silently re-minted (rule 23).
+
+**Rationale.** The name mis-described its own mechanism, and the misreading was
+universal rather than occasional — readers took `Rebond` for *"post a bond
+again"* or *"re-enter after an exit"*. It is neither. The kind acts on a record
+that is still **Bonded** and has been **slashed**: it closes the open bad
+interval in place and re-arms slashability, without changing holdings or
+moving collateral. Re-entry after an exit or a terminal slash is `JoinMarket`;
+`Release` + rejoin *"annihilates exactly what `Reinstate` preserves — identity,
+tenure"* (`PHASE_2B_FSM_RETOOL.md`). The same-day immutable-bond ruling
+(entry above) makes the old superset pin equal, and deletes the only kind that
+could have changed holdings in place. The tree had already written the
+correction into its own prose without the name following it.
+
+**Scope note.** Entries in this log dated before today, `docs/completed/`, and
+the changelog's back-entries use the old word and are **not** rewritten: they
+record what was. `docs/LMDB_WRITE_ATOMICITY_AUDIT.md` is the one record-class
+exception — its §10/§12 matrices are a live inventory checked against
+`SHEKYL_LMDB_TABLES`, so its table names track the rename and it carries a note
+saying which of its contents moved and which did not.
+
 ## 2026-04-25 — Wallet stack greenfield Rust rewrite (supersedes incremental rewire)
 
 **Decision.** The Monero-inherited `wallet2.cpp` C++ wallet is replaced
@@ -4774,7 +4850,11 @@ band is exactly the policy every named tier obeys and nothing more:
 at or above the snapshot's economy floor (below it the transaction
 does not clear — not paternalism), at or below the same derived
 era-maximum absolute cap (`absolute_fee_rate_cap()` = 14,000,000
-atomic-units/weight) on the same effective weight-1 basis. This
+atomic-units/weight) on the same effective weight-1 basis. *[Value as
+ruled 2026-08-17. Superseded twice since, basis unchanged: re-derived as a
+structural bound (220,000,000) at #640, then unrounded to 218,453,333 when
+FL-R21 took `round_money_up_2` off the served path (PR B, 2026-09-11).]*
+This
 brings the code to what the 2026-08-16 ruling already named as
 `Custom`'s bound; no third, `Custom`-only ceiling was ever ratified,
 and none is introduced. A ceiling anchored on `priority` was
@@ -4922,6 +5002,17 @@ priority hierarchy, not a deferral. A future product round that wants
 offline signing starts from a fresh threat-model review, not from this
 entry.
 
+**Disambiguation (2026-09-12).** "Cold authority" in the archival bond
+family (`requires_cold_authority`, `cold_authority_pin`,
+`shekyl_archival_cold_authority_pin`) is a **custody tier** — the
+principal-tier `bond_spend_pk` committed in the bond record, which the
+serving host does not hold — and is unrelated to the workflow rejected
+here. A cold-authority spend is an ordinary networked spend made with a key
+kept off the serving box. The function is not renamed: it is accurate in
+standard custody vocabulary, single-sourced, FFI-exported, and gate-asserted
+by name. See `docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` §5 (`EU-D2`'s custody
+vocabulary stands; its "widen the selector" clause was rejected 2026-09-13).
+
 **Reference.** `docs/api/wallet_rpc.yaml` `x-shekyl-method-registry`;
 `.cursor/rules/23-disposition-visibility.mdc`; wallet-rewrite audit
 plan (2026-09-07).
@@ -5012,4 +5103,760 @@ real derived address (KAT taxonomy PR)"`.
 `rust/shekyl-crypto-pq/src/wallet_envelope.rs` tests module;
 `.cursor/rules/50-testing.mdc` §"Every vector declares its oracle".
 
+---
+
+## 2026-09-10 — Single-Rust-image contract: shared internal libraries are refused (amends 2026-06-11)
+
+**Decision.** `BUILD_SHARED_LIBS=ON` is refused at configure time
+(`CMakeLists.txt`, `FATAL_ERROR`); internal C++ libraries are static in
+every build type. The Debug-defaults-to-shared behaviour inherited from
+the Monero build is deleted, not gated.
+
+**Why.** The 2026-06-11 mechanism selects one Rust archive per *link
+head* and verifies the result with a post-link `nm` gate on `shekyld`.
+Both assume the C++ libraries between the Rust archive and the binary
+are static, so that the binary is the only link head. Under
+`BUILD_SHARED_LIBS=ON` every internal library that lists
+`SHEKYL_FFI_LINK_LIBS` is its own link head, resolves the generator
+expression to `shekyl_ffi`, and embeds a full copy of `libshekyl_ffi.a`.
+`nm --defined-only` on a Debug tree found four such `.so`s —
+`libcryptonote_core`, `libcryptonote_basic`,
+`libcryptonote_format_utils_basic`, `libepee` — each carrying its own
+`tracing-core` `GLOBAL_DISPATCH` and its own
+`shekyl_archival_retention::constants::EFFECTIVE`, next to the
+executable's `libshekyl_daemon_image.a`: five Rust images in one
+process. The gate passed: it inspects the binary, and the binary holds
+exactly one copy.
+
+The failure this produced was silent and looked like a wallet defect.
+The regtest emission-claim e2e (`e2e_emission_claim_accepted_and_applied`)
+passed against a Release daemon and failed against a Debug daemon with a
+bare `Malformed` from `/submit_transaction`. Phase C now returns a
+`VerifyReject` whose reason the submit engine logs at `info`; that
+line named the cause: `epoch 1 not finalized at height 1025`. `Blockchain::init` in `libcryptonote_core.so` had armed the
+512-block regtest schedule in *its* copy of the latch and logged the
+override as active; the RPC submit verifier in the executable read its
+own copy, still on the genesis 10 000-block schedule, and computed
+`h_close(1) = 20 000`. Every Rust `static` is duplicated the same way;
+the epoch latch is only the one that had a visible consequence.
+
+**Why refuse rather than fix shared linking.** Resolving Rust symbols
+from the executable into the `.so`s (undefined-in-shlib + exported from
+the binary) is platform-divergent (ELF vs Mach-O vs PE) and would exist
+only to preserve a Debug-build convenience that has no user — the
+production and CI configurations are already static. Per
+`16-architectural-inheritance.mdc` (user-protection defaults in
+user-absent contexts) the inherited default inverts to a loud refusal.
+Deleting the configuration removes the failure class; a gate that
+walked every `.so` would only arbitrate it.
+
+**Consequences.**
+
+- Debug builds link statically (longer links; `docs/COMPILING_DEBUGGING_TESTING.md`
+  rewrites its shared-library section accordingly).
+- `utils/health/clang-*.sh` and `Makefile` `debug-all` drop their
+  `BUILD_SHARED_LIBS` flags; the CI artifact-layout comments that
+  attributed static internals to "Release defaults OFF" now cite the
+  refusal.
+- The `nm` gate's coverage claim is exact again: with one link head per
+  binary, "one `GLOBAL_DISPATCH` in `shekyld`" is "one Rust image in the
+  `shekyld` process".
+- Reversion clause: reopen only if a shipped binary must load Rust code
+  from a shared object (a plugin surface, a language binding). The
+  substrate is that binary's link map; the re-evaluation is a fresh
+  decision-log entry that also specifies how the `nm` gate walks its
+  shared objects.
+
+**Reference.** `CMakeLists.txt` (`BUILD_SHARED_LIBS` refusal),
+`cmake/BuildRust.cmake` (per-binary image selection),
+`src/daemon/CMakeLists.txt` (nm gate),
+`rust/shekyl-archival-retention/src/constants.rs` (`EFFECTIVE` latch).
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
+
+## 2026-09-12 — `ARCHIVAL_P_DERIVE_V1` retirement AUTHORIZED: `hs_id` derivation to take a rotation index; vector to be re-anchored as V2 (`EU-D8`)
+
+**Decision.** Written **before** D, as its authorization: at this writing V1 is
+in the tree and the derivation is unchanged. The persona serving-identity
+derivation `derive_p_hs_id_seed(master_seed, net, fmt, p_slot)` is **to be
+replaced**, not extended: a new label (`shekyl-archival-p-hs-id-ed25519-v2`, hyphen-normalized
+per the existing convention) with a rotation index **always present** in the
+preimage. `docs/test_vectors/ARCHIVAL_P_DERIVE_V1` is **to be deleted** and a V2
+vector directory minted with a fresh manifest. This entry is the authorization
+the regeneration requires under `50-testing.mdc` §"Regenerating a self-pinned
+vector is a decision, not a command," and the citation D's regenerator
+invocation must carry.
+
+**Ruled by Rick, 2026-09-11**, in the `EndpointUpdate` sequence
+(`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D8`): *"there is no chain and no
+user wallet, so replace the derivation outright and re-anchor the vector. Mint
+the new label, rotation always present, delete V1. Free today, a migration after
+genesis — the same argument that decided the envelope arms."*
+
+**What moves.**
+
+1. The `hs_id` label: `…-v1` → `…-v2`. One label never names two functions
+   (`30-cryptography.mdc`); adding a preimage term under the old label was
+   never available.
+2. The preimage gains a rotation index, unconditionally. The rejected
+   alternative — "rotation = 0 reproduces today's bytes" — encodes
+   absent-iff-zero into a preimage, the representational trick that produces
+   the next three-year-old comment.
+3. The V1 vector directory (`manifest.json`, `vectors.json`, tier-1 HKDF
+   intermediates + tier-2 end-to-end material) is deleted by D. V2 is minted
+   fresh, not derived from V1's bytes.
+4. The `shekyl-archival-p-hs-id-ed25519-v1` row of
+   `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism 2, const
+   `ARCHIVAL_P_HS_ID_INFO`) moves to v2 in the same commit:
+   `scripts/ci/domain_registry_gate.sh` asserts the registered literal at its
+   defining file, so the old row fails the moment the label changes.
+
+**Why replacement is free today.** No block has been mined on any network and
+no user wallet exists; every persona is regenerated deterministically from
+its seed. After genesis the same change is a migration.
+
+**What does not move.** The identity and debit-authority tiers of
+`ARCHIVAL_P_DERIVE` (GF-1/GF-9 labels) are untouched; only the `hs_id` tier
+changes. `p_canonical_id` is unaffected.
+
+**Oracle statement (rule per `50-testing.mdc`).** The V2 vectors are
+**self-pinned (tier 3)** drift tripwires, as V1's were. The V1 manifest's
+`regeneration_command` (`kat_regenerate_archival_p_derive_v1 -- --ignored`)
+predates the citation gate and is not gated; D replaces the regenerator along
+with the vector rather than inheriting an ungated one, and the V2 regenerator
+refuses to run without citing this entry.
+
+**Regeneration citation to use.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-12 ARCHIVAL_P_DERIVE_V1 retirement
+authorized; hs_id rotation index; V2 re-anchor (EU-D8)"`.
+
+**Sequencing.** D is the last step of C0 → A → B+C1 → D. Until it lands, B+C1's
+wire has no second address to rotate to (a STAGED callee-without-caller,
+recorded at `EU-D10`).
+
+**Reference.** `rust/shekyl-crypto-pq/src/archival_p.rs`
+(`ARCHIVAL_P_HS_ID_INFO`, `derive_p_hs_id_seed`);
+`docs/test_vectors/ARCHIVAL_P_DERIVE_V1/manifest.json` (to be deleted by D);
+`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (the v1 row, to move with D);
+`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` §9;
+`.cursor/rules/50-testing.mdc` §"Regenerating a self-pinned vector".
+
+---
+
+## 2026-09-12 — JoinMarket vin gains a mandatory serving endpoint (`EU-D3`); the gate-4 lifecycle tripwire is re-pinned
+
+**Decision.** The archival bond-post vin carries the persona's serving
+endpoint — the raw 32-byte Ed25519 public key of its v3 onion service —
+present iff `post_kind == JoinMarket` and **mandatory** there (a bond
+without an endpoint was the discovery gap), immutable for the record's life.
+Ruled by Rick (`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`,
+2026-09-11; narrowed to JoinMarket-only by the 2026-09-13 entry below);
+landed under `07-consensus-atomic-cutovers.mdc` as PR #724 (`f103acd38`,
+2026-09-13).
+
+**What moves.** Every serialized JoinMarket vin gains 32 bytes after
+`bond_spend_pk`. The self-pinned gate-4 lifecycle fixture
+(`rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json`,
+`join.wire_hex`) pins that wire, and the C++ integration test
+(`tests/unit_tests/archival_bond_post_integration.cpp`) parses the same hex
+with the C++ decoder — so the re-pin is the cross-language check that both
+serializers moved together. The fixture's endpoint is a deterministic pattern
+(`0x0E × 32`), as `bond_spend_pk`'s is: the tripwire pins wire shape and
+record commit, not the onion derivation.
+
+**Why free.** No chain has been mined on any network and no user wallet
+exists; there is no legacy JoinMarket vin to accommodate.
+
+**Regeneration citation to use.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-12 JoinMarket endpoint mandatory
+(EU-D3); gate-4 lifecycle re-pin"`. The gate-4 regenerator is armed with the
+citation check by the same PR (it was an unarmed rewrite-on-request before,
+the shape `50-testing.mdc` calls a one-command silencer).
+
+**Reference.** `rust/shekyl-archival-retention/src/bond_wire.rs`
+(`ArchivalBondPostVin::endpoint`, `check_couplings`);
+`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` §3.
+
+---
+
+## 2026-09-13 — `EndpointUpdate` (bond-post kind 4) REJECTED: a bonded persona's endpoint never changes; the `ARCHIVAL_P_DERIVE_V1` retirement authorized 2026-09-12 is WITHDRAWN
+
+**Ruled by Rick, 2026-09-13, verbatim:** *"IT has always been - who said it
+could rotate? That is a HARD NO. Rotating an existing bond is a dead giveaway
+for someone to link it. IT has been the rule for a long time. THe roation
+COULD be about a daemon, but how the fuck would you lose the key if it's
+derived from the seed?"*
+
+**Decision.** A bonded persona's serving endpoint is committed at
+`JoinMarket` and never changes. A new onion address is a new persona: Release
+under the cold `bond_spend_pk`, then a fresh `JoinMarket`. There is no
+`EndpointUpdate` post kind; byte 4 of the bond-post kind is unassigned.
+
+**What this withdraws.** The entry above this one's predecessor,
+"`ARCHIVAL_P_DERIVE_V1` retirement AUTHORIZED" (2026-09-12): no rotation
+index enters the `hs_id` preimage, the v1 label and vector stay, and the
+regeneration citation it minted must not be used. The 2026-08-10
+"rotation-in-place" and kind-4 carrier paragraphs of
+`ARCHIVAL_CHALLENGE_MECHANISM.md` §7 item 2, recorded as rulings, were not
+Rick's and are replaced in place. The `EndpointUpdate` round record
+(`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md`) now carries the rejection and
+keeps `EU-D1`, `EU-D3`, `EU-D4` as the JoinMarket-endpoint design.
+
+**What was built and excised.** PR #717 carried the JoinMarket endpoint
+(vin field, record column, LMDB v13) interleaved with the kind-4 arm; the
+kind-4 half was excised before merge and the JoinMarket half re-cut as its
+own PR, #724, merged 2026-09-13 (`f103acd38`). Archive tags: `archive/feat/eu-b-c1-endpoint-update-wire-2026-09-13`
+(the #717 branch), `archive/feat/eu-d-hs-id-rotation-2026-09-13` (D's
+design pass, never built).
+
+**Why the rejected reasoning failed.** The onion key is an HKDF child of the
+seed (cannot be lost); the address is published in the `JoinMarket` post
+(public is its normal state); a compromised host holds the serving seed and
+identity key, which no endpoint change takes back — only Release does, and
+Release is authorized by the one key never on the host.
+
+---
+
+## 2026-09-13 — Attestation pass countersignature moves to v2 (`SF-D8`, anchor-bound): pinned attestation vectors regenerated
+
+**Decision.** The consensus helper `verify_pass_countersignature`
+(`rust/shekyl-archival-retention/src/attestation_wire.rs`) is re-anchored
+to the `SF-D8` transcript as finally ruled — a requester-supplied
+**chain anchor** buried at the segment-freeze depth, gated by `P` and
+looked up on the connecting chain at admission — and the pinned vectors
+that froze the v1 shape are regenerated. This entry is the authorization
+the armed regenerators require under `50-testing.mdc` §"Regenerating a
+self-pinned vector is a decision, not a command," and the citation their
+invocations carry.
+
+**Ruled by Rick, 2026-09-13**, in the shard-fetch round
+(`docs/design/ARCHIVAL_SHARD_FETCH.md` `SF-D5` / `SF-D8`, second
+amendment; landed as that round's §9.1 step (a0), "the v2
+pass-countersignature verifier, first and alone"). The same day's
+**first** amendment — requester-random `nonce[32] ‖ height_le[8]` with
+signed height required to equal the predecessor height — was drafted,
+adversarially reviewed, and SUPERSEDED before landing: a requester-chosen
+integer carries no existence property (`P` signs blind, so a lone witness
+could pre-fetch a signature for any future height), and exact equality
+misses every honest fetch that spans a block boundary. It is recorded
+here so it is not re-derived.
+
+**What moves.**
+
+1. **The request header and the signed message.** v1 signed the 32-byte
+   block-bound nonce `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` alone.
+   v2's request carries one header decoding to 72 bytes,
+   `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`: fresh random,
+   then the requester's own chain at `tip − archival_reorg_depth_blocks`
+   (720) — height and hash. `P` signs the **decoded** 72 bytes in
+   canonical binary followed by `shard_id_le[8]`, the `u64` it parsed from
+   `/shard/{id}` (80 bytes; never the header's textual form, so Rust and
+   C++ cannot disagree on a wire variant). A signature that does not
+   cover the parsed route id is a confused deputy. `cb_out_key` and the
+   challenge tuple leave the message: the fetch proves `P` served, not
+   which miner asked.
+2. **Why an anchor, and why 720 deep.** The anchor restores the existence
+   property `RF-D3`/`RF-D5` gave the v1 nonce — the block had to exist to
+   be hashed — while keeping the nonce requester-random so `P` cannot
+   recognise a witness. Anchoring at the **tip** hash would make the
+   signature fork-sensitive: a `P` that saw the losing side of a
+   same-height race first signs a hash that never becomes canonical and
+   eats an unpriced miss. At 720 the hash is the segment-freeze depth
+   (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, const-asserted equal in the
+   retention KAT), identical on every honest node's chain — no new "this
+   depth is safe" assumption. **Priced residual:** burial depth is lead
+   time. A `P` that skips its own gate can sign a pass anchored `hash(T)`
+   at tip *T* that is admissible at *h* ∈ [*T* + 720, *T* + 720 + *L*],
+   a day out, and pre-sign the coming day for a colluding requester.
+   Fork immunity and short lead are one knob; fork misses land on honest
+   operators unpriced, collusion lead is already priced by the 2-of-3
+   quadratic. Accepted.
+3. **`P`-side gate (lands with (a), `RF-R1`).** Before signing, `P`
+   requires `anchor_height ∈ [p − 720 − L, p − 720 + L]`, `p` its own
+   height, else the identical 404. The upper bound is what makes
+   freshness against a non-colluding witness **structural** rather than
+   economic: without it a lone witness at height *T* sends `hash(T)` and
+   holds a signature usable at *T* + 720. The lower bound is hygiene. The
+   gate is two-sided with the same `L` so a `P` one block behind does not
+   refuse the network and no `P` gates distinctively. `P` needs a
+   **height**, not a chain — one `u64` from the host over the loopback the
+   claim leg already requires; `shekyl-p-serve` stays chain-blind.
+   **Residual, recorded:** the gate leaks whether `P` is synced (a
+   requester can binary-search `P`'s height through 404s). A synced `P`
+   answers like every other synced `P`; an unsynced one is already
+   failing challenges. The leak is "synced or not", not identity.
+4. **Admission.** `PassRecord` carries `nonce: [u8; 32]` and
+   `anchor_height: u64` (neither derivable); the **hash is not carried**
+   — admission reads it from the connecting chain, which is what makes a
+   fabricated hash fail. With `h` the block's **validated** predecessor
+   height: `anchor_height ∈ [h − 720 − L, h − 720]` else
+   `AnchorOutOfWindow`; transcript rebuilt with the connecting chain's
+   hash at `anchor_height` (alt chain above the fork point when
+   validating on an alt chain — nothing caps reorg depth, so main-chain
+   lookup alone would be a consensus split) and verified under `P`'s
+   bond hybrid key, else `BadCountersignature`; every pass record refused
+   while `h < 720 + L` (724) — no anchor exists; first settlement is at
+   10 000, nothing lost. The `attestation_root` record layout becomes
+   `header ‖ nonce ‖ anchor_height ‖ signature`; the prunable witness
+   entry becomes `nonce ‖ anchor_height ‖ signature`
+   (`ATTESTATION_WITNESS_MAX_BYTES` 866 568 → 876 808, +40/entry versus
+   v1, Rust-authoritative, C++ asserted equal). The root's customization
+   string does **not** rotate: no chain carried the old layout, and the
+   genesis-frozen empty root (`count = 0`) is byte-identical — pinned
+   unchanged.
+5. **Constants, single-sourced.** `archival_reorg_depth_blocks` (720,
+   existing) gains its third consumer as the anchor depth; its JSON
+   comment now names both danger directions (lower → reorg-sensitive
+   anchor and honest fork misses; higher → longer collusive lead) and the
+   `PDM-Q11` `D_max` gate as a consumer. New
+   `archival_attestation_anchor_lag_blocks = 4`, **PROVISIONAL**,
+   `build.rs`-enforced `≥ 2`; Rust reads it, C++ sizes the window through
+   `shekyl_archival_pass_anchor_window` and holds no copy.
+   *Sizing:* too small produces honest witness misses (unpriced); too
+   large costs one block of pre-fetch lead per unit against a 720-block
+   floor and one block of epoch slack per unit against 10 000 — so err
+   large. Two blocks of fetch-plus-`SF-D6`-retry span (the only fetch
+   figure is a ~180 KB/s burst floor from a null result, and bounded
+   retries stretch one attempt to minutes), one of `P`/requester skew,
+   one of margin: four. *Falsifier:* the W₂ / PD-F-2 dispersion
+   measurement, either direction — p99 under two minutes → 3; over six
+   → the answer is **not** to raise `L` but that `SF-D6`'s retry budget is
+   too generous, because `L` would be absorbing what the budget should
+   bound. *Recorded residual:* `L` / 10 000 of slack at the epoch
+   boundary; not fixed.
+6. **The scheme domain.** `SCHEME_DOMAIN_ATTESTATION` rotates
+   `shekyl/archival-attestation-scheme-v1` → `…-v2`. One label never names
+   two functions (`30-cryptography.mdc`); a v1 signature can never verify
+   as v2 independent of the message layout. No retired-label const is
+   kept; `v1_domain_signature_does_not_verify_under_v2` is the negative
+   control.
+7. **Deleted.** `attestation_nonce()`, its cSHAKE customization
+   `shekyl/archival-attestation-nonce-v1`, and the `prev_block_hash` /
+   `cb_out_key` / `cb_out_key_readable` verifier inputs (FFI verdicts 8
+   and 12 RETIRED; 13 `MALFORMED_ANCHOR_TABLE`, 14 `ANCHOR_OUT_OF_WINDOW`,
+   15 `BELOW_ANCHOR_THRESHOLD` minted). `MECH1_EXPECTED` 50 → 49.
+
+**Vectors regenerated under this entry.**
+
+- `rust/shekyl-archival-retention/tests/attestation_wire_kat.rs`:
+  `ROOT_TWO_EXPECT_HEX` (record layout gained nonce and anchor height);
+  `NONCE_EXPECT_HEX` deleted with its function and replaced by the
+  hand-computed `REQUEST_HEADER_EXPECT_HEX` and `MSG_EXPECT_HEX`
+  concatenation pins.
+- `rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json`
+  — **new.** A fully deterministic positive vector: `P`'s identity keypair
+  from `derive_archival_p_keys([0x5A; 64], Mainnet, Bip39, slot 0)`, the
+  ML-DSA leg hedged with a fixed seed, over a fixed
+  `(nonce, anchor_height, anchor_hash, shard_id)` with a deterministic
+  `kat_chain_hash` window at `predecessor_height = 4242`. Rebuilding from
+  the operands must reproduce every pinned byte; the pinned signature
+  must verify inside the window against the pinned chain and fail under
+  any single-term change, a forked anchor hash, or a shifted window.
+  Threshold pinned at 723 (refuse) / 724 (accept) in Rust, FFI, and C++.
+- `docs/test_vectors/PQC_HYBRID_V2_KAT.json`: the `attestation` surface
+  vector re-signs under the `-v2` domain (the other five surfaces are
+  reused byte-identically by the idempotent writer).
+- `rust/shekyl-rpc-types/build.rs` `PINNED_DIGEST` re-pinned for the
+  added `archival_attestation_anchor_lag_blocks` key (a different `L` is
+  a different chain).
+- Cross-language: the FFI attestation-verify tests and the C++
+  `archival_attestation_verify` pinned-vector test consume the same fixture,
+  under this same citation. (Renamed `_kat.json` → `_pinned.json` in review,
+  2026-09-14: the signature bytes are tier 3, and rule 50 reserves the KAT
+  name for tiers 1–2 — the oracle statement below is unchanged.)
+
+**Oracle statement (`50-testing.mdc`).** The root and witness pins remain
+**self-pinned (tier 3)** drift tripwires. The header and message pins are
+**hand-computed (tier 1)** — the concatenations are checkable by eye. The
+signature fixture is **self-pinned (tier 3)** for the bytes, with an
+independent (tier 2) check alongside: the verifier accepts it and rejects
+every single-term mutation, so sign/verify co-drift cannot pass.
+
+**Regeneration citation used.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-13 SF-D8 v2 pass countersignature: nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id under -v2 domain, anchor window [h−720−L, h−720] (ARCHIVAL_SHARD_FETCH.md §9.1 step a0)"`.
+
+**Reference.** `docs/design/ARCHIVAL_SHARD_FETCH.md` `SF-D5`, `SF-D8`,
+`SF-D13`, §9.1 (a0); `docs/design/ARCHIVAL_CREDIT_WIRE.md` §3;
+`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (scheme row rotated, nonce row
+deleted); `config/consensus_constants.json`; `.cursor/rules/50-testing.mdc`.
+
+---
+
+## 2026-09-14 — `PL-D3` ratified: the leaf's 4th scalar becomes a Pedersen commitment to the PQC key; the leaf-hash vectors are re-pinned
+
+**Decision.** Every FCMP++ spend identified the output it spent through the public
+4th leaf scalar (`PL-D1`, [`docs/design/FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)).
+Ratified fix `PL-D3` (Rick, 2026-09-14, in-channel; the written form in §6.2 of
+that document): the published per-output value is `CM ‖ record`, 64 bytes, where
+`CM = k·G_k + r·J` is a Pedersen commitment to the key scalar
+`k = H_ℓ(hybrid_pk)` (cSHAKE256 under `shekyl/pqc-leaf-key-v1`, reduced into the
+Ed25519 scalar field), `r` is an HKDF-derived blind under a guard counter, and the
+record is `cSHAKE256("shekyl/pqc-leaf-record-v1", pk ‖ r_h)` (`PL-D3a`, kept for
+the whole v3 era). The leaf's 4th scalar is `CM.x`; the circuit proves
+`K + r·J = CM` for the verifier-computed `K = k·G_k` instead of an equality with
+a public hash. Point validity is an admission rule; the wallet verifies both
+halves at scan. The prefixed-Blake2b leaf hash `shekyl-pqc-leaf` is retired.
+
+**What moves.** Every pinned vector that captured the old leaf value or a root
+over it (census companion §9 S1, class a/b):
+`docs/test_vectors/PQC_LEAF_HASH_KAT.json` and `PQC_LEAF_HASH_RAW_PK_KAT.json`
+(retired — they pin the retired function; replaced by
+`PQC_KEY_SCALAR_KAT.json` for `k`/`K` over the same raw-key inputs and
+`PQC_LEAF_COMMITMENT_KAT.json` for `(combined_ss, idx) → CM ‖ record ‖ r ‖ r_h ‖ ctr`),
+`docs/test_vectors/PQC_SCAN_OUTPUT_KAT.json` (the `h_pqc` field becomes the
+64-byte `pqc_leaf` entry), the `ct2_tier_{a,b}.json` trees and their roots, the
+genesis `golden_kat.rs` constants (the genesis transaction publishes the new
+`0x07`), the archival `*_kat_v1.json` fixtures that embed leaf bytes, and the
+`0x07` shape rule's width (`64·n`). The new NUMS generators
+`PQC_LEAF_COMMITMENT_G_K` / `_J` are pinned in the frozen-points KAT.
+
+**Also moved by the implementation (2026-09-14, same citation):** the three
+`GENESIS_TX` pins in `src/cryptonote_config.h` (the genesis coinbase publishes
+five 64-byte entries; `+160` bytes) and with them the frozen block-0 ids —
+`docs/GENESIS_ALLOCATIONS.md`, `shekyl-rpc-types::identity`,
+`tests/unit_tests/mining_parity.cpp`, `regtest_coinbase_hashes.json` — the
+captured regtest coinbase block vectors `regtest_coinbase_h{0,1,2}.block` and
+the `shekyl-rpc-types` miner-tx vectors extracted from them;
+`docs/test_vectors/WITNESS_HEADER.json` (the multisig witness header grows to
+288 bytes / 9 fields: `[O][I][C][CM][r][x][y][z][a]`);
+`docs/test_vectors/TX_EXTRA_PQC_ROUND_TRIP.json` (constants only); the
+`shekyl-tx-weight` `FCMP_PROOF_SIZE_KAT` table (the opening leg changes every
+cell); the emission vin fixtures (`emission_connect_kat_v1.json` — the vin no
+longer carries `pqc_pk_hash`, ruling 9), the serve-credit fixtures that embed
+leaf bytes (`gate2_serve_credit_kat_v1.json`,
+`serve_credit_equivalence_kat_v1.json`, `serve_credit_tx_parity_v1.json`,
+`pruned_tx_hash_parity_v1.json`); and two store version pins that make a stale
+tree loud — LMDB `VERSION 13 → 14` and the wallet curve-tree store
+`SCHEMA_VERSION 4 → 5` (same byte layouts; every leaf, layer hash and root in
+an older store came from a derivation no current node reproduces; pre-genesis:
+delete and resync).
+
+**Oracle statement (`50-testing.mdc`).** `PQC_KEY_SCALAR_KAT.json` is
+**self-pinned (tier 3)** drift tripwire over the same degenerate lengths the
+retired raw-pk pins covered, with the tier-2 check beside it that
+`shekyl_fcmp::PqcKeyScalar` forwards to the owner. `PQC_LEAF_COMMITMENT_KAT.json`
+is **self-pinned (tier 3)** with the tier-2 check that `CM` opens to
+`K(pk) + r·J` and that the recipient's scan re-derives the identical entry.
+The fix-falsifier (`rust/shekyl-wire/tests/pl_d1_fix_falsifier.rs`, red on the
+old tree) and the binding-falsifier (`test_wrong_opening_fails` in the vendored
+circuit crate) are the tier-2 checks on the mechanism itself.
+
+**Regeneration citation used.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-14 PL-D3 leaf commitment: 0x07 = CM ‖ record, CM = k·G_k + r·J opened in-circuit; leaf-hash vectors retired and re-pinned"`
+
+**Reference.** `docs/design/FCMP_SPEND_LINKABILITY.md` §6.2, §10, §12;
+`docs/audit_trail/FCMP_SPEND_LINKABILITY_CENSUS.md` (was `docs/design/`; moved 2026-09-23) §8 (pre-flight measurements);
+`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism-4 `shekyl-pqc-leaf` retired;
+two mechanism-1 customizations and two mechanism-2 labels added);
+`.cursor/rules/50-testing.mdc`.
+
+---
+## 2026-09-17 — Two stores by obligation, not by posture: the wallet holds serving state, the daemon holds only archival consensus state; daemon uniformity forecloses any archival serving path in the daemon
+
+**Context.** The wallet-side shard store (`shekyl-curve-tree`'s redb
+`LeafStore`, `rust/shekyl-curve-tree/src/store/redb_backend.rs`, 128-byte
+leaves at `SCHEMA_VERSION = 5`, served by `shekyl-p-serve`) and the daemon's
+consensus store (`shekyl-chain-store`, DRS) are two databases. The question
+was whether that split is a transitional duplication to be collapsed, and what
+justifies it if not. Ruled by Rick 2026-09-17, in-channel; verified at the
+cited sources.
+
+**Amended 2026-09-18 (`PDM-Q-F33`; PR #775 landed `e685ef1cd`, #774 landed
+`eee838d4d` fifteen minutes later, so the re-key fell to PDM).** The
+*architecture* below — two stores by obligation, no archival serving state
+in the daemon, all daemons prune uniformly — stands and is what `PDM-Q9`
+ruled on. Its *unit-bearing consequences* are written against the leaf
+partition and re-key under `PDM-Q6` item 4 / F32 / Q12
+([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md)):
+(2) the segment partition → the shard partition `b_*` over retained per-tx
+length rows closing at `SHARD_BYTES`, consensus by the same admission
+argument, with the one-home / const-assert / no-provisional-marker hazard
+transferred to `SHARD_BYTES`; the leaf partition (`SEGMENT_LEAF_COUNT`,
+`frozen_segment_count`, `SEGMENT_LAYER_J`) is a deletion surface at
+E4 / S-ARCH and its interim tie stays owed until then; (3) the daemon's
+`R_k` skeleton → the two hash rows `txs_prunable_hash` / `txs_pqc_auth_hash`;
+the E3 sentence ("import `SEGMENT_LEAF_COUNT` / `SegmentId` and define
+PDM's discard unit in them") is **refuted** by Q12 — S-PRUNE derives `b_*`
+from the A4 rows and E3 consumes it. The text below is retained as ruled,
+with its era; read it with this paragraph.
+
+**Decision — RULED.** The split stands, on a justification that does not
+depend on deployment posture or on who owns the box:
+
+1. **The wallet-side store is the thing the bond obligates, not a duplicate.**
+   `shekyl-curve-tree` carries two purposes: membership-path assembly, and
+   `serving_route` (`rust/shekyl-curve-tree/src/lib.rs`; consumed by
+   `shekyl-p-serve` and `shekyl-p-fetch`). The first is the privacy argument
+   that is latent under a co-resident daemon. The second is unconditional — an
+   archiver must hold its shards to serve them; that is what it is bonded to
+   do, and no posture makes it optional. The wallet-side store stands on the
+   serving purpose whatever becomes of the path-assembly one.
+2. **Under PDM the two stores stop overlapping.** A full daemon co-resident
+   with an archiver duplicates bytes; the pruned-daemon round
+   (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) exists so the daemon discards what the
+   archival market holds. The daemon keeps consensus state and skeleton; the
+   archiver keeps the segments. The duplication is a property of the
+   transitional deployment, not of the design.
+3. **Daemon uniformity — the argument that survives everything else.**
+   "`P` is serving these shards" rides the bond-post wire in cleartext
+   (`Holdings::ShardSetCompact(shard_ids)`,
+   `rust/shekyl-wire/src/transaction.rs:502`). What must never leak is
+   **`P` → Principal**. The daemon is the one process with a publicly
+   identified network address — it peers. If a daemon backing an archiver
+   behaved differently from a plain one — extra tables, extra RPC surface, a
+   different disk footprint, different latency under load — probing daemons
+   would reveal that *this address has an archiver behind it*. That does not
+   name `P`, but it puts the Principal's public identity and archival
+   participation in one bucket, reachable by anyone who can connect to peers.
+   Uniform daemons remove that probe channel rather than mitigating it.
+   **Precision from review (2026-09-18):** the premise "the daemon's IP is
+   known" holds on the clearnet posture, which the relay round already
+   classes as confidentiality-and-integrity-not-anonymity (PW-3a); on the
+   ruled Tor default a daemon's peers see an onion. Uniformity is therefore
+   defence in depth that matters most for the operators who have no other
+   anonymity, and any clearnet RPC surface an operator exposes — and it is
+   the correct default because posture is the operator's choice, not the
+   protocol's. *SUPERSEDED: "removes the channel entirely"; "holds whatever
+   any operator's posture is."* Two textbook channels were raised against
+   the design in review and **withdrawn** on the record: transaction-origin
+   analysis of `P`'s bond-lifecycle submissions (the standard Dandelion++
+   residual, clearnet-only, π₀ = 0 measured on Tor — `DAEMON_RELAY_PRIVACY.md`
+   §6; not a channel the split creates) and co-located hidden-service load
+   correlation (needs a clearnet candidate set, a measurable effect from one
+   capped 3.33 MB stream, and Pi-class hardware nobody archives on; not a
+   channel the split creates either). **Noise NN over clearnet (planned;
+   paused for the DRS storage migration) does not move this:** it hides the
+   *traffic*, not the fact that a given IP is a Shekyl node — an active
+   prober still completes the handshake with a known address, and NN carries
+   no authentication to refuse it with (PW-19a). NN mitigates
+   confidentiality, not identity; the uniformity argument stands unchanged
+   under it.
+
+**The line, stated so it is not redrawn.** The daemon holds **archival
+consensus state** — bonds, serve credits, settlement, slash — because every
+daemon validates those and they are uniform by definition. The daemon holds
+**no archival serving state, ever**. Consensus is universal; serving is
+elective, and elective behaviour in a publicly addressed process is a
+fingerprint.
+
+**The criterion under the line (review, 2026-09-18).** The fingerprint is
+**persistent, posture-correlated** state or behaviour: a bond is a months-long
+commitment and serving state is durable, so a daemon carrying either differs
+from its neighbours for as long as the bond lives. **Episodic** actions any
+daemon takes for its own reasons — fetching a shard to inspect the
+visualisation, to confirm a transaction, or as the **witness** verifying a
+challenge it drew (Q8; the memory-only seed ring of Q10 retains nothing past
+inclusion) — carry no posture signal, because every daemon does them sometimes
+and none retains anything afterwards. So: *the daemon may do anything episodic
+and universally available; it may hold nothing durable that correlates with
+archival participation.* That admits the witness fetch and forecloses the
+fast path without a per-case list. Mining is elective and long-term, but it
+is not archival posture and is public through its own door.
+
+**Corollary — pruning posture is part of uniformity (RULED with this
+entry).** Full and pruned daemons differ observably. If archiver operators
+tended to run full daemons, "runs a full node" would become the fingerprint
+with no archival code involved. **All daemons prune uniformly**, and the
+archiver-backed daemon sits at the network's default posture — which is part
+of the reason for the two-store split: the segments live in the wallet-side
+store so the daemon beside it can prune like every other. PDM owns the
+default; this is the constraint it carries.
+
+**REJECTED, recorded so it is not rediscovered: an archival fast path in the
+daemon.** Once wallet and daemon are co-resident, letting the daemon serve
+segments directly (it already has the blocks; skip the IPC hop) is the obvious
+optimisation. Every form of it makes an archiver-backed daemon observably
+different from a plain one and reopens exactly the channel the split closes.
+**No archival serving path in the daemon, at any performance argument.**
+Reopening criterion (rule 21): only a change that makes archival serving
+universal — every daemon serves, none is elective — would dissolve the
+fingerprint; short of that, the rejection is not revisited on latency grounds.
+
+**Consequences recorded with the ruling.**
+
+- **What crosses the boundary is the segment partition, not the leaf
+  codec (sharpened in review, 2026-09-18).** A challenge is verified by the
+  witness comparing bytes fetched from the **archiver's** store against an
+  `R_k` it holds **locally** (`served_frame.rs:9–12`) — and under PDM that
+  local `R_k` is the skeleton the **daemon's** store keeps after discarding
+  leaves. Four objects must agree across that boundary, and they are not one
+  kind of thing. (1) **Leaf bytes** (128 B = 4 Selene scalars): already
+  consensus — the hash preimage, PL-D3 frozen, rule-42 pinned, `LEAF_BYTES`
+  derived from `SCALARS_PER_LEAF` with a const-assert (`segment.rs:36`);
+  nothing to share. (2) **The segment partition** — `SEGMENT_LAYER_J = 2`,
+  `outputs_per_node(j)`, `SegmentId` numbering (`segment.rs:18,:42,:48`) —
+  **and it is consensus, which inverts the first reading (design review,
+  2026-09-18).** `frozen_segment_count(leaf_count) = ⌊leaf_count /
+  SEGMENT_LEAF_COUNT⌋` (`shekyl-archival-retention/src/segment_freeze.rs:12–13`)
+  is *"deterministic in its one consensus input (O-1)"*; ~~bond admission
+  reads it to decide which `shard_id`s are admissible~~ — **corrected
+  2026-09-19: it does not.** `frozen_segment_count`'s three consumers are the
+  D2 escalation operand (`blockchain.cpp:1502`), the coverage RPC
+  (`archival_shard_coverage.cpp:34`) and the freeze / pop-revert path
+  (`db_lmdb.cpp:7997`); none is bond admission, and `ShardSet::new`
+  (`bond_wire.rs:210-227`) bounds a `shard_id` against no chain state at all.
+  Bond admission's shard predicate was RULED 2026-09-19 and is being **built,
+  not ported** —
+  [`ARCHIVAL_BOND_ADD_ADMISSION.md`](design/ARCHIVAL_BOND_ADD_ADMISSION.md)
+  §3. And pop revert
+  deletes exactly the rows with `shard_id ≥ frozen_segment_count(post_trim)`
+  (O-3); both daemon hooks consume it via
+  `shekyl_archival_frozen_segment_count`. A divergent partition therefore
+  does not fail challenges silently — it **forks**, at admission and at
+  revert. Better news for safety, and it relocates the argument: the
+  partition needs no shared home as a courtesy; it is a consensus surface
+  and is treated as one. **Where the tie is thin today:** `SEGMENT_LEAF_COUNT`
+  is *generated* in archival-retention (`build.rs:249`, from the economics
+  config) and const-asserted against the `shekyl-fcmp` width product
+  `38·18·38 = 25 992` (`segment_freeze.rs:44–46`); the wallet-side store
+  computes `outputs_per_node(SEGMENT_LAYER_J)` from the same widths
+  independently (`segment.rs:64`). The two agree *through the widths*, not
+  through each other — change `SEGMENT_LAYER_J` and nothing asserts the
+  store's segment is still the consensus segment. Three refinements
+  (2026-09-18), the first leading: **(i) `SEGMENT_LAYER_J` is marked
+  "provisional" (`segment.rs:17`) and is de facto consensus-frozen — the
+  marker invites the fork.** A reader takes it at face value, moves `j` to
+  3, and the wallet store partitions at 987 696 leaves while
+  `frozen_segment_count` keeps admitting `shard_id`s against 25 992; no
+  gate, and a comment that said it was safe. Either the marker goes or the
+  tie lands, and the marker going is not the cheaper fix. **(ii) The config
+  file is the more dangerous door:** `consensus_constants.json` is editable
+  without touching Rust, curve-tree would never notice, and the edit reads
+  as a parameter tune when it is a partition change. **(iii) The config
+  value reaches challenge leaf selection too**, not only admission and
+  revert: the production geometry for `challenge_leaf_index` is the
+  per-segment leaf count recorded in the segment registry at freeze
+  (`blockchain.cpp:5050–5073` → FFI), and that row is written from
+  `SEGMENT_LEAF_COUNT`. (`challenge.rs:273` passes the constant directly,
+  but that is a test.) So a config move partitions admission, revert and
+  challenge selection together and leaves the store behind. **The
+  dependency already runs archival-retention → curve-tree**
+  (`Cargo.toml:46`), so
+  archival-retention is the crate that sees both and is where the equality
+  assertion belongs; E3/S-CURVE is the unbuilt side that must consume
+  `frozen_segment_count` / `SEGMENT_LEAF_COUNT` rather than mint a
+  partition. **The hazard has a recorded instance at this exact boundary:**
+  `challenged_leaf_offset_in_chunk` carries the RF-D8 note
+  (`segment_freeze.rs:89–92`) — a first FFI draft subtracted a
+  segment-relative index from a global tree position, *"selected leaf 0 of
+  every chunk for every shard past the first, so every signature verified
+  against the wrong leaf and the C++ end-to-end path rejected what the Rust
+  KATs (which had the arithmetic right, locally) accepted."* "One home for
+  this arithmetic (RF-D8)" is already the established remedy; cite it
+  rather than argue from first principles. (3) **`R_k`** — `try_extract_r_k` over `shekyl_fcmp::tree` layer
+  math (`ops.rs:9,:65`): consensus by construction through `shekyl-fcmp`;
+  what E3 owes is the CT-0 freeze KAT
+  (`shekyl-fcmp/tests/curve_tree_freeze.rs`) run against its own skeleton.
+  (4) **The served frame** (`served_frame.rs:17–24`, `shekyl_curve_io`
+  canonical varint): already single-sourced, reasoning written at `:34–40`.
+  Ordering for the shared-code work therefore reads **partition first** —
+  exposed as a *consensus* surface, which makes it more urgent, not less —
+  then schema gates and the shared key macro. *SUPERSEDED: "the leaf
+  encoding becomes a wire format"; "codec first"; "the partition is not
+  consensus" (the first reading of this review).* FOLLOWUPS row.
+- **Two hazards the sharpening surfaced.** (a) **A second pin of 720:**
+  `segment.rs:20–22` hardcodes `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS = 720`
+  beside a comment "same numeric value as `ARCHIVAL_REORG_DEPTH_BLOCKS`",
+  which is generated from the economics config (`build.rs:210`) — two
+  constants, one meaning, no assertion joining them; if the config moves,
+  segments keep freezing at 720 while the fork analysis (`SO-D8e`), the bond
+  assembly window and the pass anchor move. FOLLOWUPS row (the existing
+  CT-1 dedup row, amended). **Site constraint:** the assert cannot live in
+  `shekyl-curve-tree` — `ARCHIVAL_REORG_DEPTH_BLOCKS` is generated in
+  archival-retention's `build.rs` and the dependency runs
+  archival-retention → curve-tree, so the assert belongs in
+  archival-retention (which sees both), or curve-tree's copy moves there and
+  is imported back. A PR that starts in `segment.rs` discovers this the
+  wrong way round. Same site, same PR, as the
+  `SEGMENT_LEAF_COUNT == leaves_per_segment()` tie above. **Implementation
+  wrinkle on that tie** *(SUPERSEDED 2026-09-18 — landed as described in the
+  LANDED note below; `const fn` since the partition PR)*: `leaves_per_segment` and `outputs_per_node` are
+  `pub fn`, not `const fn`, so the equality cannot be a compile-time assert
+  as written; and `outputs_per_node`'s loop uses
+  `u8::try_from(layer).expect(..)`, which is not const (`Result::expect`
+  needs `E: Debug`), so the loop is rewritten over a `u8` counter
+  (`layer_is_selene` is already `is_multiple_of`, const-stable). For a
+  consensus-equality invariant the compile-time form is strictly better
+  than a test; a PR that tries the assert first will hit this and may
+  settle for a test. The partition PR is therefore three small pieces —
+  `const fn` in curve-tree, the equality assert and the 720 assert in
+  archival-retention — all in the crate the dependency direction forces,
+  all before E3 has anything to import. E3's own two obligations (import
+  the partition and define PDM's discard unit in `SegmentId`; run the CT-0
+  freeze KAT against its skeleton) are E3's, not this PR's; the FOLLOWUPS
+  row separates the two. **LANDED 2026-09-18 (partition PR), with one
+  correction to the sketch above:** `shekyl-curve-tree` is only a
+  *dev*-dependency of archival-retention — the manifest entry
+  `shekyl-archival-retention/Cargo.toml:46` sits under the
+  `[dev-dependencies]` header at `:39`, and `path.rs:53–56` records the
+  refusal of the production edge as policy (the consensus crate does not
+  import the wallet-side store crate) — so the assert could not name
+  `shekyl_curve_tree` in the lib. (The sketch quoted `:46` without its
+  section header.) The derivation moved instead to the crate both already depend on and
+  that owns the geometry: `shekyl_fcmp::tree` now holds `SEGMENT_LAYER_J`,
+  `outputs_per_node`, `leaves_per_segment` as `const fn`; curve-tree
+  re-exports them; archival-retention asserts `SEGMENT_LEAF_COUNT ==
+  leaves_per_segment()` compile-time in the production graph, replacing its
+  hand-written width product. The 720 tie landed as the dedup itself, not an
+  assert: `shekyl-curve-tree`'s `build.rs` already read
+  `consensus_constants.json`, so `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` is now
+  generated from `archival_reorg_depth_blocks` — the same key as
+  `ARCHIVAL_REORG_DEPTH_BLOCKS` — and the literal, the interim assert and the
+  CT-1 FOLLOWUPS row are gone (a `cfg(test)` assert was tried first and
+  refused in review: integration-test targets build the lib without
+  `cfg(test)`, so it was skippable). Both doors red-checked. *SUPERSEDED: "the
+  dependency already runs archival-retention → curve-tree" as a production
+  fact; "the assert belongs in archival-retention" for the partition tie —
+  it does, but via `shekyl-fcmp`, not via curve-tree.* (b) **`recon`'s
+  oracle is a fact about timing:** `recon.rs:6–13` replicates the daemon's
+  C++ leaf-stream derivation bit-exactly, and that duplication is an oracle
+  *because* the two implementations are independent. After E3 the daemon's
+  derivation is Rust in the same workspace and independence is nominal; the
+  argument for two copies lapses and the standard drift argument against
+  them returns, with the pinned CT-2 vectors (`CT2_DRAIN_ORDER.md`) and
+  header-root equality taking over the oracle role. **The bar that raises
+  (design review):** RF-D8 is a case where the cross-language check
+  *worked* — C++ rejected what local Rust KATs accepted — so unifying after
+  E3 retires a mechanism with a demonstrated catch, not only a redundancy.
+  Not grounds to keep two implementations; grounds for a precondition:
+  **the CT-2 pins must cover specifically what the cross-language check
+  caught — global-versus-segment-relative index confusion — before
+  unification**, or the unification loses coverage it cannot see it is
+  losing. Unification of `recon` with the shared derivation is therefore
+  the expected disposition **after E3, with that vector pinned first** —
+  a separate decision, as first recorded.
+- **Retention has two owners now.** The daemon's journal horizon pinned in the
+  `SO-D8` round (four bond journals back to `h_open(E)` at `h_slash`) is the
+  daemon's. The archiver's store has its own — how long a shard is held after
+  a release, and whether anything enforces it — and with two databases nobody
+  owns that question by default. FOLLOWUPS row; owner named there.
+- **The remote-daemon reserves acquire a constituency.** Local `P` store plus
+  remote daemon is the non-default posture WI-3 R2-1 and the `2d-2` family
+  hold mitigations in reserve for — the
+  `min(claimed_tip, verified_frontier + reorg_depth)` clamp among them
+  (`ARCHIVAL_BOND_SP_R0_PLAN.md:140,:193`), fully specified and deliberately
+  unbuilt because building it now would be remote-daemon defence in the local
+  default. If exchanges and heavy stakers are the expected shape of that
+  deployment, the reopen criterion for that family is a **deployment
+  milestone**, not an unforeseeable event. Not an objection to the reserve;
+  a restatement of when it fires.
+
+**What this does not decide.** Which of the wallet's two curve-tree purposes
+(path assembly) remains load-bearing under a co-resident daemon — that
+ranking is a separate question and the split does not depend on its answer.
+
+**Review record (2026-09-18).** Adversarial review raised seven findings;
+two were withdrawn at source (origin analysis; load correlation — see the
+uniformity paragraph), one was withdrawn on the Foundation-seed
+`CompleteTree` floor (archiver-store durability is an operator's trade, not
+the network's availability floor — `FOUNDATION_ARCHIVAL_DISCLOSURE.md:196`,
+`V3_STAKER_ARCHIVAL.md:120`), and the rest are folded in above.
+
+**Reference.** `docs/design/ARCHIVAL_SERVING_ROUTE.md` (request contract;
+cross-reference added), `docs/design/ARCHIVAL_PRUNED_DAEMON_MODE.md` (the
+discard that makes the stores complementary), `docs/design/DAEMON_REDB_STORE.md`
+S-ARCH / DRS-E4 (where "no serving state in the daemon" is enforced when the
+archival surface is ported — FOLLOWUPS row), `docs/design/ARCHIVAL_BOND_SP_R0_PLAN.md`
+(the R2-1 reserve).
+
+---

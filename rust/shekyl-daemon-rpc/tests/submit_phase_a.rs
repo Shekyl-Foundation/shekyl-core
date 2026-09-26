@@ -14,6 +14,7 @@ mod submit_fixtures;
 
 use shekyl_daemon_rpc::submit::{parse_submission, SubmitTxKind};
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_types::PCanonicalId;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
 use shekyl_wire::{
     BondPost, BondPostKind, Ct, CtBase, Holdings, Input, Output, Transaction, TxPrefix,
@@ -32,7 +33,7 @@ fn reject_reason(tx_hex: &str) -> String {
         },
         "every Phase-A failure maps to Rejected{{Malformed}}"
     );
-    reject.reason
+    reject.reason().to_owned()
 }
 
 // ── The admit path ──────────────────────────────────────────────────────
@@ -48,12 +49,12 @@ fn valid_spend_parses_with_extracted_facts() {
     assert_eq!(parsed.blob, blob, "blob must be the exact decoded bytes");
     assert_eq!(parsed.tx, tx);
     assert_eq!(
-        parsed.txid.to_bytes(),
+        parsed.txid,
         tx.hash(),
         "txid must be the canonical shekyl-wire hash (§3.4)"
     );
     assert_eq!(parsed.key_images, kis, "key images in vin order");
-    assert_eq!(parsed.reference_block.to_bytes(), FIXTURE_REF_BLOCK);
+    assert_eq!(parsed.reference_block, FIXTURE_REF_BLOCK);
     assert_eq!(parsed.fee, 12_345);
     assert_eq!(parsed.weight, tx.weight() as u64, "row I3 weight");
     assert_eq!(parsed.kind, SubmitTxKind::Spend);
@@ -118,9 +119,9 @@ fn truncated_blob_rejects() {
 
 #[test]
 fn coinbase_submission_rejects() {
-    // A structurally valid coinbase (sole gen input, Null ct) — parses and
-    // validates, but RPC submission of a miner tx is the live
-    // tx_sanity_check residue (§8.8) and must refuse.
+    // A structurally valid coinbase (sole gen input, Null ct, the CEN-I20
+    // extra grammar) — parses and validates, but RPC submission of a miner
+    // tx is the live tx_sanity_check residue (§8.8) and must refuse.
     let coinbase = Transaction {
         prefix: TxPrefix {
             unlock_time: 60,
@@ -130,7 +131,7 @@ fn coinbase_submission_rejects() {
                 key: [0x22; 32],
                 view_tag: 7,
             }],
-            extra: submit_fixtures::conforming_pqc_extra(1),
+            extra: submit_fixtures::conforming_coinbase_extra(1),
         },
         ct: Ct::Null(CtBase {
             enc_amounts: vec![[0u8; 9]],
@@ -241,9 +242,10 @@ fn non_canonical_key_image_encoding_rejects() {
 fn bond_post_input() -> Input {
     Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0xAB; PQC_HYBRID_SINGLE_KEY_LEN],
-        p_canonical_id: [0x77; 32],
+        p_canonical_id: PCanonicalId::from_bytes([0x77; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::ShardSetCompact(vec![1, 2, 3, 9]),
         bonded_total_atomic: 750_000_000 * 4,

@@ -37,6 +37,7 @@ mod tests;
 
 use alt_chain::alt_chain_info;
 use blockchain::{print_blockchain_dynamic_stats, print_blockchain_info};
+use shekyl_types::PrunableHash;
 use status::{hard_fork_info, show_status};
 
 /// Rendered; `out` holds the text to print as success output.
@@ -439,7 +440,7 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
         format!("print_transaction: the daemon's body for {hash} is not a transaction")
     })?;
     let derived = if pruned {
-        parsed.hash_with_supplied_prunable(tx.prunable_hash.to_bytes())
+        parsed.hash_with_supplied_prunable(PrunableHash::from_bytes(tx.prunable_hash.to_bytes()))
     } else {
         parsed.hash()
     };
@@ -705,8 +706,7 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
         "print_peer_list" => {
             let (white, gray) = peer_list_selection(args.get(1).map(String::as_str));
             let limit = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(0);
-            let pruned_only = args.iter().any(|a| a == "pruned");
-            print_peer_list(&source, white, gray, limit, pruned_only, unix_now())
+            print_peer_list(&source, white, gray, limit, unix_now())
         }
         "print_peer_list_stats" => print_peer_list_stats(&source),
         "print_connections" => print_connections(&source),
@@ -943,10 +943,7 @@ fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer, now: u64) -> String 
     } else {
         format!("{}:{}", peer.host, peer.port)
     };
-    format!(
-        "{prefix:<10} {addr:<25} {:<4x} {elapsed}",
-        peer.pruning_seed
-    )
+    format!("{prefix:<10} {addr:<25} {elapsed}")
 }
 
 /// Which lists `print_peer_list` prints, from the selector argument.
@@ -965,31 +962,25 @@ fn peer_list_selection(selector: Option<&str>) -> (bool, bool) {
     (selector != Some("gray"), selector != Some("white"))
 }
 
-/// `print_peer_list [white|gray] [limit] [pruned]`.
+/// `print_peer_list [white|gray] [limit]`.
 ///
-/// `limit` applies **per list**, not to the pair, and `pruned` filters
-/// unpruned peers out client-side — both as the C++ did.
+/// `limit` applies **per list**, not to the pair, as the C++ did. The
+/// `pruned` selector went with the stripe engine (`PDM-Q7`): there is no
+/// per-peer pruning state left to filter on.
 #[deny(clippy::arithmetic_side_effects)]
 fn print_peer_list(
     src: &Source,
     white: bool,
     gray: bool,
     limit: usize,
-    pruned_only: bool,
     now: u64,
 ) -> Result<String, String> {
     let reply = fetch_peer_list(src, PUBLIC_ONLY)?;
     let mut out = Vec::new();
     let mut take = |prefix: &str, peers: &[shekyl_rpc_types::Peer]| {
-        // `take` **before** `filter`: `limit` bounds the peers examined, not
-        // the peers printed. That is the C++ order — it advanced an iterator
-        // `limit` entries and let `print_peer` skip the unpruned ones inside
-        // the loop — so `print_pl 5 pruned` shows the pruned peers among the
-        // first five, not the first five pruned peers.
         for peer in peers
             .iter()
             .take(if limit == 0 { usize::MAX } else { limit })
-            .filter(|p| !pruned_only || p.pruning_seed != 0)
         {
             out.push(render_peer(prefix, peer, now));
         }
@@ -1254,15 +1245,9 @@ fn sync_info(src: &Source) -> Result<String, String> {
         .iter()
         .fold(0u64, |acc, p| acc.saturating_add(p.info.current_download));
     out.push(format!("Downloading at {current_download} kB/s"));
-    if reply.next_needed_pruning_seed != 0 {
-        out.push(format!(
-            "Next needed pruning seed: {}",
-            reply.next_needed_pruning_seed
-        ));
-    }
     out.push(format!("{} peers", reply.peers.len()));
     out.push(
-        "Remote Host                        Peer_ID   State   Prune_Seed          Height  DL kB/s, Queued Blocks / MB"
+        "Remote Host                        Peer_ID   State             Height  DL kB/s, Queued Blocks / MB"
             .to_owned(),
     );
     for p in &reply.peers {
@@ -1279,10 +1264,9 @@ fn sync_info(src: &Source) -> Result<String, String> {
         )]
         let megabytes = size as f64 / 1e6;
         out.push(format!(
-            "{:<24}  {:<16}  {:<8x}  {}  {} kB/s, {nblocks} blocks / {} MB queued",
+            "{:<24}  {:<16}  {}  {} kB/s, {nblocks} blocks / {} MB queued",
             p.info.address,
             p.info.state.as_str(),
-            p.info.pruning_seed,
             p.info.height,
             p.info.current_download,
             trimmed(megabytes, 6),
@@ -1313,21 +1297,17 @@ fn sync_info(src: &Source) -> Result<String, String> {
             .start_block_height
             .saturating_add(s.nblocks.saturating_sub(1));
         let range = format!("{} - {last}", s.start_block_height);
-        // Computed, not carried: the wire `span` has never had this field,
-        // and the C++ console derived it the same way from the same height.
-        let seed = CoreRpc::span_pruning_seed(s.start_block_height);
         if s.size == 0 {
             out.push(format!(
-                "{:<24}  {}/{:x} ({range})  -",
-                s.remote_address, s.nblocks, seed
+                "{:<24}  {} ({range})  -",
+                s.remote_address, s.nblocks
             ));
         } else {
             let speed = f64::from(s.speed) / 100.0;
             out.push(format!(
-                "{:<24}  {}/{:x} ({range}, {} kB)  {} kB/s ({})",
+                "{:<24}  {} ({range}, {} kB)  {} kB/s ({})",
                 s.remote_address,
                 s.nblocks,
-                seed,
                 s.size / 1000,
                 s.rate / 1000,
                 trimmed(speed, 2)

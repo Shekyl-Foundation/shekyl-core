@@ -25,12 +25,19 @@
 mod common;
 use common::conforming_pqc_extra;
 
+use shekyl_types::BlockHash;
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 /// Build a representative 1-in / 2-out FCMP++ spend. Field *sizes* mirror the
 /// real shape (single-key PQC pk/sig, one Bp+, per-input pseudo-out); the byte
 /// *values* are arbitrary — this exercises serialization structure, not crypto.
+// The three hash pins below were re-pinned 2026-09-14 with `PL-D3`
+// (`FCMP_SPEND_LINKABILITY.md` §6.2): the synthetic spend's `0x07` field is now
+// one 64-byte `CM ‖ record` entry per output (`conforming_pqc_extra`), so the
+// prefix, its hash preimage and the PQC signing payload all moved. Confirmed
+// against the C++ leg by `tests/unit_tests/pruned_tx_hash_parity.cpp`, which
+// builds the same transaction on both sides.
 fn synthetic_spend() -> Transaction {
     let base = CtBase {
         enc_amounts: vec![[1u8; 9], [2u8; 9]],
@@ -93,7 +100,7 @@ fn synthetic_spend() -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 12_345,
-            reference_block: [0x44; 32],
+            reference_block: BlockHash::from_bytes([0x44; 32]),
             base,
             pqc_auths,
             prunable: Some(prunable),
@@ -215,7 +222,7 @@ fn serve_credit_tx(n: usize) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0x44; 32],
+            reference_block: BlockHash::from_bytes([0x44; 32]),
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],
@@ -233,6 +240,23 @@ fn serve_credit_tx(n: usize) -> Transaction {
             }),
         },
     }
+}
+
+/// `PDM-Q-F26`: the serve-credit form has **no** third txid component. Its
+/// hybrid countersignature is over the pass record (Ed25519 leg on the vin,
+/// ML-DSA leg in the pruned record; CEN-J10), `pqc_auths` is empty by mandate, and the
+/// C++ oracle hashes it 3-part — so `pqc_auth_hash()` is `None`, and the
+/// skeleton reconstruction with `None` is the body's own hash. `None` here is
+/// a fact about the txid's arity, not a discarded value.
+#[test]
+fn serve_credit_txid_has_no_pqc_component() {
+    let tx = serve_credit_tx(2);
+    assert_eq!(tx.pqc_auth_hash(), None, "serve-credit hashes 3-part");
+    assert_eq!(
+        tx.hash_with_supplied_components(None, tx.prunable_hash()),
+        tx.hash(),
+        "3-part reconstruction from the stored prunable digest alone"
+    );
 }
 
 #[test]
@@ -345,11 +369,12 @@ fn synthetic_spend_hash_preimage_is_pinned() {
     // the layout regressed — confirm against the C++ leg before updating.
     let h: String = synthetic_spend()
         .hash()
+        .as_bytes()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
-        h, "32e2207f96d09ef2c5c72ab3a2737e77fdd20cf0b09b998bf9c00da2bf588c99",
+        h, "687b75959bcc7f1acc261a49213e8a0f47862cb6bffa9d21443437e3ae853b6e",
         "synthetic FCMP++ spend hash preimage drifted (see the §11 note above)"
     );
 }
@@ -362,9 +387,12 @@ fn synthetic_spend_prefix_hash_is_pinned() {
     // hash above. Source-validated against the spec; no live spend-hash oracle yet, so
     // this pins the value against drift — confirm vs the daemon before changing it.
     let tx = synthetic_spend();
+    // `PrefixHash` and `TxHash` are distinct types (RTN-7), so the type system
+    // already refuses one for the other; the byte comparison pins that the
+    // *values* differ too.
     assert_ne!(
-        tx.prefix_hash(),
-        tx.hash(),
+        tx.prefix_hash().to_bytes(),
+        tx.hash().to_bytes(),
         "prefix (signable) hash must differ from the chain-identity tx hash"
     );
     // Structural: the prefix hash depends ONLY on the prefix, not the ct — changing the
@@ -380,26 +408,28 @@ fn synthetic_spend_prefix_hash_is_pinned() {
     );
     let h: String = tx
         .prefix_hash()
+        .as_bytes()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
-        h, "131e4af4d1fb26be406470eacbc8f8e59e75dd921e8aac727f693746bbae1057",
+        h, "733a56d1a904b12ccea0a258418e72ff17b95a458408b6071d4194d80840d2eb",
         "FCMP++ prefix (signable_tx_hash) drifted (§1.2)"
     );
 }
 
 #[test]
 fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
-    // Per-input PQC signing preimage (§1.1): payload(i) = prefix_blob ‖ ct_base_blob ‖
-    // prunable_hash ‖ pqc_header(i) ‖ all_key_hashes, then keccak256. Source-validated;
-    // the live C++ oracle KAT is the §1.1 residual. Regression guard against drift.
+    // Per-input PQC signing preimage (§1.1): payload(i) = pruned ‖ prunable_hash ‖
+    // header(i) ‖ key_hashes, then keccak256. The captured KAT
+    // (`pqc_signing_preimage_kat.rs`) holds the derivation to the specification's
+    // output over real transactions; this pins one synthetic body against drift.
     let tx = synthetic_spend();
     let hashes = tx.pqc_signing_payload_hashes();
     assert_eq!(hashes.len(), 1, "one PQC signing hash per input");
-    let h: String = hashes[0].iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        h, "5cc2aea0f8f7d57bbb8f0ef77709b41aca673bd8e3caf8e9c59cc6c253e98ed1",
+        hashes[0].to_string(),
+        "00862ce5178bfeadcdc99aa34618950d47f3c318843addc168843fb067e4a23a",
         "FCMP++ PQC signing preimage drifted (§1.1)"
     );
     // Structural: the fee is bound into the preimage (it lives in ct_base_blob), so

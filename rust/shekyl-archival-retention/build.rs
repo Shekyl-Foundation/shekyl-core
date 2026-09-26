@@ -64,6 +64,46 @@ fn main() {
             )
         });
 
+    // Pass-countersignature anchor lag `L` (ARCHIVAL_SHARD_FETCH.md SF-D8,
+    // PROVISIONAL 4). Admission's window is `[h − depth − L, h − depth]`;
+    // `P`'s pre-sign gate is `±L` around its own `height − depth`. Read here so
+    // the verifier consumes the generated constant, never a literal.
+    let anchor_lag_blocks = map
+        .get("archival_attestation_anchor_lag_blocks")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing archival_attestation_anchor_lag_blocks in {}",
+                config_path.display()
+            )
+        });
+    // Shape invariant, not a tunable: a fetch that spans one block boundary
+    // (the requester anchored for `h`, the miner ended up building `h+1`)
+    // must not be an honest miss, so the window is at least two heights
+    // wide below the top. `L = 0` would reinstate the exact-equality miss the
+    // ruling replaced. The re-pin band is [2, …]; the JSON comment names the
+    // falsifier.
+    if anchor_lag_blocks < 2 {
+        panic!(
+            "archival_attestation_anchor_lag_blocks ({anchor_lag_blocks}) must be >= 2 in {} \
+             (a fetch spanning one block boundary must not be an honest miss — SF-D8)",
+            config_path.display()
+        );
+    }
+    // The window must also fit below `predecessor_height` with room for a
+    // `u64` table index: `depth + lag` is the genesis reject threshold and is
+    // added to nothing larger than a block height, so overflow is not a live
+    // concern, but the sum must itself compute.
+    archival_reorg_depth_blocks
+        .checked_add(anchor_lag_blocks)
+        .unwrap_or_else(|| {
+            panic!(
+                "archival_reorg_depth_blocks + archival_attestation_anchor_lag_blocks overflows \
+                 u64 in {}",
+                config_path.display()
+            )
+        });
+
     let release_cooldown_epochs = map
         .get("release_cooldown_epochs")
         .and_then(serde_json::Value::as_u64)
@@ -168,6 +208,7 @@ fn main() {
          pub const MAX_CLAIM_AGE_W: u64 = {max_claim_age_w};\n\
          pub const RELEASE_COOLDOWN_EPOCHS: u64 = {release_cooldown_epochs};\n\
          pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = {archival_reorg_depth_blocks};\n\
+         pub const ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS: u64 = {anchor_lag_blocks};\n\
          pub const RETENTION_HORIZON_BLOCKS: u64 = {retention_horizon_blocks};\n\
          pub const BOND_DURATION_BASE_EPOCHS: u64 = {bond_duration_base_epochs};\n\
          pub const BOND_DURATION_AGE_SCALE: u64 = {bond_duration_age_scale};\n"

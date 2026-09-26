@@ -362,7 +362,16 @@ info:
   # added REJECTED as an alias-shape of claim; CapabilityMode narrowed to
   # FULL (ViewOnly REJECTED / hardware-offload DEFERRED, symbols deleted
   # tree-wide).
-  version: 0.4.0
+  # 0.5.0: PL-D3 — get_balance.unspendable (required) and TransferView
+  # state UNSPENDABLE + unspendable_reason, for received-but-unspendable
+  # outputs whose published 0x07 entry does not open to this wallet.
+  # 0.6.0: RTN-6 — PaymentRequest created_at / expiry are wall-clock Unix
+  # seconds (not block heights). api_version stays 1 (pre-genesis cutover).
+  # 0.7.0: proof verification gains -29305 PROOF_DAEMON_SYNCING. A check
+  # asked of an unsynchronized daemon refuses instead of returning a
+  # verdict. A tx read gathered below that check's witness is -29201,
+  # not this code. Generation is not gated. api_version stays 1.
+  version: 0.7.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -642,6 +651,7 @@ components:
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
         - -29303   # PROOF_TX_NOT_FOUND
         - -29304   # PROOF_TX_UNCONFIRMED
+        - -29305   # PROOF_DAEMON_SYNCING
         - -29400   # UNKNOWN_TRANSFER_ID
         - -29500   # STAKE_NOT_READY
         - -29501   # STAKE_IN_FLIGHT
@@ -729,11 +739,12 @@ components:
                                           tier whose effective weight-1
                                           charge (mask rounding included)
                                           exceeds the era-maximum
-                                          legitimate fee — the
-                                          daemon-rounded genesis-condition
-                                          Fh, 14,000,000
-                                          atomic-units/weight, derived from
-                                          the economics parameters and
+                                          legitimate fee — the STRUCTURAL
+                                          bound absolute_fee_rate_cap(),
+                                          every factor at its own extreme:
+                                          218,453,333 atomic-units/weight
+                                          at canonical parameters, derived
+                                          from the economics parameters and
                                           KAT-pinned
                                           (data: {"reason","rate","bound"}).
                                           Distinct from -29102 (the query
@@ -830,6 +841,22 @@ components:
                                           cannot back a reserve claim —
                                           wait for confirmation and
                                           regenerate the proof
+          -29305 PROOF_DAEMON_SYNCING     proofs: VERIFICATION was asked of
+                                          a daemon that is not synchronized,
+                                          so the chain facts the proof would
+                                          be checked against are not the
+                                          chain's. A syncing daemon answers
+                                          "not found" for a tx it has not
+                                          reached and a short confirmation
+                                          count mid-sync — both indistinguish-
+                                          able from a forged proof — so this
+                                          refuses rather than returning a
+                                          verdict whose premise was absent.
+                                          Retryable once caught up. Proof
+                                          GENERATION is not gated by this.
+                                          A transaction whose chain count
+                                          sits below the synchronized
+                                          reading is -29201, not this code.
           -29400 UNKNOWN_TRANSFER_ID      get_transfer_by_id: a well-formed
                                           id naming no row (a malformed id
                                           is -32602, not this)
@@ -1475,7 +1502,7 @@ components:
 
     GetBalanceResult:
       type: object
-      required: [liquid, unlocked, pending]
+      required: [liquid, unlocked, pending, unspendable]
       description: >
         Staking is first-class (locked JSON shape). As of WI-RPC-5 the
         staking fields carry live values projected from the same
@@ -1514,6 +1541,13 @@ components:
             staking seal — degrade, never a fabricated zero).
         pending:
           $ref: "#/components/schemas/AtomicUnits"
+        unspendable:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Money in received-but-unspendable outputs (`get_transfers`
+            state UNSPENDABLE; `FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`):
+            on chain and retained, never spendable by this wallet. Counted
+            in no other field. Always present; `"0"` is a true zero.
 
     GetPrimaryAddressParams:
       type: object
@@ -1801,7 +1835,7 @@ components:
             INCOMING rows are scanner-observed and always carry it.
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED, ABANDONED]
+          enum: [PENDING, CONFIRMED, SPENT, UNSPENDABLE, FAILED, DROPPED, ABANDONED]
           description: >
             PENDING = unsettled (receive awaiting confirmation, or send
             still in flight). CONFIRMED = on-chain. SPENT = receive
@@ -1815,7 +1849,15 @@ components:
             gave up on the send (`abandon_tx`); unlike DROPPED the
             release claim is intent, not evidence, so the input locks
             may still be held until the watchdog resolves — and a late
-            confirmation still flips such a row to CONFIRMED.
+            confirmation still flips such a row to CONFIRMED. UNSPENDABLE =
+            INCOMING only: received but unspendable — the sender's
+            transaction (`tx_hash`) published a `tx_extra` `0x07` leaf entry
+            that does not open to this wallet's derivation for the output
+            (`FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`), so no spend of it
+            can ever be proven; the money is on chain, the row is retained,
+            and `get_balance.unspendable` totals it. `unspendable_reason`
+            names which half failed. Never flips: a rescan re-derives the
+            same verdict from the same chain bytes.
 
 
             Each value is a distinct situation and none collapses into
@@ -1826,6 +1868,16 @@ components:
         spent_height:
           type: integer
           format: int64
+        unspendable_reason:
+          type: string
+          enum: [PQC_LEAF_MISMATCH, PQC_LEAF_ENTRY_ABSENT]
+          description: >
+            Present exactly when `state` is UNSPENDABLE. PQC_LEAF_MISMATCH:
+            the published `0x07` entry (`CM ‖ record`) is not this wallet's
+            derivation for the output. PQC_LEAF_ENTRY_ABSENT: the
+            transaction carries no `0x07` entry for the output (a shape
+            consensus refuses; reachable only from a non-consensus block
+            source).
         attribution:
           allOf:
             - $ref: "#/components/schemas/ReceiveAttribution"
@@ -1851,7 +1903,7 @@ components:
           enum: [INCOMING, OUTGOING]
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED, ABANDONED]
+          enum: [PENDING, CONFIRMED, SPENT, UNSPENDABLE, FAILED, DROPPED, ABANDONED]
         since_height:
           type: integer
           format: int64
@@ -2106,11 +2158,15 @@ components:
         created_at:
           type: integer
           format: int64
-          description: Block height at creation (the request clock is height).
+          description: >
+            Wall-clock Unix seconds at creation (UTC). Invoice clocks are
+            timestamps, not chain heights.
         expiry:
           type: integer
           format: int64
-          description: Absolute expiry height. Absent when the request has none.
+          description: >
+            Absolute expiry as Unix seconds (UTC). Absent when the request
+            has none.
         state:
           $ref: "#/components/schemas/PaymentRequestState"
         matched_tx_hash:
@@ -2135,8 +2191,11 @@ components:
         expiry:
           type: integer
           format: int64
-          minimum: 0
-          description: Optional absolute expiry height.
+          minimum: 1000000000
+          description: >
+            Optional absolute expiry as Unix seconds (UTC). Values below
+            1e9 are refused as height-shaped leftovers of the pre-RTN-6
+            `--expiry <height>` CLI.
 
     CreatePaymentRequestResult:
       type: object
@@ -2192,7 +2251,11 @@ components:
         expiry:
           type: integer
           format: int64
-          minimum: 0
+          minimum: 1000000000
+          description: >
+            Optional absolute expiry as Unix seconds (UTC). Values below
+            1e9 are refused as height-shaped leftovers of the pre-RTN-6
+            `--expiry <height>` CLI.
 
     MakeUriResult:
       type: object

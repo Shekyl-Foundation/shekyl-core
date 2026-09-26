@@ -35,7 +35,13 @@
 #include <condition_variable>
 #include <mutex>
 #include <cstdint>
+#include <chrono>
+#include <functional>
 #include <optional>
+#include <thread>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #include "gtest/gtest.h"
 
@@ -143,7 +149,7 @@ TEST(test_epee_connection, test_lifetime)
   struct context_t: epee::net_utils::connection_context_base {
     static std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) noexcept { return size_t(-1); }
     static constexpr int handshake_command() noexcept { return 1001; }
-    static constexpr bool handshake_complete() noexcept { return true; }
+    static constexpr bool session_established() noexcept { return true; }
   };
 
   using functional_obj_t = std::function<void ()>;
@@ -479,7 +485,7 @@ TEST(test_epee_connection, ssl_shutdown)
   struct context_t: epee::net_utils::connection_context_base {
     static std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) noexcept { return size_t(-1); }
     static constexpr int handshake_command() noexcept { return 1001; }
-    static constexpr bool handshake_complete() noexcept { return true; }
+    static constexpr bool session_established() noexcept { return true; }
   };
 
   struct command_handler_t: epee::levin::levin_commands_handler<context_t> {
@@ -712,4 +718,160 @@ TEST(boosted_tcp_server, strand_deadlock)
   server.send_stop_signal();
   server.timed_wait_server_stop(5 * 1000);
   server.deinit_server();
+}
+
+namespace
+{
+  struct pipe_probe
+  {
+    std::mutex mu;
+    int attaches = 0;
+    int starts = 0;
+    int detaches = 0;
+    bool fail = false;
+    intptr_t fd = -1;
+  };
+
+  pipe_probe& probe()
+  {
+    static pipe_probe p;
+    return p;
+  }
+
+  void reset_probe(bool fail)
+  {
+    std::lock_guard<std::mutex> lock(probe().mu);
+    probe().attaches = 0;
+    probe().starts = 0;
+    probe().detaches = 0;
+    probe().fail = fail;
+    probe().fd = -1;
+  }
+
+  void close_native(intptr_t native)
+  {
+    if (native < 0)
+      return;
+#ifndef _WIN32
+    ::close(static_cast<int>(native));
+#else
+    closesocket(static_cast<SOCKET>(native));
+#endif
+  }
+
+  void* probe_attach(
+    intptr_t native, const uint8_t*, int32_t,
+    int32_t (*)(void*, const uint8_t*, size_t),
+    void (*)(void*), void (*)(void*),
+    int32_t (*)(void*, int32_t, size_t), void*)
+  {
+    std::lock_guard<std::mutex> lock(probe().mu);
+    ++probe().attaches;
+    if (probe().fail)
+    {
+      close_native(native);
+      return nullptr;
+    }
+    probe().fd = native;
+    return &probe();
+  }
+
+  void probe_start(void*)
+  {
+    std::lock_guard<std::mutex> lock(probe().mu);
+    ++probe().starts;
+  }
+
+  void probe_pin(void*) {}
+  void probe_unpin(void*) {}
+  int32_t probe_write(void*, const uint8_t*, size_t) { return 0; }
+  void probe_read_done(void*) {}
+
+  void probe_detach(void*)
+  {
+    std::lock_guard<std::mutex> lock(probe().mu);
+    ++probe().detaches;
+    close_native(probe().fd);
+    probe().fd = -1;
+  }
+
+  bool wait_probe(const std::function<bool(const pipe_probe&)>& done)
+  {
+    for (int i = 0; i < 100; ++i)
+    {
+      {
+        std::lock_guard<std::mutex> lock(probe().mu);
+        if (done(probe()))
+          return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+  }
+}
+
+TEST(boosted_tcp_server, network_pipe_takes_the_descriptor)
+{
+  test_tcp_server srv(epee::net_utils::e_connection_type_RPC);
+  uint8_t network_id[16] = {};
+  static const epee::net_utils::network_pipe_ops ops = {
+    &probe_attach, &probe_start, &probe_pin, &probe_unpin,
+    &probe_write, &probe_detach, &probe_read_done,
+  };
+  srv.set_network_pipe(network_id, &ops);
+  ASSERT_TRUE(srv.init_server(
+    0, "127.0.0.1", 0, "::", false, true,
+    epee::net_utils::ssl_support_t::e_ssl_support_disabled));
+  ASSERT_TRUE(srv.run_server(1, false));
+
+  const auto port = static_cast<unsigned short>(srv.get_binded_port());
+  auto connect_one = [&] {
+    boost::asio::io_context client_io;
+    boost::asio::ip::tcp::socket client(client_io);
+    client.connect(boost::asio::ip::tcp::endpoint(
+      boost::asio::ip::make_address("127.0.0.1"), port));
+  };
+
+  reset_probe(false);
+  connect_one();
+  ASSERT_TRUE(wait_probe([](const pipe_probe& p) { return p.starts == 1; }));
+  {
+    std::lock_guard<std::mutex> lock(probe().mu);
+    EXPECT_EQ(probe().attaches, 1);
+    EXPECT_EQ(probe().detaches, 0);
+  }
+
+  srv.send_stop_signal();
+  srv.timed_wait_server_stop(5 * 1000);
+  srv.deinit_server();
+}
+
+TEST(boosted_tcp_server, network_pipe_attach_failure_does_not_start)
+{
+  test_tcp_server srv(epee::net_utils::e_connection_type_RPC);
+  uint8_t network_id[16] = {};
+  static const epee::net_utils::network_pipe_ops ops = {
+    &probe_attach, &probe_start, &probe_pin, &probe_unpin,
+    &probe_write, &probe_detach, &probe_read_done,
+  };
+  srv.set_network_pipe(network_id, &ops);
+  ASSERT_TRUE(srv.init_server(
+    0, "127.0.0.1", 0, "::", false, true,
+    epee::net_utils::ssl_support_t::e_ssl_support_disabled));
+  ASSERT_TRUE(srv.run_server(1, false));
+  reset_probe(true);
+  const auto port = static_cast<unsigned short>(srv.get_binded_port());
+  boost::asio::io_context client_io;
+  boost::asio::ip::tcp::socket client(client_io);
+  client.connect(boost::asio::ip::tcp::endpoint(
+    boost::asio::ip::make_address("127.0.0.1"), port));
+  ASSERT_TRUE(wait_probe([](const pipe_probe& p) { return p.attaches == 1; }));
+  {
+    std::lock_guard<std::mutex> lock(probe().mu);
+    EXPECT_EQ(probe().starts, 0);
+    EXPECT_EQ(probe().detaches, 0);
+  }
+  srv.send_stop_signal();
+  srv.timed_wait_server_stop(5 * 1000);
+  srv.deinit_server();
 }

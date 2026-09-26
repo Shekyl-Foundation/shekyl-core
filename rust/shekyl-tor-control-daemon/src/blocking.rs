@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use shekyl_tor_control_client::binary::{self, TorBinaryError};
-use shekyl_tor_control_client::control::{ServiceId, TorExit};
+use shekyl_tor_control_client::control::{OnionPow, ServiceId, TorExit};
 
 use crate::ephemeral::{
     DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
@@ -143,16 +143,19 @@ impl BlockingDaemonTor {
     ///
     /// A failure leaves tor and its SOCKS proxy up — the caller's ruled
     /// degrade is outbound-only on the zone, not teardown.
+    /// `pow` is explicit. The daemon's FFI passes [`OnionPow::Enabled`].
     pub fn publish(
         &self,
         virtual_port: u16,
         local_port: u16,
         max_streams: u16,
+        pow: OnionPow,
     ) -> Result<ServiceId, DaemonTorPublishError> {
         self.runtime.block_on(self.control.publish(
             virtual_port,
             SocketAddr::from(([127, 0, 0, 1], local_port)),
             max_streams,
+            pow,
         ))
     }
 
@@ -217,7 +220,7 @@ mod tests {
         assert!(started.is_alive());
         assert!(started.socks_addr().ip().is_loopback());
         let service_id = started
-            .publish(11021, 41021, 64)
+            .publish(11021, 41021, 64, OnionPow::Enabled)
             .expect("publish after start");
         assert_eq!(service_id.as_str().len(), 56);
         let exit = started.shutdown();

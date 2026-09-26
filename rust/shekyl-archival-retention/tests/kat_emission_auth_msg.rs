@@ -32,6 +32,13 @@
 //! reference for no tripwire benefit — so read `V1` as "corpus rev 1", never as
 //! "customization v1".
 //!
+//! **Regenerated for `PL-D3` (2026-09-14, `FCMP_SPEND_LINKABILITY.md` §6.2,
+//! round-doc ruling 9):** the vin's `pqc_pk_hash` field left the wire (the
+//! backing leaf's binding is the membership-only proof's in-circuit opening),
+//! so `EXPECTED_WIRE_LEN` (10 933 → 10 901) and `EXPECTED_WIRE_DIGEST_HEX`
+//! moved; both role digests are unchanged because the auth message never
+//! framed that field.
+//!
 //! **What "values unchanged" does and does not mean.** The fixture's scarcity
 //! numbers are **retained operands**, not micro-unit recomputes: the same
 //! integers are now *interpreted* as micro where they were milli, which is why
@@ -55,11 +62,11 @@ const EXPECTED_BACKING_HEX: &str = "c975235c70fa6c9bd80b429e8a92f06dea988a22edb6
 /// Expected 64-byte `auth_msg` digest, claim-side (`Claim`) customization.
 const EXPECTED_CLAIM_HEX: &str = "dd39154467976ebd6ca98456ffde6934cbcd29adee749e8621903e7908230fbc28ceeca5dd693e9b571fe7965bc64987ed684e320d46ab5d62f8858eb338b6f5";
 /// Expected serialized wire length of the fixture vin.
-const EXPECTED_WIRE_LEN: usize = 10_933;
+const EXPECTED_WIRE_LEN: usize = 10_901;
 /// Expected `cshake256_32("shekyl/emission-wire-kat-v1", wire_bytes)` of the
 /// fixture vin's full serialization (tag included) — pins the wire layout.
 const EXPECTED_WIRE_DIGEST_HEX: &str =
-    "5ce06d80fcb61ace96c63c196751752f93cf70874c1451d4e2fd8b713f509ff9";
+    "5ae6e93b35c690fc9c08cf95aa5448a3ac0010a8d73ba552285209b335b6f357";
 
 /// Fully deterministic fixture — every byte fixed, no RNG, so the vectors are
 /// reproducible from this source alone.
@@ -103,7 +110,6 @@ fn fixture_vin() -> ArchivalRewardEmissionVin {
         backing: MembershipOnlyBacking {
             proof: vec![0xEE; 64],
             pseudo_out: [0x22; 32],
-            pqc_pk_hash: [0x33; 32],
             backing_pubkey: vec![0xB2; SINGLE_KEY_CANONICAL_LEN],
             tree_depth: 3,
         },

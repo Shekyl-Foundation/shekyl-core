@@ -1,0 +1,579 @@
+# `shekyl-chain-rules` slice 4 — census 4.F, the miner transaction (DRS-E6 increment 5)
+
+**Status:** OPEN — **rules-crate commits 1–9 LANDED on the branch
+2026-09-22, amended 2026-09-23** (§5: sixteen 4.F rows; `implemented 34 / validator-enforced
+150`, `by-construction 4`; genesis pinned, band 1 empty; `WrongReward → F18`;
+the split epoch is `rules::miner::EMISSION_SPLIT_EPOCH`, not a `RuleSet` field;
+`Emission` is derived and recorded in coverage, not stored on `ValidatedBlock`). Round 0
+pre-flight written 2026-09-21 against `dev` @ `ea140396b`; Round 0.5 the
+shim-layer sweep (§3.1); precursor P1–P4 landed as #819; Round 1
+(2026-09-22, `dev` @ `7b9be6cd1`): the `dev` sweep (§3.2), §8 ruled. Open
+residue: F14/F14b/F16/F18 on G6 (slice 7), F17 on E3, the fee-ladder zone
+argument (§3.1 P1a). The PDM question (Q3) was answered the same day and
+absorbed.
+Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessors
+[`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md),
+[`CHAIN_RULES_SLICE_2.md`](../completed/CHAIN_RULES_SLICE_2.md),
+[`CHAIN_RULES_SLICE_3.md`](CHAIN_RULES_SLICE_3.md). Parent plan:
+[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5 table 3 (*"slice 4 —
+emission / burn arithmetic in `shekyl-economics` (adopt); needs header +
+weights"*). Cites `26-sub-pr-design-discipline.mdc`. The living contract is
+[`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md); do not implement from this
+file. Owner: the DRS-E6 lane.
+
+**Scope (table 3).** The twenty-two surface-free rows of 4.F — CEN-F1 … F21
+with F14b — all `pending` at `rust/shekyl-chain-rules/src/census.rs:340`–`:361`
+(13 bucket 1, 4 bucket 2, 5 bucket 4). Plus the store-side consequence
+S-CHAIN-W already names: `ConnectFacts.coins_generated` is *deleted by*
+`CEN-F13`/`F14`/`F14b` and `ConnectFacts.burned` by `CEN-F17`/`G11`
+(`connect.rs:196`–`:240`, `DELETED_BY`) — two of the six passed-through
+facts become derivations when their rows land.
+
+**What this pre-flight found, in one paragraph** *(the count and the
+"adopted" claim are corrected by §3.1's sweep — read that section as the
+current state; this paragraph is Round 0's record).* The bodies are Rust and
+already the daemon's one implementation — `shekyl-economics`
+(`paid_block_reward`, `calc_release_multiplier`, `TxVolume`,
+`emission_share::{calc_effective_emission_share, split_block_emission}`,
+`burn::{calc_burn_pct, compute_burn_split_at}`) and `shekyl-ct-balance`
+(`check_output_keys`, `check_commitment_masks`) — reached from C++ through
+`legacy_core.rs` / `ct_balance_ffi.rs` shims, so this slice **adopts**, as
+slice 2 did. What it cannot do is evaluate the whole family: the coinbase's
+*exact-pay* verdict (F18) is a function of four operands, and **two have no
+source in the Rust pipeline yet** — the effective weight median in force for
+the candidate (F14/F14b) is CEN-G6's derivation over the long-term window
+(slice 7; the store records only the median *for* each connected block, not
+the one for the next), and the fee-burn's `frozen_segment_count` (F17) is a
+function of the curve-tree leaf count, whose daemon-side tables are
+unshaped in the redb store (S-CURVE, `PDM-Q12`). So 4.F splits along its
+operands: **eighteen rows** are landable now — the coinbase's structure
+(F1–F10), the genesis arm (F11), the base subsidy and its operand (F13), the
+volume window (F15, F20), the split (F16), the epoch constant (F21), the
+read-point discipline that Rust makes structural (F19), and the dead
+denomination gate (F12, as a disposition) — and **four** (F14, F14b, F17,
+F18) wait on G6 and on the curve-tree read, *unless* this slice pulls the
+median machinery forward (§8 Q1). Three design findings shape the eighteen:
+the C++ `economics.h` shims carry **rule content** (the `== 0`
+short-circuits, F16/F17's constant marshaling) that must move into
+`shekyl-economics` with fixtures, not be re-marshaled (F5); the genesis
+block's identity per network is data of exactly `ReleaseAnchors`' kind, and
+F11 asks whether genesis *is* the height-0 anchor (F6, §8 Q3); and F19's
+"read at parent state or halt" is what the branded view **is** — a row true
+by construction needs a registry status that says so (§8 Q4).
+
+---
+
+## 1. Parents — landed? (§7.5.1 (a))
+
+| Parent | Needed for | State at `ea140396b` |
+| --- | --- | --- |
+| Slices 1–3 (`BlockRule`/`FormRule`, `BlockContext`, `Trust`, B6 on the token, `RowStatus::EnforcedAt`) | every row here; F19's status vocabulary | **Landed** (#768, #777, #814). |
+| `shekyl-economics` (`emission.rs`, `release.rs`, `volume.rs`, `burn.rs`, `emission_share.rs`, `escalation.rs`, `params.rs` — `EconomicParams::default()` generated from `config/economics_params.json` by `build.rs`) | the 4.F arithmetic | **Landed**; no `redb`, no store; `Cargo.toml` deps to verify for the G1 closure (§3 F2). |
+| `shekyl-ct-balance` (`check_output_keys :250`, `check_commitment_masks :284`, `amount_commitment :129`) | F9, F10 | **Landed**; the C++ reaches it through `ct_balance_ffi.rs:178`/`:215`. Dependency closure: `curve25519-dalek` — heavier than `shekyl-difficulty`; the rules crate already reaches it through `shekyl-wire` (§3 F2 verifies). |
+| `shekyl-wire` `Transaction`: `Input::Gen(u64)`, `Ct::Null(CtBase)` / `Ct::Fcmp { fee, .. }`, `Transaction::weight()` (size + Bp+ clawback, `:1471`), `TxPrefix { version, unlock_time, .. }` | F1–F8 read the coinbase's shape; F17 sums `fee`; F14 sums `weight()` | **Landed**. |
+| S-CHAIN-R (#772): `BlockInfo { coins_generated, weight, long_term_weight, long_term_effective_median, cumulative_tx_count, .. }` (`codec/chain.rs:76`–`:101`) | F13 (parent's `coins_generated`), F15/F20 (`cumulative_tx_count` differences), F14 (weights — *recorded*, but see G6) | **Landed** as recorded facts; `RecordedBlock` (`view.rs:132`) projects `hash`, `header`, `cumulative_difficulty` only — **grows** by `coins_generated` and `cumulative_tx_count` here ("fields grow with rows"). |
+| **CEN-G6 / G6b** — the effective median in force for the *next* block (long-term window 100 000, short-term 100, `S = 4` ratified vs the shipped ×50 divergence, floor at the 300 000-byte zone) | F14, F14b, and therefore F18 | **Not landed** (slice 7). The store records `long_term_effective_median` *for* block `h` (SCR-19: the value `h` was judged against, never the recompute after `h` enters the window); the candidate at `h + 1` needs that recompute. `shekyl-economics::block_weight::{effective_median, long_term_weight}` are the clamps; the two rolling medians over recorded `weight` / `long_term_weight` are what no Rust path builds. |
+| **S-CURVE** — the daemon-side curve tree in the redb store (`CURVE_TREE_{LEAVES,LAYERS,META}`, `schema.rs:463`–`:471`, **Unshaped**); `PDM-Q12` re-unitised the tree (`CURVE_TREE_STORE_SHAPES.md` CLOSED → `WALLET_SIDE_STORE.md`) | F17's `frozen_segment_count = shekyl_archival_frozen_segment_count(leaf_count at parent state)` (`blockchain.cpp:1492`–`:1503`) | **Not landed** as a view read. `ChainView::root_at` exists; no leaf count. |
+| 4.H (fee semantics: CEN-H* CT balance `sum(pseudoOuts) = sum(masks) + fee·H`) | F17's `fee` sum is *the candidate's* `Ct::Fcmp.fee` values — readable today; whether a fee is *valid* is 4.H's (slice 5) | Summing is landable; the sum's trustworthiness is slice 5's. Recorded as a dependency of the **verdict**, not of the read. |
+
+Two parents block four rows; none blocks the other eighteen.
+
+---
+
+## 2. Row-body audit (§7.5.1 (b)) — 22 rows at `ea140396b`
+
+The census pins its C++ lines at `02c086f4b`; every 4.F pin has drifted
+(`prevalidate_miner_transaction` is at `blockchain.cpp:1391`,
+`validate_miner_transaction` at `:1506`, `parent_frozen_segment_count` at
+`:1492`) — F1 below, a census amendment in the landing PR.
+
+| Row | b | Statement (short) | Body (Rust, landed) | Stage | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| F1 | 4 | exactly one input, `txin_gen` | — (`vin.len() == 1 && matches!(vin[0], Input::Gen(_))`) | `form` | **Land** — predicate on the coinbase; bucket 4 ports as-is with a fixture |
+| F2 | 2 | coinbase `version ≥ 3` | — | `form` | **Land** |
+| F3 | 2 | coinbase CT type `Null` | — (`matches!(ct, Ct::Null(_))`) | `form` | **Land** |
+| F4 | 1 | exactly 1 output; height 0 exempt; height is *caller-derived* | — | `validate` | **Land** — the height is `cx.connecting`, never `Input::Gen`'s claim (that is F5's subject) |
+| F5 | 4 | `txin_gen.height == connecting` | — | `validate` | **Land** — the spoof closure F4/F6 rest on; refusal `Locus::Miner`? (§8 Q6) |
+| F6 | 4 | `unlock_time == height + 60` | constant `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` in `cryptonote_config.h`, *not* `config/` (census note) | `validate` | **Land** — the window becomes a `RuleSet` parameter (`mined_money_unlock_window: BlockCount`), pinned to 60 by the fixture (§8 Q5) |
+| F7 | 4 | output amounts sum without overflow | `checked_add` fold | `form` | **Land** |
+| F8 | 2 | outputs are `txout_to_tagged_key` | — (the wire type admits one output kind — verify at source whether the predicate is *unfailable* in Rust, §3 F7) | `form` | **Land**, possibly as a definition row |
+| F9 | 1 | output keys canonical, prime-order, non-identity | `shekyl_ct_balance::check_output_keys` | `form` | **Land as adopted** |
+| F10 | 1 | commitment masks canonical, ≠ identity, ≠ G, ≠ `zeroCommit(amount)` | `shekyl_ct_balance::check_commitment_masks` | `form` | **Land as adopted** |
+| F11 | 1 | genesis (height 0) emission accepted as configured (`GENESIS_TX` per nettype); structure validated, amount not recomputed | none in Rust (`GENESIS_TX` lives in `cryptonote_config.h:367`/`:501`/`:512`) | `validate` | **Two halves** — (a) *amount not recomputed*: the genesis arm of F13–F18, a `connecting.is_zero()` short-circuit, lands here; (b) *as configured*: the genesis block per network is release-carried data of `ReleaseAnchors`' kind — **§8 Q3** |
+| F12 | **3** (was 4) | decomposed-denomination gate was **dead code** (`version == 3` where `version` is the HF version, always 1) | — | — | **RULED Q2 (a), 2026-09-21; DELETED (P4).** Branch, predicate, table, header declaration and `canonical_amounts.cpp` gone; census row → bucket 3; registry variant removed; denominator 153 → 152 |
+| F13 | 1 | base subsidy `(MONEY_SUPPLY − already_generated) >> 21`, tail floor | `emission::base_block_reward` | `validate` | **Land** — a definition row (like D4): operand `block_at(tip).coins_generated` (view grows). **Amended 2026-09-23:** derived and recorded in coverage; stored on the verdict when F14b's paid reward is what `connect` persists |
+| F14 | 1 | weight `> 2·median` rejects; `== 2·median` accepted at zero subsidy (recorded divergence) | `emission::paid_block_reward` (`apply_weight_penalty`) | `validate` | **Blocked on G6** (the median) — or pulled forward, §8 Q1 |
+| F14b | 2 | the penalty curve | same | `validate` | **Blocked on G6** |
+| F15 | 1 | release-rate multiplier over the exact window, capped to remaining supply | `release::calc_release_multiplier`, `TxVolume::window` | `validate` | **Land** — operand from F20 |
+| F16 | 1 | emission split into miner / staker legs | `emission_share::{calc_effective_emission_share, split_block_emission}` + the C++ shim's `block_emission == 0` short-circuit (`economics.h:97`–`:110`) | `validate` | **Land as adopted, shim content moved into Rust** (§3 F5) |
+| F17 | 1 | fee burn split; coinbase pays only `miner_fee_income` | `burn::calc_burn_pct`, `compute_burn_split_at` + shim's `total_fees == 0` short-circuit (`economics.h:64`–`:88`) | `validate` | **Function lands; row blocked on S-CURVE** (leaf count → `frozen_segment_count`) |
+| F18 | 1 | coinbase pays **exactly** `miner_emission + miner_fee_income` | — | `validate` | **Blocked** (F14b, F17) |
+| F19 | 1 | `frozen_segment_count` read at **parent state** or the node halts; single-read discipline | — | — | **True by construction in Rust**: `validate` runs inside the write transaction over a view branded `'id` that *is* the parent state; the reorder the C++ guards against (`m_db->height() != block_height`) is unrepresentable. Needs a status (§8 Q4) |
+| F20 | 1 | volume operand `(tx_count_sum, blocks)` over the prior `min(h, 720)` blocks; `(0, 0)` at height 0 | `TxVolume::window(sum, blocks)`; sum = `cumulative_tx_count(tip) − cumulative_tx_count(tip − 720)` | `validate` | **Land** — a definition row; two view reads (`RecordedBlock.cumulative_tx_count`) |
+| F21 | 1 | `genesis_ng_height` is **1** (the emission-split epoch operand) | — (`hardfork.cpp:383`–`:394`) | data | **Land by construction** as `rules::miner::EMISSION_SPLIT_EPOCH`, pinned to the hardfork tables, consumed by F16. **Amended 2026-09-23:** a `RuleSet` field when a schedule step names a different epoch, not before |
+
+Row-count check: 22 = the `pending` entries `F1`–`F21` + `F14b`.
+
+---
+
+## 3. Findings from the code sweep
+
+- **F1 — every 4.F census line pin has drifted.** `prevalidate_miner_transaction` `:1391`–`:1428`, `validate_miner_transaction` `:1506`–`:1560`, `parent_frozen_segment_count` `:1492`; the census cites `1642`–`1803`. Amendment in the landing PR (the slice-2/3 F3/F2 shape).
+- **F2 — the G1 closure grows by two crates; verify before adopting.** `shekyl-economics` (deps to read at source: `serde`? `build.rs` reads `config/economics_params.json` — a *build-time* file read, no runtime file; confirm nothing reaches a store) and `shekyl-ct-balance` (`curve25519-dalek`, already in the closure via `shekyl-wire`). `check_chain_rules_no_store.sh` is the gate; run it in commit 1.
+- **F3 — the store already records three of the four missing operands, and `RecordedBlock` projects none of them.** `coins_generated` (F13), `cumulative_tx_count` (F15/F20), `weight`/`long_term_weight`/`long_term_effective_median` (F14, via G6) are `BlockInfo` fields at `codec/chain.rs:76`–`:101`. The view grows two fields this slice (`coins_generated`, `cumulative_tx_count`); the weight trio grows with G6, whoever lands it.
+- **F4 — the median in force for the candidate is nowhere.** `long_term_effective_median` at `block_info[h]` is the median `h` was judged against (SCR-19); the candidate at `h + 1` needs the recompute *including* `h`, which the C++ holds in `m_current_block_cumul_weight_median` after connect and which no Rust path builds. This is CEN-G6/G6b's body: two rolling medians (100 000 and 100 blocks) over recorded weights, `effective_median(long, short)` and `long_term_weight` (`shekyl-economics/src/block_weight.rs:36`/`:47`) as the clamps. **F14, F14b and F18 cannot be evaluated without it.** §8 Q1.
+- **F5 — the C++ `economics.h` shims carry rule content.** `compute_fee_burn` returns `{fees, 0, 0}` when `total_fees == 0` *before* any Rust runs; `compute_emission_split` returns `{emission, 0}` when `block_emission == 0`; both marshal the `SHEKYL_*` constants from `cryptonote_config.h`. Those short-circuits are consensus (the zero-fee coinbase pays zero; a zero-subsidy block splits nothing) and are not in `shekyl-economics` — the Rust functions are called *around* them. Adoption means `shekyl-economics` gains `compute_emission_split(reward, height, epoch, &params)` and `compute_fee_burn(fees, volume, supply, frozen, &params)` **with** the short-circuits and fixtures, and the C++ shims become one-call marshaling (rule 20: advance the boundary). Their constants come from `EconomicParams`, which `build.rs` already generates from `config/` — confirm the C++ `SHEKYL_*` values equal the generated ones (a constant-parity test, the F13-of-slice-2 shape).
+- **F6 — F11's "as configured" is the genesis block's identity per network, which is release-carried data.** `GENESIS_TX` per nettype is in `cryptonote_config.h`; the store's init compares its height-0 block to it (`blockchain.cpp:508`–`:517`). Nothing in Rust holds the genesis identity. `ReleaseAnchors` is exactly the shape: a `(BlockHeight::ZERO, genesis_hash)` entry per public network, the ur-anchor "trusted with the binary". It would make E1 judge genesis (already fixtured in slice 3: `a_genesis_anchor_judges_the_genesis_candidate`) and E5 refuse a wrong-network file at open (`Remedy::RefuseToRun`, already fixtured) — **and it would refute `no_release_has_shipped_an_anchor_yet`**, deliberately. Whether genesis is an anchor or a separate `GenesisBlock::for_network` is §8 Q3.
+- **F7 — F8 may be unfailable in Rust.** The C++ `check_output_types` refuses output variants the wire type may not be able to represent (`shekyl_wire` outputs are tagged keys by construction?). Verify at source in commit 1; if unrepresentable, F8 is a *definition* row recorded at parse (the B6 shape), not a predicate — and the census row gains that note.
+- **F8 — the volume window is two view reads, not 720.** `Σ tx_hashes.size()` over the prior `min(h, 720)` blocks equals `cumulative_tx_count(h − 1) − cumulative_tx_count(h − 1 − min(h, 720))` (with the lower term `0` when the window reaches genesis); the store's `cumulative_tx_count` is the prefix sum built for exactly this (S-CHAIN-W). Height 0 → `(0, 0)` as the census states.
+- **F9 — F19 is a structural property, not a check.** The C++ asserts `m_db->height() == block_height` because its read point can drift past `add_block`; the Rust `validate` runs inside the write transaction over a `ChainView<'id>` that *is* the parent state, and `connect` takes the branded verdict — the drift has no expression. The row is enforced by the type system, with a `compile_fail` doctest as its falsifier (the G4/PDM-Q3 shape). `RowStatus` has no word for it: `EnforcedAt` names a site and a runtime test; this has neither. §8 Q4.
+- **F10 — F12 is dead code the census already convicted.** The gate `if (version == 3)` compares the *hard-fork* version (always 1) — `is_valid_decomposed_amount` and the `valid_decomposed_outputs[]` table never run. Bucket 4 "port as-is with a fixture" has no fixture for a branch that never fires. Rule 60 (*"when you encounter `if (version < N)` … delete the dead branch"*) and rule 15's default both say delete; deleting is a C++ edit to `blockchain.cpp` / `cryptonote_format_utils.cpp` — small, rule-20-shaped ("leave the file better"), but a C++ deletion inside an E6 slice is a scope question. §8 Q2.
+- **F11 — F17's operand chain reaches the curve tree.** `frozen_segment_count = shekyl_archival_frozen_segment_count(leaf_count)` (`archival_ffi/schedule.rs:221`); the leaf count is the daemon-side tree's, whose redb tables are `Unshaped` (S-CURVE) and whose unit `PDM-Q12` moved. `ChainView` has `root_at` and no leaf count. The *function* `compute_fee_burn` is adoptable now (F5) with fixtures over a supplied count; the *row* is evaluable when the view can answer. Two owners meet here (E6, the S-CURVE increment); the pre-flight names the seam — `ChainView::frozen_segment_count(height)` or `leaf_count(height)` — and leaves the method for S-CURVE to mint with its data (rule 22: a callee without its data is staging without a substrate).
+- **F12 — the coinbase's fee operand is the candidate's own.** `Σ Ct::Fcmp.fee` over the listed transactions is stateless and readable today; whether each fee is *right* (CT balance, H rows) is slice 5's. F17/F18's verdict inherits 4.H's trust; recorded, not a blocker on the read.
+- **F13 — `F4`/`F6` read the connecting height, `F5` checks the claim.** The census note ("the height operand is caller-derived, not `txin_gen.height`; spoof closed by F5") maps exactly to `cx.connecting` vs `Input::Gen(h)`: F5 is the only row that *reads* the claim, and it compares it to the view's height. All three are `validate`-stage (they need the height); F1/F2/F3/F7/F8/F9/F10 are stateless (`form`).
+
+### 3.1 The shim-layer sweep (Round 0.5, 2026-09-21) — what "adopted" actually contains
+
+**Why this section exists.** F5 found two rule-bearing arms in the C++ shim
+layer by reading two functions. The review's prior after two-found-by-reading
+is that there are more (the FFI-export sweep two lanes back: two found by
+accident, eight by sweeping), and that Round 1 cannot rule on a landable
+count until the shim layer is *enumerated*, not sampled. So every site of
+control flow between a 4.F caller and its Rust call was read, in
+`src/shekyl/economics.h`, `cryptonote_basic_impl.cpp` (`get_block_reward`),
+`blockchain.cpp` (`prevalidate_miner_transaction`,
+`validate_miner_transaction`, the connect call site), the C++ side of
+`ct_balance_ffi.rs` (`check_outs_valid`, `check_commitment_mask_valid`,
+`check_outs_overflow`, `check_output_types`), and the Rust side of the shims
+(`legacy_core.rs`, `ct_balance_ffi.rs` — Rust, but in `shekyl-ffi`, which
+the rules crate cannot reach).
+
+**The discriminator (R8's).** *Would this still be required if the consensus
+rules changed?* A null-pointer guard survives any rule change and is
+**marshaling**. A zero-fee arm that decides the burn split does not and is
+**rule content**. A constant the C++ supplies that has no Rust home is rule
+content as *data*. A branch no rule can reach is **dead** (rule 60). The
+question turns a judgement per site into a test.
+
+| # | Site | What sits between the caller and Rust | Class | Row(s) | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| S1 | `economics.h:70` `compute_fee_burn` | `if (total_fees == 0) return {total_fees, 0, 0};` — the zero-fee burn outcome decided before any Rust runs | **RULE** | F17, G11 | Relocate into `shekyl-economics::compute_fee_burn` with a fixture |
+| S2 | `economics.h:74`–`:82` | `SHEKYL_TX_VOLUME_BASELINE`, `…_ASYMPTOTE`, `…_BURN_BASE_RATE`, `…_BURN_CAP` passed as arguments | marshaling | F17 | Both sides generate these from `config/economics_params.json` (`cmake/generate_economics_params.py` ↔ `build.rs`); the Rust function takes `&EconomicParams` and the arguments go |
+| S3 | `economics.h:74`–`:87` | the **composition** `calc_burn_pct → compute_burn_split_escalated` (the pct feeds the split) | **RULE** | F17 | Relocate: one Rust function owns the pipeline |
+| S4 | `economics.h:103` `compute_emission_split` | `if (block_emission == 0) return {block_emission, 0};` | **RULE** | F16 | Relocate into `shekyl-economics::compute_emission_split` with a fixture |
+| S5 | `economics.h:107`–`:111` | `SHEKYL_STAKER_EMISSION_SHARE`, `…_DECAY`, `SHEKYL_BLOCKS_PER_YEAR` as arguments | marshaling | F16 | as S2 |
+| S6 | `economics.h:107`–`:114` | the composition `calc_emission_share → split_block_emission` | **RULE** | F16 | Relocate with S4 |
+| S7 | `cryptonote_basic_impl.cpp:93` `get_block_reward` (5-arg) | substitutes `tx_volume_window{BASELINE, 1}` — the "`M_r`-neutral view" for fee/relay floors | **RULE** (policy) | CEN-M3's held machinery, not 4.F | Out of this slice; recorded for slice 10 / E5: a policy operand chosen in C++ |
+| S8 | `cryptonote_basic_impl.cpp:81`–`:86`, `:143` | `get_min_block_weight(version)` → `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` (300 000), a hand-written `#define` in `cryptonote_config.h` — **`EconomicParams` has no zone field**; `paid_block_reward` takes it as an argument on every call | **RULE as data** (a consensus constant with no Rust home) | F14b, G6b | `full_reward_zone` joins `config/consensus_constants.json` (`block_weight_full_reward_zone_bytes`) → `EconomicParams`; the reward and the fee floor read the field. Precursor to F14b regardless of Q1 |
+| S9 | `cryptonote_basic_impl.cpp:150`–`:163` | `BLOCK_TOO_BIG → false`, other status `→ false` | marshaling | F14 | Rust already classifies (`EmissionError::BlockTooBig` vs the rest); the rules crate reads the `Result` directly. Note: the C++ folds *every* other error into a refusal; the Rust rule must decide verdict-vs-fault per variant (slice 2's "unproven ≠ disproven") |
+| S10 | `blockchain.cpp:1509` | `block_height = txin_gen.height` — `validate_miner_transaction` reads the **claim**, safe only because `prevalidate` ran F5 first | **RULE** (operand source by ordering) | F11, F4, F6 | Moot in Rust: `cx.connecting` is the operand; F5 checks the claim. Recorded so the ordering dependency does not get re-created |
+| S11 | `blockchain.cpp:1513`–`:1517` | `if (block_height == 0) { base_reward = money_in_use; return true; }` — genesis skips the reward and **defines** genesis's `coins_generated` as its coinbase sum | **RULE** (two facts) | F11, F13 | Port as F11's genesis arm; the `coins_generated` definition at height 0 is a store-side fact `connect` needs when `coins_generated` is derived — recorded on the S-CHAIN-W row |
+| S12 | `blockchain.cpp:1511` | `money_in_use += o.amount` **unchecked** — safe only because `check_outs_overflow` (F7) ran first | ordering | F7, F18 | `checked_add` in Rust; the ordering is not carried |
+| S13 | `blockchain.cpp:1519`–`:1527` | `if (version == 3)` decomposed-denomination gate | **dead** | F12 | Q2 (a) — **deleted (P4)** |
+| S14 | `blockchain.cpp:1529` | `median_weight = m_current_block_cumul_weight_median` — cached daemon state | **RULE** operand | F14, F14b | G6's derivation (§3 F4); no Rust source |
+| S15 | `blockchain.cpp:1534` (validation), `:1821` (template) | `circulating_supply = already_generated_coins` — the **definition** of F17's "circulating supply" operand, **gross** emission ignoring burn, assigned at two sites | **RULED DEFECT** — FL-R16c (`FEE_LADDER_DERIVATION.md` §8, review round 4: *"the sweep must not walk past the pre-existing definitional bug … record — binds the implementing PR"*), rediscovered here as a fresh finding because the ruling's pins (`:1787`, `:2074`) had drifted | F17 | **Not an amendment — the binding disposition, landed (P1c):** `circulating_supply = coins_generated − total_burned`, derived **once** in `shekyl-economics::supply::CirculatingSupply::derive` from two store facts, `checked_sub` with the `None` arm a `SupplyInvariantViolation` (never a saturating zero: zero would sail through `calc_burn_pct`'s `total_supply == 0` guard and return a burn of `0` that looks valid). Both C++ sites pass `shekyl::supply_facts`; the accrual shares one read. The clamp at `burn.rs:83` **stays** — the two halves of FL-R16c are independent (the saturation is the perpetual tail's, not the gross operand's; `supply::tests::net_supply_exceeds_the_asymptote_under_the_tail`) — with its comment rewritten so it no longer names an operand that left |
+| S16 | `blockchain.cpp:1540` | `genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` | **RULE** as data | F21 | `RuleSet` parameter (Q5) |
+| S17 | `blockchain.cpp:1553`–`:1565` | `miner_base_reward + effective_fee` **unchecked**; `<` then `!=` (two arms, one outcome) | **RULE** | F18 | `checked_add`; one `!=` arm |
+| S18 | `blockchain.cpp:5470`, `:5675`–`:5676` (connect) | `cumulative_block_weight = weight(miner_tx) + Σ tx_weight`; `fee_summary = Σ fee` | **RULE** (operand definitions) | 4.G (weight), F17/F18 (fee) | Block weight is 4.G's definition (slice 7); the fee sum is the candidate's own and lands as a definition read here |
+| S19 | `blockchain.cpp:5837` | `frozen_segment_count = parent_frozen_segment_count(h)` → `shekyl_archival_frozen_segment_count(leaf_count)` | **RULE** operand; the read-point guard is F19 | F17, F19 | The leaf→segment function is Rust (`archival_ffi/schedule.rs:221`, in `shekyl-ffi`); the *read* is S-CURVE's (§3 F11) |
+| S20 | `blockchain.cpp:1394`–`:1428` `prevalidate_miner_transaction` | F1–F6's predicates, in C++ | **RULE** | F1–F6 | The port itself — these were never "adopted" |
+| S21 | `blockchain.cpp:1421` | `check_tx_extra_pqc_field_shape(b.miner_tx)` — **CEN-I19 applied to the coinbase** | RULE (another family's) | I19 | Not a 4.F row; in Rust the per-tx path judges `TxSlot::Miner` too (`validate.rs`), so I19 covers the coinbase when 4.I lands. Recorded so slice 6 knows the coinbase is in its domain UPDATE 2026-09-23: renamed `check_tx_extra_shape` and widened — it now also applies the coinbase grammar `CEN-I20` (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′); the Rust judge should call `shekyl_wire::tx_extra::check_tx_extra_shape(fields, n, is_coinbase)`, which is I19 + I20 in one function, rather than mint either. |
+| S22 | `cryptonote_format_utils.cpp:841` `check_outs_valid` | `if (tx.vout.empty()) return true;` before `shekyl_check_output_keys` | marshaling | F9 | Redundant: `check_output_keys(&[])` is `Ok` (`chunks_exact` over nothing). Goes |
+| S23 | `cryptonote_format_utils.cpp:1021`–`:1050` `check_output_types` | a **four-arm hard-fork ladder** (`≥ NG`, `> VIEW_TAGS`, `< VIEW_TAGS`, `==`) of which one arm is reachable | **dead** ×3 + RULE ×1 | F8 | Three arms are rule-60 deletions (a `version < N` ladder for Monero-era forks); the live arm is F8's predicate, ported |
+| S24 | `cryptonote_format_utils.cpp:907` `check_outs_overflow` | `if (money > o.amount + money)` — the overflow test written as a wrapping compare | **RULE** | F7 | Port as `checked_add`; same verdict on every input (u64 wrap is total) |
+| S25 | `blockchain.cpp:3238` `check_commitment_mask_valid` | `if (outPk.size() != vout.size()) return false;` — **one mask per output** | **RULE** (uncensused for the coinbase) | F10 | Census F10 does not state it; either F10's text gains the clause or it is CEN-H*'s CT-shape row applied to the coinbase. Amendment either way |
+| S26 | `blockchain.cpp:3244` | `if (outPk.empty()) return true;` | marshaling | F10 | Redundant: `check_commitment_masks(&[], _)` is `Ok`. Goes |
+| S27 | `blockchain.cpp:3250`–`:3255` | `if (rv.type == CTTypeNull) → coinbase_amounts` — **the decision that the `zeroCommit(amount)` fingerprint gate applies to the coinbase** is made in C++; Rust takes `Option<&[u64]>` and does what it is told | **RULE** (selection) | F10 | Relocate: `shekyl-ct-balance` gains a typed entry (`check_coinbase_commitment_masks(masks, amounts)` / the spend form) so the caller cannot pass the wrong selection; the `Option` parameter goes |
+| S28 | `blockchain.cpp:3259`–`:3275` | `rc → bool` with per-variant messages | marshaling | F10 | — |
+| S29 | `legacy_core.rs:452` `shekyl_base_block_reward` | `.unwrap_or(0)` — an `EmissionError` becomes a reward of **0** | **RULE-shaped** (fault → value) | F13's C++ consumers | Callers: `economics.h:48` names it for "raw base curve" consumers; verify each accepts 0 as "error". Not the rules crate's path (it calls `base_block_reward` directly); recorded for the FFI lane |
+| S30 | `legacy_core.rs:534` `shekyl_block_reward` | null-pointer guard; `Err(BlockTooBig) → TOO_BIG`, `Err(_) → INVALID` | marshaling | F14 | — |
+| S31 | `legacy_core.rs:426`, `:732`, `:749` | `EconomicParams::default()` supplied Rust-side for the escalation/share params while C++ supplies the burn/share constants (S2, S5) — **two entry points, two sources for one parameter set** | marshaling, inconsistent | F16, F17 | Resolved by S2/S5: one `&EconomicParams` in Rust |
+
+**Tally.** Thirty-one sites; **fifteen are rule content** (S1, S3, S4, S6,
+S8, S10, S11, S14, S15, S16, S17, S18, S20, S24, S25, S27 — sixteen counting
+S27's selection separately from S25's shape clause), **four are dead** (S13;
+S23 ×3), the rest marshaling. Of the rule content, **five live in the shim
+layer proper** — S1, S3, S4, S6 in `economics.h`, S27 in
+`check_commitment_mask_valid` — and **one is a consensus constant with no
+Rust home** (S8). F5's "two" was five in the shims and one missing parameter.
+
+**What this does to "the bodies are Rust, adopted".** It was describing the
+shim layer's *intent*. Read by contents: of the rows this slice can evaluate,
+**three** adopt a Rust body end-to-end (F9 `check_output_keys`, F13
+`base_block_reward`, F15 via `effective_emission` — which is exactly
+`max(M_r·curve, TAIL)`, the pre-penalty paid emission, computable **without
+the median**); **F10, F16, F17 adopt a Rust body wrapped in C++ rule content**
+(S27; S4+S6; S1+S3+S15) and cannot be registered `implemented` until that
+content moves — the validator would otherwise lack behaviour the C++ has;
+**F1–F8, F11, F18, F20 are ports** of C++ predicates and definitions (the
+slice-1 shape, never adoption); F14b needs a constant only C++ holds (S8).
+
+**What this does to the landable count.** Operand availability is unchanged
+by the sweep — but one row moves: **F16 is operand-blocked** (the split's
+operand is the *paid* reward, after F14b's penalty), which Round 0 missed.
+So: **operand-complete now: F1–F11, F13, F15, F19, F20, F21 = 16 rows, plus
+F12 as a disposition; blocked: F14, F14b, F16, F18 (the median) and F17 (the
+leaf count) = 5.** Of the sixteen, F10 needs S27 relocated first.
+
+**The precursor, and why it is cheap.** Moving S1/S3/S4/S6/S27 and S8 out of
+C++ is **behaviour-preserving**: the same outcome computed one layer down,
+a C++ deletion plus a Rust addition with fixtures, no observable change and
+therefore no census divergence and no consensus review — rule 20's
+advance-the-boundary in its plainest form. It lands as commits **before
+Round 1**, so Round 1 rules on the actual landable set:
+
+- **P1** `shekyl-economics`: `full_reward_zone` in `config/economics_params.json`
+  → `EconomicParams` (S8); `compute_emission_split(block_emission, height,
+  epoch, &params) -> EmissionSplit` with the zero arm (S4, S6);
+  `compute_fee_burn(total_fees, tx_volume, circulating_supply, frozen,
+  &params)` with the zero arm (S1, S3). KATs at the former shim boundary
+  (zero fee; zero emission; the `[0.8, 1.3]` clamp edges). `economics.h`
+  shrinks to two one-call marshals; the `SHEKYL_*` arguments go (S2, S5,
+  S31).
+- **P2** `shekyl-ct-balance`: the coinbase/spend selection typed at the
+  entry (S27); the vacuous guards go from the C++ callers (S22, S26).
+- **P3** census amendments: F17's operand definition (S15), F10's
+  one-mask-per-output clause (S25), every 4.F line pin (§3 F1).
+- **P4** (rule 60, Q2's shape): the three dead `check_output_types` arms
+  (S23) and — if Q2 (a) — the decomposed gate (S13).
+
+P1–P2 are the "commit rather than a PR" case the review anticipated if the
+sweep came back small; it came back with five shim sites and one missing
+constant, which is one PR's worth of relocation with fixtures, sequenced
+ahead of the slice's rule commits and reviewable on its own.
+
+**Precursor LANDED on the branch 2026-09-21 (P1a, P1b/c, P2, P3):**
+
+- **P1a (S8)** — `block_weight_full_reward_zone_bytes` in
+  `config/consensus_constants.json` (the surge factor's precedent: one key,
+  both generators); `EconomicParams::full_reward_zone`; the argument gone
+  from `paid_block_reward` / `block_reward_with_penalty` /
+  `block_weight_limit` / `shekyl_block_reward`; the C++ macro defined from
+  the generated header; params digest `0x02 → 0x03` (the zone selects the
+  penalty, so a stamp that omitted it would let two nodes agree while paying
+  differently); `PINNED_DIGEST` re-pinned with the chain question answered.
+  `full_reward_zone` is the last `EconomicParams` field, so the digest
+  order is the declaration order. `shekyl-wire::MIN_BLOCK_WEIGHT` is
+  generated from the same key (the wire crate cannot depend on economics).
+  `checked_relay_fee_floor` / `checked_corrected_fee_ladder` and their FFI
+  read `params.full_reward_zone`; the zone argument is gone there too.
+  Behaviour unchanged.
+- **P1b (S4, S6)** — `shekyl-economics::compute_emission_split` owns the
+  composition. Zero emission is the split at zero (both legs zero); there
+  is no separate arm. `shekyl_compute_emission_split` FFI; `economics.h`
+  marshals one call.
+- **P1c (S1, S3, S15)** — `compute_fee_burn` / `calc_burn_pct_at` own the
+  percentage from `params` and the composition. Zero fees are the pipeline
+  at zero; there is no separate arm.
+  `CirculatingSupply::derive` is FL-R16c's definitional half, landed (see
+  the S15 row); `shekyl_compute_fee_burn` / `shekyl_calc_burn_pct_at` take
+  the two store facts and return a status (`SUPPLY_INVARIANT` writes
+  nothing — the caller halts); `validate_miner_transaction` gains
+  `total_burned`, read **once** at the connect site beside
+  `frozen_segment_count` and shared with the accrual; the template reads
+  its own at parent state; the info RPC's `burn_pct` is over the derived
+  supply. **Not moved, recorded on FL-R16c:** the relay-floor ring and the
+  fee estimate form `C` over the gross operand through the raw
+  `shekyl_calc_burn_pct` — the ring recomputes rungs at historical heights,
+  and neither store has a per-height cumulative-burn fact (only per-block
+  `block_burn` rows). A fee-ladder question with a store dependency.
+- **P2 (S22, S25, S26, S27)** — `shekyl_ct_balance::check_commitment_masks(masks, n_outputs, MaskSubject)`
+  is the one entry: the arity gate (`MaskCountMismatch`) and the
+  fingerprint selected by the subject. There is no `Option<&[u64]>`
+  primitive under it. The FFI takes the CT type byte and the output count
+  as facts and derives the subject (`ERR_MASK_COUNT`, `ERR_CT_TYPE`);
+  `check_commitment_mask_valid` and `check_outs_valid` lose their arms.
+  The economics exports live in `shekyl-ffi`'s `economics_ffi`, not
+  `legacy_core`.
+- **P3** — census F10 (arity clause; selection), F16, F17 (the FL-R16c
+  definition; the shim content) amended with re-resolved pins; FL-R16a/b/c
+  pins re-resolved and R16c → BUILT (both halves, independence recorded);
+  FOLLOWUPS: the census-method question (owner: the census, §3.4). The
+  remaining 4.F line pins (F1) are the slice PR's.
+- **P4 — LANDED (Q2 ruled (a), 2026-09-21).** One rule-60 commit: F12's
+  gate, `is_valid_decomposed_amount`, `valid_decomposed_outputs[]`, the
+  header declaration and `tests/unit_tests/canonical_amounts.cpp` (which
+  exercised only them); S23's three dead `check_output_types` arms and the
+  `hf_version` parameter that selected among them (three callers). Census
+  F12 → bucket 3 with the deletion recorded in the row; `CenRow::F12`
+  removed; the gate reports `validator-enforced 150 / enforced 152`; §3.1
+  and Table 3 figures moved (`4.F 13/4/4/21`).
+
+### 3.2 Round 1 sweep (2026-09-22) — what moved on `dev` between the pre-flight pin and Round 1
+
+`ea140396b` → `7b9be6cd1` (#815–#823). Read at source, not from PR titles;
+the pre-flight's blockers and Q7's "no cross-lane edit" were re-checked
+rather than inherited (rule 22: a blocker's condition can expire and look
+exactly like pending).
+
+- **S-CURVE landed (#815/#818, DRS-E1 increment 7) — F17's blocker is not
+  what §2 named.** `ReadSnapshot::curve_tree() -> CurveTreeState { root,
+  depth, leaf_count }` (`store/read.rs:793`, `curve_reads.rs`) is the read
+  §2 said did not exist. It exists; **the writer does not**: the summary
+  row is `EMPTY`, written by the seal, until DRS-E3 populates the tree
+  (`curve_reads.rs` module docs: "SI-11 armed by the reads until E3
+  writes"). A `ChainView::curve_tree_leaf_count()` fed from it today would
+  return `0` on every replayed chain — a real read of a table nothing
+  writes, which is the passed-through-fact shape Q1 (c) rejected. F17's
+  operand `n = frozen_segment_count(leaf_count)` is therefore blocked on
+  **DRS-E3**, not S-CURVE. Falsify by: `curve_tree().leaf_count > 0` after
+  replaying a chain with at least one output. Recorded in §6.
+- **E2's mutation family landed (#822) and names 4.F rows.**
+  `shekyl-chain-ingest/src/mutation.rs`: `Mutation::WrongReward` (the
+  coinbase's first output amount `+ REWARD_OFF_BY`) expects **CEN-F13** at
+  `ExpectedPlace::Unnamed`, and the test's branch is chosen by
+  `CenRow::status` at every run — `Pending` pins "the block connects",
+  `Implemented` asserts `(height, InvalidBlock { rule: F13, locus: the
+  place })`, and an `Unnamed` place under `Implemented` "is a failed
+  assertion, not a guessed block locus" (`DRS_E2_REPLAY_DRIVER.md` §3.10
+  row `WrongReward`; `:470`: the place is Unnamed "until 4.F and 4.G name
+  their locus"). Two consequences this slice must answer, not discover
+  at CI:
+  1. **F13 is a definition row, not the predicate that refuses a wrong
+     amount.** F13 states the base subsidy (the D4 shape, carried on the
+     verdict); the row whose refusal a wrong coinbase amount trips is
+     **F18** (exact payout), which is blocked on G6 with F14/F14b/F16.
+     If this slice marks F13 `implemented` and lands F18 `pending`, the
+     `WrongReward` test flips to expecting a refusal by F13 and the block
+     connects — a red test that names the wrong row. The spec's row is
+     mis-keyed; **Q8**.
+  2. **Whatever place Q6 chooses for the coinbase must land in
+     `ExpectedPlace` and in §3.10 in the same PR** — a one-arm edit in
+     `shekyl-chain-ingest` and a spec row edit in a DRS-E2 document. Q7's
+     "no cross-lane edit is foreseen" is false; the edit is small, named,
+     and Q6 decides its content. Amended in §8.
+- **`BlockHeight` grew `checked_add` / `checked_sub` / `ordinals_until`
+  (#820).** F6's unlock-window arithmetic (`height + window` compared to
+  the coinbase's `unlock_time`) has a checked form to use; no blocker.
+- **#823 deleted the C++ tx-data prune; #821 the pruning-seed wire; #816
+  the WSS bench timing; #817 wallet ordinals.** None touches 4.F, the
+  view, or the rules crate.
+- **The precursor (#819) landed**, so Q1 is now asked, against sixteen
+  landable rows (F1–F11, F13, F15, F19, F20, F21) and five blocked (F14,
+  F14b, F16, F18 on G6; F17 on E3). No open PR touches
+  `shekyl-chain-rules`, the store's view, or `economics.h` (`gh pr list`:
+  none open).
+
+---
+
+## 4. Substrate this slice adds (sketch; shaped by §8)
+
+- **`RecordedBlock` grows `coins_generated: AtomicUnits` and
+  `cumulative_tx_count: u64`** (projection edits in `BatchView::block_at` and
+  the mock; the F11 conformance harness of slice 2 covers both sides).
+- **`RuleSet` grows one parameter:** `mined_money_unlock_window: BlockCount`
+  (60; F6), the C++ `#define`, because F6 reads it. CEN-F21's epoch is
+  `rules::miner::EMISSION_SPLIT_EPOCH` (1, pinned to the hardfork tables) —
+  **amended 2026-09-23:** a `RuleSet` field with no reader was copied into
+  every rule-set mismatch. It joins `RuleSet` when a schedule step names a
+  different epoch.
+- **Definition rows derived and recorded** (the D4 shape, amended
+  2026-09-23): F11/F13/F15/F20 run in `Emission::derive` and stamp coverage.
+  The priced value stays off `ValidatedBlock` until F14b produces the paid
+  reward `connect` persists as `coins_generated`. **This slice can delete
+  neither** passed-through fact: `coins_generated` needs that paid reward,
+  and `burned` needs F17's operand. The record at close states
+  `passed_through` 6 → 6, with the deletions owed to the increments that
+  land F14b and F17.
+- **A miner-transaction rule class.** F1–F10 judge `block.miner_transaction`
+  with `Locus::Miner`-shaped refusals; `tx_form` is the per-listed-tx path
+  the pool shares and the coinbase "never passes the H path" (census F8
+  note), so these are block-level rules reading one field, not `TxRule`s.
+- **`shekyl-economics` gains** `compute_emission_split` and
+  `compute_fee_burn` with the shims' short-circuits (F5) and a constants
+  parity test against `cryptonote_config.h`'s `SHEKYL_*`.
+
+---
+
+## 5. Fixtures per row and commit plan — LANDED on the branch 2026-09-22
+
+Written once §8 settled (Round 1 rulings, 2026-09-22). Every landed
+predicate row has its negative fixture asserting **the row at the miner
+place**; every definition row a value pin against `shekyl-economics`
+called with the same operands (the body the C++ marshals to); every
+by-construction row a falsifier the gate asserts (`rules/miner_tests.rs`).
+
+**Commits, in Q7's order (rules first; view growth where the rules need it;
+the ingest/spec re-key ahead of the row it protects):**
+
+| # | Commit | What |
+| --- | --- | --- |
+| 1 | `RowStatus::ByConstruction` (Q4) | The fourth status; `by_construction(property, "falsifier")`; the gate's `#[test]`-or-`doctest:<item>` falsifier check; excluded from per-block completeness like `EnforcedAt`. No row takes it yet |
+| 2 | `RuleSet` parameters (Q5) | `mined_money_unlock_window` (60), pinned to `cryptonote_config.h` rather than restated. The split epoch landed here as a field and was moved off `RuleSet` by #10 |
+| 3 | `RecordedBlock` grows | `coins_generated`, `cumulative_tx_count` — store projection, harness, mock-vs-store conformance |
+| 4 | `chain-ingest`: `WrongReward → F18`, `ExpectedPlace::Miner` (Q6, Q8) | The one cross-lane edit, landed **before** F13 flips so the family is green at every commit; `DRS_E2_REPLAY_DRIVER.md` §3.10 row |
+| 5 | `rules/miner.rs` — sixteen rows (Q1 (a)) | F1/F3/F7/F9/F10 in `form`; F4/F5/F6 in `validate`; F11/F13/F15/F20 derived by `Emission::derive` and recorded in coverage (not stored on the verdict — #10); F2/F8/F19/F21 by construction. `Corrupt::TxCountNotMonotone` ↔ store `StoreInvariant::FoldNotMonotone` (SI-13, a new register row: a recorded fold never decreases, observed by the validator like SI-10). `fixture::coinbase(height)` becomes a valid coinbase; the store's and ingest's private copies delegate to it. The fixture's unlock time reads `RuleSet::mined_money_unlock_window` (#10) |
+| 6 | Genesis pinned (Q3) | `ReleaseAnchors` carries each public network's genesis identity — as a `genesis` pin apart from the checkpoints, per the PDM answer (§8 Q3): verified by equality (E1 at 0, E5 at open), in no trust band, `current()` `None`; derived in test from `cryptonote_config.h` through the genesis tool and held equal to `shekyl_rpc_types::genesis_hash_for` |
+| 7 | SI-13 | The store-invariant register is a bijection, so `FoldNotMonotone` could not ride SI-8's row: SI-13 (a recorded fold never *decreases*, observed by the validator — SI-8 guards the write, SI-13 the read), row 13 |
+| 8 | Docs | This section; census 4.F pins re-resolved with each row's Rust home; contract stamp; index; DRS row; FOLLOWUPS; CHANGELOG |
+| 9 | Genesis is a pin, not an anchor (Q3, the PDM answer) | Commit 6 amended: `genesis` a separate field, `Anchor`s at height `≥ 1` by the compile-time gate, `current()` `None` on every public network; the charter's record is `PDM-Q5`'s own amendment (#824); FOLLOWUPS row closed |
+| 10 | Review: unread consensus state leaves the copied types | `EMISSION_SPLIT_EPOCH` is the F21 constant F16 will pass to `compute_emission_split`; it is not a `RuleSet` field until a schedule step names a different epoch. `rust/clippy.toml` (the workspace `large-error-threshold`) is deleted with the field. `Emission::derive` still records F11/F13/F15/F20; the priced value stays off `ValidatedBlock` until F14b's paid reward. `fixture::coinbase` builds `unlock_time` from the rule set's window |
+
+**Figures at landing:** `consensus: implemented 34 / validator-enforced 150
+held-by-cxx 2 at-open 1 by-construction 4 enforced 152 ratified 126 /
+enforced 152`; `4.F 16 / 21` (F14, F14b, F16, F18 pending on G6; F17 on
+E3). Coverage over a well-formed candidate: 29 rows.
+
+**What the fixtures found while landing:**
+
+- The harness's `fixture::coinbase` had no inputs and no outputs; the
+  store's and the ingest's private coinbases had keys that were not
+  points. Three fixtures, none a coinbase the rules accept — the
+  `RD-F16` divergence made concrete. One definition now
+  (`fixture::coinbase(height)`: `G` as key, `2·G` as mask, both pinned
+  through `shekyl-ct-balance`), and the other two delegate.
+- A long-chain fixture for F20 (`W + 2` blocks) tripped SI-10 before it
+  reached F20: `recorded()` blocks carry zero work. `recorded_with_emission`
+  gives them work that grows with the timestamp — D4's window is not the
+  fixture's subject, but it reads what is there.
+- The only `Err` the emission functions return is the tail subsidy's own
+  overflow, a parameter-set fact independent of any chain read. Reporting
+  it per block as a `Fault::Corrupt` would have handed the store a fault
+  it maps to no invariant; `economics()` prices the tail once when the
+  parameters resolve and stops the node there, and the per-block path is
+  total (`priced`, with the pin `shipped_parameters_price_the_tail`).
+
+---
+
+## 6. What this slice does not build
+
+- G6/G6b (the medians) — Q1 ruled (a); F14/F14b/F16/F18 with them, in slice 7 (registry `pending`; `WrongReward` in E2's family keys to F18 and pins "connects" until then).
+- F17's *row*: its operand `n = frozen_segment_count(leaf_count)` reads a
+  tree DRS-E3 has not written (§3.2 — S-CURVE's read exists and returns
+  the seal's `EMPTY`). Falsify by `curve_tree().leaf_count > 0` after a
+  replay with outputs; the row lands with E3, not with a read of zero.
+- 4.H fee validity (slice 5); 4.G aggregation (slice 7).
+- The `coins_generated` / `burned` `ConnectFacts` deletions (owed to the
+  landings of F14b and F17).
+
+---
+
+## 7. Round log
+
+- **Round 0 (2026-09-21, `ea140396b`).** Sweep; §1–§4; §8 questions posed.
+- **Round 0.5 (2026-09-21).** The shim-layer sweep the review ordered
+  before Round 1 (§3.1): 31 sites under R8's discriminator; five rule-bearing
+  shim sites and one homeless constant (F5 had found two); F16 moves to the
+  blocked set; "adopted" corrected to three rows; the precursor P1–P4 named
+  and sequenced ahead of Round 1.
+- **Precursor landed (2026-09-22, #819 → `b2dd94405`).** P1–P4 as their own
+  PR; FL-R16c BUILT; CEN-F12 deleted (Q2 (a)); denominator 153 → 152.
+- **Round 1 (2026-09-22, `7b9be6cd1`).** The `dev` sweep (§3.2): F17's
+  blocker re-keyed S-CURVE → DRS-E3 (the read landed, the writer has not);
+  E2's mutation family names F13 as `WrongReward`'s refuser and needs the
+  coinbase's place — Q8 posed, Q7 amended; Q1 asked against the corrected
+  count. **Ruled the same day:** Q1 (a), Q3 (a) with one question for the
+  PDM lane, Q4 (a), Q5 yes, Q6 reuse `TxSlot::Miner` — the `ExpectedPlace`
+  landing being the important half, Q7 as amended, Q8 (a).
+- **Landed on the branch (2026-09-22).** Nine commits per §5. Sixteen rows;
+  `implemented 18 → 34`, `by-construction 0 → 4`. The 4.F census pins
+  re-resolved with each row's Rust home.
+
+---
+
+## 8. Questions for the reviewer — Round 0, re-posed for Round 1 (2026-09-22)
+
+- **Q1 — the median (F4), re-posed against §3.1's count. RULED (a), 2026-09-22; landed.** F14, F14b, F16
+  and F18 need the effective median in force for the candidate, which is
+  CEN-G6/G6b's derivation and exists nowhere in Rust (F16 joined the blocked
+  set in the sweep: its operand is the *paid* reward). Three arms: **(a)**
+  land the **sixteen** operand-complete rows here (F1–F11, F13, F15, F19,
+  F20, F21; F12 as a disposition), after the §3.1 precursor relocations;
+  F14/F14b/F16/F18 stay `pending` with a `blocked-by G6` registry comment
+  and land in slice 7 with the weights machinery, where table 3 put them; **(b)** pull G6/G6b into this slice — two rolling medians over the
+  recorded `weight` / `long_term_weight` (100 000- and 100-block windows,
+  read through `ChainView::block_at` or a new bulk `weights(range)` method),
+  the `S = 4` ratified clamp (a **divergence from the shipped ×50** the
+  census already records — landing it here makes the Rust validator refuse
+  blocks the C++ accepts near the surge bound, which is a CSR-3a pass
+  condition, not a defect); **(c)** an interim `ChainView::effective_median_for_next()`
+  fed from the store's recorded value — **rejected before asking**: it would
+  be the wrong median by one block (SCR-19) and a passed-through fact
+  dressed as a derivation. **Default: (a).** G6 is 4.G's heaviest row and
+  the one with the recorded divergence; landing it as a side effect of the
+  coinbase slice would bury the divergence in the wrong PR. The cost is
+  that F18 — the row that *is* "the coinbase is right" — waits one slice.
+  **Q1 is not asked until the §3.1 precursor has landed** (the review's
+  ordering: the sweep changes what Round 1 rules on). **Asked now
+  (2026-09-22): the precursor is on `dev` and the count is sixteen; F17 is
+  blocked on E3, not S-CURVE (§3.2), which does not change the arms.**
+- **Q2 — F12, the dead gate.** **(a)** census amendment: F12 → bucket 3
+  (*"dead code; deleted"*) **and** delete the branch, `is_valid_decomposed_amount`
+  and `valid_decomposed_outputs[]` in the same PR (rule 60's instruction;
+  ~40 C++ lines, a deletion not a rewrite); **(b)** amend the census only and
+  leave the C++ for cutover (E4); **(c)** register `implemented` with a
+  vacuous rule. (c) is a fixture that cannot fire. **Default: (a)** — the
+  C++ deletion is the smallest rule-20-shaped touch there is, and bucket 3
+  moves the denominator honestly (153 → 152, `validator-enforced` 151 →
+  150) rather than counting a rule that never ran as ported.
+  **RULED (a), 2026-09-21. Landed as P4 (§3.1).**
+- **Q3 — genesis as the height-0 anchor (F6). RULED (a), 2026-09-22; landed — and amended the same day by the PDM lane's answer: `assumevalid = 0` is *no anchor at all* (`Trust::Full`, band 1 empty); genesis is not trusted with the binary, it is *defined* by it — verified by equality, in no trust band. So (a)'s mechanism stands and (a)'s framing does not: `ReleaseAnchors` carries the genesis identity as a separate `genesis` pin, `Anchor`s are the checkpoints at height `≥ 1` (compile-time gate; `for_tests` refuses 0), `current()`/`covers()` — what `Trust::below_anchor` is minted from — see checkpoints only, and one equality accessor (`expected_at`) serves E1 at height 0 and at anchored heights alike; E5 walks `pins()`, genesis first. The reading was ruled on the release gate: PDM `:304`'s verifying node runs `assumevalid = 0`; under "genesis is the anchor" it would connect height 0 as `BelowAnchor(0)`, record the proof rows' absence in coverage and provenance, and rest the release on a file the charter calls "never parity evidence" — circular. Behaviourally the two coincide at height 0 (genesis has no proofs to skip); the persisted state differs. Recorded: `anchors.rs` module docs, `trust.rs`, `band_one_is_empty_until_the_first_checkpoint_release`, `for_tests_refuses_an_anchor_at_genesis`; the charter's own record is `ARCHIVAL_PRUNED_DAEMON_MODE.md` `PDM-Q5`'s amendment of 2026-09-22 (#824), which supersedes the gloss this branch had written there. The FOLLOWUPS row is closed.** F11's "as configured" is a
+  per-network block identity the binary carries — the definition of an
+  anchor. **(a)** put `(0, genesis_hash)` into `ReleaseAnchors::for_network`
+  for the three public networks: E1 then judges genesis, E5 refuses a
+  wrong-network file at open, both already fixtured; the slice-3 test
+  `no_release_has_shipped_an_anchor_yet` is refuted *by design* and replaced
+  by `band_one_is_empty_until_the_first_checkpoint_release`; PDM-Q5's "`C`"
+  stays the last *checkpoint* — SUPERSEDED as first written ("the last
+  anchor above genesis"), by the PDM answer above: genesis is not an anchor
+  of any rank, so `C` needs no re-reading.
+  **(b)** a separate `GenesisBlock::for_network(net) -> BlockHash` beside
+  `RuleSchedule`, consumed by an F11 rule at `connecting.is_zero()`, leaving
+  the anchor table for checkpoints only. **Default: (a)** — one mechanism
+  for one kind of fact ("a block the binary vouches for"), and the two
+  behaviours F11 asks for are exactly E1 and E5. The genesis hashes come
+  from `GENESIS_TX` + the genesis header per network; the Rust side derives
+  them once (the genesis tool's pins or a KAT against `cryptonote_config.h`)
+  and the table holds the result as data. *"One kind of fact" was the part
+  the PDM answer refuted: the landed shape is (a)'s one table and one
+  equality read with (b)'s separation of genesis from the checkpoints
+  inside it.*
+- **Q4 — a status for a row true by construction (F9). RULED (a), 2026-09-22; landed with four instances (F2, F8, F19, F21).** F19 is enforced by
+  the view brand and the transaction boundary, falsified by a
+  `compile_fail` doctest, with no runtime site and no per-block coverage.
+  **(a)** `RowStatus::ByConstruction { property, falsifier }` — like
+  `EnforcedAt` in leaving `RuleSet::enforced()`, counted as implemented,
+  with the gate asserting the named doctest exists; the PDM-Q3 instrument
+  ("true by construction at `645d09dc3`, held as a standing property with a
+  compile-shaped falsifier") is the same class and would take the status
+  too; **(b)** `EnforcedAt { site: <the view brand>, test: <a runtime test
+  that a mis-ordered read cannot be written> }` — stretches "site" past a
+  function; **(c)** `implemented` with a rule whose check is a no-op —
+  a fixture that cannot fire. **Default: (a).**
+- **Q5 — constants as `RuleSet` parameters. RULED yes, 2026-09-22; the window landed; the epoch amended 2026-09-23.** F6's unlock window (60) is a `RuleSet` field because F6 reads it, pinned by test to `cryptonote_config.h` (not a `config/` key). F21's split epoch (1) was ruled onto `RuleSet` the same day and **amended on review:** it is `rules::miner::EMISSION_SPLIT_EPOCH`, pinned to the three hardfork tables, and joins `RuleSet` when a schedule step names a different epoch. A field no row read was part of rule-set equality and was copied into `Stale::RuleSet` and `StoreCannot::RuleSetNotInForce` (the pair at 144 bytes), which is why `rust/clippy.toml` raised the workspace `large-error-threshold`; that file is deleted with the field. The same review keeps `Emission` off `ValidatedBlock`: `derive` records F11/F13/F15/F20, and the priced value is what F14b reads inside `validate`. `connect` persists F14b's paid reward, which this value is not. **Default was: yes, both.**
+- **Q6 — the coinbase's locus. RULED reuse `TxSlot::Miner`, 2026-09-22; landed, with `ExpectedPlace::Miner` in E2's family — the half that closes the gap Q8's mis-key slipped through.** Refusals on F1–F10 point at the miner
+  transaction; `Locus::Block` is imprecise, `TxSlot::Miner` exists for the
+  per-tx path. Does the block-level miner rule refuse at `Locus::Tx(TxSlot::Miner)`
+  (reusing the slot vocabulary) or does `Locus` grow a `Miner` arm?
+  **Default: reuse `TxSlot::Miner`** — one vocabulary for "which transaction".
+- **Q7 — sequencing. RULED as amended, 2026-09-22; followed (§5).** No in-flight PR touches `shekyl-chain-rules` or the
+  store's view today (`gh pr list`: none open at Round 1). The E2 driver
+  calls `validate` and picks up new coverage rows automatically. **Amended
+  2026-09-22 (§3.2): one cross-lane edit is required, not foreseen-absent** —
+  E2's mutation family (`shekyl-chain-ingest/src/mutation.rs`) and
+  `DRS_E2_REPLAY_DRIVER.md` §3.10 hold `WrongReward → F13, Unnamed`, and
+  the family's branch is chosen by `CenRow::status`; this slice's landing
+  changes that branch, so the row key (Q8) and the place (Q6) land in the
+  same PR, as one commit touching the ingest crate and the E2 spec row.
+  **Default: land as one PR after Round 1**, rules-crate commits first,
+  view growth (store projection) after, the ingest/spec commit last so the
+  mutation test is green at every commit — the store side is a projection
+  edit, not a schema change.
+- **Q8 — `WrongReward`'s row is mis-keyed (§3.2). RULED (a), 2026-09-22; landed. The residual the ruling named: `CenRow::status` catches "marked implemented but does not refuse"; it cannot catch "keyed to a row that was never going to refuse" — the keying is the one part the status can't check, which is why naming the place (Q6) matters more than the re-key.** E2's §3.10 names
+  **CEN-F13** as the row that refuses a coinbase whose output amount is off
+  by one. F13 is the *definition* of the base subsidy — a D4-shaped row
+  carried on the verdict, refusing nothing; the predicate a wrong amount
+  trips is **F18** (exact payout: outputs = paid reward + `miner_fee_income`),
+  blocked on G6. If F13 goes `implemented` here with F18 `pending`, the
+  family's test expects a refusal by F13 and the block connects. **(a)**
+  re-key the mutation to F18 in `mutation.rs` and §3.10 in this PR's
+  ingest commit (Q7): the `Pending` branch keeps pinning "connects" until
+  slice 7 lands F18, and flips to the right row then; F13's own coverage is
+  a value pin (the definition equals the C++'s), not a refusal. **(b)** land
+  F18 here — that is Q1 (b) by another door and is decided there. **(c)**
+  leave F13 as the key and mark F13 `implemented` — a red test naming the
+  wrong row, refused. **Default: (a)** — the census, not the family, is the
+  oracle (the family's own module docs), and the census says F18 is the
+  predicate. This is also the first instance of the family's contract
+  being exercised by a slice landing: worth the E2 lane confirming the
+  re-key reads §3.10's intent correctly.

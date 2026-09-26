@@ -36,11 +36,22 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use shekyl_sp_t3_spike::fixture::ShardFixture;
-use shekyl_sp_t3_spike::harness::Apparatus;
+use shekyl_sp_t3_spike::harness::{
+    Apparatus, APPARATUS_ANCHOR_HASH, APPARATUS_ANCHOR_HEIGHT, APPARATUS_OWN_HEIGHT,
+};
 use shekyl_tor_control_client::control::onion::OnionPow;
 
 fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key).map(PathBuf::from)
+}
+
+/// Lowercase hex, for the byte-exact inputs a remote reader pastes.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        write!(s, "{b:02x}").expect("write to String");
+        s
+    })
 }
 
 /// Parse `SHEKYL_SPIKE_POW`: `off`, `on`, or `tuned:<rate>:<burst>`.
@@ -84,7 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("pow: {pow:?}");
 
     let dir = tempfile::tempdir()?;
-    eprintln!("bringing up 1 persona (conformant shape) behind one tor...");
+    // The apparatus also launches a client tor, used here only for the
+    // reachability probe; the readers this binary exists for are elsewhere.
+    eprintln!("bringing up 1 persona (conformant shape) behind its own tor, plus a probe tor...");
     let app =
         Apparatus::bring_up_with_pow(tor, dir.path().join("tor-data"), 1, fixture.bytes(), pow)
             .await?;
@@ -96,7 +109,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // purpose: the operator needs it to drive remote readers, and this is a
     // disposable spike rig, not the wallet.
     println!("ONION={}", persona.service_id().hostname());
-    println!("URL={}", persona.shard_url(0));
+    // Since SF (a) a reader is `shekyl-p-fetch`, not curl. It builds a
+    // `FetchTarget` the way a daemon does from a bond record —
+    // `ServingEndpoint::from_record_bytes(ENDPOINT_RECORD)` (the hostname
+    // above is *derived* from these bytes and cannot be turned back into
+    // them) plus the persona's verifying key — and a `RequestHeader` the way
+    // a daemon does from its tip: `RequestHeader::fresh(ANCHOR_HEIGHT,
+    // ANCHOR_HASH)`, which this persona's `SF-D5` gate admits because its
+    // own height is `OWN_HEIGHT`. Every input is printed byte-exact.
+    println!(
+        "ENDPOINT_RECORD_HEX={}",
+        hex(persona.serving_endpoint().as_bytes())
+    );
+    println!(
+        "VERIFYING_KEY_HEX={}",
+        hex(&persona.verifying_key().to_canonical_bytes()?)
+    );
+    println!("OWN_HEIGHT={APPARATUS_OWN_HEIGHT}");
+    println!("ANCHOR_HEIGHT={APPARATUS_ANCHOR_HEIGHT}");
+    println!("ANCHOR_HASH_HEX={}", hex(&APPARATUS_ANCHOR_HASH));
     println!("PAYLOAD_BYTES={len}");
     // The number a remote reader should compare a fetched body against. Not
     // PAYLOAD_BYTES: since RF-D4 the body leads with a frame header, and the

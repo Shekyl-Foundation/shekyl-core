@@ -43,18 +43,52 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.29: `get_version` gains the three identity-
+/// `CORE_RPC_VERSION_MINOR`. 3.37: `get_block_template` bounds `reserve_size`
+/// to 8 and `extra_nonce` to 8 bytes — the coinbase `0x02` nonce is a fixed
+/// 8-byte field under the closed coinbase grammar (`TX_EXTRA_RUST_CUTOVER.md`
+/// TXE-Q6′), always reserved, so `reserved_offset` is always returned; a
+/// larger request is refused with `CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND`
+/// (-23; the old 0..255 `TOO_BIG_RESERVE_SIZE` -3 is retired).
+/// 3.36: `get_info` drops `tx_prune_height` — the
+/// C++ tx-data prune whose watermark it reported is deleted (LMDB v15; the
+/// uniform discard is S-PRUNE, which will report its own frontier when it
+/// exists). 3.35: `pruning_seed` leaves `get_peer_list`,
+/// `get_connections` and `sync_info.peers`, and `next_needed_pruning_seed`
+/// leaves `sync_info`; the `prune_blockchain` method is deleted (REJECTED in
+/// the registry, `PDM-Q7`) — the stripe engine is gone, so every value was
+/// 0 and the field was a gossiped self-asserted attribute (`PWD-I1`'s shape).
+/// 3.34: `get_curve_tree_path` **removed** — a
+/// per-output path query is spend-revealing (`PHASE_2A_SEND_PATH.md` §3.0.1),
+/// had no production consumer, and paired each leaf with a different
+/// output's `(O, C)` on any chain carrying a transaction (`SOK-10`, Q7 → A);
+/// the wallet assembles paths locally. (#782 and #784 both minted 3.33 on
+/// their branches and git merged the constant clean — the collision the
+/// paragraph below warns about, caught on merge by the parity chain test.)
+/// 3.33: `get_output_histogram` deleted — a
+/// per-amount output-count query over caller-chosen unlock and recency
+/// windows is a statistical disclosure surface with no consumer on a chain
+/// without rings (`DRS_E1_SOUT_KI.md` SOK-Q3, ruled B; census U-7). 3.32:
+/// `calc_pow` drops leftover `major_version` (RandomX-only longhash; C++
+/// daemon RPC is still live via `core_rpc_ffi`). 3.31: `get_archival_shard_coverage` and
+/// `request_archival_shard` (`ARCHIVAL_SHARD_SELECTION_LIST.md` `SL-D`).
+/// 3.30: `get_fee_estimate.fees` drops the dead
+/// fourth slot — three priced tiers, one slot each (FL-R25; the RK-5 bridge
+/// mirrored slot 1 for a `FeePriority::Elevated` caller that never existed).
+/// 3.29: `get_version` gains the three identity-
 /// tuple fields — `consensus_constants_digest`, `nettype`, `genesis_hash`
 /// (`CLIENT_VERSION_CONSTANTS_VALIDATION.md` `VC-2`). 3.28 was the peer
 /// identifier leaving every readout; 3.27 RK-5b's three header-method shape
 /// changes; 3.26 `get_info.following_degraded`; 3.25 the RK-4c removals.
 ///
-/// **Read from `dev` at the moment this line is written, never carried
+/// **Read from this tree at the moment this line is written, never carried
 /// forward from a plan.** `chain.rs:59-70` records two branches taking 3.26
 /// honestly and git merging them character-for-character, because `= 25` →
-/// `= 26` is textually identical whoever writes it. This value was read on
-/// the tree cut from PR #658's merge.
-pub const CORE_RPC_VERSION_MINOR: u32 = 29;
+/// `= 26` is textually identical whoever writes it. 3.33 is the
+/// `get_output_histogram` deletion on this branch; 3.34 the
+/// `get_curve_tree_path` removal, chained after it on merge; 3.35 the
+/// `pruning_seed` deletion; 3.36 the `tx_prune_height` deletion; 3.37 the
+/// coinbase-nonce bound.
+pub const CORE_RPC_VERSION_MINOR: u32 = 37;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -130,6 +164,13 @@ pub const CORE_RPC_ERROR_CODE_INTERNAL_ERROR: i64 = -5;
 /// (`pow_hash_or_refuse`, and `5b0c32f51`'s "loud, never the degrade arm"):
 /// a method that declines to answer must not report success.
 pub const CORE_RPC_ERROR_CODE_CORE_BUSY: i64 = -9;
+
+/// JSON-RPC error code for an operator shard-fetch that did not produce a
+/// body (`CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE`). Typed miss — not
+/// `WRONG_PARAM`. The requested `shard_id` was well-formed; this node
+/// does not currently hold the archive (pruned, or the scheduler returned
+/// MISS).
+pub const CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE: i64 = -22;
 
 /// The REST error envelope a natively-served endpoint answers with when it
 /// cannot produce its reply (HTTP 500): `status` is never `OK`, and `error`
@@ -370,6 +411,45 @@ pub struct GetVersionResponse {
     pub genesis_hash: HashHex,
 }
 
+/// The `n` of a `STORE_INVARIANT_REGISTER.md` `SI-n` row — the register's
+/// stable name for a store belt, as the wire carries it.
+///
+/// Deliberately **not** `shekyl-chain-store::StoreInvariant`
+/// (`DAEMON_REDB_STORE.md` §3.6.2; PR #751 disposition): this crate is
+/// consumed by every wallet, and embedding the store's enum would make each
+/// of them link the redb-backed store to decode a tip; and that enum gains a
+/// variant each time an increment builds a belt, while the register's
+/// numbering is append-only. The operator resolves the number against the
+/// register — the one public authority on what each row means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StoreInvariantRow(pub u32);
+
+/// Whether the daemon's chain-store writer is live or halted
+/// (`DAEMON_REDB_STORE.md` §3.6.2) — the halt a wallet must be able to see
+/// before it refreshes against a chain that has moved on without it.
+///
+/// Minted with S-CHAIN-W, the only producer of the `Halted` arm
+/// (`shekyl-chain-store::ConnectState` is the store-side value). Carried on
+/// the tip (`ChainTip.connect`) when the Rust store serves `get_info` —
+/// the `CORE_RPC_VERSION` minor bump lands with that field, not with these
+/// types: the daemon still serves LMDB at this pin, and a version moves when
+/// a wire shape does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ConnectState {
+    /// Connects and pops are accepted.
+    Live,
+    /// A connect or pop hit a store invariant; the writer refuses until
+    /// restart, reads stay open.
+    Halted {
+        /// The height the halting connect or pop was working at.
+        at_height: u64,
+        /// The belt that caught it.
+        row: StoreInvariantRow,
+    },
+}
+
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
 fn is_zero(v: &u64) -> bool {
     *v == 0
@@ -378,6 +458,20 @@ fn is_zero(v: &u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_state_serializes_as_a_tagged_state_with_the_register_row_number() {
+        let live = serde_json::to_string(&ConnectState::Live).expect("json");
+        assert_eq!(live, r#"{"state":"live"}"#);
+        let halted = ConnectState::Halted {
+            at_height: 4_200,
+            row: StoreInvariantRow(6),
+        };
+        let json = serde_json::to_string(&halted).expect("json");
+        assert_eq!(json, r#"{"state":"halted","at_height":4200,"row":6}"#);
+        let back: ConnectState = serde_json::from_str(&json).expect("round trip");
+        assert_eq!(back, halted);
+    }
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {
@@ -399,10 +493,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_637);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 29);
+        assert_eq!(CORE_RPC_VERSION, 196_645);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 37);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 29);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 37);
     }
 
     #[test]

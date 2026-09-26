@@ -1,0 +1,38 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+# Local-only cargo-fuzz harness for the `tx_extra` codec — the single
+# implementation parsing untrusted block-path bytes since the C++ parser
+# left (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q5b). Isolated from the parent
+# workspace via its own [workspace] table (same shape as shekyl-fcmp/fuzz)
+# so stable-Rust CI never attempts to resolve libfuzzer-sys. Builds and
+# runs only under nightly:
+#   cargo +nightly fuzz run fuzz_tx_extra_parse corpus/fuzz_tx_extra_parse seeds/fuzz_tx_extra_parse
+# The seeds (`seeds/fuzz_tx_extra_parse/`, committed) are the C++ fuzzer's
+# corpus (`tests/data/fuzz/tx-extra/`), moved here with the target they
+# seed; `corpus/` is the grown, uncommitted working set.
+
+[package]
+name = "shekyl-wire-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "BSD-3-Clause"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-wire = { path = ".." }
+
+[[bin]]
+name = "fuzz_tx_extra_parse"
+path = "fuzz_targets/fuzz_tx_extra_parse.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

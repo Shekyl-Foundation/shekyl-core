@@ -250,7 +250,32 @@ count_pattern() {
 # DRS-P0d: 43 -> 48. Three production sites (outer / chain / spent-elem) plus
 # two #[cfg(test)] sites that hash under the same registered domains to pin
 # XOR identity and the empty-chain preimage.
-MECH1_EXPECTED=48
+# DRS-0 slice A: 48 -> 50. Two production sites in
+# rust/shekyl-chain-store/src/accumulator.rs -- SetAccumulator::toggle and
+# AppendAccumulator::push. NEITHER ADDS A REGISTRY ROW, and that is a
+# property of this registry worth stating rather than a gap to wave past:
+# both take the customization as a CONSTRUCTOR PARAMETER
+# (self.element_domain / self.chain_domain), so the domain literal lives at
+# the CALL SITE, not at the hash site. Today every caller is a test using
+# b"shekyl/test/..." fixtures. When DRS-E1 wires real tables to these
+# accumulators, each table's domain becomes a production literal that MUST
+# be registered below -- the literal-presence leg will see it there, but
+# this count pin will NOT move, because the number of cSHAKE call sites
+# stays at two however many tables are wired.
+# SF-D8 (2026-09-13): `attestation_nonce()` and its one cSHAKE site were
+# deleted with the v1 nonce-only countersignature (50 -> 49).
+# PL-D3 (2026-09-14): 49 -> 54. Two production sites in
+# rust/shekyl-crypto-pq/src/leaf_commitment.rs -- `pqc_key_scalar`
+# (shekyl/pqc-leaf-key-v1, the 64-byte read) and `pqc_leaf_record`
+# (shekyl/pqc-leaf-record-v1) -- plus three inline #[cfg(test)] sites: the
+# domain-separation negative control hashes one preimage under both
+# customizations (two sites) and the record test recomputes the record (one).
+# S-CHAIN-W (2026-09-15, PR #757): 54 -> 56. One production site in
+# rust/shekyl-chain-store/src/codec/undo.rs -- `post_image`
+# (shekyl/chain-store/undo-log/post-image-v1, the undo entry's post-image
+# digest) -- plus one inline #[cfg(test)] site: the domain-separation
+# negative control hashes one preimage under an unrelated customization.
+MECH1_EXPECTED=57
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

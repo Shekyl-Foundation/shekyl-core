@@ -156,7 +156,7 @@ post-decap (or decap is universal).
 | **`enc_label` (8 B)** (FA-11) | `CtSigBase` | Hybrid | `k_label` from `combined_ss` | Post-decap decrypt | Opaque ciphertext | **Verify** — no change |
 | `view_tag_combined` | **Not on wire** | Hybrid | `combined_ss` | Internal only | N/A | No wire action |
 | KEM CTs (`R_eph`, ML-KEM) | `tx_extra` | Public / ciphertext | — | — | No clustering via tag alone | No FA-6 change |
-| `output_key`, commitment, `pqc_pk`, `h_pqc` | tx / RCT | Public | — | — | No | No FA-6 change |
+| `output_key`, commitment, `pqc_pk`, the `0x07` leaf entry | tx / RCT | Public | — | — | No | No FA-6 change |
 
 **Implementation gate:** Before FA-6 merges, sign off §3.1 rows marked
 **Verify** with code pointers (`dev` post–PR #100 for `label_tag` /

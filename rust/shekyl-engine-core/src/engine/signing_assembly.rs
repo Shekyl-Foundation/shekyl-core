@@ -92,7 +92,7 @@ pub(crate) fn assemble_tx_to_sign(
         // transfer vector shifted under the tx between selection and fold (a
         // reorg during the AssembleTx round-trip) — refuse rather than bind the
         // wrong secrets to this path.
-        if td.global_output_index != ai.gindex.0 {
+        if td.global_output_index != ai.gindex {
             return Err(SendError::CannotSign {
                 reason: "selected transfer shifted under the transaction during assembly",
             });
@@ -152,33 +152,24 @@ fn input_context_from_transfer(
     let output_key = td.key.compress().to_bytes();
     let commitment = td.commitment.calculate().compress().to_bytes();
 
+    // The chunk carries the path node's full child set, including the spent
+    // output; the signer (tx-builder) re-derives this input's own PQC leaf
+    // commitment from its secrets and checks it against that entry before
+    // proving (`PL-D3`; a mismatch is the typed received-but-unspendable
+    // refusal), so nothing about the own leaf is read here.
     let leaf_chunk: Vec<LeafEntry> = path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect();
-    // This input's own PQC leaf hash is the real `h_pqc` of its own entry in the
-    // assembled leaf chunk (the chunk carries the path node's full child set,
-    // including the spent output). Matched on the full `(O, C)` identity pair
-    // (the same pairing `assemble_path`'s post-resolution check uses), so the
-    // lookup is unambiguous even if two chunk entries ever shared an output key.
-    let h_pqc = path
-        .leaf_chunk
-        .iter()
-        .find(|cl| cl.output_key == output_key && cl.commitment == commitment)
-        .map(|cl| cl.h_pqc)
-        .ok_or(SendError::CannotSign {
-            reason: "assembled leaf chunk does not contain the spent output",
-        })?;
 
     Ok(TxInputSigningContext {
         handle,
         // Signing context crosses into the crypto/FCMP layer, which takes raw
         // `[u8; 32]` (rule 18); convert at this edge.
         tx_hash: td.tx_hash.to_bytes(),
-        internal_output_index: td.internal_output_index,
+        internal_output_index: td.internal_output_index.to_raw(),
         amount: td.amount(),
         key_image,
         source_ciphertext,
         output_key,
         commitment,
-        h_pqc,
         leaf_chunk,
         c1_layers: path.c1_layers.clone(),
         c2_layers: path.c2_layers.clone(),
@@ -191,10 +182,10 @@ fn input_context_from_transfer(
 /// boundary.
 pub(crate) fn leaf_entry_from_chunk(cl: &ChunkLeaf) -> LeafEntry {
     LeafEntry {
-        output_key: cl.output_key,
+        output_key: cl.output_key.to_bytes(),
         key_image_gen: cl.key_image_gen,
-        commitment: cl.commitment,
-        h_pqc: cl.h_pqc,
+        commitment: cl.commitment.to_bytes(),
+        cm_x: cl.cm_x,
     }
 }
 

@@ -54,6 +54,7 @@ enum class removed_reason
   bind_confirm,      // permission slip for binds that are now refused (RT-W2)
   ignore_ipv4,       // tolerated a failed v4 bind; a loopback bind failure is fatal by design
   derived_advert,    // port advertisement is derived from listener + zone, not configured
+  host_inbound_cap,  // per-host inbound admission: a host is not an operator (PWD-I7/I8)
 };
 
 struct removed_flag
@@ -66,7 +67,7 @@ struct removed_flag
 // source of truth — CHANGELOG.md and FOLLOWUPS.md reference it by name
 // rather than duplicating the list, so editing this array keeps the
 // documentation in sync automatically.
-constexpr std::array<removed_flag, 23> REMOVED_FLAGS = {{
+constexpr std::array<removed_flag, 24> REMOVED_FLAGS = {{
   // Daemonizer, deleted in V3.1 (background execution / service management).
   {"detach",                       removed_reason::daemonizer},
   {"pidfile",                      removed_reason::daemonizer},
@@ -108,6 +109,10 @@ constexpr std::array<removed_flag, 23> REMOVED_FLAGS = {{
   // not something to ignore; the flag parsed into a field nothing read.
   {"rpc-ignore-ipv4",              removed_reason::ignore_ipv4},
   {"hide-my-port",                 removed_reason::derived_advert},
+  // Per-host inbound admission, deleted 2026-09-22 (PWD-I7/I8). A host is
+  // not an operator: under CGNAT one address is many unrelated
+  // subscribers, so no value of the cap was correct.
+  {"max-connections-per-ip",      removed_reason::host_inbound_cap},
 }};
 
 // boost::program_options::unknown_option::get_option_name() returns the
@@ -200,6 +205,15 @@ bool handle_removed_flag(
         "we accept inbound connections at all. To not be advertised, refuse\n"
         "inbound with '--in-peers 0'; to not take part in p2p, do not run a\n"
         "daemon. See docs/USER_GUIDE.md.\n";
+      break;
+    case removed_reason::host_inbound_cap:
+      std::cerr <<
+        "Error: '--" << view << "' was removed. Inbound admission no longer keys\n"
+        "on the remote HOST: one address is not one operator -- under CGNAT it is\n"
+        "hundreds of unrelated subscribers, so no cap value was correct. Two\n"
+        "daemons behind one NAT were partitioned across disjoint peer sets by it.\n"
+        "The bound that remains is a total ceiling on inbound connections:\n"
+        "use '--in-peers <n>'. See docs/design/SHEKYL_P2P_PROTOCOL.md (PWD-I7).\n";
       break;
     case removed_reason::ignore_ipv4:
       std::cerr <<

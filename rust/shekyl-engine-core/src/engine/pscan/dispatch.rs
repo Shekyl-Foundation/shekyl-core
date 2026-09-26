@@ -34,7 +34,7 @@ use std::time::Duration;
 use shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS;
 use shekyl_engine_state::{PendingBondPost, PendingPostBlock, PendingPostState};
 use shekyl_standoff::draw::bounded_uniform;
-use shekyl_types::{BlockHeight, PCanonicalId};
+use shekyl_types::{BlockCount, ChainCount, PCanonicalId};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::pending_post_gate::PendingPostGate;
@@ -212,7 +212,7 @@ pub(crate) struct DispatchConfig {
     /// Blocks past `Dispatched::at` after which an unconfirmed post alarms
     /// and stops resubmitting. Production is
     /// [`DISPATCH_ALARM_HORIZON_BLOCKS`]; see its rationale.
-    pub alarm_horizon_blocks: u64,
+    pub alarm_horizon_blocks: BlockCount,
     /// Upper bound (exclusive) of the send-time dispersal draw (§3.2
     /// part 3): each dispatch sleeps `U[0, bound)` before the submit call,
     /// decorrelating the send from the sweep's tick phase. Production is
@@ -226,7 +226,7 @@ impl DispatchConfig {
     /// window the draw must cover).
     pub(crate) fn production(tick_interval: Duration) -> Self {
         Self {
-            alarm_horizon_blocks: DISPATCH_ALARM_HORIZON_BLOCKS,
+            alarm_horizon_blocks: BlockCount::from_raw(DISPATCH_ALARM_HORIZON_BLOCKS),
             dispersal_bound: tick_interval,
         }
     }
@@ -253,19 +253,18 @@ pub(crate) enum DispatchError {
 // Selection (pure — gates 1 and 2)
 // ---------------------------------------------------------------------------
 
-/// The pure due-block arithmetic (§3.1): `due = anchor_t0 +
-/// bond_post_offset_blocks`. Saturating: a plan whose offset overflows the
-/// height space can only push the due block *later* (monotone noise), never
-/// wrap to "due immediately".
-fn due_height(post: &PendingBondPost) -> u64 {
-    post.anchor_t0
-        .to_raw()
-        .saturating_add(post.bond_post_offset_blocks)
+/// The pure due-count arithmetic (§3.1): `due = anchor_t0 +
+/// bond_post_offset_blocks` on the dispatch count clock. Saturating: a
+/// plan whose offset overflows the count space can only push due *later*
+/// (monotone noise), never wrap to "due immediately". The offset's type
+/// is pinned on [`PendingBondPost::bond_post_offset_blocks`].
+fn due_count(post: &PendingBondPost) -> ChainCount {
+    post.anchor_t0.saturating_add(post.bond_post_offset_blocks)
 }
 
 /// Select the single post to dispatch this tick, or `None` (§3.2 part 2).
 ///
-/// Candidates are live posts whose due block has arrived at `tip` and that
+/// Candidates are live posts whose due count has arrived at `tip` and that
 /// still have a send to make:
 ///
 /// - [`PendingPostState::Pending`] — the first dispatch;
@@ -276,29 +275,28 @@ fn due_height(post: &PendingBondPost) -> u64 {
 ///   (past the horizon; the escalation is the alarm, not a faster loop), or
 ///   past the alarm horizon (the alarm pass this tick will catch it).
 ///
-/// Ordering: lowest due block; ties broken by lowest `anchor_t0`, then
+/// Ordering: lowest due count; ties broken by lowest `anchor_t0`, then
 /// persona id — pinned so a catch-up backlog replays deterministically. The
 /// posts left behind wait for subsequent ticks (one-per-tick: co-launching a
 /// backlog links the wallet's personas by simultaneity).
 fn select_dispatch_candidate<'a>(
     posts: &'a [PendingBondPost],
-    tip: BlockHeight,
-    alarm_horizon_blocks: u64,
+    tip: ChainCount,
+    alarm_horizon: BlockCount,
     held: &BTreeSet<PCanonicalId>,
     alarmed: &BTreeSet<PCanonicalId>,
 ) -> Option<&'a PendingBondPost> {
     posts
         .iter()
-        .filter(|p| due_height(p) <= tip.to_raw())
+        .filter(|p| due_count(p) <= tip)
         .filter(|p| !alarmed.contains(&p.persona))
         .filter(|p| match p.state {
             PendingPostState::Pending => true,
             PendingPostState::Dispatched { at, .. } => {
-                !held.contains(&p.persona)
-                    && tip.to_raw() < at.to_raw().saturating_add(alarm_horizon_blocks)
+                !held.contains(&p.persona) && tip < at.saturating_add(alarm_horizon)
             }
         })
-        .min_by_key(|p| (due_height(p), p.anchor_t0.to_raw(), p.persona))
+        .min_by_key(|p| (due_count(p), p.anchor_t0, p.persona))
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +341,7 @@ pub(crate) trait DispatchTick: Send + 'static {
     /// [`DispatchDriver`] impl for the full per-tick contract.
     fn on_tick(
         &mut self,
-        tip: BlockHeight,
+        tip: ChainCount,
         evidence: TickEvidence<'_>,
         cancel: &CancellationToken,
     ) -> impl std::future::Future<Output = Result<(), DispatchError>> + Send;
@@ -354,7 +352,7 @@ pub(crate) trait DispatchTick: Send + 'static {
 impl DispatchTick for () {
     async fn on_tick(
         &mut self,
-        _tip: BlockHeight,
+        _tip: ChainCount,
         _evidence: TickEvidence<'_>,
         _cancel: &CancellationToken,
     ) -> Result<(), DispatchError> {
@@ -370,10 +368,10 @@ struct TickPlan {
     settled: shekyl_engine_state::pending_post_block::SettledRetirement,
     /// Dispatched-but-unsettled claims/drains newly past the alarm horizon:
     /// `(kind, persona, first-dispatch tip)`.
-    reservation_alarms: Vec<(ReservationKind, PCanonicalId, BlockHeight)>,
+    reservation_alarms: Vec<(ReservationKind, PCanonicalId, ChainCount)>,
     /// Dispatched-but-unconfirmed posts newly past the alarm horizon:
     /// `(persona, first-dispatch tip, total attempts)`.
-    alarms: Vec<(PCanonicalId, BlockHeight, u32)>,
+    alarms: Vec<(PCanonicalId, ChainCount, u32)>,
     /// The post sealed as `Dispatched` this tick (a clone of the sealed
     /// record) and its post-transition attempt count.
     dispatched: Option<(PendingBondPost, u32)>,
@@ -493,9 +491,9 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
     /// sweep-corroborated clamp is the pre-designed mitigation held in
     /// reserve for that reopen). The tip has **two consumers in this tick
     /// with opposite sensitivities to a lying daemon** (finding A-1,
-    /// 2026-07-06): the *due-check* (`due_height(p) <= tip`), where
+    /// 2026-07-06): the *due-check* (`due_count(p) <= tip`), where
     /// inflation is benign-later (monotone noise, posts dispatch late);
-    /// and the *alarm horizon* (`tip < at + alarm_horizon_blocks`), where
+    /// and the *alarm horizon* (`tip < at.saturating_add(alarm_horizon)`), where
     /// inflation is **premature-alarm** — a tip reported
     /// `alarm_horizon_blocks` ahead trips the operator alarm on posts
     /// that are propagating normally. The 2d-2 clamp must therefore cover
@@ -513,7 +511,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
     /// (§3.4).
     async fn on_tick(
         &mut self,
-        tip: BlockHeight,
+        tip: ChainCount,
         evidence: TickEvidence<'_>,
         cancel: &CancellationToken,
     ) -> Result<(), DispatchError> {
@@ -583,7 +581,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                     )
                 {
                     if let PendingPostState::Dispatched { at, .. } = state {
-                        if tip.to_raw() >= at.to_raw().saturating_add(horizon)
+                        if tip >= at.saturating_add(horizon)
                             && !reservation_alarmed.contains(&(kind, persona))
                         {
                             reservation_alarms.push((kind, persona, at));
@@ -596,9 +594,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 let mut alarms = Vec::new();
                 for post in block.posts() {
                     if let PendingPostState::Dispatched { at, attempts } = post.state {
-                        if tip.to_raw() >= at.to_raw().saturating_add(horizon)
-                            && !alarmed.contains(&post.persona)
-                        {
+                        if tip >= at.saturating_add(horizon) && !alarmed.contains(&post.persona) {
                             alarms.push((post.persona, at, attempts));
                         }
                     }
@@ -695,7 +691,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 persona = ?persona,
                 dispatched_at = at.to_raw(),
                 tip = tip.to_raw(),
-                horizon_blocks = self.config.alarm_horizon_blocks,
+                horizon_blocks = self.config.alarm_horizon_blocks.to_raw(),
                 "reservation STALL: a dispatched {} has not settled past the alarm horizon — \
                  at least one input it reserved is still live on chain, so its one-live gate \
                  stays shut and this persona cannot start another. NOTE the reservation may \
@@ -720,7 +716,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 dispatched_at = at.to_raw(),
                 tip = tip.to_raw(),
                 attempts,
-                horizon_blocks = self.config.alarm_horizon_blocks,
+                horizon_blocks = self.config.alarm_horizon_blocks.to_raw(),
                 "bond-post dispatch ALARM: dispatched post unconfirmed past the alarm horizon — \
                  resubmits stop (F31: the pool either holds the bytes or is censoring); the \
                  record and its funding reservation are HELD (funds-safety over liveness). \
@@ -750,7 +746,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         }
 
         // GF-7 emission (§3.7): at the submit call site, after the dispersal
-        // sleep. `at` is the logical block the due-check fired against;
+        // sleep. `at` is the claimed count the due-check fired against;
         // `persona` is the opaque wallet-local slot ordinal (payload
         // discipline: no wall-clock, no txid, no identity).
         #[cfg(feature = "gf7-hooks")]

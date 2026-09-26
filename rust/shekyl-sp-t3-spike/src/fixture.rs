@@ -10,7 +10,8 @@
 //! An archival shard is one frozen level-2 curve-tree segment:
 //! `SEGMENT_LEAF_COUNT` = 25 992 leaves × 128 bytes ≈ 3.33 MB
 //! (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2; the leaf width is pinned by
-//! `shekyl_fcmp::tree::construct_leaf`, which packs `O.x ‖ I.x ‖ C.x ‖ h_pqc`).
+//! `shekyl_fcmp::tree::construct_leaf`, which packs `O.x ‖ I.x ‖ C.x ‖ CM.x`
+//! — the 4th scalar is the `PL-D3` leaf commitment's x-coordinate).
 //!
 //! The ruling for this spike is that the payload is a **real shard from a regtest
 //! chain, not synthetic bytes**, and this module refuses to paper over that: it
@@ -37,14 +38,18 @@
 //!   (`DEFAULT_LOCK_WINDOW`). Shard 0 additionally needs the freeze gate
 //!   `tip − end_block_height ≥ SPENDABLE_AGE(60) + REORG_MARGIN(720)`, so the
 //!   target height is ≈ 25 992 + 60 + 780 ≈ 26 832 blocks.
-//! - **Does an extraction path exist?** Yes, and it is a *batched* RPC rather than
+//! - **Does an extraction path exist?** It did at the time of the measurement
+//!   (records-was; the RPC below was removed 2026-09-18 — `SOK-10` Q7 → A, see
+//!   `bins/extract_shard.rs`). It was a *batched* RPC rather than
 //!   the 684 round-trips a per-chunk read would imply:
 //!   `COMMAND_RPC_GET_CURVE_TREE_PATH` takes a **vector** of `output_indices` and
-//!   returns, per entry, a `chunk_outputs_blob` of `[O:32][I:32][C:32][h_pqc:32]`
-//!   for every leaf in that leaf-chunk (`core_rpc_server_commands_defs.h`). Those
-//!   are compressed Ed25519 points, so the 128-byte *leaf* is then rebuilt
-//!   locally with `shekyl_fcmp::tree::construct_leaf` — the same function
-//!   `shekyl_curve_tree::recon::try_build_leaf` uses on the wallet path.
+//!   returns, per entry, a `chunk_outputs_blob` of `[O:32][I:32][C:32][CM.x:32]`
+//!   for every leaf in that leaf-chunk (`core_rpc_server_commands_defs.h`). The
+//!   first three fields are compressed Ed25519 points and the 4th is the leaf's
+//!   scalar as the chunk carries it (`PL-D3`: the commitment point itself is not
+//!   served), so the 128-byte *leaf* is rebuilt locally with
+//!   `shekyl_fcmp::tree::leaf_from_chunk_entry` — the constructor for exactly
+//!   this served-chunk shape.
 //!
 //! So D4 is a cost, not a blocker, and the halt does not fire.
 

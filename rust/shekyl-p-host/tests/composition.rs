@@ -19,15 +19,23 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use shekyl_archival_retention::pass_anchor::{
+    pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
+};
+use shekyl_archival_retention::verify_pass_transcript;
+use shekyl_crypto_pq::signature::HybridSignature;
+use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_NAME};
 use shekyl_curve_tree::{
     leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity,
     PostureDeclaration, SegmentPin, ServedFrameHeader, ServingReader, TargetKind, TreePosition,
     LEAF_BYTES,
 };
 use shekyl_p_host::{
-    HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet,
-    ReportedSet, ServeObligation, ServeSetPinner, Staleness, StalenessBound,
+    DaemonTipCache, HostError, NoResidentKey, PassKey, PersonaServing, PersonaServingHost,
+    PinError, PinReport, PinnedServeSet, ReportedSet, ServeCounters, ServeObligation,
+    ServeSetPinner, Staleness, StalenessBound,
 };
+use shekyl_p_serve::{TestKeySigner, SIGNATURE_ENVELOPE_LEN};
 use shekyl_tor_control_wallet::service::{
     EventSink, OnionIdentity, ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture,
     WalletTorControlConfig,
@@ -47,14 +55,14 @@ fn segment_entries() -> Vec<LeafEntry> {
             let mut leaf = [1u8; 128];
             leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
             LeafEntry {
-                gindex: Gindex(gindex),
-                maturity: BlockHeight(0),
-                creation_height: BlockHeight(0),
+                gindex: Gindex::from_raw(gindex),
+                maturity: BlockHeight::from_raw(0),
+                creation_height: BlockHeight::from_raw(0),
                 leaf,
                 identity: OutputIdentity {
-                    output_key: [1u8; 32],
-                    commitment: Some([2u8; 32]),
-                    h_pqc: [3u8; 32],
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([1u8; 32]),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes([2u8; 32])),
+                    cm: [3u8; 32],
                     target: TargetKind::TaggedKey,
                 },
             }
@@ -162,7 +170,7 @@ impl ServeSetPinner for SlowSecondCallPinner {
                 shard_ids,
                 outcomes,
             },
-            as_of_height: BlockHeight(generation * 1_000),
+            as_of_height: BlockHeight::from_raw(generation * 1_000),
             reader: ServingReader::new(Arc::clone(&self.store)),
         })
     }
@@ -216,7 +224,7 @@ impl ServeSetPinner for IncoherentPinner {
                 shard_ids: self.shard_ids.clone(),
                 outcomes,
             },
-            as_of_height: BlockHeight(1),
+            as_of_height: BlockHeight::from_raw(1),
             reader: ServingReader::new(Arc::new(LeafStore::open_ephemeral().expect("open store"))),
         })
     }
@@ -249,20 +257,61 @@ fn identity() -> OnionIdentity {
     OnionIdentity::from_hs_id_seed(&[9u8; 32])
 }
 
-fn body_of(response: &[u8]) -> &[u8] {
+/// An ephemeral attestation key for a host under test; the test keeps the
+/// handle to read the public half back.
+fn test_key() -> Arc<TestKeySigner> {
+    Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(0)))
+}
+
+/// The gate's height source under test: a daemon tip stamped at `height`.
+///
+/// Since `WSS-24` the `SF-D5` anchor gate reads the **daemon's** tip, not the
+/// store's scan tip, so a test that moves the chain must move this too. That
+/// is the contract rather than a fixture chore — the two heights are
+/// different facts, and the whole point of the change is that the gate
+/// follows the second one.
+///
+/// The age bound is an hour: long enough that no case in this file can expire
+/// mid-test. The age policy itself belongs to `daemon_tip`'s own suite, which
+/// drives it against a supplied instant rather than a clock.
+fn tip_at(height: u64) -> Arc<DaemonTipCache> {
+    let tip = Arc::new(DaemonTipCache::new(Duration::from_secs(3_600)));
+    tip.stamp_synced(BlockHeight::from_raw(height));
+    tip
+}
+
+/// The request header a daemon at `own_height` attaches: anchored at
+/// `tip − 720`, the centre of the persona's gate.
+const NONCE: [u8; 32] = [0x5a; 32];
+const ANCHOR_HASH: [u8; 32] = [0xa5; 32];
+
+fn anchor_for(own_height: u64) -> BlockHeight {
+    BlockHeight::from_raw(own_height - PASS_ANCHOR_DEPTH_BLOCKS.to_raw())
+}
+
+/// Split a 200 response into its `SF-D8` envelope and the framed body that
+/// follows it, the way a fetcher does.
+fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
     let end = response
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head");
-    &response[end + 4..]
+    let body = &response[end + 4..];
+    assert!(
+        body.len() >= SIGNATURE_ENVELOPE_LEN,
+        "a served body leads with the countersignature envelope"
+    );
+    let (sig, rest) = body.split_at(SIGNATURE_ENVELOPE_LEN);
+    let sig = HybridSignature::from_canonical_bytes(sig).expect("canonical hybrid signature");
+    (sig, rest)
 }
 
 /// Leaf bytes a 200 response actually carries, read through the served frame
-/// (`RF-D4`) the way a fetcher does: the two leading lengths, then the segment.
-/// Asserting on the raw body length would now be asserting on the header too,
-/// and would pass just as well if the frame were malformed.
+/// (`RF-D4`) the way a fetcher does: the envelope, the two leading lengths,
+/// then the segment. Asserting on the raw body length would now be asserting
+/// on the header too, and would pass just as well if the frame were malformed.
 fn served_segment_len(response: &[u8]) -> u64 {
-    let mut body = body_of(response);
+    let (_, mut body) = envelope_of(response);
     let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
     assert_eq!(frame.padding_len(), 0, "writers emit zero padding");
     assert_eq!(
@@ -273,11 +322,31 @@ fn served_segment_len(response: &[u8]) -> u64 {
     frame.segment_bytes()
 }
 
-async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
+/// Whether a response is the endpoint's identical refusal. Every non-servable
+/// outcome renders the same 404, so this is all a requester can tell — which
+/// is the point of asserting through it rather than through a counter.
+fn is_refused(response: &[u8]) -> bool {
+    let head_end = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("response has a head");
+    String::from_utf8_lossy(&response[..head_end]).contains(" 404 ")
+}
+
+/// One request as a daemon at `own_height` sends it: the ruled route plus
+/// the 72-byte request header the countersignature binds.
+async fn fetch(addr: SocketAddr, path: &str, own_height: u64) -> Vec<u8> {
+    let header = pass_request_header_bytes(&NONCE, anchor_for(own_height), &ANCHOR_HASH);
     let mut s = TcpStream::connect(addr).await.expect("connect");
-    s.write_all(format!("GET {path} HTTP/1.1\r\nhost: x\r\n\r\n").as_bytes())
-        .await
-        .expect("write request");
+    s.write_all(
+        format!(
+            "GET {path} HTTP/1.1\r\nhost: x\r\n{REQUEST_HEADER_NAME}: {}\r\n\r\n",
+            encode_request_header(&header)
+        )
+        .as_bytes(),
+    )
+    .await
+    .expect("write request");
     let mut out = Vec::new();
     s.read_to_end(&mut out).await.expect("read response");
     out
@@ -307,18 +376,18 @@ async fn a_pruned_member_refuses_the_whole_serve_set_and_names_every_one() {
     let mut both = segment_entries();
     let mut second = segment_entries();
     for (i, e) in second.iter_mut().enumerate() {
-        e.gindex = Gindex(leaves_per_segment() as u64 + i as u64);
+        e.gindex = Gindex::from_raw(leaves_per_segment() as u64 + i as u64);
     }
     both.extend(second);
     store
-        .append_block_deltas(&both, &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&both, &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segments 0 and 1");
     store.prune_frozen(&[]).expect("prune without pinning");
 
     let err = PinnedServeSet::acquire(&StorePinner::new(
         Arc::clone(&store),
         &[0, 1, 2],
-        BlockHeight(10_000),
+        BlockHeight::from_raw(10_000),
     ))
     .await
     .expect_err("a pruned member must refuse the set");
@@ -344,13 +413,13 @@ async fn unfrozen_members_are_pinned_and_recorded_as_not_yet_servable() {
     // not the same thing as a fault.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
 
     let pinned = PinnedServeSet::acquire(&StorePinner::new(
         Arc::clone(&store),
         &[0, 1],
-        BlockHeight(10_000),
+        BlockHeight::from_raw(10_000),
     ))
     .await
     .expect("frozen + not-yet-frozen is a healthy set");
@@ -436,20 +505,23 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     // repeatedly. It is the guard against someone adding the rebind later.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
 
-    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight(10_000));
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(10_000));
 
     let dir = tempfile::tempdir().expect("tempdir");
     let id = identity();
     let expected_service_id = id.service_id().clone();
+    let key = test_key();
     let host = PersonaServingHost::start(
         churning_tor(&dir),
         PersonaServing {
             identity: id,
             virtual_port: 80,
             max_streams: 8,
+            key: Arc::clone(&key) as Arc<dyn PassKey>,
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -462,12 +534,25 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     let addr = host.serve_addr();
     assert!(addr.ip().is_loopback(), "the serve target is loopback");
 
-    let first = fetch(addr, "/x-provisional/v0/shard/0").await;
+    let first = fetch(addr, "/shard/0", 10_000).await;
     assert_eq!(
         served_segment_len(&first),
         (leaves_per_segment() * LEAF_BYTES) as u64,
         "a whole shard, not a 404 that happens to be non-empty"
     );
+    // The envelope verifies against the key the host was started with,
+    // over the transcript the request fixed — at a gate centred on the
+    // daemon tip the host was started with (`WSS-24`).
+    let (signature, _) = envelope_of(&first);
+    verify_pass_transcript(
+        key.public_key(),
+        &NONCE,
+        anchor_for(10_000),
+        &ANCHOR_HASH,
+        0,
+        &signature,
+    )
+    .expect("the served countersignature binds header and shard id");
 
     // Let the supervisor fail several incarnations.
     let mut posture = host.posture();
@@ -495,11 +580,35 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
         addr,
         "the loopback target must not move under incarnation churn"
     );
-    let second = fetch(addr, "/x-provisional/v0/shard/0").await;
-    assert_eq!(second, first, "and it must still be serving the same bytes");
-    let (served, _refused, failures, _accept_errors) = host.counters();
+    let second = fetch(addr, "/shard/0", 10_000).await;
+    // "The same bytes" is the frame, not the whole body: hybrid signing is
+    // randomized, so two serves of one shard carry two valid envelopes over
+    // one identical payload. Compare what the persona is obligated to
+    // reproduce, and verify what it is obligated to bind.
+    let (second_signature, second_frame) = envelope_of(&second);
+    assert_eq!(
+        second_frame,
+        envelope_of(&first).1,
+        "and it must still be serving the same bytes"
+    );
+    verify_pass_transcript(
+        key.public_key(),
+        &NONCE,
+        anchor_for(10_000),
+        &ANCHOR_HASH,
+        0,
+        &second_signature,
+    )
+    .expect("the second serve is countersigned too");
+    let ServeCounters {
+        served,
+        lookup_failures,
+        sign_failures,
+        ..
+    } = host.counters();
     assert_eq!(served, 2);
-    assert_eq!(failures, 0);
+    assert_eq!(lookup_failures, 0);
+    assert_eq!(sign_failures, 0);
 
     host.shutdown().await;
 }
@@ -510,7 +619,7 @@ async fn shutdown_stops_the_listener() {
     // port it points at); what is observable without a live onion is that
     // the listener is gone once shutdown resolves.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight(0));
+    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight::from_raw(0));
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -519,6 +628,8 @@ async fn shutdown_stops_the_listener() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
+            key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -576,7 +687,7 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
     // it on every tick.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
 
     let pinner = SlowSecondCallPinner {
@@ -591,6 +702,8 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
+            key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -612,7 +725,7 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
     );
     assert_eq!(
         witness.serve_set().as_of_height(),
-        BlockHeight(3_000),
+        BlockHeight::from_raw(3_000),
         "the stamp must come from the last attempt to run, not the last to finish"
     );
 
@@ -628,10 +741,14 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     // that window discards bytes no re-pin can restore.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
 
-    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight(1));
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(1));
+
+    // Hoisted: this test advances the chain, so it must advance the gate's
+    // view of the chain too (see `tip_at`).
+    let tip = tip_at(10_000);
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -640,6 +757,8 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
+            key: test_key(),
+            tip: Arc::clone(&tip),
         },
         &pinner,
     )
@@ -647,20 +766,23 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     .expect("start");
 
     // Holdings grow to cover segment 1, which then freezes.
-    pinner.holdings_became(&[0, 1], BlockHeight(20_000));
+    pinner.holdings_became(&[0, 1], BlockHeight::from_raw(20_000));
     host.refresh().await.expect("refresh");
     let mut second = segment_entries();
     for (i, e) in second.iter_mut().enumerate() {
-        e.gindex = Gindex(leaves_per_segment() as u64 + i as u64);
+        e.gindex = Gindex::from_raw(leaves_per_segment() as u64 + i as u64);
     }
     store
-        .append_block_deltas(&second, &[], &[], BlockHeight(20_000))
+        .append_block_deltas(&second, &[], &[], BlockHeight::from_raw(20_000))
         .expect("freeze segment 1");
+    // The daemon the persona reads has moved with the chain — what the tip
+    // refresher does on its cadence in production.
+    tip.stamp_synced(BlockHeight::from_raw(20_000));
 
     // The prune that would have cost the shard. The refresh's pin is what
     // survives it — taken before the freeze, which is the whole point.
     store.prune_frozen(&[]).expect("prune");
-    let body = fetch(host.serve_addr(), "/x-provisional/v0/shard/1").await;
+    let body = fetch(host.serve_addr(), "/shard/1", 20_000).await;
     assert_eq!(
         served_segment_len(&body),
         (leaves_per_segment() * LEAF_BYTES) as u64,
@@ -678,7 +800,7 @@ async fn staleness_reads_one_clock_twice_with_independent_drivers() {
     // principal's block scan). Ingest without refresh is exactly the
     // divergence a halted sweep produces.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight(0));
+    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight::from_raw(0));
     let pinned = PinnedServeSet::acquire(&pinner).await.expect("pin");
 
     let bound = StalenessBound::blocks(100);
@@ -690,7 +812,7 @@ async fn staleness_reads_one_clock_twice_with_independent_drivers() {
 
     // Ingest advances the tip; nothing refreshes the serve-set.
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("ingest");
     let stale = pinned.staleness(bound).expect("read staleness");
     assert!(stale.is_stale(), "10_000 blocks of ingest, no refresh");
@@ -699,7 +821,7 @@ async fn staleness_reads_one_clock_twice_with_independent_drivers() {
     assert!(stale.to_string().contains("refresh is still succeeding"));
 
     // And a refresh clears it — the same two clocks, re-aligned.
-    pinner.holdings_became(&[], BlockHeight(10_000));
+    pinner.holdings_became(&[], BlockHeight::from_raw(10_000));
     let refreshed = pinned.refreshed(&pinner).await.expect("refresh");
     assert_eq!(
         refreshed.staleness(bound).expect("read staleness"),
@@ -721,7 +843,7 @@ async fn staleness_measures_local_ingest_not_the_distance_to_the_daemon() {
     // `tip - as_of_height` here saturates to `Current { lag: 0 }` no matter
     // how much this wallet ingests. Reading one clock twice does not.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight(500_000));
+    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight::from_raw(500_000));
     let pinned = PinnedServeSet::acquire(&pinner).await.expect("pin");
 
     let bound = StalenessBound::blocks(100);
@@ -733,7 +855,7 @@ async fn staleness_measures_local_ingest_not_the_distance_to_the_daemon() {
 
     // The wallet catches up. The serve-set is not re-derived.
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("ingest");
 
     assert_eq!(
@@ -759,9 +881,9 @@ async fn a_store_rollback_beneath_the_pins_is_its_own_reading() {
     // affirmative all-clear on the one store event that can unpin a member.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
-    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight(10_000));
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(10_000));
     let pinned = PinnedServeSet::acquire(&pinner).await.expect("pin");
 
     let bound = StalenessBound::blocks(100);
@@ -772,7 +894,7 @@ async fn a_store_rollback_beneath_the_pins_is_its_own_reading() {
 
     // A reorg deep enough to invalidate the sync tip.
     store
-        .truncate_from_tree_position(TreePosition(0))
+        .truncate_from_tree_position(TreePosition::from_raw(0))
         .expect("rollback");
 
     // The truncation deleted this member's pin row, so the reading is the
@@ -818,9 +940,9 @@ async fn re_ingest_past_the_baseline_does_not_clear_a_dropped_pin() {
     // shards nothing retains.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
-    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight(10_000));
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(10_000));
     let pinned = PinnedServeSet::acquire(&pinner).await.expect("pin");
 
     let bound = StalenessBound::blocks(100);
@@ -831,24 +953,24 @@ async fn re_ingest_past_the_baseline_does_not_clear_a_dropped_pin() {
 
     // Reorg: the pin row for segment 0 goes with it.
     store
-        .truncate_from_tree_position(TreePosition(0))
+        .truncate_from_tree_position(TreePosition::from_raw(0))
         .expect("rollback");
 
     // The chain re-converges and the principal ingests straight back past the
     // height the witness was stamped at. Nothing here re-pins.
     let mut replayed = segment_entries();
     for (i, e) in replayed.iter_mut().enumerate() {
-        e.gindex = Gindex(i as u64);
+        e.gindex = Gindex::from_raw(i as u64);
     }
     store
         // Just past the baseline and well inside the bound, so a tip-derived
         // reading lands on `Current` rather than merely on the wrong arm.
         // That is the finding's actual hazard: not a bad number, an
         // affirmative all-clear.
-        .append_block_deltas(&replayed, &[], &[], BlockHeight(10_050))
+        .append_block_deltas(&replayed, &[], &[], BlockHeight::from_raw(10_050))
         .expect("re-ingest past the baseline");
     assert!(
-        store.sync_tip_height().expect("tip") > BlockHeight(10_000),
+        store.sync_tip_height().expect("tip") > BlockHeight::from_raw(10_000),
         "the premise of this test is that the tip climbed back ABOVE the baseline"
     );
 
@@ -884,17 +1006,17 @@ async fn one_terminally_pruned_member_does_not_wedge_every_later_refresh() {
     // unpinned and prunable. That is §9.6 item 4's slash re-entering through
     // the error path of the refresh built to close it.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight(0));
+    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight::from_raw(0));
     let pinned = PinnedServeSet::acquire(&pinner).await.expect("pin");
 
     // Segment 0 freezes and is pruned before this persona ever bonded it.
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
     store.prune_frozen(&[]).expect("prune unpinned");
 
     // Holdings now name the unrecoverable shard 0 AND a fresh shard 1.
-    pinner.holdings_became(&[0, 1], BlockHeight(20_000));
+    pinner.holdings_became(&[0, 1], BlockHeight::from_raw(20_000));
     let refreshed = pinned
         .refreshed(&pinner)
         .await
@@ -911,10 +1033,10 @@ async fn one_terminally_pruned_member_does_not_wedge_every_later_refresh() {
     // it must still be there — under a whole-set refusal it would not be.
     let mut second = segment_entries();
     for (i, e) in second.iter_mut().enumerate() {
-        e.gindex = Gindex(leaves_per_segment() as u64 + i as u64);
+        e.gindex = Gindex::from_raw(leaves_per_segment() as u64 + i as u64);
     }
     store
-        .append_block_deltas(&second, &[], &[], BlockHeight(20_000))
+        .append_block_deltas(&second, &[], &[], BlockHeight::from_raw(20_000))
         .expect("freeze segment 1");
     store.prune_frozen(&[]).expect("prune");
     assert!(
@@ -939,14 +1061,14 @@ async fn a_pruned_member_still_refuses_the_start() {
     // paid before the persona advertises itself.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
     store.prune_frozen(&[]).expect("prune unpinned");
 
     let err = PinnedServeSet::acquire(&StorePinner::new(
         Arc::clone(&store),
         &[0],
-        BlockHeight(10_000),
+        BlockHeight::from_raw(10_000),
     ))
     .await
     .expect_err("acquire still refuses what refresh records");
@@ -966,7 +1088,7 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
     // ingests nothing, so the lag arms have nothing to say. The count of
     // ATTEMPTS is the one local fact the fault cannot suppress.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight(0));
+    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight::from_raw(0));
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
         churning_tor(&dir),
@@ -974,6 +1096,8 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
+            key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -1027,9 +1151,9 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
     // only one of those is recoverable.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
-    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight(1));
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(1));
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -1038,6 +1162,8 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
+            key: test_key(),
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -1055,14 +1181,14 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
     assert!(matches!(err, PinError::Pinner { .. }));
     assert_eq!(
         host.pinned_serve_set().serve_set().as_of_height(),
-        BlockHeight(1),
+        BlockHeight::from_raw(1),
         "the previous witness survives a failed refresh"
     );
 
     // And the pins it holds are still real.
     store.prune_frozen(&[]).expect("prune");
     assert_eq!(
-        served_segment_len(&fetch(host.serve_addr(), "/x-provisional/v0/shard/0").await),
+        served_segment_len(&fetch(host.serve_addr(), "/shard/0", 10_000).await),
         (leaves_per_segment() * LEAF_BYTES) as u64
     );
 
@@ -1080,6 +1206,8 @@ async fn start_refuses_a_pinner_that_cannot_pin() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
+            key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
         },
         DeadPinner,
     )
@@ -1095,12 +1223,15 @@ async fn a_refresh_that_pins_a_different_store_keeps_the_previous_witness() {
     // previous pins stay; the mismatch is an implementor defect.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
-    let pinned =
-        PinnedServeSet::acquire(&StorePinner::new(Arc::clone(&store), &[0], BlockHeight(1)))
-            .await
-            .expect("pin");
+    let pinned = PinnedServeSet::acquire(&StorePinner::new(
+        Arc::clone(&store),
+        &[0],
+        BlockHeight::from_raw(1),
+    ))
+    .await
+    .expect("pin");
 
     struct OtherStorePinner;
     impl ServeSetPinner for OtherStorePinner {
@@ -1111,7 +1242,7 @@ async fn a_refresh_that_pins_a_different_store_keeps_the_previous_witness() {
                     shard_ids: vec![0],
                     outcomes: vec![(0, SegmentPin::PinnedServable)],
                 },
-                as_of_height: BlockHeight(2),
+                as_of_height: BlockHeight::from_raw(2),
                 reader: ServingReader::new(other),
             })
         }
@@ -1122,7 +1253,7 @@ async fn a_refresh_that_pins_a_different_store_keeps_the_previous_witness() {
         .await
         .expect_err("pins in a different store cannot replace this witness");
     assert!(matches!(err, PinError::PinnerStoreMismatch));
-    assert_eq!(pinned.serve_set().as_of_height(), BlockHeight(1));
+    assert_eq!(pinned.serve_set().as_of_height(), BlockHeight::from_raw(1));
 }
 
 #[tokio::test]
@@ -1134,7 +1265,7 @@ async fn host_staleness_uses_the_live_witness() {
     // the lag arithmetic (that is
     // `staleness_reads_one_clock_twice_with_independent_drivers`).
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight(0));
+    let pinner = StorePinner::new(Arc::clone(&store), &[], BlockHeight::from_raw(0));
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
         churning_tor(&dir),
@@ -1142,6 +1273,8 @@ async fn host_staleness_uses_the_live_witness() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
+            key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -1155,7 +1288,7 @@ async fn host_staleness_uses_the_live_witness() {
     );
 
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("ingest");
     let stale = host.staleness(bound).expect("read host staleness");
     assert!(
@@ -1194,7 +1327,7 @@ impl ServeSetPinner for PrefixPinner {
                 frozen_count,
                 declaration,
             },
-            as_of_height: BlockHeight(10_000),
+            as_of_height: BlockHeight::from_raw(10_000),
             reader: ServingReader::new(Arc::clone(&self.store)),
         })
     }
@@ -1215,7 +1348,7 @@ impl ServeSetPinner for UndeclaredPrefixPinner {
                 frozen_count,
                 declaration: PostureDeclaration::AlreadyDeclared,
             },
-            as_of_height: BlockHeight(10_000),
+            as_of_height: BlockHeight::from_raw(10_000),
             reader: ServingReader::new(Arc::clone(&self.store)),
         })
     }
@@ -1233,7 +1366,7 @@ impl ServeSetPinner for UndeclaredPrefixPinner {
 async fn prefix_acquire_requires_the_declared_posture_and_bounds_membership() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
 
     let err = PinnedServeSet::acquire(&UndeclaredPrefixPinner {
@@ -1289,7 +1422,7 @@ async fn prefix_acquire_requires_the_declared_posture_and_bounds_membership() {
 async fn prefix_refresh_admits_a_segment_that_froze_since_the_last_one() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
@@ -1301,10 +1434,10 @@ async fn prefix_refresh_admits_a_segment_that_froze_since_the_last_one() {
     // Segment 1 fills and freezes — the chain kept growing.
     let mut second = segment_entries();
     for (i, e) in second.iter_mut().enumerate() {
-        e.gindex = Gindex(leaves_per_segment() as u64 + i as u64);
+        e.gindex = Gindex::from_raw(leaves_per_segment() as u64 + i as u64);
     }
     store
-        .append_block_deltas(&second, &[], &[], BlockHeight(20_000))
+        .append_block_deltas(&second, &[], &[], BlockHeight::from_raw(20_000))
         .expect("append and freeze segment 1");
 
     let refreshed = pinned.refreshed(&pinner).await.expect("refresh");
@@ -1353,7 +1486,7 @@ async fn prefix_over_an_unfrozen_store_is_empty_and_still_acquires() {
 async fn prefix_overstating_the_cursor_refuses_and_understating_it_does_not() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     store.set_prune_disabled().expect("declare the posture");
 
@@ -1368,7 +1501,7 @@ async fn prefix_overstating_the_cursor_refuses_and_understating_it_does_not() {
                     frozen_count: self.frozen_count,
                     declaration: PostureDeclaration::AlreadyDeclared,
                 },
-                as_of_height: BlockHeight(10_000),
+                as_of_height: BlockHeight::from_raw(10_000),
                 reader: ServingReader::new(Arc::clone(&self.store)),
             })
         }
@@ -1409,7 +1542,7 @@ async fn prefix_overstating_the_cursor_refuses_and_understating_it_does_not() {
 async fn prefix_posture_loss_is_posture_lost_not_pins_dropped() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
@@ -1446,7 +1579,7 @@ async fn prefix_posture_loss_is_posture_lost_not_pins_dropped() {
 async fn prefix_refresh_repairs_a_lost_posture_and_verifies_the_corpus() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
@@ -1481,7 +1614,7 @@ async fn prefix_refresh_repairs_a_lost_posture_and_verifies_the_corpus() {
 async fn prefix_loss_window_prune_is_surfaced_persisted_and_refuses_a_restart() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
@@ -1529,4 +1662,121 @@ async fn prefix_loss_window_prune_is_surfaced_persisted_and_refuses_a_restart() 
         PinError::MembersAlreadyPruned { shard_ids: vec![0] },
         "got {err:?}"
     );
+}
+
+#[tokio::test]
+async fn the_gate_follows_the_daemon_not_the_principals_scan() {
+    // WSS-24, end to end. The defect: `own_height` was the principal's
+    // block-scan tip, and nothing bounds that lag below the gate's L = 4. An
+    // honest persona whose wallet refresh was a few blocks behind refused a
+    // VALID challenge, missed the pass, and was slashed for its own scanner's
+    // cadence.
+    //
+    // The store here is deliberately stale — frozen and ingested to 10_000 —
+    // while the chain, and the daemon, are at 10_006. Six blocks is past L, so
+    // under the old reading this fetch is refused; under the ruled one it is
+    // served. That gap is the whole finding, and it is what makes this test a
+    // falsifier rather than a restatement: re-point `HostSigner::own_height`
+    // at `ServingReader::sync_tip_height` and this goes red.
+    const SCAN_TIP: u64 = 10_000;
+    const CHAIN_TIP: u64 = 10_006;
+    // Compile-time: the fixture must put the scan tip OUTSIDE the gate, or
+    // this test proves nothing. A later edit to either constant that closed
+    // the gap would otherwise leave a green test asserting nothing.
+    const _: () = assert!(CHAIN_TIP - SCAN_TIP > PASS_ANCHOR_LAG_BLOCKS.to_raw());
+
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(
+            &segment_entries(),
+            &[],
+            &[],
+            BlockHeight::from_raw(SCAN_TIP),
+        )
+        .expect("freeze segment 0");
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(SCAN_TIP));
+
+    let tip = tip_at(CHAIN_TIP);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let key = test_key();
+    let host = PersonaServingHost::start(
+        churning_tor(&dir),
+        PersonaServing {
+            identity: identity(),
+            virtual_port: 80,
+            max_streams: 8,
+            key: Arc::clone(&key) as Arc<dyn PassKey>,
+            tip: Arc::clone(&tip),
+        },
+        &pinner,
+    )
+    .await
+    .expect("start");
+
+    // The challenge an honest witness sends, anchored at the chain's own
+    // tip - 720. Nothing about it is unusual; it is refused today only
+    // because of where this persona read its height.
+    let served = fetch(host.serve_addr(), "/shard/0", CHAIN_TIP).await;
+    assert!(
+        !is_refused(&served),
+        "a valid challenge must be served even though the scan tip is {} blocks behind",
+        CHAIN_TIP - SCAN_TIP
+    );
+    assert_eq!(
+        served_segment_len(&served),
+        (leaves_per_segment() * LEAF_BYTES) as u64,
+        "a whole shard, not a 404 that happens to be non-empty"
+    );
+    // And the countersignature binds the anchor the requester actually sent,
+    // so "served" is not merely "did not 404".
+    let (signature, _) = envelope_of(&served);
+    verify_pass_transcript(
+        key.public_key(),
+        &NONCE,
+        anchor_for(CHAIN_TIP),
+        &ANCHOR_HASH,
+        0,
+        &signature,
+    )
+    .expect("the served countersignature binds the requester's anchor");
+
+    // A daemon that has stopped following the chain is the other direction:
+    // its height is not the chain's, so the persona must refuse rather than
+    // certify against it. Same store, same pins, same request — only the
+    // daemon's state differs, which is what makes this pair discriminating.
+    //
+    // "Stopped following" is deliberately broader than "syncing" since F2:
+    // a once-synced daemon that lost its peers, went offline, or refused a
+    // switch at the prune watermark all land here, because the sticky
+    // `synchronized` flag cannot distinguish them (`daemon_tip`'s suite
+    // owns which reply means which).
+    tip.stamp_not_following();
+    let refused = fetch(host.serve_addr(), "/shard/0", CHAIN_TIP).await;
+    assert!(
+        is_refused(&refused),
+        "a persona whose daemon is syncing must not certify an anchor"
+    );
+
+    // Refusing on a height it cannot read is a LOOKUP failure, not a sign
+    // failure: the key was never asked. That is the bucket an operator reads
+    // to tell "lost sight of the chain" from "key not resident".
+    let counters = host.counters();
+    assert_eq!(
+        counters.sign_failures, 0,
+        "the key is not consulted for an anchor the gate already refused"
+    );
+    assert!(
+        counters.lookup_failures >= 1,
+        "an unreadable height lands in the same bucket an unreadable store does"
+    );
+
+    // Once the daemon is synced again the persona serves again — the refusal
+    // is a state, not a latch.
+    tip.stamp_synced(BlockHeight::from_raw(CHAIN_TIP));
+    assert!(
+        !is_refused(&fetch(host.serve_addr(), "/shard/0", CHAIN_TIP).await),
+        "a persona must recover when its daemon does"
+    );
+
+    host.shutdown().await;
 }

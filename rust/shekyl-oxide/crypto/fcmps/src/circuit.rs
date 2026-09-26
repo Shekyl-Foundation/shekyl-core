@@ -37,16 +37,6 @@ pub trait FcmpCurves {
     type C2: Ciphersuite;
     /// The Discrete-Log gadget parameters for the curve of the second set of branches.
     type C2Parameters: DiscreteLogParameters;
-
-    /// Additional scalars per leaf beyond the 3 point x-coordinates (O.x, I.x, C.x).
-    ///
-    /// Shekyl uses 1 extra scalar: H(pqc_pk), giving a 4-scalar leaf.
-    const EXTRA_LEAF_SCALARS: usize = 1;
-
-    /// Total scalars per output in the leaf layer: 3 base x-coordinates + extras.
-    fn leaf_tuple_width() -> usize {
-        3 + Self::EXTRA_LEAF_SCALARS
-    }
 }
 
 /// A struct representing a circuit.
@@ -99,6 +89,7 @@ where
         U_table: &GeneratorTable<C::F, Parameters>,
         V_table: &GeneratorTable<C::F, Parameters>,
         G_table: &GeneratorTable<C::F, Parameters>,
+        J_table: &GeneratorTable<C::F, Parameters>,
 
         O_tilde: (C::F, C::F),
         o_blind: PointWithDlog<Parameters>,
@@ -116,18 +107,23 @@ where
         c_blind: PointWithDlog<Parameters>,
         C: (Variable, Variable),
 
-        extra_leaf_vars: Vec<Variable>,
-        extra_leaf_public_values: Vec<C::F>,
+        K: (C::F, C::F),
+        k_blind: PointWithDlog<Parameters>,
+        CM: (Variable, Variable),
 
         branch: Vec<Vec<Variable>>,
     ) {
-        let (challenge, challenged_generators) =
-            self.discrete_log_challenge(transcript, curve, &[T_table, U_table, V_table, G_table]);
+        let (challenge, challenged_generators) = self.discrete_log_challenge(
+            transcript,
+            curve,
+            &[T_table, U_table, V_table, G_table, J_table],
+        );
         let mut challenged_generators = challenged_generators.into_iter();
         let challenged_T = challenged_generators.next().unwrap();
         let challenged_U = challenged_generators.next().unwrap();
         let challenged_V = challenged_generators.next().unwrap();
         let challenged_G = challenged_generators.next().unwrap();
+        let challenged_J = challenged_generators.next().unwrap();
 
         let O = self.on_curve(curve, O);
         let o_blind = self.discrete_log(curve, o_blind, &challenge, &challenged_T);
@@ -150,21 +146,18 @@ where
         let c_blind = self.discrete_log(curve, c_blind, &challenge, &challenged_G);
         self.incomplete_add_pub(C_tilde, c_blind, C);
 
-        // Constrain each extra leaf scalar to equal its public value (e.g. H(pqc_pk))
-        assert_eq!(
-            extra_leaf_vars.len(),
-            extra_leaf_public_values.len(),
-            "extra_leaf_vars and extra_leaf_public_values must have equal length"
-        );
-        for (var, public_val) in extra_leaf_vars.iter().zip(extra_leaf_public_values.iter()) {
-            self.constrain_equal_to_zero(
-                LinComb::from(*var) - &LinComb::empty().constant(*public_val),
-            );
-        }
+        // The PQC leaf commitment `CM = k·G_k + r·J` opens to the verifier-computed
+        // public point `K = k·G_k` under the witness blind `r`: `K + r·J = CM`, the
+        // exact shape of the `C` leg above (Shekyl `PL-D3`). `CM.x` is the leaf's
+        // 4th scalar; it enters the membership tuple as a witness, never as a public
+        // value, which is what closes `PL-D1`.
+        let CM = self.on_curve(curve, CM);
+        let k_blind = self.discrete_log(curve, k_blind, &challenge, &challenged_J);
+        self.incomplete_add_pub(K, k_blind, CM);
 
-        // Membership tuple: x-coordinates of O, I, C plus any extra leaf scalars
-        let mut member = vec![O.x(), I.x(), C.x()];
-        member.extend(extra_leaf_vars.iter().cloned());
+        // Membership tuple: `{O.x, I.x, C.x, CM.x}` — width is `LEAF_TUPLE_WIDTH`.
+        let member = vec![O.x(), I.x(), C.x(), CM.x()];
+        debug_assert_eq!(member.len(), crate::LEAF_TUPLE_WIDTH);
         self.tuple_member_of_list(transcript, member, branch);
     }
 

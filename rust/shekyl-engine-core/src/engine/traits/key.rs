@@ -77,6 +77,7 @@ use shekyl_units::AtomicUnits;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::engine::error::KeyEngineError;
+use shekyl_types::BlockHash;
 
 // --- Constants -------------------------------------------------------------
 
@@ -357,8 +358,6 @@ pub(crate) struct TxInputSigningContext {
     pub output_key: [u8; 32],
     /// Pedersen commitment (on-chain).
     pub commitment: [u8; 32],
-    /// PQC leaf hash `H(pqc_pk)` for this output.
-    pub h_pqc: [u8; 32],
     /// Sibling leaf chunk for FCMP++ membership proof.
     pub leaf_chunk: Vec<LeafEntry>,
     /// Selene (C1) branch layers, bottom-to-top.
@@ -383,7 +382,6 @@ impl std::fmt::Debug for TxInputSigningContext {
             .field("source_ciphertext", &self.source_ciphertext)
             .field("output_key", &"[REDACTED]")
             .field("commitment", &"[REDACTED]")
-            .field("h_pqc", &"[REDACTED]")
             .field("leaf_chunk", &format!("{} entries", self.leaf_chunk.len()))
             .field("c1_layers", &format!("{} layers", self.c1_layers.len()))
             .field("c2_layers", &format!("{} layers", self.c2_layers.len()))
@@ -425,7 +423,7 @@ impl std::fmt::Debug for TxInputSigningContext {
 /// - [`Self::output_index`] ↔ `SpendInput::output_index`
 ///
 /// The public on-chain components of `SpendInput` (`output_key`,
-/// `commitment`, `amount`, `h_pqc`, `leaf_chunk`, `c1_layers`,
+/// `commitment`, `amount`, `leaf_chunk`, `c1_layers`,
 /// `c2_layers`) ride on the surrounding [`TxInputSigningContext`] /
 /// [`TxToSign`] message shapes, not in this bundle — they are not
 /// secrets.
@@ -611,7 +609,7 @@ pub(crate) struct TxSignatures {
     pub per_input: Vec<TxInputSignature>,
     pub fcmp_proof: Vec<u8>,
     pub fee: u64,
-    pub reference_block: [u8; 32],
+    pub reference_block: BlockHash,
     pub tree_depth: u8,
     /// Output one-time keys for final wire encode (LocalSigner).
     pub output_keys: Vec<[u8; 32]>,
@@ -951,7 +949,6 @@ mod tests {
             source_ciphertext: sentinel_ciphertext(),
             output_key: [0x44; 32],
             commitment: [0x55; 32],
-            h_pqc: [0x66; 32],
             leaf_chunk: Vec::new(),
             c1_layers: Vec::new(),
             c2_layers: Vec::new(),
@@ -977,6 +974,7 @@ mod tests {
         // the per-input shape; pre-establishing the redaction
         // discipline is cheaper than re-establishing it later.
         use shekyl_tx_builder::TreeContext;
+        use shekyl_types::CurveTreeRoot;
 
         use shekyl_address::Network;
 
@@ -991,7 +989,6 @@ mod tests {
                 source_ciphertext: sentinel_ciphertext(),
                 output_key: [0x44; 32],
                 commitment: [0x55; 32],
-                h_pqc: [0x66; 32],
                 leaf_chunk: Vec::new(),
                 c1_layers: Vec::new(),
                 c2_layers: Vec::new(),
@@ -999,8 +996,8 @@ mod tests {
             outputs: vec![],
             fcmp_plus_plus_context: FcmpPlusPlusContext {
                 tree: TreeContext {
-                    reference_block: [0; 32],
-                    tree_root: [0; 32],
+                    reference_block: BlockHash::NULL,
+                    tree_root: CurveTreeRoot::from_bytes([0; 32]),
                     tree_depth: 1,
                 },
             },

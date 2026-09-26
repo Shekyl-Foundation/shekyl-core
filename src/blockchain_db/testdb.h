@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <map>
@@ -87,7 +88,23 @@ public:
   virtual void correct_block_cumulative_difficulties(const uint64_t& start_height, const std::vector<difficulty_type>& new_cumulative_difficulties) override {}
   virtual uint64_t get_block_already_generated_coins(const uint64_t& height) const override { return 10000000000; }
   virtual uint64_t get_block_long_term_weight(const uint64_t& height) const override { return 128; }
-  virtual std::vector<uint64_t> get_long_term_block_weights(uint64_t start_height, size_t count) const override { return {}; }
+  // `count` copies of what `get_block_long_term_weight` reports, NOT an empty
+  // vector. The two accessors are the same fact read two ways, and returning
+  // `{}` here made them contradict: `Blockchain::get_long_term_block_weight_median`
+  // inserts this vector into a rolling median and then calls `median()`, so an
+  // empty answer left the window EMPTY and `median()` read its uninitialised
+  // storage. The resulting long-term median was heap-dependent — observed as
+  // 9 475 100 461 579 156 132 in one ordering and sane in another — which then
+  // set `m_long_term_effective_median_block_weight` and both fee paths from it.
+  //
+  // It stayed hidden because the pre-FL-R20 estimate inserted `grace_blocks`
+  // zeroes into a COPY of that window before taking the median, which made the
+  // value well-defined (0) and `max(0, Zm)` sane. The relay floor had no such
+  // accident and was already reading the garbage. FL-R20 deletes the grace
+  // insertion, so the fixture had to stop lying.
+  virtual std::vector<uint64_t> get_long_term_block_weights(uint64_t start_height, size_t count) const override {
+    return std::vector<uint64_t>(count, get_block_long_term_weight(start_height));
+  }
   virtual crypto::hash get_block_hash_from_height(const uint64_t& height) const override { return crypto::hash(); }
   virtual std::vector<cryptonote::block> get_blocks_range(const uint64_t& h1, const uint64_t& h2) const override { return std::vector<cryptonote::block>(); }
   virtual std::vector<crypto::hash> get_hashes_range(const uint64_t& h1, const uint64_t& h2) const override { return std::vector<crypto::hash>(); }
@@ -109,7 +126,6 @@ public:
   virtual cryptonote::tx_out_index get_output_tx_and_index(const uint64_t& amount, const uint64_t& index) const override { return cryptonote::tx_out_index(); }
   virtual void get_output_tx_and_index(const uint64_t& amount, const std::vector<uint64_t> &offsets, std::vector<cryptonote::tx_out_index> &indices) const override {}
   virtual void get_output_key(const epee::span<const uint64_t> &amounts, const std::vector<uint64_t> &offsets, std::vector<cryptonote::output_data_t> &outputs, bool allow_partial = false) const override {}
-  virtual bool can_thread_bulk_indices() const override { return false; }
   virtual std::vector<std::vector<uint64_t>> get_tx_amount_output_indices(const uint64_t tx_index, size_t n_txes) const override { return std::vector<std::vector<uint64_t>>(); }
   virtual bool has_key_image(const crypto::key_image& img) const override { return false; }
   virtual void remove_block() override { }
@@ -126,7 +142,6 @@ public:
   virtual bool for_all_outputs(std::function<bool(uint64_t amount, const crypto::hash &tx_hash, uint64_t height, size_t tx_idx)> f) const override { return true; }
   virtual bool for_all_outputs(uint64_t amount, const std::function<bool(uint64_t height)> &f) const override { return true; }
   virtual bool is_read_only() const override { return false; }
-  virtual std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const override { return std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>>(); }
   virtual bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const override { return false; }
 
   virtual void add_txpool_tx(const crypto::hash &txid, const cryptonote::blobdata_ref &blob, const cryptonote::txpool_tx_meta_t& details) override {}
@@ -153,10 +168,6 @@ public:
   virtual uint8_t get_hard_fork_version(uint64_t height) const override { return 0; }
   virtual void check_hard_fork_info() override {}
 
-  virtual uint32_t get_blockchain_pruning_seed() const override { return 0; }
-  virtual bool prune_blockchain(uint32_t pruning_seed = 0) override { return true; }
-  virtual bool update_pruning() override { return true; }
-  virtual bool check_pruning() override { return true; }
 
   virtual void add_alt_block(const crypto::hash &blkid, const cryptonote::alt_block_data_t &data, const cryptonote::blobdata_ref &blob) override {}
   virtual bool get_alt_block(const crypto::hash &blkid, alt_block_data_t *data, cryptonote::blobdata *blob) override { return false; }
@@ -185,8 +196,28 @@ public:
   virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t, uint64_t) override {}
   virtual uint32_t archival_serve_credit_pass_count(const crypto::hash&, uint64_t, uint64_t) const override { return 0; }
 
+  // Settlement write throws. Absence is SO-D1 non-observation (the most
+  // forgiving verdict), so a silent no-op write would let a test pass after
+  // a failed store — the SO-D5 inversion in a double. Serve-credit may no-op
+  // because absence there is a MISS. A working in-memory table belongs on a
+  // subclass (the serve-credit pattern) or on BlockchainLMDB / TempLMDB.
+  virtual void set_archival_settlement(const crypto::hash&, uint64_t, uint64_t,
+    uint32_t, uint32_t) override
+  {
+    throw std::runtime_error(
+      "FATAL: BaseTestDB is not a settlement store; a no-op write would "
+      "read back as SO-D1 non-observation (fail-open). Use TempLMDB.");
+  }
+  virtual bool get_archival_settlement(const crypto::hash&, uint64_t, uint64_t,
+    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>&) const override
+  {
+    return false;
+  }
+  virtual void delete_archival_settlement_for_epoch(uint64_t) override {}
+  virtual void delete_archival_settlement_before_epoch(uint64_t) override {}
+
   virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&,
-    const std::vector<uint8_t>&, uint64_t,
+    const std::vector<uint8_t>&, const crypto::public_key&, uint64_t,
     uint64_t, uint8_t, const std::vector<uint64_t>&,
     const std::vector<std::pair<uint64_t, uint64_t>>&) override {}
   virtual void put_archival_bond_value(const crypto::hash&,
@@ -212,11 +243,6 @@ public:
   virtual bool get_output_leaf_index(shekyl::db::OutputIndex, shekyl::db::TreePosition&) const override { return false; }
   virtual bool get_leaf_output_index(shekyl::db::TreePosition, shekyl::db::OutputIndex&) const override { return false; }
 
-  virtual void store_output_metadata(uint64_t, const output_pruning_metadata_t&) override {}
-  virtual bool get_output_metadata(uint64_t, output_pruning_metadata_t&) const override { return false; }
-  virtual bool is_output_pruned(uint64_t) const override { return false; }
-  virtual bool prune_tx_data(uint64_t) override { return true; }
-  virtual uint64_t get_last_pruned_tx_data_height() const override { return 0; }
   virtual bool tx_has_verification_data(const crypto::hash&) const override { return true; }
 
   virtual void grow_curve_tree(const std::vector<uint8_t>&, uint64_t) override {}
@@ -235,7 +261,6 @@ public:
   }
   virtual uint8_t get_curve_tree_depth() const override { return 0; }
   virtual uint64_t get_curve_tree_leaf_count() const override { return 0; }
-  virtual bool get_curve_tree_layer_hash(uint8_t, uint64_t, uint8_t*) const override { return false; }
   virtual bool get_curve_tree_leaf_by_tree_position(uint64_t, uint8_t*) const override { return false; }
   virtual bool get_curve_tree_leaf_by_output_index(uint64_t, uint8_t*) const override { return false; }
 

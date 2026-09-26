@@ -7,17 +7,34 @@ license.workspace = true
 repository.workspace = true
 description = "Foundational state-shaped domain newtypes (heights, indices, hashes, timestamps) shared across the Shekyl wallet/consensus stack"
 
+[build-dependencies]
+# Host-only: the build script reads `config/consensus_constants.json` for
+# the shard partition's `T` (`SHARD_TX_COUNT`). The runtime crate stays
+# `#![no_std]` with no new dependency.
+serde_json = "1"
+
 [dependencies]
-serde = { workspace = true }
+# `default-features = false`: this crate is `#![no_std]` so `shekyl-difficulty`
+# (and any other leaf math crate) can consume the vocabulary without taking
+# `std`. Rule 17 does not forbid that first-party edge; refusing it is how
+# `BlockHeight` got redefined as `u64` in the DAA. `derive` is the only
+# feature the newtypes need.
+# Not `workspace = true`: Cargo ignores `default-features = false` on a
+# workspace dep whose workspace entry did not itself disable defaults
+# (serde/zeroize in the workspace Cargo.toml enable `std`). Direct pins
+# keep this crate `no_std`-consumable.
+serde = { version = "1", default-features = false, features = ["derive"] }
 # Hash newtypes derive `Zeroize` so they can sit in `Zeroize`-deriving
 # containers (e.g. `TransferDetails`), matching `AtomicUnits`. Non-secret
 # data, but the wipe must compile where the container wipes structurally.
-zeroize = { workspace = true }
+zeroize = { version = "1.5", default-features = false, features = ["derive"] }
 # `postcard_schema::Schema` is opt-in: only crates that persist these
 # newtypes into snapshot-checked blocks (today `shekyl-engine-state`) need
 # the derive. Foundational consumers (difficulty, consensus, economics)
 # stay free of the dependency. See `42-serialization-policy.mdc` for why the
-# named schema matters once a type lands in a persisted block.
+# named schema matters once a type lands in a persisted block. The `schema`
+# feature implies `std` via postcard-schema's `use-std`; the default build
+# does not.
 postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"], optional = true }
 
 [features]

@@ -12,10 +12,11 @@
 //! repository already uses).
 
 use super::*;
-use crate::engine::test_support::conforming_pqc_extra;
+use crate::engine::test_support::{conforming_coinbase_extra, conforming_pqc_extra};
 use core::future::Future;
 use shekyl_rpc_types::HashHex;
 
+use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, PrunableHash, TxHash};
 use shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL;
 use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, TxPrefix};
 
@@ -54,13 +55,13 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
     // pinning the binding while claiming to pin the status guard.
     let tx = pruned_spend_tx(0);
     let prunable_digest = [0x5Au8; 32];
-    let txid = tx.hash_with_supplied_prunable(prunable_digest);
+    let txid = tx.hash_with_supplied_prunable(PrunableHash::from_bytes(prunable_digest));
     let mut body = Vec::new();
     tx.write(&mut body).expect("Vec write is infallible");
     let reply = shekyl_rpc_types::GetTransactionsResponse {
         status: shekyl_rpc_types::RpcStatus("Failed".to_owned()),
         txs: vec![TxEntry {
-            tx_hash: HashHex::from_bytes(txid),
+            tx_hash: HashHex::from_bytes(txid.to_bytes()),
             as_hex: String::new(),
             pruned_as_hex: hex::encode(&body),
             prunable_as_hex: String::new(),
@@ -100,10 +101,12 @@ fn coinbase_block(number: u64) -> Block {
             major_version: 1,
             minor_version: 0,
             timestamp: 1,
-            previous: [0u8; 32],
+            previous: BlockHash::NULL,
             nonce: 0,
-            curve_tree_root: [0u8; 32],
-            attestation_root: shekyl_archival_retention::empty_attestation_root(),
+            curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+            attestation_root: AttestationRoot::from_bytes(
+                shekyl_archival_retention::empty_attestation_root(),
+            ),
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {
@@ -114,7 +117,7 @@ fn coinbase_block(number: u64) -> Block {
                     key: [1u8; 32],
                     view_tag: 0,
                 }],
-                extra: conforming_pqc_extra(1),
+                extra: conforming_coinbase_extra(1),
             },
             ct: Ct::Null(CtBase {
                 enc_amounts: vec![[7u8; 9]],
@@ -212,7 +215,7 @@ fn parse_pruned_tx_rejects_coinbase_shaped() {
                 key: [1u8; 32],
                 view_tag: 0,
             }],
-            extra: conforming_pqc_extra(1),
+            extra: conforming_coinbase_extra(1),
         },
         ct: Ct::Null(CtBase {
             enc_amounts: vec![[0u8; 9]],
@@ -238,11 +241,11 @@ fn parse_pruned_tx_rejects_coinbase_shaped() {
                 key: [1u8; 32],
                 view_tag: 0,
             }],
-            extra: conforming_pqc_extra(1),
+            extra: conforming_coinbase_extra(1),
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]],
                 enc_labels: vec![[0u8; 9]],
@@ -306,7 +309,7 @@ fn pruned_spend_tx(unlock_time: u64) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0u8; 9], [0u8; 9]],
                 enc_labels: vec![[0u8; 9], [0u8; 9]],
@@ -332,8 +335,8 @@ fn pruned_tx_hex() -> String {
 /// `prunable_hash`. Deriving it rather than picking a label is the point:
 /// `parse_tx_batch` now binds the body, so a fixture that invents a hash is
 /// staging the substitution it is supposed to reject.
-fn pruned_id(tx: &Transaction) -> [u8; 32] {
-    tx.hash_with_supplied_prunable([0u8; 32])
+fn pruned_id(tx: &Transaction) -> TxHash {
+    tx.hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]))
 }
 
 /// A **full** (unpruned) non-miner spend: [`pruned_spend_tx`] with the
@@ -384,9 +387,9 @@ fn full_spend_tx() -> Transaction {
 /// A reply entry built from the wire type rather than a JSON literal, so
 /// the double cannot describe a shape the daemon does not produce (RK-D1).
 /// The mined arm, because these fixtures stand in for confirmed txs.
-fn tx_entry_with(tx_hash: [u8; 32], as_hex: &str, pruned_as_hex: &str) -> TxEntry {
+fn tx_entry_with(tx_hash: TxHash, as_hex: &str, pruned_as_hex: &str) -> TxEntry {
     TxEntry {
-        tx_hash: HashHex::from_bytes(tx_hash),
+        tx_hash: HashHex::from_bytes(tx_hash.to_bytes()),
         as_hex: as_hex.to_owned(),
         pruned_as_hex: pruned_as_hex.to_owned(),
         prunable_as_hex: String::new(),
@@ -408,7 +411,7 @@ fn tx_entry(tx_hash_hex: &str, pruned_hex: &str) -> TxEntry {
         .expect("test hash is hex")
         .try_into()
         .expect("test hash is 32 bytes");
-    tx_entry_with(bytes, "", pruned_hex)
+    tx_entry_with(TxHash::from_bytes(bytes), "", pruned_hex)
 }
 
 /// **A canonical transaction under a borrowed label is refused.**
@@ -479,7 +482,7 @@ fn parse_tx_batch_rejects_reordered_hashes() {
     // in swapped slots. Running global-output-index assignment depends on
     // block order, so a reorder must be rejected even though each tx is
     // individually valid (the adversarial-daemon mis-association case).
-    let (h0, h1) = ([3u8; 32], [4u8; 32]);
+    let (h0, h1) = (TxHash::from_bytes([3u8; 32]), TxHash::from_bytes([4u8; 32]));
     let blob = pruned_tx_hex();
     let txs = vec![
         tx_entry(&hex::encode(h1), &blob),
@@ -493,7 +496,7 @@ fn parse_tx_batch_rejects_reordered_hashes() {
 
 #[test]
 fn parse_tx_batch_rejects_count_mismatch() {
-    let (h0, h1) = ([3u8; 32], [4u8; 32]);
+    let (h0, h1) = (TxHash::from_bytes([3u8; 32]), TxHash::from_bytes([4u8; 32]));
     let blob = pruned_tx_hex();
     let txs = vec![tx_entry(&hex::encode(h0), &blob)];
     assert!(matches!(
@@ -529,7 +532,7 @@ fn a_reply_without_a_tx_hash_label_is_refused_at_the_boundary() {
 
 #[test]
 fn parse_tx_batch_rejects_missing_pruned_blob() {
-    let h0 = [3u8; 32];
+    let h0 = TxHash::from_bytes([3u8; 32]);
     let txs = vec![tx_entry_with(h0, "", "")];
     assert!(matches!(
         parse_tx_batch(&[h0], &txs, TxBodyForm::Pruned),
@@ -617,7 +620,7 @@ fn parse_full_tx_rejects_a_prunable_stripped_spend_naming_the_pruned_daemon() {
 
 #[test]
 fn parse_tx_batch_full_form_requires_a_body_field() {
-    let h0 = [3u8; 32];
+    let h0 = TxHash::from_bytes([3u8; 32]);
     let txs = vec![tx_entry_with(h0, "", "")];
     assert!(matches!(
         parse_tx_batch(&[h0], &txs, TxBodyForm::Full),

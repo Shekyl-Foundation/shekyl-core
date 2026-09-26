@@ -1,0 +1,17 @@
+[package]
+name = "shekyl-onion-v3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "rend-spec-v3 onion hostname from an Ed25519 public key, and the check that a hostname is one (no Tor instance)"
+publish = false
+
+[dependencies]
+# SHA3-256 for the v3 checksum (rend-spec-v3 §6). Same crate and feature
+# set the rest of the workspace hashes with.
+sha3 = { version = "0.10", default-features = false }
+
+[lints]
+workspace = true

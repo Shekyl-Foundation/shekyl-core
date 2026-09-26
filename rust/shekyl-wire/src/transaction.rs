@@ -44,10 +44,10 @@
 use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
+use shekyl_types::{BlockHash, PCanonicalId, PrefixHash};
 
 use crate::bytes::{read_array, read_byte};
-use crate::hash::hash_concat;
-use crate::tx_extra::{check_pqc_field_shape_of, parse as parse_tx_extra};
+use crate::tx_extra::{check_tx_extra_shape, parse as parse_tx_extra, ExtraSubject};
 use crate::varint::{read_varint, write_varint};
 use crate::READ_LEN_CAP;
 
@@ -70,8 +70,8 @@ pub const CT_TYPE_FCMP: u8 = 0x01;
 /// `txin_archival_serve_credit_response` tag (gate-2, non-spending).
 pub const TAG_INPUT_SERVE_CREDIT: u8 = 0x02;
 /// `txin_archival_bond_post` tag (gate-4). JoinMarket (credit) and Release
-/// (debit) are the wallet-constructible archival kinds; Rebond and
-/// HoldingsUpdate have verify arms and no producer yet.
+/// (debit) are the wallet-constructible archival kinds; Reinstate has a verify
+/// arm and no producer yet. Discriminant 3 (HoldingsUpdate) is REJECTED.
 pub const TAG_INPUT_BOND_POST: u8 = 0x03;
 /// `txin_archival_reward_emission` tag (C-1) — an opaque canonical blob whose
 /// codec is owned by `shekyl-archival-retention::emission_wire`
@@ -81,9 +81,13 @@ pub const TAG_INPUT_BOND_POST: u8 = 0x03;
 /// enforces (`cryptonote_basic.h:302-310`) and [`Input::read`] mirrors.
 pub const TAG_INPUT_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 
-/// `post_kind` value for a JoinMarket archival bond post.
-/// `bond_spend_pk` is present on the wire iff `post_kind == JOINMARKET` (§9.11).
+/// `post_kind` value for a JoinMarket archival bond post. `bond_spend_pk` and
+/// the serving endpoint are present on the wire iff `post_kind == JOINMARKET`
+/// (§9.11, `EU-D3`).
 pub const BOND_POST_KIND_JOINMARKET: u8 = 0;
+/// The serving endpoint on the wire: the raw 32-byte ed25519 public key of the
+/// persona's v3 onion service. Present iff JoinMarket (`EU-D3`).
+pub const BOND_POST_ENDPOINT_LEN: usize = 32;
 /// `holdings.kind` for a compact shard-set (carries an explicit shard list).
 pub const HOLDINGS_SHARD_SET_COMPACT: u8 = 0;
 /// `holdings.kind` for the complete tree (carries no shard list).
@@ -130,19 +134,24 @@ pub const MAX_TX_EXTRA: usize = 24_576;
 /// parse/DoS cap. The **binding** relay/consensus bound for a single tx is
 /// the (much tighter) [`TX_WEIGHT_LIMIT`].
 pub const MAX_TX_SIZE: usize = 1_000_000;
-/// Minimum block weight (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`,
-/// `src/cryptonote_config.h`) — the full-reward zone every block gets
-/// regardless of the dynamic median.
-pub const MIN_BLOCK_WEIGHT: usize = 300_000;
+include!(concat!(env!("OUT_DIR"), "/block_weight_generated.rs"));
+
+/// Minimum block weight: the penalty-free zone, generated from
+/// `config/consensus_constants.json` `block_weight_full_reward_zone_bytes`.
+///
+/// The same key generates `EconomicParams::full_reward_zone` and the C++
+/// macro `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`. This crate reads
+/// the JSON because the wire format cannot depend on `shekyl-economics`.
+/// [`TX_WEIGHT_LIMIT`] is half of this minus the coinbase reserve.
+pub const MIN_BLOCK_WEIGHT: usize = GENERATED_FULL_REWARD_ZONE_USIZE;
 /// Coinbase blob reserve (`CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE`)
 /// subtracted from the per-tx weight limit.
 pub const COINBASE_BLOB_RESERVED_SIZE: usize = 600;
 /// Per-transaction weight limit (`get_transaction_weight_limit`,
 /// `src/cryptonote_core/tx_verification_utils.cpp`): half the minimum block
 /// weight minus the coinbase reserve. A compile-time constant on Shekyl
-/// (v3-from-genesis: `HF_VERSION_PER_BYTE_FEE = 1`, so the `/ 2` arm always
-/// applies — the daemon-rpc submit facts pin the same 149 400 value from the
-/// C++ side). Tx weight is the serialized size plus the Bp+ verification
+/// (the half-weight arm is unconditional from genesis; the daemon-rpc submit
+/// facts pin the same 149 400 value from the C++ side). Tx weight is the serialized size plus the Bp+ verification
 /// clawback ([`bp_plus_weight_clawback`]); the mempool refuses any tx whose
 /// weight exceeds this, so builders must bound against it, never against
 /// [`MAX_TX_SIZE`].
@@ -171,6 +180,11 @@ pub const UNLOCK_TIME_BLOCK_SENTINEL: u64 = 500_000_000;
 pub const PQC_HYBRID_SINGLE_KEY_LEN: usize = 1996;
 /// Single hybrid signature length — twin of `SINGLE_SIG_CANONICAL_LEN`.
 pub const PQC_HYBRID_SINGLE_SIG_LEN: usize = 3385;
+
+// The attestation-witness cap in `shekyl-types` factors this length in.
+// A signature-size change has to move the pin in the same edit.
+const _: () =
+    assert!(PQC_HYBRID_SINGLE_SIG_LEN == shekyl_types::archival::ATTESTATION_WITNESS_SIGNATURE_LEN);
 
 /// Transport bound on a serve-credit vin's opaque `canonical_bytes` (kept
 /// half, `RF-D1`): `tag(1) + p_id(32) + shard varint(≤10) + epoch varint(≤10)
@@ -587,36 +601,40 @@ fn check_serve_credit_pruned_blob(bytes: &[u8]) -> io::Result<()> {
 
 /// The `post_kind` discriminant of a [`BondPost`], with its coupled payload.
 ///
-/// Only the JoinMarket post carries `bond_spend_pk` on the wire (§9.11), so the
-/// coupling lives in the type: `JoinMarket` *always* has the key and `Other` *never*
-/// does. That makes both silent round-trip hazards of the old `{ post_kind: u8,
-/// bond_spend_pk: Option<_> }` shape — a non-JoinMarket post whose `Some` key `write`
-/// dropped, and a JoinMarket post whose missing key `write` errored on — impossible
-/// to construct.
+/// Only the JoinMarket post carries `bond_spend_pk` and the serving endpoint on
+/// the wire (§9.11, `EU-D3`), so the one coupling lives in the type: `JoinMarket`
+/// *always* has both and `Other` *never* does. That makes both silent round-trip
+/// hazards of a `{ post_kind: u8, bond_spend_pk: Option<_> }` shape — a
+/// non-JoinMarket post whose `Some` key `write` dropped, and a JoinMarket post
+/// whose missing key `write` errored on — impossible to construct.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BondPostKind {
     /// JoinMarket post (`post_kind` `0x00`) — carries `bond_spend_pk`, the
-    /// GF-1 debit authorizer (§9.11). The credit path; Release is `Other(2)`.
+    /// GF-1 debit authorizer (§9.11), and the serving endpoint (`EU-D3`). The
+    /// credit path; Release is `Other(2)`.
     JoinMarket {
         /// The GF-1 debit authorizer hybrid public key.
         bond_spend_pk: Vec<u8>,
+        /// Serving endpoint: 32-byte onion pubkey, mandatory on JoinMarket.
+        endpoint: [u8; BOND_POST_ENDPOINT_LEN],
     },
-    /// Any non-JoinMarket post kind — no `bond_spend_pk` on the wire. The byte must
-    /// not be the JoinMarket tag (`Other` is non-JoinMarket by construction; `write`
-    /// rejects `Other(JOINMARKET)`).
+    /// Any non-JoinMarket post kind — no `bond_spend_pk` and no endpoint on the
+    /// wire. The byte must not be the JoinMarket tag (`Other` is non-JoinMarket
+    /// by construction; `write` rejects `Other(JOINMARKET)`).
     Other(u8),
 }
 
 /// Archival bond-post payload (dense tag `0x03`, gate-4 §3.4.1).
-/// The `post_kind`/`bond_spend_pk` coupling (§9.11) is carried in [`BondPostKind`]:
-/// JoinMarket carries the key; every other archival kind is `Other(tag)`.
+/// The `post_kind` coupling (§9.11, `EU-D3`) is carried in [`BondPostKind`]:
+/// JoinMarket carries the key and the endpoint; every other archival kind is
+/// `Other(tag)`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BondPost {
     /// `P`'s canonical hybrid public key.
     pub hybrid_public_key: Vec<u8>,
     /// `P`'s canonical id.
-    pub p_canonical_id: [u8; 32],
-    /// The post kind and its coupled `bond_spend_pk` (§9.11).
+    pub p_canonical_id: PCanonicalId,
+    /// The post kind and its coupled `bond_spend_pk` + endpoint (§9.11, `EU-D3`).
     pub kind: BondPostKind,
     /// Holdings served.
     pub holdings: Holdings,
@@ -632,18 +650,22 @@ impl BondPost {
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         write_varint(self.hybrid_public_key.len(), w)?;
         w.write_all(&self.hybrid_public_key)?;
-        w.write_all(&self.p_canonical_id)?;
+        w.write_all(self.p_canonical_id.as_bytes())?;
         match &self.kind {
-            BondPostKind::JoinMarket { bond_spend_pk } => {
+            BondPostKind::JoinMarket {
+                bond_spend_pk,
+                endpoint,
+            } => {
                 w.write_all(&[BOND_POST_KIND_JOINMARKET])?;
                 write_varint(bond_spend_pk.len(), w)?;
                 w.write_all(bond_spend_pk)?;
+                w.write_all(endpoint)?;
             }
             BondPostKind::Other(post_kind) => {
                 // `Other` is non-JoinMarket by contract; reusing the JoinMarket tag
-                // would make `write` emit a `bond_spend_pk`-less blob that `read`
-                // would then try to parse as JoinMarket (consuming the holdings bytes
-                // as the key). Reject the misconstruction rather than emit it.
+                // would make `write` emit a key-less, endpoint-less blob that `read`
+                // would then try to parse as JoinMarket (consuming the holdings
+                // bytes as the key). Reject the misconstruction rather than emit it.
                 if *post_kind == BOND_POST_KIND_JOINMARKET {
                     return Err(io::Error::other(
                         "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag \
@@ -662,7 +684,7 @@ impl BondPost {
     fn read<R: Read>(r: &mut R) -> io::Result<BondPost> {
         let hybrid_public_key =
             read_len_prefixed_exact(r, "bond_post hybrid_public_key", PQC_HYBRID_SINGLE_KEY_LEN)?;
-        let p_canonical_id = read_array(r)?;
+        let p_canonical_id = PCanonicalId::from_bytes(read_array(r)?);
         let post_kind = read_byte(r)?;
         // `read` never yields `Other(JOINMARKET)`: the JoinMarket tag always takes the
         // first arm, so the `write` guard above only fires on a hand-built value.
@@ -673,6 +695,7 @@ impl BondPost {
                     "bond_spend_pk",
                     PQC_HYBRID_SINGLE_KEY_LEN,
                 )?,
+                endpoint: read_array(r)?,
             }
         } else {
             BondPostKind::Other(post_kind)
@@ -700,7 +723,7 @@ impl BondPost {
             )));
         }
         match &self.kind {
-            BondPostKind::JoinMarket { bond_spend_pk } => {
+            BondPostKind::JoinMarket { bond_spend_pk, .. } => {
                 if bond_spend_pk.len() != PQC_HYBRID_SINGLE_KEY_LEN {
                     return Err(io::Error::other(format!(
                         "shekyl-wire: bond_post bond_spend_pk {} != canonical {PQC_HYBRID_SINGLE_KEY_LEN}",
@@ -709,7 +732,7 @@ impl BondPost {
                 }
             }
             // `Other` must not reuse the JoinMarket tag — `write` would emit a
-            // bond_spend_pk-less blob that re-parses as JoinMarket (a mis-parse).
+            // key-less, endpoint-less blob that re-parses as JoinMarket (a mis-parse).
             BondPostKind::Other(post_kind) => {
                 if *post_kind == BOND_POST_KIND_JOINMARKET {
                     return Err(io::Error::other(
@@ -844,13 +867,13 @@ impl PqcAuth {
         w.write_all(&self.hybrid_signature)
     }
 
-    /// The PQC **header** — `auth_version ‖ scheme_id ‖ flags(u16 LE) ‖ varint(pk_len) ‖
-    /// hybrid_public_key`, with **no signature bytes**. This is the `pqc_header(i)`
-    /// component of the per-input PQC signing preimage
-    /// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.5 / C++ `tx_pqc_verify.cpp:109-124`): a
-    /// signature signs over its own header, so the header must exclude it. Identical to
-    /// [`Self::write`] up to and including the public key.
-    fn header_write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+    /// The authentication's **header** — `auth_version ‖ scheme_id ‖ flags(u16 LE) ‖
+    /// varint(pk_len) ‖ hybrid_public_key`: what identifies the signer and the
+    /// scheme, and nothing of the signature. It is the input's own component of
+    /// the PQC signing preimage (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.5,
+    /// [`PqcSigningPreimage::payload`]); a signature is not over itself, so the
+    /// header is [`Self::write`] stopped before the signature.
+    fn write_header<W: Write>(&self, w: &mut W) -> io::Result<()> {
         w.write_all(&[self.auth_version, self.scheme_id])?;
         w.write_all(&self.flags.to_le_bytes())?;
         write_varint(self.hybrid_public_key.len(), w)?;
@@ -1080,12 +1103,17 @@ pub enum Ct {
     Fcmp {
         /// Transaction fee.
         fee: u64,
-        /// Block hash anchoring the curve-tree root the proof is against.
-        reference_block: [u8; 32],
+        /// Block hash anchoring the curve-tree root the proof is against —
+        /// `ref_height`'s companion (CEN-I12). Typed as the block hash it is
+        /// (RTN-7): raw beside a typed `previous` would be the asymmetry no
+        /// later reader could explain.
+        reference_block: BlockHash,
         /// Committed base arrays (per output).
         base: CtBase,
         /// Per-input PQC authentication (count == `nvin`, no length prefix; empty
-        /// in the serve-credit form — the countersignature rides the vin).
+        /// in the serve-credit form, whose hybrid countersignature is over the
+        /// pass record instead — Ed25519 leg on the vin, ML-DSA leg in the
+        /// pruned record; CEN-J10).
         pqc_auths: Vec<PqcAuth>,
         /// Prunable region. `None` only for the storage-pruned *spend* form
         /// (daemon `get_transactions prune:true`). Serve-credit carries
@@ -1097,6 +1125,15 @@ pub enum Ct {
 impl Ct {
     /// Write the ct section.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        self.write_base(w)?;
+        self.write_pqc_auths(w)?;
+        self.write_prunable(w)
+    }
+
+    /// The ct type byte, the fee / reference block (FCMP only) and the
+    /// committed base — everything before the tx-level `pqc_auths`. The
+    /// store's `txs_pruned` segment ends here.
+    fn write_base<W: Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
             Ct::Null(base) => {
                 w.write_all(&[CT_TYPE_NULL])?;
@@ -1106,26 +1143,40 @@ impl Ct {
                 fee,
                 reference_block,
                 base,
-                pqc_auths,
-                prunable,
+                ..
             } => {
                 w.write_all(&[CT_TYPE_FCMP])?;
                 write_varint(*fee, w)?;
-                w.write_all(reference_block)?;
-                base.write(w)?;
-                // tx-level pqc_auths: count == nvin, no length prefix (empty in
-                // the serve-credit form).
-                for auth in pqc_auths {
-                    auth.write(w)?;
-                }
-                // prunable follows iff present (absent only for the
-                // storage-pruned spend form).
-                if let Some(prunable) = prunable {
-                    prunable.write(w)?;
-                }
-                Ok(())
+                w.write_all(reference_block.as_bytes())?;
+                base.write(w)
             }
         }
+    }
+
+    /// The tx-level `pqc_auths`: count == nvin, no length prefix (empty in
+    /// the serve-credit form; absent for `Null`). The store's
+    /// `txs_pqc_auths` segment.
+    fn write_pqc_auths<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        if let Ct::Fcmp { pqc_auths, .. } = self {
+            for auth in pqc_auths {
+                auth.write(w)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The prunable region: present iff the spend carries one (absent for
+    /// `Null` and for the storage-pruned spend form). The store's
+    /// `txs_prunable` segment.
+    fn write_prunable<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        if let Ct::Fcmp {
+            prunable: Some(prunable),
+            ..
+        } = self
+        {
+            prunable.write(w)?;
+        }
+        Ok(())
     }
 
     /// Read the ct section. `inputs`/`outputs` (the vin/vout counts) size the
@@ -1148,7 +1199,7 @@ impl Ct {
             CT_TYPE_NULL => Ok(Ct::Null(CtBase::read(outputs, r)?)),
             CT_TYPE_FCMP => {
                 let fee = read_varint(r)?;
-                let reference_block = read_array(r)?;
+                let reference_block = BlockHash::from_bytes(read_array(r)?);
                 let base = CtBase::read(outputs, r)?;
                 // EOF-tolerant tail (§9.8 / §4). A genuine spend that ends
                 // after the base is the storage-pruned form with empty
@@ -1306,12 +1357,86 @@ pub struct Transaction {
     pub ct: Ct,
 }
 
+mod txid;
+pub use txid::TxidParts;
+
+mod signing_preimage;
+pub use signing_preimage::PqcSigningPreimage;
+
+/// A transaction's bytes as the chain store's three segments.
+///
+/// `concat(pruned, pqc_auths, prunable)` is exactly [`Transaction::write`]'s
+/// output; the cuts are the two offsets the C++ store takes as
+/// `pqc_auths_offset` and `unprunable_size` (`db_lmdb.cpp`
+/// `add_transaction_data`), so `txs_pruned` / `txs_pqc_auths` /
+/// `txs_prunable` hold byte-identical rows on both engines. Layout, not
+/// consensus: nothing here changes what [`Transaction::write`] emits.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TxSegments {
+    /// Version, prefix, ct type byte, fee / reference block (FCMP) and the
+    /// committed base — `txs_pruned`.
+    pub pruned: Vec<u8>,
+    /// The tx-level `pqc_auths` — `txs_pqc_auths`. Empty for a coinbase,
+    /// for the serve-credit form, and for a spend with no inputs; the
+    /// store writes no row for an empty segment (LMDB parity).
+    pub pqc_auths: Vec<u8>,
+    /// The prunable region — `txs_prunable`. Empty when absent; the store
+    /// writes the (empty) row regardless (LMDB parity).
+    pub prunable: Vec<u8>,
+}
+
+impl TxSegments {
+    /// The whole transaction, as [`Transaction::write`] emits it.
+    #[must_use]
+    pub fn concat(&self) -> Vec<u8> {
+        let mut out =
+            Vec::with_capacity(self.pruned.len() + self.pqc_auths.len() + self.prunable.len());
+        out.extend_from_slice(&self.pruned);
+        out.extend_from_slice(&self.pqc_auths);
+        out.extend_from_slice(&self.prunable);
+        out
+    }
+}
+
 impl Transaction {
     /// Write the transaction.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         write_varint(TX_VERSION, w)?;
         self.prefix.write(w)?;
         self.ct.write(w)
+    }
+
+    /// The **pruned segment** — version, prefix, CT type, fee and reference
+    /// block (FCMP), and the committed base: what a node retains after
+    /// pruning ([`TxSegments::pruned`], the store's `txs_pruned` row) and the
+    /// whole-transaction component of the PQC signing preimage
+    /// ([`PqcSigningPreimage`]). The bytes [`Self::write`] emits before the
+    /// authentications and the prunable region.
+    fn write_pruned<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        write_varint(TX_VERSION, w)?;
+        self.prefix.write(w)?;
+        self.ct.write_base(w)
+    }
+
+    /// The transaction's bytes cut into the store's three segments
+    /// ([`TxSegments`]). Same bytes as [`Self::write`], split where the
+    /// store keeps them.
+    ///
+    /// # Errors
+    ///
+    /// Only what writing into a `Vec` can raise — in practice, none.
+    pub fn write_segments(&self) -> io::Result<TxSegments> {
+        let mut pruned = Vec::new();
+        self.write_pruned(&mut pruned)?;
+        let mut pqc_auths = Vec::new();
+        self.ct.write_pqc_auths(&mut pqc_auths)?;
+        let mut prunable = Vec::new();
+        self.ct.write_prunable(&mut prunable)?;
+        Ok(TxSegments {
+            pruned,
+            pqc_auths,
+            prunable,
+        })
     }
 
     /// Read the transaction.
@@ -1413,93 +1538,13 @@ impl Transaction {
     /// serializes `VARINT(version)` first, so this is
     /// `keccak256(varint(TX_VERSION) ‖ TxPrefix::write)` — the same `varint(3) ‖
     /// prefix` composition [`Self::write`] emits at the head of the tx.
-    pub fn prefix_hash(&self) -> [u8; 32] {
+    pub fn prefix_hash(&self) -> PrefixHash {
         let mut buf = Vec::new();
         write_varint(TX_VERSION, &mut buf).expect("writing to a Vec is infallible");
         self.prefix
             .write(&mut buf)
             .expect("writing to a Vec is infallible");
-        keccak256(&buf)
-    }
-
-    /// Per-input PQC signing-preimage hashes — the `signed_hash(i)` each input's PQC
-    /// auth (ML-DSA + ed25519) signs (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; C++
-    /// `get_transaction_signed_payload`, `tx_pqc_verify.cpp:58-152`):
-    ///
-    /// ```text
-    /// payload(i)     = prefix_blob ‖ ct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
-    /// signed_hash(i) = keccak256(payload(i))
-    /// ```
-    /// - `prefix_blob`    = `varint(TX_VERSION) ‖ TxPrefix::write` (same as [`Self::prefix_hash`]'s input)
-    /// - `ct_base_blob`  = `CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write`
-    ///   (mirrors the [`Ct::Fcmp`] write head exactly — §1.3, referenceBlock in *base*)
-    /// - `prunable_hash`  = `keccak256(Prunable::write)` (the digest, not the blob — §1.4)
-    /// - `pqc_header(i)`  = the i-th auth header, **no signature** (`PqcAuth::header_write` — §1.5)
-    /// - `all_key_hashes` = `‖ over every auth: keccak256(hybrid_public_key)` (binds every
-    ///   input's key into every signature)
-    ///
-    /// Returns one hash per `pqc_auths` entry — `== nvin` for a valid spend, whose arity
-    /// `Transaction::validate` couples (the count is not re-checked here, so a hand-built
-    /// tx with mismatched arity yields one hash per auth regardless). Returns an empty vec
-    /// for any non-spend shape — a `Null` ct, or a fee-only `Fcmp` with no prunable /
-    /// empty `pqc_auths` — which carries no per-input PQC signature.
-    pub fn pqc_signing_payload_hashes(&self) -> Vec<[u8; 32]> {
-        let Ct::Fcmp {
-            fee,
-            reference_block,
-            base,
-            pqc_auths,
-            prunable: Some(prunable),
-        } = &self.ct
-        else {
-            return Vec::new();
-        };
-        if pqc_auths.is_empty() {
-            return Vec::new();
-        }
-
-        // prefix_blob = varint(TX_VERSION) ‖ TxPrefix::write
-        let mut prefix_blob = Vec::new();
-        write_varint(TX_VERSION, &mut prefix_blob).expect("Vec write is infallible");
-        self.prefix
-            .write(&mut prefix_blob)
-            .expect("Vec write is infallible");
-
-        // ct_base_blob = CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write —
-        // byte-for-byte the head `Ct::Fcmp::write` emits before pqc_auths/prunable.
-        let mut ct_base_blob = Vec::new();
-        ct_base_blob.push(CT_TYPE_FCMP);
-        write_varint(*fee, &mut ct_base_blob).expect("Vec write is infallible");
-        ct_base_blob.extend_from_slice(reference_block);
-        base.write(&mut ct_base_blob)
-            .expect("Vec write is infallible");
-
-        // prunable_hash = keccak256(Prunable::write)
-        let mut prunable_blob = Vec::new();
-        prunable
-            .write(&mut prunable_blob)
-            .expect("Vec write is infallible");
-        let prunable_hash = keccak256(&prunable_blob);
-
-        // all_key_hashes = concat over EVERY auth of keccak256(hybrid_public_key)
-        let mut all_key_hashes = Vec::with_capacity(pqc_auths.len() * 32);
-        for auth in pqc_auths {
-            all_key_hashes.extend_from_slice(&keccak256(&auth.hybrid_public_key));
-        }
-
-        pqc_auths
-            .iter()
-            .map(|auth| {
-                let mut payload = Vec::new();
-                payload.extend_from_slice(&prefix_blob);
-                payload.extend_from_slice(&ct_base_blob);
-                payload.extend_from_slice(&prunable_hash);
-                auth.header_write(&mut payload)
-                    .expect("Vec write is infallible");
-                payload.extend_from_slice(&all_key_hashes);
-                keccak256(&payload)
-            })
-            .collect()
+        PrefixHash::from_bytes(keccak256(&buf))
     }
 
     /// Parse a transaction from a complete blob, requiring **exact consumption**
@@ -1525,111 +1570,6 @@ impl Transaction {
             )));
         }
         Ok(tx)
-    }
-
-    /// The consensus transaction hash (`keccak256` over component hashes,
-    /// GENESIS_TX_WIRE_FORMAT.md §11): **3-part** for the coinbase (`Null`) —
-    /// `H(prefix) · H(base) · null_hash`; **4-part** for an FCMP++ spend —
-    /// `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`. `H(prefix)` includes
-    /// the version varint (the first field of the C++ `transaction_prefix`).
-    pub fn hash(&self) -> [u8; 32] {
-        self.hash_with_prunable(None)
-    }
-
-    /// The consensus transaction hash of a **pruned** body, with the prunable
-    /// digest supplied instead of computed.
-    ///
-    /// The C++ equivalent is `get_pruned_transaction_hash`. It exists because a
-    /// pruned body has no prunable section to hash: [`Self::hash`] would
-    /// substitute the null hash and return an identity no transaction has.
-    ///
-    /// This is what lets a caller **bind** a pruned body served by an untrusted
-    /// daemon to the hash it asked for. The reply's `tx_hash` label proves
-    /// nothing — the daemon chooses it — and so does `prunable_hash` on its
-    /// own; what the daemon cannot choose is a body and a digest that mix to a
-    /// txid someone else named first, which is a keccak preimage.
-    pub fn hash_with_supplied_prunable(&self, prunable_hash: [u8; 32]) -> [u8; 32] {
-        self.hash_with_prunable(Some(prunable_hash))
-    }
-
-    /// Shared body of [`Self::hash`] and [`Self::hash_with_supplied_prunable`]:
-    /// one construction, so the pruned and unpruned paths cannot drift into
-    /// hashing the same transaction two ways.
-    fn hash_with_prunable(&self, supplied_prunable: Option<[u8; 32]>) -> [u8; 32] {
-        let mut prefix_buf = Vec::new();
-        write_varint(TX_VERSION, &mut prefix_buf).expect("Vec write is infallible");
-        self.prefix
-            .write(&mut prefix_buf)
-            .expect("Vec write is infallible");
-        let h_prefix = keccak256(&prefix_buf);
-
-        match &self.ct {
-            Ct::Null(base) => {
-                // A coinbase has no prunable section at all, so its third
-                // component is the null hash whether or not a digest was
-                // supplied — pruning cannot give it one.
-                let mut base_buf = vec![CT_TYPE_NULL];
-                base.write(&mut base_buf).expect("Vec write is infallible");
-                hash_concat(&[h_prefix, keccak256(&base_buf), [0u8; 32]])
-            }
-            Ct::Fcmp {
-                fee,
-                reference_block,
-                base,
-                pqc_auths,
-                prunable,
-            } => {
-                let mut base_buf = vec![CT_TYPE_FCMP];
-                write_varint(*fee, &mut base_buf).expect("Vec write is infallible");
-                base_buf.extend_from_slice(reference_block);
-                base.write(&mut base_buf).expect("Vec write is infallible");
-                let h_base = keccak256(&base_buf);
-
-                // Per the C++ oracle (format_utils.cpp:1137/1163-1182): **4-part**
-                // `{prefix, base, pqc_auths, prunable}` iff `has_pqc && !pqc_auths
-                // .empty()`, where `has_pqc = version>=3 && vin[0] != gen`; otherwise
-                // **3-part** `{prefix, base, prunable}`. The prunable component is
-                // `H(prunable)` when present, else the null hash. Both arms carry
-                // struct-derived cross-language hash parity (`pruned_tx_hash_parity`
-                // and `serve_credit_tx_parity`, each with a C++ leg asserting the
-                // same pin); the live-oracle pin (`live_oracle_spend_v1.json`) binds
-                // both languages to a daemon-accepted spend.
-                // A supplied digest wins: it is the pruned case, where the
-                // section is absent and its hash is the caller's operand.
-                let h_prunable = match (supplied_prunable, prunable) {
-                    (Some(h), _) => h,
-                    (None, Some(prunable)) => {
-                        let mut prunable_buf = Vec::new();
-                        prunable
-                            .write(&mut prunable_buf)
-                            .expect("Vec write is infallible");
-                        keccak256(&prunable_buf)
-                    }
-                    (None, None) => [0u8; 32],
-                };
-
-                // `has_pqc` excludes the (malformed) gen-first shape, exactly as the
-                // oracle does — so a `gen` input + `Fcmp` ct hashes 3-part like a
-                // coinbase rather than misclassifying as a spend.
-                let first_is_gen = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
-                if pqc_auths.is_empty() || first_is_gen {
-                    hash_concat(&[h_prefix, h_base, h_prunable])
-                } else {
-                    // The pqc component mirrors the oracle's generic `std::vector`
-                    // serializer (format_utils.cpp:1169), whose `begin_array(cnt)`
-                    // writes the element **count as a leading varint** before the
-                    // entries — unlike the tx *body*, where the count is implicit
-                    // (`vin.size()`, no prefix). Both must match their respective C++
-                    // paths; they legitimately differ.
-                    let mut auth_buf = Vec::new();
-                    write_varint(pqc_auths.len(), &mut auth_buf).expect("Vec write is infallible");
-                    for auth in pqc_auths {
-                        auth.write(&mut auth_buf).expect("Vec write is infallible");
-                    }
-                    hash_concat(&[h_prefix, h_base, keccak256(&auth_buf), h_prunable])
-                }
-            }
-        }
     }
 
     /// Structural / canonical-form validation for an ingested **pruned** transaction:
@@ -1803,24 +1743,36 @@ impl Transaction {
                 "shekyl-wire: emission must not mix with a bond_post input (§2.5)",
             ));
         }
-        // tx_extra bound (the coinbase extra is unbounded in C++; cap non-coinbase).
+        // tx_extra size bound on a non-coinbase transaction (the relay cap,
+        // CEN-M4). A coinbase extra has no size cap here or in C++; it is
+        // bounded by the coinbase grammar below instead — exactly four fields
+        // of fixed or `n`-proportional width, so its size is a function of
+        // the output count, not a miner's choice.
         if !is_coinbase && self.prefix.extra.len() > MAX_TX_EXTRA {
             return Err(io::Error::other(format!(
                 "shekyl-wire: tx_extra {} exceeds {MAX_TX_EXTRA}",
                 self.prefix.extra.len()
             )));
         }
-        // CEN-I19 (`GENESIS_TX_WIRE_FORMAT.md` §9.6a): exactly one `0x06` of
-        // `1120·n` and one `0x07` of `32·n` when the transaction has `n > 0`
-        // outputs, neither when `n == 0`. The daemon enforces this at admission
-        // through the same [`check_pqc_field_shape_of`]; enforcing it here is
-        // what makes that one rule, rather than one rule and a claim.
+        // The tx_extra shape rule: CEN-I19 (`GENESIS_TX_WIRE_FORMAT.md`
+        // §9.6a — exactly one `0x06` of `1120·n` and one `0x07` of `64·n`
+        // when the transaction has `n > 0` outputs, neither when `n == 0`)
+        // plus, on a coinbase, the closed grammar `[0x01, 0x02(8), 0x06,
+        // 0x07]` (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′), and no `0x02` off it.
+        // The daemon enforces this at admission through the same
+        // [`check_tx_extra_shape`]; enforcing it here is what makes that one
+        // rule, rather than one rule and a claim.
         //
         // An unparseable `extra` is refused. This crate owns the genesis tag
         // set; skipping the shape check on parse failure would diverge from
         // admission.
         let fields = parse_tx_extra(&self.prefix.extra).map_err(io::Error::other)?;
-        check_pqc_field_shape_of(&fields, n_out).map_err(io::Error::other)?;
+        let subject = if is_coinbase {
+            ExtraSubject::Coinbase
+        } else {
+            ExtraSubject::General
+        };
+        check_tx_extra_shape(&fields, n_out, subject).map_err(io::Error::other)?;
         let size = self.serialized_len();
         if size > MAX_TX_SIZE {
             return Err(io::Error::other(format!(
@@ -1980,6 +1932,19 @@ impl Transaction {
     /// forward obligation) is **pinned exactly** here: `pseudo_outs.len()` must
     /// equal the `ToKey` input count for every shape, bond-post included
     /// (`GENESIS_TX_WIRE_FORMAT.md` §1.1 coupling closure, 2026-07-05).
+    ///
+    /// **Not the rule of record.** The consensus predicates this and
+    /// [`Self::validate_context_free_pruned`] evaluate are owned by
+    /// `shekyl_chain_rules::tx_form`, row-keyed to `CONSENSUS_RULE_CENSUS.md`
+    /// §4.H (`CHAIN_RULES_SLICE_5.md` §3.1, Q1 ruled (a), 2026-09-23). This is
+    /// the wallet's pre-check — what the pool will refuse, said before the
+    /// submit — and it is held to the rule of record by an **enumerated**
+    /// conformance test in that crate
+    /// (`shekyl-chain-rules/src/rules/tx_conformance_tests.rs`): every
+    /// error-returning site in this file is classified parse / rule → census row / policy →
+    /// policy row / invariant, and every rule arm's tripping transaction is
+    /// asserted to reach it and to be refused by `tx_form` on the named row.
+    /// Adding a refusal arm here without a row there fails that test.
     pub fn validate(&self) -> io::Result<()> {
         self.validate_context_free_pruned()?;
         // Prunable-coupled checks: spend-proof completeness that needs the full,

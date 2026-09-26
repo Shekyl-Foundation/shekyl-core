@@ -36,11 +36,9 @@
 #include "cryptonote_basic_impl.h"
 #include "cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
-#include "crypto/pow_registry.h"
 #include "file_io_utils.h"
 #include "common/command_line.h"
 #include "common/util.h"
-#include "string_coding.h"
 #include "string_tools.h"
 #include "storages/portable_storage_template_helper.h"
 #include "boost/logic/tribool.hpp"
@@ -86,15 +84,11 @@ using namespace epee;
 #include "crypto/hash.h"
 #include "cryptonote_basic/block_ingest.h"
 
-
-extern "C" void slow_hash_allocate_state();
-extern "C" void slow_hash_free_state();
 namespace cryptonote
 {
 
   namespace
   {
-    const command_line::arg_descriptor<std::string> arg_extra_messages =  {"extra-messages-file", "Specify file for extra messages to include into coinbase transactions", "", true};
     const command_line::arg_descriptor<std::string> arg_start_mining =    {"start-mining", "Specify wallet address to mining for", "", true};
     const command_line::arg_descriptor<uint32_t>      arg_mining_threads =  {"mining-threads", "Specify mining threads count", 0, true};
     const command_line::arg_descriptor<bool>        arg_bg_mining_enable =  {"bg-mining-enable", "enable background mining", true, true};
@@ -166,15 +160,12 @@ namespace cryptonote
     uint64_t height = AUTO_VAL_INIT(height);
     uint64_t expected_reward; //only used for RPC calls - could possibly be useful here too?
 
-    cryptonote::blobdata extra_nonce;
-    if(m_extra_messages.size() && m_config.current_extra_message_index < m_extra_messages.size())
-    {
-      extra_nonce = m_extra_messages[m_config.current_extra_message_index];
-    }
-
     uint64_t seed_height;
     crypto::hash seed_hash;
-    if(!m_phandler->get_block_template(bl, m_mine_address, di, height, expected_reward, extra_nonce, seed_height, seed_hash))
+    // The built-in miner varies only the header nonce; the coinbase nonce is
+    // the daemon's zero fill. (The --extra-messages-file rotation that once
+    // fed it is gone: arbitrary miner-chosen bytes with no mining purpose.)
+    if(!m_phandler->get_block_template(bl, m_mine_address, di, height, expected_reward, blobdata(), seed_height, seed_hash))
     {
       LOG_ERROR("Failed to get_block_template(), stopping mining");
       return false;
@@ -286,7 +277,6 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------------
   void miner::init_options(boost::program_options::options_description& desc)
   {
-    command_line::add_arg(desc, arg_extra_messages);
     command_line::add_arg(desc, arg_start_mining);
     command_line::add_arg(desc, arg_mining_threads);
     command_line::add_arg(desc, arg_bg_mining_enable);
@@ -298,30 +288,6 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------------
   bool miner::init(const boost::program_options::variables_map& vm, network_type nettype)
   {
-    if(command_line::has_arg(vm, arg_extra_messages))
-    {
-      std::string buff;
-      bool r = file_io_utils::load_file_to_string(command_line::get_arg(vm, arg_extra_messages), buff);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to load file with extra messages: " << command_line::get_arg(vm, arg_extra_messages));
-      std::vector<std::string> extra_vec;
-      boost::split(extra_vec, buff, boost::is_any_of("\n"), boost::token_compress_on );
-      m_extra_messages.resize(extra_vec.size());
-      for(size_t i = 0; i != extra_vec.size(); i++)
-      {
-        string_tools::trim(extra_vec[i]);
-        if(!extra_vec[i].size())
-          continue;
-        std::string buff = string_encoding::base64_decode(extra_vec[i]);
-        if(buff != "0")
-          m_extra_messages[i] = buff;
-      }
-      m_config_folder_path = boost::filesystem::path(command_line::get_arg(vm, arg_extra_messages)).parent_path().string();
-      m_config = AUTO_VAL_INIT(m_config);
-      const std::string filename = m_config_folder_path + "/" + MINER_CONFIG_FILE_NAME;
-      CHECK_AND_ASSERT_MES(epee::serialization::load_t_from_json_file(m_config, filename), false, "Failed to load data from " << filename);
-      MINFO("Loaded " << m_extra_messages.size() << " extra messages, current index " << m_config.current_extra_message_index);
-    }
-
     if(command_line::has_arg(vm, arg_start_mining))
     {
       address_parse_info info;
@@ -486,7 +452,7 @@ namespace cryptonote
     for(; bl.nonce != std::numeric_limits<uint32_t>::max(); bl.nonce++)
     {
       crypto::hash h;
-      gbh(bl, height, seed_hash, diffic <= 100 ? 0 : tools::get_max_concurrency(), h);
+      gbh(bl, height, seed_hash, h);
 
       if(check_hash(h, diffic))
       {
@@ -540,7 +506,6 @@ namespace cryptonote
     difficulty_type local_diff = 0;
     uint32_t local_template_ver = 0;
     block b;
-    slow_hash_allocate_state();
     ++m_threads_active;
     while(!m_stop)
     {
@@ -584,29 +549,19 @@ namespace cryptonote
       b.nonce = nonce;
       crypto::hash h;
 
-      m_gbh(b, height, NULL, tools::get_max_concurrency(), h);
+      m_gbh(b, height, NULL, h);
 
       if(check_hash(h, local_diff))
       {
         //we lucky!
-        ++m_config.current_extra_message_index;
         MGINFO_GREEN("Found block " << get_block_hash(b) << " at height " << height << " for difficulty: " << local_diff);
         cryptonote::block_verification_context bvc;
-        if(!m_phandler->handle_block_found(b, bvc) || !cryptonote::block_added(bvc))
-        {
-          --m_config.current_extra_message_index;
-        }else
-        {
-          //success update, lets update config
-          if (!m_config_folder_path.empty())
-            epee::serialization::store_t_to_json_file(m_config, m_config_folder_path + "/" + MINER_CONFIG_FILE_NAME);
-        }
+        m_phandler->handle_block_found(b, bvc);
       }
       nonce+=m_threads_total;
       ++m_hashes;
       ++m_total_hashes;
     }
-    slow_hash_free_state();
     MGINFO("Miner thread stopped ["<< th_local_index << "]");
     --m_threads_active;
     return true;

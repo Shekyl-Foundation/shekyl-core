@@ -10,7 +10,7 @@ use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_core::StakedBalance;
 use shekyl_engine_core::SubmitOutcome;
 use shekyl_engine_state::{
-    DisputeReason, ReceiveAttribution, SendRecord, SendState, TransferDetails,
+    DisputeReason, ReceiveAttribution, SendRecord, SendState, TransferDetails, UnspendableReason,
 };
 use shekyl_scanner::BalanceSummary;
 use shekyl_types::TxHash;
@@ -84,6 +84,7 @@ pub fn get_balance_result(
         liquid: unlocked.clone(),
         staked,
         unlocked,
+        unspendable: atomic_units_string(b.unspendable),
         claimable_rewards: staking.map(|s| atomic_units_string(s.rewards_received_unspent)),
         pending: atomic_units_string(b.awaiting_confirmation),
     })
@@ -173,11 +174,25 @@ pub fn transfer_state(
 ) -> TransferState {
     if td.spent {
         TransferState::Spent
+    } else if td.unspendable.is_some() {
+        // PL-D3 §6.2: the scan-time verdict outranks the lock (an
+        // unspendable row is never selected, so a lock on it would itself be
+        // a defect) and CONFIRMED (which promises spendability).
+        TransferState::Unspendable
     } else if spend_locks.contains(td.global_output_index) {
         TransferState::Pending
     } else {
         TransferState::Confirmed
     }
+}
+
+/// Wire string for a row's received-but-unspendable reason
+/// (`TransferView::unspendable_reason`); `None` for a spendable row.
+pub fn unspendable_reason_string(td: &TransferDetails) -> Option<String> {
+    td.unspendable.map(|reason| match reason {
+        UnspendableReason::PqcLeafMismatch => "PQC_LEAF_MISMATCH".to_owned(),
+        UnspendableReason::PqcLeafEntryAbsent => "PQC_LEAF_ENTRY_ABSENT".to_owned(),
+    })
 }
 
 /// Project ledger receive-attribution to the RPC view (no cleartext labels).
@@ -259,11 +274,12 @@ pub fn transfer_view(
         amount: atomic_units_string(td.amount()),
         fee: "0".to_owned(),
         // Ledger rows are scanner-observed, so they are always mined.
-        block_height: Some(i64::try_from(td.block_height).unwrap_or(i64::MAX)),
+        block_height: Some(i64::try_from(td.block_height.to_raw()).unwrap_or(i64::MAX)),
         state: transfer_state(td, spend_locks),
         spent_height: td
             .spent_height
-            .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
+            .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
+        unspendable_reason: unspendable_reason_string(td),
         // Receive-side row, so attribution is always meaningful here.
         attribution: Some(attribution_view(&td.receive_attribution)),
         // Per-txid note (SJ-DQ-7); shared across both directions of a txid.
@@ -286,7 +302,7 @@ pub fn outgoing_transfer_id(txid: &TxHash) -> String {
 /// confirmed row back to `Dispatched` (rule 82).
 pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
     match row.state {
-        SendState::Confirmed { height } => Some(height),
+        SendState::Confirmed { height } => Some(height.to_raw()),
         SendState::Dispatched
         | SendState::TerminalRejected
         | SendState::PresumedDead
@@ -357,6 +373,8 @@ pub fn outgoing_transfer_view(
         block_height: outgoing_block_height(row).map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
         state: outgoing_transfer_state(row),
         spent_height: None,
+        // OUTGOING rows are never received-but-unspendable.
+        unspendable_reason: None,
         // Receive attribution is documented "Present on INCOMING rows
         // only" — a send has no receive side to attribute.
         attribution: None,
@@ -374,7 +392,7 @@ pub fn refresh_result(summary: &RefreshSummary, synced_height: u64) -> RefreshRe
         reorg_fork_height: summary
             .reorg
             .as_ref()
-            .map(|r| i64::try_from(r.fork_height).unwrap_or(i64::MAX)),
+            .map(|r| i64::try_from(r.fork_height.to_raw()).unwrap_or(i64::MAX)),
     }
 }
 
@@ -425,7 +443,7 @@ pub fn submit_pending_tx_result(outcome: &SubmitOutcome) -> SubmitPendingTxResul
 pub fn pending_tx_result(tx: &PendingTx) -> BuildPendingTxResult {
     BuildPendingTxResult {
         pending_tx_id: tx.id.raw().to_string(),
-        built_at_height: i64::try_from(tx.built_at_height).unwrap_or(i64::MAX),
+        built_at_height: i64::try_from(tx.built_at_height.to_raw()).unwrap_or(i64::MAX),
         built_at_tip_hash: hex::encode(tx.built_at_tip_hash),
         fee: atomic_units_string(tx.fee_atomic_units),
         content_gen: i64::try_from(tx.content_gen).unwrap_or(i64::MAX),
@@ -628,6 +646,53 @@ mod tests {
         assert_eq!(projected.confirmed_height, Some(i64::MAX));
     }
 
+    /// `PL-D3` §6.2 (rule 82): a received-but-unspendable row projects as
+    /// `UNSPENDABLE` with its reason and the sender's transaction hash, and
+    /// the verdict outranks both the in-flight lock and `CONFIRMED`.
+    #[test]
+    fn unspendable_row_projects_state_reason_and_sender() {
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+        use shekyl_curve_primitives::Commitment;
+        use shekyl_engine_state::SendJournalBlock;
+        use shekyl_scanner::{TransferDetailsExt, WalletOutput};
+
+        let sender_tx = [0x5au8; 32];
+        let out = WalletOutput::new_for_test(
+            shekyl_types::TxHash::from_bytes(sender_tx),
+            1,
+            9,
+            ED25519_BASEPOINT_POINT,
+            Scalar::ZERO,
+            Commitment::new(Scalar::ONE, 1_000),
+        );
+        let mut td =
+            TransferDetails::from_wallet_output(&out, shekyl_types::BlockHeight::from_raw(5));
+        let no_locks = SendJournalBlock::empty().spend_locks();
+        assert_eq!(transfer_state(&td, &no_locks), TransferState::Confirmed);
+        assert_eq!(unspendable_reason_string(&td), None);
+
+        td.unspendable = Some(UnspendableReason::PqcLeafMismatch);
+        assert_eq!(transfer_state(&td, &no_locks), TransferState::Unspendable);
+        let view = transfer_view(&td, &no_locks, &std::collections::BTreeMap::new());
+        assert_eq!(view.state, TransferState::Unspendable);
+        assert_eq!(view.state.as_str(), "UNSPENDABLE");
+        assert_eq!(
+            view.unspendable_reason.as_deref(),
+            Some("PQC_LEAF_MISMATCH")
+        );
+        assert_eq!(
+            view.tx_hash,
+            td.tx_hash.to_string(),
+            "the sender's tx is named"
+        );
+
+        td.unspendable = Some(UnspendableReason::PqcLeafEntryAbsent);
+        assert_eq!(
+            unspendable_reason_string(&td).as_deref(),
+            Some("PQC_LEAF_ENTRY_ABSENT")
+        );
+    }
+
     #[test]
     fn balance_maps_unlocked_to_liquid() {
         let b = BalanceSummary {
@@ -635,12 +700,14 @@ mod tests {
             unlocked: AtomicUnits::from_raw(40),
             locked_by_timelock: AtomicUnits::from_raw(10),
             frozen: AtomicUnits::ZERO,
+            unspendable: AtomicUnits::from_raw(7),
             awaiting_confirmation: AtomicUnits::from_raw(5),
         };
         let r = get_balance_result(&b, Some(&StakedBalance::ZERO)).expect("legs cannot overflow");
         assert_eq!(r.unlocked, "40");
         assert_eq!(r.liquid, "40");
         assert_eq!(r.pending, "5");
+        assert_eq!(r.unspendable, "7");
         // A non-staker's zeros are true zeros (nothing staked), not the
         // pre-WI-RPC-5 placeholder.
         assert_eq!(r.staked.as_deref(), Some("0"));
@@ -660,6 +727,7 @@ mod tests {
             unlocked: AtomicUnits::from_raw(40),
             locked_by_timelock: AtomicUnits::ZERO,
             frozen: AtomicUnits::ZERO,
+            unspendable: AtomicUnits::ZERO,
             awaiting_confirmation: AtomicUnits::ZERO,
         };
         let staking = StakedBalance {
@@ -689,6 +757,7 @@ mod tests {
             unlocked: AtomicUnits::ZERO,
             locked_by_timelock: AtomicUnits::ZERO,
             frozen: AtomicUnits::ZERO,
+            unspendable: AtomicUnits::ZERO,
             awaiting_confirmation: AtomicUnits::ZERO,
         };
         let staking = StakedBalance {
@@ -703,7 +772,7 @@ mod tests {
     fn sample_send_record(state: SendState) -> SendRecord {
         use shekyl_engine_state::{SendInputRef, SendRecipient};
         SendRecord {
-            dispatched_at_height: 100,
+            dispatched_at_height: shekyl_types::BlockHeight::from_raw(100),
             fee: 700,
             recipients: vec![
                 SendRecipient {
@@ -742,7 +811,9 @@ mod tests {
             TransferState::Dropped
         );
         assert_eq!(
-            outgoing_transfer_state(&sample_send_record(SendState::Confirmed { height: 200 })),
+            outgoing_transfer_state(&sample_send_record(SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(200)
+            })),
             TransferState::Confirmed
         );
         assert_eq!(
@@ -775,7 +846,9 @@ mod tests {
     #[test]
     fn only_confirmed_sends_have_an_inclusion_height() {
         assert_eq!(
-            outgoing_block_height(&sample_send_record(SendState::Confirmed { height: 250 })),
+            outgoing_block_height(&sample_send_record(SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250)
+            })),
             Some(250)
         );
         for unmined in [
@@ -801,7 +874,9 @@ mod tests {
 
         let view = outgoing_transfer_view(
             &txid,
-            &sample_send_record(SendState::Confirmed { height: 250 }),
+            &sample_send_record(SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250),
+            }),
             &notes,
         )
         .expect("project");

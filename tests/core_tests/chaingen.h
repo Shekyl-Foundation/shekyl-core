@@ -339,132 +339,6 @@ std::string dump_keys(T * buff32)
   return ss.str();
 }
 
-struct output_index {
-  const cryptonote::txout_target_v out;
-  uint64_t amount;
-  size_t blk_height; // block height
-  size_t tx_no; // index of transaction in block
-  size_t out_no; // index of out in transaction
-  size_t idx;
-  uint64_t unlock_time;
-  bool is_coin_base;
-  bool spent;
-  bool rct;
-  ct::key comm;
-  const cryptonote::block *p_blk;
-  const cryptonote::transaction *p_tx;
-  ct::key v3_mask{};
-  crypto::secret_key v3_ho{};
-  bool v3_recovered = false;
-
-  output_index(const cryptonote::txout_target_v &_out, uint64_t _a, size_t _h, size_t tno, size_t ono, const cryptonote::block *_pb, const cryptonote::transaction *_pt)
-      : out(_out), amount(_a), blk_height(_h), tx_no(tno), out_no(ono), idx(0), unlock_time(0),
-      is_coin_base(false), spent(false), rct(false), p_blk(_pb), p_tx(_pt)
-  {
-
-  }
-
-  ~output_index() { memwipe(v3_ho.data, sizeof(v3_ho.data)); }
-
-  output_index(const output_index &other)
-      : out(other.out), amount(other.amount), blk_height(other.blk_height), tx_no(other.tx_no), rct(other.rct),
-      out_no(other.out_no), idx(other.idx), unlock_time(other.unlock_time), is_coin_base(other.is_coin_base),
-      spent(other.spent), comm(other.comm), p_blk(other.p_blk), p_tx(other.p_tx),
-      v3_mask(other.v3_mask), v3_ho(other.v3_ho), v3_recovered(other.v3_recovered) {  }
-
-  void set_rct(bool arct) {
-    rct = arct;
-    if (rct && p_tx->ct_signatures.outPk.size() > out_no)
-      comm = p_tx->ct_signatures.outPk[out_no].mask;
-    else
-      comm = ct::zeroCommit(amount);
-  }
-
-  ct::key commitment() const {
-    return comm;
-  }
-
-  const std::string toString() const {
-    std::stringstream ss;
-
-    ss << "output_index{blk_height=" << blk_height
-       << " tx_no=" << tx_no
-       << " out_no=" << out_no
-       << " amount=" << amount
-       << " idx=" << idx
-       << " unlock_time=" << unlock_time
-       << " spent=" << spent
-       << " is_coin_base=" << is_coin_base
-       << " rct=" << rct
-       << " comm=" << dump_keys(comm.bytes)
-       << "}";
-
-    return ss.str();
-  }
-
-  output_index& operator=(const output_index& other)
-  {
-    new(this) output_index(other);
-    return *this;
-  }
-};
-
-typedef std::tuple<uint64_t, crypto::public_key, ct::key> get_outs_entry;
-typedef std::pair<crypto::hash, size_t> output_hasher;
-typedef boost::hash<output_hasher> output_hasher_hasher;
-typedef std::map<uint64_t, std::vector<size_t> > map_output_t;
-typedef std::map<uint64_t, std::vector<output_index> > map_output_idx_t;
-typedef std::unordered_map<crypto::hash, cryptonote::block> map_block_t;
-typedef std::unordered_map<output_hasher, output_index, output_hasher_hasher> map_txid_output_t;
-typedef std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses_t;
-typedef std::pair<uint64_t, size_t>  outloc_t;
-
-typedef std::variant<cryptonote::account_public_address, cryptonote::account_keys, cryptonote::account_base, cryptonote::tx_destination_entry> var_addr_t;
-typedef struct {
-  const var_addr_t addr;
-  bool is_subaddr;
-  uint64_t amount;
-} dest_wrapper_t;
-
-// Daemon functionality
-class block_tracker
-{
-public:
-  map_output_idx_t m_outs;
-  map_txid_output_t m_map_outs;  // mapping (txid, out) -> output_index
-  map_block_t m_blocks;
-
-  block_tracker() = default;
-  block_tracker(const block_tracker &bt): m_outs(bt.m_outs), m_map_outs(bt.m_map_outs), m_blocks(bt.m_blocks) {};
-  map_txid_output_t::iterator find_out(const crypto::hash &txid, size_t out);
-  map_txid_output_t::iterator find_out(const output_hasher &id);
-  void process(const std::vector<cryptonote::block>& blockchain, const map_hash2tx_t& mtx);
-  void process(const std::vector<const cryptonote::block*>& blockchain, const map_hash2tx_t& mtx);
-  void process(const cryptonote::block* blk, const cryptonote::transaction * tx, size_t i);
-  void global_indices(const cryptonote::transaction *tx, std::vector<uint64_t> &indices);
-  void get_fake_outs(size_t num_outs, uint64_t amount, uint64_t global_index, uint64_t cur_height, std::vector<get_outs_entry> &outs);
-
-  std::string dump_data();
-  void dump_data(const std::string & fname);
-
-private:
-  friend class boost::serialization::access;
-
-  template<class Archive>
-  void serialize(Archive & ar, const unsigned int /*version*/)
-  {
-    ar & m_outs;
-    ar & m_map_outs;
-    ar & m_blocks;
-  }
-};
-
-std::string dump_data(const cryptonote::transaction &tx);
-cryptonote::account_public_address get_address(const var_addr_t& inp);
-cryptonote::account_public_address get_address(const cryptonote::account_public_address& inp);
-cryptonote::account_public_address get_address(const cryptonote::account_keys& inp);
-cryptonote::account_public_address get_address(const cryptonote::account_base& inp);
-cryptonote::account_public_address get_address(const cryptonote::tx_destination_entry& inp);
 
 inline cryptonote::difficulty_type get_test_difficulty(const std::optional<uint8_t>& hf_ver=std::nullopt) {return !hf_ver || *hf_ver <= 1 ? 1 : 2;}
 // Shekyl is single-DAA from genesis (LWMA-1 with T = SHEKYL_DAA_TARGET_SECONDS).
@@ -473,11 +347,6 @@ inline cryptonote::difficulty_type get_test_difficulty(const std::optional<uint8
 // .cursor/rules/60-no-monero-legacy.mdc.
 inline uint64_t current_difficulty_window(const std::optional<uint8_t>& /*hf_ver*/=std::nullopt) { return SHEKYL_DAA_TARGET_SECONDS; }
 
-cryptonote::tx_destination_entry build_dst(const var_addr_t& to, bool is_subaddr=false, uint64_t amount=0);
-std::vector<cryptonote::tx_destination_entry> build_dsts(const var_addr_t& to1, bool sub1=false, uint64_t am1=0);
-std::vector<cryptonote::tx_destination_entry> build_dsts(std::initializer_list<dest_wrapper_t> inps);
-uint64_t sum_amount(const std::vector<cryptonote::tx_destination_entry>& destinations);
-uint64_t sum_amount(const std::vector<cryptonote::tx_source_entry>& sources);
 
 bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins,
                                  const cryptonote::account_public_address& miner_address, cryptonote::transaction& tx,
@@ -487,33 +356,6 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
 
 bool append_v3_output_to_miner_tx(cryptonote::transaction& tx, const crypto::secret_key& txkey_sec,
                                   const cryptonote::account_public_address& addr, uint64_t amount);
-
-bool construct_tx_to_key(const std::vector<test_event_entry>& events, cryptonote::transaction& tx,
-                         const cryptonote::block& blk_head, const cryptonote::account_base& from, const var_addr_t& to, uint64_t amount,
-                         uint64_t fee, size_t nmix, bool rct=true);
-
-bool construct_tx_to_key(const std::vector<test_event_entry>& events, cryptonote::transaction& tx, const cryptonote::block& blk_head,
-                         const cryptonote::account_base& from, std::vector<cryptonote::tx_destination_entry> destinations,
-                         uint64_t fee, size_t nmix, bool rct=true);
-
-bool construct_tx_to_key(cryptonote::transaction& tx, const cryptonote::account_base& from, const var_addr_t& to, uint64_t amount,
-                         std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct=true);
-
-bool construct_tx_to_key(cryptonote::transaction& tx, const cryptonote::account_base& from, const std::vector<cryptonote::tx_destination_entry>& destinations,
-                         std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct=true);
-
-cryptonote::transaction construct_tx_with_fee(std::vector<test_event_entry>& events, const cryptonote::block& blk_head,
-                                            const cryptonote::account_base& acc_from, const var_addr_t& to,
-                                            uint64_t amount, uint64_t fee);
-
-bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys,
-    std::vector<cryptonote::tx_source_entry>& sources,
-    const std::vector<cryptonote::tx_destination_entry>& destinations,
-    const std::optional<cryptonote::account_public_address>& change_addr,
-    std::vector<uint8_t> extra, cryptonote::transaction& tx,
-    bool rct=true, uint8_t hf_version = 1);
 
 
 uint64_t num_blocks(const std::vector<test_event_entry>& events);
@@ -525,41 +367,6 @@ bool trim_block_chain(std::vector<const cryptonote::block*>& blockchain, const c
 bool find_block_chain(const std::vector<test_event_entry>& events, std::vector<cryptonote::block>& blockchain, map_hash2tx_t& mtx, const crypto::hash& head);
 bool find_block_chain(const std::vector<test_event_entry>& events, std::vector<const cryptonote::block*>& blockchain, map_hash2tx_t& mtx, const crypto::hash& head);
 
-void fill_tx_destinations(const var_addr_t& from, const cryptonote::account_public_address& to,
-                          uint64_t amount, uint64_t fee,
-                          const std::vector<cryptonote::tx_source_entry> &sources,
-                          std::vector<cryptonote::tx_destination_entry>& destinations, bool always_change=false);
-
-void fill_tx_destinations(const var_addr_t& from, const std::vector<cryptonote::tx_destination_entry>& dests,
-                          uint64_t fee,
-                          const std::vector<cryptonote::tx_source_entry> &sources,
-                          std::vector<cryptonote::tx_destination_entry>& destinations,
-                          bool always_change);
-
-void fill_tx_destinations(const var_addr_t& from, const cryptonote::account_public_address& to,
-                          uint64_t amount, uint64_t fee,
-                          const std::vector<cryptonote::tx_source_entry> &sources,
-                          std::vector<cryptonote::tx_destination_entry>& destinations,
-                          std::vector<cryptonote::tx_destination_entry>& destinations_pure,
-                          bool always_change=false);
-
-
-bool fill_tx_sources(std::vector<cryptonote::tx_source_entry>& sources, const std::vector<test_event_entry>& events,
-                     const cryptonote::block& blk_head, const cryptonote::account_base& from, uint64_t amount, size_t nmix);
-
-void fill_tx_sources_and_destinations(const std::vector<test_event_entry>& events, const cryptonote::block& blk_head,
-                                      const cryptonote::account_base& from, const cryptonote::account_public_address& to,
-                                      uint64_t amount, uint64_t fee, size_t nmix,
-                                      std::vector<cryptonote::tx_source_entry>& sources,
-                                      std::vector<cryptonote::tx_destination_entry>& destinations);
-
-void fill_tx_sources_and_destinations(const std::vector<test_event_entry>& events, const cryptonote::block& blk_head,
-                                      const cryptonote::account_base& from, const cryptonote::account_base& to,
-                                      uint64_t amount, uint64_t fee, size_t nmix,
-                                      std::vector<cryptonote::tx_source_entry>& sources,
-                                      std::vector<cryptonote::tx_destination_entry>& destinations);
-
-uint64_t get_balance(const cryptonote::account_base& addr, const std::vector<cryptonote::block>& blockchain, const map_hash2tx_t& mtx);
 
 bool extract_hard_forks(const std::vector<test_event_entry>& events, v_hardforks_t& hard_forks);
 bool extract_hard_forks_from_blocks(const std::vector<test_event_entry>& events, v_hardforks_t& hard_forks);
@@ -971,56 +778,6 @@ inline bool do_replay_file(const std::string& filename)
 #define REWIND_BLOCKS_N(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, COUNT) REWIND_BLOCKS_N_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, COUNT, std::nullopt)
 #define REWIND_BLOCKS(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC) REWIND_BLOCKS_N(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW)
 #define REWIND_BLOCKS_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, HF) REWIND_BLOCKS_N_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW, HF)
-
-#define MAKE_TX_MIX(VEC_EVENTS, TX_NAME, FROM, TO, AMOUNT, NMIX, HEAD)                       \
-  cryptonote::transaction TX_NAME;                                                             \
-  construct_tx_to_key(VEC_EVENTS, TX_NAME, HEAD, FROM, TO, AMOUNT, TESTS_DEFAULT_FEE, NMIX); \
-  VEC_EVENTS.push_back(TX_NAME);
-
-#define MAKE_TX_MIX_RCT(VEC_EVENTS, TX_NAME, FROM, TO, AMOUNT, NMIX, HEAD)                       \
-  cryptonote::transaction TX_NAME;                                                             \
-  construct_tx_to_key(VEC_EVENTS, TX_NAME, HEAD, FROM, TO, AMOUNT, TESTS_DEFAULT_FEE, NMIX, true, ct::RangeProofPaddedBulletproof); \
-  VEC_EVENTS.push_back(TX_NAME);
-
-#define MAKE_TX(VEC_EVENTS, TX_NAME, FROM, TO, AMOUNT, HEAD) MAKE_TX_MIX(VEC_EVENTS, TX_NAME, FROM, TO, AMOUNT, 0, HEAD)
-
-#define MAKE_TX_MIX_LIST(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD)             \
-  {                                                                                      \
-    cryptonote::transaction t;                                                           \
-    construct_tx_to_key(VEC_EVENTS, t, HEAD, FROM, TO, AMOUNT, TESTS_DEFAULT_FEE, NMIX); \
-    SET_NAME.push_back(t);                                                               \
-    VEC_EVENTS.push_back(t);                                                             \
-  }
-
-#define MAKE_TX_MIX_LIST_RCT(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD) \
-        MAKE_TX_MIX_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD, ct::RangeProofPaddedBulletproof, 4)
-#define MAKE_TX_MIX_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD, RCT_TYPE, BP_VER)  \
-  {                                                                                      \
-    cryptonote::transaction t;                                                           \
-    construct_tx_to_key(VEC_EVENTS, t, HEAD, FROM, TO, AMOUNT, TESTS_DEFAULT_FEE, NMIX, true, RCT_TYPE, BP_VER); \
-    SET_NAME.push_back(t);                                                               \
-    VEC_EVENTS.push_back(t);                                                             \
-  }
-
-#define MAKE_TX_MIX_DEST_LIST_RCT(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD)            \
-        MAKE_TX_MIX_DEST_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD, ct::RangeProofPaddedBulletproof, 4)
-#define MAKE_TX_MIX_DEST_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD, RCT_TYPE, BP_VER)  \
-  {                                                                                      \
-    cryptonote::transaction t;                                                           \
-    construct_tx_to_key(VEC_EVENTS, t, HEAD, FROM, TO, TESTS_DEFAULT_FEE, NMIX, true, RCT_TYPE, BP_VER); \
-    SET_NAME.push_back(t);                                                               \
-    VEC_EVENTS.push_back(t);                                                             \
-  }
-
-#define MAKE_TX_LIST(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, HEAD) MAKE_TX_MIX_LIST(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, 0, HEAD)
-
-#define MAKE_TX_LIST_START(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, HEAD) \
-    std::list<cryptonote::transaction> SET_NAME; \
-    MAKE_TX_LIST(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, HEAD);
-
-#define MAKE_TX_LIST_START_RCT(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD) \
-    std::list<cryptonote::transaction> SET_NAME; \
-    MAKE_TX_MIX_LIST_RCT(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD);
 
 #define MAKE_MINER_TX_AND_KEY_AT_HF_MANUALLY(TX, BLK, HF_VERSION, KEY)                                    \
   transaction TX;                                                                                         \

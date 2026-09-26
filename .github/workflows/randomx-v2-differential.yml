@@ -1,3 +1,29 @@
+# THE PERMANENT VERIFIER↔JIT PARITY GATE (DRS-E2 §0, ruled 2026-09-19;
+# `docs/design/DRS_E2_REPLAY_DRIVER.md` §1.3, RD-Q12, RD-F12).
+#
+# Shekyl VERIFIES every block with the Rust verifier, `shekyl-pow-randomx`
+# — the daemon's connect path, the replay driver, the wallet — forever.
+# Shekyl MINES with the JIT in `external/randomx-v2`, the one C++
+# dependency that survives cutover, behind `randomx-v2-sys`. The miner
+# can therefore produce work the verifier rejects if the two ever
+# disagree on a single hash, silently, until a block is orphaned. This
+# workflow is what stands between those two facts, and it is not
+# rewrite scaffolding with an expiry: it re-runs the full pinned vector
+# set whenever EITHER pin moves (the `paths:` filters below name both
+# trees and the lockfile), and it fuzzes `longhash` across the boundary
+# on every daily cron — the `rotating` lanes below, whose seedhashes and
+# blobs are derived from a logged rotation index (so the input set is
+# reproducible from one integer; the seeds are index-derived, not
+# pinned), and whose divergence forensics — the failing blob itself,
+# both `PowHash`es, both cache fingerprints and the pair's position, as
+# the harness's structured failure record on stderr — land in the log
+# the lane uploads as its failure artifact, so an inequality is
+# actionable and never a muted alarm. The comparison is over `PowHash`,
+# the type seam #785 minted (`three_leg_verdict`).
+#
+# The Phase 2g history below is how the gate was built; its obligation
+# is the paragraph above.
+#
 # Phase 2g RandomX v2 differential-harness CI gates.
 #
 # Per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.5.1-§5.5.3 + §5.5.6
@@ -83,8 +109,11 @@ on:
       - 'rust/shekyl-randomx-differential/**'
       - 'rust/randomx-v2-sys/**'
       - 'rust/shekyl-pow-randomx/**'
+      - 'rust/Cargo.toml'
+      - 'rust/Cargo.lock'
       - 'external/randomx-v2/**'
       - 'external/CMakeLists.txt'
+      - 'CMakeLists.txt'
       - 'scripts/ci/check_randomx_crate_invariants.sh'
       - '.github/actions/install-rust/**'
       - '.github/actions/build-randomx-v2-ref/**'
@@ -95,8 +124,11 @@ on:
       - 'rust/shekyl-randomx-differential/**'
       - 'rust/randomx-v2-sys/**'
       - 'rust/shekyl-pow-randomx/**'
+      - 'rust/Cargo.toml'
+      - 'rust/Cargo.lock'
       - 'external/randomx-v2/**'
       - 'external/CMakeLists.txt'
+      - 'CMakeLists.txt'
       - 'scripts/ci/check_randomx_crate_invariants.sh'
       - '.github/actions/install-rust/**'
       - '.github/actions/build-randomx-v2-ref/**'
@@ -801,7 +833,7 @@ jobs:
           retention-days: 90
 
   rotating:
-    # The exploring differential lane (RANDOMX_V2_MUTATION_REGIME.md
+    # The exploring differential lane (docs/completed/RANDOMX_V2_MUTATION_REGIME.md
     # §7.5 item 2). Every other differential lane re-verifies the same
     # 1024 pinned pairs; this one derives a fresh input set per
     # rotation index and runs rust-vs-C over inputs the project has
@@ -1047,9 +1079,10 @@ jobs:
     # BUILD_RANDOMX_V2_MINER_LIB=ON by design — do not "fix" that guard.
     #
     # The job also runs the binary symbol-isolation gate on the linked
-    # daemon (scripts/ci/check_randomx_symbol_isolation.sh): the daemon
-    # build is already paid for here, and this is the only workflow that
-    # builds one on a cadence.
+    # daemon (scripts/ci/check_randomx_symbol_isolation.sh). The same
+    # script runs per-PR on the Ubuntu 24.04 daemon artifact in
+    # build.yml; this cron copy is the cadence that still fires when no
+    # daemon-building PR ran that day.
     name: 'cron: full-dataset parity gate + symbol isolation'
     runs-on: ubuntu-latest
     timeout-minutes: 300

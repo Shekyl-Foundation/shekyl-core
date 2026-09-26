@@ -43,8 +43,10 @@ build = "build.rs"
 # any future fork-pin-bump PR that this crate's `src/lib.rs`
 # declarations are coupled to a specific upstream pin; any advance
 # requires the 7-signature re-audit per R1-D2 reopening criterion.
-# T15 asserts `fork-pin-sha` matches `external/randomx-v2`'s HEAD
-# at per-PR cadence.
+# `fork-pin-sha` is the superproject gitlink pin T15 asserts
+# (`HEAD:external/randomx-v2`). Any advance requires the 7-signature
+# re-audit per R1-D2 reopening criterion. T15 also compares on-disk
+# HEAD when the checkout has its own `.git`.
 fork-pin-coupled = true
 fork-pin-sha = "aaafe71322df6602c21a5c72937ac284724ae561"
 

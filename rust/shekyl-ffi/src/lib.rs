@@ -62,6 +62,7 @@ compile_error!(
 // `shekyl_account_*` callers and removed once C++ no longer references
 // them.
 pub mod account_ffi;
+pub mod clearnet_transport_ffi;
 
 // LWMA-1 difficulty-adjustment FFI export. Wraps `shekyl_difficulty::
 // lwma1_next` in a C-ABI surface using the `ShekylU128` two-u64
@@ -73,6 +74,11 @@ pub mod difficulty_ffi;
 // DRS-P0d layout-independent logical state digest v0. C++ walks
 // production LMDB; the hasher is shekyl-chain-store.
 pub mod chain_digest_ffi;
+
+// DRS-E2 trace writer: the C++ LMDB exporter's one door. Facts records and
+// digest checkpoints, written and hashed in Rust (`shekyl-chain-ingest`);
+// the exporter and this surface die with the daemon at cutover.
+pub mod e2_trace_ffi;
 
 // RandomX v2 light-cache PoW verification FFI. Wraps `shekyl_pow_randomx`
 // (`compute_hash` + `CacheStore`) in a C-ABI surface — the consensus
@@ -95,6 +101,17 @@ pub mod curve_tree_replica_ffi;
 // has n > 0 outputs, neither when n == 0. The rule lives in shekyl-wire; the
 // daemon's admission path hands over its own parse's field lengths.
 pub mod tx_extra_ffi;
+
+// tx_extra codec (TX_EXTRA_RUST_CUTOVER.md §3): shekyl-wire parses and
+// builds tx_extra; the daemon transports. Field/pubkey/leaf reads, the
+// bytes-taking I19 form, and the coinbase writer — the C++ parser's
+// replacement, one call per site.
+pub mod tx_extra_codec_ffi;
+
+// The PQC signing preimage (CHAIN_RULES_SLICE_6.md §5 commit 7, Q7 (c)):
+// shekyl-wire derives every input's signed hash; the daemon verifies against
+// it. Replaces the C++ assembly in tx_pqc_verify.cpp, one call per tx.
+pub mod tx_signing_ffi;
 
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
@@ -123,6 +140,10 @@ pub mod relay_zone_ffi;
 // the Rust-pinned libzstd is the single zstd implementation in the binary.
 pub mod levin_ffi;
 
+// Inbound descriptor ceiling (PWD-I7). One call: Rust probes the process
+// and returns the admission decision. C++ passes reservations only.
+pub mod inbound_ceiling_ffi;
+
 // Peer-attribution drop rule FFI — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`). The
 // classification is recorded by C++ as an opaque byte on the verification
 // context; whether that byte severs a connection is decided only here.
@@ -147,6 +168,7 @@ pub use shekyl_logging;
 
 // Legacy monofile FFI surface (split from the former body of this file).
 // Domain modules keep #[no_mangle] symbols; this root only wires and re-exports.
+mod economics_ffi;
 mod legacy_core;
 mod legacy_curve_tree;
 mod legacy_fcmp;
@@ -157,6 +179,8 @@ mod legacy_tx;
 mod legacy_types;
 mod legacy_util;
 
+#[allow(unused_imports)]
+pub use economics_ffi::*;
 #[allow(unused_imports)]
 pub use legacy_core::*;
 #[allow(unused_imports)]

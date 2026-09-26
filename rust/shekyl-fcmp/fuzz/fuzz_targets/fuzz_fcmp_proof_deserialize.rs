@@ -5,8 +5,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use shekyl_fcmp::leaf::PqcKeyScalar;
 use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
-use shekyl_fcmp::leaf::PqcLeafScalar;
 
 fuzz_target!(|data: &[u8]| {
     // Attempt to interpret raw bytes as an FCMP++ proof and verify it.
@@ -21,7 +21,7 @@ fuzz_target!(|data: &[u8]| {
             &proof,
             &[KeyImage::from_canonical_bytes([0u8; 32])],
             &[[0u8; 32]],
-            &[PqcLeafScalar([0u8; 32])],
+            &[PqcKeyScalar::from_canonical_bytes([0u8; 32]).expect("zero is canonical")],
             &[0u8; 32],
             8,
             [0u8; 32],
@@ -58,9 +58,21 @@ fuzz_target!(|data: &[u8]| {
         .collect();
 
     let pseudo_outs: Vec<[u8; 32]> = vec![[0u8; 32]; num_inputs as usize];
-    let pqc_hashes: Vec<PqcLeafScalar> = vec![PqcLeafScalar([0u8; 32]); num_inputs as usize];
+    let pqc_keys: Vec<PqcKeyScalar> = vec![
+        PqcKeyScalar::from_canonical_bytes([0u8; 32])
+            .expect("zero is canonical");
+        num_inputs as usize
+    ];
 
-    let _ = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
+    let _ = verify(
+        &proof,
+        &key_images,
+        &pseudo_outs,
+        &pqc_keys,
+        &tree_root,
+        tree_depth,
+        signable_tx_hash,
+    );
 
     // Also test with truncated data
     for cut in [1, 2, 4, 8, 16, 32] {
@@ -70,7 +82,15 @@ fuzz_target!(|data: &[u8]| {
                 num_inputs: num_inputs as u32,
                 tree_depth,
             };
-            let _ = verify(&truncated, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
+            let _ = verify(
+                &truncated,
+                &key_images,
+                &pseudo_outs,
+                &pqc_keys,
+                &tree_root,
+                tree_depth,
+                signable_tx_hash,
+            );
         }
     }
 
@@ -82,5 +102,13 @@ fuzz_target!(|data: &[u8]| {
         num_inputs: num_inputs as u32,
         tree_depth,
     };
-    let _ = verify(&big_proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
+    let _ = verify(
+        &big_proof,
+        &key_images,
+        &pseudo_outs,
+        &pqc_keys,
+        &tree_root,
+        tree_depth,
+        signable_tx_hash,
+    );
 });

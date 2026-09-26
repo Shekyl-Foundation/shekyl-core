@@ -5,8 +5,9 @@
 
 //! Gate-4 §8 phase-1 lifecycle KAT (join → serve `E_first`, bonded-aggregation audit).
 //!
-//! Regenerate fixture:
-//! `cargo test -p shekyl-archival-retention regenerate_gate4_lifecycle_fixture -- --ignored --nocapture`
+//! Regenerate fixture (armed — cite the decision-log entry that authorizes it):
+//! `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+//!   cargo test -p shekyl-archival-retention regenerate_gate4_lifecycle_fixture -- --ignored --nocapture`
 
 use std::io::Cursor;
 
@@ -18,8 +19,8 @@ use shekyl_archival_retention::{
     serve_credit_epoch_ok, sigma_work_milli, verify_conservation_snapshot,
     verify_join_market_bond_post, verify_segment_path, ArchivalBondPostVin,
     ArchivalServeCreditPruned, ArchivalServeCreditResponse, BadInterval, BondPostError,
-    BondPostKind, ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind,
-    ServeCreditRow, ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS,
+    ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow,
+    ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES, SETTLEMENT_EPOCH_BLOCKS,
     VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
@@ -72,20 +73,19 @@ fn build_gate4_document() -> Value {
     // not key validity; the C++ integration auth KAT references this hex.
     let bond_spend_pk = vec![0xB5u8; hybrid_pk_bytes.len()];
 
-    let join_vin = ArchivalBondPostVin {
-        hybrid_public_key: hybrid_pk_bytes,
-        p_canonical_id: p_id,
-        post_kind: BondPostKind::JoinMarket,
-        bond_spend_pk: bond_spend_pk.clone(),
-        holdings: HoldingsDescriptor {
+    let join_vin = ArchivalBondPostVin::join_market(
+        hybrid_pk_bytes,
+        p_id,
+        bond_spend_pk.clone(),
+        [0x0Eu8; ENDPOINT_BYTES],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![integration["shard_id"].as_u64().expect("shard")])
                 .unwrap(),
         },
-        bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_debit: 0,
-    };
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+    );
     verify_join_market_bond_post(&join_vin, false).expect("join vin valid");
 
     json!({
@@ -209,8 +209,13 @@ fn gate4_emission_phase2_vectors(emission: &Value) {
 }
 
 #[test]
-#[ignore = "writes tests/fixtures/gate4_lifecycle_kat_v1.json"]
+#[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
 fn regenerate_gate4_lifecycle_fixture() {
+    // The fixture is a self-pinned tripwire (rule 50): the shared guard
+    // refuses to move it without a docs/V3_WALLET_DECISION_LOG.md citation.
+    let decision =
+        shekyl_crypto_pq::test_support::regen_decision_or_refuse("the gate-4 lifecycle fixture");
+    eprintln!("regenerating the gate-4 lifecycle fixture under decision: {decision}");
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/gate4_lifecycle_kat_v1.json");
     let doc = build_gate4_document();

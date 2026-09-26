@@ -20,32 +20,52 @@
 //!
 //! # `SEGMENT_LEAF_COUNT` (pipeline doc §5.2)
 //!
-//! The level-2 subtree leaf count under the production curve-tree widths:
-//! `38 * 18 * 38 = 25 992` (leaf-chunk width `SELENE_CHUNK_WIDTH`, layer-1
-//! width `HELIOS_CHUNK_WIDTH`, layer-2 width `SELENE_CHUNK_WIDTH`;
-//! `CURVE_TREE_CLIENT.md` §7.2.2, gate-2 §2 sizing provisional "subtree
-//! level 2"). The value flows from `config/consensus_constants.json`
-//! through `build.rs` like every cross-language consensus constant, and
-//! the compile-time assert below ties it to the `shekyl-fcmp` width
-//! constants so a width change cannot silently strand it.
+//! The level-`SEGMENT_LAYER_J` (= 2) subtree leaf count under the production
+//! curve-tree widths: `38 * 18 * 38 = 25 992`. The value flows from
+//! `config/consensus_constants.json` through `build.rs` like every
+//! cross-language consensus constant, and the compile-time assert below ties
+//! it to `shekyl_fcmp::tree::leaves_per_segment()` — the one partition
+//! derivation, which the wallet-side shard store also takes from that crate
+//! (`V3_WALLET_DECISION_LOG.md` 2026-09-17, two stores) — so neither a width
+//! change nor a config edit can move this crate's pop revert away from the
+//! store. (*Corrected 2026-09-19:* this sentence previously said "admission
+//! and pop revert". **`frozen_segment_count` is not read by bond admission** —
+//! its consumers are the D2 escalation operand, the coverage RPC and
+//! freeze / pop-revert. Bond admission's shard predicate was ruled
+//! 2026-09-19 and is **unbuilt**; see
+//! `docs/design/ARCHIVAL_BOND_ADD_ADMISSION.md` §3.) Level 2 was gate-2's provisional sizing; the freeze
+//! pipeline round pinned it (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2).
 //!
 //! Not a tunable. Reversion criteria per the pipeline doc §5.2: a CT
 //! sizing re-review before genesis moving the subtree level (constants
 //! bump + fixture regen), or a V4 tree migration changing widths (that
 //! migration's own design round).
 
-use shekyl_fcmp::tree::{HELIOS_CHUNK_WIDTH, SELENE_CHUNK_WIDTH};
+use shekyl_fcmp::tree::{leaves_per_segment, SELENE_CHUNK_WIDTH};
 
 include!(concat!(env!("OUT_DIR"), "/segment_leaf_count_generated.rs"));
 
-// Width-product pin: SEGMENT_LEAF_COUNT is derived from the tree widths,
-// not chosen. A width change on the shekyl-fcmp side fails here instead
-// of silently stranding the JSON value (pipeline doc §5.2).
+// Partition pin (V3_WALLET_DECISION_LOG.md 2026-09-17, "two stores"): the
+// config-generated SEGMENT_LEAF_COUNT must equal the partition derivation
+// that lives in `shekyl_fcmp::tree` — the one home both stores consume. The
+// wallet-side shard store partitions by `leaves_per_segment()`; this crate's
+// consensus reader (`frozen_segment_count`: the D2 escalation operand, the
+// coverage RPC, and pop revert — **not** bond admission; see the module doc)
+// partitions by the JSON value. Until this assert the two agreed only because
+// the JSON value happened to equal the width product `38 · 18 · 38`; a
+// `SEGMENT_LAYER_J` move, or a config edit that reads as a tune, would have
+// forked admission and revert away from the store with nothing failing.
+// Compile-time, in the production graph — a consensus equality must not
+// depend on which tests ran. (Replaces the earlier hand-written
+// `SELENE * HELIOS * SELENE` pin, which restated the derivation instead of
+// taking it from its owner.)
 const _: () = assert!(
-    SEGMENT_LEAF_COUNT == (SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH * SELENE_CHUNK_WIDTH) as u64,
-    "SEGMENT_LEAF_COUNT must equal the level-2 subtree leaf count \
-     SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH * SELENE_CHUNK_WIDTH \
-     (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2)"
+    SEGMENT_LEAF_COUNT == leaves_per_segment() as u64,
+    "SEGMENT_LEAF_COUNT (consensus, config-generated) must equal \
+     shekyl_fcmp::tree::leaves_per_segment() (the partition both stores take \
+     from that crate): a divergent partition forks bond admission and pop \
+     revert away from the shard store (V3_WALLET_DECISION_LOG.md 2026-09-17; \
+     ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2)"
 );
 
 // Chunk alignment: segment bases are leaf-chunk-aligned, which the §6.2

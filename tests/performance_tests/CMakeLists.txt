@@ -30,10 +30,7 @@ set(performance_tests_sources
   main.cpp)
 
 set(performance_tests_headers
-  check_tx_signature.h
   check_hash.h
-  cn_slow_hash.h
-  construct_tx.h
   ge_frombytes_vartime.h
   generate_key_derivation.h
   generate_key_image.h
@@ -44,7 +41,6 @@ set(performance_tests_headers
   sc_reduce32.h
   sc_check.h
   multiexp.h
-  multi_tx_test_base.h
   performance_tests.h
   performance_utils.h
   single_tx_test_base.h)

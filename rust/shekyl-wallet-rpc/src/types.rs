@@ -255,6 +255,10 @@ pub struct GetBalanceResult {
     pub staked: Option<AtomicUnitsString>,
     /// Unlocked / spendable now.
     pub unlocked: AtomicUnitsString,
+    /// Money in received-but-unspendable outputs (`TransferState::Unspendable`;
+    /// `PL-D3` §6.2): on chain, retained, never spendable by this wallet.
+    /// Always present; `"0"` is a true zero.
+    pub unspendable: AtomicUnitsString,
     /// Emission-reward money received and still unspent in staking-side
     /// outputs — the same quantity as
     /// `get_staked_balance.rewards_received_unspent`; NOT a claim-era
@@ -353,6 +357,15 @@ pub enum TransferState {
     Confirmed,
     /// Spent (receive-side output consumed).
     Spent,
+    /// Received but unspendable (INCOMING only; `PL-D3`,
+    /// `FCMP_SPEND_LINKABILITY.md` §6.2): the sender's transaction
+    /// published a `tx_extra` `0x07` leaf entry that does not open to this
+    /// wallet's derivation for the output, so the chain leaf can never be
+    /// proven by this wallet. The money is on chain and the row names the
+    /// sender's transaction (`tx_hash`); it is excluded from every
+    /// spendable balance (rule 82: a failure mode is first-class, not a
+    /// log line). `unspendable_reason` says which half failed.
+    Unspendable,
     /// Terminal failure: daemon refused the dispatch; the tx never mined
     /// (OUTGOING journal `TerminalRejected` only — rule 82 failed-send history).
     Failed,
@@ -388,6 +401,7 @@ impl TransferState {
             Self::Pending => "PENDING",
             Self::Confirmed => "CONFIRMED",
             Self::Spent => "SPENT",
+            Self::Unspendable => "UNSPENDABLE",
             Self::Failed => "FAILED",
             Self::Dropped => "DROPPED",
             Self::Abandoned => "ABANDONED",
@@ -493,6 +507,12 @@ pub struct TransferView {
     /// Height at which the output was spent, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spent_height: Option<i64>,
+    /// Why the output is `UNSPENDABLE` (present exactly when `state` is
+    /// `UNSPENDABLE`): `PQC_LEAF_MISMATCH` — the published leaf entry is not
+    /// this wallet's derivation; `PQC_LEAF_ENTRY_ABSENT` — the transaction
+    /// carries no entry for the output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unspendable_reason: Option<String>,
     /// Receive attribution (WI-RPC-4).
     ///
     /// Present on INCOMING rows only. Receive attribution answers "which
@@ -702,9 +722,9 @@ pub struct PaymentRequestView {
     pub label: String,
     /// Requested amount.
     pub amount: AtomicUnitsString,
-    /// Block height at creation (the request clock is block height).
+    /// Wall-clock Unix seconds at creation (UTC).
     pub created_at: i64,
-    /// Absolute expiry height, if any.
+    /// Absolute expiry as Unix seconds (UTC), if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expiry: Option<i64>,
     /// Lifecycle state.
@@ -756,7 +776,7 @@ pub struct ParseUriResult {
     /// `rid` query parameter (decimal string), if present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rid: Option<String>,
-    /// `expiry` query parameter (absolute block height), if present.
+    /// `expiry` query parameter (Unix seconds, UTC), if present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expiry: Option<i64>,
 }

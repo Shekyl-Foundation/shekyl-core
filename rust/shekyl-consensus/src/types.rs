@@ -1,13 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Difficulty(pub u128);
-
-impl Difficulty {
-    pub fn zero() -> Self {
-        Difficulty(0)
-    }
-}
+/// Cumulative difficulty through a block — distinct from [`Difficulty`].
+pub use shekyl_difficulty::CumulativeDifficulty;
+/// Re-export of the transform-shaped difficulty target owned by
+/// [`shekyl_difficulty`]. The leftover `Difficulty(pub u128)` that
+/// lived here is deleted (RTN-5).
+pub use shekyl_difficulty::Difficulty;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockHeader {
@@ -23,6 +21,6 @@ pub struct BlockHeader {
 pub struct ChainState {
     pub height: u64,
     pub top_hash: [u8; 32],
-    pub cumulative_difficulty: Difficulty,
+    pub cumulative_difficulty: CumulativeDifficulty,
     pub timestamp: u64,
 }

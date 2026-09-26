@@ -37,9 +37,20 @@ shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+# Domain newtypes reconstructed immediately inside the difficulty FFI
+# shims (RTN-5). ABI stays raw `u64` / `ShekylU128`.
+shekyl-types = { path = "../shekyl-types" }
 # DRS-P0d logical-state digest v0. The hasher is safe-only; this crate
 # is the pointer boundary. DRS-E1 will grow shekyl-chain-store further.
 shekyl-chain-store = { path = "../shekyl-chain-store" }
+# DRS-E2 trace writer (`e2_trace_ffi`): the one door the C++ LMDB exporter
+# hands bytes through; the format and the checkpoint hashing are Rust's
+# (RD-F9, RD-Q9). Harvest shim — the C++ side dies at cutover (§1.3).
+# Trace writer only (RD-F9, RD-Q9). Default features pull the pipeline,
+# the RPC fetcher and clap — harvest FFI does not need them, and feature
+# unification on `cargo build -p shekyl-ffi` (the daemon image) stays
+# at the writer.
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }
 # RandomX v2 light-cache PoW verifier. Consumed by `pow_randomx_ffi.rs`
 # (the `shekyl_pow_randomx_v2_*` exports) which is the consensus PoW
 # verification boundary per `RANDOMX_V2_PHASE3_PLAN.md` §6. Default
@@ -94,6 +105,7 @@ shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 # shim reaches the Rust-pinned libzstd through these exports, making it the
 # single zstd in the binary (system-libzstd link dropped).
 shekyl-levin = { path = "../shekyl-levin" }
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # Daemon ephemeral-onion posture (`daemon_tor_ffi.rs`, PWD-E7 piece 3): the
 # blocking facade over DaemonTorControl. The facade owns its tokio runtime,
 # so this crate takes no tokio edge of its own.

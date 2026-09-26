@@ -45,7 +45,7 @@ class Daemon(object):
             'params': {
                 'client': client,
                 'wallet_address': address,
-                'reserve_size' : 1,
+                'reserve_size' : 8,
                 'prev_block' : prev_block,
             },
             'jsonrpc': '2.0', 
@@ -62,11 +62,10 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(get_miner_data)
 
-    def calc_pow(self, major_version, height, block_blob, seed_hash = ''):
+    def calc_pow(self, height, block_blob, seed_hash = ''):
         calc_pow = {
             'method': 'calc_pow',
             'params': {
-                'major_version': major_version,
                 'height': height,
                 'block_blob' : block_blob,
                 'seed_hash' : seed_hash,
@@ -209,7 +208,6 @@ class Daemon(object):
             'method': 'generateblocks',
             'params': {
                 'amount_of_blocks' : blocks,
-                'reserve_size' : 20,
                 'wallet_address': address,
                 'prev_block': prev_block,
                 'starting_nonce': starting_nonce,
@@ -371,22 +369,6 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(get_output_distribution)
 
-    def get_output_histogram(self, amounts = [], min_count = 0, max_count = 0, unlocked = False, recent_cutoff = 0, client = ""):
-        get_output_histogram = {
-            'method': 'get_output_histogram',
-            'params': {
-                'client': client,
-                'amounts': amounts,
-                'min_count': min_count,
-                'max_count': max_count,
-                'unlocked': unlocked,
-                'recent_cutoff': recent_cutoff,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_output_histogram)
-
     def set_log_level(self, level):
         set_log_level = {
             'level': level,
@@ -542,17 +524,6 @@ class Daemon(object):
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(get_txpool_backlog)
-
-    def prune_blockchain(self, check = False):
-        prune_blockchain = {
-            'method': 'prune_blockchain',
-            'params': {
-                'check': check,
-            },
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(prune_blockchain)
 
     def flush_cache(self, bad_txs = False):
         flush_cache = {

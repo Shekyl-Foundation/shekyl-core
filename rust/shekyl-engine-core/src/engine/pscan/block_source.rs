@@ -31,9 +31,10 @@ use std::future::Future;
 use shekyl_p_transport::PTorClient;
 use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, ChainCount};
 
 use crate::engine::block_fetch::default_fetch_scannable_block_full;
+use crate::engine::daemon::synced_chain_facts::fetch_synced_chain_facts;
 use crate::engine::prpc::PRpc;
 use crate::engine::traits::DaemonEngine;
 
@@ -46,12 +47,24 @@ use crate::engine::traits::DaemonEngine;
 pub(crate) enum BlockSourceError {
     /// The underlying source (transport, parse, or daemon) failed.
     Source(String),
+    /// The daemon reports it is still synchronizing, so it has no tip to
+    /// claim.
+    ///
+    /// Deliberately **not** folded into [`Self::Source`]: "the daemon did not
+    /// answer" and "the daemon answered that it does not know yet" are
+    /// different faults with different operator remedies (rule 82), and
+    /// `R-B` makes only the second one routine.
+    DaemonSyncing,
 }
 
 impl std::fmt::Display for BlockSourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Source(msg) => write!(f, "block source failure: {msg}"),
+            Self::DaemonSyncing => write!(
+                f,
+                "the daemon is still synchronizing, so it has no chain tip to claim"
+            ),
         }
     }
 }
@@ -78,18 +91,22 @@ impl From<RpcError> for BlockSourceError {
 // placeholder and tests. Bump to `pub` when 2d-2's transport needs to implement
 // it from another crate (a one-word change behind a stable signature).
 pub(crate) trait BlockSource {
-    /// This source's **claimed** chain height — the *count* of blocks, matching
-    /// the daemon's `get_height` (a genesis-only chain has height `1`). So the
-    /// highest existing block is `tip_height - 1`, and [`Self::block_at`] is valid
-    /// for heights in `0 .. tip_height` (half-open).
+    /// This source's **claimed** chain **count** — matching the daemon's
+    /// `get_height` (a genesis-only chain reports `1`). So the highest
+    /// existing block is `tip()`, and [`Self::block_at`] is valid for
+    /// ordinals in `0 .. count` (half-open; exclusive end is
+    /// [`ChainCount::next_height`]).
     ///
-    /// It is a *claimed* height, **not** a trusted-current one: a single source
-    /// can withhold or truncate its tip for free (the SP-7 stale-tip residual) —
-    /// forging a header chain is PoW-expensive, truncating it is not. Tip *currency*
-    /// is resolved by **posture**, not multi-source machinery
-    /// (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §4); this trait only reports what the
-    /// source claims.
-    fn tip_height(&self) -> impl Future<Output = Result<BlockHeight, BlockSourceError>> + Send;
+    /// The method name is the WI-3 named clock (`daemon_claimed_tip` /
+    /// `BlockSource::tip_height`); the return type is the quantity. It is a
+    /// *claimed* count, **not** a trusted-current one: a single source can
+    /// withhold or truncate its tip for free (the SP-7 stale-tip residual)
+    /// — forging a header chain is PoW-expensive, truncating it is not. Tip
+    /// *currency* is resolved
+    /// by **posture**, not multi-source machinery
+    /// (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §4); this trait only reports
+    /// what the source claims.
+    fn tip_height(&self) -> impl Future<Output = Result<ChainCount, BlockSourceError>> + Send;
 
     /// Fetch the **whole** block at `height` (header + every transaction + the
     /// first global output index), in scannable form.
@@ -126,8 +143,37 @@ pub(crate) trait BlockSource {
 // rather than re-deriving the same checked conversions (and the same error
 // strings) per impl, where the copies could drift.
 
-/// A source's claimed tip height: the bare [`Rpc::get_height`] converted
-/// fail-closed to a [`BlockHeight`].
+/// A source's claimed tip, **only if the daemon reports itself synchronized**.
+///
+/// Returns the [`SyncedChainFacts`](crate::engine::daemon::synced_chain_facts::SyncedChainFacts)
+/// witness rather than a bare height
+/// (`WALLET_SIDE_STORE.md` `WSS-Q14`). Every consumer below posts a
+/// transaction stamped with this clock, and `R-B` says that while the daemon
+/// reports syncing the answer is **unknown** — do not erase, post or sign. So
+/// the clock is not derivable without the witness: a syncing daemon yields
+/// [`BlockSourceError::DaemonSyncing`] and the caller declines, rather than
+/// stamping a post with a resync height.
+///
+/// This is the choke point, which is why the gate sits here and not at six
+/// call sites. **The witness is consumed here, not returned** — callers
+/// receive a [`ChainCount`], the quantity this clock has always carried
+/// (the type matches; the number does not move), and cannot inspect the
+/// facts it was derived from. What the type buys is not an API for them:
+/// it is that **there is no other way to obtain this clock**, so a future
+/// consumer inherits the refusal instead of having to remember it —
+/// adopt-on-next-touch is how `WSS-25` happened.
+///
+/// A consumer that needs to *reason* about the facts rather than take a
+/// height — to reject a rolled-back record, say — must hold the witness
+/// itself and reconcile it (`CoherentChainView`), which is what the claim
+/// and exit lanes do. This function is for consumers that only need a clock.
+///
+/// One `get_info` read replaces the former `get_height` read: the same
+/// response carries the height and the sync state, so the gate costs no extra
+/// round trip, and the former `usize → u64` conversion is gone with it. The
+/// value returned is **numerically unchanged** — [`ChainCount`], not
+/// `.tip()`. Flipping to `.tip()` would fire due one block late and skip
+/// the last pscan block.
 ///
 /// **Named daemon-claimed-tip clock (WI-2 F-2 / WI-3 R2-1).** This is the
 /// single function both (a) bond-assemble `anchor_t0` stamps and (b) the
@@ -138,14 +184,14 @@ pub(crate) trait BlockSource {
 /// Generic over the transport so the local (`DaemonEngine: Rpc`) and remote
 /// ([`PRpc`]) sources share one body; the returned future is `Send` because
 /// `get_height`'s is.
-pub(crate) async fn daemon_claimed_tip<R: Rpc>(rpc: &R) -> Result<BlockHeight, BlockSourceError> {
-    let height = rpc.get_height().await?;
-    // Checked, fail-closed conversion. The 64-bit-only build gate already makes
-    // `usize <= u64` (so this never errors), but the uniform checked form keeps
-    // the conversion honest.
-    let raw = u64::try_from(height)
-        .map_err(|_| BlockSourceError::Source(format!("chain height {height} exceeds u64")))?;
-    Ok(BlockHeight::from_raw(raw))
+pub(crate) async fn daemon_claimed_tip<R: Rpc>(rpc: &R) -> Result<ChainCount, BlockSourceError> {
+    let facts = fetch_synced_chain_facts(rpc)
+        .await?
+        .ok_or(BlockSourceError::DaemonSyncing)?;
+    // Count, not tip ordinal — the number is frozen (Phase 1).
+    // Flipping to `.tip()` would fire due one block late and skip the
+    // last pscan block. A 3-block chain still reports 3.
+    Ok(facts.chain_height())
 }
 
 /// A [`BlockHeight`] as the `usize` block **number** the fetch layer indexes by,
@@ -184,7 +230,7 @@ impl<D: DaemonEngine> DaemonBlockSource<D> {
 }
 
 impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
-    async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
+    async fn tip_height(&self) -> Result<ChainCount, BlockSourceError> {
         // `DaemonEngine: Rpc`, so `get_height` is the inherited tip query.
         daemon_claimed_tip(&self.daemon).await
     }
@@ -235,7 +281,7 @@ impl PBlockSource {
 }
 
 impl BlockSource for PBlockSource {
-    async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
+    async fn tip_height(&self) -> Result<ChainCount, BlockSourceError> {
         // `PRpc: Rpc`, so `get_height` is the inherited tip query — over `P`'s
         // circuit, same claimed-not-trusted semantics as any single source.
         daemon_claimed_tip(&self.rpc).await
@@ -270,9 +316,9 @@ mod tests {
     /// (the daemon serves `chain[height]`), so dummy parents suffice here.
     fn three_block_chain() -> Vec<ScannableBlock> {
         vec![
-            make_synthetic_block(0, [0u8; 32]),
-            make_synthetic_block(1, [0u8; 32]),
-            make_synthetic_block(2, [0u8; 32]),
+            make_synthetic_block(0, shekyl_types::BlockHash::NULL),
+            make_synthetic_block(1, shekyl_types::BlockHash::NULL),
+            make_synthetic_block(2, shekyl_types::BlockHash::NULL),
         ]
     }
 
@@ -284,7 +330,7 @@ mod tests {
         // tip_height reports the source's claimed height (chain length).
         assert_eq!(
             source.tip_height().await.expect("tip_height"),
-            BlockHeight::from_raw(3)
+            ChainCount::from_raw(3)
         );
 
         // block_at returns the WHOLE block at the requested height — fetch-everything,
@@ -295,6 +341,67 @@ mod tests {
             .expect("block_at transport")
             .expect("block 1 present");
         assert_eq!(fetched.block.number(), Some(1));
+    }
+
+    // ── WSS-Q14 class-A refusal bite ────────────────────────────────────
+    //
+    // `daemon_claimed_tip` is the choke point six consumers read their clock
+    // through: `anchor_t0` (bond_orchestrator), the claim / drain / release
+    // dispatch stamps, and both `BlockSource::tip_height` impls (whence the
+    // pscan finality horizon). Every one of them stamps a transaction it then
+    // posts, which is what `R-B` forbids on an unsynchronized view.
+    //
+    // One bite covers the class because there is exactly one derivation: the
+    // consumers cannot obtain this clock any other way. The edit that turns
+    // this red is deleting the `ok_or(DaemonSyncing)` — which is also the
+    // edit that would silently restore `WSS-25`'s shape on the posting lanes.
+
+    /// A syncing daemon has no tip to claim, so the clock is not derivable —
+    /// and the refusal names the state rather than looking like a transport
+    /// fault.
+    ///
+    /// This bites against every consumer stamping a post on a resync height;
+    /// it does **not** cover a daemon that lies "synchronized" (the type
+    /// carries the daemon's claim, not an independent measurement).
+    #[tokio::test]
+    async fn a_syncing_daemon_yields_no_claimed_tip() {
+        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, three_block_chain());
+        daemon.set_daemon_syncing(true);
+
+        let err = daemon_claimed_tip(&daemon)
+            .await
+            .expect_err("a syncing daemon has no tip to claim");
+        assert!(
+            matches!(err, BlockSourceError::DaemonSyncing),
+            "the refusal must name the sync state, not read as a transport \
+             failure an operator would chase at the network layer: {err:?}"
+        );
+
+        // And the same refusal reaches the consumers through the seam they
+        // actually call, rather than only the free function.
+        let source = DaemonBlockSource::new(daemon);
+        assert!(
+            matches!(
+                source.tip_height().await,
+                Err(BlockSourceError::DaemonSyncing)
+            ),
+            "BlockSource::tip_height must inherit the gate"
+        );
+    }
+
+    /// The negative control, and the numeric pin: synchronized, the clock is
+    /// the same value it was before the gate existed.
+    ///
+    /// Without this the test above would pass on a `daemon_claimed_tip` that
+    /// had simply stopped working. It also pins the count-vs-tip reading
+    /// deliberately left unchanged — a 3-block chain still reports 3, not 2.
+    #[tokio::test]
+    async fn a_synchronized_daemon_reports_the_unchanged_clock() {
+        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, three_block_chain());
+        assert_eq!(
+            daemon_claimed_tip(&daemon).await.expect("synced"),
+            ChainCount::from_raw(3),
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -1,0 +1,103 @@
+{
+  "durability": {
+    "imposed_argv": [
+      "--regtest",
+      "--keep-fakechain",
+      "--fixed-difficulty=1",
+      "--db-sync-mode=safe",
+      "--allow-local-ip",
+      "--no-igd",
+      "--non-interactive",
+      "--log-level=1",
+      "--data-dir=/home/torvaldsl/shekyl/drsbench-work2/subject",
+      "--p2p-bind-port=42171",
+      "--rpc-bind-port=59205",
+      "--add-exclusive-node=127.0.0.1:59667"
+    ],
+    "observed": true,
+    "policy": "DRS-D9 full-fsync-per-commit",
+    "readback": "the subject daemon's own startup report of the flags it resolved. The mode is still validated against an allowed set BEFORE spawning, because a refusal that comes before the run costs nothing and this line only arrives after it",
+    "resolved_log_line": "2026-09-13T19:34:28.202943Z  INFO global: Database sync: flags=0x1 (safe), sync_mode=3, threshold=1 blocks",
+    "sync_mode": "safe"
+  },
+  "engine": "lmdb",
+  "engine_selected_by": "daemon-default-lmdb (no engine switch exists)",
+  "environment": {
+    "cpu_count": 16,
+    "loadavg_1m_at_end": 2.962890625,
+    "loadavg_1m_at_start": 1.9306640625,
+    "loadavg_5m_at_end": 3.38818359375,
+    "note": "the subject is meant to be the machine's only significant load. A wall-time ratio requires two runs at comparable load: on this machine the same fixture moved 36-55% on wall and 16-24% on CPU between an idle box and a 5-minute load average of 8.6 over 16 cores, and a 1.25x floor sits well inside that band"
+  },
+  "fixture": {
+    "blocks_generated": 200,
+    "generation_wall_s": 156.005,
+    "height_reached": 201,
+    "height_requested": 200,
+    "nettype": "fakechain",
+    "peers_used": 1,
+    "prunable_region": "absent by construction: coinbase-only fixture, no non-coinbase transaction and therefore no txs_prunable_hash region",
+    "reference_height": 100000,
+    "seed_height": 201,
+    "seed_reused": false,
+    "tx_per_block": 0,
+    "verify_exercised": {
+      "fcmp_pp": false,
+      "pow": true
+    },
+    "verify_note": "PoW longhash is computed and checked for every block with no nettype bypass; --fixed-difficulty lowers the TARGET only. generateblocks produces coinbase-only blocks, so FCMP++ verification is not exercised at all."
+  },
+  "git_rev": "463c628b14e6ad09a51b09dc67fd5c29710b464b",
+  "hardware": {
+    "cpu_count": 16,
+    "cpu_model": "11th Gen Intel(R) Core(TM) i9-11950H @ 2.60GHz",
+    "disk_class": "ssd_or_nvme",
+    "disk_class_source": "probed",
+    "fs_type": "ext4",
+    "ram_bytes": 134237892608
+  },
+  "measures": [
+    {
+      "axis": "wall_time",
+      "denominator": "subject's first successful get_info to height == seed height; EXCLUDES process start, RandomX dataset init and store open",
+      "name": "ibd_wall_time_s",
+      "scenario": "ibd_coinbase_only",
+      "unit": "s",
+      "value": 22.444
+    },
+    {
+      "axis": "cpu_time",
+      "denominator": "utime+stime of the subject over all threads, sampled at the first successful get_info and again at the end, reported as the DELTA \u2014 so it spans exactly the same phase as ibd_wall_time_s",
+      "name": "subject_cpu_s",
+      "scenario": "ibd_coinbase_only",
+      "unit": "s",
+      "value": 80.89
+    },
+    {
+      "axis": "memory",
+      "denominator": "subject VmHWM sampled during sync. NOT \u00a77.4's attacker-feed row, which has no definition yet",
+      "name": "peak_rss_bytes",
+      "scenario": "ibd_coinbase_only",
+      "unit": "bytes",
+      "value": 564932608
+    },
+    {
+      "axis": "disk",
+      "denominator": "filesystem-ALLOCATED bytes of the subject data dir, measured after the store was closed. NOT \u00a77.4's multi-year row",
+      "name": "store_bytes",
+      "scenario": "ibd_coinbase_only",
+      "unit": "bytes",
+      "value": 1462272
+    },
+    {
+      "axis": "disk",
+      "denominator": "apparent (file-length) bytes of the same directory, same moment; differs from the allocated figure only if the engine leaves holes",
+      "name": "store_bytes_apparent",
+      "scenario": "ibd_coinbase_only",
+      "unit": "bytes",
+      "value": 1441822
+    }
+  ],
+  "schema_version": "shekyl_drs_bench_v1",
+  "thresholds_frozen_at": "ba4b3c73a"
+}

@@ -63,16 +63,23 @@ pub enum RowError {
     /// correct *as arithmetic*: nothing was observed. But a stored row with
     /// `issued = 0` would assert "issued, and unreachable" about a pair that
     /// was never issued, and it would break the invariant `SO-D1` exists for —
-    /// **absent ⇒ never issued** is a theorem about the writer, and only stays
-    /// one while the writer cannot emit this row.
+    /// **absent ⇒ no live obligation in `E`** is a theorem about the writer,
+    /// and only stays one while the writer cannot emit this row. Absence
+    /// covers two cases, both correctly non-observations: a pair the urn
+    /// never reached, and a pair that was issued but had exited (dropped or
+    /// slashed) by the fire height, which the settlement filter writes no row
+    /// for (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.4 (3.3), pin 5).
+    /// *SUPERSEDED 2026-09-16: "absent ⇒ never issued" — the never-issued
+    /// case alone.*
     ///
     /// Refused here, at the row constructor, rather than in `settle_epoch`:
     /// the fold is a pure statement about counts and has other callers; the
     /// ROW is the storage boundary, and it is storage that `SO-D1` rules on.
     #[error(
         "issued is 0: SO-D1 writes a row only for a pair with issued >= 1, so \
-         absence means never-issued; a zero-issued row would make absence \
-         ambiguous and is refused at the boundary rather than stored"
+         absence means no live obligation in the epoch (never issued, or issued \
+         and exited before the fire height); a zero-issued row would make \
+         absence ambiguous and is refused at the boundary rather than stored"
     )]
     IssuedZero,
 
@@ -326,8 +333,9 @@ mod tests {
         // And the boundary the case sits against: ZERO issuance is not a row
         // at all. Asserted here, beside its neighbour, because the pair is the
         // ruling — `SO-D1` distinguishes "issued but unreachable" (a written
-        // NonObservation) from "never issued" (an absence), and a test that
-        // covered only the first would leave the two synonymous again.
+        // NonObservation) from "no live obligation" (an absence: never issued,
+        // or exited before the fire height), and a test that covered only the
+        // first would leave the two synonymous again.
         assert!(
             matches!(SettlementRow::settle(0, 0), Err(RowError::IssuedZero)),
             "a zero-issued pair must be refused, not stored as NonObservation"
@@ -396,8 +404,8 @@ mod tests {
         );
     }
 
-    /// A desynced accounting input is a typed refusal, never a clamp — the
-    /// posture `SettleError` sets, preserved through the row constructor.
+    /// Layer-3 mapping pin (`SO-D8d`): a backstop refusal, never a clamp.
+    /// Not the Q3 reconstruction fixture (divergent urns at Slice C).
     #[test]
     fn more_passes_than_issued_is_refused_not_clamped() {
         assert_eq!(

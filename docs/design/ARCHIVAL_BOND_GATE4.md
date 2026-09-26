@@ -213,7 +213,7 @@ Emission already ships a loud cleartext **source** term (mint) inflation-checked
 | `post_kind` | `bond_credit` | `bond_debit` | Notes |
 |-------------|---------------|--------------|-------|
 | `JoinMarket` | yes (`== bond_floor`) | no | Creates record |
-| `Rebond` | yes (`== bond_floor(post) − bonded_total`; **0 legal**) | no | Restores standing after slash; credit = growth only (P2B-9 Pin 2) |
+| `Reinstate` | yes (`== bond_floor(post) − bonded_total`; **0 legal**) | no | Restores standing after slash; credit = growth only (P2B-9 Pin 2) |
 | `Release` | no | yes (`== bonded_total`) | After release cooldown |
 | `HoldingsUpdate` add shard | yes (`+FLOOR`) | no | V3.0 |
 | `HoldingsUpdate` drop shard | no | yes (`FLOOR`) | V3.0; per-shard cooldown (§4.4) |
@@ -258,7 +258,7 @@ ArchivalBondPostVin {
 
 enum BondPostKind {
   JoinMarket,
-  Rebond,
+  Reinstate,
   Release,
   HoldingsUpdate,        // V3.0 wire; credit/debit directions §3.2
 }
@@ -275,7 +275,7 @@ u8                      vin_type = 5
 varint                  hybrid_pubkey_len   (≤ 2048)
 [hybrid_pubkey_len]     HybridPublicKey::to_canonical_bytes()   // P_pubkey (identity)
 [32]                    p_canonical_id      (hint; verifier recomputes)
-u8                      post_kind           (0=JoinMarket, 1=Rebond, 2=Release, 3=HoldingsUpdate)
+u8                      post_kind           (0=JoinMarket, 1=Reinstate, 2=Release, 3=HoldingsUpdate)
 // if post_kind == 0 (JoinMarket): the dedicated bond-spend key is committed into the record
 varint                  bond_spend_pk_len   (≤ 2048)            // present iff post_kind == 0
 [bond_spend_pk_len]     bond_spend_pk.to_canonical_bytes()      // present iff post_kind == 0
@@ -331,7 +331,7 @@ a key-swap at join.
 **Bond-vin authorizing key (GF-1, gate-6 §9.6).** The `pqc_auths[]` entry aligned with the bond
 vin verifies against:
 
-- **credit / identity-establishing paths** (`bond_debit == 0`: `JoinMarket`, `Rebond`,
+- **credit / identity-establishing paths** (`bond_debit == 0`: `JoinMarket`, `Reinstate`,
   `HoldingsUpdate` add-shard) — the **identity key `P_pubkey`** (`= hybrid_sign_pk`). The funded
   value arrives via standard `txin_to_key` inputs (key images, self-authorizing); the bond-vin
   signature only proves control of `P_canonical_id`.
@@ -346,7 +346,7 @@ require the `bond_spend_pk` field present (`scheme_id = 1`) and **commit it into
 (immutable debit authorizer, §4.1); `bond_credit == bond_floor(holdings)`; credit
 `bonded_total_atomic` and `total_bonded_atomic`.
 
-**Rebond path (reinstatement, not re-entry — P2B-9):** require existing record with an
+**Reinstate path (reinstatement, not re-entry — P2B-9):** require existing record with an
 **open bad interval** (`good_standing == false`, both slash severities); the vin's holdings
 must be `ShardSetCompact`, **non-empty**, and a **superset of the record's current holdings**
 (shedding stays `HoldingsUpdate`-drop's gated job — Pin 1); `bond_credit ==
@@ -355,8 +355,8 @@ slash preserves floor-equality, so standing-only reinstatement carries no credit
 amending the earlier "restores `== bond_floor`" wording); interval-cap headroom
 `bad_intervals.size() ≤ 254` (one slot reserved for the next slash + one for `Release`'s
 clean close, so exit is always reachable — Pin 6); **close** the open bad interval
-(`end_exclusive = E_rebond + 1`, F3 / Pin 3). Carried shards keep their add-epochs; added
-shards take `E_rebond` (Pin 7).
+(`end_exclusive = E_reinstate + 1`, F3 / Pin 3). Carried shards keep their add-epochs; added
+shards take `E_reinstate` (Pin 7).
 
 **Release path (G4-1):** clean release of bonded balance when:
 
@@ -425,7 +425,7 @@ reversion clause).
    - `bond_debit > 0` (`Release`, `HoldingsUpdate` drop) → verify against the record's committed
      `bond_spend_pk`. The account identity key `P_pubkey` (`= hybrid_sign_pk`) **must not**
      authorize a debit (identity-only invariant).
-   - `bond_debit == 0` (`JoinMarket`, `Rebond`, `HoldingsUpdate` add) → verify against
+   - `bond_debit == 0` (`JoinMarket`, `Reinstate`, `HoldingsUpdate` add) → verify against
      `P_pubkey`; on `JoinMarket` this signature also binds the committed `bond_spend_pk` —
      the vin rides inside the signed tx prefix of the surface-A whole-tx payload
      (§3.4.1; SA-2b retired the separate sig-preimage).
@@ -444,7 +444,7 @@ not an ambiguity patch.) Consequences:
   current set to identify the dropped shard (which is why the vin must carry the post-state, not the
   current set — there is no separate drop-shard field).
 - **Full `Release`** carries **empty holdings** (`bond_floor(∅) = 0`, so `bonded_total_atomic = 0`). The
-  `ShardSetCompactEmpty` rejection is a **credit / identity-path** check (`JoinMarket` / `Rebond` /
+  `ShardSetCompactEmpty` rejection is a **credit / identity-path** check (`JoinMarket` / `Reinstate` /
   add / drop-with-remaining hold ≥ 1 shard), **not** a full-`Release` check.
 - **Debit amount:** `bond_debit == record.bonded_total(current) − vin.bonded_total_atomic` (= the full
   `record.bonded_total` for `Release`). §4.3's `bond_debit == bonded_total == bond_floor(holdings)`
@@ -590,9 +590,9 @@ risk against the serve-credit table, the single source of truth. Landed:
 **Landed representation of `bond_event_log` (F3).** The interval log is
 `ArchivalBondValue::bad_intervals` (`shekyl_types.h`): a slash appends an **open**
 interval `[E_slash, u64::MAX)` — at most **one** open interval ever exists (same-epoch
-slashes coalesce, P2B-9 Pin 5; later epochs are `good_through`-blocked) — `Rebond`
-closes it (`end_exclusive = E_rebond + 1`: the partial rebond epoch is forfeited in
-both directions, P2B-9 Pin 3, amending the earlier `E_rebond` pin), and a clean
+slashes coalesce, P2B-9 Pin 5; later epochs are `good_through`-blocked) — `Reinstate`
+closes it (`end_exclusive = E_reinstate + 1`: the partial reinstate epoch is forfeited in
+both directions, P2B-9 Pin 3, amending the earlier `E_reinstate` pin), and a clean
 `Release` appends the **zero-length** clean interval-close
 `[E_release, E_release)` — `good_through` skips it at every epoch (it can falsify
 nothing), so it is purely an event marker that records the exit settlement epoch
@@ -665,7 +665,7 @@ shard adjustment post-genesis would be a hard fork; and without it the only way 
 shed a single shard is `Release` + re-`JoinMarket` — tearing down a working multi-shard
 operation (all collateral into release cooldown, all serving interrupted, all serve-credit
 continuity reset) to swap one slot. The full lifecycle
-(`JoinMarket / Rebond / HoldingsUpdate / Release`) ships at genesis. Sim reconciliation of
+(`JoinMarket / Reinstate / HoldingsUpdate / Release`) ships at genesis. Sim reconciliation of
 the resulting age-stratified mobility friction is a pre-seal dependency
 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*steady-state frame* item 6).
 
@@ -761,7 +761,7 @@ On block disconnect at height `H`:
 
 1. **JoinMarket** in block: delete `ArchivalBondRecord` iff `join_market_height == H`;
    revert `bond_credit`, `total_bonded_atomic`, same-block gate-2 writes for `P`.
-2. **Rebond / Release / HoldingsUpdate** in block: revert record + balance terms in reverse
+2. **Reinstate / Release / HoldingsUpdate** in block: revert record + balance terms in reverse
    connect order.
 3. Emission leg §8: paying-emission dedup + mint undo (separate vin path).
 
@@ -817,7 +817,7 @@ law (§4.5); `== bond_floor`; UTXO framings rejected.
 - [x] C++ / Rust `txin_archival_bond_post` vin registration (`tag 0x05`, `bond_wire`, §3.4.1).
 - [x] `bond_credit`/`bond_debit` in RCT balance verifier (`verCtSemanticsBondPost`; NIC path).
 - [x] JoinMarket connect: `put_archival_bond_record` + `total_bonded_atomic`.
-- [ ] Rebond / Release / HoldingsUpdate connect paths — **V3.0 scope** (promoted 2026-06-15;
+- [ ] Reinstate / Release / HoldingsUpdate connect paths — **V3.0 scope** (promoted 2026-06-15;
       FSM actions in [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)).
 - [ ] **Dedicated bond-spend key (GF-1, gate-6 §9.6)** — commit `bond_spend_pk` into the record
       on `JoinMarket` connect (§4.1); verify `bond_debit` paths' bond-vin `pqc_auths` against the

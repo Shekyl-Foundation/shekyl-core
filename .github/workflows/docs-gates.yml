@@ -89,6 +89,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: true
+          # Full history, not the default depth-1. The code-citation gate
+          # resolves each citation AT THE REVISION THE DOCUMENT DECLARES, and
+          # `git show <pin>:<path>` cannot work in a shallow clone. The gate
+          # FATALs on an unreachable pin rather than skipping it, so a depth-1
+          # checkout would fail this job loudly instead of passing it vacuously
+          # — but the right fix is to have the history, not to soften the gate.
+          fetch-depth: 0
 
       - name: Run doc-link check
         # Every relative markdown link under docs/ must resolve in the
@@ -120,6 +127,41 @@ jobs:
         # reason as above.
         if: '!cancelled()'
         run: python3 scripts/ci/check_lmdb_schema_coverage.py
+
+      - name: Run AFC-1 archival forcing register check
+        # The forcing register (docs/design/archival_forcing_cells.tsv) is the
+        # 34-cell map of which archival apply/revert halves a block sequence
+        # can force. Its value is that its citations RESOLVE, and line anchors
+        # into db_lmdb.cpp drift with every edit — a register of stale anchors
+        # is worse than none, because it reads as checked.
+        #
+        # Extraction is deliberately identical to check_lmdb_schema_coverage's
+        # parse_table_list: two gates pinning one construct with independently
+        # written parsers agree by construction today and diverge silently
+        # later. A looser parser here would MISS a future archival table, which
+        # would then be absent from BOTH sides of the set difference and go
+        # green over a table nothing covers.
+        #
+        # Runs even if earlier checks failed, for the same non-masking reason.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_archival_forcing_cells.py
+
+      - name: Run AFC-1 forcing register self-test
+        # The gate's four legs were bitten by hand when written; a hand bite
+        # is not a pin. These fixtures hold each leg, including the gate's own
+        # regression: the anchor leg once matched any long word from the
+        # free-text note, so a row could resolve to a comment rather than to
+        # code while reading as checked.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_archival_forcing_cells.py
+
+      - name: Run LMDB schema coverage self-test
+        # The write-pattern leg pins SET membership, not cardinality. A
+        # rotation that keeps the blind-upsert count at 10 and changes
+        # the members must go red — that is the defect that produced the
+        # leg. Instance of 47-gate-subject-assertion.mdc / 50-testing.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_lmdb_schema_coverage.py
 
       - name: Run DRS-P0d digest-v0 coverage check
         # The logical-state digest v0 must name its three families
@@ -154,11 +196,354 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_targets.py --selftest
 
+      - name: "Run FOLLOWUPS Owner: resolution gate"
+        # A deferral's owner must resolve — to a live docs/design/ document or
+        # a registered index-§2 family — or the row is a queue nobody chose
+        # (rule 22; DRS_E2_REPLAY_DRIVER.md RD-F4). Rows predating the cell are
+        # grandfathered by exact heading in a list that only burns down.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_followups_owners.py
+
+      - name: Run FOLLOWUPS owner gate selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_followups_owners.py --selftest
+      - name: Check FOLLOWUPS row prose ends a sentence
+        # Every row's prose (heading + continuation) must end a sentence or
+        # a reference. Closes the class the 2026-08-28 compression opened:
+        # 91 headings and 14 bodies cut at a line wrap (7ab156282), found
+        # two rows at a time until this gate. Asserts its own subject.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_followups_row_prose.py
+      - name: Check FOLLOWUPS row prose (selftest)
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_followups_row_prose.py --selftest
+
+      - name: Run the conformance-register extractor self-test
+        # DRS-E2 RD-Q6: the E2 grader's register is the coverage gate's own
+        # parse, serialized. The self-test parses the serialized text back
+        # and asserts the shape the Rust grader reads (keys, sorted unique
+        # ids, the state vocabulary, at least one row).
+        if: '!cancelled()'
+        run: python3 scripts/ci/export_conformance_register.py --selftest
+
+      - name: Check the committed register fixture against the extractor
+        # The Rust grader's tests parse this fixture with `Register::from_json`
+        # (rust/shekyl-chain-ingest/src/grader.rs); this step holds the
+        # fixture equal to what the extractor emits now, so a key rename on
+        # either side goes red here and not after a whole replay has run.
+        # Regenerate with `--out` when the register changes.
+        if: '!cancelled()'
+        run: python3 scripts/ci/export_conformance_register.py --check-fixture rust/shekyl-chain-ingest/fixtures/conformance_register.json
+
+      - name: Run pinned-anchor gate
+        # A `file:line` citation must resolve in the tree it is PINNED to, not
+        # in the working tree the author had open. PR #812 shipped five anchors
+        # derived from a tree where that PR's own edits shifted net_node.inl by
+        # +10 lines: substance right, line numbers wrong, which a reviewer
+        # spot-checking against the working tree cannot see. A row whose
+        # falsifier points at the wrong line is a row nobody can run.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_pinned_anchors.py
+
+      - name: Run pinned-anchor gate selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_pinned_anchors.py --selftest
+
+      - name: Run code-citation resolver
+        # Every code citation in the pinned review documents must resolve to
+        # exactly one tracked file at the era that document declares — its
+        # section pin, a row-level override, or HEAD when it claims no pin.
+        # Zero or many is a FATAL: a citation resolving to two files resolves
+        # to neither, which is how a register row comes to cite the wrong file
+        # while reading as evidence.
+        #
+        # Resolution happens at the PIN, never at HEAD by default: a pinned
+        # citation is records-was, and failing it against current code would
+        # teach authors to re-anchor pinned records, which is the opposite of
+        # what a pin is for.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_doc_code_citations.py
+
+      - name: Run code-citation resolver selftest
+        # Every limb of that gate has a fixture that makes it fail — ambiguous
+        # basename, era selection, pin scoping, unreachable pin, unparseable
+        # era declaration, symbol/range containment, empty corpus. Run them,
+        # because a check nobody exercises is a check nobody knows still
+        # fires, and this gate's live defects were repaired in the same commit
+        # that introduced it: without these fixtures it would have no
+        # remaining proof of life.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_doc_code_citations.py
+
+      - name: Run DRS-BENCH harness selftest
+        # `scripts/bench/drs_artifact.py` refuses to emit or compare a consensus
+        # store number that does not carry its measurement conditions —
+        # DRS-D9 durability, hardware class, height reached, which
+        # verification the fixture actually exercised, and every live axis.
+        # The selftest breaks one field at a time and asserts the refusal names
+        # it; a control proves the unmutated artifact is accepted, without
+        # which every one of those reds could be firing on an already-invalid
+        # fixture. It also loads the committed `docs/benchmarks/drs_bench_ibd_*.json`
+        # files, so deleting or editing them is a red (rule 47).
+        #
+        # It also pins §1.3's frozen ratios against the doc's own text in both
+        # directions, so editing the threshold on either side alone is a red.
+        # Those numbers were frozen before any measurement existed, and a
+        # ratio refined after seeing a number is a reopening (rule 21), not a
+        # refinement.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_drs_bench.py
+
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_prefix_uniqueness.py
+
+      - name: Run shell gate-exit discipline check
+        # 46-shell-gate-exits.mdc had no enforcement: a rule, not a gate.
+        # Both halves are checked — a verdict travelling through a pipe (which
+        # has shipped a clippy-red commit and masked a broken C++ link), and
+        # `pgrep -f`/`pkill -f` matching the caller. The anchor exemption is
+        # load-bearing: `pgrep -f "^$WORKSPACE/tor/tor "` is CORRECT because
+        # `^` binds the match to argv[0], and flagging it would fail careful
+        # code and teach the author to weaken it.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_shell_gate_exits.py
+
+      - name: Run shell gate-exit self-test
+        # Each check bitten red independently, and the anchor exemption pinned
+        # in BOTH directions — anchored passes, unanchored fails.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_shell_gate_exits.py
+
+      - name: Run DRS-C surface map gate
+        # Tier-A A9: blockchain.cpp's store vocabulary is partitioned into
+        # named validation surfaces, every method in exactly one. The gate
+        # RE-DERIVES the vocabulary from the tree it runs on rather than
+        # trusting a verification stamp: §3.5's stamp sat at 97 while the tree
+        # had moved to 102, and the membership moved further than the total
+        # (+7/-3 for a net +4).
+        #
+        # It derives the alias SET from `BlockchainDB *`/`&` declarations
+        # instead of matching one token, and takes the call OPERATOR from the
+        # declaration's sigil (`*` -> `->`, `&` -> `.`). The first version
+        # matched `m_db->` -- the same derivation that built the table -- so it
+        # was green BY CONSTRUCTION over calls made through any other name, and
+        # missed three live methods. Receiver shapes the derivation cannot
+        # follow (`get_db` on sight, an `auto` binding of the store, a
+        # dereferenced call) are REFUSED over the DERIVED alias set, so a new
+        # alias or a new shape fails loudly instead of shrinking the vocabulary.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_c_surface_map.py
+
+      - name: Self-test the DRS-C surface map gate
+        # That gate has been wrong twice in the same way: a receiver shape its
+        # derivation could not follow, silently absent from the vocabulary,
+        # with the bijection green over the gap. Hand-run negative controls
+        # caught neither, because they were written from the same mental model
+        # as the derivation. Every shape is pinned here as a case -- collected,
+        # refused, and the near-misses that must be neither.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_drs_c_surface_map.py
+
+      - name: Run redb key-type ordering gate
+        # The bijection gate checks that every table is MAPPED; this one checks
+        # the mapping reproduces LMDB's ORDERING. That gap was not theoretical:
+        # review of the first landing found three MDB_INTEGERKEY tables mapped
+        # as &[u8] and one DUPSORT multimap whose values ignored compare_uint64
+        # — names 49/49 while four orderings were wrong.
+        # Default-flag tables are deliberately unconstrained: several store
+        # BE(x) 8-byte keys, where big-endian byte-lex IS numeric order, so both
+        # u64 and &[u8] are correct and a rule would fail correct code.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_key_types.py
+
+      - name: Run redb key-type ordering selftest
+        # The rule function is what makes INTEGERKEY and dupsort-hash32
+        # collapse unskippable; run the fixture that a name-set elif
+        # swallowing zerokval-uint64 tables (block_info, output_txs) fails.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_key_types.py --selftest
+
+      - name: Run redb schema bijection gate
+        # DRS-0 slice B: every table in SHEKYL_LMDB_TABLES has exactly one
+        # redb TableDefinition and vice versa, no duplicates on either side.
+        # The X-macro is the only admissible source: a table can exist
+        # without being on BlockchainDB's interface. Until 2026-09-13 the
+        # settlement pair existed only on BlockchainLMDB, so a schema built
+        # from the abstract interface would have omitted a write path LMDB
+        # has; SO-D8 promoted it since, which closes the instance, not the
+        # class (rationale of record: check_redb_schema_bijection.py header).
+        # Checks NAMES, not types — ordering is the key-type gate above;
+        # comparator evidence is in lmdb_order's tests; class evidence is
+        # per-row in the audit's §12.
+        # Since S-CHAIN-W commit 1 the schema also carries tables LMDB never
+        # had (`RUST_ONLY_TABLES`, a {table: reason} map in schema.rs). A
+        # definition with neither a twin nor an entry there is still red
+        # with the original extra-leg refusal; the map is not a mode switch.
+        # Instance of 47-gate-subject-assertion.mdc; --selftest proves each
+        # refusal.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_bijection.py
+
+      - name: Run redb schema bijection gate self-test
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_bijection.py --selftest
+
+      - name: Run store-invariant register bijection gate
+        # C2-R8 §11: STORE_INVARIANT_REGISTER.md §2 is a bijection with the
+        # `StoreInvariant` enum over the rows that say `built`. The `Status`
+        # column is the arming switch — at birth every row is `ruled` and the
+        # enum does not exist (rule 23: no variant before its producer), so
+        # the gate passes on its subject assertions alone and SAYS SO; the
+        # first PR that flips a row to `built` must add the variant, and a
+        # variant with no row is the other red. Same pair-shape as the redb
+        # bijection above, on a doc register and a Rust definition.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_invariant_register.py
+
+      - name: Run store-invariant register gate self-test
+        # Every failure class bitten red on synthetic inputs: empty register,
+        # sparse or duplicate ids, closed-vocabulary status, built-without-
+        # anchor, built-without-enum, and both bijection directions.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_invariant_register.py --selftest
+
+      - name: Run store-error conversion-ban gate
+        # C2-R8 Q2 §3.3: the store's error classes (`StoreInvariantViolated`,
+        # `StoreCannot`) are never converted into the consensus verdict
+        # (`InvalidBlock`) — no From/Into/TryFrom/TryInto between them (bare or
+        # path-qualified trait), the store crate never names InvalidBlock, and
+        # no match arm maps a store-error pattern onto an InvalidBlock body
+        # (brace-depth arm scan, nested arms included, strings blanked). A
+        # store constraint that reaches the caller as "invalid block" is a
+        # hidden rule
+        # (db_lmdb.cpp:1438 is the instance R8 was convened over); the same
+        # constraint as a fatal is a belt. All three clauses are live: the
+        # gate counts verdict-type definitions and refuses on zero, so a
+        # clause-3 scan with nothing to match cannot pass as "clean" (raised
+        # 2026-09-15 by DRS-E6 increment 1, the PR that minted `InvalidBlock`
+        # in shekyl-chain-rules — CHAIN_RULES_CRATE.md §7).
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_error_conversion_ban.py
+
+      - name: Run store unlock_time projection gate (+ self-test)
+        # No public read type under shekyl-chain-store/src/store/ has an
+        # `unlock_time` field (S-TX STX-9): the stored codec rows keep the
+        # field until census U-2 rules it, and no read hands it out so the
+        # ruling finds no Rust consumer to unwind. Asserts its subject first
+        # — the codec rows must still declare the field, else the gate has
+        # nothing to guard and fails so it is deleted with the field.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: |
+          python3 scripts/ci/check_store_unlock_time_projection.py --selftest
+          python3 scripts/ci/check_store_unlock_time_projection.py
+
+      - name: Run store-error conversion-ban gate self-test
+        # All three clauses bitten red, plus the subject-absent cases (no
+        # error.rs; enum absent; zero variants; no verdict-type definition,
+        # including one hidden in a comment), the legitimate shapes (a
+        # daemon-error From; line and block comments; sibling arms; adjacent
+        # functions; an enum-shaped verdict), and the bypasses a window/bare-
+        # ident scanner would miss (qualified path; TryInto; nested arm;
+        # `}` inside a string).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_error_conversion_ban.py --selftest
+
+      - name: Run DRS-E6 surface-partition gate
+        # DAEMON_REDB_STORE.md §7.5 is a dated derivation over the census:
+        # rows by flag × surface × bucket (table 1), the set of live
+        # surface-bound consensus rows and each row's bucket (table 2), the
+        # surface-free rows per subsystem (table 3), and the headline `N of M`
+        # phrases. A census row that moves bucket or gains/loses a store
+        # citation moves the schedule and the completeness gate's
+        # denominators; this re-derives every figure from
+        # CONSENSUS_RULE_CENSUS.md §4 and fails on any difference, printing
+        # the derivation. Table 2's `store site` gloss and *which* increment a
+        # row arrives with are rulings the doc owns, not derivations — the gate
+        # asserts only that every live row names an increment, so none
+        # "arrives nowhere". The bound/free regex is quoted verbatim in §7.5
+        # and checked, so the doc and the gate define "surface-bound" once.
+        # Subject asserted: an empty census, a §4 header missing a read
+        # column, a header without its GFM delimiter row (no table renders),
+        # zero bound rows, or a missing §7.5 table is a failure. Instance of
+        # 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_e6_partition.py
+
+      - name: Run DRS-E6 surface-partition gate self-test
+        # Every refusal bitten red on synthetic inputs: census re-bucket, new
+        # citation, retirement to bucket 3, new row; each doc table wrong or
+        # missing; totals and headline phrases stale; regex not quoted; empty
+        # census, changed header, flag vocabulary, duplicate ids; and the §15
+        # decision log's dated figures proven NOT to be read as live claims.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_e6_partition.py --selftest
+
+      - name: Run chain-rules census-coverage gate
+        # rust/shekyl-chain-rules/src/census.rs declares two `census_rows!`
+        # registries — CenRow (consensus flag), PolicyRow (policy flag) — one
+        # variant per ENFORCED census row (bucket ≠ 3), in census order, each
+        # `pending` or `implemented(path)`. This holds the registry to
+        # CONSENSUS_RULE_CENSUS.md §4 as a bijection per flag (no missing row,
+        # no entry without a row of ITS registry's flag, census order) and
+        # prints the crate's coverage as two lines over two denominators —
+        # `implemented / enforced` and `ratified / enforced`, consensus and
+        # policy never summed (CHAIN_RULES_CRATE.md §6; R8 §9.4). It is the
+        # only place the crate's "N of M" figure is computed. Also refuses
+        # `redb` / `shekyl-chain-store` in the crate's Cargo.toml (G1, direct;
+        # the transitive half needs cargo and runs in rust-audit-test.yml).
+        # Subject asserted: missing registry, `mod census;` absent from lib.rs,
+        # a flag with no registry, an empty registry, an unparseable census —
+        # each exits 2, never a vacuous pass. Instance of
+        # 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_chain_rules_coverage.py
+
+      - name: Run chain-rules census-coverage gate self-test
+        # Every refusal bitten red on synthetic inputs: row missing, bucket-3
+        # row registered, policy row under the consensus enum, duplicate id,
+        # order swapped (and a missing row proven NOT to cascade into an order
+        # fault); census re-bucketed / re-flagged / new row under a fixed
+        # registry; header, flag vocabulary, entry grammar, `implemented`
+        # without a path, an attribute on an entry, empty registry, trailing
+        # text, unclosed invocation; each input file missing, `mod census;`
+        # commented out, no invocation, two registries for one flag, a flag
+        # with none; `redb` / `shekyl-chain-store` under dependencies,
+        # dev-dependencies, build-dependencies, a target table, and renamed
+        # via `package =`; a comment mentioning both proven NOT to trip it.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_chain_rules_coverage.py --selftest
+
+      - name: Run conformance-coverage gate
+        # Every RATIFIED consensus rule (census bucket 1/2) must carry a
+        # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and
+        # the register must not reach outside that set. Counting register rows
+        # proves SELF-CONSISTENCY, never COVERAGE — an absent row has no id to
+        # count — and the ratified denominator has already moved four times,
+        # each move silently reopening a backlog someone had just called closed.
+        # Buckets 3/4 are UNREVIEWED by construction and are NOT demanded.
+        # Instance of 47-gate-subject-assertion.mdc: both parses assert their
+        # own subject, and each side counts its own dropped ids, because an
+        # id-recognition bug that hits BOTH documents equally is invisible to a
+        # set difference.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_conformance_coverage.py
+
+      - name: Run conformance-coverage gate self-test
+        # Bitten red in both directions, plus the symmetric-drop case the
+        # comparison alone cannot see. Fixtures are deliberately multi-shape:
+        # #704's defects were all at INTERSECTIONS of axes, and its root cause
+        # was single-section fixtures making a limb untestable by their shape.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_conformance_coverage.py
 
       - name: Run index table-shape check
         # GFM drops a surplus cell and blanks a missing one, so a malformed row
@@ -169,6 +554,24 @@ jobs:
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_table_shape.py
+
+      - name: Run wire raw-hash-surface check
+        # RTN-7: every 32-byte chain identity leaves `shekyl-wire` as a
+        # `shekyl-types` newtype, so the two digests a store hands back for
+        # txid reconstruction cannot be transposed. Without this gate the
+        # typing is a cleanup that decays one field at a time —
+        # RAW_TYPE_NEWTYPE_MIGRATION.md §6 records the intent, and rows do
+        # not gate. Red in both directions: an unnamed occurrence, an
+        # allowlist entry whose item is gone, or an empty scan (rule 47).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_wire_raw_hash_surface.py
+
+      - name: Self-test the wire raw-hash-surface check
+        # Each leg fires on its own axis, including the enum-variant-field
+        # case this gate's own first run exposed (variant fields are public
+        # with no `pub` keyword, so a `pub`-only scan missed the key image).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_wire_raw_hash_surface.py --selftest
 
       - name: Run consensus-digest independent oracle
         # Re-implements the canonical form (CLIENT_VERSION_CONSTANTS_VALIDATION.md
@@ -193,3 +596,16 @@ jobs:
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_landed_rows_stamped.py
+
+      - name: Run bench-crate dependency check
+        # `shekyl-wss-q1b-bench` is a measurement harness -- synthetic corpus,
+        # a rig gate keyed on /proc, a fixture that mints curve points with
+        # known secrets. None of that ships. The crate's own docs say so, and
+        # a crate-doc sentence is not a check (47-gate-subject-assertion.mdc).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_bench_not_a_dependency.py
+
+      - name: Run bench-crate dependency check selftest
+        # A gate never shown to fire is indistinguishable from one that cannot.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_bench_not_a_dependency.py --selftest

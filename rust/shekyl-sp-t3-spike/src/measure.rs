@@ -59,19 +59,29 @@ pub const Q_RISK_STAR: f64 = 0.1011;
 /// Why a fetch did not deliver a shard. The taxonomy §6.4 asks for.
 ///
 /// Kept coarse on purpose: a finer split would need per-request detail that §6.4
-/// forbids retaining, and these four are what distinguish "Tor was slow" from
-/// "the apparatus broke", which is the distinction the verdict turns on.
+/// forbids retaining. Timeout/Circuit/Truncated are the path; Refused is the
+/// apparatus — the distinction the void-row rule and the `q` inversion share.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureKind {
     /// The request exceeded the harness's own ceiling without completing.
     Timeout,
-    /// The circuit or rendezvous could not be established.
+    /// The circuit or rendezvous could not be established, or the connection
+    /// closed before any response head — no exchange happened.
     Circuit,
-    /// A response arrived but was short or malformed — the apparatus-failure
-    /// signal (a truncated shard is not a slow shard).
+    /// A response head arrived, then the stream broke or closed short of
+    /// `content-length`. That is a **transport** failure (not a slow
+    /// success): it counts in `q`/`D*`, and it is **not** an `N`-void.
+    /// Voiding the row would throw away the width as a circuit-churn
+    /// sample because a mid-body RST is Tor. A complete exchange of the
+    /// wrong body length is [`Self::Refused`] instead (the apparatus).
     Truncated,
-    /// Anything else below HTTP: connect, proxy, IO.
-    Transport,
+    /// A **completed** exchange the production client refused: the identical
+    /// 404, a malformed head or envelope, a countersignature that does not
+    /// verify under `P`'s key. `SF-D6` classes every one of these as a miss,
+    /// not a stall, and none of them is Tor's doing — a non-zero count here
+    /// means the apparatus is wrong (anchor gate, key, fixture), never that
+    /// the path was slow.
+    Refused,
 }
 
 /// One timed fetch. **No timestamp, no persona, no circuit id** — see the module
@@ -242,14 +252,18 @@ fn nearest_rank(sorted: &[Duration], p: u8) -> Option<Duration> {
 ///
 /// # Why this exists — the cold arm might not be cold
 ///
-/// The cold/warm split rests on distinct SOCKS usernames getting distinct
-/// circuits (`IsolateSOCKSAuth`), which controls the **client** side. It does
-/// *not* control the **service** side: a client that has already fetched a
-/// persona's descriptor may have it cached, and tor may reuse service-side
-/// rendezvous machinery across successive fetches to the *same* persona. The
-/// cold arm varies the client id but hits one persona throughout, so fetch #150
-/// can be paying a materially smaller setup cost than fetch #1 while both are
-/// labelled "cold".
+/// The cold arm rests on `SIGNAL NEWNYM` to the **client** tor before each
+/// fetch (`harness.rs`, the re-based rig): tor drops its client circuits and
+/// its client-side onion-service state, so the next fetch pays descriptor,
+/// intro, and rendezvous from nothing. That controls the client side. It does
+/// *not* control the **service** side — the persona's tor keeps its intro
+/// points and may reuse service-side rendezvous machinery across successive
+/// fetches from the *same* client — and it does not control the guards, which
+/// `NEWNYM` deliberately keeps. The cold arm hits one persona throughout, so
+/// fetch #150 can be paying a materially smaller setup cost than fetch #1
+/// while both are labelled "cold". (The first rig's isolation-key mechanism
+/// had the same exposure through a shared descriptor cache; the mechanism
+/// changed, the check did not.)
 ///
 /// **The bias is directional and unsafe.** If later cold fetches are faster, the
 /// arm's tail is optimistic, which pushes `D*` *up* — handing TJ-C a more
@@ -302,7 +316,7 @@ pub fn summarize(observations: &[Observation]) -> Summary {
         FailureKind::Timeout,
         FailureKind::Circuit,
         FailureKind::Truncated,
-        FailureKind::Transport,
+        FailureKind::Refused,
     ] {
         let c = observations
             .iter()
@@ -327,12 +341,398 @@ pub fn summarize(observations: &[Observation]) -> Summary {
     }
 }
 
+/// `p99` of an arm's successes, if the arm had any.
+#[must_use]
+pub fn p99(summary: &Summary) -> Option<Duration> {
+    summary
+        .percentiles
+        .iter()
+        .find(|(p, _)| *p == 99)
+        .map(|(_, d)| *d)
+}
+
+/// Below this p99 the `L` note says **drop `L` to 3**.
+///
+/// Verbatim from the PROVISIONAL note on
+/// `archival_attestation_anchor_lag_blocks` in `consensus_constants.json`:
+/// *"If p99 fetch-plus-retry lands under two minutes, drop to 3."* Held
+/// here as the number the note states, not re-derived from a block
+/// interval — the note is in minutes, so the check is in minutes.
+pub const L_DROP_BELOW: Duration = Duration::from_secs(120);
+
+/// Above this p99 the `L` note says the answer is **not** to raise `L`.
+///
+/// *"If it lands over six minutes the answer is NOT to raise L — L would
+/// then be absorbing what SF-D6's retry budget should bound; tighten the
+/// budget instead."* Same source as [`L_DROP_BELOW`].
+pub const L_BUDGET_TOO_GENEROUS_ABOVE: Duration = Duration::from_secs(360);
+
+/// What the cold arm's tail says about the provisional `L = 4`.
+///
+/// The note's falsifier is *fetch-plus-retry*; this rig makes one attempt
+/// per observation (retry is the scheduler's, `SF-D6` / `TJ-D`), so the
+/// verdict is over the **single-attempt** p99 and says only what that
+/// number can decide. A fetch-plus-retry span is never shorter than its
+/// first attempt, so a single-attempt p99 is a **lower bound** on the
+/// note's quantity: it can *refute* the "under two minutes" branch and it
+/// can *establish* the "over six" branch, but it can never establish that
+/// the span stays under six — that needs the retry policy, which is not
+/// in this crate. There is deliberately no `Holds` arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LVerdict {
+    /// p99 under [`L_DROP_BELOW`]: the note's "drop to 3" branch is live,
+    /// subject to the retry budget — *necessary*, not sufficient.
+    DropToThreeCandidate,
+    /// p99 in `[L_DROP_BELOW, L_BUDGET_TOO_GENEROUS_ABOVE]`: the drop branch
+    /// is **refuted** (a span that starts at ≥ 2 min cannot end under it);
+    /// the six-minute branch is **open** until `SF-D6`'s retry budget is
+    /// applied to this tail — [`attempts_within_budget`] is that input.
+    DropRefutedBudgetOpen,
+    /// p99 over [`L_BUDGET_TOO_GENEROUS_ABOVE`] on a **single** attempt: the
+    /// note's "tighten the budget, do not raise `L`" branch — and since no
+    /// retry budget can make a single over-budget attempt fit, this is the
+    /// one verdict that also questions the fetch itself.
+    TightenRetryBudgetNotL,
+    /// No successes to take a p99 over.
+    Undefined,
+}
+
+/// Read the `L` falsifier off an arm.
+#[must_use]
+pub fn l_verdict(summary: &Summary) -> LVerdict {
+    match p99(summary) {
+        None => LVerdict::Undefined,
+        Some(p) if p < L_DROP_BELOW => LVerdict::DropToThreeCandidate,
+        Some(p) if p > L_BUDGET_TOO_GENEROUS_ABOVE => LVerdict::TightenRetryBudgetNotL,
+        Some(_) => LVerdict::DropRefutedBudgetOpen,
+    }
+}
+
+/// How many attempts of this p99 fit under [`L_BUDGET_TOO_GENEROUS_ABOVE`]
+/// — the most `SF-D6`'s bounded retry can afford per witness attempt
+/// before `L` is absorbing what the budget should bound. `None` when even
+/// one does not fit, or there is no p99.
+#[must_use]
+pub fn attempts_within_budget(summary: &Summary) -> Option<u32> {
+    let p = p99(summary)?;
+    let fits = L_BUDGET_TOO_GENEROUS_ABOVE.as_secs_f64() / p.as_secs_f64().max(f64::MIN_POSITIVE);
+    // A truncating cast is the intent: the number of *whole* attempts.
+    let whole = fits.floor();
+    (whole >= 1.0).then(|| {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = whole.min(f64::from(u32::MAX)) as u32;
+        n
+    })
+}
+
+/// One width of the concurrency sweep: `width` cold fetches in flight at
+/// once through the one client tor, to `width` distinct personas.
+pub struct SweepPoint {
+    /// Fetches in flight.
+    pub width: usize,
+    /// The observations at that width — every fetch of every round.
+    pub observations: Vec<Observation>,
+    /// Connections the **serve side** shed at its own in-flight cap while
+    /// this width ran (the delta of the endpoints' refusal counters across
+    /// the point). Non-zero means the placeholder cap, not the transport,
+    /// shaped these observations: the row is **void** as an `N` input and
+    /// is reported as such, never quietly folded into the table.
+    pub cap_refusals: u64,
+}
+
+/// One row of the churn table `SF-D7` reads its upper bound from.
+///
+/// The table **reports, it does not rule.** Any knee threshold written
+/// here — "p99 within 1.5× of width 1" — would be a number this crate
+/// invented, which is the shape the `L` note's own falsifier was rewritten
+/// to avoid. The ratio and the circuit-failure rate are what a reader
+/// compares across widths; the pin is theirs, taken together with the
+/// memory term the binary prints beside each row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChurnRow {
+    /// Fetches in flight.
+    pub width: usize,
+    /// Observations at this width.
+    pub n: usize,
+    /// Success p50, if any.
+    pub p50: Option<Duration>,
+    /// Success p99, if any.
+    pub p99: Option<Duration>,
+    /// This width's p99 over width 1's, when both exist.
+    pub p99_over_width_1: Option<f64>,
+    /// Fraction of observations that failed as `Circuit` — the churn signal
+    /// itself: rendezvous circuits that did not come up under load.
+    pub circuit_rate: f64,
+    /// The inverted gate answer at this width.
+    pub d_star: DStar,
+    /// Serve-side cap refusals during this width (see
+    /// [`SweepPoint::cap_refusals`]). A row with a non-zero count is
+    /// **void**: its churn is the placeholder cap's, not Tor's. It stays in
+    /// the table so the reader sees *that* it was void rather than a gap,
+    /// and it is never the ratio baseline.
+    pub cap_refusals: u64,
+    /// Observations at this width the **client** refused after a completed
+    /// exchange ([`FailureKind::Refused`]: `404`, malformed protocol, bad
+    /// countersignature). Any non-zero count is the apparatus being wrong
+    /// (this module's own reading of the class), so the row is **void** on
+    /// the same footing as a cap-bound one: what it measured was not Tor.
+    pub refused: usize,
+}
+
+impl ChurnRow {
+    /// Whether this row can be read as an `N` input at all: neither the
+    /// serve-side cap nor a client refusal touched it. Mid-body
+    /// [`FailureKind::Truncated`] observations stay in the row — they are
+    /// Tor, and they do not void the width.
+    #[must_use]
+    pub const fn is_void(&self) -> bool {
+        self.cap_refusals != 0 || self.refused != 0
+    }
+}
+
+/// Summarise a sweep into the churn table, ordered by width.
+///
+/// The `p99 / p99(width 1)` ratio takes its baseline from the width-1 row
+/// only when that row is not void; a cap-bound or refusal-tainted baseline
+/// would scale every other row by an apparatus artefact, so the column is
+/// left empty instead.
+#[must_use]
+pub fn churn_table(points: &[SweepPoint]) -> Vec<ChurnRow> {
+    let mut rows: Vec<ChurnRow> = points
+        .iter()
+        .map(|pt| {
+            let s = summarize(&pt.observations);
+            let count = |kind: FailureKind| {
+                s.failures
+                    .iter()
+                    .find(|(k, _)| *k == kind)
+                    .map_or(0, |(_, c)| *c)
+            };
+            let circuits = count(FailureKind::Circuit);
+            let refused = count(FailureKind::Refused);
+            ChurnRow {
+                width: pt.width,
+                n: s.n,
+                p50: s
+                    .percentiles
+                    .iter()
+                    .find(|(p, _)| *p == 50)
+                    .map(|(_, d)| *d),
+                p99: p99(&s),
+                p99_over_width_1: None,
+                circuit_rate: ratio(circuits, s.n),
+                d_star: s.d_star,
+                cap_refusals: pt.cap_refusals,
+                refused,
+            }
+        })
+        .collect();
+    rows.sort_by_key(|r| r.width);
+    let baseline = rows
+        .iter()
+        .find(|r| r.width == 1 && !r.is_void())
+        .and_then(|r| r.p99)
+        .map(|d| d.as_secs_f64());
+    for row in &mut rows {
+        row.p99_over_width_1 = match (baseline, row.p99) {
+            (Some(b), Some(p)) if b > 0.0 && !row.is_void() => Some(p.as_secs_f64() / b),
+            _ => None,
+        };
+    }
+    rows
+}
+
+/// Persona indices for one concurrency-sweep round: `width` consecutive
+/// slots wrapping from `round`, so every width samples every persona
+/// across rounds rather than always taking the prefix `0..width`.
+///
+/// The recorded W₂ pin used the prefix (`round == 0` start every time).
+/// That cannot have hidden churn at the pinned width: width 8 already
+/// included every persona. Rotation is so a later `SF-D7` re-derive is
+/// not confounded with which serving tors were in the batch.
+#[must_use]
+pub fn sweep_round_indices(round: usize, width: usize, personas: usize) -> Vec<usize> {
+    if personas == 0 || width == 0 {
+        return Vec::new();
+    }
+    let width = width.min(personas);
+    (0..width).map(|k| (round + k) % personas).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn secs(s: u64) -> Duration {
         Duration::from_secs(s)
+    }
+
+    #[test]
+    fn l_verdict_reads_the_note_s_two_thresholds_off_p99() {
+        // 100 successes so nearest-rank p99 is the 99th value.
+        let fast: Vec<Observation> = (1..=100).map(|_| Observation::success(secs(30))).collect();
+        assert_eq!(l_verdict(&summarize(&fast)), LVerdict::DropToThreeCandidate);
+        assert_eq!(attempts_within_budget(&summarize(&fast)), Some(12));
+
+        let mid: Vec<Observation> = (1..=100).map(|_| Observation::success(secs(200))).collect();
+        assert_eq!(l_verdict(&summarize(&mid)), LVerdict::DropRefutedBudgetOpen);
+        assert_eq!(attempts_within_budget(&summarize(&mid)), Some(1));
+
+        let slow: Vec<Observation> = (1..=100).map(|_| Observation::success(secs(400))).collect();
+        assert_eq!(
+            l_verdict(&summarize(&slow)),
+            LVerdict::TightenRetryBudgetNotL
+        );
+        assert_eq!(attempts_within_budget(&summarize(&slow)), None);
+
+        let none = [Observation::failure(secs(1), FailureKind::Circuit)];
+        assert_eq!(l_verdict(&summarize(&none)), LVerdict::Undefined);
+    }
+
+    #[test]
+    fn l_verdict_is_exactly_the_note_s_boundaries() {
+        // At two minutes the note says nothing about dropping; at six it
+        // says nothing about the budget. Both boundaries are inclusive to
+        // the open middle, so the verdict never fires on the number the
+        // note names.
+        let at = |s: u64| {
+            summarize(
+                &(1..=100)
+                    .map(|_| Observation::success(secs(s)))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(l_verdict(&at(120)), LVerdict::DropRefutedBudgetOpen);
+        assert_eq!(l_verdict(&at(360)), LVerdict::DropRefutedBudgetOpen);
+        assert_eq!(l_verdict(&at(119)), LVerdict::DropToThreeCandidate);
+        assert_eq!(l_verdict(&at(361)), LVerdict::TightenRetryBudgetNotL);
+    }
+
+    #[test]
+    fn churn_table_reports_ratio_and_circuit_rate_without_ruling() {
+        let one = SweepPoint {
+            width: 1,
+            observations: (1..=100).map(|_| Observation::success(secs(10))).collect(),
+            cap_refusals: 0,
+        };
+        let mut four_obs: Vec<Observation> =
+            (1..=90).map(|_| Observation::success(secs(25))).collect();
+        four_obs.extend((1..=10).map(|_| Observation::failure(secs(60), FailureKind::Circuit)));
+        let four = SweepPoint {
+            width: 4,
+            observations: four_obs,
+            cap_refusals: 0,
+        };
+        // Out of order on purpose: the table sorts by width.
+        let rows = churn_table(&[four, one]);
+        assert_eq!(rows[0].width, 1);
+        assert_eq!(rows[0].p99_over_width_1, Some(1.0));
+        assert!((rows[0].circuit_rate - 0.0).abs() < f64::EPSILON);
+        assert!(!rows[0].is_void());
+        assert_eq!(rows[1].width, 4);
+        assert_eq!(rows[1].p99_over_width_1, Some(2.5));
+        assert!((rows[1].circuit_rate - 0.10).abs() < 1e-9);
+        // No `bound` field, no knee: the row carries the inputs and stops.
+    }
+
+    #[test]
+    fn a_cap_bound_row_is_void_and_never_the_baseline() {
+        // The serve-side cap shed connections at width 1: those circuit
+        // failures are the placeholder's, so the row is void, and it must
+        // not become the denominator every other row is read against.
+        let one = SweepPoint {
+            width: 1,
+            observations: (1..=100).map(|_| Observation::success(secs(10))).collect(),
+            cap_refusals: 3,
+        };
+        let two = SweepPoint {
+            width: 2,
+            observations: (1..=100).map(|_| Observation::success(secs(12))).collect(),
+            cap_refusals: 0,
+        };
+        let rows = churn_table(&[one, two]);
+        assert!(rows[0].is_void());
+        assert_eq!(rows[0].cap_refusals, 3);
+        assert_eq!(rows[0].p99_over_width_1, None);
+        // Width 2 is clean but has no clean baseline to be read against.
+        assert!(!rows[1].is_void());
+        assert_eq!(rows[1].p99_over_width_1, None);
+        // The void row is still *in* the table — a gap would hide that the
+        // cap bound; a flagged row shows it.
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn a_client_refusal_voids_the_row_like_the_cap_does() {
+        // One `Refused` observation among 100 at width 2: the apparatus was
+        // wrong for at least one exchange, so nothing at that width is a
+        // Tor measurement. Width 1 is clean and stays the baseline.
+        let one = SweepPoint {
+            width: 1,
+            observations: (1..=100).map(|_| Observation::success(secs(10))).collect(),
+            cap_refusals: 0,
+        };
+        let mut tainted: Vec<Observation> =
+            (1..=99).map(|_| Observation::success(secs(12))).collect();
+        tainted.push(Observation::failure(secs(1), FailureKind::Refused));
+        let two = SweepPoint {
+            width: 2,
+            observations: tainted,
+            cap_refusals: 0,
+        };
+        let rows = churn_table(&[one, two]);
+        assert!(!rows[0].is_void());
+        assert_eq!(rows[0].p99_over_width_1, Some(1.0));
+        assert!(rows[1].is_void());
+        assert_eq!(rows[1].refused, 1);
+        assert_eq!(rows[1].cap_refusals, 0);
+        assert_eq!(rows[1].p99_over_width_1, None);
+    }
+
+    #[test]
+    fn a_truncated_row_is_not_void() {
+        // Mid-body RST is Tor. Voiding the width would discard the circuit-
+        // churn sample because a body that started is evidence the
+        // rendezvous came up. A complete wrong-length body is `Refused`
+        // (the apparatus) and voids; this class does not.
+        let one = SweepPoint {
+            width: 1,
+            observations: (1..=100).map(|_| Observation::success(secs(10))).collect(),
+            cap_refusals: 0,
+        };
+        let mut mixed: Vec<Observation> =
+            (1..=99).map(|_| Observation::success(secs(12))).collect();
+        mixed.push(Observation::failure(secs(1), FailureKind::Truncated));
+        let two = SweepPoint {
+            width: 2,
+            observations: mixed,
+            cap_refusals: 0,
+        };
+        let rows = churn_table(&[one, two]);
+        assert!(!rows[1].is_void());
+        assert_eq!(rows[1].refused, 0);
+        assert_eq!(rows[1].p99_over_width_1, Some(1.2));
+    }
+
+    #[test]
+    fn sweep_round_indices_rotate_the_start_and_stay_distinct() {
+        assert_eq!(sweep_round_indices(0, 1, 8), vec![0]);
+        assert_eq!(sweep_round_indices(1, 1, 8), vec![1]);
+        assert_eq!(sweep_round_indices(0, 4, 8), vec![0, 1, 2, 3]);
+        assert_eq!(sweep_round_indices(1, 4, 8), vec![1, 2, 3, 4]);
+        assert_eq!(sweep_round_indices(7, 2, 8), vec![7, 0]);
+        assert_eq!(sweep_round_indices(0, 8, 8), (0..8).collect::<Vec<_>>());
+        let wrapped = sweep_round_indices(5, 8, 8);
+        let mut sorted = wrapped.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..8).collect::<Vec<_>>());
+        assert_eq!(
+            wrapped.len(),
+            wrapped
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+        );
     }
 
     /// `n` successes with the given second-latencies.
@@ -403,7 +803,7 @@ mod tests {
         // deadline fixes it; it does not, and the type says so.
         let mut obs = oks(&[1; 8]);
         obs.push(Observation::failure(secs(60), FailureKind::Timeout));
-        obs.push(Observation::failure(secs(60), FailureKind::Transport));
+        obs.push(Observation::failure(secs(60), FailureKind::Refused));
         assert_eq!(invert(&obs, Q_RISK_STAR), DStar::Unbounded);
     }
 
@@ -478,7 +878,7 @@ mod tests {
         assert_eq!(s.successes, 3);
         assert_eq!(s.failures, vec![(FailureKind::Truncated, 1)]);
         assert!((s.completion_rate() - 0.75).abs() < 1e-12);
-        // A truncated response is an apparatus failure, and it must not be able to
+        // A truncated response is a failure, and it must not be able to
         // masquerade as a fast success in the percentiles.
         assert_eq!(s.percentiles[0], (50, secs(4)));
     }

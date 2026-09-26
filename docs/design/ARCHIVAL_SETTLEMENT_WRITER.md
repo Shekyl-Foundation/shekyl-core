@@ -48,7 +48,7 @@ Grounded on `dev@cbba3e261`, 2026-08-23. Every row was read, not recalled.
 | 4 | Absent-row ⇒ non-observation ⇒ not-drawable | §4.2 | *conditional in §4.2 — resolved by `SO-D1`* |
 | 5 | Expiry ⇒ miss | fork §7.3, closed 2026-08-08 | §7 preamble |
 | 6 | Urn state derives, never stores | §7.1 + `ARCHIVAL_CREDIT_WIRE.md` §3 | §7.1 "urn bookkeeping" |
-| 7 | Prune horizon ≥ window | `failure_window.rs:93–104,181` | const-assert present |
+| 7 | Prune horizon ≥ window | `failure_window.rs:90–124,178–210` (re-anchored 2026-09-13, SO-D5 discharge) | const-assert present; names both failure directions |
 
 ### 1.1 Why the existing table cannot be widened (re-verified, not inherited)
 
@@ -104,7 +104,18 @@ row in `IMPLEMENTATION_INDEX.md` and `SERVE_CREDIT_PRUNED_MAX_BYTES`
 **The record got bigger and the chain got smaller** — because `RF-D8` ruling
 (i) kept the ~1,920 B opening *additively*, and `RF-D10` put the 5,107 B
 countersignature half on the prunable side. Both are correct and they push
-opposite ways. Restating the second row as "prunability fixed `k_cap`" would be
+opposite ways.
+
+> **SUPERSEDED IN ITS FIRST HALF — `RF-D8` (i) was RETRACTED 2026-08-26
+> (recorded here 2026-09-11, so this paragraph stood on a withdrawn premise
+> for 16 days).** The opening does not survive, so "the record got bigger"
+> no longer holds: the record is ~3,411 B, not ~5,331 B, and every figure
+> below derived from the ~1,920 B opening — including §2.1's arithmetic
+> — wants re-deriving before anything is sized against it. `RF-D10`'s half
+> is untouched. The two-forces framing survives; only the first magnitude
+> falls. Kept rather than recomputed in place, because this section is the
+> record of what the round priced, and a silently updated number would make
+> the round look like it had foreseen the retraction. Restating the second row as "prunability fixed `k_cap`" would be
 true only on the axis that stopped binding.
 
 ### 2.1 The arithmetic, with `SEB = 10,000` (`constants.rs:202`)
@@ -191,8 +202,12 @@ fallback for a §7.1 variant that did not win. Three reasons, in priority order:
    cost is "the same cardinality the emission gather already walks" (§4.2),
    i.e. a walk the block already performs.
 3. **It makes the absent-row invariant total.** With every issued pair written,
-   *absent ⇒ never issued ⇒ not drawable ⇒ non-observation* is a theorem about
-   the writer, not an inference about a regime.
+   *absent ⇒ no live obligation in E* is a theorem about the writer, not an
+   inference about a regime. **UPDATE 2026-09-16 (Q3):** *SUPERSEDED: absent
+   ⇒ never issued ⇒ not drawable ⇒ non-observation.* The restated chain
+   covers both never-issued and issued-then-exited (a drop or slash whose
+   settlement filter writes no row — proposal §7.4). `SO-D5`'s inversion
+   (absent ⇒ non-observation ⇒ the denominator shrinks) is unchanged.
 
 **Keyed on issued, not drawable** — §4.4's re-keying, preserved. A drawable pair
 the urn never reached is not a pair that failed, and writing it as anything
@@ -202,7 +217,8 @@ condition is where that distinction lives.
 **Under-issuance is specified, not assumed away** (§4.4's own instruction):
 `issued = 1` settles **NonObservation** by absolute-2, and it gets a **row**
 rather than an absence. Absence and NonObservation are then no longer
-synonymous — absence means *not issued*, a written NonObservation means *issued
+synonymous — absence means *no live obligation in E* (never issued, or
+issued-then-exited; Q3 2026-09-16), a written NonObservation means *issued
 but unreachable*. **This is deliberate and it is the auditability argument
 winning over absence-consistency:** the capped regime is the one where the
 mechanism's teeth degrade (§7.1: 72 % unobservable at `k_cap = 30`,
@@ -342,7 +358,12 @@ reads. So wiring it would be additive and safe. It is still wrong to do:
    what a beacon-era wiring would prove is not the thing that will run.
 
 **Named blocker, per rule 22:** the writer's call site lands with `SO-D8`'s
-cutover, which is what supplies both operands. **The revert is wired now**
+cutover, which is what supplies both operands. **UPDATE 2026-09-16 (Q15):**
+that cutover is Rust-direct — `shekyl-chain-rules` for the admission
+gates, S-ARCH (DRS-E4) for the write — not a C++ loop over an FFI batch.
+The pre-cutover daemon keeps the beacon, so this section's interim-writer
+question stays **closed** and is not revisited. Falsify by a production
+settlement write on the Rust apply/slash path. **The revert is wired now**
 regardless, because it is pure cleanup with no such dependency, and it is the
 half `SO-D6` was actually open about — proven by a pop round-trip rather than
 by argument.
@@ -479,6 +500,16 @@ assert is unrelated. **Failing safe is not the same as failing correctly**, and
 an assert that describes the wrong failure is one that gets relaxed by whoever
 proves that failure cannot happen.
 
+> **DISCHARGED 2026-09-13.** `failure_window.rs` now names both directions in
+> the module doc (`:90–124`, one bullet per table, with which read is live
+> today and which is the ruled future), in the assert's doc and its message
+> (`:178–210`), and in the margin test's name and comment
+> (`the_window_fits_inside_the_archival_retention_horizon`). The claim the
+> rewrite rests on — both tables prune at one horizon — was verified at
+> `prune_archival_epochs_before` (`db_lmdb.cpp:7726,7728`), not inherited
+> from this section. The `:93–104` / `:181` anchors quoted above are the
+> pre-rewrite line numbers and are left as written; the §2 row is updated.
+
 ---
 
 ## 9. `SO-D6` — CLOSED 2026-08-24: recompute, no alt twin, and the revert already exists
@@ -495,7 +526,7 @@ guessed at:
 
 | Kind of data | Revert shape | Example |
 |---|---|---|
-| **Received** evidence, unreproducible on a losing branch | pre-image **journal**, restored on pop | `archival_attestation_witness` + its alt twin; the release / holdings / rebond journals |
+| **Received** evidence, unreproducible on a losing branch | pre-image **journal**, restored on pop | `archival_attestation_witness` + its alt twin; the release / holdings / reinstate journals |
 | **Derived** from final chain state | **delete**, recompute on re-connect | `revert_archival_epoch_close_at_height` drops `r_market`, `sigma_work`, `budget` |
 
 A settlement row is the second kind — it is a fold over evidence that is
@@ -581,6 +612,38 @@ of them are how this round started.
    disagreed and the stale one is the one a reader reaches first. The doc's
    item 2 is **struck in place, not rewritten** — someone who already followed
    the instruction needs the correction where they read it.
+
+   > **REVERSED 2026-09-11 — this item is now wrong in exactly the way it
+   > warns about, and it is the SOURCE the index was projecting.** `RF-D8`
+   > ruling (i) was **retracted 2026-08-26**, five days after the RF round's
+   > CLOSED stamp (`ARCHIVAL_RESPONSE_FORMAT.md`, grep `RF-D8` (i)): the
+   > countersignature preimage names the challenged leaf, so `P` cannot sign
+   > it without learning which request is the challenge — defeating
+   > `ARCHIVAL_CHALLENGE_MECHANISM.md` §9's *"the test IS a read"*. The
+   > witness-computed rescue branch is redundant (a witness holding the bytes
+   > recomputes `R_k` in full), so both branches collapse.
+   >
+   > **Consequence: every bolded conclusion above is inverted.**
+   > `verify_segment_path` and `challenge_leaf_index` are **deletion-bound**
+   > on `ARCHIVAL_CREDIT_WIRE.md` §2's surface, not permanent consensus
+   > admission code. `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 2 and
+   > `challenge.rs:9–19` **read correctly as they stand — do not "fix"
+   > them.** The fifth fix this item describes landed at `aee2477d9d`
+   > (2026-08-24) and was undone in effect by `52f61476bb` (2026-08-26);
+   > `challenge.rs` now carries the retraction and `path.rs` the
+   > deletion-bound annotation, so the two modules agree again.
+   >
+   > **`challenge.rs` still deletes only in its leaf-opening half.** The
+   > module stays live as the serve-credit admission path into
+   > `blockchain.cpp` until the assignment cutover — "deletes wholesale"
+   > was over-broad in both directions.
+   >
+   > Left in place under this document's own rule, one level up: someone who
+   > followed *this* item needs the reversal where they read it. This was
+   > found from the projection — `IMPLEMENTATION_INDEX.md`'s
+   > `SO-D1…SO-Dn` row, reconciled in its own change — which is the
+   > reverse of the usual direction and only worked because the index row
+   > quoted this one instead of citing it.
 4. **`FOLLOWUPS.md` §"PRUNABILITY RESOLVED"** said the records ride *the
    coinbase transaction's* prunable region. `RF-D10` landed them in the
    **serve-credit transaction's** (`serialize_ctsig_prunable`, `ct_types.h`).
@@ -603,7 +666,8 @@ of them are how this round started.
 
 **§9.5's HOLD list is discharged with them.** Pass-record serialization
 cleared 2026-08-18 (the carrier round) and the response format 2026-08-21;
-`EndpointUpdate` stays held, and the settlement writer is now held on a round
+`EndpointUpdate` stayed held until it was REJECTED 2026-09-13, and the
+settlement writer is now held on a round
 rather than a blocker. Discharged in place following the `settle_epoch` entry
 already below it — a HOLD list silently pruned as items clear loses the
 evidence that the sequencing was right.
@@ -639,12 +703,19 @@ serve-credit response"* — which is precisely why
 **What is genuinely open** is the arithmetic at the boundary: a response naming
 `E` admitted during `E+1`, and what dedup and the emission gather do with it.
 
+**Scope addition 2026-09-12 (`ba4b3c73a`):** `SO-D8` also **promotes the settlement write path onto `BlockchainDB`**. *Its original coupling — "so the wiring and the interface change arrive together" — is SUPERSEDED 2026-09-13: the interface landed alone (`a6f602d33`, next paragraph) while the production caller stays on the §5.1 hold; the promotion was pulled forward precisely so the base-class change is off the cutover's critical path.* **PRE-PROMOTION:** it lived only on `BlockchainLMDB` (`src/blockchain_db/lmdb/db_lmdb.h`; zero hits in `blockchain_db.h` and `testdb.h`), so if the cutover landed without it, either the base-class change would happen on the consensus-cutover critical path or the redb store (DRS-0) would silently ship without a write path LMDB has.
+
+**LANDED 2026-09-13 (`a6f602d33`).** The four methods are pure virtuals on `BlockchainDB`, `override` on `BlockchainLMDB`. `BaseTestDB` throws on write (absence is SO-D1 non-observation, so a silent no-op is fail-open); working-store KATs stay on `TempLMDB`. The production caller remains the §5.1 hold.
+
 **Why it is not ruled here, stated as a rule-22 blocker rather than a
 deferral:** this is **consensus-visible admission timing on a genesis-frozen
 surface** — a wrong byte is permanent. It is the design-first category, and it
 belongs to the old credit wire's §5 atomic cutover, which owns the admission
 path this round does not touch. **No admission code changes in this round's
-implementation.**
+implementation.** **UPDATE 2026-09-16 (Q15):** that cutover itself waits
+until `shekyl-chain-rules` is the live validator and S-ARCH has the write;
+no C++ admission or writer code is added in the interim
+([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) Q15).
 
 ---
 
@@ -659,7 +730,8 @@ implementation.**
 | `SO-D5` | Prune const-assert kept, failure direction inverted in its rationale | **RULED** |
 | `SO-D6` | Reorg: recompute, **no alt twin** — derived rows delete and recompute; reverts via the existing slash revert | **CLOSED 2026-08-24** |
 | `SO-D7` | ~~Writer runs at `h_close + W₂`~~ → **writer runs inside the slash scheduler's per-epoch pass**; the `≥ W₂` constraint was already const-asserted | **CORRECTED 2026-08-24** |
-| `SO-D8` | Cross-epoch admission (response naming `E` landing in `E+1`) | **OPEN — assigned to the §5 cutover**, consensus-visible |
+| `SO-D8` | Cross-epoch admission (response naming `E` landing in `E+1`). **Direction ratified 2026-09-13 — shape R-B:** the record names and validates its issuing block `h`, `E = epoch(h)`, deadline `h_incl ≤ h + CHALLENGE_RESPONSE_BLOCKS`; `PC-D2` reversed; dedup widens to `(P,s,E,h)`; the emission gather joins the writer in the slash pass (this doc's `SO-D7` applied to its second consumer). `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B / PC-D4 / SO-D7); `SO-D8d` RULED 2026-09-16 (three local layers, halt not clamp, on-chain digest REJECTED; proposal §6); `SO-D8e` RULED 2026-09-16 (proposal §7.2); Q9 carrier semantics RULED (B) same day; Q9's set-commitment bytes (PROPOSED) remain to be ruled in [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §9. *SUPERSEDED: "and the witness-key / batching questions remain to be ruled" — Q8 and Q9 RULED 2026-09-16.* **Reconciled 2026-09-14 against `PL-D3` (PR #745):** the witness key must not be a spendable output's own key, because `PL-D3` holds only while the per-output key is published once, at spend (proposal §2.2); `SO-D8` builds on `dev` after #745 and touches none of its surfaces. The §12 hold on the writer call site stands until then. **UPDATE 2026-09-16 (Q15 RULED):** wait until SO can be written directly in Rust; no C++ mirroring. **S-CHAIN-W increment 3 landed 2026-09-15** (PR #757); DRS is one increment from a validator. Deadline and SO-D9 are surface-free E6 rows; witness verification is bound to the block/tx surface; membership and dedup wait on S-ARCH with the writer — not the whole port. Wait's load-bearing reason is re-derivation plus a second bite at a genesis-frozen wire (`h`, 117 → ~125, rule 42), not only the shim prohibition. Beacon-era §5.1 interim-writer stays closed. *SUPERSEDED: Q12 sequenced behind F5.* Q3 RULED 2026-09-16 (`DrawableSet::at_epoch_open`; drop stays in `D`; filter at settlement). **UPDATE 2026-09-16 (Q8 RULED):** dedicated non-output hybrid key from coinbase output 0's `combined_ss`; 32-B commitment under `0x0C` (not `0x0B` — no version prefix, `k × 49` B). Combined_ss does not cross the FFI. **UPDATE 2026-09-16 (Q8 pins):** `0x0C` mandatory-present (commitment 2); `combined_ss` uniqueness is a derivation requirement with a fixture; Q10 RULED: memory-only ZeroizeOnDrop; persist-encrypted REJECTED. Q12 RULED independently (proposal §7.9); Q13 writes the CEN row and does not re-open optionality. **UPDATE 2026-09-16 (Q9 RULED):** *records-was, amended below:* Merkle-root batching; fail-whole refused (authorship ≠ incidence); serve-credit is fee-less by construction; 300,000 is `get_min_block_weight` (a floor); prunable bytes count toward weight. Against `TX_WEIGHT_LIMIT` the 97-record set splits 39 / 39 / 19 (≈365 KB/block; 39:1). Unpaid inclusion and any prunable-weight discount belong to a fee-and-weight round. **UPDATE 2026-09-16 (Q10 RULED):** accept-loss; memory-only ZeroizeOnDrop ring; persist-encrypted REJECTED. File promptly; evict on inclusion; log dropped in-flight on restart. Named fallback: re-derivable `tx_key`, not persist. **UPDATE 2026-09-16 (Q13 RULED):** 0x0C content is one CEN row, five fixtures, genesis-unconditional; dedicated parser must not copy 0x0B empty-set; length is WITNESS_COMMITMENT_BYTES. **UPDATE 2026-09-16 (Q12 RULED):** 0x0C is a bare 32-B cSHAKE256 of witness_pk under shekyl/archival-witness-key-v1, independent of F5; hiding is theater (reveal publishes pk); reopen if h is removed in order to conceal the issuing block. **UPDATE 2026-09-16 (SO-D8a/b/c RULED):** transcriptions — fire gate dies, `h_close` replaced by per-challenge W₂ (`CHALLENGE_RESPONSE_BLOCKS` FOLLOWUPS discharged); dedup `(P,s,E,h)` exact-get because `h` is in the past and in the DB (what PC-D4 could not do); emission gather to slash pass (SO-D7's second consumer). **UPDATE 2026-09-16 (`SO-D8d` RULED, amended same day vs `dev@5fde3b1ce`):** three local layers — assignment equality (streamed); **persisted** local 32-B `D` digest written in the connect batch at `h_open(E)`, compared against a re-walk at every slash pass; `passes ≤ issued` backstop (strictly dominated). The harmful direction (`NonObservation → Missed`; the free exit) is layer 2's alone. Desync is a **store-invariant Fault** with a new `SI-` row (Slice C) — `poison().arm(row)` → `ConnectState::Halted`; never `CenRow`/`InvalidBlock`; the block at the slash height is unwritten *because the writer halted*, not because it is invalid. Q7 collapsed: cache drops at `h_close + W₂`; the writer is a pure function of chain data (`SO-D1` §4.2, `SO-D6`). §7.4 pin 4 reconciled by call site. On-chain `D`-digest REJECTED on four grounds (ground 3 withdrawn); issued-from-records REJECTED. Q4 is a coverage precondition (λ divergence passes layer 2). **UPDATE 2026-09-16 (Q15 residue):** #761/#762/#764 landed; falsifier unchanged and unfired (LMDB serves production; `held_by_cxx` rows). **UPDATE 2026-09-16 (review):** Q9's byte construction (proposal §7.6.1, PROPOSED) and carrier semantics (§7.6.2, OPEN — the inherited contract refuses a whole carrier on one bad vin; per-vin admission vs fail-whole + resubmission, recommendation (B)) are ruled before Slice C; Q3's drop-safety argument corrected (a dropped pair writes no row — zero bad observations, not one); fee-and-weight round now a FOLLOWUPS row. **UPDATE 2026-09-16 (`SO-D8e` RULED):** forward urn + `W₂` ring of self-contained pairs (~1.9 MB); no checkpoints — rewind replays from the hash-independent wave boundary; one `DrawableSet` live; lifetime `[h_open, h_close + W₂]`, settlement never reads it; one persisted carve-out (32-B `D` digest at `h_open`, undo-logged); ~16 MB at maturity; stateless draws-with-replacement FORECLOSED; owed `SI-10` (SI-5 exists, reuse refused) and 720-not-`D_max`. **UPDATE 2026-09-16 (Q9 amended):** Merkle-root batching SUPERSEDED same day — its isolation-at-admission premise was false under the carrier contract; ruled form is one signature per carrier over a set commitment (`cSHAKE256_32` of the length-framed records, bytes PROPOSED), **carrier fail-whole + resubmission within `W₂`** ((B) RULED; (A) per-vin admission REJECTED — free-weight channel); no inclusion paths (−22 KB/block); split 42 / 42 / 13, ≈ 347 KB/block, 42:1. **UPDATE 2026-09-17 (Q4 RESOLVED, `fix/so-q4-pin-lambda`):** `ChallengeUrn::new` reads `CHALLENGES_PER_PAIR_PER_EPOCH`; `assign_epoch` feeds that constructor; explicit λ is `#[cfg(test)]`; FOLLOWUPS `lambda_target` row removed. Open: Q9 set-commitment vectors. Q12–Q13 RULED; Q14 resolved by Q15 plus the tautology-repair prohibition. | **DIRECTION RATIFIED 2026-09-13 — a–e RULED 2026-09-16; placement RULED 2026-09-16 (Q15)**, consensus-visible |
+| `SO-D9` | `ERR_EPOCH_MISMATCH` (`serve_credit.rs:168`) was a tautology — `ctx.settlement_epoch` (`blockchain.cpp:5304`) was the record's own epoch (`:5124`). Ruled **(i)**: populate it at that single site from `shekyl_archival_settlement_epoch_at_height(·)` of the block whose epoch the record claims — `current_height` on the **pre-cutover R-A path** (the connecting block), the **validated issuing block `h`** under **R-B** (proposal §1 "what is ruled is the site", §2.1 item 3) — making "the record's epoch is the block's epoch" an explicit enforced rule rather than a bound on *when* implicit in `h_close`. The *site* is independent of `SO-D8`'s shape; the *operand* is not, and the two pre-FFI C++ bounds (`h_close`, `challenge_seal_on_chain`) mean (i) on the R-A operand flips exactly one block per epoch (proposal §1 "Ordering", Q14). **Implementation not yet built** and **not to be built on the C++ path** (Q15, 2026-09-16): the row lands in `shekyl-chain-rules` with the R-B cutover, operand `h`. **Prohibition:** do not repair the tautology in `blockchain.cpp` — that would be a consensus tightening on the live LMDB daemon for a path being replaced. FOLLOWUPS row. Proposal: [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §1 / Q15 | **RULED 2026-09-13 — (i)**; site **re-homed 2026-09-16 (Q15)** |
 
 **Not blocked on the stressnet.** Everything above is desk-derivable, and
 `SO-D2`'s `issued` byte is deliberately the artifact that makes the eventual

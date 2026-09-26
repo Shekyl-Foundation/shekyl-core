@@ -22,11 +22,14 @@
 //!   [`shekyl_pow_randomx_v2_seed_epoch_overridden`] — the seed-epoch
 //!   schedule (replacing `crypto::rx_seedheight`/`rx_seedheights`). The
 //!   schedule arithmetic is pure and lives in
-//!   `shekyl_pow_randomx::seed_epoch`; **this module owns the ambient
-//!   half** — the `SEEDHASH_EPOCH_*` env overrides (regtest fast-epoch
-//!   lever) are read once per process here, clamped by the crate's pure
-//!   `clamp_*` functions, and passed in as parameters, keeping the
-//!   verifier crate free of runtime state per its isolation charter.
+//!   `shekyl_difficulty::seed_epoch` (moved there from the engine crate
+//!   2026-09-19 so the validator adopts the one implementation for
+//!   CEN-D3 without depending on the engine — DRS-E6 slice 2); **this
+//!   module owns the ambient half** — the `SEEDHASH_EPOCH_*` env
+//!   overrides (regtest fast-epoch lever) are read once per process here,
+//!   clamped by the `clamp_*` functions below, and passed in as
+//!   parameters, keeping both the verifier crate and the validation crate
+//!   free of runtime state.
 //!
 //! The RandomX v2 algorithm itself lives entirely in
 //! [`shekyl_pow_randomx`] (the `#![deny(unsafe_code)]` verifier crate);
@@ -117,8 +120,9 @@
 //! module-level state (`RANDOMX_V2_RUST.md` §7.2); the memo lives here
 //! at the FFI boundary.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
+use shekyl_difficulty::{next_seedheight, seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 
 /// Upper bound on `data_len` accepted by [`shekyl_pow_randomx_v2_hash`].
@@ -269,14 +273,71 @@ pub unsafe extern "C" fn shekyl_pow_randomx_v2_set_canonical(seedhash: *const [u
     // contract guarantees an aligned, initialized [u8; 32].
     let seed = Seedhash::from_bytes(*seedhash);
 
-    // Eager derivation off the hot path, then sticky-pin. The two steps
-    // are deliberately not collapsed: lookup_or_derive both warms the
-    // cache and returns the Arc that set_canonical pins, so the 256 MiB
-    // fill is paid exactly once here rather than lazily on the first
-    // verifying call of the epoch.
-    let prepared: Arc<_> = cache_store().lookup_or_derive(&seed);
-    cache_store().set_canonical(prepared);
+    // Eager derivation off the hot path, then sticky-pin — one call, so
+    // the 256 MiB fill is paid exactly once here rather than lazily on the
+    // first verifying call of the epoch. The daemon does not measure
+    // derivations; the outcome is the ingest pipeline's to read.
+    let _served = cache_store().pin_canonical(&seed);
     SHEKYL_POW_RANDOMX_V2_OK
+}
+
+/// Clamp a raw `SEEDHASH_EPOCH_LAG` override exactly as the C `atoi`
+/// path did for in-range values: absent → default; unparsable → 0 →
+/// fails power-of-two → default; parsed but `> default` or not a
+/// power of two → default.
+///
+/// C-parity is precise, not bit-for-bit: three deliberate deltas from
+/// glibc `atoi`, all regtest-lever-only and measured against the C before
+/// deletion — values ≥ 2³² clamp to the default instead of wrapping
+/// mod 2³² (glibc: `atoi("4294967312") == 16`, so the old C *accepted*
+/// absurd wrapped overrides); only ASCII whitespace is skipped (C
+/// `isspace`; a plain `str::trim_start` would accept NBSP-prefixed values
+/// the C rejected); non-UTF-8 env bytes read as absent (the C parsed the
+/// raw byte prefix).
+fn clamp_lag(raw: Option<&str>) -> u64 {
+    match raw {
+        None => SEEDHASH_EPOCH_LAG,
+        Some(s) => {
+            let lag = parse_atoi(s);
+            if lag > SEEDHASH_EPOCH_LAG || !lag.is_power_of_two() {
+                SEEDHASH_EPOCH_LAG
+            } else {
+                lag
+            }
+        }
+    }
+}
+
+/// Clamp a raw `SEEDHASH_EPOCH_BLOCKS` override exactly as the C did:
+/// `< 2`, `> default`, or not a power of two → default.
+fn clamp_blocks(raw: Option<&str>) -> u64 {
+    match raw {
+        None => SEEDHASH_EPOCH_BLOCKS,
+        Some(s) => {
+            let blocks = parse_atoi(s);
+            if !(2..=SEEDHASH_EPOCH_BLOCKS).contains(&blocks) || !blocks.is_power_of_two() {
+                SEEDHASH_EPOCH_BLOCKS
+            } else {
+                blocks
+            }
+        }
+    }
+}
+
+/// C `atoi` semantics for the value range these knobs accept: ASCII
+/// whitespace skipped (C-locale `isspace` — NOT Unicode whitespace),
+/// optional sign, digits until the first non-digit; no digits → 0;
+/// negative → 0 (no in-`int`-range negative wraps to an accepted
+/// power of two, so outcomes match C on every branch). See
+/// [`clamp_lag`] for the deliberate ≥2³² delta.
+fn parse_atoi(s: &str) -> u64 {
+    let t = s.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let t = t.strip_prefix('+').unwrap_or(t);
+    if t.starts_with('-') {
+        return 0;
+    }
+    let end = t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+    t[..end].parse::<u64>().unwrap_or(0)
 }
 
 /// The effective `(epoch_blocks, epoch_lag)` schedule parameters:
@@ -286,11 +347,8 @@ pub unsafe extern "C" fn shekyl_pow_randomx_v2_set_canonical(seedhash: *const [u
 fn seed_epoch_params() -> (u64, u64) {
     static PARAMS: OnceLock<(u64, u64)> = OnceLock::new();
     *PARAMS.get_or_init(|| {
-        let blocks = shekyl_pow_randomx::clamp_blocks(
-            std::env::var("SEEDHASH_EPOCH_BLOCKS").ok().as_deref(),
-        );
-        let lag =
-            shekyl_pow_randomx::clamp_lag(std::env::var("SEEDHASH_EPOCH_LAG").ok().as_deref());
+        let blocks = clamp_blocks(std::env::var("SEEDHASH_EPOCH_BLOCKS").ok().as_deref());
+        let lag = clamp_lag(std::env::var("SEEDHASH_EPOCH_LAG").ok().as_deref());
         (blocks, lag)
     })
 }
@@ -305,7 +363,7 @@ fn seed_epoch_params() -> (u64, u64) {
 #[no_mangle]
 pub extern "C" fn shekyl_pow_randomx_v2_seedheight(height: u64) -> u64 {
     let (blocks, lag) = seed_epoch_params();
-    shekyl_pow_randomx::seedheight(height, blocks, lag)
+    seedheight(height, blocks, lag)
 }
 
 /// `seedheight(height + lag)` — the upcoming seed height, for the RPC
@@ -314,7 +372,7 @@ pub extern "C" fn shekyl_pow_randomx_v2_seedheight(height: u64) -> u64 {
 #[no_mangle]
 pub extern "C" fn shekyl_pow_randomx_v2_next_seedheight(height: u64) -> u64 {
     let (blocks, lag) = seed_epoch_params();
-    shekyl_pow_randomx::next_seedheight(height, blocks, lag)
+    next_seedheight(height, blocks, lag)
 }
 
 /// The effective seed-epoch length in blocks (2048, or the clamped
@@ -333,17 +391,44 @@ pub extern "C" fn shekyl_pow_randomx_v2_seed_epoch_blocks() -> u64 {
 /// visible in the logs, not discovered via chain fork.
 #[no_mangle]
 pub extern "C" fn shekyl_pow_randomx_v2_seed_epoch_overridden() -> bool {
-    seed_epoch_params()
-        != (
-            shekyl_pow_randomx::SEEDHASH_EPOCH_BLOCKS,
-            shekyl_pow_randomx::SEEDHASH_EPOCH_LAG,
-        )
+    seed_epoch_params() != (SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use shekyl_pow_randomx::PreparedCache;
+
+    #[test]
+    fn lag_clamp_matches_c_atoi_semantics() {
+        assert_eq!(clamp_lag(None), 64);
+        assert_eq!(clamp_lag(Some("16")), 16);
+        assert_eq!(clamp_lag(Some("64")), 64);
+        assert_eq!(clamp_lag(Some("128")), 64); // > default → default
+        assert_eq!(clamp_lag(Some("3")), 64); // !pow2 → default
+        assert_eq!(clamp_lag(Some("0")), 64); // 0 fails pow2
+        assert_eq!(clamp_lag(Some("garbage")), 64); // atoi → 0 → default
+        assert_eq!(clamp_lag(Some("-8")), 64);
+        assert_eq!(clamp_lag(Some("  8tail")), 8); // ASCII-ws + prefix parse
+        assert_eq!(clamp_lag(Some("+16")), 16);
+        // Deliberate deltas from glibc atoi: mod-2^32 wrap values are
+        // rejected to default rather than wrapped-accepted, and non-ASCII
+        // whitespace is NOT skipped.
+        assert_eq!(clamp_lag(Some("4294967312")), 64); // C accepted as 16
+        assert_eq!(clamp_lag(Some("\u{00A0}16")), 64); // NBSP: C rejected too
+        assert_eq!(clamp_lag(Some("99999999999999999999")), 64); // > u64: parse fails → default
+    }
+
+    #[test]
+    fn blocks_clamp_matches_c_atoi_semantics() {
+        assert_eq!(clamp_blocks(None), 2048);
+        assert_eq!(clamp_blocks(Some("64")), 64);
+        assert_eq!(clamp_blocks(Some("2")), 2);
+        assert_eq!(clamp_blocks(Some("1")), 2048); // < 2 → default
+        assert_eq!(clamp_blocks(Some("4096")), 2048); // > default → default
+        assert_eq!(clamp_blocks(Some("1000")), 2048); // !pow2 → default
+        assert_eq!(clamp_blocks(Some("x")), 2048);
+    }
 
     /// `seedhash == NULL` is rejected before any dereference.
     #[test]
@@ -575,22 +660,19 @@ mod tests {
     /// the same clamp functions the exports use, so the test verifies
     /// the WIRING (export == pure formula at the effective params)
     /// whatever the ambient environment; the schedule itself is KAT'd
-    /// env-free in `shekyl_pow_randomx::seed_epoch`.
+    /// env-free in `shekyl_difficulty::seed_epoch`.
     #[test]
     fn seedheight_exports_match_schedule() {
-        let blocks = shekyl_pow_randomx::clamp_blocks(
-            std::env::var("SEEDHASH_EPOCH_BLOCKS").ok().as_deref(),
-        );
-        let lag =
-            shekyl_pow_randomx::clamp_lag(std::env::var("SEEDHASH_EPOCH_LAG").ok().as_deref());
+        let blocks = clamp_blocks(std::env::var("SEEDHASH_EPOCH_BLOCKS").ok().as_deref());
+        let lag = clamp_lag(std::env::var("SEEDHASH_EPOCH_LAG").ok().as_deref());
         for h in [0u64, 2100, 2112, 2113, 4161, u64::MAX] {
             assert_eq!(
                 shekyl_pow_randomx_v2_seedheight(h),
-                shekyl_pow_randomx::seedheight(h, blocks, lag)
+                seedheight(h, blocks, lag)
             );
             assert_eq!(
                 shekyl_pow_randomx_v2_next_seedheight(h),
-                shekyl_pow_randomx::next_seedheight(h, blocks, lag)
+                next_seedheight(h, blocks, lag)
             );
         }
         assert_eq!(shekyl_pow_randomx_v2_seed_epoch_blocks(), blocks);

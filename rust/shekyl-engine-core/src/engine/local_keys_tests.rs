@@ -28,6 +28,7 @@
 
 use super::*;
 use shekyl_crypto_pq::output::construct_output;
+use shekyl_types::{BlockHash, PrefixHash};
 
 /// Standard test seed; every test uses this unless it specifically
 /// exercises seed-divergence behavior.
@@ -110,32 +111,15 @@ fn build_paid_to_self(
 // tree; promoting them is out of scope for an additive test caller.
 // ─────────────────────────────────────────────────────────────────
 
-/// Generate a canonical Selene scalar's byte representation for
-/// use as an `h_pqc` leaf field, derived deterministically from
-/// `seed`. The byte expansion goes through `Field25519::wide_reduce`
-/// so the result is guaranteed to round-trip through `from_repr`
-/// regardless of `seed`. The returned bytes do not need to be a
-/// real `H(pqc_pk)` for the M3c-via-C test — the FCMP++ verifier
-/// accepts any consistent `h_pqc` value because the proof binds
-/// `pqc_pk_hashes` as a public input rather than re-deriving it
-/// from a real PQC public key.
-///
-/// Determinism is intentional: tests should be reproducible, and
-/// the property M3c pins is invariant under the specific h_pqc
-/// values chosen.
-fn make_synthetic_h_pqc_bytes(seed: u64) -> [u8; 32] {
-    use ciphersuite::group::ff::PrimeField;
-    let mut buf = [0u8; 64];
-    buf[..8].copy_from_slice(&seed.to_le_bytes());
-    // Splash the seed across the high half too so adjacent seeds
-    // produce well-separated field elements (avoids accidental
-    // structural correlation when the 9-fixture sweep runs).
-    buf[32..40].copy_from_slice(&seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).to_le_bytes());
-    // `wide_reduce` is `Field25519`'s inherent constructor (not on
-    // the `Field` trait); calling through `<Selene as Ciphersuite>::F`
-    // does not resolve. The Selene scalar field IS `Field25519`.
-    let h_pqc_field = dalek_ff_group::FieldElement::wide_reduce(buf);
-    h_pqc_field.to_repr()
+/// The leaf's 4th scalar for a constructed output: `CM.x`, the x-coordinate
+/// of its real PQC leaf commitment (`PL-D3`). Under the commitment leaf the
+/// FCMP++ verifier no longer takes the leaf value as a public input — the
+/// circuit opens the leaf commitment to the revealed key's point — so a
+/// synthetic 4th scalar would not verify; the tests build the honest one.
+fn leaf_scalar_of(constructed: &shekyl_crypto_pq::output::OutputData) -> [u8; 32] {
+    shekyl_fcmp::PqcLeafScalar::from_commitment_point(&constructed.pqc_leaf.point)
+        .expect("constructed leaf commitment decompresses")
+        .0
 }
 
 /// Build a recipient `OutputInfo` record by constructing a fresh
@@ -705,11 +689,10 @@ fn derive_primary_source_secrets_bundle_byte_identical_against_legacy_chain() {
 ///    containing all `n_in` entries (each engine SpendInput
 ///    references the same chunk, with its own
 ///    `(output_key, commitment)` selecting which entry it is
-///    spending). `h_pqc` values come from
-///    [`make_synthetic_h_pqc_bytes`] — synthetic-but-canonical
-///    Selene scalars; the FCMP++ verifier accepts any consistent
-///    `h_pqc` because `pqc_pk_hashes` is a public input rather
-///    than re-derived from a real PQC public key in-circuit.
+///    spending). Each leaf's 4th scalar is the real `CM.x` of the
+///    constructed output's PQC leaf commitment (`PL-D3`); the
+///    verifier takes each input's PQC key scalar and the circuit
+///    opens the leaf commitment to it.
 /// 5. Asserts engine `SpendInput` byte-identity vs the hand-
 ///    composed legacy `SpendInput` field-by-field at the input
 ///    layer.
@@ -724,8 +707,8 @@ fn derive_primary_source_secrets_bundle_byte_identical_against_legacy_chain() {
 ///      commitment points; the engine-path `fcmp_proof` verifies
 ///      via `shekyl_fcmp::proof::verify` against the engine-
 ///      derived key images, the proof's pseudo-outputs, the
-///      synthetic `h_pqc` Selene scalars, the synthetic single-
-///      leaf-chunk tree root, and the same `signable_tx_hash`
+///      inputs' PQC key scalars, the synthetic single-leaf-chunk
+///      tree root, and the same `signable_tx_hash`
 ///      passed to the prover.
 ///    - **Echo-passthrough.** `reference_block` and `tree_depth`
 ///      from the input `TreeContext` are echoed unchanged in
@@ -759,7 +742,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
     use shekyl_curve_io::CompressedPoint;
     use shekyl_curve_primitives::Commitment;
     use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
-    use shekyl_fcmp::PqcLeafScalar;
+    use shekyl_fcmp::PqcKeyScalar;
     use shekyl_tx_builder::{sign_transaction, LeafEntry, SpendInput, TreeContext};
 
     let keys = LocalKeys::from_test_seed(TEST_SEED);
@@ -767,8 +750,8 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
     let n_in_values: [usize; 3] = [1, 2, 3];
 
     let tree_depth: u8 = 1;
-    let signable_tx_hash = [0xC3u8; 32];
-    let reference_block = [0xD4u8; 32];
+    let signable_tx_hash = PrefixHash::from_bytes([0xC3u8; 32]);
+    let reference_block = BlockHash::from_bytes([0xD4u8; 32]);
     let fee: u64 = 1_000;
 
     // Recipient = base spend key `D = b·G`. The spend witness is `ho + b`
@@ -782,6 +765,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
         // ── Build inputs ───────────────────────────────────
         let mut input_amounts: Vec<u64> = Vec::with_capacity(n_in);
         let mut leaf_chunk: Vec<LeafEntry> = Vec::with_capacity(n_in);
+        let mut pqc_keys: Vec<PqcKeyScalar> = Vec::new();
         let mut engine_bundles: Vec<_> = Vec::with_capacity(n_in);
         let mut legacy_bundles: Vec<_> = Vec::with_capacity(n_in);
 
@@ -866,7 +850,15 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             // internally (`compute_key_image_gen`) and the
             // FCMP++ in-circuit constraint binds the leaf-
             // stored value to the prover's claim.
-            let h_pqc = make_synthetic_h_pqc_bytes((n_in as u64) * 1_000_000 + (input_idx as u64));
+            let h_pqc = leaf_scalar_of(&constructed);
+            // The verifier's per-input key is the canonical hybrid public key
+            // the spend reveals (`derive_pqc_public_key`), not the ML-DSA-only
+            // `OutputData::pqc_public_key`.
+            let combined64: [u8; 64] = legacy_combined_ss[..64].try_into().expect("64 bytes");
+            let hybrid_pk =
+                shekyl_crypto_pq::derivation::derive_pqc_public_key(&combined64, output_index)
+                    .expect("derive hybrid pk");
+            pqc_keys.push(PqcKeyScalar::from_pqc_public_key(&hybrid_pk));
             leaf_chunk.push(LeafEntry {
                 output_key: constructed.output_key,
                 key_image_gen: shekyl_curve_generators::biased_hash_to_point(
@@ -875,7 +867,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
                 .compress()
                 .to_bytes(),
                 commitment: constructed.commitment,
-                h_pqc,
+                cm_x: h_pqc,
             });
 
             legacy_bundles.push((
@@ -908,7 +900,6 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
                 spend_key_x,
                 spend_key_y,
                 commitment_mask,
-                h_pqc: leaf_chunk[i].h_pqc,
                 combined_ss,
                 output_index: i as u64,
                 leaf_chunk: leaf_chunk.clone(),
@@ -993,10 +984,6 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
                 "SpendInput.commitment_mask mismatch ({context}, input={i})"
             );
             assert_eq!(
-                e.h_pqc, l.h_pqc,
-                "SpendInput.h_pqc mismatch ({context}, input={i})"
-            );
-            assert_eq!(
                 e.combined_ss, l.combined_ss,
                 "SpendInput.combined_ss mismatch ({context}, input={i})"
             );
@@ -1023,8 +1010,8 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
                     "leaf_chunk[{j}].commitment mismatch ({context}, input={i})"
                 );
                 assert_eq!(
-                    ec.h_pqc, lc.h_pqc,
-                    "leaf_chunk[{j}].h_pqc mismatch ({context}, input={i})"
+                    ec.cm_x, lc.cm_x,
+                    "leaf_chunk[{j}].cm_x mismatch ({context}, input={i})"
                 );
             }
             assert_eq!(
@@ -1122,10 +1109,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
                 ))
             })
             .collect();
-        let pqc_pk_hashes: Vec<PqcLeafScalar> = engine_inputs
-            .iter()
-            .map(|inp| PqcLeafScalar(inp.h_pqc))
-            .collect();
+        let pqc_pk_hashes: Vec<PqcKeyScalar> = pqc_keys.clone();
         let proof = ShekylFcmpProof {
             data: signed_engine.fcmp_proof.clone(),
             num_inputs: u32::try_from(n_in).expect("n_in is bounded by the [1, 3] sweep"),
@@ -1136,9 +1120,9 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             &key_images,
             &signed_engine.pseudo_outs,
             &pqc_pk_hashes,
-            &tree.tree_root,
+            tree.tree_root.as_bytes(),
             tree.tree_depth,
-            signable_tx_hash,
+            signable_tx_hash.to_bytes(),
         );
         assert!(
             matches!(result, Ok(true)),
@@ -1214,7 +1198,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     use shekyl_curve_io::CompressedPoint;
     use shekyl_curve_primitives::Commitment;
     use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
-    use shekyl_fcmp::PqcLeafScalar;
+    use shekyl_fcmp::PqcKeyScalar;
     use shekyl_tx_builder::{
         sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext, TxBuilderError,
     };
@@ -1241,13 +1225,13 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         "bond floor must be positive for the fixture holdings"
     );
 
-    let signable_tx_hash = [0xC3u8; 32];
-    let reference_block = [0xD4u8; 32];
+    let signable_tx_hash = PrefixHash::from_bytes([0xC3u8; 32]);
+    let reference_block = BlockHash::from_bytes([0xD4u8; 32]);
     let tree_depth: u8 = 1;
     let fee: u64 = 1_000;
 
     // ── Construct the bond vin (no on-vin signature — SA-2b) ─────────
-    let built = build_join_market_vin(p_keys.bond_post_keys(), holdings.clone())
+    let built = build_join_market_vin(p_keys.bond_post_keys(), holdings.clone(), [0xEE; 32])
         .expect("build JoinMarket vin");
     assert_eq!(built.vin().bond_credit, floor);
     assert_eq!(built.vin().bond_debit, 0);
@@ -1277,14 +1261,14 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         .derive_primary_source_secrets_bundle(&ciphertext, input_index)
         .expect("engine derive_primary_source_secrets_bundle must succeed");
 
-    let h_pqc = make_synthetic_h_pqc_bytes(0xB0);
+    let h_pqc = leaf_scalar_of(&constructed);
     let leaf_chunk = vec![LeafEntry {
         output_key: constructed.output_key,
         key_image_gen: shekyl_curve_generators::biased_hash_to_point(constructed.output_key)
             .compress()
             .to_bytes(),
         commitment: constructed.commitment,
-        h_pqc,
+        cm_x: h_pqc,
     }];
     let tree_root = crate::engine::synthetic_tree::selene_single_chunk_tree_root(&leaf_chunk);
     let tree = TreeContext {
@@ -1300,7 +1284,6 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         spend_key_x: *bundle.spend_key_x,
         spend_key_y: *bundle.spend_key_y,
         commitment_mask: *bundle.commitment_mask,
-        h_pqc,
         combined_ss: bundle.combined_ss.to_vec(),
         output_index: input_index,
         leaf_chunk: leaf_chunk.clone(),
@@ -1406,8 +1389,10 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
             KeyImage::from_canonical_bytes(compute_test_key_image(inp.output_key, inp.spend_key_x))
         })
         .collect();
-    let pqc_pk_hashes: Vec<PqcLeafScalar> =
-        inputs.iter().map(|inp| PqcLeafScalar(inp.h_pqc)).collect();
+    let combined64: [u8; 64] = bundle.combined_ss[..64].try_into().expect("64 bytes");
+    let hybrid_pk = shekyl_crypto_pq::derivation::derive_pqc_public_key(&combined64, input_index)
+        .expect("derive hybrid pk");
+    let pqc_pk_hashes: Vec<PqcKeyScalar> = vec![PqcKeyScalar::from_pqc_public_key(&hybrid_pk)];
     let proof = ShekylFcmpProof {
         data: signed.fcmp_proof.clone(),
         num_inputs: 1,
@@ -1420,9 +1405,9 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
                 &key_images,
                 &signed.pseudo_outs,
                 &pqc_pk_hashes,
-                &tree.tree_root,
+                tree.tree_root.as_bytes(),
                 tree.tree_depth,
-                signable_tx_hash,
+                signable_tx_hash.to_bytes(),
             ),
             Ok(true)
         ),
@@ -1580,8 +1565,8 @@ async fn sign_transaction_rejects_empty_inputs() {
         outputs: vec![],
         fcmp_plus_plus_context: FcmpPlusPlusContext {
             tree: TreeContext {
-                reference_block: [0; 32],
-                tree_root: [0; 32],
+                reference_block: BlockHash::NULL,
+                tree_root: shekyl_types::CurveTreeRoot::from_bytes([0; 32]),
                 tree_depth: 1,
             },
         },

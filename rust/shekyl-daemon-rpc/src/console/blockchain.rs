@@ -150,9 +150,8 @@ pub(super) fn version_tally(counts: &[u32; 256]) -> String {
 /// `print_blockchain_dynamic_stats <nblocks>`.
 ///
 /// **The `hard_fork_info` leg is deleted rather than ported.** Its only use
-/// was `hfres.enabled ? "byte" : "kB"` against `HF_VERSION_PER_BYTE_FEE`,
-/// which is `1` (`cryptonote_config.h:282`), and `enabled` is
-/// `get_current_version() >= 1`. `Blockchain` constructs its `HardFork` with
+/// was `hfres.enabled ? "byte" : "kB"`. `enabled` was
+/// `get_current_version() >= 1`, so the "kB" arm was unreachable from genesis.
 /// `original_version = 1` on all three networks
 /// (`blockchain.cpp:474`/`:476`/`:478`), `init()` seeds `heights[0]` with
 /// that version at height 0, and `current_fork_index` starts at 0 and only

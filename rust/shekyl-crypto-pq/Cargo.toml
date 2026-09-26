@@ -113,6 +113,12 @@ blake2 = "0.10"
 # the test is the load-bearing enforcement of that discipline.
 bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize", "unicode-normalization"] }
 shekyl-address = { path = "../shekyl-address" }
+# `KeyImage` is defined in `shekyl-types` (moved there for DRS-E6,
+# `CHAIN_RULES_CRATE.md` §3.4) and re-exported from `key_image.rs`; the
+# derivation `I = x · H_p(O)` stays in this crate's `output` module.
+# `shekyl-types` depends only on `serde`/`zeroize` (+ optional
+# `postcard-schema`), so this adds no third-party surface and no cycle.
+shekyl-types = { path = "../shekyl-types" }
 # `zeroize` feature activates `Sha3State: ZeroizeOnDrop` (sha3 0.10.9+)
 # so the cSHAKE / SHA-3 sponge state is wiped on drop. Required by the
 # `derive_output_handle` cSHAKE256 invocation per

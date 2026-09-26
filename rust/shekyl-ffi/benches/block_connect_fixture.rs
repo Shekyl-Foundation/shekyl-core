@@ -194,7 +194,7 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
     // tx_extra through the CODEC-OWNED serializer (`shekyl_wire::tx_extra::
     // serialize`) — one length-prefixed 0x06 blob carrying ALL outputs' KEM
     // ciphertexts concatenated, one length-prefixed 0x07 blob carrying all
-    // leaf hashes, exactly as both shipped codecs encode them (the Rust
+    // leaf entries, exactly as both shipped codecs encode them (the Rust
     // read_blob/write_blob pair and the C++ single-`std::string blob`
     // structs, tx_extra.h:210-228 + src/serialization/string.h:55-61).
     // Two earlier hand-rolled forms diverged — first omitting the 0x07
@@ -209,15 +209,20 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
             std::iter::repeat_n(u8::try_from(i).expect("n_out <= 16"), HYBRID_KEM_CT_BYTES)
         })
         .collect();
+    // One admissible 64-byte `0x07` entry per output (`CM ‖ record`, PL-D3):
+    // admission checks every entry's point (`check_pqc_leaf_entries`), so
+    // the filler must be a real point, not a byte pattern. The record half
+    // is unchecked by consensus; a per-output nibble keeps entries distinct.
     let leaf_concat: Vec<u8> = (0..n_out)
         .flat_map(|i| {
-            let nib = 0xB0u8 | (u8::try_from(i).expect("n_out <= 16") & 0x0F);
-            std::iter::repeat_n(nib, 32)
+            let mut entry = shekyl_wire::tx_extra::conforming_pqc_leaf_entry();
+            entry[63] = 0xB0u8 | (u8::try_from(i).expect("n_out <= 16") & 0x0F);
+            entry
         })
         .collect();
     let extra = shekyl_wire::tx_extra::serialize(&[
         shekyl_wire::tx_extra::TxExtraField::PqcKemCiphertext(kem_concat),
-        shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(leaf_concat),
+        shekyl_wire::tx_extra::TxExtraField::PqcLeafEntries(leaf_concat),
     ])
     .expect("tx_extra serialize");
 
@@ -248,7 +253,7 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
         },
         ct: Ct::Fcmp {
             fee: 1,
-            reference_block: [0xAB; 32],
+            reference_block: shekyl_types::BlockHash::from_bytes([0xAB; 32]),
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]; n_out],
                 enc_labels: vec![[0u8; 9]; n_out],

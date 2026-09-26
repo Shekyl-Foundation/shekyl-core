@@ -49,7 +49,6 @@
 #include "version.h"
 #include "string_tools.h"
 #include "common/util.h"
-#include "common/pruning.h"
 #include "net/error.h"
 #include "math_helper.h"
 #include "misc_log_ex.h"
@@ -132,7 +131,7 @@ namespace nodetool
     command_line::add_arg(desc, arg_limit_rate_down);
     command_line::add_arg(desc, arg_limit_rate);
     command_line::add_arg(desc, arg_pad_transactions);
-    command_line::add_arg(desc, arg_max_connections_per_ip);
+    command_line::add_arg(desc, arg_clearnet_transport_encrypt);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -231,19 +230,24 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_host_limit(const epee::net_utils::network_address &address)
   {
+    // Live walk, same reason `get_outgoing_connections_count` refreshes its
+    // counter itself: `m_current_number_of_in_peers` is rewritten once a
+    // second and is not incremented on accept. The candidate is not in the
+    // list yet — this runs before the connection is inserted.
+    const inbound_census census = census_inbound(address.get_zone());
     const network_zone& zone = m_network_zones.at(address.get_zone());
-    if (zone.m_current_number_of_in_peers >= zone.m_config.m_net_config.max_in_connection_count) // in peers limit
+    if (zone.m_inbound_cap_explicit
+        && census.zone >= zone.m_config.m_net_config.max_in_connection_count)
     {
       MWARNING("Exceeded max incoming connections, so dropping this one.");
       return true;
     }
-
-    if(has_too_many_connections(address))
+    if (m_process_inbound_ceiling && census.process >= *m_process_inbound_ceiling)
     {
-      MWARNING("CONNECTION FROM " << address.host_str() << " REFUSED, too many connections from the same address");
+      MWARNING("Exceeded the inbound descriptor ceiling (" << *m_process_inbound_ceiling
+               << "), so dropping this one.");
       return true;
     }
-
     return false;
   }
 
@@ -584,7 +588,10 @@ namespace nodetool
       m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, public_zone.m_config.m_net_config.max_out_connection_count);
 
 
-    if ( !set_max_in_peers(public_zone, command_line::get_arg(vm, arg_in_peers) ) )
+    // Negative is unset. The ceiling is derived in `apply_inbound_ceiling`
+    // after the listeners exist; storing the sentinel here would narrow it
+    // into `uint32_t` and rebuild the unbounded interval.
+    if ( !set_max_in_peers(public_zone, command_line::get_arg(vm, arg_in_peers)) )
       return false;
 
     if ( !set_tos_flag(vm, command_line::get_arg(vm, arg_tos_flag) ) )
@@ -674,8 +681,6 @@ namespace nodetool
       if (!set_max_in_peers(zone, inbound.max_connections))
         return false;
     }
-
-    max_connections = command_line::get_arg(vm, arg_max_connections_per_ip);
 
     return true;
   }
@@ -944,6 +949,28 @@ namespace nodetool
 
     m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
     network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
+    {
+      const bool encrypt = command_line::get_arg(vm, arg_clearnet_transport_encrypt);
+      if (encrypt)
+      {
+        static const epee::net_utils::network_pipe_ops clearnet_noise_pipe = {
+          &shekyl_clearnet_attach,
+          &shekyl_clearnet_start,
+          &shekyl_clearnet_pin,
+          &shekyl_clearnet_unpin,
+          &shekyl_clearnet_write,
+          &shekyl_clearnet_detach,
+          &shekyl_clearnet_read_done,
+        };
+        public_zone.m_net_server.set_network_pipe(
+          reinterpret_cast<const uint8_t*>(&m_network_id), &clearnet_noise_pipe);
+        MINFO("public-zone clearnet transport encryption is on (Noise NNhfs test gate)");
+      }
+      else
+      {
+        MINFO("public-zone clearnet channel is unencrypted; this is temporary and the off path is deleted before genesis");
+      }
+    }
 
     if ((m_nettype == cryptonote::MAINNET && public_zone.m_port != std::to_string(::config::P2P_DEFAULT_PORT))
         || (m_nettype == cryptonote::TESTNET && public_zone.m_port != std::to_string(::config::testnet::P2P_DEFAULT_PORT))
@@ -1010,6 +1037,7 @@ namespace nodetool
     // from here onwards, it's online stuff
     if (m_offline)
     {
+      apply_inbound_ceiling(0);
       ephemeral_tor_guard.armed = false;
       return res;
     }
@@ -1068,6 +1096,7 @@ namespace nodetool
       }
     }
 
+    apply_inbound_ceiling(0);
     ephemeral_tor_guard.armed = false;
     return res;
   }
@@ -1276,11 +1305,11 @@ namespace nodetool
         context.support_flags = rsp.node_data.support_flags;
         const auto azone = context.m_remote_address.get_zone();
         network_zone& zone = m_network_zones.at(azone);
-        zone.m_peerlist.set_peer_just_seen(context.m_remote_address, context.m_pruning_seed);
+        zone.m_peerlist.set_peer_just_seen(context.m_remote_address);
         // Self-connection is detected on the ACCEPTOR side (the inbound
         // handler sees our own in-flight nonce and drops); this arm then
         // observes an ordinary failed handshake.
-        LOG_INFO_CC(context, "New connection handshaked, pruning seed " << epee::string_tools::to_string_hex(context.m_pruning_seed));
+        LOG_INFO_CC(context, "New connection handshaked");
         LOG_DEBUG_CC(context, " COMMAND_HANDSHAKE INVOKED OK");
       }else
       {
@@ -1336,7 +1365,7 @@ namespace nodetool
         add_host_fail(context.m_remote_address);
       }
       if(!context.m_is_income)
-        m_network_zones.at(context.m_remote_address.get_zone()).m_peerlist.set_peer_just_seen(context.m_remote_address, context.m_pruning_seed);
+        m_network_zones.at(context.m_remote_address.get_zone()).m_peerlist.set_peer_just_seen(context.m_remote_address);
       if (!m_payload_handler.process_payload_sync_data(rsp.payload_data, context, false))
       {
         m_network_zones.at(context.m_remote_address.get_zone()).m_net_server.get_config_object().close(context.m_connection_id );
@@ -1579,11 +1608,10 @@ namespace nodetool
     time_t last_seen;
     time(&last_seen);
     pe_local.last_seen = static_cast<int64_t>(last_seen);
-    pe_local.pruning_seed = con->m_pruning_seed;
     zone.m_peerlist.append_with_peer_white(pe_local);
     //update last seen and push it to peerlist manager
 
-    zone.m_notifier.on_handshake_complete(con->m_connection_id, con->m_is_income);
+    zone.m_notifier.on_session_established(con->m_connection_id, con->m_is_income);
     zone.m_notifier.new_out_connection();
 
     LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK.");
@@ -1711,8 +1739,6 @@ namespace nodetool
     {
       ++outer_loop_count;
 
-      const uint32_t next_needed_pruning_stripe = m_payload_handler.get_next_needed_pruning_stripe().second;
-
       // Build a list of all distinct /24 subnets we are connected to now right now; to catch
       // any connection changes, re-build the list for every outer try loop pass
       std::set<uint32_t> connected_subnets;
@@ -1748,8 +1774,8 @@ namespace nodetool
       std::vector<peerlist_entry> filtered;
 
       // Inner try loop: Find candidates first with subnet deduplication, if none found again without.
-      // Finding none happens if all candidates are from subnets we are already connected to and/or
-      // they don't offer the needed stripe when pruning. Only actually loop and deduplicate if we are
+      // Finding none happens if all candidates are from subnets we are already connected to.
+      // Only actually loop and deduplicate if we are
       // in the public zone because private zones don't have subnets.
       for (int step = 0; step < 2; ++step)
       {
@@ -1816,7 +1842,7 @@ namespace nodetool
         } // deduplicate
         // else, for step 1 / second pass of inner try loop, take all peers from all subnets
 
-        // Take as many candidates as we need and care about stripes if pruning
+        // Take as many candidates as we need
         const size_t limit = use_white_list ? 20 : std::numeric_limits<size_t>::max();
         for (const peerlist_entry &peer : candidate_peers) {
           if (filtered.size() >= limit)
@@ -1825,11 +1851,7 @@ namespace nodetool
             // Already tried, not a possible candidate
             continue;
 
-          if (next_needed_pruning_stripe == 0 || peer.pruning_seed == 0)
-            filtered.push_back(peer);
-          else if (next_needed_pruning_stripe == tools::get_pruning_stripe(peer.pruning_seed))
-            filtered.insert(filtered.begin(), peer);
-          // else wrong stripe, skip
+          filtered.push_back(peer);
         }
 
         if (!filtered.empty())
@@ -1838,7 +1860,7 @@ namespace nodetool
 
       if (filtered.empty())
       {
-        MINFO("No available peer in " << (use_white_list ? "white" : "gray") << " list filtered by " << next_needed_pruning_stripe);
+        MINFO("No available peer in " << (use_white_list ? "white" : "gray") << " list");
         return false;
       }
 
@@ -1848,23 +1870,6 @@ namespace nodetool
         // If using the white list, we first pick in the set of peers we've already been using earlier;
         // that "fixed probability" heavily favors the peers most recently seen in the candidate list
         random_index = get_random_index_with_fixed_probability(filtered.size() - 1);
-
-        CRITICAL_REGION_LOCAL(m_used_stripe_peers_mutex);
-        if (next_needed_pruning_stripe > 0 && next_needed_pruning_stripe <= (1ul << CRYPTONOTE_PRUNING_LOG_STRIPES) && !m_used_stripe_peers[next_needed_pruning_stripe-1].empty())
-        {
-          const epee::net_utils::network_address na = m_used_stripe_peers[next_needed_pruning_stripe-1].front();
-          m_used_stripe_peers[next_needed_pruning_stripe-1].pop_front();
-          for (size_t i = 0; i < filtered.size(); ++i)
-          {
-            const peerlist_entry &peer = filtered.at(i);
-            if (peer.adr == na)
-            {
-              MDEBUG("Reusing stripe " << next_needed_pruning_stripe << " peer " << peer.adr.str());
-              random_index = i;
-              break;
-            }
-          }
-        }
       }
       else
         random_index = crypto::rand_idx(filtered.size());
@@ -1879,8 +1884,7 @@ namespace nodetool
       tried_peers.insert(candidate.adr);
 
       _note("Considering connecting (out) to " << (use_white_list ? "white" : "gray") << " list peer: " <<
-          candidate.adr.str() << ", pruning seed " << epee::string_tools::to_string_hex(candidate.pruning_seed) <<
-          " (stripe " << next_needed_pruning_stripe << " needed), in loop pass " << outer_loop_count);
+          candidate.adr.str() << ", in loop pass " << outer_loop_count);
 
       if (zone.m_our_address == candidate.adr)
         // It's ourselves, obviously don't take that
@@ -1905,8 +1909,7 @@ namespace nodetool
         continue;
       }
 
-      MDEBUG("Selected peer: " << candidate.adr.str()
-      << ", pruning seed " << epee::string_tools::to_string_hex(candidate.pruning_seed) << " "
+      MDEBUG("Selected peer: " << candidate.adr.str() << " "
       << "[peer_list=" << (use_white_list ? white : gray)
       << "] last_seen: " << (candidate.last_seen ? epee::misc_utils::get_time_interval_string(time(NULL) - candidate.last_seen) : "never"));
 
@@ -2032,7 +2035,7 @@ namespace nodetool
       size_t conn_count = get_outgoing_connections_count(zone.second);
       while(conn_count < zone.second.m_config.m_net_config.max_out_connection_count)
       {
-        const size_t expected_white_connections = m_payload_handler.get_next_needed_pruning_stripe().second ? zone.second.m_config.m_net_config.max_out_connection_count : base_expected_white_connections;
+        const size_t expected_white_connections = base_expected_white_connections;
         if(conn_count < expected_white_connections)
         {
           //start with the white list
@@ -2120,6 +2123,12 @@ namespace nodetool
         ++count;
       return true;
     });
+    // Same reason as `get_outgoing_connections_count`: the once-a-second
+    // thread is not what admission reads. Keep the cache coherent for readers
+    // that still look at it.
+    zone.m_current_number_of_in_peers = count > std::numeric_limits<unsigned int>::max()
+      ? std::numeric_limits<unsigned int>::max()
+      : static_cast<unsigned int>(count);
     return count;
   }
   //-----------------------------------------------------------------------------------
@@ -2244,7 +2253,33 @@ namespace nodetool
       return true;
 
     const auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
-    if (public_zone != m_network_zones.end() && get_incoming_connections_count(public_zone->second) == 0)
+    if (public_zone == m_network_zones.end())
+      return true;
+
+    // PWD-E1 tier 1, DIAGNOSTIC HALF ONLY. Report the STATE; the operator
+    // draws the line, the daemon does not. A verdict ("probably unreachable")
+    // would need a threshold, and that threshold is PWD-E8's, deferred on its
+    // own measurement -- so stating the observation is what lets this land
+    // without inventing one.
+    //
+    // Three operands, because no one of them is readable alone: a count with
+    // no window does not distinguish "unreachable" from "just started", and
+    // neither tells an operator whether the port they forwarded is the port
+    // this node actually advertises. That last one is the whole of the
+    // PWD-I7 incident's diagnosis, in a line.
+    //
+    // This does NOT stop advertising, classify, or infer anything about a
+    // remote peer -- all three are the deferred action half.
+    const size_t inbound_now = get_incoming_connections_count(public_zone->second);
+    const uint32_t announced = get_announced_port(epee::net_utils::zone::public_);
+    const auto uptime_min = std::chrono::duration_cast<std::chrono::minutes>(
+        std::chrono::steady_clock::now() - m_started_at).count();
+    MGINFO("p2p inbound state: " << inbound_now << " connection(s) held, over "
+        << uptime_min << " min of uptime; advertising "
+        << (announced ? "port " + std::to_string(announced) : std::string("NO port"))
+        << ", listening on " << m_listening_port);
+
+    if (inbound_now == 0)
     {
       if (public_zone->second.m_config.m_net_config.max_in_connection_count == 0)
       {
@@ -2279,7 +2314,7 @@ namespace nodetool
       {
         // Session state this node OBSERVED, never a wire value: only
         // handshake-completed connections take part in timed sync.
-        if(cntxt.handshake_complete() && !cntxt.m_in_timedsync)
+        if(cntxt.session_established() && !cntxt.m_in_timedsync)
         {
           cntxt.m_in_timedsync = true;
           cncts.push_back(cntxt);
@@ -2312,8 +2347,6 @@ namespace nodetool
         if (ipv4.ip() == 0 || ipv4.port() == 0) // 0.0.0.0 or not dialable
           ignore = true;
       }
-      if (be.pruning_seed && (be.pruning_seed < tools::make_pruning_seed(1, CRYPTONOTE_PRUNING_LOG_STRIPES) || be.pruning_seed > tools::make_pruning_seed(1ul << CRYPTONOTE_PRUNING_LOG_STRIPES, CRYPTONOTE_PRUNING_LOG_STRIPES)))
-        ignore = true;
       if (ignore)
       {
         MDEBUG("Ignoring " << be.adr.str());
@@ -2819,7 +2852,7 @@ namespace nodetool
     {
       local_peerlist_new.insert(
         local_peerlist_new.begin() + crypto::rand_range(std::size_t(0), local_peerlist_new.size()),
-        peerlist_entry{zone.m_our_address, 0, 0}
+        peerlist_entry{zone.m_our_address, 0}
       );
     }
 
@@ -2857,7 +2890,7 @@ namespace nodetool
       return 1;
     }
 
-    if(context.handshake_complete())
+    if(context.session_established())
     {
       LOG_WARNING_CC(context, "COMMAND_HANDSHAKE came on a connection that already completed one (double COMMAND_HANDSHAKE?)");
       drop_connection(context);
@@ -2889,7 +2922,7 @@ namespace nodetool
       return 1;
     }
 
-    zone.m_notifier.on_handshake_complete(context.m_connection_id, context.m_is_income);
+    zone.m_notifier.on_session_established(context.m_connection_id, context.m_is_income);
 
     context.m_in_timedsync = false;
     context.support_flags = arg.node_data.support_flags;
@@ -2912,7 +2945,6 @@ namespace nodetool
         peerlist_entry pe{};
         pe.adr = *derived;
         pe.last_seen = 0; // an unverified claim has never been "seen"
-        pe.pruning_seed = context.m_pruning_seed;
         zone.m_peerlist.append_with_peer_gray(pe);
       }
     }
@@ -3073,8 +3105,167 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_max_in_peers(network_zone& zone, int64_t max)
   {
-    zone.m_config.m_net_config.max_in_connection_count = max;
+    // Negative is unset. It is not stored: assigning it to `uint32_t` is the
+    // narrowing that made an unset `--in-peers` into `UINT32_MAX`.
+    if (max < 0)
+    {
+      zone.m_inbound_cap_explicit = false;
+      zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+      return true;
+    }
+    zone.m_inbound_cap_explicit = true;
+    if (static_cast<uint64_t>(max) > std::numeric_limits<uint32_t>::max())
+    {
+      MWARNING("Inbound cap " << max << " exceeds the admission counter; storing the counter's maximum.");
+      zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+      return true;
+    }
+    zone.m_config.m_net_config.max_in_connection_count = static_cast<uint32_t>(max);
     return true;
+  }
+
+  template<class t_payload_net_handler>
+  std::uint64_t node_server<t_payload_net_handler>::descriptor_reservations(std::uint64_t reserved_beyond_p2p) const
+  {
+    std::uint64_t reserved = reserved_beyond_p2p;
+    const auto add = [&reserved](std::uint64_t n)
+    {
+      if (reserved > std::numeric_limits<std::uint64_t>::max() - n)
+        reserved = std::numeric_limits<std::uint64_t>::max();
+      else
+        reserved += n;
+    };
+    // RESERVE WHAT CANNOT BE COUNTED; COUNT WHAT CAN.
+    //
+    // Outbound sockets are promised but not yet open, and `census_inbound`
+    // never sees them, so the only way to keep descriptors for them is to
+    // subtract them here.
+    //
+    // Inbound on a non-public zone is the opposite case and must NOT be
+    // reserved: `census_inbound` walks every zone, so those connections are
+    // already charged against the ceiling as they are accepted. Reserving
+    // them too would subtract the same descriptors twice -- an
+    // `--anonymous-inbound` cap of N would cost the process N descriptors of
+    // headroom AND still consume N as the connections arrived, squeezing
+    // public inbound by 2N. Each zone with an explicit cap is bounded by that
+    // cap in `is_host_limit`; the ceiling bounds the pool they all draw from.
+    for (const auto& entry : m_network_zones)
+      add(entry.second.m_config.m_net_config.max_out_connection_count);
+    return reserved;
+  }
+
+  template<class t_payload_net_handler>
+  auto node_server<t_payload_net_handler>::census_inbound(epee::net_utils::zone which) -> inbound_census
+  {
+    inbound_census census{};
+    for (auto& entry : m_network_zones)
+    {
+      std::size_t count = 0;
+      entry.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
+      {
+        if (cntxt.m_is_income)
+          ++count;
+        return true;
+      });
+      entry.second.m_current_number_of_in_peers = count > std::numeric_limits<unsigned int>::max()
+        ? std::numeric_limits<unsigned int>::max()
+        : static_cast<unsigned int>(count);
+      census.process += count;
+      if (entry.first == which)
+        census.zone = count;
+    }
+    return census;
+  }
+
+  template<class t_payload_net_handler>
+  void node_server<t_payload_net_handler>::apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p)
+  {
+    const auto found = m_network_zones.find(epee::net_utils::zone::public_);
+    if (found == m_network_zones.end())
+      return;
+    network_zone& public_zone = found->second;
+    if (public_zone.m_inbound_cap_explicit)
+    {
+      m_process_inbound_ceiling.reset();
+      return;
+    }
+
+    // Remembered so a later re-derive (an `out_peers` change, say) does not
+    // need to know what the daemon reserved beyond p2p.
+    m_reserved_beyond_p2p = reserved_beyond_p2p;
+    const std::uint64_t reserved = descriptor_reservations(reserved_beyond_p2p);
+    // Descriptors already spent on ACCEPTED inbound connections are excluded
+    // from the observation, because this ceiling is what measures them. At
+    // startup the count is zero and it made no difference; a runtime
+    // re-derive (an `out_peers` change) runs with peers connected, and
+    // leaving them inside the observed count would subtract each one from the
+    // headroom AND then compare it against the smaller result — the ceiling
+    // would fall as the node filled, so a routine outbound change on a busy
+    // node could start refusing every new peer.
+    const std::uint64_t inbound_held = census_inbound(epee::net_utils::zone::public_).process;
+    shekyl_inbound_ceiling decision{};
+    shekyl_inbound_ceiling_resolve(reserved, inbound_held, &decision);
+    const bool announce = decision.kind != m_applied_ceiling_kind
+      || decision.ceiling != m_applied_ceiling_value;
+    m_applied_ceiling_kind = decision.kind;
+    m_applied_ceiling_value = decision.ceiling;
+    switch (decision.kind)
+    {
+      case SHEKYL_INBOUND_CEILING_BOUNDED:
+        public_zone.m_config.m_net_config.max_in_connection_count = decision.ceiling;
+        m_process_inbound_ceiling = decision.ceiling;
+        if (announce)
+        {
+          MGINFO("Inbound ceiling derived from the descriptor limit: " << decision.ceiling
+                 << " (limit " << decision.soft_limit << ", " << decision.held
+                 << " already held, " << reserved << " reserved)");
+          if (decision.ceiling == 0)
+            MWARNING("No descriptor headroom for inbound connections. Raise LimitNOFILE, "
+                     "lower --out-peers, or lower --rpc-max-connections; this node will accept no inbound peers.");
+        }
+        break;
+      case SHEKYL_INBOUND_CEILING_NO_PER_PROCESS_LIMIT:
+        public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+        m_process_inbound_ceiling.reset();
+        if (announce)
+          MWARNING("This platform exposes no per-process descriptor limit, so the "
+                   "inbound ceiling is unbounded. Set --in-peers explicitly to bound it.");
+        break;
+      case SHEKYL_INBOUND_CEILING_UNLIMITED:
+        public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+        m_process_inbound_ceiling.reset();
+        if (announce)
+          MWARNING("RLIMIT_NOFILE is unlimited, so no descriptor ceiling can be derived. "
+                   "Set --in-peers explicitly to bound inbound.");
+        break;
+      case SHEKYL_INBOUND_CEILING_LIMIT_UNREADABLE:
+        public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+        m_process_inbound_ceiling.reset();
+        if (announce)
+          MWARNING("Cannot read this platform's descriptor limit, so the inbound ceiling "
+                   "is unbounded. Set --in-peers explicitly to bound it.");
+        break;
+      case SHEKYL_INBOUND_CEILING_COUNT_UNREADABLE:
+        public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+        m_process_inbound_ceiling.reset();
+        if (announce)
+          MWARNING("Cannot count this process's open descriptors, so the inbound ceiling "
+                   "is unbounded. Set --in-peers explicitly to bound it.");
+        break;
+      case SHEKYL_INBOUND_CEILING_EXCEEDS_COUNTER:
+        public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
+        m_process_inbound_ceiling.reset();
+        if (announce)
+          MWARNING("Descriptor headroom does not fit the inbound counter, so a derived "
+                   "ceiling would never fire. Set --in-peers explicitly to bound it.");
+        break;
+      default:
+        public_zone.m_config.m_net_config.max_in_connection_count = 0;
+        m_process_inbound_ceiling = 0;
+        if (announce)
+          MERROR("Unrecognized inbound ceiling kind " << decision.kind << "; refusing inbound.");
+        break;
+    }
   }
 
   template<class t_payload_net_handler>
@@ -3101,6 +3292,15 @@ namespace nodetool
       if(current > count)
         public_zone->second.m_net_server.get_config_object().del_out_connections(current - count);
       m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, count);
+      // The outbound cap is a term in the inbound ceiling's reservation, so
+      // changing it at runtime invalidates a ceiling derived against the old
+      // one. Raising `out_peers` without this leaves inbound reserved against
+      // a smaller outbound budget, and live outbound plus inbound can then
+      // exceed the descriptor limit -- the exact exhaustion the ceiling
+      // exists to prevent. Re-derives against the same non-p2p reservation
+      // the last call used, so a caller that never knew the RPC budget does
+      // not have to learn it.
+      apply_inbound_ceiling(m_reserved_beyond_p2p);
     }
   }
 
@@ -3151,10 +3351,17 @@ namespace nodetool
     auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
     if (public_zone != m_network_zones.end())
     {
+      const uint32_t cap = count > std::numeric_limits<uint32_t>::max()
+        ? std::numeric_limits<uint32_t>::max()
+        : static_cast<uint32_t>(count);
+      // A runtime change is an explicit cap. The derived process backstop
+      // stops applying, matching an explicit `--in-peers` at startup.
+      public_zone->second.m_inbound_cap_explicit = true;
+      m_process_inbound_ceiling.reset();
       const auto current = public_zone->second.m_net_server.get_config_object().get_in_connections_count();
-      public_zone->second.m_config.m_net_config.max_in_connection_count = count;
-      if(current > count)
-        public_zone->second.m_net_server.get_config_object().del_in_connections(current - count);
+      public_zone->second.m_config.m_net_config.max_in_connection_count = cap;
+      if(current > cap)
+        public_zone->second.m_net_server.get_config_object().del_in_connections(current - cap);
     }
   }
 
@@ -3233,31 +3440,6 @@ namespace nodetool
   }
 
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::has_too_many_connections(const epee::net_utils::network_address &address)
-  {
-    if (address.get_zone() != epee::net_utils::zone::public_)
-      return false; // Unable to determine how many connections from host
-
-    uint32_t count = 0;
-
-    m_network_zones.at(epee::net_utils::zone::public_).m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      if (cntxt.m_is_income && cntxt.m_remote_address.is_same_host(address)) {
-        count++;
-
-        // the only call location happens BEFORE foreach_connection list is updated
-        if (count >= max_connections) {
-          return false;
-        }
-      }
-
-      return true;
-    });
-    // the only call location happens BEFORE foreach_connection list is updated
-    return count >= max_connections;
-  }
-
-  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::gray_peerlist_housekeeping()
   {
     if (m_offline) return true;
@@ -3285,47 +3467,11 @@ namespace nodetool
       }
       else
       {
-        zone.second.m_peerlist.set_peer_just_seen(pe.adr, pe.pruning_seed);
+        zone.second.m_peerlist.set_peer_just_seen(pe.adr);
         LOG_PRINT_L2("PEER PROMOTED TO WHITE PEER LIST IP address: " << pe.adr.host_str());
       }
     }
     return true;
-  }
-
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::add_used_stripe_peer(const typename t_payload_net_handler::connection_context &context)
-  {
-    const uint32_t stripe = tools::get_pruning_stripe(context.m_pruning_seed);
-    if (stripe == 0 || stripe > (1ul << CRYPTONOTE_PRUNING_LOG_STRIPES))
-      return;
-    const uint32_t index = stripe - 1;
-    CRITICAL_REGION_LOCAL(m_used_stripe_peers_mutex);
-    MINFO("adding stripe " << stripe << " peer: " << context.m_remote_address.str());
-    m_used_stripe_peers[index].erase(std::remove_if(m_used_stripe_peers[index].begin(), m_used_stripe_peers[index].end(),
-        [&context](const epee::net_utils::network_address &na){ return context.m_remote_address == na; }), m_used_stripe_peers[index].end());
-    m_used_stripe_peers[index].push_back(context.m_remote_address);
-  }
-
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::remove_used_stripe_peer(const typename t_payload_net_handler::connection_context &context)
-  {
-    const uint32_t stripe = tools::get_pruning_stripe(context.m_pruning_seed);
-    if (stripe == 0 || stripe > (1ul << CRYPTONOTE_PRUNING_LOG_STRIPES))
-      return;
-    const uint32_t index = stripe - 1;
-    CRITICAL_REGION_LOCAL(m_used_stripe_peers_mutex);
-    MINFO("removing stripe " << stripe << " peer: " << context.m_remote_address.str());
-    m_used_stripe_peers[index].erase(std::remove_if(m_used_stripe_peers[index].begin(), m_used_stripe_peers[index].end(),
-        [&context](const epee::net_utils::network_address &na){ return context.m_remote_address == na; }), m_used_stripe_peers[index].end());
-  }
-
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::clear_used_stripe_peers()
-  {
-    CRITICAL_REGION_LOCAL(m_used_stripe_peers_mutex);
-    MINFO("clearing used stripe peers");
-    for (auto &e: m_used_stripe_peers)
-      e.clear();
   }
 
   template<class t_payload_net_handler>

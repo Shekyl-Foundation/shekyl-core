@@ -57,6 +57,36 @@ enum { HAVE_BLOCK_MAIN_CHAIN, HAVE_BLOCK_ALT_CHAIN, HAVE_BLOCK_INVALID };
 
 namespace cryptonote
 {
+   /**
+    * @brief the resolved `--db-sync-mode` settings
+    *
+    * Extracted from `core::init` so the parse can be tested without opening a
+    * database. The parse FAILS CLOSED: an unrecognised token in a durability
+    * setting refuses rather than selecting a default, because the default is
+    * `DBF_FAST` (`MDB_NOSYNC`) and silently choosing the least durable mode on
+    * a typo is fail-open on the one control that decides whether a crash costs
+    * the chain.
+    */
+   struct db_sync_settings
+   {
+     uint64_t db_flags = 0;
+     blockchain_db_sync_mode sync_mode = db_defaultsync;
+     bool sync_on_blocks = true;
+     uint64_t sync_threshold = 1;
+   };
+
+   /**
+    * @brief parse a `--db-sync-mode` specification
+    *
+    * @param spec       the raw option string (`[safe|fast|fastest]:[sync|async]:[<n>[blocks|bytes]]`)
+    * @param is_default true when the argument was not supplied on the command line
+    * @param out        resolved settings, written only on success
+    * @param error      human-readable reason, written only on failure
+    * @return true on success; false means REFUSE TO START
+    */
+   bool parse_db_sync_mode(const std::string &spec, bool is_default,
+                           db_sync_settings &out, std::string &error);
+
    struct test_options {
      const std::pair<uint8_t, uint64_t> *hard_forks;
      const size_t long_term_block_weight_window;
@@ -70,7 +100,6 @@ namespace cryptonote
   extern const command_line::arg_descriptor<bool> arg_offline;
   extern const command_line::arg_descriptor<size_t> arg_block_download_max_size;
   extern const command_line::arg_descriptor<size_t> arg_span_limit;
-  extern const command_line::arg_descriptor<bool> arg_sync_pruned_blocks;
 
   /************************************************************************/
   /*                                                                      */
@@ -454,13 +483,6 @@ namespace cryptonote
      void set_checkpoints(checkpoints&& chk_pts);
 
      /**
-      * @brief set the file path to read from when loading checkpoints
-      *
-      * @param path the path to set ours as
-      */
-     void set_checkpoints_file_path(const std::string& path);
-
-     /**
       * @copydoc tx_memory_pool::have_tx
       *
       * @note see tx_memory_pool::have_tx
@@ -557,7 +579,7 @@ namespace cryptonote
       *
       * @note see Blockchain::find_blockchain_supplement(const std::list<crypto::hash>&, NOTIFY_RESPONSE_CHAIN_ENTRY::request&) const
       */
-     bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, bool clip_pruned, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const;
+     bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const;
 
 
      /**
@@ -707,18 +729,6 @@ namespace cryptonote
      std::time_t get_start_time() const;
 
      /**
-      * @brief tells the Blockchain to update its checkpoints
-      *
-      * This function will check if enough time has passed since the last
-      * time checkpoints were updated and tell the Blockchain to update
-      * its checkpoints if it is time.  If updating checkpoints fails,
-      * the daemon is told to shut down.
-      *
-      * @note see Blockchain::update_checkpoints()
-      */
-     bool update_checkpoints();
-
-     /**
       * @brief tells the daemon to wind down operations and stop running
       *
       * Currently this function raises SIGTERM, allowing the installed signal
@@ -774,36 +784,6 @@ namespace cryptonote
       * @return whether the core is running offline
       */
      bool offline() const { return m_offline; }
-
-     /**
-      * @brief get the blockchain pruning seed
-      *
-      * @return the blockchain pruning seed
-      */
-     uint32_t get_blockchain_pruning_seed() const;
-
-     /**
-      * @brief prune the blockchain
-      *
-      * @param pruning_seed the seed to use to prune the chain (0 for default, highly recommended)
-      *
-      * @return true iff success
-      */
-     bool prune_blockchain(uint32_t pruning_seed = 0);
-
-     /**
-      * @brief incrementally prunes blockchain
-      *
-      * @return true on success, false otherwise
-      */
-     bool update_blockchain_pruning();
-
-     /**
-      * @brief checks the blockchain pruning if enabled
-      *
-      * @return true on success, false otherwise
-      */
-     bool check_blockchain_pruning();
 
      /**
       * @brief flushes the invalid block cache
@@ -983,18 +963,12 @@ namespace cryptonote
      epee::math_helper::once_a_time_seconds<60*60*2, true> m_fork_moaner; //!< interval for checking HardFork status
      epee::math_helper::once_a_time_seconds<60*10, true> m_check_disk_space_interval; //!< interval for checking for disk space
      epee::math_helper::once_a_time_seconds<90, false> m_block_rate_interval; //!< interval for checking block rate
-     epee::math_helper::once_a_time_seconds<60*60*5, true> m_blockchain_pruning_interval; //!< interval for incremental blockchain pruning
 
      std::atomic<bool> m_starter_message_showed; //!< has the "daemon will sync now" message been shown?
 
      uint64_t m_target_blockchain_height; //!< blockchain height target
 
      network_type m_nettype; //!< which network are we on?
-
-     std::string m_checkpoints_path; //!< path to json checkpoints file
-     time_t m_last_json_checkpoints_update; //!< time when json checkpoints were last updated
-
-     std::atomic_flag m_checkpoints_updating; //!< set if checkpoints are currently updating to avoid multiple threads attempting to update at once
 
      size_t block_sync_size;
 

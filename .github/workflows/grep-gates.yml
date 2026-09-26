@@ -133,6 +133,11 @@ jobs:
             scripts/ci/domain_registry_gate.sh
           run_one "Consensus-invariants" \
             scripts/ci/check_consensus_invariants.sh
+          # PDM-Q7: the stripe engine and its pruning_seed wire field are
+          # deleted; a codec port carries a wire field by default (LV-2 did),
+          # so this is the only thing that keeps either from coming back.
+          run_one "PDM-Q7: no stripe engine, no pruning_seed on the wire" \
+            scripts/ci/check_no_stripe_engine.sh
           run_one "Pending-post single-write-path" \
             scripts/ci/check_pending_post_write_path.sh
           run_one "Unbounded /dev read" \
@@ -145,6 +150,18 @@ jobs:
             scripts/ci/check_engine_decomposition.sh
           run_one "Debit-auth pin: single-sourced" \
             scripts/ci/check_debit_auth_single_source.sh
+          # SF-D4: the shard-fetch client is cut from the serving/wallet side,
+          # the SOCKS dial is out of consensus/store/server, and p-serve's
+          # `test-signer` resolves off in every graph BuildRust.cmake ships.
+          # Read from manifests (this job has no toolchain): shipped roots
+          # are parsed out of BuildRust.cmake itself, and features are
+          # unified Cargo-style (aliases, defaults, optional and weak deps),
+          # not grepped. The selftest first: it plants each forwarding path
+          # on synthetic manifests and proves the resolver sees it (rule 47).
+          run_one "SF-D4: dependency-cut resolver selftest" \
+            python3 scripts/ci/check_p_fetch_dep_cut.py --selftest
+          run_one "SF-D4: shard-fetch dependency cut" \
+            python3 scripts/ci/check_p_fetch_dep_cut.py
           run_one "Rule 71: nettype selects data, not control flow" \
             scripts/ci/check_network_uniformity.sh
           run_one "Ignored tests carry their reason in the attribute" \
@@ -157,6 +174,8 @@ jobs:
             python3 scripts/ci/check_drop_verdict_classification.py
           run_one "PoW test-seam containment (CEN-D2)" \
             scripts/ci/check_pow_test_seam.sh
+          run_one "RandomX symbol-isolation negatives (rule 50)" \
+            scripts/ci/test_check_randomx_symbol_isolation.sh
           run_one "LV-1: levin wire-constant parity" \
             ./scripts/ci/check_levin_constant_parity.sh
           run_one "C++ clamp-ban (address-freeze)" \

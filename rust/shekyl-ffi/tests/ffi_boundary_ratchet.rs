@@ -83,7 +83,9 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // retargeted: a check that measured a C++ boundary does not become a check
     // of the Rust wallet stack by re-pointing it. `shekyl-engine-file` is
     // consumed directly as a Rust crate now, with no `extern "C"` edge to bound.
-    ("legacy_core.rs", 4, 0),
+    // 4 -> 2: the xchacha20 C ABI was deleted with the Phase 4 follow-on
+    // (no C++ consumer; wallet AEAD is Rust). Tightened so the win cannot grow back.
+    ("legacy_core.rs", 2, 0),
     ("legacy_curve_tree.rs", 4, 0),
     // 6 -> 5: the legacy `shekyl_fcmp_prove` entry point was deleted with the
     // C++ wrapper that was its only caller, taking one reservation with it.
@@ -92,7 +94,10 @@ const BASELINE: &[(&str, usize, usize)] = &[
     ("legacy_frost.rs", 2, 3),
     ("legacy_proofs.rs", 4, 0),
     ("legacy_tests.rs", 3, 0),
-    ("legacy_tx.rs", 1, 2),
+    // 2 -> 1 with_capacity: the wallet-cache envelope export was the other
+    // reserve, and it left with the callerless cache FFI. The remaining
+    // reserve is the collapsed-sign input vec.
+    ("legacy_tx.rs", 1, 1),
     ("levin_ffi.rs", 4, 0),
     ("pow_randomx_ffi.rs", 1, 0),
     // Curve-tree replica (test-generator surface, 2026-09-05): one typed-slice
@@ -100,9 +105,6 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // re-owns the isize::MAX byte bound); byte reads go through
     // `slice_from_ptr`, and there are no raw reserves.
     ("curve_tree_replica_ffi.rs", 1, 0),
-    // tx_extra shape rule adapter (2026-09-05): one typed-slice borrow of the
-    // caller's usize arrays (`usize_slice`, isize::MAX-bounded); no reserves.
-    ("tx_extra_ffi.rs", 1, 0),
     // 5 -> 3: `read_ids` and `read_tx_ids` moved onto `slice_from_ptr`, which
     // owns the `isize::MAX` bound `from_raw_parts` requires at the language
     // level (PR #498 review). Tightened so the win cannot grow back.

@@ -133,8 +133,74 @@ struct BlockchainAndPool
     }; \
     get_test_options(): hard_forks{std::make_pair(1, (uint64_t)0), std::make_pair((uint8_t)hf_version, (uint64_t)1), std::make_pair((uint8_t)0, (uint64_t)0)} {} \
   } opts; \
-  bool r = bc->init(new TestDB(), cryptonote::FAKECHAIN, true, &opts.test_options, 0); \
-  ASSERT_TRUE(r)
+  TestDB *db = new TestDB(); \
+  ASSERT_TRUE(bc->init(db, cryptonote::FAKECHAIN, true, &opts.test_options, 0))
 
 #define PREFIX(hf_version) PREFIX_WINDOW(hf_version, TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW)
 
+namespace
+{
+  // Independent statement of C2-R2 Q3. Asserting the generated constant
+  // against itself cannot fail.
+  constexpr uint64_t RATIFIED_SURGE_FACTOR = 4;
+  static_assert(RATIFIED_SURGE_FACTOR >= 3,
+                "the below-ceiling case needs a weight strictly between zone and S*zone");
+
+  void push_blocks(TestDB *db, size_t count, size_t weight, uint64_t long_term_weight)
+  {
+    for (size_t i = 0; i < count; ++i)
+      db->add_block(cryptonote::block(), weight, long_term_weight,
+                    cryptonote::difficulty_type(1), 0, 0, crypto::null_hash);
+  }
+}
+
+TEST(long_term_block_weight, generated_macro_matches_the_ratified_factor)
+{
+  EXPECT_EQ(RATIFIED_SURGE_FACTOR, SHEKYL_BLOCK_WEIGHT_SHORT_TERM_SURGE_FACTOR);
+}
+
+TEST(long_term_block_weight, surge_ceiling_bounds_the_effective_median_at_the_ratified_factor)
+{
+  PREFIX(1);
+  const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+
+  push_blocks(db, CRYPTONOTE_REWARD_BLOCKS_WINDOW, zone * 100, zone);
+  ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
+
+  EXPECT_EQ(RATIFIED_SURGE_FACTOR * zone, bc->get_current_cumulative_block_weight_median());
+  EXPECT_EQ(2 * RATIFIED_SURGE_FACTOR * zone, bc->get_current_cumulative_block_weight_limit());
+}
+
+TEST(long_term_block_weight, a_short_term_median_below_the_ceiling_is_not_clamped)
+{
+  PREFIX(1);
+  const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+  const uint64_t below_ceiling = zone * (RATIFIED_SURGE_FACTOR - 1);
+
+  push_blocks(db, CRYPTONOTE_REWARD_BLOCKS_WINDOW, below_ceiling, zone);
+  ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
+
+  EXPECT_EQ(below_ceiling, bc->get_current_cumulative_block_weight_median());
+}
+
+TEST(long_term_block_weight, a_quiet_chain_does_not_fall_below_the_long_term_median)
+{
+  PREFIX(1);
+  const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+
+  push_blocks(db, CRYPTONOTE_REWARD_BLOCKS_WINDOW, zone / 10, zone);
+  ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
+
+  EXPECT_EQ(zone, bc->get_current_cumulative_block_weight_median());
+}
+
+TEST(long_term_block_weight, a_block_contribution_is_bounded_to_the_17_10_band)
+{
+  PREFIX(1);
+  const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+  push_blocks(db, TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW, zone, zone);
+
+  EXPECT_EQ(zone, bc->get_next_long_term_block_weight(zone));
+  EXPECT_EQ(zone * 10 / 17, bc->get_next_long_term_block_weight(zone / 10));
+  EXPECT_EQ(zone + zone * 7 / 10, bc->get_next_long_term_block_weight(zone * 10));
+}

@@ -47,11 +47,13 @@ include!(concat!(
 
 /// Minimum reference-block age the daemon accepts (`tip − reference_height
 /// ≥ MIN_AGE`). Re-exported from the JSON authority under a doc-rich name.
-pub const REFERENCE_BLOCK_MIN_AGE: u64 = FCMP_REFERENCE_BLOCK_MIN_AGE;
+pub const REFERENCE_BLOCK_MIN_AGE: shekyl_types::BlockCount =
+    shekyl_types::BlockCount::from_raw(FCMP_REFERENCE_BLOCK_MIN_AGE);
 
 /// Maximum reference-block age the daemon accepts (`tip − reference_height
 /// ≤ MAX_AGE`). Past this the daemon rejects the spend as too stale.
-pub const REFERENCE_BLOCK_MAX_AGE: u64 = FCMP_REFERENCE_BLOCK_MAX_AGE;
+pub const REFERENCE_BLOCK_MAX_AGE: shekyl_types::BlockCount =
+    shekyl_types::BlockCount::from_raw(FCMP_REFERENCE_BLOCK_MAX_AGE);
 
 // Sentinel against silent drift (mirrors `shekyl-engine-core`'s
 // `multisig::v31::intent`): a JSON edit that moves these recomputes the
@@ -59,12 +61,12 @@ pub const REFERENCE_BLOCK_MAX_AGE: u64 = FCMP_REFERENCE_BLOCK_MAX_AGE;
 // editor to review the privacy/consensus implications before bumping the
 // sentinel rather than letting the change land silently.
 const _: () = assert!(
-    REFERENCE_BLOCK_MIN_AGE == 5,
+    REFERENCE_BLOCK_MIN_AGE.to_raw() == 5,
     "FCMP_REFERENCE_BLOCK_MIN_AGE diverged from baseline (5); REF_ANCHOR_AGE \
      is privacy-canonical — review §5.1 uniformity before updating the sentinel"
 );
 const _: () = assert!(
-    REFERENCE_BLOCK_MAX_AGE == 100,
+    REFERENCE_BLOCK_MAX_AGE.to_raw() == 100,
     "FCMP_REFERENCE_BLOCK_MAX_AGE diverged from baseline (100); the validity \
      horizon and rebuild threshold derive from it — review §5.2 before updating"
 );
@@ -72,15 +74,19 @@ const _: () = assert!(
 /// Canonical age offset for the reference block of a freshly built proof:
 /// `reference_height = tip − REF_ANCHOR_AGE` (§5.1).
 ///
-/// `MIN_AGE + 1`, matching the daemon's `get_curve_tree_path` anchor
-/// (`top_height − (MIN_AGE + 1)`) so wallet- and daemon-assembled paths
-/// agree on the anchor. One block deeper than the bare `MIN_AGE` floor
-/// for reorg safety. **Privacy-canonical, not a per-wallet knob:** every
+/// `MIN_AGE + 1`: one block deeper than the bare `MIN_AGE` floor for reorg
+/// safety. (It was also the anchor the daemon's per-output path RPC used
+/// before that RPC was removed as spend-revealing — `SOK-10` Q7; the wallet
+/// is now the only path assembler.) **Privacy-canonical, not a per-wallet knob:** every
 /// honest wallet uses this exact offset so the on-wire reference age does
 /// not fingerprint the wallet. Re-derived only on a substrate change
 /// (observed depth-6 reorg rate, or a `MIN_AGE` consensus change), not by
 /// preference (§5.1 reversion clause).
-pub const REF_ANCHOR_AGE: u64 = FCMP_REFERENCE_BLOCK_MIN_AGE + 1;
+pub const REF_ANCHOR_AGE: shekyl_types::BlockCount =
+    match REFERENCE_BLOCK_MIN_AGE.checked_add(shekyl_types::BlockCount::ONE) {
+        Some(age) => age,
+        None => panic!("REF_ANCHOR_AGE overflowed"),
+    };
 
 /// Submittable lifetime of a proof, in blocks past build time
 /// (§5.2): `MAX_AGE − REF_ANCHOR_AGE`. Built at `reference_height =
@@ -92,7 +98,11 @@ pub const REF_ANCHOR_AGE: u64 = FCMP_REFERENCE_BLOCK_MIN_AGE + 1;
 /// the daemon's acceptance window is inclusive at both ends. This is the
 /// proactive bound `PHASE_2A_SEND_PATH.md` §9 #5 left unbounded in
 /// Round 0.
-pub const PROOF_VALIDITY_HORIZON: u64 = FCMP_REFERENCE_BLOCK_MAX_AGE - REF_ANCHOR_AGE;
+pub const PROOF_VALIDITY_HORIZON: shekyl_types::BlockCount =
+    match REFERENCE_BLOCK_MAX_AGE.checked_sub(REF_ANCHOR_AGE) {
+        Some(span) => span,
+        None => panic!("PROOF_VALIDITY_HORIZON underflowed"),
+    };
 
 /// Reference-block age at which the wallet proactively re-anchors an
 /// in-flight, still-unconfirmed proof rather than risk a too-stale
@@ -103,13 +113,14 @@ pub const PROOF_VALIDITY_HORIZON: u64 = FCMP_REFERENCE_BLOCK_MAX_AGE - REF_ANCHO
 /// privacy-observable** — it changes only *when* a wallet rebuilds, never
 /// the on-wire reference age — so, unlike [`REF_ANCHOR_AGE`], it is
 /// tunable without a uniformity cost. Pinned with a documented default.
-pub const REBUILD_AT: u64 = FCMP_REFERENCE_BLOCK_MAX_AGE / 2;
+pub const REBUILD_AT: shekyl_types::BlockCount =
+    shekyl_types::BlockCount::from_raw(FCMP_REFERENCE_BLOCK_MAX_AGE / 2);
 
 // Derived-constant sentinels: catch an arithmetic regression if the JSON
 // values change in a way the sentinels above were updated to permit.
-const _: () = assert!(REF_ANCHOR_AGE == 6);
-const _: () = assert!(PROOF_VALIDITY_HORIZON == 94);
-const _: () = assert!(REBUILD_AT == 50);
+const _: () = assert!(REF_ANCHOR_AGE.to_raw() == 6);
+const _: () = assert!(PROOF_VALIDITY_HORIZON.to_raw() == 94);
+const _: () = assert!(REBUILD_AT.to_raw() == 50);
 
 /// The canonical reference height for a proof built at `tip`:
 /// `tip − REF_ANCHOR_AGE` (§5.1).
@@ -121,8 +132,10 @@ const _: () = assert!(REBUILD_AT == 50);
 /// always has a tip past this floor; the `None` is a total-function
 /// guard, not an expected runtime branch.
 #[must_use]
-pub fn select_reference_height(tip: u64) -> Option<u64> {
-    tip.checked_sub(REF_ANCHOR_AGE)
+pub fn select_reference_height(
+    tip: shekyl_types::BlockHeight,
+) -> Option<shekyl_types::BlockHeight> {
+    tip.checked_sub_count(REF_ANCHOR_AGE)
 }
 
 /// Why [`two_sided_reference_height`] refused — both arms are transient
@@ -151,7 +164,10 @@ pub enum TwoSidedRefusal {
 ///   as seen from the live `tip` ([`should_reanchor`], inclusive at
 ///   [`REBUILD_AT`]) — a proof built against it could expire before
 ///   submission.
-pub fn two_sided_reference_height(tip: u64, ingested_tip: u64) -> Result<u64, TwoSidedRefusal> {
+pub fn two_sided_reference_height(
+    tip: shekyl_types::BlockHeight,
+    ingested_tip: shekyl_types::BlockHeight,
+) -> Result<shekyl_types::BlockHeight, TwoSidedRefusal> {
     let reference_height =
         select_reference_height(tip.min(ingested_tip)).ok_or(TwoSidedRefusal::ChainTooShort)?;
     if should_reanchor(tip, reference_height) {
@@ -167,7 +183,10 @@ pub fn two_sided_reference_height(tip: u64, ingested_tip: u64) -> Result<u64, Tw
 /// the current tip, only possible across a reorg that dropped the chain
 /// below it (§5.3). Callers treat `None` as "re-anchor required".
 #[must_use]
-pub fn reference_block_age(tip_now: u64, reference_height: u64) -> Option<u64> {
+pub fn reference_block_age(
+    tip_now: shekyl_types::BlockHeight,
+    reference_height: shekyl_types::BlockHeight,
+) -> Option<shekyl_types::BlockCount> {
     tip_now.checked_sub(reference_height)
 }
 
@@ -178,7 +197,10 @@ pub fn reference_block_age(tip_now: u64, reference_height: u64) -> Option<u64> {
 /// (too-fresh below `MIN_AGE`, too-stale above `MAX_AGE`). A reference
 /// height above the tip (reorg, age `None`) is not submittable.
 #[must_use]
-pub fn proof_submittable(tip_now: u64, reference_height: u64) -> bool {
+pub fn proof_submittable(
+    tip_now: shekyl_types::BlockHeight,
+    reference_height: shekyl_types::BlockHeight,
+) -> bool {
     matches!(
         reference_block_age(tip_now, reference_height),
         Some(age) if (REFERENCE_BLOCK_MIN_AGE..=REFERENCE_BLOCK_MAX_AGE).contains(&age)
@@ -200,7 +222,10 @@ pub fn proof_submittable(tip_now: u64, reference_height: u64) -> bool {
 /// for the chain to grow back past the anchor rather than treating it as
 /// expired.
 #[must_use]
-pub fn proof_expired(tip_now: u64, reference_height: u64) -> bool {
+pub fn proof_expired(
+    tip_now: shekyl_types::BlockHeight,
+    reference_height: shekyl_types::BlockHeight,
+) -> bool {
     match reference_block_age(tip_now, reference_height) {
         Some(age) => age > REFERENCE_BLOCK_MAX_AGE,
         None => true,
@@ -221,7 +246,10 @@ pub fn proof_expired(tip_now: u64, reference_height: u64) -> bool {
 /// `None`) both fire together — the anchor is gone, so re-anchor and
 /// expiry coincide.
 #[must_use]
-pub fn should_reanchor(tip_now: u64, reference_height: u64) -> bool {
+pub fn should_reanchor(
+    tip_now: shekyl_types::BlockHeight,
+    reference_height: shekyl_types::BlockHeight,
+) -> bool {
     match reference_block_age(tip_now, reference_height) {
         Some(age) => age >= REBUILD_AT,
         None => true,
@@ -231,40 +259,51 @@ pub fn should_reanchor(tip_now: u64, reference_height: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_types::{BlockCount, BlockHeight};
+
+    fn h(n: u64) -> BlockHeight {
+        BlockHeight::from_raw(n)
+    }
 
     #[test]
     fn derived_constants_match_spec() {
         // §5.1/§5.2 worked example, pinned independently of the
         // const-eval sentinels so a test run also reports the value.
-        assert_eq!(REF_ANCHOR_AGE, 6);
-        assert_eq!(PROOF_VALIDITY_HORIZON, 94);
-        assert_eq!(REBUILD_AT, 50);
+        assert_eq!(REF_ANCHOR_AGE.to_raw(), 6);
+        assert_eq!(PROOF_VALIDITY_HORIZON.to_raw(), 94);
+        assert_eq!(REBUILD_AT.to_raw(), 50);
         // Horizon is the distance from the build-time age to the cap.
         assert_eq!(
             PROOF_VALIDITY_HORIZON,
             REFERENCE_BLOCK_MAX_AGE - REF_ANCHOR_AGE
         );
         // Re-anchor strictly precedes hard expiry.
-        const { assert!(REBUILD_AT < REFERENCE_BLOCK_MAX_AGE) };
+        const { assert!(REBUILD_AT.to_raw() < REFERENCE_BLOCK_MAX_AGE.to_raw()) };
     }
 
     #[test]
     fn select_reference_height_is_tip_minus_anchor() {
-        assert_eq!(select_reference_height(1_000), Some(994));
+        assert_eq!(select_reference_height(h(1_000)), Some(h(994)));
         // Exactly at the floor: tip == REF_ANCHOR_AGE → reference height 0.
-        assert_eq!(select_reference_height(REF_ANCHOR_AGE), Some(0));
+        assert_eq!(
+            select_reference_height(h(REF_ANCHOR_AGE.to_raw())),
+            Some(h(0))
+        );
     }
 
     #[test]
     fn select_reference_height_none_in_pre_maturity_window() {
         // Tip below the anchor: no legal reference block yet.
-        assert_eq!(select_reference_height(REF_ANCHOR_AGE - 1), None);
-        assert_eq!(select_reference_height(0), None);
+        assert_eq!(
+            select_reference_height(h(REF_ANCHOR_AGE.to_raw() - 1)),
+            None
+        );
+        assert_eq!(select_reference_height(h(0)), None);
     }
 
     #[test]
     fn fresh_proof_is_submittable_and_not_expired() {
-        let tip = 1_000;
+        let tip = h(1_000);
         let r = select_reference_height(tip).unwrap();
         assert_eq!(reference_block_age(tip, r), Some(REF_ANCHOR_AGE));
         assert!(proof_submittable(tip, r));
@@ -275,27 +314,36 @@ mod tests {
     #[test]
     fn acceptance_window_boundaries() {
         // Build the reference height so age == target exactly.
-        let tip = 1_000;
-        let at = |age: u64| tip - age;
+        let tip = h(1_000);
+        let at = |age: BlockCount| tip.checked_sub_count(age).unwrap();
 
         // Too fresh: age below MIN_AGE is not submittable (cannot arise
         // for a wallet-built proof, but the predicate is total).
-        assert!(!proof_submittable(tip, at(REFERENCE_BLOCK_MIN_AGE - 1)));
+        assert!(!proof_submittable(
+            tip,
+            at(REFERENCE_BLOCK_MIN_AGE - BlockCount::ONE)
+        ));
         // MIN_AGE and MAX_AGE inclusive bounds are submittable.
         assert!(proof_submittable(tip, at(REFERENCE_BLOCK_MIN_AGE)));
         assert!(proof_submittable(tip, at(REFERENCE_BLOCK_MAX_AGE)));
         // One past MAX_AGE is expired, not submittable.
-        assert!(!proof_submittable(tip, at(REFERENCE_BLOCK_MAX_AGE + 1)));
-        assert!(proof_expired(tip, at(REFERENCE_BLOCK_MAX_AGE + 1)));
+        assert!(!proof_submittable(
+            tip,
+            at(REFERENCE_BLOCK_MAX_AGE + BlockCount::ONE)
+        ));
+        assert!(proof_expired(
+            tip,
+            at(REFERENCE_BLOCK_MAX_AGE + BlockCount::ONE)
+        ));
         assert!(!proof_expired(tip, at(REFERENCE_BLOCK_MAX_AGE)));
     }
 
     #[test]
     fn reanchor_fires_at_threshold_before_expiry() {
-        let tip = 10_000;
-        let at = |age: u64| tip - age;
+        let tip = h(10_000);
+        let at = |age: BlockCount| tip.checked_sub_count(age).unwrap();
 
-        assert!(!should_reanchor(tip, at(REBUILD_AT - 1)));
+        assert!(!should_reanchor(tip, at(REBUILD_AT - BlockCount::ONE)));
         assert!(should_reanchor(tip, at(REBUILD_AT)));
         // Still submittable at the rebuild threshold (proactive, not a
         // hard bound): re-anchor fires well before expiry.
@@ -307,22 +355,23 @@ mod tests {
     fn proof_aging_progression() {
         // Walk a single proof's reference age from build to expiry and
         // assert each predicate flips at its documented boundary.
-        let reference_height = 10_000;
-        for age in 0..=(REFERENCE_BLOCK_MAX_AGE + 5) {
-            let tip_now = reference_height + age;
+        let reference_height = h(10_000);
+        for age in 0..=(REFERENCE_BLOCK_MAX_AGE.to_raw() + 5) {
+            let tip_now = h(reference_height.to_raw() + age);
+            let span = BlockCount::from_raw(age);
             assert_eq!(
                 proof_submittable(tip_now, reference_height),
-                (REFERENCE_BLOCK_MIN_AGE..=REFERENCE_BLOCK_MAX_AGE).contains(&age),
+                (REFERENCE_BLOCK_MIN_AGE..=REFERENCE_BLOCK_MAX_AGE).contains(&span),
                 "submittable mismatch at age {age}"
             );
             assert_eq!(
                 proof_expired(tip_now, reference_height),
-                age > REFERENCE_BLOCK_MAX_AGE,
+                span > REFERENCE_BLOCK_MAX_AGE,
                 "expired mismatch at age {age}"
             );
             assert_eq!(
                 should_reanchor(tip_now, reference_height),
-                age >= REBUILD_AT,
+                span >= REBUILD_AT,
                 "reanchor mismatch at age {age}"
             );
         }
@@ -331,8 +380,8 @@ mod tests {
     #[test]
     fn reorg_below_reference_requires_reanchor() {
         // Reference block above the current tip: chain reorged below it.
-        let reference_height = 1_000;
-        let tip_now = 998;
+        let reference_height = h(1_000);
+        let tip_now = h(998);
         assert_eq!(reference_block_age(tip_now, reference_height), None);
         assert!(!proof_submittable(tip_now, reference_height));
         assert!(proof_expired(tip_now, reference_height));

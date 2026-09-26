@@ -1,0 +1,26 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-timing-engine"
+description = "P2P timing engine: time-ordered wake hints and the one-thread service around them. No sockets and no async runtime."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+# Already pinned in the workspace lockfile. The model test is the
+# scheduler's evidence; the bench is the input to D5's engine-thread budget.
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "wake_hints"
+harness = false
+
+[lints]
+workspace = true

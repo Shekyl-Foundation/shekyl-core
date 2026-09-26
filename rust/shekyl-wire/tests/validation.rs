@@ -11,6 +11,7 @@
 mod common;
 use common::conforming_pqc_extra;
 
+use shekyl_types::{BlockHash, PCanonicalId, PqcAuthHash, PrunableHash};
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
     Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
@@ -29,7 +30,7 @@ fn fee_only_with(input: Input) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],
@@ -101,7 +102,7 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]; n_out],
                 enc_labels: vec![[0u8; 9]; n_out],
@@ -335,7 +336,10 @@ fn null_ct_on_non_coinbase_rejected() {
 #[test]
 fn fcmp_ct_on_coinbase_rejected() {
     // §2.5 dual: a coinbase (gen input) must carry a Null ct, never Fcmp.
-    let tx = spend(vec![Input::Gen(0)], vec![out()], 0, 1); // gen input + Fcmp ct
+    // The extra is the coinbase grammar's (a gen input makes this a coinbase
+    // for the shape rule too), so the refusal is the ct's.
+    let mut tx = spend(vec![Input::Gen(0)], vec![out()], 0, 1); // gen input + Fcmp ct
+    tx.prefix.extra = coinbase_with_outputs(1).prefix.extra;
     let err = tx.validate().unwrap_err();
     assert!(err.to_string().contains("Null ct"), "{err}");
 }
@@ -387,7 +391,7 @@ fn serve_credit_must_not_mix_with_a_spend() {
         // Counts here are irrelevant: the shape check rejects before the ct coupling.
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]],
                 enc_labels: vec![[0u8; 9]],
@@ -417,7 +421,7 @@ fn multiple_serve_credits_allowed() {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],
@@ -446,7 +450,7 @@ fn two_bond_posts_rejected() {
     let bp = || {
         Input::BondPost(Box::new(BondPost {
             hybrid_public_key: vec![],
-            p_canonical_id: [0u8; 32],
+            p_canonical_id: PCanonicalId::from_bytes([0u8; 32]),
             kind: BondPostKind::Other(3),
             holdings: Holdings::CompleteTree,
             bonded_total_atomic: 0,
@@ -465,9 +469,10 @@ fn two_bond_posts_rejected() {
 fn join_market_bond_post() -> Input {
     Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
-        p_canonical_id: [7u8; 32],
+        p_canonical_id: PCanonicalId::from_bytes([7u8; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![9u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 100,
@@ -493,6 +498,70 @@ fn bond_post_spend_round_trips_with_spend_subset_pseudo_outs() {
     assert_eq!(reparsed, tx, "round trip must be value-identical");
 }
 
+/// `PDM-Q-F26`: the txid's third component is decided by the one arity
+/// predicate, not per input arm. A coinbase has none (`Null` ct); a bond-post
+/// carries its identity signature in a tx-level `pqc_auths` slot and is
+/// 4-part like any spend — and a coinbase told a component anyway stays
+/// 3-part, because pruning cannot give it one.
+#[test]
+fn txid_arity_is_the_predicate_s_not_the_input_arm_s() {
+    let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
+    let coinbase = &blk.miner_transaction;
+    assert_eq!(coinbase.pqc_auth_hash(), None, "a coinbase is 3-part");
+    assert_eq!(
+        coinbase.hash_with_supplied_components(
+            Some(PqcAuthHash::from_bytes([0xAB; 32])),
+            PrunableHash::from_bytes([0xCD; 32])
+        ),
+        coinbase.hash(),
+        "a coinbase ignores supplied components: it has neither region"
+    );
+
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    tx.prefix.inputs.push(join_market_bond_post());
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        pqc_auths.push(pqc_auths[0].clone());
+    }
+    tx.validate().expect("bond-post spend must validate");
+    let pqc_auth = tx
+        .pqc_auth_hash()
+        .expect("a bond-post spend is 4-part: the identity signature is a tx-level auth");
+    assert_eq!(
+        tx.hash_with_supplied_components(Some(pqc_auth), tx.prunable_hash()),
+        tx.hash()
+    );
+}
+
+/// The oracle's predicate is `!vin.empty() && vin[0] != gen`
+/// (`cryptonote_format_utils.cpp:1290`): a body with **no inputs** and a
+/// `pqc_auths` entry hashes 3-part in C++. It is malformed — `validate`
+/// refuses it — but its identity is consensus-visible before that (relay
+/// dedup), so the Rust predicate must agree on it too, not only on valid
+/// shapes. Reading `vin[0] != gen` as "first is not gen" would call this
+/// 4-part.
+#[test]
+fn a_body_with_no_inputs_and_an_auth_is_3_part_like_the_oracle() {
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    tx.prefix.inputs.clear();
+    if let Ct::Fcmp { pqc_auths, .. } = &tx.ct {
+        assert_eq!(
+            pqc_auths.len(),
+            1,
+            "the auth stays; only the vin is emptied"
+        );
+    }
+    tx.validate().expect_err("no-input spend is malformed");
+    assert_eq!(tx.pqc_auth_hash(), None, "no inputs ⇒ no third component");
+    assert_eq!(
+        tx.hash_with_supplied_components(
+            Some(PqcAuthHash::from_bytes([0xAB; 32])),
+            tx.prunable_hash()
+        ),
+        tx.hash(),
+        "a supplied component is ignored where the txid has no slot for it"
+    );
+}
+
 #[test]
 fn bond_post_spend_with_per_vin_pseudo_outs_rejected() {
     // The pre-coupling shape (pseudoOuts sized by vin.size(), bond slot
@@ -516,7 +585,7 @@ fn bond_post_spend_with_per_vin_pseudo_outs_rejected() {
 fn bond_post_oversized_pubkey_rejected() {
     let bp = BondPost {
         hybrid_public_key: vec![0u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN + 1],
-        p_canonical_id: [0u8; 32],
+        p_canonical_id: PCanonicalId::from_bytes([0u8; 32]),
         kind: BondPostKind::Other(3),
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 0,
@@ -558,7 +627,7 @@ fn pqc_fields(kem_len: usize, leaf_len: usize) -> Vec<u8> {
     use shekyl_wire::tx_extra::{serialize, TxExtraField};
     serialize(&[
         TxExtraField::PqcKemCiphertext(vec![0x6a; kem_len]),
-        TxExtraField::PqcLeafHashes(vec![0x7b; leaf_len]),
+        TxExtraField::PqcLeafEntries(vec![0x7b; leaf_len]),
     ])
     .expect("test tx_extra serializes")
 }
@@ -580,12 +649,12 @@ fn validator_rejects_both_pqc_fields_absent() {
 
 #[test]
 fn validator_rejects_a_duplicate_leaf_hash_field() {
-    use shekyl_wire::tx_extra::{serialize, TxExtraField, PQC_LEAF_HASH_BYTES};
+    use shekyl_wire::tx_extra::{serialize, TxExtraField, PQC_LEAF_ENTRY_LEN};
     let mut extra = conforming_pqc_extra(2);
     extra.extend_from_slice(
-        &serialize(&[TxExtraField::PqcLeafHashes(vec![
+        &serialize(&[TxExtraField::PqcLeafEntries(vec![
             0x7b;
-            PQC_LEAF_HASH_BYTES * 2
+            PQC_LEAF_ENTRY_LEN * 2
         ])])
         .expect("second 0x07 serializes"),
     );
@@ -598,12 +667,13 @@ fn validator_rejects_a_duplicate_leaf_hash_field() {
 
 #[test]
 fn validator_rejects_a_leaf_hash_field_of_the_wrong_length() {
-    // 32*(n-1) — the shape the DB used to zero-fill into a leaf.
+    // A 32-byte field for two outputs — the pre-PL-D3 single-entry width, and
+    // the shape the DB used to zero-fill into a leaf.
     let err = spend_with_extra(pqc_fields(1120 * 2, 32))
         .validate_context_free_pruned()
         .unwrap_err();
     assert!(err.to_string().contains("0x07"), "{err}");
-    assert!(err.to_string().contains("64 required"), "{err}");
+    assert!(err.to_string().contains("128 required"), "{err}");
 }
 
 /// An `extra` that does not parse is refused outright.
@@ -651,3 +721,102 @@ fn validator_rejects_a_kem_field_of_the_wrong_length() {
 // wiring at all. The arm is covered where it is reachable: at C++ admission
 // (`tx_extra_pqc_field_shape.cpp`, which drives the real serve-credit parity
 // transaction) and by the rule's own KAT in `shekyl-wire::tx_extra`.
+
+/// A coinbase with `n` outputs in the grammar's one layout, built from the
+/// real genesis coinbase so everything but the outputs and the extra is a
+/// shape the validator already accepts.
+fn coinbase_with_outputs(n: usize) -> Transaction {
+    use shekyl_wire::tx_extra::{self, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES};
+    let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
+    let mut tx = blk.miner_transaction;
+    let out = tx.prefix.outputs[0].clone();
+    tx.prefix.outputs = vec![out; n];
+    if let Ct::Null(base) = &mut tx.ct {
+        base.enc_amounts = vec![[0u8; 9]; n];
+        base.enc_labels = vec![[0u8; 9]; n];
+        base.commitments = vec![base.commitments[0]; n];
+    }
+    let fields = tx_extra::parse(&tx.prefix.extra).unwrap();
+    let TxExtraField::PubKey(pk) = fields[0] else {
+        panic!("genesis extra starts with the pubkey")
+    };
+    tx.prefix.extra = tx_extra::build_coinbase_extra(
+        pk,
+        &[0u8; COINBASE_NONCE_BYTES],
+        n,
+        &vec![0x6a; HYBRID_KEM_CT_BYTES * n],
+        &tx_extra::conforming_pqc_leaf_blob(n),
+    )
+    .expect("the grammar admits this coinbase extra");
+    tx
+}
+
+/// CEN-M4 with the tx_extra cutover (`TX_EXTRA_RUST_CUTOVER.md` §8,
+/// TXE-F9). `MAX_TX_EXTRA` (24 576) is the *non-coinbase* relay cap, and
+/// stays so: a non-coinbase extra past it is refused, a coinbase extra is
+/// not size-capped here or in C++. What the cutover changed is that the
+/// coinbase extra now has a consensus bound of its own — the grammar — and
+/// that bound is tighter than the relay cap ever was: the largest grammar-
+/// valid coinbase extra is the `MAX_OUTPUTS`-output one — four tags, four
+/// varint lengths, `32 + 8 + 1184·16` bytes of payload, 18 994 in all —
+/// below 24 576. The "unbounded coinbase extra" M4 named is closed, not
+/// moved; one byte of padding on that largest coinbase is refused.
+#[test]
+fn cen_m4_coinbase_extra_is_bounded_by_the_grammar_below_the_relay_cap() {
+    use shekyl_wire::transaction::{MAX_OUTPUTS, MAX_TX_EXTRA};
+    let largest = coinbase_with_outputs(MAX_OUTPUTS);
+    let varint_len = |n: usize| {
+        if n < 0x80 {
+            1
+        } else if n < 0x4000 {
+            2
+        } else {
+            3
+        }
+    };
+    let kem = 1120 * MAX_OUTPUTS;
+    let leaf = 64 * MAX_OUTPUTS;
+    assert_eq!(
+        largest.prefix.extra.len(),
+        (1 + 32) + (1 + 1 + 8) + (1 + varint_len(kem) + kem) + (1 + varint_len(leaf) + leaf)
+    );
+    assert_eq!(largest.prefix.extra.len(), 18_994);
+    assert!(largest.prefix.extra.len() < MAX_TX_EXTRA);
+    largest
+        .validate()
+        .expect("the largest grammar-valid coinbase extra is accepted");
+
+    let mut padded = largest.clone();
+    padded.prefix.extra.push(0x00);
+    assert!(
+        padded.validate().is_err(),
+        "one byte of padding is off the coinbase grammar"
+    );
+
+    // A non-coinbase extra past the cap is the relay cap's business, unchanged.
+    let mut tx = spend(vec![ki(1)], vec![out()], 0, 1);
+    let mut extra = tx.prefix.extra.clone();
+    extra.extend(std::iter::repeat_n(0u8, MAX_TX_EXTRA)); // padding to the end
+    tx.prefix.extra = extra;
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("exceeds"), "{err}");
+}
+
+/// The genesis coinbase (h0, regtest = mainnet) satisfies the coinbase grammar
+/// through the validator, and the same bytes with the nonce removed do not:
+/// the pins were regenerated *because* the grammar requires the field.
+#[test]
+fn genesis_coinbase_carries_the_nonce_the_grammar_requires() {
+    use shekyl_wire::tx_extra::{self, TxExtraField};
+    let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
+    let fields = tx_extra::parse(&blk.miner_transaction.prefix.extra).unwrap();
+    assert!(matches!(fields[1], TxExtraField::Nonce(ref n) if n.iter().all(|b| *b == 0)));
+    let mut without = blk.miner_transaction.clone();
+    let mut kept = fields.clone();
+    kept.remove(1);
+    without.prefix.extra = tx_extra::serialize(&kept).unwrap();
+    assert!(
+        without.validate().is_err(),
+        "a coinbase without the 0x02 nonce is refused"
+    );
+}

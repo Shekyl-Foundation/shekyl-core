@@ -33,12 +33,10 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_config.h"
-#include "crypto/hash.h"
-#include "fcmp/ct_semantics.h"
 #include "shekyl/shekyl_ffi.h"
-#include "serialization/binary_archive.h"
 
-#include <sstream>
+#include <cstdint>
+#include <vector>
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "blockchain"
@@ -59,105 +57,6 @@ namespace {
 namespace cryptonote
 {
 
-bool get_transaction_signed_payload(const transaction& tx, size_t input_index, std::string& payload_out)
-{
-  if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
-    return false;
-  if (input_index >= tx.pqc_auths.size() || input_index >= tx.vin.size())
-    return false;
-
-  std::string prefix_blob;
-  {
-    std::ostringstream ss;
-    binary_archive<true> ba(ss);
-    ::serialization::serialize(ba, const_cast<transaction_prefix&>(static_cast<const transaction_prefix&>(tx)));
-    prefix_blob = ss.str();
-  }
-
-  std::string ct_blob;
-  {
-    std::ostringstream ss;
-    binary_archive<true> ba(ss);
-    transaction& tt = const_cast<transaction&>(tx);
-    const size_t inputs = tx.vin.size();
-    const size_t outputs = tx.vout.size();
-    if (!tt.ct_signatures.serialize_ctsig_base(ba, inputs, outputs))
-    {
-      MERROR("PQC payload: failed to serialize CtSigBase (input " << input_index << ")");
-      return false;
-    }
-    ct_blob = ss.str();
-  }
-
-  // Hash the prunable RCT data (fcmp_pp_proof, pseudoOuts, curve_trees_tree_depth,
-  // Bulletproofs+) and include the 32-byte digest in the signed payload. Without
-  // this binding, an attacker could substitute a different FCMP++ proof without
-  // invalidating PQC signatures, breaking the dual-layer security model.
-  std::string prunable_hash_blob;
-  {
-    const ct::CtSig& rv = tx.ct_signatures;
-    // pseudoOuts are sized by the spend subset, not vin.size() — see
-    // count_spend_inputs (cryptonote_basic.h).
-    const size_t spend_inputs = count_spend_inputs(tx.vin);
-    const size_t serve_credit_inputs = count_serve_credit_inputs(tx.vin);
-    const size_t outputs = tx.vout.size();
-    std::ostringstream ss;
-    binary_archive<true> ba(ss);
-    if (!const_cast<ct::CtSigPrunable&>(rv.p).serialize_ctsig_prunable(ba, rv.type, spend_inputs, serve_credit_inputs, outputs))
-    {
-      MERROR("PQC payload: failed to serialize CtSigPrunable (input " << input_index << ")");
-      return false;
-    }
-    crypto::hash prunable_h;
-    cryptonote::get_blob_hash(ss.str(), prunable_h);
-    prunable_hash_blob.assign(reinterpret_cast<const char*>(prunable_h.data), sizeof(prunable_h.data));
-  }
-
-  // Serialize the current input's PQC header (auth_version, scheme_id, flags, key)
-  std::string pqc_header_blob;
-  {
-    std::ostringstream ss;
-    binary_archive<true> ba(ss);
-    const pqc_authentication& auth = tx.pqc_auths[input_index];
-    if (!::do_serialize(ba, const_cast<uint8_t&>(auth.auth_version)))
-      return false;
-    if (!::do_serialize(ba, const_cast<uint8_t&>(auth.scheme_id)))
-      return false;
-    if (!::do_serialize(ba, const_cast<uint16_t&>(auth.flags)))
-      return false;
-    if (!::do_serialize(ba, const_cast<std::vector<uint8_t>&>(auth.hybrid_public_key)))
-      return false;
-    pqc_header_blob = ss.str();
-  }
-
-  // Bind ALL inputs' PQC public key hashes into the signed payload.
-  // Without this, an attacker could substitute one input's PQC key without
-  // invalidating other inputs' signatures.
-  //
-  // NOTE: this uses cn_fast_hash (Keccak-256) via get_blob_hash, which is
-  // intentionally different from shekyl_fcmp_pqc_leaf_hash (Blake2b-512
-  // with domain separator "shekyl-pqc-leaf") used for the in-circuit 4th
-  // leaf scalar.  The two serve different purposes: the leaf hash is the
-  // curve tree commitment verified inside the FCMP++ proof; the Keccak
-  // hash here is a signature-domain binding preventing key substitution
-  // across inputs.  Neither depends on the other's collision resistance.
-  std::string all_pqc_key_hashes;
-  {
-    for (size_t i = 0; i < tx.pqc_auths.size(); ++i)
-    {
-      const auto& a = tx.pqc_auths[i];
-      crypto::hash h;
-      cryptonote::get_blob_hash(
-        std::string(reinterpret_cast<const char*>(a.hybrid_public_key.data()),
-                    a.hybrid_public_key.size()), h);
-      all_pqc_key_hashes.append(reinterpret_cast<const char*>(h.data), sizeof(h.data));
-    }
-  }
-
-  payload_out = prefix_blob + ct_blob + prunable_hash_blob + pqc_header_blob + all_pqc_key_hashes;
-  return true;
-}
-
 bool verify_transaction_pqc_auth(const transaction& tx)
 {
   if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
@@ -166,6 +65,32 @@ bool verify_transaction_pqc_auth(const transaction& tx)
   {
     MERROR("PQC verify: pqc_auths size " << tx.pqc_auths.size() << " does not match vin size " << tx.vin.size());
     return false;
+  }
+
+  // The signing preimage of every input, derived once by shekyl-wire from
+  // the transaction's bytes (CEN-I17): 32 bytes per input, one per
+  // authentication. The count is the arity just checked; a body whose
+  // bytes disagree with it is refused here, never verified against a
+  // truncated or padded set.
+  std::vector<uint8_t> signed_hashes(32 * tx.vin.size());
+  size_t signed_count = 0;
+  {
+    const blobdata blob = t_serializable_object_to_blob(tx);
+    char msg[160] = {0};
+    const int32_t rc = shekyl_tx_pqc_signing_payload_hashes(
+        reinterpret_cast<const uint8_t*>(blob.data()), blob.size(),
+        signed_hashes.data(), tx.vin.size(), &signed_count,
+        msg, sizeof(msg));
+    if (rc != SHEKYL_TX_SIGNING_OK)
+    {
+      MERROR("PQC verify: signing preimage refused (code " << rc << "): " << msg);
+      return false;
+    }
+    if (signed_count != tx.pqc_auths.size())
+    {
+      MERROR("PQC verify: " << signed_count << " signing preimage(s) for " << tx.pqc_auths.size() << " pqc_auths");
+      return false;
+    }
   }
 
   for (size_t idx = 0; idx < tx.pqc_auths.size(); ++idx)
@@ -220,21 +145,14 @@ bool verify_transaction_pqc_auth(const transaction& tx)
       }
     }
 
-    std::string payload_blob;
-    if (!get_transaction_signed_payload(tx, idx, payload_blob))
-      return false;
-
-    crypto::hash payload_hash;
-    cryptonote::get_blob_hash(payload_blob, payload_hash);
-
     uint8_t pqc_result = shekyl_pqc_verify(
         auth.scheme_id,
         auth.hybrid_public_key.data(),
         auth.hybrid_public_key.size(),
         auth.hybrid_signature.data(),
         auth.hybrid_signature.size(),
-        reinterpret_cast<const uint8_t*>(payload_hash.data),
-        sizeof(payload_hash.data));
+        signed_hashes.data() + 32 * idx,
+        32);
 
     if (pqc_result != 0)
     {

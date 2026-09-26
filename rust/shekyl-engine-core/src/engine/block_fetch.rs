@@ -69,6 +69,7 @@ use shekyl_rpc_types::{
     TxEntry,
 };
 use shekyl_scanner::ScannableBlock;
+use shekyl_types::{PrunableHash, TxHash};
 use shekyl_wire::{block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, Transaction};
 
 /// Monero restricts `get_transactions` to 100 hashes per call on the
@@ -311,7 +312,7 @@ fn invalid_tx_error(tx_hash_hex: &str) -> RpcError {
 /// `form`, batching by [`TXS_PER_REQUEST`].
 async fn fetch_transactions<R: Rpc>(
     rpc: &R,
-    hashes: &[[u8; 32]],
+    hashes: &[TxHash],
     form: TxBodyForm,
 ) -> Result<Vec<Transaction>, RpcError> {
     if hashes.is_empty() {
@@ -415,7 +416,7 @@ pub(crate) fn refuse_unless_ok(status: &RpcStatus, method: &'static str) -> Resu
 /// so a hostile daemon cannot use the fallback to smuggle a
 /// prunable-stripped spend.
 pub(crate) fn parse_tx_batch(
-    batch: &[[u8; 32]],
+    batch: &[TxHash],
     txs: &[TxEntry],
     form: TxBodyForm,
 ) -> Result<Vec<Transaction>, RpcError> {
@@ -431,7 +432,7 @@ pub(crate) fn parse_tx_batch(
         // doing first — it names the cheap failure — but it proves nothing on
         // its own: the daemon chooses the label as freely as it chooses the
         // body, so a matching label is only evidence that it wanted to match.
-        if t.tx_hash.to_bytes() != *expected_hash {
+        if TxHash::from_bytes(t.tx_hash.to_bytes()) != *expected_hash {
             return Err(RpcError::InvalidNode(
                 "daemon returned a transaction whose hash did not match the request".to_string(),
             ));
@@ -469,7 +470,8 @@ pub(crate) fn parse_tx_batch(
         // digest freely leaves it solving `H(prefix ‖ base ‖ pqc ‖ X) = txid`
         // for `X`, a keccak preimage, not a substitution.
         let recomputed = match form {
-            TxBodyForm::Pruned => parsed.hash_with_supplied_prunable(t.prunable_hash.to_bytes()),
+            TxBodyForm::Pruned => parsed
+                .hash_with_supplied_prunable(PrunableHash::from_bytes(t.prunable_hash.to_bytes())),
             TxBodyForm::Full => parsed.hash(),
         };
         if recomputed != *expected_hash {
@@ -498,11 +500,17 @@ async fn compute_first_output_index<R: Rpc>(
         if tx.prefix.outputs.is_empty() {
             continue;
         }
-        let index = *rpc.get_o_indexes(hash).await?.first().ok_or_else(|| {
-            RpcError::InvalidNode(
-                "requested output indexes for a TX with outputs and got none".to_string(),
-            )
-        })?;
+        // The RPC client trait is a wire boundary and takes the txid as bytes
+        // (RTN-7 §3.2; RPC DTOs stay raw).
+        let index = *rpc
+            .get_o_indexes(hash.to_bytes())
+            .await?
+            .first()
+            .ok_or_else(|| {
+                RpcError::InvalidNode(
+                    "requested output indexes for a TX with outputs and got none".to_string(),
+                )
+            })?;
         return Ok(Some(index));
     }
     Ok(None)

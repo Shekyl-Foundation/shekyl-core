@@ -190,7 +190,7 @@ caller-side `B'` lookup (`output.rs:631-636`).
 
 Per-output confidential data on wire is **`enc_amounts` only** (9 bytes per
 output in `CtSigBase`; amount XOR + `amount_tag` — no label slot).
-`tx_extra` hybrid fields: KEM ciphertext (`0x06`), PQC leaf hashes (`0x07`)
+`tx_extra` hybrid fields: KEM ciphertext (`0x06`), PQC leaf entries (`0x07`)
 — no encrypted memo tag in `ExtraField` (`rust/shekyl-scanner/src/extra.rs`).
 Payment-request labels are **net-new** surface; transport is **5-T**
 (§5.7.10–§5.7.11). Receiver recovers cleartext amount at scan;
@@ -895,7 +895,7 @@ read as calm ("Received 12.5 SHEKYL") instead of alarming.
 field on outputs today.** Per-output confidential payload is
 `enc_amounts` (9 bytes: 8-byte XOR-encrypted amount + 1-byte `amount_tag`;
 `CtSigBase`, `ct_types.h`). `tx_extra` carries hybrid KEM (`0x06`) and PQC
-leaf hashes (`0x07`) only (`rust/shekyl-scanner/src/extra.rs`). The payment-
+leaf entries (`0x07`) only (`rust/shekyl-scanner/src/extra.rs`). The payment-
 request `label` is therefore **net-new wire surface** — which makes **where
 the label rides** the load-bearing Round-3 decision, not an afterthought (§
 below under "Wire: label transport").
@@ -947,8 +947,8 @@ pub struct PaymentRequest {
                                          // text — treat as sensitive local data
                                          // (Zeroizing<String>; file_kek at rest)
     pub amount_atomic: u64,
-    pub created_at: u64,                // wall or block height — product choice
-    pub expiry: Option<u64>,
+    pub created_at: u64,                // RTN-6: wall-clock Unix seconds (`Timestamp`); not block height
+    pub expiry: Option<u64>,            // RTN-6: wall-clock Unix seconds; absent = no expiry
     pub state: PaymentRequestState,      // Pending | Matched | Expired | Cancelled
     pub matched_tx_hash: Option<[u8; 32]>,
     pub matched_output_index: Option<u64>,
@@ -1353,7 +1353,7 @@ shape varies.
 | Requirement | Disposition |
 |-------------|-------------|
 | Bind slot in **tx hash** / transaction AAD | **Yes** — relay cannot strip or swap sentinel→tag in flight (integrity half of cooperative-label trust model). |
-| Include slot in **FCMP++ membership leaf** `{O.x, I.x, C.x, H(pqc_pk)}` | **No** — not spend-relevant; avoids circuit touch (`FCMP_PLUS_PLUS.md` leaf definition). |
+| Include slot in **FCMP++ membership leaf** `{O.x, I.x, C.x, CM.x}` | **No** — not spend-relevant; avoids circuit touch (`FCMP_PLUS_PLUS.md` leaf definition). |
 
 Confirm binding lands in the **tx-hash / RCT binding layer**, not the leaf.
 
@@ -1650,7 +1650,7 @@ the standard; third-party wallets will parse these names. **Pinned now:**
 | `amount` | Atomic units (piconoins / smallest unit) | Same as Monero-style atomic; document in user-facing copy |
 | `rid` | Opaque `u64` decimal in URI | Random assignment; never sequential |
 | `label` | URL-encoded UTF-8 | Bookkeeping only; sensitive at rest |
-| `expiry` | Product-defined (height or unix) | Not consensus |
+| `expiry` | Unix seconds (RTN-6) | Not consensus; CLI also accepts relative durations |
 
 Optional future params (`tx_description`, `recipient_name`, …) require an
 explicit spec amendment — do not bolt on ad hoc aliases at first integration.

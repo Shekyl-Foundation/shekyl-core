@@ -76,6 +76,53 @@ Worked instances, all verified at source:
   zone". That describes a design-time choice, not a mechanism: it is a
   hand-picked scalar, and a zone slower than the one it was chosen
   against is silently under-provisioned.
+- **`RANDOMX_V2_RUST.md` §9** (E2 pre-flight, 2026-09-19) read *"verifier
+  code does not use the full 2 GiB dataset"* as a ruling against a
+  verifier dataset mode. It was a description of what was built: the
+  dataset path was left unbuilt **to measure whether it was needed**, and
+  the same plan's §4 lists `Dataset::derive` as planned. This is the
+  family's **mood** variant — the earlier instances mistook *which site*
+  or *which figure*; this one mistook a sentence's mood, reading an
+  indicative as an imperative. It is the variant that turns *unbuilt*
+  into *forbidden*, and unbuilt-because-unmeasured is a large category
+  in a pre-genesis codebase. Before treating a present-tense line as a
+  decision, find the decision: a ratified question, a dated ruling, a
+  reversion clause. A line that only says what *is* has recorded a state,
+  and a state is an input to a decision, not one.
+- **`CONSENSUS_STORE_RECONCILIATION.md` CEN-H15** (E6 slice 5 Q9, 2026-09-23,
+  refuted the same day). `blockchain.cpp:3396` gates a refusal on
+  `m_nettype != FAKECHAIN`; the question read that as *"the C++ accepts a
+  `Null`-CT spend on Fakechain"*, the ruling inherited it, and the row was
+  graded DIVERGENT. Two unconditional belts sat beneath the gate —
+  `ver_non_input_consensus`'s `case CTTypeNull` and `check_tx_inputs`'s
+  own `switch` — and an `else` refused the transaction before either. No
+  path accepted it on any nettype. This is the family's **guard** variant:
+  *a conditional guard read as evidence that the guarded behaviour is
+  conditional.* A nettype-conditional check says nothing about whether the
+  behaviour it guards varies by nettype; "found a rule-71 violation"
+  requires showing the *behaviour* varies, not that some check does. The
+  gate itself was still rule 71's prohibition verbatim and its deletion
+  stayed the right disposition — which is exactly why the misreading was
+  comfortable: every part of the claim that was convenient to verify was
+  true. The reviewer's own account: *"I confirmed the parts of the claim
+  that were convenient to confirm and inherited the part that carried the
+  verdict."*
+- **`CHAIN_RULES_SLICE_6.md` §5.3.3** (E6 slice 6, 2026-09-24). The 1b
+  pre-measurement enumerated what a scenario driver would need from the
+  production stack and found two gaps — a block template and the
+  composition of connect facts. Writing the driver surfaced a third, and it
+  was production: the **producer's read path** — what the chain *is*, read
+  on the view the validator judges against and through the validator's own
+  definitions (F20's window, C3's median, F21's epoch). The measurement had
+  counted the validator's *inputs* and never asked what a producer needs to
+  read back *out of* it. This is the family's **direction** variant: the
+  earlier instances mistook a site, a figure, a mood, a guard; this one ran
+  the sweep along one dependency direction and reported the total as if it
+  covered both. It is the fourth time an enumeration's subject turned out
+  narrower than the claim built on it, so *which direction did the sweep
+  run* joins the questions asked of every sweep — and an enumeration of
+  what a component consumes says nothing about what its consumers consume
+  from it.
 
 So, when a claim is load-bearing for a security property:
 

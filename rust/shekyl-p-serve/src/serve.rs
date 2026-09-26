@@ -7,9 +7,8 @@
 //! SP-T3 spike's `serve.rs`, whose inbound-hardening shape (decoupled
 //! accept, per-step timeouts, pre-allocation request bound, aggregate-only
 //! counters) was validated there and carries forward here. The spike's
-//! `x-spike/v0` framing does **not** carry forward; this crate's
-//! `x-provisional/v0` is equally THROWAWAY (crate doc), it is simply the
-//! throwaway that serves real shards by id.
+//! `x-spike/v0` framing does **not** carry forward; the production route
+//! is `GET /shard/{id}` (`RF-R1`).
 //!
 //! Integration point for the serving host (SH-1): [`PServeEndpoint::bind`]
 //! plus [`PServeEndpoint::addr`] as the `ADD_ONION` `Port=` target. This
@@ -27,12 +26,26 @@
 //! nothing else. [`RESPONSE_HEADER_NAMES`] is the complete set, asserted
 //! by test.
 //!
+//! # The request header and the countersignature (`SF-D5`, `SF-D8`)
+//!
+//! Every request carries exactly one [`REQUEST_HEADER_NAME`] header whose
+//! value decodes canonically to 72 bytes
+//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`. Missing, duplicate,
+//! malformed, or wrong-length values are the identical complete-head 404,
+//! and so is an `anchor_height` outside the persona's pre-sign gate
+//! ([`anchor_within_gate`]). A servable request is answered with the
+//! persona's `HybridSignature` over `header ‖ shard_id_le[8]` — the
+//! canonical [`SIGNATURE_ENVELOPE_LEN`] bytes — written ahead of the
+//! `RF-D4` frame, both inside one `content-length`. The signer is the
+//! host's ([`PassSigner`]); this crate holds no key.
+//!
 //! # No request logging, at any level
 //!
 //! Not the path, not the peer, not the timing. The only observables are
-//! four aggregate monotone counters with no per-request structure:
+//! five aggregate monotone counters with no per-request structure:
 //! [`PServeEndpoint::served_count`], [`PServeEndpoint::refused_count`],
 //! [`PServeEndpoint::lookup_failure_count`],
+//! [`PServeEndpoint::sign_failure_count`],
 //! [`PServeEndpoint::accept_error_count`].
 
 use std::io;
@@ -46,21 +59,21 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
+use crate::countersign::{anchor_within_gate, PassSigner, SIGNATURE_ENVELOPE_LEN};
 use crate::provider::{ShardBody, ShardProvider};
+use shekyl_archival_retention::PassRequestHeader;
 
-/// The one route this endpoint answers. **Provisional and THROWAWAY** —
-/// see the crate doc; nothing about this path is a format-round candidate.
-pub const ROUTE_PREFIX: &str = "/x-provisional/v0/shard/";
-
-/// Response content type for shard bytes.
-pub const CONTENT_TYPE: &str = "application/octet-stream";
-
-/// Every header name the endpoint ever emits, in emission order — the
-/// **complete** set, asserted by `two_personas_are_header_identical`, so
-/// adding a header without updating this constant fails the
-/// indistinguishability test rather than silently widening the
-/// fingerprint.
-pub const RESPONSE_HEADER_NAMES: &[&str] = &["content-type", "content-length"];
+// The route grammar this endpoint answers — `GET /shard/{id}`, the
+// `application/octet-stream` content type, the request header's name and
+// textual codec, and the complete response header set — is declared once
+// in `shekyl_curve_tree::serving_route` and read by both ends of the route
+// (`SF-D4`: the fetch client may not depend on this crate, and one
+// constant read twice is the ratification two agreeing constants are
+// not). Re-exported so this crate's public surface and its tests are
+// unchanged.
+pub use shekyl_curve_tree::serving_route::{
+    decode_request_header, CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
+};
 
 /// Cap on the request head, applied **while reading** rather than after —
 /// the pre-allocation bound. A shard read's request is a request line plus
@@ -71,11 +84,12 @@ pub const MAX_REQUEST_BYTES: usize = 8 * 1024;
 /// Maximum connections served **at once**; arrivals past the cap are
 /// closed, never answered.
 ///
-/// A shard read is a ~100-byte request answered with ~3.33 MB — roughly
-/// 33 000× egress amplification with the requester paying only its own
-/// circuit — and none of the per-connection protections (timeouts, request
-/// bound) limits aggregate load; nor does the onion's `MaxStreams`, which
-/// is per rendezvous circuit. This cap is that aggregate bound.
+/// A shard GET carries ~3.33 MB of body. None of the per-connection
+/// protections (timeouts, request bound) limits aggregate load; nor does
+/// the onion's `MaxStreams`, which is per rendezvous circuit. This cap is
+/// that aggregate bound. Over onion the transfer is symmetric (the
+/// requester must receive the body), so the cap is concurrent-circuit
+/// occupancy, not a one-sided egress tax.
 ///
 /// **Carried placeholder (SPIKE-PIN-2): the value is not a derivation.**
 /// The binding resource is *egress*, not memory: a body is streamed in
@@ -164,12 +178,13 @@ pub struct PServeEndpoint {
     served: Arc<AtomicU64>,
     refused: Arc<AtomicU64>,
     lookup_failures: Arc<AtomicU64>,
+    sign_failures: Arc<AtomicU64>,
     accept_errors: Arc<AtomicU64>,
 }
 
 impl PServeEndpoint {
     /// Bind an ephemeral **loopback** port and start answering shard reads
-    /// from `provider`.
+    /// from `provider`, countersigned by `signer`.
     ///
     /// The bind address is `127.0.0.1:0` — never a routable interface,
     /// never a wildcard. A wildcard bind would make the endpoint reachable
@@ -179,20 +194,31 @@ impl PServeEndpoint {
     /// refuses non-loopback), because the two are separate opportunities
     /// to get it wrong.
     ///
+    /// `signer` supplies the persona's height for the `SF-D5` gate and the
+    /// `SF-D8` countersignature. A host whose key is not yet resident binds
+    /// a signer that refuses (`shekyl-p-host`'s `NoResidentKey`): the
+    /// endpoint stays up and answers the identical 404, never an unsigned
+    /// body.
+    ///
     /// # Errors
     ///
     /// The bind error, verbatim, if the loopback listener cannot be
     /// created.
-    pub async fn bind(provider: Arc<dyn ShardProvider>) -> io::Result<Self> {
+    pub async fn bind(
+        provider: Arc<dyn ShardProvider>,
+        signer: Arc<dyn PassSigner>,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
         let addr = listener.local_addr()?;
         let served = Arc::new(AtomicU64::new(0));
         let refused = Arc::new(AtomicU64::new(0));
         let lookup_failures = Arc::new(AtomicU64::new(0));
+        let sign_failures = Arc::new(AtomicU64::new(0));
         let accept_errors = Arc::new(AtomicU64::new(0));
         let served_ctr = Arc::clone(&served);
         let refused_ctr = Arc::clone(&refused);
         let failures_ctr = Arc::clone(&lookup_failures);
+        let sign_failures_ctr = Arc::clone(&sign_failures);
         let accept_errors_ctr = Arc::clone(&accept_errors);
         // Bounds concurrency without queueing: an arrival past the cap is
         // closed immediately rather than parked, so the refusal costs one
@@ -224,14 +250,16 @@ impl PServeEndpoint {
                     continue;
                 };
                 let provider = Arc::clone(&provider);
+                let signer = Arc::clone(&signer);
                 let served = Arc::clone(&served_ctr);
                 let failures = Arc::clone(&failures_ctr);
+                let sign_failures = Arc::clone(&sign_failures_ctr);
                 tokio::spawn(async move {
                     // Errors are swallowed by design: a failed connection
                     // must produce no log line and no differing response,
                     // or the failure itself becomes an observable. `.ok()`
                     // rather than `let _ =` so the discard is explicit.
-                    handle_connection(stream, provider, &served, &failures)
+                    handle_connection(stream, provider, signer, &served, &failures, &sign_failures)
                         .await
                         .ok();
                     // Held for the whole connection, so the slot reopens
@@ -250,6 +278,7 @@ impl PServeEndpoint {
             served,
             refused,
             lookup_failures,
+            sign_failures,
             accept_errors,
         })
     }
@@ -280,15 +309,28 @@ impl PServeEndpoint {
         self.refused.load(Ordering::Relaxed)
     }
 
-    /// Lookups that failed for infrastructure reasons (store I/O, pruned
-    /// bytes), plus bodies that failed part-way through. On the wire the
-    /// first render as the same 404 as any miss and the second as a closed
-    /// connection; this counter is the only place any of them is
-    /// distinguishable, and a nonzero value on a bonded serve-set means
-    /// pins are missing — the silent-slash precursor, surfaced.
+    /// Lookups that failed for infrastructure reasons — the store could not
+    /// report its tip height for the gate, or could not read the shard
+    /// (I/O, pruned bytes) — plus bodies that failed part-way through. On
+    /// the wire the first render as the same 404 as any miss and the last
+    /// as a closed connection; this counter is the only place any of them
+    /// is distinguishable, and a nonzero value on a bonded serve-set means
+    /// pins are missing — the silent-slash precursor, surfaced. An ordinary
+    /// miss (unknown id, unfrozen segment, anchor out of window) is the
+    /// deliberate 404 and is **not** counted here.
     #[must_use]
     pub fn lookup_failure_count(&self) -> u64 {
         self.lookup_failures.load(Ordering::Relaxed)
+    }
+
+    /// Servable requests the host's [`PassSigner`] refused to sign. On the
+    /// wire the identical 404; here, distinguishable from a store fault so
+    /// an operator can tell "key not resident" from "store not readable". A
+    /// nonzero value on a bonded persona means passes are being lost to a
+    /// signer that is down, not to a store that is short.
+    #[must_use]
+    pub fn sign_failure_count(&self) -> u64 {
+        self.sign_failures.load(Ordering::Relaxed)
     }
 
     /// `accept` failures. The loop backs off and retries rather than
@@ -329,8 +371,10 @@ impl std::fmt::Debug for PServeEndpoint {
 ///
 /// * **Complete request head that is non-servable** (wrong path/method,
 ///   malformed route/id, unknown or unfrozen shard, store failure) → the
-///   single shared [`NOT_FOUND`] body. That is the probe surface for the
-///   route table, holdings, and store health — collapsed to one shape.
+///   single shared [`render_not_found`] body. A second status (405 vs 404 vs 400)
+///   fingerprints the implementation; a distinct store-failure response is
+///   a live health oracle. Holdings are chain-public — GET 200 vs 404 is
+///   already the availability oracle — and are not what this collapse hides.
 /// * **No complete head** (oversized buffer, mid-head EOF, read timeout)
 ///   or **over capacity** → connection close with no HTTP bytes. Same
 ///   class as ordinary circuit death; not a status-code oracle. Writing
@@ -353,18 +397,20 @@ impl std::fmt::Debug for PServeEndpoint {
 async fn handle_connection(
     mut stream: TcpStream,
     provider: Arc<dyn ShardProvider>,
+    signer: Arc<dyn PassSigner>,
     served: &AtomicU64,
     lookup_failures: &AtomicU64,
+    sign_failures: &AtomicU64,
 ) -> io::Result<()> {
     let head = tokio::time::timeout(READ_TIMEOUT, read_head(&mut stream))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "request head"))??;
 
-    let body = resolve_body(&head, provider, lookup_failures).await;
+    let resolved = resolve_body(&head, provider, signer, lookup_failures, sign_failures).await;
 
     let written = tokio::time::timeout(
         WRITE_TIMEOUT,
-        write_response(&mut stream, body, served, lookup_failures),
+        write_response(&mut stream, resolved, served, lookup_failures),
     )
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write"))?;
@@ -406,58 +452,130 @@ async fn close_gracefully(stream: &mut TcpStream) {
     .ok();
 }
 
-/// Complete-head resolution: shard lookup or shared miss. Store I/O runs
-/// on a blocking pool; join / store errors increment `lookup_failures` and
-/// collapse to the same miss as an unknown id.
+/// A servable request, resolved: the countersignature's canonical bytes
+/// and the body it covers.
+struct Resolved {
+    signature: Vec<u8>,
+    body: ShardBody,
+}
+
+/// What the gate-and-lookup hop found. `Miss` is the ordinary, uncounted
+/// 404 (anchor out of window, unknown id, unfrozen segment); `StoreFault`
+/// is the serving store failing to answer — the tip height or the shard
+/// bytes — and is what [`PServeEndpoint::lookup_failure_count`] counts.
+enum Lookup {
+    Held(ShardBody),
+    Miss,
+    StoreFault,
+}
+
+/// Complete-head resolution: parse, gate, look up, sign — or the shared
+/// miss. Store I/O and the hybrid sign run on the blocking pool; join,
+/// store, and signer errors increment their counter and collapse to the
+/// same miss as an unknown id.
+///
+/// The order is deliberate. The gate runs before the store is touched so
+/// an out-of-window anchor costs no I/O; the sign runs after the lookup so
+/// the persona never signs for a shard it does not hold. The transcript
+/// covers `shard_id`, so a signature is bound to the body it precedes.
 async fn resolve_body(
     head: &[u8],
     provider: Arc<dyn ShardProvider>,
+    signer: Arc<dyn PassSigner>,
     lookup_failures: &AtomicU64,
-) -> Option<ShardBody> {
-    match parse_request(head) {
-        Some(Request::Shard(shard_id)) => {
-            match tokio::task::spawn_blocking(move || provider.shard_bytes(shard_id)).await {
-                Ok(Ok(found)) => found,
-                Ok(Err(_)) | Err(_) => {
-                    lookup_failures.fetch_add(1, Ordering::Relaxed);
-                    None
-                }
-            }
+    sign_failures: &AtomicU64,
+) -> Option<Resolved> {
+    let Request::Shard { shard_id, header } = parse_request(head)?;
+    let fields = PassRequestHeader::from_bytes(&header);
+    // Gate, then look up, on one blocking-pool hop: `own_height` may be a
+    // bounded store read (the host's choice), and the shard read is one
+    // regardless. The gate still runs first, so an out-of-window anchor
+    // never touches the shard store.
+    let gate_signer = Arc::clone(&signer);
+    let looked_up = tokio::task::spawn_blocking(move || {
+        let Some(own_height) = gate_signer.own_height() else {
+            return Lookup::StoreFault;
+        };
+        if !anchor_within_gate(own_height, fields.anchor_height()) {
+            return Lookup::Miss;
         }
-        None => None,
+        match provider.shard_bytes(shard_id) {
+            Ok(Some(body)) => Lookup::Held(body),
+            Ok(None) => Lookup::Miss,
+            Err(_) => Lookup::StoreFault,
+        }
+    })
+    .await;
+    let body = match looked_up {
+        Ok(Lookup::Held(body)) => body,
+        Ok(Lookup::Miss) => return None,
+        Ok(Lookup::StoreFault) | Err(_) => {
+            lookup_failures.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+    };
+    let message = fields.transcript(shard_id);
+    let signed = tokio::task::spawn_blocking(move || {
+        signer
+            .sign_pass(&message)
+            .ok()
+            .and_then(|sig| sig.to_canonical_bytes().ok())
+    })
+    .await;
+    match signed {
+        Ok(Some(signature)) if signature.len() == SIGNATURE_ENVELOPE_LEN => {
+            Some(Resolved { signature, body })
+        }
+        _ => {
+            sign_failures.fetch_add(1, Ordering::Relaxed);
+            None
+        }
     }
 }
 
-/// Write the head, then the frame header, then stream the body chunk by
-/// chunk.
+/// Write the head, then the countersignature envelope, then the frame
+/// header, then stream the body chunk by chunk.
 ///
-/// `content-length` comes from [`ServedFrameHeader::framed_len`], which is
-/// exact before a single leaf is read — so the head is committed before the
-/// store is touched, and a store that fails mid-body can only truncate a
-/// response, never change which response was chosen.
+/// `content-length` is [`SIGNATURE_ENVELOPE_LEN`] plus
+/// [`ServedFrameHeader::framed_len`], both exact before a single leaf is
+/// read — so the head is committed before the store is touched, and a
+/// store that fails mid-body can only truncate a response, never change
+/// which response was chosen.
 ///
 /// The frame header ([`RF-D4`]) is taken from [`ShardBody::header`] — fixed
-/// when the body was opened — and written ahead of the leaf stream.
+/// when the body was opened — and written after the signature, ahead of
+/// the leaf stream.
 ///
 /// [`RF-D4`]: shekyl_curve_tree::served_frame
+/// [`ServedFrameHeader::framed_len`]: shekyl_curve_tree::served_frame::ServedFrameHeader::framed_len
 async fn write_response(
     stream: &mut TcpStream,
-    body: Option<ShardBody>,
+    resolved: Option<Resolved>,
     served: &AtomicU64,
     lookup_failures: &AtomicU64,
 ) -> io::Result<()> {
-    let Some(mut body) = body else {
-        return write_bounded(stream, NOT_FOUND.as_bytes()).await;
+    let Some(Resolved {
+        signature,
+        mut body,
+    }) = resolved
+    else {
+        return write_bounded(stream, render_not_found().as_bytes()).await;
     };
-    // One write, not two. The wire bytes are identical either way — this is
-    // a loopback socket into tor, whose own cell framing quantizes
+    // One write, not three. The wire bytes are identical either way — this
+    // is a loopback socket into tor, whose own cell framing quantizes
     // everything downstream, so packet boundaries here are not an
     // observable and no privacy claim rests on this. What it buys is a
-    // single commitment point: the status line, the headers and the frame
-    // are decided together, before the store is touched, leaving no seam
-    // between them for a later edit to slip something into.
+    // single commitment point: the status line, the headers, the
+    // signature and the frame are decided together, before the store is
+    // touched, leaving no seam between them for a later edit to slip
+    // something into.
     let frame = body.header();
-    let mut head = render_ok(frame.framed_len()).into_bytes();
+    let content_length = u64::try_from(SIGNATURE_ENVELOPE_LEN)
+        .ok()
+        .and_then(|sig| sig.checked_add(frame.framed_len()))
+        .ok_or_else(|| io::Error::other("content-length overflow"))?;
+    let mut head = render_ok(content_length).into_bytes();
+    head.extend_from_slice(&signature);
     head.extend_from_slice(&frame.to_bytes());
     write_bounded(stream, &head).await?;
     loop {
@@ -529,15 +647,26 @@ async fn read_head(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 /// What a parsed request asks for.
 #[derive(Debug, PartialEq, Eq)]
 enum Request {
-    /// `GET /x-provisional/v0/shard/{shard_id}`.
-    Shard(u64),
+    /// `GET /shard/{shard_id}` carrying one decoded [`REQUEST_HEADER_NAME`].
+    Shard {
+        shard_id: u64,
+        header: [u8; shekyl_curve_tree::serving_route::REQUEST_HEADER_BYTES],
+    },
 }
 
-/// Parse the request line. Anything not an exact `GET` on the one route is
-/// `None`, which renders the single shared 404.
+/// Parse the request line and the one required header. Anything not an
+/// exact `GET` on the one route, or any deviation in the header (missing,
+/// duplicate, non-canonical, wrong length), is `None`, which renders the
+/// single shared 404.
+///
+/// Header *names* compare ASCII-case-insensitively and the value's
+/// surrounding optional whitespace is trimmed — that is HTTP/1.1's own
+/// grammar, not a second encoding. The value itself is the canonical
+/// lowercase hex `decode_request_header` accepts, and nothing else.
 fn parse_request(head: &[u8]) -> Option<Request> {
     let text = std::str::from_utf8(head).ok()?;
-    let line = text.lines().next()?;
+    let mut lines = text.lines();
+    let line = lines.next()?;
     let mut parts = line.split(' ');
     if parts.next()? != "GET" {
         return None;
@@ -551,21 +680,46 @@ fn parse_request(head: &[u8]) -> Option<Request> {
     }
     let shard_id = path.strip_prefix(ROUTE_PREFIX)?;
     // Exact decimal id — no path suffix, no query string.
-    shard_id.parse::<u64>().ok().map(Request::Shard)
+    let shard_id = shard_id.parse::<u64>().ok()?;
+
+    // Exactly one occurrence of the named header; every other header is
+    // ignored (presence, absence, value). The blank line ends the head.
+    let mut header = None;
+    for field in lines.take_while(|l| !l.is_empty()) {
+        let (name, value) = field.split_once(':')?;
+        if !name.eq_ignore_ascii_case(REQUEST_HEADER_NAME) {
+            continue;
+        }
+        if header.is_some() {
+            return None;
+        }
+        header = Some(decode_request_header(value.trim_matches([' ', '\t']))?);
+    }
+    Some(Request::Shard {
+        shard_id,
+        header: header?,
+    })
+}
+
+/// Status line plus exactly [`RESPONSE_HEADER_NAMES`]. One function so
+/// 200 and 404 cannot grow a second fingerprint.
+fn render_head(status: &str, len: u64) -> String {
+    format!("HTTP/1.1 {status}\r\ncontent-type: {CONTENT_TYPE}\r\ncontent-length: {len}\r\n\r\n")
 }
 
 /// The success head. Exactly [`RESPONSE_HEADER_NAMES`], nothing else — no
 /// `date` (a clock-skew fingerprint), no `server`, no `etag`, no
 /// `accept-ranges`.
 fn render_ok(len: u64) -> String {
-    format!("HTTP/1.1 200 OK\r\ncontent-type: {CONTENT_TYPE}\r\ncontent-length: {len}\r\n\r\n")
+    render_head("200 OK", len)
 }
 
 /// The single error response, byte-identical for every non-servable
 /// complete-head outcome. Built from the same header names/values as
-/// success so the declared set stays one source of truth in tests.
-const NOT_FOUND: &str =
-    "HTTP/1.1 404 Not Found\r\ncontent-type: application/octet-stream\r\ncontent-length: 0\r\n\r\n";
+/// success so the declared set stays one source of truth.
+fn render_not_found() -> String {
+    render_head("404 Not Found", 0)
+}
 
 #[cfg(test)]
 #[path = "serve_tests.rs"]

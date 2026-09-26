@@ -14,23 +14,13 @@
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::EdwardsPoint;
 use shekyl_tx_builder::LeafEntry;
-
-/// Synthetic `h_pqc` bytes for a leaf entry.
-#[must_use]
-pub(crate) fn synthetic_h_pqc_bytes(seed: u64) -> [u8; 32] {
-    use ciphersuite::group::ff::PrimeField;
-    let mut buf = [0u8; 64];
-    buf[..8].copy_from_slice(&seed.to_le_bytes());
-    buf[32..40].copy_from_slice(&seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).to_le_bytes());
-    let h_pqc_field = dalek_ff_group::FieldElement::wide_reduce(buf);
-    h_pqc_field.to_repr()
-}
+use shekyl_types::CurveTreeRoot;
 
 /// Selene single-leaf-chunk tree root for `tree_depth = 1` (M3c-via-C recipe).
 ///
-/// Root = `SELENE_HASH_INIT + multiexp(generators, [O.x, I.x, C.x, h_pqc] per leaf)`.
+/// Root = `SELENE_HASH_INIT + multiexp(generators, [O.x, I.x, C.x, CM.x] per leaf)`.
 #[must_use]
-pub(crate) fn selene_single_chunk_tree_root(leaf_chunk: &[LeafEntry]) -> [u8; 32] {
+pub(crate) fn selene_single_chunk_tree_root(leaf_chunk: &[LeafEntry]) -> CurveTreeRoot {
     use ciphersuite::{
         group::{ff::PrimeField, GroupEncoding},
         Ciphersuite,
@@ -54,7 +44,7 @@ pub(crate) fn selene_single_chunk_tree_root(leaf_chunk: &[LeafEntry]) -> [u8; 32
             let c = CompressedEdwardsY(e.commitment)
                 .decompress()
                 .expect("commitment is on-curve");
-            (o, i, c, e.h_pqc)
+            (o, i, c, e.cm_x)
         })
         .collect();
 
@@ -106,11 +96,11 @@ pub(crate) fn selene_single_chunk_tree_root(leaf_chunk: &[LeafEntry]) -> [u8; 32
 
     let root_point: <Selene as ciphersuite::Ciphersuite>::G =
         *SELENE_HASH_INIT + multiexp_vartime(&terms);
-    root_point.to_bytes()
+    CurveTreeRoot::from_bytes(root_point.to_bytes())
 }
 
 /// `(c1_layers, c2_layers, tree_root)` for a depth-consistent synthetic path.
-type SyntheticPath = (Vec<Vec<[u8; 32]>>, Vec<Vec<[u8; 32]>>, [u8; 32]);
+type SyntheticPath = (Vec<Vec<[u8; 32]>>, Vec<Vec<[u8; 32]>>, CurveTreeRoot);
 
 /// A depth-consistent **single-path** synthetic tree over `leaf_chunk` (PF7):
 /// the branch layers (`c1`, `c2`) and `tree_root` for a tree whose every layer
@@ -141,7 +131,7 @@ pub(crate) fn consistent_synthetic_path(leaf_chunk: &[LeafEntry], depth: u8) -> 
 
     // Layer 0: the Selene leaf node (same recipe the prover hashes the leaf
     // chunk to, and the depth-1 root).
-    let mut node = selene_single_chunk_tree_root(leaf_chunk);
+    let mut node = *selene_single_chunk_tree_root(leaf_chunk).as_bytes();
     let mut c1_layers: Vec<Vec<[u8; 32]>> = Vec::new();
     let mut c2_layers: Vec<Vec<[u8; 32]>> = Vec::new();
 
@@ -160,5 +150,5 @@ pub(crate) fn consistent_synthetic_path(leaf_chunk: &[LeafEntry], depth: u8) -> 
         }
     }
 
-    (c1_layers, c2_layers, node)
+    (c1_layers, c2_layers, CurveTreeRoot::from_bytes(node))
 }

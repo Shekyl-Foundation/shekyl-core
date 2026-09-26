@@ -64,6 +64,7 @@ use shekyl_engine_state::pending_post_block::{
     PendingEmissionClaim, PendingPostState, SealAdmission,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
@@ -282,7 +283,7 @@ where
                 g.ledger.snapshot(),
             )
         };
-        let block_hash_at = move |h: u64| snapshot.block_hash_at(h);
+        let block_hash_at = move |h: BlockHeight| snapshot.block_hash_at(h);
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate.clone());
 
         // Three independent reads, joined: the claimant identity (a pure
@@ -462,10 +463,13 @@ mod tests {
     ///    or moves it outside the critical section's textual span.
     #[test]
     fn seam_routes_through_the_pipeline_and_the_submit_choke_point() {
-        let seam = include_str!("claim_dispatch.rs")
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("claim_dispatch.rs has a production section");
+        // `split_once`, not `split().next()`: the latter always yields a
+        // first piece, so a drifted marker would silently make the
+        // "production half" the whole file and let this test module's own
+        // text satisfy the positive needles below. Marker drift must be red.
+        let (seam, _) = include_str!("claim_dispatch.rs")
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("claim_dispatch.rs carries the tests-module marker this split relies on");
 
         // Split needles so doc-comment mentions alone cannot satisfy them —
         // the live call sites must remain.

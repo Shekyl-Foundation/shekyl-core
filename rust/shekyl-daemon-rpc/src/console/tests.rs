@@ -14,6 +14,7 @@ use std::net::TcpListener;
 use std::os::raw::c_char;
 
 use shekyl_rpc_types::{HashHex, RpcStatus};
+use shekyl_types::{BlockHash, PrunableHash, TxHash};
 
 fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
     let cstrs: Vec<CString> = args.iter().map(|a| CString::new(*a).unwrap()).collect();
@@ -239,7 +240,7 @@ fn read_request(s: &mut std::net::TcpStream) -> Option<(String, String)> {
 /// fills, so a fixture that always returns split-form data would pass
 /// whatever the console asked for. Serving the projection makes the
 /// request an input rather than a formality.
-fn one_shot_projected(slot: crate::core::TxSlot, txid: [u8; 32]) -> String {
+fn one_shot_projected(slot: crate::core::TxSlot, txid: TxHash) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
@@ -266,14 +267,19 @@ fn one_shot_projected(slot: crate::core::TxSlot, txid: [u8; 32]) -> String {
         let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_owned();
         let request: shekyl_rpc_types::GetTransactionsRequest =
             serde_json::from_str(&body).expect("the console sends a typed request");
-        let reply =
-            crate::methods::project_transactions(&request, &[txid], &[slot], 9, |blob, pruned| {
+        let reply = crate::methods::project_transactions(
+            &request,
+            &[txid.to_bytes()],
+            &[slot],
+            9,
+            |blob, pruned| {
                 Ok(format!(
                     "{{\"json\":\"{}\",\"pruned\":{pruned}}}",
                     hex::encode(blob)
                 ))
-            })
-            .expect("projection succeeds");
+            },
+        )
+        .expect("projection succeeds");
         let out = serde_json::to_string(&reply).unwrap();
         let head = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -317,7 +323,7 @@ fn console_spend() -> shekyl_wire::Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0; 9], [0; 9]],
                 enc_labels: vec![[0; 9], [0; 9]],
@@ -410,7 +416,7 @@ fn a_retained_transaction_is_not_reported_pruned() {
 fn a_pruned_transaction_is_reported_pruned() {
     // The prunable half is gone, so the identity mixes the reply's
     // supplied digest — the same recomputation the binding performs.
-    let txid = console_spend().hash_with_supplied_prunable([0x5A; 32]);
+    let txid = console_spend().hash_with_supplied_prunable(PrunableHash::from_bytes([0x5A; 32]));
     let addr = one_shot_projected(mined_slot(Vec::new()), txid);
     let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
     assert!(
@@ -435,7 +441,7 @@ fn an_echoed_label_over_a_substituted_body_is_refused() {
     let requested = other.hash();
     let (pruned, tail) = console_spend_halves();
     let entry = shekyl_rpc_types::TxEntry {
-        tx_hash: HashHex::from_bytes(requested),
+        tx_hash: HashHex::from_bytes(requested.to_bytes()),
         as_hex: String::new(),
         pruned_as_hex: hex::encode(pruned),
         prunable_as_hex: hex::encode(tail),
@@ -482,17 +488,17 @@ fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
     // the daemon will also supply — so only the body differs.
     let mut other = console_spend();
     other.prefix.unlock_time = 5;
-    let requested = other.hash_with_supplied_prunable(CHOSEN);
+    let requested = other.hash_with_supplied_prunable(PrunableHash::from_bytes(CHOSEN));
     // Sanity: the two bodies really do have different pruned identities,
     // or the refusal below would prove nothing.
     assert_ne!(
         requested,
-        console_spend().hash_with_supplied_prunable(CHOSEN),
+        console_spend().hash_with_supplied_prunable(PrunableHash::from_bytes(CHOSEN)),
         "the fixture must substitute a genuinely different body"
     );
     let (pruned, _tail) = console_spend_halves();
     let entry = shekyl_rpc_types::TxEntry {
-        tx_hash: HashHex::from_bytes(requested),
+        tx_hash: HashHex::from_bytes(requested.to_bytes()),
         as_hex: String::new(),
         pruned_as_hex: hex::encode(pruned),
         // The half is gone, so the binding takes the pruned arm.
@@ -982,7 +988,6 @@ fn a_peer_never_seen_has_no_interval() {
         ip: 0x0700_200a,
         port: 18080,
         last_seen: 0,
-        pruning_seed: 0,
     };
     let line = render_peer("white", &peer, 1_750_000_000);
     assert!(line.contains("never"), "{line}");
@@ -1010,7 +1015,6 @@ fn a_peer_address_gains_a_port_only_when_it_has_one() {
         ip: 0,
         port,
         last_seen: 1_750_000_000,
-        pruning_seed: 0,
     };
     let line = |p: &shekyl_rpc_types::Peer| render_peer("white", p, 1_750_000_000);
 
@@ -1327,7 +1331,7 @@ fn a_get_info_reply_missing_a_field_is_refused_rather_than_defaulted() {
     assert!(out.contains("height"), "{out}");
 }
 
-fn fee_reply(fees: [u64; 4]) -> String {
+fn fee_reply(fees: [u64; 3]) -> String {
     typed_reply(&serde_json::json!({
         "jsonrpc": "2.0",
         "id": "0",
@@ -1393,7 +1397,7 @@ fn a_range_reply_that_misses_the_window_is_refused() {
     }));
     let address = route_server(vec![
         ("/get_info", info_reply(10)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         ("json_rpc:get_block_headers_range", short),
     ]);
     let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
@@ -1412,7 +1416,7 @@ fn a_range_reply_that_misses_the_window_is_refused() {
     }));
     let address = route_server(vec![
         ("/get_info", info_reply(10)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         ("json_rpc:get_block_headers_range", wrong),
     ]);
     let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
@@ -1452,7 +1456,7 @@ fn dynamic_stats_reports_the_window_it_summarized() {
     }));
     let (address, log) = route_server_recording(vec![
         ("/get_info", info_reply(10)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         ("json_rpc:get_block_headers_range", range),
     ]);
     let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
@@ -1518,7 +1522,7 @@ fn dynamic_stats_reports_the_window_it_summarized() {
 fn dynamic_stats_clamps_a_window_longer_than_the_chain() {
     let (address, log) = route_server_recording(vec![
         ("/get_info", info_reply(2)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         (
             "json_rpc:get_block_headers_range",
             headers_range_reply(&[0, 1]),

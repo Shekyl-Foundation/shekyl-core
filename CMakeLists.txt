@@ -209,6 +209,22 @@ function (die msg)
   message(FATAL_ERROR "${BoldRed}${msg}${ColourReset}")
 endfunction ()
 
+# CMake file(GLOB "dir/*") includes dotfiles (cmake 3.31; GLOB * is
+# not shell glob). A `.git`-only interrupted submodule checkout must
+# not count as populated — same contract as T15 and gate-and-push.sh.
+function (dir_populated_ignoring_git dir out_var)
+  file(GLOB _dpi_entries LIST_DIRECTORIES true "${dir}/*")
+  set(_dpi_populated FALSE)
+  foreach(_dpi_e IN LISTS _dpi_entries)
+    get_filename_component(_dpi_bn "${_dpi_e}" NAME)
+    if(NOT _dpi_bn STREQUAL ".git")
+      set(_dpi_populated TRUE)
+      break()
+    endif()
+  endforeach()
+  set(${out_var} ${_dpi_populated} PARENT_SCOPE)
+endfunction ()
+
 function (add_c_flag_if_supported flag var)
   # Prepending the flag with -Werror will only add the flag,
   # if it doesn't result in generation of a warning of using a flag unknown to the compiler.
@@ -445,20 +461,39 @@ if(NOT MANUAL_SUBMODULES)
   find_package(Git)
   if(GIT_FOUND)
     function (check_submodule relative_path)
+      set(_sm_path "${CMAKE_CURRENT_SOURCE_DIR}/${relative_path}")
+      # Empty-dir fail-closed. `git rev-parse HEAD` inside an empty
+      # submodule directory walks up to the superproject and compares
+      # two different SHAs of the same commit (or reports "not
+      # up-to-date"). This function already compares the submodule-dir
+      # HEAD against HEAD:<path> in the superproject; the empty-dir
+      # check is the whole additional fix. Do not replace the gitlink
+      # comparison with a second instrument.
+      if(NOT EXISTS "${_sm_path}" OR NOT IS_DIRECTORY "${_sm_path}")
+        message(FATAL_ERROR "Submodule '${relative_path}' is missing or not a directory. Initialize with\ngit submodule update --init --force ${relative_path}\nor run cmake with -DMANUAL_SUBMODULES=1\n")
+      endif()
+      dir_populated_ignoring_git("${_sm_path}" _sm_populated)
+      if(NOT _sm_populated)
+        message(FATAL_ERROR "Submodule '${relative_path}' is an empty directory (not initialized). git rev-parse HEAD inside it walks up to the superproject. Initialize with\ngit submodule update --init --force ${relative_path}\nor run cmake with -DMANUAL_SUBMODULES=1\n")
+      endif()
       execute_process(COMMAND git rev-parse "HEAD" WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${relative_path} OUTPUT_VARIABLE localHead)
       execute_process(COMMAND git rev-parse "HEAD:${relative_path}" WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} OUTPUT_VARIABLE checkedHead)
       string(COMPARE EQUAL "${localHead}" "${checkedHead}" upToDate)
       if (upToDate)
         message(STATUS "Submodule '${relative_path}' is up-to-date")
       else()
-        message(FATAL_ERROR "Submodule '${relative_path}' is not up-to-date. Please update all submodules with\ngit submodule update --init --force\nor run cmake with -DMANUAL_SUBMODULES=1\n")
+        message(FATAL_ERROR "Submodule '${relative_path}' is not up-to-date. Update with\ngit submodule update --init --force ${relative_path}\nor run cmake with -DMANUAL_SUBMODULES=1\n")
       endif()
     endfunction ()
     
     message(STATUS "Checking submodules")
     check_submodule(external/miniupnp)
     check_submodule(external/rapidjson)
-    check_submodule(external/randomx)
+    # external/randomx (tevador v1) is a gitlink-only pin for the
+    # restated v1 fallback (RANDOMX_V1_FALLBACK.md). Nothing in
+    # src/ tests/ rust/ scripts/ cmake/ builds that tree; do not
+    # require it initialized on a default clone. A fallback that
+    # re-adds a v1 CMake target re-adds this check with it.
     check_submodule(external/supercop)
   endif()
 endif()
@@ -479,18 +514,26 @@ enable_testing()
 
 option(BUILD_DOCUMENTATION "Build the Doxygen documentation." ON)
 option(BUILD_TESTS "Build tests." OFF)
-# RandomX v2 (Shekyl-Foundation fork) miner-library build toggle.
-# OFF (default): the v2 build is not configured; daemon and other
-# components are unaffected and byte-identical to a no-flag build
-# (per RANDOMX_V2_PHASE1_PLAN.md §4.1).
+# RandomX v2 C reference library (Shekyl-Foundation fork) miner-library
+# build toggle. Production PoW is the Rust light-cache verifier
+# (`shekyl-pow-randomx` via FFI); this option builds `librandomx.a`
+# out-of-tree for the differential harness and Hole-1 miner KATs only.
+# OFF (default): the v2 C build is not configured; daemon and other
+# components are unaffected and byte-identical to a no-flag build.
 # ON: external/CMakeLists.txt runs ExternalProject_Add against the
 # pinned external/randomx-v2 submodule and exposes the
-# shekyl_randomx_v2 IMPORTED static-library target. The target is
-# not consumed by any C++ component in Phase 1; the first consumer
-# is the Phase 2 cross-check test harness in rust/shekyl-pow-randomx/.
+# shekyl_randomx_v2 IMPORTED static-library target.
 # See docs/design/RANDOMX_V2_PHASE1_PLAN.md §§2.3, 3.3, 3.4.
+# DRS-E2 trace exporter (docs/design/DRS_E2_REPLAY_DRIVER.md §3.9): a
+# harvest shim that walks LMDB and hands bytes to the Rust trace writer.
+# OFF by default — the daemon build does not need it, and it is deleted in
+# the same commit that deletes the daemon (§1.3).
+option(BUILD_E2_TRACE_EXPORT
+  "Build shekyl-e2-trace-export, the DRS-E2 LMDB→trace harvest shim (default OFF)."
+  OFF)
+
 option(BUILD_RANDOMX_V2_MINER_LIB
-  "Build RandomX v2 (Shekyl-Foundation fork) miner library out-of-tree; default OFF in Phase 1, wired into miner consumers in Phase 3."
+  "Build RandomX v2 C reference library out-of-tree (differential harness / Hole-1 only; default OFF). Production PoW is the Rust verifier."
   OFF)
 
 # Phase 2g Rust/C differential test harness build toggle.
@@ -593,19 +636,24 @@ else()
 endif()
 option(STATIC "Link libraries statically" ${DEFAULT_STATIC})
 
-# This is a CMake built-in switch that concerns internal libraries
-set(BUILD_SHARED_LIBS_DEFAULT OFF)
-if (NOT STATIC AND CMAKE_BUILD_TYPE_LOWER STREQUAL "debug")
-	set(BUILD_SHARED_LIBS_DEFAULT ON)
+# Internal libraries are always static. Shared internal libraries are
+# refused, not merely defaulted off: every internal library that lists
+# SHEKYL_FFI_LINK_LIBS is the head of its own link line when it is a shared
+# object, so each .so embeds its own copy of the Rust image — its own
+# tracing dispatcher and its own copy of every Rust `static` — next to the
+# executable's image. That violates the single-Rust-image contract
+# (V3_WALLET_DECISION_LOG.md 2026-06-11 / 2026-09-10) in a way the
+# post-link nm gate in src/daemon/CMakeLists.txt cannot see, because the
+# duplicates live in the .so files rather than in the binary it inspects.
+# Observed: a Debug shekyld whose Blockchain::init armed the regtest
+# settlement-epoch schedule in libcryptonote_core.so's copy while the RPC
+# submit verifier read the executable's unarmed copy and refused every
+# emission claim as not-yet-finalized under the genesis schedule.
+if(BUILD_SHARED_LIBS)
+  message(FATAL_ERROR "BUILD_SHARED_LIBS=ON is not supported: shared internal libraries each embed a separate copy of the Rust image and split its process-global state (single-Rust-image contract, V3_WALLET_DECISION_LOG.md 2026-09-10). Configure without -DBUILD_SHARED_LIBS.")
 endif()
-option(BUILD_SHARED_LIBS "Build internal libraries as shared" ${BUILD_SHARED_LIBS_DEFAULT})
-
-if (BUILD_SHARED_LIBS)
-  message(STATUS "Building internal libraries with position independent code")
-  add_definitions("-DBUILD_SHARED_LIBS")
-else()
-  message(STATUS "Building internal libraries as static")
-endif()
+set(BUILD_SHARED_LIBS OFF)
+message(STATUS "Building internal libraries as static")
 set(PIC_FLAG "-fPIC")
 
 if(STATIC)
@@ -848,6 +896,30 @@ ExternalProject_Add(generate_translations_header
   CMAKE_ARGS -DLRELEASE_PATH=${LRELEASE_PATH}
   INSTALL_COMMAND ${CMAKE_COMMAND} -E echo "")
 include_directories("${CMAKE_CURRENT_BINARY_DIR}/translations")
+# Git-free randomx-v2 populate check. Must not call check_submodule
+# (that function exists only inside if(NOT MANUAL_SUBMODULES)/if(GIT_FOUND)).
+# BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS auto-flips miner-lib ON above,
+# so this covers both options. Empty SOURCE_DIR would otherwise fail
+# inside ExternalProject with a generic message.
+if(BUILD_RANDOMX_V2_MINER_LIB)
+  set(_RANDOMX_V2_SRC "${CMAKE_SOURCE_DIR}/external/randomx-v2")
+  if(NOT EXISTS "${_RANDOMX_V2_SRC}" OR NOT IS_DIRECTORY "${_RANDOMX_V2_SRC}")
+    message(FATAL_ERROR
+      "external/randomx-v2 is missing. The C reference library is opt-in "
+      "(BUILD_RANDOMX_V2_MINER_LIB / BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS). "
+      "Initialize with:\n  git submodule update --init external/randomx-v2\n"
+      "Default daemon CMake does not need this tree.")
+  endif()
+  dir_populated_ignoring_git("${_RANDOMX_V2_SRC}" _RANDOMX_V2_POPULATED)
+  if(NOT _RANDOMX_V2_POPULATED)
+    message(FATAL_ERROR
+      "external/randomx-v2 is an empty directory (not initialized). "
+      "Initialize with:\n  git submodule update --init external/randomx-v2\n"
+      "Worktrees inherit gitlinks but not submodule working trees. "
+      "Never --exclude this path. MANUAL_SUBMODULES=1 is an escape hatch, "
+      "not the happy path, and does not skip this populate check.")
+  endif()
+endif()
 add_subdirectory(external)
 
 # Final setup for liblmdb

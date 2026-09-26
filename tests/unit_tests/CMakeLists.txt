@@ -35,16 +35,14 @@ set(unit_tests_sources
   economics_c2a_prime.cpp
   bulletproofs_plus.cpp
   gap7_bp_bench.cpp
-  canonical_amounts.cpp
-  chacha.cpp
   checkpoints.cpp
   command_line.cpp
   crypto.cpp
-  cryptonote_format_utils.cpp
   daemon_default_data_dir.cpp
   daemon_rpc_client.cpp
   daemon_submit_ffi_roundtrip.cpp
   daemon_submit_shims.cpp
+  db_sync_mode_parse.cpp
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
@@ -53,10 +51,8 @@ set(unit_tests_sources
   epee_serialization.cpp
   epee_utils.cpp
   expect.cpp
-  fee.cpp
   json_serialization.cpp
   get_xtype_from_string.cpp
-  hmac_keccak.cpp
   keccak.cpp
   levin.cpp
   logging.cpp
@@ -66,7 +62,6 @@ set(unit_tests_sources
   memwipe.cpp
   mining_parity.cpp
   mlocker.cpp
-  mnemonics.cpp
   mtp_boundary.cpp
   mul_div.cpp
   multiexp.cpp
@@ -77,7 +72,6 @@ set(unit_tests_sources
   parse_amount.cpp
   peer_policy_drop_verdict.cpp
   peer_policy_block_ingest.cpp
-  pruning.cpp
   random.cpp
   rpc_target_wire_contract.cpp
   rpc_args_daemon_surface.cpp
@@ -88,8 +82,8 @@ set(unit_tests_sources
   scaling_2021.cpp
   seed_epoch.cpp
   serialization.cpp
-  sha256.cpp
   slow_memmem.cpp
+  sha256.cpp
   stall_detection_calibration.cpp
   stack_trace.cpp
   test_tx_utils.cpp
@@ -112,7 +106,9 @@ set(unit_tests_sources
   archival_serve_credit_integration.cpp
   archival_bond_post.cpp
   archival_bond_post_integration.cpp
+  archival_settlement_testdb.cpp
   archival_attestation_verify.cpp
+  archival_pass_anchor.cpp
   archival_reward_emission.cpp
   archival_emission_connect.cpp
   archival_emission_ct_balance.cpp
@@ -123,7 +119,9 @@ set(unit_tests_sources
   sync_orphan_arm.cpp
   archival_settlement_table.cpp
   archival_substrate_lmdb.cpp
+  archival_bond_record_v7_corpus.cpp
   archival_claim_source_rpc.cpp
+  archival_shard_coverage_rpc.cpp
   ct_balance_differential.cpp
   curve_tree_header_root_check.cpp
   tx_extra_pqc_field_shape.cpp
@@ -131,7 +129,6 @@ set(unit_tests_sources
   economics_b5_fee_coinbase.cpp
   economics_tx_volume_window.cpp
   pruned_tx_hash_parity.cpp
-  tx_data_pruning_lmdb.cpp
   tx_prunable_region_sole_occupant.cpp
   pow_longhash_gate.cpp
   txpool_ref_age.cpp
@@ -157,10 +154,6 @@ target_link_libraries(unit_tests
     rpc
     net
     serialization
-    # Direct, not inherited: mnemonics.cpp tests crypto::ElectrumWords, which
-    # reached this link line transitively through the C++ `wallet` library
-    # until the Phase-5 cutover unlinked it.
-    mnemonics
     p2p
     # daemon_rpc_client.cpp exercises src/daemon/rpc_client.h, whose failure
     # path writes through scoped_message_writer -> rdln::suspend_readline
@@ -221,6 +214,10 @@ SET_PROPERTY(SOURCE tx_extra_pqc_field_shape.cpp PROPERTY COMPILE_DEFINITIONS
   SERVE_CREDIT_TX_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json")
 SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_DEFINITIONS
   GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json")
+SET_PROPERTY(SOURCE archival_attestation_verify.cpp PROPERTY COMPILE_DEFINITIONS
+  ATTESTATION_V2_PINNED_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json")
+SET_PROPERTY(SOURCE archival_bond_record_v7_corpus.cpp PROPERTY COMPILE_DEFINITIONS
+  ARCHIVAL_BOND_RECORD_V7_CORPUS_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS
   MTP_BOUNDARY_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/MTP_BOUNDARY_V1.json")
 SET_PROPERTY(SOURCE fork_choice_vectors.cpp PROPERTY COMPILE_DEFINITIONS

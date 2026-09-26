@@ -59,6 +59,7 @@ Foundations & process
 - [`05-system-thinking`](.cursor/rules/05-system-thinking.mdc) — system-level design discipline
 - [`06-branching`](.cursor/rules/06-branching.mdc) — branch policy (always applies): `main`=stable, `dev`=integration; short-lived branches off `dev`; each push is separately authorized
 - [`07-consensus-atomic-cutovers`](.cursor/rules/07-consensus-atomic-cutovers.mdc) — named, opt-in exception to `06` for consensus-boundary PRs
+- [`08-worktree-hygiene`](.cursor/rules/08-worktree-hygiene.mdc) — the tested tree is the shipped tree (always applies): stage explicit paths, never `-A`/`-a`; verify from a fresh checkout of the pushed SHA
 - [`90-commits`](.cursor/rules/90-commits.mdc) — commit message & PR discipline
 - [`91-documentation-after-plans`](.cursor/rules/91-documentation-after-plans.mdc) — docs update is the final task of a plan
 - [`94-tracking-index`](.cursor/rules/94-tracking-index.mdc) — `docs/design/IMPLEMENTATION_INDEX.md` is load-bearing; identifier families register at birth; Phase 3+ / Stage 3+ items start with an index row
@@ -145,6 +146,8 @@ shekyl-core/
 Key Rust crates: `shekyl-engine-*` (wallet orchestrator/state/file), `shekyl-scanner`,
 `shekyl-tx-builder`, `shekyl-crypto-pq`, `shekyl-proofs`, `shekyl-fcmp`,
 `shekyl-curve-tree`, `shekyl-consensus`, `shekyl-economics`, `shekyl-staking`,
+`shekyl-chain-store` / `shekyl-chain-rules` (daemon store and the consensus
+validator that alone mints what it connects — the two share no code),
 `shekyl-units` / `shekyl-types` (foundational newtypes), and the single FFI
 crate `shekyl-ffi`. See [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
 
@@ -156,6 +159,29 @@ Open residue: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
 ---
 
 ## Build & test (practical orientation, not policy)
+
+**Checkout hygiene.** Clone with `git clone --recursive`. After a
+non-recursive clone or a new worktree, run
+`git submodule update --init --recursive` — never `--exclude`
+`shekyl-randomx-differential` / `external/randomx-v2`. Worktrees inherit
+gitlinks, not submodule working trees. Default daemon CMake does not
+need `external/randomx-v2`; the C library is opt-in:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON
+# RANDOMX_V2_INSTALL_DIR=<build>/external/randomx-v2-install
+```
+
+That flag (and `-DBUILD_RANDOMX_V2_MINER_LIB=ON`) builds the C library
+for the differential harness and the out-of-process miner reference only;
+it never links into `shekyld`, whose PoW is the Rust verifier
+(`RANDOMX_V2_RUST.md` §2; gate: `scripts/ci/check_randomx_symbol_isolation.sh`).
+`-DMANUAL_SUBMODULES=1` is an escape hatch (Guix/gitian), not the happy
+path. The workspace `cargo test` lane **unconditionally** excludes
+`shekyl-randomx-differential` (`.github/workflows/rust-audit-test.yml`);
+setting `RANDOMX_V2_INSTALL_DIR` does not re-include it. The dedicated
+`randomx-v2-differential` workflow is the gate for T13/T14/T15.
 
 C++ (Monero-lineage toolchain):
 
@@ -170,7 +196,7 @@ Rust (workspace under `rust/`; gates per [`45`](.cursor/rules/45-rust-lint-check
 cd rust
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace --exclude shekyl-randomx-differential
 ```
 
 CI mirrors these plus `cargo audit` on `Cargo.lock` changes and the

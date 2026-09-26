@@ -118,7 +118,7 @@ fn collect_transfers(
     if want_incoming {
         for td in ledger_rows {
             // Ledger rows are scanner-observed, so always mined.
-            if below_since(Some(td.block_height), since) {
+            if below_since(Some(td.block_height.to_raw()), since) {
                 continue;
             }
             if filters
@@ -139,7 +139,7 @@ fn collect_transfers(
                     block_height: view.block_height,
                     outgoing: false,
                     tx_hash: td.tx_hash.to_bytes(),
-                    output_index: td.internal_output_index,
+                    output_index: td.internal_output_index.to_raw(),
                 },
                 view,
             ));
@@ -254,9 +254,10 @@ pub(crate) async fn get_wallet_info(
         // stay coherent with the balance summary under ONE ledger guard.
         let (summary, (wallet_height, restore_height), staking_view) =
             crate::staking::ledger_snapshot_with_staking(&engine, |wallet| {
-                let wallet_height = i64::try_from(wallet.ledger.height()).unwrap_or(i64::MAX);
-                let restore_height =
-                    i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
+                let wallet_height =
+                    i64::try_from(wallet.ledger.height().to_raw()).unwrap_or(i64::MAX);
+                let restore_height = i64::try_from(wallet.sync_state.restore_from_height.to_raw())
+                    .unwrap_or(i64::MAX);
                 (wallet_height, restore_height)
             })?;
 
@@ -316,7 +317,7 @@ pub(crate) async fn get_wallet_info(
         .get_height()
         .await
         .ok()
-        .map(|h| i64::try_from(h).unwrap_or(i64::MAX));
+        .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX));
 
     let (name, capability, network, address) = identity;
     let result = GetWalletInfoResult {
@@ -393,7 +394,11 @@ pub(crate) async fn get_transfer_by_id(
             .ledger
             .transfers()
             .iter()
-            .find(|td| td.tx_hash == tx_hash && td.internal_output_index == output_index)
+            .find(|td| {
+                td.tx_hash == tx_hash
+                    && td.internal_output_index
+                        == shekyl_types::OutputIndexInTx::from_raw(output_index)
+            })
             .map(|td| transfer_view(td, &ledger.spend_locks(), ledger.tx_meta.notes())),
         TransferLookupId::Outgoing { tx_hash } => ledger
             .send_journal
@@ -418,7 +423,8 @@ pub(crate) async fn get_height(
     let shared = require_open_engine(tenants).await?;
     let (wallet_height, daemon) = {
         let engine = shared.read().await;
-        let wallet_height = i64::try_from(engine.ledger().ledger.height()).unwrap_or(i64::MAX);
+        let wallet_height =
+            i64::try_from(engine.ledger().ledger.height().to_raw()).unwrap_or(i64::MAX);
         (wallet_height, engine.daemon().clone())
     };
 
@@ -430,7 +436,7 @@ pub(crate) async fn get_height(
         .get_height()
         .await
         .ok()
-        .map(|h| i64::try_from(h).unwrap_or(i64::MAX));
+        .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX));
 
     let result = GetHeightResult {
         wallet_height,
@@ -451,7 +457,7 @@ mod tests {
             block.rows.insert(
                 [seed; 32],
                 SendRecord {
-                    dispatched_at_height: 100,
+                    dispatched_at_height: shekyl_types::BlockHeight::from_raw(100),
                     fee: 700,
                     recipients: vec![SendRecipient {
                         address: "shekyl1a".to_owned(),
@@ -495,7 +501,12 @@ mod tests {
     /// before this projection existed — flips both assertions.
     #[test]
     fn direction_filter_selects_the_matching_source() {
-        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+        let block = journal(&[(
+            0xab,
+            SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250),
+            },
+        )]);
 
         let all = collect_transfers(&[], &block, &no_notes(), &filters(None, None), None)
             .expect("project");
@@ -530,7 +541,12 @@ mod tests {
     fn state_filter_applies_to_journal_rows() {
         let block = journal(&[
             (0x01, SendState::Dispatched),
-            (0x02, SendState::Confirmed { height: 250 }),
+            (
+                0x02,
+                SendState::Confirmed {
+                    height: shekyl_types::BlockHeight::from_raw(250),
+                },
+            ),
             (0x03, SendState::TerminalRejected),
             (0x04, SendState::PresumedDead),
             (0x05, SendState::Abandoned),
@@ -571,7 +587,12 @@ mod tests {
     /// transaction), so the same lookup feeds both directions of a txid.
     #[test]
     fn note_projects_onto_the_transfer_view() {
-        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+        let block = journal(&[(
+            0xab,
+            SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250),
+            },
+        )]);
         let mut notes = no_notes();
         notes.insert([0xab; 32], "rent".to_owned());
 
@@ -591,7 +612,12 @@ mod tests {
     /// about a payment this wallet made.
     #[test]
     fn attribution_filter_excludes_journal_rows() {
-        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+        let block = journal(&[(
+            0xab,
+            SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250),
+            },
+        )]);
         let mut f = filters(None, None);
         f.attribution = Some(ReceiveAttributionFilter::Unattributed);
 
@@ -611,7 +637,12 @@ mod tests {
     fn since_height_never_hides_a_send_that_was_never_mined() {
         let block = journal(&[
             (0x01, SendState::Dispatched),
-            (0x02, SendState::Confirmed { height: 250 }),
+            (
+                0x02,
+                SendState::Confirmed {
+                    height: shekyl_types::BlockHeight::from_raw(250),
+                },
+            ),
             (0x03, SendState::TerminalRejected),
             (0x04, SendState::PresumedDead),
             (0x05, SendState::Abandoned),

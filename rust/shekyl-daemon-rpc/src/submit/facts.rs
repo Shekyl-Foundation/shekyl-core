@@ -12,8 +12,10 @@
 //! mempool implements it natively. Facts are plain data — the shim fetches,
 //! the engine decides. Zero verdict logic lives behind this trait.
 
-use shekyl_archival_retention::{BadInterval, HoldingsDescriptor, HoldingsKind, LastServedScan};
-use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
+use shekyl_archival_retention::{
+    BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan,
+};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
 
 use crate::submit::certificate::VerificationCertificate;
 
@@ -101,8 +103,9 @@ pub struct SubmitFacts {
     /// [`BlockHeight`]: C++ overloads "height" for this value, and holding
     /// a count in the height type is one `<=` away from an off-by-one
     /// (the emission-claim spendability anchor bug, claim-builder PR-3
-    /// review). The ref-age comparison consumes the raw count deliberately
-    /// — that is the consensus shape (`blockchain.cpp:3745-3765`).
+    /// review). The ref-age comparison consumes the typed count against the
+    /// reference's ordinal (`ref_age_window`) — that is the consensus
+    /// shape (`blockchain.cpp:3745-3765`).
     pub chain_height: ChainCount,
     /// An archival bond record exists for the submitted bond-post's
     /// `p_canonical_id` (`get_archival_bond_hybrid_pubkey` probe, read under
@@ -190,7 +193,7 @@ pub struct SubmitFacts {
 pub enum BondProbe<'a> {
     /// JoinMarket (row BP3) — the record must be **absent**; the presence
     /// bit in [`SubmitFacts::bond_record_exists`] is the whole answer.
-    Join(&'a [u8; 32]),
+    Join(&'a PCanonicalId),
     /// Release (§8.7.1.1) — the record must be **present**, so the same
     /// presence bit is joined by [`SubmitFacts::release`] carrying the
     /// record's contents as verify operands.
@@ -208,7 +211,7 @@ pub enum BondProbe<'a> {
     /// `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1's "Why UB0 exists" note.
     Release {
         /// The vin's claimed `p_canonical_id`.
-        p_canonical_id: &'a [u8; 32],
+        p_canonical_id: &'a PCanonicalId,
         /// The bond slot's `pqc_auths[i].hybrid_public_key`.
         auth_pubkey: &'a [u8],
         /// The vin's fixed `bond_debit`. UB9 requires it to equal the
@@ -224,7 +227,7 @@ pub enum BondProbe<'a> {
 
 impl BondProbe<'_> {
     /// The `p_canonical_id` this probe is keyed on, whichever arm it is.
-    pub fn p_canonical_id(&self) -> &[u8; 32] {
+    pub fn p_canonical_id(&self) -> &PCanonicalId {
         match self {
             Self::Join(id) => id,
             Self::Release { p_canonical_id, .. } => p_canonical_id,

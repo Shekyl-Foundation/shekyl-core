@@ -5,8 +5,9 @@
 
 //! Bond-post CT balance verification FFI.
 
-use shekyl_archival_retention::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
-use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
+use shekyl_archival_retention::{
+    verify_bond_post_ct_balance, BondCtBalanceError, BondTerm, BondTermError,
+};
 
 use super::codes::*;
 
@@ -66,19 +67,12 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
         Err(code) => return code,
     };
 
-    // The C ABI carries the two directions as separate u64s; convert to the
-    // `BondTerm` the (total) core function takes, rejecting the both / neither /
-    // zero states here — at the untrusted-input boundary — with the same status
-    // codes. Matching on the `NonZeroAtomicUnits` options folds the zero-amount
-    // case into "neither term" for free (a zero credit or debit is `None`).
-    let term = match (
-        NonZeroAtomicUnits::new(AtomicUnits::from_raw(bond_credit)),
-        NonZeroAtomicUnits::new(AtomicUnits::from_raw(bond_debit)),
-    ) {
-        (None, None) => return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM,
-        (Some(credit), None) => BondTerm::Credit(credit),
-        (None, Some(debit)) => BondTerm::Debit(debit),
-        (Some(_), Some(_)) => return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS,
+    // The C ABI carries the two directions as separate u64s; convert through
+    // the single `BondTerm::from_credit_debit` the consensus crate owns.
+    // Zero/zero is Unmoved (Reinstate). Both-nonzero is BOTH_TERMS.
+    let term = match BondTerm::from_credit_debit(bond_credit, bond_debit) {
+        Ok(term) => term,
+        Err(BondTermError::BothTerms) => return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS,
     };
 
     match verify_bond_post_ct_balance(pseudo_flat, mask_flat, txn_fee, term) {

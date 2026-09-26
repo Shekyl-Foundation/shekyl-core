@@ -8,8 +8,49 @@
 //! items remain visible via `#[path]` from `serve.rs`.
 
 use super::*;
+use crate::countersign::{PassKey, SignRefused, TestKeySigner};
 use crate::provider::{ProviderError, ShardBody};
+use shekyl_archival_retention::pass_anchor::{
+    pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
+    PASS_REQUEST_HEADER_LEN,
+};
+use shekyl_archival_retention::verify_pass_transcript;
+use shekyl_crypto_pq::signature::HybridSignature;
+use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{ServedFrameHeader, LEAF_BYTES};
+use shekyl_types::BlockHeight;
+
+/// The test persona's own height, and the anchor a requester at the same
+/// tip would attach (`tip − 720`), which sits at the centre of the gate.
+const OWN_HEIGHT: u64 = 10_000;
+const IN_GATE_ANCHOR: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
+const NONCE: [u8; 32] = [0x5a; 32];
+const ANCHOR_HASH: [u8; 32] = [0xa5; 32];
+
+fn header_at(anchor_height: u64) -> [u8; PASS_REQUEST_HEADER_LEN] {
+    pass_request_header_bytes(&NONCE, BlockHeight::from_raw(anchor_height), &ANCHOR_HASH)
+}
+
+fn good_header() -> [u8; PASS_REQUEST_HEADER_LEN] {
+    header_at(IN_GATE_ANCHOR)
+}
+
+fn header_line(bytes: &[u8; PASS_REQUEST_HEADER_LEN]) -> String {
+    format!(
+        "{REQUEST_HEADER_NAME}: {}\r\n",
+        encode_request_header(bytes)
+    )
+}
+
+/// Bind with a fresh ephemeral test signer at [`OWN_HEIGHT`]; the signer is
+/// returned so a test can verify the countersignature or move the height.
+async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeySigner>) {
+    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
+    let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
+        .await
+        .expect("bind");
+    (ep, signer)
+}
 
 /// In-memory provider: the loop's wire behaviour, storeless.
 struct FixtureProvider {
@@ -84,16 +125,33 @@ fn leaves(n: usize, seed: u8) -> Vec<u8> {
         .collect()
 }
 
-/// Split a 200 response into (head, frame header, payload).
-fn parse_served(response: &[u8]) -> (String, ServedFrameHeader, Vec<u8>) {
+/// A 200 response, split at its seams.
+struct Served {
+    head: String,
+    signature: HybridSignature,
+    frame: ServedFrameHeader,
+    body: Vec<u8>,
+}
+
+/// Split a 200 response into head, countersignature envelope, frame
+/// header, payload.
+fn parse_served(response: &[u8]) -> Served {
     let end = response
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head");
     let head = String::from_utf8_lossy(&response[..end]).to_string();
-    let mut body = &response[end + 4..];
+    let after_head = &response[end + 4..];
+    let (sig, mut body) = after_head.split_at(SIGNATURE_ENVELOPE_LEN);
+    let signature =
+        HybridSignature::from_canonical_bytes(sig).expect("served body leads with a signature");
     let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
-    (head, frame, body.to_vec())
+    Served {
+        head,
+        signature,
+        frame,
+        body: body.to_vec(),
+    }
 }
 
 /// Provider whose every lookup fails — the store-failure arm.
@@ -105,14 +163,39 @@ impl ShardProvider for FailingProvider {
     }
 }
 
+/// `GET path` with a well-formed, in-gate request header.
 async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
+    request(addr, "GET", path).await
+}
+
+/// One complete request head carrying the good header; returns the
+/// response bytes.
+async fn request(addr: SocketAddr, method: &str, path: &str) -> Vec<u8> {
+    request_raw(
+        addr,
+        &format!(
+            "{method} {path} HTTP/1.1\r\nhost: x\r\n{}\r\n",
+            header_line(&good_header())
+        ),
+    )
+    .await
+}
+
+/// An arbitrary complete head, verbatim; returns the response bytes.
+async fn request_raw(addr: SocketAddr, head: &str) -> Vec<u8> {
     let mut s = TcpStream::connect(addr).await.expect("connect");
-    s.write_all(format!("GET {path} HTTP/1.1\r\nhost: x\r\n\r\n").as_bytes())
-        .await
-        .expect("write request");
+    s.write_all(head.as_bytes()).await.expect("write request");
     let mut out = Vec::new();
     s.read_to_end(&mut out).await.expect("read response");
     out
+}
+
+/// The good request head for `GET /shard/0`, as bytes a test can extend.
+fn good_get_shard_0() -> String {
+    format!(
+        "GET /shard/0 HTTP/1.1\r\nhost: x\r\n{}\r\n",
+        header_line(&good_header())
+    )
 }
 
 fn head_of(response: &[u8]) -> String {
@@ -135,9 +218,7 @@ fn header_names(head: &str) -> Vec<String> {
 async fn binds_loopback_only() {
     // A wildcard or routable bind would make the endpoint reachable
     // without the rendezvous and attributable to the host's IP.
-    let ep = PServeEndpoint::bind(FixtureProvider::new([]))
-        .await
-        .expect("bind");
+    let (ep, _) = bind(FixtureProvider::new([])).await;
     assert!(ep.addr().ip().is_loopback());
     assert_ne!(ep.addr().port(), 0, "an ephemeral port was actually bound");
 }
@@ -148,15 +229,13 @@ async fn serves_each_shard_by_its_own_id() {
     // shard. Two ids must return their own bytes, not a shared buffer.
     let a: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
     let b: Vec<u8> = (0..4096u32).map(|i| (i % 241) as u8).collect();
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(7, a.clone()), (9, b.clone())]))
-        .await
-        .expect("bind");
+    let (ep, _) = bind(FixtureProvider::new([(7, a.clone()), (9, b.clone())])).await;
 
-    let ra = fetch(ep.addr(), "/x-provisional/v0/shard/7").await;
+    let ra = fetch(ep.addr(), "/shard/7").await;
     assert!(head_of(&ra).starts_with("HTTP/1.1 200 OK"));
     assert_eq!(&ra[ra.len() - a.len()..], &a[..], "shard 7 serves a-bytes");
 
-    let rb = fetch(ep.addr(), "/x-provisional/v0/shard/9").await;
+    let rb = fetch(ep.addr(), "/shard/9").await;
     assert_eq!(&rb[rb.len() - b.len()..], &b[..], "shard 9 serves b-bytes");
 
     assert_eq!(ep.served_count(), 2);
@@ -168,14 +247,10 @@ async fn two_personas_are_header_identical() {
     // Two endpoints (as two personas' loops would be), different
     // payload bytes of equal length so the assertion cannot pass
     // vacuously by serving identical bodies.
-    let a = PServeEndpoint::bind(FixtureProvider::new([(0, vec![0xAA; 2048])]))
-        .await
-        .expect("bind a");
-    let b = PServeEndpoint::bind(FixtureProvider::new([(1, vec![0xBB; 2048])]))
-        .await
-        .expect("bind b");
-    let ha = head_of(&fetch(a.addr(), "/x-provisional/v0/shard/0").await);
-    let hb = head_of(&fetch(b.addr(), "/x-provisional/v0/shard/1").await);
+    let (a, _) = bind(FixtureProvider::new([(0, vec![0xAA; 2048])])).await;
+    let (b, _) = bind(FixtureProvider::new([(1, vec![0xBB; 2048])])).await;
+    let ha = head_of(&fetch(a.addr(), "/shard/0").await);
+    let hb = head_of(&fetch(b.addr(), "/shard/1").await);
     assert_eq!(ha, hb, "two personas must be header-identical");
 
     // The header set is exactly the declared one — checked by name so
@@ -194,8 +269,9 @@ async fn two_personas_are_header_identical() {
 fn not_found_uses_the_declared_header_set_and_content_type() {
     // One source of truth: 404 is not a second fingerprint with a
     // divergent header list or content-type spelling.
-    assert!(NOT_FOUND.contains(&format!("content-type: {CONTENT_TYPE}")));
-    let head = NOT_FOUND
+    let not_found = render_not_found();
+    assert!(not_found.contains(&format!("content-type: {CONTENT_TYPE}")));
+    let head = not_found
         .split("\r\n\r\n")
         .next()
         .expect("status + headers");
@@ -204,54 +280,97 @@ fn not_found_uses_the_declared_header_set_and_content_type() {
 
 #[tokio::test]
 async fn every_non_servable_outcome_renders_one_identical_404() {
-    // The full *complete-head* miss set in one sweep: wrong path, wrong
-    // prefix, malformed id, UNKNOWN shard id (a valid route to a shard
-    // this persona does not hold), and a provider infrastructure
-    // failure. All must be byte-identical, or the differences become a
-    // probe surface for the route table, the holdings, or store health.
-    // Incomplete heads (oversized / EOF / timeout) are a different
-    // wire class — close, like over-capacity — covered separately.
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(3, leaves(1, 7))]))
-        .await
-        .expect("bind");
+    // Every complete-head miss is the one `render_not_found()`. A 405, a 500, or a
+    // second 404 shape is an implementation fingerprint; a distinct
+    // store-failure response is a live health oracle. Holdings are
+    // chain-public — GET 200 vs 404 is already the availability oracle —
+    // so this is not an existence test. It does NOT cover incomplete heads
+    // (oversized / EOF / timeout): those close, like over-capacity.
+    let (ep, _) = bind(FixtureProvider::new([(3, leaves(1, 7))])).await;
     let mut seen: Vec<Vec<u8>> = Vec::new();
-    for path in [
-        "/",
-        "/health",
-        "/x-spike/v0/shard/3",
-        "/x-provisional/v0/shard/",
-        "/x-provisional/v0/shard/abc",
-        "/x-provisional/v0/shard/4", // valid route, unheld shard
+    for (method, path) in [
+        ("GET", "/"),
+        ("GET", "/health"),
+        ("GET", "/x-spike/v0/shard/3"),
+        ("GET", "/x-provisional/v0/shard/3"), // RF-R1 predecessor — a miss, not an alias
+        ("GET", "/shard/"),
+        ("GET", "/shard/abc"),
+        ("GET", "/shard/4"), // valid route, unheld shard
+        // Wrong METHOD on a path GET would serve: a method-aware server
+        // answers 405 or 200 here. Either is a second shape, not an
+        // existence leak.
+        ("POST", "/shard/3"),
+        ("HEAD", "/shard/3"),
+        ("PUT", "/shard/3"),
+        ("DELETE", "/shard/3"),
+        ("OPTIONS", "/shard/3"),
     ] {
-        seen.push(fetch(ep.addr(), path).await);
+        seen.push(request(ep.addr(), method, path).await);
     }
-    let failing = PServeEndpoint::bind(Arc::new(FailingProvider))
-        .await
-        .expect("bind failing");
-    seen.push(fetch(failing.addr(), "/x-provisional/v0/shard/3").await);
+
+    // The request header's failure modes (`SF-D5`): each is the same 404
+    // as a wrong path. Names are case-insensitive and OWS is trimmed (that
+    // is HTTP, not a second encoding); the value is canonical or nothing.
+    let good = encode_request_header(&good_header());
+    let mut uppercase = good.clone();
+    uppercase.make_ascii_uppercase();
+    for head in [
+        // Missing entirely.
+        "GET /shard/3 HTTP/1.1\r\nhost: x\r\n\r\n".to_string(),
+        // Duplicate — even when both copies are valid.
+        format!(
+            "GET /shard/3 HTTP/1.1\r\n{}{}\r\n",
+            header_line(&good_header()),
+            header_line(&good_header())
+        ),
+        // Non-canonical hex (uppercase).
+        format!("GET /shard/3 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {uppercase}\r\n\r\n"),
+        // Wrong length: one byte short, one byte long, empty.
+        format!(
+            "GET /shard/3 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {}\r\n\r\n",
+            &good[..good.len() - 2]
+        ),
+        format!("GET /shard/3 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {good}00\r\n\r\n"),
+        format!("GET /shard/3 HTTP/1.1\r\n{REQUEST_HEADER_NAME}:\r\n\r\n"),
+        // Not hex at all.
+        format!(
+            "GET /shard/3 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {}\r\n\r\n",
+            "zz".repeat(PASS_REQUEST_HEADER_LEN)
+        ),
+        // Out of gate, both sides.
+        format!(
+            "GET /shard/3 HTTP/1.1\r\n{}\r\n",
+            header_line(&header_at(
+                IN_GATE_ANCHOR - PASS_ANCHOR_LAG_BLOCKS.to_raw() - 1
+            ))
+        ),
+        format!(
+            "GET /shard/3 HTTP/1.1\r\n{}\r\n",
+            header_line(&header_at(
+                IN_GATE_ANCHOR + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1
+            ))
+        ),
+    ] {
+        seen.push(request_raw(ep.addr(), &head).await);
+    }
+    assert_eq!(
+        ep.lookup_failure_count(),
+        0,
+        "header refusals happen before the store is touched"
+    );
+
+    let (failing, _) = bind(Arc::new(FailingProvider)).await;
+    seen.push(fetch(failing.addr(), "/shard/3").await);
     assert_eq!(failing.lookup_failure_count(), 1);
 
-    assert!(
-        seen.windows(2).all(|w| w[0] == w[1]),
-        "every miss must render byte-identically"
-    );
-    assert!(head_of(&seen[0]).starts_with("HTTP/1.1 404"));
+    for resp in &seen {
+        assert_eq!(
+            resp.as_slice(),
+            render_not_found().as_bytes(),
+            "every complete-head miss must be the shared 404"
+        );
+    }
     assert_eq!(ep.served_count(), 0, "a miss is not counted as a serve");
-}
-
-#[tokio::test]
-async fn non_get_methods_are_not_served() {
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]))
-        .await
-        .expect("bind");
-    let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-    s.write_all(b"POST /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
-        .await
-        .expect("write");
-    let mut out = Vec::new();
-    s.read_to_end(&mut out).await.expect("read");
-    assert!(head_of(&out).starts_with("HTTP/1.1 404"));
-    assert_eq!(ep.served_count(), 0);
 }
 
 #[tokio::test]
@@ -262,14 +381,12 @@ async fn a_request_body_does_not_reset_the_response() {
     // deliver the whole shared 404 — the invariant says every
     // complete-head non-servable outcome renders *the same bytes*, and
     // "reset instead" is not the same bytes.
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]))
-        .await
-        .expect("bind");
+    let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 1))])).await;
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
     let body = vec![b'z'; 64 * 1024];
     s.write_all(
         format!(
-            "POST /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\ncontent-length: {}\r\n\r\n",
+            "POST /shard/0 HTTP/1.1\r\nhost: x\r\ncontent-length: {}\r\n\r\n",
             body.len()
         )
         .as_bytes(),
@@ -282,7 +399,7 @@ async fn a_request_body_does_not_reset_the_response() {
     s.read_to_end(&mut out).await.expect("read response");
     assert_eq!(
         out,
-        NOT_FOUND.as_bytes(),
+        render_not_found().as_bytes(),
         "the complete shared 404 must survive a request that carried a body"
     );
 }
@@ -295,11 +412,9 @@ async fn unread_request_bytes_do_not_truncate_the_served_shard() {
     // the witness sees a *short shard*, failing content verification on
     // bytes this endpoint sent correctly.
     let payload: Vec<u8> = (0..256 * 1024u32).map(|i| (i % 251) as u8).collect();
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
-        .await
-        .expect("bind");
+    let (ep, _) = bind(FixtureProvider::new([(0, payload.clone())])).await;
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-    s.write_all(b"GET /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
+    s.write_all(good_get_shard_0().as_bytes())
         .await
         .expect("write request");
     // Never answered — no keep-alive — and exactly the unread remainder
@@ -333,11 +448,9 @@ async fn a_slow_reader_is_not_reset_before_it_reads_the_shard() {
     // bound was the whole cause: it guaranteed unread bytes remained,
     // which is precisely the condition close_gracefully exists to clear.
     let payload: Vec<u8> = (0..256 * 1024u32).map(|i| (i % 251) as u8).collect();
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
-        .await
-        .expect("bind");
+    let (ep, _) = bind(FixtureProvider::new([(0, payload.clone())])).await;
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-    s.write_all(b"GET /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
+    s.write_all(good_get_shard_0().as_bytes())
         .await
         .expect("write request");
     s.write_all(&vec![b'q'; 64 * 1024])
@@ -380,35 +493,69 @@ async fn a_multi_chunk_body_arrives_whole_and_in_order() {
     let payload: Vec<u8> = (0..WRITE_CHUNK_BYTES * 3 + LEAF_BYTES)
         .map(|i| u8::try_from(i % 253).expect("modulus is under 256"))
         .collect();
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
-        .await
-        .expect("bind");
-    let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
-    let (head, frame, body) = parse_served(&r);
-    assert!(head.contains(&format!("content-length: {}", frame.framed_len())));
+    let (ep, _) = bind(FixtureProvider::new([(0, payload.clone())])).await;
+    let r = fetch(ep.addr(), "/shard/0").await;
+    let Served {
+        head, frame, body, ..
+    } = parse_served(&r);
+    let expected_len = SIGNATURE_ENVELOPE_LEN as u64 + frame.framed_len();
+    assert!(head.contains(&format!("content-length: {expected_len}")));
     assert_eq!(
         frame.framed_len(),
         (frame.encoded_len() + payload.len()) as u64,
-        "content-length covers the frame header as well as the segment"
+        "the frame covers its header as well as the segment"
     );
     assert_eq!(body, payload);
 }
 
 #[tokio::test]
-async fn the_served_body_leads_with_the_frame_header() {
-    // RF-D4 on the wire. The witness reconstructs `R_k` from the
-    // segment bytes, so it needs to know where they stop; without the
-    // leading lengths a padded response is indistinguishable from a
-    // longer segment, and `content-length` cannot tell them apart
-    // because one number covers both.
+async fn the_served_body_leads_with_the_countersignature_then_the_frame() {
+    // SF-D8 then RF-D4 on the wire. The signature binds the response to
+    // the request the witness made (nonce, anchor, shard id); the frame
+    // tells it where the segment bytes stop, so a padded response is not
+    // mistaken for a longer segment. One `content-length` covers both.
     let payload = leaves(9, 0x40);
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
-        .await
-        .expect("bind");
-    let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+    let (ep, signer) = bind(FixtureProvider::new([(0, payload.clone())])).await;
+    let r = fetch(ep.addr(), "/shard/0").await;
 
-    let (head, frame, body) = parse_served(&r);
+    let Served {
+        head,
+        signature,
+        frame,
+        body,
+    } = parse_served(&r);
     assert!(head.starts_with("HTTP/1.1 200 OK"));
+    // The countersignature verifies through the consensus verifier the
+    // daemon runs, against exactly the header the request carried.
+    verify_pass_transcript(
+        signer.public_key(),
+        &NONCE,
+        BlockHeight::from_raw(IN_GATE_ANCHOR),
+        &ANCHOR_HASH,
+        0,
+        &signature,
+    )
+    .expect("the served signature covers the request header and shard id");
+    // ...and is bound to *this* shard id and *this* nonce.
+    assert!(verify_pass_transcript(
+        signer.public_key(),
+        &NONCE,
+        BlockHeight::from_raw(IN_GATE_ANCHOR),
+        &ANCHOR_HASH,
+        1,
+        &signature
+    )
+    .is_err());
+    assert!(verify_pass_transcript(
+        signer.public_key(),
+        &[0u8; 32],
+        BlockHeight::from_raw(IN_GATE_ANCHOR),
+        &ANCHOR_HASH,
+        0,
+        &signature
+    )
+    .is_err());
+
     assert_eq!(frame.leaf_count(), 9);
     assert_eq!(frame.segment_bytes(), payload.len() as u64);
     assert_eq!(
@@ -419,7 +566,116 @@ async fn the_served_body_leads_with_the_frame_header() {
     // The frame *delimits*: everything the header accounts for is
     // present, and nothing beyond it arrived.
     assert_eq!(body, payload);
-    assert_eq!(r.len() as u64 - (head.len() + 4) as u64, frame.framed_len());
+    assert_eq!(
+        r.len() as u64 - (head.len() + 4) as u64,
+        SIGNATURE_ENVELOPE_LEN as u64 + frame.framed_len()
+    );
+}
+
+#[tokio::test]
+async fn the_gate_is_two_sided_with_the_admission_lag() {
+    // `anchor_height ∈ [p − 720 − L, p − 720 + L]`: both edges serve, one
+    // past either edge is the shared 404 with no store read and no sign.
+    let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 1))])).await;
+    let l = PASS_ANCHOR_LAG_BLOCKS.to_raw();
+    for (anchor, servable) in [
+        (IN_GATE_ANCHOR, true),
+        (IN_GATE_ANCHOR - l, true),
+        (IN_GATE_ANCHOR + l, true),
+        (IN_GATE_ANCHOR - l - 1, false),
+        (IN_GATE_ANCHOR + l + 1, false),
+        (OWN_HEIGHT, false), // a requester anchoring at *its tip* is refused
+    ] {
+        let r = request_raw(
+            ep.addr(),
+            &format!(
+                "GET /shard/0 HTTP/1.1\r\n{}\r\n",
+                header_line(&header_at(anchor))
+            ),
+        )
+        .await;
+        if servable {
+            assert!(
+                head_of(&r).starts_with("HTTP/1.1 200 OK"),
+                "anchor {anchor}"
+            );
+        } else {
+            assert_eq!(r, render_not_found().as_bytes(), "anchor {anchor}");
+        }
+    }
+    assert_eq!(ep.served_count(), 3);
+    assert_eq!(ep.lookup_failure_count(), 0);
+    assert_eq!(ep.sign_failure_count(), 0);
+}
+
+#[tokio::test]
+async fn a_refusing_signer_renders_the_shared_404_and_counts_separately() {
+    // The host's key is not resident (SH-2 not yet wired, signer down):
+    // the endpoint stays up, the shard is looked up, and the response is
+    // the identical 404 — never an unsigned body. The counter is the only
+    // place this is distinguishable from a missing pin.
+    struct Refusing;
+    impl PassKey for Refusing {
+        fn sign_pass(
+            &self,
+            _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        ) -> Result<HybridSignature, SignRefused> {
+            Err(SignRefused::new("not resident"))
+        }
+    }
+    impl PassSigner for Refusing {
+        fn own_height(&self) -> Option<BlockHeight> {
+            Some(BlockHeight::from_raw(OWN_HEIGHT))
+        }
+    }
+    let signer: Arc<dyn PassSigner> = Arc::new(Refusing);
+    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]), signer)
+        .await
+        .expect("bind");
+    let r = fetch(ep.addr(), "/shard/0").await;
+    assert_eq!(r, render_not_found().as_bytes());
+    assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.lookup_failure_count(), 0);
+    assert_eq!(ep.served_count(), 0);
+    // An unheld shard is an ordinary miss — neither a lookup failure nor
+    // a sign failure: the persona never signs for a shard it does not
+    // hold, and not holding one is not a fault.
+    let r = fetch(ep.addr(), "/shard/9").await;
+    assert_eq!(r, render_not_found().as_bytes());
+    assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.lookup_failure_count(), 0);
+}
+
+#[tokio::test]
+async fn an_unreadable_height_renders_the_shared_404_and_counts_a_lookup_failure() {
+    // The host cannot read its own height — its serving store is gone.
+    // Nothing is looked up and nothing is signed: the 404 is identical,
+    // and the fault lands in `lookup_failure_count` (a store read that
+    // failed), not in `sign_failure_count` and not silently in neither.
+    struct Storeless(Arc<TestKeySigner>);
+    impl PassKey for Storeless {
+        fn sign_pass(
+            &self,
+            m: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        ) -> Result<HybridSignature, SignRefused> {
+            self.0.sign_pass(m)
+        }
+    }
+    impl PassSigner for Storeless {
+        fn own_height(&self) -> Option<BlockHeight> {
+            None
+        }
+    }
+    let key = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
+    let signer: Arc<dyn PassSigner> = Arc::new(Storeless(Arc::clone(&key)));
+    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]), signer)
+        .await
+        .expect("bind");
+    let r = fetch(ep.addr(), "/shard/0").await;
+    assert_eq!(r, render_not_found().as_bytes());
+    assert_eq!(ep.lookup_failure_count(), 1);
+    assert_eq!(ep.sign_failure_count(), 0);
+    assert_eq!(ep.served_count(), 0);
 }
 
 #[tokio::test]
@@ -438,11 +694,13 @@ async fn a_body_that_is_not_a_leaf_array_is_not_servable() {
             )))
         }
     }
-    let ep = PServeEndpoint::bind(Arc::new(RaggedProvider))
-        .await
-        .expect("bind");
-    let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
-    assert_eq!(r, NOT_FOUND.as_bytes(), "an unframeable body is not served");
+    let (ep, _) = bind(Arc::new(RaggedProvider)).await;
+    let r = fetch(ep.addr(), "/shard/0").await;
+    assert_eq!(
+        r,
+        render_not_found().as_bytes(),
+        "an unframeable body is not served"
+    );
     assert_eq!(ep.served_count(), 0);
 }
 
@@ -452,9 +710,7 @@ async fn concurrency_past_the_cap_is_refused_by_close_not_by_a_status_code() {
     // until READ_TIMEOUT). Poll until the accept loop has actually
     // filled the cap and starts shedding by CLOSE — never a fixed
     // sleep that flakes under load.
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 3))]))
-        .await
-        .expect("bind");
+    let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 3))])).await;
 
     let mut held: Vec<TcpStream> = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -517,11 +773,9 @@ async fn the_cap_does_not_refuse_below_it() {
     // Negative control: without it, a cap of zero would pass
     // "refusals happen" while breaking the endpoint entirely.
     let payload = leaves(4, 9);
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload)]))
-        .await
-        .expect("bind");
+    let (ep, _) = bind(FixtureProvider::new([(0, payload)])).await;
     for _ in 0..8 {
-        let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+        let r = fetch(ep.addr(), "/shard/0").await;
         assert!(head_of(&r).starts_with("HTTP/1.1 200 OK"));
     }
     assert_eq!(ep.refused_count(), 0, "no refusal below the cap");
@@ -533,11 +787,9 @@ async fn oversized_request_head_is_closed_not_answered() {
     // Incomplete / hostile head: close with no HTTP bytes — same wire
     // class as over-capacity, not the complete-head shared 404. The
     // pre-allocation bound is enforced while reading.
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 0))]))
-        .await
-        .expect("bind");
+    let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 0))])).await;
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-    s.write_all(b"GET /x-provisional/v0/shard/0 HTTP/1.1\r\n")
+    s.write_all(b"GET /shard/0 HTTP/1.1\r\n")
         .await
         .expect("write line");
     let filler = vec![b'x'; MAX_REQUEST_BYTES * 2];
@@ -552,38 +804,118 @@ async fn oversized_request_head_is_closed_not_answered() {
 }
 
 #[test]
-fn request_parsing_accepts_only_the_provisional_route() {
+fn route_prefix_is_the_rf_r1_path() {
+    assert_eq!(ROUTE_PREFIX, "/shard/");
+    assert!(!ROUTE_PREFIX.contains("provisional"));
+    assert!(!ROUTE_PREFIX.contains("v0"));
+}
+
+#[test]
+fn request_parsing_accepts_only_the_ruled_route() {
+    let h = header_line(&good_header());
+    let with_header = |line: &str| format!("{line}\r\n{h}\r\n");
     assert_eq!(
-        parse_request(b"GET /x-provisional/v0/shard/42 HTTP/1.1\r\n\r\n"),
-        Some(Request::Shard(42))
+        parse_request(with_header("GET /shard/42 HTTP/1.1").as_bytes()),
+        Some(Request::Shard {
+            shard_id: 42,
+            header: good_header()
+        })
     );
-    assert_eq!(parse_request(b"GET /shard/42 HTTP/1.1\r\n\r\n"), None);
+    // Discarded RF-R1 predecessor — a miss, not an alias.
+    assert_eq!(
+        parse_request(with_header("GET /x-provisional/v0/shard/42 HTTP/1.1").as_bytes()),
+        None
+    );
     // The spike's route is dead here — its framing did not carry over.
     assert_eq!(
-        parse_request(b"GET /x-spike/v0/shard/42 HTTP/1.1\r\n\r\n"),
+        parse_request(with_header("GET /x-spike/v0/shard/42 HTTP/1.1").as_bytes()),
         None
     );
     assert_eq!(
-        parse_request(b"HEAD /x-provisional/v0/shard/1 HTTP/1.1\r\n\r\n"),
+        parse_request(with_header("HEAD /shard/1 HTTP/1.1").as_bytes()),
         None
     );
     // A negative id is not a u64 — rejected rather than wrapped.
     assert_eq!(
-        parse_request(b"GET /x-provisional/v0/shard/-1 HTTP/1.1\r\n\r\n"),
+        parse_request(with_header("GET /shard/-1 HTTP/1.1").as_bytes()),
         None
     );
     // No version token / extra tokens → miss.
+    assert_eq!(parse_request(with_header("GET /shard/1").as_bytes()), None);
     assert_eq!(
-        parse_request(b"GET /x-provisional/v0/shard/1\r\n\r\n"),
-        None
-    );
-    assert_eq!(
-        parse_request(b"GET /x-provisional/v0/shard/1 HTTP/1.1 extra\r\n\r\n"),
+        parse_request(with_header("GET /shard/1 HTTP/1.1 extra").as_bytes()),
         None
     );
     // Query / suffix is not a bare u64.
     assert_eq!(
-        parse_request(b"GET /x-provisional/v0/shard/1?x=1 HTTP/1.1\r\n\r\n"),
+        parse_request(with_header("GET /shard/1?x=1 HTTP/1.1").as_bytes()),
+        None
+    );
+}
+
+#[test]
+fn request_header_parsing_is_http_lenient_and_value_strict() {
+    let good = encode_request_header(&good_header());
+    let expect = Some(Request::Shard {
+        shard_id: 1,
+        header: good_header(),
+    });
+    // Name case and optional whitespace are HTTP's; other headers are
+    // ignored on either side.
+    let upper_name = REQUEST_HEADER_NAME.to_ascii_uppercase();
+    assert_eq!(
+        parse_request(
+            format!("GET /shard/1 HTTP/1.1\r\nhost: x\r\n{upper_name}:\t {good} \r\nx: y\r\n\r\n")
+                .as_bytes()
+        ),
+        expect
+    );
+    // Missing → miss.
+    assert_eq!(
+        parse_request(b"GET /shard/1 HTTP/1.1\r\nhost: x\r\n\r\n"),
+        None
+    );
+    // Duplicate → miss, even if identical.
+    assert_eq!(
+        parse_request(
+            format!("GET /shard/1 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {good}\r\n{REQUEST_HEADER_NAME}: {good}\r\n\r\n")
+                .as_bytes()
+        ),
+        None
+    );
+    // The value is canonical lowercase hex of exactly 72 bytes.
+    let mut upper_value = good.clone();
+    upper_value.make_ascii_uppercase();
+    assert_eq!(
+        parse_request(
+            format!("GET /shard/1 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {upper_value}\r\n\r\n")
+                .as_bytes()
+        ),
+        None
+    );
+    assert_eq!(
+        parse_request(
+            format!("GET /shard/1 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {good}0\r\n\r\n").as_bytes()
+        ),
+        None
+    );
+    // A header line with no colon is a malformed head → miss.
+    assert_eq!(
+        parse_request(
+            format!(
+                "GET /shard/1 HTTP/1.1\r\nno-colon-here\r\n{REQUEST_HEADER_NAME}: {good}\r\n\r\n"
+            )
+            .as_bytes()
+        ),
+        None
+    );
+    // The header is only read from the head: a copy after the blank line
+    // (pipelined bytes) does not count.
+    assert_eq!(
+        parse_request(
+            format!("GET /shard/1 HTTP/1.1\r\n\r\n{REQUEST_HEADER_NAME}: {good}\r\n\r\n")
+                .as_bytes()
+        ),
         None
     );
 }

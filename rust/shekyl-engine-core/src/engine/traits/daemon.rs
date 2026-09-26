@@ -79,9 +79,9 @@ use crate::engine::pending::TxHash;
 /// Per `PHASE_2A_SEND_PATH.md` §3.3, the whole snapshot derives from
 /// **one** `get_fee_estimate` JSON-RPC call (not three per-tier
 /// `get_fee_rate` calls): the response's fee array maps to the three
-/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`3` per
-/// `V3_WALLET_DECISION_LOG.md`) and its single `quantization_mask`
-/// is stored once on [`Self::quantization_mask`]. This guarantees the
+/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`2`) and
+/// its single `quantization_mask` is stored once on
+/// [`Self::quantization_mask`]. This guarantees the
 /// tier band and the
 /// [`Custom`](super::super::FeePriority::Custom) feerate's rounding
 /// mask all derive from the same daemon view, with no tier-vs-tier
@@ -238,6 +238,16 @@ pub(crate) struct DaemonHealth {
     /// The daemon's network-estimated target height (`0` when synced —
     /// the info surface's convention).
     pub target_height: u64,
+    /// The daemon's own `synchronized` flag (`core_rpc_server.cpp:248`,
+    /// from `check_core_ready()`).
+    ///
+    /// **Not decoration on top of the heights.** A daemon that has just
+    /// started with no peers reports `target_height == 0` *and*
+    /// `synchronized == false`: the height comparison alone reads that as
+    /// synced, at a genesis-adjacent height. That is the rebuilt-database
+    /// case `WSS-25` is about, so both halves are required —
+    /// `SyncedChainFacts` is where the two are combined.
+    pub synchronized: bool,
 }
 
 /// Engine-side view of the daemon RPC surface (§2.5).

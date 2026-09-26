@@ -1,6 +1,6 @@
 # Shekyl Design Concepts
 
-> **Last updated:** 2026-07-19
+> **Last updated:** 2026-09-16 (Proof-of-work pointer added; economics text unchanged since 2026-07-19)
 
 > **Staking-model correction (2026-07-19).** Earlier revisions of this document
 > described a **passive lock-tier PoS** staking model ("lock SHEKYL for a duration
@@ -42,6 +42,36 @@ generation-invariant differential tests (engine vs `shekyl-economics-sim` on the
 shared primitive) vs calibration-tagged value vectors (expected to churn each
 generation). See that doc for `CALIBRATION-PENDING` code markers and the
 `as_of` / param-epoch calibration-generation tag.
+
+## Proof of work (pointer, not a second source of truth)
+
+Shekyl's PoW is **RandomX v2**; the specification of record is
+[`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md). The
+architectural decisions this document's economics assume, cited rather than
+restated:
+
+- **Rust verifies, C mines — permanently** (§2; `RANDOMX_V2_PLAN.md`
+  Decision #1). The daemon
+  embeds only the pure-software Rust verifier; the RandomX C JIT and the
+  XMRig-class miner ecosystem consume the C ABI **out of process**. The
+  built-in `start_mining` is a light-mode convenience, not the ceiling.
+  Enforced on the linked binary by `scripts/ci/check_randomx_symbol_isolation.sh`.
+- **No prewarm FFI; lazy non-canonical derivation** (§6; `RANDOMX_V2_PLAN.md`
+  Decision #6): a non-canonical cache derives on first use (≤ 200 ms, once
+  per seed epoch). The canonical cache at the chain tip is pinned and
+  derived synchronously by `shekyl_pow_randomx_v2_set_canonical` — that
+  eager pin is the sanctioned replacement for async/fake prewarm, not a
+  contradiction of Decision #6.
+- **Verifier API shaped by [`18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc)**:
+  cache/dataset/hash are transform-shaped; memoization is a function-level
+  memo inside `shekyl-ffi`, invisible to C++ callers.
+- **`rust/shekyl-consensus` stays** — six live Cargo consumers; it is not a
+  PoW vestige.
+- **Genesis-era mining asymmetry** (the honest light-mode floor vs the tuned
+  miner ceiling) is a *security* disposition owned by
+  [`docs/design/RANDOMX_V2_MINING_ASYMMETRY.md`](design/RANDOMX_V2_MINING_ASYMMETRY.md),
+  not an economics parameter; the §8 security-budget reasoning below assumes
+  that disposition is made, not that the gap is zero.
 
 ---
 
@@ -813,15 +843,22 @@ RELEASE_MIN/MAX ◄── tx volume ──────┤
 > - **The hypothesis's "mixing layer / clean coins" framing is
 >   ring-era.** "No spending history" confers an advantage only where an
 >   observer can trace spending history — i.e., on a visible spend graph
->   where decoy selection samples outputs. Under FCMP++ every output enters
->   the full-chain anonymity set identically; a fresh coinbase output adds
->   exactly what any other output adds.
+>   where decoy selection samples outputs. Under FCMP++ every output is
+>   provable from the full-chain set identically, and a fresh coinbase
+>   output adds exactly what any other output adds — provided the spend does
+>   not name its input, which it did under `PL-D1` (next bullet) until
+>   `PL-D3` landed on 2026-09-14; the ring-era framing is wrong either way.
 > - **Mechanism A's harm model presupposes an observable FCMP++ does not
 >   emit.** "Temporal correlation between *block mined at H* and *coinbase
 >   output spent at H+N*" requires observing **when a specific output is
->   spent** — an FCMP++ spend never reveals which output it consumes, so
->   N is unobservable and there is nothing to decorrelate. Do not build
->   this.
+>   spent**. The 2026-07-17 reading held that an FCMP++ spend never reveals
+>   which output it consumes; that was false between genesis-design and
+>   2026-09-14 — the `pqc_pk` each spend revealed identified the spent output
+>   (`PL-D1`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)),
+>   so N was observable. `PL-D3` (implemented 2026-09-14) makes the leaf a
+>   hiding commitment, so the observable is gone again and the 2026-07-17
+>   premise holds; the "do not build this" disposition stands on a premise
+>   that is true once more (re-ruling recorded in the `PL-` round, §12).
 > - **Mechanism B's observable is real.** Staker claims are P-attributed
 >   and carry loud plain amounts on the wire (`REWARD_EMISSION_LEG.md`),
 >   so claim frequency/timing is genuinely public; batching addresses an
@@ -880,8 +917,10 @@ correct total). These outputs enter the UTXO set and are part of the full-chain
 anonymity set used by FCMP++ membership proofs.
 
 **Privacy gain:** More coinbase-shaped outputs in the UTXO set increase the
-overall UTXO set diversity. With FCMP++, the full UTXO set is the anonymity
-set, so additional outputs improve privacy indirectly by increasing set size.
+overall UTXO set diversity. With FCMP++, the full UTXO set is the set the
+proof ranges over and, since `PL-D3` (2026-09-14) made the leaf a hiding
+commitment, the spend's anonymity set, so additional outputs improve privacy
+indirectly by increasing set size.
 
 **Risk:** Increases coinbase transaction size and adds consensus complexity.
 Anti-sybil enforcement is needed to prevent miners from creating outputs

@@ -6,9 +6,13 @@
 //! Live apparatus validation — the §7 `#[ignore]`d end-to-end gate.
 //!
 //! **This is not the measurement.** It proves the apparatus works: two personas
-//! publish, both are reachable over real rendezvous circuits, both serve their
-//! bytes intact, the derived `.onion` is the one tor published, and the services
-//! are withdrawn on shutdown. The measurement itself is the `pd-f2-measure`
+//! publish (each behind its own tor), both are reachable from the client tor
+//! over real rendezvous circuits, both serve bodies whose countersignature
+//! verifies under the persona's key and whose length matches the serving
+//! contract (frame + leaves), the derived `.onion` is the one tor published,
+//! `NEWNYM`
+//! is accepted by the client tor, and the services are withdrawn on shutdown.
+//! The measurement itself is the `pd-f2-measure`
 //! binary, which is deliberately not a test (§7: tests must not depend on network
 //! conditions, and a distribution is the wrong shape for a green/red verdict).
 //!
@@ -25,7 +29,7 @@
 
 use std::sync::Arc;
 
-use shekyl_sp_t3_spike::harness::{cold_client_id, warm_client_id, Apparatus};
+use shekyl_sp_t3_spike::harness::Apparatus;
 
 /// The pinned tor binary. **Hard-fails** rather than skipping, so a
 /// misconfigured integration lane is loud instead of silently passing by not
@@ -39,10 +43,13 @@ fn tor_binary() -> std::path::PathBuf {
 #[tokio::test]
 #[ignore = "requires the pinned Tor binary via SHEKYL_SPIKE_TOR (bootstraps, publishes onions, network)"]
 async fn two_personas_publish_and_serve_over_real_rendezvous() {
-    // A payload with structure, so a truncated or substituted response fails the
-    // byte comparison rather than passing a length check. 64 000 B is exactly
-    // 500 leaves: the served frame requires a whole number of them, and the
-    // apparatus derives the expected body length (frame + leaves) itself.
+    // A payload whose length is a whole number of leaves: the served frame
+    // requires that, and the apparatus derives expected body length (frame +
+    // leaves) itself. The live gate asserts that derived length plus a valid
+    // countersignature — `fetch_via` plugs `ContentVerify` open so a short
+    // body stays `Truncated` (stream) rather than a content refusal the
+    // measurement would void as apparatus error. Same-length substitution is
+    // not this gate's subject (the endpoint is ours).
     let payload: Vec<u8> = (0..64_000u32).map(|i| (i % 251) as u8).collect();
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -72,34 +79,48 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
 
     app.await_reachable()
         .await
-        .expect("at least one persona becomes reachable");
+        .expect("every persona becomes reachable and none is refused");
 
-    // Both personas serve, over distinct client circuits, and the bytes arrive
-    // intact. Distinct client ids so the two fetches ride separate circuits —
-    // the client-side isolation SP-T2 proved, exercised here on the serving axis.
-    for (index, id_seq) in [(0usize, 900_001u64), (1usize, 900_002u64)] {
-        let obs = app.timed_fetch(&cold_client_id(id_seq), index).await;
+    // Both personas serve, cold: countersignature valid under the persona's
+    // key, derived body length matches. A `NEWNYM`
+    // before each is the cold arm's mechanism, so its acceptance by the client
+    // tor is asserted here too — a rig whose "cold" signal was silently
+    // refused would time warm circuits and call them cold.
+    for index in [0usize, 1usize] {
+        app.rotate_client_circuits()
+            .await
+            .expect("client tor accepts SIGNAL NEWNYM");
+        let obs = app.timed_fetch(index).await;
+        // The serve-side counters are in the message so a `Circuit` here
+        // can be told apart from `P` shedding the connection at its cap.
         assert!(
             obs.is_success(),
-            "persona {index} must serve its shard over the rendezvous: {obs:?}"
+            "persona {index} must serve its shard over the rendezvous: {obs:?} \
+             (served so far: {}, shed at the serve-side cap: {})",
+            app.served_total(),
+            app.refused_total()
         );
     }
 
-    // A warm fetch (reused client id) must also succeed — this is the arm the
-    // measurement calls optimistic, and a failure here would mean the warm arm
-    // measures nothing.
-    let warm = app.timed_fetch(&warm_client_id(), 0).await;
+    // A warm fetch (no signal, same persona) must also succeed — this is the
+    // arm the measurement calls optimistic, and a failure here would mean the
+    // warm arm measures nothing. Persona 1 is the one fetched *last*, with no
+    // `NEWNYM` since: its rendezvous circuit is the one the client tor still
+    // holds. Persona 0's was dirtied by the signal before persona 1's fetch,
+    // so refetching it here would build a fresh circuit and validate nothing
+    // about reuse.
+    let warm = app.timed_fetch(1).await;
     assert!(
         warm.is_success(),
         "warm-circuit fetch must succeed: {warm:?}"
     );
 
-    // Apparatus cross-check: the endpoints served exactly the requests the client
-    // leg believes it made (2 persona fetches + 1 warm + at least 1 reachability
-    // probe). A "success" that the endpoint never saw would mean the bytes came
-    // from somewhere else entirely.
+    // Apparatus cross-check: the endpoints served every request the client
+    // leg believes it made (2 cold fetches + 1 warm + at least one cold
+    // readiness probe per persona). A "success" that the endpoint never saw
+    // would mean the bytes came from somewhere else entirely.
     assert!(
-        app.served_total() >= 4,
+        app.served_total() >= 5,
         "the endpoints must have served every counted fetch, got {}",
         app.served_total()
     );

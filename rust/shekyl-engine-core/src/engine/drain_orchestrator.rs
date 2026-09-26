@@ -573,7 +573,7 @@ pub(crate) struct DrainCtx<'a> {
     /// reserve deadlock this avoids).
     pub retired: bool,
     /// The wallet's synced chain tip — the send-path anchor input.
-    pub chain_tip: u64,
+    pub chain_tip: shekyl_types::BlockHeight,
 }
 
 /// The terminal sweep's pool residue: everything the pass leaves on the
@@ -748,7 +748,7 @@ fn scoped_records(
 pub(crate) async fn orchestrate_drain(
     handle: PersonaHandle,
     ctx: DrainCtx<'_>,
-    block_hash_at: impl FnOnce(u64) -> Option<[u8; 32]>,
+    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<[u8; 32]>,
 ) -> Result<OrchestratedDrain, DrainOrchestrationError> {
     // 1. Anchor one ReferenceBlock via the ordinary send-path procedure
     //    (shared with the bond path — never a hand-rolled `tip − age`, WI-2
@@ -758,7 +758,7 @@ pub(crate) async fn orchestrate_drain(
         .map_err(|e| DrainOrchestrationError::ReferenceUnanchorable {
             detail: e.to_string(),
         })?;
-    let reference_height = BlockHeight::from_raw(reference.height.0);
+    let reference_height = reference.height;
 
     // 2. Scope to the persona's own unreserved records, then plan per the
     //    intent: the F-D1 planner (project → amount → select) for a payment
@@ -865,9 +865,9 @@ pub(crate) async fn orchestrate_drain(
     let assemble_inputs: Vec<AssembleInput> = selected
         .iter()
         .map(|r| AssembleInput {
-            gindex: Gindex(r.gindex.to_raw()),
-            output_key: r.output_key,
-            commitment: r.commitment,
+            gindex: Gindex::from_raw(r.gindex.to_raw()),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
+            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
         })
         .collect();
     let paths = ctx
@@ -903,10 +903,10 @@ pub(crate) async fn orchestrate_drain(
                 .leaf_chunk
                 .iter()
                 .map(|cl| LeafEntry {
-                    output_key: cl.output_key,
+                    output_key: cl.output_key.to_bytes(),
                     key_image_gen: cl.key_image_gen,
-                    commitment: cl.commitment,
-                    h_pqc: cl.h_pqc,
+                    commitment: cl.commitment.to_bytes(),
+                    cm_x: cl.cm_x,
                 })
                 .collect(),
             c1_layers: path.c1_layers,

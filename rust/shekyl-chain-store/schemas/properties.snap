@@ -1,0 +1,13 @@
+# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
+#   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
+# and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
+cells = 8
+[cells]
+apply_policy = engine_local<family_set>
+archival_last_slash_epoch = chain_state<settlement_epoch>
+passed_through_facts = engine_local<passed_through_facts>
+rule_coverage_gaps = engine_local<rule_coverage_gaps>
+schema_version = engine_local<schema_version>
+settlement_epoch_blocks = engine_local<settlement_epoch_blocks>
+total_burned = chain_state<atomic_units>
+undo_log_floor = engine_local<block_height>

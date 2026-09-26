@@ -15,44 +15,18 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) {
 
     match dc.get_info() {
         Ok(info) => {
-            let height = info
-                .get("height")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let target_height = info
-                .get("target_height")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let difficulty = info
-                .get("difficulty")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let tx_count = info
-                .get("tx_count")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let outgoing_connections = info
-                .get("outgoing_connections_count")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let incoming_connections = info
-                .get("incoming_connections_count")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let status = info
-                .get("status")
-                .and_then(|s| s.as_str())
-                .unwrap_or("unknown");
-
             println!("Chain health:");
-            println!("  Status:       {status}");
-            println!("  Height:       {height}");
-            if target_height > 0 && target_height != height {
-                println!("  Target:       {target_height} (syncing)");
+            println!("  Status:       {}", info.status);
+            println!("  Height:       {}", info.height);
+            if info.target_height > 0 && info.target_height != info.height {
+                println!("  Target:       {} (syncing)", info.target_height);
             }
-            println!("  Difficulty:   {difficulty}");
-            println!("  Tx count:     {tx_count}");
-            println!("  Connections:  {outgoing_connections} out / {incoming_connections} in");
+            println!("  Difficulty:   {}", info.difficulty);
+            println!("  Tx count:     {}", info.tx_count);
+            println!(
+                "  Connections:  {} out / {} in",
+                info.outgoing_connections_count, info.incoming_connections_count
+            );
         }
         Err(e) => eprintln!("{e}"),
     }

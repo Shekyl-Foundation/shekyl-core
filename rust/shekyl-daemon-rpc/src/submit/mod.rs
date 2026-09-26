@@ -57,7 +57,7 @@ pub use ffi_shim::FfiSubmitShim;
 pub use gate::phase_c_semaphore;
 pub use phase_a::{parse_submission, ParsedSubmission, PhaseAReject, SubmitTxKind};
 pub use verifier::DaemonTxVerifier;
-pub use verify::{TxVerifier, VerifyFailure};
+pub use verify::{TxVerifier, VerifyFailure, VerifyReject};
 
 /// The production engine: FFI state shim (§4) + native verifier (§3.3's
 /// Phase-C battery). One instance per daemon, shared across transport

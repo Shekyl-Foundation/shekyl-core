@@ -30,8 +30,8 @@ rulings into bytes:
 | Ruling (elsewhere) | What it fixes for the wire |
 |---|---|
 | Miner-chosen set, coinbase-revealed | The attester is the block producer; no schedule, no beacon |
-| Block-bound nonce `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` | The record's authenticity binds to *this* block's coinbase |
-| Non-transferable / self-crediting killed | Verify must recompute the nonce, never trust a carried one |
+| Block-bound nonce `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` — **SUPERSEDED twice:** `r` → `block_hash(h−1)` (`RF-D3`/`RF-D5`, 2026-08-19, landed); then the countersignature message became requester-random `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` with `cb_out_key` dropped (`SF-D8`, 2026-09-13; verifier LANDED by the (a0) PR the same day — admission verifies over the carried nonce and anchor height, with the anchor hash read from the connecting chain inside `[h−720−L, h−720]`) | The record's authenticity binds to *this* block's coinbase — *(v1 property; `SF-D8` binds to a chain anchor 720 deep instead and accepts same-height reuse)* |
+| Non-transferable / self-crediting killed | v1 recomputed the nonce from chain terms. **SUPERSEDED `SF-D8` (LANDED (a0)):** the nonce is requester-random and **carried**; admission does not trust a carried *hash* — it looks the hash up from the connecting chain at the carried height |
 | Miss fact (three-valued) | The record carries a pass/miss discriminant; "neither" is off-wire |
 | Coinbase-output-key uniqueness (epoch-windowed) | A consensus check the wire's verify path must invoke |
 | Prunable residence | Header kept; 3.43 KB countersignature on the coinbase-tx prunable side |
@@ -118,11 +118,21 @@ manipulation surface).** Applied hard, they collapse most of a first draft:
   cover `H(nonce ‖ transfer_digest)`, but that is not consensus-verifiable:
   `transfer_digest` would digest the transferred shard bytes, which are
   off-chain, so admission could never reconstruct the signed message. The
-  countersignature covers **the nonce alone** (§3.3), and that is *complete*, not
-  a shortcut — `s` (`shard_id`) is already a nonce term, so a content digest
-  would add no binding `s` does not carry. Read-content binding comes from
+  countersignature covers **the nonce alone** (§3.3) — **SUPERSEDED 2026-09-13
+  by `SF-D8` (LANDED by (a0)): the signed message is
+  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`, the
+  nonce requester-random and the anchor the requester's chain at `tip − 720`.
+  The completeness argument below was v1's** — `s` (`shard_id`) was a nonce
+  term, so a content digest would have added no binding `s` did not carry. Read-content binding comes from
   §9.4's topology, not from a signed artifact; nothing of the sort is on the wire.
-- **The nonce is NOT stored** — `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` is recomputable
+- **The nonce is NOT stored** — **REVERSED 2026-09-13 by `SF-D8` (RULED and
+  LANDED by the (a0) PR): the pass record carries the 32-byte requester-random
+  nonce and the 8-byte `anchor_height`, because neither is recomputable; on
+  the wire they ride the prunable witness as
+  `nonce[32] ‖ anchor_height_le[8] ‖ HybridSignature[3385]` per pass, and the
+  kept header is unchanged. The anchor HASH is not carried — admission reads
+  it from its own chain at `anchor_height`, which is what makes a fabricated
+  hash fail.** v1 reasoning follows: `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` is recomputable
   at the only two moments anything needs it (admission and any later re-check),
   because `r` (coinbase extra) and `cb_out_key` (coinbase output) are kept-side
   and survive the signature prune. Storing it is redundant moving data.
@@ -273,7 +283,8 @@ machinery.
 
 **Do NOT conflate the two "tree roots" (validated at source 2026-08-03).** The
 FCMP `tree_root` (`shekyl-fcmp/src/proof.rs`, from `Selene`/`Helios` branch
-layers via `get_curve_tree_path`) is the **curve tree** over *outputs* — the
+layers the wallet assembles locally — `shekyl-curve-tree::assemble_path`; the
+daemon path RPC was removed 2026-09-18, `SOK-10`) is the **curve tree** over *outputs* — the
 membership structure a spend proof binds to. The block's `tx_tree_hash`
 (`format_utils.cpp:1419`) is a **`cn_fast_hash` binary merkle** over *tx hashes*
 for the PoW blob. Different data, different hash, different purpose; FCMP binds
@@ -308,9 +319,15 @@ transaction at all.
 
 **3.3 The verify entrypoint that replaces `shekyl_archival_verify_serve_credit_vin`
 (shape 4).** Its contract inverts: instead of a path opening, for each of the `k`
-records it (a) recomputes the nonce from `r ‖ cb_out_key ‖ P ‖ s ‖ E`,
+records it (a) takes the witness-carried requester nonce and anchor height and
+reads the anchor **hash** from the connecting chain at that height, requiring
+`anchor_height ∈ [h − 720 − L, h − 720]` for validated predecessor `h`
+*(`SF-D8`, LANDED by (a0) 2026-09-13; the v1 step recomputed a block-bound
+nonce from `r ‖ cb_out_key ‖ P ‖ s ‖ E` — RETIRED, never carried a record)*,
 (b) for a **pass** (`kind = pass`) checks the side-table `HybridSignature` is
-`P`'s valid countersignature over the nonce; for a **miss** (`kind = miss`)
+`P`'s valid countersignature over
+`nonce ‖ anchor_height_le ‖ chain_hash(anchor_height) ‖ shard_id_le` under
+`shekyl/archival-attestation-scheme-v2`; for a **miss** (`kind = miss`)
 requires no signature, (c) binds the attester to the block producer (the
 coinbase authorship *is* the attestation — no separate witness key), and
 (d) invokes the **epoch-windowed coinbase-output-key uniqueness** check (the
@@ -347,7 +364,10 @@ convention:
 - **`archival_alt_attestation_witness`, hash-keyed** — **owned by the alt-block
   table**. Written only beside `add_alt_block`, removed only by
   `remove_alt_block` / `drop_alt_blocks` / `reset()`. A row therefore exists
-  there **iff** its alt block does.
+  there **iff** its alt block does. *In the redb store (DRS-E1 S-ALT,
+  2026-09-25) this clause is structural rather than maintained: the witness
+  is a field of the alt block's own row (`AltBlock::attestation_witness`,
+  `DRS_E1_SALT.md` SAL-6) and there is no second table to own.*
 
 Neither owner writes the other's table. The consequences are what make the rule
 worth stating rather than leaving to comments:
@@ -401,8 +421,13 @@ fixes two lifecycle points on the same records:
 
 - **Admission (block validation, per-block, PRE-prune).** Recompute
   `attestation_root` over the side-table signatures and check it equals the
-  stored block field; for each **pass** recompute the nonce from
-  `r ‖ cb_out_key ‖ P ‖ s ‖ E` and verify `P`'s signature; require **miss**
+  stored block field; for each **pass** take the carried nonce and anchor
+  height, require the height inside `[h − 720 − L, h − 720]` for validated
+  predecessor `h`, and verify `P`'s signature over
+  `nonce ‖ anchor_height_le ‖ chain_hash(anchor_height) ‖ shard_id_le` under
+  `shekyl/archival-attestation-scheme-v2`; refuse every pass record while
+  `h < 720 + L` *(`SF-D8` (a0), 2026-09-13; v1 recomputed a block-bound nonce
+  from `r ‖ cb_out_key ‖ P ‖ s ‖ E` — RETIRED)*; require **miss**
   records carry none; check each `kind` bit matches signature-presence; run the
   coinbase-output-key uniqueness check. A malformed set invalidates the *block*;
   so does a coinbase `tx_extra` that fails to parse (`HEADERS_UNREADABLE`): the

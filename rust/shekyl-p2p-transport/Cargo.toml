@@ -1,0 +1,32 @@
+[package]
+name = "shekyl-p2p-transport"
+description = "Clearnet Noise NNhfs network pipe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+blake2 = { version = "0.10", default-features = false }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+fips203 = "=0.4.3"
+rand_core = { version = "0.6", features = ["getrandom"] }
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+zeroize = { workspace = true }
+
+[features]
+# The C5 bench times private handshake and record code. Production builds
+# leave it off.
+c5-bench = []
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+shekyl-levin = { path = "../shekyl-levin" }
+
+[[bench]]
+name = "c5"
+harness = false
+required-features = ["c5-bench"]

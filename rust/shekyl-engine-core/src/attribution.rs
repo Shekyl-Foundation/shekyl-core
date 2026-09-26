@@ -13,10 +13,10 @@ use shekyl_crypto_pq::label::{
 use shekyl_engine_state::{
     LedgerBlock, PaymentRequest, PaymentRequestId, PaymentRequestState, ReceiveAttribution,
 };
-use shekyl_types::TxHash;
+use shekyl_types::{OutputIndexInTx, TxHash};
 use shekyl_units::AtomicUnits;
 
-type LabelResidue = HashMap<([u8; 32], u64), [u8; 8]>;
+type LabelResidue = HashMap<(TxHash, OutputIndexInTx), [u8; 8]>;
 
 /// Lift decrypted label plaintext from a scan result before merge consumes it.
 pub(crate) fn collect_label_residue(
@@ -26,29 +26,41 @@ pub(crate) fn collect_label_residue(
     for dt in new_transfers {
         let wo = dt.output.wallet_output();
         map.insert(
-            (wo.transaction(), wo.index_in_transaction()),
+            (
+                wo.transaction(),
+                OutputIndexInTx::from_raw(wo.index_in_transaction()),
+            ),
             *dt.output.label_plaintext(),
         );
     }
     map
 }
 
+/// Wall-clock Unix seconds for invoice-expiry classification (RTN-6).
+pub(crate) fn unix_now() -> shekyl_types::Timestamp {
+    shekyl_types::Timestamp::from_raw(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    )
+}
+
 /// After a chain reorg drops transfers at `fork_height` and above — or after
 /// a rescan empties the transfer set outright — unwind `PaymentRequest` rows
 /// that matched transfers that no longer exist so a replay can re-match them.
 ///
-/// `at_height` is the height an unwound request's expiry is classified
-/// against, passed explicitly rather than read from `ledger` because the two
-/// callers reset the tip at different points: the reorg merge still holds the
-/// post-rewind tip, while [`reset_scan_derived_state`] has already zeroed it
-/// (and `is_expired_at(0)` is false for every non-zero expiry, which would
-/// resurrect long-expired invoices as `Pending`).
+/// `now` is wall-clock Unix seconds an unwound request's expiry is classified
+/// against. Invoice expiry is a human/off-chain deadline (`Timestamp`), not a
+/// chain height: passing the scanner tip here used to classify invoices
+/// against the wrong clock (RTN-6). The parameter is explicit rather than
+/// read from `ledger` so tests can pin `now` independently of tip state.
 ///
 /// [`reset_scan_derived_state`]: crate::engine::rescan::reset_scan_derived_state
 pub(crate) fn rewind_matched_payment_requests_after_reorg(
     payment_requests: &mut [PaymentRequest],
     ledger: &LedgerBlock,
-    at_height: u64,
+    now: shekyl_types::Timestamp,
 ) {
     for req in payment_requests.iter_mut() {
         if req.state != PaymentRequestState::Matched {
@@ -66,7 +78,7 @@ pub(crate) fn rewind_matched_payment_requests_after_reorg(
         }
         req.matched_tx_hash = None;
         req.matched_output_index = None;
-        req.state = if req.is_expired_at(at_height) {
+        req.state = if req.is_expired_at(now) {
             PaymentRequestState::Expired
         } else {
             PaymentRequestState::Pending
@@ -88,8 +100,7 @@ pub(crate) fn apply_receive_attributions(
         let Some(td) = ledger.transfer_mut(idx) else {
             continue;
         };
-        // `residue` is keyed by the scanner's raw `[u8; 32]` txid; convert.
-        let key = (td.tx_hash.to_bytes(), td.internal_output_index);
+        let key = (td.tx_hash, td.internal_output_index);
         let label_pt = residue
             .get(&key)
             .copied()
@@ -114,9 +125,9 @@ pub(crate) fn apply_receive_attributions(
 pub fn match_inbound_attribution(
     label_plaintext: &[u8; 8],
     amount_atomic: AtomicUnits,
-    _block_height: u64,
+    _block_height: shekyl_types::BlockHeight,
     tx_hash: TxHash,
-    output_index: u64,
+    output_index: shekyl_types::OutputIndexInTx,
     payment_requests: &mut [PaymentRequest],
 ) -> ReceiveAttribution {
     match classify_label_plaintext(label_plaintext) {
@@ -166,12 +177,22 @@ mod tests {
     use shekyl_crypto_pq::label::encode_request_plaintext;
     use shekyl_engine_state::LocalLabel;
 
+    fn h(raw: u64) -> shekyl_types::BlockHeight {
+        shekyl_types::BlockHeight::from_raw(raw)
+    }
+    fn o(raw: u64) -> shekyl_types::OutputIndexInTx {
+        shekyl_types::OutputIndexInTx::from_raw(raw)
+    }
+    fn ts(raw: u64) -> shekyl_types::Timestamp {
+        shekyl_types::Timestamp::from_raw(raw)
+    }
+
     fn sample_request(id: u64, amount: u64) -> PaymentRequest {
         PaymentRequest {
             id: PaymentRequestId(id),
             label: LocalLabel::from_str("inv"),
             amount_atomic: AtomicUnits::from_raw(amount),
-            created_at: 1,
+            created_at: shekyl_types::Timestamp::from_raw(1),
             expiry: None,
             state: PaymentRequestState::Pending,
             matched_tx_hash: None,
@@ -185,9 +206,9 @@ mod tests {
         let attr = match_inbound_attribution(
             &shekyl_crypto_pq::label::sentinel_plaintext(),
             AtomicUnits::from_raw(100),
-            10,
+            h(10),
             shekyl_types::TxHash::from_bytes([1u8; 32]),
-            0,
+            o(0),
             &mut reqs,
         );
         assert_eq!(attr, ReceiveAttribution::Unattributed);
@@ -202,14 +223,14 @@ mod tests {
         let attr = match_inbound_attribution(
             &pt,
             AtomicUnits::from_raw(500),
-            10,
+            h(10),
             shekyl_types::TxHash::from_bytes([2u8; 32]),
-            1,
+            o(1),
             &mut reqs,
         );
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
-        assert_eq!(reqs[0].matched_output_index, Some(1));
+        assert_eq!(reqs[0].matched_output_index, Some(o(1)));
     }
 
     #[test]
@@ -222,9 +243,9 @@ mod tests {
         let attr = match_inbound_attribution(
             &pt,
             AtomicUnits::from_raw(2),
-            0,
+            h(0),
             shekyl_types::TxHash::from_bytes([0u8; 32]),
-            0,
+            o(0),
             &mut reqs,
         );
         assert!(matches!(attr, ReceiveAttribution::LabelUnknown { .. }));
@@ -240,9 +261,9 @@ mod tests {
         let attr = match_inbound_attribution(
             &pt,
             AtomicUnits::from_raw(100),
-            10,
+            h(10),
             shekyl_types::TxHash::from_bytes([3u8; 32]),
-            0,
+            o(0),
             &mut reqs,
         );
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
@@ -258,39 +279,34 @@ mod tests {
         let mut reqs = vec![sample_request(rid, 50)];
         reqs[0].state = PaymentRequestState::Matched;
         reqs[0].matched_tx_hash = Some(tx_hash);
-        reqs[0].matched_output_index = Some(0);
+        reqs[0].matched_output_index = Some(o(0));
 
         let ledger = LedgerBlock::empty();
-        let height = ledger.height();
-        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, height);
+        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, ts(0));
         assert_eq!(reqs[0].state, PaymentRequestState::Pending);
         assert!(reqs[0].matched_tx_hash.is_none());
     }
 
-    /// An unwound request whose expiry height has already passed is
-    /// classified `Expired`, not `Pending` — the property the explicit
-    /// `at_height` parameter exists to make reachable from the rescan
-    /// caller, which unwinds against an already-zeroed tip.
+    /// An unwound request whose expiry has already passed is classified
+    /// `Expired`, not `Pending` — invoice expiry is wall-clock `Timestamp`.
     #[test]
-    fn rewind_expires_request_past_its_expiry_height() {
+    fn rewind_expires_request_past_its_expiry() {
         use shekyl_engine_state::LedgerBlock;
 
         let mut reqs = vec![sample_request(9, 50)];
         reqs[0].state = PaymentRequestState::Matched;
         reqs[0].matched_tx_hash = Some(shekyl_types::TxHash::from_bytes([0xEF; 32]));
-        reqs[0].matched_output_index = Some(0);
-        reqs[0].expiry = Some(100);
+        reqs[0].matched_output_index = Some(o(0));
+        reqs[0].expiry = Some(ts(100));
 
         let ledger = LedgerBlock::empty();
-        // Zeroed tip (the rescan shape) would say "not expired"; the
-        // pre-reset height the caller passes says otherwise.
-        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, 0);
+        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, ts(0));
         assert_eq!(reqs[0].state, PaymentRequestState::Pending);
 
         reqs[0].state = PaymentRequestState::Matched;
         reqs[0].matched_tx_hash = Some(shekyl_types::TxHash::from_bytes([0xEF; 32]));
-        reqs[0].matched_output_index = Some(0);
-        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, 101);
+        reqs[0].matched_output_index = Some(o(0));
+        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, ts(101));
         assert_eq!(reqs[0].state, PaymentRequestState::Expired);
     }
 
@@ -305,14 +321,14 @@ mod tests {
         let mut reqs = vec![sample_request(rid, 50)];
         reqs[0].state = PaymentRequestState::Matched;
         reqs[0].matched_tx_hash = Some(tx_hash);
-        reqs[0].matched_output_index = Some(1);
+        reqs[0].matched_output_index = Some(o(1));
 
         let mut ledger = LedgerBlock::empty();
         ledger.transfers.push(TransferDetails {
             tx_hash,
-            internal_output_index: 1,
-            global_output_index: 0,
-            block_height: 5,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(1),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(0),
+            block_height: shekyl_types::BlockHeight::from_raw(5),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 50),
@@ -323,14 +339,14 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: 0,
+            eligible_height: shekyl_types::BlockHeight::from_raw(0),
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::Matched(PaymentRequestId(rid)),
         });
 
-        let height = ledger.height();
-        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, height);
+        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, ts(0));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
         assert_eq!(reqs[0].matched_tx_hash, Some(tx_hash));
     }

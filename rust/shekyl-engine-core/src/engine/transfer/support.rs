@@ -7,6 +7,9 @@
 
 use std::sync::{Mutex, PoisonError};
 
+use shekyl_curve_tree::{AssembleInput, CommitmentBytes, OneTimePubkey};
+use shekyl_engine_state::TransferDetails;
+
 use super::super::curve_tree_actor::CurveTreeHandleError;
 use super::super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, DiagnosticSink, PendingTxDiagnostic,
@@ -15,6 +18,18 @@ use super::super::error::{FeeEstimatorError, OutputSelectorError, SendError, Sig
 use super::super::pending::ReservationId;
 
 use super::types::{PendingTxState, ReanchorError};
+
+/// Curve-tree leaf operands from a selected [`TransferDetails`].
+///
+/// One minting site so the two assemble paths (build and re-anchor) cannot
+/// wrap the compressed key and commitment two ways.
+pub(super) fn assemble_input(td: &TransferDetails) -> AssembleInput {
+    AssembleInput {
+        gindex: td.global_output_index,
+        output_key: OneTimePubkey::from_bytes(td.key.compress().to_bytes()),
+        commitment: CommitmentBytes::from_bytes(td.commitment.calculate().compress().to_bytes()),
+    }
+}
 
 #[allow(private_bounds)]
 pub(super) fn release_output_locks_for(state: &mut PendingTxState, rid: ReservationId) {
@@ -51,12 +66,14 @@ pub(super) enum TreeSpendGate {
     /// is tree-covered iff its `eligible_height <= covered_through`;
     /// `covered_through == None` means the tree is fresh/empty and covers
     /// nothing (the adopting-wallet pre-backfill state).
-    Enforced { covered_through: Option<u64> },
+    Enforced {
+        covered_through: Option<shekyl_types::BlockHeight>,
+    },
 }
 
 impl TreeSpendGate {
     /// Whether an output maturing at `eligible_height` is covered by the tree.
-    pub(super) fn covers(self, eligible_height: u64) -> bool {
+    pub(super) fn covers(self, eligible_height: shekyl_types::BlockHeight) -> bool {
         match self {
             TreeSpendGate::Unenforced => true,
             TreeSpendGate::Enforced { covered_through } => {

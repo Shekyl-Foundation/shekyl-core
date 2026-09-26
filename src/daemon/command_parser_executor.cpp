@@ -57,7 +57,6 @@ bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& 
 
   bool white = false;
   bool gray = false;
-  bool pruned = false;
   size_t limit = 0;
   for (size_t i = 0; i < args.size(); ++i)
   {
@@ -69,10 +68,6 @@ bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& 
     {
       gray = true;
     }
-    else if (args[i] == "pruned")
-    {
-      pruned = true;
-    }
     else if (!epee::string_tools::get_xtype_from_string(limit, args[i]))
     {
       std::cout << "Invalid syntax: Unexpected parameter: " << args[i] << ". For more details, use the help command." << std::endl;
@@ -81,7 +76,7 @@ bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& 
   }
 
   const bool print_both = !white && !gray;
-  return m_executor.print_peer_list(white | print_both, gray | print_both, limit, pruned);
+  return m_executor.print_peer_list(white | print_both, gray | print_both, limit);
 }
 
 bool t_command_parser_executor::print_peer_list_stats(const std::vector<std::string>& args)
@@ -753,38 +748,6 @@ bool t_command_parser_executor::flush_txpool(const std::vector<std::string>& arg
   return m_executor.flush_txpool(txid);
 }
 
-bool t_command_parser_executor::output_histogram(const std::vector<std::string>& args)
-{
-  std::vector<uint64_t> amounts;
-  uint64_t min_count = 3;
-  uint64_t max_count = 0;
-  size_t n_raw = 0;
-
-  for (size_t n = 0; n < args.size(); ++n)
-  {
-    if (args[n][0] == '@')
-    {
-      amounts.push_back(boost::lexical_cast<uint64_t>(args[n].c_str() + 1));
-    }
-    else if (n_raw == 0)
-    {
-      min_count = boost::lexical_cast<uint64_t>(args[n]);
-      n_raw++;
-    }
-    else if (n_raw == 1)
-    {
-      max_count = boost::lexical_cast<uint64_t>(args[n]);
-      n_raw++;
-    }
-    else
-    {
-      std::cout << "Invalid syntax: More than two non-amount parameters. For more details, use the help command." << std::endl;
-      return true;
-    }
-  }
-  return m_executor.output_histogram(amounts, min_count, max_count);
-}
-
 bool t_command_parser_executor::print_coinbase_tx_sum(const std::vector<std::string>& args)
 {
   if(!args.size())
@@ -922,36 +885,6 @@ bool t_command_parser_executor::pop_blocks(const std::vector<std::string>& args)
 bool t_command_parser_executor::version(const std::vector<std::string>& args)
 {
   return m_executor.version();
-}
-
-bool t_command_parser_executor::prune_blockchain(const std::vector<std::string>& args)
-{
-  if (args.size() > 1)
-  {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  if (args.empty() || args[0] != "confirm")
-  {
-    std::cout << "Warning: pruning from within shekyld will not shrink the database file size." << std::endl;
-    std::cout << "Instead, parts of the file will be marked as free, so the file will not grow" << std::endl;
-    std::cout << "until that newly free space is used up. To prune, re-run this command with" << std::endl;
-    std::cout << "the \"confirm\" parameter. If you also want a smaller file size, wait for" << std::endl;
-    std::cout << "pruning to finish, then exit shekyld, create an empty destination directory," << std::endl;
-    std::cout << "and (as the user that owns the data directory) compact the database with:" << std::endl;
-    std::cout << "  shekyl-mdb-copy -c <data-dir>/lmdb <destination-dir>" << std::endl;
-    std::cout << "then replace the old lmdb directory with the copy (you will temporarily need" << std::endl;
-    std::cout << "disk space for both)." << std::endl;
-    return true;
-  }
-
-  return m_executor.prune_blockchain();
-}
-
-bool t_command_parser_executor::check_blockchain_pruning(const std::vector<std::string>& args)
-{
-  return m_executor.check_blockchain_pruning();
 }
 
 bool t_command_parser_executor::flush_cache(const std::vector<std::string>& args)

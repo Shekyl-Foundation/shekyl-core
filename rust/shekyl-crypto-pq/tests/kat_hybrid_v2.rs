@@ -48,8 +48,9 @@
 //! positive half of that boundary.
 //!
 //! Regenerate (construction change only — the writer is idempotent while the
-//! pinned signatures still verify):
-//! `cargo test -p shekyl-crypto-pq --test kat_hybrid_v2 -- --ignored`
+//! pinned signatures still verify; armed — cite the decision-log entry):
+//! `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+//!   cargo test -p shekyl-crypto-pq --test kat_hybrid_v2 -- --ignored`
 
 use serde_json::{json, Value};
 use shekyl_crypto_pq::signature::{
@@ -163,7 +164,15 @@ fn hybrid_v2_pinned_vectors_verify_per_surface() {
     }
 }
 
-/// Regenerate `docs/test_vectors/PQC_HYBRID_V2_KAT.json` in place.
+/// Regenerate `docs/test_vectors/PQC_HYBRID_V2_KAT.json` in place. Armed —
+/// refuses to run unless `SHEKYL_PINNED_REGEN_DECISION` cites the decision-log
+/// entry authorizing the move (the fixture is a self-pinned tripwire, rule 50;
+/// the shared guard is `shekyl_crypto_pq::test_support::regen_decision_or_refuse`):
+///
+/// ```text
+/// SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+///   cargo test -p shekyl-crypto-pq --test kat_hybrid_v2 -- --ignored
+/// ```
 ///
 /// Idempotent while the construction is unchanged: the pinned keypair is
 /// reused whenever it parses, and each pinned signature is reused whenever it
@@ -172,8 +181,11 @@ fn hybrid_v2_pinned_vectors_verify_per_surface() {
 /// genuine construction change (which invalidates the pinned signatures)
 /// re-signs, and only a corrupt/missing fixture re-mints the keypair.
 #[test]
-#[ignore = "writes docs/test_vectors/PQC_HYBRID_V2_KAT.json"]
+#[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
 fn regenerate_hybrid_v2_kat() {
+    let decision =
+        shekyl_crypto_pq::test_support::regen_decision_or_refuse("PQC_HYBRID_V2_KAT.json");
+    eprintln!("regenerating the hybrid v2 surface KAT under decision: {decision}");
     let scheme = HybridEd25519MlDsa;
     let path = fixture_path();
     let existing: Option<Value> = std::fs::read_to_string(&path)

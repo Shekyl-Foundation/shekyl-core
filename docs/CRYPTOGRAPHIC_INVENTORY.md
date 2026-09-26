@@ -36,7 +36,7 @@ transcribed and **re-verified at source 2026-08-14** (crate manifests +
 | ML-DSA-65 | `fips204 =0.4.6` (**exact**) | PQ half of `HybridEd25519MlDsa` (all six §2 surfaces); per-persona archival signing key | No external audit. Same exact-pin rationale |
 | SLH-DSA-192s | `fips205 =0.4.1` (**exact**) | Wallet message signing (SM round; the last Module-LWE/SIS-**uncorrelated** signature surface) and the ratified address-v2 48-byte pk field | No external audit; **ACVP cross-check KATs vendored in our own `test_vectors/`** (NIST ACVP-Server `a7f283cdc`), which forecloses the unfixable nonconforming-keygen branch |
 | Ed25519 | `ed25519-dalek 2.2.0` / `curve25519-dalek` | Classical half of every hybrid signature; the **house Schnorr** (`crate::schnorr`, raw spend scalar — dalek `SigningKey` structurally cannot sign for it) for reserve proofs and the message-signing outer half | RustCrypto/dalek lineage (community-audited upstream); house Schnorr is ours, hedged-nonce |
-| cSHAKE256 | `sha3 0.10` | Every domain-separated derivation/preimage (mechanism 1 of §3; 28 domains) | RustCrypto audited lineage |
+| cSHAKE256 | `sha3 0.10` | Every domain-separated derivation/preimage (mechanism 1 of §3; 27 domains) | RustCrypto audited lineage |
 | Keccak-256 | `sha3 0.10` (`shekyl_crypto_hash::keccak256`; single implementation, empty-input KAT pins byte-identity; C ABI export keeps the `shekyl_cn_fast_hash` name) | Consensus content identity (txid / block / leaf / fingerprint) — **identity, never separation** (`keccak=identity, cSHAKE=separation`) | Same |
 | SHA-512, Blake2b512 | `sha2` / `blake2 0.10` | HKDF backbone (mech 2); Blake2b DSTs incl. `DOMAIN_PQC_LEAF` (mech 4) | Same |
 | Bulletproof+ / FCMP++ curve stack | Vendored, manifest-gated (`check_vendored_crypto_manifest.sh`, 59 files) | Range proofs; membership + SAL | **The known non-PQ surface — see §4** |
@@ -84,7 +84,7 @@ close):
 | B | Archival bond-post vin | **rides surface A** (SA-2b ruling: the whole-tx hash binds the vin type tag, cross-role replay structurally foreclosed; the parked dedicated preimage S1 was **deleted**) | as A | as A |
 | C | Emission auth — claim | `stake_engine/claim.rs` | `emission_verify` claim leg | `shekyl/archival-emission-claim-scheme-v1` |
 | D | Emission auth — backing | `stake_engine/claim.rs` (Auth-B) | `emission_verify` backing leg (the §5 surface-2 triple) | `shekyl/archival-emission-backing-scheme-v1` |
-| E | Attestation countersignature | no in-repo signer (C++ side) | `attestation_wire` | `shekyl/archival-attestation-scheme-v1` |
+| E | Attestation countersignature | no in-repo signer yet (`shekyl-p-serve`, `SF` (a)) | `attestation_wire` | `shekyl/archival-attestation-scheme-v2` (v1 retired 2026-09-13, `SF-D8`) |
 | F | Serve-credit response | no in-repo signer | `serve_credit` | `shekyl/archival-serve-credit-scheme-v1` |
 
 The pinned-positive KAT battery (`PQC_HYBRID_V2_KAT.json`: one verified
@@ -110,10 +110,10 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-09-10, incl. DRS-P0d chain-digest v0): 97 distinct production domain strings across the five mechanisms —
-98 registered, including the SHA3-256 micro-bucket.** The `shekyl/`-prefix lens saw ~28 — a 3.3× undercount, which is the
+**Census (dated snapshot, 2026-09-13, incl. the SF-D8 attestation-nonce retirement): 96 distinct production domain strings across the five mechanisms —
+97 registered, including the SHA3-256 micro-bucket.** The `shekyl/`-prefix lens saw ~28 — a 3.3× undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
-sums to 98: the five mechanisms 97, plus the 1-entry micro-bucket.) **This table is a
+sums to 97: the five mechanisms 96, plus the 1-entry micro-bucket.) **This table is a
 snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
 the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
 legitimately changes, that pin fails and this table is refreshed with a new as-of
@@ -126,11 +126,22 @@ by the fork-(ii) address layout making `msg_sign_pk` a mandatory field of
 every address (persona receive addresses included, for uniformity). The
 2026-09-10 refresh adds three mechanism-1 customizations for digest v0:
 `shekyl/chain-digest/v0`, `shekyl/chain-digest/v0/chain`,
-`shekyl/chain-digest/v0/spent-elem`.
+`shekyl/chain-digest/v0/spent-elem`. The 2026-09-13 refresh **removes** one
+mechanism-1 customization: `shekyl/archival-attestation-nonce-v1`, the v1
+block-bound pass-countersignature nonce. `SF-D8` (`ARCHIVAL_SHARD_FETCH.md`)
+replaced the derived nonce with a requester-random one carried on the record,
+so the derivation — and its domain — has no call site. The signing-scheme
+domain (also mechanism 1, `shekyl/archival-attestation-scheme-v1`) was
+re-versioned to `-v2` in the same change; a rename, not a count change. The
+2026-09-15 refresh adds one mechanism-1 customization:
+`shekyl/chain-store/undo-log/post-image-v1`, the chain store's undo-entry
+post-image digest (S-CHAIN-W, DRS-E1 increment 3) — and brings the table's
+mechanism-1 count current with `PRODUCTION_PINS` (30), which the 2026-09-10
+and 2026-09-13 refreshes had moved without editing the row below.
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 28 | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 30 | 0 |
 | 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 34 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 9 | 0 |
@@ -141,7 +152,7 @@ Distinctness identity is per-mechanism; mechanism 2 is keyed by `(salt, info)`, 
 three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused across two
 derivations that differ only by salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 97 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 96 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93
@@ -275,8 +286,10 @@ takes **three** things, and consensus requires all of them (the
 1. an **FCMP++ membership-only proof** — genuinely **no key image**; anti-replay
    on this surface is the per-epoch dedup layer, not a linking tag
    (`emission_vin_verify_backing`, `FCMP_MEMBERSHIP_ONLY.md` §7);
-2. the **leaf gate** — `hash_pqc_public_key(backing_pubkey) == pqc_pk_hash`,
-   binding the revealed key to the in-circuit committed leaf scalar (C-1, #277);
+2. the **leaf binding** — the proof in (1) takes `backing_pubkey`'s key point
+   `K = H_ℓ(backing_pubkey)·G_k` as its public value and opens the proven
+   leaf's commitment `CM = K + r·J` to it in-circuit (`PL-D3`, 2026-09-14;
+   replacing the C-1 hash gate of #277, whose `pqc_pk_hash` field left the vin);
 3. **Auth-B — a hybrid Ed25519 + ML-DSA-65 signature** under that same
    `backing_pubkey` over the role-separated Q1 binding message
    (`emission_vin_verify_auth` → `verify_hybrid_auth` →
@@ -285,7 +298,7 @@ takes **three** things, and consensus requires all of them (the
    the vin's `backing_pubkey`).
 
 Step 3 is the classical backstop, and step 2 does not weaken it:
-`hash_pqc_public_key` is `Blake2b512(DOMAIN_PQC_LEAF ‖ pk_bytes)` over the
+`pqc_key_scalar` is a cSHAKE256 read (`shekyl/pqc-leaf-key-v1`) over the
 **full canonical `HybridPublicKey`** (Ed25519 ‖ ML-DSA — see
 `derive_pqc_public_key`), so the committed leaf commits *both* halves. There is
 no point on this path where ML-DSA is the sole authority. The module's own

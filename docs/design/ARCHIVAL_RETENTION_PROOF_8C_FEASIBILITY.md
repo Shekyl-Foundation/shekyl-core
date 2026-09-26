@@ -89,7 +89,7 @@ E-close).
 
 | Asset | Location | 8c relevance |
 |-------|----------|--------------|
-| 128-byte leaf format (`O.x`, `I.x`, `C.x`, `h_pqc`) | `shekyl-fcmp::tree::construct_leaf` | Opening includes exact leaf bytes challenged |
+| 128-byte leaf format (`O.x`, `I.x`, `C.x`, `CM.x`) | `shekyl-fcmp::tree::construct_leaf` | Opening includes exact leaf bytes challenged |
 | Layer hash grow/trim | `shekyl-fcmp::tree` | Verifier replay path to `R_k` |
 | Frozen sub-root `R_k` per segment | `CURVE_TREE_CLIENT.md` §7.2 | **Shard-local** challenge — rejects whole-tree-root fork |
 | Segment = subtree-aligned position range | §7.2.2 | Challenge position `ℓ ∈ [k·E, (k+1)·E)` |
@@ -187,7 +187,7 @@ digests + 128-byte leaf.
 - V3 explicitly assumes path verify is **cheap on-chain** (hash chain, not pairing-heavy FCMP).
 - ZK would add prover complexity and audit surface without privacy gain on public leaves.
 
-**PQC note:** `h_pqc` is part of the 128-byte leaf; path verify is agnostic to PQC — no
+**PQC note:** the PQC leaf commitment's `CM.x` is part of the 128-byte leaf; path verify is agnostic to PQC — no
 lattice proof inside 8c.
 
 ### 6.2 Deferred — succinct ZK PoR

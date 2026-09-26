@@ -46,7 +46,7 @@ use shekyl_scanner::bench_fixtures::{
     build_typical_case_scannable_block, scannable_block_for_recipient,
 };
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::{BlockHeight, PSlot};
+use shekyl_types::{BlockHash, BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::Input;
 
@@ -104,7 +104,7 @@ fn funding_block(keys: &ArchivalPKeys) -> ScannableBlock {
 /// Recompute a block's committed tx hashes and set its `previous` pointer —
 /// the chaining `verify_exhaustive` (the production exhaustiveness gate)
 /// checks for real.
-fn chain(mut block: ScannableBlock, previous: [u8; 32]) -> ScannableBlock {
+fn chain(mut block: ScannableBlock, previous: BlockHash) -> ScannableBlock {
     block.block.header.previous = previous;
     block.block.transaction_hashes = block
         .transactions
@@ -165,7 +165,7 @@ async fn step(
     let end = start + blocks.len() as u64;
     let verified = verify_exhaustive(
         BlockHeight::from_raw(start),
-        accrual.frontier_hash(),
+        BlockHash::from_bytes(accrual.frontier_hash()),
         &blocks,
     )
     .map_err(|e| format!("exhaustiveness: {e}"))?;
@@ -187,7 +187,7 @@ pub async fn run_arm1_fire() -> Result<Arm1FireReport, String> {
 
     // Shared chain: filler (h0), funding (h1) — chained for the real
     // exhaustiveness gate from the genesis anchor.
-    let b0 = chain(build_typical_case_scannable_block(1), [0u8; 32]);
+    let b0 = chain(build_typical_case_scannable_block(1), BlockHash::NULL);
     let b1 = chain(funding_block(&keys), b0.block.hash());
 
     // ---- Scenario A: cross-step (watch-cache path). --------------------
@@ -358,10 +358,10 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     .map_err(|e| format!("derive wallet persona: {e}"))?;
     let scanner = crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona(&keys)
         .map_err(|e| format!("scanner: {e}"))?;
-    let b0 = chain(build_typical_case_scannable_block(1), [0u8; 32]);
+    let b0 = chain(build_typical_case_scannable_block(1), BlockHash::NULL);
     let b1 = chain(build_typical_case_scannable_block(1), b0.block.hash());
     let blocks = vec![b0, b1];
-    let verified = verify_exhaustive(BlockHeight::from_raw(0), [0u8; 32], &blocks)
+    let verified = verify_exhaustive(BlockHeight::from_raw(0), BlockHash::NULL, &blocks)
         .map_err(|e| format!("exhaustiveness: {e}"))?;
     let range =
         BlockRange::new(BlockHeight::from_raw(0), BlockHeight::from_raw(2)).ok_or("range")?;

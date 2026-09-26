@@ -31,7 +31,6 @@
 #pragma once
 #include "blobdatatype.h"
 #include "cryptonote_basic_impl.h"
-#include "tx_extra.h"
 #include "account.h"
 #include "subaddress_index.h"
 #include "include_base_utils.h"
@@ -66,50 +65,24 @@ namespace cryptonote
   bool is_v1_tx(const blobdata_ref& tx_blob);
   bool is_v1_tx(const blobdata& tx_blob);
 
-  template<typename T>
-  bool find_tx_extra_field_by_type(const std::vector<tx_extra_field>& tx_extra_fields, T& field, size_t index = 0)
-  {
-    auto it = std::find_if(tx_extra_fields.begin(), tx_extra_fields.end(), [&index](const tx_extra_field& f) { return std::holds_alternative<T>(f) && !index--; });
-    if(tx_extra_fields.end() == it)
-      return false;
-
-    field = std::get<T>(*it);
-    return true;
-  }
-
-  bool parse_tx_extra(const std::vector<uint8_t>& tx_extra, std::vector<tx_extra_field>& tx_extra_fields);
-  bool sort_tx_extra(const std::vector<uint8_t>& tx_extra, std::vector<uint8_t> &sorted_tx_extra, bool allow_partial = false);
-  crypto::public_key get_tx_pub_key_from_extra(const std::vector<uint8_t>& tx_extra, size_t pk_index = 0);
-  crypto::public_key get_tx_pub_key_from_extra(const transaction_prefix& tx, size_t pk_index = 0);
-  crypto::public_key get_tx_pub_key_from_extra(const transaction& tx, size_t pk_index = 0);
-  bool add_tx_pub_key_to_extra(transaction& tx, const crypto::public_key& tx_pub_key);
-  bool add_tx_pub_key_to_extra(transaction_prefix& tx, const crypto::public_key& tx_pub_key);
-  bool add_tx_pub_key_to_extra(std::vector<uint8_t>& tx_extra, const crypto::public_key& tx_pub_key);
-  // additional_tx_pub_keys removed in V3: single tx pubkey per transaction, per-output KEM ciphertexts replace additional keys
-  inline std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const std::vector<uint8_t>&) { return {}; }
-  inline std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const transaction_prefix&) { return {}; }
-  bool add_extra_nonce_to_tx_extra(std::vector<uint8_t>& tx_extra, const blobdata& extra_nonce);
-  bool add_archival_attestation_to_tx_extra(std::vector<uint8_t>& tx_extra, const std::string& attestation_blob);
-  // parse_* convention (same bool as parse_tx_extra): false ONLY on a tx_extra
-  // parse failure (headers UNREADABLE); a successful parse with no attestation
-  // tag is true with an empty attestation_blob (the committed empty set).
+  // The coinbase 0x0B attestation blob through the shekyl-wire codec
+  // (shekyl_tx_extra_field): false ONLY when the extra does not parse
+  // (headers UNREADABLE); a parsed extra with no attestation tag is true with
+  // an empty attestation_blob (the committed empty set).
   bool parse_archival_attestation_from_extra(const std::vector<uint8_t>& tx_extra, std::string& attestation_blob);
-  bool remove_field_from_tx_extra(std::vector<uint8_t>& tx_extra, const std::type_info &type);
-  void set_payment_id_to_tx_extra_nonce(blobdata& extra_nonce, const crypto::hash& payment_id);
-  void set_encrypted_payment_id_to_tx_extra_nonce(blobdata& extra_nonce, const crypto::hash8& payment_id);
-  bool get_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash& payment_id);
-  bool get_encrypted_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash8& payment_id);
   void set_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const bool use_view_tags, const crypto::view_tag& view_tag, tx_out& out);
-  bool check_output_types(const transaction& tx, const uint8_t hf_version);
-  /// The tx_extra PQC field shape rule (GENESIS_TX_WIRE_FORMAT.md §9.6a as
-  /// ruled 2026-09-05; census CEN-I19): with n = vout.size(), exactly one 0x06
-  /// KEM-ciphertext field of 1120·n bytes and exactly one 0x07 leaf-hash
-  /// field of 32·n bytes when n > 0, neither when n == 0, and tx_extra must
-  /// parse. Consensus on every path a transaction enters by (relay, block,
-  /// coinbase); the rule itself lives in shekyl-wire and is applied through
-  /// shekyl_tx_extra_pqc_field_shape on this parser's field lengths. On
-  /// failure `reason` says which field and what was found.
-  bool check_tx_extra_pqc_field_shape(const transaction& tx, std::string& reason);
+  bool check_output_types(const transaction& tx);
+  /// The tx_extra shape rule, applied on every path a transaction enters by
+  /// (relay, block, coinbase, DB add): CEN-I19 — with n = vout.size(),
+  /// exactly one 0x06 of 1120·n bytes and one 0x07 of 64·n bytes when n > 0,
+  /// neither when n == 0, every 0x07 entry an admissible point — plus the
+  /// closed coinbase grammar on a coinbase (TXE-Q6': exactly
+  /// [0x01, 0x02(8), 0x06, 0x07]) and no 0x02 off it; and tx_extra must
+  /// parse. The rule lives in shekyl-wire (`check_tx_extra_shape`) and is
+  /// applied over the codec's own parse through shekyl_tx_extra_shape_of —
+  /// the daemon hands over bytes and is_coinbase, never a second reading of
+  /// them. On failure `reason` is the rule's own sentence.
+  bool check_tx_extra_shape(const transaction& tx, std::string& reason);
   struct subaddress_receive_info
   {
     subaddress_index index;
@@ -274,11 +247,8 @@ namespace cryptonote
   void get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes, crypto::hash& h);
   crypto::hash get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes);
   crypto::hash get_tx_tree_hash(const block& b);
-  bool is_valid_decomposed_amount(uint64_t amount);
   void get_hash_stats(uint64_t &tx_hashes_calculated, uint64_t &tx_hashes_cached, uint64_t &block_hashes_calculated, uint64_t & block_hashes_cached);
 
-  crypto::secret_key encrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase);
-  crypto::secret_key decrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase);
 #define CHECKED_GET_SPECIFIC_VARIANT(variant_var, specific_type, variable_name, fail_return_val) \
   CHECK_AND_ASSERT_MES(std::holds_alternative<std::remove_const_t<specific_type>>(variant_var), fail_return_val, "wrong variant type (index " << (variant_var).index() << "), expected " << typeid(specific_type).name()); \
   specific_type& variable_name = std::get<std::remove_const_t<specific_type>>(variant_var);

@@ -27,6 +27,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
+use shekyl_types::{BlockHash, PrunableHash};
 use shekyl_wire::{Ct, CtBase, Input, Prunable, Transaction, TxPrefix};
 
 const GATE2_FIXTURE: &str =
@@ -45,8 +46,8 @@ fn hex_bytes(s: &str) -> Vec<u8> {
         .collect()
 }
 
-fn hex_str(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+fn hex_str(b: impl AsRef<[u8]>) -> String {
+    b.as_ref().iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn manifest(rel: &str) -> PathBuf {
@@ -69,7 +70,7 @@ fn build_tx(kept: Vec<u8>, pruned: Vec<u8>) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],
@@ -109,8 +110,8 @@ fn regenerate_serve_credit_tx_parity_fixture() {
         "description": "Serve-credit full-transaction byte-parity KAT (RF-D1/RF-D9). Blobs are the gate-2 integration section's; tx_hex is shekyl-wire's serialization of the transaction built around them. The C++ leg (archival_serve_credit_integration.cpp) must serialize the same transaction to these bytes and parse them back.",
         "kept_wire_hex": hex_str(&kept),
         "pruned_hex": hex_str(&pruned),
-        "tx_hex": hex_str(&tx.serialize()),
-        "tx_hash_hex": hex_str(&tx.hash()),
+        "tx_hex": hex_str(tx.serialize()),
+        "tx_hash_hex": hex_str(tx.hash()),
     });
     std::fs::write(
         manifest(PARITY_FIXTURE),
@@ -138,7 +139,7 @@ fn serve_credit_tx_serializes_to_the_pinned_bytes() {
     let bytes = tx.serialize();
     assert_eq!(hex_str(&bytes), pin["tx_hex"].as_str().unwrap(), "tx bytes");
     assert_eq!(
-        hex_str(&tx.hash()),
+        hex_str(tx.hash()),
         pin["tx_hash_hex"].as_str().unwrap(),
         "tx hash"
     );
@@ -168,7 +169,7 @@ fn serve_credit_tx_serializes_to_the_pinned_bytes() {
     );
     let digest = shekyl_crypto_hash::keccak256(&bytes[pruned_form.len()..]);
     assert_eq!(
-        hex_str(&tx.hash_with_supplied_prunable(digest)),
+        hex_str(tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))),
         pin["tx_hash_hex"].as_str().unwrap(),
         "pruned identity (supplied digest) diverged from the pinned hash"
     );

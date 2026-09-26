@@ -69,9 +69,6 @@ namespace nodetool
     virtual std::map<std::string, time_t> get_blocked_hosts()=0;
     virtual std::map<epee::net_utils::ipv4_network_subnet, time_t> get_blocked_subnets()=0;
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score = 1)=0;
-    virtual void add_used_stripe_peer(const t_connection_context &context)=0;
-    virtual void remove_used_stripe_peer(const t_connection_context &context)=0;
-    virtual void clear_used_stripe_peers()=0;
   };
 
   template<class t_connection_context>
@@ -132,15 +129,6 @@ namespace nodetool
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score)
     {
       return true;
-    }
-    virtual void add_used_stripe_peer(const t_connection_context &context)
-    {
-    }
-    virtual void remove_used_stripe_peer(const t_connection_context &context)
-    {
-    }
-    virtual void clear_used_stripe_peers()
-    {
     }
   };
 }

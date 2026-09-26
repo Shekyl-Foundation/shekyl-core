@@ -73,7 +73,8 @@ fn a_fragmented_pool_is_its_own_first_stake_refusal() {
 }
 
 use super::*;
-use shekyl_curve_tree::{should_reanchor, REF_ANCHOR_AGE};
+use shekyl_curve_tree::{should_reanchor, BlockHash, CurveTreeRoot, REF_ANCHOR_AGE};
+use shekyl_types::BlockHeight;
 
 /// The posture is the conversion: Market has nothing to post until
 /// assignment exists, Foundation is CompleteTree with the empty-set
@@ -130,11 +131,11 @@ fn assemble_imports_named_daemon_claimed_tip() {
 /// [`BondAssemblyError::ReferenceResyncing`] (not silent assemble_tx fail).
 #[test]
 fn lagging_ingest_trips_should_reanchor_loud_resync_disposition() {
-    let chain_tip = 10_000u64;
-    let ingested = 100u64;
+    let chain_tip = shekyl_types::BlockHeight::from_raw(10_000);
+    let ingested = shekyl_types::BlockHeight::from_raw(100);
     let anchor_tip = chain_tip.min(ingested);
     let reference_height = anchor_tip
-        .checked_sub(REF_ANCHOR_AGE)
+        .checked_sub_count(REF_ANCHOR_AGE)
         .expect("short but ok");
     assert!(
         should_reanchor(chain_tip, reference_height),
@@ -178,14 +179,14 @@ fn orchestrator_uses_sweep_as_sole_funding_path() {
 #[test]
 fn sweep_reference_height_equals_anchored_reference_block_height() {
     let reference = ReferenceBlock {
-        height: CtBlockHeight(1_234),
-        curve_tree_root: [0xAB; 32],
-        block_hash: [0xCD; 32],
+        height: BlockHeight::from_raw(1_234),
+        curve_tree_root: CurveTreeRoot::from_bytes([0xAB; 32]),
+        block_hash: BlockHash::from_bytes([0xCD; 32]),
     };
-    let sweep_height = BlockHeight::from_raw(reference.height.0);
+    let sweep_height = reference.height;
     assert_eq!(
         sweep_height.to_raw(),
-        reference.height.0,
+        reference.height.to_raw(),
         "sweep must filter against the anchored ReferenceBlock's height"
     );
 }
@@ -442,7 +443,7 @@ async fn probe_adopted_slot_refuses_first_stake_before_pscan_corroboration() {
         crate::engine::bond_watch::adopt_bond_sightings(
             &mut g.ledger.staking,
             &[crate::scan::BondSightingObserved {
-                block_height: 10,
+                block_height: shekyl_types::BlockHeight::from_raw(10),
                 slot: 0,
             }],
         );
@@ -474,9 +475,13 @@ fn one_block_scan_result(
     sightings: Vec<crate::scan::BondSightingObserved>,
 ) -> crate::scan::ScanResult {
     crate::scan::ScanResult {
-        processed_height_range: 1..2,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -510,7 +515,7 @@ async fn apply_scan_result_refuses_an_uncached_sighting_without_advancing_the_ti
     let err = engine
         .apply_scan_result(one_block_scan_result(vec![
             crate::scan::BondSightingObserved {
-                block_height: 1,
+                block_height: shekyl_types::BlockHeight::from_raw(1),
                 slot: 999,
             },
         ]))
@@ -561,7 +566,7 @@ async fn recovered_mid_session_first_stake_names_the_reopen_remedy() {
     engine
         .apply_scan_result(one_block_scan_result(vec![
             crate::scan::BondSightingObserved {
-                block_height: 1,
+                block_height: shekyl_types::BlockHeight::from_raw(1),
                 slot: 0,
             },
         ]))
@@ -606,9 +611,19 @@ async fn apply_scan_result_reorg_replaces_orphaned_sighting_rows() {
     // fork), slots 1 and 2 sighted at 2 (at the fork — orphaned).
     engine
         .apply_scan_result(crate::scan::ScanResult {
-            processed_height_range: 1..3,
+            processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+                ..shekyl_types::BlockHeight::from_raw(3),
             parent_hash: None,
-            block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+            block_hashes: vec![
+                (
+                    shekyl_types::BlockHeight::from_raw(1),
+                    BlockHash::from_bytes([0x11; 32]),
+                ),
+                (
+                    shekyl_types::BlockHeight::from_raw(2),
+                    BlockHash::from_bytes([0x22; 32]),
+                ),
+            ],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
             reorg_rewind: None,
@@ -616,15 +631,15 @@ async fn apply_scan_result_reorg_replaces_orphaned_sighting_rows() {
             block_curve_tree_roots: Vec::new(),
             bond_sightings: vec![
                 crate::scan::BondSightingObserved {
-                    block_height: 1,
+                    block_height: shekyl_types::BlockHeight::from_raw(1),
                     slot: 0,
                 },
                 crate::scan::BondSightingObserved {
-                    block_height: 2,
+                    block_height: shekyl_types::BlockHeight::from_raw(2),
                     slot: 1,
                 },
                 crate::scan::BondSightingObserved {
-                    block_height: 2,
+                    block_height: shekyl_types::BlockHeight::from_raw(2),
                     slot: 2,
                 },
             ],
@@ -634,16 +649,28 @@ async fn apply_scan_result_reorg_replaces_orphaned_sighting_rows() {
     // Reorg forking at 2: slot 1's post re-mines at 3; slot 2's does not.
     engine
         .apply_scan_result(crate::scan::ScanResult {
-            processed_height_range: 2..4,
-            parent_hash: Some([0x11; 32]),
-            block_hashes: vec![(2, [0xB2; 32]), (3, [0xB3; 32])],
+            processed_height_range: shekyl_types::BlockHeight::from_raw(2)
+                ..shekyl_types::BlockHeight::from_raw(4),
+            parent_hash: Some(BlockHash::from_bytes([0x11; 32])),
+            block_hashes: vec![
+                (
+                    shekyl_types::BlockHeight::from_raw(2),
+                    BlockHash::from_bytes([0xB2; 32]),
+                ),
+                (
+                    shekyl_types::BlockHeight::from_raw(3),
+                    BlockHash::from_bytes([0xB3; 32]),
+                ),
+            ],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            reorg_rewind: Some(crate::scan::ReorgRewind { fork_height: 2 }),
+            reorg_rewind: Some(crate::scan::ReorgRewind {
+                fork_height: shekyl_types::BlockHeight::from_raw(2),
+            }),
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
             bond_sightings: vec![crate::scan::BondSightingObserved {
-                block_height: 3,
+                block_height: shekyl_types::BlockHeight::from_raw(3),
                 slot: 1,
             }],
         })
@@ -651,12 +678,20 @@ async fn apply_scan_result_reorg_replaces_orphaned_sighting_rows() {
 
     let staking = engine.ledger().staking.clone();
     assert_eq!(
-        staking.bond_sightings.get(&0).map(|h| h.to_raw()),
+        staking
+            .bond_sightings
+            .get(&0)
+            .copied()
+            .map(shekyl_types::BlockHeight::to_raw),
         Some(1),
         "a row below the fork survives untouched"
     );
     assert_eq!(
-        staking.bond_sightings.get(&1).map(|h| h.to_raw()),
+        staking
+            .bond_sightings
+            .get(&1)
+            .copied()
+            .map(shekyl_types::BlockHeight::to_raw),
         Some(3),
         "a re-mined post's row moves to its new canonical height"
     );
@@ -692,12 +727,16 @@ async fn apply_scan_result_adopts_a_cached_slot_and_advances_the_tip() {
     engine
         .apply_scan_result(one_block_scan_result(vec![
             crate::scan::BondSightingObserved {
-                block_height: 1,
+                block_height: shekyl_types::BlockHeight::from_raw(1),
                 slot: 0,
             },
         ]))
         .expect("cached slot is adopted");
-    assert_eq!(engine.synced_height(), 1, "tip advanced");
+    assert_eq!(
+        engine.synced_height(),
+        shekyl_types::BlockHeight::from_raw(1),
+        "tip advanced"
+    );
     assert_eq!(engine.ledger().staking.bonded_slots, vec![0], "adopted");
     assert_eq!(engine.ledger().staking.p_slot, 1, "cursor raised past 0");
     assert!(engine.ledger().staking.staking_enabled);
@@ -707,7 +746,8 @@ async fn apply_scan_result_adopts_a_cached_slot_and_advances_the_tip() {
             .staking
             .bond_sightings
             .get(&0)
-            .map(|h| h.to_raw()),
+            .copied()
+            .map(shekyl_types::BlockHeight::to_raw),
         Some(1)
     );
 }
@@ -742,12 +782,12 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
 
     // Honest 2021-scaling KAT row: accepted, and the fee is the shared
     // formula over the bond ceiling — not a number this path invents.
-    let honest = snapshot(340, 1_400, 67_000, 1);
+    let honest = snapshot(333, 1_332, 66_666, 1);
     let fee = bond_fee_from_estimates(honest).expect("an honest snapshot funds a bond");
     assert_eq!(
         fee.to_raw(),
         shekyl_rpc_client::tx_fee::fee_from_weight(
-            &FeeRate::new(340, 1).expect("rate"),
+            &FeeRate::new(333, 1).expect("rate"),
             p_lane_weight_ceiling_bytes()
         ),
         "the bond fee is economy over the P-lane ceiling, via the shared formula"
@@ -784,12 +824,12 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
     // Agreement, stated directly: the two gates accept exactly the same
     // snapshots. A future edit that loosens one and not the other fails.
     for (e, s, p, m) in [
-        (340, 1_400, 67_000, 1),
-        (13, 53, 14_000, 1),
+        (333, 1_332, 66_666, 1),
+        (13, 52, 13_333, 1),
         (200_000, 200_000, 200_000, 1),
         (50, 20, 100, 1),
         (1, 1, 1, 1_000_000_000_000_000_000),
-        (340, 1_400, 67_000, 10_000),
+        (333, 1_332, 66_666, 10_000),
     ] {
         let raw = snapshot(e, s, p, m);
         assert_eq!(

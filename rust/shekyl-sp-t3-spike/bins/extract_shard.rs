@@ -5,6 +5,15 @@
 
 //! D4 — extract a **real** archival shard from a live regtest chain.
 //!
+//! **DOES NOT RUN at this pin (2026-09-18):** the `get_curve_tree_path` RPC it
+//! reads from was removed — spend-revealing under `PHASE_2A_SEND_PATH.md`
+//! §3.0.1 and wrong on any chain carrying a transaction (`SOK-10`, Q7 → A;
+//! `docs/completed/SOK_10_PATH_POSITION_RESOLUTION.md`). The daemon answers
+//! method-not-found. This crate is disposable debt (see `src/lib.rs`); a
+//! replacement leaf source, if the spike is rerun, is a block-derived rebuild
+//! via `shekyl-curve-tree` or the bulk leaf-range service
+//! `CURVE_TREE_CLIENT.md` §"leaf range" names. Not repaired here.
+//!
 //! ```text
 //! SHEKYL_SPIKE_RPC=http://127.0.0.1:28601 \
 //! SHEKYL_SPIKE_SHARD_OUT=/path/to/shard.bin \
@@ -16,7 +25,7 @@
 //!
 //! `COMMAND_RPC_GET_CURVE_TREE_PATH` takes a **vector** of `output_indices` and
 //! answers with one `path_entry` per index, each carrying a `chunk_outputs_blob`
-//! of `[O:32][I:32][C:32][h_pqc:32]` for every leaf in that index's leaf-chunk
+//! of `[O:32][I:32][C:32][CM.x:32]` for every leaf in that index's leaf-chunk
 //! (`core_rpc_server_commands_defs.h`). A segment is `SEGMENT_LEAF_COUNT /
 //! SELENE_CHUNK_WIDTH = 25 992 / 38 = 684` chunks, so asking for one index per
 //! chunk covers the whole segment — and because the request is batched, that is a
@@ -24,18 +33,22 @@
 //!
 //! # The blob is not the leaf, and the difference matters
 //!
-//! `chunk_outputs_blob` carries compressed **Ed25519 points**; a curve-tree leaf
-//! is `shekyl_fcmp::tree::construct_leaf`'s `O.x ‖ I.x ‖ C.x ‖ h_pqc`, where the
-//! first three fields are Wei25519 x-coordinates (Selene scalars), *not* the
-//! compressed points. Serving the blob verbatim would serve 3.33 MB of real chain
-//! data that is nonetheless **not what a persona archives**, so the conversion is
-//! done here with the same function the wallet path uses
-//! (`shekyl_curve_tree::recon::try_build_leaf` calls it too).
+//! `chunk_outputs_blob`'s first three fields are compressed **Ed25519 points**;
+//! a curve-tree leaf is `O.x ‖ I.x ‖ C.x ‖ CM.x`, where the first three fields
+//! are Wei25519 x-coordinates (Selene scalars), *not* the compressed points.
+//! Serving the blob verbatim would serve 3.33 MB of real chain data that is
+//! nonetheless **not what a persona archives**. The blob's 4th field is
+//! different in kind: it is `CM.x` **already in scalar form** — the chunk does
+//! not carry the commitment point `CM` itself (`PL-D3`) — so the rebuild is
+//! `shekyl_fcmp::tree::leaf_from_chunk_entry`, which decompresses `O`/`I`/`C`
+//! and copies the 4th scalar through. `construct_leaf` cannot be used here: it
+//! would decompress the scalar as a point, refusing roughly half of all real
+//! chunks and silently building a wrong leaf from the rest.
 //!
-//! Note the blob's `I` field is skipped rather than used: `construct_leaf`
-//! re-derives `I = Hp(O)` itself, and taking it from the wire instead would make
-//! the fixture depend on the daemon agreeing with the local derivation — a
-//! difference that should surface as a mismatch, not be papered over.
+//! The blob's `I` field is consumed as served: the daemon writes it with the
+//! same `key_image_generator` (`I = Hp(O)`) the local side would use, so on an
+//! honest reply the two derivations are equal by construction, and
+//! `leaf_from_chunk_entry` takes all four fields from the wire.
 
 use std::io::Write as _;
 
@@ -142,15 +155,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             for entry in blob.chunks_exact(128) {
                 let mut o = [0u8; 32];
+                let mut i = [0u8; 32];
                 let mut c = [0u8; 32];
-                let mut h = [0u8; 32];
+                let mut cm_x = [0u8; 32];
                 o.copy_from_slice(&entry[0..32]);
-                // entry[32..64] is `I`; `construct_leaf` re-derives it (see the
-                // module doc) so it is deliberately not read here.
+                i.copy_from_slice(&entry[32..64]);
                 c.copy_from_slice(&entry[64..96]);
-                h.copy_from_slice(&entry[96..128]);
-                let leaf = shekyl_fcmp::tree::construct_leaf(&o, &c, &h)
-                    .ok_or("construct_leaf refused an on-chain output")?;
+                cm_x.copy_from_slice(&entry[96..128]);
+                // The 4th field is `CM.x`, already a Selene scalar; only the
+                // three points are decompressed (see the module doc for why
+                // `construct_leaf` cannot be used on this blob).
+                let leaf = shekyl_fcmp::tree::leaf_from_chunk_entry(&o, &i, &c, &cm_x)
+                    .ok_or("leaf_from_chunk_entry refused an on-chain output")?;
                 leaves.push(leaf);
             }
         }

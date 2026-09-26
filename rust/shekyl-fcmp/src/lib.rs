@@ -7,8 +7,8 @@
 //!
 //! Wraps the first-party `shekyl-fcmp-proofs` crate (the FCMP++ SAL/membership
 //! proof system) with Shekyl-specific extensions: 4-scalar curve tree leaves
-//! `{O.x, I.x, C.x, H(pqc_pk)}`, Shekyl domain separators, and per-output PQC
-//! commitment integration.
+//! `{O.x, I.x, C.x, CM.x}`, Shekyl domain separators, and per-output PQC
+//! leaf-commitment integration.
 
 #![deny(unsafe_code)]
 
@@ -20,7 +20,7 @@ pub mod leaf;
 pub mod proof;
 pub mod tree;
 
-pub use leaf::{PqcLeafScalar, ShekylLeaf};
+pub use leaf::{PqcKeyScalar, PqcLeafScalar, ShekylLeaf};
 #[cfg(feature = "multisig")]
 pub use proof::ProveInputLeafChunk;
 pub use proof::{BranchLayer, ProveError, ProveInput, ProveResult, ShekylFcmpProof, VerifyError};
@@ -33,8 +33,9 @@ pub use shekyl_fcmp_proofs::sal::SpendAuthAndLinkability;
 pub use shekyl_fcmp_proofs::{Input, Output};
 
 // Consensus domain constants live in `shekyl-crypto-pq` (SA-3a): the PQC
-// leaf-hash domain at `shekyl_crypto_pq::derivation::DOMAIN_PQC_LEAF`, the
-// KEM salt at `shekyl_crypto_pq::kem::KEM_DOMAIN_SALT`.
+// leaf-key customization at `shekyl_crypto_pq::leaf_commitment::DOMAIN_PQC_LEAF_KEY`,
+// the KEM salt at `shekyl_crypto_pq::kem::KEM_DOMAIN_SALT`.
+pub use shekyl_crypto_pq::leaf_commitment::PQC_LEAF_ENTRY_LEN;
 
 /// Maximum inputs per FCMP++ transaction (bounds proof gen time and tx size).
 pub const MAX_INPUTS: usize = 8;

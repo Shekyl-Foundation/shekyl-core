@@ -1,0 +1,9 @@
+# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
+#   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
+# and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
+codec = passed_through_facts
+fixed_width = variable
+[fixtures]
+none = 00000000
+burned = 01000000066275726e6564
+all = 0600000006776569676874106c6f6e675f7465726d5f7765696768740f636f696e735f67656e657261746564066275726e65640a726f6f745f61667465721a6c6f6e675f7465726d5f6566666563746976655f6d656469616e

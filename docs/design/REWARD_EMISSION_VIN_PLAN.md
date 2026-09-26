@@ -145,9 +145,11 @@ visitor. The closest existing shape is `txin_archival_bond_post` (carries
 impl `HybridEd25519MlDsa` over `fips204::ml_dsa_65` (workspace pin
 `fips204 = "0.4.6"`). `HybridPublicKey { ed25519: [u8;32], ml_dsa: Vec<u8> }`,
 canonical encoding `to_canonical_bytes()` (1996 B, scheme id 1).
-`H(pqc_pk)` = `derivation::hash_pqc_public_key` (Blake2b-512, `DOMAIN_PQC_LEAF`,
-wide-reduced to a Selene leaf scalar); the C++ FFI mirror is
-`shekyl_fcmp_pqc_leaf_hash`.
+Per-input key scalar `k = H_ℓ(pqc_pk)` = `derivation::pqc_key_scalar`
+(cSHAKE256 `shekyl/pqc-leaf-key-v1`, reduced mod ℓ; the leaf holds the
+commitment `CM = k·G_k + r·J` and the proof opens it — `PL-D3`, 2026-09-14,
+superseding the Blake2b leaf hash this plan was written against); the C++ FFI
+mirror is `shekyl_fcmp_pqc_key_scalar`.
 
 ### 1.4 FCMP membership-only FFI seam — **the gap (§9 carry)**
 
@@ -221,7 +223,9 @@ rule this is a **merge blocker**, not a checklist item:
 
 > The consensus-activating sub-PR (**PR-E3**) is not mergeable unless its
 > verify path (a) recomputes `hash_pqc_public_key(P_pubkey)` and demands it
-> equal the in-circuit leaf-committed `H(pqc_pk)`, **and** (b) verifies the
+> equal the in-circuit leaf-committed `H(pqc_pk)` *(as built; since `PL-D3`
+> the equality is the proof's in-circuit opening of the leaf commitment to
+> the key's point and the vin carries no hash)*, **and** (b) verifies the
 > **hybrid (Ed25519 + ML-DSA-65)** signature under that pubkey over a
 > domain-separated vin context. The **ML-DSA-65 component** carries the
 > load-bearing quantum spend-authority; the **Ed25519 component** is the ratified
@@ -286,8 +290,8 @@ emission_auth_msg = cSHAKE256(
 Two ML-DSA-65 auths (the §10.1 two-auth byte budget), both over
 `emission_auth_msg`:
 
-- **Auth-B (backing):** under the `pqc_pk` whose `H(pqc_pk)` the `Fcmp` leg
-  proved in-circuit — the §7-wargame quantum spend-authority defense. This is
+- **Auth-B (backing):** under the `pqc_pk` whose key point the `Fcmp` leg
+  opened the backing leaf's commitment to in-circuit (`PL-D3`) — the §7-wargame quantum spend-authority defense. This is
   the load-bearing gate; without it backing reduces to classical security.
 - **Auth-P (pseudonym):** under `P_pubkey`'s ML-DSA component — binds
   claim/dedup/mint to P's quantum identity (an attacker who somehow produced a
@@ -665,7 +669,8 @@ Scope (all inert — no C++ caller yet):
   in `shekyl_ffi.h`, parallel to `shekyl_fcmp_verify`.
 - ML-DSA vin-auth primitive: given `P_pubkey` canonical bytes, a vin-context
   message, and a `HybridSignature`, verify ML-DSA-65 and recompute
-  `hash_pqc_public_key` for the caller to match against the in-circuit leaf.
+  `hash_pqc_public_key` for the caller to match against the in-circuit leaf
+  *(retired: PR-SA-2 moved the check Rust-side; `PL-D3` moved it into the proof)*.
   Rust + C ABI.
 
 **Gates:** membership-only verify roundtrip through the wrapper; **deser
@@ -753,8 +758,9 @@ arithmetic and crypto never re-appear as C++ logic.
 6. **Membership-only backing** — PR-E1 (`shekyl_fcmp_membership_only_verify`),
    **not** `shekyl_fcmp_verify`.
 7. **FCMP balance** — fee `txin_to_key` via existing `shekyl_fcmp_verify`.
-8. **Hybrid auth gate (§2, R1.A)** — recompute `H(pqc_pk)`, demand equality with the
-   in-circuit leaf scalar, and verify the hybrid (Ed25519 + ML-DSA-65) auth(s) over
+8. **Hybrid auth gate (§2, R1.A)** — verify the hybrid (Ed25519 + ML-DSA-65) auth(s)
+   under the key step 6 opened the backing leaf to (`PL-D3`; the former recompute-and-compare
+   of `H(pqc_pk)` against the leaf scalar is gone with the vin field) over
    `emission_auth_msg` (R1.A binding) via `emission_vin_verify_auth` inside the coarse
    `shekyl_emission_vin_verify` call (the standalone PR-E1 per-auth FFI primitive
    `shekyl_emission_hybrid_auth_verify` was retired in PR-SA-2 — it hardcoded the
@@ -1004,7 +1010,7 @@ ArchivalRewardEmissionVin {
   work_claim:          WorkClaimVector,      // WorkEpochClaim[]{ epoch, ShardWorkEntry[]{ shard_id, serve_credit_bit, scarcity_milli } }
   backing:             MembershipOnlyBacking,// FCMP++ membership, NO key image (§7)
   reward_amount_plain: u64[per-epoch|total], // loud (§5.5)
-  auth_backing:        HybridSignature,      // Q1 stake-side: P-that-staked ↔ bond — hybrid (Ed25519+ML-DSA-65) over the backing leaf's committed H(pqc_pk) (the C-1 gate; §9.6)
+  auth_backing:        HybridSignature,      // Q1 stake-side: P-that-staked ↔ bond — hybrid (Ed25519+ML-DSA-65) under the backing key whose point the proof opens the leaf commitment to (the C-1 gate, PL-D3 form; §9.6)
   auth_claim:          HybridSignature,      // Q1 claim-side: P-that-claims ↔ THIS emission — binds payout output(s) + settlement_epochs (non-replayable)
 }
 ```

@@ -34,8 +34,21 @@ fn empty_block() -> BlockCompleteEntry {
 
 #[test]
 fn witness_cap_is_cpp_formula() {
-    assert_eq!(ATTESTATION_WITNESS_MAX_BYTES, 866_568);
+    assert_eq!(ATTESTATION_WITNESS_MAX_BYTES, 876_808);
     assert_eq!(HASH_SIZE, 32);
+}
+
+/// The framing crate carries a hand-copied twin of the retention crate's
+/// witness maximum (no production dependency). This is the gate that makes
+/// the copy unable to drift silently: the v1→v2 move (866,568 → 876,808,
+/// +40 per entry for `nonce ‖ anchor_height`) was caught by the C++ FFI
+/// gate and not here, because here there was only a literal.
+#[test]
+fn witness_cap_matches_retention_authority() {
+    assert_eq!(
+        ATTESTATION_WITNESS_MAX_BYTES,
+        shekyl_archival_retention::MAX_ATTESTATION_WITNESS_BYTES
+    );
 }
 
 #[test]

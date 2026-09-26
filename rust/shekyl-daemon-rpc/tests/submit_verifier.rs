@@ -40,8 +40,8 @@ use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
 use shekyl_curve_tree::{
-    AssembleInput, BlockHeight as TreeHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput,
-    ReferenceBlock, TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash as TreeHash, BlockHeight as TreeHeight, BlockLeaves, CurveTreeClient,
+    Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_daemon_rpc::submit::{
     parse_submission, CommitOutcome, DaemonTxVerifier, EngineFault, KeyImageConflict,
@@ -56,7 +56,7 @@ use shekyl_tx_builder::{
     tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth as BuilderPqcAuth, SpendInput,
     TreeContext, WireEncodeInput,
 };
-use shekyl_types::{BlockHeight, ChainCount};
+use shekyl_types::{BlockHeight, ChainCount, PCanonicalId};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, CtBase, PqcAuth, Prunable, Transaction};
 
@@ -138,7 +138,9 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
 }
 
 fn verify(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure> {
-    DaemonTxVerifier.verify(parsed, facts)
+    DaemonTxVerifier
+        .verify(parsed, facts)
+        .map_err(|e| e.cause())
 }
 
 /// Re-run Phase A over a mutated transaction. Every mutant in this suite
@@ -279,22 +281,28 @@ fn build_funding_setup() -> FundingSetup {
 
     // Genesis coinbase: the spent output at vout 0 plus decoys — one chunk
     // overflowed, so the tree is depth 2. Every decoy shares the spent
-    // output's (valid) h_pqc; distinct O/C points keep leaf hashes distinct.
+    // output's (valid) 0x07 entry; distinct O/C points keep leaf hashes
+    // distinct.
+    let spent_entry = spent.pqc_leaf.entry_bytes();
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
-    let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 32);
+    let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     genesis_outputs.push(RawOutput {
-        output_key: spent.output_key,
-        commitment: Some(spent.commitment),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+            spent.commitment,
+        )),
         target: TargetKind::TaggedKey,
     });
-    genesis_blob.extend_from_slice(&spent.h_pqc);
+    genesis_blob.extend_from_slice(&spent_entry);
     for _ in 1..TREE_OUTPUTS {
         genesis_outputs.push(RawOutput {
-            output_key: random_point(&mut rng),
-            commitment: Some(random_point(&mut rng)),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(random_point(&mut rng)),
+            commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                random_point(&mut rng),
+            )),
             target: TargetKind::TaggedKey,
         });
-        genesis_blob.extend_from_slice(&spent.h_pqc);
+        genesis_blob.extend_from_slice(&spent_entry);
     }
 
     // Consecutive block ingestion with one decoy coinbase per filler block;
@@ -311,28 +319,30 @@ fn build_funding_setup() -> FundingSetup {
         } else {
             (
                 vec![RawOutput {
-                    output_key: filler_key,
-                    commitment: Some(filler_commitment),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(filler_key),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        filler_commitment,
+                    )),
                     target: TargetKind::TaggedKey,
                 }],
-                spent.h_pqc.to_vec(),
+                spent_entry.to_vec(),
             )
         };
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(blob.as_slice()),
+            leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];
         client
             .ingest_block(BlockLeaves {
-                height: TreeHeight(height),
+                height: TreeHeight::from_raw(height),
                 txs: &txs,
             })
             .expect("ingest block");
     }
 
     let (tree_root, tree_depth) = client
-        .root_and_depth_at(TreeHeight(reference_height))
+        .root_and_depth_at(TreeHeight::from_raw(reference_height))
         .expect("tree root + depth at reference height");
     assert_eq!(
         usize::from(tree_depth),
@@ -342,21 +352,21 @@ fn build_funding_setup() -> FundingSetup {
     // One block later the height-1 filler has matured into the tree: a
     // different, equally valid root at the same depth.
     let (other_root, other_depth) = client
-        .root_and_depth_at(TreeHeight(reference_height + 1))
+        .root_and_depth_at(TreeHeight::from_raw(reference_height + 1))
         .expect("tree root + depth one block later");
     assert_eq!(other_depth, tree_depth, "one extra leaf keeps depth 2");
     assert_ne!(other_root, tree_root, "one extra leaf moves the root");
 
     // ── Membership path + SpendInput ────────────────────────────────────
     let reference = ReferenceBlock {
-        height: TreeHeight(reference_height),
+        height: TreeHeight::from_raw(reference_height),
         curve_tree_root: tree_root,
-        block_hash: [0xAB; 32],
+        block_hash: TreeHash::from_bytes([0xAB; 32]),
     };
     let target = AssembleInput {
-        gindex: Gindex(spent_index),
-        output_key: spent.output_key,
-        commitment: spent.commitment,
+        gindex: Gindex::from_raw(spent_index),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
     };
     let path = client
         .assemble_path(&target, &reference)
@@ -371,10 +381,10 @@ fn build_funding_setup() -> FundingSetup {
         .leaf_chunk
         .iter()
         .map(|cl| LeafEntry {
-            output_key: cl.output_key,
+            output_key: cl.output_key.to_bytes(),
             key_image_gen: cl.key_image_gen,
-            commitment: cl.commitment,
-            h_pqc: cl.h_pqc,
+            commitment: cl.commitment.to_bytes(),
+            cm_x: cl.cm_x,
         })
         .collect();
     let spend_input = SpendInput {
@@ -384,7 +394,6 @@ fn build_funding_setup() -> FundingSetup {
         spend_key_x: *ki.spend_secret_x,
         spend_key_y: spent.y,
         commitment_mask: spent.z,
-        h_pqc: spent.h_pqc,
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,
@@ -406,8 +415,8 @@ fn build_funding_setup() -> FundingSetup {
         spend_input,
         pqc_pk,
         tree_ctx,
-        tree_root,
-        other_root,
+        tree_root: tree_root.to_bytes(),
+        other_root: other_root.to_bytes(),
         reference_height,
         lmdb_depth: tree_depth - 1,
     }
@@ -641,10 +650,10 @@ fn build_bond_fixture() -> BondFixture {
         .expect("encode bond_spend_pk");
     let prefix_bond_input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: p_pubkey.clone(),
-        p_canonical_id: *shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&p_pubkey)
-            .as_bytes(),
+        p_canonical_id: shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&p_pubkey),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: bond_spend_pk.clone(),
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: floor,
@@ -669,8 +678,8 @@ fn build_bond_fixture() -> BondFixture {
 
     // ── Construct the bond vin (public keys only; SA-2b — no on-vin sig);
     // amount-level credit funding rule (§7.3) before proving ─────────────
-    let built =
-        build_join_market_vin(p_keys.bond_post_keys(), holdings).expect("build JoinMarket vin");
+    let built = build_join_market_vin(p_keys.bond_post_keys(), holdings, [0xEE; 32])
+        .expect("build JoinMarket vin");
     verify_credit_funding(
         AtomicUnits::from_raw(INPUT_AMOUNT),
         AtomicUnits::from_raw(change_total),
@@ -732,7 +741,7 @@ fn build_bond_fixture() -> BondFixture {
         .sign(
             &p_keys.hybrid_sign_sk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            &payload_hashes[1],
+            payload_hashes[1].as_bytes(),
         )
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {
@@ -795,6 +804,32 @@ fn engine_accepts_the_spend_end_to_end_with_the_production_verifier() {
 }
 
 // ─── O6: commitment mask non-triviality ─────────────────────────────────
+
+#[test]
+fn a_malformed_reject_names_its_leg() {
+    // This bites against a silent unit `Malformed` leaking back onto the
+    // seam; it does NOT cover that every production site goes through a
+    // constructor (the type does — a cause without a reason does not
+    // compile).
+    let identity = {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 1;
+        bytes
+    };
+    let parsed = mutated(|tx| {
+        let (_, base, _, _) = fcmp_parts_mut(tx);
+        base.commitments[0] = identity;
+    });
+    let err = DaemonTxVerifier
+        .verify(&parsed, &admitting_facts(fixture()))
+        .expect_err("a trivial output commitment must be refused");
+    assert_eq!(err.cause(), VerifyFailure::Malformed);
+    assert!(
+        err.reason().contains("O6"),
+        "the operator reason must name the O6 leg, got {:?}",
+        err.reason()
+    );
+}
 
 #[test]
 fn trivial_output_commitments_are_rejected() {
@@ -1142,7 +1177,9 @@ fn bond_canonical_id_hint_mismatch_is_rejected() {
     let parsed = bond_mutated(|tx| {
         for input in &mut tx.prefix.inputs {
             if let shekyl_wire::transaction::Input::BondPost(bp) = input {
-                bp.p_canonical_id[0] ^= 0x01;
+                let mut id = bp.p_canonical_id.to_bytes();
+                id[0] ^= 0x01;
+                bp.p_canonical_id = PCanonicalId::from_bytes(id);
             }
         }
     });
@@ -1209,7 +1246,8 @@ fn bond_spend_pk_swap_after_signing_is_rejected() {
     let mut swapped = fx.parsed.tx.clone();
     for input in &mut swapped.prefix.inputs {
         if let shekyl_wire::transaction::Input::BondPost(bp) = input {
-            let shekyl_wire::transaction::BondPostKind::JoinMarket { bond_spend_pk } = &mut bp.kind
+            let shekyl_wire::transaction::BondPostKind::JoinMarket { bond_spend_pk, .. } =
+                &mut bp.kind
             else {
                 panic!("bond fixture is a JoinMarket post");
             };
@@ -1230,7 +1268,7 @@ fn bond_spend_pk_swap_after_signing_is_rejected() {
     let parsed = bond_mutated(|tx| {
         for input in &mut tx.prefix.inputs {
             if let shekyl_wire::transaction::Input::BondPost(bp) = input {
-                let shekyl_wire::transaction::BondPostKind::JoinMarket { bond_spend_pk } =
+                let shekyl_wire::transaction::BondPostKind::JoinMarket { bond_spend_pk, .. } =
                     &mut bp.kind
                 else {
                     panic!("bond fixture is a JoinMarket post");
@@ -1307,35 +1345,30 @@ fn bond_balance_mismatch_is_rejected() {
 #[test]
 fn producerless_bond_post_kinds_refuse_loudly() {
     // The named rule-21 refusal arm (verifier module docs), NARROWED when
-    // the Release fact set landed (§8.7.1.1): Rebond and HoldingsUpdate
-    // parse and clear Phase A (the wire admits `Other` kinds), but they
-    // have no producer, so building their submit-side fact sets now would
-    // be pre-provisioned flexibility with an unverifiable Phase-D race
-    // classification. The battery must refuse at the KIND DISPATCH rather
-    // than run the JoinMarket legs against the wrong kind — which is why
-    // this asserts against `bond_admitting_facts` (a JoinMarket-shaped
-    // fact set): reaching a verdict on it at all would be the defect.
-    for kind in [
-        shekyl_archival_retention::BondPostKind::Rebond,
-        shekyl_archival_retention::BondPostKind::HoldingsUpdate,
-    ] {
-        let parsed = bond_mutated(|tx| {
-            for input in &mut tx.prefix.inputs {
-                if let shekyl_wire::transaction::Input::BondPost(bp) = input {
-                    bp.kind = shekyl_wire::transaction::BondPostKind::Other(kind as u8);
-                }
+    // the Release fact set landed (§8.7.1.1): Reinstate parses and clears
+    // Phase A (the wire admits `Other` kinds), but it has no producer, so
+    // building its submit-side fact set now would be pre-provisioned
+    // flexibility with an unverifiable Phase-D race classification. The
+    // battery must refuse at the KIND DISPATCH rather than run the
+    // JoinMarket legs against the wrong kind. Discriminant 3
+    // (HoldingsUpdate) is REJECTED at the retention wire.
+    let kind = shekyl_archival_retention::BondPostKind::Reinstate;
+    let parsed = bond_mutated(|tx| {
+        for input in &mut tx.prefix.inputs {
+            if let shekyl_wire::transaction::Input::BondPost(bp) = input {
+                bp.kind = shekyl_wire::transaction::BondPostKind::Other(kind as u8);
             }
-        });
-        assert!(
-            !parsed.bond_post_is_release(),
-            "{kind:?} must not route to the debit arm"
-        );
-        assert_eq!(
-            verify(&parsed, &bond_admitting_facts()),
-            Err(VerifyFailure::Malformed),
-            "{kind:?} has no producer and must refuse loudly at the submit battery"
-        );
-    }
+        }
+    });
+    assert!(
+        !parsed.bond_post_is_release(),
+        "{kind:?} must not route to the debit arm"
+    );
+    assert_eq!(
+        verify(&parsed, &bond_admitting_facts()),
+        Err(VerifyFailure::Malformed),
+        "{kind:?} has no producer and must refuse loudly at the submit battery"
+    );
 }
 
 // ─── The Release fixture (§8.7.1.1 UB rows) ──────────────────────────────
@@ -1524,7 +1557,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     // reason UB3 has to read the record instead of the vin.
     let prefix_bond_input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: identity_pk.clone(),
-        p_canonical_id: built.vin().p_canonical_id,
+        p_canonical_id: PCanonicalId::from_bytes(built.vin().p_canonical_id),
         kind: BondPostKind::Other(shekyl_archival_retention::BondPostKind::Release as u8),
         holdings: Holdings::ShardSetCompact(Vec::new()),
         bonded_total_atomic: 0,
@@ -1619,7 +1652,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
         .sign(
             slot_sk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            &payload_hashes[1],
+            payload_hashes[1].as_bytes(),
         )
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {
@@ -2302,7 +2335,7 @@ fn a_competing_release_that_exits_the_record_is_a_terminal_conflict() {
 
 #[test]
 fn a_balance_that_moved_under_the_debit_is_also_terminal() {
-    // The credit-side twin: a Rebond or HoldingsUpdate-add connecting during
+    // The credit-side twin: a Reinstate or HoldingsUpdate-add connecting during
     // Phase C RAISES the record's total, so the vin's `bond_debit` no longer
     // equals it and the full-exit equality can never hold again for these
     // bytes. Keying on "exited" alone would miss this; keying on the balance

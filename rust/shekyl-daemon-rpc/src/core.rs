@@ -107,7 +107,6 @@ pub struct ConnectionFacts {
     /// The peer's claimed blockchain height.
     pub height: u64,
     pub support_flags: u32,
-    pub pruning_seed: u32,
     pub port: u16,
     /// `cryptonote_connection_context::state`, unmapped — the name it renders
     /// to is the wire projection's business.
@@ -146,12 +145,9 @@ pub struct SyncSpanFacts {
     pub filled: bool,
 }
 
-/// The download queue plus the stripe this node wants next.
+/// The download queue.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyncSpansSnapshot {
-    /// A **stripe**, not a seed. The wire field it feeds is named
-    /// `next_needed_pruning_seed`, an inherited misnomer carried on purpose.
-    pub next_needed_pruning_stripe: u32,
     pub spans: Vec<SyncSpanFacts>,
 }
 
@@ -167,7 +163,6 @@ pub struct PeerFacts {
     /// oracle vector beside the host string it renders to. Zero for every
     /// non-ipv4 arm.
     pub ip: u32,
-    pub pruning_seed: u32,
     /// 0 for the address arms that carry none.
     pub port: u16,
     /// Which list it came from.
@@ -448,7 +443,6 @@ impl CoreRpc {
                         current_speed_up: e.current_speed_up,
                         height: e.height,
                         support_flags: e.support_flags,
-                        pruning_seed: e.pruning_seed,
                         port: e.port,
                         state: e.state,
                         address_type: e.address_type,
@@ -463,21 +457,19 @@ impl CoreRpc {
         }
     }
 
-    /// The block-download queue and the next needed pruning stripe
-    /// (`shekyl_rpc_sync_spans`), copied out before the owner is released.
+    /// The block-download queue (`shekyl_rpc_sync_spans`), copied out before
+    /// the owner is released.
     pub fn sync_spans(&self) -> Result<SyncSpansSnapshot, i32> {
         if self.handle.is_null() {
             return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
         }
         let mut rows: *const ffi::SyncSpanFactsFfi = std::ptr::null();
         let mut len: usize = 0;
-        let mut stripe: u32 = 0;
         let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
         // SAFETY: as `connections` above.
         unsafe {
             let rc = ffi::shekyl_rpc_sync_spans(
                 self.handle,
-                &raw mut stripe,
                 &raw mut rows,
                 &raw mut len,
                 &raw mut owner,
@@ -501,10 +493,7 @@ impl CoreRpc {
                 }
             }
             ffi::shekyl_rpc_sync_spans_free(owner);
-            Ok(SyncSpansSnapshot {
-                next_needed_pruning_stripe: stripe,
-                spans,
-            })
+            Ok(SyncSpansSnapshot { spans })
         }
     }
 
@@ -536,7 +525,6 @@ impl CoreRpc {
                         host: borrowed_string(e.host, e.host_len),
                         last_seen: e.last_seen,
                         ip: e.ip,
-                        pruning_seed: e.pruning_seed,
                         port: e.port,
                         white: e.white != 0,
                         blocked: e.blocked != 0,
@@ -560,17 +548,6 @@ impl CoreRpc {
         // writes two compile-time constants.
         unsafe { ffi::shekyl_rpc_peerlist_limits(&raw mut white, &raw mut gray) };
         (white, gray)
-    }
-
-    /// The stripe label `sync_info` prints beside a span
-    /// (`shekyl_rpc_span_pruning_seed`).
-    ///
-    /// Handle-free, like [`Self::peerlist_limits`], and for the same reason:
-    /// `shekyld sync_info` renders against a *remote* daemon with no core to
-    /// ask, so a renderer's C++ constants must be reachable without one.
-    pub fn span_pruning_seed(start_block_height: u64) -> u32 {
-        // SAFETY: a pure function of its argument; no handle, no allocation.
-        unsafe { ffi::shekyl_rpc_span_pruning_seed(start_block_height) }
     }
 
     /// Hard-fork voting info (`shekyl_rpc_hard_fork_info`). `requested_version`
@@ -607,7 +584,7 @@ impl CoreRpc {
             return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
         }
         let mut pod = ffi::FeeEstimateFactsFfi {
-            fees: [0; 4],
+            fees: [0; 3],
             quantization_mask: 0,
             fee_count: 0,
             reserved: [0; 7],

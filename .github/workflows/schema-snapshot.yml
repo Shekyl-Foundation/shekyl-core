@@ -4,30 +4,49 @@
 # BSD-3-Clause
 #
 # Wire-schema guard — commit 3.4 of the mid-rewire hardening pass
-# (`docs/MID_REWIRE_HARDENING.md` §3.4).
+# (`docs/MID_REWIRE_HARDENING.md` §3.4), extended to the daemon chain
+# store by DRS-E1 increment 2 (`docs/design/DAEMON_REDB_STORE.md` §11.1).
 #
 # Converts the `block_version` discipline from cultural invariant to
 # mechanical check. Two jobs, one trigger:
 #
 #   pull_request → dev
 #     - assert-snapshots:       runs the `schema_snapshot` tests in
-#                               `shekyl-engine-state`. Fails with a
+#                               `shekyl-engine-state` and the whole
+#                               `codec::snapshot_tests` module in
+#                               `shekyl-chain-store`. Fails with a
 #                               unified diff if any persisted block's
-#                               postcard wire schema drifts from its
-#                               committed `.snap`.
-#     - enforce-version-bump:   cross-checks the PR diff: if any
+#                               postcard wire schema, any chain-store
+#                               canonical codec's fixture encodings, the
+#                               chain store's table catalogue (name,
+#                               shape, key/value types per table), or the
+#                               property-cell catalogue (key, scope, value
+#                               codec) drift from the committed `.snap`.
+#     - enforce-version-bump:   cross-checks the PR diff. Wallet: if any
 #                               `.snap` under `rust/shekyl-engine-state/
 #                               schemas/` changed, the matching version
 #                               constant in the paired source file
 #                               (`WALLET_LEDGER_FORMAT_VERSION`,
 #                               `LEDGER_BLOCK_VERSION`, …) must have
-#                               changed in the same PR. Fails otherwise.
+#                               changed in the same PR. Chain store: if
+#                               ANY `.snap` under `rust/shekyl-chain-store/
+#                               schemas/` changed, the value of
+#                               `SCHEMA_VERSION` in
+#                               `src/codec/schema_version.rs` must be
+#                               numerically greater at the PR head than
+#                               at its base (or the constant must be born
+#                               in the PR). Fails otherwise.
 #
 # Rationale: a `.snap` change means the on-disk wire format changed.
 # Consumers depend on the version constant to recognize incompatible
 # bundles — letting a schema drift land without a version bump is a
 # silent data corruption risk (see `docs/MID_REWIRE_HARDENING.md` §3.4
-# and `.cursor/rules/42-serialization-policy.mdc`).
+# and `.cursor/rules/42-serialization-policy.mdc`). For the chain store
+# the codec is also the digest's fold input, so a silent codec move is a
+# consensus-oracle move; and a table added, removed or re-keyed is a
+# layout change an old binary trips over at `open_table`, which is why
+# the catalogues (tables and property cells) are snapshots too
+# (`DAEMON_REDB_STORE.md` §11.1(b)).
 
 name: ci/schema-snapshot
 
@@ -35,9 +54,23 @@ on:
   pull_request:
     branches: [dev]
     paths:
-      - "rust/shekyl-engine-state/**"
-      - "rust/Cargo.lock"
-      - "rust/Cargo.toml"
+      # The gate's subject is every crate whose code can change a byte a
+      # `.snap` pins: the codecs themselves (`shekyl-store-codec`, the chain
+      # store's own, the wallet's in `shekyl-engine-state`) and everything
+      # they encode *through* -- `to_raw` / `as_bytes` on the `shekyl-types`
+      # and `shekyl-units` vocabulary, `RuleSetId` in `shekyl-chain-rules`,
+      # `CumulativeDifficulty` in `shekyl-difficulty`, the block parse in
+      # `shekyl-wire`, and their own dependencies down to the vendored
+      # `shekyl-oxide` crates. That closure is twelve first-party crates
+      # plus vendored ones today and moves whenever a manifest does. Every
+      # first-party and vendored crate is a path dependency under `rust/`
+      # (rule 25), so `rust/**` is the closure by construction -- there is no
+      # list here to drift. `workflow_gates_this_crate` derives the closure
+      # from the manifests and asserts this trigger covers each member, so
+      # narrowing this pattern goes red. An external encoder changing (a
+      # `redb` bump that re-renders `TypeName`, say) arrives as a lock-file
+      # change, which is under the same pattern.
+      - "rust/**"
       - ".github/workflows/schema-snapshot.yml"
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
@@ -86,6 +119,21 @@ jobs:
           # module name keeps this job fast and isolates the failure
           # signal from unrelated unit tests.
           cargo test -p shekyl-engine-state schema_snapshot --no-fail-fast
+
+      - name: Run chain-store codec::snapshot_tests module
+        working-directory: rust
+        run: |
+          # The chain store's counterpart lives in
+          # `shekyl-chain-store/src/codec/snapshot_tests.rs`: one `.snap`
+          # of fixture encodings per `Canonical` codec, the table and
+          # property-cell catalogue snapshots, and the meta-tests that hold
+          # the gate's subject (every impl has a snapshot; the assertions
+          # are armed; this workflow still gates the crate —
+          # `workflow_gates_this_crate` reads this file and checks that
+          # THIS filter selects its module).
+          # The filter is the module path, not a test-name prefix, so the
+          # meta-tests cannot be skipped by a name that lacks the prefix.
+          cargo test -p shekyl-chain-store codec::snapshot_tests --no-fail-fast
 
   enforce-version-bump:
     name: "Enforce paired block_version bump"
@@ -180,6 +228,66 @@ jobs:
             fi
           done
 
+          # Chain store (DRS-E1 increment 2). One version constant covers
+          # every codec and both catalogues, because the store rebuilds
+          # rather than migrates (`DAEMON_REDB_STORE.md` §11.1(a)): if ANY
+          # snapshot under the crate's schemas/ directory changed, the
+          # VALUE of SCHEMA_VERSION must be greater at the PR head than at
+          # its base. Compared numerically, not textually: a declaration
+          # line that merely changed shape (`new(1)` → `new(1u64)`) is not
+          # a bump. No per-codec registry to keep in sync — the crate's
+          # `every_canonical_impl_has_a_snapshot` meta-test guarantees the
+          # snapshot set is the codec set plus the catalogues, and its
+          # `workflow_gates_this_crate` meta-test pins the declaration to
+          # the grammar the regex below reads.
+          CS_SNAP_DIR="rust/shekyl-chain-store/schemas/"
+          CS_SRC="rust/shekyl-chain-store/src/codec/schema_version.rs"
+          CS_CONST="SCHEMA_VERSION"
+          # Prints the decimal value of SCHEMA_VERSION declared at revision
+          # $1, or nothing if the declaration is absent or unparsable. The
+          # value is the verdict; the pipe only shapes it (rule 46).
+          cs_version_at() {
+            git show "$1:${CS_SRC}" \
+              | sed -nE "s/^pub const ${CS_CONST}: SchemaVersion = SchemaVersion::new\(([0-9_]+)\).*/\1/p" \
+              | tr -d '_'
+          }
+          CS_TOUCHED=$(echo "${CHANGED}" | grep -F "${CS_SNAP_DIR}" | grep -E '\.snap$' || true)
+          if [ -n "${CS_TOUCHED}" ]; then
+            echo "::group::chain-store: snapshot(s) changed, checking ${CS_CONST} bump"
+            echo "${CS_TOUCHED}" | sed 's/^/  snapshot:  /'
+            echo "  source:    ${CS_SRC}"
+            echo "  constant:  ${CS_CONST}"
+            HEAD_V=""
+            if git cat-file -e "${HEAD_SHA}:${CS_SRC}" 2>/dev/null; then
+              HEAD_V=$(cs_version_at "${HEAD_SHA}")
+            fi
+            if [ -z "${HEAD_V}" ]; then
+              echo "::error file=${CS_SRC}::${CS_CONST} not parsable at the PR head"
+              echo "  FATAL: expected exactly one line of the form"
+              echo "    pub const ${CS_CONST}: SchemaVersion = SchemaVersion::new(<decimal>);"
+              echo "  at column 0 of ${CS_SRC}. The gate cannot compare what it cannot read."
+              FAIL=1
+            elif ! git cat-file -e "${BASE_SHA}:${CS_SRC}" 2>/dev/null; then
+              echo "  OK: ${CS_SRC} is born in this PR (${CS_CONST} = ${HEAD_V}); nothing older to bump from."
+            else
+              BASE_V=$(cs_version_at "${BASE_SHA}")
+              if [ -z "${BASE_V}" ]; then
+                echo "::error file=${CS_SRC}::${CS_CONST} not parsable at the PR base"
+                echo "  FATAL: ${CS_SRC} exists at ${BASE_SHA} but declares no readable ${CS_CONST}."
+                FAIL=1
+              elif [ "${HEAD_V}" -le "${BASE_V}" ]; then
+                echo "::error file=${CS_SRC}::${CS_CONST} not bumped alongside a chain-store snapshot (base ${BASE_V}, head ${HEAD_V})"
+                echo "  FATAL: a snapshot under ${CS_SNAP_DIR} changed — a codec moved the"
+                echo "  stored bytes AND the digest fold, or the table catalogue changed —"
+                echo "  but ${CS_CONST} is ${HEAD_V} at head and ${BASE_V} at base. Bump in the same PR."
+                FAIL=1
+              else
+                echo "  OK: ${CS_CONST} ${BASE_V} → ${HEAD_V}."
+              fi
+            fi
+            echo "::endgroup::"
+          fi
+
           if [ "${FAIL}" -ne 0 ]; then
             cat <<'EOF'
 
@@ -194,7 +302,11 @@ jobs:
                constant in the same PR and regenerate the snapshot:
                  UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state \
                    schema_snapshot
-            3. If no, revert the change to the block struct.
+               For the chain store, bump `SCHEMA_VERSION` in
+               `rust/shekyl-chain-store/src/codec/schema_version.rs` and:
+                 UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store \
+                   codec::snapshot_tests
+            3. If no, revert the change to the block struct / codec.
 
           EOF
             exit 1

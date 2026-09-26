@@ -203,15 +203,19 @@ mod tests {
     /// hand-forged range.
     fn covered_range(first: u64, len: u64) -> VerifiedRange {
         let mut blocks = Vec::new();
-        let mut prev = [0u8; 32];
+        let mut prev = shekyl_types::BlockHash::NULL;
         for h in first..first + len {
             let sb = make_synthetic_block(h, prev);
             prev = sb.block.hash();
             blocks.push(sb);
         }
-        verify_exhaustive(BlockHeight::from_raw(first), [0u8; 32], &blocks)
-            .expect("a correctly chained synthetic batch verifies")
-            .range()
+        verify_exhaustive(
+            BlockHeight::from_raw(first),
+            shekyl_types::BlockHash::NULL,
+            &blocks,
+        )
+        .expect("a correctly chained synthetic batch verifies")
+        .range()
     }
 
     fn persona(b: u8) -> PCanonicalId {

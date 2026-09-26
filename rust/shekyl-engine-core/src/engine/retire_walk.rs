@@ -100,7 +100,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_archival_retention::MAX_CLAIM_AGE_W;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_engine_state::pscan_state::PScanState;
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch};
 
 use crate::engine::pscan::accrual::PScanAccrual;
 use crate::engine::stake_engine::test_fixtures::derive_bundle;
@@ -457,10 +457,11 @@ impl crate::engine::pscan::block_source::BlockSource for WalkBlockSource {
     fn tip_height(
         &self,
     ) -> impl std::future::Future<
-        Output = Result<BlockHeight, crate::engine::pscan::block_source::BlockSourceError>,
+        Output = Result<ChainCount, crate::engine::pscan::block_source::BlockSourceError>,
     > + Send {
-        // `horizon = tip - reorg_depth`, so this yields `cursor + 2` — a
-        // **two**-block range `[cursor, cursor + 2)`, and the `+ 2` is
+        // `horizon = claimed.saturating_sub_count(reorg).next_height()`, so this
+        // yields `cursor + 2` as COUNT — a **two**-block range `[cursor, cursor + 2)`,
+        // and the `+ 2` is
         // load-bearing rather than slack. With `batch_blocks = 1` each run
         // scans one batch: run 1 consumes the block at `cursor`, seals, and is
         // cancelled inside that seal; run 2 resumes at `cursor + 1` and needs a
@@ -468,8 +469,8 @@ impl crate::engine::pscan::block_source::BlockSource for WalkBlockSource {
         // retire dispatch live *inside* that loop. Bite-checked: `+ 1` leaves
         // run 2 with an empty range, the dispatch never runs, and the retire
         // does not re-fire. Do not "simplify" this to `+ 1`.
-        let tip = BlockHeight::from_raw(self.cursor_height + WALK_REORG_DEPTH + 2);
-        async move { Ok(tip) }
+        let claimed = ChainCount::from_raw(self.cursor_height + WALK_REORG_DEPTH + 2);
+        async move { Ok(claimed) }
     }
 
     fn block_at(
@@ -499,7 +500,7 @@ const WALK_REORG_DEPTH: u64 = 1;
 /// re-fire.
 fn walk_block(cursor_height: u64, h: u64) -> shekyl_scanner::ScannableBlock {
     use crate::engine::test_support::make_synthetic_block;
-    let mut block = make_synthetic_block(cursor_height, [0u8; 32]);
+    let mut block = make_synthetic_block(cursor_height, BlockHash::NULL);
     let mut at = cursor_height;
     while at < h {
         let prev = block.block.hash();
@@ -597,7 +598,7 @@ async fn run_one_sweep(
         store,
         schedule,
         PScanConfig {
-            reorg_depth: WALK_REORG_DEPTH,
+            reorg_depth: BlockCount::from_raw(WALK_REORG_DEPTH),
             batch_blocks: 1,
         },
         initial,

@@ -32,6 +32,7 @@
 
 #include <atomic>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -340,6 +341,20 @@ bool Daemon::run(bool interactive)
         mp_internals->rpcs.front().server.get()));
       rpc_commands->start_handling(std::bind(&Daemon::stop_p2p, this));
     }
+
+    // RPC listeners are open now, and each server has a connection budget
+    // that is not yet open. Re-derive so both are inside the ceiling.
+    // `init` already derived once, before these sockets existed.
+    std::uint64_t rpc_reserved = 0;
+    for (auto const & rpc : mp_internals->rpcs)
+    {
+      const std::uint64_t cap = static_cast<std::uint64_t>(rpc.server->get_rpc_max_connections());
+      if (rpc_reserved > std::numeric_limits<std::uint64_t>::max() - cap)
+        rpc_reserved = std::numeric_limits<std::uint64_t>::max();
+      else
+        rpc_reserved += cap;
+    }
+    mp_internals->p2p.apply_inbound_ceiling(rpc_reserved);
 
     MGINFO("Starting p2p net loop...");
     mp_internals->p2p.run(); // blocks until p2p goes down

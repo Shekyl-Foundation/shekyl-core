@@ -60,3 +60,13 @@ jobs:
           END=$(date +%s)
           ELAPSED=$((END - START))
           echo "::notice::Proptest completed on ${{ matrix.branch }} in ${ELAPSED}s (budget 180m)"
+
+      - name: Run timing-engine model (8 192 cases)
+        working-directory: rust
+        env:
+          PROPTEST_CASES: "8192"
+        run: |
+          set -eu
+          list=$(cargo test --locked --release -p shekyl-timing-engine --lib -- --list)
+          printf '%s\n' "$list" | grep -qx 'model::random_ops_match_a_scanned_reference: test'
+          cargo test --locked --release -p shekyl-timing-engine --lib -- --exact model::random_ops_match_a_scanned_reference --nocapture

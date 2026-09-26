@@ -1,0 +1,26 @@
+# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
+#   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
+# and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
+codec = family_set
+fixed_width = 4
+[fixtures]
+empty = 00000000
+archival_serve_credit = 01000000
+archival_settlement = 02000000
+archival_attestation_witness = 04000000
+archival_alt_attestation_witness = 08000000
+archival_bond = 10000000
+archival_shard_segment = 20000000
+archival_slash_applied = 40000000
+archival_slash_log = 80000000
+archival_emission_claim_log = 00010000
+archival_bond_unbond_log = 00020000
+archival_bond_holdings_update_log = 00040000
+archival_bond_reinstate_log = 00080000
+archival_r_market = 00100000
+archival_sigma_work = 00200000
+archival_epoch_close_log = 00400000
+archival_budget_accrual = 00800000
+archival_budget = 00000100
+bond_and_slash_log = 90000000
+all = ffff0100

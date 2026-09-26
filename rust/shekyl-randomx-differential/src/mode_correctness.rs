@@ -5,7 +5,7 @@
 
 //! `--mode=correctness` orchestrator (§5.1.10, T1, T16).
 //!
-//! Per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1.10 + §3.15.4
+//! Per `docs/completed/RANDOMX_V2_PHASE2G_PLAN.md` §5.1.10 + §3.15.4
 //! orchestration lifecycle, this module runs the harness's
 //! per-`(seedhash, data)` byte-equality check across the random
 //! corpus (§5.1.5 + R1-D4), prefaced by the R1-D14 cache-equivalence
@@ -38,15 +38,16 @@
 //! 6. Drop both sessions; release C cache + VM; PreparedCache's
 //!    drop discipline wipes the Rust-side 256-MiB cache.
 //!
-//! ## Adversarial-corpus iteration (R7-D4)
+//! ## Adversarial-corpus iteration (R7-D4 scaffold — empty by design)
 //!
-//! Per §3.19 R7-D4, the adversarial corpus (§5.1.6) is scaffolded
-//! empty through 2g ship; the methodology + corpus land in a
-//! post-2g design round. The iteration code in [`run`] still walks
-//! the [`crate::adversarial_corpus::iter_adversarial_seedhashes`]
-//! iterator structurally, so the path lights up when the corpus
-//! fills without an additional code change. At C7, the iterator
-//! yields zero items and the per-pair body never executes.
+//! [`run`] still walks
+//! [`crate::adversarial_corpus::iter_adversarial_seedhashes`]. Those
+//! iterators yield zero items. Phase 2h closed R7-D4 by landing a
+//! *recipe* corpus (`crate::adversarial::get_corpus`) consumed by
+//! `--mode=adversarial-ratio`, not by filling this 2g scaffold.
+//! `adversarial_pairs_checked` is therefore always 0 here. That is
+//! current behavior, not a deferred fill. See
+//! `docs/completed/RANDOMX_V2_PHASE2H_PLAN.md`.
 //!
 //! ## §3.18 R6-D4 corpus indexing
 //!
@@ -82,6 +83,7 @@
 use std::fmt;
 
 use shekyl_pow_randomx::Seedhash;
+use shekyl_types::PowHash;
 
 use crate::adversarial_corpus::{iter_adversarial_data, iter_adversarial_seedhashes};
 use crate::c_oracle::{COracleError, COracleSession, RANDOMX_HASH_SIZE};
@@ -105,9 +107,9 @@ pub struct CorrectnessReport {
     /// equality (T1 + T16) held. Equals `requested_seedhashes *
     /// requested_data_per_seedhash` on success.
     pub random_pairs_checked: usize,
-    /// Number of adversarial pairs checked at this run. Zero at
-    /// C7 per §3.19 R7-D4 (adversarial corpus deferred to a
-    /// post-2g design round); non-zero once the corpus fills.
+    /// Number of pairs from the 2g R7-D4 scaffold walk. Always 0:
+    /// those iterators stay empty. Phase 2h's recipe corpus is
+    /// measured by `--mode=adversarial-ratio`, not by this field.
     pub adversarial_pairs_checked: usize,
 }
 
@@ -357,10 +359,10 @@ pub fn run(
         start = end;
     }
 
-    // Adversarial-corpus structural iteration (§3.19 R7-D4: empty
-    // at C7; the loop yields zero items, but the code path is
-    // wired so a future post-2g design round's filled corpus
-    // lights up without a separate code change).
+    // 2g R7-D4 scaffold walk: iterators yield zero items. Phase 2h
+    // did not fill this path (recipe corpus lives in
+    // `--mode=adversarial-ratio`). Kept so a non-empty scaffold would
+    // still be exercised; it is not a promise of a future fill.
     let mut adversarial_pairs_checked: usize = 0;
     for (_class_tag, seedhash) in iter_adversarial_seedhashes() {
         let rust = RustSubjectSession::derive(seedhash);
@@ -371,12 +373,10 @@ pub fn run(
         for (_data_class_tag, data) in iter_adversarial_data() {
             let rust_hash = rust.compute_hash(data);
             let c_hash = c.calculate_hash(data);
-            // Adversarial pairs use a sentinel canonical index (the
-            // random corpus owns canonical indices 0..1024) and carry
-            // no canonical pin; the C9 failure-output schema
-            // distinguishes them by the absent canonical lookup. The
-            // post-2g adversarial-corpus design round lands a
-            // class-indexed canonical table per §3.18 R6-D4.
+            // Scaffold pairs (none today) use a sentinel canonical
+            // index — the random corpus owns 0..1024 — and carry no
+            // canonical pin. Phase 2h did not add a class-indexed
+            // table to this walk.
             three_leg_verdict(seedhash, usize::MAX, data.len(), rust_hash, c_hash, None)?;
             adversarial_pairs_checked += 1;
         }
@@ -394,7 +394,7 @@ pub fn run(
 /// [`crate::cache_precondition`] rather than re-exported to keep
 /// the two modules' display formatting independent (a future
 /// reshape of one doesn't perturb the other).
-fn hex_lower(bytes: &[u8]) -> String {
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push_str(&format!("{b:02x}"));
@@ -441,19 +441,23 @@ pub(crate) fn cache_canonical_verdict(
 ///
 /// Legs, in the order §5.1.10 pins them:
 ///
-/// 1. **T1** — `rust_hash == c_hash`. The differential proper.
+/// 1. **T1** — `rust_hash == c_hash`, compared as [`PowHash`]es: the
+///    verifier's output and the JIT's are the same *kind* of value —
+///    the consensus longhash — and the seam this gate asserts across is
+///    that type, not a byte array that could be any 32 bytes (DRS-E2
+///    RD-Q12; `PowHash` is distinct from `BlockHash` since #785). The
+///    error payloads stay bytes because the forensics schema is bytes.
 /// 2. **T16 leg-3** — `rust_hash == canonical_hash`, when a canonical
-///    is pinned for this index. `None` means no pin (adversarial pairs
-///    use the `usize::MAX` sentinel index and have no canonical until
-///    the post-2g adversarial-corpus round lands a class-indexed
-///    table).
+///    is pinned for this index. `None` means no pin (the 2g scaffold
+///    walk, if it ever yields a pair, uses `usize::MAX` and has no
+///    canonical; Phase 2h did not add a class-indexed table here).
 ///
 /// Leg 1 is evaluated first and short-circuits, so a genuine rust/C
 /// divergence is never reported as a canonical mismatch.
 ///
 /// # Why this is a separate function
 ///
-/// Per `RANDOMX_V2_MUTATION_REGIME.md` MR-F10, this comparison lived
+/// Per `docs/completed/RANDOMX_V2_MUTATION_REGIME.md` MR-F10, this comparison lived
 /// inline in a loop over live sessions, so exercising any failing
 /// branch required a full 256-MiB derive plus a linked C oracle — and
 /// no negative test for it existed. §4.5 T-A1 names *this* assertion
@@ -476,7 +480,7 @@ pub(crate) fn three_leg_verdict(
     c_hash: [u8; RANDOMX_HASH_SIZE],
     canonical_hash: Option<[u8; RANDOMX_HASH_SIZE]>,
 ) -> Result<(), CorrectnessError> {
-    if rust_hash != c_hash {
+    if PowHash::from_bytes(rust_hash) != PowHash::from_bytes(c_hash) {
         return Err(CorrectnessError::HashMismatch {
             seedhash,
             canonical_index,
@@ -506,7 +510,7 @@ mod tests {
     // three-leg verdict. §4.5 T-A1 names this assertion FIRST; before
     // this block it lived inline in a loop over live sessions and had
     // no negative test at any cost. See
-    // `docs/design/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 1.
+    // `docs/completed/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 1.
 
     const SH: [u8; 32] = [0x55; 32];
 
@@ -603,8 +607,8 @@ mod tests {
     /// An absent canonical pin is not a failure.
     ///
     /// Bites against a verdict that treats `None` as a mismatch, which
-    /// would red every adversarial pair (they carry no canonical until
-    /// the post-2g class-indexed table lands).
+    /// would red any pair this walk ever yielded (the 2g scaffold has
+    /// no canonical pin; Phase 2h did not add one here).
     #[test]
     fn three_leg_absent_canonical_is_not_a_failure() {
         let h = [0x09u8; RANDOMX_HASH_SIZE];

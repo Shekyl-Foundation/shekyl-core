@@ -62,7 +62,7 @@
 //! - runtime `LedgerIndexes`
 //! - `tx_meta.scanned_pool_txs`
 //! - payment-request match fields (via attribution rewind, classified
-//!   against the **pre-reset** height)
+//!   against wall-clock Unix seconds — invoice expiry is not block height)
 //!
 //! # The curve tree is not touched
 //!
@@ -94,28 +94,21 @@ use crate::attribution::rewind_matched_payment_requests_after_reorg;
 /// provenance rule that draws the line). Callers must persist before
 /// scanning; [`Engine::start_rescan`] is the only production caller.
 pub(crate) fn reset_scan_derived_state(wallet: &mut WalletLedger, indexes: &mut LedgerIndexes) {
-    // Captured before the tip is zeroed: the rewind below classifies an
-    // unwound request's expiry against this height. Read from the emptied
-    // ledger it would be 0, and `is_expired_at(0)` is false for every
-    // non-zero expiry — a years-expired invoice would come back `Pending`
-    // and sit in `get_payment_requests` as "awaiting payment" forever.
-    let pre_reset_height = wallet.ledger.height();
-
     // Total reconstruction, not a field-by-field clear. `LedgerBlock` is
     // entirely scan-derived, so "reset" is "a fresh one at the current block
     // version" — and a field added to it later is then reset because it
     // exists, not because someone remembered to extend this function.
+    //
+    // Invoice expiry is wall-clock Unix seconds (RTN-6), not chain height.
     wallet.ledger = LedgerBlock::empty();
     *indexes = LedgerIndexes::empty();
 
     wallet.tx_meta.scanned_pool_txs.clear();
 
-    // Preserve payment-request *rows*; unwind matches against the emptied
-    // transfer set so a subsequent scan can re-attribute.
     rewind_matched_payment_requests_after_reorg(
         &mut wallet.bookkeeping.payment_requests,
         &wallet.ledger,
-        pre_reset_height,
+        crate::attribution::unix_now(),
     );
 }
 
@@ -272,7 +265,7 @@ mod tests {
         PaymentRequestId, PaymentRequestState, ReceiveAttribution, ReorgBlocks, ScannedPoolTx,
         SyncStateBlock, TxSecretKey, TxSecretKeys, WalletLedger,
     };
-    use shekyl_types::TxHash;
+    use shekyl_types::{BlockHeight, TxHash};
     use shekyl_units::AtomicUnits;
     use zeroize::Zeroizing;
 
@@ -295,9 +288,9 @@ mod tests {
     pub(super) fn sample_transfer(seed: u8) -> TransferDetails {
         TransferDetails {
             tx_hash: TxHash::from_bytes([seed; 32]),
-            internal_output_index: 0,
-            global_output_index: 0,
-            block_height: 10,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(0),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(0),
+            block_height: shekyl_types::BlockHeight::from_raw(10),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1000),
@@ -308,8 +301,9 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: 0,
+            eligible_height: shekyl_types::BlockHeight::from_raw(0),
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::Unattributed,
         }
@@ -318,14 +312,14 @@ mod tests {
     #[test]
     fn reset_clears_scan_derived_and_preserves_retention() {
         let mut wallet = WalletLedger::empty();
-        wallet.sync_state.restore_from_height = 42;
+        wallet.sync_state.restore_from_height = shekyl_types::BlockHeight::from_raw(42);
         wallet.sync_state.creation_anchor_hash = Some([7u8; 32]);
         wallet.sync_state.pending_tx_hashes.push([9u8; 32]);
 
         wallet.ledger.transfers.push(sample_transfer(1));
-        wallet.ledger.tip = BlockchainTip::new(50, [1u8; 32]);
+        wallet.ledger.tip = BlockchainTip::new(BlockHeight::from_raw(50), [1u8; 32]);
         wallet.ledger.reorg_blocks = ReorgBlocks {
-            blocks: vec![(40, [2u8; 32])],
+            blocks: vec![(shekyl_types::BlockHeight::from_raw(40), [2u8; 32])],
         };
 
         let txid = [3u8; 32];
@@ -347,11 +341,11 @@ mod tests {
             id: PaymentRequestId(0x00_00_00_00_00_06),
             label: LocalLabel::from_str("invoice"),
             amount_atomic: AtomicUnits::from_raw(100),
-            created_at: 1,
+            created_at: shekyl_types::Timestamp::from_raw(1),
             expiry: None,
             state: PaymentRequestState::Matched,
             matched_tx_hash: Some(TxHash::from_bytes([1u8; 32])),
-            matched_output_index: Some(0),
+            matched_output_index: Some(shekyl_types::OutputIndexInTx::from_raw(0)),
         });
 
         wallet.staking.staking_enabled = true;
@@ -362,7 +356,10 @@ mod tests {
         reset_scan_derived_state(&mut wallet, &mut indexes);
 
         assert_unscanned(&wallet.ledger);
-        assert_eq!(wallet.sync_state.restore_from_height, 42);
+        assert_eq!(
+            wallet.sync_state.restore_from_height,
+            shekyl_types::BlockHeight::from_raw(42)
+        );
         assert_eq!(wallet.sync_state.creation_anchor_hash, Some([7u8; 32]));
         assert_eq!(wallet.sync_state.pending_tx_hashes, vec![[9u8; 32]]);
         assert!(wallet.tx_meta.tx_keys.contains_key(&txid));
@@ -411,7 +408,7 @@ mod tests {
         wallet.send_journal.rows.insert(
             [5u8; 32],
             SendRecord {
-                dispatched_at_height: 42,
+                dispatched_at_height: shekyl_types::BlockHeight::from_raw(42),
                 fee: 700,
                 recipients: vec![SendRecipient {
                     address: "shekyl1example".to_owned(),
@@ -449,22 +446,21 @@ mod tests {
         );
     }
 
-    /// An invoice whose expiry height has already passed is unwound to
-    /// `Expired`, not `Pending`: the rewind is classified against the
-    /// pre-reset tip, not the zeroed one.
+    /// An invoice whose wall-clock expiry has already passed is unwound to
+    /// `Expired`, not `Pending` (RTN-6: invoice expiry is Unix seconds).
     #[test]
-    fn reset_expires_payment_request_past_its_expiry_height() {
+    fn reset_expires_payment_request_past_its_expiry() {
         let mut wallet = WalletLedger::empty();
-        wallet.ledger.tip = BlockchainTip::new(500, [8u8; 32]);
+        wallet.ledger.tip = BlockchainTip::new(BlockHeight::from_raw(500), [8u8; 32]);
         wallet.bookkeeping.payment_requests.push(PaymentRequest {
             id: PaymentRequestId(0x00_00_00_00_00_07),
             label: LocalLabel::from_str("stale invoice"),
             amount_atomic: AtomicUnits::from_raw(100),
-            created_at: 1,
-            expiry: Some(100),
+            created_at: shekyl_types::Timestamp::from_raw(1),
+            expiry: Some(shekyl_types::Timestamp::from_raw(100)),
             state: PaymentRequestState::Matched,
             matched_tx_hash: Some(TxHash::from_bytes([1u8; 32])),
-            matched_output_index: Some(0),
+            matched_output_index: Some(shekyl_types::OutputIndexInTx::from_raw(0)),
         });
 
         let mut indexes = LedgerIndexes::empty();
@@ -473,7 +469,7 @@ mod tests {
         assert_eq!(
             wallet.bookkeeping.payment_requests[0].state,
             PaymentRequestState::Expired,
-            "expiry is classified against the pre-reset height"
+            "unix 100 is in the past relative to wall-clock now"
         );
     }
 
@@ -481,13 +477,16 @@ mod tests {
     fn reset_is_idempotent_on_empty_ledger() {
         let mut wallet = WalletLedger::empty();
         wallet.sync_state = SyncStateBlock {
-            restore_from_height: 7,
+            restore_from_height: shekyl_types::BlockHeight::from_raw(7),
             ..SyncStateBlock::empty()
         };
         let mut indexes = LedgerIndexes::empty();
         reset_scan_derived_state(&mut wallet, &mut indexes);
         reset_scan_derived_state(&mut wallet, &mut indexes);
-        assert_eq!(wallet.sync_state.restore_from_height, 7);
+        assert_eq!(
+            wallet.sync_state.restore_from_height,
+            shekyl_types::BlockHeight::from_raw(7)
+        );
         assert_unscanned(&wallet.ledger);
     }
 }
@@ -559,7 +558,8 @@ mod start_rescan_integration_tests {
     {
         let engine = arc.write().await;
         let mut guard = engine.ledger.write();
-        guard.ledger.ledger.tip = BlockchainTip::new(500, [0xAB; 32]);
+        guard.ledger.ledger.tip =
+            BlockchainTip::new(shekyl_types::BlockHeight::from_raw(500), [0xAB; 32]);
         500
     }
 
@@ -607,7 +607,7 @@ mod start_rescan_integration_tests {
 
         let engine = arc.read().await;
         assert_eq!(
-            engine.ledger.synced_height(),
+            engine.ledger.synced_height().to_raw(),
             seeded,
             "a refused rescan must not reset the ledger"
         );
@@ -648,7 +648,7 @@ mod start_rescan_integration_tests {
 
         let engine = arc.read().await;
         assert_ne!(
-            engine.ledger.synced_height(),
+            engine.ledger.synced_height().to_raw(),
             seeded,
             "the rescan proceeded: scan-derived state was reset"
         );
@@ -683,7 +683,7 @@ mod start_rescan_integration_tests {
 
         let engine = arc.read().await;
         assert_eq!(
-            engine.ledger.synced_height(),
+            engine.ledger.synced_height().to_raw(),
             seeded,
             "a blocked rescan must not reset the ledger"
         );
@@ -714,7 +714,7 @@ mod start_rescan_integration_tests {
 
         // `chain[h] = block at height h`; heights 0..=5, genesis at 0.
         let mut chain = Vec::new();
-        let mut parent = [0u8; 32];
+        let mut parent = shekyl_types::BlockHash::NULL;
         for h in 0..6u64 {
             let block = make_synthetic_block(h, parent);
             parent = block.block.hash();
@@ -735,7 +735,11 @@ mod start_rescan_integration_tests {
             .expect("initial refresh completes over the synthetic chain");
         await_slot_release(&arc).await;
         let synced_before = arc.read().await.ledger.synced_height();
-        assert_eq!(synced_before, 5, "synthetic chain syncs to its tip");
+        assert_eq!(
+            synced_before,
+            shekyl_types::BlockHeight::from_raw(5),
+            "synthetic chain syncs to its tip"
+        );
 
         let phantom_tx = TxHash::from_bytes([0xDD; 32]);
         {
@@ -743,7 +747,7 @@ mod start_rescan_integration_tests {
             let mut guard = engine.ledger.write();
             let mut phantom = super::tests::sample_transfer(0xDD);
             phantom.tx_hash = phantom_tx;
-            phantom.block_height = 3;
+            phantom.block_height = shekyl_types::BlockHeight::from_raw(3);
             guard.ledger.ledger.transfers.push(phantom);
             guard
                 .ledger
@@ -753,11 +757,11 @@ mod start_rescan_integration_tests {
                     id: PaymentRequestId(0x00_00_00_00_00_0A),
                     label: LocalLabel::from_str("invoice"),
                     amount_atomic: AtomicUnits::from_raw(1000),
-                    created_at: 1,
+                    created_at: shekyl_types::Timestamp::from_raw(1),
                     expiry: None,
                     state: PaymentRequestState::Matched,
                     matched_tx_hash: Some(phantom_tx),
-                    matched_output_index: Some(0),
+                    matched_output_index: Some(shekyl_types::OutputIndexInTx::from_raw(0)),
                 });
         }
 

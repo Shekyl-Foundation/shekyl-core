@@ -1384,13 +1384,13 @@ the internal order is otherwise verdict-invisible. Semantic legs are the **same
 `check_archival_bond_post_input` dispatches to over FFI, so the two paths
 share the verifying code.
 
-**Non-JoinMarket kinds — Release is now covered; HoldingsUpdate / Rebond are
+**Non-JoinMarket kinds — Release is now covered; HoldingsUpdate / Reinstate are
 not.** The block path verifies all three today (`archival_bond_post_kind`
 dispatch, all Rust-backed). **Release's reopening criterion (rule 21) fired at
 PR-P4** — `build_release_vin` / `AssembleRelease` are the construction leg — and
 this section's §8.7.1.1 UB rows discharge it: `SubmitFacts` carries the Release
 fact set and the battery dispatches `verify_release_bond_post`, the same
-function the block path calls. **HoldingsUpdate / Rebond have no producer**,
+function the block path calls. **HoldingsUpdate / Reinstate have no producer**,
 so their fact sets are deliberately *not* built: a fact bundle with no
 submitter is pre-provisioned flexibility (rule 21), and its Phase-D race
 classification would be unverifiable guesswork. The battery still refuses them
@@ -1406,7 +1406,7 @@ funding-arm K12/K13 legs and the bond CT balance.
 
 **BP5 does not apply, and that is the row this section exists for.** BP5 pins
 the bond slot's auth key to the vin's *identity* key — correct on the credit
-path (`blockchain.cpp`'s JoinMarket and Rebond arms), where the post proves
+path (`blockchain.cpp`'s JoinMarket and Reinstate arms), where the post proves
 control of `P_canonical_id` and no value leaves. A debit is the opposite case:
 the identity key is held by the serving host, so pinning to it would let a host
 compromise authorize a collateral drain. UB3 replaces BP5 on this arm.
@@ -1434,7 +1434,7 @@ needs a discriminating argument, not a line number.
 | UB0 | **Possession pre-gate (submit-only, no consensus twin):** the bond slot's `pqc_auths` signature verifies against the key the slot presents | `verify_debit_slot_possession` | **A′ — runs BEFORE the Phase-B gather**, which is the whole point of it; `Malformed`. Facts-free (auth blob + payload hash), so it is legal ahead of the snapshot. Not a consensus rule: K13 already verifies this slot with every other one, and the block path has no submit surface to protect. See the work-ordering note below |
 | UB1 | Vin carries **no** `bond_spend_pk` (§9.11 coupling belt — only JoinMarket carries the debit authorizer; a vin-borne key would be a forgeable self-assertion) | `"vin carries a bond_spend_pk"` belt | **A** — `shekyl-wire` refuses the field on `BondPostKind::Other` at parse, so a `ParsedSubmission` cannot carry a violation; the belt is retained for non-parse callers; `Malformed` |
 | UB2 | Bond record **exists** for `p_canonical_id` (the inverse of BP3) **and its `bonded_total_atomic`** — the balance, not just the row | `get_archival_bond_value` (Release arm) | **B facts; the D re-check is on the BALANCE.** Phase B/C requires presence (absent → `Malformed`). Phase D compares the fresh total against the vin's `bond_debit` — gone, zeroed by a competing exit, or raised by a credit → `DoubleSpendConflict`. Presence is *not* the D predicate: the row survives an exit, so a presence-keyed check is inert (see the exit-shape note below) |
-| UB3 | Debit authorization: the record commits a canonical-length `bond_spend_pk`, **and** the bond slot's `pqc_auths` pubkey equals it | `archival_debit_auth_pin(record, auth_pubkey, "Release")` | **C over a B fact** — native `debit_auth_pin` (`shekyl-archival-retention`), the same function the block path calls over FFI; both arms `Malformed`. A record committing **no** key authorizes nothing — fail closed, never an identity-key fallback |
+| UB3 | Cold authority: the record commits a canonical-length `bond_spend_pk`, **and** the bond slot's `pqc_auths` pubkey equals it | `archival_cold_authority_pin(record, post_kind, bond_debit, auth_pubkey, "Release")` (2026-09-11; was `archival_debit_auth_pin(record, auth_pubkey, "Release")` — same pin, the selector moved into Rust) | **C over a B fact** — native `cold_authority_pin` (`shekyl-archival-retention`), the same composed gate the block path calls over FFI: `requires_cold_authority` (Release is **unconditional** there, which is why this row sits ahead of UB9's debit-term guards) then the pin; both pin arms `Malformed`. A record committing **no** key authorizes nothing — fail closed, never an identity-key fallback |
 | UB4 | Per-shard last-served epochs, gathered by the scan `HoldingsKind::last_served_scan()` selects (`HeldShards` / `AllShards`) | `shekyl_archival_last_served_scan` → `archival_bond_{all_,}last_served_epochs` | **B fact, no D re-check** (see the Phase-D scope note) — the shim echoes the scan discriminant it ran and the engine pins the echo against the record's `holdings_kind`; a mismatch is `ShimContract`, never a fold (see the permissive-direction note) |
 | UB5 | Whole-record cooldown anchor = the fold of UB4's slice; release cooldown elapsed vs the current settlement epoch | `whole_record_last_served` → `release_cooldown_elapsed` | **C**, no D re-check — native fold; `Malformed`. **Contingent** in both directions: a serve landing during C re-closes the window (see the Phase-D scope note), and a later resubmission of the same bytes can pass once the window reopens |
 | UB6 | Slash-settlement watermark (`get_archival_last_slash_epoch`), `u64::MAX` = nothing settled | `get_archival_last_slash_epoch` | **B fact, no D re-check** — the watermark only advances, so a Phase-B read can only be *behind* the truth, which fails **closed**; `Malformed`, contingent |
@@ -1558,7 +1558,7 @@ UB2 therefore carries two facts and re-checks the second. At Phase B/C a record
 **never present** is a submitter error (`Malformed` — these bytes can never
 connect). At Phase D the test is the record's balance against the submitted
 vin's own `bond_debit`, which the Phase-C battery required it to equal: gone,
-zeroed by a competing exit, **or raised** by a `Rebond` / `HoldingsUpdate`-add
+zeroed by a competing exit, **or raised** by a `Reinstate` / `HoldingsUpdate`-add
 that connected during Phase C — each leaves the full-exit equality
 unsatisfiable for these bytes, so each classifies `DoubleSpendConflict`. Keying
 on the balance rather than on "exited" catches the credit-side direction for
@@ -1605,7 +1605,7 @@ move during Phase C:
   An earlier revision justified the verdict by asserting no resubmission of
   these bytes could ever succeed. **That was false**, and the correction is
   worth keeping visible: a partial slash lowers the balance by one `FLOOR`, and
-  a later `Rebond` credits the same `FLOOR` back while closing the interval, so
+  a later `Reinstate` credits the same `FLOOR` back while closing the interval, so
   the balance can return to exactly the value these bytes bind. No sub-case is
   provably permanent — a fresh `JoinMarket` can even re-create an exited row at
   a floor equal to the old debit. What bounds the hazard is not impossibility

@@ -52,14 +52,21 @@ impl ConsensusProof for RandomXProof {
     }
 
     fn difficulty_for_next_block(&self, chain: &ChainState) -> Result<Difficulty, ConsensusError> {
-        // In practice, difficulty adjustment is computed from the last N block
-        // timestamps and difficulties. The actual algorithm runs in C++
-        // (next_difficulty_v2). This returns the chain's current difficulty
-        // as a baseline for the Rust-side interface.
+        // Genesis is a convention, not a DAA output. Past genesis this
+        // crate has no timestamp/difficulty window, so it cannot call
+        // `shekyl_difficulty::lwma1_next` (the live next-block target).
+        // Returning cumulative work as a target used to compile because
+        // both were the same leftover newtype; after RTN-5 it is a unit
+        // lie. Fail until a caller that owns the window invokes LWMA-1
+        // — do not grow this ConsensusProof stub into a second DAA
+        // (rule 70).
         if chain.height == 0 {
-            return Ok(Difficulty(1));
+            return Ok(Difficulty::from_raw(1));
         }
-        Ok(chain.cumulative_difficulty)
+        Err(ConsensusError::DifficultyError(
+            "RandomXProof is not the DAA; next-block target is shekyl_difficulty::lwma1_next"
+                .into(),
+        ))
     }
 
     fn proof_type(&self) -> ProofType {
@@ -74,13 +81,13 @@ impl ConsensusProof for RandomXProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ChainState;
+    use crate::types::{ChainState, CumulativeDifficulty};
 
     fn test_chain() -> ChainState {
         ChainState {
             height: 100,
             top_hash: [0u8; 32],
-            cumulative_difficulty: Difficulty(1000),
+            cumulative_difficulty: CumulativeDifficulty::from_raw(1000),
             timestamp: 1700000000,
         }
     }
@@ -120,10 +127,25 @@ mod tests {
         let chain = ChainState {
             height: 0,
             top_hash: [0u8; 32],
-            cumulative_difficulty: Difficulty(0),
+            cumulative_difficulty: CumulativeDifficulty::ZERO,
             timestamp: 0,
         };
-        assert_eq!(rx.difficulty_for_next_block(&chain).unwrap(), Difficulty(1));
+        assert_eq!(
+            rx.difficulty_for_next_block(&chain).unwrap(),
+            Difficulty::from_raw(1)
+        );
+    }
+
+    #[test]
+    fn next_block_difficulty_past_genesis_is_not_cumulative_work() {
+        let rx = RandomXProof::new(120, 720);
+        let err = rx
+            .difficulty_for_next_block(&test_chain())
+            .expect_err("this stub is not the DAA");
+        assert!(
+            matches!(err, ConsensusError::DifficultyError(_)),
+            "{err:?} must not be a plausible Difficulty"
+        );
     }
 
     #[test]

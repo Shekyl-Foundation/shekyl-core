@@ -1,0 +1,52 @@
+[package]
+name = "shekyl-p-fetch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Daemon shard-fetch client: the other half of shekyl-p-serve (ARCHIVAL_SHARD_FETCH.md, SF-D1..SF-D8)"
+publish = false
+
+[dependencies]
+# The route grammar both ends read (`serving_route`: virt-port, path,
+# header name and encoding, response header set) and the
+# provisional body ceiling's inputs (`leaves_per_segment`, `LEAF_BYTES`).
+# Codec shared, not mirrored (`SF-D4`). The frame itself is sub-PR 2's;
+# this crate hands frame bytes to the content-verify hole unparsed.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# rend-spec-v3 hostname from the bond-record endpoint. Shared with the
+# wallet publish path (`OnionIdentity`) so the address a persona
+# publishes and the address this crate dials cannot drift. Encoding
+# only — no Tor instance, no control port (`PWD-E9`, `SF-D4`).
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+# `HybridPublicKey` is the target's verifying key; `HybridSignature` is the
+# envelope's type and canonical codec.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Decoded request-header height is ordinal `BlockHeight` (C1 punch at encode).
+shekyl-types = { path = "../shekyl-types" }
+# The SF-D8 transcript and its verifier (`pass_anchor`, `verify_pass_transcript`)
+# — one implementation shared with the admission verifier, so the client and
+# the chain can never disagree about what `P` signed. Retention is a pure
+# consensus library with no serving edge, so this stays inside SF-D4's cut.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# net + io-util for the stream, sync for the in-flight semaphore, time for
+# the per-step bounds, rt for `spawn_blocking` (the hybrid verify and the
+# content-verify hole are CPU work that must not sit on the executor thread).
+tokio = { version = "1", default-features = false, features = ["net", "io-util", "time", "sync", "rt"] }
+# SOCKS5h dial into the daemon's tor zone (`SF-D2`, `SF-D3`): the proxy
+# resolves the `.onion`; this crate never resolves anything. Same crate and
+# pin as `shekyl-rpc-transport`'s SOCKS connector.
+tokio-socks = { version = "0.5.3", default-features = false, features = ["tokio"] }
+# The request nonce. OS entropy, nothing derived.
+getrandom = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
+# Loopback conversation test: a real `PServeEndpoint` behind a SOCKS5
+# shim. Dev-only — SF-D4 forbids this edge on the shipped graph.
+shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 # RandomX v1 fallback — contingency design
 
-**Status.** **DRAFT — Round 0 (initial draft, 2026-05-16; status block
-revised 2026-05-16 to match §1's late-binding framing).** Companion to
+**Status.** **LIVING CONTRACT (last-verified 2026-09-15; mechanism
+restated post-3c).** Companion to
 [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md). This document is
 insurance, not the preferred path. Invocation is **late-binding** per
 §1: it may be invoked any time between Phase 0 and the genesis release
@@ -28,10 +28,16 @@ finding that makes RandomX v2 the wrong genesis primitive under
 preconditions). Because Shekyl is non-divergent from upstream
 tevador/RandomX (`RANDOMX_V2_RUST.md` §1.1) and Monero is the
 parallel production deployer and audit funder (§1.4), the fallback
-is an **unpin-and-revert** operation rather than a "stop and restart"
-project — switch the submodule SHA to a pre-PR-#317 commit (default
-`102f8acf`, already in the existing `external/randomx` submodule) and
-toggle the verifier to its v1 spec branch.
+is a **re-add**, not an unpin-and-revert SHA flip. `shekyl-pow-randomx`
+is v2 bytecode with zero v1 references; `rx-slow-hash.c` is gone; the
+v1 CMake target was dropped (check_submodule row dropped with it).
+Shipping v1 means: re-add `external/randomx` as a configured CMake
+target at `102f8acf` (the gitlink stays in `.gitmodules`; Phase 3c
+deleted the configured C target / consensus path, not the submodule),
+restore or rewrite a v1 verifier, and restore the
+`check_submodule(external/randomx)` row **with** that target. Phase 4
+deleted `IPowSchema` / `pow_registry`; fallback does not restore that
+dispatch scaffolding.
 
 Trigger classes:
 

@@ -15,6 +15,7 @@
 #![deny(unsafe_code)]
 
 pub mod activity;
+pub mod block_weight;
 pub mod burn;
 pub mod digest;
 pub mod emission;
@@ -23,12 +24,16 @@ pub mod escalation;
 pub mod fee;
 pub mod params;
 pub mod release;
+pub mod supply;
 pub mod volume;
 
 pub use activity::{ActivityInvariantViolation, ActivityMetric};
+pub use block_weight::{
+    blocks_to_surge_saturation, effective_median, long_term_weight, BLOCK_WEIGHT_SURGE_FACTOR,
+};
 pub use burn::{
-    calc_burn_pct, calc_burn_pct_from_activity, compute_burn_split, compute_burn_split_at,
-    BurnSplit,
+    calc_burn_pct, calc_burn_pct_at, calc_burn_pct_from_activity, compute_burn_split,
+    compute_burn_split_at, compute_fee_burn, BurnSplit,
 };
 pub use digest::{params_digest, DIGEST_FORMAT_VERSION};
 pub use emission::{
@@ -36,18 +41,23 @@ pub use emission::{
     block_weight_limit, effective_emission, emission_speed_factor, paid_block_reward,
     projected_already_generated, tail_subsidy_per_block, EmissionError,
 };
-pub use emission_share::{calc_effective_emission_share, split_block_emission};
+pub use emission_share::{
+    calc_effective_emission_share, compute_emission_split, split_block_emission, EmissionSplit,
+};
 pub use escalation::{
     staker_pool_share_at, EscalationParams, EscalationShapeError, FrozenSegmentCount, ScaledShare,
 };
 pub use fee::{
-    checked_corrected_fee_ladder, corrected_fee_ladder, fee_correction_quantized, hysteresis_fold,
-    hysteresis_settled, hysteresis_step, quantize_pow2_ceil, round_money_up_2, FeeLadder,
-    EMISSION_CLAIM_FEE_FLOOR,
+    checked_corrected_fee_ladder, checked_relay_fee_floor, corrected_fee_ladder, fee_correction,
+    fee_correction_quantized, hysteresis_fold, hysteresis_settled, hysteresis_step,
+    quantize_pow2_ceil, relay_fee_floor, relay_floor_admits, round_money_up_2, FeeCorrection,
+    FeeLadder, EMISSION_CLAIM_FEE_FLOOR, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK,
+    RELAY_FLOOR_WINDOW,
 };
 pub use params::{
     calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,
-    EMISSION_CURVE_ASYMPTOTE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    EMISSION_CURVE_ASYMPTOTE, FULL_REWARD_ZONE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 pub use release::calc_release_multiplier;
+pub use supply::{CirculatingSupply, SupplyInvariantViolation};
 pub use volume::TxVolume;

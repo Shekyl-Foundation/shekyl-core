@@ -7,12 +7,14 @@
 
 #include "chaingen.h"
 
-// C2-R1b-Q2b, the recovery path's own value test: an operator-checkpoint
+// C2-R1b-Q2b, the recovery path's own value test: a compiled-in checkpoint
 // conflict LOW on the chain must complete its rollback, and a SECOND
-// conflicting checkpoint above it must not blow up the walk.
+// conflicting checkpoint above it must not blow up the walk. (The set is
+// installed via set_checkpoints, standing in for a populated release
+// table; the runtime json channel was deleted under PDM-Q-F23.)
 //
 //   main: (0)-(1)-(2)-(3)-(4)-(5)      height 6
-//   checkpoints.json: wrong hash at height 2 AND at height 4
+//   checkpoints: wrong hash at height 2 AND at height 4
 //
 // The height-2 conflict's rollback target is floored at DB height 1 --
 // genesis cannot be popped, so the previous `pt.first - 2 = 0` target

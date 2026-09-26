@@ -37,7 +37,6 @@ impl FcmpCurves for ShekylCurves {
     type C1Parameters = SeleneParams;
     type C2 = Helios;
     type C2Parameters = HeliosParams;
-    const EXTRA_LEAF_SCALARS: usize = 1;
 }
 
 #[allow(clippy::type_complexity)]
@@ -48,12 +47,14 @@ fn random_params(
     <Ed25519 as Ciphersuite>::G,
     <Ed25519 as Ciphersuite>::G,
     <Ed25519 as Ciphersuite>::G,
+    <Ed25519 as Ciphersuite>::G,
     FcmpParams<ShekylCurves>,
 ) {
     let G = <Ed25519 as Ciphersuite>::G::random(&mut OsRng);
     let T = <Ed25519 as Ciphersuite>::G::random(&mut OsRng);
     let U = <Ed25519 as Ciphersuite>::G::random(&mut OsRng);
     let V = <Ed25519 as Ciphersuite>::G::random(&mut OsRng);
+    let J = <Ed25519 as Ciphersuite>::G::random(&mut OsRng);
 
     let params = FcmpParams::<ShekylCurves>::new(
         generalized_bulletproofs::tests::insecure_test_generators::<_, Selene>(
@@ -72,9 +73,9 @@ fn random_params(
         T,
         U,
         V,
+        J,
     );
-
-    (G, T, U, V, params)
+    (G, T, U, V, J, params)
 }
 
 fn random_output() -> Output<<Ed25519 as Ciphersuite>::G> {
@@ -84,8 +85,14 @@ fn random_output() -> Output<<Ed25519 as Ciphersuite>::G> {
     Output::new(O, I, C).unwrap()
 }
 
-fn random_h_pqc() -> <Selene as Ciphersuite>::F {
-    <Selene as Ciphersuite>::F::random(&mut OsRng)
+/// A random PQC leaf commitment point `CM` (in production `k·G_k + r·J`; here
+/// any point, since the opening is proven against the blind's own `r`).
+fn random_cm() -> <Ed25519 as Ciphersuite>::G {
+    <Ed25519 as Ciphersuite>::G::random(&mut OsRng)
+}
+/// The leaf's 4th scalar: the commitment point's Wei25519 x-coordinate.
+fn cm_x(cm: <Ed25519 as Ciphersuite>::G) -> <Selene as Ciphersuite>::F {
+    <Ed25519 as Ciphersuite>::G::to_xy(cm).unwrap().0
 }
 
 fn flatten_output_scalars(
@@ -105,19 +112,20 @@ fn random_path(
     assert!(layers >= 1);
 
     let mut leaves = vec![];
-    let mut leaves_h_pqc: Vec<<Selene as Ciphersuite>::F> = vec![];
+    let mut leaves_cm: Vec<<Ed25519 as Ciphersuite>::G> = vec![];
     while leaves.len() < LAYER_ONE_LEN {
         leaves.push(random_output());
-        leaves_h_pqc.push(random_h_pqc());
+        leaves_cm.push(random_cm());
     }
+    let leaves_h_pqc: Vec<<Selene as Ciphersuite>::F> =
+        leaves_cm.iter().map(|cm| cm_x(*cm)).collect();
 
     let output_idx =
         usize::try_from(OsRng.next_u64() % u64::try_from(leaves.len()).unwrap()).unwrap();
     let output = leaves[output_idx];
-    let output_h_pqc = leaves_h_pqc[output_idx];
+    let output_cm = leaves_cm[output_idx];
 
-    let leaves_extra_scalars: Vec<Vec<<Selene as Ciphersuite>::F>> =
-        leaves_h_pqc.iter().map(|h| vec![*h]).collect();
+    let leaves_cm_x = leaves_h_pqc.clone();
 
     let mut selene_hash = Some({
         let mut scalars = vec![];
@@ -207,9 +215,9 @@ fn random_path(
     (
         Path {
             output,
-            output_extra_scalars: vec![output_h_pqc],
+            output_cm,
             leaves,
-            leaves_extra_scalars,
+            leaves_cm_x,
             curve_2_layers,
             curve_1_layers,
         },
@@ -236,11 +244,11 @@ fn random_paths(
         let mut outputs_h_pqc = vec![];
         for path in &res {
             outputs.push(path.output);
-            outputs_h_pqc.push(path.output_extra_scalars[0]);
+            outputs_h_pqc.push(cm_x(path.output_cm));
         }
         while outputs.len() < LAYER_ONE_LEN {
             outputs.push(random_output());
-            outputs_h_pqc.push(random_h_pqc());
+            outputs_h_pqc.push(cm_x(random_cm()));
         }
 
         let mut indices: Vec<usize> = (0..outputs.len()).collect();
@@ -254,11 +262,9 @@ fn random_paths(
             shuffled_h_pqc.push(outputs_h_pqc[idx]);
         }
 
-        let extra_scalars: Vec<Vec<<Selene as Ciphersuite>::F>> =
-            shuffled_h_pqc.iter().map(|h| vec![*h]).collect();
         for path in &mut res {
             path.leaves = shuffled_outputs.clone();
-            path.leaves_extra_scalars = extra_scalars.clone();
+            path.leaves_cm_x = shuffled_h_pqc.clone();
         }
 
         let mut new_leaves_layer = vec![];
@@ -292,14 +298,11 @@ fn random_paths(
                         .unwrap()
                     } else {
                         let mut leaves_layer = vec![];
-                        for (output, extras) in
-                            path.leaves.iter().zip(path.leaves_extra_scalars.iter())
-                        {
+                        for (output, cm_x) in path.leaves.iter().zip(path.leaves_cm_x.iter()) {
                             let O = <Ed25519 as Ciphersuite>::G::to_xy(output.O).unwrap();
                             let I = <Ed25519 as Ciphersuite>::G::to_xy(output.I).unwrap();
                             let C = <Ed25519 as Ciphersuite>::G::to_xy(output.C).unwrap();
-                            leaves_layer.extend(&[O.0, I.0, C.0]);
-                            leaves_layer.extend(extras);
+                            leaves_layer.extend(&[O.0, I.0, C.0, *cm_x]);
                         }
 
                         hash_grow(
@@ -390,12 +393,11 @@ fn random_paths(
         assert!(path.leaves.iter().any(|output| output == &path.output));
 
         let mut leaves_layer = vec![];
-        for (output, extras) in path.leaves.iter().zip(path.leaves_extra_scalars.iter()) {
+        for (output, cm_x) in path.leaves.iter().zip(path.leaves_cm_x.iter()) {
             let O = <Ed25519 as Ciphersuite>::G::to_xy(output.O).unwrap();
             let I = <Ed25519 as Ciphersuite>::G::to_xy(output.I).unwrap();
             let C = <Ed25519 as Ciphersuite>::G::to_xy(output.C).unwrap();
-            leaves_layer.extend(&[O.0, I.0, C.0]);
-            leaves_layer.extend(extras);
+            leaves_layer.extend(&[O.0, I.0, C.0, *cm_x]);
         }
 
         let mut c1_hash = Some(
@@ -484,6 +486,7 @@ fn random_output_blinds(
     T: <Ed25519 as Ciphersuite>::G,
     U: <Ed25519 as Ciphersuite>::G,
     V: <Ed25519 as Ciphersuite>::G,
+    J: <Ed25519 as Ciphersuite>::G,
 ) -> OutputBlinds<<Ed25519 as Ciphersuite>::G> {
     let output_blinds_start = std::time::Instant::now();
     let res = OutputBlinds::new(
@@ -502,6 +505,10 @@ fn random_output_blinds(
         ),
         CBlind::new(
             G,
+            ScalarDecomposition::new(<Ed25519 as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
+        ),
+        KBlind::new(
+            J,
             ScalarDecomposition::new(<Ed25519 as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
         ),
     );
@@ -588,32 +595,30 @@ fn verify_fn(
     );
 }
 
-fn input_with_h_pqc(
+fn input_for(
     output_blinds: &OutputBlinds<<Ed25519 as Ciphersuite>::G>,
     output: &Output<<Ed25519 as Ciphersuite>::G>,
-    h_pqc: <Selene as Ciphersuite>::F,
+    cm: <Ed25519 as Ciphersuite>::G,
 ) -> Input<<Selene as Ciphersuite>::F> {
-    let mut input = output_blinds.blind(output).unwrap();
-    input.extra_leaf_scalars = vec![h_pqc];
-    input
+    output_blinds.blind(output, cm).unwrap()
 }
 
 #[test]
 fn test_single_input() {
-    let (G, T, U, V, params) = random_params(1);
+    let (G, T, U, V, J, params) = random_params(1);
 
-    let output_blinds = random_output_blinds(G, T, U, V);
+    let output_blinds = random_output_blinds(G, T, U, V, J);
 
     for layers in 1..=(TARGET_LAYERS + 1) {
         println!("Testing a proof with 1 input and {layers} layers");
 
         let (path, root) = random_path(&params, layers);
         let output = path.output;
-        let h_pqc = path.output_extra_scalars[0];
+        let cm = path.output_cm;
 
         let branches = Branches::new(vec![path]).unwrap();
 
-        let input = input_with_h_pqc(&output_blinds, &output, h_pqc);
+        let input = input_for(&output_blinds, &output, cm);
 
         let proof = Fcmp::prove(
             &mut OsRng,
@@ -628,7 +633,7 @@ fn test_single_input() {
 
 #[test]
 fn test_multiple_inputs() {
-    let (G, T, U, V, params) = random_params(8);
+    let (G, T, U, V, J, params) = random_params(8);
 
     let mut all_proofs = vec![];
 
@@ -640,16 +645,12 @@ fn test_multiple_inputs() {
 
             let mut output_blinds = vec![];
             for _ in 0..paths.len() {
-                output_blinds.push(random_output_blinds(G, T, U, V));
+                output_blinds.push(random_output_blinds(G, T, U, V, J));
             }
 
             let mut inputs = vec![];
             for (path, ob) in paths.iter().zip(&output_blinds) {
-                inputs.push(input_with_h_pqc(
-                    ob,
-                    &path.output,
-                    path.output_extra_scalars[0],
-                ));
+                inputs.push(input_for(ob, &path.output, path.output_cm));
             }
 
             let branches = Branches::new(paths).unwrap();
@@ -688,7 +689,7 @@ fn test_multiple_inputs() {
 
 #[test]
 fn test_malleated_proofs() {
-    let (G, T, U, V, params) = random_params(2);
+    let (G, T, U, V, J, params) = random_params(2);
 
     for paths in [1, 2] {
         for layers in [1, 2] {
@@ -696,16 +697,12 @@ fn test_malleated_proofs() {
 
             let mut output_blinds = vec![];
             for _ in 0..paths.len() {
-                output_blinds.push(random_output_blinds(G, T, U, V));
+                output_blinds.push(random_output_blinds(G, T, U, V, J));
             }
 
             let mut inputs = vec![];
             for (path, ob) in paths.iter().zip(&output_blinds) {
-                inputs.push(input_with_h_pqc(
-                    ob,
-                    &path.output,
-                    path.output_extra_scalars[0],
-                ));
+                inputs.push(input_for(ob, &path.output, path.output_cm));
             }
 
             let branches = Branches::new(paths.clone()).unwrap();
@@ -753,20 +750,24 @@ fn test_malleated_proofs() {
     }
 }
 
+/// The binding-falsifier (Shekyl `PL-D3`): a verifier presented with a public
+/// point `K` the leaf's commitment does not open to under the prover's blind
+/// must reject — the leg binds the revealed key to the committed one.
 #[test]
-fn test_wrong_h_pqc_fails() {
-    let (G, T, U, V, params) = random_params(1);
+fn test_wrong_opening_fails() {
+    let (G, T, U, V, J, params) = random_params(1);
 
-    let output_blinds = random_output_blinds(G, T, U, V);
+    let output_blinds = random_output_blinds(G, T, U, V, J);
 
     let (path, root) = random_path(&params, 1);
     let output = path.output;
+    let cm = path.output_cm;
 
     let branches = Branches::new(vec![path]).unwrap();
 
-    // Use a WRONG h_pqc value in the verifier input
-    let mut input = output_blinds.blind(&output).unwrap();
-    input.extra_leaf_scalars = vec![random_h_pqc()];
+    // Use a WRONG K (a key the commitment does not open to) in the verifier input
+    let mut input = output_blinds.blind(&output, cm).unwrap();
+    input.K = <Ed25519 as Ciphersuite>::G::to_xy(random_cm()).unwrap();
 
     let blinded = blind_branches(&params, branches, vec![output_blinds]);
     let proof = Fcmp::prove(&mut OsRng, &params, blinded).unwrap();
@@ -786,14 +787,14 @@ fn test_wrong_h_pqc_fails() {
         .unwrap();
     let valid = params.curve_1_generators.verify(verifier_1)
         && params.curve_2_generators.verify(verifier_2);
-    assert!(!valid, "proof with wrong h_pqc should not verify");
+    assert!(!valid, "proof with a wrong opening (K) must not verify");
 }
 
 #[test]
 fn prove_benchmark() {
     const RUNS: usize = 10;
 
-    let (G, T, U, V, params) = random_params(8);
+    let (G, T, U, V, J, params) = random_params(8);
 
     for paths in 1..=4 {
         let (paths, _root) = random_paths(&params, TARGET_LAYERS, paths);
@@ -813,7 +814,7 @@ fn prove_benchmark() {
         for _ in 0..10 {
             let mut output_blinds = vec![];
             for _ in 0..paths.len() {
-                output_blinds.push(random_output_blinds(G, T, U, V));
+                output_blinds.push(random_output_blinds(G, T, U, V, J));
             }
 
             let proof = Fcmp::prove(
@@ -840,16 +841,16 @@ fn prove_benchmark() {
 
 #[test]
 fn verify_benchmark() {
-    let (G, T, U, V, params) = random_params(1);
+    let (G, T, U, V, J, params) = random_params(1);
 
     let (path, root) = random_path(&params, TARGET_LAYERS);
     let output = path.output;
-    let h_pqc = path.output_extra_scalars[0];
+    let cm = path.output_cm;
 
     let branches = Branches::new(vec![path]).unwrap();
 
-    let output_blinds = random_output_blinds(G, T, U, V);
-    let input = input_with_h_pqc(&output_blinds, &output, h_pqc);
+    let output_blinds = random_output_blinds(G, T, U, V, J);
+    let input = input_for(&output_blinds, &output, cm);
 
     let proof = Fcmp::prove(
         &mut OsRng,

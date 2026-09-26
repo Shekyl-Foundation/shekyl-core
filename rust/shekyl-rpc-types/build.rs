@@ -33,7 +33,64 @@ use std::path::PathBuf;
 /// [`consensus_canonical::CANONICAL_FILES`]. A change to either file moves it
 /// and fails this build with both values and the question to answer; see the
 /// panic below.
-const PINNED_DIGEST: &str = "fab6f63e71b9a0c806bb904343b04789a548d1f9c98a9d2847e1050bb01baf6d";
+///
+/// **Re-pinned 2026-09-11 — key ADDED: `block_weight_short_term_surge_factor`
+/// = 4 in `config/consensus_constants.json`.** The pin's question, answered
+/// rather than silenced: *does a different value of this key make a different
+/// chain?* **Yes, directly.** It is the ceiling the effective block-weight
+/// median is clamped to, and the per-block weight limit is twice that median —
+/// so a node holding `S = 50` accepts a block a node holding `S = 4` rejects as
+/// over-weight. That is a split, not a preference, which is exactly why the key
+/// belongs in this authority. The value implements the ratified `S = 4`
+/// (`docs/completed/CONSENSUS_C2_R2_WEIGHT_FEES.md` Q3, signed 2026-09-06);
+/// it replaces the hand-written `x50` that previously bypassed this authority
+/// altogether — the key was ADDED here precisely so that it stops being a
+/// constant this digest could not see.
+///
+/// **Re-pinned 2026-09-13 — key ADDED: `archival_attestation_anchor_lag_blocks`
+/// = 4 (PROVISIONAL) in `config/consensus_constants.json`.** The pin's
+/// question: *does a different value of this key make a different chain?*
+/// **Yes.** It is `L` in the SF-D8 pass-countersignature admission window
+/// `[h − depth − L, h − depth]` (`ARCHIVAL_SHARD_FETCH.md` SF-D8): a node
+/// holding `L = 4` admits a block carrying a pass anchored `h − depth − 4`
+/// that a node holding `L = 3` rejects as `ANCHOR_OUT_OF_WINDOW`, and the
+/// genesis threshold `depth + L` below which any pass record is refused moves
+/// with it. A split, so the key belongs here; it is read by
+/// `rust/shekyl-archival-retention/build.rs` (the single Rust authority — C++
+/// sizes the window through `shekyl_archival_pass_anchor_window`, holding no
+/// copy). The same change also re-commented `archival_reorg_depth_blocks`
+/// (value unchanged at 720): `_comment_*` keys are outside the canonical
+/// form, so that edit alone would not have moved this digest.
+///
+/// **Re-pinned 2026-09-21 (E6 slice 4 precursor, `CHAIN_RULES_SLICE_4.md`
+/// §3.1 S8): a key was ADDED — `block_weight_full_reward_zone_bytes = 300000`
+/// in `consensus_constants.json`.** The chain question, answered: a different
+/// zone pays a different reward for the same block (the effective median is
+/// soft-raised to it before the weight penalty; the block-weight limit is
+/// twice it — CEN-F14b, G6b), so the key belongs here. The value is the one
+/// every node already ran — it was the hand-written C++
+/// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, with no Rust home and
+/// supplied to `shekyl-economics` as an argument on every call; the move
+/// gives it one authority and two generated readers (`EconomicParams::
+/// full_reward_zone`; the C++ macro is now defined from the generated
+/// header). No behaviour changes; the digest moves because the binding grew.
+///
+/// **Re-pinned 2026-09-25 (S-PRUNE review, PR #861 item 6): a key was ADDED —
+/// `archival_shard_tx_count = 200` (PROVISIONAL, `PDM-Q6` item 5) in
+/// `consensus_constants.json`.** The chain question, answered: `T` is the
+/// archival shard partition — shard `k` is the storage ids `[k·T, (k+1)·T)`
+/// — so a node holding `T = 200` and one holding `T = 100` name different
+/// shards for the same transactions: their retention prunes discard
+/// different bodies at the same epoch boundary, their `h_scarce` differs, and
+/// every archival holding (`ShardSetCompact` shard ids), pass and challenge
+/// that names a shard means a different set of transactions. A split, so
+/// the key belongs here. The value is the one already shipped as the
+/// literal `shekyl_types::SHARD_TX_COUNT = 200`; the move gives it the same
+/// sourcing as the other Round-2 gate numerics (`settlement_epoch_blocks`,
+/// `archival_reorg_depth_blocks`, `challenge_resolution_blocks`) — one
+/// authority, read by `rust/shekyl-types/build.rs`. No behaviour changes;
+/// the digest moves because the binding grew.
+const PINNED_DIGEST: &str = "5aece7b2512ebfcad20c0747087773831b82d6b6b8b444d6f7bcbe68a9257860";
 
 fn main() {
     let manifest_dir =

@@ -8,10 +8,10 @@
 use serde_json::Value;
 use shekyl_archival_retention::{challenged_leaf_bytes, verify_segment_path, SegmentPathOpening};
 use shekyl_curve_tree::{
-    AssembleInput, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex, RawOutput,
-    ReferenceBlock, TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, CurveTreeRoot,
+    Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
-use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar};
+use shekyl_fcmp::tree::{ed25519_point_to_selene_scalar, leaf_from_chunk_entry};
 
 const FIXTURE: &str = include_str!("../../shekyl-curve-tree/tests/fixtures/ct2_tier_a.json");
 
@@ -45,8 +45,13 @@ fn decode_block(b: &Value) -> Block {
         .expect("outputs array")
         .iter()
         .map(|o| RawOutput {
-            output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
-            commitment: o["commitment"].as_str().map(decode_hex32),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(decode_hex32(
+                o["output_key"].as_str().expect("O hex"),
+            )),
+            commitment: o["commitment"]
+                .as_str()
+                .map(decode_hex32)
+                .map(shekyl_curve_tree::CommitmentBytes::from_bytes),
             target: TargetKind::TaggedKey,
         })
         .collect();
@@ -94,7 +99,7 @@ fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
         .unwrap_or_else(|| panic!("block {target_height} in fixture"));
     let raw = block.outputs[0];
     AssembleInput {
-        gindex: Gindex(coinbase_gindex(blocks, target_height)),
+        gindex: Gindex::from_raw(coinbase_gindex(blocks, target_height)),
         output_key: raw.output_key,
         commitment: raw.commitment.expect("coinbase output has a commitment"),
     }
@@ -103,10 +108,10 @@ fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
 fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {
     let mut scalars = Vec::with_capacity(chunk.len() * 4);
     for cl in chunk {
-        scalars.push(ed25519_point_to_selene_scalar(&cl.output_key).expect("O.x"));
+        scalars.push(ed25519_point_to_selene_scalar(cl.output_key.as_bytes()).expect("O.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.key_image_gen).expect("I.x"));
-        scalars.push(ed25519_point_to_selene_scalar(&cl.commitment).expect("C.x"));
-        scalars.push(cl.h_pqc);
+        scalars.push(ed25519_point_to_selene_scalar(cl.commitment.as_bytes()).expect("C.x"));
+        scalars.push(cl.cm_x);
     }
     scalars
 }
@@ -118,12 +123,12 @@ fn assembled_path_verifies_as_segment_opening() {
     for blk in &blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blk.blob),
+            leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(blk.height),
+                height: BlockHeight::from_raw(blk.height),
                 txs: &txs,
             })
             .unwrap();
@@ -135,11 +140,11 @@ fn assembled_path_verifies_as_segment_opening() {
     // here, echoed back through `AssembledPath.tree.reference_block`) intact —
     // a value drop or root swap would not pass.
     let reference = ReferenceBlock {
-        height: BlockHeight(tip.height),
-        curve_tree_root: tip.root,
-        block_hash: [0xC7u8; 32],
+        height: BlockHeight::from_raw(tip.height),
+        curve_tree_root: CurveTreeRoot::from_bytes(tip.root),
+        block_hash: BlockHash::from_bytes([0xC7u8; 32]),
     };
-    let last_drained = reference.height.0.saturating_sub(61);
+    let last_drained = reference.height.to_raw().saturating_sub(61);
     let founder = coinbase_input(&blocks, last_drained);
 
     let path = client
@@ -161,8 +166,14 @@ fn assembled_path_verifies_as_segment_opening() {
         .position(|cl| cl.output_key == founder.output_key)
         .expect("founder in leaf chunk");
     let cl = &path.leaf_chunk[leaf_offset];
-    let leaf_bytes =
-        construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("construct 128-byte leaf");
+    // The chunk carries the 4th scalar (CM.x), not the commitment point.
+    let leaf_bytes = leaf_from_chunk_entry(
+        cl.output_key.as_bytes(),
+        &cl.key_image_gen,
+        cl.commitment.as_bytes(),
+        &cl.cm_x,
+    )
+    .expect("construct 128-byte leaf");
 
     let opening = SegmentPathOpening {
         c1_layers: path.c1_layers.clone(),
@@ -179,7 +190,7 @@ fn assembled_path_verifies_as_segment_opening() {
         &layer_scalars,
         leaf_offset,
         &opening,
-        &reference.curve_tree_root,
+        &reference.curve_tree_root.to_bytes(),
     )
     .expect("assembled path verifies to consensus root");
 }
@@ -197,23 +208,23 @@ fn tj_f_forged_material_does_not_verify() {
     for blk in &blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blk.blob),
+            leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(blk.height),
+                height: BlockHeight::from_raw(blk.height),
                 txs: &txs,
             })
             .unwrap();
     }
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
-        height: BlockHeight(tip.height),
-        curve_tree_root: tip.root,
-        block_hash: [0xC7u8; 32],
+        height: BlockHeight::from_raw(tip.height),
+        curve_tree_root: CurveTreeRoot::from_bytes(tip.root),
+        block_hash: BlockHash::from_bytes([0xC7u8; 32]),
     };
-    let last_drained = reference.height.0.saturating_sub(61);
+    let last_drained = reference.height.to_raw().saturating_sub(61);
     let founder = coinbase_input(&blocks, last_drained);
     let path = client
         .assemble_path(&founder, &reference)
@@ -234,13 +245,19 @@ fn tj_f_forged_material_does_not_verify() {
     let mut tampered = layer_scalars.clone();
     tampered[0][0] ^= 0x01;
     assert!(
-        verify_segment_path(&tampered, leaf_offset, &opening, &reference.curve_tree_root).is_err(),
+        verify_segment_path(
+            &tampered,
+            leaf_offset,
+            &opening,
+            reference.curve_tree_root.as_bytes()
+        )
+        .is_err(),
         "tampered leaf-layer material must not verify"
     );
 
     // Forgery 2: consistent material against the wrong commitment — the
     // response is internally coherent but R_k is not the committed sub-root.
-    let mut wrong_rk = reference.curve_tree_root;
+    let mut wrong_rk = reference.curve_tree_root.to_bytes();
     wrong_rk[0] ^= 0x01;
     assert!(
         verify_segment_path(&layer_scalars, leaf_offset, &opening, &wrong_rk).is_err(),

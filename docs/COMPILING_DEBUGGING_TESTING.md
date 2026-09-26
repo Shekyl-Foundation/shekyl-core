@@ -57,13 +57,9 @@ where the variable `DIR_SRC` is expected to store the path to the Shekyl source 
 
 ## Use cases
 
-### Test Driven Development (TDD) - shared libraries for release builds
+### Internal libraries are always static
 
-Building shared libraries spares a lot of disk space and linkage time. By default only the debug builds produce shared libraries. If you'd like to produce dynamic libraries for the release build for the same reasons as it's being done for the debug version, then you need to add the `BUILD_SHARED_LIBS=ON` flag to the `CMake` call, like the following:
-
-`cmake -S "$DIR_SRC" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON && make`
-
-A perfect use case for the above call is following the Test Driven Development (TDD) principles. In a nutshell, you'd first write a couple of tests, which describe the (new) requirements of the class/method that you're about to write or modify. The tests will typically compile for quite a long time, so ideally write them once. After you're done with the tests, the only thing left to do is to keep modifying the implementation for as long as the tests are failing. If the implementation is contained properly within a .cpp file, then the only time cost to be paid will be compiling the single source file and generating the implementation's shared library. The test itself will not have to be touched and will pick up the new version of the implementation (via the shared library) upon the next execution of the test.
+Every build type links the in-tree C++ libraries statically; `-DBUILD_SHARED_LIBS=ON` is refused at configure time. Shared internal libraries are incompatible with the single-Rust-image contract (`docs/V3_WALLET_DECISION_LOG.md`, 2026-06-11 and 2026-09-10): each `.so` that links the Rust FFI archive is the head of its own link line and embeds its own copy of the Rust image, so process-global Rust state (the `tracing` dispatcher, the regtest settlement-epoch latch, every other `static`) is duplicated and the copies disagree. The failure is silent — the daemon starts, logs normally, and rejects valid work — which is why the configuration is refused rather than defaulted off. Debug builds therefore pay full static link times; iterate on the Rust side with `cargo test -p <crate>` where the change allows it.
 
 ### Project generation for IDEs
 
@@ -120,9 +116,10 @@ static libraries.
 ### Prerequisites
 
 - **Visual Studio 2022 (17.x)** or **Visual Studio 2026 (18.x)** with the
-  C++ Desktop workload.  The CI uses VS 2026 for forward compatibility,
-  but the build works on VS 2022 as well thanks to the
-  `CryptonightR_JIT_stub.c` workaround for the PDB ICE (see below).
+  C++ Desktop workload.  The CI uses VS 2026 for forward compatibility;
+  VS 2022 is also supported. RECORDS-WAS (pre-2026-09-15): the
+  `CryptonightR_JIT_stub.c` workaround for the PDB ICE (see below)
+  is gone with the CryptoNight deletion; MSVC no longer compiles that TU.
 - vcpkg (for Boost, libsodium, OpenSSL, LMDB)
 - Rust toolchain (`stable-x86_64-pc-windows-msvc`)
 - CMake 3.25+ (or CMake 4.0+ if using VS 2026)
@@ -163,10 +160,14 @@ const size_t checkpoints_len = 0;
 
 Consumers check `_len` rather than `sizeof()` to detect empty data.
 
-#### ICE 2: PDB type server crash (`obj_cncrypto`)
+#### ICE 2: PDB type server crash (`obj_cncrypto`) — SUPERSEDED 2026-09-16
 
-**Symptom:** All individual `.c`/`.cpp` files in `src/crypto/` compile
-successfully, then the compiler crashes during the `Generating Code...`
+**Current layout:** `cncrypto` is a single library. CryptonightR / the MSVC
+`OBJECT` split / `obj_cncrypto_rx` do not exist. This section is the ICE
+diagnosis record, not a live build recipe.
+
+**Symptom (historical):** All individual `.c`/`.cpp` files in `src/crypto/` compiled
+successfully, then the compiler crashed during the `Generating Code...`
 phase with:
 
 ```text
@@ -197,23 +198,27 @@ includes (`variant4_random_math.h` with 70 unrolled switch cases,
 `CryptonightR_template.h` with 514 assembly symbol declarations)
 overwhelm the PDB type server during the "Generating Code..." phase.
 
-**Fix:** `src/crypto/CryptonightR_JIT_stub.c` provides the same
-`v4_generate_JIT_code() { return -1; }` stub without the problematic
-includes.  On MSVC, the CMake build uses the stub; on GCC/Clang, the
-full implementation with assembly template is used as before.
+**Fix (SUPERSEDED 2026-09-15):** `src/crypto/CryptonightR_JIT_stub.c`
+provided the same `v4_generate_JIT_code() { return -1; }` stub without
+the problematic includes. Phase 4 deleted CryptoNight (`slow-hash.c`,
+JIT, AES/OAES, hash-extra). The stub, six OBJECT groups, and
+`slow-hash.c` `_M_X64` guard are gone; this section is the ICE
+diagnosis record, not a live build recipe.
 
-**Additional hardening kept in the codebase** (harmless, good hygiene):
+**Additional hardening (SUPERSEDED 2026-09-15 — files deleted with
+CryptoNight):**
 
-- `src/crypto/CMakeLists.txt` splits `cncrypto` into six OBJECT library
-  groups (`hash`, `ops`, `slowhash`, `rx`, `jit`, `cpp`).  This reduces
-  per-target TU count and is harmless on all compilers.
-- `src/crypto/CryptonightR_JIT.c` guards `#include "CryptonightR_template.h"`
-  behind `__x86_64__` (GCC/Clang only) since the 514 assembly symbol
-  declarations it contains are dead on MSVC.
+- `src/crypto/CMakeLists.txt` previously split `cncrypto` into six
+  OBJECT library groups (`hash`, `ops`, `slowhash`, `rx`, `jit`, `cpp`).
+  The remnant two-way split after CryptonightR deletion was collapsed
+  **2026-09-16**; `cncrypto` is one library.
+- `src/crypto/CryptonightR_JIT.c` previously guarded
+  `#include "CryptonightR_template.h"` behind `__x86_64__`.
 - `src/crypto/c_threads.h` includes `<process.h>` on Windows for correct
   `_beginthreadex` prototype (prevents handle truncation on 64-bit).
-- `src/crypto/slow-hash.c` extends the `force_software_aes()` guard to
-  include `_M_X64`.
+  **This header remains.**
+- `src/crypto/slow-hash.c` previously extended `force_software_aes()`
+  to include `_M_X64`. **DELETED 2026-09-15.**
 
 ---
 

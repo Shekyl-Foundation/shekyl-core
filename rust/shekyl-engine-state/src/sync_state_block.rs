@@ -42,10 +42,11 @@
 //! [`LedgerBlock::transfers`]: crate::ledger_block::LedgerBlock::transfers
 
 use serde::{Deserialize, Serialize};
+use shekyl_types::BlockHeight;
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the sync-state block. V3.0 ships version `2`.
+/// Schema version of the sync-state block. V3.0 ships version `3`.
 /// Any field addition / removal / renaming bumps this; loads that see
 /// a different version refuse rather than migrate.
 ///
@@ -57,7 +58,10 @@ use crate::error::WalletLedgerError;
 ///   docstring asserting a consumer that did not exist. Reopen criteria
 ///   are per-field (a real restoring-progress UX, a confirmation-count
 ///   preference surface, and a network-posture trust gate, respectively).
-pub const SYNC_STATE_BLOCK_VERSION: u32 = 2;
+/// - `3` — height-semantics Phase 2f retypes `restore_from_height` to
+///   [`BlockHeight`]. Postcard bytes of the transparent `u64` stay
+///   identical; the schema type-name change still bumps.
+pub const SYNC_STATE_BLOCK_VERSION: u32 = 3;
 
 /// The sync-state block. See module docs for scope, versioning, and
 /// design rationale.
@@ -70,7 +74,7 @@ pub struct SyncStateBlock {
     /// Lowest height the scanner is willing to consider for this
     /// wallet. Typically the user-supplied restore height or, for
     /// fresh wallets, the current chain tip at creation time.
-    pub restore_from_height: u64,
+    pub restore_from_height: BlockHeight,
 
     /// Optional block-hash anchor pinning the wallet to a specific fork
     /// at creation — the "trust floor" of the staking-canonicity model
@@ -106,14 +110,14 @@ impl SyncStateBlock {
     pub fn empty() -> Self {
         Self {
             block_version: SYNC_STATE_BLOCK_VERSION,
-            restore_from_height: 0,
+            restore_from_height: BlockHeight::ZERO,
             creation_anchor_hash: None,
             pending_tx_hashes: Vec::new(),
         }
     }
 
     /// Construct a sync-state block with an explicit restore anchor.
-    pub fn new(restore_from_height: u64, creation_anchor_hash: Option<[u8; 32]>) -> Self {
+    pub fn new(restore_from_height: BlockHeight, creation_anchor_hash: Option<[u8; 32]>) -> Self {
         Self {
             block_version: SYNC_STATE_BLOCK_VERSION,
             restore_from_height,
@@ -165,7 +169,7 @@ mod tests {
     fn populated() -> SyncStateBlock {
         SyncStateBlock {
             block_version: SYNC_STATE_BLOCK_VERSION,
-            restore_from_height: 3_141_592,
+            restore_from_height: BlockHeight::from_raw(3_141_592),
             creation_anchor_hash: Some([0xABu8; 32]),
             pending_tx_hashes: vec![[0x11; 32], [0x22; 32], [0x33; 32]],
         }
@@ -237,7 +241,7 @@ mod tests {
         ) {
             let b = SyncStateBlock {
                 block_version: SYNC_STATE_BLOCK_VERSION,
-                restore_from_height: restore,
+                restore_from_height: BlockHeight::from_raw(restore),
                 creation_anchor_hash: anchor,
                 pending_tx_hashes: pending,
             };

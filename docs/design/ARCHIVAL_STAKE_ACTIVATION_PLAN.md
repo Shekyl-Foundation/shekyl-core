@@ -235,8 +235,9 @@ assert arm #3 collects the phantom `bonded_slots[S]` — through the real produc
   `bond_assembly.rs:363-384`, no subset), so the first bond's input count = the number of
   `PFundingOutputRecord`s P holds. To reveal **one** input, the funding must arrive as **one** output.
 - **`stake_in` is the realization, and it is a *distinct* surface** (a **precisification** of the
-  Round-0 "#332 *is* the stake_in site"). `stake_in` is an **unbuilt principal-orchestrator wallet
-  method** — `stake_in(amount) -> PendingTx`, an ordinary FCMP++ transfer principal→persona
+  Round-0 "#332 *is* the stake_in site"). `stake_in` is a **principal-orchestrator wallet
+  method** (**built 2026-07-18**, `f8a1254c2`; this line read "unbuilt" until 2026-09-11 —
+  see the note under this bullet list) — `stake_in(amount) -> PendingTx`, an ordinary FCMP++ transfer principal→persona
   (`PRINCIPAL_STAKE_LIFECYCLE.md:108/336`), whose *design* funds each admission as **one structured
   `bond_floor + cover` output** (`ARCHIVAL_GF4B_BACKING_LINEAGE.md:388-391`); that `cover` output **is**
   the SP-7 cold-start cover ("one design across two surfaces", `PRINCIPAL_STAKE_LIFECYCLE.md:226-227`).
@@ -247,6 +248,20 @@ assert arm #3 collects the phantom `bonded_slots[S]` — through the real produc
   **funding-shape** (emit one structured output) is a co-gating method homed in
   `PRINCIPAL_STAKE_LIFECYCLE.md`; **both land pre-genesis** (`GF4B:406-414`) and cross-reference. The
   round does not defer the count — it enforces the invariant and points at `stake_in` for the shape.
+
+> **Correction 2026-09-11 — `stake_in` was built on 2026-07-18 and this row said
+> otherwise for 55 days.** The bullet above described it as an "unbuilt
+> principal-orchestrator wallet method"; it is at
+> `rust/shekyl-engine-core/src/engine/principal_stake.rs:153`, with the facade at
+> `stake_facade.rs:108`, the wallet-RPC action at
+> `shekyl-wallet-rpc/src/staking_actions.rs:77`, CLI resolution in `resolve.rs`, and
+> tests at each layer. **SA-DQ-4's invariant is unaffected and its shape criterion is
+> met:** the funding-shape half this row points at `stake_in` for is discharged in
+> `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.5, against
+> `stake_in_request_is_a_single_output_to_the_active_persona`
+> (`principal_stake.rs:276`). Dated rather than applied silently: this row reads as a
+> *plan* for work not yet begun, and a reader grounding on it would have set out to
+> build a method already carrying tests.
 
 ### 5.5 SA-DQ-5 — GF-7 preserved by construction (hold-across-reopen already built)
 

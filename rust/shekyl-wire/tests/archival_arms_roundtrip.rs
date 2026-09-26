@@ -12,6 +12,7 @@
 //! `shekyl-archival-retention::{wire,bond_wire}` + GENESIS_TX_WIRE_FORMAT.md
 //! §9.10/§9.11, with `bond_spend_pk` added per §9.11.
 
+use shekyl_types::PCanonicalId;
 use shekyl_wire::transaction::{
     ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES, BOND_POST_KIND_JOINMARKET, PQC_HYBRID_SINGLE_KEY_LEN,
     TAG_INPUT_SERVE_CREDIT,
@@ -93,9 +94,10 @@ fn bond_post_holdings_with_duplicate_shard_rejected_at_read() {
     // constructible — `read` must reject it.
     let input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0xAB; PQC_HYBRID_SINGLE_KEY_LEN],
-        p_canonical_id: [0x77; 32],
+        p_canonical_id: PCanonicalId::from_bytes([0x77; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::ShardSetCompact(vec![7, 42, 7]),
         bonded_total_atomic: 750_000_000 * 3,
@@ -117,9 +119,10 @@ fn bond_post_holdings_with_duplicate_shard_rejected_at_read() {
 fn bond_post_joinmarket_round_trips_with_bond_spend_pk() {
     let input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0xAB; PQC_HYBRID_SINGLE_KEY_LEN],
-        p_canonical_id: [0x77; 32],
+        p_canonical_id: PCanonicalId::from_bytes([0x77; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::ShardSetCompact(vec![1, 2, 3, 9]),
         bonded_total_atomic: 750_000_000 * 4,
@@ -137,10 +140,11 @@ fn bond_post_joinmarket_round_trips_with_bond_spend_pk() {
 
 #[test]
 fn bond_post_non_joinmarket_has_no_bond_spend_pk() {
-    // post_kind 3 = HoldingsUpdate: bond_spend_pk is absent on the wire.
+    // post_kind 3 was HoldingsUpdate (REJECTED); the envelope still carries
+    // Other(tag) without bond_spend_pk. Retention decode refuses the tag.
     let input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0x01; PQC_HYBRID_SINGLE_KEY_LEN],
-        p_canonical_id: [0x02; 32],
+        p_canonical_id: PCanonicalId::from_bytes([0x02; 32]),
         kind: BondPostKind::Other(3),
         holdings: Holdings::CompleteTree, // carries no shard list
         bonded_total_atomic: 12_000_000_000,
@@ -159,7 +163,7 @@ fn bond_post_other_must_not_reuse_joinmarket_tag() {
     // that re-reads as a JoinMarket post — is rejected at write.
     let input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0x01; PQC_HYBRID_SINGLE_KEY_LEN],
-        p_canonical_id: [0x02; 32],
+        p_canonical_id: PCanonicalId::from_bytes([0x02; 32]),
         kind: BondPostKind::Other(BOND_POST_KIND_JOINMARKET),
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 1,

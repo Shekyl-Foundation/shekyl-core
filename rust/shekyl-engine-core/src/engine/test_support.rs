@@ -74,6 +74,7 @@ use sha2::Sha256;
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
+use shekyl_types::{AttestationRoot, BlockHash, ChainCount};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
@@ -192,7 +193,7 @@ pub(crate) fn normalize_fcmp_wire_shape(tx: &mut shekyl_wire::Transaction) {
     } = &mut tx.ct
     {
         *fee = 0;
-        *reference_block = [0u8; 32];
+        *reference_block = BlockHash::NULL;
         for c in &mut base.commitments {
             *c = [0u8; 32];
         }
@@ -295,6 +296,10 @@ struct State {
     /// Errors queued for upcoming `get_height` calls (FIFO). Once
     /// drained, subsequent calls return the canonical height.
     height_errors: VecDeque<RpcError>,
+    /// When set, `get_info` answers as an UNSYNCHRONIZED daemon
+    /// (`WSS-Q14`). Drives the refusal bites on every consumer of
+    /// `daemon_claimed_tip`.
+    daemon_syncing: bool,
     /// Per-height error queues for `fetch_scannable_block`.
     /// FIFO; once a height's queue is drained, subsequent fetches
     /// at that height return the canonical block.
@@ -366,6 +371,7 @@ impl State {
             chain: Vec::new(),
             daemon_height_cap: None,
             height_errors: VecDeque::new(),
+            daemon_syncing: false,
             block_errors: HashMap::new(),
             malformed_at: HashSet::new(),
             reorgs_after_fetch: VecDeque::new(),
@@ -403,11 +409,61 @@ fn default_fee_estimates() -> FeeEstimates {
 /// value — the watchdog health-gate and health-failure paths are driven
 /// by the hermetic `StubDaemon` in the `submit_lifecycle` test module,
 /// which controls both health facts and submit outcomes.
+/// The hash of the block at `height` on every test fixture's chain.
+///
+/// One derivation, deliberately: `get_info`'s `top_block_hash` and
+/// `get_block_hash(height)` must agree on an unbroken chain, and the ledger's
+/// continuity check is exactly the comparison between them. Four fixtures
+/// with four derivations would make that agreement a coincidence to
+/// maintain. A fork fixture answers something else on purpose.
+pub fn test_block_hash_at(height: u64) -> [u8; 32] {
+    let mut h = [0xB1u8; 32];
+    h[..8].copy_from_slice(&height.to_le_bytes());
+    h
+}
+
+/// Outbound peers a healthy test daemon reports. Non-zero so a health
+/// reading is not the peerless alarm. Inbound is zero ("none").
+const TEST_DAEMON_OUTGOING_CONNECTIONS: u64 = 8;
+
+/// How far above its chain count a syncing test daemon places
+/// `target_height`. The lead only has to be strictly positive: the sync
+/// predicate refuses any target the count has not reached. It is not a
+/// protocol constant.
+const SYNCING_TARGET_LEAD: u64 = 10_000;
+
+/// `get_info` for [`TestDaemon`] and any other double that should answer
+/// as this daemon does.
+///
+/// `syncing` moves both halves of the predicate together: the flag clears
+/// and the target sits [`SYNCING_TARGET_LEAD`] above the count. A reply
+/// that changes only one of those is not a state this double emits. The
+/// sentinel-only case (target `0` with the flag clear) is built in
+/// `synced_chain_facts_tests` against the constructor.
+pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Value {
+    let target_height = if syncing {
+        chain_count.saturating_add(SYNCING_TARGET_LEAD)
+    } else {
+        // `0` is the wire's synchronized sentinel, not an absent field.
+        0
+    };
+    super::daemon::synced_chain_facts::GetInfoDocument {
+        chain_count: ChainCount::from_raw(chain_count),
+        target_height,
+        synchronized: !syncing,
+        top_hash: BlockHash::from_bytes(test_block_hash_at(chain_count.saturating_sub(1))),
+        outgoing_connections: TEST_DAEMON_OUTGOING_CONNECTIONS,
+        incoming_connections: 0,
+    }
+    .to_value()
+}
+
 fn default_health() -> DaemonHealth {
     DaemonHealth {
-        connections: 8,
+        connections: TEST_DAEMON_OUTGOING_CONNECTIONS,
         height: 0,
         target_height: 0,
+        synchronized: true,
     }
 }
 
@@ -520,6 +576,18 @@ impl TestDaemon {
             .lock()
             .expect("TestDaemon state poisoned")
             .daemon_height_cap = Some(cap);
+    }
+
+    /// Answer `get_info` as a daemon that is still synchronizing.
+    ///
+    /// The lever every `WSS-Q14` refusal bite pulls: with this set, the
+    /// daemon has no tip to claim, so `daemon_claimed_tip` and every
+    /// consumer of it must decline rather than stamp a post.
+    pub fn set_daemon_syncing(&self, syncing: bool) {
+        self.state
+            .lock()
+            .expect("TestDaemon state poisoned")
+            .daemon_syncing = syncing;
     }
 
     /// Queue `n` errors to be returned by the next `n`
@@ -639,7 +707,63 @@ impl Rpc for TestDaemon {
         }
     }
 
-    fn get_height(&self) -> impl Send + std::future::Future<Output = Result<usize, RpcError>> {
+    /// `get_info`, answered as a **synchronized** daemon at this double's
+    /// height — the override `post`'s panic message asks for rather than a
+    /// `post` implementation.
+    ///
+    /// `daemon_claimed_tip` reads sync state and height from one `get_info`
+    /// (`WSS-Q14`), so the double has to answer it or every dispatch path
+    /// panics. Synchronized is the right default: every existing scenario was
+    /// written against a daemon whose tip is authoritative, and answering
+    /// otherwise would silently disable the release/post paths under test.
+    /// The unsynchronized timeline has its own fixtures
+    /// (`serve_set_source.rs`'s `ResyncingDaemon`).
+    ///
+    /// `height` honours [`Self::set_daemon_height_cap`] so both clocks agree.
+    /// It deliberately does **not** drain `height_errors`: that queue's
+    /// contract is `get_height`'s, pinned FIFO by
+    /// `height_errors_drain_in_fifo_then_recover`, and draining it from two
+    /// methods would make the order depend on which clock a test happened to
+    /// read first.
+    fn json_rpc_call<Response: serde::de::DeserializeOwned + std::fmt::Debug>(
+        &self,
+        method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> impl Send + std::future::Future<Output = Result<Response, RpcError>> {
+        let state = self.state.clone();
+        let method = method.to_string();
+        async move {
+            if method != "get_info" {
+                return Err(RpcError::InternalError(format!(
+                    "TestDaemon has no json_rpc_call override for '{method}': add one rather \
+                     than implementing post()"
+                )));
+            }
+            let (height, syncing) = {
+                let state = state.lock().expect("TestDaemon state poisoned");
+                let chain_len = state.chain.len() as u64;
+                let h = state
+                    .daemon_height_cap
+                    .map(|cap| cap.min(chain_len))
+                    .unwrap_or(chain_len);
+                (h, state.daemon_syncing)
+            };
+            serde_json::from_value(daemon_get_info(height, syncing))
+                .map_err(|e| RpcError::InvalidNode(format!("TestDaemon get_info shape: {e}")))
+        }
+    }
+
+    /// The block at `number`, on the same chain `get_info` describes — so a
+    /// ledger that re-reads its anchor finds it unchanged unless a test says
+    /// otherwise.
+    fn get_block_hash(
+        &self,
+        number: usize,
+    ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+        async move { Ok(test_block_hash_at(number as u64)) }
+    }
+
+    fn get_height(&self) -> impl Send + std::future::Future<Output = Result<ChainCount, RpcError>> {
         let state = self.state.clone();
         async move {
             let mut state = state.lock().expect("TestDaemon state poisoned");
@@ -651,8 +775,7 @@ impl Rpc for TestDaemon {
                 .daemon_height_cap
                 .map(|cap| cap.min(chain_len))
                 .unwrap_or(chain_len);
-            usize::try_from(height)
-                .map_err(|_| RpcError::InvalidNode("TestDaemon height exceeded usize".to_string()))
+            Ok(ChainCount::from_raw(height))
         }
     }
 }
@@ -794,7 +917,7 @@ impl DaemonEngine for TestDaemon {
 /// detection by parent-hash compare, retries) build their chains
 /// from this helper. Tests that need owned-output recovery construct
 /// their own `ScannableBlock` (see module docs).
-pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> ScannableBlock {
+pub(crate) fn make_synthetic_block(height: u64, parent_hash: BlockHash) -> ScannableBlock {
     let header = BlockHeader {
         major_version: 1,
         minor_version: 0,
@@ -807,10 +930,14 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
         // ingest verify compares the reconstructed root against this header
         // field, so it must be the sentinel (not `[0u8; 32]`) for the verify to
         // pass on the synthetic-block test paths.
-        curve_tree_root: shekyl_fcmp::tree::selene_hash_init(),
+        curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes(
+            shekyl_fcmp::tree::selene_hash_init(),
+        ),
         // Same lesson as curve_tree_root: the valid empty is the empty-set
         // root (ARCHIVAL_CREDIT_WIRE.md §3), never `[0u8; 32]` (null_hash).
-        attestation_root: shekyl_archival_retention::empty_attestation_root(),
+        attestation_root: AttestationRoot::from_bytes(
+            shekyl_archival_retention::empty_attestation_root(),
+        ),
     };
 
     // A coinbase carrying no outputs: the sole `Gen` input and a `Null` ct whose
@@ -979,13 +1106,37 @@ pub(crate) fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
             shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES
                 * n_outputs
         ]),
-        shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(vec![
-            0x7b;
-            shekyl_wire::tx_extra::PQC_LEAF_HASH_BYTES
-                * n_outputs
-        ]),
+        shekyl_wire::tx_extra::TxExtraField::PqcLeafEntries(
+            shekyl_wire::tx_extra::conforming_pqc_leaf_blob(n_outputs),
+        ),
     ])
     .expect("conforming PQC tx_extra serializes")
+}
+
+#[cfg(test)]
+/// The `tx_extra` a coinbase with `n` outputs must carry (CEN-I20,
+/// `GENESIS_TX_WIRE_FORMAT.md` §9.6b): exactly `[0x01 pubkey, 0x02 nonce(8),
+/// 0x06 KEM(1120·n), 0x07 leaf(64·n)]` in that order, the PQC pair absent when
+/// `n == 0`. A coinbase fixture carrying only the I19 pair fails the wire
+/// validator on the grammar before it reaches the property under test.
+pub(crate) fn conforming_coinbase_extra(n_outputs: usize) -> Vec<u8> {
+    use shekyl_wire::tx_extra::{
+        self, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES, TX_EXTRA_PUBKEY_LEN,
+    };
+    let kem = vec![0x6au8; HYBRID_KEM_CT_BYTES * n_outputs];
+    let leaf = if n_outputs == 0 {
+        Vec::new()
+    } else {
+        tx_extra::conforming_pqc_leaf_blob(n_outputs)
+    };
+    tx_extra::build_coinbase_extra(
+        [0x11; TX_EXTRA_PUBKEY_LEN],
+        &[0; COINBASE_NONCE_BYTES],
+        n_outputs,
+        &kem,
+        &leaf,
+    )
+    .expect("conforming coinbase tx_extra builds")
 }
 
 mod tests {
@@ -996,11 +1147,11 @@ mod tests {
     /// from `[0u8; 32]`. Real-daemon convention: `chain[h] = block at
     /// height h`. `linear_chain(n).len() == n`, so
     /// `TestDaemon::with_seed_and_chain(_, linear_chain(n)).get_height()`
-    /// returns `n`.
+    /// returns `ChainCount::from_raw(n)`.
     fn linear_chain(n: u64) -> Vec<ScannableBlock> {
         let mut chain =
             Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
-        let mut parent = [0u8; 32];
+        let mut parent = BlockHash::NULL;
         for h in 0..n {
             let block = make_synthetic_block(h, parent);
             parent = block.block.hash();
@@ -1012,13 +1163,13 @@ mod tests {
     #[tokio::test]
     async fn empty_chain_reports_zero_height() {
         let rpc = TestDaemon::with_seed(DEFAULT_TEST_SEED);
-        assert_eq!(rpc.get_height().await.unwrap(), 0);
+        assert_eq!(rpc.get_height().await.unwrap(), ChainCount::ZERO);
     }
 
     #[tokio::test]
     async fn linear_chain_reports_canonical_height() {
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
-        assert_eq!(rpc.get_height().await.unwrap(), 5);
+        assert_eq!(rpc.get_height().await.unwrap(), ChainCount::from_raw(5));
     }
 
     #[tokio::test]
@@ -1068,7 +1219,7 @@ mod tests {
     async fn daemon_height_cap_below_chain_len() {
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(10));
         rpc.set_daemon_height(4);
-        assert_eq!(rpc.get_height().await.unwrap(), 4);
+        assert_eq!(rpc.get_height().await.unwrap(), ChainCount::from_raw(4));
     }
 
     #[tokio::test]
@@ -1078,7 +1229,7 @@ mod tests {
 
         assert!(rpc.get_height().await.is_err());
         assert!(rpc.get_height().await.is_err());
-        assert_eq!(rpc.get_height().await.unwrap(), 2);
+        assert_eq!(rpc.get_height().await.unwrap(), ChainCount::from_raw(2));
     }
 
     #[tokio::test]
@@ -1111,8 +1262,8 @@ mod tests {
         let rpc = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let clone = rpc.clone();
         // Push genesis at height 0; clone observes get_height=1.
-        rpc.push_block(make_synthetic_block(0, [0u8; 32]));
-        assert_eq!(clone.get_height().await.unwrap(), 1);
+        rpc.push_block(make_synthetic_block(0, BlockHash::NULL));
+        assert_eq!(clone.get_height().await.unwrap(), ChainCount::from_raw(1));
     }
 
     #[tokio::test]

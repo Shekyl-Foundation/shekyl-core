@@ -3,6 +3,49 @@
 **Status:** **CLOSED 2026-08-21** — every disposition `RF-D1`…`RF-D10` is
 ruled *and* implemented on `dev`. Round opened 2026-08-18.
 
+**POST-CLOSE FINDING 2026-09-13 — RULED under `SF-D8`; the v2 verifier
+(message half) LANDED by the `SF` §9.1 (a0) PR the same day; the envelope
+(carrier half) lands with (a):**
+the implemented nonce-only countersignature assumed the server derived
+the nonce as `attestation_nonce`.
+[`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) `SF-D5` makes the
+request one header decoding to 72 bytes
+`nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — requester-random
+plus the requester's own chain anchor at `tip − 720`, both callers — so
+a challenge fetch is not named on the wire, while the anchor restores the
+existence property the v1 block-hash term carried. Nonce-only still does
+not bind the signature to the server-parsed `/shard/{id}`: a witness can
+request a held decoy and file the signature as a pass for an unheld
+target. `SF-D8` RULED 2026-09-13 (amended twice later the same day; the
+second amendment is what landed) that `P` gates `anchor_height` against
+its own height ±`L` and signs the **decoded** 72 bytes ‖ `shard_id_le[8]`
+under a new versioned domain; the v1 nonce-only message is not reused;
+the pass record carries the 32-byte random and the 8-byte anchor height;
+admission requires `anchor_height ∈ [h − 720 − L, h − 720]` for validated
+predecessor `h`, rebuilds the transcript with the connecting chain's hash
+at that height, and refuses every pass record while `h < 720 + L` (724).
+`verify_pass_countersignature` is amended to that v2 message by (a0): the
+verify context carries `predecessor_height` and the `L + 1` anchor hashes
+(`anchor_hashes_ptr/len`, sized through `shekyl_archival_pass_anchor_window`)
+and no longer carries `cb_out_key`, `cb_out_key_readable`, or
+`prev_block_hash`; verdict codes 8 (`CBKEY_UNREADABLE`) and 12
+(`PREVHASH_UNPOPULATED`) are RETIRED, never reused; 13, 14, 15 are minted
+for the malformed table, out-of-window anchor, and below-threshold cases;
+the prunable witness entry is `nonce[32] ‖ anchor_height_le[8] ‖
+HybridSignature`. The challenge
+tuple and `cb_out_key` are not in the fetch signature: the fetch proves
+`P` served, not which miner asked. `SF-D8` also ruled the carrier: the
+HTTP body is a fixed-length outer envelope holding the canonical
+`HybridSignature`, followed by the unchanged `RF-D4` frame; response
+headers stay exactly `content-type` and `content-length`, which covers
+envelope plus frame. The 2026-08-21 status above remains the record of
+what landed, not a claim that the v2 message or the envelope is
+implemented. **The `RF-D4` section below is left as the CLOSED record
+of the inner frame; where it calls that frame the whole body ("no
+envelope", `served response :=`) it is superseded in scope by `SF-D8`
+and is rewritten by the implementation PR that lands the envelope.**
+Each superseded line carries its own marker.
+
 *(This line read "implementation pending" until 2026-08-23. It was stale from
 2026-08-21, when PR #522 merged: the doc led the PR per this round's own
 practice, and nothing updated the header when the code landed behind it. The
@@ -16,7 +59,7 @@ and leaving the index is how the next reader still gets the wrong answer.)*
 which a round has "landed":**
 
 | On `dev` | PR | Dispositions |
-|---|---|---|
+| --- | --- | --- |
 | 2026-08-19 | #504 | `RF-D3`, `RF-D5` |
 | 2026-08-21 | #522 | `RF-D1`, `RF-D2`, `RF-D4`, `RF-D6`…`RF-D10` — artifacts A and B, the C++ vin, the pruned half, and the review round |
 
@@ -70,7 +113,7 @@ ruling, and it was wrong in a way that produced a test of the wrong claim. See
 | 1 | **Leaf chunk is pruned-side by construction** | RULED | `ARCHIVAL_PASS_RECORD_CARRIER.md` CR-D2 |
 | 2 | **Reserved padding field; no padding scheme** | RULED 2026-08-08 (TJ-H) | `ARCHIVAL_CHALLENGE_MECHANISM.md:1065` |
 | 3 | **Nonce anchor = `cb_out_key` of block `h`** | RULED 2026-08-10 (fork 2 closed) | `ARCHIVAL_CHALLENGE_MECHANISM.md:40-43` |
-| 4 | **`r` deleted**; nonce `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` | **RULED 2026-08-10** — `RF-D3` resolved, see §2 | `ARCHIVAL_CHALLENGE_MECHANISM.md:48`, `:820-850` |
+| 4 | **`r` deleted**; nonce `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` — **as the countersignature message, SUPERSEDED 2026-09-13 by `SF-D8`** (requester-random `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`, anchor at `tip − 720`; verifier LANDED by (a0)) | **RULED 2026-08-10** — `RF-D3` resolved, see §2 | `ARCHIVAL_CHALLENGE_MECHANISM.md:48`, `:820-850` |
 | 5 | **`CR-F2`'s `prefix_hash` / tx-id change** | priced, **lands here** | `ARCHIVAL_PASS_RECORD_CARRIER.md` CR-F2 |
 
 ### 1.1 The carrier's answer, which this format must express
@@ -223,7 +266,28 @@ transport cap (runtime FFI equality gate against Rust), `shekyl-archival-retenti
 `const _: () = assert!` plus a test), which exists because that crate refuses the
 retention stack as a production dependency.
 
-### 2.5 `RF-D5` — RESOLVED 2026-08-19: `r` is **replaced**, not deleted, and the anchor is refused when unpopulated
+### 2.5 `RF-D5` — RESOLVED 2026-08-19: `r` is **replaced**, not deleted, and the anchor is refused when unpopulated — SUPERSEDED 2026-09-13 by `SF-D8` (a0): the anchor is now the **requester's `block_hash(tip − 720)`**, looked up by admission on the connecting chain, not the verifier-supplied `block_hash(h−1)`
+
+> **Supersession note (2026-09-13).** The `block_hash(h−1)` anchor and its
+> all-zeros refusal below were the v1 shape. `SF-D8` kept the anchor's
+> **existence** property but moved it: the requester puts
+> `anchor_height ‖ anchor_hash` at `tip − archival_reorg_depth_blocks`
+> (720) in the header `P` signs, the pass record carries the height, and
+> admission looks the hash up on the connecting chain inside
+> `[h − 720 − L, h − 720]` for validated predecessor `h`. So the verify
+> context carries `predecessor_height: u64` plus an `L + 1` table of the
+> connecting chain's hashes for that window (filled by
+> `Blockchain::fill_pass_anchor_window` from the main chain or the alt
+> chain above the fork point; empty below `h = 720 + L`), and the
+> `prev_block_hash` field, the readability-flag debate, and verdict 12 are
+> gone — replaced by verdicts 13 (`MALFORMED_ANCHOR_TABLE`), 14
+> (`ANCHOR_OUT_OF_WINDOW`), 15 (`BELOW_ANCHOR_THRESHOLD`). Burying the
+> anchor 720 deep is what makes every miner building on one tip send the
+> same anchor and keeps a same-height race from producing an honest miss;
+> the same-day first amendment that made the binding a bare requester
+> height with equality at admission was SUPERSEDED before landing (no
+> existence property). This section stays as the record of how the v1
+> anchor was ruled; nothing below is the current verifier.
 
 Found while grounding the deletion surface, and recorded because the ruling's
 phrasing (*"the nonce's `r` term DELETES"*) reads as a pure removal and **is not
@@ -918,8 +982,16 @@ precise state [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.m
 §9 (ruled 2026-07-29, *"the test IS a read"*) exists to prevent, because a `P`
 that can distinguish tests from reads fast-paths the tests and lets real reads
 rot. The nonce design gives indistinguishability **by construction** — `P`
-countersigns every request over an opaque 32 bytes. The opening destroys it,
-because its preimage is not opaque: it names a leaf.
+countersigns every request over opaque bytes. **LIMIT ADDED 2026-09-13:** this
+sentence rules caller indistinguishability, not route binding. `SF-D5` makes
+those bytes requester-random plus the requester's chain anchor at `tip − 720`,
+both callers, so they do not name the assignment. Signing them without the
+parsed route id still lets a witness request a held decoy and file the
+signature as a pass for an unheld target. `SF-D8` therefore binds the header
+to the server-parsed shard id (`nonce ‖ anchor_height ‖ anchor_hash ‖
+shard_id`, RULED 2026-09-13, LANDED by (a0)). The
+opening still destroys indistinguishability because its preimage is not
+opaque: it names a leaf.
 
 **The rescue branch is closed too.** Letting the *witness* compute the opening
 and carry it unsigned would keep `P` ignorant — and buys nothing, because a
@@ -1191,11 +1263,14 @@ subject. The byte-parity arm is owed regardless of how the rest of `A` lands.
 
 ---
 
-### `RF-D4` — artifact B, the served payload
+### `RF-D4` — artifact B, the served payload — INNER FRAME; SCOPE SUPERSEDED 2026-09-13 by `SF-D8`
 
-**Today there is no format.** `shekyl-p-serve` streams a raw `FrozenSegmentBody`
-— a flat concatenation of leaf bytes — with `content-length = (end − next) ·
-LEAF_BYTES` (`redb_backend.rs:363-365`). No envelope, no fields.
+**At round open (2026-08-18) there was no format.** `shekyl-p-serve` streamed
+a raw `FrozenSegmentBody` — a flat concatenation of leaf bytes — with
+`content-length = (end − next) · LEAF_BYTES` (`redb_backend.rs:363-365`). No
+envelope, no fields. *(Records-was: the state this section set out to fix.
+Since 2026-09-13 `SF-D8` places a fixed-length `HybridSignature` envelope
+ahead of the frame this section defines; that envelope is ruled, not landed.)*
 
 **`content-length` cannot be TJ-H's reserved header**, for three reasons:
 
@@ -1209,15 +1284,19 @@ LEAF_BYTES` (`redb_backend.rs:363-365`). No envelope, no fields.
    field *in the frozen format*; anything living only in HTTP/1.1 headers does
    not survive a transport change.
 
-**Draft: one length field, ahead of the body.**
+**Draft: one length field, ahead of the body.** *(SCOPE SUPERSEDED
+2026-09-13: this grammar is the **inner frame**, not the whole HTTP body.
+Per `SF-D8` the body is `HybridSignature ‖ <this frame>`; the frame's bytes
+are unchanged. Rewritten by the implementation PR.)*
 
 ```text
-served response := leaf_count  varint    (≤ leaves_per_segment = 25 992)
+inner frame     := leaf_count  varint    (≤ leaves_per_segment = 25 992)
                  ‖ padding_len varint
                  ‖ segment_bytes         (leaf_count × LEAF_BYTES, exactly)
                  ‖ padding_bytes         (padding_len, exactly)
 
 hashed against R_k: segment_bytes ONLY
+HTTP body (SF-D8, 2026-09-13; message half LANDED (a0), this envelope lands with SF (a)) := HybridSignature ‖ inner frame
 ```
 
 **`varint` names one encoding, and this document has to say which.** It is the
@@ -1413,9 +1492,16 @@ change instead of two.
 
 ## 4. What this round does not decide
 
-- **The settlement-outcome table schema** (§9.7 item 9) and **`EndpointUpdate`
-  on the bond wire** — separate PRs, separate validation surfaces
+- **The request half** (route, status line, header set). Ruled 2026-09-10
+  as `RF-R1` in [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) —
+  path `/shard/{id}`, status/header transcribed from `shekyl-p-serve`.
+  This round's exclusion of the HTTP layer stands; that document is the
+  successor the exclusion lacked, not a reopening of this round.
+- **The settlement-outcome table schema** (§9.7 item 9) — a separate PR,
+  a separate validation surface
   ([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)).
+  (`EndpointUpdate` on the bond wire, listed here as the other exclusion,
+  was REJECTED 2026-09-13.)
 - **Whether A5/W10 survives overall.** The `RESPONSE_BYTES` correction moved one
   end of it; the arithmetic is pinned by the restated proxy tests and the verdict
   belongs to `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`.

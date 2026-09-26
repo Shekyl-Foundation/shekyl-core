@@ -59,7 +59,9 @@
 
 use std::collections::HashSet;
 
-use shekyl_types::TxHash;
+use shekyl_types::{ChainCount, TxHash};
+
+use super::daemon::synced_chain_facts::daemon_reports_synchronized;
 
 // ---------------------------------------------------------------------------
 // Horizon configuration
@@ -212,12 +214,30 @@ pub(crate) struct DaemonHealthContext {
     /// The daemon's network-estimated target height (0 when synced —
     /// the info surface's convention).
     pub target_height: u64,
+    /// The daemon's own `synchronized` flag. Required alongside the
+    /// heights: a peerless freshly-started daemon reports
+    /// `target_height == 0` with `synchronized == false`, and the height
+    /// comparison alone reads that as synced.
+    pub synchronized: bool,
 }
 
 impl DaemonHealthContext {
     /// The daemon believes it is synced with the network.
+    ///
+    /// Asks [`daemon_reports_synchronized`] — the same site
+    /// [`SyncedChainFacts::new`] asks — rather than keeping its own copy.
+    /// This predicate used to be the wallet's **only** reading of sync
+    /// state, and `WSS-25` found the serve-set release gate acting on a
+    /// resyncing daemon's view because nothing carried the answer out of
+    /// this file. The ladder needs only the boolean and holds no chain
+    /// identity, so it calls the predicate and not the constructor; either
+    /// way there is one definition of "synced".
     fn is_synced(&self) -> bool {
-        self.target_height == 0 || self.height >= self.target_height
+        daemon_reports_synchronized(
+            ChainCount::from_raw(self.height),
+            self.target_height,
+            self.synchronized,
+        )
     }
 
     /// The daemon has someone to relay to.
@@ -461,9 +481,9 @@ mod tests {
         use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
         TransferDetails {
             tx_hash: TxHash::from_bytes([seed; 32]),
-            internal_output_index: u64::from(seed),
-            global_output_index: u64::from(seed),
-            block_height: 100,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(u64::from(seed)),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(u64::from(seed)),
+            block_height: shekyl_types::BlockHeight::from_raw(100),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: shekyl_curve_primitives::Commitment::new(Scalar::ONE, 1_000),
@@ -474,8 +494,9 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: 100 + SPENDABLE_AGE,
+            eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
         }
@@ -484,7 +505,10 @@ mod tests {
     fn ledger_with(transfers: Vec<TransferDetails>) -> shekyl_engine_state::LedgerBlock {
         shekyl_engine_state::LedgerBlock::new(
             transfers,
-            shekyl_engine_state::BlockchainTip::new(5_000, [0xAA; 32]),
+            shekyl_engine_state::BlockchainTip::new(
+                shekyl_types::BlockHeight::from_raw(5_000),
+                [0xAA; 32],
+            ),
             shekyl_engine_state::ReorgBlocks::default(),
         )
     }
@@ -500,7 +524,7 @@ mod tests {
         wallet.send_journal.rows.insert(
             txid,
             shekyl_engine_state::SendRecord {
-                dispatched_at_height: 3_999,
+                dispatched_at_height: shekyl_types::BlockHeight::from_raw(3_999),
                 fee: 1,
                 recipients: Vec::new(),
                 change_amount: 0,
@@ -541,7 +565,9 @@ mod tests {
         journal_row(
             &mut wallet,
             [4; 32],
-            SendState::Confirmed { height: 9 },
+            SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(9),
+            },
             Some(3_800),
             vec![5],
         );
@@ -574,7 +600,7 @@ mod tests {
                 (|wallet: &mut shekyl_engine_state::WalletLedger| {
                     let mut td = transfer_at(1);
                     td.spent = true;
-                    td.spent_height = Some(4_100);
+                    td.spent_height = Some(shekyl_types::BlockHeight::from_raw(4_100));
                     td.spending_tx_hash = Some(TxHash::from_bytes([0xEE; 32]));
                     wallet.ledger = ledger_with(vec![td]);
                 }) as fn(&mut shekyl_engine_state::WalletLedger),
@@ -621,7 +647,7 @@ mod tests {
             wallet.send_journal.rows.insert(
                 txid.to_bytes(),
                 shekyl_engine_state::SendRecord {
-                    dispatched_at_height: 3_999,
+                    dispatched_at_height: shekyl_types::BlockHeight::from_raw(3_999),
                     fee: 1,
                     recipients: Vec::new(),
                     change_amount: 0,
@@ -659,12 +685,12 @@ mod tests {
         // carried input (gindex 3) stays locked.
         let locks = wallet.spend_locks();
         assert_eq!(locks.len(), 1);
-        assert!(locks.contains(3));
+        assert!(locks.contains(shekyl_types::GlobalOutputIndex::from_raw(3)));
         let ledger = &wallet.ledger;
         for td in ledger.transfers() {
             let locked = locks.contains(td.global_output_index);
             assert_eq!(
-                td.is_spendable(u64::MAX, &locks),
+                td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &locks),
                 !locked,
                 "gindex {} spendability must mirror the derived lock",
                 td.global_output_index
@@ -678,6 +704,7 @@ mod tests {
             connections: 8,
             height: 10_000,
             target_height: 0,
+            synchronized: true,
         }
     }
 
@@ -768,6 +795,7 @@ mod tests {
             connections: 8,
             height: 5_000,
             target_height: 6_000,
+            synchronized: true,
         };
         assert_eq!(
             escape_ladder_step(&h, past, behind, CFG),
@@ -778,6 +806,7 @@ mod tests {
             connections: 0,
             height: 6_000,
             target_height: 0,
+            synchronized: true,
         };
         assert_eq!(
             escape_ladder_step(&h, past, peerless, CFG),
@@ -875,10 +904,48 @@ mod tests {
             connections: 0,
             height: 5_000,
             target_height: 6_000,
+            synchronized: true,
         };
         assert_eq!(
             escape_ladder_step(&h, past, behind_and_peerless, CFG),
             WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless)
         );
+    }
+
+    /// **The convergence pin.** The predicate has one site
+    /// (`daemon_reports_synchronized`), and the watchdog's health context
+    /// reaches it rather than keeping a second copy — which is the
+    /// whole point of `WSS-Q14`. This agrees the two readings across the boundary
+    /// where they used to be independent.
+    ///
+    /// This bites against the two readings diverging; it does **not** cover a
+    /// third consumer that re-implements the predicate instead of calling the
+    /// constructor. Nothing but review catches that.
+    #[test]
+    fn the_watchdogs_health_context_agrees_with_the_constructor() {
+        // The last row is the case the `synchronized` half exists for: a
+        // freshly started daemon with no peers reports `target_height == 0`,
+        // which the height comparison alone reads as synced.
+        for (height, target, synchronized) in [
+            (0, 0, true),
+            (1_000, 1_000_000, true),
+            (999_999, 1_000_000, true),
+            (5, 5, true),
+            (6, 5, true),
+            (5, 0, false),
+        ] {
+            let ctx = DaemonHealthContext {
+                connections: 1,
+                height,
+                target_height: target,
+                synchronized,
+            };
+            assert_eq!(
+                ctx.is_synced(),
+                daemon_reports_synchronized(ChainCount::from_raw(height), target, synchronized),
+                "the ladder and the constructor must not disagree at \
+                 ({height}, {target}, {synchronized})",
+            );
+        }
     }
 }

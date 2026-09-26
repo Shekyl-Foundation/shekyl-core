@@ -12,7 +12,7 @@ use curve25519_dalek::{EdwardsPoint, Scalar};
 
 use shekyl_crypto_pq::{handle::OutputHandle, kem::HybridCiphertext, key_image::KeyImage};
 use shekyl_curve_primitives::Commitment;
-use shekyl_types::{BlockCount, BlockHeight, Timelock, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex, OutputIndexInTx, Timelock, TxHash};
 use shekyl_units::AtomicUnits;
 
 use crate::{
@@ -30,7 +30,8 @@ use crate::{
 /// the daemon's deferred insertion cannot drift (GF4b-6 single-source
 /// sharpening, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.6). Mirrors
 /// `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (C++).
-pub const SPENDABLE_AGE: u64 = shekyl_consensus::DEFAULT_LOCK_WINDOW as u64;
+pub const SPENDABLE_AGE: shekyl_types::BlockCount =
+    shekyl_types::BlockCount::from_raw(shekyl_consensus::DEFAULT_LOCK_WINDOW as u64);
 
 /// The height at which an output's leaf is present in the curve tree and the
 /// output becomes spendable — the **single** wallet-side definition of "in
@@ -58,11 +59,11 @@ pub const SPENDABLE_AGE: u64 = shekyl_consensus::DEFAULT_LOCK_WINDOW as u64;
 /// CryptoNote timestamp form is not representable).
 ///
 /// Typed in and out ([`BlockHeight`] → [`BlockHeight`], rule 18): the pscan
-/// funding path stores the result directly; the legacy `u64`-shaped
-/// [`TransferDetails::eligible_height`] field converts at its own edge.
+/// funding path and [`TransferDetails::eligible_height`] both store the
+/// result directly.
 #[must_use]
 pub fn eligible_height(block_height: BlockHeight, additional_timelock: Timelock) -> BlockHeight {
-    let maturity = block_height + BlockCount::from_raw(SPENDABLE_AGE);
+    let maturity = block_height + SPENDABLE_AGE;
     match additional_timelock {
         Timelock::None => maturity,
         Timelock::Block(unlock) => maturity.max(unlock),
@@ -100,20 +101,51 @@ pub struct AwaitingConfirmation {
     pub tx_hash: TxHash,
     /// Wallet synced height when the accepting verdict was observed; the
     /// baseline for the watchdog's escape horizon.
-    pub accepted_at_height: u64,
+    pub accepted_at_height: BlockHeight,
 }
 
 /// A precomputed FCMP++ curve-tree path for an output.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FcmpPrecomputedPath {
     /// The reference block hash used when computing this path.
-    pub reference_block: [u8; 32],
+    pub reference_block: BlockHash,
     /// The curve-tree depth at precompute time.
     pub tree_depth: u32,
     /// The block height when this path was precomputed.
-    pub precompute_height: u64,
+    pub precompute_height: BlockHeight,
     /// The serialized path blob from the daemon.
     pub path_blob: Vec<u8>,
+}
+
+impl postcard_schema::Schema for FcmpPrecomputedPath {
+    // Wire-native named schema: `BlockHash`/`BlockHeight` are transparent
+    // over `[u8; 32]`/`u64`, so postcard bytes are unchanged. Reporting
+    // the primitive names keeps `ledger_block.snap` stable (no
+    // `LEDGER_BLOCK_VERSION` bump for a type-only change). No dummy
+    // struct: a shadow type with `[u8; 32]`/`Vec<u8>` fields trips the
+    // zeroize-field gate without owning any bytes.
+    const SCHEMA: &'static postcard_schema::schema::NamedType =
+        &postcard_schema::schema::NamedType {
+            name: "FcmpPrecomputedPath",
+            ty: &postcard_schema::schema::DataModelType::Struct(&[
+                &postcard_schema::schema::NamedValue {
+                    name: "reference_block",
+                    ty: <[u8; 32] as postcard_schema::Schema>::SCHEMA,
+                },
+                &postcard_schema::schema::NamedValue {
+                    name: "tree_depth",
+                    ty: <u32 as postcard_schema::Schema>::SCHEMA,
+                },
+                &postcard_schema::schema::NamedValue {
+                    name: "precompute_height",
+                    ty: <u64 as postcard_schema::Schema>::SCHEMA,
+                },
+                &postcard_schema::schema::NamedValue {
+                    name: "path_blob",
+                    ty: <Vec<u8> as postcard_schema::Schema>::SCHEMA,
+                },
+            ]),
+        };
 }
 
 /// Shekyl-native transfer record for one owned output.
@@ -163,13 +195,35 @@ pub struct FcmpPrecomputedPath {
 /// If a caller legitimately needs two copies, they must `Serialize` into
 /// a buffer and `Deserialize` back; the process is explicit about the
 /// boundary.
+/// Why a received output can never be spent by this wallet (rule 82: a
+/// failure mode is design scope; `FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`).
+///
+/// Set by the scanner at receive time, never by consensus: the sender
+/// publishes the output's `tx_extra` `0x07` entry (`CM ‖ record`) and only
+/// the recipient can check that it opens to its own derivation. An output
+/// classified here is **retained in the ledger** (the money is on chain and
+/// the row names the sender's transaction) but excluded from every
+/// spendable view — coin selection, `unlocked`, the RPC `CONFIRMED` state —
+/// because signing would fail at the leaf (`TxBuilderError::PqcLeafMismatch`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, postcard_schema::Schema)]
+pub enum UnspendableReason {
+    /// The published `0x07` entry is not this wallet's derivation of
+    /// `(CM, record)` for the output: the leaf the chain holds does not open
+    /// to the wallet's `(k, r)`, so no membership proof can be built.
+    PqcLeafMismatch,
+    /// The transaction carries no `0x07` entry for this output index (a
+    /// shape consensus refuses, so reachable only through a non-consensus
+    /// block source — recorded rather than assumed away).
+    PqcLeafEntryAbsent,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct TransferDetails {
     // ── Base output data (from scanner) ──
     pub tx_hash: TxHash,
-    pub internal_output_index: u64,
-    pub global_output_index: u64,
-    pub block_height: u64,
+    pub internal_output_index: OutputIndexInTx,
+    pub global_output_index: GlobalOutputIndex,
+    pub block_height: BlockHeight,
     #[serde(with = "edwards_point_bytes")]
     pub key: EdwardsPoint,
     #[serde(with = "scalar_bytes")]
@@ -180,7 +234,7 @@ pub struct TransferDetails {
 
     // ── Spend tracking ──
     pub spent: bool,
-    pub spent_height: Option<u64>,
+    pub spent_height: Option<BlockHeight>,
     /// Per-output key image. Wrapped in [`KeyImage`] for type-system
     /// protection at the engine boundary; `KeyImage` is
     /// `#[serde(transparent)]` over `[u8; 32]` so the on-disk wire
@@ -271,11 +325,18 @@ pub struct TransferDetails {
     /// Block height at which the output becomes spendable (inserted into curve tree).
     /// `block_height + SPENDABLE_AGE`. The daemon has no tree path for immature
     /// outputs, so spending before this height would fail at FCMP++ proof generation.
-    pub eligible_height: u64,
+    pub eligible_height: BlockHeight,
 
     // ── Engine management ──
     pub frozen: bool,
     pub fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
+
+    /// Received-but-unspendable classification (`PL-D3` §6.2, rule 82).
+    /// `None` for every output whose published `0x07` entry opened to the
+    /// wallet's own derivation at scan; `Some` names why the output can
+    /// never be spent. Scan-derived, so a rescan re-derives it.
+    #[serde(default)]
+    pub unspendable: Option<UnspendableReason>,
 
     /// Receive-side bookkeeping attribution (FA-8, §5.7.9).
     #[serde(default)]
@@ -286,7 +347,9 @@ impl TransferDetails {
     /// Whether this output is available for regular spending.
     ///
     /// Outputs below `eligible_height` are immature (no curve-tree path yet)
-    /// and cannot be spent. Outputs with a network-exposed spend awaiting
+    /// and cannot be spent. A received-but-unspendable output
+    /// ([`Self::unspendable`]) never is: its chain leaf does not open to the
+    /// wallet's derivation, so selecting it would fail at proving. Outputs with a network-exposed spend awaiting
     /// chain confirmation (the F14 lock, §2.6) are excluded: selecting one
     /// would build a second tx bearing the same key image. The lock map is
     /// journal-derived (PR-SJ-1b — [`crate::SendJournalBlock::spend_locks`]
@@ -296,11 +359,12 @@ impl TransferDetails {
     /// derivation at compile time.
     pub fn is_spendable(
         &self,
-        current_height: u64,
+        current_height: BlockHeight,
         spend_locks: &crate::send_journal_block::InFlightSpendLocks,
     ) -> bool {
         !self.spent
             && !self.frozen
+            && self.unspendable.is_none()
             && !spend_locks.contains(self.global_output_index)
             && current_height >= self.eligible_height
     }
@@ -362,6 +426,7 @@ struct TransferDetailsSchema {
     eligible_height: u64,
     frozen: bool,
     fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
+    unspendable: Option<UnspendableReason>,
     receive_attribution: ReceiveAttribution,
 }
 
@@ -428,6 +493,7 @@ impl std::fmt::Debug for TransferDetails {
             .field("spent", &self.spent)
             .field("eligible_height", &self.eligible_height)
             .field("frozen", &self.frozen)
+            .field("unspendable", &self.unspendable)
             .finish_non_exhaustive()
     }
 }
@@ -445,7 +511,7 @@ mod eligible_height_tests {
     fn baseline_is_spendable_age() {
         assert_eq!(
             eligible_height(h(100), Timelock::None),
-            h(100 + SPENDABLE_AGE)
+            h(100) + SPENDABLE_AGE
         );
     }
 
@@ -467,7 +533,7 @@ mod eligible_height_tests {
     fn low_timelock_is_subsumed() {
         assert_eq!(
             eligible_height(h(100), Timelock::Block(h(105))),
-            h(100 + SPENDABLE_AGE)
+            h(100) + SPENDABLE_AGE
         );
     }
 }
@@ -480,9 +546,9 @@ mod tests {
     fn sample() -> TransferDetails {
         TransferDetails {
             tx_hash: shekyl_types::TxHash::from_bytes([0xAB; 32]),
-            internal_output_index: 3,
-            global_output_index: 1234,
-            block_height: 100,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(3),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(1234),
+            block_height: shekyl_types::BlockHeight::from_raw(100),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000_000),
@@ -493,8 +559,9 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: 110,
+            eligible_height: shekyl_types::BlockHeight::from_raw(110),
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),
         }
@@ -533,11 +600,11 @@ mod tests {
         td.output_handle = Some(shekyl_crypto_pq::handle::derive_output_handle(
             &[0x77; 32],
             td.tx_hash.as_bytes(),
-            td.internal_output_index,
+            td.internal_output_index.to_raw(),
         ));
         td.key_image = Some(KeyImage::from_canonical_bytes([7u8; 32]));
         td.spent = true;
-        td.spent_height = Some(200);
+        td.spent_height = Some(shekyl_types::BlockHeight::from_raw(200));
 
         let bytes = postcard::to_allocvec(&td).unwrap();
         let back: TransferDetails = postcard::from_bytes(&bytes).unwrap();

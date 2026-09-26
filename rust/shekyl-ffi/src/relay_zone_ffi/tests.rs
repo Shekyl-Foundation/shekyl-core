@@ -152,7 +152,7 @@ fn fluff_effects_cross_with_peer_and_payload_intact() {
     reset();
     unsafe {
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true);
         let blob = [0xAB, 0xCD, 0xEF];
         let batch = [ShekylRelayBlob {
             ptr: blob.as_ptr(),
@@ -196,7 +196,7 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
     reset();
     unsafe {
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true);
         // Offered high-to-low, with a repeat: order and duplication both
         // have to be removed for the assertion below to hold.
         let raw = [[0x33u8], [0x11], [0x22], [0x11]];
@@ -243,8 +243,8 @@ fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
     unsafe {
         let peers: Vec<u8> = [id(1), id(2)].concat();
         let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
-        shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
-        shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
         shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
 
         // Ground truth from the owning structure: which peer holds slot 1.
@@ -338,7 +338,7 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         assert_eq!(shekyl_relay_zone_live_stems(h), 0, "fresh zone");
 
-        shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
         assert_eq!(shekyl_relay_zone_live_stems(h), 0, "no stems drawn yet");
 
         shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3);
@@ -468,7 +468,7 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
     reset();
     unsafe {
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true);
 
         let blob = [0x5Au8];
         let batch = [ShekylRelayBlob {
@@ -601,7 +601,7 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
     reset();
     unsafe {
         let null: *mut RelayZoneHandle = std::ptr::null_mut();
-        shekyl_relay_zone_on_handshake(null, id(1).as_ptr(), true);
+        shekyl_relay_zone_on_session_established(null, id(1).as_ptr(), true);
         shekyl_relay_zone_on_close(null, id(1).as_ptr());
         assert_eq!(shekyl_relay_zone_live_stems(null), 0);
         assert_eq!(shekyl_relay_zone_next_wake(null), 0);
@@ -752,7 +752,7 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
     // closed on the whole batch so a bad span cannot drop a sibling silently.
     unsafe {
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true);
         let bad = [ShekylRelayBlob {
             ptr: std::ptr::null(),
             len: 4,
@@ -935,7 +935,7 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
     }
     unsafe {
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
+        shekyl_relay_zone_on_session_established(h, id(9).as_ptr(), true);
 
         let mut hashes = [0u8; 64]; // two packed 32-byte canonical tx hashes
         hashes[0] = 0xA1;
@@ -1180,7 +1180,7 @@ fn the_zone_byte_selects_the_observation_window() {
 fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
     unsafe {
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
+        shekyl_relay_zone_on_session_established(h, id(9).as_ptr(), true);
 
         // Empty zone: zero rows, not an error.
         let mut rows = [std::mem::zeroed::<ShekylStemTallyRow>(); 4];
@@ -1344,8 +1344,8 @@ fn a_zone_without_the_carrier_refuses_to_enqueue() {
 /// `h` must be a live zone handle.
 unsafe fn drive_one_noise_send(h: *mut RelayZoneHandle) {
     let peers: Vec<u8> = [id(1), id(2)].concat();
-    shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
-    shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
+    shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+    shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
     shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
 
     let before = REC.with(|r| r.borrow().noise.len());
@@ -1656,8 +1656,8 @@ fn a_discarded_carrier_message_resolves_not_sent_across_the_boundary() {
 /// that overlap, so it is a precondition and not a coincidence.
 unsafe fn drive_one_wake(h: *mut RelayZoneHandle) {
     let peers: Vec<u8> = [id(1), id(2)].concat();
-    shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
-    shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
+    shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+    shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
     shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
     let due = shekyl_relay_zone_next_wake(h);
     shekyl_relay_zone_poll(

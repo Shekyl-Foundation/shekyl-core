@@ -13,6 +13,9 @@ description = "Structural transaction-weight predictor (byte-mirror of shekyl_wi
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 # Tx wire layout constants + the canonical Bp+ clawback formula + MAX_OUTPUTS.
 shekyl-wire = { path = "../shekyl-wire" }
+# The wire block/tx hash surface is typed (`BlockHash`; RTN-7); the weight
+# fixtures build `Ct::Fcmp` directly.
+shekyl-types = { path = "../shekyl-types" }
 # ML-KEM-768 ciphertext length (the per-output hybrid KEM extra field).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # varint byte-length.
@@ -26,6 +29,17 @@ shekyl-curve-io = { path = "../shekyl-curve-io" }
 # not depend on this crate.
 shekyl-scanner = { path = "../shekyl-scanner" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+# The WEIGHT GATE (tests/weight_gate.rs) asserts `predict_weight` against the
+# bytes the BUILDER emits, across the whole shape space. That needs the real
+# assembler and a real Bp+; the FCMP++ proof is the only stubbed term, and its
+# length is anchored by real proving in engine-core's `kat_fcmp_proof_size_*`.
+# Dev-only, so no production arrow is inverted: shekyl-tx-builder does not
+# depend on this crate, and this crate does not depend on it outside tests.
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+rand_core = { version = "0.6", features = ["std"] }
+serde_json = "1"
 
 [lints]
 workspace = true

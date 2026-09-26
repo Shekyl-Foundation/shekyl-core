@@ -46,7 +46,7 @@ namespace
   struct test_levin_connection_context : public epee::net_utils::connection_context_base
   {
     static constexpr int handshake_command() noexcept { return 1001; }
-    static constexpr bool handshake_complete() noexcept { return true; }
+    static constexpr bool session_established() noexcept { return true; }
     std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) const { return LEVIN_DEFAULT_MAX_PACKET_SIZE; }
   };
 

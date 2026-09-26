@@ -98,10 +98,11 @@
 1	shekyl/archival-serve-challenge-leaf-v2	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_LEAF_CUSTOMIZATION	shekyl-live		PC-D3: preimage gained block_hash(h-1) so a pair-epoch's challenges draw their leaves independently (collisions mod leaf count allowed - independence, not distinctness, is the guarantee); -v1 label retired below
 1	shekyl/archival-serve-challenge-leaf-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_LEAF_CUSTOMIZATION_V1_RETIRED	test-only		RETIRED by PC-D3. Kept ONLY as the negative control asserting -v2 does not reproduce it; must never acquire a production caller
 1	shekyl/archival-serve-challenge-fire-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_FIRE_CUSTOMIZATION	shekyl-live
+1	shekyl/pqc-leaf-key-v1	rust/shekyl-crypto-pq/src/leaf_commitment.rs	DOMAIN_PQC_LEAF_KEY	shekyl-live		PL-D3: k = H_ℓ(hybrid_pk), 64-byte read reduced mod ℓ; replaces mech-4 shekyl-pqc-leaf (retired 2026-09-14)
+1	shekyl/pqc-leaf-record-v1	rust/shekyl-crypto-pq/src/leaf_commitment.rs	DOMAIN_PQC_LEAF_RECORD	shekyl-live		PL-D3a: post-quantum record cSHAKE256(pk ‖ r_h) beside CM in tx_extra 0x07
 1	shekyl/archival-serve-credit-response-v1	rust/shekyl-archival-retention/src/challenge.rs	SERVE_CREDIT_RESPONSE_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-challenge-assignment-v1	rust/shekyl-archival-retention/src/challenge_assignment.rs	CHALLENGE_ASSIGNMENT_CUSTOMIZATION	shekyl-live		per-draw challenge-assignment stream (PR #435)
 1	shekyl/archival-p-id-v1	rust/shekyl-archival-retention/src/id.rs	P_CANONICAL_ID_CUSTOMIZATION	shekyl-live
-1	shekyl/archival-attestation-nonce-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_NONCE_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-attestation-root-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_ROOT_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-emission-auth-backing-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_BACKING_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-emission-auth-claim-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_CLAIM_CUSTOMIZATION	shekyl-live
@@ -115,12 +116,14 @@
 1	shekyl/pqc-auth-tx-multisig-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG	shekyl-live
 1	shekyl/archival-emission-claim-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_CLAIM	shekyl-live
 1	shekyl/archival-emission-backing-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_BACKING	shekyl-live
-1	shekyl/archival-attestation-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live
+1	shekyl/archival-attestation-scheme-v2	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live		SF-D8 (2026-09-13): message became the decoded request header ‖ served shard, nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]; -v1 (nonce-only) retired, no code const kept — the retention crate's v1_domain_signature_does_not_verify_under_v2 test is the negative control. The -v1 block-bound nonce customization (shekyl/archival-attestation-nonce-v1, ATTESTATION_NONCE_CUSTOMIZATION) was deleted with attestation_nonce() in the same change
 1	shekyl/archival-serve-credit-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_SERVE_CREDIT	shekyl-live
 1	shekyl/snapshot-id-v1	rust/shekyl-engine-core/src/engine/refresh/types.rs	SNAPSHOT_ID_CUSTOMIZATION	shekyl-live		wallet-internal reservation-staleness digest; cSHAKE customization (SA-3c retargeted it off cn_fast_hash — unpersisted, no wire, fresh mint)
 1	shekyl/chain-digest/v0	rust/shekyl-chain-store/src/digest_v0.rs	OUTER_CUSTOMIZATION	shekyl-live		DRS-P0d logical-state digest outer
 1	shekyl/chain-digest/v0/chain	rust/shekyl-chain-store/src/digest_v0.rs	CHAIN_CUSTOMIZATION	shekyl-live		DRS-P0d height-ordered chain component
 1	shekyl/chain-digest/v0/spent-elem	rust/shekyl-chain-store/src/digest_v0.rs	SPENT_ELEM_CUSTOMIZATION	shekyl-live		DRS-P0d spent-key XOR leaf
+1	shekyl/chain-store/undo-log/post-image-v1	rust/shekyl-chain-store/src/codec/undo.rs	POST_IMAGE_DST	shekyl-live		S-CHAIN-W (DRS-E1 inc 3): cSHAKE256-32 post-image digest of the value a journaled write left under its key; replay compares it before counting an inverse reversed (SI-6 exact). Part of the undo_log row layout (SCHEMA_VERSION 2)
+1	shekyl/p2p-wire-prefix-v1	rust/shekyl-p2p-transport/src/prefix.rs	WIRE_PREFIX_DST	shekyl-live		PWD-T5: first 8 bytes of cSHAKE256(S = this customization, X = network_id). Used only when --clearnet-transport-encrypt is on; the default plaintext path still starts with LEVIN_SIGNATURE
 #
 # ── Mechanism 2 — HKDF salt + info ───────────
 # distinctness key = salt|info. The three shared infos (spend/view/kem) are
@@ -150,6 +153,8 @@
 2	shekyl-output-label-tag	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_LABEL_TAG	shekyl-live	shekyl-output-derive-v1|shekyl-output-label-tag	info
 2	shekyl-pqc-output	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_PQC	shekyl-live	shekyl-output-derive-v1|shekyl-pqc-output	info
 2	shekyl-pqc-ed25519	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_PQC_ED25519	shekyl-live	shekyl-output-derive-v1|shekyl-pqc-ed25519	info
+2	shekyl-pqc-leaf-blind	rust/shekyl-crypto-pq/src/leaf_commitment.rs	LABEL_OUTPUT_PQC_LEAF_BLIND	shekyl-live	shekyl-output-derive-v1|shekyl-pqc-leaf-blind	info; PL-D3 blind r, info = label ‖ idx_le64 ‖ ctr
+2	shekyl-pqc-leaf-record-blind	rust/shekyl-crypto-pq/src/leaf_commitment.rs	LABEL_OUTPUT_PQC_LEAF_RECORD_BLIND	shekyl-live	shekyl-output-derive-v1|shekyl-pqc-leaf-record-blind	info; PL-D3a record blind r_h
 2	shekyl-view-tag-prefilter	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_VIEW_TAG_PREFILTER	shekyl-live	shekyl-view-tag-prefilter-v1|shekyl-view-tag-prefilter	info
 2	shekyl-view-tag-x25519	rust/shekyl-crypto-pq/src/derivation.rs	LABEL	shekyl-live	shekyl-view-tag-x25519-v1|shekyl-view-tag-x25519	info
 2	shekyl-archival-p-ed25519-spend-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_SPEND_INFO	shekyl-live		info
@@ -179,7 +184,6 @@
 3	Ed25519 Monero T	rust/shekyl-fcmp-proofs/src/sal/multisig.rs	Ed25519T::ID	frozen-inherited		byte-identical to monero-oxide fcmp++ sal/multisig.rs:36
 #
 # ── Mechanism 4 — Blake2b DST ──────────────────────────────────────────
-4	shekyl-pqc-leaf	rust/shekyl-crypto-pq/src/derivation.rs	DOMAIN_PQC_LEAF	shekyl-live		consensus leaf hash; SSOT owner after SA-3a (fcmp wraps it)
 4	Shekyl FCMP++ SAL full v1	rust/shekyl-fcmp-proofs/src/sal/mod.rs	SAL_FULL_DST	shekyl-live
 4	Shekyl FCMP++ SAL membership-only v1	rust/shekyl-fcmp-proofs/src/sal/mod.rs	SAL_MEMBERSHIP_ONLY_DST	shekyl-live
 4	Shekyl FCMP++ MO nonce r_o v1	rust/shekyl-fcmp-proofs/src/sal/membership_only.rs	MO_NONCE_R_O	shekyl-live
@@ -232,7 +236,7 @@
 # ── EXCLUDED — named, not domain separation for our purposes ────────────────
 x	RandomX\x03	rust/shekyl-pow-randomx/src/argon2d.rs	RANDOMX_ARGON_SALT	excluded		RandomX upstream Argon2d salt (configuration.md §7.1), byte-identical; not a Shekyl domain
 x	Tor safe cookie authentication server-to-controller hash	rust/shekyl-tor-control-client/src/control/safecookie.rs	(SAFECOOKIE HMAC key)	excluded		Tor control-protocol constant, not our DST
-x	.onion checksum	rust/shekyl-tor-control-client/src/onion_identity.rs	ONION_CHECKSUM_PREFIX	excluded		Tor v3 onion-address checksum prefix, protocol-fixed
+x	.onion checksum	rust/shekyl-onion-v3/src/lib.rs	ONION_CHECKSUM_PREFIX	excluded		Tor v3 onion-address checksum prefix, protocol-fixed. One home: wallet OnionIdentity and daemon ServingEndpoint both read shekyl-onion-v3.
 x	SWSP	rust/shekyl-engine-file/src/payload.rs	(wallet payload magic)	excluded		file magic, not a hash domain
 x	SHEKYLWT	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic
 x	SHEKYLWS	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic

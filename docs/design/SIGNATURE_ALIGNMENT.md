@@ -47,7 +47,7 @@ as a security property.
 | Site | Op | Signed input | Structural domain? |
 |---|---|---|---|
 | ~~`shekyl-archival-bond-builder` S1 on-vin sign~~ | — | — | **Deleted in SA-2b** (§2.2): bond vin rides generic surface-A `pqc_auths` (see `stake_engine/bond.rs` bond-slot row). Live census = eight sites below |
-| `shekyl-archival-retention/src/attestation_wire.rs:488` | verify | `record.nonce(r, cb_out_key)` | yes — `shekyl/archival-attestation-nonce-v1` |
+| `shekyl-archival-retention/src/attestation_wire.rs` (`verify_pass_countersignature`) | verify | `pass_countersignature_message(header[72], shard_id)` — decoded `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` | **no** — bare transcript; scheme domain `shekyl/archival-attestation-scheme-v2` is supplied to `verify` (row E of §5) |
 | `shekyl-crypto-pq/src/output.rs:991` | sign | caller's `message` (`sign_pqc_auth_for_output`) | **no** — bare |
 | `shekyl-engine-core/…/stake_engine/bond.rs:313` | sign | `bond_payload_hash` | **no** — bare hash |
 | `shekyl-engine-core/…/stake_engine/claim.rs:337,484` | sign | claim / emission payload hash | **no** — bare hash |
@@ -70,9 +70,11 @@ message signed under scheme 1 and scheme 2 has **identical signing input**
   `tests/unit_tests/fcmp.cpp`. Production C++ never signs and never holds a
   hybrid secret key outside tests (rule 36 holds).
 - The one production consumer is verify-only and on consensus:
-  `src/cryptonote_core/tx_pqc_verify.cpp:229` passes `scheme_id` as a
-  *dispatch parameter* (it never enters the signed bytes) and the message is a
-  bare `get_blob_hash(payload)` 32-byte hash.
+  `src/cryptonote_core/tx_pqc_verify.cpp:148` passes `scheme_id` as a
+  *dispatch parameter* (it never enters the signed bytes) and the message is
+  the input's 32-byte signed hash — since 2026-09-25 (E6 slice 6 commit 7)
+  derived by `shekyl-wire` through `shekyl_tx_pqc_signing_payload_hashes`,
+  no longer a `get_blob_hash` over a C++-assembled payload.
 - Consequence for SA-R-2: the fix at this boundary is the rule-40 move — the
   Rust export becomes context-specific and **owns its domain constant**; C++
   never carries a domain string it could get wrong.
@@ -320,16 +322,24 @@ not by which was less work.
 | B | Archival bond-post vin (rides surface A) | bond slot signs surface-A hash (`bond.rs:313`) | submit verifier / C++ `tx_pqc_verify` (as surface A) | **`shekyl/pqc-auth-tx-v1`** (same as A). Slot-preimage choice **resolved in SA-2b: generic wins**; S1 + `signature_preimage` + `SCHEME_DOMAIN_BOND_POST` deleted (§2.2) |
 | C | Emission auth — claim | `claim.rs` claim | emission_verify claim leg | `shekyl/archival-emission-claim-scheme-v1` |
 | D | Emission auth — backing | `claim.rs` backing (`sign_pqc_auth_for_output`) | emission_verify backing leg | `shekyl/archival-emission-backing-scheme-v1` |
-| E | Attestation countersignature | none in-repo | attestation_wire ← C++ | `shekyl/archival-attestation-scheme-v1` (assignable unilaterally) |
+| E | Attestation countersignature | `shekyl-p-serve` (signer lands with `SF` (a); none in-repo at ratification) | `verify_pass_countersignature` ← C++ | `shekyl/archival-attestation-scheme-v2` — **v1 RETIRED 2026-09-13** by `SF-D8` (a0): the message became `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` (the decoded request header ‖ route id), so the string moved with it (`CRYPTO_DOMAIN_REGISTRY.tsv`); no v1 signature was ever produced |
 | F | Serve-credit response | none in-repo | serve_credit (F1) | `shekyl/archival-serve-credit-scheme-v1` (assignable unilaterally) |
 
-Distinct `…-scheme-v1` per surface (SA-R-2 principle), including the four that
+Distinct `…-scheme-vN` per surface (SA-R-2 principle; every surface is at
+`v1` except E, rotated to `v2` by `SF-D8`), including the four that
 already carry an *inner* cSHAKE customization — the scheme-level domain is a
 separate layer and gets its own string. Surface A's domain lives **inside the
-Rust scheme**, so the C++ differential pair (`get_transaction_signed_payload` /
-`transaction.rs` `pqc_signing_payload_hashes`) stays byte-identical and does
-not move — the wrap is Rust-only. E and F have no in-repo signer, so their
-constants are assignable now with the KAT writers the only lockstep.
+Rust scheme**, so the signing preimage does not move — the wrap is Rust-only.
+That preimage has one derivation, `shekyl_wire::PqcSigningPreimage` (since
+2026-09-25, E6 slice 6 commit 7: the C++ assembly `get_transaction_signed_payload`
+is deleted and the daemon calls `shekyl_tx_pqc_signing_payload_hashes`; the
+former C++/Rust differential pair is now a captured KAT,
+`pqc_signing_preimage_v1.json`). F has no in-repo signer, so its constant is
+assignable now with the KAT writer the only lockstep. E's was assignable the
+same way until `SF-D8` (a0) landed its verifier and armed pinned vector
+(2026-09-13); the string is now pinned by
+`attestation_pass_countersignature_v2_pinned.json` and
+moves only with a regeneration recorded in the decision log.
 
 ### Census corrections folded as facts
 
@@ -485,7 +495,7 @@ closed.
 | **PR-SA-1** | RNG alignment: F-1…F-6 + F-8 seam; this round doc; index registration | **MERGED #426 (merge `69857ab9f`); archived `archive/feat/sa1-rng-alignment-2026-08-09`** — carried a user review round (`d7e3bac7f`: binding tests, seed-export hygiene) |
 | **PR-SA-2** | Nested combiner (SA-R-1 incl. `Result<()>` rewrite / R-2 / R-3 / R-4 / R-5); §2.1 six-surface domains (bond slot rides surface A's `shekyl/pqc-auth-tx-v1`; **surface B is §2.2, out of SA-2** — S1 + `signature_preimage` parked inert under rule-21); SA-R-4 version check placed by the **six-path parse-from-canonical enumeration** (precondition of the trait rewrite; check goes uniformly at parse or in `verify()`, never per-path); F1 (subsumed by `Result<()>`) + wrong-key regression; F-7 disposition; fixture regeneration + frozen v1 negative fixture; iai bench rework; `wire.rs` `3385` aliasing; FFI context-specific exports; RELEASE_CHECKLIST rows; genesis-blob no-hybrid-sig check. **C++-byte-identical** (no wire/`TX_VERSION` change) | pending — solitary review round |
 | **PR-SA-2b** | Bond-preimage reconciliation (§2.2): resolved the P-role replay question at the call graph — the surface-A whole-tx hash (incl. the vin type tag) forecloses cross-role replay, so **generic won**. Deleted S1 + `signature_preimage` + `BOND_POST_SIG_CUSTOMIZATION` + `SCHEME_DOMAIN_BOND_POST`; KAT surfaces 7→6. No wire change; no verifier special-case needed | **DONE** |
-| **PR-SA-3a** | Consensus leaf-hash SSOT: `PqcLeafScalar::from_pqc_public_key` wraps `hash_pqc_public_key`; retired dual `DOMAIN_PQC_LEAF` + dual Blake2b/wide_reduce; pinned pre-dedup KAT (empty / 1-byte / full ML-DSA-65 / all-`0xff`). No wire change. | **MERGED #436** |
+| **PR-SA-3a** | Consensus leaf-hash SSOT: `PqcLeafScalar::from_pqc_public_key` wraps `hash_pqc_public_key`; retired dual `DOMAIN_PQC_LEAF` + dual Blake2b/wide_reduce; pinned pre-dedup KAT (empty / 1-byte / full ML-DSA-65 / all-`0xff`). No wire change. *(Superseded 2026-09-14 by `PL-D3`: the leaf hash and its KATs are retired; the single source is now `pqc_key_scalar` / `PqcKeyScalar`, pinned by `PQC_KEY_SCALAR_KAT.json`.)* | **MERGED #436** |
 | **PR-SA-3b** | Domain registry: single-source [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) census of every production domain string by **mechanism** (not a flat all-pairs collision test — that is a category error, §5); **per-mechanism** distinctness test (`shekyl-crypto-pq/tests/domain_registry.rs`, mech-2 keyed by `salt\|info`) with pinned per-mechanism census counts (the ONLY count copy — TSV headers and prose defer to it) and **test-domain segregation** (test-only rows machine-checked disjoint from production identities per mechanism); CI gate (`scripts/ci/domain_registry_gate.sh`) with comment-stripped row-presence + exact `const <name>:` binding + comment-stripped entry-point count-pins on always-domain mechanisms (cSHAKE / FROST) + frozen-doc cross-check, **anchored on call sites, not the `shekyl/` prefix** (§3.1) — honest scope: new unregistered domains in general-purpose mechanisms (HKDF/Blake2b/keccak/SHA3-256) are a review duty, not a false gate guarantee; frozen consequence markers (mech-3 FROST into [`FROZEN_DOMAIN_SEPARATORS.md`](../FROZEN_DOMAIN_SEPARATORS.md), naming the per-seam break); TSV-only changes run the distinctness test (Rust workflow path re-include); through-line invariant written as a rule (§5); error-band pointer (§6). Mutates **zero** domain values. **Feeds the CBOM domain section.** | **MERGED #438** (carried a review round: `PRODUCTION_PINS` single-count, comment-stripped gate, tab-safe delimiter, frozen-doc cross-check, `signable_header` deleted for zero callers with the B2 forward-guard relocated to `sender_sig`) |
 | **PR-SA-3c** | `SNAPSHOT_ID_CUSTOMIZATION` (`refresh.rs`) retargeted `cn_fast_hash` → cSHAKE256 with the domain as customization (`shekyl/snapshot-id-v1`); this **does** change a domain's bytes — permitted because `SnapshotId` is a wallet-internal reservation-staleness token (no `Serialize`, absent from `shekyl-engine-file`, never wire/cross-node — verified at the call graph), so it is a fresh mint, not a re-spelling (§5). Regression test re-cast to vary the cSHAKE customization; registry row moved mech 5 → mech 1, count-pins + dated snapshots updated; `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §segment-2g marked superseded. No persisted-state change (no rule-42 bump). | **MERGED #443** (carried a review round: `SNAPSHOT_ID_DOMAIN`→`SNAPSHOT_ID_CUSTOMIZATION` rename, the domain-separation test given an independent byte-oracle instead of reusing the production encoder, and the supersession sweep taken repo-wide) |
 | **PR-SA-3d** | `cn_fast_hash` → `keccak256` rename (Rust-internal, byte-identical: 43 call sites across 14 files in 8 crates; the C ABI export keeps the name `shekyl_cn_fast_hash` so no C++ edit and the FFI export list is unchanged); crypto-hash module header already carries the Keccak-256-is-consensus-parity-only / cSHAKE-for-everything-new split, made consistent by the rename | **MERGED #446** |

@@ -5,7 +5,7 @@
 
 //! `--mode=rotating` — the exploring differential lane (re-scope item 2).
 //!
-//! Per `docs/design/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 2, this is
+//! Per `docs/completed/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 2, this is
 //! the lane that moves the **explored** coverage boundary. Every other
 //! differential lane re-verifies the same 1024 pinned pairs on every
 //! run, on every branch, in five places; this one derives a fresh input
@@ -49,8 +49,9 @@
 //! `Rotation-replay:` line.
 
 use crate::c_oracle::COracleSession;
-use crate::cache_precondition::assert_equivalent;
-use crate::mode_correctness::{three_leg_verdict, CorrectnessError};
+use crate::cache_precondition::{assert_equivalent, rust_cache_sha256};
+use crate::failure_output::FailureOutput;
+use crate::mode_correctness::{hex_lower, three_leg_verdict, CorrectnessError};
 use crate::rotating_corpus::{generate_rotating_corpus, RotationContext};
 use crate::rust_subject::RustSubjectSession;
 
@@ -87,17 +88,65 @@ impl core::fmt::Display for RotationReport {
     }
 }
 
+/// One pair the verifier and the oracle disagreed on, with everything a
+/// replay needs (module docs on [`RotationError`]).
+#[derive(Debug)]
+pub struct Divergence {
+    /// The pair's position in the rotation's corpus.
+    pub position: usize,
+    /// The corpus's length, so the position reads as one of N.
+    pub corpus_len: usize,
+    /// The structured record: seedhash, the blob in hex, both hashes,
+    /// both cache fingerprints, harness version, fork pin.
+    pub record: FailureOutput,
+    /// The mismatch as the three-leg verdict names it.
+    pub cause: CorrectnessError,
+}
+
+/// Why a rotation ended early.
+///
+/// A `rust != c` pair carries its forensics out to the caller — the
+/// failing input itself, both hashes and both cache fingerprints as the
+/// R1-D11 structured record, plus the pair's position in the corpus —
+/// because RD-Q12's fuzz hygiene ruled that a mismatch dumps the blob and
+/// both `PowHash`es, and a rotating lane's log is its failure artifact.
+/// This module computes; the binary prints. The divergence is boxed: it
+/// is built once, on the failure path, and the `Ok` path should not pay
+/// its size on every return.
+#[derive(Debug)]
+pub enum RotationError {
+    /// An oracle or precondition failure, in the pinned lane's taxonomy.
+    Correctness(CorrectnessError),
+    /// The verifier and the oracle disagreed on one pair.
+    Divergence(Box<Divergence>),
+}
+
+impl core::fmt::Display for RotationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Correctness(err) => write!(f, "{err}"),
+            Self::Divergence(d) => write!(
+                f,
+                "{} (rotation corpus pair {} of {})",
+                d.cause, d.position, d.corpus_len
+            ),
+        }
+    }
+}
+
+impl core::error::Error for RotationError {}
+
 /// Run one rotation.
 ///
-/// Errors carry the same [`CorrectnessError`] taxonomy the pinned lane
-/// uses, so the C9 failure-output schema and its triage path are
-/// unchanged — a divergence found here is reported in the shape a
-/// reviewer already knows how to read.
+/// A divergence is [`RotationError::Divergence`], carrying the record the
+/// binary emits; every other failure is the pinned lane's
+/// [`CorrectnessError`], so the triage path is one a reviewer already
+/// knows how to read.
 pub fn run(
     rotation: RotationContext,
     seedhash_count: usize,
     data_per_seedhash: usize,
-) -> Result<RotationReport, CorrectnessError> {
+) -> Result<RotationReport, RotationError> {
     let corpus = generate_rotating_corpus(rotation, seedhash_count, data_per_seedhash);
     let mut seedhashes_checked = 0usize;
     let mut pairs_checked = 0usize;
@@ -106,8 +155,10 @@ pub fn run(
     while index < corpus.len() {
         let seedhash = corpus[index].seedhash;
         let rust = RustSubjectSession::derive(seedhash);
-        let c = COracleSession::new(seedhash).map_err(CorrectnessError::COracle)?;
-        assert_equivalent(&rust, &c).map_err(CorrectnessError::Precondition)?;
+        let c = COracleSession::new(seedhash)
+            .map_err(|e| RotationError::Correctness(CorrectnessError::COracle(e)))?;
+        assert_equivalent(&rust, &c)
+            .map_err(|e| RotationError::Correctness(CorrectnessError::Precondition(e)))?;
 
         // Consume the contiguous run of pairs sharing this seedhash;
         // the generator emits them grouped, and re-deriving a cache
@@ -117,7 +168,7 @@ pub fn run(
             let pair = &corpus[index];
             let rust_hash = rust.compute_hash(&pair.data);
             let c_hash = c.calculate_hash(&pair.data);
-            three_leg_verdict(
+            if let Err(cause) = three_leg_verdict(
                 seedhash,
                 usize::MAX,
                 pair.data.len(),
@@ -126,7 +177,23 @@ pub fn run(
                 // No canonical: rotating inputs are outside the pinned
                 // corpus by construction (see module docs).
                 None,
-            )?;
+            ) {
+                return Err(RotationError::Divergence(Box::new(Divergence {
+                    position: index,
+                    corpus_len: corpus.len(),
+                    record: FailureOutput::new(
+                        hex_lower(seedhash.as_bytes()),
+                        hex_lower(&pair.data),
+                        hex_lower(&rust_hash),
+                        hex_lower(&c_hash),
+                        hex_lower(&rust_cache_sha256(rust.prepared())),
+                        hex_lower(&c.cache_sha256()),
+                        "rotating",
+                        String::new(),
+                    ),
+                    cause,
+                })));
+            }
             pairs_checked += 1;
             index += 1;
         }

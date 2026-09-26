@@ -6,9 +6,9 @@
 #
 # PoW test-seam containment (CEN-D2 fix, PR #604).
 #
-# set_pow_schema_override_for_tests replaces the ratified RandomX dispatch
-# with an arbitrary schema. That is exactly the capability a production
-# caller must never have: installing a schema that always "succeeds" would
+# set_pow_hash_override_for_tests replaces the ratified RandomX dispatch
+# with an arbitrary hash function. That is exactly the capability a production
+# caller must never have: installing a hash that always "succeeds" would
 # re-open the fail-open this seam exists to test against. The seam's own
 # comment claims production never calls it — this gate is what makes that
 # claim true rather than aspirational.
@@ -43,9 +43,9 @@ scan() {
   return 0
 }
 
-SYMBOL="set_pow_schema_override_for_tests"
-DECL="src/crypto/pow_registry.h"
-DEFN="src/crypto/pow_registry.cpp"
+SYMBOL="set_pow_hash_override_for_tests"
+DECL="src/crypto/pow_randomx.h"
+DEFN="src/crypto/pow_randomx.cpp"
 
 FAIL=0
 
@@ -83,7 +83,7 @@ DECL_RE="${DECL//./\\.}"
 DEFN_RE="${DEFN//./\\.}"
 stray="$(scan -n "$SYMBOL" src/ | scan -v "^(${DECL_RE}|${DEFN_RE}):" || true)"
 if [[ -n "$stray" ]]; then
-  echo "FAIL: ${SYMBOL} referenced outside its declaration/definition — production must never install a PoW schema:" >&2
+  echo "FAIL: ${SYMBOL} referenced outside its declaration/definition — production must never install a PoW hash override:" >&2
   echo "$stray" >&2
   FAIL=1
 fi

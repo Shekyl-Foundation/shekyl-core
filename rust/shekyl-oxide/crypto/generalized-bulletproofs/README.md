@@ -19,3 +19,15 @@ for the monero-oxide Git repository's commit
 ) and published a new definition which modified the indexes in response. This
 library adopts the changes to indexing as described in that paper. These
 changes occurred after the aforementioned audit.
+
+## Soundness assumption (Shekyl, `A5-12`)
+
+Generalized Bulletproofs is an argument of knowledge whose soundness rests on
+the **discrete-logarithm assumption** for the Pedersen generators (the
+security proofs above are in that model). A prover holding a discrete-log
+relation between generators can forge any statement; the arguments are not
+post-quantum sound. Every Shekyl consumer of this crate — the FCMP++
+membership proof and its `PL-D3` leaf-commitment opening leg — inherits
+exactly this assumption and no stronger one (`docs/design/FCMP_SPEND_LINKABILITY.md`
+§4).
+

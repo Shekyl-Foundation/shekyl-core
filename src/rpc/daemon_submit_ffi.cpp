@@ -266,7 +266,9 @@ bool fill_release_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   // None of this is a verdict. Every clause only causes LESS work: Rust runs
   // the same pins itself and issues the refusal, and the skipped flag makes it
   // refuse rather than fold an unread slice into the permissive "never served".
-  const uint8_t pin_rc = shekyl_archival_debit_auth_pin(
+  // Kind is Release: this gather exists only for that path.
+  const uint8_t pin_rc = shekyl_archival_cold_authority_pin(
+    static_cast<uint8_t>(archival_bond_post_kind::Release), bond_debit,
     record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),
     record.bond_spend_pk.size(),
     auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
@@ -419,7 +421,7 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
 
   facts.fee_per_byte = bc.get_current_fee_per_byte();
   facts.fee_quantization_mask = Blockchain::get_fee_quantization_mask();
-  facts.weight_limit = get_transaction_weight_limit(bc.get_current_hard_fork_version());
+  facts.weight_limit = get_transaction_weight_limit();
   facts.chain_height = bc.get_current_blockchain_height();
 }
 

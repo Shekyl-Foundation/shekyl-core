@@ -10,6 +10,7 @@ use std::num::NonZeroU32;
 use std::ops::Range;
 
 use shekyl_engine_state::{LedgerBlock, ReorgBlocks};
+use shekyl_types::BlockHeight;
 
 use crate::engine::pending::SnapshotId;
 use crate::scan::ScanResult;
@@ -48,8 +49,8 @@ use crate::scan::ScanResult;
 /// # Cloning, not Arc-wrapping
 ///
 /// Per the Phase 2a snapshot-strategy decision, the snapshot is built
-/// by cloning these two fields directly (`u64` is trivially cheap;
-/// `ReorgBlocks` is a `Vec<(u64, [u8; 32])>` capped at the
+/// by cloning these two fields directly (`BlockHeight` is trivially cheap;
+/// `ReorgBlocks` is a `Vec<(BlockHeight, [u8; 32])>` capped at the
 /// persistence-layer `DEFAULT_REORG_BLOCKS_CAPACITY`, so cloning it
 /// is a small allocation, not a full-ledger walk).
 ///
@@ -61,7 +62,7 @@ use crate::scan::ScanResult;
 pub struct LedgerSnapshot {
     /// Highest height the wallet has fully ingested at snapshot time.
     /// Equivalent to `LedgerBlock::height()`.
-    pub(crate) synced_height: u64,
+    pub(crate) synced_height: BlockHeight,
 
     /// The wallet's reorg detection window at snapshot time. The
     /// producer queries this for parent-hash compares and the
@@ -93,7 +94,7 @@ impl LedgerSnapshot {
     /// [`LedgerBlock::block_hash_at`] over the snapshotted window.
     /// Returns `None` if the height is below the window's earliest
     /// retained entry or above the snapshotted tip.
-    pub(crate) fn block_hash_at(&self, height: u64) -> Option<[u8; 32]> {
+    pub(crate) fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
         self.reorg_blocks
             .blocks
             .iter()
@@ -127,10 +128,10 @@ pub(crate) const SNAPSHOT_ID_CUSTOMIZATION: &[u8] = b"shekyl/snapshot-id-v1";
 pub(crate) fn snapshot_id_preimage(snapshot: &LedgerSnapshot) -> Vec<u8> {
     let n_blocks = snapshot.reorg_blocks.blocks.len();
     let mut buf = Vec::with_capacity(8 + 8 + n_blocks * (8 + 32));
-    buf.extend_from_slice(&snapshot.synced_height.to_le_bytes());
+    buf.extend_from_slice(&snapshot.synced_height.to_raw().to_le_bytes());
     buf.extend_from_slice(&(n_blocks as u64).to_le_bytes());
     for (height, hash) in &snapshot.reorg_blocks.blocks {
-        buf.extend_from_slice(&height.to_le_bytes());
+        buf.extend_from_slice(&height.to_raw().to_le_bytes());
         buf.extend_from_slice(hash);
     }
     buf
@@ -206,7 +207,7 @@ pub struct RefreshSummary {
     /// daemon's tip and no new blocks were available, this is
     /// `synced_height + 1 .. synced_height + 1` (an empty range with
     /// `blocks_processed == 0`).
-    pub processed_height_range: Range<u64>,
+    pub processed_height_range: Range<BlockHeight>,
 
     /// Count of distinct heights for which the producer recorded a
     /// `(height, block_hash)` entry. On the no-reorg path this equals
@@ -250,7 +251,7 @@ pub struct RefreshReorgEvent {
     /// scan. Heights `>= fork_height` from the wallet's pre-refresh
     /// state were discarded; heights `< fork_height` survive the merge
     /// unchanged.
-    pub fork_height: u64,
+    pub fork_height: BlockHeight,
 }
 
 // ── Branch 2: async refresh driver surface ─────────────────────────
@@ -327,11 +328,10 @@ pub enum RefreshPhase {
 ///   `RefreshPhase::Retrying`.
 /// - `blocks_total`: the per-attempt scan range size — the count
 ///   of blocks the producer plans to fetch and scan during this
-///   attempt. Concretely, `blocks_total =
-///   daemon.get_height().saturating_sub(synced_height + 1)` at
-///   attempt start, where `daemon.get_height()` returns the count
-///   of blocks (one past the tip-block index). Saturates to `0`
-///   when the wallet is at-or-above the daemon tip. Updates on
+///   attempt. The producer holds the range as ordinals
+///   (`scan_start .. chain_tip.next_height()`) and records the span
+///   here as `scan_end.saturating_sub(scan_start).to_raw()`. Saturates
+///   to `0` when the wallet is at-or-above the daemon tip. Updates on
 ///   retry boundaries because each attempt re-fetches the tip;
 ///   static within an attempt.
 /// - `phase`: see [`RefreshPhase`].
@@ -355,7 +355,7 @@ pub enum RefreshPhase {
 #[non_exhaustive]
 pub struct RefreshProgress {
     /// Height the producer most recently completed scanning.
-    pub height: u64,
+    pub height: BlockHeight,
 
     /// Blocks processed in the current attempt (resets on retry).
     pub blocks_processed: u64,
@@ -388,7 +388,7 @@ impl RefreshProgress {
     /// not carry a pending-incoming summary. The merge / success
     /// emissions that *do* carry the summary build the literal directly.
     pub(crate) const fn phase_only(
-        height: u64,
+        height: BlockHeight,
         blocks_processed: u64,
         blocks_total: u64,
         phase: RefreshPhase,
@@ -414,7 +414,12 @@ impl RefreshProgress {
     /// blank starting value.
     #[cfg(test)]
     pub(crate) const fn initial() -> Self {
-        Self::phase_only(0, 0, 0, RefreshPhase::Scanning)
+        Self::phase_only(
+            shekyl_types::BlockHeight::from_raw(0),
+            0,
+            0,
+            RefreshPhase::Scanning,
+        )
     }
 }
 
@@ -430,9 +435,9 @@ impl RefreshProgress {
 /// is.
 pub(crate) fn membership_rebuilding(
     tree_cursor: Option<shekyl_curve_tree::BlockHeight>,
-    ledger_synced: u64,
+    ledger_synced: BlockHeight,
 ) -> bool {
-    let covered = tree_cursor.map_or(0, |h| h.0);
+    let covered = tree_cursor.unwrap_or(BlockHeight::ZERO);
     covered < ledger_synced
 }
 

@@ -454,5 +454,6 @@ vacuously ([a seal is not coverage](../../.cursor/rules/50-testing.mdc)).
   already ruled on pool grinding, an edge gated behind a discarded-block cost
   and dismissed on the merits. Test it; the disposition is likely the same, and
   citing the precedent keeps it from being re-litigated as novel.
-- **The settlement-outcome table schema** (§9.7 item 9) and **`EndpointUpdate`
-  on the bond wire** — separate PRs, separate validation surfaces.
+- **The settlement-outcome table schema** (§9.7 item 9) — a separate PR,
+  a separate validation surface. (`EndpointUpdate` on the bond wire, listed
+  here as the other exclusion, was REJECTED 2026-09-13.)

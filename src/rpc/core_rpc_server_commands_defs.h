@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "string_tools.h"
 
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
@@ -259,7 +261,6 @@ namespace cryptonote
       uint64_t total_burned;
       uint64_t staker_emission_share_effective;
       std::string emission_era;
-      uint64_t tx_prune_height;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_response_base)
@@ -305,7 +306,6 @@ namespace cryptonote
         KV_SERIALIZE(total_burned)
         KV_SERIALIZE(staker_emission_share_effective)
         KV_SERIALIZE(emission_era)
-        KV_SERIALIZE_OPT(tx_prune_height, (uint64_t)0)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;
@@ -416,7 +416,11 @@ namespace cryptonote
   {
     struct request_t: public rpc_request_base
     {
-      uint64_t reserve_size;       //max 255 bytes
+      // The coinbase nonce is fixed at SHEKYL_COINBASE_NONCE_BYTES (8): the
+      // daemon always reserves exactly that many; reserve_size <= 8 and an
+      // extra_nonce of <= 8 bytes (zero-padded) are accepted, more is refused
+      // with CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND (TXE-Q6').
+      uint64_t reserve_size;
       std::string wallet_address;
       std::string prev_block;
       std::string extra_nonce;
@@ -519,14 +523,12 @@ namespace cryptonote
   {
     struct request_t: public rpc_request_base
     {
-      uint8_t major_version;
       uint64_t height;
       blobdata block_blob;
       std::string seed_hash;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(major_version)
         KV_SERIALIZE(height)
         KV_SERIALIZE(block_blob)
         KV_SERIALIZE(seed_hash)
@@ -1135,58 +1137,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_GET_OUTPUT_HISTOGRAM
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::vector<uint64_t> amounts;
-      uint64_t min_count;
-      uint64_t max_count;
-      bool unlocked;
-      uint64_t recent_cutoff;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base);
-        KV_SERIALIZE(amounts);
-        KV_SERIALIZE(min_count);
-        KV_SERIALIZE(max_count);
-        KV_SERIALIZE(unlocked);
-        KV_SERIALIZE(recent_cutoff);
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct entry
-    {
-      uint64_t amount;
-      uint64_t total_instances;
-      uint64_t unlocked_instances;
-      uint64_t recent_instances;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(amount);
-        KV_SERIALIZE(total_instances);
-        KV_SERIALIZE(unlocked_instances);
-        KV_SERIALIZE(recent_instances);
-      END_KV_SERIALIZE_MAP()
-
-      entry(uint64_t amount, uint64_t total_instances, uint64_t unlocked_instances, uint64_t recent_instances):
-          amount(amount), total_instances(total_instances), unlocked_instances(unlocked_instances), recent_instances(recent_instances) {}
-      entry() {}
-    };
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<entry> histogram;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(histogram)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
   struct COMMAND_RPC_GET_COINBASE_TX_SUM
   {
     struct request_t: public rpc_request_base
@@ -1319,33 +1269,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_PRUNE_BLOCKCHAIN
-  {
-    struct request_t: public rpc_request_base
-    {
-      bool check;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE_OPT(check, false)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      bool pruned;
-      uint32_t pruning_seed;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(pruned)
-        KV_SERIALIZE(pruning_seed)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
   struct COMMAND_RPC_FLUSH_CACHE
   {
     struct request_t: public rpc_request_base
@@ -1363,57 +1286,6 @@ namespace cryptonote
     {
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_response_base)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_GET_CURVE_TREE_PATH
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::vector<uint64_t> output_indices;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(output_indices)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct path_entry
-    {
-      uint64_t output_index;
-      uint8_t  tree_depth;
-      std::string path_blob;          // hex-encoded Merkle path (leaf scalars + branch hashes)
-      std::string chunk_outputs_blob; // hex-encoded Ed25519 output data for each leaf in the chunk:
-                                      // per entry: [O:32][I:32][C:32][h_pqc:32] = 128 bytes
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(output_index)
-        KV_SERIALIZE(tree_depth)
-        KV_SERIALIZE(path_blob)
-        KV_SERIALIZE(chunk_outputs_blob)
-      END_KV_SERIALIZE_MAP()
-    };
-
-    struct response_t: public rpc_response_base
-    {
-      std::string reference_block;
-      std::string curve_tree_root;
-      uint64_t    reference_height;
-      uint8_t     tree_depth;
-      uint64_t    leaf_count;
-      std::vector<path_entry> paths;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(reference_block)
-        KV_SERIALIZE(curve_tree_root)
-        KV_SERIALIZE(reference_height)
-        KV_SERIALIZE(tree_depth)
-        KV_SERIALIZE(leaf_count)
-        KV_SERIALIZE(paths)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;
@@ -1688,6 +1560,105 @@ namespace cryptonote
         KV_SERIALIZE(has_last_settled_slash_epoch)
         KV_SERIALIZE(last_settled_slash_epoch)
         KV_SERIALIZE(epochs)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  /// Operator coverage/profit list (`ARCHIVAL_SHARD_SELECTION_LIST.md` SL-D4).
+  /// Empty request: the answer is identical for every caller (SL-D7). No
+  /// bodies, no aggregates, no `p_id`.
+  struct COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE
+  {
+    struct request_t: public rpc_request_base
+    {
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_request_base)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct coverage_row_t
+    {
+      uint64_t shard_id;
+      uint64_t bonded_count;
+      uint64_t served_count;
+      uint64_t freeze_height;
+      uint64_t join_scarcity_micro;
+      uint64_t expected_profit_atomic;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(shard_id)
+        KV_SERIALIZE(bonded_count)
+        KV_SERIALIZE(served_count)
+        KV_SERIALIZE(freeze_height)
+        KV_SERIALIZE(join_scarcity_micro)
+        KV_SERIALIZE(expected_profit_atomic)
+      END_KV_SERIALIZE_MAP()
+    };
+
+    struct response_t: public rpc_response_base
+    {
+      uint64_t as_of_height;
+      uint64_t leaf_count;
+      uint64_t frozen_count;
+      uint64_t settled_epoch;
+      uint64_t budget_atomic;
+      uint64_t sigma_work_milli;
+      bool profit_estimate_available;
+      std::vector<coverage_row_t> shards;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_response_base)
+        KV_SERIALIZE(as_of_height)
+        KV_SERIALIZE(leaf_count)
+        KV_SERIALIZE(frozen_count)
+        KV_SERIALIZE(settled_epoch)
+        KV_SERIALIZE(budget_atomic)
+        KV_SERIALIZE(sigma_work_milli)
+        KV_SERIALIZE(profit_estimate_available)
+        KV_SERIALIZE(shards)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  /// Operator fetch that names `shard_id` only (`ARCHIVAL_SHARD_FETCH.md` SF-D1).
+  /// Returns a ruling-A aggregate, never segment bytes.
+  struct COMMAND_RPC_REQUEST_ARCHIVAL_SHARD
+  {
+    struct request_t: public rpc_request_base
+    {
+      /// Omitted on the wire stays this sentinel (`struct_init` + in-class
+      /// initializer). 0 is a real shard; `{}` must not fetch it.
+      uint64_t shard_id = std::numeric_limits<uint64_t>::max();
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_request_base)
+        KV_SERIALIZE(shard_id)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t: public rpc_response_base
+    {
+      uint64_t shard_id;
+      std::string shard_hash;
+      uint64_t block_count;
+      uint64_t tx_count;
+      uint64_t output_count;
+      uint64_t coinbase_output_count;
+      uint64_t time_range_seconds;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_response_base)
+        KV_SERIALIZE(shard_id)
+        KV_SERIALIZE(shard_hash)
+        KV_SERIALIZE(block_count)
+        KV_SERIALIZE(tx_count)
+        KV_SERIALIZE(output_count)
+        KV_SERIALIZE(coinbase_output_count)
+        KV_SERIALIZE(time_range_seconds)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

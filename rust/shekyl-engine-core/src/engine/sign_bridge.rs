@@ -67,13 +67,14 @@ pub(super) struct BuiltOutput {
     pub(super) output_key: [u8; 32],
     pub(super) view_tag: Option<u8>,
     pub(super) kem_blob: Vec<u8>,
-    /// The output's `H(pqc_pk)` curve-tree leaf component, for the tx_extra
-    /// `0x07` leaf-hash blob (vout order). An output whose transaction omits
-    /// the field ingests with a **zero** `h_pqc` leaf and is unspendable —
-    /// no FCMP++ spend of it can satisfy the verifier's
-    /// `pqc_auths`-derived leaf hash (the PR-4b bond e2e surfaced this
-    /// live: the persona funding transfer's outputs could not fund a bond).
-    pub(super) h_pqc: [u8; 32],
+    /// The output's 64-byte `0x07` entry `CM ‖ record` (`PL-D3` / `PL-D3a`):
+    /// the PQC leaf commitment whose x-coordinate becomes the leaf's 4th
+    /// scalar, and the post-quantum record. Consensus refuses a transaction
+    /// with outputs that omits the field (CEN-I19), and an entry that is not
+    /// the honest derivation leaves the recipient with an output it can see
+    /// but never open (received-but-unspendable), so every builder appends
+    /// exactly this value in vout order.
+    pub(super) pqc_leaf: [u8; 64],
 }
 
 pub(super) fn build_output(
@@ -109,7 +110,7 @@ pub(super) fn build_output(
         output_key: constructed.output_key,
         view_tag: Some(constructed.view_tag_prefilter),
         kem_blob,
-        h_pqc: constructed.h_pqc,
+        pqc_leaf: constructed.pqc_leaf.entry_bytes(),
     })
 }
 
@@ -219,7 +220,6 @@ fn spend_input_from_context(
         spend_key_x: *bundle.spend_key_x,
         spend_key_y: *bundle.spend_key_y,
         commitment_mask: *bundle.commitment_mask,
-        h_pqc: ctx.h_pqc,
         combined_ss: bundle.combined_ss.to_vec(),
         output_index: ctx.internal_output_index,
         leaf_chunk,
@@ -348,17 +348,14 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         });
     }
 
-    // tx_extra: tx pubkey + per-output KEM blobs + the `0x07` PQC leaf-hash
-    // blob (`H(pqc_pk)` per output, vout order). Without the `0x07` field
-    // every output of this transfer ingests into the curve tree with a zero
-    // `h_pqc` leaf and is **unspendable** — the FCMP++ verifier derives the
-    // leaf hash from the spender's pqc auth key, which can never equal zero.
-    // The bond/emission assembly paths (stake_engine.rs) have always
-    // appended it; the PR-4b bond e2e surfaced this gap live when a persona
-    // funding output built by this path could not fund a bond post.
-    let leaf_hash_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.h_pqc).collect();
+    // tx_extra: tx pubkey + per-output KEM blobs + the `0x07` PQC leaf
+    // entries (`CM ‖ record` per output, vout order; `PL-D3`). Consensus
+    // refuses a transaction with outputs that lacks the field (CEN-I19), and
+    // the bond/emission assembly paths (stake_engine.rs) append the same
+    // value through the same primitive.
+    let leaf_entry_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.pqc_leaf).collect();
     let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-    extra.push_pqc_leaf_hashes(leaf_hash_blob);
+    extra.push_pqc_leaf_entries(leaf_entry_blob);
     let tx_extra = extra.serialize();
 
     let mut bundles = HashMap::new();

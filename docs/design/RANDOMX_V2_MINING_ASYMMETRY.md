@@ -1,14 +1,14 @@
 # RandomX v2 — mining floor-vs-ceiling asymmetry investigation (pre-genesis-seal security disposition)
 
 
-**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
+**Status:** OPEN (parked after Phase 0; Phases 1–3 not yet executed). See front-matter table.
 ## Front-matter
 
 | Field | Value |
 |-------|-------|
 | Status | **Measurement design — Phase 0 COMPLETE; Phases 1–3 not yet executed.** No timing number is a result until Appendix B is filled from a source-verified run. **Phase 0 is fully discharged (2026-07-06):** the constant diff shows no delta (§3.1) and the runtime byte-equality differential passes **1024/1024** — stock XMRig 6.26.0 `rx/2` full-dataset is byte-identical to Shekyl's canonical (§3.2), so the ceiling miner is **stock XMRig, no patch** (§3.3). Key nuance: XMRig's *light/verification* path is v2-incomplete; the ceiling must use its full-dataset (mining) mode. Artifact: [`tests/randomx_v2_parity/xmrig_ceiling/`](../../tests/randomx_v2_parity/xmrig_ceiling/). Revised after **red-team rounds 1–2** (§11 — F1–F7 structural: four-factor decomposition, aggregate-H/s basis, whale-produces-Shekyl-blocks gap, threshold arithmetic, two-ended range; R1–R4 polish: decomposition-is-an-aid-not-identity, hash-core-vs-block-framing layer split, §6.4-pinned prototype greenlight, confirmed-huge-page provenance; Intel-first / Ryzen-rig two-machine plan). |
 | Kind | Security investigation (consensus 51%-via-asymmetry, genesis shallow-work window). **Not** a performance-tuning exercise. |
-| Priority order | privacy > security > correctness > performance > features. This study lives at the security tier; the numbers it produces feed a consensus-security decision. "Get-it-right, not get-it-now" ([`00-mission`](../../.cursor/rules/00-mission.mdc), [`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc)). |
+| Priority order | Cite [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc): security and quantum resilience are preconditions, then privacy, then longevity. This study lives at the security tier; the numbers it produces feed a consensus-security decision. "Get-it-right, not get-it-now" ([`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc)). |
 | Parent plan | [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) (Track B); [`RANDOMX_V2_PHASE3_PLAN.md`](./RANDOMX_V2_PHASE3_PLAN.md) (§7 Hole-1 gate, §9 test-gates table — the CI regime this study extends). |
 | Spec authority | [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §6 (no-prewarm / no-dataset decision — the thing disposition option (a) would revisit), §13 (non-goals). This doc **cites**; it does not re-derive. |
 | Sibling (harness) | [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) (the differential harness — **light-vs-light only**; the C-full and XMRig legs this study needs do not exist there). |
@@ -17,6 +17,7 @@
 | Working branch (doc) | `docs/randomx-mining-asymmetry` (off `dev`; design docs land on `dev` per branch policy). |
 | Working branch (code) | The bench legs, XMRig integration, whale harness, and any Rust-full prototype get **their own** branch off `dev` — this doc does not carry code. |
 | Reopen clause | §10 — "accept the gap" is itself a security choice with a threat model; recorded with a [`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc) reopen criterion, not left implicit. |
+| Tracked in FOLLOWUPS (2026-09-16) | Two one-liners in [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md): parked Phases 1–3 (falsify by Appendix B from a source-verified run; never-link falsifier is isolation check 1's §7.1 10-symbol C-ABI list) and the miner template conformance vector (§6.3; not gated on Appendix B). Disposition options (a)/(b)/(c) live in this document, not in the queue. |
 
 ---
 
@@ -203,9 +204,9 @@ Symmetric with the ceiling, the floor is not a point. It spans a **portable rele
 | **Orphan rate** for light miners while the whale is present | fraction of honest blocks orphaned | block-submit path `on_submitblock` |
 | **Selfish-mining / block-withholding** feasibility at the observed ratio | can the whale withhold and win the race? | anti-selfish-mine vectors 6–7 |
 | **Time-to-restabilize** after the whale leaves | blocks/seconds until difficulty re-tracks honest hashrate | `lwma1.rs` window `N=90` |
-| **Seed-epoch rollover under load** | does an epoch boundary stall verification under whale pressure? | `seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048`, `LAG=64`); eager-derive `pow_randomx_ffi.rs:263`; regtest fast-epoch override guarded fakechain-only `blockchain.cpp:582-599` |
+| **Seed-epoch rollover under load** | does an epoch boundary stall verification under whale pressure? | `shekyl-difficulty/src/seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048`, `LAG=64`; moved from the engine crate 2026-09-19); eager-derive `pow_randomx_ffi.rs:263`; regtest fast-epoch override guarded fakechain-only `blockchain.cpp:582-599` |
 
-Cross-check the block-arrival **stall detector** (`cryptonote_core.cpp:1781-1835`, calibration pinned by `tests/unit_tests/stall_detection_calibration.cpp:121`) is not falsely tripped by the whale's arrival/departure transients.
+Cross-check the block-arrival **stall detector** (`cryptonote_core.cpp:1653-1705`, calibration pinned by `tests/unit_tests/stall_detection_calibration.cpp:121`) is not falsely tripped by the whale's arrival/departure transients.
 
 **Optimistic-error guard (Phase 3):** the chain looks *safer than it is* if the whale is **under-injected** — i.e. if Phase 1 understated the ratio or Phase 2's tail was ignored. Guard: inject at the **pessimistic end** of the ceiling range (ASIC-tail-aware), not the software-reference end; and run the rollover-under-load case specifically, since a boundary stall is exactly where a marginal ratio becomes decisive.
 
@@ -329,7 +330,7 @@ Structured adversarial passes on the measurement design (2026-07-05). All findin
 - regtest/fakechain `src/cryptonote_core/cryptonote_core.cpp:84-91,335-336,472-473`. RPC `src/rpc/core_rpc_server.cpp`: `getblocktemplate:1597`, `submitblock:1894`, `generateblocks:1953` (gated `:1963`), `get_info:368`. Stressnet `tests/stressnet/load_generator.py:60` (`DaemonRPC`).
 
 **Seed epoch**
-- `rust/shekyl-pow-randomx/src/seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048` `:46`, `LAG=64` `:48`, `seedheight` `:109`). FFI/eager-derive `rust/shekyl-ffi/src/pow_randomx_ffi.rs:263-278`. Regtest fast-epoch override (fakechain-only) `src/cryptonote_core/blockchain.cpp:582-599`. Stall detector `src/cryptonote_core/cryptonote_core.cpp:1781-1835`, calibration `tests/unit_tests/stall_detection_calibration.cpp:121`. Drift sentinel `tests/unit_tests/seed_epoch.cpp:31`.
+- `rust/shekyl-difficulty/src/seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048` `:37`, `LAG=64` `:40`, `seedheight` `:49`; moved from `rust/shekyl-pow-randomx/src/seed_epoch.rs` 2026-09-19, E6 slice 2 — the validator adopts the schedule without depending on the engine). FFI/eager-derive `rust/shekyl-ffi/src/pow_randomx_ffi.rs:263-278`. Regtest fast-epoch override (fakechain-only) `src/cryptonote_core/blockchain.cpp:582-599`. Stall detector `src/cryptonote_core/cryptonote_core.cpp:1781-1835`, calibration `tests/unit_tests/stall_detection_calibration.cpp:121`. Drift sentinel `tests/unit_tests/seed_epoch.cpp:31`.
 
 **External artifacts (pins)**
 - `external/randomx-v2` @ `aaafe71` (v2.0.1, pristine tevador — working tree clean, no `shekyl` markers). `/home/torvaldsl/shekyl/RandomX` @ `0720fe4d` (dev-tooling atop `aaafe71`; `configuration.h` byte-identical). **XMRig @ `b2ca7248` (v6.26.0)** at `/home/torvaldsl/shekyl/xmrig` — present; `RX_V2` config `src/crypto/rx/RxAlgo.cpp:35-36` → `RandomX_MoneroConfigV2` (`src/crypto/randomx/randomx.cpp:55-62`), base defaults `randomx.cpp:124-133` / `randomx.h:70-76`. Constant delta vs fork = **none** (§3.1). Release-watch duty: re-pin deliberately on any bump.

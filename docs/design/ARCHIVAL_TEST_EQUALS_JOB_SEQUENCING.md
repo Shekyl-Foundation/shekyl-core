@@ -106,11 +106,15 @@ the payment for it honest.
   arbitrary local leaves.
 - The segment-freeze reversion clause already names the reconciliation a
   pruned-daemon mode owes (exclude frozen-segment leaves from pruning, or
-  reintroduce a materialized chunk store with a designed writer) — it is the
-  only place pruned-daemon mode is tracked at all, and it is tracked there as
-  a hypothetical.
+  reintroduce a materialized chunk store with a designed writer). **UPDATE
+  2026-09-12:** that hypothetical now has a design home —
+  [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)
+  (`PDM-Q1`…`PDM-Q12`). The two reconciliations remain that round's to rule;
+  opening the home does not discharge them.
 - The open DRS round (`DAEMON_REDB_STORE.md`) — the daemon storage redesign —
-  does not treat pruning. The mode has no design home today.
+  still does not treat pruning. **UPDATE 2026-09-12:** implementation of
+  whatever `PDM-Q` rules is sequenced after the daemon C++→Rust cutover
+  (`DRS-E*`, `PDM-Q-S0`), not into `db_lmdb.cpp`.
 
 ## 2. What re-classifies (records annotated, never deleted)
 
@@ -244,10 +248,13 @@ change post-genesis.
   profitability threshold this feeds is **marginal, not total** — see §5.1,
   which corrects a 2× form of it.
 - **TJ-D — pruned-daemon mode's design home and its two reconciliations.**
-  DRS coupling (storage side), segment-freeze reversion clause (frozen-leaf
-  exclusion or materialized chunk store), and the serve-credit verify rewire
-  (fact §2.5's consensus-required retention must be dissolved by TJ-A before
-  any pruning is possible).
+  **UPDATE 2026-09-12:** the design home is
+  [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)
+  (`PDM-Q1`…`PDM-Q12`). Remaining: DRS coupling (storage side), the
+  segment-freeze reversion clause (frozen-leaf exclusion or materialized
+  chunk store), and the serve-credit verify rewire (fact §2.5's
+  consensus-required retention must be dissolved by TJ-A before any pruning
+  is possible). Implementation waits on `DRS-E*` (`PDM-Q-S0`).
 - **TJ-E — foundation-source classification (downstream of TJ-A, not
   independent).** Post-pruning, a re-fetcher's source of last resort is the
   foundation's `CompleteTree` nodes — and **what kind of input foundation
@@ -1308,12 +1315,12 @@ slashing**, which was correct when false-slash was the only objective and is
 **backwards under attestation-resistance**. A fresh or reinstated pair is
 **unslashable for its first `m − 1 = 10` observations.**
 
-Combined with the ratified clean-window-on-`Rebond`, the free-rider's steady
+Combined with the ratified clean-window-on-`Reinstate`, the free-rider's steady
 state is not §9.6's 3-of-13 friendly draws — it is **zero service, 10 free <!-- doc-literal-gate-allow: archival failure-window m-of-n (slash observations), not multisig operator config -->
-epochs, slash, `Rebond`, 10 more.** The module argues `Rebond` is not a cheap
+epochs, slash, `Reinstate`, 10 more.** The module argues `Reinstate` is not a cheap
 reset because *"the burned collateral is the price,"* but **never states the
 inequality**: `10 × zero_service_reward_per_epoch` versus
-`ARCHIVAL_BOND_FLOOR + rebond friction`. **Not derived anywhere in the tree.**
+`ARCHIVAL_BOND_FLOOR + reinstate friction`. **Not derived anywhere in the tree.**
 If it fails, the window is a **subscription fee**. Deriving it is a Round-2
 obligation, and it **couples the `(m, n)` re-pin to `BOND_FLOOR`**.
 

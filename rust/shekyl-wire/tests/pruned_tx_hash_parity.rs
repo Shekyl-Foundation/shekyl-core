@@ -26,7 +26,7 @@
 //!   and `serialize_base` (the framing `get_pruned_tx_blob` serves) equals
 //!   the pinned pruned bytes.
 //!
-//! A wrong branch anywhere in `hash_with_prunable` — transposed components, a
+//! A wrong branch anywhere in `hash_from_components` — transposed components, a
 //! misclassified `has_pqc`, a miscounted auth segment — fails one language
 //! against the other instead of agreeing with itself.
 //!
@@ -45,6 +45,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use shekyl_crypto_hash::keccak256;
+use shekyl_types::{BlockHash, PrunableHash};
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
@@ -58,7 +59,7 @@ const PARITY_FIXTURE: &str = "tests/fixtures/pruned_tx_hash_parity_v1.json";
 const LIVE_ORACLE_FIXTURE: &str = "tests/fixtures/live_oracle_spend_v1.json";
 
 /// The pinned transaction's output count, which its `tx_extra` must match
-/// (CEN-I19: one `0x06` of `1120·n`, one `0x07` of `32·n`).
+/// (CEN-I19: one `0x06` of `1120·n`, one `0x07` of `64·n`).
 const N_OUT: usize = 2;
 
 /// The compressed Ed25519 basepoint. `expand_transaction_1` multiplies each
@@ -70,8 +71,8 @@ const BASEPOINT: [u8; 32] = {
     k
 };
 
-fn hex_str(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+fn hex_str(b: impl AsRef<[u8]>) -> String {
+    b.as_ref().iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn hex_bytes(s: &str) -> Vec<u8> {
@@ -138,7 +139,7 @@ fn build_tx(with_prunable: bool) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0u8; 9], [0u8; 9]],
                 enc_labels: vec![[0u8; 9], [0u8; 9]],
@@ -174,7 +175,10 @@ fn regenerate_pruned_tx_hash_parity_fixture() {
     let digest = prunable_digest();
     // The two derivations must already agree in Rust before either is pinned:
     // the pruned identity with the true digest supplied IS the txid.
-    assert_eq!(tx.hash(), tx.hash_with_supplied_prunable(digest));
+    assert_eq!(
+        tx.hash(),
+        tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))
+    );
     let doc = serde_json::json!({
         "format_version": 1,
         "description": "Pruned-identity KAT for the 4-part FCMP++/PQC spend arm \
@@ -183,10 +187,10 @@ fn regenerate_pruned_tx_hash_parity_fixture() {
          prunable_hash_hex = keccak256 of the prunable region; tx_hash_hex the \
          txid. The C++ leg (pruned_tx_hash_parity.cpp) must reproduce all four \
          with its production serializer and hash functions.",
-        "tx_hex": hex_str(&tx.serialize()),
-        "pruned_hex": hex_str(&build_tx(false).serialize()),
-        "prunable_hash_hex": hex_str(&digest),
-        "tx_hash_hex": hex_str(&tx.hash()),
+        "tx_hex": hex_str(tx.serialize()),
+        "pruned_hex": hex_str(build_tx(false).serialize()),
+        "prunable_hash_hex": hex_str(digest),
+        "tx_hash_hex": hex_str(tx.hash()),
     });
     std::fs::write(
         manifest(PARITY_FIXTURE),
@@ -211,10 +215,10 @@ fn pruned_spend_identity_matches_the_pinned_oracle() {
     // The construction still serializes and hashes to the pinned bytes.
     let tx = build_tx(true);
     tx.validate().expect("validate");
-    assert_eq!(hex_str(&tx.serialize()), tx_hex, "full tx bytes");
-    assert_eq!(hex_str(&tx.hash()), tx_hash_hex, "txid");
+    assert_eq!(hex_str(tx.serialize()), tx_hex, "full tx bytes");
+    assert_eq!(hex_str(tx.hash()), tx_hash_hex, "txid");
     assert_eq!(
-        hex_str(&prunable_digest()),
+        hex_str(prunable_digest()),
         prunable_hash_hex,
         "prunable digest"
     );
@@ -239,10 +243,93 @@ fn pruned_spend_identity_matches_the_pinned_oracle() {
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&hex_bytes(prunable_hash_hex));
     assert_eq!(
-        hex_str(&pruned.hash_with_supplied_prunable(digest)),
+        hex_str(pruned.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))),
         tx_hash_hex,
         "pruned identity (supplied digest) diverged from the pinned txid"
     );
+}
+
+/// `PDM-Q-F26`: the txid's **third component** and the **skeleton**
+/// reconstruction (`DAEMON_REDB_STORE.md` §7.7 item 2), pinned to the same
+/// oracle txid as the pruned form above.
+///
+/// A node that discards `pqc_auths` after verification (`PDM-Q6` item 2)
+/// holds a body with *neither* discardable region. It cannot recompute the
+/// txid from that body — `hash()` would read the empty `pqc_auths` as "3-part"
+/// and return an identity no spend has — so it reconstructs from the two
+/// stored digests. This pins that reconstruction to the pinned txid, and pins
+/// the third component's derivation (`keccak256(varint(count) ‖ auths)`) as
+/// the value the full-body path used, so the store's column and the txid
+/// cannot drift apart.
+#[test]
+fn skeleton_identity_reconstructs_the_pinned_txid_from_both_stored_digests() {
+    let pin: Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest(PARITY_FIXTURE)).expect("parity fixture"),
+    )
+    .expect("parity json");
+    let tx_hash_hex = pin["tx_hash_hex"].as_str().expect("tx_hash_hex");
+
+    let tx = build_tx(true);
+    let parts = tx.txid_parts();
+    let pqc_auth = parts
+        .pqc_auth_hash
+        .expect("a spend's txid is 4-part, so its third component exists");
+    let prunable = parts.prunable_hash;
+    assert_eq!(
+        parts.hash,
+        tx.hash(),
+        "txid_parts.hash is hash(), not a second construction"
+    );
+
+    // The third component is the hash the txid was built over, independently
+    // derived here so the accessor cannot drift from `hash()`: the count
+    // varint the C++ vector serializer emits, then the stored `txs_pqc_auths`
+    // segment bytes — which is why the segment's own keccak is NOT the
+    // component (no count).
+    let segments = tx.write_segments().expect("segments");
+    let mut auth_buf = vec![1u8]; // varint(1): build_tx carries one auth
+    auth_buf.extend_from_slice(&segments.pqc_auths);
+    assert_eq!(
+        pqc_auth.to_bytes(),
+        keccak256(&auth_buf),
+        "third component derivation"
+    );
+    assert_ne!(
+        pqc_auth.to_bytes(),
+        keccak256(&segments.pqc_auths),
+        "the stored segment's hash is not the txid component"
+    );
+
+    // The skeleton: prefix + base only. The malformed "empty pqc_auths, first
+    // input a spend" shape is exactly what a discarding node holds, and it
+    // must hash 4-part when told the component's value.
+    let mut skeleton = tx.clone();
+    if let Ct::Fcmp {
+        pqc_auths,
+        prunable,
+        ..
+    } = &mut skeleton.ct
+    {
+        pqc_auths.clear();
+        *prunable = None;
+    }
+    assert_ne!(
+        hex_str(skeleton.hash()),
+        tx_hash_hex,
+        "a skeleton hashed as a body is the wrong identity — the reason this API exists"
+    );
+    assert_eq!(
+        hex_str(skeleton.hash_with_supplied_components(Some(pqc_auth), prunable)),
+        tx_hash_hex,
+        "skeleton identity (both digests supplied) diverged from the pinned txid"
+    );
+    // One construction: the full-body and one-supplied paths are its special
+    // cases and agree on the same body.
+    assert_eq!(
+        tx.hash_with_supplied_components(Some(pqc_auth), prunable),
+        tx.hash()
+    );
+    assert_eq!(tx.hash_with_supplied_prunable(prunable), tx.hash());
 }
 
 /// The **live-oracle** half: bytes a running `shekyld` accepted and connected.
@@ -297,14 +384,14 @@ fn live_oracle_spend_identity_matches_the_accepted_bytes() {
     // Round-trip: re-serializing the parsed form reproduces them exactly. This
     // is what breaks if the serializer drifts away from what the chain took.
     assert_eq!(
-        hex_str(&tx.serialize()),
+        hex_str(tx.serialize()),
         tx_hex,
         "re-serializing the accepted spend changed its bytes"
     );
 
     // And the identity the daemon indexed it under.
     assert_eq!(
-        hex_str(&tx.hash()),
+        hex_str(tx.hash()),
         tx_hash_hex,
         "txid recomputed from the accepted bytes differs from the one the \
          daemon accepted"
@@ -328,7 +415,7 @@ fn live_oracle_spend_identity_matches_the_accepted_bytes() {
     );
     let digest = keccak256(&bytes[pruned_form.len()..]);
     assert_eq!(
-        hex_str(&tx.hash_with_supplied_prunable(digest)),
+        hex_str(tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))),
         tx_hash_hex,
         "pruned identity (supplied digest) diverged from the accepted txid"
     );

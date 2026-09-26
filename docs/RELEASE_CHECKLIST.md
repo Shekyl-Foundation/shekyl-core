@@ -94,7 +94,6 @@ further changes to the interface.
   - [ ] CI fuzz smoke gate passed (required harness inventory check in `.github/workflows/build.yml`)
   - [ ] Per-output PQC key derivation tested
   - [ ] Bech32m address encoding/decoding tested
-  - [ ] Transaction pruning mode tested (`--prune-blockchain`)
   - [ ] Block header `curve_tree_root` commitment validated
   - [ ] RPC consumer regression testing for larger transactions
 - [ ] CLI reproducible builds validated

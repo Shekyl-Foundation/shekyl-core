@@ -12,7 +12,50 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+redb = { workspace = true }
+# The shared redb value contract (CTS-Q2, ruled 2026-09-18): `Canonical`,
+# `CodecError`, the four value shapes, and the codecs for types this crate
+# does not own. Moved out of `codec` here and re-exported from it, so every
+# call path keeps its import (`crate::codec::…`). What did NOT move:
+# this store's own column codecs, §11.1(b)'s bump obligation, the fixture
+# snapshots and the `impl Canonical` source scan.
+shekyl-store-codec = { path = "../shekyl-store-codec" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# S-CHAIN-W (SCW-14): the store implements the validator's `ChainView` and
+# takes its `ChainValid`; the direction is store → rules and never the
+# reverse (`check_chain_rules_no_store.sh` holds the rules crate to that).
+# The conversion ban stays intact: this crate never names `InvalidBlock`
+# (`check_store_error_conversion_ban.py` clause 2).
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# Chain identities at the engine API: BlockHash / TxHash / KeyImage /
+# CurveTreeRoot / BlockHeight convert to storage types (`lmdb_order`) here.
+shekyl-types = { path = "../shekyl-types" }
+# Domain amounts on ConnectFacts / BlockInfo.coins_generated (RTN-2).
+shekyl-units = { path = "../shekyl-units" }
+# CumulativeDifficulty is transform-shaped and lives in shekyl-difficulty
+# (RTN-5); the store records it, it does not redefine it.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+# The block and transaction shapes the store persists as judged.
+shekyl-wire = { path = "../shekyl-wire" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The manifest walk in `codec::snapshot_tests::workflow_gates_this_crate`
+# derives the set of crates whose code can change a stored byte from the
+# workspace's `Cargo.toml`s. A hand-rolled reader that skipped a spelling it
+# did not know (`path = '../x'`, a `[dependencies.x]` table) would report a
+# clean subset -- the extractor is the gate. `toml` is already a normal
+# dependency of `shekyl-engine-prefs` at this version (rule 17: vetted once,
+# at source), so this edge adds no crate to the workspace.
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+# The validation crate's mock view and environment, for the conformance test
+# that reconciles `MockChain` against `BatchView` over a real store (E6 slice
+# 2 F11): every landed rule, identical verdicts and coverage over both. The
+# feature is test-only by contract; see the rules crate's `[features]`.
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# The v7 cross-check corpus (`codec::archival_tests`) is JSON written by the
+# C++ unit test that still owns the decoder; read with the workspace's
+# serde_json (rule 17: already a workspace dependency, no new crate).
+serde_json = { workspace = true }

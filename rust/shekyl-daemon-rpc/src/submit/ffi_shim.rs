@@ -382,7 +382,9 @@ impl SubmitStateShim for FfiSubmitShim {
                 const_ptr_or_null(key_images).cast::<u8>(),
                 key_images.len(),
                 reference_block.as_bytes().as_ptr(),
-                bond_probe.map_or(std::ptr::null(), |probe| probe.p_canonical_id().as_ptr()),
+                bond_probe.map_or(std::ptr::null(), |probe| {
+                    probe.p_canonical_id().as_bytes().as_ptr()
+                }),
                 bond_probe_kind,
                 bond_probe.map_or(std::ptr::null(), |probe| probe.auth_pubkey().as_ptr()),
                 bond_probe.map_or(0, |probe| probe.auth_pubkey().len()),

@@ -62,7 +62,6 @@ typedef struct mdb_txn_cursors
   MDB_cursor *m_txc_txs_pqc_auths;
   MDB_cursor *m_txc_txs_prunable;
   MDB_cursor *m_txc_txs_prunable_hash;
-  MDB_cursor *m_txc_txs_prunable_tip;
   MDB_cursor *m_txc_tx_indices;
   MDB_cursor *m_txc_tx_outputs;
 
@@ -92,7 +91,6 @@ typedef struct mdb_txn_cursors
 #define m_cur_txs_pqc_auths	m_cursors->m_txc_txs_pqc_auths
 #define m_cur_txs_prunable	m_cursors->m_txc_txs_prunable
 #define m_cur_txs_prunable_hash	m_cursors->m_txc_txs_prunable_hash
-#define m_cur_txs_prunable_tip	m_cursors->m_txc_txs_prunable_tip
 #define m_cur_tx_indices	m_cursors->m_txc_tx_indices
 #define m_cur_tx_outputs	m_cursors->m_txc_tx_outputs
 #define m_cur_spent_keys	m_cursors->m_txc_spent_keys
@@ -118,7 +116,6 @@ typedef struct mdb_rflags
   bool m_rf_txs_pqc_auths;
   bool m_rf_txs_prunable;
   bool m_rf_txs_prunable_hash;
-  bool m_rf_txs_prunable_tip;
   bool m_rf_tx_indices;
   bool m_rf_tx_outputs;
   bool m_rf_spent_keys;
@@ -130,7 +127,6 @@ typedef struct mdb_rflags
   bool m_rf_curve_tree_leaves;
   bool m_rf_curve_tree_layers;
   bool m_rf_curve_tree_checkpoints;
-  bool m_rf_output_metadata;
 } mdb_rflags;
 
 typedef struct mdb_threadinfo
@@ -330,10 +326,6 @@ public:
   virtual bool get_txpool_tx_meta(const crypto::hash& txid, txpool_tx_meta_t &meta) const;
   virtual bool get_txpool_tx_blob(const crypto::hash& txid, cryptonote::blobdata& bd, relay_category tx_category) const;
   virtual cryptonote::blobdata get_txpool_tx_blob(const crypto::hash& txid, relay_category tx_category) const;
-  virtual uint32_t get_blockchain_pruning_seed() const;
-  virtual bool prune_blockchain(uint32_t pruning_seed = 0);
-  virtual bool update_pruning();
-  virtual bool check_pruning();
 
   virtual void add_alt_block(const crypto::hash &blkid, const cryptonote::alt_block_data_t &data, const cryptonote::blobdata_ref &blob);
   virtual bool get_alt_block(const crypto::hash &blkid, alt_block_data_t *data, cryptonote::blobdata *blob);
@@ -388,21 +380,6 @@ public:
    * `prune_archival_epochs_before`, same txn as the deletions it receipts.
    */
   void note_archival_prune_watermark_epoch(uint64_t prune_below_epoch);
-
-
-  virtual bool can_thread_bulk_indices() const { return true; }
-
-  /**
-   * @brief return a histogram of outputs on the blockchain
-   *
-   * @param amounts optional set of amounts to lookup
-   * @param unlocked whether to restrict count to unlocked outputs
-   * @param recent_cutoff timestamp to determine which outputs are recent
-   * @param min_count return only amounts with at least that many instances
-   *
-   * @return a set of amount/instances
-   */
-  std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const;
 
   bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const;
 
@@ -462,7 +439,6 @@ private:
 
   inline void check_open() const;
 
-  bool prune_worker(int mode, uint32_t pruning_seed);
 
   virtual bool is_read_only() const;
 
@@ -510,7 +486,8 @@ private:
 
   virtual void put_archival_bond_record(const crypto::hash& p_id,
     const std::vector<uint8_t>& hybrid_pubkey,
-    const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
+    const std::vector<uint8_t>& bond_spend_pk, const crypto::public_key& endpoint,
+    uint64_t join_settlement_epoch,
     uint64_t bonded_total_atomic, uint8_t holdings_kind,
     const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals) override;
@@ -532,54 +509,12 @@ private:
     const std::vector<uint64_t>& post_shard_ids) override;
   virtual void apply_archival_holdings_update_drop(uint64_t block_height, const crypto::hash& p_id,
     const std::vector<uint64_t>& post_shard_ids) override;
-  /// The kind-specific fold outputs consumed by the shared bond-record
-  /// connect-writer scaffold: the counter movement, the add-epoch overrides
-  /// for the rebuilt index-parallel `shard_add_epochs` (empty = every POST
-  /// shard is carried), and the optional in-place interval close (Rebond).
-  struct BondRecordFoldOuts
-  {
-    uint64_t new_bonded_total = 0;
-    uint64_t new_total_bonded = 0;
-    std::vector<uint64_t> override_shard_ids;
-    uint64_t override_add_epoch = 0;
-    bool has_interval_close = false;
-    uint64_t closed_interval_index = 0;
-    uint64_t interval_end_exclusive = 0;
-  };
-  using bond_record_fold_t = std::function<uint8_t(
-    const shekyl::db::ArchivalBondValue& bond, uint64_t total_bonded,
-    BondRecordFoldOuts& outs)>;
-  /// Pre-image facts the scaffold captures before any mutation, handed to the
-  /// kind's journal writer (`closed_interval_start` is meaningful iff the fold
-  /// set `has_interval_close`).
-  struct BondRecordPreImage
-  {
-    uint64_t pre_bonded_total = 0;
-    std::vector<uint64_t> pre_shard_ids;
-    std::vector<uint64_t> pre_shard_add_epochs;
-    uint64_t closed_interval_start = 0;
-  };
-  using bond_record_journal_t = std::function<void(
-    const BondRecordPreImage& pre, const BondRecordFoldOuts& outs)>;
-  /// Shared connect-writer scaffold for every POST-holdings bond-record
-  /// mutation (HoldingsUpdate add/drop, Rebond): txn guard, record load + v6
-  /// desync check, pre-image capture, live counter read, fold, optional
-  /// in-place interval close, coupled-array rebuild, record/counter writes,
-  /// then the kind's journal append (same atomic txn). Single-sourced so a
-  /// journal/ordering/invariant change cannot land on one bond-post kind and
-  /// silently miss another — the kinds must stay reorg-twinned with their pops.
-  void apply_archival_bond_record_update(uint64_t block_height, const crypto::hash& p_id,
-    const std::vector<uint64_t>& post_shard_ids, const char* arm,
-    const bond_record_fold_t& fold, const bond_record_journal_t& journal);
-  /// The HoldingsUpdate add/drop journal writer (one row type, one pop) —
-  /// passed to the scaffold by both directions.
-  void put_archival_holdings_update_journal(uint64_t block_height,
-    const crypto::hash& p_id, const BondRecordPreImage& pre);
   virtual void revert_archival_holdings_updates_at_height(uint64_t block_height) override;
-  virtual void apply_archival_rebond(uint64_t block_height, const crypto::hash& p_id,
+  virtual void apply_archival_reinstate(uint64_t block_height, const crypto::hash& p_id,
     const std::vector<uint64_t>& post_shard_ids) override;
-  virtual void revert_archival_rebonds_at_height(uint64_t block_height) override;
+  virtual void revert_archival_reinstates_at_height(uint64_t block_height) override;
   virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const override;
+  virtual void fold_archival_market_bonded_counts(std::vector<uint64_t>& bonded_count) const override;
   virtual std::vector<uint64_t> archival_bond_last_served_epochs(const crypto::hash& p_id,
     const std::vector<uint64_t>& shard_ids) const override;
   virtual std::vector<uint64_t> archival_bond_all_last_served_epochs(
@@ -618,7 +553,6 @@ private:
   virtual std::array<uint8_t, 32> get_curve_tree_root() const override;
   virtual uint8_t get_curve_tree_depth() const override;
   virtual uint64_t get_curve_tree_leaf_count() const override;
-  virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const override;
   virtual bool get_curve_tree_leaf_by_tree_position(uint64_t tree_position, uint8_t* leaf_out) const override;
   virtual bool get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const override;
   virtual bool get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const override;
@@ -639,12 +573,6 @@ private:
   virtual uint64_t get_latest_curve_tree_checkpoint_height() const override;
   virtual void prune_curve_tree_intermediate_layers(uint64_t checkpoint_height) override;
 
-  // Output metadata pruning
-  virtual void store_output_metadata(uint64_t global_output_index, const output_pruning_metadata_t& meta) override;
-  virtual bool get_output_metadata(uint64_t global_output_index, output_pruning_metadata_t& meta) const override;
-  virtual bool is_output_pruned(uint64_t global_output_index) const override;
-  virtual bool prune_tx_data(uint64_t depth = 0) override;
-  virtual uint64_t get_last_pruned_tx_data_height() const override;
   virtual bool tx_has_verification_data(const crypto::hash& tx_hash) const override;
 
   // migrate from older DB version to current (pre-V8 DBs are refused loudly;
@@ -656,9 +584,6 @@ private:
   /** LMDB tx_id for a canonical tx hash (throws TX_DNE if missing). */
   uint64_t get_tx_id(const crypto::hash& h) const;
 
-  /** First block height not yet processed for tx-data pruning (legacy key migrates to +1). */
-  uint64_t read_tx_prune_next_block_height() const;
-  void write_tx_prune_next_block_height(MDB_txn* wtxn, uint64_t next_block);
 
   bool load_archival_bond_value(const crypto::hash& p_id,
     shekyl::db::ArchivalBondValue& out) const;
@@ -740,39 +665,27 @@ public:
 
   // ─── Settlement outcomes (SO-D2/SO-D6) ──────────────────────────────────
   //
-  // Public for the same reason apply_archival_slash_one above is: the
-  // production caller is process_archival_slash_for_epoch, a member, and these
-  // are exposed so the table's KATs can drive the path directly. Deliberately
-  // NOT virtual on BlockchainDB. The only writer is
-  // process_archival_slash_for_epoch and the only reverter is
-  // revert_archival_slashes_at_height, both BlockchainLMDB members, so the
-  // dispatch would buy nothing and would break every BlockchainDB test double
-  // for a surface none of them can implement.
+  // Public so the table's KATs can drive the path directly (same reason
+  // apply_archival_slash_one is). Overrides of BlockchainDB; contract text
+  // lives on the base declarations. LMDB-specific: SO-D2 puts the epoch last,
+  // so both deletes are full-table scans.
 
-  /// Fold (passes, issued) through the Rust encoder and store the row for
-  /// (P_id, shard, E). Refuses rather than storing if the fold refuses.
   void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch, uint32_t passes, uint32_t issued);
+    uint64_t settlement_epoch, uint32_t passes, uint32_t issued) override;
 
-  /// Read a settlement row. Returns false when absent — which SO-D1 defines as
-  /// "never issued", not "missed".
   bool get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch, std::array<uint8_t, 3>& out_row) const;
+    uint64_t settlement_epoch,
+    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const override;
 
-  /// Drop every settlement row for one epoch — the SO-D6 revert.
-  ///
   /// A full-table scan filtering the epoch field, because SO-D2's key puts the
   /// epoch LAST so the outer-window walk can range-scan a pair's epochs in
   /// order. That trade is inherited, not invented:
   /// delete_archival_serve_credit_before_epoch scans the same way for the same
   /// reason. Both callers are rare — a prune, and a reorg crossing a fold.
-  void delete_archival_settlement_for_epoch(uint64_t settlement_epoch);
+  void delete_archival_settlement_for_epoch(uint64_t settlement_epoch) override;
 
-  /// Retention prune for the settlement table — every row strictly below
-  /// `prune_below_epoch`. Called from `prune_archival_epochs_before`, which
-  /// is contracted to visit every epoch-scoped archival table and was
-  /// missing this one.
-  void delete_archival_settlement_before_epoch(uint64_t prune_below_epoch);
+  /// Same tail-epoch scan as the revert above, for the same key-order reason.
+  void delete_archival_settlement_before_epoch(uint64_t prune_below_epoch) override;
 
   /// As-of-E consensus snapshot gather — see the BlockchainDB base
   /// declaration (blockchain_db.h) for the soundness argument and the
@@ -924,7 +837,6 @@ private:
   MDB_dbi m_txs_pqc_auths;
   MDB_dbi m_txs_prunable;
   MDB_dbi m_txs_prunable_hash;
-  MDB_dbi m_txs_prunable_tip;
   MDB_dbi m_tx_indices;
   MDB_dbi m_tx_outputs;
 
@@ -966,13 +878,13 @@ private:
   MDB_dbi m_archival_emission_claim_log; // BE(height)||BE(seq) -> claimed-set pre-image journal
   MDB_dbi m_archival_bond_unbond_log; // BE(height)||BE(seq) -> Release record pre-image journal
   MDB_dbi m_archival_bond_holdings_update_log; // BE(height)||BE(seq) -> HoldingsUpdate record pre-image journal
-  MDB_dbi m_archival_bond_rebond_log; // BE(height)||BE(seq) -> Rebond record pre-image journal
+  MDB_dbi m_archival_bond_reinstate_log; // BE(height)||BE(seq) -> Reinstate record pre-image journal
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)
   MDB_dbi m_archival_sigma_work;      // BE(E) -> BE(sigma_milli)
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized
   MDB_dbi m_archival_budget_accrual;  // BE(height) -> BE(staker_inflow) (redirected write, §3.1)
   MDB_dbi m_archival_budget;          // BE(E) -> BE(budget) frozen at close (§3.2)
-  MDB_dbi m_archival_attestation_witness; // height [8B native, INTEGERKEY] -> prunable admission witness blob (r||pass-sigs; ARCHIVAL_CREDIT_WIRE.md §3.2/§4, transport B2 — never in the block blob)
+  MDB_dbi m_archival_attestation_witness; // height [8B native, INTEGERKEY] -> prunable admission witness blob (count || (nonce || anchor_height || sig) per pass, SF-D8 v2; ARCHIVAL_CREDIT_WIRE.md §3.2/§4, transport B2 — never in the block blob)
   MDB_dbi m_archival_alt_attestation_witness; // block hash [32B, compare_hash32] -> prunable alt-chain admission witness blob (reorg-survival counterpart to m_archival_attestation_witness; ARCHIVAL_CREDIT_WIRE.md §3, transport B2)
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
@@ -981,13 +893,12 @@ private:
   MDB_dbi m_output_to_leaf;           // output_index [8B native] -> tree_position [8B native] (MDB_INTEGERKEY)
   MDB_dbi m_leaf_to_output;           // tree_position [8B native] -> output_index [8B native] (MDB_INTEGERKEY)
 
-  MDB_dbi m_curve_tree_leaves;    // global_output_index -> 128 bytes leaf data
+  MDB_dbi m_curve_tree_leaves;    // tree_position (drain order, NOT global_output_index — SOK-10) -> 128 bytes leaf data {O.x, I.x, C.x, CM.x}
   MDB_dbi m_curve_tree_layers;    // (layer_idx << 56 | chunk_idx) -> 32 bytes hash
   MDB_dbi m_curve_tree_meta;      // key string -> value (root, leaf_count, depth)
   MDB_dbi m_curve_tree_checkpoints; // block_height -> serialized checkpoint (root + depth + leaf_count)
   MDB_dbi m_curve_tree_roots;       // block_height -> 32-byte curve tree root (one entry per block)
 
-  MDB_dbi m_output_metadata;      // global_output_index -> output_pruning_metadata_t
 
   mutable uint64_t m_cum_size;	// used in batch size estimation
   mutable unsigned int m_cum_count;

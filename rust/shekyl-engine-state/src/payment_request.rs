@@ -8,7 +8,7 @@
 //! Normative: `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.9, §5.7.11.
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::TxHash;
+use shekyl_types::{OutputIndexInTx, Timestamp, TxHash};
 use shekyl_units::AtomicUnits;
 
 use crate::local_label::LocalLabel;
@@ -78,20 +78,27 @@ pub enum PaymentRequestState {
 }
 
 /// Off-chain invoice persisted in [`crate::bookkeeping_block::BookkeepingBlock`].
+///
+/// `created_at` / `expiry` are wall-clock [`Timestamp`]s (RTN-6). The
+/// postcard encoding is the same `u64` it was as a height, so
+/// [`crate::bookkeeping_block::BOOKKEEPING_BLOCK_VERSION`] does not bump
+/// (rule 42 type-only). Pre-genesis wallets that wrote a height here are
+/// wiped by the operator (`rm -rf ~/.shekyl`; rule 15) — there is no
+/// in-file format detector.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentRequest {
     pub id: PaymentRequestId,
     #[serde(with = "crate::serde_helpers::local_label")]
     pub label: LocalLabel,
     pub amount_atomic: AtomicUnits,
-    pub created_at: u64,
+    pub created_at: Timestamp,
     #[serde(default)]
-    pub expiry: Option<u64>,
+    pub expiry: Option<Timestamp>,
     pub state: PaymentRequestState,
     #[serde(default)]
     pub matched_tx_hash: Option<TxHash>,
     #[serde(default)]
-    pub matched_output_index: Option<u64>,
+    pub matched_output_index: Option<OutputIndexInTx>,
 }
 
 #[derive(postcard_schema::Schema)]
@@ -121,10 +128,28 @@ impl postcard_schema::Schema for PaymentRequest {
 }
 
 impl PaymentRequest {
-    /// True when `expiry` has passed at `current_height` (block-height clock).
+    /// True when `expiry` has passed at `now` (wall-clock Unix seconds).
+    ///
+    /// Off-chain invoices are human-set and travel to unsynced payers, so
+    /// the clock is [`Timestamp`], not [`shekyl_types::BlockHeight`]
+    /// (2026-06-14 decision log; RTN-6).
     #[must_use]
-    pub fn is_expired_at(&self, current_height: u64) -> bool {
-        self.expiry.is_some_and(|e| current_height > e)
+    pub fn is_expired_at(&self, now: Timestamp) -> bool {
+        self.expiry.is_some_and(|e| now > e)
+    }
+
+    /// Display and filter state at `now`.
+    ///
+    /// A still-[`PaymentRequestState::Pending`] request whose wall-clock
+    /// expiry has passed is [`PaymentRequestState::Expired`]
+    /// (`SUBADDRESS_UNDER_PQC.md` §5.7.9 `Pending --> Expired`).
+    /// Matched / cancelled rows are unchanged — match overrides expiry.
+    #[must_use]
+    pub fn state_at(&self, now: Timestamp) -> PaymentRequestState {
+        match self.state {
+            PaymentRequestState::Pending if self.is_expired_at(now) => PaymentRequestState::Expired,
+            other => other,
+        }
     }
 }
 
@@ -167,13 +192,42 @@ mod tests {
     }
 
     #[test]
+    fn pending_request_is_expired_once_the_clock_passes() {
+        let mut req = PaymentRequest {
+            id: PaymentRequestId(1),
+            label: LocalLabel::from_str("INV"),
+            amount_atomic: AtomicUnits::from_raw(1),
+            created_at: Timestamp::from_raw(1_000_000_000),
+            expiry: Some(Timestamp::from_raw(1_000_000_100)),
+            state: PaymentRequestState::Pending,
+            matched_tx_hash: None,
+            matched_output_index: None,
+        };
+        assert_eq!(
+            req.state_at(Timestamp::from_raw(1_000_000_100)),
+            PaymentRequestState::Pending,
+            "expiry is exclusive: now == expiry is still pending"
+        );
+        assert_eq!(
+            req.state_at(Timestamp::from_raw(1_000_000_101)),
+            PaymentRequestState::Expired
+        );
+        req.state = PaymentRequestState::Matched;
+        assert_eq!(
+            req.state_at(Timestamp::from_raw(1_000_000_101)),
+            PaymentRequestState::Matched,
+            "match overrides expiry"
+        );
+    }
+
+    #[test]
     fn payment_request_postcard_roundtrip() {
         let req = PaymentRequest {
             id: PaymentRequestId(0x0000_1234_5678_9ABC),
             label: LocalLabel::from_str("INV-2026-0042"),
             amount_atomic: AtomicUnits::from_raw(150_000_000_000),
-            created_at: 100,
-            expiry: Some(200),
+            created_at: Timestamp::from_raw(100),
+            expiry: Some(Timestamp::from_raw(200)),
             state: PaymentRequestState::Pending,
             matched_tx_hash: None,
             matched_output_index: None,

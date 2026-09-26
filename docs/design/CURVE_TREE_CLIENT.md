@@ -1,7 +1,13 @@
-# Curve-tree client (design — Round 0)
+# Curve-tree client
 
-**Status:** **IMPLEMENTATION LANDED** (currency-check 2026-07-01; the "Round 0"
-design body below is preserved as the design-of-record). The `shekyl-curve-tree`
+**Status:** LIVING CONTRACT — the record of the landed CT-1…CT-5 client
+(`shekyl-curve-tree`), last verified 2026-09-19 at `dev@6c41bf820` (the `PDM`
+propagation sweep, document 4 of 4). **§7's archival alignment is RESOLVED
+there in two halves (ruled 2026-09-19):** its serving-side content is deleted
+under `PDM-Q12`, and its proving-side content is superseded by
+[`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.3 as the design of record.
+The Round-0 body (currency-check 2026-07-01) is preserved as the design-of-record
+for the landed client. The `shekyl-curve-tree`
 crate is **built + KAT-verified** — recon (CT-2), assemble/client (CT-4),
 reference-block selection (§5), and the `LeafStore` on `redb` (CT-1) all landed —
 and the **depth-3 curve-tree consensus cutover shipped** (PR #197: the daemon
@@ -12,14 +18,32 @@ into the signer (`signing_assembly.rs` → `sign_bridge.rs` → `local_pending_t
 via `CurveTreeActor`), retiring the synthetic membership vectors (they survive in
 test fixtures only). **What REMAINS** (per
 [`CT5_SERIES_CLOSEOUT.md`](../completed/CT5_SERIES_CLOSEOUT.md) §5, reversion-clause-routed):
-(a) per-input reconstruction reuse (perf — `assemble_path` re-runs `build_layers`
-per input; reopens at mainnet scale); (b) store-backed / pruned-tree assembly
-(F5, the prune-policy PR); (c) reactive `ProofStale` detection (→ Phase 6, needs a
+(a) per-input reconstruction reuse — **DISCHARGED in code 2026-09-24 (PR #842,
+`CT-6` increment 3)**: `assemble_paths` reconstructs the drained leaves and
+their layers once per transaction and indexes the `gindex` positions, so the
+`k · n` this row was opened against is now `n + k`. `assemble_path` remains as
+the one-input case, delegating. *The row is kept rather than deleted because it
+is what `CT-6` was opened to discharge, and a reader arriving from
+[`CT5_SERIES_CLOSEOUT.md`](../completed/CT5_SERIES_CLOSEOUT.md) §5 — which is a
+completed record and stays as written — needs the forward pointer;*
+(b) store-backed / pruned-tree assembly
+(F5) — **superseded in design** by [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
+§6.3: the proving state is not a store (a public frontier at `F`, a recent-block
+buffer, per-output paths), and the `WSS-13` unwind retires the leaf store in code
+under its own authorization. **(a) and (b) are both discharged by `CT-6`**
+([`CT6_PROVING_STATE.md`](CT6_PROVING_STATE.md), design round opened 2026-09-20,
+**Round 1 disposed 2026-09-22** — `Q2`/`Q3` ruled, `Q5` closed by dissolution,
+`Q1`/`Q4` pending as derivations),
+which carries §6.3 as its design of record: (a) is that round's F3(b) and its
+increment 3, (b) its F3(a) and increment 4. Its Round-0 pre-flight **removed** the
+reference-height question from the round outright — `REF_ANCHOR_AGE` /
+`select_reference_height` (§5) are landed and privacy-canonical (`CT-6` F1); (c) reactive `ProofStale` detection (→ Phase 6, needs a
 daemon stale-root signal); (d) Track-2 (FAKECHAIN regtest) depth-3+ real-tree
 verify at scale + C++↔Rust FFI parity + CT-2 Tier-B KATs + the `get_curve_tree_leaves`
 C++ endpoint — the bulk-leaf RPC (§6) is **repositioned** to non-forward
-catch-up / archival (CT-3 Round 1 confirmed block-derived forward sync as the
-default), so it is **off the Phase-2A critical path**. Named prerequisite extracted
+catch-up (CT-3 Round 1 confirmed block-derived forward sync as the default; the
+archival role it once also had went with the leaf-unit serving design, §7), so
+it is **off the Phase-2A critical path**. Named prerequisite extracted
 from `PHASE_2A_SEND_PATH.md` §3.0.4; 2A consumes its output.
 
 **Why it exists.** FCMP++ membership proofs require the wallet to assemble the
@@ -92,7 +116,7 @@ mainnet validity** (DoD #1 / §3.0.5; mainnet still also gated on Phase 6).
 Daemon-side (C++ LMDB + JSON-RPC) **already landed**:
 
 - `curve_tree_leaves` — all UTXO leaves preserved, `global_output_index →
-  128-byte {O.x, I.x, C.x, h_pqc}` (`LMDB_SCHEMA.md` §`curve_tree_leaves`).
+  128-byte {O.x, I.x, C.x, CM.x}` (`LMDB_SCHEMA.md` §`curve_tree_leaves`).
 - `curve_tree_checkpoints` — `root[32] || depth[1] || leaf_count[8]` every
   `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL = 10000` blocks
   (`db_lmdb.cpp` `save_curve_tree_checkpoint`).
@@ -107,15 +131,19 @@ Daemon-side (C++ LMDB + JSON-RPC) **already landed**:
 
 Rust-side primitives **already exist** (`shekyl-fcmp::tree`):
 
-- `construct_leaf(O, C, h_pqc) -> Option<[u8; 128]>`.
+- `construct_leaf(O, C, CM) -> Option<[u8; 128]>` (the 4th scalar is `CM.x`, extracted inside; `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14)).
 - `hash_grow_selene` / `hash_grow_helios`, `hash_trim_*`.
 - `selene_point_to_helios_scalar` / `helios_point_to_selene_scalar`,
   `ed25519_point_to_selene_scalar`.
 - `chunk_width(layer)`, `layer_is_selene(layer)`, `proof_size(n_in, depth)`,
   `SELENE_CHUNK_WIDTH` / `HELIOS_CHUNK_WIDTH` / `SCALARS_PER_LEAF`.
 
-**Gap:** no Rust path-assembler (`get_curve_tree_path`-shape) exists; layer walk
-+ sibling extraction into `c1_layers`/`c2_layers` is the new work.
+**Gap (records-was, Round 0):** no wallet-side Rust path-assembler existed; layer
+walk + sibling extraction into `c1_layers`/`c2_layers` was the new work — landed
+as `assemble_path` (CT-4). The daemon's own per-output assembler
+(`get_curve_tree_path`) was **deleted 2026-09-18** (`SOK-10` Q7 → A,
+spend-revealing per `PHASE_2A_SEND_PATH.md` §3.0.1); the wallet is now the only
+path assembler.
 
 The two **age** constants (distinct — do not conflate, §5.4):
 
@@ -141,10 +169,13 @@ Reuses `shekyl-fcmp::tree` for crypto.
 chain data. This is an explicit invariant with a structural test (mirrors 2A's
 C5 boundary assertion).
 
-The `LeafStore` is **segment-addressable** by design: its segment unit is also the
-archival shard and the visual unit, so this same store is the V3.x archival
-substrate (§7). Designing it segment-aware now is what keeps the archival
-`ArchivalEngine` additive rather than a restructure.
+The `LeafStore` was built **segment-addressable** (CT-1; landed code, kept here as
+record). The Round-0 premise behind that choice — that its segment is also the
+archival shard and this store is the archival substrate — did **not** survive:
+the archival unit is `PDM-Q-F32`'s byte-bounded `tx_id` range, the serving store
+is `P`'s own body store (`PDM-Q12`, `WSS-Q1` (a)), and the principal's proving
+state is not a store at all ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
+§6.3) — §7.
 
 ### 3.2 Components
 
@@ -172,7 +203,7 @@ this note does not renumber). `recon` is **landed and KAT-verified** by the
 CT-2 reconstruct-root KAT (`tests/recon_kat.rs`). The `client` orchestration
 is **landed**: `CurveTreeClient` ingests blocks reduced at the caller's
 decode boundary (`BlockLeaves`/`TxLeafInputs`/`RawOutput`, carrying the
-scanner-`Extra`-parsed `0x07` blob), resolves `h_pqc`, threads the global
+scanner-`Extra`-parsed `0x07` blob), resolves each output's leaf commitment, threads the global
 output index (derive-don't-accumulate; reorg = rebuild via `from_blocks`),
 owns the reference-height → drain-cutoff mapping (`drained_through = H − 1`),
 and applies the §3.3 integrity gate (`verify_root`). The Tier-A KAT now also
@@ -202,8 +233,10 @@ Leaf positions are **append-only by drain order**; a reorg below the synced tip
 can change which leaves exist. But tree leaves only change on reorgs deeper than
 `SPENDABLE_AGE = 10` (shallower reorgs reshuffle only undrained
 `pending_tree_leaves`), and a deep reorg touches only the most-recently-drained
-positions — the **active frontier segment** (§7.2.1 #4). So completed
-subtree-aligned segments are **reorg-frozen**, and the rollback unit is the active
+positions — the **active frontier segment**. So completed
+subtree-aligned segments are **reorg-frozen** (landed CT-1 behaviour, record;
+the freeze as a *design* is retired under `PDM-Q12` and the proving store's
+successor is `WALLET_SIDE_STORE.md` §6.3 — §7), and the rollback unit is the active
 frontier segment, not "up to the last 10k checkpoint." The store tracks
 `(height, leaf_count, R_k)` per segment, rolls back only the frontier on
 divergence, and re-syncs forward. **Freeze-lag:** a segment is not frozen/pruned
@@ -213,8 +246,9 @@ until buried beyond max plausible reorg depth in **block** terms:
 tip_height − segment.end_block_height ≥ SPENDABLE_AGE + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS
 ```
 
-(`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS = 720`, same numeric value as
-`ARCHIVAL_REORG_DEPTH_BLOCKS`; height-gated, not position-gated — see
+(`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` **is** `ARCHIVAL_REORG_DEPTH_BLOCKS` —
+generated from the same `archival_reorg_depth_blocks` key since 2026-09-18,
+720 today; height-gated, not position-gated — see
 [`CT1_ROUND1_PINS.md`](../completed/CT1_ROUND1_PINS.md).) `frozen_segments` records
 `end_block_height` (when the segment's newest leaf entered the tree) and
 `frozen_at_height` (when the freeze was applied). The active frontier stays
@@ -256,7 +290,7 @@ pub struct ChunkLeaf {
     pub output_key:    [u8; 32],         // O (compressed)
     pub key_image_gen: [u8; 32],         // I = Hp(O) (compressed; derived in-crate)
     pub commitment:    [u8; 32],         // C (compressed)
-    pub h_pqc:         [u8; 32],         // per-output PQC leaf hash
+    pub h_pqc:         [u8; 32],         // the leaf's 4th scalar: CM.x (PL-D3)
 }
 
 pub struct TreeContext {                 // mirrors shekyl_tx_builder::types::TreeContext
@@ -342,15 +376,22 @@ here as a migration, and it is worth setting down why:
   C++ surface, it doesn't grow it — touching one optional RPC is not leverage for
   a consensus-DB rewrite. An engine change for the daemon is a **V4,
   consensus-invisible** question; defer with confidence.
-- **The wallet `LeafStore` is greenfield Rust.** It does not exist yet (new
-  `shekyl-curve-tree` crate) and is Rust by default under the
+- **The wallet `LeafStore` is greenfield Rust.** It did not exist when this was
+  written (new `shekyl-curve-tree` crate); it exists now
+  (`rust/shekyl-curve-tree/src/store/redb_backend.rs`, CT-1 landed). The
+  typed-shape rewrite once planned in
+  [`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md) closed as record on
+  2026-09-19; its successor, [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
+  §7–§8, partitions that work by unit, and the leaf-store items have no subject
+  once the proving state is not a store (§8 (iii) there). The CT-1 decision
+  below stands as the record of what was built — and is Rust by default under the
   untrusted-input→Rust policy (`20-rust-vs-cpp-policy.mdc`). So "shift to heed"
   is not a migration question — it is *which Rust persistence for a new
   component*, decided on the wallet store's own merits.
 
 The access pattern is unusually regular, and that drives the real first question:
 
-- Dense integer positions → **fixed 128-byte records** (`{O.x, I.x, C.x, h_pqc}`),
+- Dense integer positions → **fixed 128-byte records** (`{O.x, I.x, C.x, CM.x}`),
   append-mostly forward, contiguous range reads for segment serving,
   delete-recent for reorg, delete-old-non-owned for prune-to-`R_k`.
 
@@ -395,21 +436,27 @@ its path. All public; the client holds nothing else.
 | Bound the search window | `block_height: u64` | the leaf was drained ~`block_height + SPENDABLE_AGE`; narrows which range to fetch (optimization, not correctness) |
 | Spendability gate | `eligible_height: u64` | reject if `eligible_height > reference_height` (§4.4) |
 
-`h_pqc` is **read from the matched leaf** (it is in the public 128-byte tuple);
-the client does **not** derive it. So Set A is `{O, C, block_height,
-eligible_height}` — pure public identity/position metadata.
+The leaf's 4th scalar (`CM.x`) is **read from the matched leaf** (it is in
+the public 128-byte tuple); the client does **not** derive it. So Set A is
+`{O, C, block_height, eligible_height}` — pure public identity/position
+metadata. (The spent output's own commitment *opening* — `CM` and its blind
+`r` — is re-derived by the signer from the output's secrets, not read from
+the tree; the tree's value is what it is checked against.)
 
-**Block-derived path — `h_pqc` is an additional public input.** Under the
-bulk-leaf RPC path the daemon hands the client finished 128-byte leaves, so
-`h_pqc` arrives inside the tuple as above. Under the **block-derived** default
-(`CT2_DRAIN_ORDER.md`; the wallet reconstructs leaves from blocks it already
-syncs), the client *builds* the leaf itself and therefore needs `h_pqc` as an
-input. `h_pqc` is **not derivable from the bare public output** — it is the hash
-of the *hybrid public key*, carried **on-chain in a single `tx_extra` `0x07`
-field** (`tx_extra_pqc_leaf_hashes`: one concatenated blob, `32` bytes per
-output in vout order), sliced per-output at `i*32` with a **zero-fallback** when
-the field is absent, the blob length is not a multiple of 32, or the blob is
-shorter than the vout count (`CT2_DRAIN_ORDER.md` §3, `blockchain_db.cpp:341-364`).
+**Block-derived path — the leaf commitment is an additional public input.**
+Under the bulk-leaf RPC path the daemon hands the client finished 128-byte
+leaves, so `CM.x` arrives inside the tuple as above. Under the
+**block-derived** default (`CT2_DRAIN_ORDER.md`; the wallet reconstructs
+leaves from blocks it already syncs), the client *builds* the leaf itself and
+therefore needs `CM` as an input. `CM` is **not derivable from the bare
+public output** — it is a hiding commitment to the *hybrid public key*
+(`PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14)), carried **on-chain in a single `tx_extra` `0x07` field**
+(`tx_extra_pqc_leaf_entries`: one concatenated blob, `64` bytes per output in
+vout order — `CM ‖ record`), sliced per-output at `i*64` with **no fallback**:
+an absent field, a length that is not `64 × n`, or a wrong entry count is an
+ingest error (`ClientError::LeafEntries`), exactly what admission refuses
+(`CT2_DRAIN_ORDER.md` §3.1). The zero-fallback this paragraph once described
+was retired with `PL-D3` (census `d-3`).
 It is fully public (already on the chain), so it **joins Set A** for the
 block-derived path — but as a *parsed `tx_extra` input*, not a `TransferDetails`
 field and not a secret. **Parser ownership is resolved: reuse
@@ -469,7 +516,7 @@ for it (spend-revealing), the client **content-matches**: it scans the
 downloaded contiguous leaf array for the tuple whose first 32 bytes equal the
 output's `O.x` (disambiguating on `C.x`). The match index *is* the tree position
 (`start_index + offset`), and the matched 128-byte tuple yields the full leaf
-(incl. `h_pqc`) directly — no reconstruction, no stored field, no query.
+(incl. `CM.x`) directly — no reconstruction, no stored field, no query.
 
 This is the privacy property restated structurally: **the wallet learns its
 position by reading bulk public data it already downloaded, never by asking.**
@@ -514,9 +561,10 @@ binding a height to a consensus root stays the caller's responsibility
 **Rule:** `reference_height = tip − REF_ANCHOR_AGE`, with
 `REF_ANCHOR_AGE = FCMP_REFERENCE_BLOCK_MIN_AGE + 1 = 6`.
 
-- Matches the daemon's existing `get_curve_tree_path` anchor
-  (`top_height − (MIN_AGE + 1)`), so wallet-assembled and daemon-assembled paths
-  agree on the anchor.
+- One block deeper than the bare `MIN_AGE` floor. (It also matched the anchor the
+  daemon's `get_curve_tree_path` used before that RPC was removed — `SOK-10` Q7 →
+  A, 2026-09-18; there is no daemon-assembled path to agree with any more, and
+  the offset stands on its own reorg-safety and privacy-canonical grounds.)
 - Reorg-safe: ≥ `MIN_AGE` deep, so the reference block is unlikely to be
   reorged out (and §5.3 handles the residual).
 - Maximizes the submit window (§5.2): closest legal block to the tip.
@@ -629,227 +677,113 @@ this phase finds the replication cheap and well-tested (strictly more private).
 
 ---
 
-## 7. Archival-staking alignment (storage / retrieval unification)
+## 7. Archival-staking alignment — RESOLVED 2026-09-19 (`PDM-Q12`; `WSS-Q1`)
 
-**The archival concept docs are inputs, not constraints.** `V3_STAKER_ARCHIVAL.md`
-and `V3_SHARD_VISUALIZATION.md` were written before this planning; per the design
-owner they **adapt to the best structure here**, not the reverse. This section
-makes the curve-tree client's storage/retrieval the canonical structure and says
-how archival layers onto it. Where a concept-doc detail conflicts (e.g. a
-per-output `assemble_tree_path_for_output` RPC, §7.5), this design governs and the
-concept doc is adapted.
+This section was Round 0's (2026-06) design for **one** leaf store serving three
+consumers over a subtree-aligned "segment" with a frozen sub-root `R_k`. It is
+resolved in two halves, ruled 2026-09-19 ([`FOLLOWUPS.md`](../FOLLOWUPS.md), the
+`PDM` propagation sweep row):
 
-### 7.1 The two needs are one data plane
+- **Serving-side content — DELETED under `PDM-Q12`.** The segment freeze
+  retires. The archival good is each transaction's prunable body plus its
+  `pqc_auths` (`PDM-Q6`), a shard is a consecutive `tx_id` range
+  `[b_k, b_{k+1})` closed on crossing `SHARD_BYTES` (`PDM-Q-F32`), verification
+  is per transaction against the txid components every node keeps forever, and
+  the serving store is `P`'s own ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
+  `WSS-Q1` (a)). Nothing in the curve tree is served by anyone.
+- **Proving-side content — superseded by [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
+  §6.3 as the ruled design of record:** the principal's proving state is **not a
+  store** — a public frontier at `F = tip − W`, a recent-block buffer, and
+  per-owned-output membership paths in the identity's existing sealed file.
+  Adopted 2026-09-19 **subject to** §6.3.4's four measurements; the reopen
+  clause lives with that ruling, not here. If the bench misses, one document
+  changes.
 
-- **CT client (consumer):** assembling a private path needs the leaves from
-  genesis up to the reference height — the tree is cumulative, and the sibling
-  hashes along any one path collectively cover the whole leaf set (§3, §4.3). So
-  path assembly is inherently a **whole-history-leaf** operation — exactly the
-  archival problem `V3_STAKER_ARCHIVAL.md` §"Problem 2" names.
-- **ArchivalEngine (provider):** stakers hold partitioned leaf ranges (shards —
-  shaped per §7.2) and serve them.
+The landed CT-1 store this section shaped stands as record in §3 until the
+`WSS-13` unwind ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.7) retires it
+in code under its own authorization. The subsection headings below are kept so
+that inbound citations resolve to their disposition.
 
-Same bytes, two roles. Design consequence: **one segmented leaf store, not two.**
+### 7.1 The two needs are one data plane — SUPERSEDED (two stores by obligation)
 
-### 7.2 The segment is a subtree-aligned position range (frozen sub-root `R_k`)
+The premise was that path assembly and archival serving are "same bytes, two
+roles". They are not: proving needs the tree, which is complete on every node
+and of which the prover needs only its own path plus the public root
+([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.3.1); archival serves
+transaction bodies the tree never contains (`PDM-Q6`). The ruling is **two
+stores by obligation** ([`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md),
+2026-09-17): the daemon holds consensus state and skeleton and no serving state
+(`PDM-Q9`); the archiver's wallet holds bodies in `P`'s serving store; the
+principal's proving state is not a store.
 
-The boundary is **pure tree-position, aligned to a subtree (tree-level)
-boundary** — *not* height-epoch. The choice is load-bearing, not stylistic: a
-position-aligned segment has a **frozen, reusable sub-root**; a height-aligned one
-does not, and five mechanisms below depend on that one difference existing.
+### 7.2 The segment is a subtree-aligned position range (frozen sub-root `R_k`) — DELETED (`PDM-Q12`)
 
-- **Range:** leaves at tree positions `[k·E, (k+1)·E)`, where `E` is a
-  **subtree-level leaf count** — a product of the alternating Selene/Helios chunk
-  widths, i.e. exactly one tree-level node. (See §7.2.2 for deriving `E`.)
-- **Frozen sub-root `R_k`.** A curve tree built by append (`hash_grow`) has the
-  Merkle-mountain-range property: once a left subtree is full its hash is final —
-  deepening the tree adds a parent *above* it and never re-hashes a completed
-  child. So a subtree-aligned segment `k` has a sub-root `R_k` that is **permanent
-  the moment the segment completes** and never changes as the chain grows.
-- **Contrast (the rejected fork):** a height-epoch segment is a *variable-length*
-  position range (block windows hold variable output counts), so its boundaries
-  cut across subtrees — it has **no single frozen sub-root**, and the only anchor
-  available is the per-height whole-tree header root. That inherits a cross-shard
-  dependency the position case eliminates.
+The leaf-unit shard and its frozen sub-root are retired. A shard is a
+consecutive `tx_id` range `[b_k, b_{k+1})` closed on crossing `SHARD_BYTES`,
+sized in `[SHARD_BYTES, SHARD_BYTES + MAX_TX_SIZE)` (`PDM-Q-F32`) — not
+fixed-size and not leaf-derived; there is no `R_k`, and content is verified per
+transaction against `txs_prunable_hash` / `txs_pqc_auth_hash` (`PDM-Q6` item 4).
+The five "what `R_k` buys" mechanisms of the former §7.2.1 go with it —
+including #5's claim that `R_k` plus the wallet's owned chunks suffice to
+assemble a spend path. They never did: a spend path needs the in-segment sibling
+hashes at every layer, which is exactly why [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
+§6.3 keeps **per-output paths**, not sub-roots. The former §7.2.2's
+`SEGMENT_LEAF_COUNT = 25 992` derivation is not the shard size: the landed
+`leaves_per_segment()` tie is a leaf-count geometry that dies at E4 / S-ARCH
+with the freeze and is **not** re-pointed at `SHARD_BYTES` (`PDM-Q-F33`;
+`WSS-Q11`). `shekyl-shard-visual`'s `shard_content_hash = R_k` input re-keys
+with the unit under its own document
+([`V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md)).
 
-This one unit is simultaneously the CT client's **sync/reorg/cache/prune** unit,
-the ArchivalEngine's **shard**, and `shekyl-shard-visual`'s render input
-(`shard_content_hash` = `R_k`; the concept's `(shard_id, shard_content_hash)`
-cache key is already this). The concept's "~10,000-block shard" adapts to "the
-subtree level nearest the target shard scale" (§7.2.2) — the same re-derivation
-discipline applied to `K_DUST` (drew Bitcoin's concept, re-derived the constant).
+### 7.3 Source-agnostic retrieval; integrity makes untrusted sources safe — DELETED (`PDM-Q12`; `EU-D1`)
 
-#### 7.2.1 What the frozen `R_k` buys, mechanism by mechanism
+Archivers do not serve leaves, and the wallet fetches segments from nobody. The
+proving state is built by replaying the daemon's blocks and checked against the
+header root on every ingested block (`verify_root`; §3.3 — which stands, for the
+wallet's own tree). Archival bodies are fetched by the **daemon**, episodically,
+over Tor ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md)); no wallet talks
+to a wallet ([`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md) `EU-D1`).
 
-1. **Challenge-response becomes shard-self-contained.** The archival concept's
-   proof-of-storage challenge (`V3_STAKER_ARCHIVAL.md` §"challenge") is "produce
-   the Merkle path for block `H`'s tree root proving output `O` is in range" —
-   anchored to the **whole-tree** root at `H`, so a staker holding shard `k`
-   cannot answer from shard `k` alone (it needs every *other* shard's sibling
-   sub-roots to reach the whole-tree root). With `R_k` the challenge becomes
-   "produce the path from a random position in shard `k` to `R_k`" — answerable
-   from the shard's own bytes, no cross-shard context. This resolves the concept's
-   own open "shard granularity" question and makes proof-of-storage **local**.
-2. **Multi-source distribution becomes content-addressed.** Height-aligned
-   segments have no per-segment integrity tag, so a malicious peer's wrong bytes
-   are caught only *after* recomputing against a whole-tree root (expensive, and
-   you don't learn which peer lied). `R_k` is a **content address**: request
-   "segment `k` matching `R_k`," reject non-matching bytes **on receipt**,
-   BitTorrent-style — `R_k` is the infohash the concept's gossip layer wants.
-3. **The reward market gets a clean rarity signal.** Reward is inverse to
-   replication count, so pay should track rarity, not size. Uniform-size
-   (fixed-`E`-leaf) position segments make per-shard reward track replication
-   cleanly and proof-of-storage cost uniform (fair per-shard burden).
-   Height-aligned segments vary wildly in leaf count (a busy epoch dwarfs a quiet
-   one), confounding size with rarity and breaking the balanced-portfolio model.
-4. **Reorg and pruning share the boundary.** Tree leaves change only on reorgs
-   deeper than `SPENDABLE_AGE = 10` (shallower reorgs reshuffle only undrained
-   `pending_tree_leaves`), and deep reorgs touch only the most-recently-drained
-   positions — the **active frontier segment**. So completed segments are
-   **reorg-frozen**; the rollback unit is "the active frontier segment," not "up
-   to a 10k-block checkpoint." The same boundary is the **prune** unit: once a
-   segment freezes to `R_k`, a non-archiving wallet drops its non-owned leaves and
-   keeps only `R_k` (§7.6).
-5. **Pruned-but-assemblable.** Because `R_k` plus the wallet's owned chunks
-   suffice to assemble owned-output paths, the frozen segment is exactly the line
-   that lets a non-staker stay lean without losing assembly capability (§7.6).
+### 7.4 Privacy gradient under multi-source — SUPERSEDED (`WALLET_SIDE_STORE.md` §6.3)
 
-#### 7.2.2 Deriving `E` (subtree level, not 10,000)
+The property this subsection protected — a steady-state wallet that never makes
+a spend-revealing fetch — holds more strongly under the ruled design: the
+principal assembles a spend from its public frontier, its recent-block buffer,
+and its own stored paths with **no fetch at all**. There is no "non-forward
+catch-up" tier; late discovery re-streams blocks ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
+§6.3.2 row 3). §3.0.1's "bulk, never per-output" remains binding and is now
+vacuous on the proving path.
 
-Pick the **tree level** whose leaf count (the running product of the alternating
-chunk widths) lands nearest the target shard scale, rather than fixing `E` to a
-block count. This keeps shards subtree-clean (every segment is one frozen node).
-The concept's "~10k blocks" is the target the level approximates, not the
-boundary itself.
+### 7.5 `assemble_tree_path_for_output` reconciliation — RESOLVED (`SOK-10` Q7 → A)
 
-**The levels are coarse — `~10k` is not hit exactly.** With the fork's real widths
-(`SELENE_CHUNK_WIDTH = LAYER_ONE_LEN = 38`, `HELIOS_CHUNK_WIDTH = LAYER_TWO_LEN =
-18`), the leaf counts per subtree level are: level 0 = **38** outputs, level 1 =
-`38·18` = **684**, level 2 = `38·18·38` = **25,992**, level 3 ≈ 468k, … So
-"nearest 10k leaves" is level 2 (≈26k, ~2.6× over) vs level 1 (684, ~15× under) —
-there is no clean 10k level. The realized shard size is a genuine tradeoff (shard
-count × per-shard storage × proof-of-storage cost), decided at CT-1 once the
-mainnet leaf-growth rate sets the disk budget; the doc records that the boundary
-is a subtree level, with level 2 the provisional choice pending that sizing.
+The wallet is the system's **only** path assembler: `assemble_path` (§3.5,
+CT-4). The daemon's per-output assembler (`get_curve_tree_path`) was deleted
+2026-09-18 as spend-revealing (`SOK-10` Q7 → A; `PHASE_2A_SEND_PATH.md` §3.0.1),
+and there is no staker-served path RPC. The name
+`assemble_tree_path_for_output` resolves to nothing.
 
-#### 7.2.3 Position↔height is a presentation lookup
+### 7.6 Storage unification: one store, three consumers — DELETED (two stores; `WSS-Q1`)
 
-"Which dates does shard `k` cover," the visualization's block-range intuition, and
-the concept's "block `H`" challenge phrasing all become position↔height
-conversions via checkpoint `leaf_count`s — a presentation cost, not a correctness
-one. The concept docs' height-framed language (challenge "block `H`," shard "block
-ranges") is the specific text that adapts.
-
-### 7.3 Source-agnostic retrieval; integrity makes untrusted sources safe
-
-The §6 bulk-leaf fetch is the retrieval primitive, and the sync layer is
-**source-agnostic**: a segment may come from the wallet's own daemon, a
-foundation `--no-prune` floor node, or an **untrusted** staker peer. Safety does
-not depend on trusting the source — and with the frozen `R_k` (§7.2) the check is
-**content-addressed**: request "segment `k` matching `R_k`" (the per-block header
-root chain still anchors `R_k` itself, §3.3), and reject non-matching bytes **on
-receipt** rather than after a whole-tree recompute. A malicious staker can only
-**deny service** (withhold/short a segment), never forge one, and the rejection is
-cheap and per-peer attributable. So "multi-source archival" **falls out** of the
-integrity model rather than needing a retrofit, and `R_k` is the infohash the
-concept's BitTorrent-style gossip layer wants. The V3.0-surface requirement
-`V3_STAKER_ARCHIVAL.md` §"V3 architectural requirements" (4)/(5) names ("query
-historical state from a staker peer or a foundation node") is met by making the
-**one** bulk primitive peer-pluggable — no separate multi-peer RPC pre-built.
-
-### 7.4 Privacy gradient under multi-source (the property to protect)
-
-Distributing the serving role multiplies the parties who can observe queries —
-the metadata FCMP++ protects. The key correction over a naive reading: **a
-steady-state minimal wallet is query-free too, not just a staker.** Once a wallet
-has done one forward sync and cached the frozen sub-root **frontier** (one hash
-per completed shard) plus its own owned-output chunks, it assembles owned paths
-from local data — own chunks + cached siblings — with no query. Its ongoing fetch
-is **forward segment sync** (sync-progress-based, output-independent → non-
-revealing). The prune rule that preserves this: **prune non-owned leaves of frozen
-segments; keep owned-output chunks forever.** With that rule, even a non-archiving
-wallet never makes a spend-revealing fetch. Privacy ordering, best → worst:
-
-1. **Archiver ≈ steady-state minimal wallet — query-free.** The archiver holds
-   full segments and serves others at zero query cost; the minimal wallet, after
-   one forward sync, assembles its own spends from {sub-root frontier, owned
-   chunks, active frontier} with no query. Both are the FCMP++ analog of "run your
-   own node," made structural — "if you stake, you archive" is then a
-   bandwidth-and-altruism tier *on top of* a baseline where everyone is private,
-   not the only private tier.
-2. **Cold / long-offline non-forward catch-up (acceptable, over Tor).** Pulling a
-   *specific old* segment you previously pruned leaks only "this peer fetched
-   shard `k`" — never which leaf, never a per-output index (§4.3). This only
-   arises if a wallet discarded a chunk it later needs; the prune rule above keeps
-   it rare. Routed through the anonymizing infra `V3_STAKER_ARCHIVAL.md`
-   §"Privacy" mandates; cover-traffic is the stronger later form.
-3. **Per-output path query (forbidden, §3.0.1).** Reveals the exact spent leaf —
-   forbidden on the private path, and *worse* under distributed archival (many
-   untrusted stakers would see it).
-
-The §3.0.1 "bulk, never per-output" decision is therefore **more** load-bearing
-under archival, not less; this store/retrieval design preserves it by
-construction (segment-granular fetch, content-match-local lookup).
-
-### 7.5 `assemble_tree_path_for_output` reconciliation
-
-`FCMP_PLUS_PLUS.md` §"layer loop" references `assemble_tree_path_for_output` as
-"(test/RPC path assembly)," and `V3_STAKER_ARCHIVAL.md` §req(4) frames its routing
-as a multi-source **RPC**. Under this design that name resolves to the
-**wallet-local** assembly primitive — the CT client's `assemble_path` (§3.5) —
-**not** a staker-served per-output RPC (forbidden, §3.0.1). Multi-source routing
-applies to the **bulk leaf segment** fetch (§7.3); **assembly stays local**. The
-concept's "`assemble_tree_path_for_output` RPC routing" adapts to "bulk-segment
-routing + local assembly."
-
-### 7.6 Storage unification: one store, three consumers; V3.0 surface, V3.x additive
-
-It is **one schema, footprint varies** — *not* "same bytes." The store is
-segment-addressable and shared across three consumers (minimal-wallet path
-assembly, archiver serving, `shekyl-shard-visual` rendering), but they hold
-different subsets — the visual consumer needs only `R_k` per shard, while the
-storage consumers differ as follows:
-
-- **Minimal wallet (non-staker):** holds `{sub-root frontier (one R_k per
-  completed shard — small), owned-output chunks (kept forever), active frontier
-  segment (unpruned)}`. That is the minimum to forward-sync and assemble its own
-  spend paths. The prune boundary that lets it stay lean is exactly the **frozen
-  segment** (§7.2.1 #4–5) — the strongest argument for position-alignment, since a
-  height-aligned segment gives neither a clean frozen rollback unit nor a clean
-  prune-to-`R_k` commitment.
-- **Archiver (staker, V3.x additive):** holds **full** segment leaves for its
-  pinned shard set; **serves** them (the §6 endpoint, now also outbound) and
-  prices/challenges them (challenge answered from `R_k`, §7.2.1 #1). It adds
-  segment **pin + serve + market** — *not* a new store or schema; it simply
-  retains full leaves where the minimal wallet pruned to `R_k`. `is_active_staker`
-  / `stake_tier` gate eligibility; the data plane and schema are unchanged.
-
-This is the concrete answer to "how does archival affect storage/retrieval":
-**it doesn't restructure the schema — the CT client's segmented, source-agnostic,
-self-verifying store is already the archival substrate; the staker just keeps
-more of it.** Building it position-aligned in V3.0 is what makes the V3.x archival
-ship additive (matching the archival doc's own "no V3.0 refactor" requirement) —
-satisfied by this store design rather than by pre-building unspecified RPC
-boundaries.
-
-**Adaptations the concept docs should take (proposed; applied when those docs are
-next revised, not silently here):**
-
-- `V3_STAKER_ARCHIVAL.md`: shard ≡ CT `LeafStore` **subtree-aligned position
-  segment** (not a block-range), keyed by frozen `R_k`; "query historical state" =
-  source-agnostic **bulk-segment** fetch, not per-output;
-  `assemble_tree_path_for_output` is **local** (§7.5); the challenge re-anchors
-  from "Merkle path for **block H**'s whole-tree root" to "path from a random
-  position in shard `k` to **`R_k`**" (§7.2.1 #1) — shard-self-contained,
-  prover-held, no wallet-exposed query surface and no cross-shard context. The
-  "~10k-block shard" → "subtree level nearest 10k leaves" (§7.2.2); all "block H /
-  block range" phrasing becomes a position↔height lookup (§7.2.3).
-- `V3_SHARD_VISUALIZATION.md`: `shard_content_hash` = `R_k`; the
-  `(shard_id, shard_content_hash)` cache key already matches (§7.2). Block-range
-  intuition is a position↔height presentation lookup (§7.2.3) — no structural
-  change beyond naming the segment as the shard.
+There is no shared store. `P`'s serving store is the wallet's only redb,
+`StakeEngine`-owned, encrypted, keyed by shard over `[b_k, b_{k+1})`, filled from
+the local daemon during the specified-to-scarce window and verified on fill
+against the txid, served whole-shard, and erased only on the two-epoch
+pin-release gate (`WSS-Q1` (a), `WSS-Q4`, `WSS-Q5`, `WSS-Q7`, `WSS-Q8`;
+`EPOCHS_BEFORE_PIN_RELEASE = 2`). The principal's proving state is not a store
+([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.3). The visual consumer is
+defined by [`V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md). The "adaptations
+the concept docs should take" this subsection once listed were superseded before
+they were applied; [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) was
+contracted 2026-09-19 against `PDM`, not against this section.
 
 ### 7.7 CT-0 gate: G1 (value-invariance) vs G2 (extractability)
+
+*Record of the CT-0 gate as run (2026-06), and it stands. G1 — a completed
+subtree's root value is invariant under right-side growth and trim — is a
+property of the tree the wallet still relies on: it is what makes an owned
+output's lower chunks **final forever** in [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
+§6.3.2 row 4, and what §6.3.4 row 4's `build_layers` property tests rest on.
+`R_k` as a serving or prune commitment is retired with §7.2; the property is not.*
 
 The CT-0 gate is **two invariants, not one**, with different blast radii. The doc
 elsewhere frames it as "never re-hash completed nodes"; that conflates a hard gate
@@ -1141,35 +1075,44 @@ canonical tree under replacement at both deepen boundaries.
    *Decided: pure tree-position, subtree-aligned (§7.2), and now gate-confirmed.*
    The harness (`rust/shekyl-fcmp/tests/curve_tree_freeze.rs`) ran against the real
    fork: grow/trim invariance and within-Rust extractability all pass, including
-   the layer-2 segment scale. Decision-tree **branch 3** — §7 stands, no
-   `shekyl-fcmp` accessor needed, CT-1 schema unblocked. Reopening criterion
+   the layer-2 segment scale. Decision-tree **branch 3** — §7 stood, no
+   `shekyl-fcmp` accessor needed, CT-1 schema unblocked (§7's serving half has
+   since been deleted under `PDM-Q12`; G1 itself stands — §7.7). Reopening criterion
    remains G1 (would require a future `shekyl-fcmp::tree` change that moves a
    completed subtree's root value); none observed. The only residual is CT-2's
    Rust↔C++ reconstruct-root KAT (end-to-end G2).
-8. **Derive `E` as a subtree level (§7.2.2).** Levels are coarse: 38 / 684 /
-   25,992 / … leaves. No clean ~10k level — level 2 (≈26k) is provisional; confirm
-   against mainnet leaf-growth and the shard-count × per-shard-storage tradeoff.
-   **Tracked in `FOLLOWUPS.md`** (V3.x, with the `ArchivalEngine` shard policy).
-9. **Pin vs evict / prune policy (§7.6).** Minimal wallet prunes non-owned leaves
-   of frozen segments to `R_k` but keeps owned-output chunks forever; staker pins
-   full shards. The `LeafStore` API must expose both without a V3.x restructure —
-   confirm the pin/prune seam is in CT-1's type design, not deferred.
+8. **Derive `E` as a subtree level (§7.2.2). CLOSED — pinned at level 2
+   (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2; one home in `shekyl_fcmp::tree`
+   since 2026-09-18) — and RETIRED BY RULING as the shard size:** the shard is
+   `PDM-Q-F32`'s byte-bounded range, and the landed leaf-count tie dies at
+   E4 / S-ARCH with the freeze (`WSS-Q11`). Levels are coarse: 38 / 684 / 25,992 / … leaves. No
+   clean ~10k level; level 2 (≈26k) was provisional pending mainnet leaf-growth
+   and the shard-count × per-shard-storage tradeoff, and the pipeline round
+   made it `SEGMENT_LEAF_COUNT` with reversion criteria (a CT sizing re-review
+   before genesis, or a V4 width change). Not tracked in `FOLLOWUPS.md`.
+9. **Pin vs evict / prune policy (§7.6). CLOSED BY RULING (2026-09-19) — no
+   subject.** The proving state is not a store and the serving store is `P`'s
+   own (§7.6); the pin/serve seam CT-1 shipped is landed code the `WSS-13`
+   unwind re-keys (the serve-set concept survives, its leaf key does not —
+   `WALLET_SIDE_STORE.md` §8 (ii)).
 10. **Freeze-lag depth (§3.4). CLOSED (CT-1 Round 1).** Margin is
-    `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS = 720` (`ARCHIVAL_REORG_DEPTH_BLOCKS`,
-    block counts). Gate is **height-based:**
+    `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` (= `ARCHIVAL_REORG_DEPTH_BLOCKS`, 720,
+    block counts; generated from the same JSON key since 2026-09-18). Gate is **height-based:**
     `tip_height − end_block_height ≥ SPENDABLE_AGE + 720`. Not position-based.
     Pinned in [`CT1_ROUND1_PINS.md`](../completed/CT1_ROUND1_PINS.md).
-11. **Anonymized segment fetch (§7.4).** Wire the source-agnostic fetch to the
-    Tor/I2P routing layer so non-forward catch-up fetches inherit mandatory
-    anonymization; confirm the seam against `ANONYMITY_NETWORKS.md` rather than
-    bolting it on at V3.x. **Tracked in `FOLLOWUPS.md`** (V3.0, riding the
-    `SegmentSource` seam's first consumer).
+11. **Anonymized segment fetch (§7.4). CLOSED BY RULING (2026-09-19) — no
+    subject.** The wallet fetches no segments from anyone (§7.3–§7.4); archival
+    bodies are fetched by the daemon over Tor (`SF-`). The `FOLLOWUPS.md` row
+    this item opened ("Anonymized (Tor/I2P) routing for non-forward segment
+    fetch") has no subject under `WALLET_SIDE_STORE.md` §6.3 and is recorded
+    for its owner to retire.
 12. **`build_upper_layers` factor (§7.7, CT-1).** Single-composition holds today
     only for from-leaves consumers. The wallet's steady-state hot path is
     from-cached-`R_k` (O(whole tree) per root if it calls `build_layers(all_leaves)`),
     so factor `build_upper_layers(layer_j_nodes) → root` out of `build_layers` and
     have the cached path call it directly — otherwise the two-impls hazard reopens
-    above the leaf layer. On the CT-1 list (§9), not a CT-0 blocker.
+    above the leaf layer. Landed with CT-1 (`build_upper_layers`, §9); whether the
+    proving side keeps any subroot cache at all is `WSS-Q2`'s.
 13. **CT-2 is the block-derived correctness rock, not just a KAT (§7.7, §9 CT-2).
     Round-0 spike LANDED → [`CT2_DRAIN_ORDER.md`](./CT2_DRAIN_ORDER.md).**
     The privacy-maximal block-derived default commits the wallet to replicating
@@ -1179,7 +1122,7 @@ canonical tree under replacement at both deepen boundaries.
     undeepen drop-model and the empty/early-height root (the genesis corner of the
     same "wallet composition == C++ consensus" question). The Round-0 enumeration
     pinned every divergence surface to source in `CT2_DRAIN_ORDER.md`: S1 (index
-    assignment), S1-leaf (coinbase/`h_pqc` on-chain in `tx_extra 0x07`), S2 (drain
+    assignment), S1-leaf (coinbase/leaf commitment on-chain in `tx_extra 0x07`), S2 (drain
     trigger + `(maturity, gindex)` batch, all three maturity classes, empty-tree
     root = `selene_hash_init`), S3 (reorg, which **folds into S1/S2** for the
     wallet via derive-don't-accumulate — no journal replica). Two framing
@@ -1210,9 +1153,10 @@ CT-0 is the gate (§8 #7): if **G1** fails (§7.7), the boundary choice reopens
 before any schema lands; a G2-shaped finding does not. CT-1/CT-2 are then pure-Rust and
 synthetic-testable (no daemon dependency), mirroring 2A's split: the
 crypto/assembly lands and is KAT-gated before the daemon endpoint exists. The
-V3.x `ArchivalEngine` (pin + serve + market, §7.6) is **out of CT scope** — but
-CT-1's `LeafStore` API must not foreclose it (the pin/prune + outbound-serve seam
-is the only forward requirement).
+archival serving store is not this crate's — it is `P`'s body store (`WSS-Q1`
+(a), §7.6). The pin/serve seam CT-1 shipped (`pin_serve_set`, `ServingReader`)
+is landed code the `WSS-13` unwind re-keys to the shard unit (`WALLET_SIDE_STORE.md`
+§8 (ii): the serve-set concept survives, its leaf key does not).
 
 ---
 
@@ -1241,20 +1185,13 @@ is the only forward requirement).
   `build_layers` promoted into `shekyl-fcmp::tree` as the single composition (CT-1
   assembler / CT-2 KAT / production all call it). Tier-2 tests prove
   incremental↔batch agreement; CT-2 KAT owns it end-to-end (no separate Tier 3).
-- [ ] §7.2 segment = subtree-aligned position range keyed by frozen `R_k`; shard =
-  visual unit; position↔height is presentation lookup.
-- [ ] §7.3 content-addressed fetch (`R_k` = infohash, reject on receipt);
-  untrusted source = DoS-only.
-- [ ] §7.4 corrected gradient: archiver ≈ steady-state minimal wallet (query-free)
-  > non-forward catch-up (Tor) > per-output (forbidden); prune rule keeps owned
-  chunks forever.
-- [ ] §3.4/§7.2.1#4 rollback + prune unit = frozen segment; freeze lags tip by
-  reorg margin.
-- [ ] §7.6 one schema, footprint varies (minimal = frontier + owned chunks +
-  active frontier; archiver = full segments).
-- [ ] §7.5 `assemble_tree_path_for_output` is local assembly, not a staker RPC.
-- [ ] §7.6 `LeafStore` segment-addressable so V3.x `ArchivalEngine` is additive;
-  pin/evict seam present in CT-1.
+- [x] §7 archival alignment — **RESOLVED 2026-09-19**: serving half deleted under
+  `PDM-Q12`, proving half superseded by `WALLET_SIDE_STORE.md` §6.3; the Round-0
+  boxes for §7.2–§7.6 (segment = `R_k`-keyed position range, `R_k` as infohash,
+  the fetch gradient, prune-to-`R_k`, one schema three consumers, the additive
+  `ArchivalEngine` seam) are retired with it. §7.5 stands resolved: the wallet
+  is the only path assembler (`SOK-10` Q7 → A). §3.4's landed freeze-lag
+  behaviour is record until the `WSS-13` unwind.
 
 ---
 

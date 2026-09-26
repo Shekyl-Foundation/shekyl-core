@@ -1,7 +1,7 @@
 # LMDB Schema Reference
 
 **Last updated:** August 2026
-**DB version:** 12 (schema v12: the prune-watermark receipt — `properties` key `archival_prune_watermark_epoch`, the pop floor's source (C2-R1b-Q1c); a v11 datadir pruned without receipts and is refused; v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
+**DB version:** 15 (schema v15: two tables leave the X-macro — `txs_prunable_tip` and `output_metadata` — with the C++ tx-data prune (2026-09-22); a v14 datadir holds two named DBs a v15 binary never opens and is refused at open; v14: `PL-D3` — the curve-tree leaf's 4th scalar is `CM.x`, the x-coordinate of the output's `0x07` leaf-commitment point, and the `0x07` entry is 64 B per output (`CM ‖ record`); a v13 datadir's leaves and roots were computed from the retired leaf hash and the datadir is refused (`FCMP_SPEND_LINKABILITY.md` §6.2); v13: the `archival_bond` value v6 → v7 gains the 32-byte serving `endpoint` committed at JoinMarket (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`); a v12 datadir's records fail the value's version pin and the datadir is refused; v12: the prune-watermark receipt — `properties` key `archival_prune_watermark_epoch`, the pop floor's source (C2-R1b-Q1c); a v11 datadir pruned without receipts and is refused; v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
 **Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
 
 ## Conventions
@@ -24,7 +24,65 @@ Several `DUPSORT` tables use a **dummy primary key** of 8 zero bytes (`zerokval`
 
 ### Hash comparator
 
-`compare_hash32` interprets a 32-byte `crypto::hash` as 8 consecutive `uint32_t` words in memory order and compares them lexicographically.
+`compare_hash32` (`db_lmdb.cpp:236`) loads a 32-byte `crypto::hash` as 8
+`uint32_t` words and compares them **from word 7 down to word 0** — the LAST
+four bytes are the most significant. The loads are native, so on a
+little-endian host the effect is to order the 32 bytes as a **little-endian
+256-bit integer**: byte 31 most significant, byte 0 least.
+
+**It is NOT byte-lexicographic**, and the precise statement matters more than
+that negative one, because the obvious reading of "the reverse of
+lexicographic" produces a *different, also-wrong* order:
+
+- **It IS** ascending lexicographic over the **reversed byte string** —
+  compare byte 31 first, then 30, … down to byte 0. In Rust that is
+  `a.iter().rev().cmp(b.iter().rev())`, equivalently comparing the
+  byte-reversed arrays.
+- **It is NOT** *descending* lexicographic. That reading flips the *result* of
+  comparing byte 0 first; the real function flips *which byte is compared*
+  first. Measured over 4 000 random pairs: the reversed-byte reading agrees
+  with the C++ on **4 000/4 000**, while descending-lexicographic disagrees on
+  **2 010/4 000**. A wrong implementation here is therefore wrong on about half
+  of all pairs rather than cleanly inverted — it will not show up in a smoke
+  test. (`Reverse<[u8; 32]>` is the wrong primitive for this reason.)
+
+Demonstrated with `A = 01 00 … 00` and `B = 00 … 00 01`: `compare_hash32` says
+`A < B`, byte-lexicographic says `A > B`.
+
+> **This sentence previously said "in memory order … lexicographically", which
+> is word 0 first — the opposite of what the loop does.** It is corrected here
+> because the wrong description coincided with the default ordering a
+> reimplementation would reach for (Rust's `[u8; 32]`, `memcmp`), so a port
+> built on this document would have agreed with the document, agreed with
+> itself, and been **backwards from LMDB on all seven tables that use this
+> comparator** — invisible until a range scan returned the wrong set. Found
+> while mapping the schema for DRS-0 slice B.
+
+The seven tables, split by which ordering the comparator governs:
+
+| Governs | Tables |
+|---|---|
+| **Key** order (`mdb_set_compare`) | `txpool_meta`, `txpool_blob`, `alt_blocks`, `archival_alt_attestation_witness` |
+| **Duplicate** order (`mdb_set_dupsort`) | `spent_keys`, `block_heights`, `tx_indices` |
+
+**Two properties to carry into any reimplementation** (specification records —
+the C++ is scheduled for deletion, so neither is patched here):
+
+- **Host-endianness dependence is structural, and the big-endian behaviour is
+  not a clean alternative order.** The native `uint32_t` loads mean a
+  big-endian host compares bytes in the order 28, 29, 30, 31, 24, 25, 26, 27,
+  … 0, 1, 2, 3 — a word-shuffled hybrid that is neither lexicographic nor
+  reversed-lexicographic. **There is no host on which this function is
+  lexicographic.** Measured: LE and BE readings of the same bytes disagree on
+  2 000 of 4 000 random pairs. A database written on one and read on the other
+  is silently mis-ordered rather than loudly wrong. A reimplementation must
+  state its byte order **explicitly** rather than inherit the host's.
+- **The `uint32_t*` cast of `mv_data` is undefined behaviour twice over** — it
+  violates strict aliasing, and LMDB does not guarantee 4-byte alignment of
+  key/value buffers. Benign on x86-64 and ARM64 in practice. **The evidence
+  that this is a wart rather than a considered choice is four lines above it:**
+  `compare_uint64` performs the same kind of load correctly, via `memcpy`. The
+  codebase already knows the idiom; this function simply does not use it.
 
 ### String comparator
 
@@ -146,7 +204,7 @@ PQC authentication data for v3+ transactions (second unprunable segment, between
 | Key comparator | `compare_uint64` |
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value | Byte slice `[pqc_auths_offset, unprunable_size)` from the tx blob. Variable length. Only present for non-coinbase transactions with `tx.version >= 3`. |
-| Writers | `add_transaction_data` (conditional), `remove_transaction_data`. **Not** `prune_tx_data` — this is the second unprunable segment. |
+| Writers | `add_transaction_data` (conditional), `remove_transaction_data`. Never a discard — this is the second unprunable segment. |
 | Readers | `get_pruned_tx_blob` (concatenates with txs_pruned) |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (DB v6, `migrate_5_6`) |
 
@@ -161,7 +219,7 @@ Prunable suffix of serialized transactions (`CtSigPrunable`: Bulletproof+ range 
 | Key comparator | `compare_uint64` |
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value | Bytes from `unprunable_size` to end of tx blob. Variable length. |
-| Writers | `add_transaction_data`, `remove_transaction_data`, `prune_tx_data` (delete only) |
+| Writers | `add_transaction_data`, `remove_transaction_data` (no C++ discard since v15; the uniform discard is S-PRUNE, on the redb store) |
 | Readers | `get_prunable_tx_blob` |
 | Introduced | Genesis (DB v0) |
 
@@ -176,23 +234,15 @@ Hash of the prunable section, kept for verification when the prunable data itsel
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value (dup) | `crypto::hash` (32 bytes) |
 | Dup sort | `compare_uint64` (first 8 bytes of hash treated as uint64) |
-| Writers | `add_transaction_data` (for tx version > 1), `remove_transaction_data`. **Not** `prune_tx_data` — the hash is what still names a pruned transaction. |
+| Writers | `add_transaction_data` (for tx version > 1), `remove_transaction_data`. Never a discard — the hash is what still names a pruned transaction. |
 | Introduced | Genesis (DB v0) |
 
-### `txs_prunable_tip`
+### ~~`txs_prunable_tip`~~ — DELETED (DB v15, 2026-09-22)
 
-Tracks which transactions are at the pruning frontier. Not opened in read-only mode.
-
-| Property | Value |
-|---|---|
-| LMDB name | `"txs_prunable_tip"` |
-| Flags | `MDB_INTEGERKEY \| MDB_DUPSORT \| MDB_DUPFIXED` |
-| Key | `uint64_t` tx_id (8 bytes) |
-| Value (dup) | `uint64_t` block height at insertion (8 bytes) |
-| Dup sort | `compare_uint64` |
-| Writers | `add_transaction_data` (when pruning seed != 0), `remove_transaction_data` |
-| Note | Only present when blockchain pruning is active. |
-| Introduced | Genesis (DB v0) |
+The stripe engine's tip index (`tx_id` → height, `MDB_INTEGERKEY | MDB_DUPSORT`,
+written only when a pruning seed was set). Write-never since `PDM-Q7` deleted
+the engine (#821); left the X-macro at v15 with the C++ tx-data prune. Its
+redb twin left the catalogue at `SCHEMA_VERSION 10`.
 
 ### `txs` (legacy)
 
@@ -317,32 +367,15 @@ Offset  Size  Field
 | Note | Shekyl uses only RCT outputs (amount = 0), so all entries use the `outkey` layout. The `pre_rct_outkey` layout is retained for migration compatibility. |
 | Introduced | Genesis (DB v0, rebuilt in v1 migration) |
 
-### `output_metadata`
+### ~~`output_metadata`~~ — DELETED (DB v15, 2026-09-22)
 
-Pruning-safe output metadata, retained after transaction pruning.
-
-| Property | Value |
-|---|---|
-| LMDB name | `"output_metadata"` |
-| Flags | `MDB_INTEGERKEY` |
-| Key | `uint64_t` global output index (8 bytes) |
-| Value | `output_pruning_metadata_t`, 88 bytes (`#pragma pack(1)`): |
-
-```
-Offset  Size  Field
-0       32    crypto::public_key pubkey
-32      32    ct::key commitment
-64       8    uint64_t unlock_time
-72       8    uint64_t height
-80       1    uint8_t pruned (1 if parent tx prunable data removed)
-81       7    uint8_t padding[7]
-```
-
-| Property | Value |
-|---|---|
-| Writers | `add_output` (when pruning enabled), `prune_tx_data` |
-| Readers | `get_output_metadata` |
-| Introduced | DB v6 |
+The C++ tx-data prune's post-discard scan cache (`global_output_index` → an
+88-byte `output_pruning_metadata_t`: pubkey, commitment, unlock time, height,
+pruned flag; introduced v6). Its only writer was inside `prune_tx_data` and its
+read chain (`get_output_metadata` → `is_output_pruned`) had no caller. Deleted
+with the prune. Under archival pruning the retained set is the transaction
+prefix, which already carries what a scanner needs
+(`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q6 item 1), so there is no successor table.
 
 ---
 
@@ -453,33 +486,40 @@ once (`SO-D4.3`).
 
 Gate-4 `ArchivalBondRecord` substrate for serve-credit and emission reads
 (`ARCHIVAL_CONSENSUS_STATE.md` §3.4). Written on JoinMarket bond-post connect
-(gate-4 §3.4.1).
+(gate-4 §3.4.1); the serving `endpoint` it carries is committed there and
+never changes for the record's life (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`;
+a Release leaves the row, endpoint included).
 
 | Property | Value |
 |---|---|
 | LMDB name | `"archival_bond"` |
 | Flags | `MDB_CREATE` |
 | Key | `P_id[32]` (`P_canonical_id`) |
-| Value | versioned `ArchivalBondValue` blob (v4 only at genesis: hybrid pubkey, **`bond_spend_pk`** (GF-1 debit authorizer, gate-4 §4.1), `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel, bad intervals, claimed settlement epochs, `first_paying_emission_height`; v1–v3 decode rejected) |
-| Writers | `put_archival_bond_record` (join/re-bond connect), `remove_archival_bond_record` (reorg) |
-| Readers | `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
+| Value | versioned `ArchivalBondValue` blob (v7 at genesis: hybrid pubkey, **`bond_spend_pk`** (GF-1 debit authorizer, gate-4 §4.1), **`endpoint`** (32-byte serving endpoint, `EU-D3`), `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel with the index-parallel per-shard add-epochs (v6), bad intervals, claimed settlement epochs, `first_paying_emission_height`; every earlier version is rejected at decode) |
+| Writers | `put_archival_bond_record` (JoinMarket connect), `put_archival_bond_value` (every load-modify-store writer: slash apply/revert, Release, HoldingsUpdate, Reinstate), `remove_archival_bond_record` (JoinMarket pop) |
+| Readers | `get_archival_bond_value`, `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
 | Encoder | `shekyl::db::ArchivalBondValue` in `blockchain_db/shekyl_types.h` |
 | Introduced | HF1 (gate-4 substrate; gate-2 §5.3 steps 2–3 reads) |
 
-v4 layout (`REWARD_EMISSION_LEG.md` §6.2/§6.3, pinned 2026-06-11; `bond_spend_pk`
-amended in per `ARCHIVAL_BOND_GATE4.md` §4.1, 2026-06-16 — committed at JoinMarket,
-immutable, and bound into the bond-post sig-preimage (gate-4 §3.4.1), so the
-persisted record must carry it. Pre-genesis amendment: no migration, reset
-data-dir per the v4 posture; the field is in the genesis v4, not a v5 bump):
+v7 layout. v4 (`REWARD_EMISSION_LEG.md` §6.2/§6.3, pinned 2026-06-11) appended
+the claimed-epoch set and `first_paying_emission_height`; v5 (`ARCHIVAL_BOND_GATE4.md`
+§4.1, 2026-06-16) inserted `bond_spend_pk` — committed at JoinMarket, immutable,
+and bound into the bond-post sig-preimage (gate-4 §3.4.1), so the persisted
+record must carry it; v6 (gate-4 §4.4, HoldingsUpdate) added the per-shard
+add-epochs under the holdings count; v7 (`ARCHIVAL_ENDPOINT_UPDATE.md`
+`EU-D3`, 2026-09-12) inserted the serving `endpoint` after `bond_spend_pk`.
+Every bump is pre-genesis: no migration, reset the data-dir; `decode` rejects
+any other version byte.
 
 ```text
-u8  version (= 4)
+u8  version (= 7)
 u16 BE pubkey_len ‖ pubkey bytes              (≤ 2048)   // P_pubkey (account identity)
 u16 BE bond_spend_pk_len ‖ bond_spend_pk      (≤ 2048)   // GF-1 debit authorizer (gate-4 §4.1); committed at JoinMarket, immutable
+u8[32] endpoint                                          // serving endpoint (EU-D3); committed at JoinMarket, immutable
 u64 BE join_settlement_epoch
 u64 BE bonded_total_atomic
 u8  holdings_kind (0 = shard set, 1 = CompleteTree)
-u32 BE holdings_count ‖ u64 BE shard ids      (≤ 4096)
+u32 BE holdings_count ‖ u64 BE shard ids ‖ u64 BE shard add-epochs   (≤ 4096; both arrays under the ONE count, index-parallel — v6)
 u32 BE bad_interval_count ‖ (u64 BE start, u64 BE end_exclusive) pairs (≤ 256)
 u32 BE claimed_count ‖ u64 BE claimed epochs  (≤ 32 = W + 6, strictly
                                                increasing, span ≤ W)
@@ -655,7 +695,7 @@ Per-block revert journal for slash connect / `pop_block` (gate-2 §8).
 ### The four pre-image journals
 
 `archival_emission_claim_log`, `archival_bond_unbond_log`,
-`archival_bond_holdings_update_log`, and `archival_bond_rebond_log` share
+`archival_bond_holdings_update_log`, and `archival_bond_reinstate_log` share
 the slash log's row layout and the height-keyed journal scaffold in
 `db_lmdb.cpp` (`archival_journal_{next_seq,put,read,delete}`): key
 `BE(block_height) ‖ BE(seq)` (12 bytes; each key type is an alias of
@@ -727,24 +767,24 @@ Unbond superset reused.
 | Writers | `apply_archival_holdings_update_add` / `_drop` via the single-sourced `apply_archival_bond_record_update` scaffold and `put_archival_holdings_update_journal`, the revert's clear |
 | Readers | `revert_archival_holdings_updates_at_height` |
 
-### `archival_bond_rebond_log`
+### `archival_bond_reinstate_log`
 
-Per-block journal for the Rebond connect's record pre-image
-(`ARCHIVAL_BOND_GATE4.md` §3.4; P2B-9 reinstatement). Rebond is the one
+Per-block journal for the Reinstate connect's record pre-image
+(`ARCHIVAL_BOND_GATE4.md` §3.4; P2B-9 reinstatement). Reinstate is the one
 bond-post kind that mutates an EXISTING interval in place (`end_exclusive`:
-MAX → `E_rebond + 1`), so alongside the holdings pre-image the row carries
+MAX → `E_reinstate + 1`), so alongside the holdings pre-image the row carries
 the closed interval's index + start; the pop re-opens exactly that entry to
 MAX, with a belt that the start must match and the entry must currently be
-closed (`FATAL: archival rebond revert interval desync` otherwise).
+closed (`FATAL: archival reinstate revert interval desync` otherwise).
 
 | Property | Value |
 |---|---|
-| LMDB name | `"archival_bond_rebond_log"` |
+| LMDB name | `"archival_bond_reinstate_log"` |
 | Flags | `MDB_CREATE` |
 | Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
-| Value | `ArchivalBondRebondRevertValue` v1, variable: `version[1] \|\| p_id[32] \|\| BE(pre_bonded_total)[8] \|\| BE32(closed_interval_index) \|\| BE(closed_interval_start)[8] \|\| BE32(shard_count) \|\| BE(pre_shard_ids[]) \|\| BE(pre_shard_add_epochs[])` (57 + 16·shards bytes; `pre_bonded_total == 0` is LEGAL — a terminal-slash reinstatement starts from a zero-balance record) |
-| Writers | `apply_archival_rebond` via the shared bond-record scaffold, the revert's clear |
-| Readers | `revert_archival_rebonds_at_height` |
+| Value | `ArchivalBondReinstateRevertValue` v1, variable: `version[1] \|\| p_id[32] \|\| BE(pre_bonded_total)[8] \|\| BE32(closed_interval_index) \|\| BE(closed_interval_start)[8] \|\| BE32(shard_count) \|\| BE(pre_shard_ids[]) \|\| BE(pre_shard_add_epochs[])` (57 + 16·shards bytes; `pre_bonded_total == 0` is LEGAL — a terminal-slash reinstatement starts from a zero-balance record) |
+| Writers | `apply_archival_reinstate` via the shared bond-record scaffold, the revert's clear |
+| Readers | `revert_archival_reinstates_at_height` |
 
 ### `archival_attestation_witness`
 
@@ -779,6 +819,7 @@ Reorg-survival counterpart: the same opaque bytes, keyed by **block hash**
 | Writers | `store_archival_alt_attestation_witness` (`handle_alternative_block`, beside `add_alt_block`, same txn), `remove_archival_alt_attestation_witness` (from `remove_alt_block`), `drop_alt_blocks` |
 | Readers | `get_archival_alt_attestation_witness` (reorg promotion in `switch_to_alternative_blockchain`) |
 | Introduced | rides the v9 boundary (additive, no bump) |
+| redb twin | **none — folded** into `alt_blocks`' record as `AltBlock::attestation_witness` (DRS-E1 S-ALT, 2026-09-25, layout 13; `schema::FOLDED_INTO`, `SAR-Q5`). The one-owner rule below is structural there: a field cannot outlive its row. |
 
 **One table, one owner.** Rows are owned by the alt block: written beside
 `add_alt_block`, removed by `remove_alt_block` / `drop_alt_blocks` /
@@ -869,16 +910,16 @@ Offset  Size  Field
 
 ### `curve_tree_roots`
 
-Per-block curve-tree root hash for fast lookup without deserializing checkpoints.
+Per-height curve-tree root hash for fast lookup without deserializing checkpoints.
 
 | Property | Value |
 |---|---|
 | LMDB name | `"curve_tree_roots"` |
 | Flags | `MDB_INTEGERKEY` |
-| Key | `uint64_t` block height (8 bytes) |
+| Key | `uint64_t` block height (8 bytes) — key *h* holds the tree state **at** height *h*: block *h−1*'s connect writes it as `prev_height + 1` (`blockchain_db.cpp:664`), so it is the anchor CEN-I12 reads for `ref_height = h` and the root block *h*'s header must carry (CEN-B5) |
 | Value | 32-byte root hash |
-| Writers | `set_curve_tree_root_at_height` (block connect), deleted on `pop_block` |
-| Readers | `get_curve_tree_root_at_height` |
+| Writers | `store_curve_tree_root_at_height` (block connect, `src/blockchain_db/blockchain_db.cpp:663`–`:664`) — **on every connect**, whether or not the drain grew the tree: the call is inside the `blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` gate (`:493`, always true) and *outside* the `if (new_output_count > 0)` block that closes at `:650`. The table is therefore **dense from key 1**; **key 0 is never written** (no connect produces it). Deleted on `pop_block` |
+| Readers | `get_curve_tree_root_at_height` — returns an **all-zero** array silently on a missing key (`src/blockchain_db/lmdb/db_lmdb.cpp:9064`–`:9080`, `MDB_NOTFOUND`), which is reachable only for key 0 in a healthy file (`ref_height = 0` is age-selectable while `chain_height ≤ 100`); the zeros decode to the identity point, so a proof anchored at genesis is verified against *O* — consequence-free (the empty tree has no members; forging against *O* is a DL break). Walked and recorded on CEN-I12's CSR row 2026-09-15 (`docs/design/CONSENSUS_RULE_CENSUS.md` §7 #21; S-CHAIN-W SCW-19); the verdict stands |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
 
 ### `pending_tree_leaves`
@@ -1040,6 +1081,7 @@ Offset  Size  Field
 | Writers | `add_txpool_tx`, `update_txpool_tx`, `remove_txpool_tx` |
 | Readers | `get_txpool_tx_meta`, `for_all_txpool_txes` |
 | Introduced | Genesis |
+| redb twin | `pool_meta` (`[u8; 32] → Coded<pool_record>`) in the **pool file**, `shekyl-chain-store::pool` — not the consensus store (DRS-E1 S-POOL, 2026-09-24; `DAEMON_REDB_STORE.md` §5.1; `schema::MIRRORED_ELSEWHERE`). The 192-byte record is re-specified, not ported: `DRS_E1_SPOOL.md` §3.4 |
 
 ### `txpool_blob`
 
@@ -1055,6 +1097,7 @@ Raw transaction blobs in the memory pool.
 | Writers | `add_txpool_tx`, `remove_txpool_tx` |
 | Readers | `get_txpool_tx_blob`, `for_all_txpool_txes` |
 | Introduced | Genesis |
+| redb twin | `pool_blob` (`[u8; 32] → Blob<pool_tx>`) in the **pool file**, `shekyl-chain-store::pool` (DRS-E1 S-POOL, 2026-09-24; `schema::MIRRORED_ELSEWHERE`) |
 
 ---
 
@@ -1087,6 +1130,7 @@ Offset  Size  Field
 | Writers | `add_alt_block`, `remove_alt_block`, `drop_alt_blocks` |
 | Readers | `get_alt_block`, `for_all_alt_blocks` |
 | Introduced | Genesis |
+| redb twin | `alt_blocks` (`LmdbHashKey → Coded<alt_block>`) in the **consensus file** — `AltBlock`: the u128 as one field, the weight's zero sentinel as `Option`, the block bytes **and the alt attestation witness** as fields (DRS-E1 S-ALT, 2026-09-25, layout 13; `DRS_E1_SALT.md` §3.4). Seven operations AL1–AL7 replace the six methods above plus the witness pair. |
 
 ---
 
@@ -1109,9 +1153,9 @@ General key-value store for database-level metadata.
 |---|---|---|
 | `"version"` (NUL-terminated) | `uint32_t` | Database schema version — tracks `#define VERSION` in `db_lmdb.cpp` (the header of this document names the current value; a third copy here just drifts) |
 | `"archival_prune_watermark_epoch"` | `uint64_t` | The retention prune's monotonic receipt (C2-R1b-Q1c, v12): highest `prune_below_epoch` ever applied, written in the prune's own txn before its deletions. The pop floor's source (`pop_target_allowed`). One writer, never lowered, **exempt from pop reversal** — unlike `archival_frozen_shard_count`, this key records destruction a pop cannot undo |
-| `"pruning_seed"` (NUL-terminated) | `uint32_t` | Blockchain pruning seed |
-| `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | Next block height for tx pruning |
-| `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | Height of last pruned tx data |
+| `"pruning_seed"` (NUL-terminated) | `uint32_t` | ~~Blockchain pruning seed~~ **RETIRED 2026-09-21** (`PDM-Q7`: the stripe engine is deleted; no writer, no reader — a key left in an old datadir is ignored). Not a layout change, so no version bump. |
+| `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | ~~Next block height for tx pruning~~ **RETIRED v15** with `prune_tx_data`; a key left in an old datadir is ignored |
+| `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | ~~Height of last pruned tx data~~ **RETIRED v15** (the legacy spelling of the same watermark) |
 | `"total_bonded_atomic"` (no NUL) | `uint64_t` | Global audit scalar: sum of per-`P` `bonded_total_atomic` (gate-4 §4.5). Credited on JoinMarket `bond_credit`; debited on Unbond/slash connect paths |
 | `"total_burned"` (no NUL) | `uint64_t` | Cumulative amount of SHEKYL destroyed (zero-staker burns + explicit burns) |
 | `"archival_frozen_shard_count"` (no NUL) | `uint64_t` | Pop-symmetric `archival_shard_segment` row counter — the M1 gate operand's O(1) backing store (V8; `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4). +1 in `put_archival_shard_segment`, −1 per deleted row in `revert_archival_segment_freezes`; mutation surface CI-pinned |
@@ -1119,14 +1163,14 @@ General key-value store for database-level metadata.
 | Property | Value |
 |---|---|
 | Writers | Various — `set_total_bonded_atomic`, `set_total_burned`, pruning code (`migrate()` writes nothing — refuse-loudly since the Monero ladder deletion) |
-| Readers | Various — `get_total_bonded_atomic`, `get_total_burned`, `get_blockchain_pruning_seed`, etc. |
+| Readers | Various — `get_total_bonded_atomic`, `get_total_burned`, etc. (`get_blockchain_pruning_seed` deleted 2026-09-21) |
 | Introduced | Genesis (DB v0) |
 
 ---
 
 ## Sub-database total
 
-Total: **49 sub-databases**. The single source of truth is the
+Total: **47 sub-databases**. The single source of truth is the
 `SHEKYL_LMDB_TABLES` X-macro list in `db_lmdb.cpp`; its derived
 `kLmdbTableCount` is what `mdb_env_set_maxdbs` receives (`SO-D4`,
 `ARCHIVAL_SETTLEMENT_WRITER.md`), so the count is exact by construction with
@@ -1207,6 +1251,29 @@ keeps a v11 binary — which reads no receipts — out of a v12 datadir it
 could otherwise pop past. Delete and resync. No table is added; one
 `properties` key is minted, written only by `prune_archival_epochs_before`
 in the same write txn as the deletions it receipts.
+
+### Schema v12 → v13 (breaking, no migration path)
+
+DB v13: the JoinMarket serving endpoint (`ARCHIVAL_ENDPOINT_UPDATE.md`
+`EU-D3`, 2026-09-12) — layout. The `archival_bond` value moves v6 → v7,
+inserting the 32-byte serving `endpoint` after `bond_spend_pk`, committed at
+JoinMarket from the vin's field and never changed. No table is born. Every v12
+record fails the value codec's version pin, so a v12 datadir cannot be read
+by a v13 binary and is refused at open rather than mis-decoded. Pre-genesis:
+delete and resync.
+
+DB v14: `PL-D3` — the curve-tree leaf's 4th scalar (see the header line).
+
+DB v15: two tables leave the X-macro (2026-09-22) — `txs_prunable_tip`, the
+Monero stripe engine's tip index, write-never since `PDM-Q7` deleted the
+engine (#821); and `output_metadata`, the C++ tx-data prune's post-discard
+scan cache, whose read chain was dead two levels deep. Layout, not content:
+no surviving table's bytes change, but a v14 env has two named DBs a v15
+binary never opens, and the `maxdbs` ceiling is derived from a shorter list.
+The `tx_prune_next_block` / `last_pruned_tx_data_height` properties are
+retired with the prune. The discard that replaces all of it is S-PRUNE,
+Rust, on the redb store (`DRS_E1_SPRUNE.md`; redb `SCHEMA_VERSION` 9 → 10 in
+the same PR). Pre-genesis: delete and resync.
 
 `BlockchainLMDB::migrate` refuses any pre-`VERSION` database with a message
 that tracks the constant, so each bump extends the refusal automatically.

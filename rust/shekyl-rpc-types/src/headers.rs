@@ -186,59 +186,41 @@ pub struct HardForkInfoResponse {
     pub earliest_height: u64,
 }
 
-/// Which tier of the dynamic fee estimate a caller wants.
+/// Which priced rung of the dynamic fee estimate a caller wants.
 ///
-/// The wire carries FOUR SLOTS but only THREE PRICED TIERS. FL-R17 signed
-/// three (economy / standard / priority) and RK-5 keeps the vector four
-/// wide until the RPC cutover, so slot 2 — [`FeeTier::Medium`], the old
-/// `Fm` — is a BRIDGE that mirrors [`FeeTier::Normal`]. It is not a
-/// distinct rate and must not be priced as one.
-///
-/// The slots were always a bare array, so the tier a caller meant lived in
-/// an index. Naming them is what stops `fees[3]` being reachable by
-/// position.
+/// The wire is a three-element array `[economy, standard, priority]`.
+/// Naming the rungs is what stops a caller reaching a slot by position.
 ///
 /// These are the **derivation's** tiers, deliberately not the wallet's
 /// `FeePriority` (economy / standard / priority). Those are a UX policy that
 /// *maps onto* these — `economy = Low`, `standard = Normal`,
 /// `priority = High` — and collapsing the two vocabularies into one would bake
-/// a wallet policy into the daemon's wire contract. That is a different
-/// collapse from the RK-5 bridge above: the bridge makes two SLOTS carry one
-/// rate on the wire, deliberately, so a wallet2-transliterated `Elevated`
-/// caller mapped to `Medium` pays the standard rate and stays inside the
-/// largest anonymity set rather than self-marking on a rung of its own.
+/// a wallet policy into the daemon's wire contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeeTier {
     Low,
     Normal,
-    Medium,
     High,
 }
 
-/// The four fee tiers, in derivation order.
+/// The three fee tiers, in derivation order: `[economy, standard, priority]`.
 ///
-/// A fixed array of four SLOTS carrying three priced tiers (slot 2 is the
-/// RK-5 bridge, mirroring slot 1). Fixed, so a reply carrying three
-/// **fails to deserialize** rather than being read as a shorter answer.
-/// The four-ness lived in one C++ function
-/// (`get_dynamic_base_fee_estimate_2021_scaling`'s `resize(4)`) and nothing
-/// downstream asserted it; a derivation that returned three would otherwise
-/// have produced a silently wrong base fee.
+/// Fixed, so a reply carrying any other count **fails to deserialize**
+/// rather than being read as a shorter answer with the priority rate in
+/// the wrong position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct FeeTiers(pub [u64; 4]);
+pub struct FeeTiers(pub [u64; 3]);
 
 impl FeeTiers {
-    /// The fee for one tier. Total: every [`FeeTier`] indexes a slot that
-    /// exists, because the array is fixed at four.
+    /// The fee for one tier. Every [`FeeTier`] indexes a slot that exists.
     #[must_use]
     pub const fn get(self, tier: FeeTier) -> u64 {
         let Self(fees) = self;
         match tier {
             FeeTier::Low => fees[0],
             FeeTier::Normal => fees[1],
-            FeeTier::Medium => fees[2],
-            FeeTier::High => fees[3],
+            FeeTier::High => fees[2],
         }
     }
 }
@@ -295,29 +277,28 @@ mod tests {
         FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetFeeEstimateResponse, HardForkInfoRequest,
     };
 
-    /// The four-ness is enforced by the type, not trusted. A reply carrying
-    /// three tiers is a parse error — which is the whole point, since the
-    /// `resize(4)` it mirrors lives in one C++ function and nothing
-    /// downstream asserted it.
+    /// The arity is enforced by the type, not trusted. A reply carrying any
+    /// count but three is a parse error, including the four-slot shape that
+    /// used to be the contract.
     #[test]
     fn a_fee_reply_with_the_wrong_tier_count_does_not_parse() {
-        let four = r#"{"status":"OK","fees":[1,2,3,4]}"#;
+        let three = r#"{"status":"OK","fees":[1,2,4]}"#;
         let parsed: GetFeeEstimateResponse =
-            serde_json::from_str(four).expect("four tiers is the contract");
+            serde_json::from_str(three).expect("three tiers is the contract");
         assert_eq!(parsed.fees.get(FeeTier::Low), 1);
         assert_eq!(parsed.fees.get(FeeTier::Normal), 2);
-        assert_eq!(parsed.fees.get(FeeTier::Medium), 3);
         assert_eq!(parsed.fees.get(FeeTier::High), 4);
         assert_eq!(parsed.quantization_mask, 1, "OPT(1) when absent");
 
         for wrong in [
-            r#"{"status":"OK","fees":[1,2,3]}"#,
+            r#"{"status":"OK","fees":[1,2]}"#,
+            r#"{"status":"OK","fees":[1,2,3,4]}"#,
             r#"{"status":"OK","fees":[1,2,3,4,5]}"#,
             r#"{"status":"OK","fees":[]}"#,
         ] {
             assert!(
                 serde_json::from_str::<GetFeeEstimateResponse>(wrong).is_err(),
-                "a tier count other than four must not parse: {wrong}"
+                "a tier count other than three must not parse: {wrong}"
             );
         }
     }
@@ -326,10 +307,10 @@ mod tests {
     /// type, not in the document, so the captured oracle still matches.
     #[test]
     fn the_tiers_are_named_in_rust_and_positional_on_the_wire() {
-        let tiers = FeeTiers([10, 20, 30, 40]);
+        let tiers = FeeTiers([10, 20, 30]);
         assert_eq!(
             serde_json::to_string(&tiers).expect("serialize"),
-            "[10,20,30,40]"
+            "[10,20,30]"
         );
     }
 

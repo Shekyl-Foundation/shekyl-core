@@ -91,7 +91,7 @@ Two things the grounding corrected, recorded because both were wrong in the
   spec that misaligns every input after the first.
 
 **Still open — the other half of step 1.** `fill_construct_tx_rct_stub` keeps
-its name. Its caller `construct_tx_with_tx_key` has no production caller either
+its name. Its caller `construct_tx_with_tx_key` had no production caller either (deleted 2026-09-23, `TX_EXTRA_RUST_CUTOVER.md` TXE-Q1)
 (the 2026-08-21 claim that it had one was wrong; corrected in
 [`FOLLOWUPS.md`](../FOLLOWUPS.md)), but the `construct_tx*` chain is the C++
 consensus oracle's transaction factory, reached from `tests/core_tests/` and

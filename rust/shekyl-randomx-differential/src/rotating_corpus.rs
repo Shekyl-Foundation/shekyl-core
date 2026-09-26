@@ -5,7 +5,7 @@
 
 //! Rotating-corpus seed derivation (re-scope item 2, §7.9 MR-R1).
 //!
-//! Per `docs/design/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 2, the
+//! Per `docs/completed/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 2, the
 //! rotating differential lane explores inputs *outside* the pinned
 //! corpus. Its seed is **derived from a time index, never drawn from
 //! entropy** — the distinction MR-R1 turns on, and the reason this
@@ -74,7 +74,7 @@ pub const ROTATING_CORPUS_CUSTOMIZATION: &[u8] = b"shekyl/randomx-rotating-corpu
 /// satisfied, every test passing, and `from_tag` silently rejecting the
 /// new value. A guard that appears to assert completeness and does not
 /// is precisely the failure this crate's design round
-/// (`RANDOMX_V2_MUTATION_REGIME.md` §13) exists to name, so it is not
+/// (`docs/completed/RANDOMX_V2_MUTATION_REGIME.md` §13) exists to name, so it is not
 /// one to leave standing here.
 ///
 /// Rust cannot enumerate an enum's variants without one list somewhere;

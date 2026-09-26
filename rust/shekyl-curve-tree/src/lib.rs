@@ -6,10 +6,15 @@
 //! Wallet-side FCMP++ curve-tree client.
 //!
 //! Reconstructs the FCMP++ output curve tree locally from synced blocks
-//! and assembles membership paths for spends — without revealing which
-//! output a wallet is proving against (the privacy reason the path is
-//! assembled client-side rather than fetched, `00-mission.mdc` priority
-//! 2). The reconstructed root must byte-equal the consensus root the
+//! and assembles membership paths for spends — without telling the daemon
+//! which output a wallet is proving against (`00-mission.mdc` priority 2).
+//! Client-side assembly closes the *query* channel: a fetched path names
+//! the output to the daemon. The *on-chain* channel — `PL-D1`, where the
+//! pre-`PL-D3` leaf's 4th scalar republished a value every spend reveals
+//! (`docs/design/FCMP_SPEND_LINKABILITY.md`) — is closed by `PL-D3`'s
+//! blinded leaf commitment, opened in-circuit. An output-blind spend needs
+//! both closed, so assembly stays client-side. The reconstructed
+//! root must byte-equal the consensus root the
 //! daemon commits in each block header, so the derivation replicates the
 //! daemon's leaf-stream logic bit-exactly.
 //!
@@ -22,22 +27,29 @@
 //! `tx_extra 0x07` parse is owned by `shekyl_scanner::extra::Extra` and
 //! runs at the block-decode boundary ([`client`], CT-3); this crate
 //! consumes the parsed blob and owns only the post-parse validation
-//! ([`recon::extract_leaf_hashes`]). No secret material enters this
+//! ([`recon::extract_leaf_commitments`]). No secret material enters this
 //! crate (`35-secure-memory.mdc`, `36-secret-locality.mdc`).
 //!
 //! ## Modules (see `docs/design/CURVE_TREE_CLIENT.md`)
 //!
 //! - [`types`]: public data types (no secrets).
 //! - [`recon`]: block-derived leaf reconstruction — the S1 index rule,
-//!   the leaf-skip predicate, `tx_extra 0x07` validation, `h_pqc`
-//!   fallback, maturity, drain order, and the Round-1 root oracle
-//!   (`build_layers`). Pinned against `docs/design/CT2_DRAIN_ORDER.md`.
+//!   the leaf-skip predicate, `tx_extra 0x07` validation (refusal on a
+//!   bad payload or point, no fallback), maturity, drain order, and the
+//!   Round-1 root oracle (`build_layers`). Pinned against
+//!   `docs/design/CT2_DRAIN_ORDER.md`.
 //! - [`store`]: frozen sub-root (`R_k`) cache / `build_upper_layers` hot
 //!   path (CT-1, gated behind the CT-2 KAT baseline).
 //! - [`assemble`]: membership-path assembly (CT-4).
 //! - [`client`]: orchestration over synced blocks (CT-3).
 //! - [`reference`](mod@reference): reference-block selection + proof
 //!   validity-horizon arithmetic (§5), pure functions over heights.
+//! - [`serving_route`]: the archival serving route's shared grammar —
+//!   virtual port, route, header set, request-header codec — read by
+//!   both `shekyl-p-serve` and `shekyl-p-fetch` so neither depends on
+//!   the other (`SF-D4`). The onion hostname is not grammar: it lives
+//!   in `shekyl-onion-v3`, typed on the daemon as
+//!   `shekyl-p-fetch::ServingEndpoint`.
 
 #![deny(unsafe_code)]
 
@@ -47,6 +59,7 @@ pub mod recon;
 pub mod reference;
 pub mod segment;
 pub mod served_frame;
+pub mod serving_route;
 pub mod store;
 pub mod types;
 
@@ -68,6 +81,7 @@ pub use store::{
     LeafStore, MixedRootError, PostureDeclaration, SegmentPin, ServingReader, StoreError,
 };
 pub use types::{
-    AssembleInput, AssembledPath, BlockHeight, ChunkLeaf, Gindex, LeafEntry, OutputIdentity,
-    ReferenceBlock, TargetKind, TreeContext, TreePosition,
+    AssembleInput, AssembledPath, BlockHash, BlockHeight, ChunkLeaf, CommitmentBytes,
+    CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity, ReferenceBlock, TargetKind,
+    TreeContext, TreePosition,
 };

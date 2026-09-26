@@ -28,6 +28,7 @@
 
 set(cryptonote_core_sources
   blockchain.cpp
+  relay_floor_ring.cpp
   cryptonote_core.cpp
   tx_pool.cpp
   tx_pqc_verify.cpp

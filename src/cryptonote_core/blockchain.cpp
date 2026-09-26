@@ -46,6 +46,7 @@
 #include "tx_pool.h"
 #include "tx_pqc_verify.h"
 #include "blockchain.h"
+#include "archival_pass_anchor.h"
 #include "blockchain_db/blockchain_db.h"
 #include "serialization/binary_archive.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
@@ -71,7 +72,6 @@
 #include "common/perf_timer.h"
 #include "common/notify.h"
 #include "common/varint.h"
-#include "common/pruning.h"
 #include "time_helper.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -91,8 +91,6 @@ using namespace crypto;
 
 using namespace cryptonote;
 using epee::string_tools::pod_to_hex;
-extern "C" void slow_hash_allocate_state();
-extern "C" void slow_hash_free_state();
 
 DISABLE_VS_WARNINGS(4267)
 
@@ -255,141 +253,6 @@ bool Blockchain::have_tx_keyimg_as_spent(const crypto::key_image &key_im) const
   return  m_db->has_key_image(key_im);
 }
 //------------------------------------------------------------------
-// This function makes sure that each "input" in an input (mixins) exists
-// and collects the public key for each from the transaction it was included in
-// via the visitor passed to it.
-template <class visitor_t>
-bool Blockchain::scan_outputkeys_for_indexes(size_t tx_version, const txin_to_key& tx_in_to_key, visitor_t &vis, const crypto::hash &tx_prefix_hash, uint64_t* pmax_related_block_height) const
-{
-  LOG_PRINT_L3("Blockchain::" << __func__);
-
-  // ND: Disable locking and make method private.
-  //CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  // verify that the input has key offsets (that it exists properly, really)
-  if(!tx_in_to_key.key_offsets.size())
-    return false;
-
-  // cryptonote_format_utils uses relative offsets for indexing to the global
-  // outputs list.  that is to say that absolute offset #2 is absolute offset
-  // #1 plus relative offset #2.
-  // TODO: Investigate if this is necessary / why this is done.
-  std::vector<uint64_t> absolute_offsets = relative_output_offsets_to_absolute(tx_in_to_key.key_offsets);
-  std::vector<output_data_t> outputs;
-
-  bool found = false;
-  auto it = m_scan_table.find(tx_prefix_hash);
-  if (it != m_scan_table.end())
-  {
-    auto its = it->second.find(tx_in_to_key.k_image);
-    if (its != it->second.end())
-    {
-      outputs = its->second;
-      found = true;
-    }
-  }
-
-  if (!found)
-  {
-    try
-    {
-      m_db->get_output_key(epee::span<const uint64_t>(&tx_in_to_key.amount, 1), absolute_offsets, outputs, true);
-      if (absolute_offsets.size() != outputs.size())
-      {
-        MERROR_VER("Output does not exist! amount = " << tx_in_to_key.amount);
-        return false;
-      }
-    }
-    catch (...)
-    {
-      MERROR_VER("Output does not exist! amount = " << tx_in_to_key.amount);
-      return false;
-    }
-  }
-  else
-  {
-    // check for partial results and add the rest if needed;
-    if (outputs.size() < absolute_offsets.size() && outputs.size() > 0)
-    {
-      MDEBUG("Additional outputs needed: " << absolute_offsets.size() - outputs.size());
-      std::vector < uint64_t > add_offsets;
-      std::vector<output_data_t> add_outputs;
-      add_outputs.reserve(absolute_offsets.size() - outputs.size());
-      for (size_t i = outputs.size(); i < absolute_offsets.size(); i++)
-        add_offsets.push_back(absolute_offsets[i]);
-      try
-      {
-        m_db->get_output_key(epee::span<const uint64_t>(&tx_in_to_key.amount, 1), add_offsets, add_outputs, true);
-        if (add_offsets.size() != add_outputs.size())
-        {
-          MERROR_VER("Output does not exist! amount = " << tx_in_to_key.amount);
-          return false;
-        }
-      }
-      catch (...)
-      {
-        MERROR_VER("Output does not exist! amount = " << tx_in_to_key.amount);
-        return false;
-      }
-      outputs.insert(outputs.end(), add_outputs.begin(), add_outputs.end());
-    }
-  }
-
-  size_t count = 0;
-  for (const uint64_t& i : absolute_offsets)
-  {
-    try
-    {
-      output_data_t output_index;
-      try
-      {
-        // get tx hash and output index for output
-        if (count < outputs.size())
-          output_index = outputs.at(count);
-        else
-          output_index = m_db->get_output_key(tx_in_to_key.amount, i);
-
-        // call to the passed boost visitor to grab the public key for the output
-        if (!vis.handle_output(output_index.unlock_time, output_index.pubkey, output_index.commitment))
-        {
-          MERROR_VER("Failed to handle_output for output no = " << count << ", with absolute offset " << i);
-          return false;
-        }
-      }
-      catch (...)
-      {
-        MERROR_VER("Output does not exist! amount = " << tx_in_to_key.amount << ", absolute_offset = " << i);
-        return false;
-      }
-
-      // if on last output and pmax_related_block_height not null pointer
-      if(++count == absolute_offsets.size() && pmax_related_block_height)
-      {
-        // set *pmax_related_block_height to tx block height for this output
-        auto h = output_index.height;
-        if(*pmax_related_block_height < h)
-        {
-          *pmax_related_block_height = h;
-        }
-      }
-
-    }
-    catch (const OUTPUT_DNE& e)
-    {
-      MERROR_VER("Output does not exist: " << e.what());
-      return false;
-    }
-    catch (const TX_DNE& e)
-    {
-      MERROR_VER("Transaction does not exist: " << e.what());
-      return false;
-    }
-
-  }
-
-  return true;
-}
-//------------------------------------------------------------------
 uint64_t Blockchain::get_current_blockchain_height() const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
@@ -448,7 +311,7 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
     // (caught live by the PR-4c emission e2e's first daemon spawn).
     if (m_nettype != FAKECHAIN)
     {
-      MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on a public network: the settlement-epoch schedule is consensus-critical and the override is a fakechain-only (regtest) lever; refusing to start. Unset SHEKYL_SETTLEMENT_EPOCH_BLOCKS to run this node.");
+      MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS / SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS override active on a public network: the settlement schedule and the reorg cap are consensus-critical and the overrides are fakechain-only (regtest) levers; refusing to start. Unset them to run this node.");
       return false;
     }
     // FAKECHAIN: arm the override. An unarmed process ignores the lever
@@ -464,13 +327,16 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
       // a daemon-side initialization-order defect the operator cannot fix
       // by editing the variable.
       const char *raw = getenv("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
+      const char *raw_cap = getenv("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS");
       if (arm_rc == SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE)
         MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " could not be armed: the settlement-epoch schedule had already latched before this gate ran. The value is fine; this is an initialization-order defect in the daemon (arming must precede every epoch-arithmetic call, including the genesis add). Refusing to start — please report it.");
+      else if (arm_rc == SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP)
+        MERROR("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS=" << (raw_cap ? raw_cap : "?") << " is not a valid override: expected an integer between 1 and the genesis reorg depth; refusing to start. Fix the value or unset the variable.");
       else
-        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override: expected an integer between 2 and the genesis settlement-epoch length; refusing to start. Fix the value or unset the variable.");
+        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override: expected an integer strictly above the reorg cap in force (" << (raw_cap ? raw_cap : "the genesis reorg depth") << ") and at most the genesis settlement-epoch length — a fakechain whose epoch is not above its reorg cap is a configuration mainnet cannot reach; refusing to start. Lower SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS with the epoch, fix the value, or unset the variable.");
       return false;
     }
-    MWARNING("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks instead of the genesis-pinned schedule — epoch closes, serve-credit windows, and emission claims computed under this schedule are valid only among fakechain nodes running the same override");
+    MWARNING("regtest schedule override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks and the reorg cap is " << shekyl_archival_reorg_depth_blocks() << " instead of the genesis pins — epoch closes, serve-credit windows, emission claims and the reorg depth computed under this schedule are valid only among fakechain nodes running the same override");
   }
 
   if (m_hardfork == nullptr)
@@ -883,7 +749,6 @@ block Blockchain::pop_block_from_blockchain()
     MWARNING(pruned << " pruned txes could not be added back to the txpool");
 
   m_blocks_longhash_table.clear();
-  m_scan_table.clear();
 
   uint64_t top_block_height;
   crypto::hash top_block_hash = get_tail_id(top_block_height);
@@ -1578,13 +1443,13 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
     return false;
   }
 
-  CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
+  CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
   // CEN-I19: the coinbase carries its outputs' 0x06 / 0x07 fields like every
   // other transaction (construct_miner_tx emits both); the shape rule runs
   // here because the coinbase never passes core::check_tx_semantic.
   {
     std::string why;
-    CHECK_AND_ASSERT_MES(check_tx_extra_pqc_field_shape(b.miner_tx, why), false,
+    CHECK_AND_ASSERT_MES(check_tx_extra_shape(b.miner_tx, why), false,
       "miner transaction: " << why << " (block " << get_block_hash(b) << ")");
   }
 
@@ -1640,7 +1505,7 @@ uint64_t Blockchain::parent_frozen_segment_count(uint64_t block_height) const
 }
 //------------------------------------------------------------------
 // This function validates the miner transaction reward
-bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count)
+bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count, uint64_t total_burned)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   const uint64_t block_height = std::get<txin_gen>(b.miner_tx.vin[0]).height;
@@ -1657,18 +1522,12 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     return true;
   }
 
-  if (version == 3) {
-    for (auto &o: b.miner_tx.vout) {
-      if (!is_valid_decomposed_amount(o.amount)) {
-        MERROR_VER("miner tx output " << print_money(o.amount) << " is not a valid decomposed amount");
-        return false;
-      }
-    }
-  }
-
   uint64_t median_weight = m_current_block_cumul_weight_median;
   const shekyl::tx_volume_window tx_volume = get_tx_volume_window(block_height);
-  const uint64_t circulating_supply = already_generated_coins;
+  // The supply operand is DERIVED in Rust from these two parent-state facts
+  // (FL-R16c: `= already_generated_coins`, gross of burn, was the
+  // definitional bug; E6 slice 4 §3.1 S15). C++ passes facts, defines nothing.
+  const shekyl::supply_facts supply{already_generated_coins, total_burned};
 
   if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, version, tx_volume))
   {
@@ -1685,7 +1544,7 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   // frozen_segment_count is the caller's parent-state read (the asserting
   // read-point above); the escalated share cannot reach miner_fee_income
   // (§12.11.1 Leg 1), so this stays the security-budget-preserving split.
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, circulating_supply, frozen_segment_count);
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, supply, frozen_segment_count);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -1955,14 +1814,16 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   uint8_t hf_version = b.major_version;
   size_t max_outs = 1;
   const shekyl::tx_volume_window tx_volume = get_tx_volume_window(height);
-  const uint64_t circulating_supply = already_generated_coins;
+  // Parent-state facts the supply is derived from in Rust (FL-R16c); the
+  // template and connect read the same two so they agree by construction.
+  const shekyl::supply_facts supply{already_generated_coins, m_db->get_total_burned()};
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
   // D2 escalation operand, computed ONCE and passed to BOTH construct_miner_tx
   // calls: the retry below re-prices the coinbase after the weight changes, and
   // a second read there could price against a different n than the first pass
   // (criterion #1 — template and connect must agree by construction).
   const uint64_t frozen_segment_count = parent_frozen_segment_count(height);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, circulating_supply, genesis_ng_height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1971,49 +1832,47 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, circulating_supply, genesis_ng_height);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
-    size_t coinbase_weight = get_transaction_weight(b.miner_tx);
-    if (coinbase_weight > cumulative_weight - txs_weight)
+    const size_t coinbase_weight = get_transaction_weight(b.miner_tx);
+    if (coinbase_weight != cumulative_weight - txs_weight)
     {
-      cumulative_weight = txs_weight + coinbase_weight;
-#if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
-      MDEBUG("Creating block template: miner tx weight " << coinbase_weight <<
-          ", cumulative weight " << cumulative_weight << " is greater than before");
-#endif
-      continue;
-    }
-
-    if (coinbase_weight < cumulative_weight - txs_weight)
-    {
-      size_t delta = cumulative_weight - txs_weight - coinbase_weight;
+      // The coinbase priced at `cumulative_weight` came out a different
+      // weight (its amount varint crossed a byte boundary as the penalty
+      // re-priced it — CEN-F14b), so the weight the reward was computed at
+      // and the weight the block has disagree, and connect requires them to
+      // agree exactly (validate_miner_transaction rejects `!=`). Re-price at
+      // the weight the block actually has, heavier or lighter, until the two
+      // meet. The inherited answer for the lighter case — pad `extra` with
+      // zero bytes back up to the estimate — is not available: the coinbase
+      // extra is a closed grammar (CEN-I20) and padding is a foreign tag.
+      // Below the effective median the reward is weight-independent, so this
+      // settles on the second pass; in the penalty zone it settles unless the
+      // reward sits exactly on a varint boundary and the two weights trade
+      // places; then the try budget runs out and the template fails loudly
+      // (LOG_ERROR below) rather than emit one connect refuses.
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
       MDEBUG("Creating block template: miner tx weight " << coinbase_weight <<
           ", cumulative weight " << txs_weight + coinbase_weight <<
-          " is less than before, adding " << delta << " zero bytes");
+          (coinbase_weight > cumulative_weight - txs_weight ? " is greater" : " is less") <<
+          " than before; re-pricing");
 #endif
-      b.miner_tx.extra.insert(b.miner_tx.extra.end(), delta, 0);
-      //here  could be 1 byte difference, because of extra field counter is varint, and it can become from 1-byte len to 2-bytes len.
-      if (cumulative_weight != txs_weight + get_transaction_weight(b.miner_tx))
-      {
-        CHECK_AND_ASSERT_MES(cumulative_weight + 1 == txs_weight + get_transaction_weight(b.miner_tx), false, "unexpected case: cumulative_weight=" << cumulative_weight << " + 1 is not equal txs_cumulative_weight=" << txs_weight << " + get_transaction_weight(b.miner_tx)=" << get_transaction_weight(b.miner_tx));
-        b.miner_tx.extra.resize(b.miner_tx.extra.size() - 1);
-        if (cumulative_weight != txs_weight + get_transaction_weight(b.miner_tx))
-        {
-          //fuck, not lucky, -1 makes varint-counter size smaller, in that case we continue to grow with cumulative_weight
-          MDEBUG("Miner tx creation has no luck with delta_extra size = " << delta << " and " << delta - 1);
-          cumulative_weight += delta - 1;
-          continue;
-        }
-        MDEBUG("Setting extra for block: " << b.miner_tx.extra.size() << ", try_count=" << try_count);
-      }
+      cumulative_weight = txs_weight + coinbase_weight;
+      continue;
     }
-    CHECK_AND_ASSERT_MES(cumulative_weight == txs_weight + get_transaction_weight(b.miner_tx), false, "unexpected case: cumulative_weight=" << cumulative_weight << " is not equal txs_cumulative_weight=" << txs_weight << " + get_transaction_weight(b.miner_tx)=" << get_transaction_weight(b.miner_tx));
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
     MDEBUG("Creating block template: miner tx weight " << coinbase_weight <<
         ", cumulative weight " << cumulative_weight << " is now good");
 #endif
+    // The template's coinbase must already satisfy what connect will judge
+    // (CEN-I19 + CEN-I20, the same check at :1449): a grammar-invalid extra
+    // here is a template the miner spends work on and the chain refuses.
+    {
+      std::string extra_reason;
+      CHECK_AND_ASSERT_MES(check_tx_extra_shape(b.miner_tx, extra_reason), false,
+          "Creating block template: coinbase extra violates the grammar: " << extra_reason);
+    }
 
     {
       const auto root_bytes = m_db->get_curve_tree_root();
@@ -2255,16 +2114,6 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     return false;
   }
 
-  // the credit-wire attestation verify (ARCHIVAL_CREDIT_WIRE.md §3-§4). Cheap pre-cutover (empty
-  // witness -> empty-set root recompute); post-cutover it does up to one hybrid-signature verify per
-  // pass record, so the signature leg must sit behind PoW before population turns on (Phase-5
-  // ordering constraint, see FOLLOWUPS). verify_block_attestation logs the specific verdict code.
-  if (!verify_block_attestation(b, connect.attestation_witness))
-  {
-    reject_block_form(bvc);
-    return false;
-  }
-
   //block is not related with head of main chain
   //first of all - look in alternative chains container
   alt_block_data_t prev_data;
@@ -2376,6 +2225,24 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     {
       MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, does not have enough proof of work: " << proof_of_work << std::endl << " expected difficulty: " << current_diff);
       reject_block_bad_pow(bvc);
+      return false;
+    }
+
+    // the credit-wire attestation verify (ARCHIVAL_CREDIT_WIRE.md §3-§4). Sits behind PoW: post-
+    // cutover it does up to one hybrid-signature verify per pass record. It runs HERE, not at the
+    // top of the function, because SF-D8 keys every countersignature's anchor window off the
+    // VALIDATED predecessor height -- `prev_height` above, read from the alt parent (alt store) or
+    // the main chain by `b.prev_id`, never from the coinbase's producer-claimed height
+    // (`block_height`, which prevalidate_miner_transaction checks against bei.height only
+    // afterwards). `alt_chain` is handed through so the anchor hashes above the fork point are
+    // THIS chain's, not the main chain's (a deep reorg would otherwise split consensus on every
+    // pass record anchored past the fork). The bond PUBKEY lookup inside is still main-chain
+    // `m_db` state -- a pass from a bond that joined only on this alt chain is refused here
+    // (FOLLOWUPS: "Alt-chain attestation verify resolves bond pubkeys from main-chain state").
+    // verify_block_attestation logs the specific verdict code.
+    if (!verify_block_attestation(b, prev_height, &alt_chain, connect.attestation_witness))
+    {
+      reject_block_form(bvc);
       return false;
     }
 
@@ -2671,14 +2538,10 @@ bool Blockchain::handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NO
     get_transactions_blobs(bl.second.tx_hashes, e.txs, missed_tx_ids, arg.prune);
     if (missed_tx_ids.size() != 0)
     {
-      // do not display an error if the peer asked for an unpruned block which we are not meant to have
-      if (tools::has_unpruned_block(get_block_height(bl.second), get_current_blockchain_height(), get_blockchain_pruning_seed()))
-      {
-        LOG_ERROR("Error retrieving blocks, missed " << missed_tx_ids.size()
-            << " transactions for block with hash: " << get_block_hash(bl.second)
-            << std::endl
-        );
-      }
+      LOG_ERROR("Error retrieving blocks, missed " << missed_tx_ids.size()
+          << " transactions for block with hash: " << get_block_hash(bl.second)
+          << std::endl
+      );
 
       // append missed transaction hashes to response missed_ids field,
       // as done below if any standalone transactions were requested
@@ -3052,7 +2915,7 @@ bool Blockchain::get_transactions(const t_ids_container& txs_ids, t_tx_container
 // Find the split point between us and foreign blockchain and return
 // (by reference) the most recent common block hash along with up to
 // BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT additional (more recent) hashes.
-bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, std::vector<crypto::hash>& hashes, std::vector<uint64_t>* weights, uint64_t& start_height, uint64_t& current_height, bool clip_pruned) const
+bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, std::vector<crypto::hash>& hashes, std::vector<uint64_t>* weights, uint64_t& start_height, uint64_t& current_height) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
@@ -3065,23 +2928,12 @@ bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qbloc
 
   db_rtxn_guard rtxn_guard(m_db);
   current_height = get_current_blockchain_height();
-  uint64_t stop_height = current_height;
-  if (clip_pruned)
-  {
-    const uint32_t pruning_seed = get_blockchain_pruning_seed();
-    if (start_height < tools::get_next_unpruned_block_height(start_height, current_height, pruning_seed))
-    {
-      MDEBUG("We only have a pruned version of the common ancestor");
-      return false;
-    }
-    stop_height = tools::get_next_pruned_block_height(start_height, current_height, pruning_seed);
-  }
   size_t count = 0;
-  const size_t reserve = std::min((size_t)(stop_height - start_height), (size_t)BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT);
+  const size_t reserve = std::min((size_t)(current_height - start_height), (size_t)BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT);
   hashes.reserve(reserve);
   if (weights)
     weights->reserve(reserve);
-  for(size_t i = start_height; i < stop_height && count < BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT; i++, count++)
+  for(size_t i = start_height; i < current_height && count < BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT; i++, count++)
   {
     hashes.push_back(m_db->get_block_hash_from_height(i));
     if (weights)
@@ -3091,12 +2943,12 @@ bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qbloc
   return true;
 }
 
-bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, bool clip_pruned, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const
+bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
 
-  bool result = find_blockchain_supplement(qblock_ids, resp.m_block_ids, &resp.m_block_weights, resp.start_height, resp.total_height, clip_pruned);
+  bool result = find_blockchain_supplement(qblock_ids, resp.m_block_ids, &resp.m_block_weights, resp.start_height, resp.total_height);
   if (result)
   {
     cryptonote::difficulty_type wide_cumulative_difficulty = m_db->get_block_cumulative_difficulty(resp.total_height - 1);
@@ -3360,49 +3212,47 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
 //
 // Coinbase fingerprint: C != zeroCommit(public_amount) = G + amount*H, the
 // trivially-computable commitment that would leak the confidential-coinbase
-// amount to any observer.
+// amount to any observer. Selected by the CT TYPE, in Rust (S27).
+//
+// Arity: one mask per output (outPk.size() == vout.size()), in Rust (S25).
 static bool check_commitment_mask_valid(const transaction& tx)
 {
+  // FACTS ONLY (E6 slice 4 §3.1 S25/S26/S27). This function used to decide
+  // three things before Rust ran: that outPk.size() must equal vout.size()
+  // (a rule the census never stated, and one CEN-L11's grading rests on),
+  // that an empty outPk passes (redundant: Rust accepts zero masks), and
+  // that the zeroCommit(amount) fingerprint gate applies iff the CT type is
+  // CTTypeNull. Every one of those is rule content; every one is
+  // shekyl_ct_balance::check_commitment_masks_for's now. What crosses here
+  // is the type byte, the two counts, the masks and the cleartext amounts.
   const auto& rv = tx.ct_signatures;
-
-  // Every tx shape carries exactly one outPk commitment per vout (0 == 0 for
-  // the no-output serve-credit shape). The wire serializer already pins this
-  // (serialize_ctsig_base sizes outPk to vout.size(), ct_types.h) and
-  // check_tx_semantic re-checks it for pool txs — but this gate must be
-  // locally sound rather than lean on a distant invariant, or an empty outPk
-  // beside a non-empty vout would skate through the empty fast-path below
-  // with no mask ever checked.
-  if (rv.outPk.size() != tx.vout.size())
-  {
-    MERROR("outPk count " << rv.outPk.size() << " != vout count " << tx.vout.size()
-      << ", tx " << get_transaction_hash(tx));
-    return false;
-  }
-  if (rv.outPk.empty())
-    return true;
-
   static_assert(sizeof(ct::key) == 32, "ct::key must be 32 bytes");
   std::vector<uint8_t> masks_flat;
   masks_flat.reserve(rv.outPk.size() * sizeof(ct::key));
   for (const auto& pk : rv.outPk)
     masks_flat.insert(masks_flat.end(), pk.mask.bytes, pk.mask.bytes + sizeof(ct::key));
-
-  std::vector<uint64_t> coinbase_amounts;
-  if (rv.type == ct::CTTypeNull)
-  {
-    coinbase_amounts.reserve(tx.vout.size());
-    for (const auto& o : tx.vout)
-      coinbase_amounts.push_back(o.amount);
-  }
+  std::vector<uint64_t> amounts;
+  amounts.reserve(tx.vout.size());
+  for (const auto& o : tx.vout)
+    amounts.push_back(o.amount);
 
   const uint8_t rc = shekyl_check_commitment_masks(
-    masks_flat.data(), rv.outPk.size(),
-    coinbase_amounts.empty() ? nullptr : coinbase_amounts.data(),
-    coinbase_amounts.size());
+    static_cast<uint8_t>(rv.type),
+    tx.vout.size(),
+    masks_flat.empty() ? nullptr : masks_flat.data(), rv.outPk.size(),
+    amounts.empty() ? nullptr : amounts.data());
   switch (rc)
   {
     case SHEKYL_OUTPUT_POINTS_OK:
       return true;
+    case SHEKYL_OUTPUT_POINTS_ERR_MASK_COUNT:
+      MERROR("outPk count " << rv.outPk.size() << " != vout count " << tx.vout.size()
+        << ", tx " << get_transaction_hash(tx));
+      return false;
+    case SHEKYL_OUTPUT_POINTS_ERR_CT_TYPE:
+      MERROR("CT type " << unsigned(rv.type) << " has no commitment-mask subject, tx "
+        << get_transaction_hash(tx));
+      return false;
     case SHEKYL_OUTPUT_POINTS_ERR_INVALID_MASK:
       MERROR("An output commitment mask is not a canonical prime-order point, tx "
         << get_transaction_hash(tx));
@@ -3467,7 +3317,7 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   }
 
   // require view tags on outputs
-  if (!check_output_types(tx, hf_version))
+  if (!check_output_types(tx))
   {
     tvc.m_invalid_output = true;
     return reject_form(tvc);
@@ -3510,10 +3360,6 @@ std::vector<bool> Blockchain::have_tx_keyimges_as_spent(const epee::span<const c
 }
 //------------------------------------------------------------------
 // This function validates transaction inputs and their keys.
-// FIXME: consider moving functionality specific to one input into
-//        check_tx_input() rather than here, and use this function simply
-//        to iterate the inputs as necessary (splitting the task
-//        using threads, etc.)
 bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, uint64_t* pmax_used_block_height, bool skip_fcmp_verify) const
 {
   PERF_TIMER(check_tx_inputs);
@@ -3920,9 +3766,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           memcpy(key_images_flat.data() + j * 32, &in_to_key.k_image, 32);
           memcpy(pseudo_outs_flat.data() + j * 32, rv.p.pseudoOuts[j].bytes, 32);
           const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
-          if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
+          if (!shekyl_fcmp_pqc_key_scalar(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
           {
-            MERROR_VER("Archival bond-post tx pqc leaf hash failed for spend input " << i);
+            MERROR_VER("Archival bond-post tx pqc key scalar failed for spend input " << i);
             tvc.m_verifivation_failed = true;
             return reject_form(tvc);
           }
@@ -4229,9 +4075,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             memcpy(key_images_flat.data() + j * 32, &in_to_key.k_image, 32);
             memcpy(pseudo_outs_flat.data() + j * 32, rv.p.pseudoOuts[j].bytes, 32);
             const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
-            if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
+            if (!shekyl_fcmp_pqc_key_scalar(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
             {
-              MERROR_VER("Archival emission tx pqc leaf hash failed for fee input " << i);
+              MERROR_VER("Archival emission tx pqc key scalar failed for fee input " << i);
               tvc.m_verifivation_failed = true;
               return reject_form(tvc);
             }
@@ -4349,9 +4195,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         for (size_t i = 0; i < num_inputs; ++i)
         {
           const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
-          if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + i * 32))
+          if (!shekyl_fcmp_pqc_key_scalar(hpk.data(), hpk.size(), pqc_hashes_flat.data() + i * 32))
           {
-            MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " pqc leaf hash failed for input " << i);
+            MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " pqc key scalar failed for input " << i);
             tvc.m_verifivation_failed = true;
             return reject_form(tvc);
           }
@@ -4362,7 +4208,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MDEBUG("FCMP++ verify input " << dbg_i
             << " ki=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(key_images_flat.data() + dbg_i * 32), 32))
             << " pseudo_out=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(pseudo_outs_flat.data() + dbg_i * 32), 32))
-            << " pqc_hash=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(pqc_hashes_flat.data() + dbg_i * 32), 32)));
+            // The per-input value is k = H_l(hybrid_public_key), a function of the
+            // revealed key only (PL-D3) -- never the leaf value, which is hiding.
+            << " pqc_key_scalar=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(pqc_hashes_flat.data() + dbg_i * 32), 32)));
         }
 
         if (skip_fcmp_verify)
@@ -4411,9 +4259,10 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   // MSW-6 (PQC_MULTISIG.md §16.3): the former tx-wide scheme_id agreement was
   // withdrawn. Its *stated* purpose — a cross-input scheme-downgrade defense —
   // was vacuous: `expected_scheme` was derived from `tx.pqc_auths[0]` itself
-  // (self-referential), and per-output scheme binding is the leaf hash
-  // `h_pqc = H(hybrid_public_key)` (see :3769, `shekyl_fcmp_pqc_leaf_hash`),
-  // not this check. Its *effect* was to make a tx that spends a solo (scheme 1)
+  // (self-referential), and per-output scheme binding is the in-circuit
+  // opening of the spent leaf's PQC commitment to the revealed key's point
+  // (PL-D3; the per-input `k` from `shekyl_fcmp_pqc_key_scalar` above), not
+  // this check. Its *effect* was to make a tx that spends a solo (scheme 1)
   // output and a multisig (scheme 2) output together unrepresentable — under
   // FCMP++ separate txs are unlinkable, so co-spending is the only proof of
   // common control across key models. That belongs in the wallet, not consensus,
@@ -4443,98 +4292,25 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 }
 
 //------------------------------------------------------------------
-uint64_t Blockchain::get_dynamic_base_fee(uint64_t block_reward, size_t median_block_weight, uint8_t version)
-{
-  const uint64_t min_block_weight = get_min_block_weight(version);
-  if (median_block_weight < min_block_weight)
-    median_block_weight = min_block_weight;
-  uint64_t hi, lo;
-
-  // min_fee_per_byte = round_up( 0.95 * block_reward * ref_weight / (fee_median^2) )
-  // fee_median (a.k.a. median_block_weight) equals effective long term median
-  lo = mul128(block_reward, DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT, &hi);
-  div128_64(hi, lo, median_block_weight, &hi, &lo, NULL, NULL);
-  div128_64(hi, lo, median_block_weight, &hi, &lo, NULL, NULL);
-  assert(hi == 0);
-  lo -= lo / 20;
-  return lo == 0 ? 1 : lo;
-}
 
 //------------------------------------------------------------------
-uint64_t Blockchain::get_current_fee_per_byte() const
+void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward, uint64_t median, uint64_t c, std::vector<uint64_t> &fees) const
 {
-  const uint8_t version = get_current_hard_fork_version();
-
-  uint64_t base_reward = 0;
-  uint64_t median = m_current_block_cumul_weight_limit / 2;
-  const uint64_t blockchain_height = m_db->height();
-  uint64_t already_generated_coins = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
-  // Deliberately the M_r-NEUTRAL overload (v = baseline): the relay floor is
-  // CEN-M3's held machinery and must not start tracking demand as a side
-  // effect of the FL-R12' cutover — at baseline the values are bit-for-bit
-  // the pre-cutover ones for every pre-asymptote state, no per-transaction
-  // tx_volume_window scan lands on the pool-admission path, and past the
-  // asymptote the floor is now tail-derived instead of the failure-arm 0
-  // that rejected the entire mempool (FL-R16a's relay dead-letter).
-  if (!get_block_reward(median, 1, already_generated_coins, base_reward, version))
-    return 0;
-
-  // get_dynamic_base_fee never returns 0, so 0 is unambiguously the
-  // block-reward-failure arm above.
-  return get_dynamic_base_fee(base_reward, std::min<uint64_t>(median, m_long_term_effective_median_block_weight), version);
-}
-//------------------------------------------------------------------
-bool Blockchain::check_fee(size_t tx_weight, uint64_t fee) const
-{
-  const uint64_t fee_per_byte = get_current_fee_per_byte();
-  if (fee_per_byte == 0)
-    return false;
-  MDEBUG("Using " << print_money(fee_per_byte) << "/byte fee");
-  uint64_t needed_fee = tx_weight * fee_per_byte;
-  const uint64_t mask = get_fee_quantization_mask();
-  needed_fee = (needed_fee + mask - 1) / mask * mask;
-
-  if (fee < needed_fee - needed_fee / 50) // keep a little 2% buffer on acceptance - no integer overflow
-  {
-    MERROR_VER("transaction fee is not enough: " << print_money(fee) << ", minimum fee: " << print_money(needed_fee));
-    return false;
-  }
-  return true;
-}
-
-//------------------------------------------------------------------
-void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, uint64_t c_q, std::vector<uint64_t> &fees) const
-{
-  // FL round §5.2 (FL-R17 signed: three tiers; FL-R12' round-8 amendment:
-  // whole-scalar C_q on the M_r-neutral operand). The ladder arithmetic is
-  // Rust-owned (shekyl-economics `corrected_fee_ladder`); this marshals.
-  // fees[2] mirrors fees[1] — the RK-5 wire bridge: the dead Fm slot keeps
-  // the vector shape until the RPC cutover, and wallet2-transliterated
-  // `Elevated` callers stay inside the largest anonymity set. The Fh main
-  // arm is UNCONDITIONAL (2R/M — exact marginal pricing of full expansion;
-  // the inherited surge discount was FL-C2(b)'s one derived defect).
-  fees.resize(4);
+  uint64_t slots[3];
   const int32_t rc = shekyl_corrected_fee_ladder(
       base_reward,
-      Mnw,
-      Mlw,
-      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
+      median,
       DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
-      c_q,
-      fees.data());
-  // Neither rejection is reachable from here — the out-pointer is a
-  // just-resized vector, and the scalars are chain state, far inside the
-  // ladder's u128 domain. The throw names WHICH one fired anyway: -1 is a
-  // null out-pointer (this marshal), -2 is scalars the arithmetic cannot
-  // form (the state that produced them). Reporting only the pointer case
-  // would send a reader hunting the wrong side of the boundary.
+      c,
+      slots);
   CHECK_AND_ASSERT_THROW_MES(rc == 0,
       "shekyl_corrected_fee_ladder failed: rc=" << rc << " ("
       << (rc == -1 ? "null out-pointer"
                    : rc == -2 ? "scalars outside the ladder's arithmetic domain"
                               : "unknown status")
-      << "), base_reward=" << base_reward << " Mnw=" << Mnw << " Mlw=" << Mlw
-      << " c_q=" << c_q);
+      << "), base_reward=" << base_reward << " median=" << median
+      << " c=" << c);
+  fees.assign(slots, slots + (sizeof(slots) / sizeof(slots[0])));
 }
 
 void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees) const
@@ -4544,115 +4320,21 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
 
   CHECK_AND_ASSERT_THROW_MES(grace_blocks <= CRYPTONOTE_REWARD_BLOCKS_WINDOW, "Grace blocks invalid In 2021 fee scaling estimate.");
 
-  // we want Mlw = median of max((min(Mbw, 1.7 * Ml), Zm), Ml / 1.7)
-  // Mbw: block weight for the last 99990 blocks, 0 for the next 10
-  // Ml: penalty free zone (dynamic), aka long_term_median, aka median of max((min(Mb, 1.7 * Ml), Zm), Ml / 1.7)
-  // Zm: 300000 (minimum penalty free zone)
-  //
-  // So we copy the current rolling median state, add 10 (grace_blocks) zeroes to it, and get back Mlw
-
-  epee::misc_utils::rolling_median_t<uint64_t> rm = m_long_term_block_weights_cache_rolling_median;
-  for (size_t i = 0; i < grace_blocks; ++i)
-    rm.insert(0);
-  const uint64_t Mlw_penalty_free_zone_for_wallet = std::max<uint64_t>(rm.median(), CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5);
-
-  // Msw: median over [100 - grace blocks] past + [grace blocks] future blocks
-  std::vector<uint64_t> weights;
-  get_last_n_blocks_weights(weights, 100 - grace_blocks);
-  weights.reserve(100);
-  for (size_t i = 0; i < grace_blocks; ++i)
-    weights.push_back(0);
-  const uint64_t Msw_effective_short_term_median = std::max(epee::misc_utils::median(weights), Mlw_penalty_free_zone_for_wallet);
-
-  const uint64_t Mnw = std::min(Msw_effective_short_term_median, 50 * Mlw_penalty_free_zone_for_wallet);
+  // Long-term effective median. S clamps the short-term median in
+  // update_next_cumulative_weight_limit and never reaches this path.
+  const uint64_t median = m_long_term_effective_median_block_weight;
 
   uint64_t already_generated_coins = db_height ? m_db->get_block_already_generated_coins(db_height - 1) : 0;
   uint64_t base_reward;
-  // The operand is the M_r-NEUTRAL total reward (round-8 amendment,
-  // whole-scalar form): max(curve(remaining), TAIL). M_r lives inside the
-  // quantized scalar below — quantizing C' and leaving M_r raw in the
-  // operand is identical in algebra and NOT in quantization, and the raw
-  // split re-created the measured FL-C4a dwell failure. Totality means
-  // this returns the perpetual tail past the asymptote instead of falling
-  // to the BLOCK_REWARD_OVERESTIMATE placeholder wallets refuse (FL-R16a).
+  // M_r-neutral total: max(curve(remaining), TAIL). M_r lives inside C.
   if (!get_block_reward(m_current_block_cumul_weight_limit / 2, 1, already_generated_coins, base_reward, version))
   {
     MERROR("Failed to determine block reward, using placeholder " << print_money(BLOCK_REWARD_OVERESTIMATE) << " as a high bound");
     base_reward = BLOCK_REWARD_OVERESTIMATE;
   }
 
-  // C_q inputs read from the SAME sources validation uses at this state
-  // (one derivation, no estimate-side re-model): the exact volume window
-  // (FL-R24), sigma from the emission-share schedule, burn from
-  // the canonical burn curve.
-  //
-  // NO BAND ON THE SERVED VALUE **YET**: `C_q` is the plain ceiling snap
-  // of the correction at THIS state. FL-R3 is RULED — the band stays and
-  // is restored here — so treat this as a gap with an owner, not as the
-  // design. Do not "simplify" it away.
-  //
-  // Two attempts preceded this, and both failed for the same underlying
-  // reason — the §7 hysteresis band needs the previous SERVED value, and
-  // a daemon cannot supply that deterministically. (1) Remembering it in
-  // a mutable member made the served fee depend on the daemon's QUERY
-  // HISTORY: a restarted and a long-running node could quote differently
-  // at the same height, forever. (2) Seeding the band with the previous
-  // block's UNSEEDED snap made it deterministic but INVERTED it — for raw
-  // `C` alternating 1.00× / 1.02×, the served value comes out 1× / 2× out
-  // of phase, charging the high rate exactly when the correction says low
-  // (PR #640 review). That is worse than the flicker it was meant to damp.
-  //
-  // Reconstructing the true served sequence means folding chain history
-  // with a defined depth and reorg behaviour. That is the RULED direction
-  // (FL-R3, round 17): a grid-anchored previous value — bounded to
-  // evaluate, and still a pure function of chain state — restores the
-  // band here. It carries its own design questions (grid period, fold
-  // depth, reorg behaviour, per-query cost), so it comes back as its own
-  // round rather than being invented at this call site.
-  //
-  // Two constraints bind whoever wires it, both from findings on the
-  // record: the previous value must stay derivable from chain state — a
-  // remembered one repeals FL-R18's determinism rather than restoring
-  // FL-R3 — and the band keeps a single owner in shekyl-economics, never
-  // a copy here.
-  //
-  // Until then the served value is the plain snap. FL-R18 (a) is what
-  // makes that tolerable in the interim: the residual boundary
-  // oscillation is accepted as bounded, its anonymity premise examined
-  // and refuted.
-  const shekyl::tx_volume_window tx_volume = get_tx_volume_window(db_height);
-  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  const uint64_t sigma = shekyl_calc_emission_share(
-      db_height,
-      genesis_ng_height,
-      SHEKYL_STAKER_EMISSION_SHARE,
-      SHEKYL_STAKER_EMISSION_DECAY,
-      SHEKYL_BLOCKS_PER_YEAR);
-  const uint64_t burn_pct = shekyl_calc_burn_pct(
-      tx_volume.tx_count_sum,
-      tx_volume.blocks,
-      SHEKYL_TX_VOLUME_BASELINE,
-      already_generated_coins,
-      SHEKYL_EMISSION_CURVE_ASYMPTOTE,
-      SHEKYL_BURN_BASE_RATE,
-      SHEKYL_BURN_CAP);
-  // `prev_cq = 0` is "no held value": the plain ceiling quantization.
-  const uint64_t fee_correction_cq =
-      shekyl_fee_correction_quantized(tx_volume.tx_count_sum, tx_volume.blocks, sigma, burn_pct, 0);
-
-  get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, base_reward, Mnw, Mlw_penalty_free_zone_for_wallet, fee_correction_cq, fees);
-
-  // FL-R12' round-8 rider, satisfied BY CONSTRUCTION: the estimate can
-  // only err toward acceptance. Where the quote is consumed as a floor it
-  // is the RELAY floor (CEN-M3: there is no consensus fee floor), and the
-  // relay floor prices from get_current_fee_per_byte() — a different
-  // function than this ladder, so divergence is possible by construction
-  // and the bounded C_q mispricing can err low exactly where the tail
-  // binds. Clamping the served economy rung at the very value check_fee
-  // prices from turns the signed direction claim into an identity: a
-  // conforming wallet's quote is never below the floor, so mispricing can
-  // only overquote (bounded by the pow2 step), never dead-letter.
-  fees[0] = std::max<uint64_t>(fees[0], get_current_fee_per_byte());
+  const uint64_t c = fee_correction_at(db_height, already_generated_coins);
+  get_dynamic_base_fee_estimate_2021_scaling(base_reward, median, c, fees);
 }
 
 //------------------------------------------------------------------
@@ -4681,70 +4363,6 @@ bool Blockchain::is_tx_spendtime_unlocked(uint64_t unlock_time, uint8_t hf_versi
   }
   return false;
 }
-//------------------------------------------------------------------
-// This function locates all outputs associated with a given input (mixins)
-// and validates that they exist and are usable.  It also checks the ring
-// signature for each input.
-bool Blockchain::check_tx_input(size_t tx_version, const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const ct::CtSig &ct_signatures, std::vector<ct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const
-{
-  LOG_PRINT_L3("Blockchain::" << __func__);
-
-  // ND:
-  // 1. Disable locking and make method private.
-  //CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  struct outputs_visitor
-  {
-    std::vector<ct::ctkey >& m_output_keys;
-    const Blockchain& m_bch;
-    const uint8_t hf_version;
-    outputs_visitor(std::vector<ct::ctkey>& output_keys, const Blockchain& bch, uint8_t hf_version) :
-      m_output_keys(output_keys), m_bch(bch), hf_version(hf_version)
-    {
-    }
-    bool handle_output(uint64_t unlock_time, const crypto::public_key &pubkey, const ct::key &commitment)
-    {
-      //check tx unlock time
-      if (!m_bch.is_tx_spendtime_unlocked(unlock_time, hf_version))
-      {
-        MERROR_VER("One of outputs for one of inputs has wrong tx.unlock_time = " << unlock_time);
-        return false;
-      }
-
-      // The original code includes a check for the output corresponding to this input
-      // to be a txout_to_key. This is removed, as the database does not store this info.
-      // Only txout_to_key (and since HF_VERSION_VIEW_TAGS, txout_to_tagged_key)
-      // outputs are stored in the DB in the first place, done in Blockchain*::add_output.
-      // Additional type checks on outputs were also added via cryptonote::check_output_types
-      // and cryptonote::get_output_public_key (see Blockchain::check_tx_outputs).
-
-      m_output_keys.push_back(ct::ctkey({ct::pk2rct(pubkey), commitment}));
-      return true;
-    }
-  };
-
-  output_keys.clear();
-
-  // collect output keys
-  outputs_visitor vi(output_keys, *this, hf_version);
-  if (!scan_outputkeys_for_indexes(tx_version, txin, vi, tx_prefix_hash, pmax_related_block_height))
-  {
-    MERROR_VER("Failed to get output keys for tx with amount = " << print_money(txin.amount) << " and count indexes " << txin.key_offsets.size());
-    return false;
-  }
-
-  if(txin.key_offsets.size() != output_keys.size())
-  {
-    MERROR_VER("Output keys for tx with amount = " << txin.amount << " and count indexes " << txin.key_offsets.size() << " returned wrong keys count " << output_keys.size());
-    return false;
-  }
-  if (tx_version == 1) {
-    CHECK_AND_ASSERT_MES(sig.size() == output_keys.size(), false, "internal error: tx signatures count=" << sig.size() << " mismatch with outputs keys count for inputs=" << output_keys.size());
-  }
-  // ct_signatures will be expanded after this
-  return true;
-}
-//------------------------------------------------------------------
 crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
 {
   const ct::CtSig &rv = tx.ct_signatures;
@@ -4781,181 +4399,35 @@ crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
 //------------------------------------------------------------------
 namespace
 {
-const char* archival_bond_post_verify_err_string(uint8_t code)
-{
-  switch (code)
-  {
-  case SHEKYL_ARCHIVAL_BOND_POST_OK:
-    return "ok";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR:
-    return "null shard id pointer";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND:
-    return "post_kind not JoinMarket";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY:
-    return "ShardSetCompact requires shards";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS:
-    return "CompleteTree must not carry shard ids";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO:
-    return "JoinMarket bond_debit must be zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS:
-    return "bond_credit and bond_debit both non-zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO:
-    return "bond_floor is zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH:
-    return "bonded_total/bond_credit must equal bond_floor";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS:
-    return "bond record already exists";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND:
-    return "invalid holdings_kind";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE:
-    return "post_kind not Release";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING:
-    return "Release requires an existing bond record";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE:
-    return "record bonded_total is zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_CREDIT:
-    return "Release bond_credit must be zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH:
-    return "post-connect bonded_total must equal bond_floor(holdings)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE:
-    return "Release is a full exit: post-connect bonded_total must be zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL:
-    return "bond_debit must equal the record's current bonded_total";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED:
-    return "release cooldown has not elapsed";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW:
-    return "marshaled array length overflow";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY:
-    return "full exit must end at empty holdings";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL:
-    return "record interval log is full";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING:
-    return "slash scheduler has not settled every epoch through the last-served anchor";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING:
-    return "bond_spend_pk violates the JoinMarket coupling (missing/non-canonical on "
-      "JoinMarket, or present on another kind)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE:
-    return "post_kind is not HoldingsUpdate";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE:
-    return "HoldingsUpdate on a CompleteTree record (no shard set to change)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT:
-    return "HoldingsUpdate post holdings are not ShardSetCompact";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS:
-    return "HoldingsUpdate-add terms are not exactly +FLOOR credit / no debit";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING:
-    return "HoldingsUpdate-add on a record not good_through the current epoch";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD:
-    return "HoldingsUpdate-add is not exactly one added shard";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH:
-    return "HoldingsUpdate-add post bonded_total != bond_floor(post) / current + FLOOR";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS:
-    return "HoldingsUpdate-drop terms are not exactly -FLOOR debit / no credit";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP:
-    return "HoldingsUpdate-drop must remove exactly one shard, and it must be the "
-      "shard whose per-shard facts were marshaled";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD:
-    return "HoldingsUpdate-drop would empty the shard set (a full exit is Release)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH:
-    return "HoldingsUpdate-drop post bonded_total != bond_floor(post) / current - FLOOR";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON:
-    return "HoldingsUpdate-drop before the shard's retention-commitment horizon elapsed";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND:
-    return "post_kind is not Rebond";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE:
-    return "Rebond on a CompleteTree record (demotion flips the kind; unrepresentable)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT:
-    return "Rebond post-holdings are not ShardSetCompact";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED:
-    return "Rebond requires an open bad interval (the record is not slashed)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN:
-    return "record carries multiple open bad intervals (coalescing invariant broken)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM:
-    return "record interval log lacks Rebond headroom (must leave a slot for the next "
-      "slash and the Release clean close)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS:
-    return "Rebond terms mismatch (debit nonzero, or credit != bond_floor(post) - "
-      "record bonded_total, or post bonded_total != bond_floor(post))";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET:
-    return "Rebond post-holdings are not a duplicate-free superset of the record's "
-      "current holdings (shedding goes through HoldingsUpdate-drop)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED:
-    return "retired Rebond oversize code (45) — never returned; oversize is now "
-      "unrepresentable in the vin's ShardSet holdings";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR:
-    return "record bonded_total != bond_floor(record holdings) (floor-drifted record)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED:
-    return "vin holdings shard count exceeds the wire codec bound";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD:
-    return "vin holdings carry a duplicate shard id (a set on the wire)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED:
-    return "HoldingsUpdate requires a Bonded record (an Exited or slash-emptied "
-      "record re-enters via JoinMarket/Rebond)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY:
-    return "bond record commits no bond_spend_pk; it authorizes no debit";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH:
-    return "pqc auth key is not the record's committed bond_spend_pk";
-  default:
-    return "unknown bond-post verify code";
-  }
-}
-
-// GF-1 debit authorization (gate-4 §3.5 step 5) — the SHARED debit authorizer,
-// single-sourced for every bond_debit > 0 arm (Release, HoldingsUpdate-drop; a
-// future debit kind rides the same call): the pqc auth key must equal the
-// record's COMMITTED bond_spend_pk — never the identity key P_pubkey
-// (identity-only invariant, gate-6 §9.6). The signature itself is verified
-// over the whole-tx payload by verify_transaction_pqc_auth against
-// pqc_auths[idx].hybrid_public_key; pinning that key here is the authorization
-// choice. A record with no committed key (pre-GF-1 shape) authorizes nothing —
-// fail closed, not identity fallback. Callers gate on have_record (a missing
-// record falls through to the semantic verify's RECORD_MISSING) and run this
-// BEFORE any per-shard cursor scans or FFI verify: it is a two-vector compare,
-// so an unauthorized attempt is rejected before it can cost LMDB seeks.
-// Debit authorization for the value-out bond-post arms. The predicate itself
-// is Rust (`shekyl-archival-retention::debit_auth_pin`); this site marshals and
-// logs. Callers classify the returned code via
-// `shekyl_archival_bond_post_drop_verdict` — this helper does not decide
-// whether the rejection severs. It used to be implemented here, which made it
-// a second copy of the one check that has no recovery -- a compromised serving
-// host holds the identity hybrid key, so an identity-authorized debit is a
-// collateral drain. The Rust submit battery calls the same function natively
-// (DAEMON_SUBMIT_VERDICT.md 8.7.1.1 row UB3), so the two verifying paths share
-// it rather than tracking each other.
-uint8_t archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
+// Cold-authority marshal: both halves are Rust (`cold_authority_pin`).
+// Callers gate on have_record (a missing record falls through to the
+// semantic verify's RECORD_MISSING) and run this before per-shard cursor
+// scans or FFI verify. Classification is `shekyl_archival_bond_post_drop_verdict`;
+// this helper does not decide whether the rejection severs. Operator strings
+// come from `shekyl_archival_bond_post_err_string` — the one table.
+uint8_t archival_cold_authority_pin(const shekyl::db::ArchivalBondValue& record,
+  uint8_t post_kind, uint64_t bond_debit,
   const std::vector<uint8_t>& auth_pubkey, const char* arm)
 {
-  const uint8_t rc = shekyl_archival_debit_auth_pin(
+  const uint8_t rc = shekyl_archival_cold_authority_pin(
+    post_kind, bond_debit,
     record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),
     record.bond_spend_pk.size(),
     auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
     auth_pubkey.size());
-  if (rc == SHEKYL_ARCHIVAL_BOND_POST_OK)
-    return rc;
-  // Two arms, deliberately distinct in the log: "this record authorizes
-  // nothing" and "wrong key against a record that does" have different
-  // operator remedies.
-  if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY)
+  if (rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
   {
-    MERROR_VER("Archival " << arm << " rejected: record commits no bond_spend_pk; "
-      "a debit cannot be authorized (and the identity key never authorizes "
-      "a value-out)");
-  }
-  else if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH)
-  {
-    MERROR_VER("Archival " << arm << " rejected: pqc auth key does not match the "
-      "record's committed bond_spend_pk (identity-key or foreign-key debit "
-      "authorization is forbidden)");
-  }
-  else
-  {
-    MERROR_VER("Archival " << arm << " rejected: debit-auth pin marshal fault (code "
-      << static_cast<unsigned>(rc) << ")");
+    MERROR_VER("Archival " << arm << " rejected: "
+      << shekyl_archival_bond_post_err_string(rc)
+      << " (post_kind " << static_cast<unsigned>(post_kind)
+      << ", bond_debit " << bond_debit
+      << ", code " << static_cast<unsigned>(rc) << ")");
   }
   return rc;
 }
 
 // Shared record-fact marshal for the record-mutating bond-post verify arms
-// (HoldingsUpdate, Rebond): load the bond record, belt the v6 index-parallel
+// (Reinstate): load the bond record, belt the v6 index-parallel
 // coupling, and flatten the interval log into the FFI's (start, end_exclusive)
 // pair layout. Returns false — rejecting the tx — on the desync belt.
 // Single-sourced so the arms verify against identically-gathered record facts;
@@ -5013,29 +4485,35 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     ? nullptr
     : bond.holdings.shard_ids.data();
 
-  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Release))
+  // Non-parse belt: JoinMarket-coupled fields exist iff JoinMarket. Codecs
+  // already refuse the shape at parse; this covers constructed vins.
+  const bool is_join_market =
+    bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket);
+  if (is_join_market)
   {
-    // §9.11 coupling belt for non-parse callers (every codec refuses this at
-    // parse; the credit path's twin belt sits below): only JoinMarket carries
-    // the debit authorizer — a Release debit authorizes against the record's
-    // COMMITTED copy, never a key the vin brings along.
-    if (!bond.bond_spend_pk.empty())
+    if (bond.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
     {
-      MERROR_VER("Archival Release rejected: vin carries a bond_spend_pk "
-        "(JoinMarket-coupled field)");
+      MERROR_VER("Archival JoinMarket rejected: bond_spend_pk missing or not canonical");
       return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     }
+  }
+  else if (!bond.join_market_coupled_fields_absent())
+  {
+    MERROR_VER("Archival bond-post rejected: vin carries a JoinMarket-coupled field");
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+  }
 
+  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Release))
+  {
     shekyl::db::ArchivalBondValue record{};
     const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
 
-    // GF-1 debit authorization — the shared pin (archival_debit_auth_pin
-    // above), run before the cooldown-anchor gathering + semantic verify.
-    // Classification is the bond-post mapper: no committed key is our
-    // record state; a key mismatch is the sender's form.
+    // Cold authority — shared Rust gate, before cooldown gather + semantic
+    // verify. Release is unconditional in requires_cold_authority.
     if (have_record)
     {
-      const uint8_t pin_rc = archival_debit_auth_pin(record, auth_pubkey, "Release");
+      const uint8_t pin_rc = archival_cold_authority_pin(record,
+        bond.post_kind, bond.bond_debit, auth_pubkey, "Release");
       if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
         return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(pin_rc));
     }
@@ -5081,178 +4559,15 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     if (verify_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
     {
       MERROR_VER("Archival Release verify failed (code " << static_cast<unsigned>(verify_rc)
-        << "): " << archival_bond_post_verify_err_string(verify_rc));
+        << "): " << shekyl_archival_bond_post_err_string(verify_rc));
       return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(verify_rc));
     }
     return true;
   }
 
-  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
+  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Reinstate))
   {
-    // §9.11 coupling belt: a HoldingsUpdate never carries the vin-borne debit
-    // authorizer — the add is a credit (identity-key auth) and the drop's debit
-    // authorizes against the record's COMMITTED bond_spend_pk (GF-1 selector),
-    // never a key the vin brings along.
-    if (!bond.bond_spend_pk.empty())
-    {
-      MERROR_VER("Archival HoldingsUpdate rejected: vin carries a bond_spend_pk "
-        "(JoinMarket-coupled field)");
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-    }
-
-    shekyl::db::ArchivalBondValue record{};
-    bool have_record = false;
-    std::vector<uint64_t> bad_flat;
-    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "HoldingsUpdate",
-        record, have_record, bad_flat))
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
-    const uint64_t current_epoch = shekyl_archival_settlement_epoch_at_height(chain_height);
-    const uint64_t* record_shard_ptr = record.held_shard_ids.empty()
-      ? nullptr : record.held_shard_ids.data();
-
-    // Direction (verify-pinned §3.2): bond_debit == 0 is the add (credit) arm;
-    // a positive debit is the drop (grace-tail) arm. Each arm's own term check
-    // is authoritative — this only selects which fact set to marshal.
-    if (bond.bond_debit == 0)
-    {
-      // ADD (credit path): the record's current holdings + the good_through
-      // inputs (join epoch + the flattened bad intervals). Auth is the
-      // IDENTITY key.
-      const uint8_t hu_rc = shekyl_archival_verify_holdings_update_add(
-        bond.post_kind,
-        static_cast<uint8_t>(bond.holdings.kind),
-        shard_ptr,
-        bond.holdings.shard_ids.size(),
-        nullptr, // bond_spend_pk: empty on HoldingsUpdate (belt above)
-        0,
-        bond.bonded_total_atomic,
-        bond.bond_credit,
-        bond.bond_debit,
-        have_record ? 1 : 0,
-        record.bonded_total_atomic,
-        static_cast<uint8_t>(record.holdings_kind),
-        record_shard_ptr,
-        record.held_shard_ids.size(),
-        record.join_settlement_epoch,
-        bad_flat.empty() ? nullptr : bad_flat.data(),
-        record.bad_intervals.size(),
-        current_epoch);
-      if (hu_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
-      {
-        MERROR_VER("Archival HoldingsUpdate-add verify failed (code "
-          << static_cast<unsigned>(hu_rc) << "): "
-          << archival_bond_post_verify_err_string(hu_rc));
-        return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(hu_rc));
-      }
-      if (auth_pubkey != bond.hybrid_public_key)
-      {
-        MERROR_VER("Archival HoldingsUpdate-add rejected: credit-path pqc auth key "
-          "does not match the identity key P_pubkey");
-        return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-      }
-      return true;
-    }
-
-    // DROP (grace-tail debit path). GF-1 debit authorization — the shared pin
-    // (archival_debit_auth_pin above), the Release arm's twin.
-    if (have_record)
-    {
-      const uint8_t pin_rc = archival_debit_auth_pin(record, auth_pubkey, "HoldingsUpdate-drop");
-      if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
-        return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(pin_rc));
-    }
-
-    // Identify the dropped shard by set-difference (record CURRENT \ vin POST)
-    // and read its per-shard facts. The Rust verify recomputes the diff and
-    // cross-checks dropped_shard_id, so a non-single diff is rejected there
-    // regardless of what we pass; we gather real facts only when exactly one
-    // shard was removed (the happy path), else pass zeroed facts.
-    uint64_t dropped_shard_id = 0;
-    uint64_t dropped_add_epoch = 0;
-    uint64_t dropped_freeze_height = 0;
-    uint64_t dropped_last_served = std::numeric_limits<uint64_t>::max();
-    if (have_record)
-    {
-      // Index the POST holdings once (O(1) membership) so identifying the
-      // record-minus-post shard stays O(n) rather than a nested scan at the
-      // 4096 holdings cap.
-      const std::unordered_set<uint64_t> post_shards(
-        bond.holdings.shard_ids.begin(), bond.holdings.shard_ids.end());
-      std::vector<size_t> removed_idx;
-      for (size_t i = 0; i < record.held_shard_ids.size(); ++i)
-      {
-        if (post_shards.find(record.held_shard_ids[i]) == post_shards.end())
-          removed_idx.push_back(i);
-      }
-      if (removed_idx.size() == 1)
-      {
-        const size_t i = removed_idx[0];
-        dropped_shard_id = record.held_shard_ids[i];
-        dropped_add_epoch = record.shard_add_epochs[i];
-        // The ADD verify deliberately does NOT require a frozen segment
-        // (bond_post.rs: adding an unfrozen shard is self-harm, not an
-        // attack), so a held shard may legitimately have no freeze row yet.
-        // Fail closed by leaving the freeze height at 0 — the genesis-band
-        // "oldest" sentinel, i.e. the longest (hardest-to-drop) horizon. The
-        // Rust age computation (ShardAgeAtAdd::from_add) pins the adjacent
-        // corner to the same extreme: a segment that froze AT or AFTER
-        // H_close(add_epoch) also gets the longest horizon, so an
-        // added-before-freeze shard cannot recycle its FLOOR early no matter
-        // when the freeze lands relative to the drop attempt.
-        uint64_t freeze = 0;
-        if (m_db->archival_shard_freeze_height(dropped_shard_id, freeze))
-          dropped_freeze_height = freeze;
-        const std::vector<uint64_t> served =
-          m_db->archival_bond_last_served_epochs(bond.p_canonical_id, {dropped_shard_id});
-        if (!served.empty())
-          dropped_last_served = served.front();
-      }
-    }
-    const uint64_t last_settled_slash_epoch = m_db->get_archival_last_slash_epoch();
-    const uint8_t hu_rc = shekyl_archival_verify_holdings_update_drop(
-      bond.post_kind,
-      static_cast<uint8_t>(bond.holdings.kind),
-      shard_ptr,
-      bond.holdings.shard_ids.size(),
-      nullptr, // bond_spend_pk: empty on HoldingsUpdate (belt above)
-      0,
-      bond.bonded_total_atomic,
-      bond.bond_credit,
-      bond.bond_debit,
-      have_record ? 1 : 0,
-      record.bonded_total_atomic,
-      static_cast<uint8_t>(record.holdings_kind),
-      record_shard_ptr,
-      record.held_shard_ids.size(),
-      dropped_shard_id,
-      dropped_add_epoch,
-      dropped_freeze_height,
-      dropped_last_served,
-      last_settled_slash_epoch,
-      current_epoch);
-    if (hu_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
-    {
-      MERROR_VER("Archival HoldingsUpdate-drop verify failed (code "
-        << static_cast<unsigned>(hu_rc) << "): "
-        << archival_bond_post_verify_err_string(hu_rc));
-      return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(hu_rc));
-    }
-    return true;
-  }
-
-  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Rebond))
-  {
-    // §9.11 coupling belt: Rebond never carries the vin-borne debit authorizer
-    // — it is a credit (identity-key auth, P2B-9 Pin 4) and the record keeps
-    // its join-time committed bond_spend_pk for future debits.
-    if (!bond.bond_spend_pk.empty())
-    {
-      MERROR_VER("Archival Rebond rejected: vin carries a bond_spend_pk "
-        "(JoinMarket-coupled field)");
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-    }
-
-    // Rebond semantic verify (gate-4 §3.4; P2B-9 reinstatement): marshal the
+    // Reinstate semantic verify (gate-4 §3.4; P2B-9 reinstatement): marshal the
     // record's current holdings + the full interval log as flattened
     // (start, end_exclusive) pairs — the open-interval precondition, the Pin-5
     // single-open check, and the Pin-6 headroom bound all read it Rust-side.
@@ -5260,15 +4575,15 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     shekyl::db::ArchivalBondValue record{};
     bool have_record = false;
     std::vector<uint64_t> intervals_flat;
-    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "Rebond",
+    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "Reinstate",
         record, have_record, intervals_flat))
       return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
-    const uint8_t rb_rc = shekyl_archival_verify_rebond_bond_post(
+    const uint8_t rb_rc = shekyl_archival_verify_reinstate_bond_post(
       bond.post_kind,
       static_cast<uint8_t>(bond.holdings.kind),
       shard_ptr,
       bond.holdings.shard_ids.size(),
-      nullptr, // bond_spend_pk: empty on Rebond (belt above)
+      nullptr, // bond_spend_pk: empty on Reinstate (belt above)
       0,
       bond.bonded_total_atomic,
       bond.bond_credit,
@@ -5282,43 +4597,21 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       record.bad_intervals.size());
     if (rb_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
     {
-      MERROR_VER("Archival Rebond verify failed (code "
+      MERROR_VER("Archival Reinstate verify failed (code "
         << static_cast<unsigned>(rb_rc) << "): "
-        << archival_bond_post_verify_err_string(rb_rc));
+        << shekyl_archival_bond_post_err_string(rb_rc));
       return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(rb_rc));
     }
     // Credit-path authorization (P2B-9 Pin 4, the GF-1 selector): the identity
-    // key — a Rebond proves control of P_canonical_id; the funded value (if
+    // key — a Reinstate proves control of P_canonical_id; the funded value (if
     // any) arrives via self-authorizing txin_to_key inputs.
     if (auth_pubkey != bond.hybrid_public_key)
     {
-      MERROR_VER("Archival Rebond rejected: credit-path pqc auth key does not "
+      MERROR_VER("Archival Reinstate rejected: credit-path pqc auth key does not "
         "match the identity key P_pubkey");
       return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     }
     return true;
-  }
-
-  // §9.11 belt for non-parse callers, the Release arm's twin (the serializer
-  // enforces this at parse, and the FFI vin marshaler below re-refuses the
-  // coupling): JoinMarket must commit a canonical-length bond_spend_pk for
-  // the record — it never authorizes the credit itself; the identity-key pin
-  // below does — and every other kind on this arm (Rebond and HoldingsUpdate
-  // dispatch above; anything else is verify-rejected downstream) must not
-  // carry one.
-  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
-  {
-    if (bond.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
-    {
-      MERROR_VER("Archival JoinMarket rejected: bond_spend_pk missing or not canonical");
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-    }
-  }
-  else if (!bond.bond_spend_pk.empty())
-  {
-    MERROR_VER("Archival bond-post rejected: vin carries a bond_spend_pk "
-      "(JoinMarket-coupled field)");
-    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
   }
 
   std::vector<uint8_t> existing_pubkey;
@@ -5330,6 +4623,8 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     bond.holdings.shard_ids.size(),
     bond.bond_spend_pk.data(),
     bond.bond_spend_pk.size(),
+    reinterpret_cast<const uint8_t*>(bond.endpoint.data),
+    sizeof(bond.endpoint.data),
     bond.bonded_total_atomic,
     bond.bond_credit,
     bond.bond_debit,
@@ -5337,11 +4632,11 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   if (verify_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
   {
     MERROR_VER("Archival bond-post verify failed (code " << static_cast<unsigned>(verify_rc)
-      << "): " << archival_bond_post_verify_err_string(verify_rc));
+      << "): " << shekyl_archival_bond_post_err_string(verify_rc));
     return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(verify_rc));
   }
 
-  // D3/R3 admission viability (JoinMarket only — rebond/HU-add are monotone
+  // D3/R3 admission viability (JoinMarket only — reinstate/HU-add are monotone
   // in credited work; HU-drop is left ungated so we do not trap exit-ward
   // capital). Predicate + epoch key + age live in Rust; C++ only marshals
   // LMDB rows. parent_height = chain_height - 1 (tip would self-score).
@@ -5778,19 +5073,62 @@ bool Blockchain::check_block_timestamp(const block& b, uint64_t& median_ts) cons
   return check_block_timestamp(timestamps, b, median_ts);
 }
 //------------------------------------------------------------------
-bool Blockchain::verify_block_attestation(const block& b, const blobdata& witness)
+bool Blockchain::fill_pass_anchor_window(uint64_t predecessor_height,
+  const std::list<block_extended_info>* alt_chain, std::vector<crypto::hash>& out) const
 {
-  // ARCHIVAL_CREDIT_WIRE.md §3-§4: recompute-and-compare the block's attestation_root and verify
-  // every pass record's P-countersignature. ALL logic is in Rust (shekyl_archival_verify_attestation);
-  // this only marshals -- reads the header blob from the coinbase tx_extra, names the pass p_ids
-  // (step 1), reads each bond's hybrid pubkey from LMDB by those keys, reads the coinbase output key,
-  // hands the raw bytes across, and obeys the verdict. It parses nothing structural and decides
-  // nothing (rule 20). Pre-cutover no block carries pass records, so on every VALID block (empty
-  // witness, well-formed coinbase) this matches the interim's attestation_root ==
-  // empty_attestation_root(); it is strictly stricter only on three pinned shapes (unsolicited
-  // witness bytes, an unreadable coinbase vout[0] that prevalidate_miner_transaction rejects anyway,
-  // and a coinbase tx_extra that fails to parse), so no valid block's verdict changes except the
-  // deliberate unparseable-extra tightening pinned in unreadable_headers_is_headers_unreadable.
+  out.clear();
+  uint64_t first = 0;
+  size_t len = 0;
+  const uint8_t shape = shekyl_archival_pass_anchor_window(predecessor_height, &first, &len);
+  if (shape != SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK)
+  {
+    MERROR("shekyl_archival_pass_anchor_window(" << predecessor_height << ") returned " << (unsigned)shape);
+    return false;
+  }
+  if (len == 0)
+    return true;
+
+  // Consecutive alt hashes starting at the fork; heights below that are main chain.
+  std::vector<crypto::hash> alt_hashes;
+  uint64_t alt_from = std::numeric_limits<uint64_t>::max();
+  if (alt_chain && !alt_chain->empty())
+  {
+    alt_from = alt_chain->front().height;
+    alt_hashes.reserve(alt_chain->size());
+    uint64_t expect = alt_from;
+    for (const block_extended_info& bei : *alt_chain)
+    {
+      if (bei.height != expect)
+      {
+        MERROR("pass-anchor alt chain is not consecutive at " << bei.height
+          << " (expected " << expect << ")");
+        return false;
+      }
+      alt_hashes.push_back(get_block_hash(bei.bl));
+      ++expect;
+    }
+  }
+
+  auto main_hash = [this](uint64_t height, crypto::hash& h) -> bool {
+    if (height >= m_db->height())
+      return false;
+    h = m_db->get_block_hash_from_height(height);
+    return true;
+  };
+  if (!fill_connecting_anchor_hashes(first, len, alt_from, alt_hashes, main_hash, out))
+  {
+    MERROR("pass anchor height missing on the connecting chain for predecessor "
+      << predecessor_height);
+    return false;
+  }
+  return true;
+}
+//------------------------------------------------------------------
+bool Blockchain::verify_block_attestation(const block& b, uint64_t predecessor_height,
+  const std::list<block_extended_info>* alt_chain, const blobdata& witness)
+{
+  // Marshal headers, bond pubkeys, and the connecting-chain anchor table into
+  // shekyl_archival_verify_attestation. Rust owns the verdict (rule 20).
   const crypto::hash id = get_block_hash(b);
 
   // 1. Header blob from the coinbase tx_extra. parse_archival_attestation_from_extra returns false
@@ -5839,33 +5177,31 @@ bool Blockchain::verify_block_attestation(const block& b, const blobdata& witnes
     pairs[i].pubkey_len = pubkeys[i].size();
   }
 
-  // 4. Assemble the ctx. cb_out_key is the coinbase vout[0] output key the nonce binds (consensus
-  //    rule); a block with no coinbase output or a non-key output is unreadable -- flag it so Rust
-  //    returns ERR_CBKEY_UNREADABLE rather than verifying against garbage.
+  // 4. Connecting-chain hashes for the window Rust named. predecessor_height is
+  //    the validated parent, never the coinbase-claimed height.
+  std::vector<crypto::hash> anchor_hashes;
+  if (!fill_pass_anchor_window(predecessor_height, alt_chain, anchor_hashes))
+  {
+    MERROR_VER("Block with id: " << id << " could not fill the pass anchor window for predecessor "
+      << predecessor_height);
+    return false;
+  }
+  static_assert(sizeof(crypto::hash) == 32, "anchor table entries are 32-byte block hashes");
+
+  // 5. Assemble the ctx.
   shekyl_archival_attestation_verify_ctx ctx{};
   std::memcpy(ctx.attestation_root, b.attestation_root.data, 32);
-  crypto::public_key cb_out_key;
-  if (!b.miner_tx.vout.empty() && get_output_public_key(b.miner_tx.vout[0], cb_out_key))
-  {
-    std::memcpy(ctx.cb_out_key, cb_out_key.data, 32);
-    ctx.cb_out_key_readable = 1;
-  }
-  // prev_block_hash: the nonce's anchor term, replacing the producer's revealed randomness `r`
-  // (RF-D3). It must be the VALIDATED predecessor -- on the main-chain path `bl.prev_id` is checked
-  // against `top_hash` before this runs; on the alt-chain path it is the fork point the alt chain is
-  // built on. An unvalidated header field would be producer-chosen, which is exactly the property
-  // `r` was deleted for having. Rust refuses all-zeros (ERR_PREVHASH_UNPOPULATED) rather than
-  // verifying every countersignature against H(0..0), so a forgotten field is loud, not silent --
-  // deliberately with no `_readable` flag, since a verifier holding a block has parsed its header
-  // and that arm could never legitimately fire.
-  std::memcpy(ctx.prev_block_hash, b.prev_id.data, 32);
+  ctx.predecessor_height = predecessor_height;
+  ctx.anchor_hashes_ptr = anchor_hashes.empty() ? nullptr
+    : reinterpret_cast<const uint8_t (*)[32]>(anchor_hashes.data());
+  ctx.anchor_hashes_len = anchor_hashes.size();
   ctx.headers_readable = headers_readable ? 1 : 0;
   ctx.headers_ptr = headers.empty() ? nullptr : reinterpret_cast<const uint8_t*>(headers.data());
   ctx.headers_len = headers.size();
   ctx.pairs_ptr = pairs.empty() ? nullptr : pairs.data();
   ctx.pairs_len = pairs.size();
 
-  // 5. Step 2: the atomic verify. Any non-OK is a block-validity failure.
+  // 6. Step 2: the atomic verify. Any non-OK is a block-validity failure.
   const uint8_t verdict = shekyl_archival_verify_attestation(
     witness.empty() ? nullptr : reinterpret_cast<const uint8_t*>(witness.data()), witness.size(), &ctx);
   if (verdict != SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK)
@@ -5952,10 +5288,20 @@ leave:
   // witness -> empty-set root recompute); post-cutover it does up to one hybrid-signature verify per
   // pass record, so the signature leg must sit behind PoW before population turns on (Phase-5
   // ordering constraint, see FOLLOWUPS). verify_block_attestation logs the specific verdict code.
-  if (!verify_block_attestation(bl, connect.attestation_witness))
+  //
+  // SF-D8 keys each countersignature's anchor window off the VALIDATED predecessor height:
+  // `bl.prev_id == top_hash` was just checked, so the predecessor is the current top, at height
+  // `blockchain_height - 1` (`blockchain_height` is already the chain height = this block's
+  // height), and the anchor hashes are the main chain's (no alt chain). Genesis has no
+  // predecessor (top_block_hash reports height UINT64_MAX on an empty chain); it carries zero
+  // records and sits below the anchor threshold -- pass 0 rather than the wrapped value.
   {
-    reject_block_form(bvc);
-    goto leave;
+    const uint64_t predecessor_height = blockchain_height == 0 ? 0 : blockchain_height - 1;
+    if (!verify_block_attestation(bl, predecessor_height, nullptr, connect.attestation_witness))
+    {
+      reject_block_form(bvc);
+      goto leave;
+    }
   }
 
   TIME_MEASURE_FINISH(t1);
@@ -6006,7 +5352,7 @@ leave:
       precomputed = true;
       proof_of_work = it->second;
     }
-    else if (!get_block_longhash(this, bl, proof_of_work, blockchain_height, nullptr, 0))
+    else if (!get_block_longhash(this, bl, proof_of_work, blockchain_height, nullptr))
     {
       // CEN-D2: a longhash the verifier could not compute must reject the
       // block at EVERY difficulty — the 0xff sentinel alone passes
@@ -6467,7 +5813,12 @@ leave:
   // and the staker-inflow accrual — the same single-read discipline as
   // base_reward (F-B1c): verify's operand IS the accrual's operand.
   const uint64_t frozen_segment_count = parent_frozen_segment_count(blockchain_height);
-  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count))
+  // The destroyed-fee fold at PARENT state, read ONCE here and handed to both
+  // validate_miner_transaction and the accrual below (single-read discipline,
+  // as for frozen_segment_count): circulating_supply = already_generated_coins
+  // − total_burned is derived in Rust from this pair (FL-R16c).
+  const uint64_t total_burned = m_db->get_total_burned();
+  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count, total_burned))
   {
     MERROR_VER("Block with id: " << id << " has incorrect miner transaction");
     reject_block_form(bvc);
@@ -6546,8 +5897,8 @@ leave:
         base_reward, blockchain_height, genesis_ng_height);
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
-        fee_summary, get_tx_volume_window(blockchain_height), already_generated_coins,
-        frozen_segment_count);
+        fee_summary, get_tx_volume_window(blockchain_height),
+        shekyl::supply_facts{already_generated_coins, total_burned}, frozen_segment_count);
 
     archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;
     block_burn_amount = burn.actually_destroyed;
@@ -6695,44 +6046,6 @@ leave:
   return true;
 }
 //------------------------------------------------------------------
-bool Blockchain::prune_blockchain(uint32_t pruning_seed)
-{
-  m_tx_pool.lock();
-  epee::misc_utils::auto_scope_leave_caller unlocker = epee::misc_utils::create_scope_leave_handler([&](){m_tx_pool.unlock();});
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  if (!m_db->prune_blockchain(pruning_seed))
-    return false;
-  // The confirmed prune is complete only with the output-metadata pass:
-  // stripe pruning alone leaves the txs_pqc_auths/txs_prunable rows that
-  // update_blockchain_pruning would otherwise free up to five hours later,
-  // and the console tells the operator to compact once this call returns.
-  return m_db->prune_tx_data(CRYPTONOTE_TX_PRUNE_DEPTH);
-}
-//------------------------------------------------------------------
-bool Blockchain::update_blockchain_pruning()
-{
-  m_tx_pool.lock();
-  epee::misc_utils::auto_scope_leave_caller unlocker = epee::misc_utils::create_scope_leave_handler([&](){m_tx_pool.unlock();});
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  if (!m_db->update_pruning())
-    return false;
-  if (m_db->get_blockchain_pruning_seed() && !m_db->prune_tx_data(CRYPTONOTE_TX_PRUNE_DEPTH))
-    return false;
-  return true;
-}
-//------------------------------------------------------------------
-bool Blockchain::check_blockchain_pruning()
-{
-  m_tx_pool.lock();
-  epee::misc_utils::auto_scope_leave_caller unlocker = epee::misc_utils::create_scope_leave_handler([&](){m_tx_pool.unlock();});
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  return m_db->check_pruning();
-}
-//------------------------------------------------------------------
-// returns min(Mb, 1.7*Ml) as per https://github.com/ArticMine/Monero-Documents/blob/master/MoneroScaling2021-02.pdf from HF_VERSION_LONG_TERM_BLOCK_WEIGHT
 uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) const
 {
   PERF_TIMER(get_next_long_term_block_weight);
@@ -6745,12 +6058,8 @@ uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) cons
     long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
   uint64_t long_term_effective_median_block_weight = std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, long_term_median);
 
-  // long_term_block_weight = block_weight bounded to range [long-term-median/1.7, long-term-median*1.7]
-  block_weight = std::max<uint64_t>(block_weight, long_term_effective_median_block_weight * 10 / 17);
-  uint64_t short_term_constraint = long_term_effective_median_block_weight + long_term_effective_median_block_weight * 7 / 10;
-  uint64_t long_term_block_weight = std::min<uint64_t>(block_weight, short_term_constraint);
-
-  return long_term_block_weight;
+  // [LTEM/1.7, LTEM·1.7]; the bound is shekyl_long_term_block_weight.
+  return shekyl_long_term_block_weight(long_term_effective_median_block_weight, block_weight);
 }
 //------------------------------------------------------------------
 bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight)
@@ -6776,9 +6085,10 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
     get_last_n_blocks_weights(weights, CRYPTONOTE_REWARD_BLOCKS_WINDOW);
 
     uint64_t short_term_median = epee::misc_utils::median(weights);
-    // effective median = short_term_median bounded to range [long_term_median, 50*long_term_median],
-    // but it can't be smaller than the minimum penalty free zone (a.k.a. 'full reward zone')
-    uint64_t effective_median_block_weight = std::min<uint64_t>(std::max<uint64_t>(m_long_term_effective_median_block_weight, short_term_median), CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR * m_long_term_effective_median_block_weight);
+    // Short-term median bounded to [LTEM, S·LTEM]. S is not spelled here;
+    // the clamp is shekyl_effective_block_weight_median.
+    uint64_t effective_median_block_weight = shekyl_effective_block_weight_median(
+        m_long_term_effective_median_block_weight, short_term_median);
 
     m_current_block_cumul_weight_median = effective_median_block_weight;
   }
@@ -6787,6 +6097,12 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
     m_current_block_cumul_weight_median = full_reward_zone;
 
   m_current_block_cumul_weight_limit = m_current_block_cumul_weight_median * 2;
+
+  // FL-R23 ring: every tip change — connect, pop, reorg, init — reaches this
+  // function, so the ring is maintained here and nowhere else, keyed on
+  // height continuity. M for this tip is settled just above, which is why
+  // the push happens after it and not before.
+  advance_relay_floor_ring(db_height);
 
   if (long_term_effective_median_block_weight)
     *long_term_effective_median_block_weight = m_long_term_effective_median_block_weight;
@@ -6877,12 +6193,11 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
         // popped, and "rolling back" to a chain whose height-0 block still
         // mismatches would report the conflict resolved while fixing
         // nothing (the reports-success shape, fourth instance). This node
-        // is on the wrong network or the file is wrong; fail-stop.
+        // is on the wrong network for the binary it runs; fail-stop.
         MERROR("Checkpoint at height 0 (expected " << pt.second
           << ", chain has " << m_db->get_block_hash_from_height(0)
           << ") conflicts with this chain's GENESIS -- no rollback can"
-          << " resolve it; remedy: fix the checkpoints file or resync on"
-          << " the right network");
+          << " resolve it; remedy: resync on the right network");
         ok = false;
         continue;
       }
@@ -6898,7 +6213,7 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
       // watermark, there is no remedy this daemon can apply -- it must not
       // keep running in contradiction with a checkpoint it accepted. Same
       // predicate as the pop_block belt; the false return fail-stops via
-      // core::update_checkpoints -> graceful_exit.
+      // enforce_checkpoints -> core::init.
       //
       // Height-vs-index: `rollback_target` is a DB HEIGHT (the rollback
       // loop stops when height() == rollback_target), while the predicate
@@ -6937,23 +6252,14 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
   return ok;
 }
 //------------------------------------------------------------------
-// returns false if any of the checkpoints loading returns false.
-// That should happen only if a checkpoint is added that conflicts
-// with an existing checkpoint.
-bool Blockchain::update_checkpoints(const std::string& file_path)
+bool Blockchain::enforce_checkpoints()
 {
-  if (!m_checkpoints.load_checkpoints_from_json(file_path))
-  {
-      return false;
-  }
-
   if (!check_against_checkpoints(m_checkpoints))
   {
     // F-1(b): a conflict the rollback could not apply -- the caller
-    // (core::update_checkpoints) fail-stops rather than letting the daemon
-    // run in contradiction with a checkpoint it accepted. The file is the
-    // one operator input; name it.
-    MERROR("Checkpoint conflict from '" << file_path << "' could not be resolved; refusing to continue");
+    // (core::init) fail-stops rather than letting the daemon run in
+    // contradiction with a checkpoint its own binary carries.
+    MERROR("A compiled-in checkpoint conflicts with the local chain and could not be resolved by rollback; refusing to continue");
     return false;
   }
 
@@ -6963,7 +6269,6 @@ bool Blockchain::update_checkpoints(const std::string& file_path)
 void Blockchain::block_longhash_worker(uint64_t height, const epee::span<const block> &blocks, std::unordered_map<crypto::hash, crypto::hash> &map) const
 {
   TIME_MEASURE_START(t);
-  slow_hash_allocate_state();
 
   for (const auto & block : blocks)
   {
@@ -6971,7 +6276,7 @@ void Blockchain::block_longhash_worker(uint64_t height, const epee::span<const b
        break;
     crypto::hash id = get_block_hash(block);
     crypto::hash pow;
-    if (!get_block_longhash(this, block, pow, height++, nullptr, 0))
+    if (!get_block_longhash(this, block, pow, height++, nullptr))
     {
       // CEN-D2: an uncomputed hash must never enter the precompute table --
       // the consumer trusts table hits without re-checking. Skipping the
@@ -6984,7 +6289,6 @@ void Blockchain::block_longhash_worker(uint64_t height, const epee::span<const b
     map.emplace(id, pow);
   }
 
-  slow_hash_free_state();
   TIME_MEASURE_FINISH(t);
 }
 
@@ -7047,40 +6351,17 @@ bool Blockchain::cleanup_handle_incoming_blocks(bool force_sync)
 
   TIME_MEASURE_FINISH(t1);
   m_blocks_longhash_table.clear();
-  m_scan_table.clear();
 
   CRITICAL_REGION_END();
   m_tx_pool.unlock();
-
-  update_blockchain_pruning();
 
   return success;
 }
 
 //------------------------------------------------------------------
-void Blockchain::output_scan_worker(const uint64_t amount, const std::vector<uint64_t> &offsets, std::vector<output_data_t> &outputs) const
-{
-  try
-  {
-    m_db->get_output_key(epee::span<const uint64_t>(&amount, 1), offsets, outputs, true);
-  }
-  catch (const std::exception& e)
-  {
-    MERROR_VER("EXCEPTION: " << e.what());
-  }
-  catch (...)
-  {
-
-  }
-}
-
-//------------------------------------------------------------------
-// ND: Speedups:
-// 1. Thread long_hash computations if possible (m_max_prepare_blocks_threads = nthreads, default = 4)
-// 2. Group all amounts (from txs) and related absolute offsets and form a table of tx_prefix_hash
-//    vs [k_image, output_keys] (m_scan_table). This is faster because it takes advantage of bulk queries
-//    and is threaded if possible. The table (m_scan_table) will be used later when querying output
-//    keys.
+// Thread long_hash computations if possible (m_max_prepare_blocks_threads).
+// Duplicate-tx / duplicate-key-image ATTRIBUTABLE_FORM drops (P2P-2 cluster B)
+// are a pair of sets over the batch — they no longer fill a ring-member table.
 bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t *drop_verdict)
 {
   MTRACE("Blockchain::" << __func__);
@@ -7089,7 +6370,6 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   TIME_MEASURE_START(prepare);
   bool stop_batch;
   uint64_t bytes = 0;
-  size_t total_txs = 0;
   blocks.clear();
 
   // Order of locking must be:
@@ -7128,7 +6408,6 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
     // the NOTIFY_RESPONSE_GET_OBJECTS handler. Omitting it lets a witness-carrying span exceed the
     // memory bound the batch believes it is under.
     bytes += entry.attestation_witness.size();
-    total_txs += entry.txs.size();
   }
   m_bytes_to_sync += bytes;
   while (!(stop_batch = m_db->batch_start(blocks_entry.size(), bytes))) {
@@ -7262,34 +6541,21 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   m_fake_scan_time = 0;
   m_fake_pow_calc_time = 0;
 
-  m_scan_table.clear();
-
   TIME_MEASURE_FINISH(prepare);
   m_fake_pow_calc_time = prepare / blocks_entry.size();
 
   if (blocks_entry.size() > 1 && threads > 1 && m_show_time_stats)
     MDEBUG("Prepare blocks took: " << prepare << " ms");
 
-  TIME_MEASURE_START(scantable);
-
-  // [input] stores all unique amounts found
-  std::vector < uint64_t > amounts;
-  // [input] stores all absolute_offsets for each amount
-  std::map<uint64_t, std::vector<uint64_t>> offset_map;
-  // [output] stores all output_data_t for each absolute_offset
-  std::map<uint64_t, std::vector<output_data_t>> tx_map;
-  std::vector<std::pair<cryptonote::transaction, crypto::hash>> txes(total_txs);
-
-#define SCAN_TABLE_QUIT(m, verdict) \
+#define PREPARE_QUIT(m, verdict) \
         do { \
             MERROR_VER(m) ;\
-            m_scan_table.clear(); \
             classify_drop(drop_verdict, (verdict)); \
             return false; \
         } while(0); \
 
-  // generate sorted tables for all amounts and absolute offsets
-  size_t tx_index = 0, block_index = 0;
+  std::unordered_set<crypto::hash> seen_tx_prefixes;
+  std::unordered_set<crypto::key_image> seen_key_images;
   for (const auto &entry : blocks_entry)
   {
     if (m_cancel)
@@ -7300,176 +6566,24 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
 
     for (const auto &tx_blob : entry.txs)
     {
-      if (tx_index >= txes.size())
-        SCAN_TABLE_QUIT("tx_index is out of sync", SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
-      transaction &tx = txes[tx_index].first;
-      crypto::hash &tx_prefix_hash = txes[tx_index].second;
-      ++tx_index;
-
+      transaction tx;
       if (!parse_and_validate_tx_base_from_blob(tx_blob.blob, tx))
-        SCAN_TABLE_QUIT("Could not parse tx from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+        PREPARE_QUIT("Could not parse tx from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+
+      crypto::hash tx_prefix_hash;
       cryptonote::get_transaction_prefix_hash(tx, tx_prefix_hash);
+      if (!seen_tx_prefixes.insert(tx_prefix_hash).second)
+        PREPARE_QUIT("Duplicate tx found from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
 
-      auto its = m_scan_table.find(tx_prefix_hash);
-      if (its != m_scan_table.end())
-        SCAN_TABLE_QUIT("Duplicate tx found from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-
-      m_scan_table.emplace(tx_prefix_hash, std::unordered_map<crypto::key_image, std::vector<output_data_t>>());
-      its = m_scan_table.find(tx_prefix_hash);
-      assert(its != m_scan_table.end());
-
-      // get all amounts from tx.vin(s). Archival vins (bond-post,
-      // serve-credit, reward-emission) carry no key image and no amount —
-      // skip them, matching every other vin walk on the block path (an
-      // unguarded std::get here threw bad_variant_access on the first
-      // mined bond-post, surfaced by the PR-4b e2e).
       for (const auto &txin : tx.vin)
       {
         if (!std::holds_alternative<txin_to_key>(txin))
           continue;
         const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
-
-        // check for duplicate
-        auto it = its->second.find(in_to_key.k_image);
-        if (it != its->second.end())
-          SCAN_TABLE_QUIT("Duplicate key_image found from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-
-        amounts.push_back(in_to_key.amount);
-      }
-
-      // sort and remove duplicate amounts from amounts list
-      std::sort(amounts.begin(), amounts.end());
-      auto last = std::unique(amounts.begin(), amounts.end());
-      amounts.erase(last, amounts.end());
-
-      // add amount to the offset_map and tx_map
-      for (const uint64_t &amount : amounts)
-      {
-        if (offset_map.find(amount) == offset_map.end())
-          offset_map.emplace(amount, std::vector<uint64_t>());
-
-        if (tx_map.find(amount) == tx_map.end())
-          tx_map.emplace(amount, std::vector<output_data_t>());
-      }
-
-      // add new absolute_offsets to offset_map (same archival-vin skip as
-      // the amounts walk above)
-      for (const auto &txin : tx.vin)
-      {
-        if (!std::holds_alternative<txin_to_key>(txin))
-          continue;
-        const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
-        // no need to check for duplicate here.
-        auto absolute_offsets = relative_output_offsets_to_absolute(in_to_key.key_offsets);
-        for (const auto & offset : absolute_offsets)
-          offset_map[in_to_key.amount].push_back(offset);
-
+        if (!seen_key_images.insert(in_to_key.k_image).second)
+          PREPARE_QUIT("Duplicate key_image found from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
       }
     }
-    ++block_index;
-  }
-
-  // sort and remove duplicate absolute_offsets in offset_map
-  for (auto &offsets : offset_map)
-  {
-    std::sort(offsets.second.begin(), offsets.second.end());
-    auto last = std::unique(offsets.second.begin(), offsets.second.end());
-    offsets.second.erase(last, offsets.second.end());
-  }
-
-  // gather all the output keys
-  threads = tpool.get_max_concurrency();
-  if (!m_db->can_thread_bulk_indices())
-    threads = 1;
-
-  if (threads > 1 && amounts.size() > 1)
-  {
-    tools::threadpool::waiter waiter(tpool);
-
-    for (size_t i = 0; i < amounts.size(); i++)
-    {
-      uint64_t amount = amounts[i];
-      tpool.submit(&waiter, boost::bind(&Blockchain::output_scan_worker, this, amount, std::cref(offset_map[amount]), std::ref(tx_map[amount])), true);
-    }
-    if (!waiter.wait())
-    {
-      classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
-      return false;
-    }
-  }
-  else
-  {
-    for (size_t i = 0; i < amounts.size(); i++)
-    {
-      uint64_t amount = amounts[i];
-      output_scan_worker(amount, offset_map[amount], tx_map[amount]);
-    }
-  }
-
-  // now generate a table for each tx_prefix and k_image hashes
-  tx_index = 0;
-  for (const auto &entry : blocks_entry)
-  {
-    if (m_cancel)
-    {
-      classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
-      return false;
-    }
-
-    for (size_t i = 0; i < entry.txs.size(); ++i)
-    {
-      if (tx_index >= txes.size())
-        SCAN_TABLE_QUIT("tx_index is out of sync", SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
-      const transaction &tx = txes[tx_index].first;
-      const crypto::hash &tx_prefix_hash = txes[tx_index].second;
-      ++tx_index;
-
-      auto its = m_scan_table.find(tx_prefix_hash);
-      if (its == m_scan_table.end())
-        SCAN_TABLE_QUIT("Tx not found on scan table from incoming blocks.", SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
-
-      // Same archival-vin skip as the collection walks above.
-      for (const auto &txin : tx.vin)
-      {
-        if (!std::holds_alternative<txin_to_key>(txin))
-          continue;
-        const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
-        auto needed_offsets = relative_output_offsets_to_absolute(in_to_key.key_offsets);
-
-        std::vector<output_data_t> outputs;
-        for (const uint64_t & offset_needed : needed_offsets)
-        {
-          size_t pos = 0;
-          bool found = false;
-
-          for (const uint64_t &offset_found : offset_map[in_to_key.amount])
-          {
-            if (offset_needed == offset_found)
-            {
-              found = true;
-              break;
-            }
-
-            ++pos;
-          }
-
-          if (found && pos < tx_map[in_to_key.amount].size())
-            outputs.push_back(tx_map[in_to_key.amount].at(pos));
-          else
-            break;
-        }
-
-        its->second.emplace(in_to_key.k_image, outputs);
-      }
-    }
-  }
-
-  TIME_MEASURE_FINISH(scantable);
-  if (total_txs > 0)
-  {
-    m_fake_scan_time = scantable / total_txs;
-    if(m_show_time_stats)
-      MDEBUG("Prepare scantable took: " << scantable << " ms");
   }
 
   return true;
@@ -7619,11 +6733,6 @@ bool Blockchain::get_hard_fork_voting_info(uint8_t version, uint32_t &window, ui
 uint64_t Blockchain::get_difficulty_target() const
 {
   return SHEKYL_DAA_TARGET_SECONDS;
-}
-
-std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> Blockchain:: get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const
-{
-  return m_db->get_output_histogram(amounts, unlocked, recent_cutoff, min_count);
 }
 
 std::vector<std::pair<Blockchain::block_extended_info,std::vector<crypto::hash>>> Blockchain::get_alternative_chains() const

@@ -92,7 +92,7 @@ async fn progress_returns_seeded_baseline() {
 
     let rx = handle.progress();
     let snap = *rx.borrow();
-    assert_eq!(snap.height, 0);
+    assert_eq!(snap.height, shekyl_types::BlockHeight::ZERO);
     assert_eq!(snap.blocks_processed, 0);
     assert_eq!(snap.blocks_total, 0);
     // `RefreshProgress::initial()` seeds the phase as
@@ -110,7 +110,7 @@ async fn progress_updates_propagate_to_subscribers() {
     let mut rx = handle.progress();
     progress_tx
         .send(RefreshProgress::phase_only(
-            42,
+            shekyl_types::BlockHeight::from_raw(42),
             7,
             100,
             RefreshPhase::Scanning,
@@ -118,7 +118,7 @@ async fn progress_updates_propagate_to_subscribers() {
         .expect("subscriber alive");
     rx.changed().await.expect("update delivered");
     let snap = *rx.borrow();
-    assert_eq!(snap.height, 42);
+    assert_eq!(snap.height, shekyl_types::BlockHeight::from_raw(42));
     assert_eq!(snap.blocks_processed, 7);
     assert_eq!(snap.blocks_total, 100);
 }
@@ -153,7 +153,8 @@ async fn join_delivers_summary_from_completion_oneshot() {
         handle_with(RefreshOptions::default());
 
     let summary = RefreshSummary {
-        processed_height_range: 100..105,
+        processed_height_range: shekyl_types::BlockHeight::from_raw(100)
+            ..shekyl_types::BlockHeight::from_raw(105),
         blocks_processed: 5,
         transfers_detected: 0,
         key_images_observed: 0,
@@ -297,7 +298,7 @@ async fn cancel_during_scan_emits_terminal_cancelled_phase() {
 
     progress_tx
         .send(RefreshProgress::phase_only(
-            100,
+            shekyl_types::BlockHeight::from_raw(100),
             50,
             200,
             RefreshPhase::Scanning,
@@ -305,7 +306,7 @@ async fn cancel_during_scan_emits_terminal_cancelled_phase() {
         .expect("subscriber alive");
     rx.changed().await.expect("scanning update delivered");
     let mid = *rx.borrow();
-    assert_eq!(mid.height, 100);
+    assert_eq!(mid.height, shekyl_types::BlockHeight::from_raw(100));
     assert!(matches!(mid.phase, RefreshPhase::Scanning));
 
     let mut terminal = *progress_tx.borrow();
@@ -319,7 +320,8 @@ async fn cancel_during_scan_emits_terminal_cancelled_phase() {
         "phase preserved as Cancelled"
     );
     assert_eq!(
-        last.height, 100,
+        last.height,
+        shekyl_types::BlockHeight::from_raw(100),
         "height preserved across the Scanning→Cancelled transition"
     );
     assert_eq!(

@@ -104,7 +104,7 @@ prerequisite + Phase 6.
 | Refresh + `apply_scan_result` | `refresh.rs`, `merge.rs` | **Prerequisite** — spendable outputs must exist |
 | FCMP++ tree primitives + daemon leaf/checkpoint substrate | `shekyl-fcmp::tree`, `curve_tree_leaves`, `curve_tree_checkpoints`, `prune_curve_tree_intermediate_layers` | **Reuse** — local path assembly (§3.0); only gap is a **bulk, non-revealing** leaf-range RPC |
 | Curve-tree client (local leaf store + delta sync + local path assembly) | **new phase** (§3.0.4) | **Prerequisite (own phase)** — 2A consumes a synthetic locally-computed path; real-root sends gated on this + Phase 6 |
-| `get_curve_tree_path` (per-output Merkle path) | `core_rpc_server` | **Forbidden on send path** — spend-revealing (§3.0.1); daemon-side Rule-60/privacy review is a separate C++ PR |
+| `get_curve_tree_path` (per-output Merkle path) | ~~`core_rpc_server`~~ | **Forbidden on send path** — spend-revealing (§3.0.1). **The daemon-side review this row flagged ran as `SOK-10` Q7 and the endpoint was deleted 2026-09-18 (RPC 3.34; PR #784)** — the name is REJECTED in `FCMP_PLUS_PLUS.md` |
 
 **Explicit stubs to remove:**
 
@@ -174,29 +174,38 @@ must never tell the daemon which leaf it is proving membership for.
 
 Rationale (privacy > security > features per `00-mission.mdc`):
 
-- FCMP++ has **no ring**. The anonymity set is the **entire tree**; there is no
-  decoy at the wallet↔daemon boundary. This is the Monero `get_outs` lesson
+- FCMP++ has **no ring**. The set the proof ranges over is the **entire tree**;
+  there is no decoy at the wallet↔daemon boundary. (Necessary, not sufficient:
+  between genesis-design and `PL-D3` the spend itself identified its inputs
+  on-chain (`PL-D1`), so this boundary rule protects the property the `PL-`
+  round restored on 2026-09-14 —
+  [`FCMP_SPEND_LINKABILITY.md`](FCMP_SPEND_LINKABILITY.md).) This is the Monero `get_outs` lesson
   inverted: `get_outs` fetched a ring's worth of outputs *so the daemon could
   not tell which was real* (the decoys were the cover). `60-no-monero-legacy.mdc`
   deleted `get_outs` because FCMP++ needs no ring — but that same absence means
   there is **nothing to hide behind** if the wallet asks for one specific path.
-- The daemon already exposes `get_curve_tree_path(output_indices) -> {path_blob,
-  chunk_outputs_blob}` (`core_rpc_server_commands_defs.h
-  COMMAND_RPC_GET_CURVE_TREE_PATH`). If the wallet calls it with its real output
-  index, the daemon learns **with certainty, before broadcast,** exactly which
-  output is being spent — defeating the membership-proof privacy model at the
-  one boundary FCMP++ was meant to close.
+- The daemon exposed (until 2026-09-18) `get_curve_tree_path(output_indices) ->
+  {path_blob, chunk_outputs_blob}` (`COMMAND_RPC_GET_CURVE_TREE_PATH`, deleted
+  with `SOK-10` Q7 → A). Had the wallet called it with its real output index,
+  the daemon would have learned **with certainty, before broadcast,** exactly
+  which output is being spent — defeating the membership-proof privacy model at
+  the one boundary FCMP++ was meant to close.
 - Under the priority hierarchy this is decisive regardless of how much cheaper a
   per-output query would be. No per-leaf path query, full stop.
 
-**Disposition of the existing `get_curve_tree_path` endpoint:** it must **not**
-be used by the wallet send path. It is flagged for daemon-side Rule-60 / privacy
-review as a **separate C++ PR** (acceptable, if at all, only for explicitly
-non-private contexts — debug, or an opt-in light-wallet mode that documents the
-linkability cost; it is not the default private spend path). Note also that
-`DAEMON_RPC_RUST.md` §"Cutover Remaining Work" currently lists "curve tree path
-fetch via `/get_curve_tree_path`" as part of the wallet-sync test — that
-assumption is now **wrong for private spends** and is corrected by this section.
+**Disposition of the `get_curve_tree_path` endpoint — RULED and EXECUTED
+(records-was, then outcome).** As written here (2026-06): it must **not** be
+used by the wallet send path, and was flagged for daemon-side Rule-60 / privacy
+review as a separate PR (acceptable, if at all, only for explicitly non-private
+contexts). **That review ran as `SOK-10` Q7 (2026-09-18) and ruled A — delete:**
+no consumer existed, the carve-out named no plan, and the assembler was also
+wrong on every chain carrying a transaction. The endpoint, its Rust assembler and
+its C++ shim are gone (RPC 3.34); the name is kept REJECTED in
+`FCMP_PLUS_PLUS.md`. A future light-wallet consumer needs the bulk,
+non-revealing leaf-range service of §3.0.2, never this shape. Record:
+`docs/completed/SOK_10_PATH_POSITION_RESOLUTION.md`. (`DAEMON_RPC_RUST.md`'s
+old "path fetch via `/get_curve_tree_path`" wallet-sync line was corrected in
+the same change.)
 
 #### 3.0.2 Privacy-preserving shape: daemon serves bulk, wallet assembles locally
 
@@ -210,7 +219,7 @@ Concretely the daemon serves:
   leaf_count}` and `get_curve_tree_info -> {root, depth, leaf_count, height}`.
   Global state; reveals nothing about any wallet's spend.
 - **Leaf ranges** — contiguous spans of the 128-byte leaf tuples
-  (`{O.x, I.x, C.x, h_pqc}`) by canonical tree position (§3.0.3 — the bulk
+  (`{O.x, I.x, C.x, CM.x}`) by canonical tree position (§3.0.3 — the bulk
   endpoint that needs adding).
 - **The delta** between the wallet's last local checkpoint and the chosen
   reference block.
@@ -218,7 +227,7 @@ Concretely the daemon serves:
 The wallet then assembles the path locally using the primitives that **already
 exist** in `shekyl-fcmp::tree`:
 
-- `construct_leaf(O, C, h_pqc) -> [u8; 128]` — build a leaf tuple.
+- `construct_leaf(O, C, CM) -> Option<[u8; 128]>` — build a leaf tuple (`PL-D3`: the 4th scalar is the commitment point's x-coordinate).
 - `hash_grow_selene` / `hash_grow_helios` — hash a chunk's children into the
   parent node (Selene at even layers / leaf, Helios at odd layers).
 - `selene_point_to_helios_scalar` / `helios_point_to_selene_scalar` — feed a
@@ -228,7 +237,7 @@ exist** in `shekyl-fcmp::tree`:
 
 The daemon-side substrate this leans on **already landed** (Phase 2e/2f):
 
-- `curve_tree_leaves` — `global_output_index → 128-byte {O.x, I.x, C.x, h_pqc}`,
+- `curve_tree_leaves` — `global_output_index → 128-byte {O.x, I.x, C.x, CM.x}`,
   *all* UTXO leaves preserved (`LMDB_SCHEMA.md` §`curve_tree_leaves`,
   `INTEGERKEY`).
 - `curve_tree_checkpoints` — root/depth/leaf_count every
@@ -260,7 +269,7 @@ addition is **bulk tree data, not a path-serving endpoint**:
 
 **Alternative considered (block-derived leaves, zero new RPC).** The wallet
 already scans every block during refresh and can in principle derive every
-leaf `{O, C, h_pqc}` itself, eliminating even the bulk endpoint. Rejected as the
+leaf `{O, C, CM}` itself, eliminating even the bulk endpoint. Rejected as the
 2A-prerequisite default because it requires the wallet to replicate the
 consensus maturity/drain ordering (`pending_tree_leaves` → drain → `tree_pos`)
 exactly, which is consensus-sensitive code. The bulk-leaf endpoint lets the
@@ -642,11 +651,14 @@ than catching them. This is the anchor point for F5's validity-horizon (§3.6,
 - **`TxInputSigningContext`** (per-input, **public**; extends today's
   `{ handle, source_ciphertext, output_index }` — **but `output_index` moves into
   the `handle`-recovered set per refinement C / §3.9, not a standalone field**):
-  - `output_key: [u8; 32]`, `commitment: [u8; 32]`, `h_pqc: [u8; 32]` — the
-    output's public identity; let the actor locate its own leaf and run the C3
-    check. (Maps to `SpendInput.output_key` / `commitment` / `h_pqc`.)
+  - `output_key: [u8; 32]`, `commitment: [u8; 32]` — the output's public
+    identity; let the actor locate its own leaf and run the C3 check. (Maps to
+    `SpendInput.output_key` / `commitment`. The `h_pqc` field this design
+    carried was removed by `PL-D3`, 2026-09-14: the input's leaf opening is
+    re-derived by the signer from `combined_ss` / `output_index` and checked
+    against the chunk, never read from the tree.)
   - `leaf_chunk: Vec<LeafEntry>` — the sibling leaf chunk `(O, I=key_image_gen,
-    C, h_pqc)` (maps to `SpendInput.leaf_chunk`).
+    C, CM.x)` (maps to `SpendInput.leaf_chunk`).
   - `c1_layers: Vec<Vec<[u8; 32]>>`, `c2_layers: Vec<Vec<[u8; 32]>>` — the
     locally-assembled Selene/Helios branch siblings (maps to
     `SpendInput.c1_layers` / `c2_layers`).
@@ -791,7 +803,7 @@ secret disclosure. This is **not** a security boundary. It **is** a robustness /
 error-attribution boundary worth spending. Before committing prover effort, the
 actor cheaply:
 
-- recomputes the leaf via `construct_leaf(O, C, h_pqc)` and hashes the path up to
+- recomputes the leaf via `construct_leaf(O, C, CM)` and hashes the path up to
   the claimed `tree_root` (`hash_grow_selene` / `hash_grow_helios`); and
 - checks the well-formedness precondition
   **`c1_layers.len() + c2_layers.len() + 1 == tree_depth`** (layer 0 is the leaf,
@@ -806,15 +818,16 @@ one opaque proof failure.
 
 **Source-verified:** `sign.rs` documents the circular dependency, and
 `sign_pqc_auths(payload_hashes, inputs)` takes a **caller-computed** payload
-hash (caller runs `get_transaction_signed_payload` per input, then Keccak-256).
+hash (the caller runs `phase1_payload_hashes` — `shekyl_wire::PqcSigningPreimage`'s
+`signed_hash(i)`, one `SigningPayloadHash` per input).
 That hash is external to the **builder**, not to the **actor** — so the whole
 sequence collapses into **`KeyActor::sign_transaction`, one round-trip**:
 
 1. builder `sign_transaction(tx_prefix_hash, inputs, outputs, fee, tree)` →
    `SignedProofs` (proofs populated, `pqc_auths` empty);
 2. encoder **phase 1**: assemble the skeleton (proofs + per-input `key_image` +
-   `pseudo_out`) → `get_transaction_signed_payload` per input → Keccak-256 →
-   `payload_hashes`;
+   `pseudo_out`) → `phase1_payload_hashes` (`PqcSigningPreimage::signed_hash`
+   per input) → `payload_hashes`;
 3. builder `sign_pqc_auths(payload_hashes, inputs)` → `Vec<PqcAuth>`;
 4. assemble the complete `TxSignatures` (the reply).
 
@@ -870,8 +883,8 @@ cancelled).
   recipients, selected output identities + public paths, the one `TreeContext`,
   fee, and tx-prefix inputs.
 - `TxToSign` is the **projection** the actor needs: per-input public
-  `{ handle, source_ciphertext, output_index, output_key, commitment, h_pqc,
-  leaf_chunk, c1_layers, c2_layers }`, per-output recipient context, and the
+  `{ handle, source_ciphertext, output_index, output_key, commitment,
+  leaf_chunk, c1_layers, c2_layers }` (`h_pqc` removed by `PL-D3`), per-output recipient context, and the
   tx-level `FcmpPlusPlusContext { tree }`.
 - The actor-internal `SpendInput` = the projection's public path + engine-derived
   secrets + engine-recovered amount.
@@ -1093,7 +1106,7 @@ pub struct TxInputSigningContext {
     pub source_ciphertext: SourceCiphertext,
     pub output_key: [u8; 32],
     pub commitment: [u8; 32],
-    pub h_pqc: [u8; 32],
+    // (`h_pqc` removed by PL-D3 — the signer re-derives the leaf opening)
     pub leaf_chunk: Vec<LeafEntry>,           // (verified) sibling leaf chunk
     pub c1_layers: Vec<Vec<[u8; 32]>>,        // locally-assembled Selene siblings (F1)
     pub c2_layers: Vec<Vec<[u8; 32]>>,        // locally-assembled Helios siblings (F1)
@@ -1516,17 +1529,19 @@ source dissolves it. Verified facts:
   — that branch is closed.
 - **The byte shape is the FFI projection, not the 2A path's.**
   `SignedProofs.bulletproof_plus: Vec<u8>` (and the `hex_blob`/`hex_vec32` serde
-  shaping) exists for the **C++ wallet JSON crossing**: `shekyl-ffi`'s
-  `shekyl_sign_transaction` calls `sign_transaction(...)` then
-  `serde_json::to_vec(&proofs)`. The 2A in-process path (`shekyl-engine-core`
-  `KeyActor`/`LocalSigner`) consumes `sign_transaction` as a **typed Rust
-  `ask`** and never serializes it to JSON.
+  shaping) was the **C++ wallet JSON crossing**. That export,
+  `shekyl_sign_transaction`, was deleted 2026-09-23. The remaining JSON
+  serialization is `shekyl_sign_fcmp_transaction`
+  (`serde_json::to_vec(&proofs)`); its callers are tests. The 2A in-process
+  path (`shekyl-engine-core` `KeyActor`/`LocalSigner`) consumes
+  `sign_transaction` as a **typed Rust value** and never serializes it to JSON.
 
 **Disposition:** on the 2A Rust→Rust path the adapter takes the **typed**
 `shekyl_bulletproofs::Bulletproof` (and the other typed components) straight
 into `PrunableProof`; the serialize→parse→serialize round-trip is **deleted, not
 guarded** (`15-deletion-and-debt.mdc`: delete the round-trip you can). The
-byte-shaped `SignedProofs` is retained **only** as the FFI projection. The
+byte-shaped `SignedProofs` remains the JSON shape of
+`shekyl_sign_fcmp_transaction`, not of the 2A path. The
 mechanism for giving the actor typed components (a typed builder result whose
 FFI edge serializes to JSON, vs. a typed accessor alongside `SignedProofs`) is a
 **2a-3 implementation detail**; the pin is "**no re-parse on the 2A path**."
@@ -1718,7 +1733,7 @@ step 2), never read from a daemon field.
    (`c1_layers` / `c2_layers`) and `leaf_chunk` are **not** sourced from
    `TransferDetails` — they are assembled locally by the curve-tree client
    (§3.0.4). `TransferDetails` supplies the output's **identity and tree
-   position** (`global_output_index`, `output_key`, `commitment`, `h_pqc`
+   position** (`global_output_index`, `output_key`, `commitment`
    inputs) plus the secret-derivation inputs; the path is computed against those.
    Round 1 enumerates (grep-driven) exactly which `TransferDetails` fields feed
    (a) the curve-tree client's path lookup and (b) the actor's secret derivation
@@ -1837,5 +1852,5 @@ step 2), never read from a daemon field.
 - `rust/shekyl-fcmp/src/tree.rs` — local path-assembly primitives (`construct_leaf`, `hash_grow_*`, point↔scalar)
 - `docs/FCMP_PLUS_PLUS.md` — curve tree, checkpoints (`FCMP_CURVE_TREE_CHECKPOINT_INTERVAL`), leaf format
 - `docs/LMDB_SCHEMA.md` — `curve_tree_leaves`, `curve_tree_checkpoints` schema
-- `docs/DAEMON_RPC_RUST.md` — curve-tree RPC surface (`get_curve_tree_path` forbidden on send path per §3.0.1)
+- `docs/DAEMON_RPC_RUST.md` — curve-tree RPC surface (`get_curve_tree_path` forbidden on send path per §3.0.1; **removed 2026-09-18**, `SOK-10` Q7 → A)
 - `60-no-monero-legacy.mdc` — `get_outs` removal; the no-ring/no-decoy basis for §3.0.1

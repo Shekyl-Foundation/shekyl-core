@@ -11,8 +11,13 @@ docs/benchmarks/
 ├── wallet2_baseline_v0.manifest.md     C++ baseline: RETIRED (frozen history)
 ├── shekyl_rust_v0.manifest.md          Rust baseline: operation lists + fixture shapes
 ├── shekyl_rust_v0.json                 Rust baseline: frozen numbers (criterion + iai)
-└── shekyl_rust_v0.iai.snapshot         Rust baseline: raw iai-callgrind stdout
+├── shekyl_rust_v0.iai.snapshot         Rust baseline: raw iai-callgrind stdout
+└── drs_bench_ibd_<engine>_h<H>_<arch>_<ts>.json
+                                        DRS-BENCH: consensus-store IBD artifacts
 ```
+
+(The tree above names the baseline set; ad-hoc Pi-4 captures and
+`reference-captures/` also live here.)
 
 The **manifest** files are prose specifications: every operation a
 benchmark exercises, every I/O boundary, every validation check. They
@@ -196,6 +201,50 @@ sorted largest delta first. Next steps:
 4. For a `crypto_bench_*` speed-up that is real and intentional,
    the merge commit body must spell out why — see "Baseline-update
    policy" below.
+
+## DRS-BENCH consensus-store artifacts
+
+`drs_bench_ibd_*.json` are produced by `scripts/bench/drs_bench.py measure` and
+consumed by `drs_bench.py check`, which routes two of them through the IBD floor
+frozen in `docs/design/DAEMON_REDB_STORE.md` §1.3. The gate itself —
+schema, refusals, comparator, redb-engine probe — lives in
+`scripts/bench/drs_artifact.py`. They are **not** part of the
+`shekyl_rust_v0` envelope and are not read by `compare.py`: that script is
+iai-callgrind only by construction, and its
+`<crate>/<bench_target>/<group>/<function>` ids cannot name a two-daemon C++ IBD
+run.
+
+Unlike the rolling Rust baselines, these do **not** advance on merge. Each is a
+dated record of one run on one machine, kept because §1.3's absolute "N hours"
+was deferred until a first LMDB baseline landed in-tree.
+
+**They are conditions-first, by refusal.** `measure` will not emit, and `check`
+will not compare, an artifact missing any of: DRS-D9 durability (with the argv
+that imposed it), CPU / RAM / disk class / **filesystem type**, the height
+actually reached, which verification the fixture exercised, and the peer count.
+`check` additionally refuses two artifacts that disagree about any of those —
+§1.3's floor is a ratio on one machine with one binary, engine being the only
+difference, so a ratio across differing conditions measures the difference and
+not the engine.
+
+Two refusals are worth knowing before you run it:
+
+- **A store on `tmpfs` or `ramfs` is refused, before any daemon starts.** fsync
+  there has no backing store to flush, so `--db-sync-mode=safe` is
+  indistinguishable from `MDB_NOSYNC` and the result is a RAM-disk number
+  wearing a strict-durability label. The harness's own first artifact was
+  exactly that, from a scratch directory that happened to be a large tmpfs.
+- **`disk_class` must be `hdd` or `ssd_or_nvme`.** "unknown" is refused: §1.3
+  asks for the disk type, and a required field satisfiable by a placeholder is a
+  requirement that cannot fail.
+
+Chain generation dominates the cost at the reference height, so the seed chain
+is cached and topped up via `--seed-dir` rather than regenerated. Only the
+subject is wiped per run — it is the thing being measured, and an IBD that
+starts from a partial chain is a different experiment.
+
+`scripts/bench/test_drs_bench.py` is the selftest; it and `drs_bench.py
+blockers` run in `docs-gates.yml`.
 
 ## Baseline-update policy
 

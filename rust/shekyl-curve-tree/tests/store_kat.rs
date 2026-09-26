@@ -9,8 +9,8 @@ use shekyl_curve_tree::recon::{
     assemble_leaf_stream, collect_block_leaves, root_from_scalars, TxOutputs,
 };
 use shekyl_curve_tree::{
-    BlockHeight, BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock,
-    TargetKind, TxLeafInputs,
+    BlockHash, BlockHeight, BlockLeaves, CommitmentBytes, CurveTreeClient, CurveTreeRoot,
+    OneTimePubkey, OutputIdentity, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 
 const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
@@ -53,8 +53,13 @@ fn decode_client_block(b: &serde_json::Value) -> ClientBlock {
         .expect("outputs")
         .iter()
         .map(|o| RawOutput {
-            output_key: decode_hex32(o["output_key"].as_str().expect("O")),
-            commitment: o["commitment"].as_str().map(decode_hex32),
+            output_key: OneTimePubkey::from_bytes(decode_hex32(
+                o["output_key"].as_str().expect("O"),
+            )),
+            commitment: o["commitment"]
+                .as_str()
+                .map(decode_hex32)
+                .map(CommitmentBytes::from_bytes),
             target: target_kind(o["target"].as_str().expect("target")),
         })
         .collect();
@@ -70,12 +75,12 @@ fn ingest_chain(client: &mut CurveTreeClient, blocks: &[ClientBlock]) {
     for blk in blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blk.blob),
+            leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(blk.height),
+                height: BlockHeight::from_raw(blk.height),
                 txs: &txs,
             })
             .unwrap();
@@ -107,10 +112,11 @@ fn store_root_matches_oracle_and_header_tier_a() {
                 .map(|(i, raw)| OutputIdentity {
                     output_key: raw.output_key,
                     commitment: raw.commitment,
-                    h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(
-                        &shekyl_curve_tree::recon::extract_leaf_hashes(Some(&blk.blob)),
-                        i,
-                    ),
+                    cm: shekyl_curve_tree::recon::extract_leaf_commitments(
+                        Some(&blk.blob),
+                        blk.outputs.len(),
+                    )
+                    .expect("0x07 entries")[i],
                     target: match raw.target {
                         shekyl_curve_tree::TargetKind::TaggedKey => {
                             shekyl_curve_tree::TargetKind::TaggedKey
@@ -126,11 +132,20 @@ fn store_root_matches_oracle_and_header_tier_a() {
                 is_miner: true,
                 outputs: &identities,
             }];
-            gindex = collect_block_leaves(blk.height, &txs, gindex, &mut recon_entries);
-            let through = blk.height.saturating_sub(1);
-            let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));
+            gindex = collect_block_leaves(
+                BlockHeight::from_raw(blk.height),
+                &txs,
+                gindex,
+                &mut recon_entries,
+            )
+            .expect("KAT chain has no bad published point");
+            let through = BlockHeight::from_raw(blk.height.saturating_sub(1));
+            let oracle = CurveTreeRoot::from_bytes(root_from_scalars(&assemble_leaf_stream(
+                &recon_entries,
+                through,
+            )));
             let store_root = client
-                .root_at(BlockHeight(blk.height))
+                .root_at(BlockHeight::from_raw(blk.height))
                 .expect("store hot path must not error during Tier-A KAT");
             assert_eq!(
                 store_root, oracle,
@@ -139,14 +154,15 @@ fn store_root_matches_oracle_and_header_tier_a() {
             );
             if blk.height >= 5 {
                 assert_eq!(
-                    store_root, blk.root,
+                    store_root,
+                    CurveTreeRoot::from_bytes(blk.root),
                     "{name} h={} store vs header",
                     blk.height
                 );
                 let reference = ReferenceBlock {
-                    height: BlockHeight(blk.height),
-                    curve_tree_root: blk.root,
-                    block_hash: [0u8; 32],
+                    height: BlockHeight::from_raw(blk.height),
+                    curve_tree_root: CurveTreeRoot::from_bytes(blk.root),
+                    block_hash: BlockHash::NULL,
                 };
                 assert!(client.verify_root(&reference).is_ok());
             }
@@ -164,33 +180,38 @@ fn store_root_mixed_maturity_drain_order() {
     // Coinbase (m=60) then regular (m=10) in block 0. At height 61 both are
     // drained; canonical order is by maturity, not block insertion order.
     let coinbase = RawOutput {
-        output_key: ED25519_BASEPOINT,
-        commitment: Some(ED25519_BASEPOINT),
+        output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
+        commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
         target: TargetKind::TaggedKey,
     };
     let regular = RawOutput {
-        output_key: ED25519_BASEPOINT,
-        commitment: Some(ED25519_BASEPOINT),
+        output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
+        commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
         target: TargetKind::TaggedKey,
     };
-    let blob_cb = [0x01u8; 32];
-    let blob_reg = [0x02u8; 32];
+    // One 64-byte `0x07` entry per output (`CM ‖ record`, PL-D3): the point
+    // half must decompress (the client refuses a non-point); the record half
+    // is free and keeps the two entries distinct.
+    let mut blob_cb = [0x01u8; 64];
+    blob_cb[..32].copy_from_slice(&ED25519_BASEPOINT);
+    let mut blob_reg = [0x02u8; 64];
+    blob_reg[..32].copy_from_slice(&ED25519_BASEPOINT);
     let txs = [
         TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blob_cb),
+            leaf_entry_blob: Some(&blob_cb),
             outputs: &[coinbase],
         },
         TxLeafInputs {
             is_miner: false,
-            leaf_hash_blob: Some(&blob_reg),
+            leaf_entry_blob: Some(&blob_reg),
             outputs: &[regular],
         },
     ];
     let mut client = CurveTreeClient::new();
     client
         .ingest_block(BlockLeaves {
-            height: BlockHeight(0),
+            height: BlockHeight::from_raw(0),
             txs: &txs,
         })
         .unwrap();
@@ -201,12 +222,12 @@ fn store_root_mixed_maturity_drain_order() {
     for height in 1..=61u64 {
         let txs_cb = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blob_cb),
+            leaf_entry_blob: Some(&blob_cb),
             outputs: &[coinbase],
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(height),
+                height: BlockHeight::from_raw(height),
                 txs: &txs_cb,
             })
             .unwrap();
@@ -219,10 +240,8 @@ fn store_root_mixed_maturity_drain_order() {
         .map(|(i, raw)| OutputIdentity {
             output_key: raw.output_key,
             commitment: raw.commitment,
-            h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(
-                &shekyl_curve_tree::recon::extract_leaf_hashes(Some(&blob_cb)),
-                i,
-            ),
+            cm: shekyl_curve_tree::recon::extract_leaf_commitments(Some(&blob_cb), 1)
+                .expect("0x07 entries")[i],
             target: raw.target,
         })
         .collect();
@@ -232,10 +251,8 @@ fn store_root_mixed_maturity_drain_order() {
         .map(|(i, raw)| OutputIdentity {
             output_key: raw.output_key,
             commitment: raw.commitment,
-            h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(
-                &shekyl_curve_tree::recon::extract_leaf_hashes(Some(&blob_reg)),
-                i,
-            ),
+            cm: shekyl_curve_tree::recon::extract_leaf_commitments(Some(&blob_reg), 1)
+                .expect("0x07 entries")[i],
             target: raw.target,
         })
         .collect();
@@ -249,12 +266,16 @@ fn store_root_mixed_maturity_drain_order() {
             outputs: &identities_reg,
         },
     ];
-    collect_block_leaves(0, &recon_txs, 0, &mut recon_entries);
+    collect_block_leaves(BlockHeight::ZERO, &recon_txs, 0, &mut recon_entries)
+        .expect("fixture has no bad published point");
 
-    let through = 60u64;
-    let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));
+    let through = BlockHeight::from_raw(60);
+    let oracle = CurveTreeRoot::from_bytes(root_from_scalars(&assemble_leaf_stream(
+        &recon_entries,
+        through,
+    )));
     let store_root = client
-        .root_at(BlockHeight(61))
+        .root_at(BlockHeight::from_raw(61))
         .expect("store hot path must not error");
     assert_eq!(
         store_root, oracle,
@@ -294,10 +315,10 @@ fn truncate_and_replay_matches_from_blocks() {
 
     for blk in prefix {
         assert_eq!(
-            full.root_at(BlockHeight(blk.height))
+            full.root_at(BlockHeight::from_raw(blk.height))
                 .expect("store hot path"),
             rebuilt
-                .root_at(BlockHeight(blk.height))
+                .root_at(BlockHeight::from_raw(blk.height))
                 .expect("store hot path"),
             "reorg replay at {}",
             blk.height

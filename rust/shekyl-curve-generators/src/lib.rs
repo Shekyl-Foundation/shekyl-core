@@ -15,7 +15,11 @@ use std_shims::{alloc::format, string::String, sync::LazyLock, vec::Vec};
 
 use sha3::{Digest, Keccak256};
 
-use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, edwards::EdwardsPoint};
+use curve25519_dalek::{
+    constants::ED25519_BASEPOINT_POINT,
+    edwards::{CompressedEdwardsY, EdwardsBasepointTable, EdwardsPoint},
+    traits::{BasepointTable, Identity},
+};
 use group::{prime::PrimeGroup, GroupEncoding};
 use helioselene::{Helios, HeliosPoint, Selene, SelenePoint};
 
@@ -76,6 +80,54 @@ pub static FCMP_PLUS_PLUS_U: LazyLock<EdwardsPoint> =
 /// FCMP++s's randomness commitment generator `V`.
 pub static FCMP_PLUS_PLUS_V: LazyLock<EdwardsPoint> =
     LazyLock::new(|| hash_to_point(keccak256(b"Monero FCMP++ Generator V"))); // FROZEN DST
+
+/// Shekyl's PQC leaf-commitment key generator `G_k`: the leaf's 4th scalar is the
+/// Wei25519 x-coordinate of `CM = k·G_k + r·J` with `k = H_ℓ(hybrid_pk)`; the
+/// verifier recomputes `K = k·G_k` from the key the spend reveals (`PL-D3`,
+/// `docs/design/FCMP_SPEND_LINKABILITY.md` §6.2). NUMS by construction, like `T`.
+pub static PQC_LEAF_COMMITMENT_G_K: LazyLock<EdwardsPoint> = LazyLock::new(|| {
+    hash_to_point(keccak256(b"Shekyl PQC leaf commitment generator G_k")) // FROZEN DST
+});
+
+/// Shekyl's PQC leaf-commitment blind generator `J` (`CM = k·G_k + r·J`); the
+/// in-circuit opening leg proves `K + r·J = CM` over this generator's table.
+/// NUMS by construction, like `T`.
+pub static PQC_LEAF_COMMITMENT_J: LazyLock<EdwardsPoint> = LazyLock::new(|| {
+    hash_to_point(keccak256(b"Shekyl PQC leaf commitment generator J")) // FROZEN DST
+});
+
+/// Precomputed fixed-base table for [`PQC_LEAF_COMMITMENT_G_K`]: every output's
+/// leaf commitment computes `k·G_k`, and every verifier recomputes `K = k·G_k`,
+/// so the multiply is fixed-base on both sides. Built from the frozen point —
+/// the frozen-point tests assert table-mul equals plain-mul, so the table
+/// cannot drift from its generator.
+pub static PQC_LEAF_COMMITMENT_G_K_TABLE: LazyLock<EdwardsBasepointTable> =
+    LazyLock::new(|| EdwardsBasepointTable::create(&PQC_LEAF_COMMITMENT_G_K));
+
+/// Precomputed fixed-base table for [`PQC_LEAF_COMMITMENT_J`] (`r·J` in
+/// `CM = k·G_k + r·J`). Same pinning as [`PQC_LEAF_COMMITMENT_G_K_TABLE`].
+pub static PQC_LEAF_COMMITMENT_J_TABLE: LazyLock<EdwardsBasepointTable> =
+    LazyLock::new(|| EdwardsBasepointTable::create(&PQC_LEAF_COMMITMENT_J));
+
+/// Decompress a published PQC leaf commitment point and check it is a
+/// canonical, prime-order, non-identity point — the admission rule's content
+/// check for the `tx_extra` `0x07` field (`PL-D3`,
+/// `docs/design/FCMP_SPEND_LINKABILITY.md` §6.2). Returns the point on success.
+///
+/// One home: `shekyl-wire` applies it at relay and connect, `shekyl-crypto-pq`
+/// re-exports it for the wallet's scan-time check and the tests of the
+/// derivation that produces the point.
+#[must_use]
+pub fn pqc_leaf_point_valid(point: &[u8; 32]) -> Option<EdwardsPoint> {
+    let p = CompressedEdwardsY(*point).decompress()?;
+    if p.compress().to_bytes() != *point {
+        return None; // non-canonical encoding
+    }
+    if !p.is_torsion_free() || p == EdwardsPoint::identity() {
+        return None;
+    }
+    Some(p)
+}
 
 /// The maximum amount of input tuples provable for within a single FCMP.
 // https://github.com/seraphis-migration/monero

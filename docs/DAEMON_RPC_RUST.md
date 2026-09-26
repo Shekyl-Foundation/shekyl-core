@@ -271,7 +271,9 @@ disclose `0`, matching the other peer/connection fields).
 - Curve tree RPC endpoints — registered in the Axum/FFI JSON-RPC dispatch
   table (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`) since PR #174
   (2026-06-23):
-  - `get_curve_tree_path` — Merkle path for a given leaf
+  - `get_curve_tree_path` — **REMOVED 2026-09-18 (RPC 3.34)**: a per-output path
+    query is spend-revealing (`PHASE_2A_SEND_PATH.md` §3.0.1) and had no consumer;
+    the wallet assembles paths locally (`SOK-10` Q7 → A)
   - `get_curve_tree_info` — current curve tree root hash, depth, leaf count
   - `get_curve_tree_checkpoint` — curve tree snapshot at a given height
 

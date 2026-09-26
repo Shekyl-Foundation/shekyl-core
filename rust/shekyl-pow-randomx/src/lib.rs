@@ -173,7 +173,11 @@ mod cache;
 mod cache_store;
 pub(crate) mod fpu_rounding;
 mod prepared_cache;
-mod seed_epoch;
+// The seed-epoch *schedule* (`seedheight`, the 2048/64 constants) is
+// consensus arithmetic the validator evaluates, and lives in
+// `shekyl_difficulty::seed_epoch` since 2026-09-19 (DRS-E6 slice 2,
+// CEN-D3); this crate never called it. The env-override clamps live at the
+// FFI boundary that reads the environment (`shekyl-ffi::pow_randomx_ffi`).
 mod seedhash;
 pub(crate) mod superscalar;
 mod vm;
@@ -187,11 +191,8 @@ mod vm;
 mod vm_pool;
 
 pub(crate) use cache::Cache;
-pub use cache_store::CacheStore;
+pub use cache_store::{CacheOutcome, CacheStore};
 pub use prepared_cache::PreparedCache;
-pub use seed_epoch::{
-    clamp_blocks, clamp_lag, next_seedheight, seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG,
-};
 pub use seedhash::Seedhash;
 pub use vm::compute_hash;
 

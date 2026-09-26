@@ -58,78 +58,12 @@ const _: () = {
     assert!(ZoneRouteDecision::BroadcastAllZones as u8 == 3);
 };
 
-/// How a transaction was received, mirrored from C++ `cryptonote::relay_method`
-/// **by value and test, not by include**: the C++ side `static_assert`s each
-/// variant's byte against this contract at the FFI seam, so a renumbering on
-/// either side is a compile error there rather than a silent remap here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum RelayMethod {
-    /// Received via RPC with `do_not_relay` set.
-    None = 0,
-    /// Received via RPC; trying to send over i2p/tor. The class that routes
-    /// the txpool backstop to fail-closed rather than `public_req`.
-    Local = 1,
-    /// Received/sent using Dandelion++ stem.
-    Stem = 2,
-    /// Received/sent using Dandelion++ fluff — the deliberate exit (§59.1).
-    Fluff = 3,
-    /// Received in a block.
-    Block = 4,
-}
-
-impl RelayMethod {
-    /// Byte-contract decode. `None` on an unknown byte — the FFI layer maps
-    /// that to the fail-closed arm rather than guessing a semantics.
-    #[must_use]
-    pub const fn from_byte(b: u8) -> Option<Self> {
-        match b {
-            0 => Some(Self::None),
-            1 => Some(Self::Local),
-            2 => Some(Self::Stem),
-            3 => Some(Self::Fluff),
-            4 => Some(Self::Block),
-            _ => None,
-        }
-    }
-}
-
-/// The network zone a transaction arrived on (or, for originated traffic, the
-/// zone the origination roll chose). Mirrors `epee::net_utils::zone` by value
-/// and `static_assert`, same contract discipline as [`RelayMethod`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum NetZone {
-    /// No zone — for originated traffic this is the roll saying "take
-    /// anonymity", resolved by the caller's own zone map, fail-closed.
-    Invalid = 0,
-    /// The clear internet.
-    Public = 1,
-    /// I2P.
-    I2p = 2,
-    /// Tor.
-    Tor = 3,
-}
-
-impl NetZone {
-    /// Byte-contract decode; `None` on an unknown byte.
-    #[must_use]
-    pub const fn from_byte(b: u8) -> Option<Self> {
-        match b {
-            0 => Some(Self::Invalid),
-            1 => Some(Self::Public),
-            2 => Some(Self::I2p),
-            3 => Some(Self::Tor),
-            _ => None,
-        }
-    }
-
-    /// A real anonymity network — not clearnet, not absent.
-    #[must_use]
-    pub const fn is_anonymity(self) -> bool {
-        matches!(self, Self::I2p | Self::Tor)
-    }
-}
+/// The seam's two byte-pinned words, re-exported from `shekyl-types::relay`
+/// where they moved for DRS-E1 S-POOL (`SPL-Q6`): the daemon's pool store
+/// needs the same vocabulary and cannot depend on this crate. Their
+/// definitions, decoders and the `matches` table are there; the `const`
+/// byte pins above stay **here**, at the FFI seam they pin.
+pub use shekyl_types::relay::{NetZone, RelayCategory, RelayMethod};
 
 /// Where `send_txs` places the transaction. The C++ `zone_route` token wraps
 /// exactly this value; its byte contract is `static_assert`ed at the seam.

@@ -33,6 +33,7 @@ use std::ops::Range;
 use shekyl_engine_state::{
     transfer::eligible_height, LedgerBlock, LedgerIndexes, ReceiveAttribution, TransferDetails,
 };
+use shekyl_types::BlockHeight;
 
 use crate::{balance::BalanceSummary, output::WalletOutput, scan::Timelocked};
 
@@ -46,15 +47,19 @@ pub trait TransferDetailsExt {
     /// after the scanned block is merged into the ledger. The scanner does
     /// not hold the `view_secret` required by `derive_output_handle`, by
     /// design.
-    fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self;
+    fn from_wallet_output(output: &WalletOutput, block_height: BlockHeight) -> Self;
 }
 
 impl TransferDetailsExt for TransferDetails {
-    fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self {
+    fn from_wallet_output(output: &WalletOutput, block_height: BlockHeight) -> Self {
         TransferDetails {
-            tx_hash: shekyl_types::TxHash::from_bytes(output.transaction()),
-            internal_output_index: output.index_in_transaction(),
-            global_output_index: output.index_on_blockchain(),
+            tx_hash: output.transaction(),
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(
+                output.index_in_transaction(),
+            ),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(
+                output.index_on_blockchain(),
+            ),
             block_height,
             key: output.key(),
             key_offset: output.key_offset(),
@@ -98,14 +103,10 @@ impl TransferDetailsExt for TransferDetails {
             // computation is the shared `transfer::eligible_height` — the
             // single definition of "in the tree yet," also stored by the
             // pscan funding path as `spendable_height` (GF4b-6,
-            // ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6). This legacy field is
-            // `u64`-shaped, so the typed result converts at this edge.
-            eligible_height: eligible_height(
-                shekyl_types::BlockHeight::from_raw(block_height),
-                output.additional_timelock(),
-            )
-            .to_raw(),
+            // ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6).
+            eligible_height: eligible_height(block_height, output.additional_timelock()),
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),
         }
@@ -137,7 +138,7 @@ pub trait LedgerIndexesExt {
     fn process_scanned_outputs(
         &mut self,
         ledger: &mut LedgerBlock,
-        block_height: u64,
+        block_height: BlockHeight,
         block_hash: [u8; 32],
         outputs: Timelocked,
     ) -> Range<usize>;
@@ -147,7 +148,7 @@ impl LedgerIndexesExt for LedgerIndexes {
     fn process_scanned_outputs(
         &mut self,
         ledger: &mut LedgerBlock,
-        block_height: u64,
+        block_height: BlockHeight,
         block_hash: [u8; 32],
         outputs: Timelocked,
     ) -> Range<usize> {
@@ -168,6 +169,10 @@ impl LedgerIndexesExt for LedgerIndexes {
             if ki.as_bytes() != &[0u8; 32] {
                 td.key_image = Some(ki);
             }
+            // PL-D3 §6.2: the scan-time received-but-unspendable verdict
+            // travels onto the persisted row, where `is_spendable` and the
+            // balance projection read it.
+            td.unspendable = output.unspendable();
             batch.push(td);
         }
 
@@ -191,7 +196,7 @@ pub trait WalletLedgerExt {
     fn balance(&self) -> BalanceSummary;
 
     /// Balance at an explicit chain height (tests / historical views).
-    fn balance_at(&self, current_height: u64) -> BalanceSummary;
+    fn balance_at(&self, current_height: shekyl_types::BlockHeight) -> BalanceSummary;
 }
 
 impl WalletLedgerExt for shekyl_engine_state::WalletLedger {
@@ -199,7 +204,7 @@ impl WalletLedgerExt for shekyl_engine_state::WalletLedger {
         self.balance_at(self.ledger.height())
     }
 
-    fn balance_at(&self, current_height: u64) -> BalanceSummary {
+    fn balance_at(&self, current_height: shekyl_types::BlockHeight) -> BalanceSummary {
         BalanceSummary::compute(self.ledger.transfers(), current_height, &self.spend_locks())
     }
 }
@@ -216,7 +221,7 @@ mod x5_eligible_height_tests {
     fn dummy_output() -> WalletOutput {
         let key = &Scalar::from_bytes_mod_order([7u8; 32]) * ED25519_BASEPOINT_TABLE;
         WalletOutput::new_for_test(
-            [0x11; 32],
+            shekyl_types::TxHash::from_bytes([0x11; 32]),
             0,
             1,
             key,
@@ -228,8 +233,11 @@ mod x5_eligible_height_tests {
     /// Baseline: no timelock → `eligible_height = block + SPENDABLE_AGE`.
     #[test]
     fn eligible_height_baseline_is_spendable_age() {
-        let td = TransferDetails::from_wallet_output(&dummy_output(), 100);
-        assert_eq!(td.eligible_height, 100 + SPENDABLE_AGE);
+        let td = TransferDetails::from_wallet_output(&dummy_output(), BlockHeight::from_raw(100));
+        assert_eq!(
+            td.eligible_height,
+            shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE
+        );
     }
 
     /// X5 core: a block-based additional timelock (the coinbase +60 lock) floors
@@ -240,9 +248,10 @@ mod x5_eligible_height_tests {
     fn eligible_height_respects_block_timelock() {
         let out =
             dummy_output().with_additional_timelock(Timelock::Block(BlockHeight::from_raw(160)));
-        let td = TransferDetails::from_wallet_output(&out, 100);
+        let td = TransferDetails::from_wallet_output(&out, BlockHeight::from_raw(100));
         assert_eq!(
-            td.eligible_height, 160,
+            td.eligible_height,
+            shekyl_types::BlockHeight::from_raw(160),
             "block timelock (160) floors eligible_height above block + SPENDABLE_AGE (110)"
         );
     }

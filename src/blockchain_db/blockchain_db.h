@@ -212,26 +212,6 @@ struct alt_block_data_t
   uint64_t already_generated_coins;
 };
 
-#pragma pack(push, 1)
-/**
- * @brief per-output metadata retained after transaction pruning.
- *
- * When a block is confirmed beyond CRYPTONOTE_TX_PRUNE_DEPTH (see prune_tx_data),
- * verification blobs can be discarded. This struct preserves the
- * data wallets need for scanning: public key, commitment, unlock time,
- * and the block height that confirmed the output.
- */
-struct output_pruning_metadata_t
-{
-  crypto::public_key pubkey;       //!< output one-time public key
-  ct::key           commitment;   //!< Pedersen commitment (amount commitment)
-  uint64_t           unlock_time;  //!< unlock time or height
-  uint64_t           height;       //!< block height containing this output
-  uint8_t            pruned;       //!< 1 if the parent tx's prunable data was removed
-  uint8_t            padding[7];   //!< alignment to 8-byte boundary
-};
-#pragma pack(pop)
-
 /**
  * @brief a struct containing txpool per transaction metadata
  */
@@ -1742,12 +1722,6 @@ public:
    */
   virtual void get_output_key(const epee::span<const uint64_t> &amounts, const std::vector<uint64_t> &offsets, std::vector<output_data_t> &outputs, bool allow_partial = false) const = 0;
   
-  /*
-   * FIXME: Need to check with git blame and ask what this does to
-   * document it
-   */
-  virtual bool can_thread_bulk_indices() const = 0;
-
   /**
    * @brief gets output indices (amount-specific) for a transaction's outputs
    *
@@ -1854,82 +1828,6 @@ public:
    * @return True if `tx_hash` latest relay status is in `category`.
    */
   bool txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category);
-
-  /**
-   * @brief get the blockchain pruning seed
-   * @return the blockchain pruning seed
-   */
-  virtual uint32_t get_blockchain_pruning_seed() const = 0;
-
-  /**
-   * @brief prunes the blockchain
-   * @param pruning_seed the seed to use, 0 for default (highly recommended)
-   * @return success iff true
-   */
-  virtual bool prune_blockchain(uint32_t pruning_seed = 0) = 0;
-
-  /**
-   * @brief prunes recent blockchain changes as needed, iff pruning is enabled
-   * @return success iff true
-   */
-  virtual bool update_pruning() = 0;
-
-  /**
-   * @brief checks pruning was done correctly, iff enabled
-   * @return success iff true
-   */
-  virtual bool check_pruning() = 0;
-
-  // ─── Output Metadata Pruning ──────────────────────────────────────────────
-
-  /**
-   * @brief store per-output metadata for post-pruning wallet scanning.
-   *
-   * Called before discarding a transaction's prunable data. The metadata
-   * preserves what wallets need (pubkey, commitment, height, unlock_time).
-   *
-   * @param global_output_index  the output's global index
-   * @param meta                 the metadata to persist
-   */
-  virtual void store_output_metadata(uint64_t global_output_index,
-                                     const output_pruning_metadata_t& meta) = 0;
-
-  /**
-   * @brief retrieve stored output metadata.
-   *
-   * @param global_output_index  the output's global index
-   * @param meta                 return-by-reference metadata
-   * @return true if metadata exists for this output
-   */
-  virtual bool get_output_metadata(uint64_t global_output_index,
-                                   output_pruning_metadata_t& meta) const = 0;
-
-  /**
-   * @brief check whether an output's parent transaction has been pruned.
-   *
-   * @param global_output_index  the output's global index
-   * @return true if prunable data has been removed for this output's tx
-   */
-  virtual bool is_output_pruned(uint64_t global_output_index) const = 0;
-
-  /**
-   * @brief prune confirmed transaction data beyond the reorg safety depth.
-   *
-   * For each transaction in blocks older than (tip - depth), stores output
-   * metadata in the output_metadata table and removes the prunable body
-   * (`txs_prunable`). The prunable hash and the `txs_pqc_auths` slice stay:
-   * both are operands of the transaction's identity, and the complete body
-   * is served from shard archival rather than from a pruned node.
-   *
-   * @param depth  confirmation depth; use 0 for CRYPTONOTE_TX_PRUNE_DEPTH
-   * @return true on success
-   */
-  virtual bool prune_tx_data(uint64_t depth = 0) = 0;
-
-  /**
-   * @brief last block height for which post-confirmation tx verification data was pruned (0 if none).
-   */
-  virtual uint64_t get_last_pruned_tx_data_height() const = 0;
 
   /**
    * @brief true if the tx still has prunable verification data in the db (Bulletproofs+/FCMP++/pseudoOuts).
@@ -2112,18 +2010,6 @@ public:
    */
   virtual void drop_hard_fork_info() = 0;
 
-  /**
-   * @brief return a histogram of outputs on the blockchain
-   *
-   * @param amounts optional set of amounts to lookup
-   * @param unlocked whether to restrict count to unlocked outputs
-   * @param recent_cutoff timestamp to determine whether an output is recent
-   * @param min_count return only amounts with at least that many instances
-   *
-   * @return a set of amount/instances
-   */
-  virtual std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const = 0;
-
   virtual bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const = 0;
 
   /**
@@ -2249,6 +2135,48 @@ public:
   virtual uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) const = 0;
 
+  // ─── Settlement outcomes (ARCHIVAL_SETTLEMENT_WRITER.md SO-D1/SO-D2/SO-D6) ──
+  //
+  // Per-pair-epoch VERDICT table, distinct from the per-challenge EVIDENCE
+  // ledger above: `outcome‖passes‖issued` (3 B, Rust-encoded) keyed
+  // `P_id‖BE(shard)‖BE(E)` (48 B). An absent row is SO-D1 "never issued ⇒
+  // non-observation", NOT a miss — the reader must not collapse the two.
+  //
+  // Pure virtual so a store that forgot the table fails to compile. The
+  // writer's production call site is a rule-22 hold on SO-D8 (§5.1). The
+  // revert (`revert_archival_slashes_at_height`) and the retention prune
+  // (`prune_archival_epochs_before`) are wired. Redb's table denominator is
+  // the SHEKYL_LMDB_TABLES X-macro, not this interface.
+
+  /// Fold `(passes, issued)` through the Rust encoder and store the row for
+  /// `(P_id, shard, E)`. Refuses (throws) rather than storing if the fold
+  /// refuses — C++ never composes an outcome byte (rule 36).
+  virtual void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch, uint32_t passes, uint32_t issued) = 0;
+
+  /// Read a settlement row. Returns false when absent (SO-D1 never-issued).
+  /// When true, `out_row` holds a canonical
+  /// `SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES` row. The width is the FFI
+  /// compile-time constant so a Rust-side SETTLEMENT_ROW_LEN change breaks
+  /// every override. Integrity checks on stored bytes are the backend's,
+  /// not this signature's.
+  virtual bool get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch,
+    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const = 0;
+
+  /// Drop every settlement row for one epoch — the SO-D6 revert. Rows are a
+  /// memoised derivation over final chain state, so a reorg crossing a fold
+  /// deletes and lets the reconnect recompute; there is no alt twin.
+  virtual void delete_archival_settlement_for_epoch(uint64_t settlement_epoch) = 0;
+
+  /// Retention prune for the settlement table — every row strictly below
+  /// `prune_below_epoch`. Called from `prune_archival_epochs_before`, which is
+  /// contracted to visit every epoch-scoped archival table. SO-D5 names the
+  /// failure direction a horizon breach takes here (absent ⇒ non-observation
+  /// shrinks the window's denominator), which is the opposite of the
+  /// serve-credit ledger's (absent ⇒ miss) — `failure_window.rs` carries both.
+  virtual void delete_archival_settlement_before_epoch(uint64_t prune_below_epoch) = 0;
+
   // Gate-4 / shard-registry substrate (default: false until implemented).
   virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
     std::vector<uint8_t>& out_pubkey) const;
@@ -2271,9 +2199,13 @@ public:
   // key, so the production connect can never silently commit a record whose
   // debits are unauthorized-forever. Test seeders pass {} when the record's
   // debit path is not under test.
+  // `endpoint` is the serving endpoint the JoinMarket vin carried (EU-D3),
+  // committed once as the record's endpoint for the life of the bond (a new
+  // onion address is a new persona) — likewise no default.
   virtual void put_archival_bond_record(const crypto::hash& p_id,
     const std::vector<uint8_t>& hybrid_pubkey,
-    const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
+    const std::vector<uint8_t>& bond_spend_pk, const crypto::public_key& endpoint,
+    uint64_t join_settlement_epoch,
     uint64_t bonded_total_atomic, uint8_t holdings_kind,
     const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals = {});
@@ -2350,61 +2282,44 @@ public:
   /// as a defensive ordering belt; a violation surfaces in the fold as
   /// MISSING_CLEAN_CLOSE, loud.
   virtual void revert_archival_unbonds_at_height(uint64_t block_height);
-  /// HoldingsUpdate-add connect writer (gate-4 §4.4; the Rust fold
-  /// `shekyl_archival_holdings_update_add_connect` dictates the counter
-  /// movement): sets `held_shard_ids = post` and rebuilds the index-parallel
-  /// `shard_add_epochs` (carried shards keep their add-epoch; the one added
-  /// shard takes `E_add = settlement_epoch(block_height)`). The record stays
-  /// `Bonded` (ShardSetCompact) — no interval, no clean close (grace-tail
-  /// posture). Journals the full pre-image of the mutated fields first, and
-  /// reads the LIVE `total_bonded_atomic` internally (per-post threading, as
-  /// Release). Any fold error is a hard abort. Caller: the bond-post vin
-  /// connect dispatch (add_transaction).
+  /// HoldingsUpdate connect writers: the kind is REJECTED (immutable-bond
+  /// 2026-09-20). LMDB overrides abort; the base is a no-op.
   virtual void apply_archival_holdings_update_add(uint64_t block_height,
     const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids);
-  /// HoldingsUpdate-drop connect writer (gate-4 §4.4 grace-tail): sets
-  /// `held_shard_ids = post` and rebuilds `shard_add_epochs` (the dropped
-  /// shard's add-epoch vanishes with it); the released FLOOR returns via the
-  /// `bond_debit` CT-balance source term (no ledger write). Same journal +
-  /// per-post counter threading as the add. Caller: add_transaction.
   virtual void apply_archival_holdings_update_drop(uint64_t block_height,
     const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids);
-  /// Restore the HoldingsUpdate pre-image journal rows recorded when
-  /// `block_height` connected, reverting `total_bonded_atomic` via the Rust
-  /// pop fold (which guards that the tip and pre-image balances differ by
-  /// exactly one FLOOR — a single-shard change). The record stays Bonded
-  /// throughout, so there is no Exited/clean-close check (the add/drop pop
-  /// twin, gate-4 §5).
+  /// HoldingsUpdate pop slot: kind deleted; named no-op so pop order stays
+  /// explicit (slash, then this slot, then reinstate).
   virtual void revert_archival_holdings_updates_at_height(uint64_t block_height);
-  /// Rebond connect writer (gate-4 §3.4; P2B-9 reinstatement; the Rust fold
-  /// `shekyl_archival_rebond_connect` dictates the write set): sets
-  /// `held_shard_ids = post` (a verified superset of current) and rebuilds the
-  /// index-parallel `shard_add_epochs` (carried shards keep theirs; added
-  /// shards take `E_rebond` — Pin 7), closes the open bad interval IN PLACE
-  /// (`end_exclusive = E_rebond + 1` — Pin 3; the record stays `Bonded`,
-  /// standing resumes at `E_rebond + 1`), and credits the counters by
-  /// `|added|·FLOOR` (zero for standing-only). Journals the pre-image of the
-  /// mutated fields (including the closed interval's index + start) first, and
-  /// reads the LIVE `total_bonded_atomic` internally (per-post threading). Any
-  /// fold error is a hard abort. Caller: the bond-post vin connect dispatch.
-  virtual void apply_archival_rebond(uint64_t block_height, const crypto::hash& p_id,
+  /// Reinstate connect writer: the Rust fold
+  /// `shekyl_archival_reinstate_connect` selects the one open interval and
+  /// the `E_reinstate + 1` close. Holdings and counters do not move. Journals
+  /// the closed interval's identity. Any fold error is a hard abort.
+  virtual void apply_archival_reinstate(uint64_t block_height, const crypto::hash& p_id,
     const std::vector<uint64_t>& post_shard_ids);
-  /// Restore the Rebond pre-image journal rows recorded when `block_height`
-  /// connected: re-open the journaled interval to `end_exclusive = MAX`
-  /// (identity-belted against the journal's index + start and the connect's
-  /// `E_rebond + 1` close), restore holdings/add-epochs/balance, and revert
-  /// `total_bonded_atomic` via the Rust pop fold (non-negative whole-FLOOR
-  /// delta guard — zero included).
-  virtual void revert_archival_rebonds_at_height(uint64_t block_height);
-  /// HoldingsUpdate-drop verify marshaling: the dropped shard's segment
-  /// freeze height (feeds the retention-horizon age-at-add). Returns false
-  /// when the shard has no frozen segment — a REACHABLE state, not
+  /// Restore the Reinstate journal: re-open the journaled interval to
+  /// `end_exclusive = MAX` (identity-belted against index + start and the
+  /// connect's `E_reinstate + 1` close). Holdings/counters were unchanged.
+  virtual void revert_archival_reinstates_at_height(uint64_t block_height);
+  /// Segment freeze height (still used by slash / serve-credit marshaling).
+  /// Returns false when the shard has no frozen segment — a REACHABLE state, not
   /// corruption: the add verify deliberately does not require a frozen
   /// segment (bond_post.rs), so the caller fails closed by marshaling
   /// freeze_height 0 (the genesis-band "oldest" sentinel → the longest
   /// horizon); the Rust age computation pins a segment that froze at/after
   /// H_close(add_epoch) to the same longest-horizon extreme.
   virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const;
+  /// Market co-holder counts for the operator coverage list
+  /// (`ARCHIVAL_SHARD_SELECTION_LIST.md` SL-D4 / SL-D8 reading 1). Caller
+  /// sizes `bonded_count` to `frozen_segment_count` (zeros). This is an
+  /// LMDB cursor over **bond records** (public metadata), not shard bodies
+  /// — every node prunes; bodies live with stakers or a view-fetch.
+  /// Increments in place for every **market** bond's held shards with
+  /// `shard_id < bonded_count.size()`. CompleteTree records are skipped
+  /// (Foundation is not a market co-holder). Ranking stays Rust-side.
+  /// Default is a no-op so testdb stays empty until a subclass folds
+  /// synthetic bonds. Moves with chain-store when that is Rust.
+  virtual void fold_archival_market_bonded_counts(std::vector<uint64_t>& bonded_count) const;
   /// Release verify marshaling (P2B-8 Q1/Q2): each held shard's last-served
   /// settlement epoch — one reverse-cursor seek per shard over the BE
   /// composite serve-credit key `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖
@@ -2624,7 +2539,8 @@ public:
   /**
    * @brief grow the curve tree by appending new leaf data for outputs added in a block.
    *
-   * Each leaf is 128 bytes: {O.x[32], I.x[32], C.x[32], H(pqc_pk)[32]}.
+   * Each leaf is 128 bytes: {O.x[32], I.x[32], C.x[32], CM.x[32]} -- the
+   * 4th scalar is the x-coordinate of the output's PQC leaf commitment (PL-D3).
    * The implementation stores the leaves, recomputes affected chunk hashes
    * via Rust FFI (Helios/Selene Pedersen commitments), and updates all
    * internal layers up to the root.
@@ -2655,16 +2571,6 @@ public:
    * @brief return the total number of leaves (outputs) in the curve tree.
    */
   virtual uint64_t get_curve_tree_leaf_count() const = 0;
-
-  /**
-   * @brief get the hash for a specific layer/chunk in the tree.
-   *
-   * @param layer  layer index (0 = leaf layer)
-   * @param chunk  chunk index within the layer
-   * @param hash_out  32-byte output buffer
-   * @return true if the entry exists
-   */
-  virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const = 0;
 
   /**
    * @brief get the leaf data for a specific tree position.
@@ -2834,9 +2740,11 @@ public:
   /**
    * @brief remove intermediate layer hashes between checkpoints.
    *
-   * Given a checkpoint height, removes internal hash layers that can be
-   * recomputed from leaves between the previous checkpoint and this one.
-   * Leaves and the latest live layer state are preserved.
+   * Given a checkpoint height, removes internal hash layers (1..depth-2)
+   * between the previous checkpoint and this one. Layer 0 (the leaf-chunk
+   * hash layer), the leaves, and the latest live layer state are preserved;
+   * layer 0 is the recompose source for the removed layers (trim_curve_tree
+   * rebuilds from it), not the leaf table.
    *
    * @param checkpoint_height  the checkpoint up to which to prune
    */

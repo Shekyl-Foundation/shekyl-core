@@ -26,6 +26,7 @@ shekyl-address = { path = "../shekyl-address" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
+shekyl-types = { path = "../shekyl-types" }
 
 [dev-dependencies]
 tempfile = "3"

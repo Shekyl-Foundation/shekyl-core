@@ -139,6 +139,12 @@ pub enum WalletRpcErrorCode {
     /// Proofs: a reserve-proof locator names a tx the daemon holds only
     /// in its pool — unconfirmed money cannot back a reserve claim.
     ProofTxUnconfirmed = -29304,
+    /// Proof **verification** was asked of a daemon that is not
+    /// synchronized: the chain facts a proof is checked against would not
+    /// be the chain's, and "not found" / a short confirmation count from a
+    /// daemon mid-sync is indistinguishable from a forged proof. Retryable
+    /// once the daemon catches up.
+    ProofDaemonSyncing = -29305,
     /// `get_transfer_by_id`: no match.
     UnknownTransferId = -29400,
     /// Stake: funding not ready (W1-clean refusal — fund the persona /
@@ -416,6 +422,9 @@ pub enum WalletRpcError {
     /// Proofs: a reserve-proof locator names an unconfirmed (pooled) tx.
     #[error("transaction is unconfirmed")]
     ProofTxUnconfirmed,
+    /// Proofs: verification was asked of a daemon that is not synchronized.
+    #[error("daemon is syncing; retry proof verification once it has caught up")]
+    ProofDaemonSyncing,
     /// `get_transfer_by_id`: no match.
     #[error("unknown transfer id")]
     UnknownTransferId,
@@ -736,6 +745,7 @@ impl WalletRpcError {
             Self::ProofNoProvableOutputs => WalletRpcErrorCode::ProofNoProvableOutputs,
             Self::ProofTxNotFound => WalletRpcErrorCode::ProofTxNotFound,
             Self::ProofTxUnconfirmed => WalletRpcErrorCode::ProofTxUnconfirmed,
+            Self::ProofDaemonSyncing => WalletRpcErrorCode::ProofDaemonSyncing,
             Self::UnknownTransferId => WalletRpcErrorCode::UnknownTransferId,
             Self::StakeNotReady { .. } => WalletRpcErrorCode::StakeNotReady,
             Self::StakeInFlight => WalletRpcErrorCode::StakeInFlight,
@@ -1448,8 +1458,8 @@ mod tests {
                 reason: "test malformed",
             },
             RefreshError::ConcurrentMutation {
-                wallet: 1,
-                result: 2,
+                wallet: shekyl_types::BlockHeight::from_raw(1),
+                result: shekyl_types::BlockHeight::from_raw(2),
             },
             RefreshError::InternalInvariantViolation {
                 context: "test invariant",
@@ -1503,7 +1513,9 @@ mod tests {
         assert_eq!(err.code(), WalletRpcErrorCode::UnknownTransferId);
 
         let err: WalletRpcError = AbandonTxError::StateForbids {
-            state: SendState::Confirmed { height: 42 },
+            state: SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(42),
+            },
         }
         .into();
         assert_eq!(err.code(), WalletRpcErrorCode::AbandonStateForbids);

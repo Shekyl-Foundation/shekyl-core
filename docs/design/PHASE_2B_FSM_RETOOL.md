@@ -380,7 +380,7 @@ never authoritative locally.
 | **R2** | `Exited` re-entry → new slot only | Gate-6 rotation round |
 | **R3** | §8.3 amendment (Accruing/Claimable closed) | PHASE_2B retool write-up |
 | **R4** | Grace-window GUI surfacing (**G1a — priority-1 UX**) | §7 G1 + gate-6 §5 |
-| **P2B-7** | **Closed (as of 2026-07-15 sweep)** — `HoldingsUpdate` FSM/read pins (genesis). UPDATE 2026-07-15: this row's "open: per-shard `E_add+1` connect rule, age-stratified sim reconciliation (seal-gating)" was a fossil contradicting the P2B-7 exit checklist below in this same doc — the `E_add+1` rule landed and Pin-4/Pin-5 closed at the shared accessor `archival_bond_holds_shard` (PR #303 review round, 2026-07-14), and the sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18, 2026-06-16; adversarial read confirmed 2026-07-12). The exit checklist is the authority; the checklist's own last remainder (`Rebond` verify+connect) landed via PR #307 | gate-4 §4.4; `shekyl-archival-retention`; Step 3 sim |
+| **P2B-7** | **Closed (as of 2026-07-15 sweep)** — `HoldingsUpdate` FSM/read pins (genesis). UPDATE 2026-07-15: this row's "open: per-shard `E_add+1` connect rule, age-stratified sim reconciliation (seal-gating)" was a fossil contradicting the P2B-7 exit checklist below in this same doc — the `E_add+1` rule landed and Pin-4/Pin-5 closed at the shared accessor `archival_bond_holds_shard` (PR #303 review round, 2026-07-14), and the sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18, 2026-06-16; adversarial read confirmed 2026-07-12). The exit checklist is the authority; the checklist's own last remainder (`Reinstate` verify+connect) landed via PR #307 | gate-4 §4.4; `shekyl-archival-retention`; Step 3 sim |
 | **Substrate verify** | **Closed (2026-06-07)** — LMDB pattern on `dev` verified; bond wire greenfield | PHASE_2B §7.11 |
 
 ---
@@ -565,7 +565,7 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
   slash for a challenge that fired before the add). A voluntarily dropped shard answers
   not-held everywhere (grace-tail keeps no drop interval — Pin 2), forfeiting the drop
   epoch's pending acceptances, the add-forfeit's symmetric twin. What **remained open** here
-  — `Rebond` verify+connect — **landed 2026-07-14 (PR #307, `feat/bond-fsm-rebond`; ShardSet
+  — `Reinstate` verify+connect — **landed 2026-07-14 (PR #307, `feat/bond-fsm-reinstate`; ShardSet
   newtype follow-on PR #309)**: the bond FSM's verify+connect surface is complete at genesis
   scope.
 - [x] **Age-stratified sim reconciliation (Step 3) — DONE; seal cleared.**
@@ -586,7 +586,7 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
   `fetch_latency_per_unit` (saturates `scale 4 ≡ 8`, calibration-insensitive in `[2,8]`);
   (2) **no-cushion reopen** — the `+1` is fully consumed with no emergent slack (findings 4/6), so
   reopen triggers on *any* new deep-band friction, named live candidates incl. **(c) the Gate-6
-  GF-4/GF-7 recurring rebond/release surface** (`ARCHIVAL_FIREWALL_GATE6.md` §12 — the exit-seam
+  GF-4/GF-7 recurring reinstate/release surface** (`ARCHIVAL_FIREWALL_GATE6.md` §12 — the exit-seam
   frictions can consume this margin) and a `RELEASE_COOLDOWN` rise past ~3.
   **Gate-6 cross-link:** the §L18 routed residual — a **wallet-conformance guard that warns/refuses
   a `HoldingsUpdate` drop whose freed capital is redeployed within the cooldown** — is a
@@ -599,7 +599,7 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
 
 **Why.** The bond-FSM verify/connect is **JoinMarket-only** at source (`bond_post.rs`
 `verify_join_market_bond_post`; the wire carries all four `post_kind`s but verify rejects the other
-three at genesis). Building `Rebond` / `Release` / `HoldingsUpdate` verify+connect is the real
+three at genesis). Building `Reinstate` / `Release` / `HoldingsUpdate` verify+connect is the real
 seal-blocking work (the age-stratified sim reconciliation is **done** — §L18 sealable at genesis;
 P2B-7 exit). Four questions the specs left thin are pinned here so the impl lands M1-clean
 (arm the trigger before the identifier exists). Verify contract per `post_kind`: gate-4 §3.5 (order),
@@ -651,26 +651,26 @@ post-genesis change is a hard fork. Resolves the "amends this table only" vs "co
 the amend window is *pre-seal*. The impl reads the **generated** consensus constant (never a hardcode),
 and the drop-eligibility check is `current_epoch − shard_add_epoch ≥ bond_duration(age)`.
 
-### Q4 — `Rebond` precondition + recovery path — **RESOLVED**
+### Q4 — `Reinstate` precondition + recovery path — **RESOLVED**
 
-**Question.** §3.4:319 gives the `Rebond` precondition as `good_standing == false` (post-slash);
+**Question.** §3.4:319 gives the `Reinstate` precondition as `good_standing == false` (post-slash);
 §3.2/P2B-4 frame it as `Slashed → Bonded`. These read as disagreeing on *which* post-slash state
-`Rebond` recovers, and the partial-slash recovery path was unstated.
+`Reinstate` recovers, and the partial-slash recovery path was unstated.
 
 **Resolved at source — and this corrects the earlier P2B-8 lean.** The wire settles it: the bond-post
 vin carries `holdings: HoldingsDescriptor` for **every** `post_kind` (§3.4 line 237 / §3.4.1 layout),
-and `bond_spend_pk` **only** for `JoinMarket` (§3.4:234 — `Rebond` reuses the record's committed one).
+and `bond_spend_pk` **only** for `JoinMarket` (§3.4:234 — `Reinstate` reuses the record's committed one).
 (That last clause is the **wire-field coupling**, not an auth pin: the record *keeps* the join-time
-`bond_spend_pk` for future debits; `Rebond`'s own pqc auth is the identity key per the bullet below
+`bond_spend_pk` for future debits; `Reinstate`'s own pqc auth is the identity key per the bullet below
 and gate-4 §3.4 — misread once, clarified 2026-07-14, P2B-9 Pin 4.)
 
 - **Precondition is `good_standing == false`** (§3.4, authoritative — it supersedes the FSM-table
-  "`Slashed` only" simplification). `Rebond` recovers **both** partial slash (record stays `Bonded`,
+  "`Slashed` only" simplification). `Reinstate` recovers **both** partial slash (record stays `Bonded`,
   `good_standing==false`, holdings reduced with floor re-established — §4.2 step 3) **and** terminal
   slash (`Slashed`, `bonded_total==0`). **The earlier lean ("partial slash recovers via `HoldingsUpdate`
   add") is withdrawn:** `HoldingsUpdate` add is *voluntary growth requiring `good_standing == true`*, so
-  it cannot fire while `good_standing==false` — `Rebond` is the only recovery.
-- **`Rebond` re-specifies holdings** (the vin carries them; `post ⊇ current`, non-empty — P2B-9
+  it cannot fire while `good_standing==false` — `Reinstate` is the only recovery.
+- **`Reinstate` re-specifies holdings** (the vin carries them; `post ⊇ current`, non-empty — P2B-9
   Pin 1) and credits `bonded_total` to `bond_floor(holdings)` (floor-equality, §3.5 step 4; the
   credit is `|added|·FLOOR`, **zero for the common standing-only reinstatement** — P2B-9 Pin 2;
   auth = identity `P_pubkey`, credit path
@@ -680,26 +680,26 @@ and gate-4 §3.4 — misread once, clarified 2026-07-14, P2B-9 Pin 4.)
   record + commits `bond_spend_pk`).
 
 **Grace-window slash-evasion — RESOLVED by the landed timing + mechanism (traced 2026-07-12).** The
-concern was whether `Rebond` during the grace window could cancel a *pending* slash (a `T-A15b`-class
+concern was whether `Reinstate` during the grace window could cancel a *pending* slash (a `T-A15b`-class
 evasion). It cannot, on **two independent grounds**:
 
 1. **The slash is bit-gated and fires at `H_slash_deadline`** (`= H_close + CHALLENGE_RESOLUTION_BLOCKS`,
    gate-2 §6; landed `process_archival_slash_at_height`), keyed on the *serve-credit bit*, **not** on
-   `good_standing`. `Rebond` writes no bit, so the slash lands at `H_slash_deadline` regardless.
-2. **`Rebond` is structurally ineligible during grace.** Good-standing is **not a mutable flag** — it is
+   `good_standing`. `Reinstate` writes no bit, so the slash lands at `H_slash_deadline` regardless.
+2. **`Reinstate` is structurally ineligible during grace.** Good-standing is **not a mutable flag** — it is
    **`good_through(P, E)`**, a pure function of `bad_intervals` (`consensus_state.rs:81-112`;
    `market_member_at_epoch` *is* `good_through`). A **slash writes an open bad interval**
-   `[E_slash, u64::MAX)` **at `H_slash_deadline`** (post-grace); **`Rebond` closes it**
-   (`end_exclusive = E_rebond + 1`, P2B-9 Pin 3). During grace there is **no bad interval**, so
-   `good_through` is `true` and there is nothing to recover — a mid-grace `Rebond` is
+   `[E_slash, u64::MAX)` **at `H_slash_deadline`** (post-grace); **`Reinstate` closes it**
+   (`end_exclusive = E_reinstate + 1`, P2B-9 Pin 3). During grace there is **no bad interval**, so
+   `good_through` is `true` and there is nothing to recover — a mid-grace `Reinstate` is
    **unrepresentable**, not merely guarded.
 
 **Consequent impl pins:** (i) `good_standing` is a **derived view** of `good_through` / `bad_intervals`,
 **not** a stored authority (same derive-don't-store answer as Q2) — the §4.1 field is a cache at most;
-the operative `Rebond` precondition is **"an open bad interval exists."** (ii) `Rebond`'s effect on the
-interval log is to **close the open bad interval** — `end_exclusive = E_rebond + 1`, restoring
-`good_through` from `E_rebond + 1` (amended from `E_rebond` by P2B-9 Pin 3, ratified 2026-07-14: the
-partial rebond epoch is forfeited in both directions, the Pin-5 `E_add + 1` mirror). (iii) P2B-4's
+the operative `Reinstate` precondition is **"an open bad interval exists."** (ii) `Reinstate`'s effect on the
+interval log is to **close the open bad interval** — `end_exclusive = E_reinstate + 1`, restoring
+`good_through` from `E_reinstate + 1` (amended from `E_reinstate` by P2B-9 Pin 3, ratified 2026-07-14: the
+partial reinstate epoch is forfeited in both directions, the Pin-5 `E_add + 1` mirror). (iii) P2B-4's
 "grace-window `good_standing = false`" wording is imprecise — during
 grace `good_through` is `true`; "slash pending" is a gate-2 timeline condition, not a bad interval.
 
@@ -708,15 +708,15 @@ grace `good_through` is `true`; "slash pending" is a gate-2 timeline condition, 
 - [x] Q1 per-shard cooldown anchor — derive via BE-key reverse cursor, capture in `bond_event_log`.
 - [x] Q2 record-level `Release` anchor — derive (sole consumer confirmed); drop the §4.1 field.
 - [x] Q3 `bond_duration` genesis-freeze posture — pre-seal calibration only.
-- [x] Q4 `Rebond` — precondition (`good_standing==false` = open bad interval, both slash cases),
+- [x] Q4 `Reinstate` — precondition (`good_standing==false` = open bad interval, both slash cases),
   holdings-re-spec, record-preservation, **and** the grace-window slash-evasion — all resolved (slash
-  bit-gated at `H_slash_deadline` + `Rebond` structurally ineligible during grace; `consensus_state.rs:81-112`).
+  bit-gated at `H_slash_deadline` + `Reinstate` structurally ineligible during grace; `consensus_state.rs:81-112`).
 
 **Design round CLOSED — all four resolved.** Recurring theme: **derive from the landed source of truth,
 don't add a mutable stored field** — Q1/Q2 derive from the serve-credit table, Q4's `good_standing`
 derives from `bad_intervals`/`good_through`. One forward doc-amendment (not a blocker): drop the §4.1
 `last_served_epoch` field (gate-4, Q2). The impl surface is fully pinned; **`Release` → `HoldingsUpdate`
-→ `Rebond`** all clear to build.
+→ `Reinstate`** all clear to build.
 
 **Implementation locus (rule 20 — Rust-first).** All bond-FSM verify/connect logic — including the
 **slash-apply body** (write the open `bad_interval`, `bond_debit` the `bonded_total`, remove the shard)
@@ -727,19 +727,19 @@ boundary as needed; do **not** build this in C++ to rip it out at the Rust cutov
 
 ---
 
-## P2B-9 — `Rebond` reinstatement pins (ratified 2026-07-14; not a design round)
+## P2B-9 — `Reinstate` reinstatement pins (ratified 2026-07-14; not a design round)
 
-P2B-8 Q4 resolved `Rebond`'s semantics; these pins settle the remaining gates found while
+P2B-8 Q4 resolved `Reinstate`'s semantics; these pins settle the remaining gates found while
 grounding the build. The only two that needed judgment — the re-spec shape and the credit
 equation — both fall out of one operating concept, ratified 2026-07-14:
 
-**`Rebond` is reinstatement, not re-entry.** A slash is a bounded penalty — burn one `FLOOR`,
-remove the failed shard, impose a zero-earning bad-standing gap — not a termination. `Rebond`
+**`Reinstate` is reinstatement, not re-entry.** A slash is a bounded penalty — burn one `FLOOR`,
+remove the failed shard, impose a zero-earning bad-standing gap — not a termination. `Reinstate`
 is the primitive that lets a persona pay that penalty and resume **in place**: same
 `P_canonical_id`, same remaining shards, same add-epochs, same backlog. The "it's just
 release + fresh bond" intuition breaks three ways: (1) a **terminal slash has nothing to
 release** (`bonded_total == 0`; the only way out of `Slashed` is topping collateral back up);
-(2) release+rejoin **annihilates exactly what `Rebond` preserves** — identity, tenure
+(2) release+rejoin **annihilates exactly what `Reinstate` preserves** — identity, tenure
 (add-epochs), and the scarce-shard position the market would take during the
 cooldown+exit+rejoin window; (3) **proportionality is what the seal needs** — if every slash
 forced exit + re-acquisition, one missed challenge would churn a deep-shard holder's whole
@@ -759,11 +759,11 @@ cannot get slashed on `S1` and use the reinstatement to also dump `S2`/`S3`. She
 **Coverage boundary (corrected 2026-07-14 — the original "you cannot get slashed to escape a
 retention commitment" rationale was wrong at source).** The superset does **not** cover the
 slashed shard itself: `apply_archival_slash_one` erases it from `held_shard_ids` (+ its
-coupled add-epoch), so `current` at `Rebond` time already excludes it — re-acquiring is
+coupled add-epoch), so `current` at `Reinstate` time already excludes it — re-acquiring is
 optional. **Slash-to-shed of the slashed shard is priced, not prevented**, three layers deep:
 (1) the burn destroys exactly the `FLOOR` the shed would free; (2) the bad-standing gap
-zeroes the **whole portfolio's** serve-credit through `E_rebond` (standing resumes
-`E_rebond + 1`, Pin 3); (3) a re-acquisition takes `add_epoch = E_rebond` (Pin 7), so its
+zeroes the **whole portfolio's** serve-credit through `E_reinstate` (standing resumes
+`E_reinstate + 1`, Pin 3); (3) a re-acquisition takes `add_epoch = E_reinstate` (Pin 7), so its
 `ShardAgeAtAdd` is older and its `bond_duration` **longer** than the commitment escaped —
 the ADD-side "self-harm, not an attack" shape. **Rule-21 reopen:** this pricing rests on the
 slash **burning** the `FLOOR`. If slash economics ever change to return collateral (in any
@@ -771,7 +771,7 @@ form), slash-to-shed opens as a real dodge that neither Pin 1 nor the burn price
 the re-spec shape (e.g., require re-acquisition or forfeit) at that boundary.
 
 Non-empty post (`ShardSetCompactEmpty`
-reuse): a terminal-slash record rebonding to `∅` at credit 0 would be a zombie (good standing,
+reuse): a terminal-slash record reinstating to `∅` at credit 0 would be a zombie (good standing,
 no shards, no balance; `HU`-add rejects `RecordNotBonded`, `Release` rejects `NothingToRelease`).
 Under the superset pin the diff is an **added-set**, so the landed `rebuild_shard_add_epochs`
 applies directly.
@@ -780,7 +780,7 @@ applies directly.
 finding):** because abandoning a slashed shard is priced at one `FLOOR` + the portfolio-wide
 gap, effective retention is `min(bond_duration, willingness-to-burn-a-FLOOR)` — rational for
 an uneconomic shard once storage cost × remaining lock exceeds the `FLOOR`. Believed to be
-the designed pressure-release (Rebond exists precisely so abandonment doesn't kill the
+the designed pressure-release (Reinstate exists precisely so abandonment doesn't kill the
 persona), but the seal rests on `bond_duration` holding deep capital: confirm the sim's
 actors can take the priced valve rather than treating the horizon as absolute.
 
@@ -790,29 +790,29 @@ actors can take the priced valve rather than treating the horizon as absolute.
 shape).** `apply_archival_slash_one` burns one `FLOOR` **and** removes the shard atomically
 (demotion: burns the CT floor, clears to compact-empty), so every post-slash record still
 satisfies `bonded_total == bond_floor(holdings)` — there is **no deficit to restore**.
-`Rebond` restores **standing**, not collateral; credit is owed only for growth:
+`Reinstate` restores **standing**, not collateral; credit is owed only for growth:
 `bond_credit == bond_floor(post) − record.bonded_total == |added|·FLOOR ≥ 0` — zero for the
 common standing-only reinstatement, the full floor after terminal slash (`bonded_total == 0`).
 KAT owed: a zero-credit vin through CT-balance.
 
-### Pin 3 — interval close: `end_exclusive = E_rebond + 1` (amends the Q4(ii) / gate-4 §4.1 pin)
+### Pin 3 — interval close: `end_exclusive = E_reinstate + 1` (amends the Q4(ii) / gate-4 §4.1 pin)
 
-The closed interval is `[E_slash, E_rebond + 1)`: bad through `E_rebond` **inclusive**;
-standing, serve-credit, and emit-new all resume at `E_rebond + 1`. The partial rebond epoch is
+The closed interval is `[E_slash, E_reinstate + 1)`: bad through `E_reinstate` **inclusive**;
+standing, serve-credit, and emit-new all resume at `E_reinstate + 1`. The partial reinstate epoch is
 forfeited in **both directions** — no serve credit is earnable in it (gate step 5 rejects) and
-no challenge fired in it can slash (deadline processing reads `good_through(E_rebond) = false`)
+no challenge fired in it can slash (deadline processing reads `good_through(E_reinstate) = false`)
 — the exact mirror of Pin-5's `E_add + 1` partial-epoch rule. This kills the reslash edge the
-`E_rebond` close left open (a challenge fired during bad standing — unservable all epoch —
+`E_reinstate` close left open (a challenge fired during bad standing — unservable all epoch —
 becoming slashable at its deadline once standing flipped), and carried shards resume together
-with added shards (whose `add_epoch = E_rebond` makes them countable from `E_rebond + 1`).
+with added shards (whose `add_epoch = E_reinstate` makes them countable from `E_reinstate + 1`).
 
 ### Pin 4 — auth: identity key, credit path; no selector change
 
-Q4:640's "`Rebond` reuses the record's committed one" is the **wire-field coupling** sentence
-(only `JoinMarket` carries `bond_spend_pk`; `Rebond` doesn't re-commit — the record keeps the
+Q4:640's "`Reinstate` reuses the record's committed one" is the **wire-field coupling** sentence
+(only `JoinMarket` carries `bond_spend_pk`; `Reinstate` doesn't re-commit — the record keeps the
 join-time key for future debits), **not** an auth pin. The auth pin is Q4's own bullet
 (`auth = identity P_pubkey, credit path bond_debit==0`) and gate-4 §3.4:306 agrees. The landed
-GF-1 selector (`bond_debit == 0` → identity) already routes `Rebond` correctly: the committed
+GF-1 selector (`bond_debit == 0` → identity) already routes `Reinstate` correctly: the committed
 key protects value-**out**; a credit brings value in from self-authorizing `txin_to_key`
 inputs, and the bond-vin signature only proves control of `P_canonical_id`. (An
 "establishes→identity / operates→committed" reframe was considered and rejected 2026-07-14: it
@@ -833,14 +833,14 @@ against `kMaxBadIntervals = 256`, the 257th append throws in `ArchivalBondValue:
 **inside the block-connect slash hook → deterministic consensus freeze**, reachable by
 accident (a large provider offline one epoch). Cross-epoch accumulation is already blocked
 (`good_through` fails while any open interval exists), so multiplicity is same-epoch only.
-**Fix (commit 1 of the `Rebond` PR): append the open interval only when none exists.**
+**Fix (commit 1 of the `Reinstate` PR): append the open interval only when none exists.**
 Apply-side only — the landed revert's `remove_if` strips every matching open interval on the
 first same-epoch row and no-ops on the rest, so pop symmetry holds with no schema bump. This
 establishes **≤ 1 open interval** as a machine-checkable invariant, which is what makes
-"`Rebond` closes *the* open interval" well-defined; the `Rebond` fold belts on multiplicity
+"`Reinstate` closes *the* open interval" well-defined; the `Reinstate` fold belts on multiplicity
 (loud corruption detector, not a tolerated state). **Locus (revised at the PR's review
 round):** the coalescing *decision* and the interval shape live Rust-side
-(`bond_connect::slash_open_interval_to_append`, KAT-covered — the invariant the Rust `Rebond`
+(`bond_connect::slash_open_interval_to_append`, KAT-covered — the invariant the Rust `Reinstate`
 verify depends on is exercised by the Rust suite), reached via
 `shekyl_archival_slash_open_interval_to_append`; the C++ slash-apply site appends exactly what
 the fold returns and decides nothing. The remaining slash *writer* body migrates with the
@@ -848,35 +848,35 @@ slash cutover as pinned (P2B-8 implementation locus).
 
 ### Pin 6 — interval-cap headroom: verify requires `bad_intervals.size() ≤ 254`
 
-`Rebond` re-arms slashability, so it must guarantee the log can absorb what follows: one slot
+`Reinstate` re-arms slashability, so it must guarantee the log can absorb what follows: one slot
 reserved for the next slash **and** one for `Release`'s clean interval-close, so **exit is
 always reachable** — a persona can never wedge both doors shut. At 255 the record's only
 remaining path is `Release`. Same `INTERVAL_LOG_FULL` shape as the landed `Release` guard, one
 slot stricter.
 
-### Pin 7 — add-epochs: carried keep theirs; added take `E_rebond`
+### Pin 7 — add-epochs: carried keep theirs; added take `E_reinstate`
 
 Forced by the landed `holds_shard` reconstruction ("held at tip ⇒ held strictly after the
 shard's v6 add-epoch"): a re-specified shard carrying its original add-epoch would falsely
 answer "held" across the bad-standing gap. Carried (still-held) shards keep their add-epochs;
-every shard added at `Rebond` — including a re-acquired slashed shard, and everything after a
-terminal slash — takes `E_rebond`. Tenure restarts for added shards (horizons re-arm — the
+every shard added at `Reinstate` — including a re-acquired slashed shard, and everything after a
+terminal slash — takes `E_reinstate`. Tenure restarts for added shards (horizons re-arm — the
 concept working, not a trap).
 
 ### Pin 8 — kind: `ShardSetCompact` only; demoted foundation reinstates as a normal market record
 
-The vin's holdings kind must be `ShardSetCompact`; a `CompleteTree` record at `Rebond` verify
+The vin's holdings kind must be `ShardSetCompact`; a `CompleteTree` record at `Reinstate` verify
 is unrepresentable (demotion flips the kind atomically with the interval append) — belt-reject
-anyway. A demoted-then-rebonded foundation record enters the market as a **normal compact
+anyway. A demoted-then-reinstated foundation record enters the market as a **normal compact
 participant by construction** (`FOUNDATION_EXCLUDED_FROM_MARKET` keys on the current
 `CompleteTree` kind) — reinstatement is into the normal market. Re-promotion to `CompleteTree`
-is **rejected now** (rule 21): it would be a separate deliberate consensus act, not a `Rebond`
+is **rejected now** (rule 21): it would be a separate deliberate consensus act, not a `Reinstate`
 side-effect; reopen only against a real re-promotion need.
 
 ### Impl surface (mechanical reuse of the landed Release/HU patterns)
 
 Verify + connect/pop folds in `shekyl-archival-retention`; FFI entry points (shared
-`BOND_POST` error space from code 37, a new `REBOND_APPLY` apply family); C++ dispatch on the
+`BOND_POST` error space from code 37, a new `REINSTATE_APPLY` apply family); C++ dispatch on the
 credit arm (identity-key pin already generic); a new height-keyed pre-image journal
 (`bonded_total`, shard ids, add-epochs, the closed interval's index + pre-image) whose pop
 re-opens `end_exclusive` to `MAX` byte-exactly; slash-revert-first pop ordering; per-post live
@@ -1020,22 +1020,22 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   whole same-`P` same-block class; §4.5 conservation is not a backstop). Named
   wiring obligations: marshal that pass at the block-verify site, pre-image journal
   table + FATAL mapping at the connect site.
-- **2026-07-14:** **P2B-9 — `Rebond` reinstatement pins ratified** (not a design round — Q4
+- **2026-07-14:** **P2B-9 — `Reinstate` reinstatement pins ratified** (not a design round — Q4
   resolved the semantics; these settle the build gates). Operating concept: **reinstatement,
   not re-entry** — a slash is a bounded penalty (one shard + one burned `FLOOR` + the gap),
-  `Rebond` resumes in place (same `P_canonical_id`, tenure, backlog). Pins: `post ⊇ current`
+  `Reinstate` resumes in place (same `P_canonical_id`, tenure, backlog). Pins: `post ⊇ current`
   non-empty (closes swap-shedding of **carried** shards; the slashed shard's abandonment is
   **priced** — one burned `FLOOR` + the portfolio-wide gap — not prevented, with a rule-21
   reopen if slash economics ever return collateral; corrected 2026-07-14, the original
   "retention-escape" rationale was wrong at source); credit `== |added|·FLOOR ≥ 0`
   (zero legal/common — the landed slash preserves floor-equality; amends gate-4 "restores
-  `== bond_floor`"); interval close `end_exclusive = E_rebond + 1` (partial-epoch symmetry
+  `== bond_floor`"); interval close `end_exclusive = E_reinstate + 1` (partial-epoch symmetry
   with Pin-5 `E_add+1`; amends Q4(ii)/gate-4 §4.1); auth = identity key on the landed selector
   (Q4:640 clarified as wire-coupling, not auth; "operates→committed" reframe rejected);
   **≤ 1 open interval** via same-epoch slash coalescing (fixes a reachable consensus-halt
-  vector: N same-epoch appends vs the 256-interval codec cap — commit 1 of the `Rebond` PR);
+  vector: N same-epoch appends vs the 256-interval codec cap — commit 1 of the `Reinstate` PR);
   cap headroom `≤ 254` at verify (exit always reachable); carried shards keep add-epochs,
-  added take `E_rebond`; `ShardSetCompact` only, demoted foundation reinstates as a normal
+  added take `E_reinstate`; `ShardSetCompact` only, demoted foundation reinstates as a normal
   market record (re-promotion rule-21-rejected).
 - **2026-07-12:** **P2B-8 — verify/connect design questions pinned pre-impl.** Q1 (per-shard
   `HoldingsUpdate`-drop cooldown anchor) resolved with **no new field** — derive shard `s`'s
@@ -1044,11 +1044,11 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   Q3 (`bond_duration` consensus gate) resolved — genesis-frozen; the provisional-numeric window is
   pre-seal calibration only. Q2 resolved — the record-level `last_served_epoch`'s sole consumer is the
   `Release` cooldown, so derive (drop the §4.1 field). Q4 fully resolved: at the wire (precondition
-  `good_standing==false` covers both slash cases; `Rebond` re-specifies holdings on the existing
+  `good_standing==false` covers both slash cases; `Reinstate` re-specifies holdings on the existing
   record; earlier partial-slash-via-`HoldingsUpdate` lean withdrawn) **and** the grace-window
   slash-evasion — traced closed: the slash is bit-gated at `H_slash_deadline` and `good_standing` is
   `good_through(bad_intervals)` (`consensus_state.rs:81-112`), so no bad interval exists during grace
-  and `Rebond` is structurally ineligible there. Design round CLOSED (all four; theme: derive from the
+  and `Reinstate` is structurally ineligible there. Design round CLOSED (all four; theme: derive from the
   landed source of truth, don't store). Rust-first locus pinned (rule 20): the slash-apply body the C++
   `process_archival_slash_at_height` stubs lands in `shekyl-archival-retention`, not C++. Also (same
   session): P2B-7 exit reconciled to the §L18 sealed

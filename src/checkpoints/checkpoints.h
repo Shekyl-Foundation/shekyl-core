@@ -35,8 +35,6 @@
 #include "cryptonote_config.h"
 
 #define ADD_CHECKPOINT(h, hash)  CHECK_AND_ASSERT(add_checkpoint(h,  hash), false);
-#define JSON_HASH_FILE_NAME "checkpoints.json"
-
 
 namespace cryptonote
 {
@@ -44,9 +42,11 @@ namespace cryptonote
    * @brief A container for blockchain checkpoints
    *
    * A checkpoint is a pre-defined hash for the block at a given height.
-   * Some of these are compiled-in, while others can be loaded at runtime
-   * from a json file. (Loading via DNS from a checkpoint-hosting server was
-   * removed with the rest of the cleartext-DNS surface.)
+   * Checkpoints are compiled in and carried by the release binary; there
+   * is no runtime channel. (Loading via DNS went with the cleartext-DNS
+   * surface; loading from a data-dir checkpoints.json went with PDM-Q-F23 --
+   * a runtime-loadable pin is a trust channel that bypasses the
+   * release-carried anchor, see ARCHIVAL_PRUNED_DAEMON_MODE.md PDM-Q5.)
    */
   class checkpoints
   {
@@ -153,15 +153,6 @@ namespace cryptonote
      * @return true unless adding a checkpoint fails
      */
     bool init_default_checkpoints(network_type nettype);
-
-    /**
-     * @brief load new checkpoints from json
-     *
-     * @param json_hashfile_fullpath path to the json checkpoints file
-     *
-     * @return true if loading successful and no conflicts
-     */
-    bool load_checkpoints_from_json(const std::string &json_hashfile_fullpath);
 
   private:
     std::map<uint64_t, crypto::hash> m_points; //!< the checkpoints container

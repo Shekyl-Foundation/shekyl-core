@@ -108,7 +108,11 @@
 
 use core::slice;
 
-use shekyl_difficulty::{check_hash, check_timestamp_rule, lwma1_next, Error as DifficultyError};
+use shekyl_difficulty::{
+    check_hash, check_timestamp_rule, lwma1_next, CumulativeDifficulty, Difficulty,
+    Error as DifficultyError, MTP_WINDOW_USIZE,
+};
+use shekyl_types::{BlockHeight, Timestamp};
 
 /// Difficulty target at the C-ABI boundary.
 ///
@@ -219,21 +223,25 @@ pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
         )
     };
 
-    // Widen ShekylU128 (two-u64, align 8) to u128 (align 16) for
-    // the algorithm. The materialized Vec is unavoidable here:
-    // reinterpret-casting the input slice violates the alignment
-    // contract Round 5's ABI was designed to insulate from
-    // (see module docs § "ShekylU128 ABI", § "Performance /
-    // allocation"). shekyl-difficulty remains `#![no_std]`;
-    // the `Vec` is on the `std`-having FFI side.
-    let cd: Vec<u128> = cd_ffi.iter().copied().map(u128::from).collect();
+    // Reconstruct domain types immediately (RTN-5). The C ABI stays
+    // raw `u64` / `ShekylU128`; shekyl-difficulty's Rust surface is
+    // typed. Two Vecs: timestamps (copy of the u64 slice into
+    // Timestamp) and cumulative difficulties (ShekylU128 → u128 →
+    // CumulativeDifficulty). Reinterpret-casting `[ShekylU128]` to
+    // `[u128]` still violates the Round 5 alignment contract.
+    let ts: Vec<Timestamp> = ts.iter().copied().map(Timestamp::from_raw).collect();
+    let cd: Vec<CumulativeDifficulty> = cd_ffi
+        .iter()
+        .copied()
+        .map(|v| CumulativeDifficulty::from_raw(u128::from(v)))
+        .collect();
 
-    match lwma1_next(chain_height, ts, &cd) {
+    match lwma1_next(BlockHeight::from_raw(chain_height), &ts, &cd) {
         Ok(next) => {
             // SAFETY: out_next_difficulty is non-null per the check
             // above; the caller's contract guarantees alignment and
             // writability.
-            core::ptr::write(out_next_difficulty, ShekylU128::from(next));
+            core::ptr::write(out_next_difficulty, ShekylU128::from(next.to_raw()));
             SHEKYL_DIFFICULTY_OK
         }
         Err(DifficultyError::InvalidCount) => SHEKYL_DIFFICULTY_ERR_INVALID_COUNT,
@@ -297,7 +305,7 @@ pub unsafe extern "C" fn shekyl_difficulty_check_hash(
     // an aligned, initialized [u8; 32].
     let hash = &*hash_ptr;
 
-    let pass = check_hash(hash, u128::from(difficulty));
+    let pass = check_hash(hash, Difficulty::from_raw(u128::from(difficulty)));
 
     // SAFETY: out_pass is non-null per the check above; the caller's
     // contract guarantees alignment and writability.
@@ -393,7 +401,7 @@ pub unsafe extern "C" fn shekyl_difficulty_check_timestamp_rule(
         return SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE;
     }
 
-    let win: &[u64] = if window_len == 0 {
+    let win_raw: &[u64] = if window_len == 0 {
         &[]
     } else {
         // SAFETY: non-null per the check above; `window_len <= 11` per
@@ -402,11 +410,25 @@ pub unsafe extern "C" fn shekyl_difficulty_check_timestamp_rule(
         // slice-invariant bounds.
         slice::from_raw_parts(window, window_len)
     };
+    let mut win_buf = [Timestamp::ZERO; MTP_WINDOW_USIZE];
+    let win: &[Timestamp] = if win_raw.is_empty() {
+        &[]
+    } else {
+        for (slot, &raw) in win_buf.iter_mut().zip(win_raw) {
+            *slot = Timestamp::from_raw(raw);
+        }
+        &win_buf[..win_raw.len()]
+    };
 
-    let (verdict, median) = check_timestamp_rule(candidate_ts, win, genesis_ts, local_clock);
+    let (verdict, median) = check_timestamp_rule(
+        Timestamp::from_raw(candidate_ts),
+        win,
+        Timestamp::from_raw(genesis_ts),
+        Timestamp::from_raw(local_clock),
+    );
     // SAFETY: out_median is non-null per the check above; the caller's
     // contract guarantees alignment and writability.
-    core::ptr::write(out_median, median);
+    core::ptr::write(out_median, median.to_raw());
     verdict as i32
 }
 
@@ -442,8 +464,8 @@ pub unsafe extern "C" fn shekyl_difficulty_fork_choice(
         return SHEKYL_DIFFICULTY_ERR_NULL_PTR;
     }
     let verdict = shekyl_difficulty::fork_choice(
-        u128::from(current_cumulative),
-        u128::from(alternative_cumulative),
+        CumulativeDifficulty::from_raw(u128::from(current_cumulative)),
+        CumulativeDifficulty::from_raw(u128::from(alternative_cumulative)),
         checkpoint_match != 0,
     );
     // SAFETY: non-null per the check above; caller guarantees alignment

@@ -187,8 +187,8 @@ transaction build_kat_tx()
   // transaction and the pin asserts their bytes are identical, so both must
   // build the transaction the network would accept; before this rule the pin
   // fixed agreement on a shape no builder can produce.
-  shekyl_test_fixtures::append_pqc_kem_field(tx, cryptonote::HYBRID_KEM_CT_BYTES * tx.vout.size());
-  shekyl_test_fixtures::append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_HASH_BYTES * tx.vout.size());
+  shekyl_test_fixtures::append_pqc_kem_field(tx, SHEKYL_HYBRID_KEM_CT_BYTES * tx.vout.size());
+  shekyl_test_fixtures::append_pqc_leaf_field(tx, SHEKYL_PQC_LEAF_ENTRY_BYTES * tx.vout.size());
   return tx;
 }
 
@@ -225,7 +225,7 @@ TEST(pruned_tx_hash_parity, pruned_spend_identity_matches_the_rust_oracle)
 
   // The bound surface: the pruned identity with the digest supplied is the
   // txid -- the recomputation the Rust engine performs against an untrusted
-  // daemon's pruned reply, and the derivation `prune_tx_data` preserves the
+  // daemon's pruned reply, and any discard preserves the
   // operands of (txs_prunable_hash / txs_pqc_auths, LMDB schema v11).
   EXPECT_EQ(epee::string_tools::pod_to_hex(get_pruned_transaction_hash(parsed, prunable_hash)),
             k.tx_hash_hex)

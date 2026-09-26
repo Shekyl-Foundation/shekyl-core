@@ -44,6 +44,18 @@ KEYS_INTEGER = {
     "daa_ftl_seconds": "u64",
     "daa_mtp_window": "u64",
     "daa_genesis_difficulty": "u64",
+    # Short-term block-weight surge factor S. u64 because the clamp
+    # multiplies it by a u64 median; the value is small but the product
+    # is not. Rust owner: shekyl-economics::effective_median.
+    "block_weight_short_term_surge_factor": "u64",
+    # Penalty-free block-weight zone (bytes): the median is soft-raised to
+    # it before the weight penalty and the block-weight limit is twice it
+    # (CEN-F14b, CEN-G6b). Was the hand-written
+    # CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 in cryptonote_config.h —
+    # a consensus constant with no Rust home, supplied to shekyl-economics
+    # as an argument on every call (CHAIN_RULES_SLICE_4.md §3.1 S8). Rust
+    # owner: shekyl-economics::EconomicParams::full_reward_zone.
+    "block_weight_full_reward_zone_bytes": "u64",
     # Archival retention bond floor, FOUNDATION_GENESIS_IDENTITY_SET.md §9.3.
     "archival_bond_floor_atomic": "u64",
     # Archival claim-age window W, ARCHIVAL_TIMING_CONSTANTS.md §1 /
@@ -188,6 +200,19 @@ def main() -> int:
     {emit("daa_mtp_window")}
 #define SHEKYL_DAA_GENESIS_DIFFICULTY \
     {emit("daa_genesis_difficulty")}
+
+// Short-term block-weight surge factor S. The clamp itself is
+// shekyl_effective_block_weight_median; this macro is the C++ spelling
+// of the JSON key.
+#define SHEKYL_BLOCK_WEIGHT_SHORT_TERM_SURGE_FACTOR \
+    {emit("block_weight_short_term_surge_factor")}
+
+// Penalty-free block-weight zone in bytes (CEN-F14b / G6b). The Rust owner
+// is shekyl-economics (EconomicParams::full_reward_zone); this macro is
+// the C++ spelling of the JSON key, and CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5
+// in cryptonote_config.h is defined from it.
+#define SHEKYL_BLOCK_WEIGHT_FULL_REWARD_ZONE_BYTES \
+    {emit("block_weight_full_reward_zone_bytes")}
 
 // Archival per-shard retention bond floor (ARCHIVAL_BOND_FLOOR). Emitted
 // alongside the FCMP/DAA constants because genesis foundation identities and

@@ -40,12 +40,22 @@ fn main() {
     let consensus_map: BTreeMap<String, serde_json::Value> =
         serde_json::from_str(&consensus_raw).expect("invalid JSON in consensus_constants.json");
     let daa_target_seconds = get_u64(&consensus_map, "daa_target_seconds");
+    let block_weight_surge_factor = get_u64(&consensus_map, "block_weight_short_term_surge_factor");
+    // The penalty-free block-weight zone: the same authority as the surge
+    // factor (config/consensus_constants.json drives both the C++ header
+    // generator and this). Until E6 slice 4 it was a hand-written C++ macro
+    // with no Rust home, passed to `paid_block_reward` as an argument on every
+    // call (CHAIN_RULES_SLICE_4.md §3.1 S8).
+    let block_weight_full_reward_zone =
+        get_u64(&consensus_map, "block_weight_full_reward_zone_bytes");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("params_generated.rs");
 
     let output = format!(
-        "pub const GENERATED_SCALE: u64 = {scale};\n\
+        "pub const GENERATED_BLOCK_WEIGHT_SURGE_FACTOR: u64 = {block_weight_surge_factor};\n\
+         pub const GENERATED_BLOCK_WEIGHT_FULL_REWARD_ZONE: u64 = {block_weight_full_reward_zone};\n\
+         pub const GENERATED_SCALE: u64 = {scale};\n\
          pub const GENERATED_RELEASE_MIN: u64 = {release_min};\n\
          pub const GENERATED_RELEASE_MAX: u64 = {release_max};\n\
          pub const GENERATED_TX_VOLUME_BASELINE: u64 = {tx_baseline};\n\

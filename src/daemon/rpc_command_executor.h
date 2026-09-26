@@ -78,7 +78,7 @@ private:
 
 public:
 
-  bool print_peer_list(bool white = true, bool gray = true, size_t limit = 0, bool pruned_only = false);
+  bool print_peer_list(bool white = true, bool gray = true, size_t limit = 0);
 
   bool print_peer_list_stats();
 
@@ -153,8 +153,6 @@ public:
 
   bool flush_txpool(const std::string &txid);
 
-  bool output_histogram(const std::vector<uint64_t> &amounts, uint64_t min_count, uint64_t max_count);
-
   bool print_coinbase_tx_sum(uint64_t height, uint64_t count);
 
   bool alt_chain_info(const std::string &tip, size_t above, uint64_t last_blocks);
@@ -167,9 +165,7 @@ public:
 
   bool pop_blocks(uint64_t num_blocks);
 
-  bool prune_blockchain();
 
-  bool check_blockchain_pruning();
 
   bool print_net_stats();
 

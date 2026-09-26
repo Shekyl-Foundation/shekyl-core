@@ -83,22 +83,10 @@ pub fn prune_below_epoch_at_height(block_height: u64, max_claim_age_w: u64) -> O
     }
 }
 
-/// Interval-log entry (gate-4 F3): half-open `[start_epoch, end_exclusive)`.
-///
-/// The log carries **two entry kinds** — do not assume every entry is a slash:
-/// a *bad-standing interval* has `start < end` (a slash opens with
-/// `end_exclusive = u64::MAX`; `Rebond` closes it in place), while the `Release`
-/// **clean interval-close** is **zero-length** (`start == end`) — a pure exit
-/// marker recording the release settlement epoch
-/// ([`clean_interval_close`](crate::bond_connect::clean_interval_close)). Its
-/// empty range excludes no epoch from [`good_through`] by construction, and
-/// every codec/marshal path deliberately carries `start == end`; never add a
-/// "valid interval is non-empty" assertion on this type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BadInterval {
-    pub start_epoch: u64,
-    pub end_exclusive: u64,
-}
+// `BadInterval` moved to `shekyl-types` (`DRS_E1_SARCH.md` `SAR-Q2`,
+// 2026-09-23): the daemon store persists it and this crate folds over it; the
+// two-entry-kinds warning lives on the type there. Re-exported at this path.
+pub use shekyl_types::archival::BadInterval;
 
 /// Spec-correct `good_through` (interval semantics at E-close).
 #[must_use]

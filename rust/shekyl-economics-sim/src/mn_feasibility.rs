@@ -700,7 +700,7 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
 
     // P(any) is the operative frame: a slash opens a record-scoped bad
     // interval (excludes the whole record from r_market, blocks HoldingsUpdate
-    // until Rebond). Expected pairs lost prices only the burn.
+    // until Reinstate). Expected pairs lost prices only the burn.
     let bond_floor_skl = crate::proxy::bond_at_risk_skl();
     writeln!(
         out,
@@ -708,7 +708,7 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          and the reason is mechanical rather than a risk preference. A slash\n\
          opens a bad interval on the RECORD (bad_intervals are record-scoped, not\n\
          per-shard), which excludes the whole record from r_market via\n\
-         good_through and blocks HoldingsUpdate until Rebond. One pair slashed is\n\
+         good_through and blocks HoldingsUpdate until Reinstate. One pair slashed is\n\
          therefore a whole-portfolio disruption plus a burn -- the harm is\n\
          record-scoped, so the probability must be too. At the shipped pin,\n\
          P(any of {MH} pairs) = {FH:.3e}; EXPECTED pairs lost = {EP:.3e} (~{SKL:.4}\n\

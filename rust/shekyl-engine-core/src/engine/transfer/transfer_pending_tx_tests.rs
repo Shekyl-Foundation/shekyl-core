@@ -13,8 +13,8 @@ use shekyl_address::ShekylAddress;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
 use shekyl_curve_tree::{
-    select_reference_height, AssembleInput, BlockHeight, CurveTreeClient, Gindex, ReferenceBlock,
-    REF_ANCHOR_AGE,
+    select_reference_height, AssembleInput, BlockHash, BlockHeight, CurveTreeClient, CurveTreeRoot,
+    Gindex, ReferenceBlock, REF_ANCHOR_AGE,
 };
 use shekyl_engine_state::LedgerBlock;
 use shekyl_rpc_client::FeeRate;
@@ -223,7 +223,7 @@ fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredW
         amount,
     };
     let base = WalletOutput::new_for_test(
-        tx_hash,
+        shekyl_types::TxHash::from_bytes(tx_hash),
         output_index,
         global_index,
         key,
@@ -248,7 +248,7 @@ fn advance_ledger_empty_blocks(ledger: &LocalLedger, from: u64, to: u64) {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             ledger_block,
-            h,
+            shekyl_types::BlockHeight::from_raw(h),
             hash,
             Timelocked::from_vec(Vec::new()),
         );
@@ -269,14 +269,18 @@ fn populate_ledger(
     let indexes = &mut state.indexes;
     let timelocked = Timelocked::from_vec(outputs);
     let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
-    let inserted_range =
-        indexes.process_scanned_outputs(ledger_block, block_height, block_hash, timelocked);
+    let inserted_range = indexes.process_scanned_outputs(
+        ledger_block,
+        shekyl_types::BlockHeight::from_raw(block_height),
+        block_hash,
+        timelocked,
+    );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
     for h in (block_height + 1)..=final_height {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             ledger_block,
-            h,
+            shekyl_types::BlockHeight::from_raw(h),
             hash,
             Timelocked::from_vec(Vec::new()),
         );
@@ -297,7 +301,7 @@ fn populate_ledger(
             continue;
         };
         let amount = td.amount().to_raw();
-        let output_index = td.internal_output_index;
+        let output_index = td.internal_output_index.to_raw();
         let constructed = construct_output(
             &TEST_OUTPUT_TX_KEY,
             &blob.x25519_pk,
@@ -429,7 +433,7 @@ async fn tree_handle_ingested_through(cap: u64) -> (TempDir, CurveTreeHandle) {
     let (dir, handle) = fresh_tree_handle();
     for h in 0..=cap {
         handle
-            .ingest(BlockHeight(h), std::sync::Arc::new(Vec::new()))
+            .ingest(BlockHeight::from_raw(h), std::sync::Arc::new(Vec::new()))
             .await
             .expect("empty-leaf ingest advances the cursor");
     }
@@ -447,8 +451,8 @@ async fn tree_handle_ingested_through(cap: u64) -> (TempDir, CurveTreeHandle) {
 /// and ingested into the tree as one non-miner transaction at the same
 /// height — `TaggedKey` non-miner maturity is `+DEFAULT_LOCK_WINDOW`
 /// (= `SPENDABLE_AGE`), matching the ledger's `eligible_height`. The block's
-/// `0x07` leaf-hash blob carries each output's real `h_pqc`, so the tree
-/// leaf's identity (`O`, `C`, `h_pqc`) equals the ledger output's. Empty
+/// `0x07` blob carries each output's real leaf entry (`CM ‖ record`), so the
+/// tree leaf's identity (`O`, `C`, `CM.x`) equals the ledger output's. Empty
 /// blocks advance the cursor to `synced`. Pick `owned_block` so the leaves
 /// are drained at the reference height: `owned_block + SPENDABLE_AGE <=
 /// synced - REF_ANCHOR_AGE`.
@@ -498,11 +502,11 @@ async fn funded_ledger_and_tree(
         .compress()
         .to_bytes();
         raw_outputs.push(RawOutput {
-            output_key: c.output_key,
-            commitment: Some(commitment),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(c.output_key),
+            commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(commitment)),
             target: TargetKind::TaggedKey,
         });
-        leaf_blob.extend_from_slice(&c.h_pqc);
+        leaf_blob.extend_from_slice(&c.pqc_leaf.entry_bytes());
     }
 
     let (dir, handle) = fresh_tree_handle();
@@ -510,14 +514,14 @@ async fn funded_ledger_and_tree(
         let txs = if h == owned_block {
             Arc::new(vec![crate::scan::OwnedTxLeaves {
                 is_miner: false,
-                leaf_hash_blob: Some(leaf_blob.clone()),
+                leaf_entry_blob: Some(leaf_blob.clone()),
                 outputs: raw_outputs.clone(),
             }])
         } else {
             Arc::new(Vec::new())
         };
         handle
-            .ingest(BlockHeight(h), txs)
+            .ingest(BlockHeight::from_raw(h), txs)
             .await
             .expect("consistent-fixture ingest");
     }
@@ -611,18 +615,18 @@ async fn funded_pending_tx_one() -> (TestPendingTx, Arc<LocalLedger>, TempDir) {
 /// eligibility `<= H` and excludes `H + 1`.
 #[test]
 fn tree_spend_gate_covers_boundary() {
-    assert!(TreeSpendGate::Unenforced.covers(0));
-    assert!(TreeSpendGate::Unenforced.covers(u64::MAX));
+    assert!(TreeSpendGate::Unenforced.covers(shekyl_types::BlockHeight::from_raw(0)));
+    assert!(TreeSpendGate::Unenforced.covers(shekyl_types::BlockHeight::from_raw(u64::MAX)));
     assert!(!TreeSpendGate::Enforced {
         covered_through: None,
     }
-    .covers(0));
+    .covers(shekyl_types::BlockHeight::from_raw(0)));
     let gate = TreeSpendGate::Enforced {
-        covered_through: Some(11),
+        covered_through: Some(shekyl_types::BlockHeight::from_raw(11)),
     };
-    assert!(gate.covers(0));
-    assert!(gate.covers(11));
-    assert!(!gate.covers(12));
+    assert!(gate.covers(shekyl_types::BlockHeight::from_raw(0)));
+    assert!(gate.covers(shekyl_types::BlockHeight::from_raw(11)));
+    assert!(!gate.covers(shekyl_types::BlockHeight::from_raw(12)));
 }
 
 /// D1/D3 core KAT — the adopting / first-run wallet. Matured balance is in
@@ -758,10 +762,19 @@ async fn output_not_yet_spendable_at_reference_block() {
             reference_block_height,
             wait_blocks,
         } => {
-            assert_eq!(eligible_height, 11, "block 1 + SPENDABLE_AGE");
-            assert_eq!(reference_block_height, 9, "synced 15 − REF_ANCHOR_AGE");
             assert_eq!(
-                wait_blocks, 2,
+                eligible_height,
+                shekyl_types::BlockHeight::from_raw(11),
+                "block 1 + SPENDABLE_AGE"
+            );
+            assert_eq!(
+                reference_block_height,
+                shekyl_types::BlockHeight::from_raw(9),
+                "synced 15 − REF_ANCHOR_AGE"
+            );
+            assert_eq!(
+                wait_blocks,
+                shekyl_types::BlockCount::from_raw(2),
                 "spendable once the reference reaches 11 (tip 17)"
             );
         }
@@ -806,12 +819,20 @@ async fn output_not_yet_spendable_wait_covers_required_subset() {
             reference_block_height,
             wait_blocks,
         } => {
-            assert_eq!(reference_block_height, 9);
             assert_eq!(
-                eligible_height, 13,
+                reference_block_height,
+                shekyl_types::BlockHeight::from_raw(9)
+            );
+            assert_eq!(
+                eligible_height,
+                shekyl_types::BlockHeight::from_raw(13),
                 "the binding output is B (eligible 13), not the soonest A (11)"
             );
-            assert_eq!(wait_blocks, 4, "wait until enough matures, not the soonest");
+            assert_eq!(
+                wait_blocks,
+                shekyl_types::BlockCount::from_raw(4),
+                "wait until enough matures, not the soonest"
+            );
         }
         other => panic!("expected OutputNotYetSpendable, got {other:?}"),
     }
@@ -842,7 +863,7 @@ async fn wallet_too_young_to_spend_before_reference_anchor() {
             synced_height,
             ref_anchor_age,
         } => {
-            assert_eq!(synced_height, 5);
+            assert_eq!(synced_height, shekyl_types::BlockHeight::from_raw(5));
             assert_eq!(ref_anchor_age, REF_ANCHOR_AGE);
         }
         other => panic!("expected WalletTooYoungToSpend, got {other:?}"),
@@ -953,7 +974,10 @@ async fn submit_reanchors_at_horizon_then_broadcasts() {
         .build(standard_request(7_000))
         .await
         .expect("build ok");
-    assert_eq!(built.reference_height, 14);
+    assert_eq!(
+        built.reference_height,
+        shekyl_types::BlockHeight::from_raw(14)
+    );
     assert_eq!(built.content_gen, 0, "fresh build is generation 0");
 
     // Advance BOTH the ledger and the tree well past the rebuild horizon:
@@ -963,7 +987,7 @@ async fn submit_reanchors_at_horizon_then_broadcasts() {
     advance_ledger_empty_blocks(ledger.as_ref(), 21, 80);
     for h in 21..=80 {
         tree_for_advance
-            .ingest(BlockHeight(h), std::sync::Arc::new(Vec::new()))
+            .ingest(BlockHeight::from_raw(h), std::sync::Arc::new(Vec::new()))
             .await
             .expect("advance tree cursor");
     }
@@ -1101,7 +1125,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
             .expect("submit-accept arms the journal-derived F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
-            !td.is_spendable(u64::MAX, &spend_locks),
+            !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
             "journal-locked output must be excluded from selection"
         );
     }
@@ -1433,18 +1457,19 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert_eq!(
-                lock.accepted_at_height, 20,
+                lock.accepted_at_height,
+                shekyl_types::BlockHeight::from_raw(20),
                 "the lock is baselined at a height the wallet has reached — \
                  the claimed 25 clamped to the synced 20, so the watchdog \
                  horizon stays measurable"
             );
             assert_eq!(
                 row.lock_baseline,
-                Some(lock.accepted_at_height),
+                Some(lock.accepted_at_height.to_raw()),
                 "the derived lock carries exactly the journal baseline"
             );
             assert!(
-                !td.is_spendable(u64::MAX, &spend_locks),
+                !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -1533,7 +1558,10 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
                 .get(td.global_output_index)
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
-            assert_eq!(lock.accepted_at_height, 15);
+            assert_eq!(
+                lock.accepted_at_height,
+                shekyl_types::BlockHeight::from_raw(15)
+            );
         }
     }
 
@@ -1618,7 +1646,7 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
-                !td.is_spendable(u64::MAX, &spend_locks),
+                !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -1688,6 +1716,7 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
         connections: 8,
         height: 20,
         target_height: 0,
+        synchronized: true,
     };
     let horizon_reached = 20 + config.escape_horizon_blocks;
     assert_ne!(
@@ -2036,9 +2065,11 @@ async fn dispatch_writes_the_send_journal_row() {
     // and the derived lock map carries the row's inputs under it.
     let spend_locks = guard.ledger.spend_locks();
     let lock = spend_locks
-        .get(row.inputs[0].gindex)
+        .get(shekyl_types::GlobalOutputIndex::from_raw(
+            row.inputs[0].gindex,
+        ))
         .expect("accept armed the journal-derived F14 lock over the carried input");
-    assert_eq!(row.lock_baseline, Some(lock.accepted_at_height));
+    assert_eq!(row.lock_baseline, Some(lock.accepted_at_height.to_raw()));
     assert_eq!(lock.tx_hash, txid);
     guard
         .ledger
@@ -2291,11 +2322,13 @@ struct RealTreeBondProofs {
     outputs: Vec<shekyl_tx_builder::types::OutputInfo>,
     built: shekyl_archival_bond_builder::JoinMarketVin,
     output_key: [u8; 32],
-    h_pqc: [u8; 32],
+    /// The backing output's canonical hybrid PQC public key (the verifier's
+    /// input under `PL-D3`).
+    pqc_public_key: Vec<u8>,
     spend_key_x: [u8; 32],
     fee: u64,
     floor: u64,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: shekyl_types::PrefixHash,
 }
 
 async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
@@ -2329,7 +2362,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let fee: u64 = 1_000;
     // Funding covers the change output, the fee, and the bond credit.
     let input_amount: u64 = floor + fee + 1_000_000;
-    let signable_tx_hash = [0xC3u8; 32];
+    let signable_tx_hash = shekyl_types::PrefixHash::from_bytes([0xC3u8; 32]);
 
     // ── A real, consistent ledger+tree (depth 2: two drained leaves) ─
     // The bond spends gindex 0 (the first leaf); the second leaf makes the
@@ -2367,16 +2400,16 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let synced = ledger.with_ledger_block(LedgerBlock::height);
     let rh = select_reference_height(synced).expect("reference height resolves");
     let (curve_tree_root, ref_depth) = tree
-        .reference_root_and_depth(BlockHeight(rh))
+        .reference_root_and_depth(rh)
         .await
         .expect("reference root+depth");
     let block_hash = ledger
         .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
         .expect("reference block hash present");
     let reference = ReferenceBlock {
-        height: BlockHeight(rh),
-        curve_tree_root,
-        block_hash,
+        height: rh,
+        curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+        block_hash: BlockHash::from_bytes(block_hash),
     };
 
     // ── Assemble the REAL membership path for the funding output ─────
@@ -2384,9 +2417,9 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         .assemble_tx(
             reference,
             vec![AssembleInput {
-                gindex: Gindex(0),
-                output_key: constructed.output_key,
-                commitment: constructed.commitment,
+                gindex: Gindex::from_raw(0),
+                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(constructed.output_key),
+                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(constructed.commitment),
             }],
         )
         .await
@@ -2412,10 +2445,10 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         .leaf_chunk
         .iter()
         .map(|cl| LeafEntry {
-            output_key: cl.output_key,
+            output_key: cl.output_key.to_bytes(),
             key_image_gen: cl.key_image_gen,
-            commitment: cl.commitment,
-            h_pqc: cl.h_pqc,
+            commitment: cl.commitment.to_bytes(),
+            cm_x: cl.cm_x,
         })
         .collect();
     let tree_ctx = TreeContext {
@@ -2431,7 +2464,6 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         spend_key_x: *bundle.spend_key_x,
         spend_key_y: *bundle.spend_key_y,
         commitment_mask: *bundle.commitment_mask,
-        h_pqc: constructed.h_pqc,
         combined_ss: bundle.combined_ss.to_vec(),
         output_index,
         leaf_chunk,
@@ -2440,7 +2472,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     }];
 
     // ── Build the bond vin + the change output ───────────────────────
-    let built = build_join_market_vin(p_keys.bond_post_keys(), holdings.clone())
+    let built = build_join_market_vin(p_keys.bond_post_keys(), holdings.clone(), [0xEE; 32])
         .expect("build JoinMarket vin");
     assert_eq!(built.vin().bond_credit, floor);
     assert_eq!(built.vin().bond_debit, 0);
@@ -2494,7 +2526,13 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         outputs,
         built,
         output_key: constructed.output_key,
-        h_pqc: constructed.h_pqc,
+        // The canonical hybrid key the spend reveals (not the ML-DSA-only
+        // `OutputData::pqc_public_key`).
+        pqc_public_key: shekyl_crypto_pq::derivation::derive_pqc_public_key(
+            &bundle.combined_ss[..64].try_into().expect("64 bytes"),
+            output_index,
+        )
+        .expect("derive hybrid pk"),
         spend_key_x: *bundle.spend_key_x,
         fee,
         floor,
@@ -2516,7 +2554,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
 #[tokio::test]
 async fn join_market_bond_post_fcmp_verify_over_real_tree() {
     use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
-    use shekyl_fcmp::PqcLeafScalar;
+    use shekyl_fcmp::PqcKeyScalar;
 
     use curve25519_dalek::scalar::Scalar;
 
@@ -2524,7 +2562,7 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         signed,
         tree_ctx,
         output_key,
-        h_pqc,
+        pqc_public_key,
         spend_key_x,
         signable_tx_hash,
         ..
@@ -2537,7 +2575,7 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
     let key_images = vec![KeyImage::from_canonical_bytes(
         (i_point * x_scalar).compress().to_bytes(),
     )];
-    let pqc_pk_hashes = vec![PqcLeafScalar(h_pqc)];
+    let pqc_pk_hashes = vec![PqcKeyScalar::from_pqc_public_key(&pqc_public_key)];
     let proof = ShekylFcmpProof {
         data: signed.fcmp_proof.clone(),
         num_inputs: 1,
@@ -2548,9 +2586,9 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        &tree_ctx.tree_root,
+        tree_ctx.tree_root.as_bytes(),
         tree_ctx.tree_depth,
-        signable_tx_hash,
+        signable_tx_hash.to_bytes(),
     );
     assert!(
         matches!(fcmp_result, Ok(true)),
@@ -3167,7 +3205,10 @@ async fn submit_carries_proof_across_benign_tip_advance() {
         .await
         .expect("build ok");
     // Reference anchored at tip(20) − REF_ANCHOR_AGE(6) = 14.
-    assert_eq!(built.reference_height, 14);
+    assert_eq!(
+        built.reference_height,
+        shekyl_types::BlockHeight::from_raw(14)
+    );
 
     // Advance the tip a few blocks with no reorg: reference age 25 − 14 = 11,
     // well within the daemon window and still canonical → not stale.
@@ -3282,14 +3323,18 @@ fn populate_ledger_scan_only(
     let indexes = &mut state.indexes;
     let timelocked = Timelocked::from_vec(outputs);
     let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
-    let inserted_range =
-        indexes.process_scanned_outputs(ledger_block, block_height, block_hash, timelocked);
+    let inserted_range = indexes.process_scanned_outputs(
+        ledger_block,
+        shekyl_types::BlockHeight::from_raw(block_height),
+        block_hash,
+        timelocked,
+    );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
     for h in (block_height + 1)..=final_height {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             ledger_block,
-            h,
+            shekyl_types::BlockHeight::from_raw(h),
             hash,
             Timelocked::from_vec(Vec::new()),
         );
@@ -3356,7 +3401,10 @@ async fn reserved_outputs_blocked_from_second_build() {
 fn assemble_tx_to_sign_rejects_missing_key_image() {
     use crate::engine::signing_assembly::assemble_tx_to_sign;
     use crate::engine::tx_fee_model::build_fee_directive;
-    use shekyl_curve_tree::{AssembleInput, AssembledPath, Gindex, TreeContext as CtTreeContext};
+    use shekyl_curve_tree::{
+        AssembleInput, AssembledPath, BlockHash, CurveTreeRoot, Gindex,
+        TreeContext as CtTreeContext,
+    };
     use shekyl_rpc_client::FeeRate;
 
     let ledger = Arc::new(test_ledger());
@@ -3379,17 +3427,17 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
     // `input_context_from_transfer` is reached. The path is unused before
     // that check fires, so a placeholder suffices.
     let assemble_inputs = vec![AssembleInput {
-        gindex: Gindex(100),
-        output_key: [0u8; 32],
-        commitment: [0u8; 32],
+        gindex: Gindex::from_raw(100),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([0u8; 32]),
+        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes([0u8; 32]),
     }];
     let paths = vec![AssembledPath {
         leaf_chunk: Vec::new(),
         c1_layers: Vec::new(),
         c2_layers: Vec::new(),
         tree: CtTreeContext {
-            reference_block: [0u8; 32],
-            tree_root: [0u8; 32],
+            reference_block: BlockHash::NULL,
+            tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
             tree_depth: 1,
         },
     }];

@@ -65,7 +65,7 @@ use shekyl_engine_state::{
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
-use shekyl_types::TxHash;
+use shekyl_types::{BlockHeight, TxHash};
 
 use crate::engine::key_actor::KeyEngineHandle;
 use crate::engine::local_keys::LocalKeys;
@@ -338,7 +338,7 @@ pub const MERGE_BENCH_OUTPUT_COUNT: usize = 256;
 pub struct MergeProjectionBenchFixture {
     ledger: LedgerBlock,
     view_secret: [u8; 32],
-    residue: HashMap<([u8; 32], u64), HybridCiphertext>,
+    residue: HashMap<(TxHash, shekyl_types::OutputIndexInTx), HybridCiphertext>,
     inserted: Vec<usize>,
 }
 
@@ -352,9 +352,9 @@ fn unpopulated_transfer(seed: u64) -> TransferDetails {
     let tx_hash = TxHash::from_bytes([lo; 32]);
     TransferDetails {
         tx_hash,
-        internal_output_index: seed,
-        global_output_index: 1_000 + seed,
-        block_height: 100,
+        internal_output_index: shekyl_types::OutputIndexInTx::from_raw(seed),
+        global_output_index: shekyl_types::GlobalOutputIndex::from_raw(1_000 + seed),
+        block_height: shekyl_types::BlockHeight::from_raw(100),
         key: ED25519_BASEPOINT_POINT,
         key_offset: Scalar::ONE,
         commitment: Commitment::new(Scalar::ONE, 1_000_000 + seed),
@@ -366,8 +366,9 @@ fn unpopulated_transfer(seed: u64) -> TransferDetails {
         // The post-pass populates these from `None`; that is the measured work.
         source_ciphertext: None,
         output_handle: None,
-        eligible_height: 100 + SPENDABLE_AGE,
+        eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
         frozen: false,
+        unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }
@@ -383,7 +384,7 @@ impl MergeProjectionBenchFixture {
             let seed = i as u64;
             let td = unpopulated_transfer(seed);
             // residue is keyed by the scanner's raw `[u8; 32]` txid; convert.
-            let key = (td.tx_hash.to_bytes(), td.internal_output_index);
+            let key = (td.tx_hash, td.internal_output_index);
             // A realistically-sized on-chain hybrid ciphertext (~1088-byte
             // ML-KEM + 32-byte X25519), so the per-output `clone()` in the
             // post-pass reflects production memcpy cost.
@@ -397,10 +398,10 @@ impl MergeProjectionBenchFixture {
             transfers.push(td);
         }
 
-        let tip = BlockchainTip::new(1_000_000, [0xAA; 32]);
+        let tip = BlockchainTip::new(BlockHeight::from_raw(1_000_000), [0xAA; 32]);
         let reorg_blocks = ReorgBlocks {
             blocks: (999_990..=1_000_000)
-                .map(|h| (h, [(h & 0xff) as u8; 32]))
+                .map(|h| (BlockHeight::from_raw(h), [(h & 0xff) as u8; 32]))
                 .collect(),
         };
         let ledger = LedgerBlock::new(transfers, tip, reorg_blocks);

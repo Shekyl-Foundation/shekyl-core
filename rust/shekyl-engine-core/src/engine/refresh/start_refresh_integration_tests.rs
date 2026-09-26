@@ -67,6 +67,7 @@ use crate::engine::{
     Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
 };
 use crate::scan::ScanResult;
+use shekyl_types::{BlockHash, CurveTreeRoot};
 
 /// Build a `DaemonClient` whose underlying RPC points at an
 /// unreachable URL, on the *current* tokio runtime. Async
@@ -311,7 +312,7 @@ fn linear_chain(n: u64) -> Vec<shekyl_scanner::ScannableBlock> {
     use crate::engine::test_support::make_synthetic_block;
     let mut chain =
         Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
-    let mut parent = [0u8; 32];
+    let mut parent = BlockHash::NULL;
     for h in 0..n {
         let block = make_synthetic_block(h, parent);
         parent = block.block.hash();
@@ -365,7 +366,7 @@ impl<R> crate::engine::scan_floor::ScanStartFloorProvider for StaleThenRealRefre
 where
     R: RefreshEngine + crate::engine::scan_floor::ScanStartFloorProvider,
 {
-    fn scan_start_floor(&self) -> u64 {
+    fn scan_start_floor(&self) -> shekyl_types::BlockHeight {
         self.inner.scan_start_floor()
     }
 }
@@ -389,8 +390,14 @@ impl<R: RefreshEngine> RefreshEngine for StaleThenRealRefresh<R> {
         // The Mutex-free `AtomicUsize` toggle is popped before the
         // future is constructed, so nothing is held across the
         // `.await`.
-        let stale = (self.calls.fetch_add(1, Ordering::SeqCst) == 0)
-            .then(|| ScanResult::empty_at(snapshot.synced_height.saturating_add(2), None));
+        let stale = (self.calls.fetch_add(1, Ordering::SeqCst) == 0).then(|| {
+            ScanResult::empty_at(
+                shekyl_types::BlockHeight::from_raw(
+                    snapshot.synced_height.to_raw().saturating_add(2),
+                ),
+                None,
+            )
+        });
         async move {
             if let Some(stale) = stale {
                 return Ok(stale);
@@ -463,7 +470,7 @@ async fn hybrid_linear_scan_5_blocks_advances_synced_height() {
         let g = arc.read().await;
         assert_eq!(
             g.synced_height(),
-            0,
+            shekyl_types::BlockHeight::from_raw(0),
             "fresh hybrid engine starts at synced_height 0"
         );
     }
@@ -476,7 +483,10 @@ async fn hybrid_linear_scan_5_blocks_advances_synced_height() {
         .join()
         .await
         .expect("hybrid refresh against a 6-block TestDaemon chain joins successfully");
-    assert_eq!(summary.processed_height_range, 1..6);
+    assert_eq!(
+        summary.processed_height_range,
+        shekyl_types::BlockHeight::from_raw(1)..shekyl_types::BlockHeight::from_raw(6)
+    );
     assert_eq!(summary.blocks_processed, 5);
 
     // Merge has run by the time `join().await` returned; the
@@ -485,7 +495,7 @@ async fn hybrid_linear_scan_5_blocks_advances_synced_height() {
         let g = arc.read().await;
         assert_eq!(
             g.synced_height(),
-            5,
+            shekyl_types::BlockHeight::from_raw(5),
             "post-refresh synced_height matches the producer's range upper bound"
         );
     }
@@ -515,7 +525,7 @@ async fn hybrid_linear_scan_5_blocks_advances_synced_height() {
 /// [`hybrid_linear_scan_5_blocks_advances_synced_height`] asserts the
 /// *ledger* tip, this asserts the *tree* cursor: a fresh wallet whose
 /// producer range is `1..6` must leave the tree's
-/// [`CurveTreeHandle::ingested_tip_height`] at `Some(BlockHeight(5))`
+/// [`CurveTreeHandle::ingested_tip_height`] at `Some(BlockHeight::from_raw(5))`
 /// — height `0` came from the genesis/birthday backfill (daemon-
 /// fetched + decoded by the ingest pre-pass, since the producer's
 /// floored range never includes it), heights `1..6` from the
@@ -561,7 +571,10 @@ async fn hybrid_refresh_feeds_curve_tree_from_genesis() {
         .join()
         .await
         .expect("hybrid refresh against a 6-block TestDaemon chain joins successfully");
-    assert_eq!(summary.processed_height_range, 1..6);
+    assert_eq!(
+        summary.processed_height_range,
+        shekyl_types::BlockHeight::from_raw(1)..shekyl_types::BlockHeight::from_raw(6)
+    );
 
     // Post-refresh: the tree cursor covers genesis-through-tip. The
     // merge advanced the ledger only after this ingest acked
@@ -570,7 +583,7 @@ async fn hybrid_refresh_feeds_curve_tree_from_genesis() {
         let g = arc.read().await;
         assert_eq!(
             g.synced_height(),
-            5,
+            shekyl_types::BlockHeight::from_raw(5),
             "post-refresh ledger tip matches the producer range upper bound"
         );
         let tip = g
@@ -580,7 +593,7 @@ async fn hybrid_refresh_feeds_curve_tree_from_genesis() {
             .expect("cursor read on the live actor");
         assert_eq!(
             tip,
-            Some(shekyl_curve_tree::BlockHeight(5)),
+            Some(shekyl_curve_tree::BlockHeight::from_raw(5)),
             "tree cursor covers genesis (backfilled) through the producer range tip"
         );
     }
@@ -614,29 +627,38 @@ fn membership_rebuilding_predicate() {
     // Fresh wallet from genesis: tree fresh, ledger at 0 — both at
     // the floor, nothing to rebuild.
     assert!(
-        !membership_rebuilding(None, 0),
+        !membership_rebuilding(None, shekyl_types::BlockHeight::ZERO),
         "a fresh-from-genesis wallet is not rebuilding"
     );
     // Adopting wallet: ledger loaded at 5, tree freshly wiped — the
     // backfill is the rebuild window.
     assert!(
-        membership_rebuilding(None, 5),
+        membership_rebuilding(None, shekyl_types::BlockHeight::from_raw(5)),
         "an adopting wallet with a fresh tree and a non-zero ledger is rebuilding"
     );
     // Partially-rebuilt tree still behind the ledger.
     assert!(
-        membership_rebuilding(Some(BlockHeight(3)), 5),
+        membership_rebuilding(
+            Some(BlockHeight::from_raw(3)),
+            shekyl_types::BlockHeight::from_raw(5),
+        ),
         "a tree cursor below the ledger tip is rebuilding"
     );
     // Caught up: tree cursor equals the ledger tip.
     assert!(
-        !membership_rebuilding(Some(BlockHeight(5)), 5),
+        !membership_rebuilding(
+            Some(BlockHeight::from_raw(5)),
+            shekyl_types::BlockHeight::from_raw(5),
+        ),
         "a tree caught up to the ledger is not rebuilding"
     );
     // Tree ahead of the ledger (does not occur under ack-before-
     // commit, but the predicate must not flag it).
     assert!(
-        !membership_rebuilding(Some(BlockHeight(7)), 5),
+        !membership_rebuilding(
+            Some(BlockHeight::from_raw(7)),
+            shekyl_types::BlockHeight::from_raw(5),
+        ),
         "a tree ahead of the ledger is not rebuilding"
     );
 }
@@ -743,13 +765,21 @@ async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
 
     // Forward feed: range 1..6, empty leaves; genesis backfilled from
     // the daemon. Tree tip -> 5.
-    let mut forward = ScanResult::empty_at(1, None);
-    forward.processed_height_range = 1..6;
-    forward.block_leaves = (1..6).map(|h| (h, Vec::new())).collect();
+    let mut forward = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
+    forward.processed_height_range =
+        shekyl_types::BlockHeight::from_raw(1)..shekyl_types::BlockHeight::from_raw(6);
+    forward.block_leaves = (1..6)
+        .map(|h| (shekyl_types::BlockHeight::from_raw(h), Vec::new()))
+        .collect();
     // CT-5b §3.3: empty-leaf blocks reconstruct to the empty-tree sentinel
     // at every height, so the producer's header roots are the sentinel.
     forward.block_curve_tree_roots = (1..6)
-        .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+        .map(|h| {
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
+            )
+        })
         .collect();
     {
         let g = arc.read().await;
@@ -761,18 +791,28 @@ async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
                 .ingested_tip_height()
                 .await
                 .expect("cursor read"),
-            Some(shekyl_curve_tree::BlockHeight(5)),
+            Some(shekyl_curve_tree::BlockHeight::from_raw(5)),
             "forward feed leaves the tree at tip 5",
         );
     }
 
     // Reorg at fork_height = 3 onto a shorter fork (range 3..5).
-    let mut reorg = ScanResult::empty_at(3, None);
-    reorg.processed_height_range = 3..5;
-    reorg.reorg_rewind = Some(crate::scan::ReorgRewind { fork_height: 3 });
-    reorg.block_leaves = (3..5).map(|h| (h, Vec::new())).collect();
+    let mut reorg = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(3), None);
+    reorg.processed_height_range =
+        shekyl_types::BlockHeight::from_raw(3)..shekyl_types::BlockHeight::from_raw(5);
+    reorg.reorg_rewind = Some(crate::scan::ReorgRewind {
+        fork_height: shekyl_types::BlockHeight::from_raw(3),
+    });
+    reorg.block_leaves = (3..5)
+        .map(|h| (shekyl_types::BlockHeight::from_raw(h), Vec::new()))
+        .collect();
     reorg.block_curve_tree_roots = (3..5)
-        .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+        .map(|h| {
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
+            )
+        })
         .collect();
     {
         let g = arc.read().await;
@@ -784,7 +824,7 @@ async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
                 .ingested_tip_height()
                 .await
                 .expect("cursor read"),
-            Some(shekyl_curve_tree::BlockHeight(4)),
+            Some(shekyl_curve_tree::BlockHeight::from_raw(4)),
             "tree rolled back to keep fork_height-1 (=2) then resumed on \
              the shorter fork to tip 4, dropping the orphaned height 5",
         );
@@ -820,13 +860,21 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
 
     // First forward feed: range 1..6, empty leaves; genesis backfilled.
     // Tree tip -> 5.
-    let mut forward = ScanResult::empty_at(1, None);
-    forward.processed_height_range = 1..6;
-    forward.block_leaves = (1..6).map(|h| (h, Vec::new())).collect();
+    let mut forward = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
+    forward.processed_height_range =
+        shekyl_types::BlockHeight::from_raw(1)..shekyl_types::BlockHeight::from_raw(6);
+    forward.block_leaves = (1..6)
+        .map(|h| (shekyl_types::BlockHeight::from_raw(h), Vec::new()))
+        .collect();
     // CT-5b §3.3: empty-leaf blocks reconstruct to the empty-tree sentinel
     // at every height, so the producer's header roots are the sentinel.
     forward.block_curve_tree_roots = (1..6)
-        .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+        .map(|h| {
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
+            )
+        })
         .collect();
     {
         let g = arc.read().await;
@@ -838,7 +886,7 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
                 .ingested_tip_height()
                 .await
                 .expect("cursor read"),
-            Some(shekyl_curve_tree::BlockHeight(5)),
+            Some(shekyl_curve_tree::BlockHeight::from_raw(5)),
             "forward feed leaves the tree at tip 5",
         );
     }
@@ -868,11 +916,19 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
     // no daemon backfill is needed. Through the respawn-aware wrapper, the
     // first attempt hits the dead actor, the engine respawns (cursor resumes
     // from the persisted tip 5), and the retry ingests 6, 7 to tip 7.
-    let mut forward2 = ScanResult::empty_at(6, None);
-    forward2.processed_height_range = 6..8;
-    forward2.block_leaves = (6..8).map(|h| (h, Vec::new())).collect();
+    let mut forward2 = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(6), None);
+    forward2.processed_height_range =
+        shekyl_types::BlockHeight::from_raw(6)..shekyl_types::BlockHeight::from_raw(8);
+    forward2.block_leaves = (6..8)
+        .map(|h| (shekyl_types::BlockHeight::from_raw(h), Vec::new()))
+        .collect();
     forward2.block_curve_tree_roots = (6..8)
-        .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+        .map(|h| {
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
+            )
+        })
         .collect();
     {
         let g = arc.read().await;
@@ -884,7 +940,7 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
                 .ingested_tip_height()
                 .await
                 .expect("cursor read"),
-            Some(shekyl_curve_tree::BlockHeight(7)),
+            Some(shekyl_curve_tree::BlockHeight::from_raw(7)),
             "post-respawn the tree resumed from persisted tip 5 and ingested \
              6, 7 to tip 7 — the heal progressed, it did not merely reopen",
         );
@@ -903,11 +959,12 @@ async fn ingest_rejects_inverted_processed_height_range() {
     let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
     let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
 
-    let mut bad = ScanResult::empty_at(5, None);
+    let mut bad = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(5), None);
     // Built from bindings, not a `5..3` literal, to dodge
     // `clippy::reversed_empty_ranges` — the inversion is the point.
     let (start, end) = (5u64, 3u64);
-    bad.processed_height_range = start..end;
+    bad.processed_height_range =
+        shekyl_types::BlockHeight::from_raw(start)..shekyl_types::BlockHeight::from_raw(end);
 
     let g = arc.read().await;
     let err = g
@@ -949,10 +1006,14 @@ async fn ingest_rejects_header_root_mismatch() {
     // Genesis (height 0) backfills from the TestDaemon (honest sentinel
     // root, passes); height 1 carries empty leaves — which reconstruct to
     // the sentinel — but the producer claims a *different* header root.
-    let mut bad = ScanResult::empty_at(1, None);
-    bad.processed_height_range = 1..2;
-    bad.block_leaves = vec![(1, Vec::new())];
-    bad.block_curve_tree_roots = vec![(1, [0xAB; 32])];
+    let mut bad = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(1), None);
+    bad.processed_height_range =
+        shekyl_types::BlockHeight::from_raw(1)..shekyl_types::BlockHeight::from_raw(2);
+    bad.block_leaves = vec![(shekyl_types::BlockHeight::from_raw(1), Vec::new())];
+    bad.block_curve_tree_roots = vec![(
+        shekyl_types::BlockHeight::from_raw(1),
+        CurveTreeRoot::from_bytes([0xAB; 32]),
+    )];
 
     let g = arc.read().await;
     let err = g
@@ -1043,7 +1104,10 @@ async fn hybrid_apply_scan_result_retries_on_concurrent_mutation() {
             .expect("arc has one strong reference at this point")
             .into_inner();
         let vm = hybrid_engine_view_material();
-        let refresh = StaleThenRealRefresh::new(LocalRefresh::new(vm, 0));
+        let refresh = StaleThenRealRefresh::new(LocalRefresh::new(
+            vm,
+            shekyl_types::BlockHeight::from_raw(0),
+        ));
         let hybrid = engine.replace_refresh(refresh);
         Arc::new(RwLock::new(hybrid))
     };
@@ -1053,7 +1117,7 @@ async fn hybrid_apply_scan_result_retries_on_concurrent_mutation() {
         let g = arc.read().await;
         assert_eq!(
             g.ledger.synced_height(),
-            0,
+            shekyl_types::BlockHeight::from_raw(0),
             "fresh hybrid engine starts at LocalLedger synced_height 0"
         );
     }
@@ -1070,7 +1134,10 @@ async fn hybrid_apply_scan_result_retries_on_concurrent_mutation() {
         summary.merge_attempts, 2,
         "attempt 1's stale result is rejected with ConcurrentMutation; attempt 2 succeeds"
     );
-    assert_eq!(summary.processed_height_range, 1..6);
+    assert_eq!(
+        summary.processed_height_range,
+        shekyl_types::BlockHeight::from_raw(1)..shekyl_types::BlockHeight::from_raw(6)
+    );
     assert_eq!(summary.blocks_processed, 5);
 
     // Post-merge state is authoritative: the canonical merge body
@@ -1080,7 +1147,7 @@ async fn hybrid_apply_scan_result_retries_on_concurrent_mutation() {
         let g = arc.read().await;
         assert_eq!(
             g.synced_height(),
-            5,
+            shekyl_types::BlockHeight::from_raw(5),
             "post-retry LocalLedger synced_height matches the producer's range upper bound"
         );
     }
@@ -1212,8 +1279,10 @@ async fn hybrid_refresh_engine_orchestrator_cancellation_retries() {
         // `FaultInjectingRefresh` for four-slot composition, then in
         // `StaleThenRealRefresh` to drive the one-shot retry.
         let vm = hybrid_engine_view_material();
-        let refresh =
-            StaleThenRealRefresh::new(FaultInjectingRefresh::new(LocalRefresh::new(vm, 0)));
+        let refresh = StaleThenRealRefresh::new(FaultInjectingRefresh::new(LocalRefresh::new(
+            vm,
+            shekyl_types::BlockHeight::from_raw(0),
+        )));
         let hybrid = engine.replace_refresh(refresh);
         Arc::new(RwLock::new(hybrid))
     };
@@ -1223,7 +1292,7 @@ async fn hybrid_refresh_engine_orchestrator_cancellation_retries() {
         let g = arc.read().await;
         assert_eq!(
             g.ledger.synced_height(),
-            0,
+            shekyl_types::BlockHeight::from_raw(0),
             "fresh hybrid engine starts at LocalLedger synced_height 0"
         );
     }
@@ -1242,7 +1311,10 @@ async fn hybrid_refresh_engine_orchestrator_cancellation_retries() {
         "attempt 1's stale producer result is rejected with ConcurrentMutation; \
          attempt 2's merge succeeds against the inner LocalLedger"
     );
-    assert_eq!(summary.processed_height_range, 1..6);
+    assert_eq!(
+        summary.processed_height_range,
+        shekyl_types::BlockHeight::from_raw(1)..shekyl_types::BlockHeight::from_raw(6)
+    );
     assert_eq!(summary.blocks_processed, 5);
 
     // Post-merge state is authoritative: the inner `LocalLedger`
@@ -1252,7 +1324,7 @@ async fn hybrid_refresh_engine_orchestrator_cancellation_retries() {
         let g = arc.read().await;
         assert_eq!(
             g.synced_height(),
-            5,
+            shekyl_types::BlockHeight::from_raw(5),
             "post-retry LocalLedger synced_height matches the producer's range upper bound"
         );
     }
@@ -1327,7 +1399,7 @@ fn ct2_hex32(s: &str) -> [u8; 32] {
 /// client to resolve from the `0x07` blob at ingest.
 struct Ct2FixtureBlock {
     height: u64,
-    root: [u8; 32],
+    root: CurveTreeRoot,
     leaves: Vec<crate::scan::OwnedTxLeaves>,
 }
 
@@ -1357,8 +1429,13 @@ fn ct2_tier_a_chain(name: &str) -> Vec<Ct2FixtureBlock> {
                 .expect("outputs array")
                 .iter()
                 .map(|o| RawOutput {
-                    output_key: ct2_hex32(o["output_key"].as_str().expect("O hex")),
-                    commitment: o["commitment"].as_str().map(ct2_hex32),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(ct2_hex32(
+                        o["output_key"].as_str().expect("O hex"),
+                    )),
+                    commitment: o["commitment"]
+                        .as_str()
+                        .map(ct2_hex32)
+                        .map(shekyl_curve_tree::CommitmentBytes::from_bytes),
                     target: match o["target"].as_str().expect("target") {
                         "tagged_key" => TargetKind::TaggedKey,
                         "key" => TargetKind::Key,
@@ -1368,13 +1445,15 @@ fn ct2_tier_a_chain(name: &str) -> Vec<Ct2FixtureBlock> {
                 .collect();
             Ct2FixtureBlock {
                 height: b["height"].as_u64().expect("height"),
-                root: ct2_hex32(b["curve_tree_root"].as_str().expect("root hex")),
+                root: CurveTreeRoot::from_bytes(ct2_hex32(
+                    b["curve_tree_root"].as_str().expect("root hex"),
+                )),
                 // The coinbase is the only leaf-bearing tx in a Tier-A block
                 // (coinbase-only regtest fixture). `is_miner` drives the +60
                 // maturity offset in the client's drain order.
                 leaves: vec![crate::scan::OwnedTxLeaves {
                     is_miner: true,
-                    leaf_hash_blob: Some(blob),
+                    leaf_entry_blob: Some(blob),
                     outputs,
                 }],
             }
@@ -1399,16 +1478,25 @@ fn ct2_tier_a_u64(key: &str) -> u64 {
 /// merge-invariant fields stay at their `empty_at` defaults.
 fn ct2_forward_scan_result(blocks: &[Ct2FixtureBlock]) -> ScanResult {
     let end = blocks.last().expect("non-empty chain").height + 1;
-    let mut r = ScanResult::empty_at(0, None);
-    r.processed_height_range = 0..end;
+    let mut r = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(0), None);
+    r.processed_height_range =
+        shekyl_types::BlockHeight::from_raw(0)..shekyl_types::BlockHeight::from_raw(end);
     r.block_leaves = blocks
         .iter()
-        .map(|b| (b.height, b.leaves.clone()))
+        .map(|b| {
+            (
+                shekyl_types::BlockHeight::from_raw(b.height),
+                b.leaves.clone(),
+            )
+        })
         .collect();
     // CT-5b §3.3: carry the Tier-A oracle's consensus header root per
     // height so the ingest-time verify passes the honest path (the same
     // roots the `root_at` assertions below check against).
-    r.block_curve_tree_roots = blocks.iter().map(|b| (b.height, b.root)).collect();
+    r.block_curve_tree_roots = blocks
+        .iter()
+        .map(|b| (shekyl_types::BlockHeight::from_raw(b.height), b.root))
+        .collect();
     r
 }
 
@@ -1447,7 +1535,7 @@ async fn engine_ingest_reconstructs_ct2_tier_a_root_at_every_height() {
             .ingested_tip_height()
             .await
             .expect("cursor read"),
-        Some(BlockHeight(blocks.last().unwrap().height)),
+        Some(BlockHeight::from_raw(blocks.last().unwrap().height)),
         "the cursor advanced to the chain tip",
     );
 
@@ -1455,10 +1543,12 @@ async fn engine_ingest_reconstructs_ct2_tier_a_root_at_every_height() {
     for b in &blocks {
         let (got, _depth) = g
             .curve_tree
-            .reference_root_and_depth(BlockHeight(b.height))
+            .reference_root_and_depth(BlockHeight::from_raw(b.height))
             .await
             .expect("root read");
-        if got != b.root {
+        // `reference_root_and_depth` still returns bytes — its typing is the
+        // curve-tree handle's, not this PR's (RTN-7 §3.2).
+        if CurveTreeRoot::from_bytes(got) != b.root {
             mismatches.push(b.height);
         }
     }
@@ -1523,7 +1613,7 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
             .ingested_tip_height()
             .await
             .expect("cursor read"),
-        Some(BlockHeight(main.last().unwrap().height)),
+        Some(BlockHeight::from_raw(main.last().unwrap().height)),
         "main forward feed leaves the tree at the main tip",
     );
 
@@ -1531,20 +1621,26 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
     //    divergent suffix `fork+1 ..= deep_tip` from the reorg leaves. No
     //    backfill (range start == fork+1 == cursor+1 after rollback).
     let deep_end = deep.last().unwrap().height + 1;
-    let mut reorg = ScanResult::empty_at(fork + 1, None);
-    reorg.processed_height_range = (fork + 1)..deep_end;
+    let mut reorg = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(fork + 1), None);
+    reorg.processed_height_range = shekyl_types::BlockHeight::from_raw(fork + 1)
+        ..shekyl_types::BlockHeight::from_raw(deep_end);
     reorg.reorg_rewind = Some(crate::scan::ReorgRewind {
-        fork_height: fork + 1,
+        fork_height: shekyl_types::BlockHeight::from_raw(fork + 1),
     });
     reorg.block_leaves = deep
         .iter()
         .filter(|b| b.height > fork)
-        .map(|b| (b.height, b.leaves.clone()))
+        .map(|b| {
+            (
+                shekyl_types::BlockHeight::from_raw(b.height),
+                b.leaves.clone(),
+            )
+        })
         .collect();
     reorg.block_curve_tree_roots = deep
         .iter()
         .filter(|b| b.height > fork)
-        .map(|b| (b.height, b.root))
+        .map(|b| (shekyl_types::BlockHeight::from_raw(b.height), b.root))
         .collect();
     g.ingest_scan_result_into_curve_tree(&mut reorg)
         .await
@@ -1554,7 +1650,7 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
             .ingested_tip_height()
             .await
             .expect("cursor read"),
-        Some(BlockHeight(deep.last().unwrap().height)),
+        Some(BlockHeight::from_raw(deep.last().unwrap().height)),
         "post-reorg the cursor advanced to the reorg_deep tip",
     );
 
@@ -1565,10 +1661,12 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
     for b in &deep {
         let (got, _depth) = g
             .curve_tree
-            .reference_root_and_depth(BlockHeight(b.height))
+            .reference_root_and_depth(BlockHeight::from_raw(b.height))
             .await
             .expect("root read");
-        if got != b.root {
+        // `reference_root_and_depth` still returns bytes — its typing is the
+        // curve-tree handle's, not this PR's (RTN-7 §3.2).
+        if CurveTreeRoot::from_bytes(got) != b.root {
             mismatches.push(b.height);
         }
     }
