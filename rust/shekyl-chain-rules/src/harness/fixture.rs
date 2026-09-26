@@ -21,6 +21,7 @@
 
 use super::*;
 use crate::verdict::TxSlot;
+use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
 use shekyl_types::SigningPayloadHash;
@@ -459,9 +460,11 @@ pub fn anchored_at(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transa
 ///
 /// This is the wallet's arrangement (`shekyl-tx-builder`'s
 /// `phase1_payload_hashes` then `sign_pqc_auths`) with a fixture key in
-/// place of the output's HKDF secret; the signer is the production one
-/// ([`sign_pqc_auth_for_output`]), so what verifies here is what verifies
-/// on chain. What it does **not** make real is the proof — `fcmp_proof`
+/// place of the output's HKDF secret. Pass 1 is
+/// [`derive_pqc_public_key`]: the public key alone, which is what the
+/// preimage binds, with no signature made and discarded. Pass 2 is the
+/// production signer ([`sign_pqc_auth_for_output`]), so what verifies here
+/// is what verifies on chain. What it does **not** make real is the proof — `fcmp_proof`
 /// stays [`bp_plus_layout_for`]'s kind of filler, because a membership
 /// proof needs the tree it is a member of; that is the captured chains'
 /// business (§5 row 1) and CEN-I15's witness.
@@ -492,14 +495,15 @@ pub fn signed(mut tx: Transaction) -> Transaction {
         .enumerate()
         .map(|(index, input)| fixture_signing_seed(index, input))
         .collect();
-    // Pass 1 — the public keys, which the message binds.
+    // Pass 1 — the public keys, which the message binds. The key only:
+    // deriving it by signing a dummy message would make a signature and
+    // throw it away.
     for (auth, seed) in fcmp_auths_mut(&mut tx).into_iter().flatten().zip(&seeds) {
-        let derived = sign_pqc_auth_for_output(seed, 0, SCHEME_DOMAIN_PQC_AUTH_TX, &[0u8; 32])
-            .expect("a fixture seed derives a hybrid keypair");
         auth.auth_version = 1;
         auth.scheme_id = shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
         auth.flags = 0;
-        auth.hybrid_public_key = derived.hybrid_public_key;
+        auth.hybrid_public_key = derive_pqc_public_key(seed, FIXTURE_OUTPUT_INDEX)
+            .expect("a fixture seed derives a hybrid public key");
     }
     // Pass 2 — the signatures, over the hashes those keys are part of.
     let hashes = tx.pqc_signing_payload_hashes();
@@ -541,12 +545,24 @@ fn fixture_signature(seed: &[u8; 64], hash: &SigningPayloadHash) -> Vec<u8> {
     cache
         .entry((*seed, hash.to_bytes()))
         .or_insert_with(|| {
-            sign_pqc_auth_for_output(seed, 0, SCHEME_DOMAIN_PQC_AUTH_TX, hash.as_bytes())
-                .expect("a fixture seed signs")
-                .signature
+            sign_pqc_auth_for_output(
+                seed,
+                FIXTURE_OUTPUT_INDEX,
+                SCHEME_DOMAIN_PQC_AUTH_TX,
+                hash.as_bytes(),
+            )
+            .expect("a fixture seed signs")
+            .signature
         })
         .clone()
 }
+
+/// HKDF output index for a fixture key. These bodies are not spends of a
+/// recorded output, so the index is not an output's position; it is the
+/// constant the key is derived under. The public key and the signature
+/// share it, and CEN-I18 never reads it — it verifies the signature
+/// against the key in the auth.
+const FIXTURE_OUTPUT_INDEX: u64 = 0;
 
 /// The 64-byte "combined shared secret" a fixture input's signing key is
 /// derived from: the key image doubled for a `ToKey`, so the same spend

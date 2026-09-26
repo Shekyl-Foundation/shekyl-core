@@ -462,13 +462,17 @@ impl I18 {
     /// the wire never carries — has no message for its signatures to be
     /// over, and is refused at the transaction rather than silently
     /// verified over nothing.
+    ///
+    /// The row is recorded only when the check passes, including the
+    /// vacuous non-`Fcmp` arm. A refusal leaves it unrecorded, as
+    /// [`crate::rules::run_tx`] does for a stateless rule.
     pub(crate) fn check(
         cx: &TxContext<'_>,
         hashes: &[SigningPayloadHash],
         coverage: &mut RuleCoverage,
     ) -> Verdict<()> {
-        coverage.insert(Self::ROW);
         let Ct::Fcmp { pqc_auths, .. } = &cx.tx.ct else {
+            coverage.insert(Self::ROW);
             return Ok(());
         };
         if pqc_auths.len() != hashes.len() {
@@ -492,6 +496,7 @@ impl I18 {
                 ));
             }
         }
+        coverage.insert(Self::ROW);
         Ok(())
     }
 }

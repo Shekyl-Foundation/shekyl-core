@@ -21,7 +21,7 @@ use crate::harness::{
 };
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{refused_listed, refused_lone};
-use crate::rules::tx_against::{I11, I17, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
+use crate::rules::tx_against::{I11, I17, I18, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
 use crate::rules::TxContext;
 use crate::trust::Trust;
 use crate::validate::{tx_against, validate};
@@ -577,8 +577,9 @@ fn i18_an_anchored_spends_signatures_verify_and_the_row_is_recorded() {
 
 /// One flipped byte in one input's signature refuses **that input** under
 /// I18 — the E2 driver's `ForgedSignature` place — and the rows before it
-/// (I7, the reference sequence, I17) have already recorded: the refusal is
-/// the signature's, not an earlier row's.
+/// (I7, the reference sequence, I17) have already passed: the refusal is
+/// the signature's, not an earlier row's. The row itself stays unrecorded
+/// on that refusal.
 #[test]
 fn i18_refuses_a_forged_signature_at_its_input() {
     let chain = spendable_chain();
@@ -612,6 +613,25 @@ fn i18_refuses_a_forged_signature_at_its_input() {
             },
         );
     });
+    // Both refusal arms leave the row unrecorded. `tx_against` drops its
+    // coverage with the verdict, so the contract is held on `I18::check`.
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx =
+        TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("the forged spend classifies");
+    let hashes = I17::signed_hashes(&cx, &mut coverage);
+    assert!(I18::check(&cx, &hashes, &mut coverage).is_err());
+    assert!(
+        !coverage.contains(CenRow::I18),
+        "a signature that does not verify does not record the row"
+    );
+    let mut coverage = RuleCoverage::EMPTY;
+    let intact = listed_on(&chain, KI);
+    let cx = TxContext::derive(&intact, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    assert!(I18::check(&cx, &[], &mut coverage).is_err());
+    assert!(
+        !coverage.contains(CenRow::I18),
+        "a hash list that is not one per auth does not record the row"
+    );
 }
 
 /// A signature that is valid — for a different message. Touching the
