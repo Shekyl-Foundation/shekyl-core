@@ -34,11 +34,17 @@ pub const PROTOCOL_NAME: &[u8] = b"Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s
 pub const MESSAGE1_LEN: usize = 32 + ML_KEM_768_EK_LEN;
 pub const MESSAGE2_LEN: usize = 32 + ML_KEM_768_CT_LEN + TAG_LEN + TAG_LEN;
 
-// Responder Diffie-Hellman calls on this thread. `read_message1` must not
-// move it: a malformed encapsulation key is rejected before any of them.
+// Every responder Diffie-Hellman goes through `responder_dh`, which counts
+// the call. A malformed encapsulation key must not move the count.
 #[cfg(test)]
 thread_local! {
     static RESPONDER_DH: Cell<u64> = const { Cell::new(0) };
+}
+
+fn responder_dh(eph: &StaticSecret, remote_e: &[u8; 32]) -> x25519_dalek::SharedSecret {
+    #[cfg(test)]
+    RESPONDER_DH.with(|count| count.set(count.get() + 1));
+    eph.diffie_hellman(&PublicKey::from(*remote_e))
 }
 
 #[derive(Debug)]
@@ -260,12 +266,13 @@ impl Responder {
         // after the prefix and the length. It runs before the transcript and
         // before the X25519 Diffie-Hellman in `finish`. The parsed key is
         // what `ResponderReady` stores, so `finish` does not parse it again.
+        // The transcript hashes the wire bytes, not the array `try_from_bytes` takes.
         let remote_ek = ml_kem_768::EncapsKey::try_from_bytes(remote_ek_bytes)
             .map_err(|_| HandshakeError::Kem)?;
         let mut remote_e = [0u8; 32];
         remote_e.copy_from_slice(&message1[..32]);
-        self.sym.mix_hash(&remote_e);
-        self.sym.mix_hash(&remote_ek_bytes);
+        self.sym.mix_hash(&message1[..32]);
+        self.sym.mix_hash(&message1[32..]);
         let payload = self.sym.decrypt_and_hash(&[])?;
         if !payload.is_empty() {
             return Err(HandshakeError::State);
@@ -312,9 +319,7 @@ impl ResponderReady {
         let mut msg = Vec::with_capacity(MESSAGE2_LEN);
         msg.extend_from_slice(&epub);
         self.sym.mix_hash(&epub);
-        #[cfg(test)]
-        RESPONDER_DH.with(|count| count.set(count.get() + 1));
-        let shared = eph.diffie_hellman(&PublicKey::from(self.remote_e));
+        let shared = responder_dh(&eph, &self.remote_e);
         if !shared.was_contributory() {
             return Err(HandshakeError::Decrypt);
         }
@@ -449,11 +454,17 @@ mod tests {
     fn message_lengths_and_roundtrip() {
         let (ini, m1) = Initiator::new(&nid()).unwrap();
         assert_eq!(m1.len(), MESSAGE1_LEN);
+        let before = RESPONDER_DH.with(|count| count.get());
         let (resp, m2) = Responder::new(&nid())
             .read_message1(&m1)
             .unwrap()
             .write_message2()
             .unwrap();
+        assert_eq!(
+            RESPONDER_DH.with(|count| count.get()),
+            before + 1,
+            "a successful message 2 runs the responder Diffie-Hellman once"
+        );
         assert_eq!(m2.len(), MESSAGE2_LEN);
         let mut a_send = ini.read_message2(&m2).unwrap().split().0;
         let mut b_recv = resp.split().1;
