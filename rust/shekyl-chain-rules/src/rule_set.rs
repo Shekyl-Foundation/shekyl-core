@@ -33,6 +33,7 @@ use shekyl_address::Network;
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::census::{CenRow, RowStatus};
+use crate::reorg::D_MAX;
 use crate::rules::difficulty::Target;
 
 /// Identifies the consensus rule set a `ChainValid` was checked under.
@@ -87,8 +88,17 @@ impl RuleSetId {
 /// `mined_money_unlock_window` (CEN-F6) — landed with slice 4
 /// (`CHAIN_RULES_SLICE_4.md` Q5): the C++ `#define`
 /// `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`, stated here because F6 reads it.
-/// CEN-F21's split epoch is `rules::miner::EMISSION_SPLIT_EPOCH`, not a
-/// field: it joins this set when a schedule step names a different epoch.
+/// The fifth — `reorg_cap` (CEN-E2's `D_max`, `PDM-Q11`) — is the deepest
+/// reorganisation a node following this rule set is built to accept:
+/// consensus data, so it lives here and not in any store's configuration
+/// (PR #861 review: the store's undo retention is *constrained by* the
+/// in-force set's cap, never the other way round). `GENESIS` carries
+/// [`D_MAX`]; a Fakechain set names its own through [`RuleSet::fakechain`],
+/// the same witness `Fixed` uses, so a shortened regtest schedule runs a
+/// rule set whose cap fits inside its epoch rather than a store field the
+/// validator would have to defer to. CEN-F21's split epoch is
+/// `rules::miner::EMISSION_SPLIT_EPOCH`, not a field: it joins this set
+/// when a schedule step names a different epoch.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,
@@ -96,6 +106,7 @@ pub struct RuleSet {
     header_major_version: u8,
     difficulty: DifficultyRule,
     mined_money_unlock_window: BlockCount,
+    reorg_cap: BlockCount,
 }
 
 /// How a rule set derives the next-block target (CEN-D4 reads this).
@@ -135,14 +146,20 @@ impl RuleSet {
         header_major_version: 1,
         difficulty: DifficultyRule::Lwma1,
         mined_money_unlock_window: BlockCount::from_raw(60),
+        reorg_cap: D_MAX,
     };
 
     /// Every rule set a schedule may name, in id order. A schedule step that
     /// names an id absent from here does not compile (`well_formed`).
     const ISSUED: &'static [Self] = &[Self::GENESIS];
 
-    /// The genesis rules with the target **fixed** — `shekyld --regtest
-    /// --fixed-difficulty=<n>` as a rule set (CEN-D7, arm (d)).
+    /// The genesis rules as a **Fakechain** set: the target fixed when
+    /// `shekyld --regtest --fixed-difficulty=<n>` names one (CEN-D7, arm
+    /// (d)), and the reorg cap the regtest runs — `D_MAX` for a regtest on
+    /// the production schedule, something inside the shortened epoch for a
+    /// regtest under the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever (the lever's
+    /// parse refuses `SEB ≤ cap`; the store refuses a retention below the
+    /// cap at open and at every connect).
     ///
     /// The one constructor of a non-issued rule set, and deliberately not
     /// reachable from [`RuleSchedule::for_network`]: `shekyl_address::Network`
@@ -150,11 +167,16 @@ impl RuleSet {
     /// `--regtest` is what binds this call to fakechain today; when the
     /// variant exists this takes it as a witness. `fixed` is non-zero by
     /// its type, so the target it fixes is a [`Target`] by construction
-    /// (CEN-D6).
+    /// (CEN-D6). `fakechain(None, D_MAX)` **is** `GENESIS` by value.
     #[must_use]
-    pub const fn fakechain(fixed: core::num::NonZeroU128) -> Self {
+    pub const fn fakechain(fixed: Option<core::num::NonZeroU128>, reorg_cap: BlockCount) -> Self {
+        let difficulty = match fixed {
+            Some(fixed) => DifficultyRule::Fixed(Target::fixed(fixed)),
+            None => DifficultyRule::Lwma1,
+        };
         Self {
-            difficulty: DifficultyRule::Fixed(Target::fixed(fixed)),
+            difficulty,
+            reorg_cap,
             ..Self::GENESIS
         }
     }
@@ -163,6 +185,16 @@ impl RuleSet {
     #[must_use]
     pub const fn difficulty(&self) -> DifficultyRule {
         self.difficulty
+    }
+
+    /// The deepest reorganisation a node under this rule set is built to
+    /// accept (`D_max`, CEN-E2 / `PDM-Q11`). The store's undo retention is
+    /// at least this (S-CHAIN-W SCW-7), so a legal reorg never meets
+    /// `PopBelowFloor`; CEN-E2's `is_alternative_block_allowed` reads this,
+    /// never `D_MAX` directly, so a Fakechain set and its store agree.
+    #[must_use]
+    pub const fn reorg_cap(&self) -> BlockCount {
+        self.reorg_cap
     }
 
     /// The rule set `id` names; `None` for an id no schedule has issued.
@@ -252,6 +284,7 @@ impl fmt::Debug for RuleSet {
             .field("header_major_version", &self.header_major_version)
             .field("difficulty", &self.difficulty)
             .field("mined_money_unlock_window", &self.mined_money_unlock_window)
+            .field("reorg_cap", &self.reorg_cap)
             .finish()
     }
 }

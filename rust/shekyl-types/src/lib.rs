@@ -641,6 +641,28 @@ hash32! {
 }
 
 hash32! {
+    /// `keccak256(payload(i))` — the **message one input's hybrid PQC
+    /// signature is over**: `payload(i) = pruned ‖ prunable_hash ‖ header(i)
+    /// ‖ key_hashes` (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; derived by
+    /// `shekyl_wire::PqcSigningPreimage`). The wallet signs it
+    /// (`shekyl-tx-builder`), the daemon verifies against it
+    /// (`shekyl_tx_pqc_signing_payload_hashes`, daemon-rpc K13), and the
+    /// validator records its derivation as CEN-I17 and verifies over it as
+    /// CEN-I18.
+    ///
+    /// A component of **no** txid, so not a member of the component-hash
+    /// family: **not** [`PqcAuthHash`] (the txid's third component, over the
+    /// `pqc_auths` themselves — this value is what those auths *sign*, and
+    /// the two are one letter apart by name and 32 bytes apart by nature) and
+    /// **not** [`PrefixHash`] (the FCMP++ SAL's signable hash, the txid's
+    /// first component). One per `pqc_auths` entry; none for a body without
+    /// them. Minted 2026-09-25 when the value gained its second consumer —
+    /// the reopening criterion `RTN_7_WIRE_HASH_TYPES.md` §4 set when it
+    /// stayed raw for one.
+    SigningPayloadHash
+}
+
+hash32! {
     /// The block-header **attestation root** (archival credit-wire witness
     /// commitment), not a [`CurveTreeRoot`] and not a [`BlockHash`].
     ///
@@ -881,9 +903,9 @@ hash32! {
 
 pub mod archival;
 pub use archival::{
-    BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindError, ShardSet, ShardSetError,
-    MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS, MAX_CLAIMED_EPOCH_ENTRIES,
-    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+    storage_ids_through, BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindError,
+    ShardSet, ShardSetError, MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS,
+    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, SHARD_TX_COUNT,
 };
 
 pub mod relay;

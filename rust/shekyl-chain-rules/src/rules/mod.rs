@@ -80,12 +80,14 @@ pub use pow::seed_height;
 pub(crate) mod timestamps;
 pub(crate) mod topology;
 pub(crate) mod tx;
+pub(crate) mod tx_against;
+pub(crate) mod tx_extra;
 pub(crate) mod tx_inputs;
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, ViewRead};
+use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::Target;
 use crate::rules::timestamps::MtpWindow;
@@ -328,6 +330,18 @@ pub(crate) enum TxScope {
     All,
     /// Non-coinbase transactions; vacuous on the coinbase.
     NonCoinbase,
+    /// The coinbase only; vacuous on every listed transaction.
+    ///
+    /// **`Coinbase` means *runs at [`TxSlot::Miner`]*, never *runs when the
+    /// bytes look like a coinbase*** (slice 6 Q6, RULED 2026-09-24). The kind
+    /// is derived from the slot (slice 5 Q2) precisely so a coinbase-shaped
+    /// body cannot exempt itself from the rows that refuse it by declaring
+    /// what it is; a coinbase-only scope is exactly where that would
+    /// re-enter through the back door. So a coinbase-shaped body at `Lone`
+    /// is **not** judged under a `Coinbase` rule — it is refused by the
+    /// non-coinbase rows — and a non-coinbase body at `Miner` **is**.
+    /// `the_kind_is_derived_from_the_slot_not_the_bytes` holds both.
+    Coinbase,
 }
 
 impl TxScope {
@@ -336,6 +350,7 @@ impl TxScope {
         match self {
             Self::All => true,
             Self::NonCoinbase => matches!(kind, TxKind::Listed),
+            Self::Coinbase => matches!(kind, TxKind::Coinbase),
         }
     }
 }
@@ -420,6 +435,46 @@ pub(crate) fn run_tx<R: TxRule>(cx: &TxContext<'_>, coverage: &mut RuleCoverage)
     verdict
 }
 
+/// A **view-bound** per-transaction rule — the other half of census 4.I:
+/// what a transaction's inputs claim against what the chain has recorded
+/// (the spent set, the reference block, the tree). Runs in `tx_against`, at
+/// block connect for every listed slot and at pool admission through the
+/// pool's view decorator (DRS-E5) — the C++'s `check_tx_inputs` arrangement
+/// after its stateless arms, with the DB lookups the arms make.
+///
+/// Three positions, as [`BlockRule`]: `Ok(Ok(()))` passed; `Ok(Err(refused))`
+/// refused on `Self::ROW` at the context's locus; `Err(fault)` the view could
+/// not answer, which is never a verdict. A rule that needs a recorded fact
+/// reads `view` itself, so a new per-rule lookup is a new [`ChainView`]
+/// method (slice 6 commit 5 adds `height_of` that way).
+pub(crate) trait TxAgainstRule: Rule {
+    /// Which transactions this rule judges.
+    const SCOPE: TxScope;
+
+    /// Judge `cx.tx` against `view`.
+    fn check<'id, V: ChainView<'id>>(cx: &TxContext<'_>, view: &V)
+        -> Result<Verdict<()>, V::Fault>;
+}
+
+/// Run one view-bound per-transaction rule and, if it passed, record its
+/// row. An out-of-scope kind is recorded **vacuous** — as [`run_tx`] does —
+/// so coverage says the row was evaluated at every slot.
+pub(crate) fn run_tx_against<'id, R: TxAgainstRule, V: ChainView<'id>>(
+    cx: &TxContext<'_>,
+    view: &V,
+    coverage: &mut RuleCoverage,
+) -> Result<Verdict<()>, V::Fault> {
+    if !R::SCOPE.applies_to(cx.kind) {
+        coverage.insert(R::ROW);
+        return Ok(Ok(()));
+    }
+    let verdict = R::check(cx, view)?;
+    if verdict.is_ok() {
+        coverage.insert(R::ROW);
+    }
+    Ok(verdict)
+}
+
 /// Run one per-transaction rule whose census row is not yet `implemented`.
 ///
 /// Scope applies, as in [`run_tx`]: an out-of-scope kind is not judged.
@@ -448,6 +503,9 @@ pub fn recorded<'id, V: ChainView<'id>>(
 ) -> Result<RecordedBlock, ViewRead<V::Fault>> {
     match view.block_at(height).map_err(ViewRead::View)? {
         AtHeight::Recorded(block) => Ok(block),
-        AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip { at: height })),
+        AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+            at: height,
+            record: PerHeightRecord::Block,
+        })),
     }
 }

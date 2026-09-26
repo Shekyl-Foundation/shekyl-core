@@ -31,9 +31,10 @@ use crate::pipeline::{run, Checkpoint, PipelineConfig, PipelineFault};
 use crate::schedule::ChainRules;
 use crate::sequencer::SequenceError;
 use crate::source::{IngestEvent, SequenceNo, Sequenced};
+use crate::test_support::{anchor, at};
 use crate::test_support::{
     block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg, expected_state, h,
-    key_image, open_store, reorg, spend, tmp, trace_of, Family, Scripted,
+    key_image, open_store, reorg, spend, tmp, trace_of, Family, Scripted, FIRST_SPEND_HEIGHT,
 };
 use crate::trace::Trace;
 
@@ -614,31 +615,55 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     // RD-Q13: Extend 0, 1, 2; Rewind { to: 1 }; Extend 2' (another nonce);
     // Extend 3 on 2'. The rewind is a barrier — 2' is formed only after the
     // pop committed — and the fork's blocks chain onto the rewound tip.
+    // Heights are relative to CEN-I11's first spend height `f`: main runs
+    // through `f + 1`, the rewind is to `f`, and the fork is `(f + 1)'` and
+    // `f + 2` — every block that lists a spend sits where consensus admits
+    // one, and each fork spend is anchored on the fork's own chain.
     let path = tmp("pipeline-rewind");
-    let main = chain(3);
-    let fork_spend = |height| spend(key_image(Family::Fork, height));
-    let fork2 = block_with_nonce(2, main[1].0.hash(), &[fork_spend(2)], 99);
-    assert_ne!(fork2.hash(), main[2].0.hash());
-    let fork3 = block_with_nonce(3, fork2.hash(), &[fork_spend(3)], 7);
-    // Facts for heights 0..=3 (the fork reuses height 2's facts: same
+    let f = FIRST_SPEND_HEIGHT;
+    let main = chain(f + 2);
+    let main_hashes: Vec<BlockHash> = main.iter().map(|(b, _)| b.hash()).collect();
+    let fork_spend = |hashes: &[BlockHash], height: u64| {
+        anchor(hashes, height, spend(key_image(Family::Fork, height)))
+    };
+    let mut fork_hashes = main_hashes[..=at(f)].to_vec();
+    let fork_a_spend = fork_spend(&fork_hashes, f + 1);
+    let fork_a = block_with_nonce(
+        f + 1,
+        main_hashes[at(f)],
+        core::slice::from_ref(&fork_a_spend),
+        99,
+    );
+    assert_ne!(fork_a.hash(), main_hashes[at(f + 1)]);
+    fork_hashes.push(fork_a.hash());
+    let fork_b_spend = fork_spend(&fork_hashes, f + 2);
+    let fork_b = block_with_nonce(
+        f + 2,
+        fork_a.hash(),
+        core::slice::from_ref(&fork_b_spend),
+        7,
+    );
+    // Facts for every height (the fork reuses height `f + 1`'s facts: same
     // root_after by construction). The fork spends its own family's key
-    // images — reusing the main chain's would be the double spend SI-1
+    // images — reusing the main chain's would be the double spend CEN-I7
     // refuses.
-    let trace_chain: Vec<_> = vec![
-        main[0].clone(),
-        main[1].clone(),
-        (fork2.clone(), vec![fork_spend(2)]),
-        (fork3.clone(), vec![fork_spend(3)]),
-    ];
+    let mut trace_chain: Vec<_> = main[..=at(f)].to_vec();
+    trace_chain.push((fork_a.clone(), vec![fork_a_spend.clone()]));
+    trace_chain.push((fork_b.clone(), vec![fork_b_spend.clone()]));
     let trace = Arc::new(trace_of(&trace_chain, true));
-    let events = vec![
-        IngestEvent::Extend(Box::new(candidate(&main[0].0, &main[0].1))),
-        IngestEvent::Extend(Box::new(candidate(&main[1].0, &main[1].1))),
-        IngestEvent::Extend(Box::new(candidate(&main[2].0, &main[2].1))),
-        IngestEvent::Rewind { to: h(1) },
-        IngestEvent::Extend(Box::new(candidate(&fork2, &[fork_spend(2)]))),
-        IngestEvent::Extend(Box::new(candidate(&fork3, &[fork_spend(3)]))),
-    ];
+    let mut events: Vec<IngestEvent> = main
+        .iter()
+        .map(|(b, txs)| IngestEvent::Extend(Box::new(candidate(b, txs))))
+        .collect();
+    events.push(IngestEvent::Rewind { to: h(f) });
+    events.push(IngestEvent::Extend(Box::new(candidate(
+        &fork_a,
+        &[fork_a_spend],
+    ))));
+    events.push(IngestEvent::Extend(Box::new(candidate(
+        &fork_b,
+        &[fork_b_spend],
+    ))));
     let mut source = Scripted::new(events);
     let report = run(
         &mut source,
@@ -657,21 +682,20 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
         .iter()
         .map(|(hh, x)| (hh.to_raw(), *x))
         .collect();
-    assert_eq!(
-        connected,
-        vec![
-            (0, main[0].0.hash()),
-            (1, main[1].0.hash()),
-            (2, main[2].0.hash()),
-            (2, fork2.hash()),
-            (3, fork3.hash()),
-        ]
-    );
-    // The digest after the switch is the fork's, at the checkpoint (3).
+    let mut expected: Vec<(u64, BlockHash)> = main_hashes
+        .iter()
+        .enumerate()
+        .map(|(hh, x)| (hh as u64, *x))
+        .collect();
+    expected.push((f + 1, fork_a.hash()));
+    expected.push((f + 2, fork_b.hash()));
+    assert_eq!(connected, expected);
+    // The digest after the switch is the fork's, at the checkpoint (the
+    // fork's tip).
     let Checkpoint { ours, theirs, .. } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(ours, theirs);
     assert_eq!(ours, expected_state(&trace_chain));
-    assert_eq!(tip_of(&path), Some((h(3), fork3.hash())));
+    assert_eq!(tip_of(&path), Some((h(f + 2), fork_b.hash())));
     cleanup(&path);
 }
 
@@ -957,12 +981,18 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
 /// its own — the checkpoint's families are `block_info.hash`,
 /// `spent_keys` and `curve_tree_roots[tip + 1]` — or a corruption in that
 /// family would be invisible to the comparator.
+/// The control chain's length: through the first spend block, so the
+/// spent-key family has a member to drop.
+const CONTROL_LEN: u64 = FIRST_SPEND_HEIGHT + 1;
+/// The control chain's spend height — its tip.
+const CONTROL_SPEND: u64 = FIRST_SPEND_HEIGHT;
+
 async fn digest_after_replay_and_mutation(
     name: &str,
     mutate: impl FnOnce(&redb::WriteTransaction),
 ) -> (crate::trace::Digest, crate::trace::Digest) {
     let path = tmp(name);
-    let chain = chain(4);
+    let chain = chain(CONTROL_LEN);
     let trace = Arc::new(trace_of(&chain, true));
     let bytes = corpus_of(&chain);
     let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
@@ -1023,14 +1053,20 @@ async fn a_dropped_spent_key_row_moves_the_digest_off_the_checkpoint() {
     let (expected, after) = digest_after_replay_and_mutation("control-spent-keys", |txn| {
         let mut spent = txn.open_table(SPENT_KEYS).expect("t");
         let removed = spent
-            .remove(LmdbHashKey::from_bytes(key_image(Family::Main, 2)))
+            .remove(LmdbHashKey::from_bytes(key_image(
+                Family::Main,
+                CONTROL_SPEND,
+            )))
             .expect("remove")
             .is_some();
         assert!(removed, "the row was there to drop");
         // And a foreign member the chain never spent, so the set differs
         // even for a comparator that counted rows.
         spent
-            .insert(LmdbHashKey::from_bytes(key_image(Family::Fork, 2)), Present)
+            .insert(
+                LmdbHashKey::from_bytes(key_image(Family::Fork, CONTROL_SPEND)),
+                Present,
+            )
             .expect("plant");
     })
     .await;
@@ -1041,10 +1077,10 @@ async fn a_dropped_spent_key_row_moves_the_digest_off_the_checkpoint() {
 async fn a_rewritten_live_root_row_moves_the_digest_off_the_checkpoint() {
     let (expected, after) = digest_after_replay_and_mutation("control-live-root", |txn| {
         let mut roots = txn.open_table(CURVE_TREE_ROOTS).expect("t");
-        // The live root is the row at tip + 1 = 4.
+        // The live root is the row at tip + 1.
         roots
             .insert(
-                4u64,
+                CONTROL_LEN,
                 CurveTreeRoot::from_bytes([0xd1; 32]).encoded().as_encoded(),
             )
             .expect("rewrite");

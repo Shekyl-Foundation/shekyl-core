@@ -23,7 +23,7 @@ use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_types::PrefixHash;
+use shekyl_types::{PrefixHash, SigningPayloadHash};
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
@@ -219,16 +219,17 @@ pub fn sign_transaction_with_terms(
 ///
 /// This is Phase 2 of the signing pipeline. The caller must:
 /// 1. Insert the proofs from [`sign_transaction`] into the transaction
-/// 2. Compute `get_transaction_signed_payload` for each input
-/// 3. Hash each payload with Keccak-256 to get `payload_hashes`
-/// 4. Call this function with those hashes and the corresponding secret keys
+/// 2. Derive every input's signing hash with
+///    [`crate::phase1_payload_hashes`] (`shekyl_wire::PqcSigningPreimage`'s
+///    `signed_hash(i)`, one [`SigningPayloadHash`] per input)
+/// 3. Call this function with those hashes and the corresponding secret keys
 ///
 /// # Errors
 ///
 /// Returns [`TxBuilderError::PqcSignError`] if any individual signing
 /// operation fails (e.g., malformed secret key).
 pub fn sign_pqc_auths(
-    payload_hashes: &[[u8; 32]],
+    payload_hashes: &[SigningPayloadHash],
     inputs: &[SpendInput],
 ) -> Result<Vec<PqcAuth>, TxBuilderError> {
     use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
@@ -264,7 +265,7 @@ pub fn sign_pqc_auths(
             &ss,
             inp.output_index,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            hash,
+            hash.as_bytes(),
         )
         .map_err(|e| TxBuilderError::PqcSignError {
             index: i,

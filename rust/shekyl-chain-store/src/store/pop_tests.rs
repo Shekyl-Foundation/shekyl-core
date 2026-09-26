@@ -10,12 +10,14 @@
 //! open, and NOT latched by a violation in a batch that connected nothing.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
-use super::connect_fixtures::{candidate, connect_chain_with_burn, facts, judge, spend};
+use super::connect_fixtures::{
+    at, candidate, connect_chain_with_burn, connect_with_image_planted_under_the_token, spend,
+    spend_at, spendable_prefix, FIRST_SPEND_HEIGHT,
+};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::*;
 use crate::codec::{forged, BlockBody, Canonical, Raw, TotalBurnedCell};
@@ -34,28 +36,34 @@ fn tip_height(store: &ChainStore) -> Option<u64> {
 fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
     let path = tmp("pop-basic");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![spend(10, 2)]]);
-    assert_eq!(tip_height(&store), Some(2));
-    let burned_after_three = {
+    // The spendable prefix, then two spend blocks: the tip is `s + 1`.
+    let s = FIRST_SPEND_HEIGHT;
+    let tip = s + 1;
+    connect_chain(
+        &store,
+        &spendable_prefix(&[vec![spend(9, 2)], vec![spend(10, 2)]]),
+    );
+    assert_eq!(tip_height(&store), Some(tip));
+    let burned_after_all = {
         let snap = store.begin_read().expect("read");
         snap.get_property::<TotalBurnedCell>().expect("cell")
     };
-    // Three blocks each handed `burned = 3`; genesis records none (the
-    // `h > 0` half of the C++ guard, `blockchain.cpp:6148`), so the fold is
-    // two blocks' worth.
-    assert_eq!(burned_after_three, Some(AtomicUnits::from_raw(6)));
+    // Every block handed `burned = 3`; genesis records none (the `h > 0`
+    // half of the C++ guard, `blockchain.cpp:6148`), so the fold is `tip`
+    // blocks' worth.
+    assert_eq!(burned_after_all, Some(AtomicUnits::from_raw(3 * tip)));
 
     let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
-    let popped = out.expect("pop 2");
-    assert_eq!(popped.height, BlockHeight::from_raw(2));
+    let popped = out.expect("pop the tip");
+    assert_eq!(popped.height, BlockHeight::from_raw(tip));
     assert!(popped.reversed > 0);
-    assert_eq!(tip_height(&store), Some(1));
+    assert_eq!(tip_height(&store), Some(tip - 1));
     {
         let snap = store.begin_read().expect("read");
         assert_eq!(
             snap.get_property::<TotalBurnedCell>().expect("cell"),
-            Some(AtomicUnits::from_raw(3)),
-            "block 2's burn restored to the pre-image block 1 left"
+            Some(AtomicUnits::from_raw(3 * (tip - 1))),
+            "the tip's burn restored to the pre-image its parent left"
         );
         assert!(snap
             .open_table(SPENT_KEYS)
@@ -68,15 +76,20 @@ fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
         assert!(snap
             .open_table(UNDO_LOG)
             .expect("t")
-            .get(2)
+            .get(tip)
             .expect("g")
             .is_none());
     }
 
-    // A two-deep reorg pops twice in one batch — block 1 then block 0 is
-    // refused (genesis), so the batch aborts as a whole and block 1 stays.
-    let out: Result<(Popped, Popped), TestErr> =
-        store.write(|batch| Ok((batch.pop()?, batch.pop()?)));
+    // A reorg that pops the whole chain in one batch — every block down to
+    // 1, then block 0 is refused (genesis), so the batch aborts as a whole
+    // and nothing popped.
+    let out: Result<(), TestErr> = store.write(|batch| {
+        for _ in 0..tip {
+            batch.pop()?;
+        }
+        Ok(())
+    });
     assert_eq!(
         out,
         Err(TestErr::Store(
@@ -86,13 +99,13 @@ fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
     );
     assert_eq!(
         tip_height(&store),
-        Some(1),
-        "the first pop did not land either"
+        Some(tip - 1),
+        "none of the earlier pops landed either"
     );
 
     let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
-    assert_eq!(out.map(|p| p.height), Ok(BlockHeight::from_raw(1)));
-    assert_eq!(tip_height(&store), Some(0));
+    assert_eq!(out.map(|p| p.height), Ok(BlockHeight::from_raw(tip - 1)));
+    assert_eq!(tip_height(&store), Some(tip - 2));
     assert!(store.connect_state().is_live());
     cleanup(&path);
 }
@@ -184,25 +197,33 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
         "no connect or pop: no halt"
     );
 
-    // A connect whose belt fires halts the writer at the connecting height.
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
-    let double = candidate(2, hashes[1], vec![spend(9, 2)]);
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, double)?, facts(2, 0), RuleSet::GENESIS)?)
-    });
+    // A connect whose belt fires halts the writer at the connecting height
+    // (SI-1, reached by the spent-keys table moving under a judged token:
+    // a double spend itself is CEN-I7's refusal before `connect`). Before
+    // slice 6 commit 4 a plain double spend reached this belt, which tested
+    // it as the rule; this is the belt tested as a belt, the shape the test
+    // should always have had.
+    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    let next = FIRST_SPEND_HEIGHT + 1;
+    let double = candidate(
+        next,
+        hashes[at(FIRST_SPEND_HEIGHT)],
+        vec![spend_at(&hashes, next, 10, 2)],
+    );
+    let out = connect_with_image_planted_under_the_token(&store, double, next);
     assert!(matches!(out, Err(TestErr::Store(ref m)) if m.starts_with("SI-1 violated")));
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {
-            at_height: BlockHeight::from_raw(2),
+            at_height: BlockHeight::from_raw(next),
             row: StoreInvariant::KeyImageNotFresh,
         }
     );
     let refused: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+    let halted = format!("writer is halted since height {next}");
     assert!(matches!(
         refused,
-        Err(TestErr::Store(ref m)) if m.contains("writer is halted since height 2")
+        Err(TestErr::Store(ref m)) if m.contains(&halted)
     ));
     cleanup(&path);
 }
@@ -215,16 +236,17 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
 fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
     let path = tmp("pop-post-image");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
-    // Write around the journal: overwrite `blocks[1]` through an upsert
+    let tip = FIRST_SPEND_HEIGHT;
+    connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    // Write around the journal: overwrite `blocks[tip]` through an upsert
     // handle in a batch that records nothing.
-    let impostor = candidate(1, BlockHash::from_bytes([0x77; 32]), Vec::new())
+    let impostor = candidate(tip, BlockHash::from_bytes([0x77; 32]), Vec::new())
         .block
         .serialize();
     let around: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_upsert_table(BLOCKS)?
-            .upsert(1, Raw::<BlockBody>::new(&impostor))?;
+            .upsert(tip, Raw::<BlockBody>::new(&impostor))?;
         Ok(())
     });
     around.expect("the unjournaled overwrite lands");
@@ -243,22 +265,22 @@ fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
             store.connect_state(),
             ConnectState::Halted {
                 row: StoreInvariant::UndoLogIncoherent {
-                    height: 1,
+                    height,
                     fault: UndoFault::PostImageMismatch { .. },
                 },
                 ..
-            }
+            } if height == tip
         ),
         "{:?}",
         store.connect_state()
     );
-    // Nothing landed: the tip is still 1 and the rewritten row is intact.
-    assert_eq!(tip_height(&store), Some(1));
+    // Nothing landed: the tip is where it was and the rewritten row is intact.
+    assert_eq!(tip_height(&store), Some(tip));
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.open_table(BLOCKS)
             .expect("t")
-            .get(1)
+            .get(tip)
             .expect("g")
             .map(|g| g.value().bytes().to_vec()),
         Some(impostor)

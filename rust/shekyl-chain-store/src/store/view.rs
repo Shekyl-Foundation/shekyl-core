@@ -86,7 +86,7 @@
 //! (`chain_reads` module docs, *The tip is one decoded read*).
 
 use shekyl_chain_rules::{AtHeight, ChainView, RecordedBlock, Tip};
-use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 
 use crate::codec::BlockInfo;
 
@@ -180,6 +180,14 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
             height: BlockHeight::from_raw(height),
             hash: info.hash,
         }))
+    }
+
+    /// `block_heights[hash]` — CEN-I10's read. The body is
+    /// [`chain_reads::height_of`], shared with `ReadSnapshot::height_of`;
+    /// an undecodable row is SI-7 and arms the batch's poison, as every
+    /// classified read here does.
+    fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, StoreError> {
+        chain_reads::height_of(self.batch.txn(), hash).map_err(|f| self.arm(f))
     }
 
     /// `curve_tree_roots[height]` — the tree state **at** `height`, written

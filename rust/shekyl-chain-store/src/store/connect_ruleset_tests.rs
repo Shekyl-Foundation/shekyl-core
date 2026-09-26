@@ -21,7 +21,7 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
     // RD-F13: with `in_force: RuleSetId`, no id resolved to a `Fixed` set and
     // a Fakechain verdict could never connect. The caller now hands the set
     // itself (RD-Q10), and the path exists.
-    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7), shekyl_chain_rules::D_MAX);
     let path = tmp("connect-fakechain-in-force");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let out: Result<Connected, TestErr> = store.write(|batch| {
@@ -66,7 +66,7 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
     // Same id, different set: `fakechain(7)` reuses `RuleSetId::GENESIS`.
     // An id-only check would accept the fixed-target work as public-network
     // GENESIS work; compared by value, `connect` refuses.
-    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7), shekyl_chain_rules::D_MAX);
     let path = tmp("connect-fakechain");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let out: Result<Connected, TestErr> = store.write(|batch| {
@@ -90,8 +90,8 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
     });
     let want = StoreCannot::RuleSetNotInForce {
         height: 0,
-        judged: seven,
-        in_force: RuleSet::GENESIS,
+        judged: Box::new(seven),
+        in_force: Box::new(RuleSet::GENESIS),
     };
     assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
     cleanup(&path);

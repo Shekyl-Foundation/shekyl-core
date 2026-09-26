@@ -16,7 +16,9 @@
 //! row. Block-level composition (`candidate`, `candidate_on`) is judged
 //! below as the shapes are listed into blocks.
 
-use super::fixture::{candidate, candidate_on, coinbase, recorded, root, TxShape};
+use super::fixture::{
+    anchored_on, candidate, candidate_on, coinbase, listed_on, spendable_chain, TxShape,
+};
 use super::{formed, formed_on, judged, MockChain};
 use crate::census::{CenRow, RowStatus};
 use crate::rule_set::RuleSet;
@@ -27,25 +29,24 @@ use shekyl_wire::Transaction;
 
 /// A five-block chain to build candidates on, so the fixtures are exercised
 /// above genesis as well as at it.
-fn five_blocks() -> MockChain {
-    (0..5u64).fold(MockChain::default(), |chain, i| {
-        chain.push(recorded(100 + i), root(u8::try_from(i).expect("small")))
-    })
-}
-
 /// Judge one shape at one slot the way production would reach it: `tx_form`
 /// at that slot directly, and — for a listed slot — through `validate` with
 /// the shape as the block's one body; for the miner slot, through
-/// `validate` on a candidate whose coinbase it is.
+/// `validate` on a candidate whose coinbase it is. The chain is the
+/// youngest that can list a spend ([`spendable_chain`]), and a listed body
+/// is anchored on it: a fixture's reference is chain-relative, so it is
+/// written where the chain is known, not baked into the shape.
 fn judge_at(shape: TxShape, slot: TxSlot, tx: &Transaction) {
     tx_form(tx, slot, &RuleSet::GENESIS)
         .unwrap_or_else(|refused| panic!("{}", refused_message(shape, slot, "tx_form", &refused)));
-    let chain = five_blocks();
+    let chain = spendable_chain();
     chain.with_view(|view| {
         let mut candidate = candidate_on(&chain, Vec::new());
         match slot {
             TxSlot::Miner => candidate.block.miner_transaction = tx.clone(),
-            TxSlot::Listed(_) | TxSlot::Lone => candidate = candidate_on(&chain, vec![tx.clone()]),
+            TxSlot::Listed(_) | TxSlot::Lone => {
+                candidate = candidate_on(&chain, vec![anchored_on(&chain, tx.clone())]);
+            }
         }
         let formed = formed_on(&chain, candidate);
         judged(validate(
@@ -114,7 +115,7 @@ fn no_listed_shape_is_a_coinbase() {
 }
 
 /// The coinbase fixture is a valid coinbase at genesis too (the chain in
-/// [`judge_at`] is five blocks deep).
+/// [`judge_at`] is `MIN_AGE` blocks deep).
 #[test]
 fn the_coinbase_fixture_is_valid_at_genesis() {
     tx_form(&coinbase(0), TxSlot::Miner, &RuleSet::GENESIS).expect("at the miner slot");
@@ -151,15 +152,15 @@ fn a_wider_spend_passes_including_past_the_point_table() {
 /// for when they need "some bodies".
 #[test]
 fn two_listed_fixtures_make_a_valid_block() {
-    let chain = five_blocks();
+    let chain = spendable_chain();
     chain.with_view(|view| {
         let formed = formed_on(
             &chain,
             candidate_on(
                 &chain,
                 vec![
-                    super::fixture::listed(super::fixture::point(9)),
-                    super::fixture::listed(super::fixture::point(10)),
+                    listed_on(&chain, super::fixture::point(9)),
+                    listed_on(&chain, super::fixture::point(10)),
                 ],
             ),
         );

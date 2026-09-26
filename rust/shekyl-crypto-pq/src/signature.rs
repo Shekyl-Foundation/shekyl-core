@@ -37,6 +37,7 @@
 //!
 //! There is no `Ok(false)` for a caller to mishandle. Fail-closed.
 
+use crate::error::PqcVerifyError;
 use crate::CryptoError;
 use ed25519_dalek::{
     Signature as Ed25519Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey,
@@ -591,6 +592,53 @@ fn read_vec(bytes: &[u8], cursor: &mut usize, len: usize) -> Result<Vec<u8>, Cry
     Ok(out)
 }
 
+/// One transaction `pqc_auths` slot's signature, verified — **the** body
+/// behind every consumer: the daemon's `shekyl_pqc_verify` FFI, the
+/// daemon-rpc submit verifier (K13) and the consensus validator (CEN-I18)
+/// all call this, so the three cannot disagree on what a valid slot is.
+///
+/// Dispatch on the container `scheme_id`:
+/// [`HYBRID_SCHEME_ID_ED25519_ML_DSA_65`] parses the single hybrid key and
+/// signature (exact canonical lengths, at the parse) and verifies under
+/// [`SCHEME_DOMAIN_PQC_AUTH_TX`]; [`crate::multisig::HYBRID_SCHEME_ID_MULTISIG`]
+/// is [`crate::multisig::verify_multisig`], whose container parse holds the
+/// M-of-N bounds and whose domain is [`SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`].
+/// Anything else is [`PqcVerifyError::SchemeMismatch`]. Structural pins on
+/// the slot's *other* fields (`auth_version`, `flags`) are the wire's
+/// business (CEN-I16), not this function's: it is given the three blobs and
+/// the message and answers whether the signature is valid for them.
+///
+/// `Result<()>`, never `Result<bool>` (SA-R-1): there is no `Ok(false)` to
+/// mishandle. The error is the discriminant the FFI has always exported —
+/// a parse failure is [`PqcVerifyError::DeserializationFailed`], a good
+/// parse that does not verify is [`PqcVerifyError::CryptoVerifyFailed`].
+///
+/// # Errors
+///
+/// As above; every arm's failure is a refusal of this slot, never a fault.
+pub fn verify_pqc_auth(
+    scheme_id: u8,
+    public_key: &[u8],
+    signature: &[u8],
+    message: &[u8],
+) -> Result<(), PqcVerifyError> {
+    match scheme_id {
+        HYBRID_SCHEME_ID_ED25519_ML_DSA_65 => {
+            let public_key = HybridPublicKey::from_canonical_bytes(public_key)
+                .map_err(|_| PqcVerifyError::DeserializationFailed)?;
+            let signature = HybridSignature::from_canonical_bytes(signature)
+                .map_err(|_| PqcVerifyError::DeserializationFailed)?;
+            HybridEd25519MlDsa
+                .verify(&public_key, SCHEME_DOMAIN_PQC_AUTH_TX, message, &signature)
+                .map_err(|_| PqcVerifyError::CryptoVerifyFailed)
+        }
+        crate::multisig::HYBRID_SCHEME_ID_MULTISIG => {
+            crate::multisig::verify_multisig(scheme_id, public_key, signature, message)
+        }
+        _ => Err(PqcVerifyError::SchemeMismatch),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,6 +675,85 @@ mod tests {
         let msg = b"shekyl hybrid pq signature test";
         let sig = scheme.sign(&sk, D, msg).unwrap();
         scheme.verify(&pk, D, msg, &sig).unwrap();
+    }
+
+    /// The one slot verifier every consumer calls: scheme 1 verifies a
+    /// signature made under the tx-auth domain and refuses, by the FFI's
+    /// discriminants, a wrong message, a garbled signature, a garbled key
+    /// and an unknown scheme. Scheme 2's arm is `verify_multisig`'s and is
+    /// held by that module's tests.
+    #[test]
+    fn verify_pqc_auth_dispatches_and_refuses_by_discriminant() {
+        let scheme = scheme();
+        let (pk, sk) = kp();
+        let msg = [0x5a; 32];
+        let sig = scheme.sign(&sk, SCHEME_DOMAIN_PQC_AUTH_TX, &msg).unwrap();
+        let pk_bytes = pk.to_canonical_bytes().unwrap();
+        let sig_bytes = sig.to_canonical_bytes().unwrap();
+        verify_pqc_auth(
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &pk_bytes,
+            &sig_bytes,
+            &msg,
+        )
+        .expect("a slot signed under the tx-auth domain verifies");
+        assert_eq!(
+            verify_pqc_auth(
+                HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                &pk_bytes,
+                &sig_bytes,
+                &[0x5b; 32]
+            ),
+            Err(PqcVerifyError::CryptoVerifyFailed),
+            "a different message"
+        );
+        let mut forged = sig_bytes.clone();
+        *forged.last_mut().unwrap() ^= 0x01;
+        assert_eq!(
+            verify_pqc_auth(HYBRID_SCHEME_ID_ED25519_ML_DSA_65, &pk_bytes, &forged, &msg),
+            Err(PqcVerifyError::CryptoVerifyFailed),
+            "a well-formed signature that does not verify"
+        );
+        assert_eq!(
+            verify_pqc_auth(
+                HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                &pk_bytes,
+                &sig_bytes[1..],
+                &msg
+            ),
+            Err(PqcVerifyError::DeserializationFailed),
+            "a signature that does not parse"
+        );
+        assert_eq!(
+            verify_pqc_auth(
+                HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                &pk_bytes[1..],
+                &sig_bytes,
+                &msg
+            ),
+            Err(PqcVerifyError::DeserializationFailed),
+            "a key that does not parse"
+        );
+        assert_eq!(
+            verify_pqc_auth(0x7f, &pk_bytes, &sig_bytes, &msg),
+            Err(PqcVerifyError::SchemeMismatch),
+            "an unknown scheme"
+        );
+        // The domain is the function's, not the caller's: a signature made
+        // under another surface's domain is not a tx auth.
+        let other = scheme
+            .sign(&sk, SCHEME_DOMAIN_EMISSION_CLAIM, &msg)
+            .unwrap();
+        assert_eq!(
+            verify_pqc_auth(
+                HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                &pk_bytes,
+                &other.to_canonical_bytes().unwrap(),
+                &msg
+            ),
+            Err(PqcVerifyError::CryptoVerifyFailed),
+            "another surface's domain"
+        );
     }
 
     /// SA-R-4 frozen v1 negative control (never regenerated).

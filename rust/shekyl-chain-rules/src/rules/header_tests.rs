@@ -234,6 +234,12 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         ) -> Result<AtHeight<crate::view::RecordedBlock>, Self::Fault> {
             Ok(AtHeight::AboveTip)
         }
+        fn height_of(
+            &self,
+            _: &shekyl_types::BlockHash,
+        ) -> Result<Option<shekyl_types::BlockHeight>, Self::Fault> {
+            Ok(None)
+        }
         fn root_at(
             &self,
             _: shekyl_types::BlockHeight,

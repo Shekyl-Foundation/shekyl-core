@@ -9,7 +9,7 @@
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
-use shekyl_types::{BlockHash, PrefixHash};
+use shekyl_types::{BlockHash, PrefixHash, SigningPayloadHash};
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
 };
@@ -289,8 +289,11 @@ fn prefix_only_tx(
 
 /// Per-input PQC signing-preimage hashes — delegates to the canonical
 /// [`shekyl_wire::Transaction::pqc_signing_payload_hashes`]
-/// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; C++ `get_transaction_signed_payload`).
-pub fn phase1_payload_hashes(input: &WireEncodeInput) -> Result<Vec<[u8; 32]>, TxBuilderError> {
+/// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1). Typed to the signing call: the
+/// hash degrades to bytes only where the primitive takes its message.
+pub fn phase1_payload_hashes(
+    input: &WireEncodeInput,
+) -> Result<Vec<SigningPayloadHash>, TxBuilderError> {
     Ok(build_wire_tx(input)?.pqc_signing_payload_hashes())
 }
 

@@ -4868,6 +4868,7 @@ dependencies = [
  "postcard",
  "postcard-schema",
  "serde",
+ "serde_json",
  "zeroize",
 ]
 

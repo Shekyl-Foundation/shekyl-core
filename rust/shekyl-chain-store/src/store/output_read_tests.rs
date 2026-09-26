@@ -11,7 +11,10 @@ use shekyl_types::{BlockHash, BlockHeight, KeyImage};
 
 use shekyl_chain_rules::RuleSet;
 
-use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend};
+use super::connect_fixtures::{
+    at, candidate, connect_chain, facts, judge, spend, spend_at, spendable_prefix,
+    FIRST_SPEND_HEIGHT,
+};
 use super::error::{StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -28,15 +31,27 @@ fn gi(raw: u64) -> shekyl_types::GlobalOutputIndex {
     shekyl_types::GlobalOutputIndex::from_raw(raw)
 }
 
-/// Three blocks: genesis (one miner output), a block with a two-output
-/// spend (plus its miner output), a block with one miner output. Global
-/// indices run 0..=4 in block / tx / vout order: 0 = miner@0, 1 = miner@1,
-/// 2 and 3 = the spend's vouts, 4 = miner@2.
+/// The spendable prefix (one miner output per block), a block with a
+/// two-output spend (plus its miner output), a block with one miner
+/// output. Global indices run in block / tx / vout order: one miner output
+/// per height up to and including the spend block's, then the spend's two
+/// vouts ([`SPEND_VOUT_0`], `+ 1`), then the last miner's ([`LAST_MINER`]);
+/// [`OUTPUT_COUNT`] in all.
 fn output_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>) {
     let store = ChainStore::create(path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![]]);
+    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)], vec![]]));
     (store, hashes)
 }
+
+/// The height [`output_chain`]'s spend sits at.
+const SPEND_HEIGHT: u64 = FIRST_SPEND_HEIGHT;
+/// The global index of the spend's first vout: one miner output per block
+/// through the spend block's own.
+const SPEND_VOUT_0: u64 = SPEND_HEIGHT + 1;
+/// The global index of the last block's miner output.
+const LAST_MINER: u64 = SPEND_VOUT_0 + 2;
+/// How many outputs [`output_chain`] records.
+const OUTPUT_COUNT: u64 = LAST_MINER + 1;
 
 // ------------------------------------------------------------ S-OUT-KI K1
 
@@ -44,7 +59,10 @@ fn output_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>) {
 fn has_key_image_is_true_for_a_spent_image_and_false_otherwise_on_one_snapshot() {
     let path = tmp("read-has-key-image");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![spend(15, 2)]]);
+    connect_chain(
+        &store,
+        &spendable_prefix(&[vec![spend(9, 2)], vec![spend(15, 2)]]),
+    );
     let snap = store.begin_read().expect("read");
     // N calls on one snapshot are the batch form `has_key_images` was
     // (SOK-3): every answer is against the same committed state.
@@ -71,7 +89,7 @@ fn has_key_image_is_true_for_a_spent_image_and_false_otherwise_on_one_snapshot()
 fn has_key_image_on_the_snapshot_and_in_the_batch_are_one_body() {
     let path = tmp("read-has-key-image-two-readers");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
+    connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
     let snap = store.begin_read().expect("read");
     let images = [fixture::point(9), fixture::point(16)];
     let from_snapshot: Vec<bool> = images
@@ -104,7 +122,7 @@ fn key_images_yields_exactly_the_connected_set() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     connect_chain(
         &store,
-        &[vec![], vec![spend(9, 2), spend(16, 2)], vec![spend(15, 2)]],
+        &spendable_prefix(&[vec![spend(9, 2), spend(16, 2)], vec![spend(15, 2)]]),
     );
     let snap = store.begin_read().expect("read");
     let mut scanned: Vec<[u8; 32]> = snap
@@ -140,13 +158,18 @@ fn key_images_on_an_empty_chain_is_an_empty_scan_not_an_error() {
 fn a_snapshot_sees_one_committed_state_across_a_concurrent_connect() {
     let path = tmp("read-key-images-snapshot-isolation");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
+    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
     let snap = store.begin_read().expect("read");
     // Connect another spend after the snapshot was taken.
-    let cand = candidate(2, hashes[1], vec![spend(15, 2)]);
+    let next = FIRST_SPEND_HEIGHT + 1;
+    let cand = candidate(
+        next,
+        hashes[at(FIRST_SPEND_HEIGHT)],
+        vec![spend_at(&hashes, next, 15, 2)],
+    );
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        batch.connect(judge(&view, cand)?, facts(2, 0), RuleSet::GENESIS)?;
+        batch.connect(judge(&view, cand)?, facts(next, 0), RuleSet::GENESIS)?;
         Ok(())
     });
     out.expect("connect");
@@ -184,26 +207,29 @@ fn output_is_recorded_at_every_index_below_the_count_and_beyond_count_from_it() 
             height: h(0),
         })
     );
-    // Index 3: the spend's second vout, recorded at height 1. The expected
+    // The spend's second vout, recorded at the spend height. The expected
     // key and mask are the fixture's by name — `spend(_, 2)` keys its
     // outputs `point(1), point(2)` and masks them `point(2), point(3)` — so
     // this pins the store's read to the fixture's construction, never to a
     // literal that would follow whatever the code produced.
     assert_eq!(
-        snap.output(gi(3)).expect("read"),
+        snap.output(gi(SPEND_VOUT_0 + 1)).expect("read"),
         AtIndex::Recorded(RecordedOutput {
             pubkey: shekyl_types::OneTimePubkey::from_bytes(fixture::point(2)),
             commitment: shekyl_types::CommitmentBytes::from_bytes(fixture::point(3)),
-            height: h(1),
+            height: h(SPEND_HEIGHT),
         })
     );
-    // Index 4 is the last; 5 and beyond are `BeyondCount`, never an error
-    // and never a default.
+    // The last miner output is the last index; the count and beyond are
+    // `BeyondCount`, never an error and never a default.
     assert!(matches!(
-        snap.output(gi(4)).expect("read"),
+        snap.output(gi(LAST_MINER)).expect("read"),
         AtIndex::Recorded(_)
     ));
-    assert_eq!(snap.output(gi(5)).expect("read"), AtIndex::BeyondCount);
+    assert_eq!(
+        snap.output(gi(OUTPUT_COUNT)).expect("read"),
+        AtIndex::BeyondCount
+    );
     assert_eq!(
         snap.output(gi(u64::MAX)).expect("read"),
         AtIndex::BeyondCount
@@ -216,16 +242,16 @@ fn output_origin_is_the_global_read_and_agrees_with_output_on_every_index() {
     let path = tmp("read-output-origin");
     let (store, hashes) = output_chain(&path);
     let snap = store.begin_read().expect("read");
-    // The spend at height 1 produced indices 2 and 3 as vouts 0 and 1.
-    let AtIndex::Recorded(origin) = snap.output_origin(gi(2)).expect("read") else {
-        panic!("index 2 is recorded");
+    // The spend produced two consecutive indices as vouts 0 and 1.
+    let AtIndex::Recorded(origin) = snap.output_origin(gi(SPEND_VOUT_0)).expect("read") else {
+        panic!("index {SPEND_VOUT_0} is recorded");
     };
     assert_eq!(
         origin.local_index,
         shekyl_types::OutputIndexInTx::from_raw(0)
     );
-    let AtIndex::Recorded(origin3) = snap.output_origin(gi(3)).expect("read") else {
-        panic!("index 3 is recorded");
+    let AtIndex::Recorded(origin3) = snap.output_origin(gi(SPEND_VOUT_0 + 1)).expect("read") else {
+        panic!("index {} is recorded", SPEND_VOUT_0 + 1);
     };
     assert_eq!(origin3.tx_hash, origin.tx_hash, "same spend");
     assert_eq!(
@@ -238,13 +264,13 @@ fn output_origin_is_the_global_read_and_agrees_with_output_on_every_index() {
     };
     assert_ne!(miner0.tx_hash.as_bytes(), hashes[0].as_bytes());
     assert_eq!(
-        snap.output_origin(gi(5)).expect("read"),
+        snap.output_origin(gi(OUTPUT_COUNT)).expect("read"),
         AtIndex::BeyondCount
     );
 
     // SOK-2 from the read side: `output_amounts[(0, i)].output_id == i` for
     // every recorded index, so O1 and O2 at `i` describe one output.
-    for i in 0..5u64 {
+    for i in 0..OUTPUT_COUNT {
         let amounts = snap.open_table(OUTPUT_AMOUNTS).expect("t");
         let record = amounts
             .get(OutputSlot::confidential(gi(i)).key())
@@ -263,15 +289,15 @@ fn a_hole_below_the_output_count_is_si9_not_beyond_count() {
     let path = tmp("read-output-hole");
     let (store, _) = output_chain(&path);
     drop(store);
-    // Plant the hole through the raw engine: remove `(0, 2)` from
-    // `output_amounts`, leaving `output_txs`' count at 5.
+    // Plant the hole through the raw engine: remove the spend's first vout
+    // from `output_amounts`, leaving `output_txs`' count where it was.
     {
         let db = redb::Database::open(&path).expect("open raw");
         let txn = db.begin_write().expect("write");
         {
             let mut amounts = txn.open_table(OUTPUT_AMOUNTS).expect("t");
             amounts
-                .remove(OutputSlot::confidential(gi(2)).key())
+                .remove(OutputSlot::confidential(gi(SPEND_VOUT_0)).key())
                 .expect("remove");
         }
         txn.commit().expect("commit");
@@ -279,7 +305,7 @@ fn a_hole_below_the_output_count_is_si9_not_beyond_count() {
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
     let err = snap
-        .output(gi(2))
+        .output(gi(SPEND_VOUT_0))
         .expect_err("a hole below the count is corruption");
     assert!(
         matches!(
@@ -288,12 +314,15 @@ fn a_hole_below_the_output_count_is_si9_not_beyond_count() {
         ),
         "a hole below the count is SI-9 — the count and the keys disagree — got {err:?}"
     );
-    // The neighbours are unaffected, and the count still says 5.
+    // The neighbours are unaffected, and the count still says what it did.
     assert!(matches!(
-        snap.output(gi(3)).expect("read"),
+        snap.output(gi(SPEND_VOUT_0 + 1)).expect("read"),
         AtIndex::Recorded(_)
     ));
-    assert_eq!(snap.output(gi(5)).expect("read"), AtIndex::BeyondCount);
+    assert_eq!(
+        snap.output(gi(OUTPUT_COUNT)).expect("read"),
+        AtIndex::BeyondCount
+    );
     // The read never armed the writer (the halt is the writer's state).
     assert_eq!(store.connect_state(), ConnectState::Live);
     let _ = store;
@@ -350,7 +379,7 @@ fn a_row_whose_output_id_disagrees_with_its_slot_is_si9_not_served() {
 #[test]
 fn a_stray_row_at_or_beyond_the_count_is_beyond_count_not_served() {
     // Bound first: the count (`output_txs.len()`) decides what exists, so a
-    // row planted at index 9 in `output_amounts` is not `Recorded` — the
+    // row planted at the count in `output_amounts` is not `Recorded` — the
     // reads never look past the count.
     let path = tmp("read-output-stray");
     let (store, _) = output_chain(&path);
@@ -369,7 +398,7 @@ fn a_stray_row_at_or_beyond_the_count_is_beyond_count_not_served() {
                 .expect("decodes");
             amounts
                 .insert(
-                    OutputSlot::confidential(gi(9)).key(),
+                    OutputSlot::confidential(gi(OUTPUT_COUNT)).key(),
                     record.encoded().as_encoded(),
                 )
                 .expect("plant");
@@ -378,9 +407,12 @@ fn a_stray_row_at_or_beyond_the_count_is_beyond_count_not_served() {
     }
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
-    assert_eq!(snap.output(gi(9)).expect("read"), AtIndex::BeyondCount);
     assert_eq!(
-        snap.output_origin(gi(9)).expect("read"),
+        snap.output(gi(OUTPUT_COUNT)).expect("read"),
+        AtIndex::BeyondCount
+    );
+    assert_eq!(
+        snap.output_origin(gi(OUTPUT_COUNT)).expect("read"),
         AtIndex::BeyondCount
     );
     cleanup(&path);

@@ -15,7 +15,7 @@ use crate::fault::{Corrupt, FormAttempt};
 use crate::harness::fixture::{candidate_on, recorded, root};
 use crate::harness::{
     assert_refused, boundary_pair, expected_seed, formed_on, judged, Faulted, FaultingView,
-    MockChain, MockSubstrate,
+    MockChain, MockSubstrate, WithheldRead,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule};
@@ -290,44 +290,6 @@ fn cen_c3_propagates_a_fault_and_derives_nothing() {
     );
 }
 
-/// A view whose tip says one thing and whose rows say another: `block_at`
-/// answers `AboveTip` at `hole`, a height below the tip. What SI-7 forbids
-/// a conforming store from producing — constructed here because a rule
-/// that reads below the tip must not trust that it never will.
-struct HoleyView<'a, 'id> {
-    inner: crate::harness::MockView<'a, 'id>,
-    hole: BlockHeight,
-}
-
-impl<'id> ChainView<'id> for HoleyView<'_, 'id> {
-    type Fault = core::convert::Infallible;
-
-    fn has_key_image(&self, key_image: &shekyl_types::KeyImage) -> Result<bool, Self::Fault> {
-        self.inner.has_key_image(key_image)
-    }
-
-    fn block_at(
-        &self,
-        height: BlockHeight,
-    ) -> Result<crate::view::AtHeight<crate::view::RecordedBlock>, Self::Fault> {
-        if height == self.hole {
-            return Ok(crate::view::AtHeight::AboveTip);
-        }
-        self.inner.block_at(height)
-    }
-
-    fn root_at(
-        &self,
-        height: BlockHeight,
-    ) -> Result<crate::view::AtHeight<shekyl_types::CurveTreeRoot>, Self::Fault> {
-        self.inner.root_at(height)
-    }
-
-    fn tip(&self) -> Result<Option<crate::view::Tip>, Self::Fault> {
-        self.inner.tip()
-    }
-}
-
 #[test]
 fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
     // Until 2026-09-24 the window's two `AboveTip` arms were `unreachable!`,
@@ -338,11 +300,14 @@ fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
     let chain = chain_with(&[100, 220, 340, 460]);
     let hole = BlockHeight::from_raw(2);
     chain.with_view(|inner| {
-        let view = HoleyView { inner, hole };
+        let view = inner.withholding(WithheldRead::BlockAt(hole));
         let mut coverage = RuleCoverage::EMPTY;
         assert_eq!(
             C3::window(&view, BlockHeight::from_raw(4), &mut coverage),
-            Err(ViewRead::Corrupt(Corrupt::HoleBelowTip { at: hole }))
+            Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+                at: hole,
+                record: crate::fault::PerHeightRecord::Block,
+            }))
         );
         // Through the stage: the same fault, in `Fault`'s clothing.
         let formed = formed_on(&chain, candidate_at(&chain, 500));
@@ -350,17 +315,23 @@ fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
         assert!(
             matches!(
                 outcome,
-                Err(crate::fault::Fault::Corrupt(Corrupt::HoleBelowTip { at })) if at == hole
+                Err(crate::fault::Fault::Corrupt(Corrupt::HoleBelowTip {
+                    at,
+                    record: crate::fault::PerHeightRecord::Block,
+                })) if at == hole
             ),
             "{outcome:?}"
         );
     });
     // The producer's read of the same operand reports the same fault.
     chain.with_view(|inner| {
-        let view = HoleyView { inner, hole };
+        let view = inner.withholding(WithheldRead::BlockAt(hole));
         assert_eq!(
             mtp_median_at(&view, BlockHeight::from_raw(4)),
-            Err(ViewRead::Corrupt(Corrupt::HoleBelowTip { at: hole }))
+            Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+                at: hole,
+                record: crate::fault::PerHeightRecord::Block,
+            }))
         );
     });
 }

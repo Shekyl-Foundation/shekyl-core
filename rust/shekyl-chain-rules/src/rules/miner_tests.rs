@@ -542,8 +542,12 @@ fn shipped_parameters_price_the_tail() {
 /// reach any rule, coinbase or not.
 #[test]
 fn f2_the_wire_admits_one_transaction_version() {
+    // Four rows on one property: the coinbase's version (F2), the listed
+    // transaction's (H2, H13), and CEN-I3's "exactly 3" — the C++'s
+    // `min == max == 3` inside the FAKECHAIN gate, unconditional here
+    // because the wire admits nothing else (slice 6 Q3).
     credited_to_this_falsifier(
-        &[CenRow::F2, CenRow::H2, CenRow::H13],
+        &[CenRow::F2, CenRow::H2, CenRow::H13, CenRow::I3],
         "f2_the_wire_admits_one_transaction_version",
     );
     let tx = coinbase(1);

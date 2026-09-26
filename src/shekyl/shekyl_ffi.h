@@ -1402,6 +1402,32 @@ int32_t shekyl_coinbase_extra(
     char* out_msg,
     size_t out_msg_cap);
 
+/// The PQC signing preimage (FCMP_SPEND_SIGNING_PREIMAGE.md §1.1; CEN-I17),
+/// derived by shekyl-wire — the one derivation the wallet signs over and the
+/// daemon verifies against (E6 slice 6 commit 7 retired the C++ assembly in
+/// tx_pqc_verify.cpp). Every input's signed hash, 32 bytes each in input
+/// order, written into `out` (room for `out_cap` hashes — the input count,
+/// since an admitted body carries one authentication per input);
+/// `*out_count` is how many were written (0 for a body with no per-input
+/// authentication: a coinbase, the serve-credit form, a storage-pruned spend).
+#define SHEKYL_TX_SIGNING_OK           0
+/// A required pointer was null.
+#define SHEKYL_TX_SIGNING_ERR_NULL_PTR 1
+/// The bytes are not a transaction (do not parse, or not exactly); nothing
+/// is derived from bytes that are not one. out_msg carries the parser's
+/// sentence.
+#define SHEKYL_TX_SIGNING_MALFORMED    2
+/// More per-input authentications than out_cap hashes fit; nothing written.
+#define SHEKYL_TX_SIGNING_CAPACITY     3
+int32_t shekyl_tx_pqc_signing_payload_hashes(
+    const uint8_t* tx,
+    size_t tx_len,
+    uint8_t* out,
+    size_t out_cap,
+    size_t* out_count,
+    char* out_msg,
+    size_t out_msg_cap);
+
 /// Compose every curve-tree layer ABOVE the leaf layer, narrow from the leaf-chunk
 /// layer — the correct producer-side grow that telescopes to the reference root
 /// (fixes the depth-3 layer-2 incremental-deepening divergence: an in-place deepen
@@ -2576,35 +2602,47 @@ uint64_t shekyl_archival_settlement_epoch_at_height(uint64_t block_height);
 /// length itself; the schedule functions here consume it internally.
 uint64_t shekyl_archival_settlement_epoch_blocks(void);
 
+/// The effective reorg cap in blocks (genesis-pinned D_max, 720, or the
+/// armed SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS override — the fakechain-only
+/// regtest lever beside the epoch's). Read only to report the schedule.
+uint64_t shekyl_archival_reorg_depth_blocks(void);
+
 /// True iff a SHEKYL_SETTLEMENT_EPOCH_BLOCKS override is active (effective
 /// schedule differs from the genesis default — which requires this process
 /// to have armed via shekyl_archival_settlement_epoch_arm_regtest). Drives
 /// the daemon's loud fakechain warning.
 bool shekyl_archival_settlement_epoch_overridden(void);
 
-/// True iff SHEKYL_SETTLEMENT_EPOCH_BLOCKS is present in the environment at
-/// all (no validation, no schedule latch). Drives Blockchain::init's
+/// True iff SHEKYL_SETTLEMENT_EPOCH_BLOCKS or SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS
+/// is present in the environment at all (no validation, no schedule latch).
+/// Drives Blockchain::init's
 /// fail-closed public-network refusal: the schedule is consensus, and on a
 /// non-FAKECHAIN net the lever's presence is the operator error to refuse
 /// on, before any question of the value's validity.
 bool shekyl_archival_settlement_epoch_override_present(void);
 
-/// Arm the SHEKYL_SETTLEMENT_EPOCH_BLOCKS override (FAKECHAIN startup path
-/// only), latching the validated override (or the genesis pin when unset).
-/// An unarmed process ignores the lever entirely.
+/// Arm the regtest schedule levers, SHEKYL_SETTLEMENT_EPOCH_BLOCKS and
+/// SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS (FAKECHAIN startup path only),
+/// latching the validated pair (or the genesis pins when unset). The epoch
+/// is parsed against the cap: SEB <= cap is refused. An unarmed process
+/// ignores the levers entirely.
 ///
-/// Returns one of SHEKYL_ARCHIVAL_SEB_ARM_* below, because the two refusals
+/// Returns one of SHEKYL_ARCHIVAL_SEB_ARM_* below, because the refusals
 /// need different remedies.
 uint8_t shekyl_archival_settlement_epoch_arm_regtest(void);
 
-/// Armed (or the variable is unset and the genesis pin latched).
+/// Armed (or the variables are unset and the genesis pins latched).
 #define SHEKYL_ARCHIVAL_SEB_ARM_OK                   0
-/// The value is not an integer in the accepted range — an operator input
-/// error: fix the value or unset the variable.
+/// SHEKYL_SETTLEMENT_EPOCH_BLOCKS is not an integer strictly above the reorg
+/// cap in force and at most the genesis pin — an operator input error: fix
+/// the value, lower SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS with it, or unset it.
 #define SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID          1
 /// The schedule already latched before the call — an initialization-order
 /// defect in the daemon, NOT a bad value.
 #define SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE         2
+/// SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS is not an integer in 1..=the genesis
+/// reorg depth — an operator input error.
+#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP 3
 
 /// Returns 1 and writes the settlement epoch whose close is processed at
 /// `block_height`; 0 (no write) at height 0 or non-boundary heights.

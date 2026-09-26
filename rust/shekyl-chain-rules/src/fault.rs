@@ -50,7 +50,7 @@ use crate::rule_set::RuleSet;
 /// What `validate` can fail with: the view's own fault, or one of the two
 /// kinds this crate defines. Matched arm by arm — `?` on the caller's side
 /// propagates the whole enum, never a part of it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Fault<V> {
     /// The view's substrate could not answer. Opaque; the store's own
     /// error for its projection.
@@ -66,7 +66,7 @@ pub enum Fault<V> {
 }
 
 /// A premise `form` was given that the committing view refutes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stale {
     /// The seed `form` computed the longhash under is not the block id at
     /// the seed height on the chain this block is connecting onto (CEN-D3).
@@ -87,26 +87,51 @@ pub enum Stale {
     /// the id alone cannot tell `GENESIS` from `fakechain(n)`, or two
     /// different `n`.
     ///
-    /// **This arm is what sizes [`Fault`]** (112 bytes at slice 5 with
+    /// **This arm is what sized [`Fault`]** (112 bytes at slice 5 with
     /// `RuleSet` at 48): it carries two rule sets by value, so every byte
-    /// `RuleSet` gains is charged twice here. That is the first cost slice 2
-    /// Q10 has presented — making the rule set runtime-parameterised made
+    /// `RuleSet` gains was charged twice here. That is the first cost slice
+    /// 2 Q10 has presented — making the rule set runtime-parameterised made
     /// `RuleSetId` stop being a key, and anything that round-trips a rule
     /// set must carry the value. Not a reason to reverse Q10 (the
     /// fixed-difficulty lever being impossible on public nets *by type* is
-    /// worth more than a struct's width); a reason to know where the next
-    /// size problem in this crate comes from. If it ever matters, the fix is
-    /// **boxing this payload**, which keeps the by-value comparison the
-    /// Fakechain caveat requires — not shrinking `RuleSet`, and not keeping
-    /// limits off it that a schedule step could vary (slice 5 Q5, corrected).
+    /// worth more than a struct's width). It mattered when `reorg_cap`
+    /// joined the set (PR #861: `RuleSet` 56, `Fault` past clippy's 128) and
+    /// the fix is the one written here in advance — **the payload is
+    /// boxed**, which keeps the by-value comparison the Fakechain caveat
+    /// requires — not shrinking `RuleSet`, and not keeping limits off it
+    /// that a schedule step could vary (slice 5 Q5, corrected). `Fault` and
+    /// `Stale` are `Clone`, not `Copy`, for this box.
     RuleSet {
         /// What `form` was given.
-        formed_under: RuleSet,
+        formed_under: Box<RuleSet>,
         /// What `validate` was given.
-        in_force: RuleSet,
+        in_force: Box<RuleSet>,
         /// Whether `form` may be run again.
         retry: Retry,
     },
+}
+
+/// Which per-height record a [`Corrupt::HoleBelowTip`] failed to find.
+///
+/// The fault class is one — a view whose tip and rows disagree (SI-7) —
+/// and the record is data, because the store maps it onto the cell that
+/// was read. A root hole reported as the block row would halt the writer
+/// against the wrong table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PerHeightRecord {
+    /// [`crate::ChainView::block_at`]. The store's `block_info` cell.
+    Block,
+    /// [`crate::ChainView::root_at`]. The store's `curve_tree_roots` cell.
+    CurveTreeRoot,
+}
+
+impl fmt::Display for PerHeightRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Block => "block",
+            Self::CurveTreeRoot => "curve-tree root",
+        })
+    }
 }
 
 /// View data that violates a store invariant, observed by a rule.
@@ -137,11 +162,12 @@ pub enum Corrupt {
         /// The upper height of the pair whose prefix sum is below the lower's.
         at: BlockHeight,
     },
-    /// `block_at(at)` answered `AboveTip` for a height a rule reads as
-    /// **below** the connecting height — the parent, a window member, the
-    /// seed height, block 0. A conforming store reports a hole below its
-    /// tip as its own fault (SI-7) before a rule can see one; a view that
-    /// answers `AboveTip` there is a view whose tip and rows disagree.
+    /// A per-height read answered `AboveTip` for a height a rule reads as
+    /// **below** the connecting height: the parent, a window member, the
+    /// seed height, block 0, a spend's reference height. `record` says
+    /// which read. A conforming store reports a hole below its tip as
+    /// its own fault (SI-7) before a rule can see one; a view that answers
+    /// `AboveTip` there is a view whose tip and rows disagree.
     ///
     /// Until 2026-09-24 four sites carried this as `unreachable!`, each
     /// arguing from SI-7 that the arm had no producer. That is a store
@@ -153,6 +179,8 @@ pub enum Corrupt {
     HoleBelowTip {
         /// The height that should have been recorded.
         at: BlockHeight,
+        /// Which record was missing. The store maps this onto the cell.
+        record: PerHeightRecord,
     },
 }
 
@@ -289,9 +317,9 @@ impl fmt::Display for Corrupt {
                 f,
                 "cumulative transaction count decreases at height {at:?} (SI-13)"
             ),
-            Self::HoleBelowTip { at } => write!(
+            Self::HoleBelowTip { at, record } => write!(
                 f,
-                "no block recorded at height {at:?}, below the connecting height (SI-7)"
+                "no {record} recorded at height {at:?}, below the connecting height (SI-7)"
             ),
         }
     }

@@ -104,7 +104,8 @@ pub(crate) use property::ProbeCell;
 pub use property::{
     ApplyPolicyCell, ArchivalLastSlashEpochCell, CellScope, ChainState, CoverageGapsCell,
     EngineLocal, PassedThroughFactsCell, PropertyCell, PropertyCellBytes, PropertyCellSpec,
-    SchemaVersionCell, Scope, SettlementEpochBlocksCell, TotalBurnedCell, PROPERTY_CELLS,
+    SchemaVersionCell, Scope, SettlementEpochBlocksCell, TotalBurnedCell, UndoLogFloorCell,
+    PROPERTY_CELLS,
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
 pub use settlement_epoch::SettlementEpochBlocks;

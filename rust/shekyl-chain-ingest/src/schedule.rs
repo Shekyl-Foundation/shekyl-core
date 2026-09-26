@@ -16,8 +16,11 @@
 //!   resolution cannot fail;
 //! - **regtest**, which `shekyl_address::Network` cannot name (slice 2 F10:
 //!   no Fakechain variant): the genesis rules, with the target **fixed**
-//!   when `--fixed-difficulty n` is given — `RuleSet::fakechain(n)`,
-//!   the one constructor of a non-issued set. Without the flag a regtest
+//!   when `--fixed-difficulty n` is given — `RuleSet::fakechain(Some(n),
+//!   D_MAX)`, the one constructor of a non-issued set. The cap is `D_MAX`
+//!   because the driver's store runs the production epoch
+//!   (`shekyl-chain-replay`: the epoch is a consensus constant, not a
+//!   knob); a regtest daemon under a shortened epoch names a smaller cap. Without the flag a regtest
 //!   run uses the genesis LWMA rules, exactly as `shekyld --regtest` does
 //!   with its `--fixed-difficulty` at the default `0` = not fixed.
 //!
@@ -41,7 +44,7 @@
 use core::num::NonZeroU128;
 
 use shekyl_address::Network;
-use shekyl_chain_rules::{ReleaseAnchors, RuleSchedule, RuleSet, Trust};
+use shekyl_chain_rules::{ReleaseAnchors, RuleSchedule, RuleSet, Trust, D_MAX};
 use shekyl_types::BlockHeight;
 
 use crate::corpus::CorpusNet;
@@ -116,7 +119,7 @@ impl ChainRules {
             }
             Self::Regtest {
                 fixed_difficulty: Some(n),
-            } => RuleSet::fakechain(n),
+            } => RuleSet::fakechain(Some(n), D_MAX),
             Self::Regtest {
                 fixed_difficulty: None,
             } => RuleSet::GENESIS,
@@ -174,7 +177,7 @@ mod tests {
         assert_eq!(plain.in_force(BlockHeight::from_raw(5)), RuleSet::GENESIS);
         let fixed = ChainRules::new(Chain::Regtest, Some(nz(7))).expect("regtest");
         let set = fixed.in_force(BlockHeight::from_raw(5));
-        assert_eq!(set, RuleSet::fakechain(nz(7)));
+        assert_eq!(set, RuleSet::fakechain(Some(nz(7)), D_MAX));
         assert_ne!(set, RuleSet::GENESIS, "same id, different set");
         assert_eq!(set.id(), RuleSet::GENESIS.id());
         // No release vouches for a regtest chain, flag or no flag.

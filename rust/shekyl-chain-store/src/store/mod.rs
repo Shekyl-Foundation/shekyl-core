@@ -100,6 +100,7 @@ mod invariant;
 mod keyed;
 mod output_reads;
 mod pop;
+mod prune;
 mod read;
 mod shared;
 mod tx_reads;
@@ -119,8 +120,9 @@ pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
 pub use output_reads::RecordedOutput;
 pub use pop::Popped;
+pub use prune::{Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
-pub use tx_reads::{Prunable, SegmentBytes, TxLocation, TxRecord};
+pub use tx_reads::{PqcAuths, Prunable, SegmentBytes, TxLocation, TxRecord};
 pub use undo::Restorable;
 pub use view::BatchView;
 pub use write::WriteBatch;
@@ -167,7 +169,9 @@ pub const CACHE_SIZE: usize = 1024 * 1024 * 1024;
 pub struct ChainStore {
     backend: Backend,
     apply_policy: ApplyPolicy,
-    settlement_epoch_blocks: SettlementEpochBlocks,
+    /// The settlement schedule this file is pinned to and the undo-log
+    /// retention this session runs (DRS-E1 S-PRUNE, `store/prune.rs`).
+    horizons: Horizons,
     shared: Shared,
 }
 
@@ -181,7 +185,7 @@ impl core::fmt::Debug for ChainStore {
         f.debug_struct("ChainStore")
             .field("read_only", &self.is_read_only())
             .field("apply_policy", &self.apply_policy)
-            .field("settlement_epoch_blocks", &self.settlement_epoch_blocks)
+            .field("horizons", &self.horizons)
             .field("provenance", &self.provenance())
             .finish_non_exhaustive()
     }
@@ -203,6 +207,24 @@ impl ChainStore {
         Self::with_apply_policy(path, ApplyPolicy::default(), epoch)
     }
 
+    /// Create or open the store with an explicit [`ApplyPolicy`] under the
+    /// **production** undo-log retention, `D_max`
+    /// ([`Horizons::production`]).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreCannot::RetentionNotInsideEpoch`] if `epoch ≤ D_max` — a
+    /// shortened schedule names its own retention through
+    /// [`with_horizons`](Self::with_horizons); otherwise as
+    /// [`with_horizons`](Self::with_horizons).
+    pub fn with_apply_policy(
+        path: impl AsRef<Path>,
+        apply_policy: ApplyPolicy,
+        epoch: SettlementEpochBlocks,
+    ) -> Result<Self, StoreError> {
+        Self::with_horizons(path, apply_policy, Horizons::production(epoch)?)
+    }
+
     /// Create or open the store with an explicit [`ApplyPolicy`].
     ///
     /// The policy is this **session's** intent, taken at construction so a
@@ -213,10 +235,14 @@ impl ChainStore {
     /// provenance is [`Provenance::FULL`] is parity evidence — a `Full`
     /// session over a tainted file does not clean it.
     ///
-    /// `epoch` is the settlement-epoch schedule this session runs under
-    /// (the caller's — `shekyl-archival-retention`'s effective value; the
-    /// store never reads the environment). A fresh file is **pinned** to it
-    /// in the seal; an existing file's pin must equal it (SCW-2).
+    /// `horizons` carries the settlement-epoch schedule this session runs
+    /// under (the caller's — `shekyl-archival-retention`'s effective value;
+    /// the store never reads the environment) and the undo-log retention
+    /// the boundary prune keeps (DRS-E1 S-PRUNE; `D_max` in production). A
+    /// fresh file is **pinned** to the schedule in the seal; an existing
+    /// file's pin must equal it (SCW-2). The retention is a session
+    /// parameter, not pinned: what it has retired is recorded by the
+    /// `undo_log_floor` cell.
     ///
     /// # Errors
     ///
@@ -231,11 +257,12 @@ impl ChainStore {
     /// can vouch for. A fresh file the engine refuses to take, or that
     /// cannot be sealed, is removed again, so a failed create does not
     /// leave a headerless file the next open refuses.
-    pub fn with_apply_policy(
+    pub fn with_horizons(
         path: impl AsRef<Path>,
         apply_policy: ApplyPolicy,
-        epoch: SettlementEpochBlocks,
+        horizons: Horizons,
     ) -> Result<Self, StoreError> {
+        let epoch = horizons.epoch();
         apply_policy
             .reject_empty_stub()
             .map_err(|crate::apply_policy::EmptyApplyStub| StoreCannot::EmptyApplyStub)?;
@@ -289,7 +316,7 @@ impl ChainStore {
         Ok(Self {
             backend: Backend::Writable(db),
             apply_policy,
-            settlement_epoch_blocks: epoch,
+            horizons,
             shared: Shared::new(provenance),
         })
     }
@@ -298,7 +325,13 @@ impl ChainStore {
     /// session's by construction, since a mismatch refuses the open.
     #[must_use]
     pub const fn settlement_epoch_blocks(&self) -> SettlementEpochBlocks {
-        self.settlement_epoch_blocks
+        self.horizons.epoch()
+    }
+
+    /// The schedule and the undo-log retention this session runs under.
+    #[must_use]
+    pub const fn horizons(&self) -> Horizons {
+        self.horizons
     }
 
     /// The policy this session was opened under.
@@ -339,18 +372,20 @@ impl ChainStore {
 
     /// Open an **existing** store without the ability to write.
     ///
-    /// The schedule pin is checked here too: a reader interprets
-    /// epoch-derived rows, so a reader under the wrong schedule is as
-    /// mislabeled as a writer.
+    /// `horizons` is the same session pair a writer names
+    /// ([`with_horizons`](Self::with_horizons)). The file checks the epoch
+    /// pin: a reader interprets epoch-derived rows, so a reader under the
+    /// wrong schedule is as mislabeled as a writer. The retention is not
+    /// stored in the file — the `undo_log_floor` cell records what was
+    /// retired — so a reader reports the retention it was given, and that
+    /// pair has already passed [`Horizons::new`]. A reader retires nothing.
     ///
     /// # Errors
     ///
     /// [`EngineError::Open`] if the file is absent or cannot be opened; the
     /// same header refusals as [`with_apply_policy`](Self::with_apply_policy).
-    pub fn open_read_only(
-        path: impl AsRef<Path>,
-        epoch: SettlementEpochBlocks,
-    ) -> Result<Self, StoreError> {
+    pub fn open_read_only(path: impl AsRef<Path>, horizons: Horizons) -> Result<Self, StoreError> {
+        let epoch = horizons.epoch();
         let db = redb::Builder::new()
             .set_cache_size(CACHE_SIZE)
             .open_read_only(path)
@@ -361,7 +396,7 @@ impl ChainStore {
             // A read-only handle writes nothing, so its session policy is
             // vacuously Full; the file's history is `provenance`.
             apply_policy: ApplyPolicy::Full,
-            settlement_epoch_blocks: epoch,
+            horizons,
             shared: Shared::new(provenance),
         })
     }
@@ -467,7 +502,7 @@ impl ChainStore {
         };
         // From here the batch owns the write slot: its Drop releases it on
         // every exit, including `complete` and an unwind out of `f`.
-        let mut batch = WriteBatch::new(txn, self.apply_policy, &self.shared);
+        let mut batch = WriteBatch::new(txn, self.apply_policy, &self.shared, self.horizons);
         let outcome = f(&mut batch);
         batch.complete(outcome)
     }
@@ -504,7 +539,7 @@ impl ChainStore {
                 return Err(e.into());
             }
         };
-        let mut batch = WriteBatch::new(txn, self.apply_policy, &self.shared);
+        let mut batch = WriteBatch::new(txn, self.apply_policy, &self.shared, self.horizons);
         let outcome = f(&mut batch);
         batch.abandon(outcome)
     }
@@ -595,6 +630,10 @@ mod conformance_tests;
 #[cfg(test)]
 #[path = "pop_tests.rs"]
 mod pop_tests;
+
+#[cfg(test)]
+#[path = "prune_tests.rs"]
+mod prune_tests;
 
 #[cfg(test)]
 #[path = "amendments_tests.rs"]

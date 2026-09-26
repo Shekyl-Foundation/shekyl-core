@@ -496,7 +496,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             .sign(
                 &keys.hybrid_sign_sk,
                 shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-                &emission_payload_hash,
+                emission_payload_hash.as_bytes(),
             )
             .map_err(|e| BondAssemblyError::build("emission pqc auth signing", e))?;
         pqc_auths.push(PqcAuth {

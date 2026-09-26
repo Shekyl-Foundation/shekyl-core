@@ -7,7 +7,8 @@
 
 Every 32-byte chain identity leaving the wire crate is a `shekyl-types`
 newtype — `TxHash`, `BlockHash`, `CurveTreeRoot`, `AttestationRoot`,
-`PrefixHash`, `PqcAuthHash`, `PrunableHash`, `PCanonicalId`. What remains raw
+`PrefixHash`, `PqcAuthHash`, `PrunableHash`, `SigningPayloadHash`,
+`PCanonicalId`. What remains raw
 is raw for a reason, and this gate is where the reason lives.
 
 Without it RTN-7 is a cleanup that decays invisibly: `RAW_TYPE_NEWTYPE_MIGRATION.md`
@@ -121,17 +122,12 @@ ALLOWED: dict[str, Allow] = {
         "field; typing it is the key-image exposure question, not this gate's",
         "shekyl-wallet-rpc / shekyl-scanner",
     ),
-    # A signing preimage that is NOT a txid component, so it is not a member
-    # of the component-hash family Q3 typed `prefix_hash` into.
-    "transaction.rs::pqc_signing_payload_hashes()": Allow(
-        "per-input §1.5 signing payload digests — one message per `pqc_auths` "
-        "entry, not a component of any txid (unlike `prefix_hash`, which is the "
-        "txid's first component and so became `PrefixHash`). No component-hash "
-        "family member fits, and minting one for a single consumer would be the "
-        "fresh-name-for-nothing Q3 declined. Reopen if a second consumer "
-        "appears, or if any site can pass one where a txid component is expected",
-        "shekyl-tx-builder (sign_pqc_auths consumes these as messages)",
-    ),
+    # `transaction.rs::pqc_signing_payload_hashes()` was allowlisted here
+    # ("minting a name for a single consumer is the fresh-name-for-nothing Q3
+    # declined; reopen if a second consumer appears"). The criterion fired
+    # 2026-09-25 — E6 slice 6 commit 7 made the value the daemon's
+    # (`shekyl_tx_pqc_signing_payload_hashes`) and the validator's (CEN-I17)
+    # as well as the builder's — and it became `shekyl_types::SigningPayloadHash`.
     # `tx_extra.rs::PqcOwnershipEntry.group_id` was allowlisted here (RTN-7
     # Q2's adjacency discriminator); the cell was deleted with tag 0x05
     # (REJECTED 2026-09-22, PQC_MULTISIG.md §7.4 "Retired tag"), and an

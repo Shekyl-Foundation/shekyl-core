@@ -14,7 +14,7 @@ use crate::types::*;
 use crate::validate::validate_inputs;
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 use shekyl_crypto_pq::output::EncryptedOutputField;
-use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash};
+use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 
 fn dummy_leaf_entry() -> LeafEntry {
@@ -330,7 +330,10 @@ fn test_invalid_combined_ss_length() {
 
 #[test]
 fn test_sign_pqc_length_mismatch() {
-    let result = sign_pqc_auths(&[[0u8; 32]; 2], &[dummy_spend_input(100)]);
+    let result = sign_pqc_auths(
+        &[SigningPayloadHash::from_bytes([0u8; 32]); 2],
+        &[dummy_spend_input(100)],
+    );
     assert!(matches!(
         result,
         Err(TxBuilderError::PqcSignError { index: 0, .. })

@@ -185,9 +185,10 @@ surviving text (rule 16):
 
 **The predicate.** `close_height(k) = height((k+1)·T − 1)` (Q6 item 5;
 written `height(b_{k+1} − 1)` under F32) — the shard's last **included**
-transaction, found by binary search over
-`BlockInfo.cumulative_tx_count` (`first_tx_id(h) = block_info[h−1].cumulative_tx_count`
-for `h ≥ 1`, `first_tx_id(0) = 0`; landed on #772; no new state). Let
+transaction, found by binary search over the storage-id total
+(`first_tx_id(h)` for `h ≥ 1` is `storage_ids_through(block_info[h−1].cumulative_tx_count, h−1)`
+— the listed total plus one coinbase per block; `first_tx_id(0) = 0`;
+`shekyl_types::storage_ids_through`, SPR-1). Let
 `close_epoch(k) = settlement_epoch_at_height(close_height(k))`. The
 **freeze epoch** of shard `k` is `close_epoch(k) + 1` — the whole epoch
 after the one it closed in. Shard `k` has its prunable regions and
@@ -213,7 +214,8 @@ not yet recorded — has no `close_epoch` and is never a candidate.
 **Enforcement point** unchanged: asserted where the discard is decided —
 S-PRUNE's per-epoch batch, whose set at boundary `E` is **named by `E`** —
 `{k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3}`, read off
-`cumulative_tx_count`;
+the storage-id total — `cumulative_tx_count` (listed transactions) plus one
+coinbase per block, `storage_ids_through` (SPR-1);
 no frontier, no search over disk — and which runs **inside the boundary
 block's connect transaction**, so "connected past `E·SEB` with the batch
 un-run" is unrepresentable (skeleton §4) — never discovered downstream; a violated predicate is a
@@ -230,25 +232,34 @@ by their own check, next.
 `SEB + 1` blocks old**, and `SEB = 10,000 > D_max = 720`. The 2026-09-18
 text argued the corresponding `W ≥ D_max` and asserted nothing (rule 16's
 corollary: a guarantee with no gate that can fail). This ruling asserts
-it, and names the belt: (a) **`SEB > D_max` is const-asserted at `D_max`'s
-home, on the production constants** (`CEN-E2`, Q11 — the constant is
-unbuilt, so the assertion is owed with it; FOLLOWUPS) **and is an invariant
-of every valid configuration on every nettype** (rule 71: nettype selects
-data; the data satisfies the same invariant). The regtest
-`SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override admits `2..=SEB` in isolation
-today (`constants.rs:257`) — that is a **rejected configuration** when it
-puts `SEB ≤ D_max`, not a supported one; the fakechain conforms, through
-one knob that moves both and preserves the ratio or a parse that refuses.
-There is no arm-time assertion and no nettype-specific story. (b) **Belt:**
-`pop` refuses the block at any height `≤ h_scarce` — `h_scarce` the
-`close_height` of the last shard with `close_epoch(k) + 2 ≤ current_epoch`,
-defined only for `current_epoch ≥ 2` and none before any shard closes (then
-the floor is `1`) — as `StoreCannot::PopBelowFloor { floor: h_scarce + 1 }`, the floor being
-the lowest height whose block may be popped, chain-named from
-`close_height` only (skeleton §7). It is **unreachable by construction on
-every conformant nettype** — the `SCW-7` undo floor at `tip − D_max` sits
-strictly above it — and is kept because a check that can fail is worth one
-that cannot; its test constructs the case artificially.
+it, and names the belt. **BUILT 2026-09-25 (S-PRUNE, `DRS_E1_SPRUNE.md`
+§14; the text below is as built — the ruling's 2026-09-18 wording, which
+said the constant was unbuilt, the override admitted `2..=SEB`, and a
+`h_scarce` belt was kept, is superseded by it):** (a) **`SEB > D_max` is
+const-asserted at `D_max`'s home, on the production constants**
+(`shekyl_chain_rules::reorg`, `D_MAX` derived from
+`archival_reorg_depth_blocks`) **and is an invariant of every valid
+configuration on every nettype** (rule 71: nettype selects data; the data
+satisfies the same invariant). The cap is **rule-set data** —
+`RuleSet::reorg_cap`, `GENESIS` carrying `D_MAX`, a Fakechain set naming
+its own through `RuleSet::fakechain(fixed, cap)` (SPR-8) — and the regtest
+conforms through **a parse that refuses**: `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
+is parsed against the cap in force and admits only
+`max(cap + 1, 2)..=SEB` (`settlement_epoch_override_floor`,
+`shekyl-archival-retention/src/constants.rs`, SPR-9), so a shortened
+epoch lowers the cap with it — `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`, the
+epoch lever's shape, is that knob, and the store refuses beneath the parse
+as a belt (`StoreCannot::RetentionBelowReorgCap` / `RetentionNotInsideEpoch`
+at open, the cap re-checked by `connect` at every height). Rule at the
+override, belt at open; no nettype-specific story. (b) **The belt was not
+minted (SPR-2, SPR-7):** `pop` refuses below the persisted undo floor
+(`StoreCannot::PopBelowFloor`), and the `h_scarce + 1` arm the skeleton's
+§7 sketched has no instance to fire on *because* `retention < SEB` is
+refused — the floor `E·SEB − retention` sits above `(E−1)·SEB > h_scarce`
+exactly then — and a check that cannot fire is not a belt (rule 16). The
+dependency is stated at every site that says "unreachable", so relaxing
+`RetentionNotInsideEpoch` reads as what it is. `h_scarce` is built for its
+other consumer, Q5's band-2 edge.
 
 **Two horizons and a floor, by design.** Bodies and journals are the two
 horizons; the undo journal's `D_max` is a floor both clear, not a third
@@ -632,10 +643,11 @@ a discarded shard's true size is unrecoverable. So:
 - **`height(tx)` is not a `tx_indices` lookup** — `tx_indices` is
   keyed by tx *hash* (`codec/chain.rs:126-135`), so from a `tx_id` the
   lookup needs the body it is deciding whether to delete. The
-  primitive is `first_tx_id(h) = block_info[h−1].cumulative_tx_count`
-  for `h ≥ 1`, `first_tx_id(0) = 0` (the FL-R3-STORE running total,
-  `BlockInfo.cumulative_tx_count`, landed on #772), and `tx_id` is
-  monotone in height. *Re-keyed 2026-09-22 (Q2 re-ruled):* the horizon is
+  primitive is `first_tx_id(h)` for `h ≥ 1` =
+  `storage_ids_through(block_info[h−1].cumulative_tx_count, h−1)` — the
+  listed total plus one coinbase per block, not the listed total alone
+  (SPR-1; `shekyl_types::storage_ids_through`) — and `first_tx_id(0) = 0`.
+  `tx_id` is monotone in height. *Re-keyed 2026-09-22 (Q2 re-ruled):* the horizon is
   the epoch boundary after the shard's freeze epoch, evaluated only when
   `current_epoch ≥ 2`; in epochs 0 and 1 nothing discards (Q2's genesis
   guard).
@@ -653,7 +665,8 @@ a discarded shard's true size is unrecoverable. So:
   **specified** when `b_{k+1}` closes (membership final, bondable from
   `close_height(k) = height(b_{k+1} − 1)`, the last included
   transaction's height — `b_{k+1}` itself is the first of `k+1` and may
-  not exist yet — a binary search over `cumulative_tx_count`, no new
+  not exist yet — a binary search over the storage-id total,
+  `storage_ids_through(cumulative_tx_count, h)` (SPR-1), no new
   state) and becomes **scarce** only at
   `discard(k)`, at the boundary after its freeze epoch — `≥ SEB + 1`
   blocks later (*re-keyed 2026-09-22 from "`≥ W` blocks later"*). Between the two every ordinary daemon still holds it, so
@@ -864,7 +877,8 @@ store knows what it holds. **No one in consensus needs the count.**
 *Ruling — (e).* A shard is **`T` transactions by `tx_id`**:
 `k = ⌊tx_id / T⌋`, `[k·T, (k+1)·T)` — item 3's original 2026-09-17 shape,
 restored. Membership and `close_height(k) = height((k+1)·T − 1)` derive
-from `cumulative_tx_count` on every node with **zero new data**: no length
+from the storage-id total (`cumulative_tx_count` plus one coinbase per
+block, SPR-1) on every node with **zero new data**: no length
 in the base, no length on the wire, no A4 rows, no `CtSigBase` change, no
 `SHARD_BYTES` constant, no prefix sum. The Bugbot finding has nothing to
 bind because nothing is claimed. **`T` is the one consensus constant of
@@ -1187,8 +1201,8 @@ exception falsifiers go.
 **`PDM-Q-F33` — #775 is written against the leaf unit, and re-keys
 under Q6 / Q12.** Its *architecture* (two stores by obligation; the
 partition is consensus) is unit-independent and stands. Its
-*consequences* re-key: the partition is `⌊tx_id / T⌋` from
-`cumulative_tx_count` (*re-keyed 2026-09-23, item 5; was `b_*` from
+*consequences* re-key: the partition is `⌊tx_id / T⌋` over storage ids
+(`cumulative_tx_count` plus one coinbase per block, SPR-1) (*re-keyed 2026-09-23, item 5; was `b_*` from
 retained length rows* — consensus by the same argument: admission
 validates `shard_id` against closed shards, a divergent partition forks at
 admission, which is why nothing unbound may feed it);
@@ -1300,7 +1314,17 @@ is therefore a **precondition** of `D_max`, not a sibling, and
 `PDM-Q5`'s ordering item is discharged by this sentence.
 
 **Numeric.** `D_max = 720` blocks (24 h at 120 s), **PROVISIONAL**, on
-the `bond_duration` precedent. The argument for 720 is coordination
+the `bond_duration` precedent. *Built 2026-09-25 as
+`shekyl_chain_rules::D_MAX`, **inheriting** `archival_reorg_depth_blocks`
+(`config/consensus_constants.json`; a key doing two jobs — the pass-anchor
+depth it was tuned for and this cap — recorded as inherited per rule 05
+until E4 splits it, FOLLOWUPS "Split `archival_reorg_depth_blocks`"), with `SEB > D_MAX`
+const-asserted beside it and the retention prune consuming it
+(`DRS_E1_SPRUNE.md` §14, SPR-6) — the numeric now has a mechanism to be
+tested against, which is what "provisional until tested" needed. The cap
+in force is **rule-set data**, `RuleSet::reorg_cap` — `GENESIS` carries
+`D_MAX`, a Fakechain set names its own, and the store's undo retention is
+constrained by it (SPR-8); CEN-E2 reads the rule set's cap, never the const.* The argument for 720 is coordination
 with the archival domain's frozen assumptions and is recorded as such
 (record, Q11). Two independent arguments for shallower are recorded beside it
 and are not overridden: (i) 720 sits at the top of the honest-partition
@@ -1768,8 +1792,7 @@ exists.** [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) (family `WSS-`,
 registered at birth) is the wallet-side store's umbrella; `CTS-` closes as
 record and is partitioned by unit there. Its `WSS-Q1` — one store with two
 obligations, or two files — is the axis every one of Q12's unmade decisions
-inherits, and it is posed, not yet ruled; **DRS-E** — S-PRUNE's **plan** (the skeleton `DRS_E1_SPRUNE.md` landed; the plan — increment ordinal, Round-0 pre-flight, commit sequence — is still owed, after Q1's
-horizon check lands), A3 (#772), A4, the daemon-uniformity constraint in
+inherits, and it is posed, not yet ruled; **DRS-E** — S-PRUNE **LANDED 2026-09-25** (`DRS_E1_SPRUNE.md` §14; the retention prune is built, `D_max` has a mechanism to test against — the Q1 horizon check was not a precondition: `journal_horizon` is minted beside `D_MAX`, and Q1's assertion is S-ARCH's when its journal writers land), A3 (#772), A4, the daemon-uniformity constraint in
 `DAEMON_REDB_STORE.md` (#775's row); **E4 / S-ARCH** — the serve-credit
 verifier re-key (consensus) and the leaf-cluster deletion; **E6** — the
 `Trust` mode and the `CEN-E1`/`E2` re-key; **the reward leg** — the

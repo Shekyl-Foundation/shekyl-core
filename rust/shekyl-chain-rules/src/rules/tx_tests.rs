@@ -11,7 +11,10 @@
 
 use super::*;
 use crate::coverage::RuleCoverage;
-use crate::harness::fixture::{candidate_on, coinbase, listed, point, serve_credit_only, G, TWO_G};
+use crate::harness::fixture::{
+    candidate_on, coinbase, coinbase_extra, listed, listed_on, point, pqc_extra, serve_credit_only,
+    spendable_chain, G, TWO_G,
+};
 use crate::harness::{assert_refused, credited_to_this_falsifier, formed_on, judged, MockChain};
 use crate::rule_set::RuleSet;
 use crate::rules::TxKind;
@@ -83,6 +86,14 @@ fn the_kind_is_derived_from_the_slot_not_the_bytes() {
     let cx = TxContext::derive(&spend_tx, TxSlot::Lone, &mut coverage).expect("a spend");
     assert_eq!(cx.kind, TxKind::Listed);
     assert_eq!(cx.locus(), Locus::Tx { slot: TxSlot::Lone });
+    // The I20 case (slice 6 Q6): a `Coinbase`-scoped rule applies at the
+    // miner slot and nowhere else, whatever the bytes — so a spend body at
+    // `Miner` is judged under I20, and a coinbase body at `Lone` never is.
+    // `tx_extra_tests::i20_is_the_slots_rule_not_the_bytes` holds both
+    // through `tx_form`; the scope predicate itself is pinned here.
+    assert!(TxScope::Coinbase.applies_to(TxKind::Coinbase));
+    assert!(!TxScope::Coinbase.applies_to(TxKind::Listed));
+    assert!(!TxScope::NonCoinbase.applies_to(TxKind::Coinbase));
 }
 
 /// A `NonCoinbase` row is recorded **vacuous** at the miner slot — in the
@@ -106,11 +117,14 @@ fn a_non_coinbase_row_is_vacuous_at_the_miner_slot_and_run_elsewhere() {
 /// transactions carries H4 once.
 #[test]
 fn tx_form_coverage_is_unioned_per_slot_by_validate() {
-    let chain = MockChain::default();
+    let chain = spendable_chain();
     chain.with_view(|view| {
         let formed = formed_on(
             &chain,
-            candidate_on(&chain, vec![listed(KI), listed(point(10))]),
+            candidate_on(
+                &chain,
+                vec![listed_on(&chain, KI), listed_on(&chain, point(10))],
+            ),
         );
         let valid = judged(validate(
             formed,
@@ -196,23 +210,43 @@ fn the_limits_equal_the_wire_crates_bounds() {
     );
 }
 
-/// `listed(KI)` with its `extra` sized so the serialized transaction is
-/// exactly `target` bytes long. The varint that prefixes `extra` grows with
-/// its length, so the size is solved for rather than assumed.
+/// `listed(KI)` with its filler proof sized so the serialized transaction
+/// is exactly `target` bytes long. The proof is the one field a fixture
+/// can grow without another row noticing: `extra` is I19's (its shape is
+/// fixed by the output count — slice 6 commit 3), and the proof's bytes
+/// are filler until I15 lands. The varint that prefixes the proof grows
+/// with its length, so the size is solved for rather than assumed.
 fn listed_serialized_to(target: usize) -> Transaction {
     let mut tx = listed(KI);
-    let base = tx.serialized_len();
+    let proof_len = |tx: &Transaction| match &tx.ct {
+        Ct::Fcmp {
+            prunable: Some(p), ..
+        } => p.fcmp_proof.len(),
+        _ => unreachable!("listed is a spend with a prunable region"),
+    };
+    let set_proof = |tx: &mut Transaction, len: usize| {
+        if let Ct::Fcmp {
+            prunable: Some(p), ..
+        } = &mut tx.ct
+        {
+            p.fcmp_proof = vec![0xF0; len];
+        }
+    };
+    let base = tx.serialized_len() - proof_len(&tx);
     assert!(target > base, "the fixture already exceeds {target}");
     // First guess ignores the varint growth; then adjust by the difference.
-    let mut extra_len = target - base;
+    let mut len = target - base;
     loop {
-        tx.prefix.extra = vec![0xEE; extra_len];
-        let len = tx.serialized_len();
-        if len == target {
+        set_proof(&mut tx, len);
+        let got = tx.serialized_len();
+        if got == target {
             return tx;
         }
-        assert!(len > target, "monotone: growing extra never shrinks the tx");
-        extra_len -= len - target;
+        assert!(
+            got > target,
+            "monotone: growing the proof never shrinks the tx"
+        );
+        len -= got - target;
     }
 }
 
@@ -261,11 +295,31 @@ fn h3_the_weight_limit_is_inclusive() {
 
 /// H1 and H3 are non-coinbase rows: an oversized coinbase is not theirs to
 /// refuse (the block bounds it), and both are recorded vacuous at the
-/// miner slot.
+/// miner slot. The coinbase is oversized by its **outputs** — every other
+/// field is fixed by a row that runs here (I20 pins the extra to the
+/// grammar; the CT base to the outputs) and the output count is F4's,
+/// which runs in `form`, not `tx_form`.
 #[test]
 fn h1_and_h3_are_vacuous_at_the_miner_slot() {
     let mut huge = coinbase(1);
-    huge.prefix.extra = vec![0xEE; MAX_TX_SIZE + 1];
+    // ~1.27 KB per output once the extra's per-output fields are counted
+    // (1120 KEM + 64 leaf + 50 CT base + ~36 output), so 890 outputs is
+    // ~1.13 MB — past the byte bound, while the KEM blob (996 800 bytes)
+    // stays under the codec's 1 MB per-field length cap, which is what
+    // bounds this construction from above.
+    let outputs = 890;
+    let one = huge.prefix.outputs[0].clone();
+    huge.prefix.outputs = vec![one; outputs];
+    huge.prefix.extra = coinbase_extra(outputs);
+    if let Ct::Null(base) = &mut huge.ct {
+        base.enc_amounts = vec![[0x55; 9]; outputs];
+        base.enc_labels = vec![[0x66; 9]; outputs];
+        base.commitments = vec![TWO_G; outputs];
+    }
+    assert!(
+        huge.serialized_len() > MAX_TX_SIZE,
+        "the fixture is past the byte bound"
+    );
     let form = tx_form(&huge, TxSlot::Miner, &RuleSet::GENESIS).expect("vacuous");
     assert!(form.contains(CenRow::H1) && form.contains(CenRow::H3));
 }
@@ -311,6 +365,9 @@ fn h9_output_amounts_that_overflow_are_refused_everywhere() {
         tx.prefix.outputs.push(second);
         tx.prefix.outputs[0].amount = u64::MAX;
         tx.prefix.outputs[1].amount = 1;
+        // I19 sits between H7 and H9 (the C++'s order): the extra is re-fit
+        // to the grown output count so the sum is what refuses, not the shape.
+        tx.prefix.extra = pqc_extra(tx.prefix.outputs.len());
         tx
     };
     // A listed emission, so H14 does not refuse the loud amounts first.
@@ -666,7 +723,9 @@ fn a_well_formed_listed_transaction_records_every_landed_row() {
             CenRow::I8,
             CenRow::I9,
             CenRow::I14,
-            CenRow::I16
+            CenRow::I16,
+            CenRow::I19,
+            CenRow::I20
         ]
     );
 }
@@ -852,6 +911,9 @@ fn h20_every_departure_from_the_serve_credit_shape_is_refused() {
             base.enc_amounts.push([0; 9]);
             base.enc_labels.push([0; 9]);
         }
+        // The extra fits the output so I19 (earlier in the order, here and
+        // in the C++) admits it and the departure reaches H20's arm.
+        tx.prefix.extra = pqc_extra(1);
     });
     refused_lone(&output, CenRow::H20);
     let spend_material = mutate(&|tx| {

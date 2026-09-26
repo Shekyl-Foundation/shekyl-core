@@ -12,7 +12,9 @@
 use shekyl_types::{BlockHash, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::Transaction;
 
-use super::connect_fixtures::{connect_chain, spend};
+use super::connect_fixtures::{
+    connect_chain_anchored, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
+};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, EPOCH};
 use super::*;
@@ -29,21 +31,33 @@ fn hash_of(tx: &Transaction) -> TxHash {
     tx.txid_parts().hash
 }
 
-/// Genesis, then a block with one 3-part body (a serve-credit-only
-/// transaction — no `pqc_auths` by rule, CEN-H20), then a block with a
-/// spend, which carries per-input `pqc_auths` and is 4-part. Coinbases at
-/// every height, so the dense id space is `0..=4`: coinbase 0, coinbase 1,
-/// serve credit, coinbase 2, spend.
+/// The spendable prefix, with block 1 listing one 3-part body (a
+/// serve-credit-only transaction — no `pqc_auths` by rule, CEN-H20; it
+/// spends nothing, so CEN-I11 lets it sit that low), then the first
+/// admissible spend block listing a spend, which carries per-input
+/// `pqc_auths` and is 4-part. Coinbases at every height, so the dense id
+/// space is `0..TX_COUNT`: the coinbases interleaved with the serve credit
+/// after coinbase 1, and the spend last.
 fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
     let store = ChainStore::create(path, EPOCH).expect("create");
     let plain = shekyl_chain_rules::harness::fixture::serve_credit_only([0x5e; 32]);
-    let with_pqc = spend(15, 2);
-    let hashes = connect_chain(
-        &store,
-        &[vec![], vec![plain.clone()], vec![with_pqc.clone()]],
-    );
+    let mut listing = spendable_prefix(&[vec![spend(15, 2)]]);
+    listing[1] = vec![plain.clone()];
+    // The spend as connected — anchored on the chain — is the one the reads
+    // are asked about by hash.
+    let (hashes, mut anchored) = connect_chain_anchored(&store, &listing, 0);
+    let with_pqc = anchored
+        .pop()
+        .and_then(|mut block| block.pop())
+        .expect("the last block lists the spend");
     (store, hashes, plain, with_pqc)
 }
+
+/// The height [`tx_chain`]'s spend sits at.
+const SPEND_HEIGHT: u64 = FIRST_SPEND_HEIGHT;
+/// [`tx_chain`]'s dense id count: one coinbase per height through the
+/// spend block, the serve credit, the spend.
+const TX_COUNT: u64 = SPEND_HEIGHT + 1 + 2;
 
 fn is_si7_absent(err: &StoreError, table: &str) -> bool {
     matches!(
@@ -70,7 +84,7 @@ fn tx_location_is_some_for_a_recorded_hash_and_none_for_an_unknown_one() {
         .expect("read")
         .expect("recorded");
     assert_eq!(plain_loc.height, BlockHeight::from_raw(1));
-    assert_eq!(pqc_loc.height, BlockHeight::from_raw(2));
+    assert_eq!(pqc_loc.height, BlockHeight::from_raw(SPEND_HEIGHT));
     assert!(
         plain_loc.id < pqc_loc.id,
         "ids are dense in connect order: {plain_loc:?} before {pqc_loc:?}"
@@ -94,13 +108,16 @@ fn tx_count_is_the_dense_id_space_coinbases_included() {
     let path = tmp("tx-count");
     let (store, _, _, _) = tx_chain(&path);
     let snap = store.begin_read().expect("read");
-    // Three coinbases + two spends.
-    assert_eq!(snap.tx_count().expect("read"), 5);
+    // A coinbase per block + the serve credit + the spend.
+    assert_eq!(snap.tx_count().expect("read"), TX_COUNT);
     // Every id below the count has a location reachable by hash; the count
     // is the authority the by-id reads bound against (T4, T5).
-    assert_eq!(snap.tx_prunable(id(5)).expect("read"), AtIndex::BeyondCount);
+    assert_eq!(
+        snap.tx_prunable(id(TX_COUNT)).expect("read"),
+        AtIndex::BeyondCount
+    );
     assert!(matches!(
-        snap.tx_prunable(id(4)).expect("read"),
+        snap.tx_prunable(id(TX_COUNT - 1)).expect("read"),
         AtIndex::Recorded(_)
     ));
     cleanup(&path);
@@ -126,7 +143,11 @@ fn tx_record_carries_the_permanent_half_and_recomposes_the_wire_bytes() {
         assert_eq!(
             record.pqc_auths.is_some(),
             parts.pqc_auth_hash.is_some(),
-            "§7.7 leg (ii): the pqc_auths segment is present iff the txid is 4-part"
+            "§7.7 leg (ii): the pqc_auths region is present iff the txid is 4-part"
+        );
+        assert!(
+            !matches!(record.pqc_auths, Some(PqcAuths::Discarded)),
+            "a freshly connected 4-part transaction's pqc_auths region is retained"
         );
         assert_eq!(record.pruned.clone().into_wire_bytes(), segments.pruned);
         // T3 + T4 compose to `get_tx_blob`'s `pruned ‖ pqc_auths ‖ prunable`
@@ -139,7 +160,7 @@ fn tx_record_carries_the_permanent_half_and_recomposes_the_wire_bytes() {
         assert_eq!(prunable.clone().into_wire_bytes(), segments.prunable);
         let mut wire = Vec::new();
         tx.write(&mut wire).expect("write");
-        assert_eq!(record.wire_bytes(prunable), wire);
+        assert_eq!(record.wire_bytes(prunable), Some(wire));
     }
     assert_eq!(
         snap.tx_record(&TxHash::from_bytes([0xee; 32]))
@@ -189,7 +210,7 @@ fn a_recorded_transaction_missing_its_prunable_hash_row_is_si7_not_a_log_line() 
 }
 
 #[test]
-fn a_pqc_auth_hash_row_without_its_segment_is_si7_pairwise() {
+fn a_pqc_auth_hash_row_without_its_segment_is_discarded_and_a_segment_without_its_row_is_si7() {
     let path = tmp("tx-record-pqc-pair");
     let (store, _, _, with_pqc) = tx_chain(&path);
     let hash = hash_of(&with_pqc);
@@ -212,11 +233,24 @@ fn a_pqc_auth_hash_row_without_its_segment_is_si7_pairwise() {
     }
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
-    let err = snap
-        .tx_record(&hash)
-        .expect_err("segment and hash row disagree");
-    assert!(is_si7_absent(&err, "txs_pqc_auths"), "got {err:?}");
-    // The reverse disagreement names the other table.
+    // Hash row present, segment absent: §7.7 leg (iii)'s one state — the
+    // retention prune discards `pqc_auths` by shard (DRS-E1 S-PRUNE), so
+    // this is *discarded*, never a fault, and the wire cannot be recomposed
+    // from this node.
+    let record = snap.tx_record(&hash).expect("read").expect("recorded");
+    assert_eq!(record.pqc_auths, Some(PqcAuths::Discarded));
+    let AtIndex::Recorded(Prunable::Retained(prunable)) =
+        snap.tx_prunable(record.location.id).expect("read")
+    else {
+        panic!("the prunable region was not touched");
+    };
+    assert_eq!(
+        record.wire_bytes(prunable),
+        None,
+        "a discarded region has no wire bytes here"
+    );
+    // The reverse disagreement — a segment with no hash row — is SI-7:
+    // the hash rows are permanent and nothing may delete one.
     drop(snap);
     drop(store);
     {
@@ -385,7 +419,11 @@ fn tx_locations_walks_tx_indices_in_key_order_and_agrees_with_tx_location_row_fo
         .expect("range")
         .collect::<Result<_, _>>()
         .expect("every row decodes");
-    assert_eq!(all.len(), 5, "five transactions; MIN..=MAX is the table");
+    assert_eq!(
+        all.len(),
+        usize::try_from(TX_COUNT).expect("small"),
+        "every transaction; MIN..=MAX is the table"
+    );
     // Key order: `LmdbHashKey`'s, the table's own.
     let keys: Vec<LmdbHashKey> = all.iter().map(|(h, _)| LmdbHashKey::from(*h)).collect();
     assert!(
@@ -397,7 +435,7 @@ fn tx_locations_walks_tx_indices_in_key_order_and_agrees_with_tx_location_row_fo
         assert_eq!(snap.tx_location(hash).expect("read"), Some(*location));
     }
     let first = keys[0];
-    let last = keys[4];
+    let last = *keys.last().expect("the table is not empty");
     // Inclusive: a singleton range is the key itself, so MAX is nameable.
     let only_first: Vec<_> = snap
         .tx_locations(first..=first)
@@ -412,7 +450,7 @@ fn tx_locations_walks_tx_indices_in_key_order_and_agrees_with_tx_location_row_fo
         .expect("range")
         .collect::<Result<_, _>>()
         .expect("decodes");
-    assert_eq!(rest.len(), 4);
+    assert_eq!(rest.len(), all.len() - 1);
     assert!(rest.iter().all(|(h, _)| LmdbHashKey::from(*h) != first));
     // An inverted bound in this order is empty, not a silent reshuffle.
     let inverted: Vec<_> = snap
@@ -553,7 +591,7 @@ fn an_index_id_at_or_past_the_count_is_si9_on_every_hash_read_even_with_a_stray_
             Err(e) => panic!("unexpected walk fault: {e:?}"),
         }
     }
-    assert_eq!(ok, 5, "the honest rows still walk");
+    assert_eq!(ok, TX_COUNT, "the honest rows still walk");
     assert_eq!(
         si9, 1,
         "MAX is included and classified, not dropped by an exclusive end"

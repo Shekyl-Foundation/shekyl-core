@@ -410,7 +410,7 @@ impl Message<AssembleRelease> for StakeEngine {
                     .sign(
                         &keys.bond_spend_sk,
                         shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-                        payload_hash,
+                        payload_hash.as_bytes(),
                     )
                     .map_err(|e| BondAssemblyError::build("debit pqc auth signing", e))?;
                 sig.to_canonical_bytes()

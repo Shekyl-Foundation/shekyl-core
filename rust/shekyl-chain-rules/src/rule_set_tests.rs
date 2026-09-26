@@ -139,14 +139,14 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
     assert_eq!(enforced, expected);
     assert_eq!(
         enforced.len(),
-        CenRow::ALL.len() - 12,
-        "A1 and A4 are held; E5 is enforced at open; F2, F8, F19, F21, H2, H8, H12, H13, H23 hold by construction"
+        CenRow::ALL.len() - 14,
+        "A1 and A4 are held; E5 is enforced at open; F2, F8, F19, F21, H2, H8, H12, H13, H23, I2, I3 hold by construction"
     );
     assert_eq!(
         format!("{genesis:?}"),
         format!(
-            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held, at-open and by-construction rows excluded), header_major_version: 1, difficulty: Lwma1, mined_money_unlock_window: BlockCount(60) }}",
-            v = CenRow::ALL.len() - 12,
+            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held, at-open and by-construction rows excluded), header_major_version: 1, difficulty: Lwma1, mined_money_unlock_window: BlockCount(60), reorg_cap: BlockCount(720) }}",
+            v = CenRow::ALL.len() - 14,
             n = CenRow::ALL.len()
         )
     );
@@ -180,4 +180,29 @@ fn the_unlock_window_is_the_cxx_define() {
         BlockCount::from_raw(value)
     );
     assert_eq!(value, 60, "the shipped window");
+}
+
+// ---- PR #861 review: the reorg cap is rule-set data ----
+
+/// `GENESIS` carries `D_MAX`; a Fakechain set names its own cap through
+/// the same witness `Fixed` uses, and the `RuleSetId` caveat covers it:
+/// same id, compared by value. `fakechain(None, D_MAX)` is `GENESIS`.
+#[test]
+fn the_reorg_cap_is_the_rule_sets_and_fakechain_names_its_own() {
+    use crate::D_MAX;
+    assert_eq!(RuleSet::GENESIS.reorg_cap(), D_MAX);
+    assert_eq!(RuleSet::fakechain(None, D_MAX), RuleSet::GENESIS);
+    let short = RuleSet::fakechain(None, BlockCount::from_raw(50));
+    assert_eq!(short.id(), RuleSet::GENESIS.id(), "the caveat: same id");
+    assert_ne!(short, RuleSet::GENESIS, "different set, compared by value");
+    assert_eq!(short.reorg_cap(), BlockCount::from_raw(50));
+    assert_eq!(
+        short.difficulty(),
+        RuleSet::GENESIS.difficulty(),
+        "the cap moves without the target"
+    );
+    // Two Fakechain parameters, one witness.
+    let both = RuleSet::fakechain(core::num::NonZeroU128::new(7), BlockCount::from_raw(50));
+    assert_ne!(both, short);
+    assert_eq!(both.reorg_cap(), short.reorg_cap());
 }

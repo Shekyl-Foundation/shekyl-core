@@ -95,13 +95,28 @@ exactly the content the verification existed to remove.
    git clone -q --no-checkout --shared <repo> /tmp/verify-<pr>
    cd /tmp/verify-<pr> && git fetch -q origin <branch> && git checkout -q <sha>
    git submodule update --init --recursive -q
-   # run the same gates CI runs, then delete the clone
+   # run the same gates CI runs — cargo with ITS OWN target directory —
+   # then delete the clone
+   env -u CARGO_TARGET_DIR cargo clippy --workspace --all-targets -- -D warnings
+   env -u CARGO_TARGET_DIR cargo test ...
    ```
 
    The worktree's gates are a fast local loop; they are not the
    verification. A clone of the pushed commit makes the tested artifact and
    the shipped artifact **the same object**, and it is the only mitigation
    here that does not depend on someone noticing.
+
+   **The clone's build must be the clone's.** Some environments (the agent
+   sandbox is one) export a single `CARGO_TARGET_DIR` for every checkout.
+   Under it, the clone compiles into the worktree's target directory and
+   links against whatever the worktree built last — so the step verifies
+   the clone's *source* against the worktree's *artifacts*, which is the
+   worktree check with a longer name, not a fresh one. Observed 2026-09-25
+   (`wt-e6-rows`): a clone and its worktree building concurrently into one
+   directory produced a `cargo clippy` failure for a type that both trees
+   contained. `env -u CARGO_TARGET_DIR` on every cargo invocation in the
+   clone is the fix; the cold build it costs is the isolation being real.
+   Check `echo ${CARGO_TARGET_DIR:-unset}` before trusting a clone result.
 
 ## The edit form that notices
 

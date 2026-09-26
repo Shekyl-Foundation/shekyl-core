@@ -446,7 +446,7 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
         .verify(
             &pk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            &payload_hashes[bond_idx],
+            payload_hashes[bond_idx].as_bytes(),
             &sig,
         )
         .expect("the debit auth must verify under bond_spend_pk");
