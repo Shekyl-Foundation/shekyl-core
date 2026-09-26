@@ -84,10 +84,19 @@ pub const MAX_HOLDINGS_SHARDS: usize = 4096;
 /// that total and `T`.
 ///
 /// **PROVISIONAL numeric** (Round-2 gate with `n`, `D_max`, `w_launch`):
-/// chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB. Pinned
+/// chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB. Sourced
+/// from `config/consensus_constants.json` (`archival_shard_tx_count`, via
+/// this crate's `build.rs`) like the gate's other numerics, and exposed
 /// here, the shard vocabulary's home, so the store's discard (`⌊id / T⌋`)
-/// and the archiver's holdings name one `T`.
-pub const SHARD_TX_COUNT: u64 = 200;
+/// and the archiver's holdings name one `T`. A second home for `T` — a
+/// literal in a shipped crate, or a shard boundary derived from anything
+/// but `cumulative_tx_count` and this — is the FOLLOWUPS row's falsifier.
+pub const SHARD_TX_COUNT: u64 = ARCHIVAL_SHARD_TX_COUNT;
+
+include!(concat!(
+    env!("OUT_DIR"),
+    "/consensus_constants_generated.rs"
+));
 
 const _: () = assert!(SHARD_TX_COUNT > 0, "a shard holds at least one transaction");
 

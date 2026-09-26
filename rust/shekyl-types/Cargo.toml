@@ -7,6 +7,12 @@ license.workspace = true
 repository.workspace = true
 description = "Foundational state-shaped domain newtypes (heights, indices, hashes, timestamps) shared across the Shekyl wallet/consensus stack"
 
+[build-dependencies]
+# Host-only: the build script reads `config/consensus_constants.json` for
+# the shard partition's `T` (`SHARD_TX_COUNT`). The runtime crate stays
+# `#![no_std]` with no new dependency.
+serde_json = "1"
+
 [dependencies]
 # `default-features = false`: this crate is `#![no_std]` so `shekyl-difficulty`
 # (and any other leaf math crate) can consume the vocabulary without taking

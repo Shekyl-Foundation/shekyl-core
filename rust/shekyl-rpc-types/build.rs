@@ -74,7 +74,23 @@ use std::path::PathBuf;
 /// gives it one authority and two generated readers (`EconomicParams::
 /// full_reward_zone`; the C++ macro is now defined from the generated
 /// header). No behaviour changes; the digest moves because the binding grew.
-const PINNED_DIGEST: &str = "78dffcb388c529e040836ecf8982d130d2acf9052394d07e088f6d76be3364bf";
+///
+/// **Re-pinned 2026-09-25 (S-PRUNE review, PR #861 item 6): a key was ADDED —
+/// `archival_shard_tx_count = 200` (PROVISIONAL, `PDM-Q6` item 5) in
+/// `consensus_constants.json`.** The chain question, answered: `T` is the
+/// archival shard partition — shard `k` is the storage ids `[k·T, (k+1)·T)`
+/// — so a node holding `T = 200` and one holding `T = 100` name different
+/// shards for the same transactions: their retention prunes discard
+/// different bodies at the same epoch boundary, their `h_scarce` differs, and
+/// every archival holding (`ShardSetCompact` shard ids), pass and challenge
+/// that names a shard means a different set of transactions. A split, so
+/// the key belongs here. The value is the one already shipped as the
+/// literal `shekyl_types::SHARD_TX_COUNT = 200`; the move gives it the same
+/// sourcing as the other Round-2 gate numerics (`settlement_epoch_blocks`,
+/// `archival_reorg_depth_blocks`, `challenge_resolution_blocks`) — one
+/// authority, read by `rust/shekyl-types/build.rs`. No behaviour changes;
+/// the digest moves because the binding grew.
+const PINNED_DIGEST: &str = "5aece7b2512ebfcad20c0747087773831b82d6b6b8b444d6f7bcbe68a9257860";
 
 fn main() {
     let manifest_dir =
