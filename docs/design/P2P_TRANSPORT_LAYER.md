@@ -713,14 +713,14 @@ delay is seconds. No deadline is written into this document before that
 measurement. Rule 26 B9.
 
 Pi-4 C5 run, 2026-09-26, `skl-pi` (aarch64, 4 cores), about 90 seconds:
-[`p2p_c5_pi4_20260926T003938Z.txt`](../benchmarks/p2p_c5_pi4_20260926T003938Z.txt).
-Initiator 929 µs, responder 685 µs, one rekey 5.06 µs, seal/open of
-65,535 bytes 888 µs. The responder figure is the per-connection cost
+[`p2p_c5_pi4_20260926T005507Z.txt`](../benchmarks/p2p_c5_pi4_20260926T005507Z.txt).
+Initiator 928 µs, responder 685 µs, one rekey 5.06 µs, seal/open of
+65,535 bytes 889 µs. The responder figure is the per-connection cost
 D10.3's clearnet accept-rate bound is derived from. The bound waits on
 a stated CPU budget. No rate is written here. Deadlines are not written
 here either.
 
-One rekey is 5.06 µs against 888 µs to seal and open a 65,535-byte
+One rekey is 5.06 µs against 889 µs to seal and open a 65,535-byte
 record, under one percent at that size. Fixed windows are smaller than
 that record, and the ratio grows as the window shrinks. Whether
 every-record rekey is affordable is decided with the window size from
@@ -976,7 +976,7 @@ over together.
    sealed. If that benchmark shows the cost is a meaningful fraction
    of seal cost, the interval is derived from the measured record
    rates instead. C5 (2026-09-26) measured one rekey at 5.06 µs and
-   seal/open of a 65,535-byte record at 888 µs, under one percent at
+   seal/open of a 65,535-byte record at 889 µs, under one percent at
    that size. Fixed windows are smaller, so that ratio is not the
    decision. Every-record rekey and the window size (C9) are decided
    together. Neither is chosen in this record.
