@@ -5,7 +5,9 @@ merged; #861 merged); **Round 1 RULED 2026-09-26 (maintainer, on PR #873)** —
 `CTW-Q1` ruled with a corrected justification, `CTW-Q2` **dissolved** (the
 table it asked about does not survive), `CTW-Q3` default, `CTW-Q4` ruled with
 a different primitive, `CTW-Q5` ruled with a different justification,
-`CTW-Q6` ruled against the default; `CTW-Q7` posed on this round. Each row of
+`CTW-Q6` ruled against the default, `CTW-Q7` posed and ruled the same day
+(Shekyl-named, const-asserted, **not** in the JSON — the nameable-differently
+discriminator, §3.9); no `RuleCoverage` row for growth (§3.1). Each row of
 §8 carries its ruling line-locally. Identifier families **`CTW-`** (findings)
 and **`CTW-Q`** (questions), registered in `IMPLEMENTATION_INDEX.md` §2 with
 this file (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a)). Parent
@@ -251,6 +253,20 @@ view's frontier and the two matured blocks; `ChainValid` carries it; a
 block whose frontier or matured blocks the view cannot serve is
 `Fault::View` / `Corrupt`, never a guess.
 
+**Growth gets no `RuleCoverage` row (RULED 2026-09-26).** A rule refuses;
+growth refuses nothing — there is no input it rejects, only faults it
+propagates. A coverage row that can never fire is CEN-H24's shape, and H24
+was ruled out of the registry as bucket 3 precisely so the denominator stays
+*census rules*; adding growth would inflate `enforced` with something
+unjudgeable, and the two-number record's honesty rests on that denominator
+meaning one thing. Growth is an **operand** of rules, not a rule: F17 reads
+`leaf_count`, I12 the root, I13 the depth, I15 verifies against the tree —
+four rows depend on it, none of them is it. The instrument that records it
+is §7's: `Provenance::passed_through` going 6 → 5 as `root_after` flips to
+`Derived` — the measurement of *who computes what*, already decomposed with
+its reason per field, and the honest place for a fact that has an owner but
+no verdict.
+
 ### 3.2 The phase-3 body
 
 ```text
@@ -340,6 +356,8 @@ derivable state, a per-height depth duplicating leaf count, a pending set
 duplicating the block index. **A view becomes a query. If performance later
 argues for materialising one, it materialises *with* a check against its
 source** — that is what makes the redundancy safe rather than authoritative.
+The table below is written to be applied by another lane to its own
+inherited tables without re-deriving the principle.
 A stored pending set is a second source that can disagree with the block
 data, and no belt catches it because the pending table *is* the authority; a
 derived one cannot disagree, because the block data is the authority, which
@@ -374,6 +392,40 @@ comparison exists only while the LMDB trace does. Sequence: the oracle
 lands (commit 5) before the field is deleted (commit 6). `Origin::PassedThrough`
 for `root_after` then has no producer and the variant's doc narrows to the
 one field left.
+
+### 3.9 Where a consensus numeric is sourced — `CTW-Q7` RULED: the nameable-differently discriminator
+
+The chunk arities become Shekyl-named constants, const-asserted against the
+library (`SELENE_CHUNK_WIDTH`, `HELIOS_CHUNK_WIDTH` with `const _: () =
+assert!(SELENE_CHUNK_WIDTH == fcmps::LAYER_ONE_LEN)` and its twin — the
+library's value checked against ours, never ours read off the library),
+**and not in `consensus_constants.json`**. That file carries a
+discriminator, inherited from `SHARD_BYTES`'s not-a-tune rule and recorded as
+a falsifier: *a production value that is not tunable going in there is red.*
+The test is **whether a schedule, a network or an operator could legitimately
+name the value differently.** `daa_target_seconds` and
+`archival_reorg_depth_blocks` can — a network can run a different reorg
+depth. A curve-tree chunk arity cannot: change it and every proof in
+existence stops verifying, because it is a structural parameter of the proof
+system, not a Shekyl policy choice.
+
+This also answers the sourcing asymmetry the S-PRUNE review raised as its
+minor item (`DRS_E1_SPRUNE.md` SPR-10): the idiom is not chosen by which file
+is convenient but by whether the value is nameable-differently. `D_MAX`
+belongs in the JSON because a network can name a different reorg depth;
+`T` and the chunk widths do not, because nothing can.
+
+**Collision, recorded rather than resolved here (2026-09-26):** SPR-10 moved
+`T` **into** `consensus_constants.json` on #861 the same morning
+(`archival_shard_tx_count = 200`, digest re-pinned), on the "one idiom for the
+Round-2 gate's numerics" ground — the ground this discriminator replaces.
+Under the discriminator as stated, `T` comes back out (its own const-asserted
+home in `shekyl-types`, the digest re-pinned again, the SPR-10 row and the
+FOLLOWUPS shard-partition falsifier re-worded to the discriminator). The
+counter-reading — that a shard is an archival *policy* unit a testnet could
+size differently, unlike a proof-system arity — is the one that would keep
+it in. **Maintainer's call, on PR #873; not this document's.** Whichever way
+it goes, the discriminator is the reason of record and SPR-10's row cites it.
 
 ---
 
@@ -453,7 +505,12 @@ excuse.
 | 8 | **Docs** (§9). | S | — |
 
 Eight commits, one PR, inside the 5-day ceiling. Exempt from the count:
-none. Commit 5 is the one that may stop the PR, by design.
+none. **Commit 5 is the one that may stop the PR, by design — and a halt
+there is not an overrun.** A commit that legitimately halts the work when
+its oracle disagrees is a finding, graded and adjudicated against the spec
+(E2 §0); conflating it with schedule slippage is how a real finding gets
+absorbed as an estimate miss. The signal above ("past eight") measures the
+substrate; commit 5 measures the arithmetic. They are read separately.
 
 ---
 
@@ -471,8 +528,8 @@ none. Commit 5 is the one that may stop the PR, by design.
 Denominator at the pin: `cargo test -p shekyl-chain-store --lib` 360,
 `-p shekyl-chain-rules --lib` 241, `-p shekyl-chain-ingest` 82;
 `check_redb_schema_bijection.py` / `check_redb_schema_key_types.py` (the set
-moves by −3 + 1); `check_store_invariant_register.py` (SI-16/17); the
-chain-rules coverage gate if the growth gets a coverage row; the doc gates.
+moves by −3 + 1); `check_store_invariant_register.py` (SI-16/17); the chain-rules coverage
+gate **unchanged** — growth is an operand, not a row (§3.1); the doc gates.
 Extended: the E2 conformance run with the root oracle on (commit 5).
 
 ---
@@ -487,7 +544,7 @@ Extended: the E2 conformance run with the root oracle on (commit 5).
 | **CTW-Q4** | The height-keyed depth: own table, or widen `curve_tree_roots`? | **RULED: own table, storing the primitive** — `curve_tree_leaf_counts[h]`, depth derived (§3.4). |
 | **CTW-Q5** | `RuleSet::tx_spendable_age`? | **RULED: yes**, as F6's window's sibling — a maturity pair that moves together; not on schedule variance (§3.6). |
 | **CTW-Q6** | Delete `ConnectFacts.root_after` in the same PR? | **RULED: not as a plain yes** — the replay oracle moves into the driver first (commit 5), the field goes after (commit 6) (§3.8). |
-| **CTW-Q7** *(posed on the round, from CTW-9)* | The chunk arities are `fcmps::LAYER_ONE_LEN` / `LAYER_TWO_LEN` re-exported. What is their Shekyl-named source? | **POSED, default:** Shekyl-named constants in `shekyl-fcmp` with `const _: () = assert!(SELENE_CHUNK_WIDTH == fcmps::LAYER_ONE_LEN)` — the library value checked against ours, not ours read off the library — recorded in the census sweep's fourth ground (which library constants would refuse a shape independently), and behaviourally pinned by CTW-5's oracle (a wrong arity produces a wrong root on the first grown chunk). Whether the pair also belongs in `consensus_constants.json` (it is the tree's shape) is for the maintainer. |
+| **CTW-Q7** *(posed on the round, from CTW-9)* | The chunk arities are `fcmps::LAYER_ONE_LEN` / `LAYER_TWO_LEN` re-exported. What is their Shekyl-named source? | **RULED 2026-09-26: Shekyl-named constants in `shekyl-fcmp`, const-asserted against the library — and not in `consensus_constants.json`** (§3.9: the JSON's discriminator is *nameable-differently by a schedule, network or operator*; a proof-system arity is not — change it and every proof stops verifying). Recorded in the census sweep's fourth ground (which library constants would refuse a shape independently); behaviourally pinned by CTW-5's oracle (a wrong arity is a wrong root on the first grown chunk). |
 
 ---
 
@@ -513,3 +570,4 @@ LANDED, staying in `design/` while E4's hook phases cite §3.2.
 | --- | --- |
 | 2026-09-26 | Round 0 executed at `dev@1aa48eff9` after #861 and #864 merged. Findings CTW-1…CTW-8; questions CTW-Q1…CTW-Q6 posed with defaults. Families registered at birth. No code. |
 | 2026-09-26 | **Round 1 RULED on PR #873 (maintainer).** Q1 the verdict, justification corrected (the root's reach, not a rule that checks it; `Composed` assembles, never computes); Q2 dissolved with the pending table (CTW-10 — maturity is `f(height, is_miner)`, verified at `blockchain_db.cpp:554–567`); Q3 neither; Q4 the primitive, `curve_tree_leaf_counts`; Q5 yes, as F6's sibling; Q6 the oracle moves into the driver before the field goes. CTW-9 (library arities) and CTW-11 (drain order as invariant) added from the round; CTW-Q7 posed. §3.7's test — *fact, or a view of facts I already hold?* — recorded as the question asked of every table this lane inherits. Commit table with costs and the signal (§6) written before the work. |
+| 2026-09-26 | **Round 1, second pass (maintainer, PR #873).** CTW-Q7 RULED: Shekyl-named, const-asserted, not in the JSON — the nameable-differently discriminator recorded (§3.9), which also grounds SPR-10's sourcing answer. No `RuleCoverage` row for growth: a rule refuses, growth propagates; growth is an operand of F17 / I12 / I13 / I15, and the instrument is `passed_through` 6 → 5 (§3.1, §7). Commit 5's halt named as a finding, not an overrun (§6). §3.7's fact-or-view table marked transferable. |
