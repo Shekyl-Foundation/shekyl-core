@@ -10,8 +10,9 @@ row is P2P-3's **TE**. The design is closed. The pre-flight is
 crate. The engine core is
 `shekyl-timing-engine`: wake hints, an earlier-only arm, one outstanding
 wake per owner, and lateness per class. The engine service and the C++
-bridge are not in that crate. The bridge waits until after the transport
-cutover.
+bridge are not in that crate. The service's concurrency decisions are
+the addendum below (2026-09-25, not a new round). The bridge waits until
+after the transport cutover.
 
 Pinned to `fix/p2p-transport-hmac-oracle` `55d7b2b16`. Line numbers
 were read there. Opening the round still discharges D6's third
@@ -196,6 +197,13 @@ saturated transport runtime means late relay wakes.
 An owner's `poll` is cheap and never blocks. Heavy work is posted
 elsewhere. That is what makes one thread enough.
 
+Pi-4 `wake_hints` run, 2026-09-26, `skl-pi` (aarch64, 4 cores), about
+four minutes:
+[`timing_engine_wake_hints_pi4_20260926T003745Z.txt`](../benchmarks/timing_engine_wake_hints_pi4_20260926T003745Z.txt).
+An earlier arm at 2^18 owners is 177 ns; one due poll is 377 ns. That
+file is the measurement D5's engine-thread budget is taken from. The
+budget is not written here.
+
 If the transport design's step-7 flood measurement shows relay lateness
 no better on this thread than on the transport runtime, merge the
 engine into the transport runtime.
@@ -292,17 +300,91 @@ interim executor.
    relay `Driver`'s sleep off asio, and deleting the `io_context`.
    That is the replacement D6 already ruled.
 
-## The engine service — next, not in the core
+## The engine service — ADDENDUM 2026-09-25, not a new round
 
-The crate above is the data structure. The ruled design also needs a
-service around it, written down before the transport layer consumes it.
-This is not a new round.
+The crate is the data structure. The transport layer calls a service
+around it, from its first line. These are the decisions that service is
+built from. The service is not in the crate yet. Invoke aborts stay on
+the bridge. Shutdown steps 2–8 stay with the transport and the bridge;
+step 1 is this service.
 
-- A mailbox in. `arm`, `clear`, and `deregister` arrive from owners'
-  homes on other threads.
-- One thread. It sleeps until the earlier of `next_deadline()` and the
-  next mailbox message.
-- Delivery out that never blocks. Each wake goes to its owner's home,
-  one outstanding per owner.
-- Shutdown follows ruling 6. The closed state is step 1. Invoke aborts
-  are the bridge, not this service's data structure.
+**Owners never wait on the engine.** `arm`, `clear`, and `deregister`
+are fire-and-forget: the send returns when the command is queued, not
+when the engine has applied it. A `Wake` already carries its
+`generation`, so the home learns that generation from the wake it is
+handed, not from a reply to `arm`. Owner ids are handed out by the
+handle from an atomic counter, so registering is not a round trip
+either. The handle is a type in this crate. `OwnerId`'s field stays
+private (`OwnerId(u64)`); transport never constructs one. The core
+today assigns ids itself (`Engine::register`, `next_id`). When the
+service lands, `register` takes the id the handle minted in this crate
+and refuses a duplicate. That is the core change. A public constructor
+on `OwnerId` is not part of it.
+
+**One outstanding wake is the delivery primitive.** Each owner has a
+single wake slot. It is not a queue. Delivery writes the newest `Wake`
+into that slot. If the slot was empty, it wakes the home. If the slot
+already held a wake, it does not wake the home again, and the core
+counts the replacement (`ClassLateness.replaced_wakes`). The home takes
+whatever wake is in the slot when it runs, so `note_home` is handed the
+generation the core still holds. Leaving the older wake in the slot
+would make `note_home` return `NoSuchWake` and the newer wake
+unreportable. The home drops the slot's lock before it does any work,
+so the engine thread never waits on the owner.
+
+**The engine thread sleeps by blocking on the mailbox.** The timeout is
+`next_deadline() - now` when a deadline is armed, and the thread blocks
+with no timeout when none is. There is no async runtime on that thread.
+Its budget is one thread, counted in D5, and it needs no reactor. It is
+not the transport runtime.
+
+**The handle applies the earlier-only rule before anything is queued.**
+Admission bounds how many owners exist. It does not bound how often one
+owner sends. The engine's earlier-only rule runs when it applies an
+`arm`, so an `arm` that is queued and then discarded has already taken
+a slot in the mailbox. An idle deadline that only moves later would
+send one command per event. The handle knows the deadline it has armed.
+An `arm` that is not strictly earlier is not sent. After a fire or a
+`clear` the handle has no armed deadline, and the next `arm` is sent.
+An `arm` enters the mailbox only when that owner's deadline moves
+earlier, and `clear`, `deregister`, and `note_home` enter when the
+home sends them. That is the traffic. It is not a fixed capacity: a
+deadline can keep moving earlier for as long as the connection lives.
+A mailbox that refused an earlier `arm` would drop a gap deadline
+without the owner knowing, so the queue is not given a length that
+rejects. The thread's drain, below, is what keeps the queue from
+accumulating.
+
+Commands from one owner are applied in the order that owner sent them.
+Each owner lives in exactly one home, and that home sends its own
+commands one at a time. The mailbox is one FIFO, which is what keeps
+that sender's order. A queue that reordered one home's commands would
+not meet this.
+
+On the Pi 4, at 2^18 owners, an earlier arm is 177 ns and one due poll
+is 377 ns
+([the capture](../benchmarks/timing_engine_wake_hints_pi4_20260926T003745Z.txt)).
+That is this thread's drain rate, a few million commands a second. It
+is not D5's budget.
+
+**Homes report back through the same mailbox.** `note_home` is a
+command on that mailbox, not a side channel. The home stamps
+`polled_at` itself, at the moment it observes the wake.
+
+**Every home uses the engine's clock, cloned from the same origin.**
+`MonotonicClock::new` stores `Instant::now()` as its origin, and `now`
+is nanoseconds since that instant. The clock is `Clone`, and a clone
+keeps the origin. The service constructs one clock and clones it to
+each home. A home that called `MonotonicClock::new` itself would report
+lateness from a different zero.
+
+**After close.** Each handle holds a closed flag. `register`, `arm`,
+`clear`, and `deregister` check it and return `EngineError::Closed`
+without sending. Commands already in the mailbox are dropped, not
+applied. `close` is shutdown step 1.
+
+**If the engine thread panics, the process aborts.** A dead engine
+leaves every gap timer and handshake deadline unarmed, so a flood holds
+its slots until something else notices. There is no safe degraded mode.
+The abort is that thread's failure. It is not a crate-wide panic
+strategy.
