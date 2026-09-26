@@ -6,8 +6,8 @@
 //! Init, PQC sign/verify, hashing, and secure memory.
 
 use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme as _,
-    SCHEME_DOMAIN_PQC_AUTH_TX, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+    HybridEd25519MlDsa, HybridSecretKey, SignatureScheme as _, SCHEME_DOMAIN_PQC_AUTH_TX,
+    SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
 };
 use std::os::raw::c_char;
 use std::sync::Mutex;
@@ -235,29 +235,13 @@ pub extern "C" fn shekyl_pqc_verify(
         return 11;
     };
 
-    match scheme_id {
-        1 => {
-            let scheme = HybridEd25519MlDsa;
-            let Ok(pk) = HybridPublicKey::from_canonical_bytes(pk_bytes) else {
-                return 11;
-            };
-            let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
-                return 11;
-            };
-            // Rust-owned tx-auth domain (SA-R-2); C++ passes no domain.
-            match scheme.verify(&pk, SCHEME_DOMAIN_PQC_AUTH_TX, msg, &sig) {
-                Ok(()) => 0,
-                Err(_) => 10, // CryptoVerifyFailed
-            }
-        }
-        2 => {
-            use shekyl_crypto_pq::multisig::verify_multisig;
-            match verify_multisig(scheme_id, pk_bytes, sig_bytes, msg) {
-                Ok(()) => 0,
-                Err(e) => e as u8,
-            }
-        }
-        _ => 1, // SchemeMismatch
+    // One body with the submit verifier (K13) and the consensus validator
+    // (CEN-I18): the scheme dispatch and the Rust-owned tx-auth domain
+    // (SA-R-2; C++ passes no domain) live in `verify_pqc_auth`, and the
+    // discriminant it returns is the code this ABI has always exported.
+    match shekyl_crypto_pq::signature::verify_pqc_auth(scheme_id, pk_bytes, sig_bytes, msg) {
+        Ok(()) => 0,
+        Err(e) => e as u8,
     }
 }
 

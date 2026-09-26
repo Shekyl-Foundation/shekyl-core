@@ -91,10 +91,8 @@ use shekyl_archival_retention::{
     HoldingsKind, RewardCommit, ShardSet,
 };
 use shekyl_bulletproofs::Bulletproof;
-use shekyl_crypto_pq::multisig::verify_multisig;
-use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
-};
+use shekyl_crypto_pq::error::PqcVerifyError;
+use shekyl_crypto_pq::signature::verify_pqc_auth;
 use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof, VerifyError};
@@ -1142,29 +1140,13 @@ fn verify_pqc_auth_slot(
     if auth.hybrid_public_key.is_empty() {
         return Err(VerifyReject::malformed("K13: empty hybrid_public_key"));
     }
+    // The C++ battery's key-blob bounds, kept as the loud pre-check they are
+    // there (the parse inside `verify_pqc_auth` enforces the exact lengths;
+    // this refuses a blob the DoS ceiling excludes before parsing it).
     match auth.scheme_id {
         PQC_SCHEME_SINGLE => {
             if auth.hybrid_public_key.len() != PQC_HYBRID_SINGLE_KEY_LEN {
                 return Err(VerifyReject::malformed("K13 single: key length"));
-            }
-            let Ok(public_key) = HybridPublicKey::from_canonical_bytes(&auth.hybrid_public_key)
-            else {
-                return Err(VerifyReject::malformed("K13 single: key decode"));
-            };
-            let Ok(signature) = HybridSignature::from_canonical_bytes(&auth.hybrid_signature)
-            else {
-                return Err(VerifyReject::malformed("K13 single: signature decode"));
-            };
-            if HybridEd25519MlDsa
-                .verify(
-                    &public_key,
-                    shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-                    payload_hash.as_bytes(),
-                    &signature,
-                )
-                .is_err()
-            {
-                return Err(VerifyReject::malformed("K13 single: hybrid verify refused"));
             }
         }
         PQC_SCHEME_MULTISIG => {
@@ -1173,24 +1155,28 @@ fn verify_pqc_auth_slot(
             {
                 return Err(VerifyReject::malformed("K13 multisig: key blob bounds"));
             }
-            // Group-id binding no longer exists (Option E′ deleted
-            // `group_id`; identity is the address fingerprint). This is
-            // the single `verify_multisig` entry point.
-            if verify_multisig(
-                auth.scheme_id,
-                &auth.hybrid_public_key,
-                &auth.hybrid_signature,
-                payload_hash.as_bytes(),
-            )
-            .is_err()
-            {
-                return Err(VerifyReject::malformed("K13 multisig: verify refused"));
-            }
         }
         // Excluded by the closed-set check above.
         _ => return Err(VerifyReject::malformed("K13: unreachable scheme arm")),
     }
-    Ok(())
+    // One body with the daemon's `shekyl_pqc_verify` and the validator's
+    // CEN-I18: scheme dispatch, the tx-auth domains, and the single
+    // `verify_multisig` entry point (group-id binding no longer exists —
+    // Option E′ deleted `group_id`; identity is the address fingerprint).
+    verify_pqc_auth(
+        auth.scheme_id,
+        &auth.hybrid_public_key,
+        &auth.hybrid_signature,
+        payload_hash.as_bytes(),
+    )
+    .map_err(|e| {
+        VerifyReject::malformed(match e {
+            PqcVerifyError::CryptoVerifyFailed => "K13: signature refused",
+            PqcVerifyError::DeserializationFailed => "K13: key or signature decode",
+            PqcVerifyError::SchemeMismatch => "K13: unknown scheme_id",
+            _ => "K13 multisig: container refused",
+        })
+    })
 }
 
 /// The debit arm's **possession pre-gate**: prove the submitter holds the
