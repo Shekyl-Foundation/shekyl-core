@@ -56,6 +56,14 @@ impl Ipv4Subnet {
     }
 }
 
+/// `until` is stored only when there is no deadline yet, or it is later.
+fn extends(current: Option<Tick>, until: Tick) -> bool {
+    match current {
+        Some(have) => until > have,
+        None => true,
+    }
+}
+
 fn mask(addr: Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
     if prefix_len == 0 {
         return Ipv4Addr::UNSPECIFIED;
@@ -78,10 +86,11 @@ impl BanList {
     }
 
     /// Record a host ban that lasts until `until`. A deadline that has
-    /// already passed is not a ban: the list is unchanged and this returns
-    /// false. A later deadline replaces an earlier one.
+    /// already passed is not a ban. A deadline that is not later than the
+    /// one already stored does not shorten it: [`Self::lift_host`] is how a
+    /// ban ends early. Returns whether this call stored `until`.
     pub fn ban_host(&mut self, host: IpAddr, until: Tick, now: Tick) -> bool {
-        if now >= until {
+        if now >= until || !extends(self.hosts.get(&host).copied(), until) {
             return false;
         }
         self.hosts.insert(host, until);
@@ -89,12 +98,15 @@ impl BanList {
     }
 
     /// Record an IPv4 subnet ban. Same deadline rule as [`Self::ban_host`].
-    /// The same subnet is replaced, not stacked.
+    /// One subnet is one entry.
     pub fn ban_subnet(&mut self, subnet: Ipv4Subnet, until: Tick, now: Tick) -> bool {
         if now >= until {
             return false;
         }
         if let Some(entry) = self.subnets.iter_mut().find(|(have, _)| *have == subnet) {
+            if !extends(Some(entry.1), until) {
+                return false;
+            }
             entry.1 = until;
         } else {
             self.subnets.push((subnet, until));
@@ -220,6 +232,25 @@ mod tests {
         assert!(!bans.is_banned(outside, Tick::new(99)));
         assert!(!bans.is_banned(inside, Tick::new(100)));
         assert!(bans.subnets(Tick::new(100)).is_empty());
+    }
+
+    #[test]
+    fn a_shorter_future_ban_does_not_shorten_and_a_later_one_extends() {
+        let mut bans = BanList::new();
+        let host = v4([10, 0, 0, 1]);
+        assert!(bans.ban_host(host, Tick::new(500), Tick::new(1)));
+        assert!(!bans.ban_host(host, Tick::new(200), Tick::new(50)));
+        assert!(bans.is_banned(host, Tick::new(400)));
+        assert!(bans.ban_host(host, Tick::new(800), Tick::new(50)));
+        assert!(bans.is_banned(host, Tick::new(700)));
+
+        let subnet = Ipv4Subnet::new(Ipv4Addr::new(10, 1, 0, 0), 24).expect("prefix");
+        let inside = v4([10, 1, 0, 9]);
+        assert!(bans.ban_subnet(subnet, Tick::new(500), Tick::new(1)));
+        assert!(!bans.ban_subnet(subnet, Tick::new(200), Tick::new(50)));
+        assert!(bans.is_banned(inside, Tick::new(400)));
+        assert!(bans.ban_subnet(subnet, Tick::new(800), Tick::new(50)));
+        assert!(bans.is_banned(inside, Tick::new(700)));
     }
 
     #[test]
