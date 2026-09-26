@@ -219,9 +219,10 @@ pub fn sign_transaction_with_terms(
 ///
 /// This is Phase 2 of the signing pipeline. The caller must:
 /// 1. Insert the proofs from [`sign_transaction`] into the transaction
-/// 2. Compute `get_transaction_signed_payload` for each input
-/// 3. Hash each payload with Keccak-256 to get `payload_hashes`
-/// 4. Call this function with those hashes and the corresponding secret keys
+/// 2. Derive every input's signing hash with
+///    [`crate::phase1_payload_hashes`] (`shekyl_wire::PqcSigningPreimage`'s
+///    `signed_hash(i)`, one [`SigningPayloadHash`] per input)
+/// 3. Call this function with those hashes and the corresponding secret keys
 ///
 /// # Errors
 ///

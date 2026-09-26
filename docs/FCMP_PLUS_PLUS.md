@@ -423,8 +423,15 @@ Returns an error if no checkpoint exists at the requested height.
 
 ## 6. Per-Input Signed Payload Layout
 
-Implementation entry point: `cryptonote::get_transaction_signed_payload()` in
-`src/cryptonote_core/tx_pqc_verify.cpp` (declared in `tx_pqc_verify.h`).
+Implementation entry point: `shekyl_wire::PqcSigningPreimage`
+(`rust/shekyl-wire/src/transaction/signing_preimage.rs`) — the one
+derivation, held to this layout by the captured KAT
+`pqc_signing_preimage_v1.json`. The daemon reaches it through the
+`shekyl_tx_pqc_signing_payload_hashes` FFI (`verify_transaction_pqc_auth`,
+`src/cryptonote_core/tx_pqc_verify.cpp`), the wallet through
+`shekyl_tx_builder::phase1_payload_hashes`, the validator as CEN-I17. The
+C++ assembly (`cryptonote::get_transaction_signed_payload`) was deleted
+2026-09-25 (E6 slice 6 commit 7).
 
 Each `pqc_auths[i]` signs a payload that commits to the full transaction
 state:
@@ -732,8 +739,9 @@ and must be preserved by any code that touches the FFI boundary.
    the prover computes `I` algebraically while the verifier would receive
    the modified value.
 
-6. **PQC signing requires two phases.** `get_transaction_signed_payload`
-   hashes all inputs' `hybrid_public_key` values. All public keys must be
+6. **PQC signing requires two phases.** The signing preimage
+   (`PqcSigningPreimage`) binds every input's `hybrid_public_key` into every
+   input's message. All public keys must be
    derived and placed into `tx.pqc_auths[i].hybrid_public_key` before any
    input is signed. A single-pass approach where key derivation and signing
    are interleaved produces payload hashes that don't match at verification

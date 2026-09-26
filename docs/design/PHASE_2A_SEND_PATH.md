@@ -818,15 +818,16 @@ one opaque proof failure.
 
 **Source-verified:** `sign.rs` documents the circular dependency, and
 `sign_pqc_auths(payload_hashes, inputs)` takes a **caller-computed** payload
-hash (caller runs `get_transaction_signed_payload` per input, then Keccak-256).
+hash (the caller runs `phase1_payload_hashes` — `shekyl_wire::PqcSigningPreimage`'s
+`signed_hash(i)`, one `SigningPayloadHash` per input).
 That hash is external to the **builder**, not to the **actor** — so the whole
 sequence collapses into **`KeyActor::sign_transaction`, one round-trip**:
 
 1. builder `sign_transaction(tx_prefix_hash, inputs, outputs, fee, tree)` →
    `SignedProofs` (proofs populated, `pqc_auths` empty);
 2. encoder **phase 1**: assemble the skeleton (proofs + per-input `key_image` +
-   `pseudo_out`) → `get_transaction_signed_payload` per input → Keccak-256 →
-   `payload_hashes`;
+   `pseudo_out`) → `phase1_payload_hashes` (`PqcSigningPreimage::signed_hash`
+   per input) → `payload_hashes`;
 3. builder `sign_pqc_auths(payload_hashes, inputs)` → `Vec<PqcAuth>`;
 4. assemble the complete `TxSignatures` (the reply).
 

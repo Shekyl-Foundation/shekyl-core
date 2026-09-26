@@ -329,9 +329,12 @@ Distinct `…-scheme-vN` per surface (SA-R-2 principle; every surface is at
 `v1` except E, rotated to `v2` by `SF-D8`), including the four that
 already carry an *inner* cSHAKE customization — the scheme-level domain is a
 separate layer and gets its own string. Surface A's domain lives **inside the
-Rust scheme**, so the C++ differential pair (`get_transaction_signed_payload` /
-`transaction.rs` `pqc_signing_payload_hashes`) stays byte-identical and does
-not move — the wrap is Rust-only. F has no in-repo signer, so its constant is
+Rust scheme**, so the signing preimage does not move — the wrap is Rust-only.
+That preimage has one derivation, `shekyl_wire::PqcSigningPreimage` (since
+2026-09-25, E6 slice 6 commit 7: the C++ assembly `get_transaction_signed_payload`
+is deleted and the daemon calls `shekyl_tx_pqc_signing_payload_hashes`; the
+former C++/Rust differential pair is now a captured KAT,
+`pqc_signing_preimage_v1.json`). F has no in-repo signer, so its constant is
 assignable now with the KAT writer the only lockstep. E's was assignable the
 same way until `SF-D8` (a0) landed its verifier and armed pinned vector
 (2026-09-13); the string is now pinned by

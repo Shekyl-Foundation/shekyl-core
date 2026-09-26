@@ -11,7 +11,9 @@ tx-builder spend encoder diverges from the daemon in four consensus-critical spo
 
 `shekyl-tx-builder/src/wire.rs` does two consensus-critical things: (1) serialize
 the final FCMP++ spend, and (2) compute the per-input **PQC signing preimage**
-(`phase1_payload_hashes`, mirroring C++ `get_transaction_signed_payload`). The two
+(`phase1_payload_hashes`, over `shekyl_wire::PqcSigningPreimage` — the one
+derivation the daemon also verifies against since the C++ assembly's deletion,
+2026-09-25). The two
 are inseparable — the PQC signature signs a hash of the serialized form, so encode
 and preimage must serialize the *same* bytes.
 

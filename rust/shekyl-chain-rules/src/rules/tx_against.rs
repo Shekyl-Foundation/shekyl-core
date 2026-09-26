@@ -314,11 +314,15 @@ impl I11 {
 /// never a verdict. This is the read that widens `tx_against`'s fault to
 /// [`ViewRead`]: the first view-bound row to read a per-height record.
 ///
-/// The anchor's consumer is CEN-I15's proof verification (slice 6 commit
-/// 8, this PR); until it lands the value is derived, recorded and dropped —
-/// staged with its consumer named, so the derivation and its fault
-/// classification are reviewed here, where the operand is defined, and not
-/// inside the verification commit.
+/// The anchor's consumer is CEN-I15's proof verification, which is **not
+/// in this crate yet**: it is deferred (slice 6 §5 row 8; the FOLLOWUPS row
+/// *CEN-I15 … blocked on the scenario driver being able to produce a
+/// spend*), because a membership proof is valid only against the tree it
+/// was made in and no fixture or driven chain can yet supply one. Until it
+/// lands the value is derived, recorded and dropped — staged with its
+/// consumer named, so the derivation and its fault classification are
+/// reviewed here, where the operand is defined, and not inside the
+/// verification commit. Nothing in this crate verifies the FCMP++ proof.
 pub(crate) struct I12;
 
 impl Rule for I12 {

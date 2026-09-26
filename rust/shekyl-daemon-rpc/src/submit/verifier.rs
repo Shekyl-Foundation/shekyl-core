@@ -1071,8 +1071,10 @@ fn verify_fcmp(
 /// Per auth: version pin, zero flags, known scheme id ∈ {1,2}, per-scheme
 /// key-blob length bounds, then the hybrid Ed25519+ML-DSA (or M-of-N multisig
 /// container) verification over the per-input signing-preimage hash — computed
-/// by `shekyl-wire`'s [`pqc_signing_payload_hashes`], the pinned Rust twin of
-/// C++ `get_transaction_signed_payload`.
+/// by `shekyl-wire`'s [`pqc_signing_payload_hashes`], the derivation of record
+/// (`PqcSigningPreimage`) that the daemon's `verify_transaction_pqc_auth` and
+/// the validator's CEN-I17 read too; the C++ assembly it once twinned is
+/// deleted (E6 slice 6 commit 7).
 ///
 /// MSW-6 (PQC_MULTISIG.md §16.3) withdrew the former tx-wide scheme-id
 /// agreement (every input matching `pqc_auths[0]`). Its stated scheme-downgrade
