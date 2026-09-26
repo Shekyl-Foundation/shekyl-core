@@ -363,8 +363,8 @@ impl<'id> WriteBatch<'_, 'id> {
         if valid.rule_set() != in_force {
             return Err(StoreCannot::RuleSetNotInForce {
                 height,
-                judged: valid.rule_set(),
-                in_force,
+                judged: Box::new(valid.rule_set()),
+                in_force: Box::new(in_force),
             }
             .into());
         }

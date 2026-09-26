@@ -178,7 +178,7 @@ impl core::error::Error for EngineError {
 /// block — the block was not judged — and not a coherence failure — the
 /// file is as it was. The third class exists so a refusal is never mapped
 /// onto either of the other two (C2-R8 §3.1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoreCannot {
     /// The file exists but carries no `schema_version` cell.
     ///
@@ -333,10 +333,14 @@ pub enum StoreCannot {
         height: u64,
         /// The rule set the verdict was minted under — the set, not its id:
         /// two Fakechain sets share `RuleSetId::GENESIS`, and the refusal
-        /// must be able to say which differed (RD-Q10).
-        judged: RuleSet,
+        /// must be able to say which differed (RD-Q10). Boxed, as
+        /// `shekyl_chain_rules::Stale::RuleSet`'s are: two sets by value
+        /// sized every `Result` in the store past clippy's 128 bytes once
+        /// `reorg_cap` joined `RuleSet` (PR #861); `StoreCannot` is `Clone`,
+        /// not `Copy`, for this box.
+        judged: Box<RuleSet>,
         /// The rule set the caller says is in force at `height`.
-        in_force: RuleSet,
+        in_force: Box<RuleSet>,
     },
     /// `pop` on a store with no block recorded.
     ChainEmpty,

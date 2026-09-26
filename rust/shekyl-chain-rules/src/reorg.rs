@@ -3,8 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `D_max`, the consensus reorg cap (`PDM-Q11`), and the journal horizon
-//! derived from it (`PDM-Q-F19`).
+//! `D_max`, the consensus reorg cap (`PDM-Q11`) — **the genesis rule set's
+//! value**; the cap in force is `RuleSet::reorg_cap` — and the journal
+//! horizon derived from it (`PDM-Q-F19`).
 //!
 //! # One number, three derivations
 //!
@@ -37,10 +38,13 @@
 //! *because* the undo floor `tip − D_max` sits strictly above the body
 //! horizon's `h_scarce + 1`, and that ordering is exactly
 //! `SETTLEMENT_EPOCH_BLOCKS > D_max`. Asserted at compile time on the
-//! production constants; the store re-asserts it at open against the
-//! session's schedule, so a regtest override that shortens the epoch must
-//! shorten the retention with it (rule 71: nettype selects data, the data
-//! satisfies the same invariant).
+//! production constants. The cap is rule-set data (`RuleSet::reorg_cap`;
+//! `GENESIS` carries this constant, a Fakechain set names its own), and
+//! the store's undo retention is boxed between them — at least the
+//! in-force set's cap, strictly inside the session's epoch — at open and at
+//! every connect, so a regtest that shortens the epoch runs a rule set
+//! whose cap fits (rule 71: nettype selects data, the data satisfies the
+//! same invariant).
 
 use shekyl_archival_retention::{
     ARCHIVAL_REORG_DEPTH_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_N,
@@ -48,9 +52,13 @@ use shekyl_archival_retention::{
 };
 use shekyl_types::{BlockCount, BlockHeight};
 
-/// The consensus reorg cap: the deepest reorganisation a node is built to
-/// follow (`PDM-Q11`, shape frozen; numeric **PROVISIONAL**, derived from
-/// `archival_reorg_depth_blocks` — module docs).
+/// The genesis rule set's reorg cap: the deepest reorganisation a node on
+/// the issued rules is built to follow (`PDM-Q11`, shape frozen; numeric
+/// **PROVISIONAL**, derived from `archival_reorg_depth_blocks` — module
+/// docs). Consumers read the cap **in force** through
+/// [`RuleSet::reorg_cap`](crate::RuleSet::reorg_cap); this constant is that
+/// field's value on `GENESIS` and the production pair's term in the
+/// `SEB > D_max` assertion below.
 pub const D_MAX: BlockCount = BlockCount::from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS);
 
 const _: () = assert!(
