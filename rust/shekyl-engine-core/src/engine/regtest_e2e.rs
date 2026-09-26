@@ -110,6 +110,29 @@ fn log_tail(log_path: &std::path::Path) -> String {
         .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
 }
 
+/// The fakechain-only regtest schedule levers, as one value so the pair
+/// cannot be set apart: `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
+/// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`. The daemon refuses `seb ≤ reorg_cap`
+/// at arm (`SEB > D_max` on every nettype); a harness that shortens the
+/// epoch lowers the cap with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RegtestSchedule {
+    pub(super) seb: u64,
+    pub(super) reorg_cap: u64,
+}
+
+impl RegtestSchedule {
+    /// Set both levers on this process's environment, for the in-process
+    /// arm that must match the spawned daemon's schedule.
+    pub(super) fn set_in_process_env(self) {
+        std::env::set_var("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", self.seb.to_string());
+        std::env::set_var(
+            "SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS",
+            self.reorg_cap.to_string(),
+        );
+    }
+}
+
 pub(super) struct RegtestDaemon {
     child: Child,
     data_dir: PathBuf,
@@ -175,7 +198,7 @@ impl RegtestDaemon {
 
     /// Spawn the daemon and wait until its RPC answers `get_info`.
     pub(super) async fn start() -> RegtestDaemon {
-        Self::start_with_settlement_epoch_blocks(None).await
+        Self::start_with_regtest_schedule(None).await
     }
 
     /// Spawn the daemon with a second, restricted listener, so one daemon serves
@@ -202,20 +225,26 @@ impl RegtestDaemon {
         Self::start_inner(None, true, false).await
     }
 
-    /// Spawn the daemon with an optional `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
-    /// override on the child's environment (the fakechain-only regtest
-    /// lever the daemon arms at startup — the SEB gate at the top of
-    /// `Blockchain::init`, before the genesis add). The emission
-    /// e2e passes `Some(seb)` so epoch closes land in minutes; the wallet
-    /// process arms the same value in-process (it does its own epoch
+    /// Spawn the daemon with an optional regtest schedule on the child's
+    /// environment — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
+    /// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`, the fakechain-only levers the
+    /// daemon arms at startup (the gate at the top of `Blockchain::init`,
+    /// before the genesis add). The pair moves together: the daemon refuses
+    /// an epoch that is not strictly above the reorg cap (`SEB > D_max` is
+    /// an invariant of every valid configuration; a shortened epoch runs a
+    /// Fakechain rule set whose cap fits inside it). The emission e2e
+    /// passes `Some(schedule)` so epoch closes land in minutes; the wallet
+    /// process arms the same pair in-process (it does its own epoch
     /// arithmetic when it assembles a claim, and gates on the lever —
     /// `lifecycle.rs`). `None` runs the genesis-pinned schedule.
-    pub(super) async fn start_with_settlement_epoch_blocks(seb: Option<u64>) -> RegtestDaemon {
-        Self::start_inner(seb, false, false).await
+    pub(super) async fn start_with_regtest_schedule(
+        schedule: Option<RegtestSchedule>,
+    ) -> RegtestDaemon {
+        Self::start_inner(schedule, false, false).await
     }
 
     async fn start_inner(
-        seb: Option<u64>,
+        schedule: Option<RegtestSchedule>,
         restricted_listener: bool,
         console: bool,
     ) -> RegtestDaemon {
@@ -297,12 +326,17 @@ impl RegtestDaemon {
         // this process's environment, so a lever leaked from the developer's
         // or CI's shell would silently reschedule a test that intends the
         // genesis pin.
-        match seb {
-            Some(seb) => {
-                cmd.env("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", seb.to_string());
+        match schedule {
+            Some(schedule) => {
+                cmd.env("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", schedule.seb.to_string());
+                cmd.env(
+                    "SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS",
+                    schedule.reorg_cap.to_string(),
+                );
             }
             None => {
                 cmd.env_remove("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
+                cmd.env_remove("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS");
             }
         }
         let child = cmd
@@ -2581,6 +2615,14 @@ async fn e2e_emission_claim_accepted_and_applied() {
     /// confirmed-bond substrate (~300 blocks) fits inside epoch 0 (pinning
     /// the join epoch), small enough that mining epoch 1 closed is cheap.
     const SEB: u64 = 512;
+    /// The reorg cap this schedule runs: strictly below the epoch (the
+    /// daemon refuses `SEB ≤ cap`); the walk reorgs nothing, so any cap
+    /// inside the epoch does.
+    const REORG_CAP: u64 = 64;
+    const SCHEDULE: RegtestSchedule = RegtestSchedule {
+        seb: SEB,
+        reorg_cap: REORG_CAP,
+    };
     const SHARD_ID: u64 = 0;
     /// The claimed epoch. The bond joins in epoch 0 and the onset stagger
     /// (`good_through`) defers market membership to `join + 1`, so epoch 1
@@ -2595,7 +2637,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     /// each record standalone headroom.
     const CLAIM_FUNDING_CUSHION: u64 = 12_000_000_000;
 
-    // (A1) Spawn the daemon FIRST — `start_with_settlement_epoch_blocks`
+    // (A1) Spawn the daemon FIRST — `start_with_regtest_schedule`
     // takes the e2e serial lock, so sibling `--ignored` tests cannot
     // interleave with the arming below — then arm the settlement-epoch
     // lever in THIS process before any of ITS epoch arithmetic latches
@@ -2610,18 +2652,18 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // either direction is a loud named failure, never silent bleed. Run
     // the regtest e2es in separate processes (the module docs' one-test
     // invocation) for green runs.
-    let daemon = RegtestDaemon::start_with_settlement_epoch_blocks(Some(SEB)).await;
-    // The lever is set and deliberately NOT restored afterwards: it is the
+    let daemon = RegtestDaemon::start_with_regtest_schedule(Some(SCHEDULE)).await;
+    // The levers are set and deliberately NOT restored afterwards: they are the
     // only input `arm` reads, and once armed the schedule latch is
     // irreversible, so leaving the variable set keeps the process's two
     // views of the schedule CONSISTENT (env says levered, latch is
     // levered). Scrubbing it on the way out would leave the more dangerous
     // state — a levered process that reports no lever. Child processes do
     // not inherit it by accident: the spawn seam sets it explicitly for
-    // `Some(seb)` and `env_remove`s it for `None`.
-    std::env::set_var("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", SEB.to_string());
+    // `Some(schedule)` and `env_remove`s them for `None`.
+    SCHEDULE.set_in_process_env();
     let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
-        .expect("the SEB lever must arm before any epoch arithmetic latches the schedule");
+        .expect("the schedule levers must arm before any epoch arithmetic latches the schedule");
     assert_eq!(armed, SEB, "armed schedule must be the lever value");
 
     // The shared confirmed-bond substrate runs entirely inside epoch 0.
@@ -3659,6 +3701,11 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     const SLOT: u32 = 0;
     const SHARD_ID: u64 = 0;
     const SEB: u64 = 2;
+    /// A two-block epoch admits exactly one cap (`SEB > cap ≥ 1`).
+    const SCHEDULE: RegtestSchedule = RegtestSchedule {
+        seb: SEB,
+        reorg_cap: 1,
+    };
     /// Cushion above `floor + bond fee` (the PR-B walk's shape): becomes the
     /// bond's `BondPostChange` output, which the exit sweeps.
     const FUNDING_CUSHION: u64 = 12_000_000_000;
@@ -3666,10 +3713,10 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     // Arm the levered schedule BEFORE any wallet-side epoch arithmetic (the
     // claim e2e's arming shape, and its containment caveats verbatim: the
     // latch is irreversible and per-process — run this walk alone).
-    let daemon = RegtestDaemon::start_with_settlement_epoch_blocks(Some(SEB)).await;
-    std::env::set_var("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", SEB.to_string());
+    let daemon = RegtestDaemon::start_with_regtest_schedule(Some(SCHEDULE)).await;
+    SCHEDULE.set_in_process_env();
     let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
-        .expect("the SEB lever must arm before any epoch arithmetic latches the schedule");
+        .expect("the schedule levers must arm before any epoch arithmetic latches the schedule");
     assert_eq!(armed, SEB, "armed schedule must be the lever value");
 
     let seed = [0x77u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
