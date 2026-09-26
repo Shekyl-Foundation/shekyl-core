@@ -515,3 +515,91 @@ fn a_malformed_undo_floor_cell_poisons_the_batch() {
     );
     cleanup(&path);
 }
+
+/// SPR-4: the persisted floor and the journal's first key record one fact,
+/// and the redundancy is a check that can fail. A journal whose lowest row
+/// is not the floor's is SI-6 at `pop` — before any refusal is read off
+/// either — and at the next boundary after the retire.
+#[test]
+fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary() {
+    let path = tmp("prune-floor-mismatch");
+    let (store, _b, _, _) = chain_to_300(&path);
+    // Rows [250, 300] stand and the cell says 250. Remove row 250 by hand.
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut table = txn.open_table(UNDO_LOG).expect("undo_log");
+            table
+                .remove(250u64)
+                .expect("remove")
+                .expect("row 250 stood");
+        }
+        txn.commit().expect("commit");
+    }
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("reopen");
+    let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(StoreInvariant::UndoLogIncoherent {
+                height: 300,
+                fault: UndoFault::FloorMismatch {
+                    first: 251,
+                    floor: 250
+                },
+            })
+            .to_string()
+        )),
+        "the cell and the table disagree: SI-6, not a capability limit"
+    );
+    assert!(!store.connect_state().is_live(), "the writer halts on SI-6");
+    cleanup(&path);
+
+    // The same gap, met by the boundary batch: connect to 399 under a
+    // clean journal, open the gap at the floor that 400 will establish
+    // (350), then connect 400.
+    let path = tmp("prune-floor-mismatch-boundary");
+    let (store, mut b2, _, _) = chain_to_300(&path);
+    b2.connect(&store, 301, 399, |_| Vec::new());
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut table = txn.open_table(UNDO_LOG).expect("undo_log");
+            table
+                .remove(350u64)
+                .expect("remove")
+                .expect("row 350 stood");
+        }
+        txn.commit().expect("commit");
+    }
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("reopen");
+    let previous = *b2.hashes.last().expect("399 connected");
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let cand = candidate(400, previous, Vec::new());
+        Ok(batch.connect(judge(&view, cand)?, facts(400), RuleSet::GENESIS)?)
+    });
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(StoreInvariant::UndoLogIncoherent {
+                height: 400,
+                fault: UndoFault::FloorMismatch {
+                    first: 351,
+                    floor: 350
+                },
+            })
+            .to_string()
+        )),
+        "the retire leaves a first key that is not the floor: SI-6"
+    );
+    assert_eq!(tip(&store), 399, "the boundary block did not connect");
+    assert!(!store.connect_state().is_live());
+    cleanup(&path);
+}

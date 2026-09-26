@@ -17,7 +17,15 @@
 //! The body horizon is a rule of the epoch calendar — there is no constant
 //! to name and no watermark to store. The undo floor is the one number the
 //! store keeps ([`UndoLogFloorCell`]), because `pop` must tell *pruned
-//! below* from *lost* and nothing else records what was retired.
+//! below* from *lost* and nothing else records what was retired: S-CHAIN-W
+//! §5.4 read the floor as the journal's first key, and that reading holds
+//! while a row stands — but a `pop` sequence past the retention empties the
+//! journal, and `pop` also removes the `block_info` rows that would date
+//! the last boundary, so at that point no table can say whether the row
+//! for the new tip was retired or lost (SPR-4). The cell can. It is
+//! **checked** against the table's first key at `pop` and at every
+//! boundary ([`UndoFault::FloorMismatch`](super::UndoFault::FloorMismatch),
+//! SI-6), so the redundancy can fail rather than drift (rule 16).
 //!
 //! # The batch is named by the epoch; nothing is searched (§4)
 //!
@@ -77,7 +85,7 @@
 
 use core::ops::Range;
 
-use redb::WriteTransaction;
+use redb::{ReadableTable, WriteTransaction};
 use shekyl_chain_rules::D_MAX;
 use shekyl_types::{storage_ids_through, BlockCount, BlockHeight, SHARD_TX_COUNT};
 
@@ -85,7 +93,7 @@ use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
 use crate::schema::{BLOCK_INFO, PROPERTIES, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG};
 
 use super::chain_reads::{self, ReadFault, ReadTables};
-use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
+use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant, UndoFault};
 use super::header;
 use super::write::WriteBatch;
 
@@ -238,35 +246,54 @@ impl WriteBatch<'_, '_> {
     }
 
     /// Delete `undo_log` rows below `height − retention` and raise the
-    /// persisted floor to it (monotone). Returns the floor now in force.
+    /// persisted floor to it (monotone). Returns the floor now in force,
+    /// after checking that the journal's first key **is** that floor: the
+    /// block at `height` sealed its row before this ran and every row from
+    /// the floor up is kept, so a first key elsewhere is a journal with a
+    /// gap (SI-6, [`UndoFault::FloorMismatch`](super::UndoFault::FloorMismatch)).
     fn retire_undo_rows(&self, height: u64) -> Result<BlockHeight, StoreError> {
         let retention = self.horizons().undo_retention().to_raw();
-        // `height ≥ 2·SEB > retention` at every call: the subtraction cannot
-        // wrap, and saying so as a branch keeps it from being a claim.
-        let Some(floor) = height.checked_sub(retention) else {
-            return self.undo_floor();
-        };
-        let floor = floor.max(GENESIS_FLOOR);
         let current = self.undo_floor()?.to_raw();
-        if floor <= current {
-            return Ok(BlockHeight::from_raw(current));
-        }
-        {
+        // `height ≥ 2·SEB > retention` at every call: the subtraction cannot
+        // wrap, and saying so as a branch keeps it from being a claim. The
+        // floor never lowers: a reorg across the boundary re-runs this with
+        // the same `height`.
+        let floor = height
+            .checked_sub(retention)
+            .map_or(current, |f| f.max(GENESIS_FLOOR).max(current));
+        let first = {
             let mut undo = self
                 .txn()
                 .open_table(UNDO_LOG)
                 .map_err(EngineError::Table)?;
-            undo.retain_in::<u64, _>(..floor, |_, _| false)
-                .map_err(EngineError::Storage)?;
+            if floor > current {
+                undo.retain_in::<u64, _>(..floor, |_, _| false)
+                    .map_err(EngineError::Storage)?;
+            }
+            let first = undo
+                .first()
+                .map_err(EngineError::Storage)?
+                .map(|(h, _)| h.value());
+            first
+        };
+        if floor > current {
+            header::put::<UndoLogFloorCell>(self.txn(), &BlockHeight::from_raw(floor))?;
         }
-        let floor = BlockHeight::from_raw(floor);
-        header::put::<UndoLogFloorCell>(self.txn(), &floor)?;
-        Ok(floor)
+        // The block at `height` sealed its row before this ran, so an empty
+        // journal here is a lost one; a first key that is not the floor just
+        // written is a gap.
+        if first.is_none() {
+            return Err(self.poison().arm(StoreInvariant::UndoLogIncoherent {
+                height,
+                fault: UndoFault::NoRowForTip,
+            }));
+        }
+        self.check_journal_first(first, height)?;
+        Ok(BlockHeight::from_raw(floor))
     }
 
-    /// The lowest height whose `undo_log` row is kept: the persisted floor,
-    /// or genesis's `1` when nothing has been retired.
-    pub(super) fn undo_floor(&self) -> Result<BlockHeight, StoreError> {
+    /// The persisted floor cell: `None` while nothing has been retired.
+    fn undo_floor_cell(&self) -> Result<Option<BlockHeight>, StoreError> {
         let table = self
             .txn()
             .open_table(PROPERTIES)
@@ -276,9 +303,41 @@ impl WriteBatch<'_, '_> {
         // writer live over a floor it cannot read, and a boundary connect
         // whose caller swallows the error must not commit with the prune
         // skipped (Copilot, PR #861).
-        header::get::<UndoLogFloorCell>(&table)
-            .map(|floor| floor.unwrap_or(BlockHeight::from_raw(GENESIS_FLOOR)))
-            .map_err(|e| self.arm_if_invariant(e))
+        header::get::<UndoLogFloorCell>(&table).map_err(|e| self.arm_if_invariant(e))
+    }
+
+    /// The lowest **poppable** height: the persisted floor, or `1` when
+    /// nothing has been retired (genesis has a row and is never poppable).
+    pub(super) fn undo_floor(&self) -> Result<BlockHeight, StoreError> {
+        Ok(self
+            .undo_floor_cell()?
+            .unwrap_or(BlockHeight::from_raw(GENESIS_FLOOR)))
+    }
+
+    /// The key the journal's lowest row must carry (SPR-4): the persisted
+    /// floor, or genesis's own row, `0`, while nothing has been retired.
+    /// Every connect writes its row and the prune deletes only below the
+    /// floor, so whenever the journal has a row at all its first key is
+    /// this — a different first key is a journal with a gap, SI-6
+    /// ([`UndoFault::FloorMismatch`]).
+    pub(super) fn check_journal_first(
+        &self,
+        first: Option<u64>,
+        height: u64,
+    ) -> Result<(), StoreError> {
+        let expected = self.undo_floor_cell()?.map_or(0, BlockHeight::to_raw);
+        match first {
+            Some(first) if first != expected => {
+                Err(self.poison().arm(StoreInvariant::UndoLogIncoherent {
+                    height,
+                    fault: UndoFault::FloorMismatch {
+                        first,
+                        floor: expected,
+                    },
+                }))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// [`h_scarce`] at `tip`, through this batch. SI-7 poisons the batch.

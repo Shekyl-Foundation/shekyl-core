@@ -87,10 +87,7 @@ impl WriteBatch<'_, '_> {
         };
         self.journal().note_height(tip);
         let floor = self.undo_floor()?.to_raw();
-        if tip < floor {
-            return Err(StoreCannot::PopBelowFloor { tip, floor }.into());
-        }
-        let top = {
+        let (first, top) = {
             let undo = self.open_insert_table(
                 UNDO_LOG,
                 StoreInvariant::UndoLogIncoherent {
@@ -98,16 +95,25 @@ impl WriteBatch<'_, '_> {
                     fault: UndoFault::RowAlreadyRecorded,
                 },
             )?;
+            let first = undo.first()?.map(|(h, _)| h.value());
             let top = undo.last()?.map(|(h, _)| h.value());
-            top
+            (first, top)
         };
+        // The cell and the table's first key say the same thing whenever
+        // the table has a row (SPR-4): a disagreement is a journal that
+        // does not describe its tables, checked before any refusal is
+        // read off either of them.
+        self.check_journal_first(first, tip)?;
+        if tip < floor {
+            return Err(StoreCannot::PopBelowFloor { tip, floor }.into());
+        }
         match top {
             // A block is recorded at `tip`, the tip is at or above the
             // persisted undo floor, and the journal has no row at all. The
-            // prune records what it retired (§5.4, `prune.rs`), and the
-            // floor check above has already said this tip is inside the
-            // retention — so this is a journal that does not describe its
-            // tables: SI-6, not a retention limit (PR #757 review).
+            // prune keeps every row from the floor up (§5.4, `prune.rs`),
+            // and the floor check above has already said this tip is inside
+            // the retention — so this is a journal that does not describe
+            // its tables: SI-6, not a retention limit (PR #757 review).
             None => {
                 return Err(self.poison().arm(StoreInvariant::UndoLogIncoherent {
                     height: tip,
