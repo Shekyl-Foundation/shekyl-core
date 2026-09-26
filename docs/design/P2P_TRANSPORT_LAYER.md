@@ -7,7 +7,9 @@ The 11 commits `dev` gained after it are S-POOL / chain-store and do
 not touch epee, `src/p2p`, `src/net`, the transport crate, or the
 protocol docs, so Round 1's anchors still hold. **The deliverable of
 this round is a design, not code.** Implementation does not start until
-the round closes. Target is 4–6 review rounds (rule 20). **Rule 26 is
+the round closes. **Pre-flight discharged 2026-09-26** at `dev`
+`0aa207208` (rule 26). Production code follows that record. The
+service is the first of it. Target is 4–6 review rounds (rule 20). **Rule 26 is
 cited explicitly** (`26-sub-pr-design-discipline.mdc`): this work
 crosses an FFI boundary and replaces an inherited reference. Numeric
 budgets are not written before a measurement (rule 26 B9). This
@@ -71,6 +73,59 @@ force. The transport layer does not repeat the mistakes:
 1. **Failure causes cover the whole connection, both directions** (D12).
 2. **One source for the cause table** (D12).
 3. **A descriptor test counts the socket, not the process** (D11).
+
+## Pre-flight — DISCHARGED 2026-09-26
+
+Rule 26, between design closure and the first production line. Pin:
+`dev` `0aa207208`, the merge of #870. This is not a new round. The
+record is this section, the same shape as the timing-engine pre-flight:
+the findings are a substrate confirmation and a sequence, not a
+redesign, so they do not mint `R0-D` ids.
+
+**The rulings are sufficient to start.** D1 through D15 are closed.
+The engine-service addendum in
+[`P2P_TIMING_ENGINE.md`](P2P_TIMING_ENGINE.md) is the concurrency
+contract the first line calls. C5 is recorded: the responder handshake
+is 685 µs, one rekey is 5.06 µs, seal and open of a 65,535-byte record
+is 889 µs. No accept-rate (D10.3), no per-connector deadline (D9), no
+transport-runtime thread count (D5), and no every-record rekey (D14
+item 4, decided with C9's window) is written. The implementation does
+not invent those numbers.
+
+**The tree matches the citations that the first line will rely on.**
+Fifty-six `file:line` citations in this document fall inside their
+files at this pin. Re-read, and still the values the design states:
+`P2P_DEFAULT_CONNECTION_TIMEOUT` is 5,000 at `cryptonote_config.h:189`;
+the 5 s at `:193` is `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT`, and the
+general invoke at `:192` is 2 minutes — D9 already refuses to copy
+either into a transport deadline. `NEW_CONNECTION_TIMEOUT_LOCAL` is
+1,200,000 with the comment still saying "2 minutes"
+(`abstract_tcp_server2.inl:60-61`). The send queue is 1,000 messages
+and 100 MiB (`abstract_tcp_server2.h:72-73`). The asio pool is 10
+(`net_node.inl:1150`). The daemon-rpc runtime is still the default
+multi-thread builder (`ffi_exports.rs:162`). Tor control still sets
+`.worker_threads(1)` (`blocking.rs:120`). `Driver::next_wake` is
+`driver/mod.rs:158`. `tokio-socks` 0.5.3 is still the pin in
+`shekyl-p-fetch` and `shekyl-rpc-transport`. D6's third falsifier does
+not fire: the timing-engine round opened 2026-09-25.
+
+**What is built, and what the first commit is.** The crypto core is
+`shekyl-p2p-transport`: `noise`, `channel`, `prefix`, `aead`. HMAC is
+`hmac_blake2s`. `read_message1` range-checks the encapsulation key and
+`ResponderReady` stores the parsed key. `OnionPow`'s default is
+`Enabled`. `InboundCeiling` is in `shekyl-peer-policy`. The timing
+core is `shekyl-timing-engine`. The service is not in that crate, and
+`Engine::register` still mints `OwnerId`. Connection deadlines are
+owners of the service from the first transport line, so the service —
+including `register` taking the id the handle minted — is the first
+production commit. A Rust ban list is not in the tree. D3 already
+rules it; building it is this implementation. `pipe.rs` stays. The
+pipe branch stays `fix/clearnet-pipe-option-testing` at `190cbdc3b`.
+The `io_context` stays until the bridge after cutover. I2P removal is
+the cutover's statement (D13), not this commit. The step-3 fuzz
+targets (`read_message1`, `read_message2`, `open_one`) are not in the
+tree. D11 carries them as gates of this implementation. They are not a
+reason to wait before the service.
 
 ---
 
