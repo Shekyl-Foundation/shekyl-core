@@ -173,6 +173,23 @@ that chain; the ingest crate, which depends on both, is where the witness
 lives. A rule whose only fixture is mock-served state is **untested for
 parity**, whatever its coverage row says.
 
+**Constructed fixtures whose subject is another rule.** The driver exists
+so a rule's *own* witness is real, not so every test drives a wallet. A
+store pop test, a sequencing test, a belt test need a transaction valid
+enough to reach *their* subject, and constructing one is legitimate —
+including signing it — **provided the construction uses production
+paths**: the same signer the wallet uses over the same derivation the
+verifier reads, so two production paths meet over a constructed message,
+which is what a KAT is. What was refused (E6 slice 6 §5.3: a loader, a
+replay, a knob, waiting) each made the rule's *own* subject synthetic;
+that stays refused. The test to apply: *is the rule under test the one
+this fixture is built to pass?* If yes, the witness is the driver or the
+captured chains; if no, construct through production paths and state what
+the construction cannot be — `fixture::signed` (2026-09-25) derives each
+key from its key image, the reverse of production, which CEN-I15 will
+refuse on every one of them when it lands; that cascade is *scheduled* at
+I15, not discovered there.
+
 The instance that named this (E6 slice 6, 2026-09-24): the verification
 rows — I15's FCMP++ proof, I18's PQC signature, H19's range proof — were
 about to be fixtured against a `MockChain` serving the captured block

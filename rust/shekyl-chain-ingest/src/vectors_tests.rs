@@ -220,6 +220,25 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
             manifest.shape
         );
     }
+    // The view-bound 4.I rows a real spend exercises, recorded on this
+    // chain. The **witness** for each is the admission above — `refused` is
+    // `None` with the row live, so the wallet-built spend passed it (for
+    // CEN-I18: a signature made with a real HKDF-derived key over I17's
+    // derivation verified, which no harness fixture can show, its keys
+    // being derived from the image rather than the image from the key).
+    // This assertion is the weaker half: the row was *run* here. It cannot
+    // say the row judged rather than recorded vacuous (slice 5 Q2 — one bit
+    // per row, by design), which is why it is paired with the refusal
+    // check rather than standing for it.
+    for row in [
+        "CEN-I7", "CEN-I10", "CEN-I11", "CEN-I12", "CEN-I17", "CEN-I18",
+    ] {
+        assert!(
+            report.exercised.contains(row),
+            "{}: {row} was not recorded on a chain carrying a real spend",
+            manifest.shape
+        );
+    }
 }
 
 /// **The consensus pin, made visible.** These blobs are valid against one

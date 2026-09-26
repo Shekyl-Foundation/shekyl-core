@@ -465,6 +465,18 @@ pub fn anchored_at(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transa
 /// stays [`bp_plus_layout_for`]'s kind of filler, because a membership
 /// proof needs the tree it is a member of; that is the captured chains'
 /// business (§5 row 1) and CEN-I15's witness.
+///
+/// **The relationship this fixture cannot have right, named so the
+/// cascade is scheduled (`50-testing.mdc`):** the key is derived from the
+/// key image ([`fixture_signing_seed`]); on a chain the image is derived
+/// from the spend key. I18 does not read that relationship — it verifies
+/// the signature against the key in the auth — but CEN-I15 binds each
+/// image to its spent output through the proof and will refuse every
+/// fixture built here the moment it lands. That is the migration slice 6
+/// §5.3 anticipated, collected at the rule whose subject requires it;
+/// this is not I18's witness (the captured chains are — `vectors_tests`
+/// `hold`), it is the infrastructure for every test whose subject is
+/// another rule.
 #[must_use]
 pub fn signed(mut tx: Transaction) -> Transaction {
     let Some(count) = fcmp_auths(&tx).map(Vec::len) else {
