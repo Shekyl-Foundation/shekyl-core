@@ -116,6 +116,15 @@ merge is planned rather than discovered:
 | `ConnectFacts` / `facts.rs` | deletes `root_after` (CTW-Q6, commit 6) | wave A flips four passed-through fields (`weight`, `long_term_weight`, `long_term_effective_median`, `coins_generated`) to verdict reads | **semantic** — both lanes shrink `passed_through`; the count E3 states as *6 → 5* is *6 → 1* after E3 and wave A (`burned` remains until wave B); whichever lands second re-counts |
 | `RecordedBlock` | — | possibly `weight` + `long_term_weight` (Q2 (a)) | none if Q2 takes (b) |
 
+**One dependency runs from this slice into E3, and it is not a merge
+surface.** G2 (§3.1) is a precondition for E3's correctness: E3's drain
+order is the tree's leaf order, the leaf order is consensus, and a block
+whose bodies connect in an order the header did not commit to puts outputs
+into the tree in that order on one node and another order on the next.
+E3's replay oracle (its commit 5) detects the divergence after it exists;
+G2 refuses the block before it does. Named here so E3 reads it as a
+dependency it inherits, not a row it waits to see.
+
 **The one hard dependency runs the other way.** F17 (fee burn) needs
 `frozen_segment_count`, a function of the curve-tree leaf count E3 will
 record per height (`curve_tree_leaf_counts[h + 1]`, E3 §3.4). F18 needs
@@ -185,22 +194,33 @@ the header's *declared* hashes, never the bodies — so B6 (identity) and D2
 compares the two. The crate says so itself: `Candidate`'s doc
 (`shekyl-chain-rules/src/block.rs:81–83`) — *"nothing about it has been checked, including whether
 `transactions` are the bodies `block.transaction_hashes` names; that is a
-4.G rule and lands with its slice."* The type does not satisfy G2; it names
-G2 as owed.
+4.G rule and lands with its slice."* The type does not satisfy G2 — and
+that sentence is what makes this a **deferral, not a gap**: someone saw the
+comparison was missing, wrote down which row owns it, and it is arriving
+in that row's slice. The pre-flight's first cut called it a gap; the cite
+is the evidence it was scheduled.
 
-**What a connect does with the disagreement.** The store keys each body
-under its computed identity (`connect.rs:405–407`), so *wrong body under the
-right txid* is unreachable through this path. Two things are body-dependent
-all the same: `BLOCKS` persists the block as received, declared list
-included (`connect.rs:417`), so the record lists hashes whose bodies were
-never recorded or are recorded in another order; and `record_tx` assigns
-dense tx ids and **global output ids in body order** (`connect.rs:534`,
-`:596–610`) — a reorder that connects gives outputs different indices than
-a header-ordered node, and E3's drain order (§3.3 of its pre-flight) puts
-them into the curve tree in that order: root divergence at the next block,
-B5 splits the chain silently. A *substitution* — a valid body not in the
-declared list — connects too: N hashes committed, N bodies recorded, one of
-them covered by no block id.
+**What a connect does with the disagreement — the divergence leads.** The
+store keys each body under its computed identity (`connect.rs:403–407`), so
+*wrong body under the right txid* is unreachable through this path. What
+*is* reachable is worse in a different direction. `record_tx` assigns dense
+tx ids and **global output ids in body order** (`connect.rs:534`,
+`:596–610`) while `BLOCKS` persists the block as received, declared list
+included (`:417`). So two honest nodes handed the same block with its
+bodies in different orders **both connect it and disagree on every output
+index in it**; E3's drain order (its pre-flight §3.3, *stated as the
+invariant it is*) puts those outputs into the curve tree in that
+disagreeing order; the roots diverge with no error anywhere, and B5 splits
+the two nodes at the next block. That is a consensus split that no log
+line reports. The *substitution* case — a valid body not in the declared
+list connects, N hashes committed and N bodies recorded with one covered
+by no block id — is real and comes second: it at least leaves a detectable
+orphan.
+
+**This makes G2 a precondition for E3's correctness, not only a 4.G row.**
+E3's drain order is the tree's leaf order and the leaf order is consensus;
+E3's replay oracle (its commit 5) would catch the divergence, but only
+after it existed. §1.2 records the dependency in that direction.
 
 **The belt, and where it sits.** The C++'s lookup-under-hash has a Rust
 twin in the **corpus loader**: `verified_tx(height, index, want, blob)`
@@ -209,27 +229,38 @@ hash at that index. Every captured replay is safe because of it.
 `Candidate::new` has four producers (corpus, scenario driver, two fixture
 files) and no live peer path yet — **not peer-reachable today**, reachable
 the day E5/p2p ingest builds a `Candidate` from network bodies, a path that
-inherits no belt because the belt is the corpus's. That is CEN-L1's shape
-(a consumer-side belt where the census placed a validator rule), one step
-earlier in time.
+inherits no belt because the belt is the corpus's. That is **CEN-L1's
+class — not L1's severity.** L1 was reachable by any peer holding two valid
+spends the day it was found; G2 is reachable by no peer today and will be
+by every peer the day the ingest path exists. Same shape (a consumer-side
+belt standing where the census placed a validator rule), reached *before*
+its peer path rather than after — which is the difference between a
+finding and an incident, and is why the row is disclosed and not escalated.
 
-**The pin was never witnessed.** The first cut of this section said E2's
-`ReorderedBodies` is *pinned connects* (`DRS_E2_REPLAY_DRIVER.md:457`). On
-every captured chain the mutation is `Unmutable::TooFewBodies { listed: 1 }`
-(`mutation_tests.rs:549`) — slice 6's one-body-per-block measurement again.
-"Connects" is what the code path would do, not what a run showed. Commit
-2's measurement therefore constructs a **two-body block through the
-driver** (`mine_listing(listed: Vec<Transaction>)` takes a vector; the
-bodies need not be spends, so I15's tree is not a prerequisite) and replays
-the reorder and a substitution through it.
+**Where the pin has been witnessed, corrected.** The read's first
+statement — *the pin was never witnessed* — was wrong and is withdrawn.
+E2's family runs every mutation through the production pipeline against a
+real store over a **constructed** harness chain (`test_support::chain(n)`,
+`mutation_tests.rs:401`); for `ReorderedBodies` that chain's block `AT`
+lists two harness spends so there is something to swap (`:361–375`), and
+the pinned-connects assertion runs there (`:261–275`). So *connects* is
+what a run showed. What is true is narrower: on the **captured** chains the
+mutation is `Unmutable::TooFewBodies { listed: 1 }` (`:549`) because every
+captured block lists at most one body — and the family does not run on the
+captured chains at all (§3.7). Commit 2 therefore builds the two-body block
+**through the driver** (`mine_listing(listed: Vec<Transaction>)` takes a
+vector; the bodies need not be spends, so I15's tree is not a prerequisite)
+and replays the reorder and a substitution through production paths, so
+the row's own witness is the driver's, per `50-testing.mdc`.
 
-**Grading proposed for Q7:** the *set* is bound by the merkle, the
-*pairing* is not; G2 lands as a `FormRule` — `transactions.len()
-== transaction_hashes.len()` at `Locus::Block`, `hash(body_i) ==
-transaction_hashes[i]` at `Locus::Listed { slot }` for the first mismatch —
-consensus-relevant and disclosed as L1's class caught before its peer path
-existed, not as an incident. The corpus loader's check stays, tested as a
-belt (slice 6 re-pointed the SI-1 tests the same way).
+**Q7 — RULED 2026-09-26, the proposed grading taken:** the *set* is bound
+by the merkle, the *pairing* is not; G2 lands as a `FormRule` —
+`transactions.len() == transaction_hashes.len()` at `Locus::Block`,
+`hash(body_i) == transaction_hashes[i]` at `Locus::Listed { slot }` for the
+first mismatch — consensus-relevant, one CHANGELOG line, disclosed as L1's
+class reached before its peer path existed, not as an incident. The corpus
+loader's check stays, tested as a belt (slice 6 re-pointed the SI-1 tests
+the same way).
 
 ### 3.2 G4's "skip" is a cost, not a rule
 
@@ -296,6 +327,42 @@ recompute is under the connect budget on the floor, the rolling cache is
 not built — an index that exists to make a consensus computation fast is
 store-side plumbing, but it is also a second place the answer lives.
 
+### 3.7 The corpus has one shape, and six subjects are outside it
+
+Every captured block lists **at most one** non-coinbase body (slice 6
+measured it over `corpus.e2`; §3.1 met it again as `TooFewBodies`). That
+is one shape hole with several consequences, and it is worth stating as a
+class rather than re-finding it a row at a time:
+
+- **The mutation family's witness is the harness chain, twelve of twelve.**
+  Every mutation in `Mutation::ALL` is judged over `test_support::chain(n)`
+  through the production pipeline and a real store — legitimate under
+  `50-testing.mdc` (production paths, constructed subject whose rule is
+  the mutation's) — and **none runs over the captured chains**
+  (`mutation_tests.rs`; `vectors_tests.rs` replays the corpus and asserts
+  admission only). A reader of §3.10's table sees twelve graded mutations
+  and may read that as captured-chain coverage; it is coverage of the
+  harness chain. The `Unmutable` arm reports the corpus's shape correctly
+  when asked — which is the arm doing its job — but a family that *could*
+  run on the corpus and is `Unmutable` for a mutation on every chain in it
+  should say so louder than a status, because it reads as coverage in the
+  table and is coverage of nothing there.
+- **Every cross-transaction row has no captured-chain witness.** L1 (two
+  spends, one image), G2 (two bodies, reordered), G7/G9/G10 (two archival
+  forms, one key), and H19-verify's fold (two BP+ proofs, one batch — slice
+  6 Q9's measured condition) all need ≥ 2 listed bodies in one block. Six
+  subjects, one hole.
+- **`mine_listing(Vec<Transaction>)` is the tool that closes it for all
+  six at once.** The driver can list two admissible bodies today; only the
+  proof-bearing subjects (H19-verify, and I15's) wait on E3's tree.
+
+**Commit 2's check, in the answerable form:** for each mutation in
+`Mutation::ALL`, on each of the four captured chains, does it apply or
+report `Unmutable` — and with which cause? If `ReorderedBodies` is the only
+all-four `Unmutable`, the corpus is adequate and this was one gap; if
+others are, the corpus has the shape hole above and the driver's two-body
+block is the fix for the set. Either answer goes into §5.1 as a number.
+
 ## 4. Stage placement — proposed, shaped by §8
 
 | stage | rows | why |
@@ -316,7 +383,7 @@ when an operand is absent. Wave B extends the sequence in place.
 | # | commit | gate |
 | --- | --- | --- |
 | 1 | **This file amended on review; the index row; the §5.1 expectation table** — written before commit 2, so the overrun signal has a subject | — |
-| 2 | **Measurements, no rules:** (a) the G2 grade — replay `ReorderedBodies` and state what the store does (§3.1); (b) locate or add the pruned-form fixture at both sites (§3.3); (c) the weights-read bench on the floor (§3.6) — three numbers into §5.1 | — |
+| 2 | **Measurements, no rules:** (a) the two-body block through `mine_listing`, the reorder and a substitution replayed through it — G2's own witness, and the output-index divergence shown on two connects (§3.1); (b) locate or add the pruned-form fixture at both sites (§3.3); (c) the weights-read bench on the floor (§3.6); (d) the `Unmutable` census — every mutation over every captured chain, which apply and which report what (§3.7) — four numbers into §5.1 | — |
 | 3 | **`ChainView` grows** — the weights read (Q2's shape) and `has_transaction` — trait, `BatchView`, `MockChain`, the store's conformance test holding the mock to the store, **one commit, both sides** (slice 6 §5.1's rule) | commit 2 (c) |
 | 4 | **G6 / G6b** as `judge_emission`'s first two definitions in `rules/block_weight.rs`; the two windows as generated consts (Q6); the mock holds the clamps at their boundaries, the captured chains replay through both | commit 3 |
 | 5 | **F14, F14b, F16, G12** — the sequence completed through the paid reward; `ConnectFacts.{weight, long_term_weight, long_term_effective_median, coins_generated}` read off the verdict, the ingest's four composed lines deleted (`Provenance::passed_through` re-counted with E3's) | commit 4 |
@@ -414,18 +481,23 @@ the rules.
   `#define` lines (rule 20, marshaling). The alternative — Rust consts
   with a sentinel test against the header — leaves the value with two
   hand-written homes.
-- **Q7 — G2's grade.** §3.1 read the connect path: bodies are keyed by
-  computed identity, so a body under the wrong txid is not how a reorder
-  lands; a reorder or a substitution can still connect, and the
-  `ReorderedBodies` pin has not run. Default, as §3.1 proposes: a
-  `FormRule`, disclosed as L1's class caught before a peer path exists
-  (one CHANGELOG line). Commit 2 still constructs the two-body block,
-  because that pin was `TooFewBodies` on every captured chain. The
-  alternative — treat it as a pairing gap with no security line — is
-  what the first cut of §3.1 said, and the connect read refutes it.
-- **Q8 — the loci.** G1 at `Locus::Listed { slot }`. G2's length
-  mismatch at `Locus::Block`, its first hash mismatch at
-  `Locus::Listed { slot }` (§3.1). G7 at `Locus::Input { slot, input }`
+- **Q7 — G2's grade. RULED 2026-09-26: the proposed grading, taken.**
+  §3.1 read the connect path: bodies are keyed by computed identity, so a
+  body under the wrong txid is not how a reorder lands; a reorder or a
+  substitution connects, and the reorder's consequence — output indices
+  assigned in body order, into E3's leaf order — is a silent consensus
+  split, which leads the finding. A `FormRule`, disclosed as **L1's class,
+  not L1's severity** — reached before its peer path exists rather than
+  after, the difference between a finding and an incident (one CHANGELOG
+  line). The `Candidate` doc's *"a 4.G rule and lands with its slice"* is
+  cited in the row as the evidence the type defers deliberately. Commit 2
+  still constructs the two-body block through the driver: the family's
+  pin ran on the harness chain, never on a captured one (§3.7). The
+  alternative — a pairing gap with no security line — was the first cut
+  of §3.1, and the connect read refutes it.
+- **Q8 — the loci.** G2's two loci RULED with Q7: length mismatch at
+  `Locus::Block`, first hash mismatch at `Locus::Listed { slot }` (§3.1).
+  The rest default: G1 at `Locus::Listed { slot }`. G7 at `Locus::Input { slot, input }`
   (the vin carries the triple); G9/G10 at `Locus::Input` likewise; F14
   at `Locus::Block`; the definitions record only. Default as stated;
   E2's §3.10 rows are written from these before the rules exist, as
