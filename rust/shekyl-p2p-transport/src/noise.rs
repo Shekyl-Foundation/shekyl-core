@@ -527,6 +527,20 @@ mod tests {
     }
 
     #[test]
+    fn finish_rejects_a_replaced_encapsulation_key_before_diffie_hellman() {
+        let (_ini, message1) = Initiator::new(&nid()).unwrap();
+        let mut ready = Responder::new(&nid()).read_message1(&message1).unwrap();
+        ready.remote_ek.fill(0xff);
+        let before = RESPONDER_DH.with(|count| count.get());
+        assert!(matches!(ready.write_message2(), Err(HandshakeError::Kem)));
+        assert_eq!(
+            RESPONDER_DH.with(|count| count.get()),
+            before,
+            "finish must reject the key before the Diffie-Hellman"
+        );
+    }
+
+    #[test]
     fn pinned_messages_mix_steps_and_rekey() {
         let (ini, resp, m1, m2) = pinned_pair();
         assert_eq!(m1.len(), MESSAGE1_LEN);
