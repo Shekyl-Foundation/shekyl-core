@@ -19,6 +19,20 @@
 //! landing keyed the population on `Err(` and missed three arms spelled
 //! `.map_err(..)?` and `.ok_or_else(..)?`; see the shape test.)
 //!
+//! **The population check cuts both ways.** Each fragment must occur in the
+//! twin exactly as often as it is listed here — that is what keeps the table
+//! honest about *sites*: no arm arrives unclassified, none is listed twice.
+//! It is also what makes a site with **several renderings partially
+//! invisible**: one call that refuses under two or three messages
+//! (`check_tx_extra_shape` — I19's missing field, I20's grammar, the nonce
+//! off the coinbase) is one row, keyed to one rendering, and the others
+//! cannot be rows without breaking the count. The compensation is a test
+//! **beside** the table that holds the twin to the other rendering
+//! (`the_i19_sites_nonce_rendering_is_i19_at_both_sites`); a new
+//! multi-rendering site needs the same, and should find this note rather
+//! than the wall. Found at slice 6 commit 9: the instrument's shape had
+//! excluded the clause commit 3 had just moved to I19.
+//!
 //! # Four arms, not three
 //!
 //! R8's discriminator — *would this still be required if the consensus rules
@@ -631,7 +645,7 @@ const SITES: &[Site] = &[
     invariant(
         "key-image input(s) but no prunable proof",
         Face::Memory,
-        "unreachable BY ORDERING, and only by ordering: (1) `validate_context_free_pruned` runs first and its `spend has … needs >= 2` arm forces `n_out >= 2` for any key-imaged tx; (2) inside `validate`'s fee-only arm the `must have no outputs` check precedes this one, so `n_out != 0` fires it first. Insert a rule between (1) and (2), reorder the fee-only arm, or let a key-imaged shape through (1) with fewer outputs, and this arm is live and unclassified. RE-CHECKED 2026-09-25 (slice 6 commit 9), when the slice's verification rows landed: they did not land in this path. CEN-I17 (the signing hash) and CEN-I18 (the signature over it) are `tx_against`'s, run after `tx_form` — downstream of this whole function, after both orderings and between neither — and `validate`'s body is unchanged since the slice's base. I15 and H19-verify will land in the same place. Still dead, by the same two orderings. The proof's non-emptiness is CEN-I14's, held elsewhere",
+        "unreachable BY ORDERING, and only by ordering: (1) `validate_context_free_pruned` runs first and its `spend has … needs >= 2` arm forces `n_out >= 2` for any key-imaged tx; (2) inside `validate`'s fee-only arm the `must have no outputs` check precedes this one, so `n_out != 0` fires it first. Insert a rule between (1) and (2), reorder the fee-only arm, or let a key-imaged shape through (1) with fewer outputs, and this arm is live and unclassified. RE-CHECKED 2026-09-25 (slice 6 commit 9), when the slice's verification rows landed: they did not land in this path. CEN-I17 (the signing hash) and CEN-I18 (the signature over it) are `tx_against`'s, run after `tx_form` — downstream of this whole function, after both orderings and between neither — and `validate`'s body is unchanged since the slice's base. I15 and H19-verify land in the same place, so the arm stays out of reach when they arrive: nothing that lands in `tx_against` can sit between (1) and (2), because all of `tx_against` runs after all of this function. Still dead, by the same two orderings; the next re-check is a lookup of this sentence, not a repeat. The proof's non-emptiness is CEN-I14's, held elsewhere",
     ),
     invariant(
         "return Err(PrunedError);",
