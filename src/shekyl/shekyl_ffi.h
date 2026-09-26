@@ -3916,10 +3916,14 @@ int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_pa
                             char* out_error, size_t out_error_len);
 
 //! Publish the per-boot v3 onion on the running managed tor (key minted in
-//! memory, ADD_ONION Flags=DiscardPK), forwarding virtual_port (what peers
-//! dial) to 127.0.0.1:local_port (the daemon's already-bound inbound
-//! listener), MaxStreams=max_streams per rendezvous circuit. Outputs are
-//! NUL-terminated: out_service_id (>= 57 bytes; 56-char service id, no
+//! memory, ADD_ONION Flags=DiscardPK PoWDefensesEnabled=1), forwarding
+//! virtual_port (what peers dial) to 127.0.0.1:local_port (the daemon's
+//! already-bound inbound listener), MaxStreams=max_streams per rendezvous
+//! circuit. A Tor that rejects a proof-of-work argument (control status
+//! 512 or 513, and the reply names that argument) fails the publish. Any
+//! other 512 is an ordinary publish failure. There is no second attempt
+//! without proof-of-work.
+//! Outputs are NUL-terminated: out_service_id (>= 57 bytes; 56-char service id, no
 //! ".onion"), out_error (>= 256 bytes recommended). Returns 0 = published;
 //! 1 = no instance running (start first); 2 = argument error; 3 = publish
 //! failed (detail in out_error). A publish failure leaves tor RUNNING: the
