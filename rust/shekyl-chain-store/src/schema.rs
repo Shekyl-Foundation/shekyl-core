@@ -158,13 +158,16 @@
 
 use redb::{TableDefinition, TableHandle, TypeName};
 
-use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash, TreeLeaf};
+use shekyl_types::{
+    BlockHeight, CurveTreeRoot, GlobalOutputIndex, PqcAuthHash, PrunableHash, TreeLeaf,
+    TreePosition,
+};
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
     AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockInfo, BondRecord, Coded,
-    CurveTreeState, LayerHash, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RuleSetInForce,
-    SigmaWorkMilli, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
+    CurveTreeState, LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket,
+    RuleSetInForce, SigmaWorkMilli, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
     TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::lmdb_order::LmdbHashKey;
@@ -265,6 +268,51 @@ pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
      `SAR-Q5`, `SAL-Q2`): `AltBlock::attestation_witness`",
 )];
 
+/// X-macro tables this crate **does not port**, as `(lmdb_name, reason)`:
+/// the job the table did for LMDB is done here by a function, by the undo
+/// journal, or by a table that already holds the facts — the bijection
+/// gate's fifth direction (DRS-E3, `DRS_E3_CURVE_WRITER.md` §3.7: *fact, or
+/// a view of facts the store already holds?*). Read by
+/// `check_redb_schema_bijection.py`: every entry must be in the X-macro,
+/// must **not** have a definition in this file, must not also be mirrored
+/// or folded, and carries a sentence naming what does its job now. The
+/// class table (`accumulator/class.rs`) is the LMDB inventory and keeps a
+/// row for each. This is not a deletion register — the C++ tables live
+/// until cutover — it is the record that the Rust store answered the
+/// requirement without the table, and why.
+pub const NOT_PORTED: &[(&str, &str)] = &[
+    (
+        "pending_tree_leaves",
+        "a view of the block index, not a fact: maturity is a pure function of (height, \
+         is_miner) — blockchain_db.cpp:554-567, no per-output unlock_time enters — so the \
+         leaves draining at height h are exactly block h-60's coinbase outputs and block \
+         h-10's listed outputs, read from block(h) and the output rows connect already \
+         writes (CTW-10). LMDB kept a table because its reverse lookup was expensive and its \
+         pop needed exact reversal by output id; a stored pending set is a second source that \
+         can disagree with the blocks, and a derived one cannot",
+    ),
+    (
+        "pending_tree_drain",
+        "the C++ pop journal for the drain (blockchain_db.cpp:539, 'tracked by its global \
+         output index for exact reversal'); here every drain write is journaled by undo_log \
+         and pop replays it (CTW-2, CTW-3)",
+    ),
+    (
+        "block_pending_additions",
+        "the C++ pop journal for the collect — which rows a block added to the pending set so \
+         pop_block could remove them (blockchain_db.cpp:625); with no pending table (above) \
+         there is nothing to reverse, and the undo_log would hold it if there were (CTW-3)",
+    ),
+    (
+        "curve_tree_checkpoints",
+        "a view of curve_tree_meta at 10000-block intervals, kept by the C++ for an integrity \
+         check and to bound the intermediate-layer prune its pop-time recompose needed \
+         (db_lmdb.cpp:9285-9291); the Rust grow reads only the frontier (CTW-8), pop is \
+         journal replay (CTW-2), and the meta row is journaled at every height, so the \
+         checkpoint is a second source for a row that already exists (CTW-Q3)",
+    ),
+];
+
 /// Tables this crate defines that have **no** X-macro twin, each with the
 /// reason it exists. Read by `check_redb_schema_bijection.py` (a definition
 /// is either mirrored or named here — never silently extra) and by
@@ -273,6 +321,14 @@ pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
 /// class table is the LMDB inventory, and a table absent from it with a
 /// reason here is a named exclusion, not an omission.
 pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
+    (
+        "curve_tree_leaf_counts",
+        "the leaf count at each height, keyed as curve_tree_roots is (DRS-E3, CTW-Q4): the \
+         primitive CEN-I13's height-keyed depth read derives from, which the C++ never held \
+         per height (it read the current depth, an ordering argument E6 slice 6 Q8 refused). \
+         Out of the digest domain: a function of the leaf table the digest's root already \
+         commits to",
+    ),
     (
         "undo_log",
         "the pop journal: one LIFO row of pre-images per connected height, replacing the C++ \
@@ -500,23 +556,18 @@ tables! {
     pub const ARCHIVAL_BUDGET: TableDefinition<u64, Coded<AtomicUnits>> =
         TableDefinition::new("archival_budget");
 
-    /// `pending_tree_leaves` — default flags; composite BE keys.
-    pub const PENDING_TREE_LEAVES: TableDefinition<&[u8], Unshaped> =
-        TableDefinition::new("pending_tree_leaves");
+    /// `output_to_leaf` — INTEGERKEY; `GlobalOutputIndex` (as `u64`) → the
+    /// [`TreePosition`] the drain assigned it. Written at drain, pairwise
+    /// with [`LEAF_TO_OUTPUT`]; the pair is a bijection over drained
+    /// outputs (SI-17). DRS-E3 (`DRS_E3_CURVE_WRITER.md` §3.3, §3.7).
+    pub const OUTPUT_TO_LEAF: TableDefinition<u64, Coded<TreePosition>> =
+        TableDefinition::new("output_to_leaf");
 
-    /// `pending_tree_drain` — default flags; composite BE keys.
-    pub const PENDING_TREE_DRAIN: TableDefinition<&[u8], Unshaped> =
-        TableDefinition::new("pending_tree_drain");
-
-    /// `block_pending_additions` — default flags; composite BE keys.
-    pub const BLOCK_PENDING_ADDITIONS: TableDefinition<&[u8], Unshaped> =
-        TableDefinition::new("block_pending_additions");
-
-    /// `output_to_leaf` — INTEGERKEY.
-    pub const OUTPUT_TO_LEAF: TableDefinition<u64, Unshaped> = TableDefinition::new("output_to_leaf");
-
-    /// `leaf_to_output` — INTEGERKEY.
-    pub const LEAF_TO_OUTPUT: TableDefinition<u64, Unshaped> = TableDefinition::new("leaf_to_output");
+    /// `leaf_to_output` — INTEGERKEY; `TreePosition` (as `u64`) → the
+    /// [`GlobalOutputIndex`] whose leaf sits there. The inverse of
+    /// [`OUTPUT_TO_LEAF`] (SI-17). DRS-E3.
+    pub const LEAF_TO_OUTPUT: TableDefinition<u64, Coded<GlobalOutputIndex>> =
+        TableDefinition::new("leaf_to_output");
 
     /// `curve_tree_leaves` — INTEGERKEY; `TreePosition` (as `u64`, the key
     /// contract of [`crate::ids`]) → the stored 128-byte leaf. Dense over
@@ -537,12 +588,19 @@ tables! {
     pub const CURVE_TREE_META: TableDefinition<(), Coded<CurveTreeState>> =
         TableDefinition::new("curve_tree_meta");
 
-    /// `curve_tree_checkpoints` — INTEGERKEY. Derived: recomputed, not folded.
-    pub const CURVE_TREE_CHECKPOINTS: TableDefinition<u64, Unshaped> =
-        TableDefinition::new("curve_tree_checkpoints");
-
     /// `curve_tree_roots` — INTEGERKEY.
     pub const CURVE_TREE_ROOTS: TableDefinition<u64, Coded<CurveTreeRoot>> = TableDefinition::new("curve_tree_roots");
+
+    /// `curve_tree_leaf_counts` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// height → the [`LeafCount`] **at** that height: the count after the
+    /// block at `h − 1` drained, before the block at `h` drains — keyed
+    /// exactly as [`CURVE_TREE_ROOTS`] is, written by the same connect. The
+    /// primitive behind `ChainView::depth_at` (CEN-I13's operand; depth is
+    /// a function of this count and is derived, never stored per height)
+    /// and CEN-F17's `leaf_count`. DRS-E3 (`DRS_E3_CURVE_WRITER.md` §3.4,
+    /// `CTW-Q4`).
+    pub const CURVE_TREE_LEAF_COUNTS: TableDefinition<u64, Coded<LeafCount>> =
+        TableDefinition::new("curve_tree_leaf_counts");
 
     /// `undo_log` — **Rust-only** ([`RUST_ONLY_TABLES`]); height → the
     /// [`UndoLog`](crate::codec::UndoLog) of pre-images `connect` recorded
@@ -612,9 +670,17 @@ mod tests {
             ("block_burn", 17),
             // Layout 13: `archival_alt_attestation_witness` (21) folded
             // into `alt_blocks` (S-ALT), so everything after it moved up by
-            // one.
-            ("curve_tree_roots", 43),
-            ("undo_log", 44),
+            // one. Layout 15: four tree-side tables **not ported** (DRS-E3,
+            // `NOT_PORTED`) — `pending_tree_leaves`, `pending_tree_drain`,
+            // `block_pending_additions` (34–36) and `curve_tree_checkpoints`
+            // (42) — so `curve_tree_roots` moved 43 → 39, and
+            // `curve_tree_leaf_counts` was born at 40 ahead of the two
+            // older Rust-only tables.
+            ("output_to_leaf", 34),
+            ("curve_tree_roots", 39),
+            ("curve_tree_leaf_counts", 40),
+            ("undo_log", 41),
+            ("txs_pqc_auth_hash", 42),
         ];
         for &(name, index) in pinned {
             assert_eq!(

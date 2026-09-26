@@ -119,6 +119,23 @@ impl LeafCount {
     }
 }
 
+/// `curve_tree_leaf_counts[h]` — the count at a height, stored as its raw
+/// LE `u64` (DRS-E3, `CTW-Q4`): the primitive `depth_at` derives from.
+impl Canonical for LeafCount {
+    const NAME: &'static str = "leaf_count";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
 /// The tree's summary — `curve_tree_meta`'s one row (module docs).
 ///
 /// Layout (41 bytes): `root`[32] ‖ `depth` u8 ‖ `leaf_count` u64 LE.

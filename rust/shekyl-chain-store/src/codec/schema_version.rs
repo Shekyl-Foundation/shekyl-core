@@ -148,7 +148,17 @@ use super::{Canonical, CodecError};
 ///   is named by the epoch). `txs_pqc_auths` re-grades `AppendMostly →
 ///   Excluded` in the accumulator matrix: this surface deletes its rows,
 ///   and the permanent `txs_pqc_auth_hash` row is the append-mostly one.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(14);
+/// - `15` — DRS-E3 (`DRS_E3_CURVE_WRITER.md` §3.7, commit 1): **the
+///   curve-tree writer's tables.** Four X-macro tables are **not ported**
+///   (`NOT_PORTED`, the bijection gate's fifth direction): the pending set
+///   is a view of the block index (maturity is `f(height, is_miner)`), two
+///   were the C++'s pop journals (the `undo_log` is ours), and the
+///   checkpoint row is a view of the meta row — every later table's ordinal
+///   moves. `output_to_leaf` / `leaf_to_output` take types
+///   (`TreePosition` / `GlobalOutputIndex`, the drain-order bijection,
+///   SI-17). `curve_tree_leaf_counts` is born, Rust-only: the count at each
+///   height, keyed as the roots are (`CTW-Q4`). No digest family moves.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(15);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -205,10 +215,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(14));
-        assert_eq!(SCHEMA_VERSION.encode(), [14, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(15));
+        assert_eq!(SCHEMA_VERSION.encode(), [15, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[14, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[15, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }
