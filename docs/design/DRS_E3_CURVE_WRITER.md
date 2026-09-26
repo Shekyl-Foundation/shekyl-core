@@ -529,6 +529,16 @@ adjudicated against the spec (E2 §0), recorded as a finding with its
 height and chain, and stops the PR until ruled — never patched around, never
 sampled down to the heights that agree.
 
+**How the count stays honest if something slips.** Slice 6's expectation
+held because its deferrals were *dispositions with falsifiers*, not
+shortfalls. E3 has the same structure available: every consumer in §7 —
+I13's `depth_at`, I15's scenario spend, F17's `leaf_count` — already has a
+falsifier that exists today. A commit that does not land in this PR leaves
+as a rule-22 deferral: named blocker, named owner, the falsifier from §7's
+table, disclosed in the commit that sheds it. Slipped that way it is a
+disposition and the count remains checkable; slipped as "we'll get to it" it
+is what makes the next estimate unfalsifiable.
+
 ---
 
 ## 7. What E3 unblocks, and the measurable
