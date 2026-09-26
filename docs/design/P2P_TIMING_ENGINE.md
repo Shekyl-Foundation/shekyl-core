@@ -346,15 +346,20 @@ a slot in the mailbox. An idle deadline that only moves later would
 send one command per event. The handle knows the deadline it has armed.
 An `arm` that is not strictly earlier is not sent. After a fire or a
 `clear` the handle has no armed deadline, and the next `arm` is sent.
-The commands that enter the mailbox are then bounded by the number of
-owners times the number of times a deadline actually moves earlier,
-plus `clear`, `deregister`, and `note_home`. A bounded mailbox that
-refused an earlier `arm` is still the wrong tool: that would drop a
-gap deadline without the owner knowing.
+An `arm` enters the mailbox only when that owner's deadline moves
+earlier, and `clear`, `deregister`, and `note_home` enter when the
+home sends them. That is the traffic. It is not a fixed capacity: a
+deadline can keep moving earlier for as long as the connection lives.
+A mailbox that refused an earlier `arm` would drop a gap deadline
+without the owner knowing, so the queue is not given a length that
+rejects. The thread's drain, below, is what keeps the queue from
+accumulating.
 
 Commands from one owner are applied in the order that owner sent them.
-Each owner lives in exactly one home, and the mailbox keeps each
-sender's order.
+Each owner lives in exactly one home, and that home sends its own
+commands one at a time. The mailbox is one FIFO, which is what keeps
+that sender's order. A queue that reordered one home's commands would
+not meet this.
 
 On the Pi 4, at 2^18 owners, an earlier arm is 177 ns and one due poll
 is 377 ns

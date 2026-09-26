@@ -2,8 +2,10 @@
 #
 # Host: skl-pi (10.10.14.15), aarch64, 4 cores, 8 GB. No sudo.
 # Source: shekyl-core dev 5a8d2ae78 (wake_hints bench as merged in #865).
-# Binary: cross-compiled aarch64-unknown-linux-gnu, release, --bench wake_hints.
-# Wall clock: about four minutes (20 functions, 3 s warmup + 5 s measurement each).
+# Build: cargo build --release --target aarch64-unknown-linux-gnu -p shekyl-timing-engine --bench wake_hints
+# Run: ./wake_hints --bench
+# Criterion 0.5. sample_size is 10 in the bench. Warmup 3 s and measurement 5 s are Criterion's defaults.
+# Wall clock: about four minutes (20 functions).
 # This is a run record for D5's engine-thread budget. It is not that budget.
 #
 Gnuplot not found, using plotters backend
