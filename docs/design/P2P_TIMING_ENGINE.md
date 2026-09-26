@@ -338,16 +338,29 @@ with no timeout when none is. There is no async runtime on that thread.
 Its budget is one thread, counted in D5, and it needs no reactor. It is
 not the transport runtime.
 
-**The mailbox does not refuse an arm, and it does not grow per owner.**
-A bounded mailbox that refused an `arm` would drop a gap deadline
-without the owner knowing. That is worse than a long queue. Admission
-(the ban list and the inbound ceiling) bounds how many owners exist. It
-does not bound how many commands one owner can enqueue. The mailbox
-coalesces to one queued command of each kind per owner: an earlier
-`arm` replaces the queued `arm`, a later `arm` is not queued (the same
-rule as `Engine::arm`), and a queued `clear` or `note_home` is
-replaced by the next one. One owner is then a constant number of
-queued commands. The queue is not given a length that rejects.
+**The handle applies the earlier-only rule before anything is queued.**
+Admission bounds how many owners exist. It does not bound how often one
+owner sends. The engine's earlier-only rule runs when it applies an
+`arm`, so an `arm` that is queued and then discarded has already taken
+a slot in the mailbox. An idle deadline that only moves later would
+send one command per event. The handle knows the deadline it has armed.
+An `arm` that is not strictly earlier is not sent. After a fire or a
+`clear` the handle has no armed deadline, and the next `arm` is sent.
+The commands that enter the mailbox are then bounded by the number of
+owners times the number of times a deadline actually moves earlier,
+plus `clear`, `deregister`, and `note_home`. A bounded mailbox that
+refused an earlier `arm` is still the wrong tool: that would drop a
+gap deadline without the owner knowing.
+
+Commands from one owner are applied in the order that owner sent them.
+Each owner lives in exactly one home, and the mailbox keeps each
+sender's order.
+
+On the Pi 4, at 2^18 owners, an earlier arm is 177 ns and one due poll
+is 377 ns
+([the capture](../benchmarks/timing_engine_wake_hints_pi4_20260926T003745Z.txt)).
+That is this thread's drain rate, a few million commands a second. It
+is not D5's budget.
 
 **Homes report back through the same mailbox.** `note_home` is a
 command on that mailbox, not a side channel. The home stamps
