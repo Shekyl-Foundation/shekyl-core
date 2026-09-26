@@ -20,9 +20,7 @@ use shekyl_wallet_rpc::types::{
     CollectUnstakedResult, DrainResult, DrainVerdictView, UnstakeResult,
 };
 
-use super::{
-    confirm, confirm_interactive, format_amount, opt_amount, read_password, require_open, transfers,
-};
+use super::{confirm, format_amount, opt_amount, read_password, require_open, transfers};
 use crate::rpc_client::{params, RpcSession};
 
 /// The exact phrase a foundation stake requires, typed by the operator.
@@ -36,8 +34,9 @@ use crate::rpc_client::{params, RpcSession};
 /// Compared after trimming surrounding whitespace only — a trailing space
 /// or a stray newline from a terminal is not a different intent, while any
 /// other difference is.
-const FOUNDATION_PHRASE: &str = "serve without reward";
+pub const FOUNDATION_PHRASE: &str = "serve without reward";
 
+#[allow(dead_code)]
 pub fn cmd_stake(rpc: &RpcSession, foundation: bool) {
     if !require_open(rpc) {
         return;
@@ -95,6 +94,7 @@ pub fn cmd_stake(rpc: &RpcSession, foundation: bool) {
 /// `-29506` refusal body carries and the published contract pins, so the
 /// operator reads exactly what a wrapper's user would read. A second copy
 /// in this file is the drift this arrangement exists to prevent.
+#[allow(dead_code)]
 fn cmd_stake_foundation(rpc: &RpcSession) {
     println!("{}", shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING);
     println!();
@@ -153,7 +153,7 @@ fn cmd_stake_foundation(rpc: &RpcSession) {
 /// After the disclosure the flow IS the transfer flow — `stake_in` returns a
 /// `build_pending_tx`-shaped reservation, confirmed with the actual fee and
 /// then submitted or discarded through the shared helpers.
-pub fn cmd_stake_in(rpc: &RpcSession, amount: u64) {
+pub fn cmd_stake_in(rpc: &RpcSession, amount: u64, yes: bool) {
     if !require_open(rpc) {
         return;
     }
@@ -194,7 +194,7 @@ pub fn cmd_stake_in(rpc: &RpcSession, amount: u64) {
     println!("amount above. It stays yours: it becomes part of your staking balance.");
     println!("It is chosen automatically and cannot be shown before sending.");
 
-    if !confirm_interactive("Fund staking with this transfer?", "stake in") {
+    if !super::confirm_money("Fund staking with this transfer?", "stake add", yes) {
         transfers::discard_declined(rpc, &built);
         return;
     }
@@ -235,7 +235,7 @@ pub fn cmd_drain_balance(rpc: &RpcSession) {
 /// cannot be discarded once sent. No fee or destination is shown as a
 /// choice because none exists (rule 81 / the anti-fingerprint pin): the fee
 /// is set automatically and the funds can only come back to this wallet.
-pub fn cmd_drain(rpc: &RpcSession, amount: u64) {
+pub fn cmd_drain(rpc: &RpcSession, amount: u64, yes: bool) {
     if !require_open(rpc) {
         return;
     }
@@ -253,7 +253,7 @@ pub fn cmd_drain(rpc: &RpcSession, amount: u64) {
     println!("The network fee is set automatically and is paid from the staking");
     println!("funds on top of this amount.");
 
-    if !confirm_interactive("Move these funds?", "drain") {
+    if !super::confirm_money("Move these funds?", "stake return", yes) {
         println!("Drain cancelled; nothing was sent.");
         return;
     }
@@ -430,7 +430,7 @@ fn serving_posture_display(posture: Option<&str>) -> String {
 /// fee, or target is shown as a choice because none exists: the exit
 /// releases the whole bond, the fee is set automatically, and the wallet
 /// picks the bonded stake to exit (rule 81 — no slot vocabulary).
-pub fn cmd_unstake(rpc: &RpcSession) {
+pub fn cmd_unstake(rpc: &RpcSession, yes: bool) {
     if !require_open(rpc) {
         return;
     }
@@ -440,7 +440,7 @@ pub fn cmd_unstake(rpc: &RpcSession) {
     println!("The released funds return to your staking balance first; collect");
     println!("them to this wallet afterwards with \"collect_unstaked\".");
 
-    if !confirm_interactive("Post the permanent exit?", "unstake") {
+    if !super::confirm_money("Post the permanent exit?", "stake exit", yes) {
         println!("Unstake cancelled; nothing was sent.");
         return;
     }
@@ -480,7 +480,7 @@ pub fn cmd_unstake(rpc: &RpcSession) {
 /// two-part completion fact (this persona's remainder, plus whether
 /// another exit's pool remains) is what this command renders explicitly
 /// rather than letting "sent" read as "done".
-pub fn cmd_collect_unstaked(rpc: &RpcSession) {
+pub fn cmd_collect_unstaked(rpc: &RpcSession, yes: bool) {
     if !require_open(rpc) {
         return;
     }
@@ -488,7 +488,7 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession) {
     println!("balance. The network fee is set automatically and paid from the");
     println!("collected funds; large collections may take more than one pass.");
 
-    if !confirm_interactive("Collect the released funds?", "collect_unstaked") {
+    if !super::confirm_money("Collect the released funds?", "stake collect", yes) {
         println!("Collection cancelled; nothing was sent.");
         return;
     }
@@ -557,6 +557,29 @@ fn format_amount_str(atomic: &str) -> String {
 fn print_serving_posture(val: &Value) {
     let posture = val.get("posture").and_then(Value::as_str);
     println!("Serving posture:     {}", serving_posture_display(posture));
+}
+
+/// Bare `stake`: this wallet's posture and the returnable amount.
+pub fn cmd_stake_read(rpc: &RpcSession) {
+    cmd_staking_info(rpc);
+    if rpc.is_open() {
+        cmd_drain_balance(rpc);
+    }
+}
+
+/// `stake join` names a shard set and does not post it. Wallet-RPC `stake`
+/// still takes a posture, not shard ids, and a market call answers -29505.
+pub fn cmd_stake_join(rpc: &crate::rpc_client::RpcSession, shard_ids: &[u64]) {
+    rpc.fail();
+    let listed = shard_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    eprintln!(
+        "stake join {listed}: nothing was written. Posting a chosen set of \
+         shards is not available yet."
+    );
 }
 
 #[cfg(test)]

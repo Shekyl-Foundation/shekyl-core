@@ -2,10 +2,12 @@
 
 **Status:** OPEN — Round 1 (2026-09-11); **CU-1…CU-6 LANDED on `dev`**
 (branch archived as `archive/cli-usability-cu-2026-09-13`; the cuts are live in
-`rust/shekyl-cli/`). *Corrected 2026-09-24: this banner read "awaiting landing
-on `dev`" for eleven days after the work landed — a status claim that outlived
-its subject, and the direction that costs, since nobody re-checks a row that
-says the work is still pending.*
+`rust/shekyl-cli/`). **CU-7…CU-10** (command language, completion, status
+line, script stdin) are on `feat/cli-shell` as of 2026-09-26. *Corrected
+2026-09-24: this banner read "awaiting landing on `dev`" for eleven days
+after the work landed — a status claim that outlived its subject, and the
+direction that costs, since nobody re-checks a row that says the work is
+still pending.*
 Owning doc for the `CU-1…CU-N` identifier family (registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2).
 
@@ -233,3 +235,14 @@ Enumerated here before code (rule 82); each path says what to run next.
 CU-1 + CU-2 (ergonomics) → CU-3 (mining control) → CU-4 + CU-5 →
 CU-6 (docs land with the verbs they describe). Single short-lived
 branch off `dev` (`feat/cli-usability-cu`), one commit per CU item.
+
+## 5. CU-7…CU-10 — the shell (2026-09-26)
+
+The command language, completion, status line, and script stdin are
+specified in the `feat/cli-shell` work and live in `rust/shekyl-cli/`
+(`catalog.rs`, `grammar.rs`, `status.rs`). Three forms: bare noun,
+subject plus verb, product verb. Retired spellings diagnose and do not
+run. CompleteTree is the hidden startup flag `--complete-tree-foundation`,
+not `stake foundation`. `shard list all` reads `get_archival_shard_coverage`.
+`stake join` names shard ids and does not post until wallet-RPC `stake`
+accepts a shard set.

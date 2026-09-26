@@ -278,8 +278,12 @@ mainnet>
 testnet:miner>
 ```
 
-Type `help` for the full command list and `help <command>` for one
-command's usage.
+Type `help` for the command list grouped by subject, and `help <command>`
+for that command's arguments. Tab completes a subject, then its verbs,
+then its flags. Up-arrow recalls earlier commands. The bottom line shows
+the CLI version, the time, and whether the wallet is synced. A pipe runs
+the same commands and stops at the first failure; pass `--password-file`
+with `--wallet`.
 
 Wallet files live under `~/.shekyl/wallets/<network>/` by default, one
 directory per network, so a testnet wallet can never shadow a mainnet one.
@@ -290,14 +294,15 @@ directory per network, so a testnet wallet can never shadow a mainnet one.
 At the prompt:
 
 ```
-mainnet> create mywallet
+mainnet> wallet create mywallet
 ```
 
 You will be prompted for a password, and the wallet's 24-word BIP-39 seed
 phrase (English wordlist) is shown **once** — **write it down on paper
 immediately**. This seed is the only way to recover your funds if your
-wallet file is lost. To keep the seed out of logs and scrollback, `create`
-refuses to print it when output is piped or redirected.
+wallet file is lost. To keep the seed out of logs and scrollback, `wallet create`
+refuses to print it when output is piped or redirected. A script uses
+the `create` subcommand below, not a `wallet create` line.
 
 For scripts there is a non-interactive subcommand that writes the seed to a
 file instead of the terminal (created `0600`, refusing to overwrite):
@@ -315,7 +320,7 @@ Your wallet is automatically a V3 wallet with full post-quantum key material
 At the prompt:
 
 ```
-mainnet> restore mywallet word1 word2 ... word24
+mainnet> wallet restore mywallet word1 word2 ... word24
 ```
 
 or non-interactively, reading the seed from a file:
@@ -337,7 +342,7 @@ separate restore-from-keys flow and no view-only wallet variant.
 At the prompt:
 
 ```
-mainnet> open mywallet
+mainnet> wallet open mywallet
 ```
 
 or open at startup:

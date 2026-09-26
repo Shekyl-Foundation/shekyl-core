@@ -6,12 +6,15 @@
 //! shekyl-cli internals, exposed as a library so integration tests can
 //! drive the RPC session directly. The binary entry point is `main.rs`.
 
+pub mod catalog;
 pub mod commands;
 pub mod daemon;
 pub mod display;
+pub mod grammar;
 pub mod resolve;
 pub mod rpc_client;
 pub mod session;
+pub mod status;
 pub mod validate;
 
 /// Prompt for a password without echoing it.

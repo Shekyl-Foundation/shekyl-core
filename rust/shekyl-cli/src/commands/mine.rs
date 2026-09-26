@@ -61,29 +61,6 @@ pub(crate) fn parse_mine(args: &[&str]) -> Result<ParsedMine, String> {
     }
 }
 
-/// `start_mining [threads|auto]` alias.
-pub(crate) fn parse_start_mining_alias(args: &[&str]) -> Result<ParsedMine, String> {
-    match args {
-        [] => Ok(ParsedMine::Start { threads: None }),
-        [token] => Ok(ParsedMine::Start {
-            threads: parse_thread_token(token)?,
-        }),
-        _ => Err("start_mining: usage is \"start_mining [threads|auto]\"".to_owned()),
-    }
-}
-
-/// `stop_mining` / `mining_status` take no arguments.
-pub(crate) fn parse_noarg_alias(verb: &str, args: &[&str]) -> Result<ParsedMine, String> {
-    if !args.is_empty() {
-        return Err(format!("{verb}: takes no arguments (usage: {verb})"));
-    }
-    match verb {
-        "stop_mining" => Ok(ParsedMine::Stop),
-        "mining_status" => Ok(ParsedMine::Status),
-        _ => Err(format!("{verb}: usage is \"{verb}\"")),
-    }
-}
-
 fn parse_thread_token(raw: &str) -> Result<Option<u64>, String> {
     match raw {
         "auto" => Ok(None),
@@ -310,9 +287,7 @@ pub fn cmd_mine_status(rpc: &RpcSession, daemon: Option<&DaemonClient>, network:
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_mine, parse_noarg_alias, parse_start_mining_alias, ParsedMine, BUILT_IN_MINER_NOTICE,
-    };
+    use super::{parse_mine, ParsedMine, BUILT_IN_MINER_NOTICE};
 
     #[test]
     fn mine_grammar_accepts_exact_arity_and_rejects_strays() {
@@ -358,28 +333,5 @@ mod tests {
             !BUILT_IN_MINER_NOTICE.contains("XMRig"),
             "do not name a miner that speaks a different template dialect"
         );
-    }
-
-    #[test]
-    fn mining_aliases_reject_extra_arguments() {
-        assert_eq!(
-            parse_start_mining_alias(&[]).unwrap(),
-            ParsedMine::Start { threads: None }
-        );
-        assert_eq!(
-            parse_start_mining_alias(&["3"]).unwrap(),
-            ParsedMine::Start { threads: Some(3) }
-        );
-        assert!(parse_start_mining_alias(&["3", "extra"]).is_err());
-        assert_eq!(
-            parse_noarg_alias("stop_mining", &[]).unwrap(),
-            ParsedMine::Stop
-        );
-        assert!(parse_noarg_alias("stop_mining", &["now"]).is_err());
-        assert_eq!(
-            parse_noarg_alias("mining_status", &[]).unwrap(),
-            ParsedMine::Status
-        );
-        assert!(parse_noarg_alias("mining_status", &["--json"]).is_err());
     }
 }

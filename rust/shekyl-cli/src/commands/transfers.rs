@@ -14,17 +14,11 @@
 use serde_json::{json, Value};
 use shekyl_wallet_rpc::types::{SubmitPendingTxResult, SubmitVerdictView};
 
-use super::{confirm, format_amount, format_amount_str, require_open};
+use super::{format_amount, format_amount_str, require_open};
 use crate::rpc_client::RpcSession;
 
-/// Map the wallet2-era numeric `--priority N` flag onto the wallet-RPC
-/// named tiers: 0-1 → ECONOMY, 2 (and unset) → STANDARD, 3+ → PRIORITY.
-pub(crate) fn priority_tier(priority: Option<u32>) -> &'static str {
-    match priority {
-        None | Some(2) => "STANDARD",
-        Some(0 | 1) => "ECONOMY",
-        Some(_) => "PRIORITY",
-    }
+pub(crate) fn priority_tier(priority: Option<&str>) -> &str {
+    priority.unwrap_or("STANDARD")
 }
 
 /// The handle fields of a `build_pending_tx`-shaped success (`transfer` and
@@ -176,13 +170,7 @@ pub(crate) fn submit_pending(rpc: &RpcSession, built: &BuiltPendingTx) {
     }
 }
 
-pub fn cmd_transfer(
-    rpc: &RpcSession,
-    amount: u64,
-    dest: &str,
-    priority: Option<u32>,
-    no_confirm: bool,
-) {
+pub fn cmd_transfer(rpc: &RpcSession, amount: u64, dest: &str, priority: Option<&str>, yes: bool) {
     if !require_open(rpc) {
         return;
     }
@@ -210,26 +198,19 @@ pub fn cmd_transfer(
     println!("  Fee:    {} SKL", built.fee_skl);
 
     let stdin_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
-    let accepted = if no_confirm {
-        if stdin_is_tty {
-            eprintln!("--no-confirm is only honored for non-interactive input; confirming.");
-            confirm("Send this transaction?")
-        } else {
-            true
-        }
+    let accepted = if yes && !stdin_is_tty {
+        true
+    } else if yes && stdin_is_tty {
+        eprintln!("--yes is only honored for non-interactive input; confirming.");
+        super::confirm("Send this transaction?")
     } else if !stdin_is_tty {
-        // Non-interactive input without --no-confirm: reading confirm() here
-        // would silently consume the next piped line (or hit EOF) as the
-        // answer and discard the send with no clear reason — automation would
-        // see funds "sent" that never moved. Refuse loudly and point at the
-        // explicit flag instead.
         eprintln!(
             "Refusing to send without confirmation on non-interactive input. \
-             Re-run with --no-confirm to send unattended, or run interactively."
+             Re-run with --yes to send unattended, or run interactively."
         );
         false
     } else {
-        confirm("Send this transaction?")
+        super::confirm("Send this transaction?")
     };
 
     if !accepted {
@@ -256,11 +237,20 @@ fn discard_reservation(rpc: &RpcSession, pending_tx_id: &str) {
     }
 }
 
-pub fn cmd_transfers(rpc: &RpcSession) {
+pub fn cmd_transfers(rpc: &RpcSession, incoming: bool, outgoing: bool, unmatched: bool) {
     if !require_open(rpc) {
         return;
     }
-    match rpc.call("get_transfers", json!({})) {
+    let mut params = json!({});
+    if incoming || unmatched {
+        params["direction"] = json!("INCOMING");
+    } else if outgoing {
+        params["direction"] = json!("OUTGOING");
+    }
+    if unmatched {
+        params["attribution"] = json!("UNATTRIBUTED");
+    }
+    match rpc.call("get_transfers", params) {
         Ok(val) => {
             let transfers = val.get("transfers").and_then(|v| v.as_array());
             let Some(transfers) = transfers.filter(|a| !a.is_empty()) else {
@@ -268,8 +258,8 @@ pub fn cmd_transfers(rpc: &RpcSession) {
                 return;
             };
             println!(
-                "{:<10} {:<10} {:>18} {:>14} {:>10}  TxID",
-                "Direction", "State", "Amount (SKL)", "Fee (SKL)", "Height"
+                "{:<10} {:<12} {:>16} {:>12} {:>8}  Id",
+                "Direction", "State", "Amount", "Fee", "Height"
             );
             for t in transfers {
                 print_transfer_row(t);
@@ -295,8 +285,8 @@ fn print_transfer_row(t: &Value) {
     let amount = format_amount_str(s("amount"));
     let fee = format_amount_str(s("fee"));
     let height = format_height(t);
-    let tx_hash = s("tx_hash");
-    println!("{direction:<10} {state:<10} {amount:>18} {fee:>14} {height:>10}  {tx_hash}");
+    let id = s("id");
+    println!("{direction:<10} {state:<12} {amount:>16} {fee:>12} {height:>8}  {id}");
     // An UNSPENDABLE row (PL-D3 §6.2) carries why; print it beside the row
     // so the user sees the failure where the money is listed (rule 82).
     if let Some(reason) = t.get("unspendable_reason").and_then(|v| v.as_str()) {
@@ -347,10 +337,9 @@ pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) {
                 return;
             };
             let s = |name: &str| t.get(name).and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Transfer {}:", s("id"));
-            println!("  Direction: {}", s("direction"));
-            println!("  State:     {}", s("state"));
-            println!("  TxID:      {}", s("tx_hash"));
+            println!("Transfer:");
+            println!("  Id (tx show):              {}", s("id"));
+            println!("  Transaction (note/abandon): {}", s("tx_hash"));
             println!("  Amount:    {} SKL", format_amount_str(s("amount")));
             println!("  Fee:       {} SKL", format_amount_str(s("fee")));
             println!("  Height:    {}", format_height(t));
@@ -451,8 +440,8 @@ pub fn cmd_history_incoming_unattributed(rpc: &RpcSession) {
                 return;
             };
             println!(
-                "{:<10} {:<10} {:>18} {:>14} {:>10}  TxID",
-                "Direction", "State", "Amount (SKL)", "Fee (SKL)", "Height"
+                "{:<10} {:<12} {:>16} {:>12} {:>8}  Id",
+                "Direction", "State", "Amount", "Fee", "Height"
             );
             for t in transfers {
                 print_transfer_row(t);
@@ -472,11 +461,9 @@ mod tests {
     #[test]
     fn priority_flag_maps_onto_named_tiers() {
         assert_eq!(priority_tier(None), "STANDARD");
-        assert_eq!(priority_tier(Some(0)), "ECONOMY");
-        assert_eq!(priority_tier(Some(1)), "ECONOMY");
-        assert_eq!(priority_tier(Some(2)), "STANDARD");
-        assert_eq!(priority_tier(Some(3)), "PRIORITY");
-        assert_eq!(priority_tier(Some(9)), "PRIORITY");
+        assert_eq!(priority_tier(Some("ECONOMY")), "ECONOMY");
+        assert_eq!(priority_tier(Some("STANDARD")), "STANDARD");
+        assert_eq!(priority_tier(Some("PRIORITY")), "PRIORITY");
     }
 
     /// The never-default contract, whose violation is a fund-lock: a

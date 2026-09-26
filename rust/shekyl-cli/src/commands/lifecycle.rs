@@ -28,6 +28,7 @@ pub fn cmd_create(rpc: &RpcSession, filename: &str) {
              For non-interactive or scripted creation, use:\n  \
              shekyl-cli create <name> --seed-out <path> --password-file <path>"
         );
+        rpc.fail();
         return;
     }
     let Some(password) = read_password("New wallet password: ") else {
@@ -111,6 +112,14 @@ pub fn cmd_close(rpc: &RpcSession) {
 
 pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
     if !require_closed(rpc) {
+        return;
+    }
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        rpc.fail();
+        eprintln!(
+            "wallet restore in a script would put the seed in the script. \
+             Use: shekyl-cli restore <name> --seed-file <path> --password-file <path>"
+        );
         return;
     }
     // Seed material: wiped on drop like the password, on every path out of
