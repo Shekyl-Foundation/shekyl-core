@@ -1,0 +1,157 @@
+# Pi-4 wake_hints — timing engine, 2026-09-26
+#
+# Host: skl-pi (10.10.14.15), aarch64, 4 cores, 8 GB. No sudo.
+# Source: shekyl-core dev 5a8d2ae78 (wake_hints bench as merged in #865).
+# Binary: cross-compiled aarch64-unknown-linux-gnu, release, --bench wake_hints.
+# Wall clock: about four minutes (20 functions, 3 s warmup + 5 s measurement each).
+# This is a run record for D5's engine-thread budget. It is not that budget.
+#
+Gnuplot not found, using plotters backend
+Benchmarking wake_hints/arm_earlier/1
+Benchmarking wake_hints/arm_earlier/1: Warming up for 3.0000 s
+Benchmarking wake_hints/arm_earlier/1: Collecting 10 samples in estimated 5.0000 s (9.9M iterations)
+Benchmarking wake_hints/arm_earlier/1: Analyzing
+wake_hints/arm_earlier/1
+                        time:   [139.98 ns 140.04 ns 140.09 ns]
+Benchmarking wake_hints/poll_one_due/1
+Benchmarking wake_hints/poll_one_due/1: Warming up for 3.0000 s
+Benchmarking wake_hints/poll_one_due/1: Collecting 10 samples in estimated 5.0000 s (15M iterations)
+Benchmarking wake_hints/poll_one_due/1: Analyzing
+wake_hints/poll_one_due/1
+                        time:   [204.40 ns 204.45 ns 204.50 ns]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking wake_hints/arm_earlier/4
+Benchmarking wake_hints/arm_earlier/4: Warming up for 3.0000 s
+Benchmarking wake_hints/arm_earlier/4: Collecting 10 samples in estimated 5.0000 s (6.1M iterations)
+Benchmarking wake_hints/arm_earlier/4: Analyzing
+wake_hints/arm_earlier/4
+                        time:   [221.64 ns 238.11 ns 249.51 ns]
+Found 4 outliers among 10 measurements (40.00%)
+  2 (20.00%) low severe
+  2 (20.00%) high severe
+Benchmarking wake_hints/poll_one_due/4
+Benchmarking wake_hints/poll_one_due/4: Warming up for 3.0000 s
+Benchmarking wake_hints/poll_one_due/4: Collecting 10 samples in estimated 5.0000 s (14M iterations)
+Benchmarking wake_hints/poll_one_due/4: Analyzing
+wake_hints/poll_one_due/4
+                        time:   [222.59 ns 222.66 ns 222.77 ns]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+Benchmarking wake_hints/arm_earlier/16
+Benchmarking wake_hints/arm_earlier/16: Warming up for 3.0000 s
+Benchmarking wake_hints/arm_earlier/16: Collecting 10 samples in estimated 5.0000 s (7.2M iterations)
+Benchmarking wake_hints/arm_earlier/16: Analyzing
+wake_hints/arm_earlier/16
+                        time:   [191.68 ns 191.94 ns 192.25 ns]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking wake_hints/poll_one_due/16
+Benchmarking wake_hints/poll_one_due/16: Warming up for 3.0000 s
+Benchmarking wake_hints/poll_one_due/16: Collecting 10 samples in estimated 5.0000 s (13M iterations)
+Benchmarking wake_hints/poll_one_due/16: Analyzing
+wake_hints/poll_one_due/16
+                        time:   [233.37 ns 235.38 ns 237.04 ns]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+Benchmarking wake_hints/arm_earlier/64
+Benchmarking wake_hints/arm_earlier/64: Warming up for 3.0000 s
+Benchmarking wake_hints/arm_earlier/64: Collecting 10 samples in estimated 5.0000 s (7.6M iterations)
+Benchmarking wake_hints/arm_earlier/64: Analyzing
+wake_hints/arm_earlier/64
+                        time:   [168.85 ns 169.06 ns 169.53 ns]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking wake_hints/poll_one_due/64
+Benchmarking wake_hints/poll_one_due/64: Warming up for 3.0000 s
+Benchmarking wake_hints/poll_one_due/64: Collecting 10 samples in estimated 5.0000 s (12M iterations)
+Benchmarking wake_hints/poll_one_due/64: Analyzing
+wake_hints/poll_one_due/64
+                        time:   [245.90 ns 245.99 ns 246.14 ns]
+Benchmarking wake_hints/arm_earlier/256
+Benchmarking wake_hints/arm_earlier/256: Warming up for 3.0000 s
+Benchmarking wake_hints/arm_earlier/256: Collecting 10 samples in estimated 5.0000 s (7.6M iterations)
+Benchmarking wake_hints/arm_earlier/256: Analyzing
+wake_hints/arm_earlier/256
+                        time:   [169.01 ns 169.12 ns 169.19 ns]
+Benchmarking wake_hints/poll_one_due/256
+Benchmarking wake_hints/poll_one_due/256: Warming up for 3.0000 s
+Benchmarking wake_hints/poll_one_due/256: Collecting 10 samples in estimated 5.0000 s (12M iterations)
+Benchmarking wake_hints/poll_one_due/256: Analyzing
+wake_hints/poll_one_due/256
+                        time:   [256.29 ns 256.44 ns 256.69 ns]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking wake_hints/arm_earlier/1024
+Benchmarking wake_hints/arm_earlier/1024: Warming up for 3.0000 s
+Benchmarking wake_hints/arm_earlier/1024: Collecting 10 samples in estimated 5.0000 s (7.4M iterations)
+Benchmarking wake_hints/arm_earlier/1024: Analyzing
+wake_hints/arm_earlier/1024
+                        time:   [170.13 ns 170.21 ns 170.31 ns]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking wake_hints/poll_one_due/1024
+Benchmarking wake_hints/poll_one_due/1024: Warming up for 3.0000 s
+Benchmarking wake_hints/poll_one_due/1024: Collecting 10 samples in estimated 5.0000 s (11M iterations)
+Benchmarking wake_hints/poll_one_due/1024: Analyzing
+wake_hints/poll_one_due/1024
+                        time:   [271.37 ns 271.42 ns 271.48 ns]
+Benchmarking wake_hints/arm_earlier/4096
+Benchmarking wake_hints/arm_earlier/4096: Warming up for 3.0000 s
+Benchmarking wake_hints/arm_earlier/4096: Collecting 10 samples in estimated 5.0000 s (6.4M iterations)
+Benchmarking wake_hints/arm_earlier/4096: Analyzing
+wake_hints/arm_earlier/4096
+                        time:   [182.40 ns 182.85 ns 183.51 ns]
+Benchmarking wake_hints/poll_one_due/4096
+Benchmarking wake_hints/poll_one_due/4096: Warming up for 3.0000 s
+Benchmarking wake_hints/poll_one_due/4096: Collecting 10 samples in estimated 5.0000 s (10M iterations)
+Benchmarking wake_hints/poll_one_due/4096: Analyzing
+wake_hints/poll_one_due/4096
+                        time:   [280.24 ns 281.72 ns 282.67 ns]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking wake_hints/arm_earlier/16384
+Benchmarking wake_hints/arm_earlier/16384: Warming up for 3.0000 s
+Benchmarking wake_hints/arm_earlier/16384: Collecting 10 samples in estimated 5.0000 s (4.8M iterations)
+Benchmarking wake_hints/arm_earlier/16384: Analyzing
+wake_hints/arm_earlier/16384
+                        time:   [175.25 ns 175.73 ns 176.46 ns]
+Benchmarking wake_hints/poll_one_due/16384
+Benchmarking wake_hints/poll_one_due/16384: Warming up for 3.0000 s
+Benchmarking wake_hints/poll_one_due/16384: Collecting 10 samples in estimated 5.0000 s (8.5M iterations)
+Benchmarking wake_hints/poll_one_due/16384: Analyzing
+wake_hints/poll_one_due/16384
+                        time:   [311.68 ns 312.23 ns 312.80 ns]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking wake_hints/arm_earlier/65536
+Benchmarking wake_hints/arm_earlier/65536: Warming up for 3.0000 s
+Benchmarking wake_hints/arm_earlier/65536: Collecting 10 samples in estimated 5.0001 s (4.0M iterations)
+Benchmarking wake_hints/arm_earlier/65536: Analyzing
+wake_hints/arm_earlier/65536
+                        time:   [182.27 ns 183.52 ns 186.27 ns]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking wake_hints/poll_one_due/65536
+Benchmarking wake_hints/poll_one_due/65536: Warming up for 3.0000 s
+Benchmarking wake_hints/poll_one_due/65536: Collecting 10 samples in estimated 5.0000 s (6.4M iterations)
+Benchmarking wake_hints/poll_one_due/65536: Analyzing
+wake_hints/poll_one_due/65536
+                        time:   [349.85 ns 350.19 ns 350.64 ns]
+Benchmarking wake_hints/arm_earlier/262144
+Benchmarking wake_hints/arm_earlier/262144: Warming up for 3.0000 s
+Benchmarking wake_hints/arm_earlier/262144: Collecting 10 samples in estimated 5.0002 s (781k iterations)
+Benchmarking wake_hints/arm_earlier/262144: Analyzing
+wake_hints/arm_earlier/262144
+                        time:   [176.47 ns 177.08 ns 177.95 ns]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking wake_hints/poll_one_due/262144
+Benchmarking wake_hints/poll_one_due/262144: Warming up for 3.0000 s
+Benchmarking wake_hints/poll_one_due/262144: Collecting 10 samples in estimated 5.0002 s (836k iterations)
+Benchmarking wake_hints/poll_one_due/262144: Analyzing
+wake_hints/poll_one_due/262144
+                        time:   [376.51 ns 376.91 ns 377.39 ns]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+
