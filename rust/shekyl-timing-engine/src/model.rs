@@ -18,23 +18,45 @@ enum Op {
     Advance(u16),
     Poll,
     NoteHome(u8),
-    Close,
 }
 
+/// Live operations only. `Close` is applied once, after the sequence, so a
+/// few hundred operations stay on registered owners instead of turning into
+/// errors at the first close.
 fn op_strategy() -> impl Strategy<Value = Op> {
     prop_oneof![
-        any::<u8>().prop_map(Op::Register),
-        (any::<u8>(), any::<u32>()).prop_map(|(slot, deadline)| Op::Arm {
+        2 => any::<u8>().prop_map(Op::Register),
+        8 => (any::<u8>(), any::<u32>()).prop_map(|(slot, deadline)| Op::Arm {
             slot,
             deadline: deadline % 10_000,
         }),
-        any::<u8>().prop_map(Op::Clear),
-        any::<u8>().prop_map(Op::Deregister),
-        (1u16..500).prop_map(Op::Advance),
-        Just(Op::Poll),
-        any::<u8>().prop_map(Op::NoteHome),
-        Just(Op::Close),
+        2 => any::<u8>().prop_map(Op::Clear),
+        1 => any::<u8>().prop_map(Op::Deregister),
+        4 => (1u16..500).prop_map(Op::Advance),
+        4 => Just(Op::Poll),
+        4 => any::<u8>().prop_map(Op::NoteHome),
     ]
+}
+
+/// Ordinary runs use 128 cases. `PROPTEST_CASES` replaces that number.
+///
+/// Set here, not left to [`ProptestConfig::default`]. That default reads the
+/// variable once per process and caches the result.
+fn proptest_config() -> ProptestConfig {
+    ProptestConfig {
+        cases: cases_from_env(),
+        ..ProptestConfig::default()
+    }
+}
+
+fn cases_from_env() -> u32 {
+    match std::env::var("PROPTEST_CASES") {
+        Ok(raw) => raw
+            .parse()
+            .unwrap_or_else(|_| panic!("PROPTEST_CASES must be a u32, got {raw}")),
+        Err(std::env::VarError::NotPresent) => 128,
+        Err(std::env::VarError::NotUnicode(_)) => panic!("PROPTEST_CASES is not Unicode"),
+    }
 }
 
 struct RefOwner {
@@ -117,10 +139,10 @@ fn check(engine: &mut Engine<ManualClock>, reference: &Reference) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
+    #![proptest_config(proptest_config())]
     #[test]
     fn random_ops_match_a_scanned_reference(
-        ops in prop::collection::vec(op_strategy(), 1..48)
+        ops in prop::collection::vec(op_strategy(), 200..=400)
     ) {
         run(&ops);
     }
@@ -154,10 +176,9 @@ fn run(ops: &[Op]) {
                 }
             }
             Op::Arm { slot, deadline } => {
-                if ids.is_empty() {
+                let Some(id) = registered(&ids, slot) else {
                     continue;
-                }
-                let id = ids[usize::from(slot) % ids.len()];
+                };
                 let result = engine.arm(id, Tick::new(u64::from(deadline)));
                 let owner = reference.owners.get_mut(&id.0).expect("registered");
                 if reference.closed {
@@ -177,10 +198,9 @@ fn run(ops: &[Op]) {
                 }
             }
             Op::Clear(slot) => {
-                if ids.is_empty() {
+                let Some(id) = registered(&ids, slot) else {
                     continue;
-                }
-                let id = ids[usize::from(slot) % ids.len()];
+                };
                 let result = engine.clear(id);
                 if reference.closed {
                     assert_eq!(result.unwrap_err(), EngineError::Closed);
@@ -194,10 +214,9 @@ fn run(ops: &[Op]) {
                 }
             }
             Op::Deregister(slot) => {
-                if ids.is_empty() {
+                let Some(index) = registered_index(&ids, slot) else {
                     continue;
-                }
-                let index = usize::from(slot) % ids.len();
+                };
                 let id = ids.remove(index);
                 engine.deregister(id).unwrap();
                 reference.owners.remove(&id.0);
@@ -220,10 +239,9 @@ fn run(ops: &[Op]) {
                 }
             }
             Op::NoteHome(slot) => {
-                if ids.is_empty() {
+                let Some(id) = registered(&ids, slot) else {
                     continue;
-                }
-                let id = ids[usize::from(slot) % ids.len()];
+                };
                 let owner = reference.owners.get_mut(&id.0).expect("registered");
                 let result = match (owner.pending_generation, owner.pending_fired) {
                     (Some(generation), Some(_)) => {
@@ -245,16 +263,31 @@ fn run(ops: &[Op]) {
                     }
                 }
             }
-            Op::Close => {
-                engine.close();
-                reference.closed = true;
-                for owner in reference.owners.values_mut() {
-                    owner.deadline = None;
-                    owner.pending_generation = None;
-                    owner.pending_fired = None;
-                }
-            }
         }
         check(&mut engine, &reference);
     }
+    engine.close();
+    reference.closed = true;
+    for owner in reference.owners.values_mut() {
+        owner.deadline = None;
+        owner.pending_generation = None;
+        owner.pending_fired = None;
+    }
+    check(&mut engine, &reference);
+}
+
+/// Index of a currently registered owner. `slot` modulo that count.
+///
+/// An empty registry has no owner to name, so the operation is skipped
+/// rather than aimed at an id that was never minted.
+fn registered_index(ids: &[OwnerId], slot: u8) -> Option<usize> {
+    let len = ids.len();
+    if len == 0 {
+        return None;
+    }
+    Some(usize::from(slot) % len)
+}
+
+fn registered(ids: &[OwnerId], slot: u8) -> Option<OwnerId> {
+    registered_index(ids, slot).map(|index| ids[index])
 }
