@@ -99,6 +99,7 @@ use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof, VerifyError};
 use shekyl_fcmp::PqcKeyScalar;
+use shekyl_types::SigningPayloadHash;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 use shekyl_wire::transaction::{
     BondPost as WireBondPost, BondPostKind as WireBondPostKind, BpPlus, Ct, CtBase, Holdings,
@@ -1128,7 +1129,10 @@ fn verify_pqc_auths(parsed: &ParsedSubmission, pqc_auths: &[PqcAuth]) -> Result<
 /// makes it legal to run *before* the fact gather, and it is the property
 /// to preserve: a daemon fact reaching this function would put a DB read
 /// back in front of the authorization it is ordered to follow.
-fn verify_pqc_auth_slot(auth: &PqcAuth, payload_hash: &[u8; 32]) -> Result<(), VerifyReject> {
+fn verify_pqc_auth_slot(
+    auth: &PqcAuth,
+    payload_hash: &SigningPayloadHash,
+) -> Result<(), VerifyReject> {
     if auth.auth_version != 1 || auth.flags != 0 {
         return Err(VerifyReject::malformed("K13: auth_version/flags"));
     }
@@ -1155,7 +1159,7 @@ fn verify_pqc_auth_slot(auth: &PqcAuth, payload_hash: &[u8; 32]) -> Result<(), V
                 .verify(
                     &public_key,
                     shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-                    payload_hash,
+                    payload_hash.as_bytes(),
                     &signature,
                 )
                 .is_err()
@@ -1176,7 +1180,7 @@ fn verify_pqc_auth_slot(auth: &PqcAuth, payload_hash: &[u8; 32]) -> Result<(), V
                 auth.scheme_id,
                 &auth.hybrid_public_key,
                 &auth.hybrid_signature,
-                payload_hash,
+                payload_hash.as_bytes(),
             )
             .is_err()
             {

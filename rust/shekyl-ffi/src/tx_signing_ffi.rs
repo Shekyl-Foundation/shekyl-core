@@ -99,7 +99,7 @@ pub unsafe extern "C" fn shekyl_tx_pqc_signing_payload_hashes(
     }
     for (i, hash) in hashes.iter().enumerate() {
         // SAFETY: `out` is writable for `32 · out_cap` bytes and `i < out_cap`.
-        unsafe { core::ptr::copy_nonoverlapping(hash.as_ptr(), out.add(32 * i), 32) };
+        unsafe { core::ptr::copy_nonoverlapping(hash.as_bytes().as_ptr(), out.add(32 * i), 32) };
     }
     // SAFETY: `out_count` checked non-null above.
     unsafe { *out_count = hashes.len() };

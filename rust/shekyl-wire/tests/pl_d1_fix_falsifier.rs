@@ -56,6 +56,7 @@ use shekyl_curve_tree::{
 };
 use shekyl_fcmp::{tree::ed25519_point_to_selene_scalar, PqcKeyScalar};
 use shekyl_tx_builder::{sign_pqc_auths, tx_prefix_hash_from_parts, LeafEntry, SpendInput};
+use shekyl_types::SigningPayloadHash;
 use shekyl_units::AtomicUnits;
 
 const COINBASE_LOCK_WINDOW: u64 = shekyl_consensus::COINBASE_LOCK_WINDOW as u64;
@@ -249,11 +250,12 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         &[],
     );
     let pqc_auths = sign_pqc_auths(
-        // A stand-in message: the prefix hash's bytes, not the §1.5 per-input
+        // A stand-in message: the prefix hash's bytes, not the §1.1 per-input
         // payload (`phase1_payload_hashes`). These auths are never verified
-        // here; the `.to_bytes()` is the deliberate, visible un-typing — the
-        // `PrefixHash` type refuses the silent form (RTN-7 Q3).
-        &[tx_prefix_hash.to_bytes()],
+        // here; `.to_bytes()` then `SigningPayloadHash::from_bytes` is the
+        // deliberate, visible un-typing and re-typing — both newtypes refuse
+        // the silent form (RTN-7 Q3), which is why a stand-in has to say so.
+        &[SigningPayloadHash::from_bytes(tx_prefix_hash.to_bytes())],
         std::slice::from_ref(&spend_input),
     )
     .expect("PQC auth signing");

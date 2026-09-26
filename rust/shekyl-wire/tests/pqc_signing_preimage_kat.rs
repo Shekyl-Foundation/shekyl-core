@@ -51,6 +51,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use shekyl_crypto_hash::keccak256;
+use shekyl_types::SigningPayloadHash;
 use shekyl_wire::{Ct, PqcSigningPreimage, Transaction};
 
 const FIXTURE: &str = "tests/fixtures/pqc_signing_preimage_v1.json";
@@ -244,17 +245,18 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
             .iter()
             .map(|p| hex_bytes(p.as_str().expect("hex")))
             .collect();
-        let hashes: Vec<[u8; 32]> = entry["signed_hashes_hex"]
+        let hashes: Vec<SigningPayloadHash> = entry["signed_hashes_hex"]
             .as_array()
             .expect("signed_hashes_hex")
             .iter()
             .map(|h| <[u8; 32]>::try_from(hex_bytes(h.as_str().expect("hex"))).expect("32 bytes"))
+            .map(SigningPayloadHash::from_bytes)
             .collect();
         assert_eq!(payloads.len(), hashes.len(), "{name}: one hash per payload");
         for (i, (payload, hash)) in payloads.iter().zip(&hashes).enumerate() {
             assert_eq!(
                 keccak256(payload),
-                *hash,
+                hash.to_bytes(),
                 "{name} input {i}: the fixture's own hash is of its own payload"
             );
         }

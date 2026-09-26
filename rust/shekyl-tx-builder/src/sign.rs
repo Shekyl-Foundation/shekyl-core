@@ -23,7 +23,7 @@ use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_types::PrefixHash;
+use shekyl_types::{PrefixHash, SigningPayloadHash};
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
@@ -228,7 +228,7 @@ pub fn sign_transaction_with_terms(
 /// Returns [`TxBuilderError::PqcSignError`] if any individual signing
 /// operation fails (e.g., malformed secret key).
 pub fn sign_pqc_auths(
-    payload_hashes: &[[u8; 32]],
+    payload_hashes: &[SigningPayloadHash],
     inputs: &[SpendInput],
 ) -> Result<Vec<PqcAuth>, TxBuilderError> {
     use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
@@ -264,7 +264,7 @@ pub fn sign_pqc_auths(
             &ss,
             inp.output_index,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            hash,
+            hash.as_bytes(),
         )
         .map_err(|e| TxBuilderError::PqcSignError {
             index: i,

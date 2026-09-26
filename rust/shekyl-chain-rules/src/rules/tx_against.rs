@@ -36,7 +36,9 @@ use crate::rules::tx::TxClass;
 use crate::rules::{BlockContext, BlockRule, Rule, TxAgainstRule, TxContext, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::{AtHeight, ChainView, Tip};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_types::{
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, SigningPayloadHash,
+};
 use shekyl_wire::{Ct, Input};
 
 // CEN-I11's window, from `config/consensus_constants.json` at build time
@@ -413,7 +415,10 @@ impl I17 {
     /// serve-credit form, which CEN-H20 forbids to carry any: that form is
     /// signed over the pass record instead (CEN-J10), so this row and I18
     /// are vacuous on it by construction, not by exemption.
-    pub(crate) fn signed_hashes(cx: &TxContext<'_>, coverage: &mut RuleCoverage) -> Vec<[u8; 32]> {
+    pub(crate) fn signed_hashes(
+        cx: &TxContext<'_>,
+        coverage: &mut RuleCoverage,
+    ) -> Vec<SigningPayloadHash> {
         coverage.insert(Self::ROW);
         cx.tx.pqc_signing_payload_hashes()
     }

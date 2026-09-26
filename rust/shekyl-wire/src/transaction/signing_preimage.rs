@@ -28,7 +28,7 @@
 //! input's payload is composed.
 
 use shekyl_crypto_hash::keccak256;
-use shekyl_types::PrunableHash;
+use shekyl_types::{PrunableHash, SigningPayloadHash};
 
 use super::{Ct, PqcAuth, Transaction};
 
@@ -107,11 +107,12 @@ impl PqcSigningPreimage {
         payload
     }
 
-    /// `signed_hash(i) = keccak256(payload(i))` — the 32 bytes the input's
-    /// hybrid signature is made over and verified against.
+    /// `signed_hash(i) = keccak256(payload(i))` — the message the input's
+    /// hybrid signature is made over and verified against, typed so it can
+    /// never be passed where a txid component is expected (RTN-7).
     #[must_use]
-    pub fn signed_hash(&self, auth: &PqcAuth) -> [u8; 32] {
-        keccak256(&self.payload(auth))
+    pub fn signed_hash(&self, auth: &PqcAuth) -> SigningPayloadHash {
+        SigningPayloadHash::from_bytes(keccak256(&self.payload(auth)))
     }
 }
 
@@ -122,7 +123,7 @@ impl Transaction {
     /// arity is the validator's to refuse). Empty for a body with no
     /// preimage ([`PqcSigningPreimage::of`]).
     #[must_use]
-    pub fn pqc_signing_payload_hashes(&self) -> Vec<[u8; 32]> {
+    pub fn pqc_signing_payload_hashes(&self) -> Vec<SigningPayloadHash> {
         let Some(preimage) = PqcSigningPreimage::of(self) else {
             return Vec::new();
         };

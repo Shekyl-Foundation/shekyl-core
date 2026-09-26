@@ -204,6 +204,19 @@ addressees:
   opposite answer: minting a name for one consumer is the
   fresh-name-for-nothing Q3 declined. Reopen if a second consumer appears,
   or if any site can pass one where a txid component is expected.
+  **UPDATE 2026-09-25 — REOPENED and TYPED, the criterion fired:** E6
+  slice 6 commit 7 made the value the daemon's
+  (`shekyl_tx_pqc_signing_payload_hashes`, `tx_pqc_verify.cpp`) and the
+  validator's (CEN-I17, soon I18) as well as the builder's and daemon-rpc
+  K13's; the gate went red on the new `signing_preimage.rs` surface, and
+  the answer was the one this bullet pre-committed to, not a re-keyed
+  allowlist entry. Now `shekyl_types::SigningPayloadHash` (default arm,
+  public digest), distinct by name and doc from `PqcAuthHash` — the txid
+  component over the auths that *sign* this value — and from `PrefixHash`.
+  The type flows through `phase1_payload_hashes` / `sign_pqc_auths` to the
+  signing and verifying primitives, where `as_bytes()` is the boundary
+  (the `PrefixHash` shape). The allowlist entry is deleted (an allowlist may
+  not outlive its subject); the gate's docstring lists the newtype.
 - **`Input::ToKey.key_image` stays raw here.** `shekyl_types::KeyImage`
   exists but is `redact, no_display`, and the wire codec's RPC projections
   hex-encode this field — typing it is the key-image *exposure* question,
