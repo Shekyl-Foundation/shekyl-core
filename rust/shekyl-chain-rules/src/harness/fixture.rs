@@ -21,6 +21,9 @@
 
 use super::*;
 use crate::verdict::TxSlot;
+use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
+use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
+use shekyl_types::SigningPayloadHash;
 
 /// The well-formed **transaction** shapes this module builds, as a
 /// closed set. The sanity gate walks the chain from [`FIRST`](Self::FIRST)
@@ -439,7 +442,128 @@ pub fn anchored_at(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transa
     let reference = hashes
         .get(usize::try_from(at.to_raw()).expect("a fixture height fits usize"))
         .unwrap_or_else(|| panic!("the chain holds no block at {at} to reference"));
-    referencing(tx, *reference)
+    // Signed after anchoring: the reference is in the pruned segment every
+    // signature binds (I17), so a signature made before it moved would not
+    // verify.
+    signed(referencing(tx, *reference))
+}
+
+/// Every `pqc_auths` slot of `tx` **signed** — by a hybrid key derived
+/// deterministically from its input, over the §1.1 signing hash of this
+/// body — so a fixture anchored here verifies under CEN-I18 as a wallet's
+/// spend would, and the fixture substrate does not collapse the moment the
+/// signature row lands (§1.2's cascade, met at one site). Two passes,
+/// because the message binds every input's public key (I17): the keys are
+/// derived first, the signatures made second. A body with no preimage
+/// (no `pqc_auths`, or no prunable region) is returned unchanged.
+///
+/// This is the wallet's arrangement (`shekyl-tx-builder`'s
+/// `phase1_payload_hashes` then `sign_pqc_auths`) with a fixture key in
+/// place of the output's HKDF secret; the signer is the production one
+/// ([`sign_pqc_auth_for_output`]), so what verifies here is what verifies
+/// on chain. What it does **not** make real is the proof — `fcmp_proof`
+/// stays [`bp_plus_layout_for`]'s kind of filler, because a membership
+/// proof needs the tree it is a member of; that is the captured chains'
+/// business (§5 row 1) and CEN-I15's witness.
+#[must_use]
+pub fn signed(mut tx: Transaction) -> Transaction {
+    let Some(count) = fcmp_auths(&tx).map(Vec::len) else {
+        return tx;
+    };
+    if count == 0 {
+        return tx;
+    }
+    let seeds: Vec<[u8; 64]> = tx
+        .prefix
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| fixture_signing_seed(index, input))
+        .collect();
+    // Pass 1 — the public keys, which the message binds.
+    for (auth, seed) in fcmp_auths_mut(&mut tx).into_iter().flatten().zip(&seeds) {
+        let derived = sign_pqc_auth_for_output(seed, 0, SCHEME_DOMAIN_PQC_AUTH_TX, &[0u8; 32])
+            .expect("a fixture seed derives a hybrid keypair");
+        auth.auth_version = 1;
+        auth.scheme_id = shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
+        auth.flags = 0;
+        auth.hybrid_public_key = derived.hybrid_public_key;
+    }
+    // Pass 2 — the signatures, over the hashes those keys are part of.
+    let hashes = tx.pqc_signing_payload_hashes();
+    if hashes.len() != count {
+        // No prunable region (the storage-pruned form): nothing to sign over.
+        return tx;
+    }
+    for ((auth, seed), hash) in fcmp_auths_mut(&mut tx)
+        .into_iter()
+        .flatten()
+        .zip(&seeds)
+        .zip(&hashes)
+    {
+        auth.hybrid_signature = fixture_signature(seed, hash);
+    }
+    tx
+}
+
+/// The signature a fixture seed makes over `hash` — **memoized**, because
+/// the production signer is hedged (ML-DSA-65 draws randomness on every
+/// sign) and a fixture must be a pure function of what built it: tests
+/// rebuild a body and expect the bytes the store already holds, and a
+/// block's hash is over those bytes. The key `(seed, hash)` is everything
+/// the signature's validity depends on, since the hash binds the whole
+/// body (I17); process-wide, so parallel test threads agree. This is why
+/// determinism lives here and not as a deterministic-signing entry point
+/// on the scheme: the crypto surface should not offer production code a
+/// way to sign without randomness.
+fn fixture_signature(seed: &[u8; 64], hash: &SigningPayloadHash) -> Vec<u8> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    /// `(seed, signed hash)` → the canonical signature bytes.
+    type Signatures = HashMap<([u8; 64], [u8; 32]), Vec<u8>>;
+    static SIGNATURES: OnceLock<Mutex<Signatures>> = OnceLock::new();
+    let cache = SIGNATURES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache
+        .lock()
+        .expect("the fixture signature cache is not poisoned");
+    cache
+        .entry((*seed, hash.to_bytes()))
+        .or_insert_with(|| {
+            sign_pqc_auth_for_output(seed, 0, SCHEME_DOMAIN_PQC_AUTH_TX, hash.as_bytes())
+                .expect("a fixture seed signs")
+                .signature
+        })
+        .clone()
+}
+
+/// The 64-byte "combined shared secret" a fixture input's signing key is
+/// derived from: the key image doubled for a `ToKey`, so the same spend
+/// always signs with the same key and two spends never share one; a
+/// constant per position for the archival arms.
+fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
+    let mut seed = [0u8; 64];
+    match input {
+        Input::ToKey { key_image, .. } => {
+            seed[..32].copy_from_slice(key_image);
+            seed[32..].copy_from_slice(key_image);
+        }
+        _ => seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs")),
+    }
+    seed
+}
+
+fn fcmp_auths(tx: &Transaction) -> Option<&Vec<PqcAuth>> {
+    match &tx.ct {
+        Ct::Fcmp { pqc_auths, .. } => Some(pqc_auths),
+        Ct::Null(_) => None,
+    }
+}
+
+fn fcmp_auths_mut(tx: &mut Transaction) -> Option<&mut Vec<PqcAuth>> {
+    match &mut tx.ct {
+        Ct::Fcmp { pqc_auths, .. } => Some(pqc_auths),
+        Ct::Null(_) => None,
+    }
 }
 
 /// `tx` anchored on `chain` for the block that connects next
@@ -492,10 +616,12 @@ pub fn chain_of(len: u64) -> MockChain {
 /// [`PQC_HYBRID_SINGLE_KEY_LEN`] — with filler bytes in the blobs:
 /// what the wire needs to round-trip a non-serve-credit `Fcmp`
 /// transaction (`pqc_auths.len() == nvin`), what I16's structure
-/// admits, and nothing the *signature* rows (I17, I18) would accept.
-/// Filler, like [`bp_plus_layout_for`]: the structure a rule accepts,
-/// for fixtures whose subject is not the signature. The blobs were empty
-/// until slice 6 commit 2 landed I16.
+/// admits, and nothing CEN-I18 would accept. The **unanchored** slot:
+/// every body that reaches `tx_against` goes through [`anchored_at`],
+/// which replaces this with a real key and a real signature
+/// ([`signed`]); a body judged by `tx_form` alone keeps the filler, as
+/// no stateless row reads the blobs. The blobs were empty until slice 6
+/// commit 2 landed I16.
 pub fn pqc_auth_filler() -> PqcAuth {
     PqcAuth {
         auth_version: 1,

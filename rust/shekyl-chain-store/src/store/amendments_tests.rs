@@ -23,7 +23,8 @@ use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, LongTermWeight};
 
 use super::connect_fixtures::{
-    candidate, connect_chain, facts, judge, spend, spend_at, spendable_prefix, FIRST_SPEND_HEIGHT,
+    candidate, connect_chain, connect_chain_anchored, facts, judge, spend, spend_at,
+    spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
@@ -321,18 +322,24 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     // Every spend carries per-input auths (the wire reads `nvin` of them),
     // so a spend is 4-part; the 3-part non-coinbase transaction is the
     // serve-credit-only shape, whose `pqc_auths` are empty by rule (CEN-H20)
-    // — the countersignature rides the vin.
+    // — its countersignature is over the pass record (CEN-J10).
     let four_part = spend(9, 2);
     let three_part = fixture::serve_credit_only([0x5f; 32]);
-    let expected = four_part
-        .txid_parts()
-        .pqc_auth_hash
-        .expect("one pqc_auth makes the txid 4-part");
     assert!(three_part.txid_parts().pqc_auth_hash.is_none());
     // The first spend block lists the 4-part spend then the 3-part one:
     // tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one per block through
-    // that one), then four_part, then three_part.
-    connect_chain(&store, &spendable_prefix(&[vec![four_part, three_part]]));
+    // that one), then four_part, then three_part. The expectation is read
+    // off the spend **as connected**: anchoring signs every auth slot, and
+    // the third component is over the auths.
+    let (_, connected) =
+        connect_chain_anchored(&store, &spendable_prefix(&[vec![four_part, three_part]]), 0);
+    let expected = connected
+        .last()
+        .and_then(|block| block.first())
+        .expect("the spend block lists the spend first")
+        .txid_parts()
+        .pqc_auth_hash
+        .expect("one pqc_auth makes the txid 4-part");
     let four_part_id = FIRST_SPEND_HEIGHT + 1;
     let three_part_id = four_part_id + 1;
     let snap = store.begin_read().expect("read");
