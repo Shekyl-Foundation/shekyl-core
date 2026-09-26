@@ -386,8 +386,12 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever now refuses an epoch that is not
   strictly above the reorg cap, and a second fakechain-only lever,
   `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` (`1..=720`), lowers the cap with it;
-  a daemon on a public network refuses to start if either is present. The
-  C++ stripe engine was deleted earlier; nothing here is a port of it.
+  a daemon on a public network refuses to start if either is present. `T`
+  (`archival_shard_tx_count = 200`) joins `config/consensus_constants.json`
+  as the shard partition's one source, so the `get_version`
+  consensus-constants digest moves (a key was added; the value every node
+  already ran). The C++ stripe engine was deleted earlier; nothing here is a
+  port of it.
   Pre-genesis: a daemon store at layout 13 is recreated, not migrated.
 - **DRS-E1 S-ALT — the alternative-chain store, typed, on the consensus
   file; the switch is one transaction.** Schema layout **13**: `alt_blocks`
