@@ -751,10 +751,14 @@ listener, and so a connection in the gap phase.
 2. **Cheapest rejection first.** The responder checks the 8-byte prefix,
    then exact lengths, then the ML-KEM encapsulation-key range check.
    Only after all three does it run X25519 and the encapsulation.
-   `noise.rs` currently performs the X25519 Diffie-Hellman before
-   validating the encapsulation key (`ResponderReady::finish`). The key
-   check moves to `read_message1`. Every failure still closes the same
-   way: FIN after zero bytes written. Step 7 measures that.
+   *Records-was, at the 2026-09-25 pin:* `ResponderReady::finish` ran
+   the X25519 Diffie-Hellman before validating the encapsulation key.
+   **Landed:** the range check is in `read_message1`, and a malformed
+   key returns before any responder Diffie-Hellman. `ResponderReady`
+   stores the parsed key, so `finish` does not parse it again. Every
+   failure still
+   closes the same way: FIN after zero bytes written. Step 7 measures
+   that.
 
 3. **Clearnet accept rate is owned here.** This document owns the
    FOLLOWUPS row on connection admission before the channel exists. The
