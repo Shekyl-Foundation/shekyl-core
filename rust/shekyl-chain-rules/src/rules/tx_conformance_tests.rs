@@ -496,7 +496,7 @@ const SITES: &[Site] = &[
         Face::Memory,
         CenRow::I19,
         i19_no_pqc_fields,
-        "spelled `.map_err(io::Error::other)?`, not `Err(` (#839 review). One site, two rows: CEN-I19's PQC field shape on every transaction, and — with `ExtraSubject::Coinbase` — CEN-I20's coinbase grammar (TXE, `50256487f`). Keyed to I19, the arm every transaction reaches; I20's coinbase face is the same call",
+        "spelled `.map_err(io::Error::other)?`, not `Err(` (#839 review). One site, two rows: CEN-I19's PQC field shape on every transaction, and — with `ExtraSubject::Coinbase` — CEN-I20's coinbase grammar (TXE, `50256487f`). Keyed to I19, the arm every transaction reaches; I20's coinbase face is the same call. The site has a THIRD rendering — `NonceOutsideCoinbase`, `ExtraSubject::General` — which slice 6 commit 3 ruled is I19's (the nonce clause moved from I20; TXE-Q6′). One site is one table row, so that rendering is held by `the_i19_sites_nonce_rendering_is_i19_at_both_sites` beside the table",
     ),
     rule(
         "tx size {size} exceeds {MAX_TX_SIZE}",
@@ -631,7 +631,7 @@ const SITES: &[Site] = &[
     invariant(
         "key-image input(s) but no prunable proof",
         Face::Memory,
-        "unreachable BY ORDERING, and only by ordering: (1) `validate_context_free_pruned` runs first and its `spend has … needs >= 2` arm forces `n_out >= 2` for any key-imaged tx; (2) inside `validate`'s fee-only arm the `must have no outputs` check precedes this one, so `n_out != 0` fires it first. Insert a rule between (1) and (2), reorder the fee-only arm, or let a key-imaged shape through (1) with fewer outputs, and this arm is live and unclassified — re-check it when slice 6 adds proof verification to this path. The proof's non-emptiness is CEN-I14's, held elsewhere",
+        "unreachable BY ORDERING, and only by ordering: (1) `validate_context_free_pruned` runs first and its `spend has … needs >= 2` arm forces `n_out >= 2` for any key-imaged tx; (2) inside `validate`'s fee-only arm the `must have no outputs` check precedes this one, so `n_out != 0` fires it first. Insert a rule between (1) and (2), reorder the fee-only arm, or let a key-imaged shape through (1) with fewer outputs, and this arm is live and unclassified. RE-CHECKED 2026-09-25 (slice 6 commit 9), when the slice's verification rows landed: they did not land in this path. CEN-I17 (the signing hash) and CEN-I18 (the signature over it) are `tx_against`'s, run after `tx_form` — downstream of this whole function, after both orderings and between neither — and `validate`'s body is unchanged since the slice's base. I15 and H19-verify will land in the same place. Still dead, by the same two orderings. The proof's non-emptiness is CEN-I14's, held elsewhere",
     ),
     invariant(
         "return Err(PrunedError);",
@@ -905,6 +905,36 @@ fn the_baseline_passes_the_twin_and_the_crate() {
         .validate()
         .unwrap_or_else(|e| panic!("the twin refuses the coinbase baseline: {e}"));
     judge_on(&chain, candidate).unwrap_or_else(|r| panic!("the crate refuses the coinbase: {r}"));
+}
+
+/// The I19 site's second rendering. `check_tx_extra_shape(General)` refuses
+/// a nonce off the coinbase (`NonceOutsideCoinbase`), and slice 6 commit 3
+/// ruled that refusal is CEN-I19's — the census had it under I20, whose
+/// `Coinbase` scope never sees a listed transaction, and the tiebreaker
+/// was where the enforcement lives (TXE-Q6′). The table holds one row per
+/// site and the site's row is keyed to the missing-field rendering, so
+/// this holds the other rendering: the twin refuses it with the nonce
+/// message, and `tx_form` refuses the same body on I19 at both listed
+/// slots — the rule of record and the wallet's pre-check agree on the row
+/// the ruling moved.
+#[test]
+fn the_i19_sites_nonce_rendering_is_i19_at_both_sites() {
+    let mut with_nonce = spend2();
+    with_nonce.prefix.extra = crate::harness::fixture::coinbase_extra(2);
+    let err = with_nonce
+        .validate()
+        .expect_err("the twin refuses a nonce off the coinbase");
+    assert!(
+        err.to_string().contains("nonce is coinbase-only"),
+        "the twin refused on another arm: {err}"
+    );
+    for slot in [TxSlot::Lone, TxSlot::Listed(0)] {
+        assert_refused(
+            tx_form(&with_nonce, slot, &RuleSet::GENESIS).map(|_| ()),
+            CenRow::I19,
+            Locus::Tx { slot },
+        );
+    }
 }
 
 /// Every trip reaches its arm in the twin, and the crate is held to the row
