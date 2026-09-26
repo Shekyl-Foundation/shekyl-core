@@ -39,13 +39,23 @@ fn responder(iters: u64) -> Duration {
 }
 
 fn seal_open(len: usize, iters: u64) -> Duration {
-    let mut session = Session::connected();
     let plaintext = vec![0xA5u8; len];
-    let start = Instant::now();
-    for _ in 0..iters {
-        black_box(session.seal_open(&plaintext));
+    // One short of the rekey. The handshake that starts the next batch is
+    // outside the timed section, so the reported time is seal and open only.
+    let batch = c5_bench::seal_opens_before_rekey().saturating_sub(1).max(1);
+    let mut total = Duration::ZERO;
+    let mut left = iters;
+    while left > 0 {
+        let mut session = Session::connected();
+        let n = left.min(batch);
+        let start = Instant::now();
+        for _ in 0..n {
+            black_box(session.seal_open(&plaintext));
+        }
+        total += start.elapsed();
+        left -= n;
     }
-    start.elapsed()
+    total
 }
 
 fn rekey(iters: u64) -> Duration {

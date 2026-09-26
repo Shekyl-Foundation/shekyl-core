@@ -59,9 +59,17 @@ impl Session {
     pub fn seal_open(&mut self, plaintext: &[u8]) -> usize {
         let wire = self.send.seal(plaintext).expect("seal");
         let (opened, consumed) = self.recv.open_one(&wire).expect("open");
-        debug_assert_eq!(opened.len(), plaintext.len());
+        std::hint::black_box(opened);
         consumed
     }
+}
+
+/// How many `seal_open` calls fit before either direction rekeys.
+///
+/// Each call spends two nonces on the send half and two on the receive half.
+/// Rekey runs when a direction's nonce reaches [`crate::channel::REKEY_NONCES`].
+pub fn seal_opens_before_rekey() -> u64 {
+    crate::channel::REKEY_NONCES / 2
 }
 
 /// One Noise HKDF: three HMAC-BLAKE2s. This is the rekey step.
