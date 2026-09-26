@@ -435,25 +435,36 @@ census_rows! {
         // rows landed in `tx_form` at slice 6 commit 2 (`rules/tx_inputs.rs`);
         // the view-bound and verification rows follow in `tx_against`.
         I1 implemented(crate::rules::tx_inputs::I1),
-        I2 pending,
-        I3 pending,
+        // I2: a non-coinbase CT is `FcmpPlusPlusPqc`. The wire's `Ct` has two
+        // variants and the `Null` half is H15's landed refusal off the
+        // coinbase; nothing else is representable (slice 6 Q3, list-and-
+        // iterate: the falsifier names I2 and walks the type set).
+        I2 by_construction(shekyl_wire::Ct, "i2_the_wire_admits_two_ct_types_and_h15_refuses_null_off_the_coinbase"),
+        // I3: version exactly 3 — the fourth row on `TX_VERSION`'s falsifier
+        // (F2, H2, H13 before it; slice 6 Q3).
+        I3 by_construction(shekyl_wire::transaction::TX_VERSION, "f2_the_wire_admits_one_transaction_version"),
         I4 implemented(crate::rules::tx_inputs::I4),
         I5 implemented(crate::rules::tx_inputs::I5),
         I6 implemented(crate::rules::tx_inputs::I6),
-        I7 pending,
+        I7 implemented(crate::rules::tx_against::I7),
         I8 implemented(crate::rules::tx_inputs::I8),
         I9 implemented(crate::rules::tx_inputs::I9),
-        I10 pending,
-        I11 pending,
-        I12 pending,
+        // I10–I12 (slice 6 commit 5) are the regular-spend reference rows,
+        // run by `tx_against` in the D4 arrangement: I10 yields `ref_height`,
+        // I11 measures it, I12 is the definition of the anchor read at it.
+        I10 implemented(crate::rules::tx_against::I10),
+        I11 implemented(crate::rules::tx_against::I11),
+        I12 implemented(crate::rules::tx_against::I12),
         I13 pending,
         I14 implemented(crate::rules::tx_inputs::I14),
         I15 pending,
         I16 implemented(crate::rules::tx_inputs::I16),
-        I17 pending,
-        I18 pending,
-        I19 pending,
-        I20 pending,
+        // I17 (slice 6 commit 7): the signing preimage, adopted from the wire's
+        // one derivation (Q7 (c)) and recorded where `tx_against` derives it.
+        I17 implemented(crate::rules::tx_against::I17),
+        I18 implemented(crate::rules::tx_against::I18),
+        I19 implemented(crate::rules::tx_extra::I19),
+        I20 implemented(crate::rules::tx_extra::I20),
         // 4.J Archival transaction families (all verdicts Rust-side; C++ marshals)
         J1 pending,
         J2 pending,
@@ -495,7 +506,10 @@ census_rows! {
         K9 pending,
         K10 pending,
         // 4.L Storage layer (constraints that reject chain data at write time)
-        L1 pending,
+        // L1 is the validator's (C2-R8 Q6): the intra-block half of key-image
+        // uniqueness, run in `validate` after every slot; SI-1 is the store's
+        // belt beneath it, never the rule.
+        L1 implemented(crate::rules::tx_against::L1),
         L7 pending,
         L8 pending,
         L9 pending,

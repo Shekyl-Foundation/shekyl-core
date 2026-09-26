@@ -402,12 +402,15 @@ fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
 #[test]
 fn a_corpus_with_a_rewind_round_trips_as_events() {
     use crate::test_support::{corpus_of_reorg, reorg};
-    let r = reorg(4, 1, 3);
+    // Main reaches two spend blocks past CEN-I11's floor; the fork rewinds
+    // to the block before the first and lists three spends of its own.
+    let floor = crate::test_support::FIRST_SPEND_HEIGHT;
+    let r = reorg(floor + 2, floor - 1, 3);
     let bytes = corpus_of_reorg(&r);
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
     assert_eq!(
         reader.declared(),
-        4 + 1 + 3,
+        (floor + 2) + 1 + 3,
         "count is records of both kinds"
     );
     let mut kinds = Vec::new();
@@ -417,9 +420,14 @@ fn a_corpus_with_a_rewind_round_trips_as_events() {
             IngestEvent::Rewind { to } => format!("R{}", to.to_raw()),
         });
     }
-    // main 0..=3 (genesis lists nothing, then one spend each), rewind to 1,
-    // fork 2'..=4' (one spend each).
-    assert_eq!(kinds, ["E0", "E1", "E1", "E1", "R1", "E1", "E1", "E1"]);
+    // main: nothing listed below the floor, one spend at the floor and the
+    // block after; rewind to the block before the floor; fork: one spend
+    // each at the floor and the two blocks after.
+    let mut expected: Vec<String> = vec!["E0".to_owned(); usize::try_from(floor).expect("small")];
+    expected.extend(["E1", "E1"].map(str::to_owned));
+    expected.push(format!("R{}", floor - 1));
+    expected.extend(["E1", "E1", "E1"].map(str::to_owned));
+    assert_eq!(kinds, expected);
 }
 
 #[test]

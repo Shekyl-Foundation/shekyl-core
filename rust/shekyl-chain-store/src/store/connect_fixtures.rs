@@ -19,11 +19,14 @@ use shekyl_types::{
     Timestamp,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Transaction};
+use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 use super::store_tests::TestErr;
 use super::view::BatchView;
 use super::*;
+use crate::codec::Present;
+use crate::lmdb_order::LmdbHashKey;
+use crate::schema::SPENT_KEYS;
 
 /// The coinbase for `height`: the rules harness's, which satisfies every
 /// landed 4.F row (a sole `Input::Gen(height)`, `Null` ct, one output with
@@ -193,8 +196,89 @@ pub(super) fn judge_under<'b, 'id>(
     }
 }
 
+/// Reach the SI-1 belt. CEN-I7 refuses a recorded key image at `validate`
+/// (slice 6 commit 4), so a double spend no longer walks through
+/// [`judge`] to the store; what the belt beneath the rule still guards is
+/// the table **moving under a judged token**. This judges `candidate`
+/// against the batch's view, then records its first listed input's key
+/// image as spent — the same `Present` row `connect` would write — and
+/// only then connects. Returns `connect`'s outcome: SI-1, poisoning the
+/// batch.
+pub(super) fn connect_with_image_planted_under_the_token(
+    store: &ChainStore,
+    candidate: Candidate,
+    height: u64,
+) -> Result<Connected, TestErr> {
+    let Some(Input::ToKey { key_image, .. }) = candidate
+        .transactions
+        .first()
+        .and_then(|tx| tx.prefix.inputs.first())
+    else {
+        panic!("the candidate's first listed transaction spends");
+    };
+    let planted = LmdbHashKey::from_bytes(*key_image);
+    store.write(|batch| {
+        let view = batch.chain_view();
+        let judged = judge(&view, candidate)?;
+        batch
+            .open_insert_table(SPENT_KEYS, StoreInvariant::KeyImageNotFresh)?
+            .insert(planted, Present)?;
+        Ok(batch.connect(judged, facts(height, 0), RuleSet::GENESIS)?)
+    })
+}
+
+/// The first height at which a block may list a spend. CEN-I11 wants a
+/// spend's reference at least `REFERENCE_BLOCK_MIN_AGE` below the
+/// connecting height, and the youngest reference any chain has is genesis
+/// — so the first spend sits at height `MIN_AGE`, referencing block 0.
+/// Every chain here that lists a spend starts with this many coinbase-only
+/// blocks ([`spendable_prefix`]); a fixture chain listing a spend lower is
+/// asking the store to record what consensus refuses.
+pub(super) const FIRST_SPEND_HEIGHT: u64 = shekyl_chain_rules::REFERENCE_BLOCK_MIN_AGE.to_raw();
+
+/// A fixture height as an index into a hash list.
+pub(super) fn at(height: u64) -> usize {
+    usize::try_from(height).expect("a fixture height fits usize")
+}
+
+/// `FIRST_SPEND_HEIGHT` coinbase-only blocks, then `listed` — the listing a
+/// chain that carries spends is built from, so the spend heights in a test
+/// read as offsets from the first admissible one.
+pub(super) fn spendable_prefix(listed: &[Vec<Transaction>]) -> Vec<Vec<Transaction>> {
+    let mut all = vec![Vec::new(); usize::try_from(FIRST_SPEND_HEIGHT).expect("small")];
+    all.extend_from_slice(listed);
+    all
+}
+
+/// [`spend`], anchored for a block connecting at `height` on the chain
+/// whose block hashes are `hashes`: its reference is the block
+/// `REFERENCE_BLOCK_MIN_AGE` below — the newest CEN-I11 admits
+/// ([`fixture::newest_admissible_reference`]). One anchoring body with the
+/// rules harness's ([`fixture::referencing`]), so the store cannot anchor
+/// a spend differently from the crate that judges it.
+pub(super) fn spend_at(
+    hashes: &[BlockHash],
+    height: u64,
+    key_image: usize,
+    outputs: usize,
+) -> Transaction {
+    anchor(hashes, height, spend(key_image, outputs))
+}
+
+/// `tx` anchored for a block connecting at `height` (see [`spend_at`]):
+/// the harness's [`fixture::anchored_at`]. A serve credit stays as it is
+/// at any height. A spend or an emission — including an emission with no
+/// fee input, CEN-J21 — is anchored, and panics below
+/// `FIRST_SPEND_HEIGHT`.
+pub(super) fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
+    fixture::anchored_at(hashes, height, tx)
+}
+
 /// Connect `listed` as consecutive blocks from genesis in one batch,
-/// handing each `facts(h, 0)`. Returns each block's hash.
+/// handing each `facts(h, 0)`. Every listed transaction is anchored on the
+/// chain as it is built ([`anchor`]), so a caller lists bare [`spend`]s
+/// and the reference is written where the hashes are known. Returns each
+/// block's hash.
 pub(super) fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<BlockHash> {
     connect_chain_with_burn(store, listed, 0)
 }
@@ -206,11 +290,29 @@ pub(super) fn connect_chain_with_burn(
     listed: &[Vec<Transaction>],
     burned: u64,
 ) -> Vec<BlockHash> {
-    let mut hashes = Vec::new();
+    connect_chain_anchored(store, listed, burned).0
+}
+
+/// [`connect_chain_with_burn`], also returning the listed transactions
+/// **as connected** — anchored — for a test that then reads them back by
+/// hash.
+pub(super) fn connect_chain_anchored(
+    store: &ChainStore,
+    listed: &[Vec<Transaction>],
+    burned: u64,
+) -> (Vec<BlockHash>, Vec<Vec<Transaction>>) {
+    let mut hashes: Vec<BlockHash> = Vec::new();
+    let mut anchored = Vec::new();
     let mut previous = BlockHash::NULL;
     let mut cands = Vec::new();
     for (h, txs) in listed.iter().enumerate() {
-        let cand = candidate(h as u64, previous, txs.clone());
+        let h = h as u64;
+        let txs: Vec<Transaction> = txs
+            .iter()
+            .map(|tx| anchor(&hashes, h, tx.clone()))
+            .collect();
+        anchored.push(txs.clone());
+        let cand = candidate(h, previous, txs);
         previous = cand.block.hash();
         hashes.push(previous);
         cands.push(cand);
@@ -227,7 +329,7 @@ pub(super) fn connect_chain_with_burn(
         Ok(())
     });
     out.expect("chain connects");
-    hashes
+    (hashes, anchored)
 }
 
 pub(super) fn connect_genesis(store: &ChainStore, burned: u64) -> (Connected, Block) {

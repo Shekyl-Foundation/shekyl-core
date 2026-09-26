@@ -6,8 +6,12 @@
 use super::*;
 use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, Retry, Stale};
-use crate::harness::fixture::{candidate, coinbase, listed, point};
-use crate::harness::{formed, formed_under, judged, Faulted, MockChain, MockSubstrate};
+use crate::harness::fixture::{
+    candidate, candidate_on, coinbase, listed_on, point, spendable_chain,
+};
+use crate::harness::{
+    defined, formed, formed_on, formed_under, judged, Faulted, MockChain, MockSubstrate,
+};
 use crate::rule_set::RuleSetId;
 use crate::substrate::Substrate;
 use crate::trust::Trust;
@@ -15,10 +19,17 @@ use crate::TxIdentity;
 
 #[test]
 fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
-    MockChain::default().with_view(|view| {
-        let input = candidate(vec![listed(point(9)), listed(point(10))]);
+    // On the youngest chain that can list a spend (CEN-I11), the two spends
+    // anchored on it (CEN-I10); a genesis block listing spends is a shape
+    // consensus refuses, and until slice 6 commit 5 this fixture was one.
+    let chain = spendable_chain();
+    chain.with_view(|view| {
+        let input = candidate_on(
+            &chain,
+            vec![listed_on(&chain, point(9)), listed_on(&chain, point(10))],
+        );
         let valid = judged(validate(
-            formed(input),
+            formed_on(&chain, input),
             &view,
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,
@@ -89,10 +100,27 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I4,
                 CenRow::I5,
                 CenRow::I6,
+                // Slice 6 commit 4: the first view-bound row (I7, vacuous
+                // on the coinbase, a lookup on each spend) and the
+                // block-level L1, which passes with no image repeated.
+                CenRow::I7,
                 CenRow::I8,
                 CenRow::I9,
+                // Slice 6 commit 5: the regular-spend reference rows — the
+                // reference recorded (I10), in the window (I11), the anchor
+                // read at its height (I12, a definition).
+                CenRow::I10,
+                CenRow::I11,
+                CenRow::I12,
                 CenRow::I14,
                 CenRow::I16,
+                // Slice 6 commit 7: the signing preimage, a definition
+                // recorded where the hashes are derived.
+                CenRow::I17,
+                CenRow::I18,
+                CenRow::I19,
+                CenRow::I20,
+                CenRow::L1,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
@@ -103,7 +131,11 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
 
 #[test]
 fn the_validated_block_is_the_candidate_with_identities_derived_once() {
-    let input = candidate(vec![listed(point(9)), listed(point(10))]);
+    let chain = spendable_chain();
+    let input = candidate_on(
+        &chain,
+        vec![listed_on(&chain, point(9)), listed_on(&chain, point(10))],
+    );
     let expected_hash = input.block.hash();
     let identity = |tx: &Transaction| {
         let parts = tx.txid_parts();
@@ -140,9 +172,9 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
         assert!(id.pqc_auth_hash.is_some(), "a spend's txid is 4-part");
     }
 
-    MockChain::default().with_view(|view| {
+    chain.with_view(|view| {
         let valid = judged(validate(
-            formed(input),
+            formed_on(&chain, input),
             &view,
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,
@@ -174,10 +206,11 @@ fn a_block_with_no_listed_transactions_passes() {
     });
 }
 
-/// `tx_form` judges the landed 4.H rows at the slot it is given (slice 5);
-/// `tx_against` still records nothing (4.I is slice 6). At the miner slot a
-/// well-formed coinbase records H1/H3/H4 vacuous and H16 passed — every
-/// landed row was evaluated.
+/// `tx_form` judges the landed stateless rows at the slot it is given
+/// (slice 5, slice 6 commits 2–3); `tx_against` the landed view-bound ones
+/// (slice 6 commit 4). At the miner slot a well-formed coinbase records
+/// the non-coinbase rows vacuous and the rest passed — every landed row was
+/// evaluated.
 #[test]
 fn tx_entry_points_record_the_landed_rows() {
     let tx = coinbase(1);
@@ -209,13 +242,32 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::I8,
             CenRow::I9,
             CenRow::I14,
-            CenRow::I16
+            CenRow::I16,
+            CenRow::I19,
+            CenRow::I20
         ]
     );
+    // `tx_against` at the miner slot: the class derivation records H5/H6
+    // here too (it derives its own context, so it evaluated them), and the
+    // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I12 (the
+    // regular-spend reference rows), I17 and I18 (the signing preimage and
+    // the signatures over it, of which a coinbase has none) — are recorded
+    // vacuous on a coinbase.
     MockChain::default().with_view(|view| {
+        let against = defined(tx_against(&tx, TxSlot::Miner, &view, &RuleSet::GENESIS))
+            .expect("the coinbase reads nothing from the view");
         assert_eq!(
-            tx_against(&tx, &view, &RuleSet::GENESIS),
-            Ok(Ok(RuleCoverage::EMPTY))
+            against.iter().collect::<Vec<_>>(),
+            vec![
+                CenRow::H5,
+                CenRow::H6,
+                CenRow::I7,
+                CenRow::I10,
+                CenRow::I11,
+                CenRow::I12,
+                CenRow::I17,
+                CenRow::I18
+            ]
         );
     });
 }

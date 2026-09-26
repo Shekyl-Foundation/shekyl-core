@@ -11,30 +11,14 @@
 
 use super::*;
 use crate::fault::{FormAttempt, Retry};
-use crate::harness::fixture::{candidate_on, recorded_with_work, root};
+use crate::harness::fixture::{candidate_on, chain_of};
 use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, MockSubstrate};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::ChainValid;
 use crate::view::AtHeight;
-use shekyl_difficulty::{check_hash, CumulativeDifficulty, Difficulty, GENESIS_DIFFICULTY};
-
-/// A chain of `len` blocks with distinct identities (timestamps a target
-/// block time apart) and the genesis constant of work per block — enough
-/// that D4's window, once it opens, derives a real target rather than the
-/// zero a work-less chain yields (see `difficulty_tests`).
-fn chain_of(len: u64) -> MockChain {
-    (0..len).fold(MockChain::default(), |chain, h| {
-        chain.push(
-            recorded_with_work(
-                1_000 + h * 120,
-                CumulativeDifficulty::from_raw(u128::from(h + 1) * GENESIS_DIFFICULTY),
-            ),
-            root(u8::try_from(h % 250).expect("fits") + 1),
-        )
-    })
-}
+use shekyl_difficulty::{check_hash, Difficulty, GENESIS_DIFFICULTY};
 
 /// Both stages over `chain` with `substrate`, claiming `seed`, at `attempt`.
 fn judge_with(

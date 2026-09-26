@@ -53,7 +53,7 @@ use crate::codec::{
 };
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES, SPENT_KEYS, TX_INDICES};
+use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::archival_reads::{self, PassCount, ServedShard};
 use super::at_index::AtIndex;
@@ -251,26 +251,16 @@ impl<'store> ReadSnapshot<'store> {
 
     /// **R2.** The height a block hash sits at, or `None` if the chain does
     /// not contain it. By-hash, so `Option`: absence has one meaning here
-    /// (§3.3). Replaces `block_exists` and `get_block_height`.
+    /// (§3.3). Replaces `block_exists` and `get_block_height`. The body is
+    /// [`chain_reads::height_of`], shared with the validator's
+    /// `BatchView::height_of` (CEN-I10) so the two readers cannot disagree
+    /// about the table or its codec.
     ///
     /// # Errors
     ///
     /// SI-7 if the row does not decode; engine errors pass through.
     pub fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, StoreError> {
-        let table = self.open_table(BLOCK_HEIGHTS)?;
-        let Some(guard) = table
-            .get(LmdbHashKey::from(*hash))
-            .map_err(EngineError::Storage)?
-        else {
-            return Ok(None);
-        };
-        guard.value().decode().map(Some).map_err(|cause| {
-            StoreInvariant::CellCorrupt {
-                key: "block_heights",
-                fault: CellFault::Undecodable(cause),
-            }
-            .into()
-        })
+        chain_reads::height_of(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **R3.** The per-height record at `height` — timestamp, weight,

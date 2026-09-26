@@ -24,8 +24,9 @@
 //!   ([`ExpectedPlace::Unnamed`]) is a failed assertion, not a guessed
 //!   block locus.
 //! - `Pending` — the rule is not in Rust yet, and the family **pins what
-//!   happens today** (§3.10's last column: the block connects, or a store
-//!   belt halts the run). The pin is not acceptance of the gap; it is the
+//!   happens today** (§3.10's last column: the block connects; until E6
+//!   slice 6 ported CEN-I7 one pin was a store belt halting the run). The
+//!   pin is not acceptance of the gap; it is the
 //!   gap made a red test the moment the row is ported, because the branch
 //!   is chosen by the census at every run. The census is the falsifier.
 //!
@@ -56,7 +57,7 @@ use core::fmt;
 use shekyl_chain_rules::{Candidate, CenRow};
 use shekyl_difficulty::{check_hash, is_timestamp_below_ftl, Difficulty, FTL_SECONDS};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
-use shekyl_wire::{Input, Transaction};
+use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::source::{IngestEvent, Sequenced, Source};
 
@@ -84,6 +85,12 @@ const ORPHAN_PARENT: [u8; 32] = [0x77; 32];
 /// `0x5c`.
 const UNHELD_ROOT_FILL: u8 = 0x5a;
 pub(crate) const UNHELD_ROOT: [u8; 32] = [UNHELD_ROOT_FILL; 32];
+
+/// A `referenceBlock` no chain holds — [`Mutation::UnknownReference`]'s.
+/// Its own value, like [`ORPHAN_PARENT`]: this module is production code
+/// and cannot reach the rules harness's `UNRECORDED_REFERENCE` (a
+/// test-only feature); the two need not agree, only both be unheld.
+const UNHELD_REFERENCE: BlockHash = BlockHash::from_bytes([0x99; 32]);
 
 /// One systematic invalidation. Exhaustive: [`Mutation::ALL`] is every
 /// variant, and a match over it is a compile-time census of the family.
@@ -119,6 +126,20 @@ pub enum Mutation {
     ReorderedBodies,
     /// A listed spend reuses a key image an earlier block spent.
     DoubleSpend,
+    /// A listed spend's `referenceBlock` names a hash the chain never held
+    /// (the harness's `UNRECORDED_REFERENCE`). CEN-I10, at the transaction.
+    UnknownReference,
+    /// A listed spend's `referenceBlock` is the candidate's own parent — a
+    /// block the chain holds, one block old, `MIN_AGE − 1` too young.
+    /// CEN-I11, at the transaction. The old edge of the window is the
+    /// mock's (`I11::window`): a chain past `MAX_AGE` is beyond what the
+    /// fixture family's `root_after` bytes can build (§3.10).
+    ReferenceTooRecent,
+    /// One byte of a listed spend's first `pqc_auths` slot's signature
+    /// flipped. CEN-I18, at that input. The signature is forged and the
+    /// body left alone: a driven chain's spends are signed once, by the
+    /// wallet, and the body-changed-under-a-signature case is the mock's.
+    ForgedSignature,
 }
 
 /// Where [`Mutation::expected`]'s row points when it refuses.
@@ -137,13 +158,17 @@ pub enum ExpectedPlace {
     Miner,
     /// The refusal points at an input (CEN-I7, §3.10).
     Input,
+    /// The refusal points at a listed transaction (`Locus::Tx { slot:
+    /// TxSlot::Listed(_) }`) — CEN-I10 and CEN-I11, whose subject is the
+    /// transaction's reference, not an input (§3.10).
+    Listed,
     /// The spec has not named the place. Not a guessed block locus.
     Unnamed,
 }
 
 impl Mutation {
     /// Every mutation, in the table's order (§3.10).
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 12] = [
         Self::HeaderVersion,
         Self::Orphan,
         Self::WrongRoot,
@@ -153,6 +178,9 @@ impl Mutation {
         Self::WrongReward,
         Self::ReorderedBodies,
         Self::DoubleSpend,
+        Self::UnknownReference,
+        Self::ReferenceTooRecent,
+        Self::ForgedSignature,
     ];
 
     /// The census row that refuses this mutation — the spec's answer,
@@ -169,6 +197,9 @@ impl Mutation {
             Self::WrongReward => CenRow::F18,
             Self::ReorderedBodies => CenRow::G2,
             Self::DoubleSpend => CenRow::I7,
+            Self::UnknownReference => CenRow::I10,
+            Self::ReferenceTooRecent => CenRow::I11,
+            Self::ForgedSignature => CenRow::I18,
         }
     }
 
@@ -183,7 +214,8 @@ impl Mutation {
             | Self::FutureTimestamp
             | Self::StaleTimestamp
             | Self::PowUnderWrongSeed => ExpectedPlace::Block,
-            Self::DoubleSpend => ExpectedPlace::Input,
+            Self::DoubleSpend | Self::ForgedSignature => ExpectedPlace::Input,
+            Self::UnknownReference | Self::ReferenceTooRecent => ExpectedPlace::Listed,
             // 4.F named its locus with slice 4 (Q6): the miner transaction.
             Self::WrongReward => ExpectedPlace::Miner,
             // 4.G has not named a locus. Guessing `Block` would make the
@@ -288,15 +320,70 @@ impl Mutation {
                 // new hash — otherwise this would also be `ReorderedBodies`'
                 // body ↔ hash disagreement (G2), and a G2 refusal would
                 // mask the I7 one this mutation exists to provoke.
-                candidate.block.transaction_hashes = candidate
-                    .transactions
-                    .iter()
-                    .map(Transaction::hash)
-                    .collect();
+                relist(&mut candidate);
+            }
+            Self::UnknownReference => {
+                Self::move_reference(&mut candidate, UNHELD_REFERENCE)?;
+            }
+            Self::ReferenceTooRecent => {
+                // The parent is on the chain (I10 passes) and one block old
+                // (I11 refuses): the young edge, from the driver.
+                let parent = candidate.block.header.previous;
+                Self::move_reference(&mut candidate, parent)?;
+            }
+            Self::ForgedSignature => {
+                let mut signatures =
+                    candidate
+                        .transactions
+                        .iter_mut()
+                        .filter_map(|tx| match &mut tx.ct {
+                            Ct::Fcmp { pqc_auths, .. } => pqc_auths.first_mut(),
+                            Ct::Null(_) => None,
+                        });
+                let Some(last) = signatures
+                    .next()
+                    .and_then(|auth| auth.hybrid_signature.last_mut())
+                else {
+                    return Err(Unmutable::NoSignatureToForge);
+                };
+                *last ^= 0x01;
+                // The auths are the txid's third component: one violation
+                // only if the header follows the body.
+                relist(&mut candidate);
             }
         }
         Ok(candidate)
     }
+
+    /// Point the first listed spend's `referenceBlock` at `reference` and
+    /// re-list the header (one violation, as `DoubleSpend` does).
+    fn move_reference(candidate: &mut Candidate, reference: BlockHash) -> Result<(), Unmutable> {
+        let mut references = candidate
+            .transactions
+            .iter_mut()
+            .filter_map(|tx| match &mut tx.ct {
+                Ct::Fcmp {
+                    reference_block, ..
+                } => Some(reference_block),
+                Ct::Null(_) => None,
+            });
+        let Some(reference_block) = references.next() else {
+            return Err(Unmutable::NoReferenceToMove);
+        };
+        *reference_block = reference;
+        relist(candidate);
+        Ok(())
+    }
+}
+
+/// The header lists the bodies as they now are: a body mutation is one
+/// violation only if the hashes follow it (G2 would otherwise mask it).
+fn relist(candidate: &mut Candidate) {
+    candidate.block.transaction_hashes = candidate
+        .transactions
+        .iter()
+        .map(Transaction::hash)
+        .collect();
 }
 
 impl fmt::Display for Mutation {
@@ -404,6 +491,14 @@ pub enum Unmutable {
     /// The candidate lists no `ToKey` input to repurpose.
     #[error("the candidate has no ToKey input to repeat a spend through")]
     NoSpendToRepeat,
+    /// [`Mutation::UnknownReference`] / [`Mutation::ReferenceTooRecent`] on
+    /// a block that lists no `Fcmp` body.
+    #[error("the candidate lists no Fcmp body whose reference could move")]
+    NoReferenceToMove,
+    /// [`Mutation::ForgedSignature`] on a block that lists no body with a
+    /// `pqc_auths` slot carrying a signature.
+    #[error("the candidate lists no pqc_auths slot with a signature to forge")]
+    NoSignatureToForge,
     /// CEN-C1 and CEN-C2 do not judge genesis, so a timestamp written
     /// there is not their violation.
     #[error("{0} is exempt at genesis; CEN-C1 and CEN-C2 do not judge height 0")]

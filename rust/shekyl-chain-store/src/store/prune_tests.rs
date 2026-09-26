@@ -24,7 +24,7 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
-use super::connect_fixtures::{coinbase, judge_under, spend};
+use super::connect_fixtures::{anchor, coinbase, judge_under, spend};
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
 use crate::codec::{
@@ -118,7 +118,11 @@ impl Builder {
     }
 
     /// Connect heights `from..=to` in one batch, handing `listed(h)` at each;
-    /// returns each connect's outcome.
+    /// returns each connect's outcome. Every listed transaction is
+    /// **anchored** on the chain as built (`connect_fixtures::anchor`: a
+    /// recorded reference inside CEN-I11's window, and its slots signed), so
+    /// a caller lists bare `spend`s and reads them back through
+    /// [`Self::listed`].
     fn connect(
         &mut self,
         store: &ChainStore,
@@ -129,7 +133,10 @@ impl Builder {
         let mut cands = Vec::new();
         for h in from..=to {
             let previous = self.hashes.last().copied().unwrap_or(BlockHash::NULL);
-            let txs = listed(h);
+            let txs: Vec<Transaction> = listed(h)
+                .into_iter()
+                .map(|tx| anchor(&self.hashes, h, tx))
+                .collect();
             let cand = candidate(h, previous, txs.clone());
             self.hashes.push(cand.block.hash());
             self.listed.push(txs);
@@ -217,7 +224,7 @@ fn chain_to_300(path: &std::path::Path) -> (ChainStore, Builder, Connected, Conn
 #[test]
 fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
     let path = tmp("prune-boundary");
-    let (store, _b, at_200, at_300) = chain_to_300(&path);
+    let (store, b, at_200, at_300) = chain_to_300(&path);
 
     // Epoch 2's boundary: no shard has closed before height 100 (100
     // coinbases < T), so the discard set is empty, and the undo floor rises
@@ -243,8 +250,10 @@ fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
     }
     {
         let snap = store.begin_read().expect("read");
+        // The spends as listed — anchored and signed by the builder — not
+        // the bare fixture, whose hash they no longer share.
         let early = snap
-            .tx_record(&spend(1, 2).hash())
+            .tx_record(&b.listed[5][0].hash())
             .expect("read")
             .expect("recorded");
         assert_eq!(
@@ -254,7 +263,7 @@ fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
         );
         assert!(early.pqc_auth_hash.is_some(), "the hash row is permanent");
         let late = snap
-            .tx_record(&spend(2, 2).hash())
+            .tx_record(&b.listed[250][0].hash())
             .expect("read")
             .expect("recorded");
         assert!(

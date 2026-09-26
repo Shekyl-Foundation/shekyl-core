@@ -685,8 +685,8 @@ std::vector<uint8_t> msw6_sign_multisig_2of3(const ShekylPqcKeypair (&kps)[3],
   return sig_blob;
 }
 
-// Minimal 2-spend-input, 0-output v3 tx whose rct base + prunable serialize
-// through get_transaction_signed_payload. 0 outputs ⇒ no Bp+ / outPk needed;
+// Minimal 2-spend-input, 0-output v3 tx whose bytes the signing-preimage
+// derivation accepts. 0 outputs ⇒ no Bp+ / outPk needed;
 // two spend inputs ⇒ two pseudoOuts. Not a spendable tx — just enough for the
 // PQC signing-payload binding that verify_transaction_pqc_auth checks.
 cryptonote::transaction msw6_two_spend_skeleton()
@@ -714,13 +714,23 @@ cryptonote::transaction msw6_two_spend_skeleton()
   return tx;
 }
 
+// The input's signing-preimage hash, from the derivation of record
+// (shekyl-wire, through the daemon's own call; CEN-I17) — the same hash
+// verify_transaction_pqc_auth will check the signature against.
 crypto::hash msw6_input_payload_hash(const cryptonote::transaction& tx, size_t idx)
 {
-  std::string payload;
-  CHECK_AND_ASSERT_THROW_MES(cryptonote::get_transaction_signed_payload(tx, idx, payload),
-                             "get_transaction_signed_payload failed");
+  const cryptonote::blobdata blob = cryptonote::t_serializable_object_to_blob(tx);
+  std::vector<uint8_t> hashes(32 * tx.vin.size());
+  size_t count = 0;
+  char msg[160] = {0};
+  const int32_t rc = shekyl_tx_pqc_signing_payload_hashes(
+      reinterpret_cast<const uint8_t*>(blob.data()), blob.size(),
+      hashes.data(), tx.vin.size(), &count, msg, sizeof(msg));
+  CHECK_AND_ASSERT_THROW_MES(rc == SHEKYL_TX_SIGNING_OK,
+                             "signing preimage refused (code " << rc << "): " << msg);
+  CHECK_AND_ASSERT_THROW_MES(idx < count, "no preimage for input " << idx);
   crypto::hash h;
-  cryptonote::get_blob_hash(payload, h);
+  memcpy(h.data, hashes.data() + 32 * idx, 32);
   return h;
 }
 
@@ -747,8 +757,9 @@ TEST(fcmp, msw6_mixed_scheme_transaction_verifies)
   cryptonote::transaction tx = msw6_two_spend_skeleton();
 
   // Public keys must be final before the payloads are computed — the signing
-  // payload binds every input's key hash (get_transaction_signed_payload), so
-  // the signatures are set afterward (the payload never covers the signature).
+  // preimage binds every input's key hash (FCMP_SPEND_SIGNING_PREIMAGE.md
+  // §1.1), so the signatures are set afterward (the preimage never covers
+  // the signature).
   tx.pqc_auths[0].auth_version = 1;
   tx.pqc_auths[0].scheme_id = 1;  // solo
   tx.pqc_auths[0].flags = 0;

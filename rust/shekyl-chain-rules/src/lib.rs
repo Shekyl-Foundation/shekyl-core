@@ -151,7 +151,9 @@ pub use anchors::{Anchor, ReleaseAnchors};
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
-pub use fault::{Corrupt, Fault, FormAttempt, Retry, Stale, ViewRead, MAX_FORM_ATTEMPTS};
+pub use fault::{
+    Corrupt, Fault, FormAttempt, PerHeightRecord, Retry, Stale, ViewRead, MAX_FORM_ATTEMPTS,
+};
 pub use reorg::{journal_horizon, journal_horizon_under, D_MAX};
 pub use rule_set::{
     AdmissionPolicy, AdmissionPolicyId, DifficultyRule, RuleSchedule, RuleSet, RuleSetId,
@@ -162,6 +164,7 @@ pub use rules::miner::{tx_volume_window, EMISSION_SPLIT_EPOCH};
 pub use rules::recorded;
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;
+pub use rules::tx_against::{REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
 pub use substrate::Substrate;
 pub use trust::Trust;
 pub use validate::{form, tx_against, tx_form, validate};

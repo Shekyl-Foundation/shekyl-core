@@ -128,7 +128,7 @@ about production behaviour; it is **none**, wearing a green check.
 
 Distrust anything named `Mock*` on sight, because the name marks the place
 where someone chose to construct the conditions instead of producing them.
-A mock earns its keep in exactly two situations, and its doc comment says
+A mock earns its keep in exactly three situations, and its doc comment says
 which:
 
 1. **Predicate logic on plain values, where there is no state to fake.** A
@@ -137,6 +137,28 @@ which:
 2. **Faults the real substrate cannot be made to exhibit on demand.** "The
    rule propagates a store fault as a fault, never a verdict" needs a view
    that fails at height 7; a real store will not.
+3. **States a conforming substrate cannot hold — malformity by wrapper.**
+   A view whose tip says 12 and whose rows stop at 7; a root missing at a
+   height the same view just reported recorded. A conforming store refuses
+   to hold these (SI-2, SI-4, SI-7), so no driven chain can produce them,
+   and the validator's answer to them — `Corrupt::HoleBelowTip`, the
+   controlled fault that replaced four `unreachable!`s — has **no other way
+   to be reached by a test**. The instrument is `WithholdingView`: one
+   `WithheldRead` (`BlockAt` or `RootAt` at one height) over the dense
+   mock, and the assertion is the *classification* — the fault arm, never
+   a verdict.
+
+The line between the three and everything else is **whether the chain is
+the subject**. I11's window is arithmetic that happens to take heights as
+inputs; a wrapper's hole is a shape of view, not a fact about any chain.
+"This block exists", "this root is what the tree grew", "this depth is
+consistent with the leaves" are assertions *about a chain*, and a
+constructed view answering them tests the construction. So the split is
+not mock-versus-driver; it is three things — **arithmetic on the mock,
+operation on the driver, unreachable-by-construction states on wrappers
+over the mock** — and a test that is none of the three is the false test
+above. (E6 slice 6 commit 5, 2026-09-25: I10 and I12 operate on the
+driver, I11's boundaries on the mock, `HoleBelowTip` on `WithholdingView`.)
 
 Everything else — a computed root, a tree depth, a spent set populated to
 make a rule fire, a membership set that exists because a test said so — is
@@ -150,6 +172,23 @@ transaction replayed the same way. The dependency-direction belt
 that chain; the ingest crate, which depends on both, is where the witness
 lives. A rule whose only fixture is mock-served state is **untested for
 parity**, whatever its coverage row says.
+
+**Constructed fixtures whose subject is another rule.** The driver exists
+so a rule's *own* witness is real, not so every test drives a wallet. A
+store pop test, a sequencing test, a belt test need a transaction valid
+enough to reach *their* subject, and constructing one is legitimate —
+including signing it — **provided the construction uses production
+paths**: the same signer the wallet uses over the same derivation the
+verifier reads, so two production paths meet over a constructed message,
+which is what a KAT is. What was refused (E6 slice 6 §5.3: a loader, a
+replay, a knob, waiting) each made the rule's *own* subject synthetic;
+that stays refused. The test to apply: *is the rule under test the one
+this fixture is built to pass?* If yes, the witness is the driver or the
+captured chains; if no, construct through production paths and state what
+the construction cannot be — `fixture::signed` (2026-09-25) derives each
+key from its key image, the reverse of production, which CEN-I15 will
+refuse on every one of them when it lands; that cascade is *scheduled* at
+I15, not discovered there.
 
 The instance that named this (E6 slice 6, 2026-09-24): the verification
 rows — I15's FCMP++ proof, I18's PQC signature, H19's range proof — were

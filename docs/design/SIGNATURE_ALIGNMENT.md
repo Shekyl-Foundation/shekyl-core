@@ -70,9 +70,11 @@ message signed under scheme 1 and scheme 2 has **identical signing input**
   `tests/unit_tests/fcmp.cpp`. Production C++ never signs and never holds a
   hybrid secret key outside tests (rule 36 holds).
 - The one production consumer is verify-only and on consensus:
-  `src/cryptonote_core/tx_pqc_verify.cpp:229` passes `scheme_id` as a
-  *dispatch parameter* (it never enters the signed bytes) and the message is a
-  bare `get_blob_hash(payload)` 32-byte hash.
+  `src/cryptonote_core/tx_pqc_verify.cpp:148` passes `scheme_id` as a
+  *dispatch parameter* (it never enters the signed bytes) and the message is
+  the input's 32-byte signed hash — since 2026-09-25 (E6 slice 6 commit 7)
+  derived by `shekyl-wire` through `shekyl_tx_pqc_signing_payload_hashes`,
+  no longer a `get_blob_hash` over a C++-assembled payload.
 - Consequence for SA-R-2: the fix at this boundary is the rule-40 move — the
   Rust export becomes context-specific and **owns its domain constant**; C++
   never carries a domain string it could get wrong.
@@ -327,9 +329,12 @@ Distinct `…-scheme-vN` per surface (SA-R-2 principle; every surface is at
 `v1` except E, rotated to `v2` by `SF-D8`), including the four that
 already carry an *inner* cSHAKE customization — the scheme-level domain is a
 separate layer and gets its own string. Surface A's domain lives **inside the
-Rust scheme**, so the C++ differential pair (`get_transaction_signed_payload` /
-`transaction.rs` `pqc_signing_payload_hashes`) stays byte-identical and does
-not move — the wrap is Rust-only. F has no in-repo signer, so its constant is
+Rust scheme**, so the signing preimage does not move — the wrap is Rust-only.
+That preimage has one derivation, `shekyl_wire::PqcSigningPreimage` (since
+2026-09-25, E6 slice 6 commit 7: the C++ assembly `get_transaction_signed_payload`
+is deleted and the daemon calls `shekyl_tx_pqc_signing_payload_hashes`; the
+former C++/Rust differential pair is now a captured KAT,
+`pqc_signing_preimage_v1.json`). F has no in-repo signer, so its constant is
 assignable now with the KAT writer the only lockstep. E's was assignable the
 same way until `SF-D8` (a0) landed its verifier and armed pinned vector
 (2026-09-13); the string is now pinned by

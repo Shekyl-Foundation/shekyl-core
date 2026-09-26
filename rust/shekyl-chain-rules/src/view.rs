@@ -190,6 +190,17 @@ pub trait ChainView<'id> {
     /// timestamps).
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Self::Fault>;
 
+    /// The height the block `hash` is recorded at, or `None` if the chain
+    /// does not contain it. By hash, so `Option` and not [`AtHeight`]:
+    /// absence has one meaning here — the block is not on this chain —
+    /// where a height-keyed read distinguishes "above the tip" from a hole.
+    ///
+    /// CEN-I10 (the spend's `referenceBlock` is a main-chain block; its
+    /// height is CEN-I11's and CEN-I12's operand). The store has carried
+    /// this read since S-CHAIN-R (`ReadSnapshot::height_of`); slice 6
+    /// commit 5 put it on the contract.
+    fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Self::Fault>;
+
     /// The curve-tree state **at** chain height `height` — the root after
     /// the block at `height − 1` connected and **before** the block at
     /// `height` drained its own leaves. It is the membership anchor a spend

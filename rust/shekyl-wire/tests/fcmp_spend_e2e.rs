@@ -82,6 +82,7 @@ use shekyl_tx_builder::{
     sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, LeafEntry, OutputInfo, SpendInput,
     TreeContext,
 };
+use shekyl_types::SigningPayloadHash;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
@@ -524,11 +525,12 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // prefix hash; the per-input message-binding semantics are exercised by the
     // dedicated `shekyl-ffi` signing test, not asserted here.
     let pqc_auths = sign_pqc_auths(
-        // A stand-in message: the prefix hash's bytes, not the §1.5 per-input
+        // A stand-in message: the prefix hash's bytes, not the §1.1 per-input
         // payload (`phase1_payload_hashes`). These auths are never verified
-        // here; the `.to_bytes()` is the deliberate, visible un-typing — the
-        // `PrefixHash` type refuses the silent form (RTN-7 Q3).
-        &[tx_prefix_hash.to_bytes()],
+        // here; `.to_bytes()` then `SigningPayloadHash::from_bytes` is the
+        // deliberate, visible un-typing and re-typing — both newtypes refuse
+        // the silent form (RTN-7 Q3), which is why a stand-in has to say so.
+        &[SigningPayloadHash::from_bytes(tx_prefix_hash.to_bytes())],
         std::slice::from_ref(&spend_input),
     )
     .expect("Phase-2 PQC auth signing");

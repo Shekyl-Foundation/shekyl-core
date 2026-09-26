@@ -35,7 +35,7 @@ use shekyl_tx_builder::{
     tx_prefix_hash_from_parts_with_extra, InputTerm, OutputTerm, PqcAuth, TreeContext,
     WireEncodeInput,
 };
-use shekyl_types::{GlobalOutputIndex, PCanonicalId};
+use shekyl_types::{GlobalOutputIndex, PCanonicalId, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
 use zeroize::Zeroizing;
@@ -103,7 +103,7 @@ pub(crate) fn require_funding_inputs(count: usize) -> Result<(), BondAssemblyErr
 /// closes over the named secret.
 pub(crate) async fn assemble_signed_bond_post(
     args: BondPostAssembleArgs<'_>,
-    sign_bond_slot: impl FnOnce(&[u8; 32]) -> Result<Vec<u8>, BondAssemblyError>,
+    sign_bond_slot: impl FnOnce(&SigningPayloadHash) -> Result<Vec<u8>, BondAssemblyError>,
 ) -> Result<AssembledBondPostTx, BondAssemblyError> {
     require_funding_inputs(args.funding.len())?;
 

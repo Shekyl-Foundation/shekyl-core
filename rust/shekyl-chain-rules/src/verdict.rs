@@ -139,8 +139,9 @@ pub enum TxSlot {
     /// The listed transaction at this position in the candidate's order.
     Listed(usize),
     /// A transaction judged on its own by `tx_form` / `tx_against` — the
-    /// pool's position. `validate` never leaves this in a verdict: it
-    /// re-homes it to the real slot.
+    /// pool's position. `validate` never passes it: both stages take the
+    /// slot from their caller and name it in a refusal, so a verdict from
+    /// `validate` carries `Miner` or `Listed(n)` by construction.
     Lone,
 }
 
@@ -164,21 +165,6 @@ pub enum Locus {
         /// The input's position in that transaction.
         input: usize,
     },
-}
-
-impl Locus {
-    /// Replace [`TxSlot::Lone`] with the slot the transaction occupies in
-    /// the candidate. Every other locus is returned unchanged.
-    pub(crate) const fn rehome(self, into: TxSlot) -> Self {
-        match self {
-            Self::Tx { slot: TxSlot::Lone } => Self::Tx { slot: into },
-            Self::Input {
-                slot: TxSlot::Lone,
-                input,
-            } => Self::Input { slot: into, input },
-            other => other,
-        }
-    }
 }
 
 impl fmt::Display for TxSlot {

@@ -8,35 +8,25 @@
 //! live in `tx_conformance_tests`.
 
 use crate::harness::fixture::{
-    bp_plus_layout_for, coinbase, listed, point, pqc_auth_filler, serve_credit_only, G, TWO_G,
+    bp_plus_layout_for, coinbase, coinbase_extra, listed, point, pqc_auth_filler, pqc_extra,
+    serve_credit_only, G, TWO_G,
 };
 use shekyl_wire::transaction::{
     MAX_TX_EXTRA, MAX_TX_SIZE, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
     TAG_INPUT_SERVE_CREDIT, UNLOCK_TIME_BLOCK_SENTINEL,
 };
-use shekyl_wire::tx_extra::{
-    self, build_coinbase_extra, conforming_pqc_leaf_blob, TxExtraField, COINBASE_NONCE_BYTES,
-    HYBRID_KEM_CT_BYTES,
-};
+use shekyl_wire::tx_extra::{self, conforming_pqc_leaf_blob, TxExtraField, HYBRID_KEM_CT_BYTES};
 use shekyl_wire::{BondPost, BondPostKind, Ct, Holdings, Input, Output, Transaction};
 
 // ---- the baseline ---------------------------------------------------------
 
-/// `tx` with the `extra` CEN-I19 requires for its output count: one `0x06`
-/// of `1120·n` and one `0x07` of `64·n` conforming leaf entries — what the
-/// twin's `validate` demands of every transaction, and what the crate's
-/// fixtures do not carry (I19 is slice 6's).
+/// `tx` with the `extra` CEN-I19 requires for its **current** output count
+/// — [`pqc_extra`], re-applied after a trip changed the outputs. The
+/// fixtures carry it already (slice 6 commit 3); a trip that truncates or
+/// adds outputs must re-fit the field, or I19 refuses before the arm the
+/// trip is aimed at.
 pub(super) fn with_pqc_extra(mut tx: Transaction) -> Transaction {
-    let n = tx.prefix.outputs.len();
-    tx.prefix.extra = if n == 0 {
-        Vec::new()
-    } else {
-        tx_extra::serialize(&[
-            TxExtraField::PqcKemCiphertext(vec![0x5A; HYBRID_KEM_CT_BYTES * n]),
-            TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n)),
-        ])
-        .expect("two capped fields serialize")
-    };
+    tx.prefix.extra = pqc_extra(tx.prefix.outputs.len());
     tx
 }
 
@@ -91,26 +81,16 @@ pub(super) fn serve_credit_ok() -> Transaction {
     tx
 }
 
-/// The fixture coinbase with the `extra` CEN-I20 requires of a coinbase
-/// (`TX_EXTRA_RUST_CUTOVER.md`, landed on `dev` at `50256487f`): the one
-/// grammar — a `0x01` pubkey, an 8-byte `0x02` nonce, then I19's two PQC
-/// fields sized to the outputs. Built by the wire's own builder, so a
-/// grammar change moves this fixture with it.
+/// The fixture coinbase — which carries CEN-I20's grammar since slice 6
+/// commit 3 (`fixture::coinbase_extra`); kept as the trips' name for it.
 pub(super) fn coinbase_ok(height: u64) -> Transaction {
-    let mut cb = coinbase(height);
-    cb.prefix.extra = coinbase_extra_for(cb.prefix.outputs.len());
-    cb
+    coinbase(height)
 }
 
+/// The grammar's `extra` for `n` outputs: the fixture's, re-fit after a
+/// trip changed the coinbase's output count.
 pub(super) fn coinbase_extra_for(n: usize) -> Vec<u8> {
-    build_coinbase_extra(
-        [0x71; 32],
-        &[0x4E; COINBASE_NONCE_BYTES],
-        n,
-        &vec![0x5A; HYBRID_KEM_CT_BYTES * n],
-        &conforming_pqc_leaf_blob(n),
-    )
-    .expect("the grammar's one layout builds")
+    coinbase_extra(n)
 }
 
 /// A bond-post input with a canonical hybrid key and `kind`; the type's
@@ -279,9 +259,25 @@ pub(super) fn h9_output_amounts_overflow() -> Transaction {
     tx
 }
 
+/// An `extra` past the relay cap that **parses and satisfies I19**: the two
+/// PQC fields the outputs require, then a `0x09` view-tag-hints blob of
+/// `MAX_TX_EXTRA` bytes. Raw filler (the first cut, `[0xEE; MAX + 1]`) would
+/// reach the twin's cap arm all the same — it checks the length before it
+/// parses — but the crate would refuse it on I19 for not parsing, and the
+/// entry would record a shape disagreement, not the policy one it is for.
+/// The `0x09` blob is admissible on a listed transaction under I19 (the
+/// general subject bounds the PQC fields and bans the nonce; the parser's
+/// `READ_LEN_CAP` is the only limit on a hints blob), which is itself a
+/// finding — recorded on the census-sweep FOLLOWUPS row.
 pub(super) fn m4_extra_over_the_relay_cap() -> Transaction {
     let mut tx = spend2();
-    tx.prefix.extra = vec![0xEE; MAX_TX_EXTRA + 1];
+    let n = tx.prefix.outputs.len();
+    tx.prefix.extra = tx_extra::serialize(&[
+        TxExtraField::PqcKemCiphertext(vec![0x5A; HYBRID_KEM_CT_BYTES * n]),
+        TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n)),
+        TxExtraField::PqcViewTagHints(vec![0x99; MAX_TX_EXTRA]),
+    ])
+    .expect("three fields serialize");
     tx
 }
 

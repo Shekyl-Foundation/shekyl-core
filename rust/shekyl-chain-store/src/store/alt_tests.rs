@@ -11,7 +11,10 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, BlockWeight};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend};
+use super::connect_fixtures::{
+    at, candidate, connect_chain, facts, judge, spend, spend_at, spendable_prefix,
+    FIRST_SPEND_HEIGHT,
+};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{forged, AltBlock, AltBlockFacts, Canonical, CodecError};
@@ -324,34 +327,42 @@ fn a_row_whose_block_does_not_hash_to_its_key_is_si7() {
 fn a_switch_is_one_transaction_or_none_of_it() {
     let path = tmp("alt-switch");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // Main chain: 0 — 1 — 2. A competing block 2' on 1 is held as an alt.
-    let main = connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![spend(10, 2)]]);
-    let main_2_bytes = candidate(2, main[1], vec![spend(10, 2)]).block.serialize();
-    let alt_cand = candidate(2, main[1], vec![spend(11, 2)]);
-    let alt_2 = alt_cand.block.hash();
+    // Main chain: the spendable prefix, then a spend block `s` and a spend
+    // block `top` on it. A competing block `top'` on `s` is held as an alt.
+    let s = FIRST_SPEND_HEIGHT;
+    let top = s + 1;
+    let main = connect_chain(
+        &store,
+        &spendable_prefix(&[vec![spend(9, 2)], vec![spend(10, 2)]]),
+    );
+    let main_top_bytes = candidate(top, main[at(s)], vec![spend_at(&main, top, 10, 2)])
+        .block
+        .serialize();
+    let alt_cand = candidate(top, main[at(s)], vec![spend_at(&main, top, 11, 2)]);
+    let alt_top = alt_cand.block.hash();
     let alt_witness = vec![0x5A; 40];
     let out: Result<(), TestErr> = store.write(|batch| {
         Ok(batch.insert_alt_block(
-            &alt_2,
-            &alt(2, &alt_cand.block.serialize(), Some(alt_witness.clone())),
+            &alt_top,
+            &alt(top, &alt_cand.block.serialize(), Some(alt_witness.clone())),
         )?)
     });
-    out.expect("hold 2'");
+    out.expect("hold top'");
 
-    // The switch to 2': demote 2, promote 2'.
+    // The switch to top': demote top, promote top'.
     let out: Result<Vec<u8>, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         // Read what the switch is about to change, through the batch.
-        let promoted = batch.alt_block(&alt_2)?.expect("2' is held");
+        let promoted = batch.alt_block(&alt_top)?.expect("top' is held");
         let popped = batch.pop()?;
-        assert_eq!(popped.height, BlockHeight::from_raw(2));
-        batch.insert_alt_block(&main[2], &alt(2, &main_2_bytes, None))?;
+        assert_eq!(popped.height, BlockHeight::from_raw(top));
+        batch.insert_alt_block(&main[at(top)], &alt(top, &main_top_bytes, None))?;
         batch.connect(
-            judge(&view, candidate(2, main[1], vec![spend(11, 2)]))?,
-            facts(2, 0),
+            judge(&view, alt_cand.clone())?,
+            facts(top, 0),
             RuleSet::GENESIS,
         )?;
-        batch.remove_alt_block(&alt_2)?;
+        batch.remove_alt_block(&alt_top)?;
         Ok(promoted.attestation_witness().expect("witness").to_vec())
     });
     assert_eq!(
@@ -359,16 +370,16 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         Ok(alt_witness),
         "the promoted block's witness travels out of the switch"
     );
-    assert_eq!(tip_height(&store), Some(2));
-    assert_eq!(hash_at(&store, 2), Some(alt_2));
+    assert_eq!(tip_height(&store), Some(top));
+    assert_eq!(hash_at(&store, top), Some(alt_top));
     {
         let snap = store.begin_read().expect("read");
         assert!(
-            snap.has_alt_block(&main[2]).expect("has"),
+            snap.has_alt_block(&main[at(top)]).expect("has"),
             "the demoted block is an alt block"
         );
         assert!(
-            !snap.has_alt_block(&alt_2).expect("has"),
+            !snap.has_alt_block(&alt_top).expect("has"),
             "the promoted block is not"
         );
         assert_eq!(snap.alt_block_count().expect("len"), 1);
@@ -378,13 +389,16 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         batch.pop()?;
-        batch.insert_alt_block(&alt_2, &alt(2, &alt_cand.block.serialize(), None))?;
+        batch.insert_alt_block(&alt_top, &alt(top, &alt_cand.block.serialize(), None))?;
         batch.connect(
-            judge(&view, candidate(2, main[1], vec![spend(10, 2)]))?,
-            facts(2, 0),
+            judge(
+                &view,
+                candidate(top, main[at(s)], vec![spend_at(&main, top, 10, 2)]),
+            )?,
+            facts(top, 0),
             RuleSet::GENESIS,
         )?;
-        batch.remove_alt_block(&main[2])?;
+        batch.remove_alt_block(&main[at(top)])?;
         // A refusal on a hash never held aborts the whole switch.
         batch.remove_alt_block(&main[0])?;
         Ok(())
@@ -395,15 +409,15 @@ fn a_switch_is_one_transaction_or_none_of_it() {
             StoreError::from(AltCannot::NotHeld).to_string()
         ))
     );
-    assert_eq!(tip_height(&store), Some(2));
-    assert_eq!(hash_at(&store, 2), Some(alt_2), "the pop did not land");
+    assert_eq!(tip_height(&store), Some(top));
+    assert_eq!(hash_at(&store, top), Some(alt_top), "the pop did not land");
     let snap = store.begin_read().expect("read");
     assert!(
-        snap.has_alt_block(&main[2]).expect("has"),
+        snap.has_alt_block(&main[at(top)]).expect("has"),
         "the remove did not land"
     );
     assert!(
-        !snap.has_alt_block(&alt_2).expect("has"),
+        !snap.has_alt_block(&alt_top).expect("has"),
         "the insert did not land"
     );
     assert!(store.connect_state().is_live(), "a refusal is not a halt");
@@ -421,7 +435,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
 fn an_alt_block_with_a_witness_moves_no_digest() {
     let path = tmp("alt-digest-boundary");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let main = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
+    let main = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
     let before = store
         .begin_read()
         .expect("read")

@@ -19,7 +19,11 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{candidate, connect_genesis, facts, judge, spend};
+use super::connect_fixtures::{
+    at, candidate, connect_chain, connect_chain_with_burn, connect_genesis,
+    connect_with_image_planted_under_the_token, facts, judge, spend_at, spendable_prefix,
+    FIRST_SPEND_HEIGHT,
+};
 use super::store_tests::{cleanup, production_horizons, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
@@ -263,33 +267,47 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
 fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     let path = tmp("connect-two");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let g = candidate(0, BlockHash::NULL, Vec::new());
+    // The chain below the two blocks under test: everything up to the block
+    // before the first admissible spend height, so the pair is a
+    // coinbase-only block and, on it, the first block that may list a spend.
+    let s = FIRST_SPEND_HEIGHT;
+    let below = connect_chain(&store, &vec![Vec::new(); at(s - 1)]);
+    let g = candidate(s - 1, below[at(s - 2)], Vec::new());
     let g_hash = g.block.hash();
-    let b1 = candidate(1, g_hash, vec![spend(9, 2)]);
+    let mut hashes = below.clone();
+    hashes.push(g_hash);
+    let b1 = candidate(s, g_hash, vec![spend_at(&hashes, s, 9, 2)]);
     let b1_hash = b1.block.hash();
     let spend_hash = b1.transactions[0].hash();
 
     let out: Result<(Connected, Connected), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let c0 = batch.connect(judge(&view, g)?, facts(0, 0), RuleSet::GENESIS)?;
-        // Block 1 is validated against a view that already holds block 0
-        // and connected in the same batch.
-        let c1 = batch.connect(judge(&view, b1)?, facts(1, 25), RuleSet::GENESIS)?;
+        let c0 = batch.connect(judge(&view, g)?, facts(s - 1, 0), RuleSet::GENESIS)?;
+        // The spend block is validated against a view that already holds
+        // its parent and connected in the same batch.
+        let c1 = batch.connect(judge(&view, b1)?, facts(s, 25), RuleSet::GENESIS)?;
         Ok((c0, c1))
     });
     let (c0, c1) = out.expect("both connect");
-    assert_eq!(c0.height, BlockHeight::ZERO);
-    assert_eq!(c1.height, BlockHeight::from_raw(1));
-    // block 1: miner tx 7 (tx_indices, txs_pruned, txs_prunable,
+    assert_eq!(c0.height, BlockHeight::from_raw(s - 1));
+    assert_eq!(c1.height, BlockHeight::from_raw(s));
+    // the spend block: miner tx 7 (tx_indices, txs_pruned, txs_prunable,
     // txs_prunable_hash, output_txs, member, tx_outputs) + spend 12 (1 key
     // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
     // and txs_pqc_auth_hash row + 2 outputs × (output_txs + member) +
     // tx_outputs) + root 1 + block 3 + hf 1 + block_burn 1 + total_burned 1
     // = 26.
     assert_eq!(c1.journaled, 26);
+    // Dense store ids: one coinbase per block through the spend block
+    // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
+    // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.
+    let spend_id = s + 1;
 
     let snap = store.begin_read().expect("read");
-    assert_eq!(snap.open_table(BLOCKS).expect("t").len().expect("len"), 2);
+    assert_eq!(
+        snap.open_table(BLOCKS).expect("t").len().expect("len"),
+        s + 1
+    );
     assert!(
         snap.open_table(SPENT_KEYS)
             .expect("t")
@@ -304,10 +322,8 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
             .get(LmdbHashKey::from(b1_hash))
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
-        Some(BlockHeight::from_raw(1))
+        Some(BlockHeight::from_raw(s))
     );
-    // Dense store ids across the two blocks: tx_ids 0 (g miner), 1 (b1
-    // miner), 2 (spend); output_ids 0, 1, 2, 3; amount_index under 0: 0..4.
     let spend_index = snap
         .open_table(TX_INDICES)
         .expect("t")
@@ -317,38 +333,41 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
         .value()
         .decode()
         .expect("decodes");
-    assert_eq!(spend_index.tx_id, crate::ids::TxStorageId::from_raw(2));
-    assert_eq!(spend_index.height, BlockHeight::from_raw(1));
+    assert_eq!(
+        spend_index.tx_id,
+        crate::ids::TxStorageId::from_raw(spend_id)
+    );
+    assert_eq!(spend_index.height, BlockHeight::from_raw(s));
     assert_eq!(
         snap.open_table(TX_OUTPUTS)
             .expect("t")
-            .get(2)
+            .get(spend_id)
             .expect("g")
             .expect("row")
             .value()
             .decode()
             .expect("decodes"),
         TxOutputIndices(vec![
-            crate::ids::AmountIndex::from_raw(2),
-            crate::ids::AmountIndex::from_raw(3),
+            crate::ids::AmountIndex::from_raw(s + 1),
+            crate::ids::AmountIndex::from_raw(s + 2),
         ])
     );
     assert_eq!(
         snap.open_table(OUTPUT_TXS).expect("t").len().expect("len"),
-        4
+        s + 3
     );
     assert_eq!(
         snap.open_table(OUTPUT_AMOUNTS)
             .expect("t")
             .len()
             .expect("len"),
-        4,
-        "one bucket: amount_index runs 0..4 under amount 0, and equals output_id"
+        s + 3,
+        "one bucket: amount_index runs over every output under amount 0, and equals output_id"
     );
     let info1 = snap
         .open_table(BLOCK_INFO)
         .expect("t")
-        .get(1)
+        .get(s)
         .expect("g")
         .expect("row")
         .value()
@@ -361,7 +380,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     assert_eq!(
         snap.open_table(BLOCK_BURN)
             .expect("t")
-            .get(1)
+            .get(s)
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
         Some(AtomicUnits::from_raw(25))
@@ -369,7 +388,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     assert!(snap
         .open_table(BLOCK_BURN)
         .expect("t")
-        .get(0)
+        .get(s - 1)
         .expect("g")
         .is_none());
     assert_eq!(
@@ -381,12 +400,15 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     // fixture rather than pinned as a length. (Until E6 slice 5 the fixture
     // was the storage-pruned form and this row was empty; CEN-H19 refuses
     // that form at consensus.)
-    let expected_prunable = spend(9, 2).write_segments().expect("segments").prunable;
+    let expected_prunable = spend_at(&hashes, s, 9, 2)
+        .write_segments()
+        .expect("segments")
+        .prunable;
     assert!(!expected_prunable.is_empty());
     assert_eq!(
         snap.open_table(TXS_PRUNABLE)
             .expect("t")
-            .get(2)
+            .get(spend_id)
             .expect("g")
             .map(|g| g.value().bytes().to_vec()),
         Some(expected_prunable)
@@ -398,8 +420,10 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
 fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
     let path = tmp("connect-pop");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 3);
-    // Snapshot every table's row count and total_burned after genesis.
+    // The chain below the first admissible spend height, each block handed
+    // `burned = 3`. Snapshot every table's row count and total_burned after it.
+    let s = FIRST_SPEND_HEIGHT;
+    let hashes = connect_chain_with_burn(&store, &vec![Vec::new(); at(s)], 3);
     fn len<K: redb::Key + 'static, V: redb::Value + 'static>(
         snap: &ReadSnapshot<'_>,
         t: redb::TableDefinition<'static, K, V>,
@@ -419,43 +443,54 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
             snap.get_property::<TotalBurnedCell>().expect("cell"),
         )
     };
-    let after_genesis = counts(&store);
+    let before = counts(&store);
     // Genesis was handed `burned = 3` and recorded none: the burn phase is
     // guarded `h > 0 && burned > 0` as a whole (`blockchain.cpp:6148`), so
-    // there is no `total_burned` cell yet.
-    assert_eq!(after_genesis, (1, 1, 1, 1, 0, None));
-
-    let b1 = candidate(1, genesis.hash(), vec![spend(9, 2)]);
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 4), RuleSet::GENESIS)?)
-    });
-    out.expect("block 1 connects");
-    // `OUTPUT_TXS`: the two coinbases' one output each, plus the spend's two
-    // (CEN-I1's minimum since slice 6 commit 2).
+    // the fold holds the blocks above genesis only. One coinbase, one
+    // output, one root per block; nothing spent.
     assert_eq!(
-        counts(&store),
-        (2, 3, 4, 2, 1, Some(AtomicUnits::from_raw(4)))
+        before,
+        (s, s, s, s, 0, Some(AtomicUnits::from_raw(3 * (s - 1))))
     );
 
-    let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
+    let b1 = candidate(s, hashes[at(s - 1)], vec![spend_at(&hashes, s, 9, 2)]);
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, b1)?, facts(s, 4), RuleSet::GENESIS)?)
+    });
+    out.expect("the spend block connects");
+    // `OUTPUT_TXS`: one more coinbase output, plus the spend's two (CEN-I1's
+    // minimum since slice 6 commit 2).
+    assert_eq!(
+        counts(&store),
+        (
+            s + 1,
+            s + 2,
+            s + 3,
+            s + 1,
+            1,
+            Some(AtomicUnits::from_raw(3 * (s - 1) + 4))
+        )
+    );
+
+    let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(s)?));
     assert!(matches!(popped, Ok(Replayed::Entries(_))));
     assert_eq!(
         counts(&store),
-        after_genesis,
+        before,
         "every table and the fold are back to the pre-block state"
     );
     let snap = store.begin_read().expect("read");
     assert!(snap
         .open_table(BLOCK_BURN)
         .expect("t")
-        .get(1)
+        .get(s)
         .expect("g")
         .is_none());
     assert!(snap
         .open_table(UNDO_LOG)
         .expect("t")
-        .get(1)
+        .get(s)
         .expect("g")
         .is_none());
     cleanup(&path);
@@ -630,31 +665,28 @@ fn a_gapped_txs_pruned_primary_is_si9() {
     });
 }
 
+/// The belt beneath CEN-I7. A key image an earlier block spent is I7's
+/// refusal at `validate` (slice 6 commit 4) and never reaches `connect`
+/// through `judge`; the belt's remaining subject is the table moving under
+/// a token already judged against it, and that is what this plants.
+///
+/// Until commit 4 this test reached SI-1 with a plain double spend — it was
+/// testing the belt as if it were the rule, and the belt passing was the
+/// validator's hole made green. This is the shape it should always have
+/// had: the rule refuses the spend, and the belt is tested as a belt.
 #[test]
-fn a_key_image_spent_in_an_earlier_block_is_si1() {
+fn a_key_image_recorded_under_a_judged_token_is_si1() {
     let path = tmp("connect-ki");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
-    let b1 = candidate(1, genesis.hash(), vec![spend(9, 2)]);
-    let b1_hash = b1.block.hash();
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), RuleSet::GENESIS)?)
-    });
-    out.expect("block 1");
-    // No landed rule checks key images yet (CEN-I7 is slice 6), so the
-    // double spend reaches the store — and the belt beneath the rule catches
-    // it as a fatal.
-    let b2 = candidate(2, b1_hash, vec![spend(9, 2)]);
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)
-    });
+    let s = FIRST_SPEND_HEIGHT;
+    let hashes = connect_chain(&store, &spendable_prefix(&[]));
+    let b1 = candidate(s, hashes[at(s - 1)], vec![spend_at(&hashes, s, 9, 2)]);
+    let out = connect_with_image_planted_under_the_token(&store, b1, s);
     expect_row(&out, StoreInvariant::KeyImageNotFresh);
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.open_table(BLOCKS).expect("t").len().expect("len"),
-        2,
+        s,
         "nothing landed"
     );
     cleanup(&path);

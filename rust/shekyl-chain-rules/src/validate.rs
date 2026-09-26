@@ -45,7 +45,7 @@ use shekyl_wire::Transaction;
 
 use crate::block::{Candidate, StructurallyValid, ValidatedBlock};
 use crate::coverage::RuleCoverage;
-use crate::fault::{Fault, FormAttempt, Stale};
+use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
 use crate::rules::difficulty::D4;
@@ -55,11 +55,13 @@ use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
+use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
+use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9};
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
-use crate::verdict::{ChainValid, InvalidBlock, TxSlot, Verdict};
+use crate::verdict::{ChainValid, TxSlot, Verdict};
 use crate::view::{ChainView, Tip};
 
 /// Run the listed stateless rules in order; the first refusal is the verdict.
@@ -176,7 +178,7 @@ pub fn form<S: Substrate>(
 /// use core::convert::Infallible;
 /// use core::marker::PhantomData;
 /// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
+/// use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 ///
 /// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
 /// impl<'id> ChainView<'id> for View<'id> {
@@ -186,6 +188,9 @@ pub fn form<S: Substrate>(
 ///     }
 ///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+///         Ok(None)
 ///     }
 ///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
@@ -222,7 +227,7 @@ pub fn form<S: Substrate>(
 /// use core::convert::Infallible;
 /// use core::marker::PhantomData;
 /// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
+/// use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 ///
 /// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
 /// impl<'id> ChainView<'id> for View<'id> {
@@ -230,6 +235,9 @@ pub fn form<S: Substrate>(
 ///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> { Ok(false) }
 ///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+///         Ok(None)
 ///     }
 ///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
@@ -244,6 +252,9 @@ pub fn form<S: Substrate>(
 ///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> { Ok(false) }
 ///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+///         Ok(None)
 ///     }
 ///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
@@ -323,17 +334,20 @@ pub fn validate<'id, V: ChainView<'id>>(
         .enumerate()
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
     for (slot, tx) in core::iter::once(miner).chain(listed) {
-        match judge_tx(tx, slot, view, rule_set).map_err(Fault::View)? {
+        // Both stages refuse at the slot they were given (slice 6 commit 4
+        // gave `tx_against` the slot `tx_form` already had), so the locus
+        // arrives named and nothing is re-homed.
+        match judge_tx(tx, slot, view, rule_set).map_err(Fault::from)? {
             Ok(tx_coverage) => coverage.union(&tx_coverage),
-            // `tx_form` refuses at the slot it was given; `tx_against` still
-            // writes `Lone` (slice 6 adopts the slot), so the re-home stays.
-            Err(refused) => {
-                return Ok(Err(InvalidBlock::new(
-                    refused.rule,
-                    refused.locus.rehome(slot),
-                )));
-            }
+            Err(refused) => return Ok(Err(refused)),
         }
+    }
+    // CEN-L1 spans the slots — a key image twice among the block's inputs —
+    // and runs once every slot has passed: each slot's view is the chain
+    // before the block, so this is the only place the repeat is visible to
+    // the validator. Last, as the C++'s `add_spent_key` refusal is.
+    if let Err(refused) = rules::run::<L1, _>(&cx, view, &mut coverage).map_err(Fault::View)? {
+        return Ok(Err(refused));
     }
 
     let hash = formed.hash();
@@ -407,7 +421,11 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //
     // 1. The 4.H line every transaction is held to. H1 (serialized size) is
     //    the byte bound and runs first; the rest of the line is slice 5's
-    //    order.
+    //    order — with I19 and I20 (the `tx_extra` rows, slice 6 commit 3)
+    //    where `check_tx_semantic` runs the shape adapter: after
+    //    `check_outs_valid` (H7) and before `check_money_overflow` (H9).
+    //    I20 is `TxScope::Coinbase` and records as vacuous on every listed
+    //    slot.
     // 2. Class shape (H20–H22), then H19's BP+ layout. A transaction that
     //    fails its shape and an input-path row is named by the shape: a
     //    proof-less bond post is H21, not "fewer than two outputs". That is
@@ -419,42 +437,90 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     // 3. The stateless input-path rows. The cap does not have to precede
     //    the shape rules to bound proof work: I15 and the H19 batch verify
     //    run after `tx_form` returns, so I4 has already refused.
-    judge_tx!(cx, coverage; H1, H3, H4, H7, H9, H10, H11, H14, H15, H16, H17, H18);
+    judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
     judge_tx!(cx, coverage; H20, H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
     judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16);
     Ok(coverage)
 }
 
-/// Stateful per-transaction rules (census 4.I): everything that needs the
-/// recorded chain — spent key images, the membership anchor. The pool passes
-/// its view decorator here.
+/// Stateful per-transaction rules (census 4.I, the view-bound half):
+/// everything that needs the recorded chain — spent key images, and with
+/// the later commits the reference block and the tree. The pool passes its
+/// view decorator here.
 ///
-/// A refusal's locus is [`TxSlot::Lone`]; `validate` re-homes it.
+/// Runs after [`tx_form`] has admitted the bytes, as the C++'s
+/// `check_tx_inputs` runs its DB lookups after its stateless arms; the
+/// class is derived again here (cheaply) so a caller that skipped
+/// `tx_form` still gets H5/H6's refusal rather than a rule judging an
+/// unclassified transaction.
+///
+/// Takes the **slot**, as [`tx_form`] does, for the same reason: the kind a
+/// rule's scope reads is the slot's, never the bytes' (slice 5 Q2), and a
+/// view-bound rule scoped `NonCoinbase` must know it is looking at the
+/// miner transaction without asking the transaction. The pool passes
+/// [`TxSlot::Lone`]; `validate` passes the position. A refusal names the
+/// slot it was given.
+///
+/// The fault is a [`ViewRead`]: the view's own, or a store invariant a
+/// per-height read observed broken (CEN-I12's root at a height I10 just
+/// found recorded answering `AboveTip` — [`crate::Corrupt::HoleBelowTip`]). A
+/// caller treats the second as `validate` does: the writer halt, never a
+/// verdict.
+///
+/// # Errors
+///
+/// The view's fault, or [`ViewRead::Corrupt`] as above.
 pub fn tx_against<'id, V: ChainView<'id>>(
     tx: &Transaction,
+    slot: TxSlot,
     view: &V,
     rule_set: &RuleSet,
-) -> Result<Verdict<RuleCoverage>, V::Fault> {
-    // 4.I rules land with their slice (DRS-D12); nothing reads the
-    // transaction, the view, or the rule set yet.
-    let _ = (tx, view, rule_set);
-    Ok(Ok(RuleCoverage::EMPTY))
+) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
+    // No 4.I row reads the rule set yet; the first that does (a schedule
+    // step varying a reference-window constant, Q5) takes it from here.
+    let _ = rule_set;
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = match rules::TxContext::derive(tx, slot, &mut coverage) {
+        Ok(cx) => cx,
+        Err(refused) => return Ok(Err(refused)),
+    };
+    // Order: the C++'s `check_tx_inputs` looks up each key image as it
+    // walks the inputs (I7), then the reference sequence (I10 yields the
+    // height, I11 measures it, I12 reads the anchor). I13 and I15 join
+    // that sequence in `judge_reference`, not here.
+    match rules::run_tx_against::<I7, _>(&cx, view, &mut coverage).map_err(ViewRead::View)? {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    match judge_reference(&cx, view, &mut coverage)? {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    // The signature sequence: I17 yields every input's signing hash, I18
+    // verifies each signature over it (`verify_transaction_pqc_auth`, the
+    // last check of the C++'s `check_tx_inputs`, `blockchain.cpp:4277`).
+    match judge_signatures(&cx, &mut coverage) {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    Ok(Ok(coverage))
 }
 
-/// [`tx_form`] then [`tx_against`], coverages unioned. The locus of a
-/// refusal is left as the callee wrote it.
+/// [`tx_form`] then [`tx_against`] at one slot, coverages unioned. Both
+/// stages name the slot they were given, so a refusal's locus is left as
+/// the callee wrote it.
 fn judge_tx<'id, V: ChainView<'id>>(
     tx: &Transaction,
     slot: TxSlot,
     view: &V,
     rule_set: &RuleSet,
-) -> Result<Verdict<RuleCoverage>, V::Fault> {
+) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
     let mut coverage = match tx_form(tx, slot, rule_set) {
         Ok(coverage) => coverage,
         Err(refused) => return Ok(Err(refused)),
     };
-    Ok(tx_against(tx, view, rule_set)?.map(|against| {
+    Ok(tx_against(tx, slot, view, rule_set)?.map(|against| {
         coverage.union(&against);
         coverage
     }))

@@ -17,7 +17,10 @@ use shekyl_chain_rules::{AtHeight, RuleSet};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend};
+use super::connect_fixtures::{
+    at, candidate, connect_chain, facts, judge, spend, spend_at, spendable_prefix,
+    FIRST_SPEND_HEIGHT,
+};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -90,14 +93,14 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
 fn tip_is_the_last_recorded_block_and_the_writer_is_live() {
     let path = tmp("read-tip-recorded");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
+    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
     let snap = store.begin_read().expect("read");
     let tip = snap.tip().expect("tip");
     assert_eq!(
         tip.recorded.expect("recorded"),
         shekyl_chain_rules::Tip {
-            height: h(1),
-            hash: hashes[1],
+            height: h(FIRST_SPEND_HEIGHT),
+            hash: hashes[at(FIRST_SPEND_HEIGHT)],
         }
     );
     assert_eq!(tip.connect, ConnectState::Live);
@@ -130,9 +133,11 @@ fn height_of_is_some_for_a_recorded_hash_and_none_otherwise() {
 fn block_info_is_recorded_at_and_below_the_tip_and_above_tip_above_it() {
     let path = tmp("read-block-info");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![]]);
+    // The spend at the first admissible height, then one more block.
+    connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)], vec![]]));
+    let tip = FIRST_SPEND_HEIGHT + 1;
     let snap = store.begin_read().expect("read");
-    for height in 0..3u64 {
+    for height in 0..=tip {
         let AtHeight::Recorded(info) = snap.block_info(h(height)).expect("read") else {
             panic!("height {height} is recorded");
         };
@@ -141,10 +146,14 @@ fn block_info_is_recorded_at_and_below_the_tip_and_above_tip_above_it() {
             shekyl_types::Timestamp::from_raw(1_000 + 60 * height),
             "the fixture's clock"
         );
-        assert_eq!(info.cumulative_tx_count, u64::from(height >= 1), "0, 1, 1");
+        assert_eq!(
+            info.cumulative_tx_count,
+            u64::from(height >= FIRST_SPEND_HEIGHT),
+            "0 below the spend, 1 from it"
+        );
     }
     assert!(matches!(
-        snap.block_info(h(3)).expect("read"),
+        snap.block_info(h(tip + 1)).expect("read"),
         AtHeight::AboveTip
     ));
     assert!(matches!(
@@ -249,20 +258,21 @@ fn block_infos_is_above_tip_when_the_start_is_and_clamps_the_end_otherwise() {
 fn block_returns_the_body_verified_against_the_recorded_identity() {
     let path = tmp("read-block");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
+    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    let spend_block = FIRST_SPEND_HEIGHT;
     let snap = store.begin_read().expect("read");
-    let AtHeight::Recorded(body) = snap.block(h(1)).expect("read") else {
-        panic!("height 1 is recorded");
+    let AtHeight::Recorded(body) = snap.block(h(spend_block)).expect("read") else {
+        panic!("height {spend_block} is recorded");
     };
-    assert_eq!(body.hash, hashes[1]);
+    assert_eq!(body.hash, hashes[at(spend_block)]);
     assert_eq!(
         body.block.hash(),
-        hashes[1],
+        hashes[at(spend_block)],
         "the body hashes to its identity"
     );
     assert_eq!(body.block.transaction_hashes.len(), 1);
     assert!(matches!(
-        snap.block(h(2)).expect("read"),
+        snap.block(h(spend_block + 1)).expect("read"),
         AtHeight::AboveTip
     ));
     cleanup(&path);
@@ -483,10 +493,19 @@ fn the_fold_reads_return_exactly_what_connect_wrote() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     connect_chain(
         &store,
-        &[vec![], vec![spend(9, 2), spend(10, 2)], vec![spend(11, 2)]],
+        &spendable_prefix(&[vec![spend(9, 2), spend(10, 2)], vec![spend(11, 2)]]),
     );
+    let first = FIRST_SPEND_HEIGHT;
     let snap = store.begin_read().expect("read");
-    for (height, cum) in [(0u64, 0u64), (1, 2), (2, 3)] {
+    // No listed transaction below the first spend block; two there, three
+    // one block on.
+    for height in 0..first {
+        assert_eq!(
+            snap.cumulative_tx_count(h(height)).expect("read"),
+            AtHeight::Recorded(0)
+        );
+    }
+    for (height, cum) in [(first, 2u64), (first + 1, 3)] {
         assert_eq!(
             snap.cumulative_tx_count(h(height)).expect("read"),
             AtHeight::Recorded(cum)
@@ -498,11 +517,11 @@ fn the_fold_reads_return_exactly_what_connect_wrote() {
         );
     }
     assert_eq!(
-        snap.cumulative_tx_count(h(3)).expect("read"),
+        snap.cumulative_tx_count(h(first + 2)).expect("read"),
         AtHeight::AboveTip
     );
     assert_eq!(
-        snap.long_term_effective_median(h(3)).expect("read"),
+        snap.long_term_effective_median(h(first + 2)).expect("read"),
         AtHeight::AboveTip
     );
     cleanup(&path);
@@ -530,21 +549,25 @@ fn the_redb_digest_is_the_hasher_over_the_files_three_families() {
     // drain (SCW-19), which is `facts(tip).root_after`.
     let path = tmp("read-digest-chain");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![spend(9, 2)], vec![spend(10, 2)]]);
+    let hashes = connect_chain(
+        &store,
+        &spendable_prefix(&[vec![spend(9, 2)], vec![spend(10, 2)]]),
+    );
+    let tip = FIRST_SPEND_HEIGHT + 1;
     let snap = store.begin_read().expect("read");
     let by_hand = {
         let blocks: Vec<[u8; 32]> = hashes.iter().map(|h| *h.as_bytes()).collect();
         // The spent images are the fixtures' by name (`spend(9, _)`,
         // `spend(10, _)`), not literals that would follow the code.
         let spent = [fixture::point(9), fixture::point(10)];
-        crate::digest_v0::digest_v0(&blocks, &spent, facts(2, 0).root_after.value.as_bytes())
+        crate::digest_v0::digest_v0(&blocks, &spent, facts(tip, 0).root_after.value.as_bytes())
     };
     assert_eq!(snap.logical_state_digest_v0().expect("digest"), by_hand);
     // Order-insensitive in the spent family, as the hasher promises.
     let swapped = crate::digest_v0::digest_v0(
         &hashes.iter().map(|h| *h.as_bytes()).collect::<Vec<_>>(),
         &[fixture::point(10), fixture::point(9)],
-        facts(2, 0).root_after.value.as_bytes(),
+        facts(tip, 0).root_after.value.as_bytes(),
     );
     assert_eq!(by_hand, swapped);
     cleanup(&path);
@@ -557,7 +580,7 @@ fn the_digest_moves_when_any_family_moves() {
     // chain's digest is not the new one.
     let path = tmp("read-digest-moves");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[vec![], vec![spend(9, 2)]]);
+    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
     let before = store
         .begin_read()
         .expect("read")
@@ -569,11 +592,12 @@ fn the_digest_moves_when_any_family_moves() {
         .tip()
         .expect("tip")
         .recorded
-        .expect("two blocks");
+        .expect("blocks connected");
+    let next = FIRST_SPEND_HEIGHT + 1;
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let cand = candidate(2, tip.hash, vec![spend(11, 2)]);
-        batch.connect(judge(&view, cand)?, facts(2, 0), RuleSet::GENESIS)?;
+        let cand = candidate(next, tip.hash, vec![spend_at(&hashes, next, 11, 2)]);
+        batch.connect(judge(&view, cand)?, facts(next, 0), RuleSet::GENESIS)?;
         Ok(())
     });
     out.expect("connects");

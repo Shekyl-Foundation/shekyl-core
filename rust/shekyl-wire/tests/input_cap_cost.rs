@@ -519,7 +519,7 @@ fn measure(
         let pk = HybridPublicKey::from_canonical_bytes(&auth.public_key).expect("key parses");
         let sig = HybridSignature::from_canonical_bytes(&auth.signature).expect("sig parses");
         scheme
-            .verify(&pk, SCHEME_DOMAIN_PQC_AUTH_TX, message, &sig)
+            .verify(&pk, SCHEME_DOMAIN_PQC_AUTH_TX, message.as_bytes(), &sig)
             .expect("hybrid auth verifies over the assembled transaction's payload hash");
     }
     let verify_auths = started.elapsed();

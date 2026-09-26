@@ -72,6 +72,12 @@ curve25519-dalek = { version = "4", optional = true }
 # and the gate holds the two equal.
 harness = ["dep:curve25519-dalek"]
 
+[build-dependencies]
+# Build-script only: read `config/consensus_constants.json` for the two
+# reference-window ages. Not a normal dependency — the script's graph is
+# not linked into the crate (G1's belt excludes build edges).
+serde_json = "1"
+
 [dev-dependencies]
 # The shared C2-R3 boundary vectors (`docs/test_vectors/MTP_BOUNDARY_V1.json`)
 # are driven through the 4.C rules as well as through `shekyl-difficulty`.

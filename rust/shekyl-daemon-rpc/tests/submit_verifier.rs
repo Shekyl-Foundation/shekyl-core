@@ -741,7 +741,7 @@ fn build_bond_fixture() -> BondFixture {
         .sign(
             &p_keys.hybrid_sign_sk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            &payload_hashes[1],
+            payload_hashes[1].as_bytes(),
         )
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {
@@ -1652,7 +1652,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
         .sign(
             slot_sk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            &payload_hashes[1],
+            payload_hashes[1].as_bytes(),
         )
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {

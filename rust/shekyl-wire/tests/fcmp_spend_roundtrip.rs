@@ -243,7 +243,8 @@ fn serve_credit_tx(n: usize) -> Transaction {
 }
 
 /// `PDM-Q-F26`: the serve-credit form has **no** third txid component. Its
-/// countersignature rides the vin, `pqc_auths` is empty by mandate, and the
+/// hybrid countersignature is over the pass record (Ed25519 leg on the vin,
+/// ML-DSA leg in the pruned record; CEN-J10), `pqc_auths` is empty by mandate, and the
 /// C++ oracle hashes it 3-part — so `pqc_auth_hash()` is `None`, and the
 /// skeleton reconstruction with `None` is the body's own hash. `None` here is
 /// a fact about the txid's arity, not a discarded value.
@@ -419,15 +420,16 @@ fn synthetic_spend_prefix_hash_is_pinned() {
 
 #[test]
 fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
-    // Per-input PQC signing preimage (§1.1): payload(i) = prefix_blob ‖ ct_base_blob ‖
-    // prunable_hash ‖ pqc_header(i) ‖ all_key_hashes, then keccak256. Source-validated;
-    // the live C++ oracle KAT is the §1.1 residual. Regression guard against drift.
+    // Per-input PQC signing preimage (§1.1): payload(i) = pruned ‖ prunable_hash ‖
+    // header(i) ‖ key_hashes, then keccak256. The captured KAT
+    // (`pqc_signing_preimage_kat.rs`) holds the derivation to the specification's
+    // output over real transactions; this pins one synthetic body against drift.
     let tx = synthetic_spend();
     let hashes = tx.pqc_signing_payload_hashes();
     assert_eq!(hashes.len(), 1, "one PQC signing hash per input");
-    let h: String = hashes[0].iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        h, "00862ce5178bfeadcdc99aa34618950d47f3c318843addc168843fb067e4a23a",
+        hashes[0].to_string(),
+        "00862ce5178bfeadcdc99aa34618950d47f3c318843addc168843fb067e4a23a",
         "FCMP++ PQC signing preimage drifted (§1.1)"
     );
     // Structural: the fee is bound into the preimage (it lives in ct_base_blob), so

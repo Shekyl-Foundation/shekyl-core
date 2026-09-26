@@ -75,7 +75,7 @@ use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 use super::chain_reads::ReadFault;
 use super::prune::Horizons;
 
-use shekyl_chain_rules::Corrupt;
+use shekyl_chain_rules::{Corrupt, PerHeightRecord};
 use shekyl_units::AtomicUnits;
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
@@ -286,14 +286,18 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                 height: at.to_raw(),
             },
             // A rule read below the connecting height and the view answered
-            // `AboveTip`: the same SI-7 row `chain_reads::absent` arms when
-            // the store itself finds a dense-range row missing — observed
-            // from the rule side this time, which is what made it a
-            // `Corrupt` rather than a panic (E6 slice 6, 2026-09-24). The
-            // height is not on the row; `CellCorrupt` names the cell, and
-            // the connecting height the batch noted is the context.
-            Corrupt::HoleBelowTip { at: _ } => StoreInvariant::CellCorrupt {
-                key: "block_info",
+            // `AboveTip`: the same SI-7 row the store arms when it finds a
+            // dense-range row missing — observed from the rule side this
+            // time (E6 slice 6, 2026-09-24). The height is not on the row;
+            // `CellCorrupt` names the cell the read was of, and the
+            // connecting height the batch noted is the context. The record
+            // selects the cell: a root hole reported as `block_info` would
+            // halt the writer against the wrong table.
+            Corrupt::HoleBelowTip { at: _, record } => StoreInvariant::CellCorrupt {
+                key: match record {
+                    PerHeightRecord::Block => "block_info",
+                    PerHeightRecord::CurveTreeRoot => "curve_tree_roots",
+                },
                 fault: CellFault::Absent,
             },
         };

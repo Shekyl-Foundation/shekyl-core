@@ -12,12 +12,10 @@ use std::sync::Arc;
 
 use shekyl_chain_rules::harness::{Faulted, MockSubstrate};
 use shekyl_chain_rules::{seed_height, Candidate, CenRow, Locus, RowStatus, TxSlot};
-use shekyl_chain_store::store::{StoreError, StoreInvariant};
 use shekyl_difficulty::{check_hash, Difficulty, FTL_SECONDS};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, Transaction};
 
-use crate::connector::RunFault;
 use crate::metrics::Metrics;
 use crate::mutation::{
     first_nonce, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Pow, Unmutable,
@@ -28,7 +26,7 @@ use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{
     block_with_nonce, chain_listing, chain_listing_with, cleanup, h, key_image, open_store,
-    root_at, spend, tmp, trace_of, Family, Scripted,
+    root_at, spend, tmp, trace_of, Family, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -105,9 +103,11 @@ fn nonce_meeting_target(
 /// satisfies the target. The seed is [`seed_height`]'s, the same function
 /// the pipeline claims with.
 fn mined_chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
+    // The same listing as `test_support::chain`: a spend from the first
+    // admissible height, nothing below.
     let listed: Vec<Vec<Transaction>> = (0..n)
         .map(|hh| {
-            if hh == 0 {
+            if hh < FIRST_SPEND_HEIGHT {
                 Vec::new()
             } else {
                 vec![spend(key_image(Family::Main, hh))]
@@ -190,8 +190,11 @@ fn assert_lands(mutation: Mutation, at: u64, outcome: &Outcome) {
     let expected = mutation.expected();
     match expected.status() {
         RowStatus::Implemented => {
-            let Outcome::Report(report) = outcome else {
-                panic!("{mutation}: the run faulted instead of refusing");
+            let report = match outcome {
+                Outcome::Report(report) => report,
+                Outcome::Fault(fault) => {
+                    panic!("{mutation}: the run faulted instead of refusing: {fault}")
+                }
             };
             let (height, verdict) = report
                 .refused
@@ -232,6 +235,15 @@ fn assert_place(mutation: Mutation, locus: Locus) {
             matches!(locus, Locus::Input { .. }),
             "{mutation}: §3.10 names an input, got {locus}"
         ),
+        ExpectedPlace::Listed => assert!(
+            matches!(
+                locus,
+                Locus::Tx {
+                    slot: TxSlot::Listed(_)
+                }
+            ),
+            "{mutation}: §3.10 names a listed transaction, got {locus}"
+        ),
         ExpectedPlace::Unnamed => panic!(
             "{mutation}: {} is Implemented and expected_place is still Unnamed. \
              Name the locus on the mutation when the row is ported.",
@@ -247,11 +259,12 @@ fn assert_place(mutation: Mutation, locus: Locus) {
 fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
     match mutation {
         Mutation::WrongReward | Mutation::ReorderedBodies => {
-            let Outcome::Report(report) = outcome else {
-                panic!(
-                    "{mutation}: the run faulted; {} is Pending and connects today",
+            let report = match outcome {
+                Outcome::Report(report) => report,
+                Outcome::Fault(fault) => panic!(
+                    "{mutation}: the run faulted; {} is Pending and connects today: {fault}",
                     mutation.expected().as_str()
-                );
+                ),
             };
             assert_eq!(
                 report.refused,
@@ -266,29 +279,20 @@ fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
                 "{mutation}: the mutated block connected"
             );
         }
-        // The validator has no I7, so the double spend reaches `connect`,
-        // where SI-1 is the belt: the run halts. C2-R8's taxonomy — a belt
-        // firing is the validator's hole — observed, not accepted.
-        Mutation::DoubleSpend => {
-            let Outcome::Fault(fault) = outcome else {
-                panic!("{mutation}: expected the SI-1 halt while I7 is Pending");
-            };
-            assert!(
-                matches!(
-                    fault,
-                    PipelineFault::Connector(RunFault::Store(StoreError::InvariantViolated(
-                        StoreInvariant::KeyImageNotFresh
-                    )))
-                ),
-                "{mutation}: expected the SI-1 halt while I7 is Pending, got {fault}"
-            );
-        }
+        // `DoubleSpend` pinned the SI-1 halt while I7 was Pending (C2-R8's
+        // taxonomy — a belt firing is the validator's hole — observed, not
+        // accepted); E6 slice 6 commit 4 ported I7 and the pin was deleted
+        // with the hole. It refuses at its input now, like the six.
         Mutation::HeaderVersion
         | Mutation::Orphan
         | Mutation::WrongRoot
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
-        | Mutation::PowUnderWrongSeed => panic!(
+        | Mutation::PowUnderWrongSeed
+        | Mutation::DoubleSpend
+        | Mutation::UnknownReference
+        | Mutation::ReferenceTooRecent
+        | Mutation::ForgedSignature => panic!(
             "{mutation}: the census says {} is pending, and the family has no pin for a row \
              that was Implemented at the pin",
             mutation.expected().as_str()
@@ -310,14 +314,17 @@ async fn the_family_lands_on_its_named_rows() {
     }
 }
 
-/// Where a mutation lands: block 2, so blocks 0 and 1 are below it (a spend
-/// to reuse, a median to fall under). The mutated block is the tip.
+/// Where a mutation lands: the block after the first spend block, so the
+/// blocks below it hold a spend to reuse and a median to fall under. The
+/// mutated block is the tip. (Block 2 until slice 6 commit 5: CEN-I11 put
+/// the first admissible spend at `FIRST_SPEND_HEIGHT`, and `DoubleSpend`
+/// needs one beneath it.)
 ///
 /// A pending row connects, and a successor built on the pre-mutation hash
 /// orphans on CEN-A2, so the pin would read a gap as a refusal. An
 /// implemented row stops the run at the refusal, so a successor would not
 /// be judged either. One length covers both.
-const AT: u64 = 2;
+const AT: u64 = FIRST_SPEND_HEIGHT + 1;
 const CHAIN_LEN: u64 = AT + 1;
 
 async fn setup_and_judge(mutation: Mutation) -> Outcome {
@@ -352,15 +359,22 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
             .await
         }
         Mutation::ReorderedBodies => {
-            // Block 2 lists two bodies so there is something to swap.
-            let listed = vec![
-                Vec::new(),
-                vec![spend(key_image(Family::Main, 1))],
-                vec![
-                    spend(key_image(Family::Main, 2)),
-                    spend(key_image(Family::Fork, 2)),
-                ],
-            ];
+            // `chain(n)`'s listing, except that block `AT` lists two bodies
+            // so there is something to swap.
+            let listed: Vec<Vec<Transaction>> = (0..n)
+                .map(|hh| {
+                    if hh < FIRST_SPEND_HEIGHT {
+                        Vec::new()
+                    } else if hh == AT {
+                        vec![
+                            spend(key_image(Family::Main, hh)),
+                            spend(key_image(Family::Fork, hh)),
+                        ]
+                    } else {
+                        vec![spend(key_image(Family::Main, hh))]
+                    }
+                })
+                .collect();
             assert_eq!(listed.len() as u64, n, "the reordered block is the tip");
             let chain = chain_listing(listed);
             judge(
@@ -380,7 +394,10 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
         | Mutation::WrongReward
-        | Mutation::DoubleSpend => {
+        | Mutation::DoubleSpend
+        | Mutation::UnknownReference
+        | Mutation::ReferenceTooRecent
+        | Mutation::ForgedSignature => {
             let chain = crate::test_support::chain(n);
             judge(
                 &format!("{mutation:?}").to_lowercase(),
@@ -401,7 +418,9 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_mined_chain_replays_clean_under_the_seeded_hasher() {
     let path = tmp("mutation-mined-clean");
-    let chain = mined_chain(4);
+    // The family's own length, so the clean replay covers the spend blocks
+    // the mutations are staged over.
+    let chain = mined_chain(CHAIN_LEN);
     let mut source = scripted(&chain);
     let report = run(
         &mut source,
@@ -418,7 +437,10 @@ async fn the_mined_chain_replays_clean_under_the_seeded_hasher() {
     .await
     .expect("a mined chain is a valid chain");
     assert_eq!(report.refused, None);
-    assert_eq!(report.connected.len(), 4);
+    assert_eq!(
+        report.connected.len(),
+        usize::try_from(CHAIN_LEN).expect("small")
+    );
     assert!(
         report.exercised.contains("CEN-D1"),
         "D1 was judged, not skipped"
@@ -505,16 +527,27 @@ fn a_mutation_height_the_chain_never_reaches_is_a_fault_not_a_clean_replay() {
 
 #[test]
 fn a_candidate_that_cannot_carry_the_mutation_names_why() {
-    // Block 1 of `chain(2)` lists one body: nothing to reorder.
-    let chain = crate::test_support::chain(2);
-    let mut source = Mutated::new(scripted(&chain), h(1), Mutation::ReorderedBodies, env());
-    source.next().expect("block 0");
+    // The first spend block of `chain(FIRST_SPEND_HEIGHT + 1)` lists one
+    // body: nothing to reorder.
+    let first_spend = FIRST_SPEND_HEIGHT;
+    let chain = crate::test_support::chain(first_spend + 1);
+    let mut source = Mutated::new(
+        scripted(&chain),
+        h(first_spend),
+        Mutation::ReorderedBodies,
+        env(),
+    );
+    for below in 0..first_spend {
+        source
+            .next()
+            .unwrap_or_else(|e| panic!("block {below} passes through: {e:?}"));
+    }
     match source.next() {
         Err(MutationFault::Unmutable {
             mutation: Mutation::ReorderedBodies,
             at,
             cause: Unmutable::TooFewBodies { listed: 1 },
-        }) => assert_eq!(at, h(1)),
+        }) => assert_eq!(at, h(first_spend)),
         other => panic!("{other:?}"),
     }
     // Genesis has nothing spent before it: no double spend to stage.
@@ -538,7 +571,7 @@ fn a_candidate_that_cannot_carry_the_mutation_names_why() {
 }
 
 #[test]
-fn every_mutation_names_a_row_and_the_pending_ones_are_the_three_the_plan_lists() {
+fn every_mutation_names_a_row_and_the_pending_ones_are_the_two_the_plan_lists() {
     let pending: Vec<CenRow> = Mutation::ALL
         .iter()
         .map(|m| m.expected())
@@ -548,8 +581,10 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_the_three_the_plan_lists(
     // line and the family's pinned-gap arm both go red together — the plan's
     // table is then updated with the row, not the test loosened. (Slice 4
     // re-keyed WrongReward F13 → F18, Q8: F13 landed as a definition, and
-    // the predicate a wrong amount trips is F18, blocked on G6.)
-    assert_eq!(pending, vec![CenRow::F18, CenRow::G2, CenRow::I7]);
+    // the predicate a wrong amount trips is F18, blocked on G6. Slice 6
+    // commit 4 ported I7: `DoubleSpend` now refuses at its input, and the
+    // family's landing arm below holds it.)
+    assert_eq!(pending, vec![CenRow::F18, CenRow::G2]);
     for m in Mutation::ALL {
         assert!(
             m.to_string().contains(m.expected().as_str()),
@@ -572,6 +607,11 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_the_three_the_plan_lists(
             (Mutation::WrongReward, ExpectedPlace::Miner),
             (Mutation::ReorderedBodies, ExpectedPlace::Unnamed),
             (Mutation::DoubleSpend, ExpectedPlace::Input),
+            // Slice 6 commit 5: the reference rows name the transaction.
+            (Mutation::UnknownReference, ExpectedPlace::Listed),
+            (Mutation::ReferenceTooRecent, ExpectedPlace::Listed),
+            // Slice 6 commit 8: the signature names its input, as I7 does.
+            (Mutation::ForgedSignature, ExpectedPlace::Input),
         ]
     );
 }

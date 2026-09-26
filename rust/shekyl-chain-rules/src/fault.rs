@@ -111,6 +111,29 @@ pub enum Stale {
     },
 }
 
+/// Which per-height record a [`Corrupt::HoleBelowTip`] failed to find.
+///
+/// The fault class is one — a view whose tip and rows disagree (SI-7) —
+/// and the record is data, because the store maps it onto the cell that
+/// was read. A root hole reported as the block row would halt the writer
+/// against the wrong table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PerHeightRecord {
+    /// [`crate::ChainView::block_at`]. The store's `block_info` cell.
+    Block,
+    /// [`crate::ChainView::root_at`]. The store's `curve_tree_roots` cell.
+    CurveTreeRoot,
+}
+
+impl fmt::Display for PerHeightRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Block => "block",
+            Self::CurveTreeRoot => "curve-tree root",
+        })
+    }
+}
+
 /// View data that violates a store invariant, observed by a rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Corrupt {
@@ -139,11 +162,12 @@ pub enum Corrupt {
         /// The upper height of the pair whose prefix sum is below the lower's.
         at: BlockHeight,
     },
-    /// `block_at(at)` answered `AboveTip` for a height a rule reads as
-    /// **below** the connecting height — the parent, a window member, the
-    /// seed height, block 0. A conforming store reports a hole below its
-    /// tip as its own fault (SI-7) before a rule can see one; a view that
-    /// answers `AboveTip` there is a view whose tip and rows disagree.
+    /// A per-height read answered `AboveTip` for a height a rule reads as
+    /// **below** the connecting height: the parent, a window member, the
+    /// seed height, block 0, a spend's reference height. `record` says
+    /// which read. A conforming store reports a hole below its tip as
+    /// its own fault (SI-7) before a rule can see one; a view that answers
+    /// `AboveTip` there is a view whose tip and rows disagree.
     ///
     /// Until 2026-09-24 four sites carried this as `unreachable!`, each
     /// arguing from SI-7 that the arm had no producer. That is a store
@@ -155,6 +179,8 @@ pub enum Corrupt {
     HoleBelowTip {
         /// The height that should have been recorded.
         at: BlockHeight,
+        /// Which record was missing. The store maps this onto the cell.
+        record: PerHeightRecord,
     },
 }
 
@@ -291,9 +317,9 @@ impl fmt::Display for Corrupt {
                 f,
                 "cumulative transaction count decreases at height {at:?} (SI-13)"
             ),
-            Self::HoleBelowTip { at } => write!(
+            Self::HoleBelowTip { at, record } => write!(
                 f,
-                "no block recorded at height {at:?}, below the connecting height (SI-7)"
+                "no {record} recorded at height {at:?}, below the connecting height (SI-7)"
             ),
         }
     }

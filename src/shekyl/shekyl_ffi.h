@@ -1402,6 +1402,32 @@ int32_t shekyl_coinbase_extra(
     char* out_msg,
     size_t out_msg_cap);
 
+/// The PQC signing preimage (FCMP_SPEND_SIGNING_PREIMAGE.md §1.1; CEN-I17),
+/// derived by shekyl-wire — the one derivation the wallet signs over and the
+/// daemon verifies against (E6 slice 6 commit 7 retired the C++ assembly in
+/// tx_pqc_verify.cpp). Every input's signed hash, 32 bytes each in input
+/// order, written into `out` (room for `out_cap` hashes — the input count,
+/// since an admitted body carries one authentication per input);
+/// `*out_count` is how many were written (0 for a body with no per-input
+/// authentication: a coinbase, the serve-credit form, a storage-pruned spend).
+#define SHEKYL_TX_SIGNING_OK           0
+/// A required pointer was null.
+#define SHEKYL_TX_SIGNING_ERR_NULL_PTR 1
+/// The bytes are not a transaction (do not parse, or not exactly); nothing
+/// is derived from bytes that are not one. out_msg carries the parser's
+/// sentence.
+#define SHEKYL_TX_SIGNING_MALFORMED    2
+/// More per-input authentications than out_cap hashes fit; nothing written.
+#define SHEKYL_TX_SIGNING_CAPACITY     3
+int32_t shekyl_tx_pqc_signing_payload_hashes(
+    const uint8_t* tx,
+    size_t tx_len,
+    uint8_t* out,
+    size_t out_cap,
+    size_t* out_count,
+    char* out_msg,
+    size_t out_msg_cap);
+
 /// Compose every curve-tree layer ABOVE the leaf layer, narrow from the leaf-chunk
 /// layer — the correct producer-side grow that telescopes to the reference root
 /// (fixes the depth-3 layer-2 incremental-deepening divergence: an in-place deepen
