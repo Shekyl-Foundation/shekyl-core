@@ -412,20 +412,28 @@ system, not a Shekyl policy choice.
 This also answers the sourcing asymmetry the S-PRUNE review raised as its
 minor item (`DRS_E1_SPRUNE.md` SPR-10): the idiom is not chosen by which file
 is convenient but by whether the value is nameable-differently. `D_MAX`
-belongs in the JSON because a network can name a different reorg depth;
-`T` and the chunk widths do not, because nothing can.
+belongs in the JSON because a network can name a different reorg depth; the
+chunk widths do not, because nothing can.
 
-**Collision, recorded rather than resolved here (2026-09-26):** SPR-10 moved
-`T` **into** `consensus_constants.json` on #861 the same morning
-(`archival_shard_tx_count = 200`, digest re-pinned), on the "one idiom for the
-Round-2 gate's numerics" ground — the ground this discriminator replaces.
-Under the discriminator as stated, `T` comes back out (its own const-asserted
-home in `shekyl-types`, the digest re-pinned again, the SPR-10 row and the
-FOLLOWUPS shard-partition falsifier re-worded to the discriminator). The
-counter-reading — that a shard is an archival *policy* unit a testnet could
-size differently, unlike a proof-system arity — is the one that would keep
-it in. **Maintainer's call, on PR #873; not this document's.** Whichever way
-it goes, the discriminator is the reason of record and SPR-10's row cites it.
+**And `T` stays in — RULED 2026-09-26, correcting a sentence of the ruling
+that had put `T` beside the arities.** `archival_shard_tx_count = 200` sits
+in the JSON marked PROVISIONAL among `archival_attestation_anchor_lag_blocks`
+(also PROVISIONAL) and the failure-window `m`/`n` — the archival-policy
+neighbourhood — and `T` is sized against a shard-byte target and archival
+economics: a network with a different corpus would legitimately name a
+different one. It passes the discriminator cleanly. A proof-system arity
+does not. SPR-10's move (#861, the same morning, on the "one idiom for the
+gate's numerics" ground) therefore stands, **on this reason rather than that
+one**; its row cites the discriminator. *The mechanism of the near-reversal
+is the record worth keeping:* the S-PRUNE review's item 6 paired `D_MAX` and
+`T` as "two consensus numerics on one gate in two idioms", the ruling on
+that item was a ruling on the idiom, and the pairing was carried forward
+into a sentence about the arities without testing `T` against the
+discriminator being written — the borrowed-framing failure (rule 16's
+corollary): the grouping was the premise, and the ruling fell on the
+grouping rather than on the members. Caught because the lane escalated
+instead of defaulting when one ruling silently reversed another six hours
+old.
 
 ---
 
@@ -570,4 +578,4 @@ LANDED, staying in `design/` while E4's hook phases cite §3.2.
 | --- | --- |
 | 2026-09-26 | Round 0 executed at `dev@1aa48eff9` after #861 and #864 merged. Findings CTW-1…CTW-8; questions CTW-Q1…CTW-Q6 posed with defaults. Families registered at birth. No code. |
 | 2026-09-26 | **Round 1 RULED on PR #873 (maintainer).** Q1 the verdict, justification corrected (the root's reach, not a rule that checks it; `Composed` assembles, never computes); Q2 dissolved with the pending table (CTW-10 — maturity is `f(height, is_miner)`, verified at `blockchain_db.cpp:554–567`); Q3 neither; Q4 the primitive, `curve_tree_leaf_counts`; Q5 yes, as F6's sibling; Q6 the oracle moves into the driver before the field goes. CTW-9 (library arities) and CTW-11 (drain order as invariant) added from the round; CTW-Q7 posed. §3.7's test — *fact, or a view of facts I already hold?* — recorded as the question asked of every table this lane inherits. Commit table with costs and the signal (§6) written before the work. |
-| 2026-09-26 | **Round 1, second pass (maintainer, PR #873).** CTW-Q7 RULED: Shekyl-named, const-asserted, not in the JSON — the nameable-differently discriminator recorded (§3.9), which also grounds SPR-10's sourcing answer. No `RuleCoverage` row for growth: a rule refuses, growth propagates; growth is an operand of F17 / I12 / I13 / I15, and the instrument is `passed_through` 6 → 5 (§3.1, §7). Commit 5's halt named as a finding, not an overrun (§6). §3.7's fact-or-view table marked transferable. |
+| 2026-09-26 | **Round 1, second pass (maintainer, PR #873).** CTW-Q7 RULED: Shekyl-named, const-asserted, not in the JSON — the nameable-differently discriminator recorded (§3.9), which also grounds SPR-10's sourcing answer. **Third pass, same day:** `T` stays in the JSON — it passes the discriminator (an archival policy unit a network could size differently); the ruling's sentence pairing `T` with the arities was the review's borrowed grouping, corrected on escalation (§3.9). No `RuleCoverage` row for growth: a rule refuses, growth propagates; growth is an operand of F17 / I12 / I13 / I15, and the instrument is `passed_through` 6 → 5 (§3.1, §7). Commit 5's halt named as a finding, not an overrun (§6). §3.7's fact-or-view table marked transferable. |
