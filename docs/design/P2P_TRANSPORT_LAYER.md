@@ -712,6 +712,12 @@ single global handshake deadline would break on a network whose mixing
 delay is seconds. No deadline is written into this document before that
 measurement. Rule 26 B9.
 
+Pi-4 C5 run, 2026-09-26, `skl-pi` (aarch64, 4 cores), about 90 seconds:
+[`p2p_c5_pi4_20260926T003938Z.txt`](../benchmarks/p2p_c5_pi4_20260926T003938Z.txt).
+Initiator 929 µs, responder 685 µs, one rekey 5.06 µs, seal/open of
+65,535 bytes 888 µs. Deadlines and the clearnet accept-rate values are
+still not written from this record.
+
 ---
 
 ## D10 — bounds before a session exists (RULED 2026-09-25)
