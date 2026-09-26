@@ -95,7 +95,8 @@ pub enum Stale {
     /// set must carry the value. Not a reason to reverse Q10 (the
     /// fixed-difficulty lever being impossible on public nets *by type* is
     /// worth more than a struct's width). It mattered when `reorg_cap`
-    /// joined the set (PR #861: `RuleSet` 56, `Fault` past clippy's 128) and
+    /// joined the set (PR #861: `RuleSet` 56, `Fault` past clippy's 128;
+    /// `tx_spendable_age` took it to 64 at DRS-E3 commit 2, absorbed) and
     /// the fix is the one written here in advance — **the payload is
     /// boxed**, which keeps the by-value comparison the Fakechain caveat
     /// requires — not shrinking `RuleSet`, and not keeping limits off it

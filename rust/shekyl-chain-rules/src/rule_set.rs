@@ -96,9 +96,15 @@ impl RuleSetId {
 /// [`D_MAX`]; a Fakechain set names its own through [`RuleSet::fakechain`],
 /// the same witness `Fixed` uses, so a shortened regtest schedule runs a
 /// rule set whose cap fits inside its epoch rather than a store field the
-/// validator would have to defer to. CEN-F21's split epoch is
-/// `rules::miner::EMISSION_SPLIT_EPOCH`, not a field: it joins this set
-/// when a schedule step names a different epoch.
+/// validator would have to defer to. The sixth — `tx_spendable_age` — is
+/// the miner window's sibling (DRS-E3 `CTW-Q5`): how many blocks after its
+/// height a *listed* transaction's outputs stay out of the curve tree, the
+/// C++ `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE`. Both decide when an output
+/// becomes usable — the pair is the drain calendar the tree grows by
+/// (`DRS_E3_CURVE_WRITER.md` §3.2, §3.6) — so they live together and move
+/// together; the reason is coherence with F6, not schedule variance.
+/// CEN-F21's split epoch is `rules::miner::EMISSION_SPLIT_EPOCH`, not a
+/// field: it joins this set when a schedule step names a different epoch.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,
@@ -107,6 +113,7 @@ pub struct RuleSet {
     difficulty: DifficultyRule,
     mined_money_unlock_window: BlockCount,
     reorg_cap: BlockCount,
+    tx_spendable_age: BlockCount,
 }
 
 /// How a rule set derives the next-block target (CEN-D4 reads this).
@@ -147,6 +154,7 @@ impl RuleSet {
         difficulty: DifficultyRule::Lwma1,
         mined_money_unlock_window: BlockCount::from_raw(60),
         reorg_cap: D_MAX,
+        tx_spendable_age: BlockCount::from_raw(10),
     };
 
     /// Every rule set a schedule may name, in id order. A schedule step that
@@ -255,6 +263,21 @@ impl RuleSet {
         self.mined_money_unlock_window
     }
 
+    /// How many blocks after its height a **listed** transaction's outputs
+    /// stay out of the curve tree — the maturity the drain uses for every
+    /// non-coinbase output (DRS-E3 §3.2: block `h`'s listed outputs drain
+    /// at `h + tx_spendable_age`; its coinbase at
+    /// `h + mined_money_unlock_window`). `10` on every issued rule set —
+    /// the C++ `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE`; `rule_set_tests` pins
+    /// the two equal, and pins both maturities to the wallet side's
+    /// `shekyl_consensus::{DEFAULT_LOCK_WINDOW, COINBASE_LOCK_WINDOW}` —
+    /// the eligibility arithmetic that assumes the daemon inserts at exactly
+    /// these heights (`shekyl_engine_state::transfer::SPENDABLE_AGE`).
+    #[must_use]
+    pub const fn tx_spendable_age(&self) -> BlockCount {
+        self.tx_spendable_age
+    }
+
     /// The `BlockHeader.major_version` this rule set admits (CEN-B1), and
     /// the floor a header's version vote must reach (CEN-B2).
     ///
@@ -285,6 +308,7 @@ impl fmt::Debug for RuleSet {
             .field("difficulty", &self.difficulty)
             .field("mined_money_unlock_window", &self.mined_money_unlock_window)
             .field("reorg_cap", &self.reorg_cap)
+            .field("tx_spendable_age", &self.tx_spendable_age)
             .finish()
     }
 }
