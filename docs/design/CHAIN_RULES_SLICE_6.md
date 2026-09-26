@@ -1,10 +1,18 @@
 # `shekyl-chain-rules` slice 6 — census 4.I, the transaction's inputs under FCMP++ (DRS-E6 increment 7)
 
-**Status:** OPEN — **Round 1 RULED 2026-09-24 (Q1–Q9, §8, each line-local);
-implementation begins on §5 in the ruled order — capture first.** Round 0
-pre-flight written 2026-09-23 against `dev` @ `4dc5194de` (post-#839, slice 5
-landed), amended on review 2026-09-23 (PR #852, commit *docs: slice 6 Round
-0 amended on review*). Registered before implementation (rule 94 §5).
+**Status:** OPEN — **implementation LANDED 2026-09-26: §5 commits 1–10
+merged to `dev` as #852, #853 and #864 (merge `1aa48eff9`); validator
+coverage `64 → 73`, registry `implemented 75`. Two rows DEFERRED, each on
+a FOLLOWUPS row with a falsifier: I13 (§5 row 6, owner
+`DRS_E1_SCURVE.md` §2.3 — E3's height-keyed depth read; E3's pre-flight
+opened as #873) and I15 with H19-verify (§5 row 8, owner this file —
+blocked on the scenario driver producing a spend).** Stays in `design/`
+as that row's owner; archives when I15 lands or the owner re-homes to
+`CHAIN_RULES_CRATE.md` §4.6. Round 1 RULED 2026-09-24 (Q1–Q9, §8, each
+line-local). Round 0 pre-flight written 2026-09-23 against `dev` @
+`4dc5194de` (post-#839, slice 5 landed), amended on review 2026-09-23
+(PR #852, commit *docs: slice 6 Round 0 amended on review*). Registered
+before implementation (rule 94 §5).
 
 Branch commits are named by PR and subject, never by SHA: the branch was
 rebased once already and every SHA the first cut of this file pinned to
@@ -394,6 +402,29 @@ implemented). **The signal:** more than ten commits *excluding commit 7's
 overrun* means the substrate was not as finished as this table claims —
 that is the answerable form. Commit 7's overrun is excluded because it
 would fire the signal for a reason the table already knows.
+
+**The signal fired (recorded 2026-09-26, at close).** #864 merged at
+thirty-five commits. Read by subject, the rows cost close to what the
+table said — fifteen commits for rows 3–10, with their disclosure commits
+and row 7's fourth (the `SigningPayloadHash` mint CI asked for) — and
+the other twenty fall into three classes, none of them a rule:
+**(a)** seven findings the rows surfaced in the fixture substrate, each
+its own commit so the rule commit stayed reviewable alone — the alt
+codec's snapshot borrowing a harness body, `TXE-Q6′`'s other half,
+CEN-L1 graded as a security finding, the alt snapshot's literals, the
+mock's third job, the serve-credit KAT entry's reason, the "on the vin"
+phrase sweep; **(b)** eight plan and review-round commits — this table,
+the reviewer's, Copilot's, the REWRITE-NOTE sweep the I7 register row
+exposed, the `dev` merge; **(c)** five process commits with no subject in
+the tree. So the answerable form's answer: **the substrate was not
+finished, and the unfinished part was the fixtures, not the rules** — the
+third slice running to find that a fixture family constructed state no
+rule had yet asked about (`[0x80; 32]` keys, `[fill; 32]` images, the
+`[0x99; 32]` reference, now the image-derived signing key I15 will
+refuse). What this predicts for slice 7: the
+weights machinery reads recorded facts every fixture already carries
+(`weight`, `long_term_weight`), so the fixture class should be smaller —
+if it is not, the table was wrong about the cause.
 
 One thing the sequence also inherits, recorded here so it is not
 re-derived: the branch names its own commits by PR and subject, never by
