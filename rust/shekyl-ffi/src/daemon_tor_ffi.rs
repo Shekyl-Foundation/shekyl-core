@@ -236,9 +236,12 @@ pub unsafe extern "C" fn shekyl_daemon_tor_start(
 }
 
 /// Publish the per-boot v3 onion on the running managed tor (key minted in
-/// memory, `Flags=DiscardPK`), forwarding `virtual_port` (what peers dial) to
-/// `127.0.0.1:local_port` (the daemon's already-bound inbound listener), with
-/// `MaxStreams=max_streams` per rendezvous circuit.
+/// memory, `Flags=DiscardPK`, `PoWDefensesEnabled=1`), forwarding
+/// `virtual_port` (what peers dial) to `127.0.0.1:local_port` (the daemon's
+/// already-bound inbound listener), with `MaxStreams=max_streams` per
+/// rendezvous circuit. A Tor that rejects the proof-of-work arguments
+/// (control status 512) fails the publish. There is no second attempt
+/// without proof-of-work.
 ///
 /// Outputs (NUL-terminated):
 /// - `out_service_id` (≥ 57 bytes): the 56-char service id, no `.onion`.

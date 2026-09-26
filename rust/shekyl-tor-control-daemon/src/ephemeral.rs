@@ -152,11 +152,11 @@ pub enum DaemonTorPublishError {
     Publish(AddOnionReplyError),
     /// The operator's Tor refused the proof-of-work arguments (status 512).
     /// The onion is not published. There is no second attempt without PoW.
+    /// The control-port reply text is not kept: those lines are a forensic
+    /// surface and this error is logged.
     PowRefused {
         /// The status tor returned.
         status: u16,
-        /// Tor's reply text, truncated. Shown to the operator.
-        detail: String,
     },
 }
 
@@ -170,19 +170,10 @@ impl std::fmt::Display for DaemonTorPublishError {
             Self::Control(e) => write!(f, "tor control failure: {e:?}"),
             Self::Died => write!(f, "tor died during publish"),
             Self::Publish(e) => write!(f, "ADD_ONION failed: {e:?}"),
-            Self::PowRefused { status, detail } => {
-                if detail.is_empty() {
-                    write!(
-                        f,
-                        "this Tor refused onion-service proof-of-work (ADD_ONION status {status}). The onion was not published. Upgrade Tor. This node does not publish an onion without proof-of-work"
-                    )
-                } else {
-                    write!(
-                        f,
-                        "this Tor refused onion-service proof-of-work (ADD_ONION status {status}: {detail}). The onion was not published. Upgrade Tor. This node does not publish an onion without proof-of-work"
-                    )
-                }
-            }
+            Self::PowRefused { status } => write!(
+                f,
+                "this Tor refused onion-service proof-of-work (ADD_ONION status {status}). The onion was not published. Upgrade Tor. This node does not publish an onion without proof-of-work"
+            ),
         }
     }
 }
@@ -192,18 +183,11 @@ impl std::error::Error for DaemonTorPublishError {}
 /// A 512 on a publish that sent PoW arguments. `None` means the caller
 /// classifies the reply the ordinary way. There is no arm here that
 /// rebuilds the request with [`OnionPow::Disabled`].
-fn pow_refusal(
-    pow: OnionPow,
-    status: u16,
-    detail: Option<&String>,
-) -> Option<DaemonTorPublishError> {
+fn pow_refusal(pow: OnionPow, status: u16) -> Option<DaemonTorPublishError> {
     if matches!(pow, OnionPow::Disabled) || status != 512 {
         return None;
     }
-    let detail = detail
-        .map(|line| line.chars().take(200).collect())
-        .unwrap_or_default();
-    Some(DaemonTorPublishError::PowRefused { status, detail })
+    Some(DaemonTorPublishError::PowRefused { status })
 }
 
 /// A live managed-tor incarnation: bootstrapped, SOCKS address known, and —
@@ -342,7 +326,7 @@ impl DaemonTorControl {
             Err(AskError::Control(control)) => return Err(DaemonTorPublishError::Control(control)),
             Err(AskError::ActorGone) => return Err(DaemonTorPublishError::Died),
         };
-        if let Some(refused) = pow_refusal(pow, reply.status(), reply.lines().first()) {
+        if let Some(refused) = pow_refusal(pow, reply.status()) {
             return Err(refused);
         }
         evaluate_add_onion_reply(&reply, &expected).map_err(DaemonTorPublishError::Publish)?;
@@ -419,25 +403,17 @@ mod tests {
 
     #[test]
     fn a_pow_refusal_is_terminal_and_a_disabled_publish_is_not_one() {
-        let refused = pow_refusal(
-            OnionPow::Enabled,
-            512,
-            Some(&"Unrecognized key \"PoWDefensesEnabled\"".to_owned()),
-        );
+        let refused = pow_refusal(OnionPow::Enabled, 512);
         match refused {
-            Some(DaemonTorPublishError::PowRefused { status, detail }) => {
-                assert_eq!(status, 512);
-                assert!(detail.contains("PoWDefensesEnabled"));
+            Some(err @ DaemonTorPublishError::PowRefused { status: 512 }) => {
+                let text = err.to_string();
+                assert!(text.contains("proof-of-work"));
+                assert!(!text.contains("Unrecognized"));
             }
             other => panic!("expected PowRefused, got {other:?}"),
         }
-        assert!(pow_refusal(OnionPow::Disabled, 512, Some(&"PoW".to_owned())).is_none());
-        assert!(pow_refusal(
-            OnionPow::Enabled,
-            551,
-            Some(&"not a syntax error".to_owned())
-        )
-        .is_none());
+        assert!(pow_refusal(OnionPow::Disabled, 512).is_none());
+        assert!(pow_refusal(OnionPow::Enabled, 551).is_none());
     }
     use crate::test_support::tor_binary;
     use shekyl_tor_control_client::binary::VerifiedTorBinary;
