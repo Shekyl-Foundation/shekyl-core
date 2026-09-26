@@ -2,8 +2,9 @@
 
 **Status:** OPEN — **Round 0 pre-flight, written 2026-09-26 against `dev` @
 `ad557ac5a` (post-#874, slice 6 closed out; post-#873, DRS-E3's curve-writer
-pre-flight).** Nine questions in §8; implementation begins when they are
-ruled. Registered before implementation (rule 94 §5); process per
+pre-flight).** Q7 RULED 2026-09-26; Q8's two G2 loci ruled with it; Q1–Q6
+and Q8's remaining loci unruled. Implementation begins when §8 is ruled.
+Registered before implementation (rule 94 §5); process per
 `26-sub-pr-design-discipline.mdc` (cited here as the pre-flight's shape:
 substrate re-read at the pin, artifact execution before a budget becomes a
 gate).
@@ -427,6 +428,12 @@ the rules.
   class: a `FormRule`, which is the no-view form stage
   (`rules/mod.rs:156`). A view-less `BlockRule` is not a class the crate
   has.
+- **Q7 RULED 2026-09-26**, and Q8's two G2 loci with it: length mismatch at
+  `Locus::Block`, first hash mismatch at `Locus::Listed`. The claim that
+  the `ReorderedBodies` pin was never witnessed is withdrawn in §3.1: the
+  pin ran on the harness chain (`mutation_tests.rs:261`, two bodies at
+  `:361`); the captured chains are `TooFewBodies` and the family does not
+  run there (§3.7).
 
 ## 8. Questions for the reviewer — Round 0
 
