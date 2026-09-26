@@ -304,7 +304,9 @@ see §4. Reads epoch geometry as **data** (rule 71): the leg computes
 flow and no driver-local "regtest ticks fast" skip. The test
 affordance is the existing **armed** override
 `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` (PR-C's composed-arc walk uses
-`= 2`), which the driver inherits by calling the same helper.
+`= 2`, with `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS = 1` beside it — the
+epoch must be strictly above the reorg cap, S-PRUNE SPR-9), which the
+driver inherits by calling the same helper.
 
 **Amendment (in-PR): emission claims currently require a loopback
 daemon.** The leg's claim-source fetch is persona-attributable, so it

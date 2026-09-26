@@ -232,25 +232,34 @@ by their own check, next.
 `SEB + 1` blocks old**, and `SEB = 10,000 > D_max = 720`. The 2026-09-18
 text argued the corresponding `W ≥ D_max` and asserted nothing (rule 16's
 corollary: a guarantee with no gate that can fail). This ruling asserts
-it, and names the belt: (a) **`SEB > D_max` is const-asserted at `D_max`'s
-home, on the production constants** (`CEN-E2`, Q11 — the constant is
-unbuilt, so the assertion is owed with it; FOLLOWUPS) **and is an invariant
-of every valid configuration on every nettype** (rule 71: nettype selects
-data; the data satisfies the same invariant). The regtest
-`SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override admits `2..=SEB` in isolation
-today (`constants.rs:257`) — that is a **rejected configuration** when it
-puts `SEB ≤ D_max`, not a supported one; the fakechain conforms, through
-one knob that moves both and preserves the ratio or a parse that refuses.
-There is no arm-time assertion and no nettype-specific story. (b) **Belt:**
-`pop` refuses the block at any height `≤ h_scarce` — `h_scarce` the
-`close_height` of the last shard with `close_epoch(k) + 2 ≤ current_epoch`,
-defined only for `current_epoch ≥ 2` and none before any shard closes (then
-the floor is `1`) — as `StoreCannot::PopBelowFloor { floor: h_scarce + 1 }`, the floor being
-the lowest height whose block may be popped, chain-named from
-`close_height` only (skeleton §7). It is **unreachable by construction on
-every conformant nettype** — the `SCW-7` undo floor at `tip − D_max` sits
-strictly above it — and is kept because a check that can fail is worth one
-that cannot; its test constructs the case artificially.
+it, and names the belt. **BUILT 2026-09-25 (S-PRUNE, `DRS_E1_SPRUNE.md`
+§14; the text below is as built — the ruling's 2026-09-18 wording, which
+said the constant was unbuilt, the override admitted `2..=SEB`, and a
+`h_scarce` belt was kept, is superseded by it):** (a) **`SEB > D_max` is
+const-asserted at `D_max`'s home, on the production constants**
+(`shekyl_chain_rules::reorg`, `D_MAX` derived from
+`archival_reorg_depth_blocks`) **and is an invariant of every valid
+configuration on every nettype** (rule 71: nettype selects data; the data
+satisfies the same invariant). The cap is **rule-set data** —
+`RuleSet::reorg_cap`, `GENESIS` carrying `D_MAX`, a Fakechain set naming
+its own through `RuleSet::fakechain(fixed, cap)` (SPR-8) — and the regtest
+conforms through **a parse that refuses**: `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
+is parsed against the cap in force and admits only
+`max(cap + 1, 2)..=SEB` (`settlement_epoch_override_floor`,
+`shekyl-archival-retention/src/constants.rs`, SPR-9), so a shortened
+epoch lowers the cap with it — `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`, the
+epoch lever's shape, is that knob, and the store refuses beneath the parse
+as a belt (`StoreCannot::RetentionBelowReorgCap` / `RetentionNotInsideEpoch`
+at open, the cap re-checked by `connect` at every height). Rule at the
+override, belt at open; no nettype-specific story. (b) **The belt was not
+minted (SPR-2, SPR-7):** `pop` refuses below the persisted undo floor
+(`StoreCannot::PopBelowFloor`), and the `h_scarce + 1` arm the skeleton's
+§7 sketched has no instance to fire on *because* `retention < SEB` is
+refused — the floor `E·SEB − retention` sits above `(E−1)·SEB > h_scarce`
+exactly then — and a check that cannot fire is not a belt (rule 16). The
+dependency is stated at every site that says "unreachable", so relaxing
+`RetentionNotInsideEpoch` reads as what it is. `h_scarce` is built for its
+other consumer, Q5's band-2 edge.
 
 **Two horizons and a floor, by design.** Bodies and journals are the two
 horizons; the undo journal's `D_max` is a floor both clear, not a third
@@ -1310,7 +1319,10 @@ the `bond_duration` precedent. *Built 2026-09-25 as
 (one source, `config/consensus_constants.json`), with `SEB > D_MAX`
 const-asserted beside it and the retention prune consuming it
 (`DRS_E1_SPRUNE.md` §14, SPR-6) — the numeric now has a mechanism to be
-tested against, which is what "provisional until tested" needed.* The argument for 720 is coordination
+tested against, which is what "provisional until tested" needed. The cap
+in force is **rule-set data**, `RuleSet::reorg_cap` — `GENESIS` carries
+`D_MAX`, a Fakechain set names its own, and the store's undo retention is
+constrained by it (SPR-8); CEN-E2 reads the rule set's cap, never the const.* The argument for 720 is coordination
 with the archival domain's frozen assumptions and is recorded as such
 (record, Q11). Two independent arguments for shallower are recorded beside it
 and are not overridden: (i) 720 sits at the top of the honest-partition

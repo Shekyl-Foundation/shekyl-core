@@ -6,16 +6,22 @@
 and `journal_horizon`, `shekyl_types::SHARD_TX_COUNT` (`T`); the boundary
 batch inside `connect` (`store/prune.rs`: `D(E)` named by the epoch, whole
 shards' `txs_prunable` + `txs_pqc_auths` discarded through the raw tables,
-undo rows below `tip − retention` retired, the `undo_log_floor` cell);
-`Horizons { epoch, undo_retention }` as the store's session parameter with
-`0 < retention < SEB` refused at open; `pop` refusing below the persisted
-floor; `TxRecord.pqc_auths` as `Option<PqcAuths { Retained, Discarded }>`;
+undo rows below `tip − retention` retired, the `undo_log_floor` cell,
+checked against the journal's first key); the reorg cap as **rule-set
+data** (`RuleSet::reorg_cap`, `GENESIS` carrying `D_MAX`, a Fakechain set
+naming its own); `Horizons { epoch, undo_retention }` as the store's session
+parameter with `cap ≤ retention < SEB` refused at open and the cap
+re-checked by `connect` against the set in force; the regtest lever's parse
+refusing `SEB ≤ cap` (`SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` beside
+`SHEKYL_SETTLEMENT_EPOCH_BLOCKS`); `pop` refusing below the persisted floor;
+`TxRecord.pqc_auths` as `Option<PqcAuths { Retained, Discarded }>`;
 `h_scarce` on the snapshot and the batch. **As built** — §14: the skeleton's
-`first_tx_id` primitive was off by the coinbases; the §7 pop belt is
-unreachable by arithmetic and was not minted; the `D_max` blocker below was
-rule 22's unfalsifiable shape and is dissolved by the build. Round-0
-findings `SPR-1 … SPR-6` are §14's rows (family registered in
-`IMPLEMENTATION_INDEX.md` §2).
+`first_tx_id` primitive was off by the coinbases; the §7 pop belt was not
+minted, unreachable *because* `retention < SEB` is refused (SPR-2, its
+first-stated reason corrected by SPR-7); the `D_max` blocker below was
+rule 22's unfalsifiable shape and is dissolved by the build. Findings
+`SPR-1 … SPR-9` and question `SPR-Q1` are §14's rows (families registered
+in `IMPLEMENTATION_INDEX.md` §2).
 *Skeleton history, retained:* OPEN — **SKELETON, not a plan.** Written 2026-09-18 at
 `dev@20ebdf1e5`, **re-keyed 2026-09-22 at `dev@5b2d4c6d6` to `PDM-Q2`'s
 re-ruling** (the body horizon is the epoch boundary after the freeze epoch;
@@ -45,8 +51,9 @@ an operand, not a number, until `PDM-Q11`'s numeric is confirmed; the
 increment does not cut before then.~~ **DISSOLVED 2026-09-25 (rule 22): the
 falsifier this sentence named could only fire after the work it blocked —
 `D_max` is confirmed by running the mechanisms that consume it, and the
-mechanism is this increment. Built with `D_max` as a parameter
-(`Horizons::undo_retention`, production `D_MAX`); the numeric stays
+mechanism is this increment. Built with `D_max` as rule-set data
+(`RuleSet::reorg_cap`, `GENESIS` carrying `D_MAX`; the store's
+`Horizons::undo_retention` at least that cap); the numeric stays
 PROVISIONAL in `PDM-Q11`, now testable.**
 
 **Family:** `SPR-N` (as-built findings, §14) and `SPR-QN` (questions the
@@ -133,8 +140,12 @@ journal horizon is F19's expression. `W` — the 2026-09-18 constant that
 made them one number — is **retired**. The undo floor `D_max` is a lower
 bound both clear and is not a third horizon: every discarded body is
 `≥ SEB + 1` blocks old and `SEB > D_max` (const-asserted at `D_max`'s home,
-`shekyl_chain_rules::reorg` — **built 2026-09-25**, and re-asserted at
-store open on the session pair as `StoreCannot::RetentionNotInsideEpoch`).
+`shekyl_chain_rules::reorg` — **built 2026-09-25**; on a regtest pair the
+same inequality is the rule at the lever's parse,
+`settlement_epoch_override_floor(cap) = max(cap + 1, 2)`, the site Q2 item 5
+ruled, and the belt beneath it at store open —
+`StoreCannot::RetentionNotInsideEpoch` above, `RetentionBelowReorgCap`
+below, the cap being the in-force rule set's).
 
 **Who deletes what.** S-PRUNE's batch discards bodies. **Undo-row
 retirement below `tip − D_max` is also this surface's** — `pop.rs` says the
@@ -281,17 +292,21 @@ bytes with no `CenRow`, or an S-PRUNE type imported by the rules crate
 
 ## 7. Pops — the check, and what S-PRUNE does not do
 
-**As built (SPR-2): the pop check reads the persisted undo floor; the belt
-below was not minted.** `h_scarce` is a `close_height` below `(E−1)·SEB ≤
-tip − SEB < tip`, so `tip ≤ h_scarce` has no instance under *any*
-retention — not only while `SEB > D_max` — and a defence that cannot fail
-consumes the attention that would find the gap (rule 16). `pop` refuses a
-tip below the `undo_log_floor` cell (`StoreCannot::PopBelowFloor`); the
-inequality `SEB > retention` is still refused at open
-(`StoreCannot::RetentionNotInsideEpoch`) and const-asserted on the
-production pair, because it is what keeps the undo floor above the body
-horizon. `h_scarce` itself is built, as `PDM-Q5`'s band-2 edge
-(`ReadSnapshot::h_scarce`, `WriteBatch::h_scarce`). *The skeleton's text,
+**As built (SPR-2, reason corrected by SPR-7): the pop check reads the
+persisted undo floor; the belt below was not minted.** The belt guards the
+*pop target*, not the tip, and what keeps every target above `h_scarce` is
+the undo floor: at the boundary `E·SEB` the floor is `E·SEB − retention`,
+which is `> (E−1)·SEB > h_scarce` **exactly when `retention < SEB`** — the
+inequality `Horizons::new` refuses at open
+(`StoreCannot::RetentionNotInsideEpoch`) and the production pair
+const-asserts. Under it the arm has no instance to fire on, and a defence
+that cannot fail consumes the attention that would find the gap (rule 16);
+relax that refusal and the belt becomes reachable, which is why the
+dependency is stated here and in `pop.rs` / `prune.rs` rather than the
+first-landed "unreachable by arithmetic alone, under any retention", which
+was false. `pop` refuses a tip below the `undo_log_floor` cell
+(`StoreCannot::PopBelowFloor`). `h_scarce` itself is built, as `PDM-Q5`'s
+band-2 edge (`ReadSnapshot::h_scarce`, `WriteBatch::h_scarce`). *The skeleton's text,
 retained as the record of what was posed:* ~~The pop check reads `close_height` only.~~ The **floor is the lowest
 height whose block may be popped**: `h_scarce + 1`, with `h_scarce` the
 `close_height` of the last shard with `close_epoch(k) + 2 ≤ current_epoch`
@@ -457,11 +472,15 @@ carries the finding.
 | Finding | Statement |
 | --- | --- |
 | **SPR-1** | **`first_tx_id` was off by the coinbases.** §2 wrote `first_tx_id(h) = block_info[h−1].cumulative_tx_count`; that total counts a block's *listed* transactions (`connect.rs`, "the parent's plus this block's listed transactions") while storage ids are dense over every recorded transaction, the miner transaction first. Built as `cumulative_tx_count(h−1) + h` (one coinbase per block). Found by the first test that closed a shard: `D(3)` came back empty. Read at the code, not the plan — the rule-16 corollary, in the plan's own primitive. |
-| **SPR-2** | **The §7 pop belt is unreachable by arithmetic, not by `SEB > D_max`, and was not minted.** `h_scarce` is the `close_height` of a shard with `close_epoch + 2 ≤ E`, so `h_scarce < (E−1)·SEB ≤ tip − SEB < tip` at every tip; `tip ≤ h_scarce` has no instance to build "by hand". A check that cannot fire is not a belt (rule 16); the inequality it was said to depend on is still enforced — at open, as `StoreCannot::RetentionNotInsideEpoch`, and at compile time on the production pair — because it is what keeps the undo floor above the body horizon. `h_scarce` is built for its other consumer, `PDM-Q5`'s band-2 edge. |
-| **SPR-3** | **The retention is a session parameter, not a second constant.** The skeleton's rule-71 ask ("one knob that overrides both and preserves the ratio, or a parse that refuses") is met at the store: `Horizons { epoch, undo_retention }`, `0 < retention < SEB` or the open is refused; `create` / `with_apply_policy` run `D_MAX`, `with_horizons` is the regtest knob. `OTHER_EPOCH = 50` in the header tests had to name a retention — the refusal firing where it should. The retention is not pinned in the header (the `undo_log_floor` cell records what it retired); the schedule is. |
-| **SPR-4** | **The undo floor is persisted; the body frontier is not.** §5.4 of S-CHAIN-W asked S-PRUNE to persist the floor it establishes so `pop` can tell *pruned below* from *lost*; §4 of this plan forbids a stored discard watermark. Both hold: `undo_log_floor` (layout 14, `EngineLocal`) is the journal's retention mark, monotone, written by the batch; the body discard's set is `D(E)`, computed and stored nowhere. `pop` below the cell is `PopBelowFloor`; above it, a missing row is SI-6. |
+| **SPR-2** | **The §7 pop belt is unreachable while `retention < SEB` is refused, and was not minted.** The belt guards pop *targets*; every target is at or above the undo floor `E·SEB − retention`, and that floor is `> (E−1)·SEB > h_scarce` iff `retention < SEB` — the inequality `Horizons::new` refuses at open (`StoreCannot::RetentionNotInsideEpoch`) and the production pair const-asserts. A check that cannot fire is not a belt (rule 16), so the arm is not minted; the refusal that makes it unreachable is named at every site that says so. *First landed with a different reason — see SPR-7.* `h_scarce` is built for its other consumer, `PDM-Q5`'s band-2 edge. |
+| **SPR-3** | **The retention is a session parameter, not a second constant.** `Horizons { epoch, undo_retention }`; `create` / `with_apply_policy` run the genesis set's cap on both sides, `with_horizons` is the regtest knob. `OTHER_EPOCH = 50` in the header tests had to name a retention — the refusal firing where it should. The retention is not pinned in the header (the `undo_log_floor` cell records what it retired); the schedule is. *As first landed the store was the only site of the `SEB > cap` refusal and the skeleton's rule-71 ask ("a parse that refuses") was claimed met there; the review (item 5) moved the rule to the parse and left the store's as the belt — SPR-9.* |
+| **SPR-4** | **The undo floor is persisted *and checked*; the body frontier is not persisted.** S-CHAIN-W §5.4 ruled the floor *structural* — "poppable iff `undo_log[h]` exists", the journal's first key — and this row first cited it for the opposite. The structural reading holds while a row stands and fails in one state, found by the pop-floor test the moment the cell was removed: a `pop` sequence past the retention empties the journal (`[250, 300]` is fifty-one rows; fifty-one pops leave none), and `pop` also removes the `block_info` rows that would date the last boundary, so at tip 249 no table can say whether 249's row was retired (`PopBelowFloor`) or lost (SI-6). Reading the empty journal as SI-6 halts the writer on a `pop_blocks` past the cap — a capability limit, not corruption; reading it as `PopBelowFloor` labels a lost journal as one, which the PR #757 review refused. The cell (layout 14, `EngineLocal`, monotone) is what distinguishes them, so it stays — and the redundancy is a check that can fail (rule 16): the journal's first key equals the cell (or genesis's own row, `0`, before anything is retired) whenever the journal has a row, at `pop` and at every boundary, else SI-6 `UndoFault::FloorMismatch { first, floor }`. The body discard's set is `D(E)`, computed and stored nowhere (§4). |
 | **SPR-5** | **A discarded `pqc_auths` region is a state.** `TxRecord` carried `pqc_auths: Option<SegmentBytes>` with a hash row and no segment classified SI-7 (§7.7 leg ii read pairwise). Under `PDM-Q6` the region is discarded with the shard, so that combination is leg (iii)'s one state: `Option<PqcAuths { Retained, Discarded }>`, `wire_bytes` → `None` for a discarded region, and the pairwise test now asserts *discarded* in one direction and SI-7 (a segment without its permanent hash row) in the other. |
 | **SPR-6** | **`D_max` is derived, not re-typed.** `config/consensus_constants.json` already carries `archival_reorg_depth_blocks = 720` and its comment names PDM-Q11's gate as a consumer; `D_MAX = BlockCount::from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS)` — one source in `config/`, no second 720 to drift. The blocker this file carried ("the increment does not cut before the numeric is confirmed") had a falsifier that could only fire after the increment — rule 22's shape — and is dissolved by the build; the numeric stays PROVISIONAL in `PDM-Q11`, now with a mechanism to test it against. |
+| **SPR-7** | **A right conclusion with a wrong reason, graded as a finding.** SPR-2 first landed as "unreachable by arithmetic alone … `h_scarce < tip` at every tip … under any retention". `h_scarce < tip` is trivial and beside the point — the belt guards pop targets, not the tip — and the real ground, `retention < SEB`, is the inequality the text said it did not depend on. Under `retention ≥ SEB` the floor drops below `h_scarce` and the belt is reachable. The conclusion (do not mint) was right because `Horizons::new` refuses that pair; the reason was the thing a reader relaxing `RetentionNotInsideEpoch` would have believed. Corrected at the three code sites and §7 (PR #861 review, SPL-14's shape: correct behaviour, incorrect explanation). |
+| **SPR-8** | **The reorg cap is rule-set data, and the store's retention is constrained by it — not the other way round.** The first landing put the cap and the retention in one store field and the review's first fix ("the validator consumes the session's cap") would have made a store configuration authoritative over a consensus rule, against C2-R8 (the store supplies nothing consensus-visible). Built the ruled direction: `RuleSet::reorg_cap` (`GENESIS` = `D_MAX`; `RuleSet::fakechain(fixed, cap)` names a Fakechain set's own, the `Fixed` witness with the `RuleSetId`-is-not-a-key caveat already paid for), `Horizons::new(epoch, retention, cap)` refusing `retention < cap` (`StoreCannot::RetentionBelowReorgCap`), `connect` re-checking against the set in force at every height. `D_MAX` had no production consumer in `shekyl-chain-rules` (CEN-E2's `is_alternative_block_allowed` is unbuilt), so nothing was retrofitted; CEN-E2 reads `reorg_cap()`, never the const (census row pinned). The `Fault` width cost `Stale::RuleSet` wrote down in advance arrived (`RuleSet` 48 → 56 put `Fault` and `StoreError` past clippy's 128) and took the fix it named: the two rule sets in `Stale::RuleSet` and `StoreCannot::RuleSetNotInForce` are boxed; the three types are `Clone`, not `Copy`. |
+| **SPR-9** | **The `SEB > D_max` refusal moved to the ruled site; the store's is the belt.** `parse_settlement_epoch_override` admitted `2..=SEB` with no reference to the cap (`constants.rs`), so `SEB = 2` against a 720 cap parsed clean — one invariant enforced at one of its two sites, and the regtest e2e walks (`SEB = 512`, `SEB = 2`) ran a configuration mainnet cannot reach: every body inside a legal reorg reaped. The parse now takes the cap in force and refuses below `settlement_epoch_override_floor(cap) = max(cap + 1, 2)`. Because the cap is rule-set data (SPR-8), a shortened regtest runs a Fakechain set whose cap fits — `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` is that lever, the epoch lever's shape exactly (fakechain-only, armed at startup, read once, refused by presence on public nets, `1..=D_max`), parsed first so the epoch is parsed against it; `effective_archival_reorg_depth_blocks` is what the daemon's `RuleSet::fakechain` names. The harness spawns and arms a `RegtestSchedule { seb, reorg_cap }` pair (512/64, 2/1). Rule at the override, belt at open — the shape C2-R8 ruled. |
+| **SPR-Q1** | **Does the pass-anchor depth follow a Fakechain cap?** `pass_anchor.rs` admits a pass whose anchor lies in `[h − ARCHIVAL_REORG_DEPTH_BLOCKS − L, h − ARCHIVAL_REORG_DEPTH_BLOCKS]` — the same 720, for the same reason (a reorg past the anchor depth invalidates admitted passes). Under a levered regtest the rule set's cap is smaller and the anchor depth still reads the const: one number, two consumers, one of them moved (rule 05). Whether admission reads `effective_archival_reorg_depth_blocks()` / the in-force set's cap, or the anchor depth is deliberately the production constant on every nettype, is E4's (pass admission's owner) to rule; this increment changes neither. **Falsify by:** the claim e2e walk (`SEB = 512`, cap 64) — if a pass admission it relies on is refused by the anchor arithmetic on a chain shorter than `720 + L`, the two numbers must agree and the failure answers the question; if it admits, the production depth is compatible with a shortened cap there and the question stays a design one for E4. Posed 2026-09-25; open. |
 
 **What the tests hold** (`store/prune_tests.rs`, 300-block chains under a
 100-block epoch and a 50-block retention — `T = 200` closes a shard only
@@ -477,15 +496,26 @@ decrease in the storage-id total refuses the boundary connect as SI-13
 and leaves the writer halted with the block uncommitted. A read-only
 open reports the `Horizons` it was given. A planted undecodable
 `undo_log_floor` cell is SI-7 through `pop` and arms the latch: a closure
-that swallows it does not commit, and the writer halts. `Horizons`'
-refusals; `D_MAX`, `SEB > D_MAX`, `journal_horizon` and its session form
-`journal_horizon_under(tip, epoch_blocks, reorg_cap)` in
-`shekyl-chain-rules`. 355 + 14
+that swallows it does not commit, and the writer halts. A journal whose
+lowest row is not the cell's floor is SI-6 `FloorMismatch` at `pop`
+(`{ 251, 250 }`) and at the next boundary (`{ 351, 350 }`), tip unchanged,
+writer halted (SPR-4). `Horizons::new(100, 49, cap 50)` is refused; a
+store admitted under cap 50 and handed `GENESIS` (720) at `connect` is
+refused with nothing connected and the writer live (SPR-8). The chains run
+under `RuleSet::fakechain(None, 50)` — a regtest wanting a 50-block
+retention gets a rule set whose cap fits. `Horizons`' refusals; `D_MAX`,
+`SEB > D_MAX`, `journal_horizon` and its session form
+`journal_horizon_under(tip, epoch_blocks, reorg_cap)`, and
+`GENESIS.reorg_cap() == D_MAX` / `fakechain(None, D_MAX) == GENESIS` in
+`shekyl-chain-rules`; the parse floor `max(cap + 1, 2)` and the cap lever's
+range in `shekyl-archival-retention` (SPR-9). 355 + 14
 chain-store, 32 + 7 `shekyl-types`, 207 chain-rules; every `scripts/ci`
 gate green at the mechanism commit; the review fix re-ran the store
 and types libs (355, 32), and the round-3 fix (the floor cell arms the
 latch; `journal_horizon_under`) re-ran chain-store and chain-rules
-(**357** + 14, **208**).
+(**357** + 14, **208**); the review round (SPR-4, SPR-7 … SPR-9) re-ran
+chain-store, chain-rules and archival-retention (**359** + 14, **209** + 15,
+**278**).
 
 **What stays E4's / E5's / S-ARCH's**, unchanged by this build: the
 journals' retirement at `journal_horizon` (S-ARCH's writers, when they

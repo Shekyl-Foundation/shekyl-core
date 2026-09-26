@@ -70,18 +70,19 @@
 //! it are gone, a capability limit, loud, never a verdict. The skeleton
 //! also asked for a second arm, the body-horizon belt `h_scarce + 1` (block
 //! `h_scarce` is mixed — some of its transactions discarded — so it is not
-//! poppable), and said it was unreachable while `SEB > retention`. Read at
-//! the definitions, it is unreachable **by arithmetic alone**: `h_scarce` is
-//! a `close_height` below `(E − 1)·SEB ≤ tip − SEB < tip`, so `tip ≤
-//! h_scarce` has no instance under any retention — there is no case to
-//! build by hand. A defence that cannot fail consumes the attention that
-//! would find the gap (rule 16), so the arm is not minted; the
-//! `SEB > retention` inequality is still refused at open
-//! ([`StoreCannot::RetentionNotInsideEpoch`]) and const-asserted on the
-//! production pair (`shekyl_chain_rules::D_MAX`), because it is what keeps
-//! the undo floor above the body horizon. [`h_scarce`] itself stays, as
-//! `PDM-Q5`'s band-2 edge: chain-named, no presence read, the same number
-//! on every node.
+//! poppable). The belt guards pop *targets*, and every target is at or
+//! above the undo floor, which at the boundary `E·SEB` is `E·SEB −
+//! retention`; that floor is `> (E − 1)·SEB > h_scarce` **exactly when
+//! `retention < SEB`** — the inequality [`Horizons::new`] refuses at open
+//! ([`StoreCannot::RetentionNotInsideEpoch`]) and the production pair
+//! const-asserts (`shekyl_chain_rules::D_MAX`). Under that refusal the arm
+//! has no instance to fire on, and a defence that cannot fail consumes the
+//! attention that would find the gap (rule 16), so it is not minted.
+//! Relax the refusal and the belt is reachable: the dependency is the
+//! reason, not "arithmetic alone" (a first landing said the latter, and
+//! `h_scarce < tip` is true and beside the point — SPR-7). [`h_scarce`]
+//! itself stays, as `PDM-Q5`'s band-2 edge: chain-named, no presence read,
+//! the same number on every node.
 
 use core::ops::Range;
 

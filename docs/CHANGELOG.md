@@ -375,11 +375,19 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   retired below `tip − D_max` at the same boundary and the store records the
   lowest height it kept, so a reorg deeper than the retention is refused as
   a capability limit (`PopBelowFloor`), never mistaken for a corrupt
-  journal. `D_max` is built (720, provisional, derived from the archival
-  reorg depth — one source) with `SEB > D_max` asserted at compile time;
-  the store refuses at open any schedule/retention pair that breaks it, so a
-  shortened regtest epoch must shorten its retention with it. The C++
-  stripe engine was deleted earlier; nothing here is a port of it.
+  journal; the recorded floor is checked against the journal at every pop
+  and boundary, and a disagreement is SI-6. `D_max` is built (720,
+  provisional, derived from the archival reorg depth — one source) with
+  `SEB > D_max` asserted at compile time, **as rule-set data**: the reorg
+  cap is a field of the consensus rule set (`RuleSet::reorg_cap`; the
+  genesis set carries `D_max`, a Fakechain set names its own), and the
+  store's undo retention must cover the in-force set's cap — refused at
+  open and at every connect otherwise. **Regtest operators:** the
+  `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever now refuses an epoch that is not
+  strictly above the reorg cap, and a second fakechain-only lever,
+  `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` (`1..=720`), lowers the cap with it;
+  a daemon on a public network refuses to start if either is present. The
+  C++ stripe engine was deleted earlier; nothing here is a port of it.
   Pre-genesis: a daemon store at layout 13 is recreated, not migrated.
 - **DRS-E1 S-ALT — the alternative-chain store, typed, on the consensus
   file; the switch is one transaction.** Schema layout **13**: `alt_blocks`

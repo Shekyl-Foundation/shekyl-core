@@ -20,14 +20,19 @@
 //! Genesis is never poppable — the floor is at least `1` — and the
 //! retention prune (DRS-E1 S-PRUNE, `prune.rs`) retires rows below
 //! `tip − retention` at every epoch boundary and records the lowest height
-//! it kept in the `undo_log_floor` cell. `pop` refuses a tip below that
-//! floor with [`StoreCannot::PopBelowFloor`] — a capability limit, loud,
-//! never a verdict: undo-log retention is `D_max` in production
-//! (PDM-Q11), so a legal reorg never reaches it. The body-horizon belt the
-//! S-PRUNE skeleton sketched (`DRS_E1_SPRUNE.md` §7: refuse a tip at or
-//! below `h_scarce`) is **not minted** — `h_scarce < tip` by arithmetic at
-//! every tip, so the arm has no instance to fire on (`prune.rs`, *the belt
-//! that was not minted*).
+//! it kept in the `undo_log_floor` cell, which the journal's first key is
+//! checked against here and at every boundary (SI-6 `FloorMismatch`;
+//! `DRS_E1_SPRUNE.md` SPR-4 on why the cell is kept at all). `pop` refuses
+//! a tip below that floor with [`StoreCannot::PopBelowFloor`] — a
+//! capability limit, loud, never a verdict: the retention is at least the
+//! in-force rule set's reorg cap (`Horizons::new`, `connect`; `D_max` in
+//! production, PDM-Q11), so a legal reorg never reaches it. The
+//! body-horizon belt the S-PRUNE skeleton sketched (`DRS_E1_SPRUNE.md` §7:
+//! refuse a tip at or below `h_scarce`) is **not minted** — the floor
+//! `E·SEB − retention` sits above `h_scarce` *because* `retention < SEB` is
+//! refused at open, so the arm has no instance to fire on while that
+//! refusal stands (`prune.rs`, *the belt that was not minted*; SPR-7 on the
+//! reason).
 //!
 //! # SI-6
 //!
