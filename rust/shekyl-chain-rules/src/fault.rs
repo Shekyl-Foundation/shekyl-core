@@ -43,9 +43,10 @@
 
 use core::fmt;
 
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex};
 
 use crate::rule_set::RuleSet;
+use crate::tree_growth::GrowFault;
 
 /// What `validate` can fail with: the view's own fault, or one of the two
 /// kinds this crate defines. Matched arm by arm — `?` on the caller's side
@@ -124,6 +125,13 @@ pub enum PerHeightRecord {
     Block,
     /// [`crate::ChainView::root_at`]. The store's `curve_tree_roots` cell.
     CurveTreeRoot,
+    /// [`crate::ChainView::leaf_count_at`]. The store's
+    /// `curve_tree_leaf_counts` cell (DRS-E3).
+    LeafCount,
+    /// [`crate::ChainView::outputs_at`]. The store's block body and output
+    /// rows at a height below the tip (DRS-E3: the drain's two source
+    /// blocks).
+    Outputs,
 }
 
 impl fmt::Display for PerHeightRecord {
@@ -131,6 +139,8 @@ impl fmt::Display for PerHeightRecord {
         f.write_str(match self {
             Self::Block => "block",
             Self::CurveTreeRoot => "curve-tree root",
+            Self::LeafCount => "curve-tree leaf count",
+            Self::Outputs => "block outputs",
         })
     }
 }
@@ -182,6 +192,23 @@ pub enum Corrupt {
         at: BlockHeight,
         /// Which record was missing. The store maps this onto the cell.
         record: PerHeightRecord,
+    },
+    /// A recorded output's points do not decompress — `construct_leaf`
+    /// refused them (DRS-E3 §3.2). Every admitted output's key, commitment
+    /// and `0x07` point were gated as canonical prime-order points at
+    /// admission (CEN-L11's argument, made a halt rather than a panic), so
+    /// a recorded one that is not is bytes no conforming store holds.
+    LeafNotConstructible {
+        /// The output whose leaf could not be made.
+        output: GlobalOutputIndex,
+    },
+    /// The tree the view described could not be grown: its frontier's shape
+    /// contradicts its leaf count, or a stored chunk hash is not a point of
+    /// its layer's curve ([`GrowFault`]). The summary and the layer table
+    /// disagree — SI-12's family, observed from the validator's side.
+    TreeUnservable {
+        /// What the grow refused.
+        fault: GrowFault,
     },
 }
 
@@ -322,6 +349,11 @@ impl fmt::Display for Corrupt {
                 f,
                 "no {record} recorded at height {at:?}, below the connecting height (SI-7)"
             ),
+            Self::LeafNotConstructible { output } => write!(
+                f,
+                "recorded output {output:?} has a point that does not decompress; its leaf cannot be constructed"
+            ),
+            Self::TreeUnservable { fault } => write!(f, "curve tree cannot be grown: {fault}"),
         }
     }
 }

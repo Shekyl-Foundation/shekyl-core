@@ -98,6 +98,7 @@ mod halt;
 mod header;
 mod invariant;
 mod keyed;
+mod leaf_reads;
 mod output_reads;
 mod pop;
 mod prune;
@@ -654,6 +655,9 @@ mod archival_read_tests;
 #[cfg(test)]
 #[path = "alt_tests.rs"]
 mod alt_tests;
+#[cfg(test)]
+#[path = "leaf_read_tests.rs"]
+mod leaf_read_tests;
 #[cfg(test)]
 #[path = "output_read_tests.rs"]
 mod output_read_tests;

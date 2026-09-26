@@ -85,7 +85,7 @@
 //! every classified read, not only on a read of the tip itself
 //! (`chain_reads` module docs, *The tip is one decoded read*).
 
-use shekyl_chain_rules::{AtHeight, ChainView, RecordedBlock, Tip};
+use shekyl_chain_rules::{AtHeight, BlockOutputs, ChainView, RecordedBlock, Tip, TreeFrontier};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 
 use crate::codec::BlockInfo;
@@ -93,6 +93,7 @@ use crate::codec::BlockInfo;
 use super::chain_reads::{self, ReadFault};
 use super::curve_reads;
 use super::error::StoreError;
+use super::leaf_reads;
 use super::write::WriteBatch;
 
 /// The recorded chain as this batch sees it — including the batch's own
@@ -201,5 +202,22 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     /// absence rule; here a fault poisons the batch.
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, StoreError> {
         curve_reads::root_at(self.batch.txn(), height).map_err(|f| self.arm(f))
+    }
+
+    /// The three DRS-E3 reads (`leaf_reads`): the frontier from the
+    /// summary and the layer table, the per-height leaf count from its
+    /// own table, and a recorded block's outputs assembled from the rows
+    /// the connect wrote — never from a pending table (CTW-10).
+    fn tree_frontier(&self) -> Result<TreeFrontier, StoreError> {
+        leaf_reads::frontier(self.batch.txn()).map_err(|f| self.arm(f))
+    }
+
+    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, StoreError> {
+        leaf_reads::leaf_count_at(self.batch.txn(), height).map_err(|f| self.arm(f))
+    }
+
+    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, StoreError> {
+        let tip = self.tip_row()?;
+        leaf_reads::outputs_at(self.batch.txn(), tip.as_ref(), height).map_err(|f| self.arm(f))
     }
 }

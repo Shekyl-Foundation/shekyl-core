@@ -89,6 +89,22 @@ impl TreeFrontier {
             layer_count_for_leaves(self.leaf_count)
         }
     }
+
+    /// Where a frontier's chunks live in a tree of `leaf_count` leaves:
+    /// `(layer, index)` of every layer's last chunk, layer 0 first. The
+    /// store reads exactly these rows to assemble the frontier
+    /// (`curve_tree_layers[(layer, index)]`, DRS-E3 §3.1); the arithmetic
+    /// lives here so the reader and [`grow`] cannot disagree about which
+    /// chunk is last. Empty for an empty tree.
+    #[must_use]
+    pub fn last_chunk_indices(leaf_count: u64) -> Vec<(u8, u64)> {
+        if leaf_count == 0 {
+            return Vec::new();
+        }
+        (0..layer_count_for_leaves(leaf_count))
+            .map(|layer| (layer, chunk_count(leaf_count, layer) - 1))
+            .collect()
+    }
 }
 
 /// One `(layer, chunk)` hash a grow produced.

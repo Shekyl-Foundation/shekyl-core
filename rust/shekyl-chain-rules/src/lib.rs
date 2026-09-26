@@ -123,6 +123,7 @@ mod anchors;
 mod block;
 mod census;
 mod coverage;
+mod drain;
 mod fault;
 mod reorg;
 mod rule_set;
@@ -152,6 +153,7 @@ pub use anchors::{Anchor, ReleaseAnchors};
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
+pub use drain::drained_outputs;
 pub use fault::{
     Corrupt, Fault, FormAttempt, PerHeightRecord, Retry, Stale, ViewRead, MAX_FORM_ATTEMPTS,
 };
@@ -171,4 +173,4 @@ pub use tree_growth::{grow, ChunkHash, GrowFault, LayerWrite, TreeFrontier, Tree
 pub use trust::Trust;
 pub use validate::{form, tx_against, tx_form, validate};
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
-pub use view::{AtHeight, ChainView, RecordedBlock, Tip};
+pub use view::{AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, Tip};

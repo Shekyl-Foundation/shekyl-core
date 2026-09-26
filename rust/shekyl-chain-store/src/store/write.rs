@@ -69,13 +69,15 @@ use core::marker::PhantomData;
 use redb::{Key, ReadableTable, TableDefinition, TableHandle, WriteTransaction};
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
-use crate::codec::{post_image, Canonical, ChainState, PropertyCell, TotalBurnedCell, UndoEntry};
+use crate::codec::{
+    post_image, Canonical, ChainState, CodecError, PropertyCell, TotalBurnedCell, UndoEntry,
+};
 use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 
 use super::chain_reads::ReadFault;
 use super::prune::Horizons;
 
-use shekyl_chain_rules::{Corrupt, PerHeightRecord};
+use shekyl_chain_rules::{Corrupt, GrowFault, PerHeightRecord};
 use shekyl_units::AtomicUnits;
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
@@ -297,8 +299,41 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                 key: match record {
                     PerHeightRecord::Block => "block_info",
                     PerHeightRecord::CurveTreeRoot => "curve_tree_roots",
+                    PerHeightRecord::LeafCount => "curve_tree_leaf_counts",
+                    PerHeightRecord::Outputs => "blocks",
                 },
                 fault: CellFault::Absent,
+            },
+            // The drain (DRS-E3) found a recorded output whose points do
+            // not decompress: the `output_amounts` row decoded but is not
+            // what a conforming store holds. The row names the cell; the
+            // index is in the fault's sentence on the rule side.
+            Corrupt::LeafNotConstructible { output: _ } => StoreInvariant::CellCorrupt {
+                key: "output_amounts",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "output_amounts",
+                    reason: "a recorded point does not decompress",
+                }),
+            },
+            // The frontier the store served could not be grown. The
+            // frontier is read from `curve_tree_layers` at the positions
+            // the grower's own arithmetic names, so every arm is that
+            // table's content disagreeing with the tree the summary
+            // describes (SI-11's family, observed one layer up).
+            Corrupt::TreeUnservable { fault } => StoreInvariant::CellCorrupt {
+                key: "curve_tree_layers",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "curve_tree_layers",
+                    reason: match fault {
+                        GrowFault::FrontierShape { .. } => {
+                            "the frontier's layer count disagrees with the leaf count"
+                        }
+                        GrowFault::NotOnCurve { .. } => {
+                            "a last chunk's hash is not a point of its layer's curve"
+                        }
+                        GrowFault::NoLeaves => "the drain grew nothing",
+                    },
+                }),
             },
         };
         self.poison.arm(row)

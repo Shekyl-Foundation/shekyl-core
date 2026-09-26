@@ -150,6 +150,12 @@ impl<K: BlobKind> SegmentBytes<K> {
         self.bytes
     }
 
+    /// The segment's wire bytes, borrowed.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     /// The segment's length in bytes — the one fact about the bytes a
     /// caller may learn without taking them (a fee or size estimate is not
     /// a parse).
