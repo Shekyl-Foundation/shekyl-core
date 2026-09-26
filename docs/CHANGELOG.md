@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+### Consensus validator — census 4.I, the transaction against the chain (DRS-E6 slice 6, commits 3–10)
+
+- **Security.** `CEN-L1` — no key image appears twice among one block's
+  inputs — now runs in `shekyl-chain-rules::validate` as a block rule.
+  Before, only the chain-wide check (`CEN-I7`) ran in the validator and the
+  intra-block case was left to the store's `SI-1` invariant: a block listing
+  two transactions that spend the same image passed `validate` and tripped
+  a **fatal writer halt** — reachable by any peer holding two valid spends
+  of its own output. The census, the register and the slice plan had all
+  named the store's belt as the rule's enforcement; the cells are corrected
+  and the belt is now tested as a belt.
+- **The PQC signing preimage has one derivation, in Rust.** The per-input
+  hybrid-signature message (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1) is
+  `shekyl_wire::PqcSigningPreimage`; the daemon's `verify_transaction_pqc_auth`
+  no longer assembles it in C++ (`get_transaction_signed_payload` deleted)
+  and calls `shekyl_tx_pqc_signing_payload_hashes` instead. The derivation
+  is held to a KAT of 21 payloads captured from the C++ over eight
+  daemon-accepted transactions before that code was removed. The hash is
+  the new `shekyl_types::SigningPayloadHash`; the builder's
+  `phase1_payload_hashes` / `sign_pqc_auths` and daemon-rpc's slot verifier
+  take it (API).
+- **One signature verifier.** `shekyl_crypto_pq::signature::verify_pqc_auth`
+  is the body behind the `shekyl_pqc_verify` FFI (codes unchanged),
+  daemon-rpc's K13 and the validator's `CEN-I18`, so the daemon, the pool
+  and the validator cannot disagree on a valid slot.
+- Validator-side coverage `66 → 73`: I19/I20 (`tx_extra` shape and the
+  coinbase grammar), I7, L1, I10/I11/I12 (the reference block: on this
+  chain, in the age window, the root at its height — `ChainView::height_of`
+  added), I17, I18. `tx_against(tx, slot, view, rule_set)` takes the slot
+  and returns `ViewRead<V::Fault>` (a root missing below the tip is
+  `Corrupt::HoleBelowTip`, never a verdict). I13 waits on E3's height-keyed
+  depth read; I15 and H19-verify on the scenario driver producing a spend —
+  each a `FOLLOWUPS.md` row with its falsifier.
+- The E2 replay driver's mutation family gains `DoubleSpend` refusing at
+  its input, `UnknownReference`, `ReferenceTooRecent`, `ForgedSignature`.
+
 ### Clearnet Noise NNhfs, off by default
 
 - **`--clearnet-transport-encrypt`** (default off) releases the public-zone

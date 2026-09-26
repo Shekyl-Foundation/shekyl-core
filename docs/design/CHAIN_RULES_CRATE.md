@@ -397,6 +397,13 @@ pub trait ChainView<'id> {
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Self::Fault>;
     /// CEN-I12 (the membership anchor is the tree state at `ref_height`).
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault>;
+    /// CEN-I10 (a spend's `referenceBlock` is a block on this chain — a
+    /// lookup by hash, `blockchain.cpp:4113` `block_exists(hash, &height)`;
+    /// `None` is the one absence: not on this chain). The height it answers
+    /// is I11's operand and the height I12 reads the root at. Slice 6
+    /// commit 5 (2026-09-25); the store shares one body between
+    /// `ReadSnapshot` and `BatchView`.
+    fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Self::Fault>;
     /// CEN-A2 (`hash`); B5 (and 4.C, CEN-F5 later) via `Tip::connecting_height`.
     /// B1 does not read the tip: the rule set is an input. `None` is the empty
     /// chain — slice 1, Q1.
@@ -638,9 +645,15 @@ pub enum Corrupt { CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyO
 pub fn tx_form(tx: &shekyl_wire::Transaction, slot: TxSlot, rule_set: &RuleSet) -> Verdict<RuleCoverage>;
 
 /// Stateful per-tx rules (4.I). The pool passes its `PoolView` decorator here.
+/// Takes the SLOT it judges at, as `tx_form` does (slice 6 commit 4: deriving
+/// at `Lone` and re-homing the locus afterwards put the coinbase through H5
+/// at the wrong slot; `Locus::rehome` is deleted). The fault widens to
+/// `ViewRead<V::Fault>` (slice 6 commit 5): I12 reads a per-height record,
+/// and a root missing at a height I10 just found recorded is
+/// `Corrupt::HoleBelowTip`, never a verdict.
 pub fn tx_against<'id, V: ChainView<'id>>(
-    tx: &shekyl_wire::Transaction, view: &V, rule_set: &RuleSet,
-) -> Result<Verdict<RuleCoverage>, V::Fault>;
+    tx: &shekyl_wire::Transaction, slot: TxSlot, view: &V, rule_set: &RuleSet,
+) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>>;
 ```
 
 Generic over `V: ChainView<'id>` (not `&dyn`) so E5's decorator implements the
@@ -648,8 +661,16 @@ trait without this crate naming it. Inside a rule, `?` propagates a **fault**
 and only a fault; a refusal is always written out as `Ok(Err(InvalidBlock {
 rule, locus }))` at the site that judged — the row is named where the decision
 is made. `validate` calls `tx_form` then `tx_against` for the miner tx and each
-listed tx, re-homing a `Locus::Tx { slot: Lone }` / `Locus::Input { slot: Lone,
-.. }` to the real `TxSlot`, unions the coverages, and mints the `ChainValid`.
+listed tx **at the slot each occupies** — both stages derive at the slot they
+judge, so a refusal's locus is left as the callee wrote it — unions the
+coverages, and mints the `ChainValid`. The view-bound per-tx rules are
+`TxAgainstRule`s (`check(cx, view) -> Result<Verdict<()>, V::Fault>`, run by
+`run_tx_against`, out-of-scope rows recorded vacuous like `TxRule`'s), plus
+two D4-arranged sequences that yield an operand and consume it —
+`judge_reference` (I10 yields the height, I11 measures it, I12 reads the
+anchor) and `judge_signatures` (I17 yields every input's signing hash, I18
+verifies over it) — and `TxScope` has a `Coinbase` arm (I20: the coinbase
+only, vacuous on every listed transaction).
 Block-level **predicates** run in census order, each through
 `rules::run_form` (stateless, in `form`) or `rules::run` (view-bound, in
 `validate`), inserting `R::ROW` iff `R` passed. **Definition** rows record at
@@ -1453,7 +1474,8 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   reconstructs its 4-part txid from the two stored digests. KAT'd
   against the pinned oracle txid on the full body **and** the skeleton
   (`pruned_tx_hash_parity`), and on the 3-part forms — coinbase,
-  serve-credit (`None`; the countersignature rides the vin), a coinbase
+  serve-credit (`None`; its countersignature is over the pass record,
+  CEN-J10 — Ed25519 leg on the vin, ML-DSA leg in the pruned record), a coinbase
   handed components anyway — and on the bond-post (4-part like any spend:
   the identity signature is a tx-level `pqc_auths` slot, so the arity is
   the predicate's, never an input arm's). The wire surface is **typed as
