@@ -45,10 +45,36 @@ use shekyl_fcmp_proofs::fcmps;
 pub const SCALARS_PER_LEAF: usize = 4;
 
 /// Number of outputs per leaf-layer chunk (C1/Selene branching factor).
-pub const SELENE_CHUNK_WIDTH: usize = fcmps::LAYER_ONE_LEN;
+///
+/// **Shekyl's statement of the arity, checked against the library — never
+/// the library's value read off as ours** (DRS-E3 `CTW-Q7`, RULED
+/// 2026-09-26; `DRS_E3_CURVE_WRITER.md` §3.9). A chunk arity is a
+/// structural parameter of the proof system: name it differently and every
+/// proof in existence stops verifying. That is why it is a const here and
+/// **not** a key in `config/consensus_constants.json` — the file's second
+/// membership test is *could a schedule, a network or an operator
+/// legitimately name it differently?*, and nothing can. The assertion below
+/// is the belt: a `fcmps` bump that moved `LAYER_ONE_LEN` fails this crate's
+/// build instead of silently re-shaping the tree (the `MAX_INPUTS` lesson —
+/// a library constant that became consensus unratified).
+pub const SELENE_CHUNK_WIDTH: usize = 38;
 
-/// Number of children per Helios-layer chunk.
-pub const HELIOS_CHUNK_WIDTH: usize = fcmps::LAYER_TWO_LEN;
+/// Number of children per Helios-layer chunk. Shekyl's statement, checked
+/// against the library below; see [`SELENE_CHUNK_WIDTH`].
+pub const HELIOS_CHUNK_WIDTH: usize = 18;
+
+const _: () = assert!(
+    SELENE_CHUNK_WIDTH == fcmps::LAYER_ONE_LEN,
+    "SELENE_CHUNK_WIDTH != fcmps::LAYER_ONE_LEN: the proof library's leaf-layer arity moved \
+     under Shekyl's stated tree shape; every proof and every stored layer hash depends on it. \
+     Re-ratify the arity (CTW-Q7) rather than following the library"
+);
+
+const _: () = assert!(
+    HELIOS_CHUNK_WIDTH == fcmps::LAYER_TWO_LEN,
+    "HELIOS_CHUNK_WIDTH != fcmps::LAYER_TWO_LEN: the proof library's Helios arity moved under \
+     Shekyl's stated tree shape; re-ratify (CTW-Q7) rather than following the library"
+);
 
 /// Total leaf scalars per leaf-layer chunk.
 pub const LEAF_CHUNK_SCALARS: usize = SCALARS_PER_LEAF * SELENE_CHUNK_WIDTH;

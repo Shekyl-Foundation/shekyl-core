@@ -28,6 +28,14 @@ shekyl-units = { path = "../shekyl-units" }
 # consensus hash identities (`Block::hash`, `Transaction::hash`) CEN-B6
 # defines. Deps: shekyl-crypto-hash, shekyl-curve-generators; no store.
 shekyl-wire = { path = "../shekyl-wire" }
+# The curve tree's arithmetic — `construct_leaf`, `hash_grow_selene` /
+# `hash_grow_helios`, the Shekyl-stated chunk arities — for the growth
+# the verdict derives (DRS-E3 `CTW-Q1`: the root determines future
+# validity, so the authority over validity carries it), and the proof
+# verifier CEN-I15 needs. Already in this crate's closure through
+# `shekyl-wire` and `shekyl-archival-retention`; the direct edge names the
+# consumer. No store.
+shekyl-fcmp = { path = "../shekyl-fcmp" }
 # `Network`, the one nettype enum in the workspace: it selects a
 # `RuleSchedule` (rule 71 — data, never control flow). Default features only;
 # `serde` stays off.

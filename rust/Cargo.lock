@@ -3863,6 +3863,7 @@ dependencies = [
  "shekyl-ct-balance",
  "shekyl-difficulty",
  "shekyl-economics",
+ "shekyl-fcmp",
  "shekyl-genesis-tool",
  "shekyl-rpc-types",
  "shekyl-types",
