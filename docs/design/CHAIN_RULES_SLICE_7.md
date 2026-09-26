@@ -48,14 +48,18 @@ Two things make 4.G unlike 4.I:
   (`shekyl-archival-retention`). G1 is the store's `tx_exists` belt, with
   no view read. G2 has no pairing rule; `Transaction::hash` is the hash,
   not that rule. The crypto is behind us.
-- **The heaviest row is a definition, and it is the one with the recorded
-  divergence.** G6/G6b's effective median is what the coinbase's exact-pay
-  verdict (F18) is a function of. The shipped C++ clamps the short-term
-  median at **×50** the long-term; the census ratified **S = 4**
-  (C2-R2 Q3, GAP-7 measured on the Pi 4 floor). Landing G6 makes the Rust
-  validator refuse blocks the C++ accepts near the surge bound. Slice 4 Q1
-  ruled that this divergence lands in *its own* slice, in the PR that owns
-  the weights, so it cannot be buried — this is that PR.
+- **The heaviest row is a definition, and it is the one the census still
+  records as divergent.** G6/G6b's effective median is what the coinbase's
+  exact-pay verdict (F18) is a function of. The census ratified **S = 4**
+  (C2-R2 Q3, GAP-7 measured on the Pi 4 floor) against Monero's ×50 and
+  its cells say the C++ still ships the ×50. **Read at the line, it does
+  not** (§3.8): since `1c8594049` (2026-09-12) both C++ sites call the Rust
+  clamp, so G6 lands at **parity**, and the divergence this slice carries
+  is in two census cells and two register rows, corrected in commit 10.
+  Slice 4 Q1 ruled that G6 lands in *its own* slice, in the PR that owns
+  the weights — this is that PR; what it owns turned out to be a record
+  correction rather than a rule change, which is the better outcome and
+  was found by reading the subject instead of the question.
 
 In Rust the home is `validate` (`validate.rs:277`): the `BlockRule` class
 (`rules::run::<L1,_>` after the slot loop, `:349`) for the view-bound
@@ -299,19 +303,22 @@ keys** and — the one C++ touch this slice would make — the two defines
 pointed at the generated macros, as `…FULL_REWARD_ZONE_V5` already is
 (`:60`). Rule 20: a define is marshaling, not logic. **Q6.**
 
-### 3.5 Two readers of one median, one of them a producer
+### 3.5 Two readers of one median, one of them a producer — and the parity capture
 
-The block template is the second consumer of G6 (§1.3). It is also where
-`S = 4` versus `×50` will first *matter operationally*: a Rust producer
-prices its coinbase at the ratified median and a C++ validator near the
-surge bound accepts a block a Rust validator refuses, or the reverse. That
-is the CSR-3a divergence slice 4 named, arriving through the producer.
-Nothing to build — the E2 conformance run grades it — but the run's
-`WrongReward` and a new `SurgeBoundReward` mutation should be *planned*
-against the captured chains: none of the four carry a surge, so the mock
-holds the arithmetic at the four boundaries (`S·LTEM` exactly / one over;
-zone exactly / one under) and the divergence is stated as a `#[ignore]`d
-live-lane test, not left to memory.
+The block template is the second consumer of G6 (§1.3): the Rust producer
+prices its coinbase against the median the Rust validator judges by, one
+derivation (Q4). *Records-was:* this section's first cut framed the
+template as where `S = 4` versus `×50` would first matter operationally;
+§3.8 shows there is no ×50 to diverge from. What remains is the capture
+I17's KAT made the pattern for — **a C++-built block at the C++'s weight
+limit, accepted by the Rust validator on G6, taken while both
+implementations exist** — the same reasoning and the same window as the
+signing-preimage KAT, opposite sign: a parity pin, not a divergence pin.
+None of the four captured chains approaches the bound, so the mock holds
+the arithmetic at its boundaries (`S·LTEM` exactly / one over; the zone
+exactly / one under; `min(window, h)` at low heights, §3.9's early-chain
+arm) and the round trip is a `#[ignore]`d live-lane test against a
+regtest daemon, not left to memory.
 
 ### 3.6 What the cost of the median is — unmeasured, and measured before it gates
 
@@ -364,6 +371,106 @@ all-four `Unmutable`, the corpus is adequate and this was one gap; if
 others are, the corpus has the shape hole above and the driver's two-body
 block is the fix for the set. Either answer goes into §5.1 as a number.
 
+### 3.8 The ×50 is gone from the C++; the census and the register did not notice (read 2026-09-26)
+
+The census G6 and G6b cells (`CONSENSUS_RULE_CENSUS.md:410–411`) say *"the
+shipped C++ constant is the refuted ×50, a known divergence until the store
+port implements the signed value"*; the register grades both **DIVERGENT**
+for that one cause (`CONSENSUS_STORE_RECONCILIATION.md:920–921`, reviewed
+at `eb1b60198`, 2026-09-11). At `ad557ac5a` the C++ has no ×50:
+`update_next_cumulative_weight_limit` calls
+`shekyl_effective_block_weight_median` (`blockchain.cpp:6090`), which is
+`shekyl_economics::effective_median` over `BLOCK_WEIGHT_SURGE_FACTOR`
+(`economics/build.rs:56`, generated from `consensus_constants.json:16` = 4);
+the long-term clamp is `shekyl_long_term_block_weight` (`:6062`); no
+`SURGE` literal survives in `blockchain.cpp` or `cryptonote_config.h`; the
+FFI pins `shekyl_effective_block_weight_median(zone, zone × 100) == 4 × zone`
+(`shekyl-ffi/src/legacy_tests.rs:1108–1111`); and the template reads the
+median that clamp set (`:1905`). The commit is `1c8594049` *consensus: own
+the surge clamp in Rust; both C++ sites consume it* — **2026-09-12, one day
+after the register's review**. Both rows were true at their pin and have
+been false as status for two weeks; nothing re-graded them because the fix
+landed in a lane that did not own the register.
+
+Three consequences. **(i)** G6 lands at parity: one derivation, one key,
+both languages. **(ii)** Q9's `RuleSet`-knob refusal strengthens — there is
+no C++ value to be compatible *with*, so an entry carrying `50` would
+encode a number that exists nowhere and give it institutional standing.
+**(iii)** Commit 10 re-reviews CEN-G6/G6b in the register at the landing
+tree; if both go CHECKED-CONFORMANT the gate's tally moves **125 / 3 / 5 →
+127 / 1 / 5** and CEN-I4 (`:600`) is the register's only recorded
+divergence — derived from `check_conformance_coverage.py` at that tree, not
+from this arithmetic, and said plainly in the CHANGELOG if it holds.
+
+**The mechanism, named because it recurs:** the reviewer read Q9's text and
+the census cells it cites, and ruled — without reading `blockchain.cpp`. A
+census cell describing implementation state is a claim about code, not the
+code (rule 16's corollary); the elaborate producer-side exposure the first
+ruling constructed was internally consistent and about a system that
+stopped existing on 2026-09-12. Reading the question is not reading the
+subject.
+
+### 3.9 C2-R2 Q1 had three legs and one falsifier, on the wrong leg
+
+The 300 000-byte zone **was** arbitrated — `CONSENSUS_C2_R2_WEIGHT_FEES.md`
+§Q1 (`:223–284`, SIGNED 2026-09-06): a tx-capacity leg, a throughput-floor
+leg, and the GAP-7 verification-cost leg, discharged on the Pi 4 floor.
+Read leg 1 at `:233–244`: *"a typical 2-output spend runs ≈ 4–8 kB (**an
+estimate** — prefix + extra + BP+ + FCMP proof; **not a measured corpus**),
+putting the zone at roughly **35–75** typical transactions per free
+block."* The estimate counted the per-output PQC extra (≈ 1.1 KB) and did
+not count the per-**input** hybrid auth. Slice 6's I4 round then measured
+real spends through the production builder (`CHAIN_RULES_SLICE_6.md:
+903–917`, floor run `:1003–1018`): **13 584 bytes** for one input and two
+outputs, **58 720** at eight, **6.4 KB per input** of which 5.4 KB is the
+hybrid auth. So the zone holds **≈ 22** typical transactions penalty-free,
+**≈ 5** at eight inputs — a third of the ruling's premise. Q1's only stated
+falsifier (`:277–280`) is on leg 3; nothing was armed to fire when a corpus
+replaced the estimate, so the measurement landed in slice 6, sat beside a
+ruling it refutes, and no mechanism connected them.
+
+**Disposition (rule 15 — a design round, not this slice's):** reopen **Q1
+leg 1 only**, with the corpus as input — state the objective (how many
+transactions a block carries without penalty, and why), run the leg on the
+I4 table, derive or confirm; legs 2 and 3 and the signature stand. A
+FOLLOWUPS row carries it, owner the census (which owns §10 R2). The value's
+home gains the comment it lacks (`_comment_block_weight_zone`, citing Q1
+and its condition — rule 91's constant-doc class). Slice 7 consumes the
+zone by name and is unaffected by the outcome; `TX_WEIGHT_LIMIT = zone/2 −
+600` (`transaction.rs:158`) moves with it and is FL-R16c's to re-read.
+Before genesis: the window in which this is free closes at exactly one
+point.
+
+**The lesson beyond the row, proposed for `22-no-lazy-deferral.mdc`'s
+falsifier section:** *a multi-leg ruling needs a falsifier per leg.* One
+falsifier on a three-leg ruling retires the whole ruling's reopening
+criterion to whichever leg someone happened to pick; the ruling then reads
+as equally settled across all three when one is a measurement and two are
+estimates. A leg that says "an estimate" in its own text is a leg that has
+named its falsifier and not armed it.
+
+### 3.10 The weight formula: bytes track inputs; the clawback is the open question
+
+`Transaction::weight = size + bp_plus_weight_clawback` (`shekyl-wire/src/
+transaction.rs:226`) is Monero's formula, and C2-R2 does not examine it
+(no mention of the clawback in the round). Half the "why is this here?" is
+answered by the I4 measurement already: **6.4 KB and 11.9 ms per input,
+linear within 5 % on both machines** (`CHAIN_RULES_SLICE_6.md:911–917`,
+`:1011–1018`) — bytes track verification cost proportionally in the input
+dimension, which is the load-bearing one, so the formula's byte basis is
+defensible there and that sentence is recorded as the answer. What the
+measurement does not cover is the clawback: BP+ is a **fixed** cost (2.7 ms
+on the i9, 34.9 ms on the Pi, independent of inputs), and the clawback
+exists to price Monero's BP+ *aggregation* economics. The open question
+narrows to *why does Shekyl price a fixed-cost proof by a size adjustment?*
+— bounded, answerable, a FOLLOWUPS row, owner the census.
+
+Same family, smaller: `DYNAMIC_FEE_PER_KB_BASE_FEE_V5`
+(`cryptonote_config.h:70`) has **no reader** outside its own header — a
+dead define; the fee floor was derived in the FL rounds and does not
+inherit the zone through it. It goes with Q6's two-define edit (the same
+file, left in good shape; disclosed, not "while we're here").
+
 ## 4. Stage placement — proposed, shaped by §8
 
 | stage | rows | why |
@@ -386,13 +493,13 @@ when an operand is absent. Wave B extends the sequence in place.
 | 1 | **This file amended on review; the index row; the §5.1 expectation table** — written before commit 2, so the overrun signal has a subject | — |
 | 2 | **Measurements, no rules:** (a) the two-body block through `mine_listing`, the reorder and a substitution replayed through it — G2's own witness, and the output-index divergence shown on two connects (§3.1); (b) locate or add the pruned-form fixture at both sites (§3.3); (c) the weights-read bench on the floor (§3.6); (d) the `Unmutable` census — every mutation over every captured chain, which apply and which report what (§3.7) — four numbers into §5.1 | — |
 | 3 | **`ChainView` grows** — the weights read (Q2's shape) and `has_transaction` — trait, `BatchView`, `MockChain`, the store's conformance test holding the mock to the store, **one commit, both sides** (slice 6 §5.1's rule) | commit 2 (c) |
-| 4 | **G6 / G6b** as `judge_emission`'s first two definitions in `rules/block_weight.rs`; the two windows as generated consts (Q6); the mock holds the clamps at their boundaries, the captured chains replay through both | commit 3 |
+| 4 | **G6 / G6b** as `judge_emission`'s first two definitions in `rules/block_weight.rs`; the two windows as generated consts (Q6, with the two `#define`s repointed and the dead fee define deleted, §3.10); the mock holds the clamps at their boundaries **and the `min(window, h)` arm at low heights** (C2-R2 Q2's early-chain weakness — below 100 000 the window is the chain); the captured chains replay through both at parity (§3.8) | commit 3 |
 | 5 | **F14, F14b, F16, G12** — the sequence completed through the paid reward; `ConnectFacts.{weight, long_term_weight, long_term_effective_median, coins_generated}` read off the verdict, the ingest's four composed lines deleted (`Provenance::passed_through` re-counted with E3's) | commit 4 |
 | 6 | **G2** as a `FormRule` in `form`; E2's `ReorderedBodies` flips from pinned-connects to refusing at `Locus::Listed` | commit 2 (a) |
 | 7 | **G1, G7, G9, G10** as `BlockRule`s after L1; G9's admitted pair as a positive fixture; the driver gains `DuplicateListing`, `DuplicateServeCredit`, `DuplicateClaim`, `DuplicateBondPost` spec-first in `DRS_E2_REPLAY_DRIVER.md` §3.10 | commit 3 |
 | 8 | **G3, G4, G5** registry entries, `by_construction` with their falsifiers named; conformance re-check (the register's G rows, `:640–646`, re-read against the crate) | commit 7 |
 | 9 | **Wave B — F17, F18, G11, G13** if E3's `leaf_count` has landed; else **the named successor**, one FOLLOWUPS row, falsifier `rg 'fn leaf_count_at\|fn depth_at' rust/shekyl-chain-rules/src/view.rs` → present with `BatchView`'s impl, then this row lands as one commit extending `judge_emission` and `WrongReward` flips | E3 commit 4 |
-| 10 | **Docs:** census 4.G re-pinned at the landing tree; `CHAIN_RULES_CRATE.md` §4.3 (the two reads), §4.6 (`judge_emission`, the verdict's four values); `DAEMON_REDB_STORE.md` §7.5; index; FOLLOWUPS (the F14-family residue closed; the wave-B row if deferred); CHANGELOG (the `S = 4` divergence going live in the validator is consensus-relevant, and G2 if commit 2 grades it as more than a pairing) | — |
+| 10 | **Docs:** census 4.G re-pinned at the landing tree, **G6/G6b's *"shipped ×50 … until the port"* clauses corrected** (§3.8); the register's CEN-G6/G6b rows **re-reviewed at the landing tree** (DIVERGENT → CHECKED-CONFORMANT if the read holds; tally derived from `check_conformance_coverage.py`, not by hand); `CHAIN_RULES_CRATE.md` §4.3 (the two reads), §4.6 (`judge_emission`, the verdict's seven values and Q5's test); `DAEMON_REDB_STORE.md` §7.5; index; FOLLOWUPS (the F14-family residue closed; the wave-B row if deferred; the two rows §3.9/§3.10 opened); CHANGELOG — G2 (Q7, one line), and if the tally is 127 / 1 / 5, that CEN-I4 is the register's only recorded divergence | — |
 
 Ten commits is the rule-06 ceiling; commit 9 is the one that may leave.
 
@@ -437,13 +544,13 @@ the rules.
 
 ## 8. Questions for the reviewer — Round 0
 
-- **Q1 — the two waves, and E3.** F17/F18/G11/G13 wait on E3's per-height
-  leaf count (§1.2). Default: this slice lands wave A and names wave B as
-  its successor with the falsifier in §5 row 9, absorbing it if E3's commit
-  4 merges inside the slice's window. The alternative — hold the whole
-  slice for E3 — is refused for the reason slice 6 refused waiting on I13:
-  nothing in wave A depends on it, and the median is what unblocks the
-  template. Confirm.
+- **Q1 — the two waves, and E3. RULED 2026-09-26: the default — slice 6's
+  precedent applied.** Nothing in wave A depends on E3, and wave B is a
+  named successor with a falsifier (§5 row 9), not a hold. F17/F18/G11/G13
+  wait on E3's per-height leaf count (§1.2); this slice lands wave A and
+  absorbs B if E3's commit 4 merges inside the window. The alternative —
+  hold the whole slice for E3 — was refused for the reason slice 6 refused
+  waiting on I13.
 - **Q2 — the weights read.** G6 needs the last 100 `weight`s and the last
   min(100 000, h) `long_term_weight`s. **(a)** `RecordedBlock` gains both
   fields and the rule loops `block_at` — no new method, ten fixture sites
@@ -456,38 +563,74 @@ the rules.
   consensus value. Default **(b)**, *conditional on commit 2 (c)'s bench
   on the floor*: if a 100 000-row projection read is not under budget
   there, (b) with a store-side dense column is the fallback, and (c) is
-  reopened on the measured number, not on intuition.
-- **Q3 — G1's intra-block half.** The C++ refuses a hash listed twice in
-  one block only by the belt (`TX_EXISTS` on the second insert). Every
-  duplicate body is *also* caught by a class row — L1 (a spend's key
-  image), G7/G9/G10 (the archival forms) — so the Rust rule could leave
-  the intra-block case to them. Default: G1 refuses *"already on the chain
-  **or earlier in this block**"* — one predicate, one `Locus`, and the
-  outcome the C++ reaches through two mechanisms reached through one;
-  the class rows stay as the rows they are. Rule 71 is satisfied either
-  way (both refuse); the question is which row names the refusal.
+  reopened on the measured number, not on intuition. **Deferral
+  CONFIRMED 2026-09-26, with the fallback pre-empted:** a store-side dense
+  column is a **materialised view of data the store already holds** — the
+  class E3's pre-flight met four times in two days and answered once
+  (`DRS_E3_CURVE_WRITER.md` §3.7: `undo_log_floor`, `CURVE_TREE_META`, a
+  per-height depth, the pending set; *"a view becomes a query; if
+  performance later argues for materialising one, it materialises **with**
+  a check against its source"*) — so if the bench forces it, it arrives
+  with that check (an SI row: the column's entry at `h` equals
+  `block_info[h]`'s, held on every connect and by the conformance test),
+  never as an authority a rule reads without the source beside it. Written
+  now so the bench result does not decide it under pressure.
+- **Q3 — G1's intra-block half. RULED 2026-09-26: the default, for a
+  better reason than the one given.** G1 refuses *"already on the chain
+  **or earlier in this block**"*. The reason is not tidiness ("one
+  predicate, one `Locus`"). The alternative — leave the intra-block case
+  to L1 and G7/G9/G10 — is a **coverage claim over transaction classes**:
+  every duplicate body is caught because a spend has a key image or an
+  archival form has its row. True today; silently false the day a class
+  arrives with neither — and the serve-credit form already demonstrates a
+  class with no key image. A predicate that refuses duplication directly
+  is robust to new classes; a union of class rows must be re-verified
+  whenever one is added, by someone who will not know they are obliged
+  to. It is also the belt-versus-rule correction again: the C++ reaches
+  this only through `TX_EXISTS` on the second insert; making it a rule is
+  not duplicating the belt, it is putting the refusal where the census
+  says it lives. The class rows stay as the rows they are.
 - **Q4 — the median's signature, for two readers.** `pub fn
   effective_median_at<V: ChainView>(view: &V, connecting: BlockHeight) ->
   Result<EffectiveMedian, ViewRead<V::Fault>>` returning both the
   effective median and the LTEM (the template needs the first, G6b the
-  second). Default as stated; the alternative — the template reads the
-  store's recorded `long_term_effective_median(tip)` — is slice 4 Q1 (c)
-  by another door (SCR-19: one block stale).
+  second). **RULED 2026-09-26: the default — I17's shape one row over.**
+  One derivation, two consumers, the second reader being the template
+  rather than the daemon. The precedent is named in the row because the
+  alternative keeps reappearing by different doors — slice 4 Q1 (c), the
+  template reading the store's recorded `long_term_effective_median(tip)`
+  — and SCR-19's one-block staleness is the same objection each time.
 - **Q5 — what the verdict carries.** Four values (`weight`,
   `long_term_weight`, `long_term_effective_median`, `coins_generated`) so
   `facts.rs` deletes four composed lines and `ConnectFacts` reads them
-  from `ChainValid`, the D4 precedent. `burned` stays passed-through until
-  F17. Default yes; the alternative (keep them in `ConnectFacts` as
-  passed-through and let the ingest recompute) is the two-sources class
-  the seam exists to close.
+  from `ChainValid`, the D4 precedent. **RULED 2026-09-26: yes, and the
+  test that keeps the verdict from becoming a fact bundle is stated:** *a
+  value belongs in the verdict iff the validator must compute it to reach
+  the verdict.* All four pass — `weight`, `long_term_weight` and the LTEM
+  are read by the G rows, `coins_generated` by the F rows — so carrying
+  them is free; the computation already happened. `burned` stays
+  passed-through until F17 because the **same test gives the other
+  answer** (no rule reads it yet), which is what makes it a test rather
+  than a preference. `ChainValid` will carry seven values after this
+  slice; the next four arrive under this sentence, or not at all. The
+  alternative (keep them in `ConnectFacts` as passed-through and let the
+  ingest recompute) is the two-sources class the seam exists to close.
 - **Q6 — the two windows into `consensus_constants.json`.** Add
   `block_weight_short_term_window_blocks: 100` and
   `block_weight_long_term_window_blocks: 100000`; `shekyl-economics`'s
   `build.rs` generates them; the two C++ defines point at the generated
-  macros. Default yes — slice 6 Q5's shape, and the one C++ touch is two
-  `#define` lines (rule 20, marshaling). The alternative — Rust consts
-  with a sentinel test against the header — leaves the value with two
-  hand-written homes.
+  macros. **RULED 2026-09-26: yes — mechanical under the JSON's membership
+  rule.** `consensus_constants.json`'s `_comment` names two tests, both
+  required: (1) a different value makes a different chain — both windows
+  pass (a different window is a different median, a different limit, a
+  different set of valid blocks); (2) a schedule, network or operator
+  could legitimately name it differently — both pass (a network with
+  another block time would). Both tests, both keys; a lookup, not a
+  judgement, which is what the pair was for. The one C++ touch is two
+  `#define` lines pointed at the generated macros (rule 20, marshaling),
+  plus the dead `DYNAMIC_FEE_PER_KB_BASE_FEE_V5` deleted from the same
+  file (§3.10, disclosed). The alternative — Rust consts with a sentinel
+  test against the header — leaves the value with two hand-written homes.
 - **Q7 — G2's grade. RULED 2026-09-26: the proposed grading, taken.**
   §3.1 read the connect path: bodies are keyed by computed identity, so a
   body under the wrong txid is not how a reorder lands; a reorder or a
@@ -509,12 +652,23 @@ the rules.
   at `Locus::Block`; the definitions record only. Default as stated;
   E2's §3.10 rows are written from these before the rules exist, as
   slice 6 did.
-- **Q9 — the divergence going live.** With G6, the Rust validator refuses
-  a block whose short-term median exceeds `4 × LTEM` where the C++
-  accepts up to `50 ×`. Slice 4 Q1 named this a CSR-3a pass condition.
-  Default: land it as ratified, with (i) the census G6/G6b cells' *"until
-  the port"* clause closed in commit 10, (ii) a `#[ignore]`d live-lane
-  test constructing the divergence (§3.5), and (iii) one CHANGELOG line
-  under consensus. The alternative — a `RuleSet` knob carrying `50` until
-  the C++ is retired — is a version dispatch for a network with no
-  deployed users (rule 16's user-absent inversion) and is refused.
+- **Q9 — the divergence going live. RE-RULED 2026-09-26: G6 lands at
+  parity; the divergence is in the record, not the code.** *Records-was,
+  the question as asked:* with G6 the Rust validator would refuse a block
+  whose short-term median exceeds `4 × LTEM` where the C++ accepts up to
+  `50 ×`; default, land it as ratified with a live-lane divergence test
+  and a CHANGELOG line under consensus. *The first ruling took that
+  default and was wrong* — it read the question and the census cells it
+  cites and never read `blockchain.cpp`; §3.8 has the read. **Ruled:** (i)
+  no rule change — both languages compute `S = 4` from one key since
+  `1c8594049`; (ii) the census G6/G6b cells and the register's two
+  DIVERGENT rows are corrected in commit 10, re-reviewed at the landing
+  tree, and if the gate derives 127 / 1 / 5 the CHANGELOG says plainly
+  that CEN-I4 is the register's only recorded divergence; (iii) the
+  live-lane test is a **parity capture in I17's KAT shape** (§3.5) — a
+  C++-built block at the C++'s limit accepted by the Rust validator on G6
+  while both implementations exist. The `RuleSet` knob carrying `50` is
+  refused for a stronger reason than rule 16's user-absent inversion: the
+  rule set is where a future reader learns what Shekyl permits, and there
+  is no C++ value to be compatible with — the entry would encode a number
+  that exists nowhere and give a refuted value institutional standing.
