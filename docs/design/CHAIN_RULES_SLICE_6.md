@@ -407,7 +407,14 @@ formatted text was committed; caught by `git status` before any edit, restored
 from `HEAD`; and instance 16, the same file — `pqc_signing_preimage_kat.rs` —
 back at its pre-`cargo fmt` text a third time, forty minutes after `4a1137801`
 committed the wrapped form, caught by the `git status` that follows every
-commit) go into `08-worktree-hygiene.mdc` with commit 10. The recipe
+commit; and instance 17, the widest — **five files** (`tx_against.rs`,
+`tx_against_tests.rs`, `amendments_tests.rs`, `signature.rs`,
+`verifier.rs`) at their pre-`cargo fmt` text together, an hour after their
+commits, showing in the `git status` that preceded the push of
+`9c9a046dc`; every hunk formatting, restored from `HEAD`, the pushed
+commits unaffected) go into `08-worktree-hygiene.mdc` with commit 10. The
+five were exactly the files the edit tool had touched that hour and
+`cargo fmt` had then rewritten — the mechanism `wt-e6-s6` named, at scale. The recipe
 correction from the same day — the clone builds with `env -u
 CARGO_TARGET_DIR` — is already in that rule (`8e4616a35`); it did not wait,
 because it changes what the step *is*, not what it has seen.
