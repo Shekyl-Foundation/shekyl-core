@@ -776,8 +776,9 @@ listener, and so a connection in the gap phase.
    took ports and `max_streams` only, and `OnionPow`'s `Default` was
    `Disabled`. **Landed:** `publish` takes the setting explicitly, the
    default is `Enabled`, and the daemon's onion is published with
-   `OnionPow::Enabled`. A status-512 reply is
-   `DaemonTorPublishError::PowRefused` and is not retried without PoW.
+   `OnionPow::Enabled`. `PowRefused` is a 512 or 513 whose reply names a
+   PoW argument. Any other 512 is an ordinary publish failure. Neither
+   is retried without PoW.
    `Disabled` stays as an explicit choice for measurement arms. The
    type's doc comment is corrected, and the crate's KAT is updated so
    the default renders `PoWDefensesEnabled=1`. If the operator's Tor
