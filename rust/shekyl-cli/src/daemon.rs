@@ -124,6 +124,42 @@ pub struct MiningStatus {
     pub difficulty: u64,
 }
 
+/// `get_archival_shard_coverage` result. Field names match the daemon wire.
+#[derive(Debug, Deserialize)]
+pub struct ArchivalShardCoverage {
+    pub as_of_height: u64,
+    pub leaf_count: u64,
+    pub frozen_count: u64,
+    pub settled_epoch: u64,
+    pub budget_atomic: u64,
+    pub sigma_work_milli: u64,
+    pub profit_estimate_available: bool,
+    pub shards: Vec<ShardCoverageRow>,
+}
+
+/// One frozen shard on the coverage list.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ShardCoverageRow {
+    pub shard_id: u64,
+    pub bonded_count: u64,
+    pub served_count: u64,
+    pub freeze_height: u64,
+    pub join_scarcity_micro: u64,
+    pub expected_profit_atomic: u64,
+}
+
+/// `request_archival_shard` result. An aggregate, never shard bytes.
+#[derive(Debug, Deserialize)]
+pub struct ArchivalShardFetch {
+    pub shard_id: u64,
+    pub shard_hash: String,
+    pub block_count: u64,
+    pub tx_count: u64,
+    pub output_count: u64,
+    pub coinbase_output_count: u64,
+    pub time_range_seconds: u64,
+}
+
 /// Lightweight daemon RPC client. Uses ureq (rustls TLS backend) with an
 /// independent connection from the wallet-RPC session's daemon path.
 pub struct DaemonClient {
@@ -269,6 +305,24 @@ impl DaemonClient {
         let value = self.json_rpc("get_info", &serde_json::json!({}))?;
         serde_json::from_value(value)
             .map_err(|e| DaemonError::MalformedResponse(format!("get_info: {e}")))
+    }
+
+    /// Operator coverage list. Empty params; the daemon orders the rows.
+    pub fn archival_shard_coverage(&self) -> Result<ArchivalShardCoverage, DaemonError> {
+        let value = self.json_rpc("get_archival_shard_coverage", &serde_json::json!({}))?;
+        serde_json::from_value(value).map_err(|e| {
+            DaemonError::MalformedResponse(format!("get_archival_shard_coverage: {e}"))
+        })
+    }
+
+    /// Ask the daemon to retrieve one shard. The response is an aggregate.
+    pub fn request_archival_shard(&self, shard_id: u64) -> Result<ArchivalShardFetch, DaemonError> {
+        let value = self.json_rpc(
+            "request_archival_shard",
+            &serde_json::json!({ "shard_id": shard_id }),
+        )?;
+        serde_json::from_value(value)
+            .map_err(|e| DaemonError::MalformedResponse(format!("request_archival_shard: {e}")))
     }
 
     /// The configured daemon URL, for copy that names the endpoint

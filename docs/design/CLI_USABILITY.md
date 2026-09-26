@@ -2,10 +2,12 @@
 
 **Status:** OPEN — Round 1 (2026-09-11); **CU-1…CU-6 LANDED on `dev`**
 (branch archived as `archive/cli-usability-cu-2026-09-13`; the cuts are live in
-`rust/shekyl-cli/`). *Corrected 2026-09-24: this banner read "awaiting landing
-on `dev`" for eleven days after the work landed — a status claim that outlived
-its subject, and the direction that costs, since nobody re-checks a row that
-says the work is still pending.*
+`rust/shekyl-cli/`). **CU-7…CU-10** (command language, completion, status
+line, script stdin) are on `feat/cli-shell` as of 2026-09-26. *Corrected
+2026-09-24: this banner read "awaiting landing on `dev`" for eleven days
+after the work landed — a status claim that outlived its subject, and the
+direction that costs, since nobody re-checks a row that says the work is
+still pending.*
 Owning doc for the `CU-1…CU-N` identifier family (registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2).
 
@@ -117,8 +119,10 @@ change.
   shape); bare `help` keeps the categorized listing.
 - `start_mining` typed with no `mine` surface present was a bare
   "Unknown command" while `USER_GUIDE.md` taught it — the motivating
-  rule-82 instance. With CU-3 the name is a live alias; the near-miss
-  diagnostics in §4 cover the rest.
+  rule-82 instance. CU-3 (2026-09-11) made the name a live alias.
+  CU-7 (2026-09-26) retired it: `start_mining`, `stop_mining`, and
+  `mining_status` diagnose and name `mine start`, `mine stop`, and
+  `mine status`, and do not run.
 
 ### CU-3 — Control mining from the wallet (daemon still hashes)
 
@@ -139,8 +143,9 @@ REPL verbs:
   address (short form per CU-4), difficulty. The daemon's
   `pow_algorithm` string is **not** rendered (operators do not need a
   protocol-algorithm name; the daemon always reports RandomX).
-- Aliases: `start_mining [threads]` / `stop_mining` / `mining_status`
-  (Monero muscle memory; also what `USER_GUIDE.md` had been teaching).
+- `start_mining`, `stop_mining`, and `mining_status` do not run
+  (CU-7, 2026-09-26). Each diagnoses and names `mine start`,
+  `mine stop`, or `mine status`.
 
 Gates, all fail-closed before any daemon call:
 
@@ -195,7 +200,7 @@ Enumerated here before code (rule 82); each path says what to run next.
 | F5 | No wallet open | `mine *` (and existing `require_open` sites) | `open <name>` / `create <name>` |
 | F6 | Already mining | `mine start` | Current thread count + `mine stop` first (daemon reports the state; the CLI relays it, no error tone) |
 | F7 | Daemon not synced | `mine start` | Refuse with height copy. The daemon will not mine until it is caught up (`CHECK_CORE_READY` / `BUSY`); there is no confirmation that can succeed. |
-| F8 | `start_mining` (or `mine`) typo'd / partial / extra args | parser | Usage diagnostic naming `mine start [threads]`, never bare "Unknown command" |
+| F8 | retired `start_mining` / `stop_mining` / `mining_status`, or a partial `mine` (CU-7, 2026-09-26: the retired line does not run) | parser | Diagnostic naming `mine start [threads]`, `mine stop`, or `mine status`; never bare "Unknown command" |
 | F9 | Password/seed TTY rules | existing `display.rs` / `--password-stdin` surfaces | Already correct; unchanged |
 
 ### CU-6 — Docs (rule 91)
@@ -233,3 +238,14 @@ Enumerated here before code (rule 82); each path says what to run next.
 CU-1 + CU-2 (ergonomics) → CU-3 (mining control) → CU-4 + CU-5 →
 CU-6 (docs land with the verbs they describe). Single short-lived
 branch off `dev` (`feat/cli-usability-cu`), one commit per CU item.
+
+## 5. CU-7…CU-10 — the shell (2026-09-26)
+
+The command language, completion, status line, and script stdin are
+specified in the `feat/cli-shell` work and live in `rust/shekyl-cli/`
+(`catalog.rs`, `grammar.rs`, `status.rs`). Three forms: bare noun,
+subject plus verb, product verb. Retired spellings diagnose and do not
+run. CompleteTree is the hidden startup flag `--complete-tree-foundation`,
+not `stake foundation`. `shard list all` reads `get_archival_shard_coverage`.
+`stake join` names shard ids and does not post until wallet-RPC `stake`
+accepts a shard set.

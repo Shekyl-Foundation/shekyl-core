@@ -14,12 +14,11 @@
 use serde_json::json;
 
 use super::{opt_amount, require_open};
+use crate::outcome::CommandResult;
 use crate::rpc_client::RpcSession;
 
-pub fn cmd_fee(rpc: &RpcSession, n_inputs: Option<i64>, n_outputs: Option<i64>) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_fee(rpc: &RpcSession, n_inputs: Option<i64>, n_outputs: Option<i64>) -> CommandResult {
+    require_open(rpc)?;
 
     let mut params = json!({});
     if let Some(n) = n_inputs {
@@ -32,8 +31,7 @@ pub fn cmd_fee(rpc: &RpcSession, n_inputs: Option<i64>, n_outputs: Option<i64>) 
     let quotes = match rpc.call("get_default_fee_priority", params) {
         Ok(v) => v,
         Err(e) => {
-            rpc.report("Failed to get fee quotes", &e);
-            return;
+            return Err(rpc.report("Failed to get fee quotes", &e));
         }
     };
 
@@ -76,6 +74,7 @@ pub fn cmd_fee(rpc: &RpcSession, n_inputs: Option<i64>, n_outputs: Option<i64>) 
                 .unwrap_or(0);
             println!("Estimated size: {size} bytes (fee weight {weight})");
         }
-        Err(e) => rpc.report("Failed to estimate transaction size", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to estimate transaction size", &e)),
+    };
+    Ok(())
 }

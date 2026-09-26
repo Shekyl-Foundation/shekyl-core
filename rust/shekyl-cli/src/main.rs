@@ -105,6 +105,21 @@ pub struct ReplArgs {
     /// Show structured RPC error details (error.data) on failures.
     #[arg(long, global = true, default_value_t = false)]
     pub debug: bool,
+
+    /// Read the wallet password from this file when `--wallet` is set.
+    /// Required when stdin is not a terminal. Wiped after the wallet opens.
+    #[arg(long, global = true, value_name = "PATH")]
+    password_file: Option<std::path::PathBuf>,
+
+    /// Post a Foundation CompleteTree bond before the prompt. Hidden: this
+    /// is an unbounded-disk, non-earning posture, not a normal command.
+    #[arg(long, global = true, hide = true)]
+    complete_tree_foundation: bool,
+
+    /// The exact phrase `serve without reward`, required with
+    /// `--complete-tree-foundation` when stdin is not a terminal.
+    #[arg(long, global = true, hide = true, value_name = "PHRASE")]
+    acknowledge: Option<String>,
 }
 
 impl ReplArgs {
@@ -451,30 +466,55 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if cli.complete_tree_foundation && cli.wallet.is_none() {
+        eprintln!(
+            "--complete-tree-foundation needs --wallet <name>. \
+             Unbounded disk, no reward. Nothing was written."
+        );
+        rpc.shutdown();
+        std::process::exit(1);
+    }
+
     if let Some(ref filename) = cli.wallet {
-        // The password lives in this inner scope and nowhere else, so it is
-        // wiped before the match below — which can reach `process::exit`, and
-        // `exit` bypasses Drop. A `Zeroizing` still in scope at that call is a
-        // secret that never gets wiped at all. Scoping keeps that structural:
-        // the compiler ends the lifetime here, so a later branch added to the
-        // match cannot extend a secret's life past the exit by accident.
-        let opened = {
-            let password = prompt_password("Wallet password: ")?;
-            rpc.call(
-                "open_wallet",
-                rpc_client::params::NamedPassword {
-                    name: filename,
-                    password: &password,
-                },
-            )
-        };
-        match opened {
-            Ok(_) => {
-                rpc.set_open(filename);
-                println!("Opened wallet: {filename}");
+        let script = !std::io::IsTerminal::is_terminal(&std::io::stdin());
+        if script && cli.password_file.is_none() {
+            eprintln!(
+                "A script must pass --password-file with --wallet. \
+                 Stdin is the script, not the password."
+            );
+            rpc.shutdown();
+            std::process::exit(1);
+        }
+        if cli.complete_tree_foundation {
+            let accepted = commands::accept_foundation_terms(script, cli.acknowledge.as_deref());
+            if accepted.is_err() {
+                rpc.shutdown();
+                std::process::exit(1);
             }
-            Err(e) => {
-                rpc.report("Failed to open wallet", &e);
+        }
+        let password = match &cli.password_file {
+            Some(path) => commands::scripted::read_password_file(path)?,
+            None => prompt_password("Wallet password: ")?,
+        };
+        let opened = rpc.call(
+            "open_wallet",
+            rpc_client::params::NamedPassword {
+                name: filename,
+                password: &password,
+            },
+        );
+        if let Err(e) = opened {
+            let _reported = rpc.report("Failed to open wallet", &e);
+            drop(password);
+            rpc.shutdown();
+            std::process::exit(1);
+        }
+        rpc.set_open(filename);
+        println!("Opened wallet: {filename}");
+        if cli.complete_tree_foundation {
+            let staked = commands::post_foundation_stake(&rpc, &password);
+            drop(password);
+            if staked.is_err() {
                 rpc.shutdown();
                 std::process::exit(1);
             }
