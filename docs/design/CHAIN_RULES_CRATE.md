@@ -1159,7 +1159,9 @@ second lines behind the belt and the type shapes, not gates.
   crate has not implemented:* that is the design — the fourteen pending-row
   arms begin asserting the day their row lands, with no pin to update. The
   baseline (coinbase, two-output spend, serve-credit) passes both copies.
-- `tx_against` before 4.I lands: `Ok(Ok(EMPTY))`.
+- `tx_against` — *records-was:* returned `Ok(Ok(EMPTY))` until 4.I landed
+  (slice 6, #864, 2026-09-26); its rules' tests are `rules/tx_against_tests.rs`
+  and the captured-chain witness `shekyl-chain-ingest`'s `vectors_tests`.
 - a mock whose `Fault` is a unit type and whose `block_at` faults: `validate`
   returns `Err(fault)`, not a verdict (bites: a fault swallowed into a pass or a
   refusal). Increment 1 has no rule that reads the view, so this is exercised

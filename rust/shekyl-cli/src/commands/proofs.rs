@@ -23,14 +23,18 @@
 use serde_json::{json, Value};
 
 use super::{format_amount, format_amount_str, opt_amount, require_open};
+use crate::outcome::CommandResult;
 use crate::rpc_client::RpcSession;
 
 // ── Generation (open wallet required) ────────────────────────────────
 
-pub fn cmd_get_tx_proof(rpc: &RpcSession, txid: &str, address: &str, message: Option<&str>) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_get_tx_proof(
+    rpc: &RpcSession,
+    txid: &str,
+    address: &str,
+    message: Option<&str>,
+) -> CommandResult {
+    require_open(rpc)?;
     let result = rpc.call(
         "get_tx_proof",
         json!({
@@ -63,14 +67,17 @@ pub fn cmd_get_tx_proof(rpc: &RpcSession, txid: &str, address: &str, message: Op
                 _ => {}
             }
         }
-        Err(e) => rpc.report("Failed to generate tx proof", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to generate tx proof", &e)),
+    };
+    Ok(())
 }
 
-pub fn cmd_get_reserve_proof(rpc: &RpcSession, amount: Option<u64>, message: Option<&str>) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_get_reserve_proof(
+    rpc: &RpcSession,
+    amount: Option<u64>,
+    message: Option<&str>,
+) -> CommandResult {
+    require_open(rpc)?;
     // Echo the parse-time binding before generating anything. The
     // `[amount] [message...]` grammar reads an amount-shaped first token as
     // the proof bound, so `get_reserve_proof 2026 budget review` proves
@@ -102,8 +109,9 @@ pub fn cmd_get_reserve_proof(rpc: &RpcSession, amount: Option<u64>, message: Opt
                  (\"get_reserve_proof <amount>\") over proving the full balance."
             );
         }
-        Err(e) => rpc.report("Failed to generate reserve proof", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to generate reserve proof", &e)),
+    };
+    Ok(())
 }
 
 // ── Verification (wallet-less) ───────────────────────────────────────
@@ -114,7 +122,7 @@ pub fn cmd_check_tx_proof(
     address: &str,
     proof: &str,
     message: Option<&str>,
-) {
+) -> CommandResult {
     let result = rpc.call(
         "check_tx_proof",
         json!({
@@ -132,7 +140,7 @@ pub fn cmd_check_tx_proof(
                 .unwrap_or(false);
             if !valid {
                 println!("BAD proof: the proof does NOT verify for this txid/address/message.");
-                return;
+                return Ok(());
             }
             let direction = val.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
             println!("Good proof ({direction}).");
@@ -151,8 +159,9 @@ pub fn cmd_check_tx_proof(
             }
             print_confirmations(&val);
         }
-        Err(e) => rpc.report("Failed to check tx proof", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to check tx proof", &e)),
+    };
+    Ok(())
 }
 
 pub fn cmd_check_reserve_proof(
@@ -160,7 +169,7 @@ pub fn cmd_check_reserve_proof(
     address: &str,
     proof: &str,
     message: Option<&str>,
-) {
+) -> CommandResult {
     let result = rpc.call(
         "check_reserve_proof",
         json!({
@@ -177,7 +186,7 @@ pub fn cmd_check_reserve_proof(
                 .unwrap_or(false);
             if !valid {
                 println!("BAD proof: the proof does NOT verify for this address/message.");
-                return;
+                return Ok(());
             }
             let count = val
                 .get("output_count")
@@ -197,8 +206,9 @@ pub fn cmd_check_reserve_proof(
                 }
             }
         }
-        Err(e) => rpc.report("Failed to check reserve proof", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to check reserve proof", &e)),
+    };
+    Ok(())
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

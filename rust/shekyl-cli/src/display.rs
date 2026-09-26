@@ -110,19 +110,6 @@ fn multiplexer_warning() -> Option<&'static str> {
     None
 }
 
-/// Returns true if the command's input line must not be added to readline
-/// history. Covers secrets (`restore`'s mnemonic) and large bearer pastes
-/// (proof strings, message signatures). An OUTBOUND tx proof embeds the
-/// raw per-tx key; a reserve proof is a permanent spend-detection beacon;
-/// `verify` carries a ~21.7 KB armored signature — none of those belong
-/// in a plaintext history file.
-pub fn omit_from_history(cmd: &str) -> bool {
-    matches!(
-        cmd,
-        "restore" | "check_tx_proof" | "check_reserve_proof" | "verify"
-    )
-}
-
 /// The display form of an address (CU-4): the first 24 characters, an
 /// ellipsis, and the last 12. Shekyl's hybrid-PQC addresses run to hundreds
 /// of characters; the full string is unusable at a glance and floods scrollback.
@@ -163,7 +150,8 @@ pub fn sanitize_for_terminal(s: &str) -> std::borrow::Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{omit_from_history, sanitize_for_terminal, short_address};
+    use super::{sanitize_for_terminal, short_address};
+    use crate::catalog::omit_from_history;
     use std::borrow::Cow;
 
     #[test]
@@ -178,10 +166,15 @@ mod tests {
 
     #[test]
     fn history_omits_secrets_and_bearer_pastes() {
-        for cmd in ["restore", "check_tx_proof", "check_reserve_proof", "verify"] {
-            assert!(omit_from_history(cmd), "{cmd} must stay out of history");
+        for line in [
+            "wallet restore name word",
+            "check payment tx addr proof",
+            "check reserve addr proof",
+            "verify addr sig hello",
+        ] {
+            assert!(omit_from_history(line), "{line} must stay out of history");
         }
-        assert!(!omit_from_history("sign"));
+        assert!(!omit_from_history("sign hello"));
         assert!(!omit_from_history("balance"));
     }
 

@@ -23,6 +23,7 @@ use shekyl_wallet_rpc::types::{SignMessageResult, VerifyMessageResult};
 use shekyl_wallet_rpc::WalletRpcErrorCode;
 
 use super::require_open;
+use crate::outcome::{failed, CommandResult};
 use crate::rpc_client::{RpcError, RpcSession};
 
 /// Refuse `@path` signature files larger than this. Any valid armored
@@ -33,10 +34,8 @@ use crate::rpc_client::{RpcError, RpcSession};
 /// read to EOF and shipped to the server just to bounce.
 const SIG_FILE_MAX_BYTES: usize = 2 * shekyl_crypto_pq::message_signing::MSG_SIG_MAX_ENCODED_LEN;
 
-pub fn cmd_sign(rpc: &RpcSession, message: &str) {
-    if !require_open(rpc) {
-        return;
-    }
+pub fn cmd_sign(rpc: &RpcSession, message: &str) -> CommandResult {
+    require_open(rpc)?;
     eprintln!("Signing — this takes a few seconds by design; please wait...");
     match rpc.call("sign_message", json!({ "message": message })) {
         Ok(val) => match serde_json::from_value::<SignMessageResult>(val) {
@@ -49,23 +48,31 @@ pub fn cmd_sign(rpc: &RpcSession, message: &str) {
                      file and pass @path to verify."
                 );
             }
-            Ok(_) | Err(_) => rpc.report(
-                "Failed to sign message",
-                &RpcError::Transport("server returned no signature".into()),
-            ),
+            Ok(_) | Err(_) => {
+                return Err(rpc.report(
+                    "Failed to sign message",
+                    &RpcError::Transport("server returned no signature".into()),
+                ))
+            }
         },
-        Err(e) => rpc.report("Failed to sign message", &e),
-    }
+        Err(e) => return Err(rpc.report("Failed to sign message", &e)),
+    };
+    Ok(())
 }
 
-pub fn cmd_verify(rpc: &RpcSession, address: &str, signature: &str, message: &str) {
+pub fn cmd_verify(
+    rpc: &RpcSession,
+    address: &str,
+    signature: &str,
+    message: &str,
+) -> CommandResult {
     // Deliberately no `require_open`: verification is a public operation
     // over public inputs (SM-R-6).
     let signature = match load_signature(signature) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Could not verify signature: {e}");
-            return;
+            return failed();
         }
     };
     let result = rpc.call(
@@ -83,10 +90,12 @@ pub fn cmd_verify(rpc: &RpcSession, address: &str, signature: &str, message: &st
     match result {
         Ok(val) => match serde_json::from_value::<VerifyMessageResult>(val) {
             Ok(_) => println!("Signature is VALID for this address and message."),
-            Err(_) => rpc.report(
-                "Could not verify signature",
-                &RpcError::Transport("unexpected server response".into()),
-            ),
+            Err(_) => {
+                return Err(rpc.report(
+                    "Could not verify signature",
+                    &RpcError::Transport("unexpected server response".into()),
+                ))
+            }
         },
         // The one negative *answer* gets a verdict line; every other
         // refusal (corrupted paste, unknown scheme, unbound address
@@ -95,8 +104,9 @@ pub fn cmd_verify(rpc: &RpcSession, address: &str, signature: &str, message: &st
         Err(e) if e.code() == Some(invalid) => {
             println!("Signature is INVALID: not a signature by that address over this message.");
         }
-        Err(e) => rpc.report("Could not verify signature", &e),
-    }
+        Err(e) => return Err(rpc.report("Could not verify signature", &e)),
+    };
+    Ok(())
 }
 
 /// `@path` reads a signature from a file so a mail-wrapped 21.7 KB paste

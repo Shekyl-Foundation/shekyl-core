@@ -123,6 +123,22 @@ Worked instances, all verified at source:
   run* joins the questions asked of every sweep — and an enumeration of
   what a component consumes says nothing about what its consumers consume
   from it.
+- **`DRS_E3_CURVE_WRITER.md` §3.9** (E3 pre-flight, 2026-09-26). The S-PRUNE
+  review's item 6 paired `D_MAX` and `T` — *"two consensus numerics on one
+  re-pin gate, in two idioms"* — and the ruling on that item was a ruling on
+  the *idiom*. Hours later the same pairing was carried into a sentence
+  about the curve-tree chunk arities, putting `T` beside them, inside the
+  very ruling that minted the correct test (*could a schedule, a network or
+  an operator legitimately name it differently?*) — and `T` was never run
+  through it. It passes; the arities do not; the sentence was wrong. This
+  is the family's **grouping** variant: the borrowed-citation failure with
+  a grouping in place of a cite. *The review's pairing was the premise, the
+  ruling fell on the grouping, and the grouping was carried into the next
+  sentence untested.* A grouping someone else drew is a claim about its
+  members, and each member is tested against the rule being applied, not
+  admitted on the strength of its neighbour. Caught because the lane
+  escalated when one ruling silently reversed another six hours old,
+  instead of defaulting through it.
 
 So, when a claim is load-bearing for a security property:
 
