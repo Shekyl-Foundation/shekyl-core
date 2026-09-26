@@ -5,7 +5,9 @@
 
 //! A scanned list, obviously correct, run beside the heap.
 
-use super::{Engine, EngineError, Generation, IdSource, ManualClock, OwnerClass, OwnerId, Tick};
+use super::{
+    Engine, EngineError, Generation, IdSource, ManualClock, OwnerClass, OwnerId, OwnerMint, Tick,
+};
 use proptest::prelude::*;
 use std::collections::HashMap;
 
@@ -184,8 +186,9 @@ fn run(ops: &[Op]) {
         match *op {
             Op::Register(class) => {
                 let class = OwnerClass::from_index(class);
-                let id = source.mint();
-                let result = engine.register(id, class);
+                let minted = source.mint().expect("id space");
+                let id = minted.id();
+                let result = engine.register(minted, class);
                 let expected = reference.register(id.0, class);
                 assert_eq!(result, expected);
                 if result.is_ok() {
@@ -196,7 +199,7 @@ fn run(ops: &[Op]) {
                 let Some(id) = registered(&ids, slot) else {
                     continue;
                 };
-                let result = engine.register(id, OwnerClass::Transport);
+                let result = engine.register(OwnerMint::duplicate(id), OwnerClass::Transport);
                 let expected = reference.register(id.0, OwnerClass::Transport);
                 assert_eq!(result, expected);
                 assert_eq!(result.unwrap_err(), EngineError::DuplicateOwner);

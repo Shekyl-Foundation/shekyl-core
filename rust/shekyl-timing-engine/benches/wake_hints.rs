@@ -29,8 +29,9 @@ fn armed(n: usize) -> (Engine<ManualClock>, Vec<OwnerId>) {
     let source = IdSource::new();
     let mut ids = Vec::with_capacity(n);
     for i in 0..n {
-        let id = source.mint();
-        engine.register(id, OwnerClass::Transport).unwrap();
+        let minted = source.mint().expect("id space");
+        let id = minted.id();
+        engine.register(minted, OwnerClass::Transport).unwrap();
         engine
             .arm(id, Tick::new(1_000_000 + u64::try_from(i).unwrap()))
             .unwrap();

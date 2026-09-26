@@ -117,8 +117,9 @@ not fire: the timing-engine round opened 2026-09-25.
 core is `shekyl-timing-engine`. *Records-was, at this pre-flight: the
 service was not in that crate, and `Engine::register` minted
 `OwnerId`.* The service has since landed as `EngineService`.
-`register` takes the id the handle minted and refuses a duplicate,
-including one that was deregistered. Connection deadlines are owners
+`IdSource::mint` returns an `OwnerMint` that `register` consumes, so
+an id is not reused and a stale heap hint cannot match a new owner.
+Connection deadlines are owners
 of the service from the first transport line, so the service was the
 first production commit. A Rust ban list is not in the tree. D3 already
 rules it; building it is this implementation. `pipe.rs` stays. The
