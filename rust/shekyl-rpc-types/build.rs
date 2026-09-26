@@ -174,7 +174,10 @@ fn main() {
              \n\
              \x20 * A key was ADDED or REMOVED. Same chain question, asked of that key: if a\n\
              \x20   different value of it would make a different chain it belongs here and you\n\
-             \x20   re-pin; if not, it does not belong here.",
+             \x20   re-pin; if not, it does not belong here. For an ADDED key ask the second\n\
+             \x20   test too (DRS_E3_CURVE_WRITER.md §3.9): could a schedule, a network or an\n\
+             \x20   operator legitimately name it differently? A proof-system structural\n\
+             \x20   parameter cannot -- it is a const-asserted constant in its crate, not a key.",
             files = consensus_canonical::CANONICAL_FILES
         );
     }
