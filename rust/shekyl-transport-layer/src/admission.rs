@@ -3,32 +3,66 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Socket admission without sockets. The count is the live set.
+//! Socket admission without sockets. The occupancy table is the live set.
 //!
-//! Accept compares the inbound count with [`InboundCeiling`](shekyl_peer_policy::InboundCeiling)
-//! and increments it in the same lock. Close removes the socket once.
+//! Accept compares the process-wide inbound occupancy — every connector's
+//! inbound row, summed — with [`InboundCeiling`](shekyl_peer_policy::InboundCeiling)
+//! and increments that row in the same lock. Close removes the socket once.
 //! A second close does not decrement again.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 
-use crate::address::PeerAddress;
 use crate::ban::{BanList, Ipv4Subnet};
-use crate::declaration::ConnectorId;
-use crate::dial::check_tor_dial;
+use crate::declaration::{declaration, Assessment, BannableInbound, ConnectorId, InboundIdentity};
+use crate::dial::check_dial;
 use crate::{CloseCause, CloseKind};
 
 /// Which way the socket was opened.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum Direction {
     /// Accepted.
-    Inbound,
+    Inbound = 0,
     /// Dialed.
-    Outbound,
+    Outbound = 1,
+}
+
+impl Direction {
+    /// Columns in one connector's occupancy row.
+    pub const COUNT: usize = 2;
+
+    /// Column of this direction. [`Self::Inbound`] is 0 and [`Self::Outbound`] is 1.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Inbound => 0,
+            Self::Outbound => 1,
+        }
+    }
+}
+
+const _: () = {
+    assert!(Direction::Inbound.index() == 0);
+    assert!(Direction::Outbound.index() == 1);
+    assert!(Direction::Inbound.index() != Direction::Outbound.index());
+    assert!(Direction::COUNT == 2);
+};
+
+/// What the connector saw. The session records this. It is not the
+/// loopback socket a local overlay router accepted on, and the port is
+/// not part of it: a ban names the host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ObservedEndpoint {
+    /// A clearnet host.
+    Host(IpAddr),
+    /// Overlay peer. This zone, no address.
+    Zone,
 }
 
 /// One live socket. There is no public constructor: the table mints it.
@@ -48,7 +82,7 @@ impl SocketId {
 pub enum OpenError {
     /// A D12 cause. Nothing was reserved.
     Refused(CloseCause),
-    /// The id counter cannot mint another id.
+    /// The id counter or the occupancy counter cannot move.
     Exhausted,
 }
 
@@ -61,18 +95,104 @@ pub enum CloseResult {
     AlreadyClosed,
 }
 
+/// Clearnet inbound is a host a ban can name. Tor inbound is the zone.
+const _: () = {
+    assert!(matches!(
+        declaration(ConnectorId::Clearnet.column()).bannable_inbound(),
+        Assessment::Assessed(BannableInbound::Yes)
+    ));
+    assert!(matches!(
+        declaration(ConnectorId::Clearnet.column()).inbound_identity(),
+        Assessment::Assessed(InboundIdentity::SocketAddress)
+    ));
+    assert!(matches!(
+        declaration(ConnectorId::Tor.column()).bannable_inbound(),
+        Assessment::Assessed(BannableInbound::NoAddress)
+    ));
+    assert!(matches!(
+        declaration(ConnectorId::Tor.column()).inbound_identity(),
+        Assessment::Assessed(InboundIdentity::ZoneNoAddress)
+    ));
+};
+
+fn inbound_observation_matches(connector: ConnectorId, endpoint: ObservedEndpoint) -> bool {
+    let column = declaration(connector.column());
+    matches!(
+        (
+            column.bannable_inbound(),
+            column.inbound_identity(),
+            endpoint
+        ),
+        (
+            Assessment::Assessed(BannableInbound::Yes),
+            Assessment::Assessed(InboundIdentity::SocketAddress),
+            ObservedEndpoint::Host(_),
+        ) | (
+            Assessment::Assessed(BannableInbound::NoAddress),
+            Assessment::Assessed(InboundIdentity::ZoneNoAddress),
+            ObservedEndpoint::Zone,
+        )
+    )
+}
+
+fn admission_refused() -> OpenError {
+    OpenError::Refused(CloseCause::new(CloseKind::AdmissionRefused))
+}
+
+/// Per-connector, per-direction reservation counts.
+///
+/// Indexed by [`ConnectorId::index`] and [`Direction::index`], both dense
+/// from zero over [`ConnectorId::ALL`]. The process ceiling sums the
+/// inbound column of every row in that list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Occupancy {
+    rows: [[u64; Direction::COUNT]; ConnectorId::COUNT],
+}
+
+impl Occupancy {
+    const fn new() -> Self {
+        Self {
+            rows: [[0; Direction::COUNT]; ConnectorId::COUNT],
+        }
+    }
+
+    fn get(&self, connector: ConnectorId, direction: Direction) -> u64 {
+        self.rows[connector.index()][direction.index()]
+    }
+
+    fn try_increment(&mut self, connector: ConnectorId, direction: Direction) -> Option<()> {
+        let cell = &mut self.rows[connector.index()][direction.index()];
+        let next = cell.checked_add(1)?;
+        *cell = next;
+        Some(())
+    }
+
+    fn decrement(&mut self, connector: ConnectorId, direction: Direction) {
+        let cell = &mut self.rows[connector.index()][direction.index()];
+        *cell = cell.checked_sub(1).expect("socket count underflow");
+    }
+
+    /// Inbound reservations on every built connector.
+    fn process_inbound(&self) -> Option<u64> {
+        let mut sum = 0u64;
+        for id in ConnectorId::ALL {
+            sum = sum.checked_add(self.get(*id, Direction::Inbound))?;
+        }
+        Some(sum)
+    }
+}
+
 #[derive(Debug)]
 struct Live {
     connector: ConnectorId,
     direction: Direction,
-    ip: Option<IpAddr>,
+    endpoint: ObservedEndpoint,
 }
 
 #[derive(Debug)]
 struct Inner {
     next_id: u64,
-    /// Clearnet inbound, clearnet outbound, Tor inbound, Tor outbound.
-    counts: [u64; 4],
+    occupancy: Occupancy,
     live: HashMap<SocketId, Live>,
     bans: BanList,
 }
@@ -81,38 +201,37 @@ impl Inner {
     fn new() -> Self {
         Self {
             next_id: 1,
-            counts: [0; 4],
+            occupancy: Occupancy::new(),
             live: HashMap::new(),
             bans: BanList::new(),
         }
     }
 
     fn holds(&self) -> bool {
-        let mut expect = [0u64; 4];
+        let mut expect = Occupancy::new();
         for live in self.live.values() {
-            let Some(count) = expect[slot(live.connector, live.direction)].checked_add(1) else {
+            if expect
+                .try_increment(live.connector, live.direction)
+                .is_none()
+            {
                 return false;
-            };
-            expect[slot(live.connector, live.direction)] = count;
+            }
         }
-        expect == self.counts
-    }
-
-    fn inbound_total(&self) -> Option<u64> {
-        self.counts[slot(ConnectorId::Clearnet, Direction::Inbound)]
-            .checked_add(self.counts[slot(ConnectorId::Tor, Direction::Inbound)])
+        expect == self.occupancy
     }
 }
 
-const fn slot(connector: ConnectorId, direction: Direction) -> usize {
-    let base = match connector {
-        ConnectorId::Clearnet => 0,
-        ConnectorId::Tor => 2,
-    };
-    base + match direction {
-        Direction::Inbound => 0,
-        Direction::Outbound => 1,
+fn refuse_over_process_ceiling(inner: &Inner, ceiling: InboundCeiling) -> Result<(), OpenError> {
+    let total = inner
+        .occupancy
+        .process_inbound()
+        .ok_or(OpenError::Exhausted)?;
+    if let InboundCeiling::Bounded(limit) = ceiling {
+        if total >= u64::from(limit) {
+            return Err(admission_refused());
+        }
     }
+    Ok(())
 }
 
 /// The socket table. Clones share it. A poisoned lock aborts the process:
@@ -135,56 +254,74 @@ impl Sockets {
         self.inner.lock().expect("socket table lock poisoned")
     }
 
-    /// Inbound clearnet. A banned address is [`CloseKind::AdmissionRefused`]
-    /// and reserves nothing.
+    /// Inbound clearnet.
+    ///
+    /// `ceiling` is the process-wide inbound ceiling: this row and every
+    /// other connector's inbound row are one sum. A banned address is
+    /// [`CloseKind::AdmissionRefused`] and reserves nothing.
     pub fn accept_clearnet(
         &self,
         ip: IpAddr,
         ceiling: InboundCeiling,
         now: Tick,
     ) -> Result<OpenSocket, OpenError> {
-        self.reserve(
+        let endpoint = ObservedEndpoint::Host(ip);
+        assert!(
+            inbound_observation_matches(ConnectorId::Clearnet, endpoint),
+            "clearnet inbound observation does not match its declaration"
+        );
+        let mut inner = self.lock();
+        if inner.bans.is_banned(ip, now) {
+            return Err(admission_refused());
+        }
+        refuse_over_process_ceiling(&inner, ceiling)?;
+        self.mint(
+            &mut inner,
             ConnectorId::Clearnet,
             Direction::Inbound,
-            Some(ip),
-            Some(ceiling),
-            now,
+            endpoint,
         )
     }
 
     /// Outbound clearnet. The inbound ceiling does not apply. A banned
     /// address is still refused.
     pub fn open_clearnet(&self, ip: IpAddr, now: Tick) -> Result<OpenSocket, OpenError> {
-        self.reserve(
+        let mut inner = self.lock();
+        if inner.bans.is_banned(ip, now) {
+            return Err(admission_refused());
+        }
+        self.mint(
+            &mut inner,
             ConnectorId::Clearnet,
             Direction::Outbound,
-            Some(ip),
-            None,
-            now,
+            ObservedEndpoint::Host(ip),
         )
     }
 
     /// Inbound Tor. There is no address to ban.
-    pub fn accept_tor(&self, ceiling: InboundCeiling, now: Tick) -> Result<OpenSocket, OpenError> {
-        self.reserve(
-            ConnectorId::Tor,
-            Direction::Inbound,
-            None,
-            Some(ceiling),
-            now,
-        )
+    ///
+    /// `ceiling` is the same process-wide sum as [`Self::accept_clearnet`].
+    pub fn accept_tor(&self, ceiling: InboundCeiling) -> Result<OpenSocket, OpenError> {
+        let endpoint = ObservedEndpoint::Zone;
+        assert!(
+            inbound_observation_matches(ConnectorId::Tor, endpoint),
+            "tor inbound observation does not match its declaration"
+        );
+        let mut inner = self.lock();
+        refuse_over_process_ceiling(&inner, ceiling)?;
+        self.mint(&mut inner, ConnectorId::Tor, Direction::Inbound, endpoint)
     }
 
-    /// Outbound Tor. Anything other than an onion v3 hostname is
-    /// [`CloseKind::DialFailed`] and reserves nothing.
-    pub fn open_tor(&self, address: &PeerAddress) -> Result<OpenSocket, OpenError> {
-        check_tor_dial(address).map_err(OpenError::Refused)?;
-        self.reserve(
+    /// Outbound Tor. The addressing cell says what may be dialed. Anything
+    /// else is [`CloseKind::DialFailed`] and reserves nothing.
+    pub fn open_tor(&self, address: &NetworkAddress) -> Result<OpenSocket, OpenError> {
+        check_dial(ConnectorId::Tor, address).map_err(OpenError::Refused)?;
+        let mut inner = self.lock();
+        self.mint(
+            &mut inner,
             ConnectorId::Tor,
             Direction::Outbound,
-            None,
-            None,
-            Tick::new(0),
+            ObservedEndpoint::Zone,
         )
     }
 
@@ -202,22 +339,24 @@ impl Sockets {
 
     /// Ban `host` until `until` and close live sockets to that host.
     /// A deadline that has already passed bans nothing and closes nothing.
+    /// A deadline that is not later than the one stored does not shorten it.
     /// Each closed socket is [`CloseKind::LocalClose`], once.
     pub fn ban_host(&self, host: IpAddr, until: Tick, now: Tick) -> Vec<SocketId> {
         let mut inner = self.lock();
         if !inner.bans.ban_host(host, until, now) {
             return Vec::new();
         }
-        close_matching(&mut inner, Match::Host(host))
+        close_matching(&mut inner, BanSubject::Host(host))
     }
 
     /// Ban an IPv4 subnet and close live IPv4 sockets inside it.
+    /// The deadline rule is the same as [`Self::ban_host`].
     pub fn ban_subnet(&self, subnet: Ipv4Subnet, until: Tick, now: Tick) -> Vec<SocketId> {
         let mut inner = self.lock();
         if !inner.bans.ban_subnet(subnet, until, now) {
             return Vec::new();
         }
-        close_matching(&mut inner, Match::Subnet(subnet))
+        close_matching(&mut inner, BanSubject::Subnet(subnet))
     }
 
     /// Remove a host ban. Sockets that are already open stay open.
@@ -228,7 +367,7 @@ impl Sockets {
     /// How many live sockets this connector has in this direction.
     #[must_use]
     pub fn socket_count(&self, connector: ConnectorId, direction: Direction) -> u64 {
-        self.lock().counts[slot(connector, direction)]
+        self.lock().occupancy.get(connector, direction)
     }
 
     /// How many sockets are live, in every connector and direction.
@@ -243,50 +382,35 @@ impl Sockets {
         self.lock().live.contains_key(&id)
     }
 
-    fn reserve(
+    /// The endpoint recorded for `id`, when the socket is still live.
+    #[must_use]
+    pub fn endpoint(&self, id: SocketId) -> Option<ObservedEndpoint> {
+        self.lock().live.get(&id).map(|live| live.endpoint)
+    }
+
+    fn mint(
         &self,
+        inner: &mut Inner,
         connector: ConnectorId,
         direction: Direction,
-        ip: Option<IpAddr>,
-        ceiling: Option<InboundCeiling>,
-        now: Tick,
+        endpoint: ObservedEndpoint,
     ) -> Result<OpenSocket, OpenError> {
-        let mut inner = self.lock();
-        if let Some(ip) = ip {
-            if inner.bans.is_banned(ip, now) {
-                return Err(OpenError::Refused(CloseCause::new(
-                    CloseKind::AdmissionRefused,
-                )));
-            }
-        }
-        if let Some(ceiling) = ceiling {
-            let total = inner.inbound_total().ok_or(OpenError::Exhausted)?;
-            if let InboundCeiling::Bounded(limit) = ceiling {
-                if total >= u64::from(limit) {
-                    return Err(OpenError::Refused(CloseCause::new(
-                        CloseKind::AdmissionRefused,
-                    )));
-                }
-            }
-        }
         let next = inner.next_id.checked_add(1).ok_or(OpenError::Exhausted)?;
-        let index = slot(connector, direction);
-        let count = inner.counts[index]
-            .checked_add(1)
+        inner
+            .occupancy
+            .try_increment(connector, direction)
             .ok_or(OpenError::Exhausted)?;
         let id = SocketId(inner.next_id);
         inner.next_id = next;
-        inner.counts[index] = count;
         inner.live.insert(
             id,
             Live {
                 connector,
                 direction,
-                ip,
+                endpoint,
             },
         );
         debug_assert!(inner.holds());
-        drop(inner);
         Ok(OpenSocket {
             sockets: self.clone(),
             id,
@@ -302,26 +426,27 @@ impl Default for Sockets {
 }
 
 #[derive(Clone, Copy)]
-enum Match {
+enum BanSubject {
     Host(IpAddr),
     Subnet(Ipv4Subnet),
 }
 
-fn is_match(banned: Match, ip: Option<IpAddr>) -> bool {
-    match (banned, ip) {
-        (Match::Host(host), Some(observed)) => observed == host,
-        (Match::Subnet(subnet), Some(IpAddr::V4(observed))) => subnet.contains(observed),
-        (Match::Host(_) | Match::Subnet(_), None) | (Match::Subnet(_), Some(IpAddr::V6(_))) => {
-            false
+fn endpoint_is_subject(subject: BanSubject, endpoint: ObservedEndpoint) -> bool {
+    match (subject, endpoint) {
+        (BanSubject::Host(host), ObservedEndpoint::Host(observed)) => observed == host,
+        (BanSubject::Subnet(subnet), ObservedEndpoint::Host(IpAddr::V4(observed))) => {
+            subnet.contains(observed)
         }
+        (BanSubject::Host(_) | BanSubject::Subnet(_), ObservedEndpoint::Zone)
+        | (BanSubject::Subnet(_), ObservedEndpoint::Host(IpAddr::V6(_))) => false,
     }
 }
 
-fn close_matching(inner: &mut Inner, banned: Match) -> Vec<SocketId> {
+fn close_matching(inner: &mut Inner, subject: BanSubject) -> Vec<SocketId> {
     let ids: Vec<SocketId> = inner
         .live
         .iter()
-        .filter(|(_, live)| is_match(banned, live.ip))
+        .filter(|(_, live)| endpoint_is_subject(subject, live.endpoint))
         .map(|(id, _)| *id)
         .collect();
     for id in &ids {
@@ -336,10 +461,7 @@ fn release(inner: &mut Inner, id: SocketId, cause: CloseCause) -> CloseResult {
     let Some(live) = inner.live.remove(&id) else {
         return CloseResult::AlreadyClosed;
     };
-    let index = slot(live.connector, live.direction);
-    inner.counts[index] = inner.counts[index]
-        .checked_sub(1)
-        .expect("socket count underflow");
+    inner.occupancy.decrement(live.connector, live.direction);
     debug_assert!(inner.holds());
     CloseResult::Recorded(cause)
 }
@@ -348,6 +470,7 @@ fn release(inner: &mut Inner, id: SocketId, cause: CloseCause) -> CloseResult {
 /// if nothing has closed it yet, so a failure before the channel exists
 /// does not leave the count up.
 #[derive(Debug)]
+#[must_use = "dropping an OpenSocket releases the reservation"]
 pub struct OpenSocket {
     sockets: Sockets,
     id: SocketId,
@@ -383,12 +506,12 @@ impl Drop for OpenSocket {
 
 #[cfg(test)]
 mod tests {
-    use super::{CloseResult, OpenError};
+    use super::{CloseResult, ObservedEndpoint, OpenError};
     pub(super) use super::{Direction, Sockets};
-    use crate::address::PeerAddress;
     use crate::ban::Ipv4Subnet;
     pub(super) use crate::declaration::ConnectorId;
     use crate::{CloseCause, CloseKind};
+    use shekyl_net_address::NetworkAddress;
     use shekyl_onion_v3::v3_onion_hostname;
     use shekyl_peer_policy::InboundCeiling;
     use shekyl_timing_engine::Tick;
@@ -420,10 +543,9 @@ mod tests {
         assert_eq!(refused(error), CloseKind::AdmissionRefused);
         assert_eq!(sockets.live(), 0);
         let _open = sockets
-            .accept_tor(
-                InboundCeiling::Unbounded(shekyl_peer_policy::UnboundedReason::Unlimited),
-                now(),
-            )
+            .accept_tor(InboundCeiling::Unbounded(
+                shekyl_peer_policy::UnboundedReason::Unlimited,
+            ))
             .expect("admitted");
         assert_eq!(
             sockets.socket_count(ConnectorId::Tor, Direction::Inbound),
@@ -452,7 +574,7 @@ mod tests {
     fn close_releases_once_and_drop_does_not_release_again() {
         let sockets = Sockets::new();
         let open = sockets
-            .accept_tor(InboundCeiling::Bounded(2), now())
+            .accept_tor(InboundCeiling::Bounded(2))
             .expect("open");
         let id = open.id();
         assert_eq!(
@@ -505,10 +627,37 @@ mod tests {
     }
 
     #[test]
+    fn clearnet_and_tor_inbound_share_the_process_ceiling() {
+        let sockets = Sockets::new();
+        let ceiling = InboundCeiling::Bounded(1);
+        let clearnet = sockets
+            .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
+            .expect("clearnet");
+        let error = sockets.accept_tor(ceiling).expect_err("process full");
+        assert_eq!(refused(error), CloseKind::AdmissionRefused);
+        assert_eq!(
+            sockets.socket_count(ConnectorId::Clearnet, Direction::Inbound),
+            1
+        );
+        assert_eq!(
+            sockets.socket_count(ConnectorId::Tor, Direction::Inbound),
+            0
+        );
+        assert_eq!(
+            sockets.endpoint(clearnet.id()),
+            Some(ObservedEndpoint::Host(ip([10, 0, 0, 1])))
+        );
+        let tor = sockets
+            .accept_tor(InboundCeiling::Bounded(2))
+            .expect("room");
+        assert_eq!(sockets.endpoint(tor.id()), Some(ObservedEndpoint::Zone));
+    }
+
+    #[test]
     fn a_tor_dial_that_is_not_an_onion_reserves_nothing() {
         let sockets = Sockets::new();
         let error = sockets
-            .open_tor(&PeerAddress::Ipv4 {
+            .open_tor(&NetworkAddress::Ipv4 {
                 ip: Ipv4Addr::LOCALHOST,
                 port: 18080,
             })
@@ -517,7 +666,7 @@ mod tests {
         assert_eq!(sockets.live(), 0);
         let host = v3_onion_hostname(&[0x22; 32]);
         let _open = sockets
-            .open_tor(&PeerAddress::Tor { host, port: 18080 })
+            .open_tor(&NetworkAddress::Tor { host, port: 18080 })
             .expect("onion");
         assert_eq!(
             sockets.socket_count(ConnectorId::Tor, Direction::Outbound),
@@ -537,9 +686,7 @@ mod tests {
         let kept = sockets
             .accept_clearnet(other, InboundCeiling::Bounded(8), now())
             .expect("other");
-        let tor = sockets
-            .accept_tor(InboundCeiling::Bounded(8), now())
-            .expect("tor");
+        let tor = sockets.accept_tor(InboundCeiling::Bounded(8)).expect("tor");
         let v6 = sockets
             .accept_clearnet(
                 IpAddr::V6(Ipv6Addr::LOCALHOST),
@@ -595,7 +742,7 @@ mod tests {
                 let held = Arc::clone(&held);
                 scope.spawn(move || {
                     for _ in 0..20 {
-                        if let Ok(open) = sockets.accept_tor(InboundCeiling::Bounded(5), now()) {
+                        if let Ok(open) = sockets.accept_tor(InboundCeiling::Bounded(5)) {
                             held.lock().expect("held").push(open);
                         }
                     }
@@ -654,8 +801,7 @@ mod tests {
                             );
                         }
                         if i % 2 == 0 {
-                            if let Ok(open) = sockets.accept_tor(InboundCeiling::Bounded(64), now())
-                            {
+                            if let Ok(open) = sockets.accept_tor(InboundCeiling::Bounded(64)) {
                                 drop(open);
                             }
                         }
@@ -708,7 +854,7 @@ mod tests {
                 }
             }
             1 => {
-                if let Ok(sock) = sockets.accept_tor(ceiling, now()) {
+                if let Ok(sock) = sockets.accept_tor(ceiling) {
                     open.push(sock);
                 }
             }
@@ -721,7 +867,7 @@ mod tests {
             }
             3 => {
                 let host = v3_onion_hostname(&[0x33; 32]);
-                if let Ok(sock) = sockets.open_tor(&PeerAddress::Tor { host, port: 18080 }) {
+                if let Ok(sock) = sockets.open_tor(&NetworkAddress::Tor { host, port: 18080 }) {
                     open.push(sock);
                 }
             }

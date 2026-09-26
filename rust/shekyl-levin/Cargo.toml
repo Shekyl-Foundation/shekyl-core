@@ -19,6 +19,7 @@ zstd = ["dep:zstd"]
 
 [dependencies]
 thiserror = { workspace = true }
+shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-portable-storage = { path = "../shekyl-portable-storage" }
 # This vendored, pinned libzstd (zstd-sys `cc`-compiles the copy in the
 # crate; the non-default `pkg-config` feature is NOT enabled) is the

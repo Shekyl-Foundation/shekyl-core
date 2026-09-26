@@ -228,9 +228,13 @@ members = [
     "shekyl-p-transport",
     "shekyl-p2p-transport",
 
-    # Transport-layer logic (P2P_TRANSPORT_LAYER.md): declarations, socket
-    # counts, the ban list. No sockets. The Noise layer stays
-    # shekyl-p2p-transport.
+    # The peer address union. Levin frames it; the transport layer selects
+    # a connector from it. Neither crate defines a second copy.
+    "shekyl-net-address",
+
+    # Transport-layer logic (P2P_TRANSPORT_LAYER.md): declarations, the
+    # stack plan, socket counts, the ban list. No sockets. The Noise
+    # layer stays shekyl-p2p-transport. Levin is the session above the plan.
     "shekyl-transport-layer",
 
     # Persona serving loop: loopback shard server behind the P onion

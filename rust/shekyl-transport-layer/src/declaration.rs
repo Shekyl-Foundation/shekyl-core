@@ -6,18 +6,13 @@
 //! D7. Each connector declares what its network provides. A cell nobody
 //! has assessed reads "not assessed". It does not inherit another network's
 //! answer.
+//!
+//! [`connector_for`] reads the addressing cell, so two connectors cannot
+//! claim one family. [`stack_plan`] reads the encryption cell: a network
+//! with no native encryption gets the Noise layer, and the session above
+//! that plan does not match on the connector.
 
-use crate::address::PeerAddress;
-
-/// A connector that is built. I2P is a column in the table and is not
-/// one of these.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConnectorId {
-    /// Clearnet.
-    Clearnet,
-    /// Tor.
-    Tor,
-}
+use shekyl_net_address::NetworkAddress;
 
 /// A column of the declaration table, including the column that has no
 /// connector yet.
@@ -31,6 +26,73 @@ pub enum NetworkColumn {
     I2p,
 }
 
+macro_rules! connectors {
+    (
+        $(#[$enum_meta:meta])*
+        enum ConnectorId {
+            $($(#[$meta:meta])* $name:ident => $column:ident),+ $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[repr(u8)]
+        pub enum ConnectorId {
+            $($(#[$meta])* $name,)+
+        }
+
+        impl ConnectorId {
+            /// Every built connector, in declaration order.
+            ///
+            /// The occupancy table and the process-wide inbound sum both
+            /// walk this list. A connector that is not here is not counted.
+            pub const ALL: &'static [Self] = &[$(Self::$name,)+];
+
+            /// Rows in the occupancy table. One per connector.
+            pub const COUNT: usize = Self::ALL.len();
+
+            /// Index into the occupancy table. Dense from zero, in [`Self::ALL`] order.
+            #[must_use]
+            pub const fn index(self) -> usize {
+                match self {
+                    $(Self::$name => Self::$name as usize,)+
+                }
+            }
+
+            /// The declaration column for this connector.
+            #[must_use]
+            pub const fn column(self) -> NetworkColumn {
+                match self {
+                    $(Self::$name => NetworkColumn::$column,)+
+                }
+            }
+        }
+
+        const _: () = {
+            // `index` is the discriminant, and the macro emits the variants
+            // in order with no explicit values, so the discriminants are
+            // 0..COUNT. A hole would write one connector's occupancy into
+            // another's row.
+            let mut position = 0usize;
+            $(
+                assert!(ConnectorId::$name.index() == position);
+                position += 1;
+            )+
+            assert!(position == ConnectorId::COUNT);
+        };
+    };
+}
+
+connectors! {
+    /// A connector that is built. I2P is a column in the table and is not
+    /// one of these.
+    enum ConnectorId {
+        /// Clearnet.
+        Clearnet => Clearnet,
+        /// Tor.
+        Tor => Tor,
+    }
+}
+
 /// An assessed value, or a cell nobody has assessed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Assessment<T> {
@@ -38,24 +100,6 @@ pub enum Assessment<T> {
     Assessed(T),
     /// Nobody has assessed this cell.
     NotAssessed,
-}
-
-/// The words a cell reads as.
-pub trait CellText {
-    /// The cell's text. "not assessed" is [`Assessment::NotAssessed`], not
-    /// a value of this trait.
-    fn cell_text(self) -> &'static str;
-}
-
-impl<T: CellText> Assessment<T> {
-    /// What the cell reads as.
-    #[must_use]
-    pub fn text(self) -> &'static str {
-        match self {
-            Self::NotAssessed => "not assessed",
-            Self::Assessed(value) => value.cell_text(),
-        }
-    }
 }
 
 /// How peers are named.
@@ -69,13 +113,16 @@ pub enum Addressing {
     B32I2p,
 }
 
-impl CellText for Addressing {
-    fn cell_text(self) -> &'static str {
-        match self {
-            Self::Ip => "ipv4/ipv6",
-            Self::OnionV3 => "onion v3",
-            Self::B32I2p => "b32.i2p",
-        }
+/// The addressing family an address presents.
+///
+/// IPv4 and IPv6 are one family. This is the variant, not a check that
+/// the hostname is well formed. The dial rule does that check.
+#[must_use]
+pub const fn addressing_of(address: &NetworkAddress) -> Addressing {
+    match address {
+        NetworkAddress::Ipv4 { .. } | NetworkAddress::Ipv6 { .. } => Addressing::Ip,
+        NetworkAddress::Tor { .. } => Addressing::OnionV3,
+        NetworkAddress::I2p { .. } => Addressing::B32I2p,
     }
 }
 
@@ -89,12 +136,54 @@ pub enum NativeEncryption {
     Classical,
 }
 
-impl CellText for NativeEncryption {
-    fn cell_text(self) -> &'static str {
-        match self {
-            Self::NoneNative => "none native",
-            Self::Classical => "native, classical only",
-        }
+/// A layer the transport adds because the connector's network does not
+/// provide a property the session contract requires.
+///
+/// The session reads the byte stream above this list. It does not match
+/// on [`ConnectorId`], and it does not know which layer supplied encryption.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddedLayer {
+    /// The Noise NNhfs handshake and record layer in `shekyl-p2p-transport`.
+    ///
+    /// Added when native encryption is [`NativeEncryption::NoneNative`].
+    Noise,
+}
+
+/// Whether a column can be built, and which layers the transport adds
+/// under the session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StackPlan {
+    /// `layers` is what the transport adds. Empty means the network
+    /// already meets the encryption contract.
+    Ready {
+        /// Layers under the session, in the order they wrap the stream.
+        layers: &'static [AddedLayer],
+    },
+    /// The encryption cell has not been assessed, so no layer can be
+    /// chosen. There is no connector for this column.
+    NotUsable,
+}
+
+const NOISE_LAYER: &[AddedLayer] = &[AddedLayer::Noise];
+const NO_ADDED_LAYER: &[AddedLayer] = &[];
+
+/// The layers `column`'s encryption cell requires.
+///
+/// Clearnet declares no native encryption, so the plan is
+/// [`AddedLayer::Noise`]. Tor declares classical encryption, so the plan
+/// is empty. I2P's encryption cell is not assessed, so the column is
+/// not usable. A new [`NativeEncryption`] variant has to say which of
+/// those it is.
+#[must_use]
+pub const fn stack_plan(column: NetworkColumn) -> StackPlan {
+    match declaration(column).encryption() {
+        Assessment::Assessed(NativeEncryption::NoneNative) => StackPlan::Ready {
+            layers: NOISE_LAYER,
+        },
+        Assessment::Assessed(NativeEncryption::Classical) => StackPlan::Ready {
+            layers: NO_ADDED_LAYER,
+        },
+        Assessment::NotAssessed => StackPlan::NotUsable,
     }
 }
 
@@ -107,15 +196,6 @@ pub enum DestinationAuth {
     OneWay,
 }
 
-impl CellText for DestinationAuth {
-    fn cell_text(self) -> &'static str {
-        match self {
-            Self::No => "no",
-            Self::OneWay => "one way",
-        }
-    }
-}
-
 /// A yes or no that has been assessed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YesNo {
@@ -125,25 +205,10 @@ pub enum YesNo {
     No,
 }
 
-impl CellText for YesNo {
-    fn cell_text(self) -> &'static str {
-        match self {
-            Self::Yes => "yes",
-            Self::No => "no",
-        }
-    }
-}
-
 /// Correlation, or the origin of a relayed transaction. The assessed
 /// answer on the networks where it has been written down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NotProvided;
-
-impl CellText for NotProvided {
-    fn cell_text(self) -> &'static str {
-        "not provided"
-    }
-}
 
 /// What an observer at this node's end can see of the connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,15 +217,6 @@ pub enum LocalVisibility {
     Visible,
     /// The same facts, as Tor traffic.
     VisibleAsTor,
-}
-
-impl CellText for LocalVisibility {
-    fn cell_text(self) -> &'static str {
-        match self {
-            Self::Visible => "visible",
-            Self::VisibleAsTor => "visible as tor traffic",
-        }
-    }
 }
 
 /// Whether an inbound peer has an address a ban can name.
@@ -172,15 +228,6 @@ pub enum BannableInbound {
     NoAddress,
 }
 
-impl CellText for BannableInbound {
-    fn cell_text(self) -> &'static str {
-        match self {
-            Self::Yes => "yes",
-            Self::NoAddress => "no address",
-        }
-    }
-}
-
 /// What a connection is a stream of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamKind {
@@ -188,15 +235,6 @@ pub enum StreamKind {
     Tcp,
     /// A Tor stream.
     Tor,
-}
-
-impl CellText for StreamKind {
-    fn cell_text(self) -> &'static str {
-        match self {
-            Self::Tcp => "tcp",
-            Self::Tor => "tor stream",
-        }
-    }
 }
 
 /// The observed identity of an inbound peer.
@@ -208,15 +246,6 @@ pub enum InboundIdentity {
     ZoneNoAddress,
 }
 
-impl CellText for InboundIdentity {
-    fn cell_text(self) -> &'static str {
-        match self {
-            Self::SocketAddress => "socket address",
-            Self::ZoneNoAddress => "zone, no address",
-        }
-    }
-}
-
 /// Where a connector's deadlines come from. No duration is stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeadlineInput {
@@ -226,50 +255,17 @@ pub enum DeadlineInput {
     WhenAConnectorExists,
 }
 
-impl CellText for DeadlineInput {
-    fn cell_text(self) -> &'static str {
-        match self {
-            Self::MeasuredPerConnector => "measured per connector",
-            Self::WhenAConnectorExists => "when a connector exists",
-        }
-    }
-}
-
 /// Rendezvous arrival priced by onion-service proof of work.
+///
+/// Flood resistance of streams inside an established circuit is not a
+/// value yet. The Tor flood test is what would add one. Until then the
+/// sentence stays in the design record, not in a one-variant type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rendezvous {
     /// Clearnet has no rendezvous.
     NotApplicable,
-    /// Enabled. Flood resistance is a separate cell.
+    /// Enabled.
     Enabled,
-}
-
-impl CellText for Rendezvous {
-    fn cell_text(self) -> &'static str {
-        match self {
-            Self::NotApplicable => "not applicable",
-            Self::Enabled => "enabled",
-        }
-    }
-}
-
-/// Flood resistance of streams inside an established circuit. The only
-/// value today is that nobody has assessed it. A result from the Tor
-/// flood test is what would add another.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FloodResistance {
-    /// The Tor flood test has not been run.
-    NotAssessed,
-}
-
-impl FloodResistance {
-    /// What the cell reads as.
-    #[must_use]
-    pub const fn text(self) -> &'static str {
-        match self {
-            Self::NotAssessed => "not assessed",
-        }
-    }
 }
 
 /// One column of the D7 table.
@@ -289,7 +285,6 @@ pub struct Declaration {
     inbound_identity: Assessment<InboundIdentity>,
     deadline_inputs: Assessment<DeadlineInput>,
     rendezvous: Assessment<Rendezvous>,
-    flood_resistance: Option<FloodResistance>,
 }
 
 impl Declaration {
@@ -363,36 +358,6 @@ impl Declaration {
     pub const fn rendezvous(self) -> Assessment<Rendezvous> {
         self.rendezvous
     }
-    /// Flood resistance, when this column has that residual.
-    #[must_use]
-    pub const fn flood_resistance(self) -> Option<FloodResistance> {
-        self.flood_resistance
-    }
-
-    /// Every cell's text, including the flood residual when this column has one.
-    #[must_use]
-    pub fn texts(self) -> Vec<&'static str> {
-        let mut out = vec![
-            self.addressing.text(),
-            self.encryption.text(),
-            self.destination_authenticated.text(),
-            self.address_hidden_from_peer.text(),
-            self.destination_hidden_from_local_observer.text(),
-            self.address_hidden_from_remote_observer.text(),
-            self.correlation.text(),
-            self.local_observer_visibility.text(),
-            self.relay_origin.text(),
-            self.bannable_inbound.text(),
-            self.stream.text(),
-            self.inbound_identity.text(),
-            self.deadline_inputs.text(),
-            self.rendezvous.text(),
-        ];
-        if let Some(flood) = self.flood_resistance {
-            out.push(flood.text());
-        }
-        out
-    }
 }
 
 /// The column for `which`.
@@ -414,7 +379,6 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             inbound_identity: Assessment::Assessed(InboundIdentity::SocketAddress),
             deadline_inputs: Assessment::Assessed(DeadlineInput::MeasuredPerConnector),
             rendezvous: Assessment::Assessed(Rendezvous::NotApplicable),
-            flood_resistance: None,
         },
         NetworkColumn::Tor => Declaration {
             addressing: Assessment::Assessed(Addressing::OnionV3),
@@ -431,7 +395,6 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             inbound_identity: Assessment::Assessed(InboundIdentity::ZoneNoAddress),
             deadline_inputs: Assessment::Assessed(DeadlineInput::MeasuredPerConnector),
             rendezvous: Assessment::Assessed(Rendezvous::Enabled),
-            flood_resistance: Some(FloodResistance::NotAssessed),
         },
         NetworkColumn::I2p => Declaration {
             addressing: Assessment::Assessed(Addressing::B32I2p),
@@ -448,58 +411,125 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             inbound_identity: Assessment::NotAssessed,
             deadline_inputs: Assessment::Assessed(DeadlineInput::WhenAConnectorExists),
             rendezvous: Assessment::NotAssessed,
-            flood_resistance: None,
         },
     }
 }
 
-/// The connector an address selects. I2P selects none.
+/// The connector whose addressing cell is the family `address` presents.
+///
+/// I2P presents [`Addressing::B32I2p`] and no connector declares that
+/// family, so the result is [`None`]. Two connectors declaring one family
+/// is the D7 falsifier: the result is [`None`] rather than a silent pick,
+/// and the crate test rejects that table.
 #[must_use]
-pub const fn connector_for(address: &PeerAddress) -> Option<ConnectorId> {
-    match address {
-        PeerAddress::Ipv4 { .. } | PeerAddress::Ipv6 { .. } => Some(ConnectorId::Clearnet),
-        PeerAddress::Tor { .. } => Some(ConnectorId::Tor),
-        PeerAddress::I2p { .. } => None,
+pub fn connector_for(address: &NetworkAddress) -> Option<ConnectorId> {
+    let family = addressing_of(address);
+    let mut found = None;
+    for id in ConnectorId::ALL {
+        let Assessment::Assessed(declared) = declaration(id.column()).addressing() else {
+            continue;
+        };
+        if declared != family {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(*id);
     }
+    found
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        connector_for, declaration, Assessment, BannableInbound, ConnectorId, DeadlineInput,
-        FloodResistance, NativeEncryption, NetworkColumn, NotProvided, Rendezvous,
+        addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,
+        BannableInbound, ConnectorId, DeadlineInput, DestinationAuth, InboundIdentity,
+        LocalVisibility, NativeEncryption, NetworkColumn, NotProvided, Rendezvous, StackPlan,
+        StreamKind, YesNo,
     };
-    use crate::address::PeerAddress;
+    use shekyl_net_address::NetworkAddress;
     use std::net::{Ipv4Addr, Ipv6Addr};
+
+    fn cell<T>(value: Assessment<T>, assessed: impl Fn(T) -> &'static str) -> &'static str {
+        match value {
+            Assessment::NotAssessed => "not assessed",
+            Assessment::Assessed(value) => assessed(value),
+        }
+    }
+
+    fn yes_no(value: YesNo) -> &'static str {
+        match value {
+            YesNo::Yes => "yes",
+            YesNo::No => "no",
+        }
+    }
+
+    /// The words the D7 cells read as. The scan for reputation words lives
+    /// here, next to the strings, and not on the public cell types.
+    fn cell_texts(column: super::Declaration) -> Vec<&'static str> {
+        vec![
+            cell(column.addressing(), |value| match value {
+                Addressing::Ip => "ipv4/ipv6",
+                Addressing::OnionV3 => "onion v3",
+                Addressing::B32I2p => "b32.i2p",
+            }),
+            cell(column.encryption(), |value| match value {
+                NativeEncryption::NoneNative => "none native",
+                NativeEncryption::Classical => "native, classical only",
+            }),
+            cell(column.destination_authenticated(), |value| match value {
+                DestinationAuth::No => "no",
+                DestinationAuth::OneWay => "one way",
+            }),
+            cell(column.address_hidden_from_peer(), yes_no),
+            cell(column.destination_hidden_from_local_observer(), yes_no),
+            cell(column.address_hidden_from_remote_observer(), yes_no),
+            cell(column.correlation(), |NotProvided| "not provided"),
+            cell(column.local_observer_visibility(), |value| match value {
+                LocalVisibility::Visible => "visible",
+                LocalVisibility::VisibleAsTor => "visible as tor traffic",
+            }),
+            cell(column.relay_origin(), |NotProvided| "not provided"),
+            cell(column.bannable_inbound(), |value| match value {
+                BannableInbound::Yes => "yes",
+                BannableInbound::NoAddress => "no address",
+            }),
+            cell(column.stream(), |value| match value {
+                StreamKind::Tcp => "tcp",
+                StreamKind::Tor => "tor stream",
+            }),
+            cell(column.inbound_identity(), |value| match value {
+                InboundIdentity::SocketAddress => "socket address",
+                InboundIdentity::ZoneNoAddress => "zone, no address",
+            }),
+            cell(column.deadline_inputs(), |value| match value {
+                DeadlineInput::MeasuredPerConnector => "measured per connector",
+                DeadlineInput::WhenAConnectorExists => "when a connector exists",
+            }),
+            cell(column.rendezvous(), |value| match value {
+                Rendezvous::NotApplicable => "not applicable",
+                Rendezvous::Enabled => "enabled",
+            }),
+        ]
+    }
+
+    fn unassessed(column: NetworkColumn) -> usize {
+        cell_texts(declaration(column))
+            .iter()
+            .filter(|text| **text == "not assessed")
+            .count()
+    }
 
     #[test]
     fn an_unassessed_cell_reads_not_assessed() {
-        let i2p = declaration(NetworkColumn::I2p);
-        assert_eq!(i2p.encryption().text(), "not assessed");
-        assert_eq!(
-            i2p.texts()
-                .iter()
-                .filter(|text| **text == "not assessed")
-                .count(),
-            11
-        );
-        let tor = declaration(NetworkColumn::Tor);
-        assert_eq!(tor.flood_resistance(), Some(FloodResistance::NotAssessed));
-        assert_eq!(
-            tor.texts()
-                .iter()
-                .filter(|text| **text == "not assessed")
-                .count(),
-            1
-        );
-        assert_eq!(
-            declaration(NetworkColumn::Clearnet)
-                .texts()
-                .iter()
-                .filter(|text| **text == "not assessed")
-                .count(),
-            0
-        );
+        assert!(matches!(
+            declaration(NetworkColumn::I2p).encryption(),
+            Assessment::NotAssessed
+        ));
+        assert_eq!(unassessed(NetworkColumn::I2p), 11);
+        assert_eq!(unassessed(NetworkColumn::Tor), 0);
+        assert_eq!(unassessed(NetworkColumn::Clearnet), 0);
     }
 
     #[test]
@@ -509,7 +539,10 @@ mod tests {
             NetworkColumn::Tor,
             NetworkColumn::I2p,
         ] {
-            for text in declaration(column).texts() {
+            match column {
+                NetworkColumn::Clearnet | NetworkColumn::Tor | NetworkColumn::I2p => {}
+            }
+            for text in cell_texts(declaration(column)) {
                 let lower = text.to_ascii_lowercase();
                 assert!(!lower.contains("protected"), "{text}");
                 assert!(!lower.contains("secure"), "{text}");
@@ -549,34 +582,72 @@ mod tests {
     }
 
     #[test]
-    fn the_address_type_selects_one_connector() {
-        assert_eq!(
-            connector_for(&PeerAddress::Ipv4 {
-                ip: Ipv4Addr::LOCALHOST,
-                port: 18080,
-            }),
-            Some(ConnectorId::Clearnet)
-        );
-        assert_eq!(
-            connector_for(&PeerAddress::Ipv6 {
-                ip: Ipv6Addr::LOCALHOST,
-                port: 18080,
-            }),
-            Some(ConnectorId::Clearnet)
-        );
-        assert_eq!(
-            connector_for(&PeerAddress::Tor {
-                host: "example.onion".to_owned(),
-                port: 18080,
-            }),
-            Some(ConnectorId::Tor)
-        );
-        assert_eq!(
-            connector_for(&PeerAddress::I2p {
-                host: "example.b32.i2p".to_owned(),
-                port: 0,
-            }),
-            None
-        );
+    fn the_addressing_cell_selects_the_connector() {
+        let samples = [
+            (
+                NetworkAddress::Ipv4 {
+                    ip: Ipv4Addr::LOCALHOST,
+                    port: 18080,
+                },
+                Some(ConnectorId::Clearnet),
+            ),
+            (
+                NetworkAddress::Ipv6 {
+                    ip: Ipv6Addr::LOCALHOST,
+                    port: 18080,
+                },
+                Some(ConnectorId::Clearnet),
+            ),
+            (
+                NetworkAddress::Tor {
+                    host: "example.onion".to_owned(),
+                    port: 18080,
+                },
+                Some(ConnectorId::Tor),
+            ),
+            (
+                NetworkAddress::I2p {
+                    host: "example.b32.i2p".to_owned(),
+                    port: 0,
+                },
+                None,
+            ),
+        ];
+        for (address, expected) in samples {
+            assert_eq!(connector_for(&address), expected);
+            let family = addressing_of(&address);
+            let owners: Vec<ConnectorId> = ConnectorId::ALL
+                .iter()
+                .copied()
+                .filter(|id| declaration(id.column()).addressing() == Assessment::Assessed(family))
+                .collect();
+            assert!(owners.len() <= 1, "{family:?} claimed twice");
+            assert_eq!(owners.first().copied(), expected);
+        }
+    }
+
+    #[test]
+    fn noise_is_added_only_where_native_encryption_is_absent() {
+        match stack_plan(NetworkColumn::Clearnet) {
+            StackPlan::Ready { layers } => assert_eq!(layers, &[AddedLayer::Noise]),
+            StackPlan::NotUsable => panic!("clearnet meets the encryption contract"),
+        }
+        match stack_plan(NetworkColumn::Tor) {
+            StackPlan::Ready { layers } => assert!(layers.is_empty()),
+            StackPlan::NotUsable => panic!("tor meets the encryption contract"),
+        }
+        assert_eq!(stack_plan(NetworkColumn::I2p), StackPlan::NotUsable);
+        for column in [
+            NetworkColumn::Clearnet,
+            NetworkColumn::Tor,
+            NetworkColumn::I2p,
+        ] {
+            match column {
+                NetworkColumn::Clearnet | NetworkColumn::Tor | NetworkColumn::I2p => {}
+            }
+            let ready = matches!(stack_plan(column), StackPlan::Ready { .. });
+            let built = ConnectorId::ALL.iter().any(|id| id.column() == column);
+            assert_eq!(ready, built, "{column:?}");
+        }
     }
 }

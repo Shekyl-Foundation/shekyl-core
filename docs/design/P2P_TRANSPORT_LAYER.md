@@ -140,22 +140,32 @@ The pass above is discharged. This note is the scope of the first
 transport increment.
 
 The crate is `shekyl-transport-layer`. It depends on
-`shekyl-p2p-transport` and `shekyl-timing-engine`.
-`shekyl-p2p-transport` stays the Noise layer: no connector and no
-socket loop. `Responder::read_message1`, `Initiator::read_message2`,
-and `RecvHalf::open_one` are public so the D11 fuzz targets can call
-them. Those targets live beside that crate.
+`shekyl-net-address`, `shekyl-p2p-transport`, and
+`shekyl-timing-engine`. `shekyl-net-address` is the address union.
+`shekyl-levin` implements the portable-storage codec for that union
+and does not depend on the transport crate. The transport crate does
+not depend on Levin. `shekyl-p2p-transport` stays the Noise layer: no
+connector and no socket loop. `Responder::read_message1`,
+`Initiator::read_message2`, and `RecvHalf::open_one` are public so the
+D11 fuzz targets can call them. Those targets live beside that crate.
 
 In this increment:
 
-- Connector declarations are data (D7). The address type selects the
-  connector. I2P is a column and not a connector. A cell nobody has
-  assessed reads "not assessed". The Tor connector dials an onion v3
-  hostname only; anything else is `DialFailed`.
+- Connector declarations are data (D7). The addressing cell selects
+  the connector. I2P is a column and not a connector. A cell nobody
+  has assessed reads "not assessed". The dial rule reads that cell:
+  onion v3 for Tor, an IP address for clearnet, and anything else is
+  `DialFailed`.
+- The stack plan reads the encryption cell. Clearnet declares no
+  native encryption, so the plan adds the Noise layer. Tor declares
+  classical encryption, so the plan adds nothing. Levin is the session
+  above that plan. It does not match on the connector, and adding
+  Noise to a connector does not change how Levin reads the stream.
 - Socket admission is a count, not a socket (D4, D8). Accept reserves
   one slot against `InboundCeiling` in the same step as the increment.
-  Close releases that slot once. The count is per connector and
-  direction.
+  Close releases that slot once. Occupancy is per connector and
+  direction. The process-wide ceiling is the sum of every connector's
+  inbound row, and that list is the connector list.
 - The ban list holds IPv4 subnets and host addresses. Expiry is checked
   when an entry is looked up. A new ban closes live sockets to that
   host. Nothing in the RPC calls it yet. That call is the seam, when

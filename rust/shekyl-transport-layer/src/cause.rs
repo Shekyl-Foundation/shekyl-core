@@ -12,7 +12,7 @@ pub enum Phase {
     BeforeChannel,
     /// The channel exists and the Levin handshake is not done.
     Gap,
-    /// Any time after the channel exists.
+    /// The Levin handshake is done. This row does not include [`Phase::Gap`].
     AfterChannel,
 }
 
@@ -94,8 +94,16 @@ pub struct CloseCause {
 }
 
 impl CloseCause {
+    /// A cause other than [`CloseKind::ProxyRefused`].
+    ///
+    /// `ProxyRefused` is [`Self::proxy_refused`]: it carries the overlay
+    /// reply code. Passing that kind here is a programming error.
     #[must_use]
     pub const fn new(kind: CloseKind) -> Self {
+        assert!(
+            !matches!(kind, CloseKind::ProxyRefused),
+            "ProxyRefused carries the overlay reply code"
+        );
         Self {
             kind,
             reply_code: 0,
@@ -230,5 +238,12 @@ mod tests {
         assert!(CloseKind::LocalClose.applies_in(Phase::AfterChannel));
         assert!(!CloseKind::DialFailed.applies_in(Phase::AfterChannel));
         assert!(!CloseKind::PeerClosed.applies_in(Phase::BeforeChannel));
+        assert!(!CloseKind::PeerClosed.applies_in(Phase::Gap));
+    }
+
+    #[test]
+    #[should_panic(expected = "ProxyRefused carries the overlay reply code")]
+    fn a_proxy_refusal_without_a_reply_code_is_not_a_cause() {
+        let _cause = CloseCause::new(CloseKind::ProxyRefused);
     }
 }
