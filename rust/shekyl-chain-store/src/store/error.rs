@@ -321,6 +321,19 @@ pub enum StoreCannot {
         /// The schedule it runs under.
         epoch: SettlementEpochBlocks,
     },
+    /// The session's undo-log retention is below the reorg cap of the rule
+    /// set it runs under (S-CHAIN-W SCW-7: retention `≥ D_max`, or a legal
+    /// reorg returns [`PopBelowFloor`](Self::PopBelowFloor)). Refused at
+    /// open against the cap the caller names, and by `connect` against the
+    /// set in force at every height — a Fakechain regtest runs a rule set
+    /// whose cap fits its retention, never a store field the validator
+    /// defers to (PR #861 review).
+    RetentionBelowReorgCap {
+        /// The undo-log retention the session asked for.
+        retention: shekyl_types::BlockCount,
+        /// The in-force rule set's cap.
+        reorg_cap: shekyl_types::BlockCount,
+    },
     /// A `ChainValid` judged under one rule set was handed to `connect` at
     /// a height where another is in force (S-CHAIN-W §3.1, SCW-16).
     ///
@@ -536,6 +549,17 @@ impl core::fmt::Display for StoreCannot {
                  retention with the epoch, or run the production pair",
                 retention.to_raw(),
                 epoch.get()
+            ),
+            Self::RetentionBelowReorgCap {
+                retention,
+                reorg_cap,
+            } => write!(
+                f,
+                "undo-log retention {} is below the in-force rule set's reorg cap of {}: a legal \
+                 reorg would meet PopBelowFloor (S-CHAIN-W SCW-7); raise the retention, or run a \
+                 Fakechain rule set whose cap fits it",
+                retention.to_raw(),
+                reorg_cap.to_raw()
             ),
             Self::SettlementEpochMismatch { pinned, session } => write!(
                 f,

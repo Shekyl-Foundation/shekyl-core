@@ -24,7 +24,7 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
-use super::connect_fixtures::{coinbase, judge, spend};
+use super::connect_fixtures::{coinbase, judge_under, spend};
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
 use crate::codec::{
@@ -35,13 +35,19 @@ use crate::schema::{BLOCK_INFO, PROPERTIES, UNDO_LOG};
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
+/// The Fakechain rule set this schedule runs: the genesis rules with a
+/// reorg cap that fits the retention (SCW-7) — a regtest wanting a 50-block
+/// retention gets a rule set whose cap is at most 50, not a store field the
+/// validator defers to (PR #861 review).
+const RULES: RuleSet = RuleSet::fakechain(None, BlockCount::from_raw(RETENTION));
 
 fn horizons() -> Horizons {
     Horizons::new(
         SettlementEpochBlocks::new(SEB).expect("non-zero"),
         BlockCount::from_raw(RETENTION),
+        RULES.reorg_cap(),
     )
-    .expect("0 < retention < epoch")
+    .expect("cap ≤ retention < epoch")
 }
 
 /// A curve root that is a function of the height, wide enough for long
@@ -94,13 +100,20 @@ fn facts(height: u64) -> ConnectFacts {
 struct Builder {
     hashes: Vec<BlockHash>,
     listed: Vec<Vec<Transaction>>,
+    /// The rule set every block is judged under and handed to `connect`.
+    rules: RuleSet,
 }
 
 impl Builder {
     fn new() -> Self {
+        Self::under(RULES)
+    }
+
+    fn under(rules: RuleSet) -> Self {
         Self {
             hashes: Vec::new(),
             listed: Vec::new(),
+            rules,
         }
     }
 
@@ -126,7 +139,11 @@ impl Builder {
             let view = batch.chain_view();
             let mut out = Vec::new();
             for (h, cand) in (from..=to).zip(cands) {
-                out.push(batch.connect(judge(&view, cand)?, facts(h), RuleSet::GENESIS)?);
+                out.push(batch.connect(
+                    judge_under(&view, cand, &self.rules)?,
+                    facts(h),
+                    self.rules,
+                )?);
             }
             Ok(out)
         });
@@ -356,6 +373,9 @@ fn h_scarce_is_the_last_discarded_shards_close_height() {
     cleanup(&path);
 }
 
+/// The Fakechain set for the ten-block schedule the SI-13 tests run.
+const SHORT: RuleSet = RuleSet::fakechain(None, BlockCount::from_raw(3));
+
 /// A later `block_info` row whose storage-id total is below an earlier
 /// one's is SI-13. The boundary connect must not commit with `D(E)` skipped.
 #[test]
@@ -364,10 +384,11 @@ fn a_decreasing_storage_id_total_refuses_the_boundary() {
     let horizons = Horizons::new(
         SettlementEpochBlocks::new(10).expect("non-zero"),
         BlockCount::from_raw(3),
+        SHORT.reorg_cap(),
     )
-    .expect("0 < retention < epoch");
+    .expect("cap ≤ retention < epoch");
     let store = ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons).expect("create");
-    let mut b = Builder::new();
+    let mut b = Builder::under(SHORT);
     // Height 40 is epoch 4, the first boundary whose window starts above
     // genesis: `D(4)` reads `first_tx_id(10)` and `first_tx_id(30)`.
     b.connect(&store, 0, 39, |_| Vec::new());
@@ -378,7 +399,7 @@ fn a_decreasing_storage_id_total_refuses_the_boundary() {
     let cand = candidate(40, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, cand)?, facts(40), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge_under(&view, cand, &SHORT)?, facts(40), SHORT)?)
     });
     assert!(
         out.is_err(),
@@ -408,10 +429,11 @@ fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
     let horizons = Horizons::new(
         SettlementEpochBlocks::new(10).expect("non-zero"),
         BlockCount::from_raw(3),
+        SHORT.reorg_cap(),
     )
-    .expect("0 < retention < epoch");
+    .expect("cap ≤ retention < epoch");
     let store = ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons).expect("create");
-    let mut b = Builder::new();
+    let mut b = Builder::under(SHORT);
     b.connect(&store, 0, 39, |_| Vec::new());
     drop(store);
     plant_listed(&path, 9, 30);
@@ -421,7 +443,7 @@ fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
     let cand = candidate(40, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, cand)?, facts(40), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge_under(&view, cand, &SHORT)?, facts(40), SHORT)?)
     });
     assert!(
         out.is_err(),
@@ -583,7 +605,7 @@ fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary(
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let cand = candidate(400, previous, Vec::new());
-        Ok(batch.connect(judge(&view, cand)?, facts(400), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge_under(&view, cand, &RULES)?, facts(400), RULES)?)
     });
     assert_eq!(
         out,
@@ -601,5 +623,63 @@ fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary(
     );
     assert_eq!(tip(&store), 399, "the boundary block did not connect");
     assert!(!store.connect_state().is_live());
+    cleanup(&path);
+}
+
+/// SCW-7 as a refusal on both sides: `Horizons::new` refuses a retention
+/// below the cap it is handed, and `connect` refuses a block whose in-force
+/// set names a cap the retention does not cover — at the block, live, with
+/// nothing connected — never a `PopBelowFloor` on a legal reorg later.
+#[test]
+fn a_retention_below_the_in_force_cap_is_refused_at_open_and_at_connect() {
+    let epoch = SettlementEpochBlocks::new(SEB).expect("non-zero");
+    assert_eq!(
+        Horizons::new(epoch, BlockCount::from_raw(49), BlockCount::from_raw(50)),
+        Err(StoreCannot::RetentionBelowReorgCap {
+            retention: BlockCount::from_raw(49),
+            reorg_cap: BlockCount::from_raw(50),
+        })
+    );
+    assert!(Horizons::new(epoch, BlockCount::from_raw(50), BlockCount::from_raw(50)).is_ok());
+    // The production cap does not fit a 100-block schedule at all.
+    assert!(matches!(
+        Horizons::production(epoch),
+        Err(StoreCannot::RetentionNotInsideEpoch { .. })
+    ));
+
+    // A store admitted under RULES (cap 50) is handed GENESIS (cap 720).
+    let path = tmp("prune-cap-at-connect");
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let cand = candidate(0, BlockHash::NULL, Vec::new());
+        Ok(batch.connect(
+            judge_under(&view, cand, &RuleSet::GENESIS)?,
+            facts(0),
+            RuleSet::GENESIS,
+        )?)
+    });
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(StoreCannot::RetentionBelowReorgCap {
+                retention: BlockCount::from_raw(RETENTION),
+                reorg_cap: shekyl_chain_rules::D_MAX,
+            })
+            .to_string()
+        ))
+    );
+    assert!(store.connect_state().is_live(), "a refusal is not a halt");
+    assert!(
+        store
+            .begin_read()
+            .expect("read")
+            .tip()
+            .expect("tip")
+            .recorded
+            .is_none(),
+        "nothing connected"
+    );
     cleanup(&path);
 }

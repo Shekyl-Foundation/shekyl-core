@@ -122,7 +122,12 @@ fn a_file_reopens_under_its_pinned_schedule_and_refuses_another() {
     // A 50-block schedule cannot run the production retention (`D_max` ≥
     // 50), so the session names its own — the pin check is what this test
     // is about, and it fires after the horizons are admitted.
-    let other_horizons = Horizons::new(OTHER_EPOCH, BlockCount::from_raw(10)).expect("inside");
+    let other_horizons = Horizons::new(
+        OTHER_EPOCH,
+        BlockCount::from_raw(10),
+        BlockCount::from_raw(10),
+    )
+    .expect("inside");
     assert!(
         matches!(
             ChainStore::with_horizons(&path, ApplyPolicy::default(), other_horizons),
@@ -143,7 +148,7 @@ fn a_file_reopens_under_its_pinned_schedule_and_refuses_another() {
         matches!(
             ChainStore::open_read_only(
                 &path,
-                Horizons::new(OTHER_EPOCH, BlockCount::from_raw(10)).expect("inside")
+                Horizons::new(OTHER_EPOCH, BlockCount::from_raw(10), BlockCount::from_raw(10)).expect("inside")
             ),
             Err(StoreError::Cannot(got)) if got == want
         ),
@@ -175,7 +180,12 @@ fn a_reader_reports_the_retention_it_was_opened_with() {
     // shortened schedule names that schedule's own retention; it does not
     // inherit `D_max`, which does not fit inside the epoch.
     let path = tmp("ro-session");
-    let session = Horizons::new(OTHER_EPOCH, BlockCount::from_raw(10)).expect("inside");
+    let session = Horizons::new(
+        OTHER_EPOCH,
+        BlockCount::from_raw(10),
+        BlockCount::from_raw(10),
+    )
+    .expect("inside");
     drop(ChainStore::with_horizons(&path, ApplyPolicy::default(), session).expect("create"));
     let ro = ChainStore::open_read_only(&path, session).expect("reader");
     assert_eq!(ro.horizons(), session);

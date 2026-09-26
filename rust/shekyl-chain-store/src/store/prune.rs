@@ -86,7 +86,7 @@
 use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
-use shekyl_chain_rules::D_MAX;
+use shekyl_chain_rules::RuleSet;
 use shekyl_types::{storage_ids_through, BlockCount, BlockHeight, SHARD_TX_COUNT};
 
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
@@ -115,12 +115,18 @@ const FIRST_PRUNING_EPOCH: u64 = 2;
 /// The two horizons the store runs under: the settlement schedule the file
 /// is pinned to, and how many undo rows below the tip it keeps.
 ///
-/// `0 < undo_retention < epoch` is the one invariant, checked at
-/// construction and refused at open (`DRS_E1_SPRUNE.md` §3, §12): the pop
-/// floor's belt depends on the undo floor sitting above the body horizon.
-/// Production runs `D_max`; a regtest override that shortens the epoch
-/// shortens the retention with it, so the invariant holds on every nettype
-/// (rule 71).
+/// The retention is boxed between two numbers that are not the store's:
+/// **at least the in-force rule set's reorg cap** (`RuleSet::reorg_cap`,
+/// S-CHAIN-W SCW-7 — below it a legal reorg meets `PopBelowFloor`) and
+/// **strictly inside the epoch** (`DRS_E1_SPRUNE.md` §3, §12 — the pop
+/// floor sits above the body horizon *because* `retention < SEB`, SPR-7).
+/// Both are checked at construction and refused at open; the cap is
+/// re-checked by `connect` against the set in force at every height, so a
+/// schedule step that raises the cap is refused at the block it applies
+/// to. The store holds no rule set and no schedule (rule 71): the caller
+/// hands the cap here as it hands the set to `connect`. Production runs
+/// `D_max` on both sides; a regtest under a shortened epoch runs a
+/// Fakechain rule set whose cap fits inside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Horizons {
     epoch: SettlementEpochBlocks,
@@ -128,16 +134,25 @@ pub struct Horizons {
 }
 
 impl Horizons {
-    /// The schedule with an explicit undo retention.
+    /// The schedule with an explicit undo retention, under a rule set whose
+    /// reorg cap is `reorg_cap`.
     ///
     /// # Errors
     ///
+    /// [`StoreCannot::RetentionBelowReorgCap`] if `undo_retention < reorg_cap`;
     /// [`StoreCannot::RetentionNotInsideEpoch`] unless `0 < undo_retention < epoch`.
     pub fn new(
         epoch: SettlementEpochBlocks,
         undo_retention: BlockCount,
+        reorg_cap: BlockCount,
     ) -> Result<Self, StoreCannot> {
         let retention = undo_retention.to_raw();
+        if retention < reorg_cap.to_raw() {
+            return Err(StoreCannot::RetentionBelowReorgCap {
+                retention: undo_retention,
+                reorg_cap,
+            });
+        }
         if retention == 0 || retention >= epoch.get() {
             return Err(StoreCannot::RetentionNotInsideEpoch {
                 retention: undo_retention,
@@ -150,14 +165,34 @@ impl Horizons {
         })
     }
 
-    /// The schedule with the production retention, `D_max`.
+    /// The schedule with the production retention: the genesis rule set's
+    /// cap, `D_max`, on both sides.
     ///
     /// # Errors
     ///
     /// [`StoreCannot::RetentionNotInsideEpoch`] if `epoch ≤ D_max` — a
-    /// shortened schedule must name its own retention.
+    /// shortened schedule runs a Fakechain rule set and names its retention
+    /// against that set's cap.
     pub fn production(epoch: SettlementEpochBlocks) -> Result<Self, StoreCannot> {
-        Self::new(epoch, D_MAX)
+        let cap = RuleSet::GENESIS.reorg_cap();
+        Self::new(epoch, cap, cap)
+    }
+
+    /// Whether this retention covers `in_force`'s reorg cap (SCW-7) —
+    /// `connect`'s per-height belt.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreCannot::RetentionBelowReorgCap`] if it does not.
+    pub(super) fn check_covers(&self, in_force: &RuleSet) -> Result<(), StoreCannot> {
+        let reorg_cap = in_force.reorg_cap();
+        if self.undo_retention.to_raw() < reorg_cap.to_raw() {
+            return Err(StoreCannot::RetentionBelowReorgCap {
+                retention: self.undo_retention,
+                reorg_cap,
+            });
+        }
+        Ok(())
     }
 
     /// The settlement schedule.
@@ -528,14 +563,19 @@ mod horizon_tests {
     }
 
     #[test]
-    fn horizons_hold_zero_lt_retention_lt_epoch() {
-        assert!(Horizons::new(seb(10), BlockCount::from_raw(3)).is_ok());
+    fn horizons_hold_cap_le_retention_lt_epoch() {
+        let cap = BlockCount::from_raw(3);
+        assert!(Horizons::new(seb(10), BlockCount::from_raw(3), cap).is_ok());
         assert!(matches!(
-            Horizons::new(seb(10), BlockCount::from_raw(0)),
+            Horizons::new(seb(10), BlockCount::from_raw(2), cap),
+            Err(StoreCannot::RetentionBelowReorgCap { .. })
+        ));
+        assert!(matches!(
+            Horizons::new(seb(10), BlockCount::from_raw(0), BlockCount::from_raw(0)),
             Err(StoreCannot::RetentionNotInsideEpoch { .. })
         ));
         assert!(matches!(
-            Horizons::new(seb(10), BlockCount::from_raw(10)),
+            Horizons::new(seb(10), BlockCount::from_raw(10), cap),
             Err(StoreCannot::RetentionNotInsideEpoch { .. })
         ));
         assert!(
@@ -547,13 +587,14 @@ mod horizon_tests {
                 Horizons::production(seb(50)),
                 Err(StoreCannot::RetentionNotInsideEpoch { .. })
             ),
-            "a shortened epoch must name its own retention"
+            "a shortened epoch runs a Fakechain set and names its retention against its cap"
         );
     }
 
     #[test]
     fn the_batch_runs_at_boundaries_from_epoch_two() {
-        let h = Horizons::new(seb(10), BlockCount::from_raw(3)).expect("ok");
+        let h =
+            Horizons::new(seb(10), BlockCount::from_raw(3), BlockCount::from_raw(3)).expect("ok");
         for height in [0, 10, 5, 15, 21] {
             assert!(!h.is_pruning_boundary(height), "{height}");
         }
