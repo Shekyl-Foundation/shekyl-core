@@ -314,18 +314,23 @@ when the engine has applied it. A `Wake` already carries its
 `generation`, so the home learns that generation from the wake it is
 handed, not from a reply to `arm`. Owner ids are handed out by the
 handle from an atomic counter, so registering is not a round trip
-either. The core today assigns ids itself (`Engine::register`,
-`next_id`). The service cannot be written on that shape. When the
-service lands, `register` takes the id the handle minted and refuses a
-duplicate. That is the one core change this addendum requires.
+either. The handle is a type in this crate. `OwnerId`'s field stays
+private (`OwnerId(u64)`); transport never constructs one. The core
+today assigns ids itself (`Engine::register`, `next_id`). When the
+service lands, `register` takes the id the handle minted in this crate
+and refuses a duplicate. That is the core change. A public constructor
+on `OwnerId` is not part of it.
 
 **One outstanding wake is the delivery primitive.** Each owner has a
-single wake slot. Delivery sets that slot and wakes the home. It is not
-a queue. Delivering to an owner whose slot is already set does nothing
-more, and the core counts it as a replacement
-(`ClassLateness.replaced_wakes`). The home takes the wake out of the
-slot before it does any work, so the engine thread never waits on the
-owner.
+single wake slot. It is not a queue. Delivery writes the newest `Wake`
+into that slot. If the slot was empty, it wakes the home. If the slot
+already held a wake, it does not wake the home again, and the core
+counts the replacement (`ClassLateness.replaced_wakes`). The home takes
+whatever wake is in the slot when it runs, so `note_home` is handed the
+generation the core still holds. Leaving the older wake in the slot
+would make `note_home` return `NoSuchWake` and the newer wake
+unreportable. The home drops the slot's lock before it does any work,
+so the engine thread never waits on the owner.
 
 **The engine thread sleeps by blocking on the mailbox.** The timeout is
 `next_deadline() - now` when a deadline is armed, and the thread blocks
@@ -333,13 +338,16 @@ with no timeout when none is. There is no async runtime on that thread.
 Its budget is one thread, counted in D5, and it needs no reactor. It is
 not the transport runtime.
 
-**The mailbox is unbounded, and admission is what bounds it.** A bounded
-mailbox that refused an `arm` would drop a gap deadline without the
-owner knowing. That is worse than a long queue. Commands arrive only
-from connections admission has already let in — the ban list and the
-inbound ceiling — so the number of owners, and therefore the number of
-queued commands, is bounded by admission. That is the bound. It is not
-a second limit inside the mailbox.
+**The mailbox does not refuse an arm, and it does not grow per owner.**
+A bounded mailbox that refused an `arm` would drop a gap deadline
+without the owner knowing. That is worse than a long queue. Admission
+(the ban list and the inbound ceiling) bounds how many owners exist. It
+does not bound how many commands one owner can enqueue. The mailbox
+coalesces to one queued command of each kind per owner: an earlier
+`arm` replaces the queued `arm`, a later `arm` is not queued (the same
+rule as `Engine::arm`), and a queued `clear` or `note_home` is
+replaced by the next one. One owner is then a constant number of
+queued commands. The queue is not given a length that rejects.
 
 **Homes report back through the same mailbox.** `note_home` is a
 command on that mailbox, not a side channel. The home stamps
