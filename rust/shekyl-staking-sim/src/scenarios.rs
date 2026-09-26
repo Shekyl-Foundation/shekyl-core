@@ -11,9 +11,9 @@ use crate::agent::{run_epoch, AgentParams};
 use crate::audit::{challenge_needed, deterrence_threshold, read_prob};
 use crate::fingerprint::{force_deep_portfolio, Ta1Metrics, Ta1Recorder, SEB_DEFAULT};
 use crate::metrics::{
-    churn_rate, coverage, coverage_with_r, CoverageMetrics, TargetParams, N_BANDS,
+    churn_rate, coverage, coverage_with_r, size_band_under, CoverageMetrics, TargetParams, N_BANDS,
 };
-use crate::model::{r_target, Actor, Rng, Shard, World};
+use crate::model::{r_target, Actor, CompositionParams, Rng, Shard, World};
 use crate::participation::{
     admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, ParticipationParams,
 };
@@ -65,6 +65,12 @@ pub struct SimConfig {
     /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
     /// `1.0` = iteration-1 behavior; the (bond × shard-size) pair sweep varies it.
     pub deep_shard_size: f64,
+    /// **Composition axis** (`PDM-Q-F34`): heavy/light per-shard size ratio `S` at constant
+    /// total storage demand. `1.0` = flat (every pre-composition scenario, byte-identical).
+    pub size_spread: f64,
+    /// Key per-shard size on an independent draw instead of age — the confound control
+    /// that separates a cost-band effect from an age-band one.
+    pub size_decorrelated: bool,
 
     // L9 duration axis + dynamic world (iteration 2; inert when `!dynamic`).
     /// Dynamic frontier-window: shards age each epoch and recycle at age 1.
@@ -610,6 +616,12 @@ pub struct ScenarioResult {
     /// **Oldest-band audit cadence** (L14): the challenge rate the single oldest (coldest,
     /// most-irreplaceable) shard needs — the worst oversight point (P3 tail).
     pub audit_oldest_cadence: f64,
+    /// **Composition axis** (`PDM-Q-F34`): realized mean shard size (`1.0` when flat).
+    pub size_mean: f64,
+    /// Final-epoch `frac_under_target` within the light / mid / heavy size terciles. The
+    /// heavy entry is the one the row is about; the light entry is what over-subscription
+    /// looks like.
+    pub size_band_under_target: [f64; 3],
     /// Actor Gini, windowed mean over the churn window (steady-state spread read).
     pub gini_actor_window: f64,
     /// Max single-actor share, peak over the churn window (conservative spread read).
@@ -625,20 +637,40 @@ pub struct ScenarioResult {
     pub ta1: Option<Ta1Metrics>,
 }
 
+impl SimConfig {
+    /// The composition axis this scenario runs under.
+    pub fn composition(&self) -> CompositionParams {
+        CompositionParams {
+            spread: self.size_spread,
+            decorrelated: self.size_decorrelated,
+        }
+    }
+}
+
 fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
     // L12 bootstrap: the chain starts as a small genesis core of *hot* (age 0) shards —
     // there is no deep history at t=0; it accrues as these age and `run_sim` appends new
     // shards. The full-window draw below is the steady-state (every prior scenario).
     let shards: Vec<Shard> = if cfg.bootstrap {
         (0..cfg.n_shard_genesis)
-            .map(|_| Shard { age: 0.0 })
+            .map(|_| Shard {
+                age: 0.0,
+                size_seed: 0.0,
+            })
             .collect()
     } else {
         (0..cfg.n_shard)
             .map(|_| {
                 let u = rng.next_f64();
                 let age = u.powf(cfg.age_skew);
-                Shard { age }
+                // Composition control key: drawn only for the decorrelated arm, so every
+                // other scenario consumes zero extra RNG and stays byte-identical.
+                let size_seed = if cfg.size_spread > 1.0 && cfg.size_decorrelated {
+                    rng.next_f64()
+                } else {
+                    0.0
+                };
+                Shard { age, size_seed }
             })
             .collect()
     };
@@ -873,6 +905,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         bond_carry: cfg.bond_carry,
         deep_threshold: cfg.deep_threshold,
         deep_shard_size: cfg.deep_shard_size,
+        comp: cfg.composition(),
         bond_dur_base: cfg.bond_dur_base,
         bond_dur_age_scale: cfg.bond_dur_age_scale,
         lock_anticipation: cfg.lock_anticipation,
@@ -894,6 +927,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         bond_rate: cfg.bond_rate,
         bond_age_scale: cfg.bond_age_scale,
         deep_shard_size: cfg.deep_shard_size,
+        comp: cfg.composition(),
     };
 
     // Seed price so the first epoch's marginal-value calc is non-degenerate.
@@ -1827,6 +1861,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // cooldown=2 (oUmx 0, margin 0), so no freeze-driven `r_target_deep` increase is needed.
     let deep_margin = oldest_margin >= 0.0;
 
+    // Composition read (PDM-Q-F34): the aggregate and age-banded metrics above cannot see
+    // a cost redistribution; this one can.
+    let (size_band_under_target, size_mean) = size_band_under(&world, &last_eval.r, &tp);
+
     ScenarioResult {
         name: cfg.name.clone(),
         axis: cfg.axis.clone(),
@@ -1880,6 +1918,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         audit_oversight_credited,
         audit_deep_share,
         audit_oldest_cadence,
+        size_mean,
+        size_band_under_target,
         gini_actor_window,
         max_actor_share_window,
         claims: SubClaims {
@@ -1945,6 +1985,8 @@ fn baseline() -> SimConfig {
         bond_carry: 0.03,
         deep_threshold: 0.5,
         deep_shard_size: 1.0, // one unit per shard = iteration-1 behavior
+        size_spread: 1.0,     // flat composition = every pre-F34 scenario, byte-identical
+        size_decorrelated: false,
         // Static iteration-1 world by default; the L9 dynamic/duration scenarios opt in.
         dynamic: false,
         epoch_aging: 0.0,
@@ -3925,6 +3967,47 @@ pub fn build_scenarios() -> Vec<SimConfig> {
                 }
             }
         }
+    }
+
+    // --- Composition axis (`PDM-Q-F34`): per-shard byte heterogeneity at CONSTANT total
+    //     storage demand. `S` is the heavy/light size ratio; sizes track age (era density),
+    //     so the heavy band is the young end and the light band the old end that `g(age)`
+    //     pays a premium for. The base is the COVERED provisioning point (`storage_scale`
+    //     1.3 = `prov_p13`, frac_under 0 / deep_under 0), so any breach is this axis's doing
+    //     and not a pre-existing shortfall; `S = 1` reproduces `prov_p13` exactly.
+    //     `S = 4` is the realized per-tx spread, `S = 60` is `MAX_TX_SIZE / mean` (the
+    //     adversarial ceiling, on the wrong axis but the figure the charter carries). There
+    //     is no chain to measure pre-genesis, so this is §7.7's BOUNDING sweep, not a
+    //     measurement: the question it answers is *at what `S` does the heavy band breach
+    //     the ratified `frac_under_target < 0.05` bar*.
+    for s in [1.0, 2.0, 4.0, 10.0, 60.0] {
+        let mut c = baseline();
+        c.name = format!("comp_s{s:.0}");
+        c.axis = "composition".into();
+        c.storage_scale = 1.3;
+        c.size_spread = s;
+        out.push(c.clone());
+
+        // Confound control: same size marginal keyed on an independent draw, so a band
+        // effect here is SIZE, not age. Only where the spread is large enough to matter.
+        if s >= 4.0 {
+            let mut d = c;
+            d.name = format!("comp_s{s:.0}_decorr");
+            d.axis = "composition_control".into();
+            d.size_decorrelated = true;
+            out.push(d);
+        }
+    }
+
+    // Marginal base (`storage_scale` 1.0 = `baseline`, frac_under 0.050 — sitting ON the
+    // bar): the sensitivity read. A covered base answers "does composition break coverage";
+    // this answers "how much slack does composition consume".
+    for s in [4.0, 60.0] {
+        let mut c = baseline();
+        c.name = format!("comp_marg_s{s:.0}");
+        c.axis = "composition_marginal".into();
+        c.size_spread = s;
+        out.push(c);
     }
 
     out

@@ -190,9 +190,14 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!(
         "  on cold tail only); auOld = oldest-band cadence (P3). L14; 0 outside audit model."
     );
+    eprintln!(
+        "  szMn = realized MEAN shard size; szLo/szMd/szHi = frac_under within the light/\
+         mid/heavy SIZE tercile (PDM-Q-F34 composition axis; size tracks era density, so\
+         szHi is the young/dense end). 1.00/equal bands outside the composition axis."
+    );
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} {:>6} {:>14} {:>5} {:>5} {:>5} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} {:>6} {:>14} {:>5} {:>5} {:>5} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
         "scenario",
         "axis",
         "bond",
@@ -249,6 +254,10 @@ fn print_summary(results: &[ScenarioResult]) {
         "auC",
         "auDp",
         "auOld",
+        "szMn",
+        "szLo",
+        "szMd",
+        "szHi",
     );
 
     for r in results {
@@ -258,7 +267,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} {:>6.0} {:>14} {:>5.0} {:>5.0} {:>5.0} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} {:>6.0} {:>14} {:>5.0} {:>5.0} {:>5.0} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3} | {:>5.2} {:>5.3} {:>5.3} {:>5.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -322,6 +331,10 @@ fn print_summary(results: &[ScenarioResult]) {
             r.audit_oversight_credited,
             r.audit_deep_share,
             r.audit_oldest_cadence,
+            r.size_mean,
+            r.size_band_under_target[0],
+            r.size_band_under_target[1],
+            r.size_band_under_target[2],
         );
     }
 
@@ -2028,7 +2041,16 @@ mod tests {
 
     #[test]
     fn advance_epoch_retires_oldest_and_decrements_locks() {
-        let shards = vec![Shard { age: 0.98 }, Shard { age: 0.2 }];
+        let shards = vec![
+            Shard {
+                age: 0.98,
+                size_seed: 0.0,
+            },
+            Shard {
+                age: 0.2,
+                size_seed: 0.0,
+            },
+        ];
         let actors = vec![Actor {
             storage_capacity: 4,
             capital: 10.0,

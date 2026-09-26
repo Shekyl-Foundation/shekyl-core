@@ -72,12 +72,85 @@ impl Rng {
 #[derive(Debug, Clone)]
 pub struct Shard {
     pub age: f64,
+    /// Composition control key: an independent per-shard draw used **only** by the
+    /// decorrelated arm of the composition axis (`CompositionParams::decorrelated`).
+    /// `0.0` in every other scenario, and never drawn there, so the RNG stream — and
+    /// therefore every pre-composition result — is byte-identical.
+    pub size_seed: f64,
 }
 
 impl Shard {
     /// Deep-history shards require a per-shard retention bond. Hot shards do not.
     pub fn is_deep(&self, deep_threshold: f64) -> bool {
         self.age >= deep_threshold
+    }
+}
+
+/// **Composition axis** (`PDM-Q-F34`) — per-shard storage cost, the byte heterogeneity
+/// the fixed-cardinality partition admits.
+///
+/// A shard is `T = 200` consecutive storage ids, so its byte size is set by the usage
+/// **density of its era**, not by any per-transaction draw: a low-density era puts ~180
+/// coinbases (which carry no archival good at all — `prunable_hash` is `null_hash` and
+/// there are no `pqc_auths`) and ~20 spends in one shard, while a dense era puts four
+/// blocks of pure spends in it. Size therefore tracks the shard's **age**, and cost-band
+/// is confounded with age-band by construction. That is the substance, not a modelling
+/// artifact: channel 1 (`(1/R_market)·g(age)`, `REWARD_EMISSION_LEG.md` §4.1) takes **no
+/// byte operand**, so nothing prices a heavy shard except the realized thinness of its
+/// holder set — and `g(age)` pays the *most* for the era that is cheapest to hold.
+///
+/// `spread` is the heavy/light size ratio `S`. Sizes are normalized so the mean shard is
+/// one storage unit, which keeps total storage demand invariant in `S`: this axis
+/// **redistributes** cost, it does not add it (adding it is `storage_scale`). `S = 1` ⇒
+/// every size is exactly `1.0` ⇒ every pre-composition scenario is byte-identical.
+///
+/// `decorrelated` is the **control**: the same size marginal keyed on `Shard::size_seed`
+/// instead of age, which separates "heavy shards are under-held" from "old shards are
+/// under-held". Pre-genesis there is no realized composition to sample (`tests/data` is
+/// Monero-lineage), so `S` is **swept, not measured** — the bounding use
+/// `ARCHIVAL_PRUNED_DAEMON_MODE.md` §7.7 sanctions for a constant with no corpus behind it.
+#[derive(Debug, Clone, Copy)]
+pub struct CompositionParams {
+    /// Heavy/light size ratio `S` (`1.0` = flat, the pre-composition model).
+    pub spread: f64,
+    /// Key sizes on an independent draw instead of age (the confound control).
+    pub decorrelated: bool,
+}
+
+impl CompositionParams {
+    pub fn is_flat(&self) -> bool {
+        self.spread <= 1.0
+    }
+
+    /// Mean of the unnormalized shape over a uniform key — the divisor that holds total
+    /// storage demand fixed as `S` moves. A skewed age distribution shifts the *realized*
+    /// mean off `1.0`, which is why the realized mean is reported (`szMn`) rather than
+    /// assumed.
+    fn norm(&self) -> f64 {
+        1.0 + (self.spread - 1.0) / 2.0
+    }
+
+    /// Storage units shard `s` occupies, relative to the mean shard. Newest (age 0) is
+    /// heaviest and oldest (age 1) lightest — monotone usage growth, the direction the
+    /// deep-history premium is aimed against.
+    pub fn size(&self, shard: &Shard) -> f64 {
+        if self.is_flat() {
+            return 1.0;
+        }
+        let key = if self.decorrelated {
+            shard.size_seed
+        } else {
+            shard.age
+        };
+        (1.0 + (self.spread - 1.0) * (1.0 - key)) / self.norm()
+    }
+
+    /// Realized mean size over a shard set (`1.0` when flat).
+    pub fn mean_size(&self, shards: &[Shard]) -> f64 {
+        if self.is_flat() || shards.is_empty() {
+            return 1.0;
+        }
+        shards.iter().map(|s| self.size(s)).sum::<f64>() / shards.len() as f64
     }
 }
 
@@ -221,7 +294,10 @@ impl World {
     /// shard is consistently indexable. No-op on legacy scenarios (never called when
     /// `!bootstrap`).
     pub fn append_shard(&mut self, age: f64) {
-        self.shards.push(Shard { age });
+        self.shards.push(Shard {
+            age,
+            size_seed: 0.0,
+        });
         for a in 0..self.actors.len() {
             self.holdings[a].push(false);
             self.locks[a].push(0);
@@ -443,13 +519,109 @@ pub fn r_target(age: f64, r_target_hot: f64, r_target_deep: f64) -> usize {
 }
 
 #[cfg(test)]
+mod composition_tests {
+    use super::{CompositionParams, Shard};
+
+    fn shard(age: f64) -> Shard {
+        Shard {
+            age,
+            size_seed: 0.0,
+        }
+    }
+
+    /// `spread = 1.0` is the pre-composition model: every shard costs exactly one unit.
+    /// This is what makes every pre-`PDM-Q-F34` scenario byte-identical, so it is pinned
+    /// rather than assumed.
+    #[test]
+    fn flat_spread_is_exactly_one_unit_per_shard() {
+        let c = CompositionParams {
+            spread: 1.0,
+            decorrelated: false,
+        };
+        for age in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert_eq!(c.size(&shard(age)), 1.0, "age {age}");
+        }
+        assert_eq!(c.mean_size(&[shard(0.0), shard(1.0)]), 1.0);
+    }
+
+    /// The axis REDISTRIBUTES cost, it does not add it: the mean shard stays one unit over
+    /// a uniform age distribution at every spread. Without this the arm would be a
+    /// disguised `storage_scale` sweep and a coverage change would be unattributable.
+    #[test]
+    fn spread_is_mean_preserving_over_uniform_ages() {
+        let shards: Vec<Shard> = (0..1000).map(|i| shard(i as f64 / 999.0)).collect();
+        for spread in [2.0, 4.0, 10.0, 60.0] {
+            let c = CompositionParams {
+                spread,
+                decorrelated: false,
+            };
+            let mean = c.mean_size(&shards);
+            assert!(
+                (mean - 1.0).abs() < 1e-3,
+                "spread {spread}: mean size {mean} is not ~1.0"
+            );
+        }
+    }
+
+    /// Size tracks era density, so the young end is heavy and the old end light — the
+    /// direction that puts the `g(age)` premium on the CHEAP shards. A sign flip here
+    /// inverts the whole reading of the arm.
+    #[test]
+    fn young_shards_are_heavier_than_old_ones() {
+        let c = CompositionParams {
+            spread: 60.0,
+            decorrelated: false,
+        };
+        let young = c.size(&shard(0.0));
+        let old = c.size(&shard(1.0));
+        assert!(young > old, "young {young} must exceed old {old}");
+        // The extremes are the stated ratio apart; the mean-preserving normalizer is what
+        // keeps the heavy END near 2x the MEAN, which is why `S` is a ratio between bands
+        // and not a multiple of the mean.
+        assert!((young / old - 60.0).abs() < 1e-6, "ratio {}", young / old);
+        assert!(young < 2.5, "heavy end {young} is not near 2x the mean");
+    }
+
+    /// The control keys on the independent draw, so age carries no size information —
+    /// the one thing that separates a cost-band finding from an age-band one.
+    #[test]
+    fn decorrelated_keys_on_the_seed_not_the_age() {
+        let c = CompositionParams {
+            spread: 10.0,
+            decorrelated: true,
+        };
+        let a = Shard {
+            age: 0.0,
+            size_seed: 1.0,
+        };
+        let b = Shard {
+            age: 1.0,
+            size_seed: 0.0,
+        };
+        assert!(
+            c.size(&a) < c.size(&b),
+            "seed must dominate age in the control arm"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     /// Two deep shards, one actor with capacity 2. `s = 0` is the under-target shard
     /// the predicate is asked about.
     fn one_actor_world(capacity: usize) -> World {
-        let shards = vec![Shard { age: 1.0 }, Shard { age: 1.0 }];
+        let shards = vec![
+            Shard {
+                age: 1.0,
+                size_seed: 0.0,
+            },
+            Shard {
+                age: 1.0,
+                size_seed: 0.0,
+            },
+        ];
         let actors = vec![Actor {
             storage_capacity: capacity,
             capital: 100.0,

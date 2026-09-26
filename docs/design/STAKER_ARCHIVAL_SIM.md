@@ -3406,6 +3406,7 @@ worked byte sweep at the pinned cadence (`SETTLEMENT_EPOCH_BLOCKS = 10_000`,
 | L15 | **Retrieval / correlated-failure realism** (gate 4–5) | Coverage (replicas exist) ≠ retrieval (fetch within latency at target availability); the L4 survival arithmetic assumes *independent* holder failure. Modeled per-holder uptime `u` + a coarse failure-domain bucketing (`a % n_domains`); availability `= 1 − (1−u)^d` where `d` is the count of *distinct domains* among a shard's serving holders (`src/retrieval.rs`; gated, legacy byte-identical). | **RESOLVED (shape derived) — iteration 3.** Two results, both on a **fully-covered** deep set (`deep_und=0`, `R≈6`): (1) **coverage ≠ retrieval** — under independent failure (`l15_indep`) the covered set meets a three-nines SLA (`rUDp=0`), but as holders cluster into fewer domains (`l15_corr_d{6,3,2,1}`) realized availability falls `0.9997/0.997/0.988/0.900` and the under-SLA deep fraction climbs `0.007/0.20/1.0/1.0` **with `R` unchanged** — so **diversity (≥3 domains), not replica count, is the binding retrieval constraint**; (2) **`R_target` is derivable, not stipulated** — `⌈ln(1−A*)/ln(1−u)⌉` gives `rTgtA` 2/3/5/10 at `u` 0.95/0.90/0.80/0.50 (`l15_uptime_*`), so the stipulated `r_target_deep=6` silently assumes `u ≳ 0.85`; below that the covered set is under-redundant for the SLA *even under independence* (`u50`: `rUDp=1.0`). **Disposition:** gate-4/5 must (a) state the retrieval SLA `(u, A*)` and *derive* `R_target` from it, and (b) add a **co-located-with-coverage diversity floor** (≥`d*` distinct domains per deep shard) — a covered-but-clustered set is a latent availability failure. **Reinforces P3** (the oldest band, thinnest, is first under the diversity floor) and **L16** (the onion path depresses `u`, raising the derived `R_target`). **Residue:** live `u`, the SLA `A*`, and the real domain-correlation structure are post-testnet empirics; the privacy tension (diversity must be measured in coarse buckets, never per-holder geolocation — mission priority 2) is the gate-4 design constraint. See §*L15 — retrieval availability*. **Substrate for L14** (the challenge cadence rides on this serving/diversity state). |
 | L16 | **Transport selection / latency-regime coupling** (gate 6 / networking; the L10 latency axis seen from the transport side) | The firewalled-pseudonym requirement forces the **heavy archival fetch onto onion-service↔Tor-client rendezvous** (slowest Tor config; `P`'s location must not link to the principal, so no clearnet fallback). This makes the L10 `L2–L6` sweep the **operating regime by construction**, and `fetch_latency_per_unit` the onion-rendezvous latency — the post-testnet "real fetch latency" unknown is just *where on the band* the live transport sits. L16 couples that band to L15 via `u_eff = u_base/(1+k·L)` (`src/transport.rs`; gated, legacy byte-identical). TCP-sync and Tor reinforce (Tor is TCP-only; the inherited Levin/TCP stack drops in); the commitment is coupled (UDP/QUIC sync would reopen it). Tor is primary on maturity + TCP + persistent-reachable-service + longevity; I2P is a defensible secondary; Lokinet (Oxen-tied, UDP) and Nym (mixnet, latency-disqualifying for heavy fetch) are out. The **Arti in-process onion-service** option (Rust-canonical) is claimed viable on the 2.x LTS line — *to verify per `17-dependency-discipline.mdc`*. Full analysis: [`../ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Transport for the staker-archival path*. | **RESOLVED (shape derived) — iteration 3.** On a fully covered deep set (`deep_und=0`, `R≈6`), transport depression alone breaks the retrieval SLA from `L≥1` (`l16_regime_*`: `trU` 0.900→0.634, derived `rTgtA` 3→7, `rUDp` 0→1.0 across `L0..L6`); duration backstop does not repair depressed `u` (`l16_L6_s0`≡`s4`); replica floor adds `R` not `u` (`l16_L6_floor`≡`L6` — reinforces P4); transport+diversity compose worse than either (`l16_L4_d3`: `rUDp=1.0` vs `l15_corr_d3` `0.202`). **Disposition:** treat rendezvous latency as an input to the retrieval SLA `(u,A*)`, derive `R_target` from depressed `u_eff`, size against transport **and** diversity. **Residue:** post-testnet `L`, `k`, band position, and any non-linking bandwidth relaxation. Transport PR forks unchanged (Arti embed, I2P door, rendezvous threat pass). See §*L16 — transport-regime coupling* and §*Soundness pass*. |
 | L17 | **Black-swan / acute-shock resilience** (gates 5/7; due-diligence close) | L13/P2 stressed *gradual* declines; historical crises are steps (March-2020 gap-down, FTX custody collapse, LUNA compound, 2008 flight-to-liquidity, **Filecoin's fiat-opex provider exodus** — SPs 4 100 → ~1 900 as FIL fell). Gated `shock_*` knobs fire one-epoch discontinuities at the settled pinned-economics attractor; reads `shkP`/`shkRec`/`shkBA` (§*L17*). **swan-2** (W1–W3): extinction accounting (`shkExt` — backfill is *sourceless*), domain-correlated exit, aftershock re-fire, shock-at-knee, cascade × ρ. **swan-3** (W12–W15): per-band extinction read (`extB`), floored extinction read + floor-on closure arms (`shkExF`), holder-class-correlated exit (`shock_exit_top_deep`). **swan-4** (retention correction): foundation-as-sole-source re-read; bandwidth-bound re-seed arms (`reseed_rate`, `ssSE`/`ssMxW`/`ssOpn`). | **RESOLVED (measured, re-anchored on the retention guarantee) — 2026-06-11, swan-2/-3/-4 same day.** **swan-4 correction:** genesis foundation seeds retain complete trees permanently (`V3_STAKER_ARCHIVAL.md` authority pin), so market wipe-outs are **foundation-as-sole-source transitions, not data loss** — no shock in the grid loses data; the grid measures availability. Population shocks **absorbed with zero market wipe-outs**: 30 % exit (stride or index-bucketed, attractor or knee), ρ×3 panic, permanent ρ×2 (conditioned on Finding-0). Correlation drives the tail: at 50 %, stride 0 / index-bucketed-domain 1 / **class-correlated 28** wipe-outs — and class-correlated **30 %** costs 4 (outranks every independent 50 %). Aftershock pair 4, **within the independence-to-no-reseat envelope [1.9, 21]** (W14). Price legs, bare-lean: V-crash 37 to sole-source, recovered servo-400 99, permanent-gap 144–649 (market collapse onto the backstop); **band read (W12): mid-deep modal, NOT oldest-concentrated** (vshape 20/17 b4/b5; servo-400 5/64/30). **Re-seed bottleneck sized (swan-4):** at `reseed_rate = 3` (~1 flow/seat) the V-trough costs **429 sole-source shard-epochs, worst window 10**, servo-400 **403/9** (5 windows open at the run boundary); 4× provisioning halves exposure (429→204) and cuts wipe-outs 40→10 — foundation seeding bandwidth = **availability-SLO sizing input, provisioned at the crisis multiple (~4× steady-state; not gameable — foundation's own action)**, with the `N_active` domain-diversity condition folded into the gate-5 ops requirement. Serving-floor arms (`shkExF = 0`) cover every window incl. the 114-epoch servo-400 crossing. swan-2 domain rows ran with **no placement diversity floor (W15 pinned)** — benign results were bucketing luck. **Exports: retention guarantee + single-org threat model documented with authority** (swan-2 "new requirement" → existing-guarantee documentation); **treasury diversification = named ops requirement** (W4). W12/W13 completeness questions **parked against the no-sunset pin** (reversion (d)). Honest-holding = named residue; trigger observables pinned (W17): challenge-latency shift (weak) + **source-load spikes on true holders at challenge anchors** (confirmatory); detection open, not solved. Reversion re-keyed on **class- or domain-concentrated exit ≥ ~0.3** and on reopening the no-sunset pin. §*L17*. |
+| L19 | **Composition variance / per-shard cost heterogeneity** (gate 4–5; `PDM-Q-F34`) | Channel 1 (`(1/R_market)·g(age)`, [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4.1) takes **no byte operand**, while a fixed-cardinality shard (`T = 200` ids) varies in bytes with the usage density of its era. Every prior arm holds a shard's storage cost at one unit (`deep_shard_size`, class-keyed), so a *redistribution* of cost at constant total is invisible to it by construction. Modeled as `size(age) = 1 + (S−1)(1−age)` normalized mean-preserving (`src/model.rs` `CompositionParams`; gated at `S = 1`, legacy byte-identical), scaling the storage budget, the carry cost and the L10 fetch lag; read out as `frac_under_target` per **size tercile** (`size_band_under`). | **RESOLVED (shape derived) — 2026-09-26.** Three results. (1) **The aggregate bar cannot see this axis, and moves the wrong way:** on the marginal base the aggregate `frac_under` *improves* `0.050 → 0.021 → 0.037` across `S = 1/4/60` while the heavy band degrades `— / 0.050 / 0.113` — light shards are over-subscribed, heavy ones thin, and at `S = 60` the ratified `frac_under_target < 0.05` gate PASSES on a state with **11 % of heavy shards under target**. (2) **Slack absorbs it entirely:** on the covered base (`storage_scale` 1.3) every band is `0.000` at every `S` through 60 — the exposure is a function of provisioning headroom, not of `S` alone. (3) **The age-correlation is PROTECTIVE, and that is the finding:** the decorrelated control (same size marginal keyed on an independent draw) breaches where the correlated arm does not — heavy band `0.013/0.013/0.025` at `S = 4/10/60` on the *covered* base, `dS/dN` `1.47 → 1.40`. Under monotone usage growth the expensive shards are the **young** ones, which need fewest copies and carry no premium, while `g(age)` pays for the cheap old tail. So composition variance is not a hazard the market must clear — the era-ordering aligns cost against need, and the bootstrap subsidy (`DESIGN_CONCEPTS.md` Component 4) is what that alignment looks like at the cheap end. **Disposition:** no mechanism owed; `T` is not implicated (the partition is right, `PDM-Q6` item 5). Gate 4/5 owes **the band read, not a new bar** — a coverage verdict stated per cost band, since the aggregate certifies a failing band. **Residue / falsifier:** the shape is *linear and mean-preserving*, so the heavy END sits near 2× the mean at any `S` (`S` is a ratio between bands, not a multiple of the mean); a **bursty** composition (few very heavy shards) puts more mass at high cost and is the untested arm. Falsifier: a heavy-tailed size shape, or a realized composition once a chain exists, whose heavy band breaches the bar on a *covered* base. No corpus exists pre-genesis (`tests/data` is Monero-lineage), so `S` is swept, not measured — §7.7's bounding use. |
 | T-A1 | **F1 re-linkage instrument** (PHASE_2B §7.7; gate-3 + rotation) | **CLOSED.** Instrument + qual firewall wargame complete. Scarcity-spread → unique portfolios; primary firewall holds lifetime `T_obs` under wallet defaults. | **Conditionally finally accepted — regime-bounded (swan-2/W7).** Form-C reopen not triggered. The acceptance premise (lean-eq cohort ~79–100) is temporarily invalidated in L17 swan troughs (9–25 bonded — intersection surface maximally cheap); holds at the attractor, not in a crisis trough. [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §7 regime bound + §9; gate-6 sync-exit wargame (W8) is the mitigation question. |
 | G7 | **Locked-supply re-pricing / admission principal** (gate 7; PHASE_2B §2.4 close-condition (iii)) | Iteration-5 run (2026-06-11; §*Gate 7 iteration-5 — results*): derived archival lock collapses to `bond_floor × R × shards(t)` — 117 → 3 546 coins over 30 yr, `lock/circ ≤ 8.5×10⁻⁷` (10⁻⁵ even at 10× denser shard geometry; 1.4×10⁻⁴ at arm-B `MIN = 10 000×` floor). All three macro gauges (burn servo, release factor, net inflation) **insensitive to both arms at every `N_P`** — burn identical to the cent; both arms clamp identically at the 90 % cap under load. Δ vs. the asserted comparator: legacy schedules overstated burn −22.3 % via the now-inert `(1 + stake_ratio)` factor (FOLLOWUPS item). | **RESOLVED — bonds-only** per the pre-named indeterminate criterion (admission lock does no measurable macro work; smaller consensus surface wins). Cross-doc spec edits **landed 2026-06-11** (emission §10.2 branch deletion, PHASE_2B §2.4 (iii) + admission row, gate-6 §2.5, V3_STAKER_ARCHIVAL). **Reversion:** reopen iff bond floor / shard geometry re-pin ≥ 3 OOM upward combined, or a new archival lock class lands; re-run `--gate7`, re-apply criteria. |
 | AGG | **Per-reward proof aggregate** (PHASE_2B §2.4 close-condition (ii); emission §10.1) | Worked byte sweep (2026-06-11; §*Close-condition (ii)*) — no feedback dynamics, every term pinned or banked. Typical emission tx ≈ 17–19 kB, dominated by constant-size hybrid crypto (ML-DSA-65 sig 3.3 kB ×2, hybrid pk 2 kB, FCMP++ ~2.5 kB), not the work claim (≤ 780 B/epoch at year-30 lean portfolio ≈ 60 shards). Aggregate at 20 kB margin: thin/lean/thick = 80/160/310 B per block amortized = **0.027/0.053/0.103 %** of the 300 kB penalty-free zone. Single-tx max (15-epoch batch) ≈ 29 kB; boundary burst drains in ≈ 11 blocks at thick with zero spreading; only `work_claim` grows with chain age (2.6 kB/epoch at year 100 — still < 15 kB constant term). | **RESOLVED — (ii) closes; wire confirmed as pinned.** ≤ 0.11 % amortized across the envelope (≤ 0.21 % at uniform 2× size error). `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` + `SETTLEMENT_EPOCH_BLOCKS = 10_000` confirmed. Caveat: `FcmpMembershipOnly` size assumed at 1-input `FcmpPlusPlus` order (proves strictly less). **Reversion:** reopen iff built proof > 3× estimate, `N_P` envelope re-pins above ~1 500, epoch re-pins below 1 000 blocks, or **the envelope extends below `N_P` ≈ 25–30** (thin direction, W9 — L13 servo floor 17 / swan troughs ~9; per-archiver claim scales as `1/N_P` and a 15-epoch batch ≈ 70 kB at `N_P`=17 year-30; the guard is a per-emission claim cap forcing batch splitting); re-evaluation = re-run sweep with measured sizes. |
@@ -4134,3 +4135,115 @@ optimizer.** Not one parameter moved (`RELEASE_COOLDOWN_EPOCHS = 2`, `r_target_d
 availability_floor + 1`, `age_weight = 3`, foundation floor unchanged). The settings are
 **frozen**; the residual risk lives in operator behavior and the wallet/ops surface, not in
 the protocol parameters — and that, not more sweeps, is where the next work belongs.
+
+## L19 — composition variance: the aggregate bar certifies a failing heavy band (2026-09-26)
+
+**The question.** `PDM-Q6` item 5 made a shard a fixed count of transactions
+(`T = 200` storage ids, `archival_shard_tx_count`), and retired `SHARD_BYTES` as
+consensus. The partition is right — byte lengths live in the bodies being discarded, so
+a byte boundary needs a stored table of what the discarding node no longer has. But the
+*price* did not change with it: channel 1 is `(1/R_market(s,E)) · g(age(s))`, whose
+operands are a replication count and an age. **It takes no byte operand at all.** So the
+weight curve prices the *consequence* of a shard's cost (a thin holder set) and never the
+cost, and a cost spread across shards can only clear as a **redundancy** spread — bounded
+above by the cost ratio, compressed by whatever per-shard cost is byte-independent (bond
+lock, challenge). The charter answers the ~60× composition spread in a refutation list
+("a lottery… the weight curve is the mechanism that turns a lottery into a market"). That
+argument clears prices; the question it leaves is **coverage**, and it carried no
+falsifier a run could fail.
+
+**Why the existing instruments cannot answer it.** Two models, blind in different ways.
+`shekyl-economics-sim`'s `burden.rs` has the bytes (`SHARD_BYTES: f64 = 3.33e6`) and no
+per-shard holder state — `n · R · SHARD_BYTES` is a mean-of-means clearance question, and
+correctly so. This sim has the holder state and a ratified coverage bar
+(`frac_under_target < 0.05`), and counts an actor's storage in **slots**: `storage_capacity:
+usize`, one unit per shard via a class-keyed `deep_shard_size`. A redistribution of cost at
+constant total is therefore invisible to both, and the `~60×` could not appear in any
+result either produces.
+
+**The model.** A shard is 200 *consecutive* ids, so its size is not a per-transaction
+draw — an iid per-tx spread would collapse by `√200`. What produces a band-level spread is
+the **usage density of the era**: a low-density era puts ~180 coinbases (which carry no
+archival good — `prunable_hash` is `null_hash`, no `pqc_auths`) and ~20 spends in one
+shard; a dense era puts four blocks of pure spends in it. So size is a function of age:
+
+> `size(age) = [1 + (S − 1)(1 − age)] / [1 + (S − 1)/2]`
+
+`S` is the heavy/light ratio; the normalizer holds the **mean** shard at one unit, so the
+axis redistributes cost rather than adding it (adding it is `storage_scale`). It scales the
+greedy fill's storage budget, the per-shard carry cost, and the L10 fetch lag (egress is the
+shard's own bytes — the possession read is whole-shard, `SF-D1`). The **value** term is left
+byte-blind, because that is channel 1's actual shape. `S = 1` ⇒ every size is exactly `1.0`;
+all 384 pre-existing scenarios verified byte-identical, and `comp_s1` reproduces `prov_p13`
+exactly.
+
+Pre-genesis there is no realized composition to sample (`tests/data` is Monero-lineage), so
+`S` is **swept, not measured** — §7.7's bounding use. `S = 4` is the realized per-transaction
+spread; `S = 60` is `MAX_TX_SIZE / ~16.7 KB`, an adversarial ceiling over the mean rather
+than a composition spread, carried because the charter carries it.
+
+### Results
+
+| scenario | base | `S` | aggregate `frac_und` | light | mid | **heavy** | `dS/dN` | `min_R` |
+|---|---|---|---|---|---|---|---|---|
+| `comp_s1` | covered (1.3) | 1 | 0.000 | 0.000 | 0.000 | 0.000 | 1.47 | 4 |
+| `comp_s2` | covered | 2 | 0.000 | 0.000 | 0.000 | 0.000 | 1.47 | 3 |
+| `comp_s4` | covered | 4 | 0.000 | 0.000 | 0.000 | 0.000 | 1.47 | 3 |
+| `comp_s10` | covered | 10 | 0.000 | 0.000 | 0.000 | 0.000 | 1.47 | 3 |
+| `comp_s60` | covered | 60 | 0.000 | 0.000 | 0.000 | 0.000 | 1.47 | 3 |
+| `comp_s4_decorr` | covered | 4 | 0.004 | 0.000 | 0.000 | **0.013** | 1.40 | 3 |
+| `comp_s10_decorr` | covered | 10 | 0.004 | 0.000 | 0.000 | **0.013** | 1.40 | 3 |
+| `comp_s60_decorr` | covered | 60 | 0.008 | 0.000 | 0.000 | **0.025** | 1.40 | 3 |
+| `baseline` | marginal (1.0) | 1 | 0.050 | *(degenerate)* | | | 1.25 | 3 |
+| `comp_marg_s4` | marginal | 4 | 0.021 | 0.000 | 0.013 | **0.050** | 1.25 | 2 |
+| `comp_marg_s60` | marginal | 60 | 0.037 | 0.000 | 0.000 | **0.113** | 1.25 | 2 |
+
+At `S = 1` the terciles partition an equal-size set, so that band read is index noise and is
+reported, not asserted on.
+
+**1. The aggregate moves the wrong way.** On the marginal base the aggregate `frac_under`
+*improves* as composition spreads — `0.050 → 0.021 → 0.037` — while the heavy band goes
+`0.050 → 0.113`. Light shards are cheap, so they are over-subscribed and pull the mean down;
+the deficit concentrates entirely in the heavy band. At `S = 60` the ratified
+`frac_under_target < 0.05` gate **PASSES** on a state with 11 % of heavy shards under target.
+The aggregate bar is not merely insensitive here; it is anti-correlated with the failure.
+
+**2. Provisioning slack absorbs it.** On the covered base every band is `0.000` at every `S`
+through 60. The exposure is a function of headroom, not of `S` alone — which is the same
+shape L8/`endowment_mix` already reports (`mix_capital_heavy` fails at 0.742 deep-under where
+`mix_storage_heavy` passes at 0.000): coverage is **storage-leg-bound**, and this axis makes
+the storage leg shard-dependent.
+
+**3. The age-correlation is protective — that is the result.** The decorrelated control
+breaches where the correlated arm does not: heavy band `0.013/0.013/0.025` at `S = 4/10/60`
+on the *covered* base, with `dS/dN` falling `1.47 → 1.40`. Under monotone usage growth the
+heavy shards are the **young** ones — low `r_target`, no premium needed — and the light ones
+are the old deep tail that `g(age)` pays for. Cost and need are aligned by the era-ordering,
+not by the price. Decorrelate them and the alignment is what is lost.
+
+So the confound between cost band and age band is not a nuisance in the instrument: it is the
+mechanism. Cheap early history is not a hole to close but the shape that makes the deep-history
+premium land on shards that are cheap to hold — the bootstrap subsidy
+(`DESIGN_CONCEPTS.md` Component 4) seen from the storage side.
+
+### Disposition
+
+**No mechanism owed, and `T` is not implicated** — `PDM-Q6` item 5's partition stands, and
+nothing here reopens alternative **(g)** (no consensus consumer of a shard's byte size
+appeared; the byte term the reward leg would need is not demanded by any result above).
+
+What gate 4/5 owes is **the read, not a new bar**: a coverage verdict stated *per cost band*,
+because the aggregate certifies a failing band. `frac_under_target < 0.05` is the right
+threshold applied to the wrong population.
+
+**Residue.** The shape is linear and mean-preserving, so the heavy *end* sits near 2× the mean
+at any `S` — `S` is a ratio between bands, not a multiple of the mean, which is why even
+`S = 60` is absorbed by 30 % headroom. A **bursty** composition (a few very heavy shards
+rather than a smooth era gradient) puts more mass at high cost and is the untested arm.
+
+**Falsifier.** A heavy-tailed size shape, or a realized composition once a chain exists, whose
+heavy band breaches the bar on a **covered** base. Also: the mechanical question this arm does
+not reach — what the challenge draw does with a closed shard whose good is zero bytes
+(`Σ(prunable_len + pqc_auths_len) = 0`, reachable on any run of `T` coinbase ids), and what
+`serve_credit_bit` is when the read has nothing to return. That is a rule question, not a sim
+arm.
