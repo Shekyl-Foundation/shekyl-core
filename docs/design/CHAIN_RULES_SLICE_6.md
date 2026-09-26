@@ -412,9 +412,17 @@ commit; and instance 17, the widest — **five files** (`tx_against.rs`,
 `verifier.rs`) at their pre-`cargo fmt` text together, an hour after their
 commits, showing in the `git status` that preceded the push of
 `9c9a046dc`; every hunk formatting, restored from `HEAD`, the pushed
-commits unaffected) go into `08-worktree-hygiene.mdc` with commit 10. The
-five were exactly the files the edit tool had touched that hour and
-`cargo fmt` had then rewritten — the mechanism `wt-e6-s6` named, at scale. The recipe
+commits unaffected; and instance 18, `vectors_tests.rs`, five minutes after
+`eab040196` committed `cargo fmt`'s wrap of a one-line array, showing in
+the status beside the push) go into `08-worktree-hygiene.mdc` with commit
+10. The five were exactly the files the edit tool had touched that hour
+and `cargo fmt` had then rewritten — the mechanism `wt-e6-s6` named, at
+scale. Eighteen instances, and every one since 12 has the same shape: a
+line the edit tool wrote long, `cargo fmt` wrapped on disk, the buffer
+reasserted. **The mitigation that removes the cause rather than catching
+the effect is to write the line the way `cargo fmt` will leave it** —
+`rustfmt` is deterministic, and a line under 100 columns that `fmt` does
+not touch cannot drift back to a pre-`fmt` form. The status check stays. The recipe
 correction from the same day — the clone builds with `env -u
 CARGO_TARGET_DIR` — is already in that rule (`8e4616a35`); it did not wait,
 because it changes what the step *is*, not what it has seen.
