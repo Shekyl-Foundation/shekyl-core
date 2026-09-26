@@ -36,7 +36,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use shekyl_tor_control_daemon::{
-    BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError, TorBinaryError,
+    BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError, OnionPow, TorBinaryError,
 };
 
 /// Matches `SHEKYL_DAEMON_TOR_*` in `shekyl_ffi.h`.
@@ -283,7 +283,7 @@ pub unsafe extern "C" fn shekyl_daemon_tor_publish(
         return RC_NOT_RUNNING;
     };
 
-    match instance.publish(virtual_port, local_port, max_streams) {
+    match instance.publish(virtual_port, local_port, max_streams, OnionPow::Enabled) {
         Ok(service_id) => {
             // SAFETY: caller contract for `out_service_id`.
             unsafe { write_c_string(service_id.as_str(), out_service_id, out_service_id_len) };

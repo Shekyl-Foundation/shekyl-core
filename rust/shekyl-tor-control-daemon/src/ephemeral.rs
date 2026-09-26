@@ -51,8 +51,8 @@ use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
     ask_timed, evaluate_add_onion_reply, parse_socks_listeners, wait_until_ready, AddOnion,
     AddOnionReplyError, AskError, BootstrapReadiness, Command, ControlError, EventSink, ManagedTor,
-    OnionFlags, OnionPort, ServiceId, SocksPort, TorControlClient, TorControlClientConfig, TorExit,
-    TorLaunch, WaitReadyError,
+    OnionFlags, OnionPort, OnionPow, ServiceId, SocksPort, TorControlClient,
+    TorControlClientConfig, TorExit, TorLaunch, WaitReadyError,
 };
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
@@ -150,6 +150,14 @@ pub enum DaemonTorPublishError {
     /// different address than the held identity derives — the latter meaning
     /// the tor on the control port is not running our request.
     Publish(AddOnionReplyError),
+    /// The operator's Tor refused the proof-of-work arguments (status 512).
+    /// The onion is not published. There is no second attempt without PoW.
+    PowRefused {
+        /// The status tor returned.
+        status: u16,
+        /// Tor's reply text, truncated. Shown to the operator.
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for DaemonTorPublishError {
@@ -162,11 +170,41 @@ impl std::fmt::Display for DaemonTorPublishError {
             Self::Control(e) => write!(f, "tor control failure: {e:?}"),
             Self::Died => write!(f, "tor died during publish"),
             Self::Publish(e) => write!(f, "ADD_ONION failed: {e:?}"),
+            Self::PowRefused { status, detail } => {
+                if detail.is_empty() {
+                    write!(
+                        f,
+                        "this Tor refused onion-service proof-of-work (ADD_ONION status {status}). The onion was not published. Upgrade Tor. This node does not publish an onion without proof-of-work"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "this Tor refused onion-service proof-of-work (ADD_ONION status {status}: {detail}). The onion was not published. Upgrade Tor. This node does not publish an onion without proof-of-work"
+                    )
+                }
+            }
         }
     }
 }
 
 impl std::error::Error for DaemonTorPublishError {}
+
+/// A 512 on a publish that sent PoW arguments. `None` means the caller
+/// classifies the reply the ordinary way. There is no arm here that
+/// rebuilds the request with [`OnionPow::Disabled`].
+fn pow_refusal(
+    pow: OnionPow,
+    status: u16,
+    detail: Option<&String>,
+) -> Option<DaemonTorPublishError> {
+    if matches!(pow, OnionPow::Disabled) || status != 512 {
+        return None;
+    }
+    let detail = detail
+        .map(|line| line.chars().take(200).collect())
+        .unwrap_or_default();
+    Some(DaemonTorPublishError::PowRefused { status, detail })
+}
 
 /// A live managed-tor incarnation: bootstrapped, SOCKS address known, and —
 /// after a successful [`Self::publish`] — an onion service published. Dropping
@@ -268,11 +306,16 @@ impl DaemonTorControl {
     /// SOCKS proxy works, so the caller's ruled degrade is outbound-only on
     /// the zone. (If the failure was tor dying, [`Self::is_alive`] and the
     /// caller's liveness sweep observe that separately.)
+    /// `pow` is explicit. The daemon passes [`OnionPow::Enabled`].
+    /// [`OnionPow::Disabled`] is a measurement arm. A status-512 reply on a
+    /// PoW publish is [`DaemonTorPublishError::PowRefused`]: this function
+    /// returns it and does not send another `ADD_ONION`.
     pub async fn publish(
         &self,
         virtual_port: u16,
         local_target: SocketAddr,
         max_streams: u16,
+        pow: OnionPow,
     ) -> Result<ServiceId, DaemonTorPublishError> {
         let port = OnionPort::loopback(virtual_port, local_target).ok_or(
             DaemonTorPublishError::TargetNotLoopback {
@@ -287,7 +330,8 @@ impl DaemonTorControl {
         let identity = OnionIdentity::from_hs_id_seed(&seed);
         let expected = identity.service_id().clone();
         let request = AddOnion::new(identity.mint_onion_key(), port, max_streams)
-            .with_flags(OnionFlags { discard_pk: true });
+            .with_flags(OnionFlags { discard_pk: true })
+            .with_pow(pow);
         let reply = match ask_timed(&self.actor, Command::AddOnion(request), self.reply_deadline)
             .await
         {
@@ -298,6 +342,9 @@ impl DaemonTorControl {
             Err(AskError::Control(control)) => return Err(DaemonTorPublishError::Control(control)),
             Err(AskError::ActorGone) => return Err(DaemonTorPublishError::Died),
         };
+        if let Some(refused) = pow_refusal(pow, reply.status(), reply.lines().first()) {
+            return Err(refused);
+        }
         evaluate_add_onion_reply(&reply, &expected).map_err(DaemonTorPublishError::Publish)?;
         Ok(expected)
     }
@@ -369,6 +416,29 @@ impl DaemonTorControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pow_refusal_is_terminal_and_a_disabled_publish_is_not_one() {
+        let refused = pow_refusal(
+            OnionPow::Enabled,
+            512,
+            Some(&"Unrecognized key \"PoWDefensesEnabled\"".to_owned()),
+        );
+        match refused {
+            Some(DaemonTorPublishError::PowRefused { status, detail }) => {
+                assert_eq!(status, 512);
+                assert!(detail.contains("PoWDefensesEnabled"));
+            }
+            other => panic!("expected PowRefused, got {other:?}"),
+        }
+        assert!(pow_refusal(OnionPow::Disabled, 512, Some(&"PoW".to_owned())).is_none());
+        assert!(pow_refusal(
+            OnionPow::Enabled,
+            551,
+            Some(&"not a syntax error".to_owned())
+        )
+        .is_none());
+    }
     use crate::test_support::tor_binary;
     use shekyl_tor_control_client::binary::VerifiedTorBinary;
 
@@ -433,7 +503,12 @@ mod tests {
         assert!(boot1.socks_addr().ip().is_loopback());
 
         match boot1
-            .publish(18080, "192.168.1.10:18080".parse().unwrap(), 64)
+            .publish(
+                18080,
+                "192.168.1.10:18080".parse().unwrap(),
+                64,
+                OnionPow::Enabled,
+            )
             .await
         {
             Err(DaemonTorPublishError::TargetNotLoopback { target }) => {
@@ -444,7 +519,12 @@ mod tests {
         assert!(boot1.is_alive(), "a refused publish must not kill tor");
 
         let first_id = boot1
-            .publish(18080, "127.0.0.1:48080".parse().unwrap(), 64)
+            .publish(
+                18080,
+                "127.0.0.1:48080".parse().unwrap(),
+                64,
+                OnionPow::Enabled,
+            )
             .await
             .expect("first boot publish");
         assert_eq!(first_id.as_str().len(), 56);
@@ -464,7 +544,12 @@ mod tests {
             .await
             .expect("second boot start");
         let second_id = boot2
-            .publish(18080, "127.0.0.1:48080".parse().unwrap(), 64)
+            .publish(
+                18080,
+                "127.0.0.1:48080".parse().unwrap(),
+                64,
+                OnionPow::Enabled,
+            )
             .await
             .expect("second boot publish");
         assert_ne!(

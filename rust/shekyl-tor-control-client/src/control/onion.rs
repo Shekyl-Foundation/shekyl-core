@@ -291,24 +291,25 @@ impl OnionFlags {
 /// the requester stops reading. PoW and the in-flight cap are not
 /// substitutes — one gates arrival, the other caps concurrent bodies.
 ///
-/// # Default is [`Disabled`](Self::Disabled), matching tor
+/// # Default is [`Enabled`](Self::Enabled) (D10.4)
 ///
-/// PoW is not free for honest clients — it is client-side work on every
-/// rendezvous — so it is off unless a deployment asks for it, exactly as tor
-/// ships it (`PoWDefensesEnabled` "Default if not present is 0, disabled").
+/// Every onion service we publish runs proof-of-work. Honest clients pay
+/// nothing until the service is under attack. [`Disabled`](Self::Disabled)
+/// remains an explicit measurement arm. tor's own default is off
+/// (`PoWDefensesEnabled` "Default if not present is 0, disabled"); that is
+/// tor's default, not ours.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum OnionPow {
-    /// No PoW defenses. tor's default, and the right choice for a bonded persona
-    /// whose client population is bounded by the challenge draw.
-    #[default]
+    /// No PoW defenses. An explicit measurement arm, not a publish default.
     Disabled,
     /// PoW on, with **tor's own queue parameters** (currently 250 req/s sustained,
-    /// burst 2500).
+    /// burst 2500). This is the default.
     ///
     /// Renders `PoWDefensesEnabled=1` and nothing else, so those numbers stay
     /// tor's to own and version. Restating them here would be a second copy of a
     /// fact this crate does not control — the copy that silently goes stale when
     /// tor retunes its defaults.
+    #[default]
     Enabled,
     /// PoW on with explicit queue parameters, for a deployment that has *measured*
     /// its load and has reason to deviate from tor's defaults.
@@ -386,11 +387,10 @@ impl AddOnion {
         }
     }
 
-    /// Enable onion-service proof-of-work defenses (see [`OnionPow`]).
+    /// Set onion-service proof-of-work defenses (see [`OnionPow`]).
     ///
-    /// Default is [`OnionPow::Disabled`], matching tor. Turn it on for a service
-    /// whose client population is **not** bounded by the challenge draw — most
-    /// concretely, a publicly advertised uncompensated one.
+    /// Default is [`OnionPow::Enabled`] (D10.4). Pass
+    /// [`OnionPow::Disabled`] only for a measurement arm.
     #[must_use]
     pub fn with_pow(mut self, pow: OnionPow) -> Self {
         self.pow = pow;
@@ -528,7 +528,7 @@ mod tests {
             concat!(
                 "ADD_ONION ED25519-V3:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g",
                 "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw== ",
-                "Flags=MaxStreamsCloseCircuit,DiscardPK MaxStreams=4 Port=80,127.0.0.1:40001"
+                "Flags=MaxStreamsCloseCircuit,DiscardPK MaxStreams=4 PoWDefensesEnabled=1 Port=80,127.0.0.1:40001"
             )
         );
     }
@@ -562,12 +562,19 @@ mod tests {
     }
 
     #[test]
-    fn pow_is_absent_by_default_and_renders_in_grammar_order() {
-        // Default must render NOTHING: an absent `PoWDefensesEnabled` is tor's
-        // own "off", so the disabled case adds no bytes and cannot change the
-        // line a bonded persona sends.
+    fn default_renders_pow_enabled_and_disabled_renders_nothing() {
+        // D10.4: the default line carries `PoWDefensesEnabled=1` and no queue
+        // parameters, so tor keeps those numbers.
         let plain = AddOnion::new(key(), loopback_port(), 4).to_wire_line();
-        assert!(!plain.contains("PoW"), "{}", plain.as_str());
+        assert!(plain.contains("PoWDefensesEnabled=1"), "{}", plain.as_str());
+        assert!(!plain.contains("PoWQueueRate"), "{}", plain.as_str());
+        assert!(!plain.contains("PoWQueueBurst"), "{}", plain.as_str());
+
+        // Disabled is the measurement arm. It adds no PoW bytes.
+        let off = AddOnion::new(key(), loopback_port(), 4)
+            .with_pow(OnionPow::Disabled)
+            .to_wire_line();
+        assert!(!off.contains("PoW"), "{}", off.as_str());
 
         // Enabled-with-tor-defaults renders the switch only — the 250/2500
         // numbers stay tor's to own, so they cannot go stale here.

@@ -771,12 +771,13 @@ listener, and so a connection in the gap phase.
    publish: the daemon's p2p onion and the wallet's serving personas.
    PoW is a property of the service we host. Outbound clients solve a
    puzzle only when the far service escalates, at a capped cost
-   (SPIKE-F-17). At this pin the daemon does not do that:
-   `ephemeral.rs:289` builds `AddOnion` with no PoW, and `publish`
-   (`blocking.rs:146-151`) takes ports and `max_streams` only.
-   `OnionPow`'s `Default` is `Disabled` (`onion.rs:303`). The ruling
-   changes those: `publish` takes the setting explicitly and defaults
-   to `Enabled`, and the daemon's onion is published that way.
+   (SPIKE-F-17). *Records-was, at the 2026-09-25 pin:* the daemon did
+   not do that. `ephemeral.rs` built `AddOnion` with no PoW, `publish`
+   took ports and `max_streams` only, and `OnionPow`'s `Default` was
+   `Disabled`. **Landed:** `publish` takes the setting explicitly, the
+   default is `Enabled`, and the daemon's onion is published with
+   `OnionPow::Enabled`. A status-512 reply is
+   `DaemonTorPublishError::PowRefused` and is not retried without PoW.
    `Disabled` stays as an explicit choice for measurement arms. The
    type's doc comment is corrected, and the crate's KAT is updated so
    the default renders `PoWDefensesEnabled=1`. If the operator's Tor
