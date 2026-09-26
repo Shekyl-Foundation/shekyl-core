@@ -41,10 +41,12 @@ consume in `validate_miner_transaction` (`:1525`).
 
 Two things make 4.G unlike 4.I:
 
-- **Most of it is aggregation, not verification.** Nine of the thirteen rows
-  either sum, fold or look up; only G7/G9/G10 and G1/G2 refuse on their own
-  predicate, and their bodies are Rust already (`shekyl-archival-retention`,
-  `Transaction::hash`). The crypto is behind us.
+- **Most of it is aggregation, not verification.** Eight of the thirteen
+  rows either sum, fold or look up. Five refuse on their own predicate:
+  G1, G2, G7, G9, G10. G7/G9/G10 already have Rust bodies
+  (`shekyl-archival-retention`). G1 is the store's `tx_exists` belt, with
+  no view read. G2 has no pairing rule; `Transaction::hash` is the hash,
+  not that rule. The crypto is behind us.
 - **The heaviest row is a definition, and it is the one with the recorded
   divergence.** G6/G6b's effective median is what the coinbase's exact-pay
   verdict (F18) is a function of. The shipped C++ clamps the short-term
@@ -55,7 +57,8 @@ Two things make 4.G unlike 4.I:
   the weights, so it cannot be buried — this is that PR.
 
 In Rust the home is `validate` (`validate.rs:277`): the `BlockRule` class
-(`rules::run::<L1,_>` after the slot loop, `:349`) for the refusing rows, and
+(`rules::run::<L1,_>` after the slot loop, `:349`) for the view-bound
+refusals, a `FormRule` for G2 (no view; `rules/mod.rs:156`), and
 definition rows recorded where derived and carried on `ChainValid` — the D4
 precedent (`cumulative_difficulty` left `ConnectFacts` when the validator
 derived it, slice 2), which E3's pre-flight names as *the lane's precedent
@@ -67,8 +70,8 @@ for "who derives"* (`DRS_E3_CURVE_WRITER.md` §1 item 11).
 
 - **The slot loop and `BlockRule`** (`validate.rs:336–355`): every slot
   through `tx_form` then `tx_against`; L1 runs after, over the block. G7, G9,
-  G10, G1 and G2 are L1's shape exactly — span the slots, refuse at the
-  second occurrence's `Locus`.
+  G10 and G1 are L1's shape — span the slots, refuse at the second
+  occurrence's `Locus`. G2 is not: it reads no view, so it is a `FormRule`.
 - **The definition-row pattern** (slice 5 I12/I17, slice 4 F13/F15/F20):
   recorded as coverage where derived, value staged for its consumer. G6/G6b
   are definitions with four consumers in this slice (F14, F14b, F16, F18)
@@ -91,7 +94,8 @@ for "who derives"* (`DRS_E3_CURVE_WRITER.md` §1 item 11).
   74–101`), one row per height. `ConnectFacts` passes all three through
   (`connect.rs:164–196`), and the ingest's `facts.rs:40–57` table names
   **this slice** as what flips `weight`, `long_term_weight` and
-  `long_term_effective_median` from passed-through to derived.
+  `long_term_effective_median` from passed-through to derived, and
+  `coins_generated` on F14b (the same table, the row above `burned`).
 - **The E2 mutation family pins two of this slice's rows.**
   `ReorderedBodies` → CEN-G2, `WrongReward` → CEN-F18
   (`DRS_E2_REPLAY_DRIVER.md` §3.10, `:456–457`), both **Pending — the block
@@ -109,7 +113,7 @@ merge is planned rather than discovered:
 | --- | --- | --- | --- |
 | `ChainView` trait (`view.rs`), `BatchView`, `MockChain` | `tree_frontier`, `matured_outputs_at`, `depth_at` | the weights-window read (Q2) and `has_transaction` (Q3) | textual — adjacent methods; resolve by keeping both |
 | `ChainValid` / the verdict | `TreeGrowth` | `weight`, `long_term_weight`, `long_term_effective_median`, `coins_generated` (Q5) | textual |
-| `ConnectFacts` / `facts.rs` | deletes `root_after` (CTW-Q6, commit 6) | flips three passed-through fields to verdict reads | **semantic** — both lanes shrink `passed_through`; the count E3 states as *6 → 5* is *6 → 2* after both; whichever lands second re-counts |
+| `ConnectFacts` / `facts.rs` | deletes `root_after` (CTW-Q6, commit 6) | wave A flips four passed-through fields (`weight`, `long_term_weight`, `long_term_effective_median`, `coins_generated`) to verdict reads | **semantic** — both lanes shrink `passed_through`; the count E3 states as *6 → 5* is *6 → 1* after E3 and wave A (`burned` remains until wave B); whichever lands second re-counts |
 | `RecordedBlock` | — | possibly `weight` + `long_term_weight` (Q2 (a)) | none if Q2 takes (b) |
 
 **The one hard dependency runs the other way.** F17 (fee burn) needs
@@ -144,7 +148,7 @@ today — and are **not** corrected here; the census re-pin is commit 10's).
 | row | b | what the C++ does at `ad557ac5a` | Rust body today | proposed disposition |
 | --- | --- | --- | --- | --- |
 | **G1** | 4 | `m_db->tx_exists(tx_id)` → `reject_block_form` (`:5516–5522`); the miner tx is not in `tx_hashes`; a duplicate *inside* `tx_hashes` is refused by the second insert (`TX_EXISTS`, L3) | store belt SI-3 (`tx_indices` insert, `connect.rs:529`); **no view read** for the question | **`BlockRule`** over a new `ChainView::has_transaction(&TxHash) -> bool` (the `has_key_image` shape, K1; one body with the store's read); refuses at the listing's `Locus`. Q3 asks whether the Rust rule also refuses the intra-block duplicate the C++ leaves to its belt |
-| **G2** | 4 | `take_tx` from the pool, else the block supplement; a hash resolving to neither → `MISSING_TXS` outcome, not a rejection (`:5551–5588`); **body ↔ hash agreement is established by lookup under the computed hash** | **nothing binds a listed body to `tx_hashes[i]`** — E2's `ReorderedBodies` connects (§1.1) | **`BlockRule` in the form stage** (no view): `transactions.len() == tx_hashes.len()` and `hash(body_i) == tx_hashes[i]` for every `i`; refuses at `Locus::Listed { slot }`. The *resolution* half (pool/supplement) is the ingest's and E5's, not a rule; the *agreement* half is consensus and is the row (§3.1) |
+| **G2** | 4 | `take_tx` from the pool, else the block supplement; a hash resolving to neither → `MISSING_TXS` outcome, not a rejection (`:5551–5588`); **body ↔ hash agreement is established by lookup under the computed hash** | **nothing binds a listed body to `tx_hashes[i]`** — E2's `ReorderedBodies` connects (§1.1) | **`FormRule`** (form stage, no view — `rules/mod.rs:156`): `transactions.len() == tx_hashes.len()` and `hash(body_i) == tx_hashes[i]` for every `i`; refuses at `Locus::Listed { slot }`. The *resolution* half (pool/supplement) is the ingest's and E5's, not a rule; the *agreement* half is consensus and is the row (§3.1) |
 | **G3** | 4 | supplement txs pass `ver_non_input_consensus` before connect (`:5440`) | `validate` runs `tx_form` on **every** listed body regardless of where the ingest got it (`validate.rs:336`); there is no pool path into `validate` | **`by_construction`** on `validate`'s slot loop; falsifier: a listed body failing an H row refuses the block (exists: the slot-loop tests) |
 | **G4** | 1 | every listed tx through `check_tx_inputs` at connect (`:5636–5648`); pool-verified txs skip only the FCMP re-verify, hash-gated (M8) | `tx_against` on every slot, unconditionally (`validate.rs:340`); the crate has no admission cache and no skip | **`by_construction`** on the same loop; the M8 skip is a *cost* behaviour of the C++ (a re-verify of a proof already verified over the same bytes has the same verdict), recorded as such — **not** a divergence (§3.2). Falsifier: a listed spend failing I7 refuses the block (exists) |
 | **G5** | 4 | `n_pruned > 0` → `reject_block_internal` (`:5659–5663`): a pruned block has no weight source | `tx_form` refuses the storage-pruned form before this stage (H-rows; the wire's `into_full` is the only door, `transaction.rs:2089`) | **`by_construction`** on the wire's full-transaction type; falsifier: the H fixture that refuses the pruned form. Confirm at commit 2 that such a fixture exists at both sites; if not, it is this slice's to add (§3.3) |
@@ -161,7 +165,7 @@ today — and are **not** corrected here; the census re-pin is commit 10's).
 | **F16** | 1 | emission split into miner / staker legs | `compute_emission_split` + the shim's `block_emission == 0` short-circuit moved into Rust (slice 4 F5) | **lands** — operand is F14b's paid reward |
 | **F18** | 1 | coinbase pays **exactly** `miner_emission + miner_fee_income` | — | **successor wave** (needs F17's `miner_fee_income`); E2's `WrongReward` flips then |
 
-Count: **12 rows land in wave A** (G1, G2, G3, G4, G5, G6, G6b, G7, G9, G10,
+Count: **14 rows land in wave A** (G1, G2, G3, G4, G5, G6, G6b, G7, G9, G10,
 G12, F14, F14b, F16 — of which G3/G4/G5 are by construction, so **11
 implemented + 3 by-construction**), **4 in wave B** (G11, G13, F18, and F17
 from slice 4's residue). Registry `implemented 75 → 86` after A, `→ 90`
@@ -169,25 +173,63 @@ after B; `by-construction 11 → 14`.
 
 ## 3. Findings from the code sweep
 
-### 3.1 G2 is the row E2 has been waiting for, and it is a gap today
+### 3.1 G2 is the row E2 has been waiting for, and it is a gap today — read at the line on review (2026-09-26)
 
-E2's `ReorderedBodies` mutation swaps two listed bodies and leaves the
-header's `tx_hashes` untouched. The pinned result is **the block connects**
-(`DRS_E2_REPLAY_DRIVER.md:457`). B-rows hold the header's merkle over
-`tx_hashes` (`rules/header.rs:169`); nothing holds the bodies to the hashes.
-In the C++ the agreement is a by-product of *lookup* — the body is fetched
-under the hash, so it cannot disagree — and the DB layer trusts it (census
-G2 note, CEN-L4). In Rust the candidate arrives as `(TxHash, Transaction)`
-pairs and the store keys the body under **its own** `Transaction::hash`
-(CEN-B6), so a reordered block would either be refused by the store's SI-3
-when the recomputed hash collides, or — if the bodies are merely permuted —
-record every body under its true hash and connect a block whose recorded
-`tx_hashes` order disagrees with its bodies' order. Which of those it is is
-**measured at commit 2**, not asserted here; either way the validator has
-no row for it and should. Graded as the L1 class (a belt or an accident
-standing where a rule belongs), **not** as a security finding on the
-evidence so far: the merkle root still binds the *set*; what is unbound is
-the *pairing*. Commit 2 states which.
+**Where the merkle's leaves come from decides the grading, and they come
+from the declared list.** `shekyl_wire::Block::pow_blob` (`block.rs:233–235`)
+builds the tree over `[miner_transaction.hash(), transaction_hashes…]` —
+the header's *declared* hashes, never the bodies — so B6 (identity) and D2
+(PoW) bind the declared list. The bodies arrive positionally in
+`Candidate { block, transactions }` and `ValidatedBlock::derive`
+(`block.rs:355–358`) recomputes every identity **from the body**; nothing
+compares the two. The crate says so itself: `Candidate`'s doc
+(`block.rs:80–83`) — *"nothing about it has been checked, including whether
+`transactions` are the bodies `block.transaction_hashes` names; that is a
+4.G rule and lands with its slice."* The type does not satisfy G2; it names
+G2 as owed.
+
+**What a connect does with the disagreement.** The store keys each body
+under its computed identity (`connect.rs:405–407`), so *wrong body under the
+right txid* is unreachable through this path. Two things are body-dependent
+all the same: `BLOCKS` persists the block as received, declared list
+included (`connect.rs:417`), so the record lists hashes whose bodies were
+never recorded or are recorded in another order; and `record_tx` assigns
+dense tx ids and **global output ids in body order** (`connect.rs:534`,
+`:596–610`) — a reorder that connects gives outputs different indices than
+a header-ordered node, and E3's drain order (§3.3 of its pre-flight) puts
+them into the curve tree in that order: root divergence at the next block,
+B5 splits the chain silently. A *substitution* — a valid body not in the
+declared list — connects too: N hashes committed, N bodies recorded, one of
+them covered by no block id.
+
+**The belt, and where it sits.** The C++'s lookup-under-hash has a Rust
+twin in the **corpus loader**: `verified_tx(height, index, want, blob)`
+(`corpus.rs:325–340`, `:362`) refuses a body whose hash is not the declared
+hash at that index. Every captured replay is safe because of it.
+`Candidate::new` has four producers (corpus, scenario driver, two fixture
+files) and no live peer path yet — **not peer-reachable today**, reachable
+the day E5/p2p ingest builds a `Candidate` from network bodies, a path that
+inherits no belt because the belt is the corpus's. That is CEN-L1's shape
+(a consumer-side belt where the census placed a validator rule), one step
+earlier in time.
+
+**The pin was never witnessed.** The first cut of this section said E2's
+`ReorderedBodies` is *pinned connects* (`DRS_E2_REPLAY_DRIVER.md:457`). On
+every captured chain the mutation is `Unmutable::TooFewBodies { listed: 1 }`
+(`mutation_tests.rs:549`) — slice 6's one-body-per-block measurement again.
+"Connects" is what the code path would do, not what a run showed. Commit
+2's measurement therefore constructs a **two-body block through the
+driver** (`mine_listing(listed: Vec<Transaction>)` takes a vector; the
+bodies need not be spends, so I15's tree is not a prerequisite) and replays
+the reorder and a substitution through it.
+
+**Grading proposed for Q7:** the *set* is bound by the merkle, the
+*pairing* is not; G2 lands as a form-stage `BlockRule` — `transactions.len()
+== transaction_hashes.len()` at `Locus::Block`, `hash(body_i) ==
+transaction_hashes[i]` at `Locus::Listed { slot }` for the first mismatch —
+consensus-relevant and disclosed as L1's class caught before its peer path
+existed, not as an incident. The corpus loader's check stays, tested as a
+belt (slice 6 re-pointed the SI-1 tests the same way).
 
 ### 3.2 G4's "skip" is a cost, not a rule
 
@@ -258,7 +300,7 @@ store-side plumbing, but it is also a second place the answer lives.
 
 | stage | rows | why |
 | --- | --- | --- |
-| form (`BlockRule`, no view) | G2 | body ↔ hash is a property of the candidate's bytes alone |
+| form (`FormRule`, no view) | G2 | body ↔ hash is a property of the candidate's bytes alone |
 | `validate`, after the slot loop (`BlockRule`, view) | G1, G7, G9, G10 | span the slots; G1 reads the chain, the others read only the block |
 | `validate`, definition rows (before the coinbase's 4.F consumers) | G6, G6b, then F14 → F14b → F16 → G12 (→ F17 → F18 → G11/G13 in wave B) | the D4 arrangement: the median yields, the penalty consumes, the paid reward advances the supply |
 | by construction | G3, G4, G5 | the slot loop and the wire's full type |
@@ -278,7 +320,7 @@ when an operand is absent. Wave B extends the sequence in place.
 | 3 | **`ChainView` grows** — the weights read (Q2's shape) and `has_transaction` — trait, `BatchView`, `MockChain`, the store's conformance test holding the mock to the store, **one commit, both sides** (slice 6 §5.1's rule) | commit 2 (c) |
 | 4 | **G6 / G6b** as `judge_emission`'s first two definitions in `rules/block_weight.rs`; the two windows as generated consts (Q6); the mock holds the clamps at their boundaries, the captured chains replay through both | commit 3 |
 | 5 | **F14, F14b, F16, G12** — the sequence completed through the paid reward; `ConnectFacts.{weight, long_term_weight, long_term_effective_median, coins_generated}` read off the verdict, the ingest's four composed lines deleted (`Provenance::passed_through` re-counted with E3's) | commit 4 |
-| 6 | **G2** in the form stage; E2's `ReorderedBodies` flips from pinned-connects to refusing at `Locus::Listed` | commit 2 (a) |
+| 6 | **G2** as a `FormRule` in `form`; E2's `ReorderedBodies` flips from pinned-connects to refusing at `Locus::Listed` | commit 2 (a) |
 | 7 | **G1, G7, G9, G10** as `BlockRule`s after L1; G9's admitted pair as a positive fixture; the driver gains `DuplicateListing`, `DuplicateServeCredit`, `DuplicateClaim`, `DuplicateBondPost` spec-first in `DRS_E2_REPLAY_DRIVER.md` §3.10 | commit 3 |
 | 8 | **G3, G4, G5** registry entries, `by_construction` with their falsifiers named; conformance re-check (the register's G rows, `:640–646`, re-read against the crate) | commit 7 |
 | 9 | **Wave B — F17, F18, G11, G13** if E3's `leaf_count` has landed; else **the named successor**, one FOLLOWUPS row, falsifier `rg 'fn leaf_count_at\|fn depth_at' rust/shekyl-chain-rules/src/view.rs` → present with `BatchView`'s impl, then this row lands as one commit extending `judge_emission` and `WrongReward` flips | E3 commit 4 |
@@ -312,7 +354,12 @@ the rules.
 
 - **Round 0** (2026-09-26): pre-flight written at `ad557ac5a`; every G row
   and the four F rows read at the line; the E3 collision surfaces
-  enumerated from #873's merged pre-flight; nine questions.
+  enumerated from #873's merged pre-flight; nine questions. Review the
+  same day corrected this file's own counts — eight aggregations, wave A
+  is 14 rows, `passed_through` is *6 → 1* after E3 and wave A — and G2's
+  class: a `FormRule`, which is the no-view form stage
+  (`rules/mod.rs:156`). A view-less `BlockRule` is not a class the crate
+  has.
 
 ## 8. Questions for the reviewer — Round 0
 
@@ -370,7 +417,7 @@ the rules.
 - **Q7 — G2's grade.** §3.1 says commit 2 measures what the store does
   with a reordered block. If the store records bodies under their own
   hashes and connects, the row is a *pairing* gap (the set is bound by the
-  merkle) and lands as a form `BlockRule` with no CHANGELOG security line;
+  merkle) and lands as a `FormRule` with no CHANGELOG security line;
   if the store can be made to record a body under a hash that is not its
   own, that is L1's class and is disclosed as such. The measurement
   decides; the reviewer confirms the two gradings before it is taken.
