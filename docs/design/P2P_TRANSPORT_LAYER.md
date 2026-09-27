@@ -288,7 +288,10 @@ no handshake on the blocking pool. Outbound is SOCKS5 through
 build, and rendezvous. Inbound is `accept_tor`, then the gap timer.
 A failed bind drops every listener that succeeded, so the zone is not
 inserted. Onion-service proof-of-work and `MaxStreams` are the accept
-bound.
+bound. Publication is one `ADD_ONION` through `DaemonTorControl` with
+proof-of-work on. `PowRefused` is not followed by a publish without
+proof-of-work. Any other publish failure leaves the zone outbound-only.
+The address is what the session layer stores as `m_our_address`.
 
 Before the flip, ruling 4's exception is still in force. The option off
 omits the Noise layer the declaration adds, and the socket bytes are the

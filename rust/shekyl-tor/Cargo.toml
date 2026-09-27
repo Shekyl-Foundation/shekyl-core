@@ -18,6 +18,8 @@ shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-runtime = { path = "../shekyl-runtime" }
 shekyl-socks = { path = "../shekyl-socks" }
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }

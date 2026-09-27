@@ -34,6 +34,9 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot, Notify};
 
 mod drive;
+mod publish;
+
+pub use publish::{publish_forward, publish_with_control, InboundPosture, PublishFault};
 
 use drive::{accept_one, dial_one, Accept, Dial, Queued, SendQueue};
 

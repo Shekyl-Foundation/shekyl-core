@@ -4811,6 +4811,8 @@ dependencies = [
  "shekyl-runtime",
  "shekyl-socks",
  "shekyl-timing-engine",
+ "shekyl-tor-control-client",
+ "shekyl-tor-control-daemon",
  "shekyl-transport-layer",
  "tokio",
 ]

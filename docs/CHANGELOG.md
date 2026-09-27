@@ -17,7 +17,9 @@
   keeps one runtime: plaintext while its option is off, Noise while it
   is on. It dials directly or through SOCKS5 CONNECT (`shekyl-socks`).
   The Tor connector uses that same SOCKS client. Its stream is the
-  channel, and a failed bind does not insert the zone.
+  channel, and a failed bind does not insert the zone. Onion publication
+  is one `ADD_ONION` with proof-of-work on. A refusal is not retried
+  without it.
 
 ### CLI wallet shell
 
