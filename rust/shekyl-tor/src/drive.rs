@@ -11,7 +11,7 @@
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
@@ -223,26 +223,32 @@ where
         loop {
             let overfull = overfull_write.notified();
             if flag_write.load(Ordering::Acquire) {
-                drop(write.shutdown().await);
-                return CloseCause::new(CloseKind::SendQueueFull);
+                return finish(&stop_write, &mut write, CloseKind::SendQueueFull).await;
             }
             tokio::select! {
                 biased;
-                () = stop_write.wait() => {
+                cause = stop_write.wait() => {
                     drop(write.shutdown().await);
-                    return CloseCause::new(CloseKind::LevinHandshakeTimeout);
+                    return cause;
                 }
                 () = overfull => {
-                    drop(write.shutdown().await);
-                    return CloseCause::new(CloseKind::SendQueueFull);
+                    return finish(&stop_write, &mut write, CloseKind::SendQueueFull).await;
                 }
                 next = out_rx.recv() => {
                     let Some(queued) = next else {
-                        drop(write.shutdown().await);
-                        return CloseCause::new(CloseKind::LocalClose);
+                        return finish(&stop_write, &mut write, CloseKind::LocalClose).await;
                     };
-                    if write.write_all(&queued.bytes).await.is_err() {
-                        return CloseCause::new(CloseKind::IoError);
+                    tokio::select! {
+                        biased;
+                        cause = stop_write.wait() => {
+                            drop(write.shutdown().await);
+                            return cause;
+                        }
+                        result = write.write_all(&queued.bytes) => {
+                            if result.is_err() {
+                                return finish(&stop_write, &mut write, CloseKind::IoError).await;
+                            }
+                        }
                     }
                 }
             }
@@ -250,22 +256,41 @@ where
     });
     let read_cause = loop {
         if overfull_flag.load(Ordering::Acquire) {
+            stop_read.trip(CloseCause::new(CloseKind::SendQueueFull));
             break CloseCause::new(CloseKind::SendQueueFull);
         }
         let mut buf = [0u8; 8192];
         tokio::select! {
             biased;
-            () = stop_read.wait() => {
-                break CloseCause::new(CloseKind::LevinHandshakeTimeout);
+            cause = stop_read.wait() => {
+                break cause;
             }
             result = read.read(&mut buf) => {
                 let n = match result {
-                    Ok(0) => break CloseCause::new(CloseKind::PeerClosed),
+                    Ok(0) => {
+                        let cause = CloseCause::new(CloseKind::PeerClosed);
+                        stop_read.trip(cause);
+                        break cause;
+                    }
                     Ok(n) => n,
-                    Err(_) => break CloseCause::new(CloseKind::IoError),
+                    Err(_) => {
+                        let cause = CloseCause::new(CloseKind::IoError);
+                        stop_read.trip(cause);
+                        break cause;
+                    }
                 };
-                if in_tx.send(buf[..n].to_vec()).await.is_err() {
-                    break CloseCause::new(CloseKind::LocalClose);
+                tokio::select! {
+                    biased;
+                    cause = stop_read.wait() => {
+                        break cause;
+                    }
+                    result = in_tx.send(buf[..n].to_vec()) => {
+                        if result.is_err() {
+                            let cause = CloseCause::new(CloseKind::LocalClose);
+                            stop_read.trip(cause);
+                            break cause;
+                        }
+                    }
                 }
             }
         }
@@ -273,7 +298,18 @@ where
     drop(in_tx);
     let write_cause = writer.await.ok();
     gap.abort();
-    write_cause.unwrap_or(read_cause)
+    stop.cause().unwrap_or(write_cause.unwrap_or(read_cause))
+}
+
+async fn finish(
+    stop: &Stop,
+    write: &mut tokio::net::tcp::OwnedWriteHalf,
+    kind: CloseKind,
+) -> CloseCause {
+    let cause = CloseCause::new(kind);
+    stop.trip(cause);
+    drop(write.shutdown().await);
+    cause
 }
 
 async fn gap_owner<C>(
@@ -285,12 +321,14 @@ async fn gap_owner<C>(
     C: Clock + Clone + Send + Sync + 'static,
 {
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
+        stop.trip(CloseCause::new(CloseKind::LocalClose));
         return;
     };
     let now = owner.clock().now();
     let deadline = Tick::new(now.get().saturating_add(gap_within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
+        stop.trip(CloseCause::new(CloseKind::LocalClose));
         return;
     }
     tokio::select! {
@@ -305,7 +343,7 @@ async fn gap_owner<C>(
             match result {
                 Ok(_) | Err(_) => {}
             }
-            stop.trip();
+            stop.trip(CloseCause::new(CloseKind::LevinHandshakeTimeout));
             ignore(owner.deregister());
             return;
         }
@@ -314,7 +352,7 @@ async fn gap_owner<C>(
     match result {
         Ok(_) | Err(_) => {}
     }
-    stop.trip();
+    stop.trip(CloseCause::new(CloseKind::LevinHandshakeTimeout));
     ignore(owner.deregister());
 }
 
@@ -324,27 +362,36 @@ fn ignore<E>(result: Result<(), E>) {
 
 struct Stop {
     notify: Notify,
-    tripped: AtomicBool,
+    cause: Mutex<Option<CloseCause>>,
 }
 
 impl Stop {
     fn new() -> Self {
         Self {
             notify: Notify::new(),
-            tripped: AtomicBool::new(false),
+            cause: Mutex::new(None),
         }
     }
 
-    fn trip(&self) {
-        self.tripped.store(true, Ordering::Release);
-        self.notify.notify_waiters();
+    /// The first cause wins. A later trip does not replace it.
+    fn trip(&self, cause: CloseCause) {
+        let mut slot = self.cause.lock().expect("stop");
+        if slot.is_none() {
+            *slot = Some(cause);
+            drop(slot);
+            self.notify.notify_waiters();
+        }
     }
 
-    async fn wait(&self) {
+    fn cause(&self) -> Option<CloseCause> {
+        *self.cause.lock().expect("stop")
+    }
+
+    async fn wait(&self) -> CloseCause {
         loop {
             let notified = self.notify.notified();
-            if self.tripped.load(Ordering::Acquire) {
-                return;
+            if let Some(cause) = self.cause() {
+                return cause;
             }
             notified.await;
         }

@@ -94,6 +94,11 @@ impl Session {
     }
 }
 
+/// The listener. [`Drop`] shuts the pool down with the caller's timeout.
+/// [`shutdown`](Self::shutdown) is the same call, and neither may run
+/// inside a task: Tokio panics if a runtime is dropped there. That is
+/// [`shekyl_runtime::Pool`]'s rule. Dropping the listener is how a pool
+/// that was not shut down explicitly still leaves.
 pub struct Listener<C: Clock + Clone> {
     pool: Option<Pool>,
     handle: tokio::runtime::Handle,
@@ -197,9 +202,19 @@ fn too_many_open_files(code: Option<i32>) -> bool {
 
 /// Bind the loopback forward target and any anonymous-inbound addresses.
 ///
+/// `sockets` is the process-wide admission table. The ceiling counts
+/// every connector that shares it. This function does not mint a table.
+///
 /// One failed bind drops the listeners that succeeded and returns the
-/// error. The caller does not insert the zone.
-pub fn listen<C>(pool: Pool, engine: &Handle<C>, config: &Config) -> std::io::Result<Listener<C>>
+/// error. The caller does not insert the zone. An accepted socket is
+/// handed to admission directly. There is no queue of sockets ahead of
+/// that check.
+pub fn listen<C>(
+    pool: Pool,
+    engine: &Handle<C>,
+    sockets: Sockets,
+    config: &Config,
+) -> std::io::Result<Listener<C>>
 where
     C: Clock + Clone + Send + Sync + 'static,
 {
@@ -210,7 +225,6 @@ where
     for listener in &extras {
         extra_addrs.push(listener.local_addr()?);
     }
-    let sockets = Sockets::new();
     let (sessions_tx, sessions_rx) = mpsc::unbounded_channel();
     let engine_keep = engine.clone();
     let sockets_keep = sockets.clone();
@@ -228,17 +242,25 @@ where
     let mut listeners = extras;
     listeners.push(forward);
     pool.spawn(async move {
-        let (accepted_tx, mut accepted_rx) = mpsc::unbounded_channel();
         for listener in listeners {
-            let accepted_tx = accepted_tx.clone();
+            let sockets = sockets.clone();
+            let sessions = sessions_tx.clone();
             let on_cause = Arc::clone(&on_cause);
+            let engine = engine.clone();
             tokio::spawn(async move {
                 loop {
                     match listener.accept().await {
                         Ok((stream, _)) => {
-                            if accepted_tx.send(stream).is_err() {
-                                break;
-                            }
+                            let accept = Accept {
+                                stream,
+                                sockets: sockets.clone(),
+                                ceiling,
+                                gap_within,
+                                sessions: sessions.clone(),
+                                on_cause: Arc::clone(&on_cause),
+                                send_queue_bytes,
+                            };
+                            tokio::spawn(accept_one(accept, engine.clone()));
                         }
                         Err(error) if accept_error_is_transient(&error) => {
                             on_cause(CloseCause::new(CloseKind::IoError));
@@ -248,19 +270,6 @@ where
                     }
                 }
             });
-        }
-        drop(accepted_tx);
-        while let Some(stream) = accepted_rx.recv().await {
-            let accept = Accept {
-                stream,
-                sockets: sockets.clone(),
-                ceiling,
-                gap_within,
-                sessions: sessions_tx.clone(),
-                on_cause: Arc::clone(&on_cause),
-                send_queue_bytes,
-            };
-            tokio::spawn(accept_one(accept, engine.clone()));
         }
     });
     Ok(Listener {
@@ -303,7 +312,7 @@ mod tests {
     use shekyl_peer_policy::InboundCeiling;
     use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
     use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
-    use shekyl_transport_layer::{CloseCause, CloseKind};
+    use shekyl_transport_layer::{CloseCause, CloseKind, Sockets};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
@@ -374,6 +383,7 @@ mod tests {
         let listener = listen(
             pool,
             &engine.handle(),
+            Sockets::new(),
             &config(
                 proxy,
                 Vec::new(),
@@ -437,6 +447,7 @@ mod tests {
         let result = listen(
             pool,
             &engine.handle(),
+            Sockets::new(),
             &config(
                 SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
                 vec![taken],
@@ -500,6 +511,7 @@ mod tests {
         let mut listener = listen(
             pool,
             &engine.handle(),
+            Sockets::new(),
             &config(
                 SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port)),
                 Vec::new(),
@@ -551,6 +563,7 @@ mod tests {
         let listener = listen(
             pool,
             &engine.handle(),
+            Sockets::new(),
             &config(
                 SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port)),
                 Vec::new(),
