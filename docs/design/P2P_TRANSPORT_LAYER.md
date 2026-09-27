@@ -208,7 +208,11 @@ a `spawn_blocking` task that is still running, and it panics if that
 wait happens inside an asynchronous context. A pool is never dropped
 from inside a task. On drop the runtime field is first, so the row
 covers that wait too. The timeout is the caller's. This crate does not
-contain one.
+contain one. A blocking task still running when `shutdown` returns
+keeps its OS thread. That thread is detached and the row is already
+gone, so the ledger undercounts until the thread exits. At process
+exit that does not matter. A pool shut down and replaced while the
+daemon keeps running omits those threads from the next total.
 
 Tokio's unset worker count (one per core) and its blocking cap (512)
 are the defaults D5 refuses, so neither number lives in either crate.

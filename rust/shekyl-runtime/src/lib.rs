@@ -60,6 +60,13 @@ impl Pool {
     /// bound. This crate does not contain one. A call from inside a task
     /// panics for the same reason drop does: the wait is not allowed in an
     /// asynchronous context.
+    ///
+    /// A blocking task still running when the wait ends keeps its OS
+    /// thread. That thread is detached, and the row is already gone, so
+    /// the ledger undercounts until the thread exits. At process exit that
+    /// does not matter. A pool shut down and replaced while the daemon
+    /// keeps running is a different case: the replacement's total omits
+    /// those detached threads.
     pub fn shutdown(self, timeout: Duration) {
         let Pool { runtime, row } = self;
         runtime.shutdown_timeout(timeout);
