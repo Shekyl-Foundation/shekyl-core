@@ -182,6 +182,32 @@ question for steering: *is an indefinitely-open frontier shard — unbondable,
 undiscardable, retained on every daemon — acceptable on a quiet chain, given
 that its good is small and "no market for it" may be the correct answer?*
 
+### The falsifier for "(B) with no clock", run at the pin
+
+The stated falsifier is **any consumer that needs a shard to close by height**.
+Checked at source across the five surfaces, and **it does not fire** — every one
+of them already has a defined answer for a shard that has not closed:
+
+| surface | what it needs | an open frontier shard |
+|---|---|---|
+| `h_scarce` and the discard calendar `D(E) = { k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3 }` | the `close_height` of shards **already closed**, reached by id arithmetic and one binary search | is not in the closed set, so not in `D(E)`. Never discarded — which is the cost, not a contradiction (`prune.rs:34-36`, `:472-500`) |
+| `g(age)` | `shard_age_milli(close_block_height, freeze_height, SEB)` — a **freeze** height, *if* frozen | already scores `age_milli = 0` when there is no frozen segment, by an explicit branch: *"the age term is `if shard.has_segment { shard_age_milli(..) } else { 0 }`"* (`admission.rs:305-341`; the function at `consensus_state.rs:235-252`) |
+| D2 escalation | `compute_burn_split_at(total_fees, burn_pct, n: FrozenSegmentCount)` — a **count** of frozen shards, not a height (`burn.rs:188-191`) | is not frozen, so not counted |
+| Foundation `CompleteTree` / seed coverage | an owed set of *"every **closed**, final shard"* (`WALLET_SIDE_STORE.md`:463, WSS-Q10) | is not owed |
+| Bootstrap | fills from closed shards through the same owed computation | likewise |
+
+**So nothing assumes height-driven closure**, and the shape of every one of
+those answers is the same: an unclosed shard is *representable* as "not closed"
+and each consumer already returns the right thing for it. The one consequence
+that is real is the one already priced above — the frontier shard is retained on
+every daemon until it closes.
+
+Recorded because it cuts the other way too: **adding "or `H` blocks" to (B)
+would reintroduce exactly the defect (B) removes.** Any time-driven closure rule
+closes a shard holding *fewer than `T` transactions of good*, and a coinbase-only
+shard under (A) is precisely that rule firing on an empty chain. A clock is the
+zero floor by another name.
+
 ---
 
 ## 3. Constraints on `T`
@@ -296,32 +322,55 @@ because the conclusion is the one to distrust:**
 > `t(T) = t_fixed + (T · bytes-per-tx) / v`, with `t(200) ∈ {48.27, 86.06} s`
 
   One measurement, two unknowns — so the bound is an interval, not a number.
-  At the **heavy end of composition** (~2× the mean, L19), against the 120 s
-  criterion:
+  Against the 120 s criterion, on the **mean** shard and on a **heavy** shard
+  taken at twice the mean:
 
-| calibration | `t_fixed` | implied `v` | heavy-end ceiling |
-|---|---|---|---|
-| soak p99 | 0 s | 38.7 KB/s | **`T ≲ 139`** |
-| soak p99 | 60 s | 127.8 KB/s | `T ≲ 230` |
-| cold p99 | 0 s | 69.0 KB/s | `T ≲ 248` |
-| cold p99 | 30 s | 182 KB/s | `T ≲ 491` |
+| calibration | `t_fixed` | implied `v` | mean-basis ceiling | ×2 basis |
+|---|---|---|---|---|
+| soak p99 | 0 s | 38.7 KB/s | `T ≲ 278` | **`T ≲ 139`** |
+| soak p99 | 60 s | 127.8 KB/s | `T ≲ 459` | `T ≲ 230` |
+| cold p99 | 0 s | 69.0 KB/s | `T ≲ 496` | `T ≲ 248` |
+| cold p99 | 30 s | 182 KB/s | `T ≲ 982` | `T ≲ 491` |
 
-  So **the heavy-end ceiling lies somewhere in ~[140, 490], and `T = 200` is
-  inside that band.** `U1a` is therefore **unresolved at 200** — it may already
-  be violated at the heavy end (the `t_fixed = 0` reading) or clear by 2.5×
-  (the large-fixed-cost reading), and *nothing in the tree says which*. What it
-  is **not** any longer is slack: the round's first pass reported ~300× headroom
-  from `CHALLENGE_RESPONSE_BLOCKS`, and the measured single-attempt criterion
-  replaces that with a factor of at most ~2.5 either way.
+  **On the mean basis every reading clears `T = 200`, by 1.4× to 4.9×. It is
+  only the heavy-shard multiplier that puts 200 inside the band** (~[140, 490]),
+  which makes that multiplier the load-bearing quantity — and it is **not
+  measured**. Two qualifications, both of which must be discharged before this
+  row decides anything:
+
+  **(i) The ×2 is a property of L19's shape function, not of any shard.** L19's
+  size model is linear and *mean-preserving*, which caps its heavy end just
+  under 2× the mean at every `S` — the cap L19 records as its own residue. So
+  "~2× the mean" is a limit of that normalizer, not a measured shard size, and
+  citing L19 for it (as this row's first version did) is citing the model for
+  one of its artifacts. **What the row actually needs is a shard-level quantile
+  of *good per shard*** — under (B), per-transaction composition averaged over
+  `T` plus whatever era correlation survives that averaging. It is neither the
+  per-transaction extreme (which `√T` suppresses) nor L19's normalizer. Until
+  that quantile exists the [140, 490] band **rests on an assumption**, and the
+  honest reading is the mean-basis row: clear at 200, by a factor this round
+  cannot yet name precisely.
+
+  **(ii) The criterion as stated stacks two worst cases.** A p99 circuit *and* a
+  heavy shard at the same draw is a joint event; the criterion compounds them as
+  if it were one. What the bound should be derived against is a **target
+  witness-miss rate** — `P(t > 120 s) = P(slow circuit ∧ heavy shard)` — with the
+  two components' dependence stated. If they are roughly independent the joint
+  probability is small and **the ceiling loosens materially**. Either way the
+  miss rate is a number someone must *choose*, the way `L = 4` chose "err
+  large", rather than something that falls out of multiplying two p99s. **Owed
+  before `U1a` is treated as a bound.**
 
   `L`'s two-block fetch-plus-retry span is the outer envelope, but deriving `T`
   from it would be **circular** — see `SHT-7`: that span was sized on the same
   retired 3.33 MB byte count `T` itself came from.
 
 *Domain:* both — the read is of a shard's bytes either way, though under (A)
-the same `T` buys fewer bytes. *Grade:* **hard, and possibly already violated**
-— exceeding it makes honest witness misses systematic, and `L`'s own ruling
-forbids absorbing that by raising `L` ("the answer is **not** raise `L`").
+the same `T` buys fewer bytes. *Grade:* **hard; whether it is violated at 200 is
+unresolved and rests on two undischarged quantities** (the heavy-shard quantile
+and the target miss rate above) — exceeding it makes honest witness misses
+systematic, and `L`'s own ruling forbids absorbing that by raising `L` ("the
+answer is **not** raise `L`").
 *What closes it:* **W₂ re-run at two or three object sizes.** One size gives one
 equation in two unknowns; two sizes separate `t_fixed` from `v`, the 180 KB/s
 floor drops out of every derivation that currently leans on it, and this row
@@ -420,8 +469,26 @@ asymmetry above; it does **not** feed `L`'s 20 s premise — and so the retired
 3.33 MB — back into `T`'s own bound, which the ceiling-seeking form did
 (`SHT-7`); and it makes the binding quantity a *floor* that sim and bookkeeping
 arithmetic can both produce, with the hard ceiling as a check rather than as the
-selector. It cannot be evaluated until W₂ runs at more than one object size,
-and saying so is the point.
+selector.
+
+**The rule is not ready to apply, and this section must not read as if it
+were.** Pointing it down lands it squarely on the two edges this round could not
+measure:
+
+- **`L1`'s threshold is not derived.** The round removed the illustrative
+  one-fifth and put the *form* in its place (the net margin that flips a
+  marginal holder's decision); nothing has replaced the number. So `L1` names a
+  floor it cannot yet evaluate.
+- **`L2`'s floor depends on a ruling this round does not make** — whether the
+  ~13.7 GB per-bond ceiling is a feature (gate-6 firewall cost, deliberately
+  paid) or an overhead on an honest operator. The two answers put the floor in
+  different places.
+
+So the rule currently has **nothing to select from**: a lower-edge rule whose
+lower edges are one underived threshold and one open ruling. That is the correct
+state of the work and not a defect in the rule — but the deliverable here is the
+*rule plus its three owed inputs* (`L1`'s threshold, `L2`'s ruling, and `U1a`'s
+two undischarged quantities), not a value for `T`.
 
 **Pre-registered falsifiers on any `T` this round selects.**
 
@@ -439,6 +506,40 @@ and saying so is the point.
    (`rust/shekyl-types/src/archival.rs:88-101`).
 
 ---
+
+## 4.1 The W₂ re-run, pre-registered
+
+This measurement now decides both `T` and `L` (`SHT-7`), so its analysis is
+registered **before** it runs. Otherwise it is the one number in the round that
+could be read after the fact to land on 200 — the shape rule 76 refuses in a
+constant and the same reason `L`'s own falsifier says "the re-pin must not simply
+track the measurement upward".
+
+1. **Model.** `t = t_fixed + bytes / v`, fitted **per percentile** (a p99 fit,
+   not a fit through means), over **two or three object sizes** spanning at
+   least a 4× byte range. Two sizes identify the pair; a third tests linearity,
+   and a poor fit is itself a result — it would say the transport does not
+   decompose this way and the ceiling needs a different model.
+2. **Governing regime: soak, not cold.** Witness fetches share circuits with
+   the requester's other traffic and recur every epoch, so the steady-state
+   figure is the one an honest holder lives under. Cold p99 is the outer bound
+   and is reported, not used to select. (This is the stricter of the two, which
+   is the point: it is the direction the asymmetry in §4 says to err.)
+3. **Target witness-miss rate.** Stated as a probability before the fit, with
+   the dependence between circuit latency and shard size stated (the §3 `U1a`
+   qualification (ii)). The bound is then `P(t_fixed + bytes(T)/v > 120 s) ≤`
+   that target over the joint distribution, **not** a product of two p99s.
+4. **Decision thresholds, written down now.** If the fitted `t_fixed` is a
+   *small* share of the measured p99, the per-byte term dominates, the heavy-end
+   ceiling sits near the low end of [140, 490], and `T = 200` is at or over the
+   edge — `U1a` fires and `T` must come down. If `t_fixed` is a *large* share,
+   the ceiling is well above 200 and `U1a` stops being the binding constraint,
+   which hands selection back to `L1`/`L2`. The threshold between those readings
+   is where the heavy-end ceiling crosses the selected `T` at the target miss
+   rate — computable from (1)–(3) the moment the fit exists, and not before.
+5. **What it also re-grounds.** `L`'s fetch span, stated **per byte** instead of
+   per 3.33 MB object (`SHT-7`), which is what stops `T` and `L` from resting on
+   the same retired number.
 
 ## 5. Re-pin plan
 
