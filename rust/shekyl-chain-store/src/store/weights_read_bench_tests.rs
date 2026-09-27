@@ -48,6 +48,7 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader};
 
+use super::connect_fixtures::batch_root_going_into;
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::view::BatchView;
 use super::*;
@@ -128,9 +129,8 @@ fn facts(height: u64) -> ConnectFacts {
     }
 }
 
-/// A candidate whose header carries `root` — the store's `root_at(height)`,
-/// the validator's derived root since DRS-E3 (CEN-B5); no function of the
-/// height can supply it, so the builder reads it back per block.
+/// A candidate whose header carries `root` — [`batch_root_going_into`] at
+/// this height (CEN-B5).
 fn candidate(height: u64, previous: BlockHash, root: CurveTreeRoot) -> Candidate {
     let block = Block {
         header: BlockHeader {
@@ -161,10 +161,7 @@ fn build_chain(store: &ChainStore, n: u64, per_batch: u64) {
         let out: Result<(), TestErr> = store.write(|batch| {
             let view = batch.chain_view();
             for h in height..end {
-                let root = match view.root_at(BlockHeight::from_raw(h))? {
-                    AtHeight::Recorded(root) => root,
-                    AtHeight::AboveTip => panic!("no root recorded going into height {h}"),
-                };
+                let root = batch_root_going_into(&view, h)?;
                 let cand = candidate(h, previous, root);
                 previous = cand.block.hash();
                 batch.connect(judge(&view, cand, &substrate)?, facts(h), RULES)?;

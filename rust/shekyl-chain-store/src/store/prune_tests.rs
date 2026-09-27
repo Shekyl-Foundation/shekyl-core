@@ -16,7 +16,7 @@
 //! for long chains, with the same shape.
 
 use redb::ReadableTable;
-use shekyl_chain_rules::{AtHeight, Candidate, ChainView, RuleSet};
+use shekyl_chain_rules::{Candidate, RuleSet};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, BlockWeight, LongTermWeight, SHARD_TX_COUNT,
 };
@@ -24,7 +24,7 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
-    anchor, candidate, candidate_over, judge_under, root_going_into, spend,
+    anchor, batch_root_going_into, candidate, candidate_over, judge_under, root_going_into, spend,
 };
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
@@ -119,12 +119,7 @@ impl Builder {
                     .into_iter()
                     .map(|tx| anchor(&self.hashes, h, tx))
                     .collect();
-                // The header carries the root the store recorded going
-                // into `h` — this batch's own previous connect (CEN-B5).
-                let root = match view.root_at(BlockHeight::from_raw(h))? {
-                    AtHeight::Recorded(root) => root,
-                    AtHeight::AboveTip => panic!("no root recorded going into height {h}"),
-                };
+                let root = batch_root_going_into(&view, h)?;
                 let cand = candidate_over(root, h, previous, txs.clone());
                 self.hashes.push(cand.block.hash());
                 self.listed.push(txs);
