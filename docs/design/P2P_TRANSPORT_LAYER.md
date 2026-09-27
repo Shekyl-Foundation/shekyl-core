@@ -268,18 +268,26 @@ connection alive for as long as the queue held it.
 One descriptor per socket is a test assertion (D11). The accept path
 does not walk `/proc/self/fd`. A transient `accept` error
 (`EMFILE`, `ENFILE`, `ECONNABORTED`) is recorded and the listener keeps
-accepting. Shutdown is what ends that loop. The outbound queue is a
-byte cap, the caller's, labelled unmeasured until PWD-T6's
-session-established limit plus measurement names it. A send that does
-not fit closes with `SendQueueFull`. The inbound reader awaits space
+accepting. Shutdown is what ends that loop. The outbound queue is that byte cap and nothing else. It is not an
+unbounded channel with a counter beside it. The caller passes the cap,
+labelled unmeasured until PWD-T6's session-established limit plus
+measurement names it. A send that does not fit is not stored, and the
+connection closes with `SendQueueFull`. The inbound reader awaits space
 instead of closing: a slow consumer on this side stops reading, and TCP
 flow control pushes back on the peer.
 
 The dialer checks the addressing cell, then `open_clearnet`. A direct
 dial connects to the address. A proxy dial connects to the SOCKS5
-endpoint and asks it to CONNECT; `shekyl-socks` is that handshake, and
-the Tor connector uses the same crate. A refusal is `ProxyRefused` with
-the reply byte. The initiator handshake runs on the blocking pool under
+endpoint and asks it to CONNECT; `shekyl-socks` is that handshake, and it is the one SOCKS client.
+It keeps the proxy's reply byte, which `ProxyRefused` carries.
+`tokio-socks` 0.5.3 maps the byte onto a fixed set of variants
+(`receive_reply`) and collapses every other value, including Tor's
+extended onion-service codes, to `UnknownAuthMethod`. `shekyl-p-fetch`
+and `shekyl-rpc-transport` still call it. Moving them onto
+`shekyl-socks` and dropping `tokio-socks` is a FOLLOWUPS row. A refusal
+is `ProxyRefused` with the reply byte. `ExtendedErrors` on the
+operator's `SocksPort` is what makes Tor's extended codes appear. That
+belongs in the operator docs. The initiator handshake runs on the blocking pool under
 the same engine owner, armed when the socket exists.
 
 Before the flip, ruling 4's exception is still in force. The option off

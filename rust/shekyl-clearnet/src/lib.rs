@@ -188,8 +188,7 @@ impl Overfull {
 
 pub struct Session {
     inbound: mpsc::Receiver<Vec<u8>>,
-    outbound: mpsc::UnboundedSender<drive::Queued>,
-    queue: drive::SendQueue,
+    queue: drive::ByteQueue,
     overfull: Arc<Overfull>,
 }
 
@@ -199,13 +198,19 @@ impl Session {
     }
 
     /// Queue plaintext up to the connection's byte cap. A buffer that does
-    /// not fit closes the connection. The cap is the caller's.
+    /// not fit is not stored, and the connection closes with
+    /// [`CloseKind::SendQueueFull`]. The cap is the caller's, from
+    /// PWD-T6's session-established limit plus measurement, and unmeasured
+    /// until that limit is a number.
     pub fn try_send(&self, bytes: Vec<u8>) -> Result<(), CloseKind> {
-        let queued = self.queue.try_enqueue(bytes).map_err(|()| {
-            self.overfull.trip();
-            CloseKind::SendQueueFull
-        })?;
-        self.outbound.send(queued).map_err(|_| CloseKind::IoError)
+        match self.queue.try_push(bytes) {
+            Ok(()) => Ok(()),
+            Err(drive::PushError::Full) => {
+                self.overfull.trip();
+                Err(CloseKind::SendQueueFull)
+            }
+            Err(drive::PushError::Closed) => Err(CloseKind::IoError),
+        }
     }
 }
 
@@ -515,13 +520,13 @@ mod tests {
 
     #[test]
     fn the_send_queue_counts_bytes_and_holds_more_than_one_buffer() {
-        let queue = super::drive::SendQueue::new(4);
-        let first = queue.try_enqueue(b"ab".to_vec()).expect("first");
-        let second = queue.try_enqueue(b"cd".to_vec()).expect("second");
-        assert!(queue.try_enqueue(b"e".to_vec()).is_err());
-        drop(first);
-        assert!(queue.try_enqueue(b"ef".to_vec()).is_ok());
-        drop(second);
+        let queue = super::drive::ByteQueue::new(4);
+        queue.try_push(b"ab".to_vec()).expect("first");
+        queue.try_push(b"cd".to_vec()).expect("second");
+        assert!(queue.try_push(b"e".to_vec()).is_err());
+        let first = queue.pop_now().expect("queued");
+        queue.release(first.len());
+        assert!(queue.try_push(b"ef".to_vec()).is_ok());
     }
 
     #[test]
