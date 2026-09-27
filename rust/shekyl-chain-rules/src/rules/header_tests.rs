@@ -240,6 +240,16 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         ) -> Result<Option<shekyl_types::BlockHeight>, Self::Fault> {
             Ok(None)
         }
+        fn weights_window(
+            &self,
+            _: shekyl_types::BlockHeight,
+            _: shekyl_types::BlockCount,
+        ) -> Result<AtHeight<Vec<crate::view::RecordedWeights>>, Self::Fault> {
+            Ok(AtHeight::AboveTip)
+        }
+        fn has_transaction(&self, _: &shekyl_types::TxHash) -> Result<bool, Self::Fault> {
+            Ok(false)
+        }
         fn root_at(
             &self,
             _: shekyl_types::BlockHeight,

@@ -179,7 +179,7 @@ pub fn form<S: Substrate>(
 /// use core::convert::Infallible;
 /// use core::marker::PhantomData;
 /// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+/// use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
 ///
 /// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
 /// impl<'id> ChainView<'id> for View<'id> {
@@ -207,6 +207,16 @@ pub fn form<S: Substrate>(
 ///     }
 ///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn weights_window(
+///         &self,
+///         _: BlockHeight,
+///         _: BlockCount,
+///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
+///         Ok(false)
 ///     }
 /// }
 /// // Each call brands a fresh view, as the store's `write` does.
@@ -242,7 +252,7 @@ pub fn form<S: Substrate>(
 /// use core::convert::Infallible;
 /// use core::marker::PhantomData;
 /// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+/// use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
 ///
 /// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
 /// impl<'id> ChainView<'id> for View<'id> {
@@ -269,6 +279,16 @@ pub fn form<S: Substrate>(
 ///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
 ///     }
+///     fn weights_window(
+///         &self,
+///         _: BlockHeight,
+///         _: BlockCount,
+///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
+///         Ok(false)
+///     }
 /// }
 /// struct Evil;
 /// impl<'id> ChainView<'id> for Evil {
@@ -294,6 +314,16 @@ pub fn form<S: Substrate>(
 ///     }
 ///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn weights_window(
+///         &self,
+///         _: BlockHeight,
+///         _: BlockCount,
+///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
+///         Ok(false)
 ///     }
 /// }
 /// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}

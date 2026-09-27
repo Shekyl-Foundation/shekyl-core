@@ -34,16 +34,16 @@ use std::collections::{BTreeMap, VecDeque};
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    tree_after, AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, RuleSet, Tip,
-    TreeFrontier,
+    tree_after, AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, RecordedWeights,
+    RuleSet, Tip, TreeFrontier,
 };
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, GlobalOutputIndex,
-    KeyImage, LongTermWeight,
+    AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
+    GlobalOutputIndex, KeyImage, LongTermWeight, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{admitted_leaf_blob, parse, pqc_leaf_entries_per_output};
@@ -221,6 +221,18 @@ impl<'id> ChainView<'id> for GrownTree {
 
     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
         Ok(None)
+    }
+
+    fn weights_window(
+        &self,
+        _: BlockHeight,
+        _: BlockCount,
+    ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
+
+    fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
+        Ok(false)
     }
 
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {

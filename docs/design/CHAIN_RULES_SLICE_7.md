@@ -123,6 +123,36 @@ merge is planned rather than discovered:
 | `ConnectFacts` / `facts.rs` | deletes `root_after` (CTW-Q6, commit 6) | wave A flips four passed-through fields (`weight`, `long_term_weight`, `long_term_effective_median`, `coins_generated`) to verdict reads | **semantic** — both lanes shrink `passed_through`; the count E3 states as *6 → 5* is *6 → 1* after E3 and wave A (`burned` remains until wave B); whichever lands second re-counts |
 | `RecordedBlock` | — | possibly `weight` + `long_term_weight` (Q2 (a)) | none if Q2 takes (b) |
 
+**E3 LANDED 2026-09-27 (#878, `dev` @ `9fb8fb3f9`), four minutes before
+commit 3 branched — so the table above is now records-was, and what it
+predicted resolved as follows.** The trait row became adjacency, not
+conflict: `tree_frontier`, `leaf_count_at`, `outputs_at` and a derived
+`depth_at` were on `ChainView` when commit 3 added `weights_window` and
+`has_transaction` beside them — nine implementors, each carrying both. The
+`ConnectFacts` row resolved as predicted: `root_after` is gone
+(`passed_through` 6 → 5 at E3's landing; wave A takes it to 1). Two things
+the table did **not** predict: **(i)** E3 and #880 merged clean textually
+and **broke each other semantically** — #880's bench built `ConnectFacts`
+with a `root_after` field E3 had deleted, and its G2 test built the
+replay's trace with `placeholder_root_after`, which E3 deleted with the
+placeholder; `cargo test -p shekyl-chain-store` and `-p shekyl-chain-ingest`
+did not compile on `dev` between `9fb8fb3f9` and **#884** (`9d549ead2`),
+which repaired both from the E3 side — `trace_with` grows the tree over
+the chain it is given and writes the trace's `root_after` from it, so a
+caller cannot name a root; `batch_root_going_into` is the one in-batch read
+of the root a header must carry, used by `connect_chain`, the prune
+builder and the weights bench — and re-held the G2 replays to E3's root
+oracle (`compared` at every height, `diverged` empty). Commit 3 had
+repaired the same two sites independently; those commits were dropped when
+#884 landed and commit 3 was rebuilt on it. **(ii)** The **wave B blocker is
+gone**: `leaf_count_at` is F17's operand (`frozen_segment_count` is a
+function of the leaf count at the parent state), so §5 row 9's absorption
+condition is met and F17, F18, G11 and G13 return to this slice as wave A's
+tail. Slice 6's I13 (`depth_at` is its operand) and I15/H19-verify (a
+scenario spend against a real tree) are unblocked by the same landing; they
+are slice 6's FOLLOWUPS rows, not this slice's, and are named so their
+owner hears it.
+
 **One dependency runs from this slice into E3, and it is not a merge
 surface.** G2 (§3.1) is a precondition for E3's correctness: E3's drain
 order is the tree's leaf order, the leaf order is consensus, and a block
@@ -631,13 +661,13 @@ when an operand is absent. Wave B extends the sequence in place.
 | --- | --- | --- |
 | 1 | **This file amended on review; the index row; the §5.1 expectation table** — written before commit 2, so the overrun signal has a subject | — |
 | 2 | **LANDED 2026-09-26 (cost 1 — the estimate said 2; the driver listed two bodies at the first attempt, and the one wall was a fixture's: `trace_of`'s roots are not the driver's, §3.1). 2026-09-27: that wall was the pre-E3 placeholder; §3.1's update is the structure.** Measurements, no rules: (a) the two-body block through `mine_listing`, the reorder and a substitution replayed through it — all three connect; output order follows the bodies; the unlisted body is recorded (`body_pairing_tests.rs`, pins that flip at commit 6); (b) the pruned-form fixture at both sites — it was prose, and the row is **H18**, not H19 (§3.3); (c) the weights-read bench, `#[ignore]`d in `shekyl-chain-store` (`weights_read_bench_tests.rs`), run at N = 100 000 on the desktop and, cross-compiled, on the Pi 4 floor — (b) 36.6 ms against (a) 598 ms there, 0.5 % of the zone-point verify; **Q2 RULED (b)** (§5.1, the budget cell filled by that run); (d) the `Unmutable` census over the corpus — `ReorderedBodies` the only corpus-shape gap, `DoubleSpend` unreachable on the two spend-named chains (§3.7) | — |
-| 3 | **`ChainView` grows** — the weights read (Q2's shape) and `has_transaction` — trait, `BatchView`, `MockChain`, the store's conformance test holding the mock to the store, **one commit, both sides** (slice 6 §5.1's rule) | commit 2 (c) |
+| 3 | **LANDED 2026-09-27 (cost 1).** `ChainView::weights_window(end, at_most) -> AtHeight<Vec<RecordedWeights>>` — the up-to-`at_most` recorded blocks strictly below `end`, `AboveTip` past `tip + 1`, a hole inside the window SI-7 and never a shorter vector — and `ChainView::has_transaction(&TxHash) -> bool`; **no default bodies** (a default that answered "no weights" or "no such transaction" would make G6 and G1 silently vacuous on a mock, the opposite of E3's derived `depth_at`), so all nine implementors carry both. The store's body is one range cursor over `block_info` (`chain_reads::weights_below`, the shape the floor chose) and `tx_indices` membership (`tx_reads::has_transaction`), each shared by `BatchView` and `ReadSnapshot` so the validator and the pool/template read one answer. `MockChain` records weights per pushed block — `push` names the zone for both, `push_weighing` names them — and a transaction set (`with_transaction`); **no existing fixture moved** (§5.1's tally: still 0). The store's conformance test holds both reads to the store's over every `end` × `at_most` shape, the hole test holds the SI-7 arm the mock cannot reach, and `RecordedWeights` is a named projection, not a tuple, so the two columns cannot be swapped by position. Built on `dev` after #884 repaired E3's two breaks of commit 2 (§1.2) | commit 2 (c) |
 | 4 | **G6 / G6b** as `judge_emission`'s first two definitions in `rules/block_weight.rs`; the two windows as generated consts (Q6, with the two `#define`s repointed and the dead fee define deleted, §3.10); the mock holds the clamps at their boundaries **and the `min(window, h)` arm at low heights** (C2-R2 Q2's early-chain weakness — below 100 000 the window is the chain); the captured chains replay through both at parity (§3.8) | commit 3 |
 | 5 | **F14, F14b, F16, G12** — the sequence completed through the paid reward; `ConnectFacts.{weight, long_term_weight, long_term_effective_median, coins_generated}` read off the verdict, the ingest's four composed lines deleted (`Provenance::passed_through` re-counted with E3's) | commit 4 |
 | 6 | **G2** as a `FormRule` in `form`; E2's `ReorderedBodies` flips from pinned-connects to refusing at `Locus::Tx { slot: Listed(0) }`; `MissingBody` (→ `Locus::Block`) and `SubstitutedBody` (→ `Listed(i)`) join it | commit 2 (a) |
 | 7 | **G1** as a `BlockRule` **before** the slot loop, **G7, G9, G10** after it beside L1 (§4); the order pinned by a test in which a re-listed spend is refused on G1, not I7; G9's admitted pair as a positive fixture; the driver gains `RelistedTransaction` and `DoubledListing` (→ G1, `Locus::Tx { slot: Listed(second) }`), `DuplicateServeCredit`, `DuplicateClaim`, `DuplicateBondPost` (→ `Locus::Input` at the second occurrence), `OverweightBlock` (→ F14, `Locus::Block`) — **written spec-first in `DRS_E2_REPLAY_DRIVER.md` §3.10 at commit 2**, each row's locus derived from the refusal's own evidence (Q8), so the rows carry the distinguishing work before there is code to check them against; **and a driver-built spend chain with two spends in two blocks, so `DoubleSpend` has a witness on a chain named for spends** (§3.7) | commit 3 |
 | 8 | **G3, G4, G5** registry entries, `by_construction` with their falsifiers named; conformance re-check (the register's G rows, `:640–646`, re-read against the crate) | commit 7 |
-| 9 | **Wave B — F17, F18, G11, G13** if E3's `leaf_count` has landed; else **the named successor**, one FOLLOWUPS row, falsifier `rg 'fn leaf_count_at\|fn depth_at' rust/shekyl-chain-rules/src/view.rs` → present with `BatchView`'s impl, then this row lands as one commit extending `judge_emission` and `WrongReward` flips | E3 commit 4 |
+| 9 | **Wave B — F17, F18, G11, G13 — ABSORBED (2026-09-27): E3 landed `leaf_count_at` with `BatchView`'s impl (#878), the condition this row named, so the deferral is not taken.** Lands after row 5 as one commit extending `judge_emission` — F17's `frozen_segment_count` from the leaf count at the parent state (F19's single-read discipline), F18's exact-pay over F16's and F17's legs, G11's accrual and burn as definitions, G13 as G11's height-0 arm — and `WrongReward` flips from pinned to refusing at `Locus::Tx { slot: Miner }`. *Records-was:* the row as written — wave B a named successor, falsifier `rg 'fn leaf_count_at\|fn depth_at' rust/shekyl-chain-rules/src/view.rs` → present with `BatchView`'s impl; the falsifier fired the day after it was written | commit 5 |
 | 10 | **Docs:** census 4.G re-pinned at the landing tree, **G6/G6b's *"shipped ×50 … until the port"* clauses corrected** (§3.8); the register's CEN-G6/G6b rows **re-reviewed at the landing tree** (DIVERGENT → CHECKED-CONFORMANT if the read holds; tally derived from `check_conformance_coverage.py`, not by hand); `CHAIN_RULES_CRATE.md` §4.3 (the two reads), §4.6 (`judge_emission`, the verdict's seven values and Q5's test); `DAEMON_REDB_STORE.md` §7.5; index; FOLLOWUPS (the F14-family residue closed; the wave-B row if deferred; the two rows §3.9/§3.10 opened); CHANGELOG — G2 (Q7, one line), and if the tally is 127 / 1 / 5, that CEN-I4 is the register's only recorded divergence | — |
 
 Ten commits is the rule-06 ceiling; commit 9 is the one that may leave.
@@ -655,13 +685,13 @@ bench exists to catch). Its cell below says so.
 | --- | --- | --- | --- |
 | 1 | this file on review; index; this table | 1 (on #877) | — |
 | 2 | four measurements, no rules (§5 row 2): the two-body driver block with the reorder and a substitution replayed; the pruned-form fixture located or added; the weights-read bench on the floor; the `Unmutable` census over the corpus | 2 — the driver has never listed two bodies, and the first attempt at anything the driver has never done has cost a commit each time (slice 6 §5.3.3) | yes |
-| 3 | `ChainView::{weights_window, has_transaction}` — trait, `BatchView`, `MockChain`, the store's conformance test, one commit both sides | 1 | yes |
+| 3 | `ChainView::{weights_window, has_transaction}` — trait, `BatchView`, `MockChain`, the store's conformance test, one commit both sides. **Landed at 1 (2026-09-27)**, carrying two repairs E3's landing owed #880's tests (§1.2) | 1 | yes |
 | 4 | G6 / G6b in `judge_emission`; the two windows generated; boundary and low-height fixtures | 2 | yes |
 | 5 | F14, F14b, F16, G12 through the paid reward; four `ConnectFacts` fields read off the verdict; four composed lines deleted | 2 | yes |
 | 6 | G2 as a `FormRule`; `ReorderedBodies` flips; `MissingBody`, `SubstitutedBody` | 1 | yes |
 | 7 | G1 before the loop, G7/G9/G10 after; the order pinned; seven mutations | 2 | yes |
 | 8 | G3/G4/G5 by construction; conformance re-check | 1 | yes |
-| 9 | wave B if E3's leaf count has landed; else the FOLLOWUPS row | 2, or 1 for the deferral | yes |
+| 9 | wave B — **absorbed**, E3 landed (`leaf_count_at`) on 2026-09-27; F17, F18, G11, G13 as one commit after row 5 | 2 | yes |
 | 10 | docs: census 4.G re-pin and the G6/G6b correction; the register's two rows re-reviewed; crate contract; index; FOLLOWUPS; CHANGELOG | 1 | yes |
 
 **Expectation: fifteen commits, fourteen if wave B defers.** Registry

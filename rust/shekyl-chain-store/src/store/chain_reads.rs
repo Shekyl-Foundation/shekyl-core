@@ -70,8 +70,8 @@
 use std::borrow::Borrow;
 
 use redb::{Key, ReadTransaction, ReadableTable, TableDefinition, Value, WriteTransaction};
-use shekyl_chain_rules::AtHeight;
-use shekyl_types::{BlockHash, BlockHeight, KeyImage};
+use shekyl_chain_rules::{AtHeight, RecordedWeights};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, KeyImage};
 use shekyl_wire::Block;
 
 use crate::codec::{BlockBody, BlockInfo, Canonical, CodecError, Coded};
@@ -350,6 +350,61 @@ pub(super) fn info_at<T: ReadTables>(
         ),
         HeightClass::AboveTip => AtHeight::AboveTip,
     })
+}
+
+/// The recorded weights of the up-to-`at_most` blocks strictly below `end`,
+/// in height order — `ChainView::weights_window`'s body (CEN-G6 / G6b, E6
+/// slice 7 Q2). **One range cursor** over `block_info`, each row decoded
+/// once and projected to its two weight columns: on the Pi 4 floor that is
+/// 36.6 ms for the 100 000-row long window against 598 ms for the same
+/// rows as point reads, which is why this is a read of its own and not a
+/// loop over [`info_at`].
+///
+/// Classified against `tip`: `end > tip + 1` is [`AtHeight::AboveTip`] —
+/// the window would include heights the chain does not have. Inside the
+/// window every row must exist (SI-2: `block_info` is dense to the tip); a
+/// cursor that yields fewer rows than the window spans, or a row keyed off
+/// its expected height, is SI-7, reported as `absent("block_info")` the way
+/// [`info_at`] reports a hole — never a shorter vector a median would
+/// silently be taken over.
+pub(super) fn weights_below<T: ReadTables>(
+    txn: &T,
+    tip: Option<&(u64, BlockInfo)>,
+    end: BlockHeight,
+    at_most: BlockCount,
+) -> Result<AtHeight<Vec<RecordedWeights>>, ReadFault> {
+    let end = end.to_raw();
+    let recorded_through = match tip {
+        None => 0,
+        Some((t, _)) => t + 1,
+    };
+    if end > recorded_through {
+        return Ok(AtHeight::AboveTip);
+    }
+    let span = end.min(at_most.to_raw());
+    let start = end - span;
+    let mut out = Vec::with_capacity(usize::try_from(span).expect("a window fits memory"));
+    let table = txn.table(BLOCK_INFO)?;
+    let mut expected = start;
+    for row in table.range(start..end)? {
+        let (key, value) = row?;
+        if key.value() != expected {
+            return Err(absent("block_info"));
+        }
+        let info = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable("block_info", cause))?;
+        out.push(RecordedWeights {
+            weight: info.weight,
+            long_term_weight: info.long_term_weight,
+        });
+        expected += 1;
+    }
+    if expected != end {
+        return Err(absent("block_info"));
+    }
+    Ok(AtHeight::Recorded(out))
 }
 
 /// The recorded `blocks` blob at `height`, **unverified** — R5's body. The

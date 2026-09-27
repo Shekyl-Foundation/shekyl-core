@@ -14,7 +14,7 @@
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{AtHeight, RuleSet};
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
@@ -202,6 +202,33 @@ fn a_hole_below_the_tip_is_si7_and_does_not_halt_the_writer() {
     assert!(is_si7_absent(
         rows[1].as_ref().expect_err("the hole"),
         "block_info"
+    ));
+    assert_eq!(store.connect_state(), ConnectState::Live);
+    // The weights window (slice 7, CEN-G6's read) over the same hole: a
+    // window that spans it is SI-7 as a whole — never a vector two rows
+    // long that a median would silently be taken over — while a window
+    // that stops short of the hole is intact, and one that starts past the
+    // recordable is `AboveTip`. The mock cannot reach this arm (its vector
+    // is dense by construction), so it is the store's alone to hold.
+    let e = snap
+        .weights_window(h(3), BlockCount::from_raw(3))
+        .expect_err("a hole inside the window is SI-7");
+    assert!(is_si7_absent(&e, "block_info"), "{e}");
+    let e = snap
+        .weights_window(h(2), BlockCount::from_raw(1))
+        .expect_err("the hole is the one row asked for");
+    assert!(is_si7_absent(&e, "block_info"), "{e}");
+    match snap
+        .weights_window(h(1), BlockCount::from_raw(5))
+        .expect("below the hole")
+    {
+        AtHeight::Recorded(rows) => assert_eq!(rows.len(), 1, "only block 0 lies below the hole"),
+        AtHeight::AboveTip => panic!("end 1 is recordable"),
+    }
+    assert!(matches!(
+        snap.weights_window(h(4), BlockCount::from_raw(1))
+            .expect("above"),
+        AtHeight::AboveTip
     ));
     assert_eq!(store.connect_state(), ConnectState::Live);
     cleanup(&path);
