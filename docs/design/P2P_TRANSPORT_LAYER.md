@@ -121,14 +121,68 @@ service was not in that crate, and `Engine::register` minted
 an id is not reused and a stale heap hint cannot match a new owner.
 Connection deadlines are owners
 of the service from the first transport line, so the service was the
-first production commit. A Rust ban list is not in the tree. D3 already
-rules it; building it is this implementation. `pipe.rs` stays. The
+first production commit. *Records-was, at this pre-flight:* a Rust
+ban list was not in the tree. D3 already rules it; the logic-core
+increment builds it and does not wire it. `pipe.rs` stays. The
 pipe branch stays `fix/clearnet-pipe-option-testing` at `190cbdc3b`.
 The `io_context` stays until the bridge after cutover. I2P removal is
-the cutover's statement (D13), not this commit. The step-3 fuzz
-targets (`read_message1`, `read_message2`, `open_one`) are not in the
-tree. D11 carries them as gates of this implementation. They are not a
-reason to wait before the service.
+the cutover's statement (D13), not this commit. *Records-was, at this
+pre-flight:* the step-3 fuzz targets (`read_message1`, `read_message2`,
+`open_one`) were not in the tree. D11 carries them as gates of this
+implementation. They are not a reason to wait before the service.
+
+---
+
+## Logic core — this increment (2026-09-26)
+
+Rule 26 is cited. This is not a new round and not a second pre-flight.
+The pass above is discharged. This note is the scope of the first
+transport increment.
+
+The crate is `shekyl-transport-layer`. It depends on
+`shekyl-net-address`, `shekyl-p2p-transport`, and
+`shekyl-timing-engine`. `shekyl-net-address` is the address union.
+`shekyl-levin` implements the portable-storage codec for that union
+and does not depend on the transport crate. The transport crate does
+not depend on Levin. `shekyl-p2p-transport` stays the Noise layer: no
+connector and no socket loop. `Responder::read_message1`,
+`Initiator::read_message2`, and `RecvHalf::open_one` are public so the
+D11 fuzz targets can call them. Those targets live beside that crate.
+
+In this increment:
+
+- Connector declarations are data (D7). The addressing cell selects
+  the connector. I2P is a column and not a connector. A cell nobody
+  has assessed reads "not assessed". The dial rule reads that cell:
+  onion v3 for Tor, an IP address for clearnet, and anything else is
+  `DialFailed`.
+- The stack plan reads the encryption cell. Clearnet declares no
+  native encryption, so the plan adds the Noise layer. Tor declares
+  classical encryption, so the plan adds nothing. Levin is the session
+  above that plan. It does not match on the connector, and adding
+  Noise to a connector does not change how Levin reads the stream.
+- Socket admission is a count, not a socket (D4, D8). Accept reserves
+  one slot against `InboundCeiling` in the same step as the increment.
+  Close releases that slot once. Occupancy is per connector and
+  direction. The process-wide ceiling is the sum of every connector's
+  inbound row, and that list is the connector list.
+- The ban list holds IPv4 subnets and host addresses. Expiry is checked
+  when an entry is looked up. A new ban closes live sockets to that
+  host. Nothing in the RPC calls it yet. That call is the seam, when
+  Rust owns the sockets.
+- One `CloseCause` is the D12 table. The discriminants in
+  `src/shekyl/close_cause.h` are generated from that enum, and the
+  header's size and field offsets are the `repr(C)` struct's.
+  `shekyl_ffi.h` includes it. The test fails if the header drifts, and
+  the C++ build fails if the typedef no longer matches that layout.
+  There is no second table to edit.
+
+Not in this increment: sockets, the D5 runtime constructor, a thread
+count, a deadline, an accept rate, the seam, the differential harness,
+and cutover. The constructor is the next increment. It takes the budget
+as an input. The clearnet connector waits on it. Moving the daemon-RPC
+and Tor-control runtimes onto that constructor is a follow-up of the
+constructor, not a precondition.
 
 ---
 
