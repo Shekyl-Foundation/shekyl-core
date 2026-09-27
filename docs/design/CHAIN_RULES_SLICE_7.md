@@ -317,6 +317,24 @@ keys** and — the one C++ touch this slice would make — the two defines
 pointed at the generated macros, as `…FULL_REWARD_ZONE_V5` already is
 (`:60`). Rule 20: a define is marshaling, not logic. **Q6.**
 
+**The short-term window has a third reader, and it is not the weight
+system's (found on review, 2026-09-27).** `CRYPTONOTE_REWARD_BLOCKS_WINDOW`
+is read at three sites: the short-term median (`blockchain.cpp:6085`), the
+fee estimator's own assertion (`:4321`), and the RPC fee-estimate
+`grace_blocks` ceiling (`rpc_facts_ffi.cpp:165`, `:1526`
+`shekyl_rpc_fee_grace_blocks_max`, consumed by `shekyl-daemon-rpc`
+`methods.rs:1048`). Rule 05 asks whether that is one mechanism doing two
+jobs. Read at the estimator: `grace_blocks` is how many blocks ahead a fee
+estimate must still clear, and the estimate is the median over this
+window — so an estimate cannot be asked to hold past the horizon the
+median it is built from has already rolled out of. The ceiling is
+**derived from** the window, not a second number that happens to equal
+it; splitting them would mint a constant with no derivation of its own.
+Disposition, into Q6: one JSON key, **three named readers**, and the RPC
+ceiling's doc says it is the median's horizon by derivation — so a future
+retune of the window moves the ceiling *because it should*, and the
+coupling is recorded rather than hidden.
+
 ### 3.5 Two readers of one median, one of them a producer — and the parity capture
 
 The block template is the second consumer of G6 (§1.3): the Rust producer
@@ -463,7 +481,7 @@ as equally settled across all three when one is a measurement and two are
 estimates. A leg that says "an estimate" in its own text is a leg that has
 named its falsifier and not armed it.
 
-### 3.10 The weight formula: bytes track inputs; the clawback is the open question
+### 3.10 The weight formula: bytes track inputs; the clawback's dimension is unmeasured
 
 `Transaction::weight = size + bp_plus_weight_clawback` (`shekyl-wire/src/
 transaction.rs:226`) is Monero's formula, and C2-R2 does not examine it
@@ -472,12 +490,23 @@ answered by the I4 measurement already: **6.4 KB and 11.9 ms per input,
 linear within 5 % on both machines** (`CHAIN_RULES_SLICE_6.md:911–917`,
 `:1011–1018`) — bytes track verification cost proportionally in the input
 dimension, which is the load-bearing one, so the formula's byte basis is
-defensible there and that sentence is recorded as the answer. What the
-measurement does not cover is the clawback: BP+ is a **fixed** cost (2.7 ms
-on the i9, 34.9 ms on the Pi, independent of inputs), and the clawback
-exists to price Monero's BP+ *aggregation* economics. The open question
-narrows to *why does Shekyl price a fixed-cost proof by a size adjustment?*
-— bounded, answerable, a FOLLOWUPS row, owner the census.
+defensible there and that sentence is recorded as the answer.
+
+**What the measurement does not cover, stated precisely (corrected on
+review, 2026-09-27).** The I4 sweep varied inputs 1→8 **at two outputs
+throughout**, and found BP+ constant (2.7 ms i9, 34.9 ms Pi). But the
+clawback is a function of the **padded output count** and is zero at two
+or fewer (`bp_plus_weight_clawback`, `transaction.rs:226`) — so every
+transaction the sweep timed had a clawback of zero, and what it shows is
+that BP+ is input-independent, **not** that the proof's cost is fixed in
+the dimension the clawback prices. The first cut of this section framed the
+clawback as "a size adjustment on a fixed-cost proof"; that framing ran
+ahead of the evidence. The honest open question is one measurement wide:
+**time BP+ verification across padded output counts (2, 4, 8, 16) and set
+it against the clawback's curve** — if the cost is flat there too, the
+clawback prices nothing Shekyl pays and the question is why it is carried;
+if it scales, Monero's adjustment may be pricing the right thing and the
+question is whether the curve fits. A FOLLOWUPS row, owner the census.
 
 Same family, smaller: `DYNAMIC_FEE_PER_KB_BASE_FEE_V5`
 (`cryptonote_config.h:70`) has **no reader** outside its own header — a
@@ -529,7 +558,7 @@ bench exists to catch). Its cell below says so.
 
 | commit | lands | cost | falsifier applies |
 | --- | --- | --- | --- |
-| 1 | this file on review; index; this table | 1 (**landed**: #877) | — |
+| 1 | this file on review; index; this table | 1 (on #877) | — |
 | 2 | four measurements, no rules (§5 row 2): the two-body driver block with the reorder and a substitution replayed; the pruned-form fixture located or added; the weights-read bench on the floor; the `Unmutable` census over the corpus | 2 — the driver has never listed two bodies, and the first attempt at anything the driver has never done has cost a commit each time (slice 6 §5.3.3) | yes |
 | 3 | `ChainView::{weights_window, has_transaction}` — trait, `BatchView`, `MockChain`, the store's conformance test, one commit both sides | 1 | yes |
 | 4 | G6 / G6b in `judge_emission`; the two windows generated; boundary and low-height fixtures | 2 | yes |
@@ -679,8 +708,14 @@ is chosen from these three numbers and nothing else.
   judgement, which is what the pair was for. The one C++ touch is two
   `#define` lines pointed at the generated macros (rule 20, marshaling),
   plus the dead `DYNAMIC_FEE_PER_KB_BASE_FEE_V5` deleted from the same
-  file (§3.10, disclosed). The alternative — Rust consts with a sentinel
-  test against the header — leaves the value with two hand-written homes.
+  file (§3.10, disclosed). **Amended on review (2026-09-27):** the
+  short-term window's key has **three readers, not one** — the median,
+  the fee estimator's assertion, and the RPC `grace_blocks` ceiling
+  (§3.4) — and the third is included, not split: the ceiling is the
+  median's horizon by derivation, so it reads the same key and its doc
+  says why; a retune of the window moves it because it should. The
+  alternative — Rust consts with a sentinel test against the header —
+  leaves the value with two hand-written homes.
 - **Q7 — G2's grade. RULED 2026-09-26: the proposed grading, taken.**
   §3.1 read the connect path: bodies are keyed by computed identity, so a
   body under the wrong txid is not how a reorder lands; a reorder or a
@@ -710,7 +745,16 @@ is chosen from these three numbers and nothing else.
   first:** `Locus::Listed { slot }` is not a variant — `Locus` is `Block |
   Tx { slot: TxSlot } | Input { slot, input }`, `TxSlot` is `Miner |
   Listed(usize) | Lone` (`verdict.rs:136–165`); the spelling is `Locus::Tx
-  { slot: TxSlot::Listed(i) }`. And the review's premise that G1 has a
+  { slot: TxSlot::Listed(i) }`. *The general shape, recorded here as the
+  evidence behind the census-sweep FOLLOWUPS row's fifth mechanism:* a
+  design document named a symbol that does not exist, the name propagated
+  toward E2's mutation rows, and nothing would have compiled against it
+  until commit 2 — the fourth document-names-a-missing-symbol instance
+  this month, and unlike a stale line pin it is invisible to the citation
+  gate, which resolves paths and ranges rather than identifiers. The
+  symbols are enumerable (`rustdoc --output-format json`, or `rg 'pub
+  (enum|struct|fn|const) '`), so a doc-cited Rust path could be checked by
+  the mechanism that checks census coverage. And the review's premise that G1 has a
   *root arm* whose evidence names no slot is refused at the line: **no
   rule compares a merkle root to anything** — the tree hash over the
   declared list is an *input to the identity* (`Block::pow_blob`,
