@@ -28,6 +28,11 @@
 //! Run: `SHEKYL_WEIGHTS_BENCH_BLOCKS=100000 cargo test -p shekyl-chain-store
 //! --release weights_read_bench -- --ignored --nocapture`.
 
+// A whole-file test module: the parent gates it with `#[cfg(test)]`, and
+// this self-declaration is what the debug-macro lint keys on — the bench
+// prints its figures, which is its job, not a debug leftover.
+#![cfg(test)]
+
 use core::convert::Infallible;
 use std::time::Instant;
 
