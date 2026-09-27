@@ -347,9 +347,26 @@ fn note(causes: &mut Vec<Unmutable>, cause: Unmutable) {
     }
 }
 
+/// The key images a candidate's listed bodies spend.
+fn key_images_of(candidate: &Candidate) -> impl Iterator<Item = [u8; 32]> + '_ {
+    candidate
+        .transactions
+        .iter()
+        .flat_map(|tx| tx.prefix.inputs.iter())
+        .filter_map(|input| match input {
+            Input::ToKey { key_image, .. } => Some(*key_image),
+            _ => None,
+        })
+}
+
 /// Every candidate of one captured chain in connect order, with the key
 /// images spent strictly below it — the two operands `Mutation::apply`
-/// takes. A `Rewind` truncates, as the pipeline would.
+/// takes. A `Rewind` truncates, as the pipeline would, and the spent set
+/// after it is the retained tip's **post-block** state: its `spent_before`
+/// plus its own images (the first cut took `spent_before` alone, which
+/// would have called a `DoubleSpend` of the retained tip's image
+/// `NothingSpentBefore` — Copilot on #880; no captured chain rewinds, so
+/// the census's answer did not move).
 fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Vec<[u8; 32]>)> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let mut reader =
@@ -361,19 +378,20 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Vec<[u8; 32]>)> {
         match event.event {
             IngestEvent::Extend(candidate) => {
                 let before = spent.clone();
-                for tx in &candidate.transactions {
-                    for input in &tx.prefix.inputs {
-                        if let Input::ToKey { key_image, .. } = input {
-                            spent.push(*key_image);
-                        }
-                    }
-                }
+                spent.extend(key_images_of(&candidate));
                 chain.push((height, *candidate, before));
                 height += 1;
             }
             IngestEvent::Rewind { to } => {
                 chain.truncate(usize::try_from(to.to_raw() + 1).expect("small"));
-                spent = chain.last().map(|(_, _, s)| s.clone()).unwrap_or_default();
+                spent = match chain.last() {
+                    None => Vec::new(),
+                    Some((_, tip, before)) => {
+                        let mut after = before.clone();
+                        after.extend(key_images_of(tip));
+                        after
+                    }
+                };
                 height = to.to_raw() + 1;
             }
         }
