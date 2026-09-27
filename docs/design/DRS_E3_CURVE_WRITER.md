@@ -593,9 +593,18 @@ and the correction is recorded here rather than absorbed:
   first attempt signed the PQC auths over the prefix hash, as
   `fcmp_spend_e2e` does; CEN-I18 refused it. The rule was right; the payload
   is `pqc_signing_payload_hashes` over the body with the key in place.
-- **Commit 5 (the protected one) reported no disagreement.** Derived root ==
-  trace root at all 1 979 heights of the four chains, including
-  `spend-depth3`'s 762; the tip digests match. The protection was not needed
+- **Commit 5 (the protected one) reported no disagreement — the CTW-5
+  result of record.** Run 2026-09-26 at `0a6686bd9` (B5 as the oracle) and
+  again at `d2daea472` (the explicit per-height comparison), under
+  `MockSubstrate`, against `shekyl-chain-ingest/tests/vectors/` as committed
+  at `dev@ad557ac5a`: the derived root equalled the LMDB trace's `root_after`
+  at **every** height of every chain — `bond-post` 109/109 (tip 108),
+  `emission-claim` 1026/1026 (tip 1025), `spend-1in-2out` 82/82 (tip 81),
+  `spend-depth3` 762/762 (tip 761); 1 979 heights, zero divergences, and the
+  daemon's tip digest matched on all four. No adjudication was needed. This
+  was the one window in which the trace was an oracle rather than a source;
+  it is not reproducible once the trace stops being consulted, so the
+  numbers live here and not only in the PR. The protection was not needed
   this time; it stays in the text for the next lane.
 
 **Shard geometry, recorded here (maintainer finding, 2026-09-26).** Two
