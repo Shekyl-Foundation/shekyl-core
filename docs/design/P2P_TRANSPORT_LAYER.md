@@ -184,26 +184,36 @@ onto it stays a follow-up of the constructor, not a precondition.
 
 ## Runtime constructor — this increment (2026-09-26)
 
-The crate is `shekyl-runtime`. [`runtime`](../../rust/shekyl-runtime/src/lib.rs)
-takes a [`Budget`](../../rust/shekyl-runtime/src/lib.rs) — worker count
-and blocking-pool cap, both required — and a thread name, and builds
-one multi-thread runtime. Tokio's unset worker count (one per core)
-and its blocking cap (512) are the defaults D5 refuses, so neither
-number lives in the crate. `net` and `time` are on, so the runtime can
-host sockets and deadlines. A dedicated thread registers with
-`register_thread`: one worker, blocking cap 0, because it has no
-blocking pool. Tokio refuses a blocking cap of 0, so a runtime's cap
-is at least one.
+The ledger is [`shekyl-thread-ledger`](../../rust/shekyl-thread-ledger/src/lib.rs).
+It has no Tokio dependency. [`spawn_dedicated`](../../rust/shekyl-thread-ledger/src/lib.rs)
+starts one OS thread, stores the `JoinHandle` in the guard, and uses
+that same string as the OS thread name and the row label. Joining or
+dropping the guard removes the row after the thread has been joined.
+The row's kind is `DedicatedThread`: one thread, and no blocking pool.
+A zero blocking cap is not that fact. Tokio refuses a blocking cap of
+zero, and a dedicated thread is not a Tokio runtime. [`LedgerId`](../../rust/shekyl-thread-ledger/src/lib.rs)
+is the row's identity. The name is a label and may be shared.
 
-Every live pool is a row on the process ledger: name, workers, blocking
-cap. Dropping the pool removes the row. The timing engine's thread
-registers when it starts. The daemon prints the ledger and the total
-once, after startup, via `shekyl_thread_budget_report`. The clearnet
+[`runtime`](../../rust/shekyl-runtime/src/lib.rs) takes a
+[`RuntimeBudget`](../../rust/shekyl-thread-ledger/src/lib.rs) — worker
+count and blocking-pool cap, both required — and a thread name, and
+builds one multi-thread runtime. The pool holds the ledger guard and
+drops the runtime first, so the row covers the workers' shutdown.
+Tokio's unset worker count (one per core) and its blocking cap (512)
+are the defaults D5 refuses, so neither number lives in either crate.
+The runtime enables the I/O driver and the time driver. `net` and
+`time` are on for that.
+
+[`report`](../../rust/shekyl-thread-ledger/src/lib.rs) is the one line:
+each row, then the total of workers, blocking caps, and dedicated
+threads. The daemon prints it once every runtime it builds comes from
+`runtime`. The daemon-RPC builder at `shekyl-daemon-rpc`
+`ffi_exports.rs` and the Tor-control builder at
+`shekyl-tor-control-daemon` `blocking.rs` still construct their own, so
+the print is not wired. A total taken while those builders are off the
+ledger would omit the pools the sum exists to count. The clearnet
 connector is the first caller that keeps a runtime. Its call passes a
 blocking cap labelled unmeasured; D6's measurement replaces that value.
-The daemon-RPC builder at `shekyl-daemon-rpc` `ffi_exports.rs` and the
-Tor-control builder at `shekyl-tor-control-daemon` `blocking.rs` still
-construct their own. That move is the follow-up.
 
 ---
 
@@ -505,11 +515,13 @@ and does not set a worker count, so it takes one worker per core;
 On a 4-core Pi-4 those two are five workers. A third runtime that also
 took the default would make nine, plus blocking pools. The transport
 layer does not add one that way. The constructor is
-`shekyl-runtime::runtime(Budget { workers, blocking }, name)`. Both
-counts are inputs; Tokio's 512 blocking cap is not left in place. The
-ledger sums every live pool, including the timing engine's thread, and
-the daemon prints that sum once at startup. The two call sites above
-are not on the constructor yet.
+`shekyl-runtime::runtime(RuntimeBudget { workers, blocking }, name)`.
+Both counts are inputs; Tokio's 512 blocking cap is not left in place.
+The ledger is `shekyl-thread-ledger`, which does not depend on Tokio.
+It sums every live pool, including the timing engine's dedicated
+thread. The daemon prints that sum once at startup once the two call
+sites above construct through `runtime`. Printing before that move
+would omit the pools the sum exists to count.
 
 ---
 

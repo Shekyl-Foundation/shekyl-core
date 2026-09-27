@@ -1,0 +1,19 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-thread-ledger"
+description = "Process thread-budget ledger. No Tokio and no sockets. A dedicated thread is spawned here; shekyl-runtime records a pool."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

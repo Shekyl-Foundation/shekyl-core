@@ -783,31 +783,6 @@ pub unsafe extern "C" fn shekyl_rpc_hardfork_entry_rust_check(
     }
 }
 
-/// The D5 thread ledger as one line. The daemon prints it once at startup
-/// and frees the buffer with `shekyl_buffer_free`.
-#[repr(C)]
-pub struct ShekylThreadBudgetBuffer {
-    pub ptr: *mut u8,
-    pub len: usize,
-}
-
-#[no_mangle]
-pub extern "C" fn shekyl_thread_budget_report() -> ShekylThreadBudgetBuffer {
-    let bytes = shekyl_runtime::report().into_bytes();
-    let len = bytes.len();
-    if len == 0 {
-        return ShekylThreadBudgetBuffer {
-            ptr: std::ptr::null_mut(),
-            len: 0,
-        };
-    }
-    let leaked = Box::leak(bytes.into_boxed_slice());
-    ShekylThreadBudgetBuffer {
-        ptr: leaked.as_mut_ptr(),
-        len,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

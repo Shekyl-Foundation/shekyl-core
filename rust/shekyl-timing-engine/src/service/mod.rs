@@ -20,8 +20,9 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+use shekyl_thread_ledger::RowGuard;
 
 use crate::{
     Clock, Engine, EngineError, Generation, IdSource, OwnerClass, OwnerId, OwnerMint, Tick, Wake,
@@ -331,16 +332,18 @@ fn park<C: Clock>(engine: &mut Engine<C>) -> Park {
     }
 }
 
+/// OS thread name and ledger label of the engine thread.
+const ENGINE_THREAD_NAME: &str = "shekyl-timing";
+
 /// One thread, one mailbox, the closed flag every handle shares.
 pub struct EngineService<C: Clock> {
+    /// The engine thread and its ledger row. Drop joins it after sending
+    /// shutdown, while the mailbox still exists.
+    row: RowGuard,
     tx: Sender<Command>,
     closed: Arc<AtomicBool>,
     ids: IdSource,
     clock: C,
-    thread: Mutex<Option<JoinHandle<()>>>,
-    /// The engine thread's row on the process thread ledger. Taken after
-    /// the thread has joined, so the row is live for the thread's life.
-    budget: Option<shekyl_runtime::Registration>,
     #[cfg(test)]
     gate: Arc<Gate>,
     #[cfg(test)]
@@ -385,34 +388,30 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
         let thread_gate = Arc::clone(&gate);
         #[cfg(test)]
         let thread_counts = Arc::clone(&counts);
-        let thread = thread::Builder::new()
-            .name("shekyl-timing".to_string())
-            .spawn(move || {
-                let engine = Engine::new(engine_clock);
-                let finished = catch_unwind(AssertUnwindSafe(|| {
-                    worker(
-                        engine,
-                        &rx,
-                        &thread_closed,
-                        #[cfg(test)]
-                        &thread_gate,
-                        #[cfg(test)]
-                        &thread_counts,
-                    );
-                }));
-                if finished.is_err() {
-                    terminal();
-                }
-            })
-            .expect("timing engine thread");
-        let budget = shekyl_runtime::register_thread("shekyl-timing");
+        let row = shekyl_thread_ledger::spawn_dedicated(ENGINE_THREAD_NAME, move || {
+            let engine = Engine::new(engine_clock);
+            let finished = catch_unwind(AssertUnwindSafe(|| {
+                worker(
+                    engine,
+                    &rx,
+                    &thread_closed,
+                    #[cfg(test)]
+                    &thread_gate,
+                    #[cfg(test)]
+                    &thread_counts,
+                );
+            }));
+            if finished.is_err() {
+                terminal();
+            }
+        })
+        .expect("timing engine thread");
         Self {
+            row,
             tx,
             closed,
             ids,
             clock,
-            thread: Mutex::new(Some(thread)),
-            budget: Some(budget),
             #[cfg(test)]
             gate,
             #[cfg(test)]
@@ -450,16 +449,20 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
     }
 }
 
+impl<C: Clock> EngineService<C> {
+    /// Queue shutdown and join the worker. The ledger row leaves with the join.
+    fn join_worker(&self) {
+        drop(self.tx.send(Command::Shutdown));
+        self.row.join();
+    }
+}
+
 impl<C: Clock> Drop for EngineService<C> {
     fn drop(&mut self) {
         self.closed.store(true, Ordering::Release);
         #[cfg(test)]
         self.gate.release();
-        drop(self.tx.send(Command::Shutdown));
-        if let Some(thread) = self.thread.lock().expect("thread lock").take() {
-            drop(thread.join());
-        }
-        drop(self.budget.take());
+        self.join_worker();
     }
 }
 
@@ -864,11 +867,13 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
         self.gate.release();
     }
 
+    /// Join the worker and remove its ledger row. The service stays alive.
     fn wait_stopped(&self) {
-        drop(self.tx.send(Command::Shutdown));
-        if let Some(thread) = self.thread.lock().expect("thread lock").take() {
-            drop(thread.join());
-        }
+        self.join_worker();
+    }
+
+    fn ledger_id(&self) -> shekyl_thread_ledger::LedgerId {
+        self.row.id().expect("the engine thread's ledger row")
     }
 
     fn registers_applied(&self) -> usize {

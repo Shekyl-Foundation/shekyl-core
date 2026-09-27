@@ -14,15 +14,39 @@ use super::*;
 use crate::{ManualClock, OwnerClass, Tick};
 
 #[test]
-fn the_engine_thread_is_on_the_budget_ledger() {
+fn the_engine_thread_is_a_dedicated_ledger_row() {
     let service = EngineService::start(ManualClock::new(Tick::new(0)));
-    let row = shekyl_runtime::ledger()
+    let id = service.ledger_id();
+    let row = shekyl_thread_ledger::ledger()
         .into_iter()
-        .find(|row| row.name == "shekyl-timing")
+        .find(|row| row.id == id)
         .expect("the engine thread is recorded while it is alive");
-    assert_eq!(row.workers, 1);
-    assert_eq!(row.blocking, 0);
+    assert_eq!(row.name, "shekyl-timing");
+    assert_eq!(row.kind, shekyl_thread_ledger::RowKind::DedicatedThread);
+    assert_eq!(
+        row.kind.threads(),
+        shekyl_thread_ledger::DEDICATED_THREAD_COUNT
+    );
     drop(service);
+    assert!(shekyl_thread_ledger::ledger()
+        .iter()
+        .all(|row| row.id != id));
+}
+
+#[test]
+fn stopping_the_engine_thread_removes_its_ledger_row() {
+    let service = EngineService::start(ManualClock::new(Tick::new(0)));
+    let id = service.ledger_id();
+    service.wait_stopped();
+    assert!(shekyl_thread_ledger::ledger()
+        .iter()
+        .all(|row| row.id != id));
+}
+
+#[test]
+fn the_service_is_shareable_across_threads() {
+    fn assert_sync<T: Sync>() {}
+    assert_sync::<EngineService<ManualClock>>();
 }
 
 #[test]

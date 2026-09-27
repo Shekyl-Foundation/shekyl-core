@@ -356,18 +356,6 @@ bool Daemon::run(bool interactive)
     }
     mp_internals->p2p.apply_inbound_ceiling(rpc_reserved);
 
-    // D5: every runtime that has registered by the end of startup, and the
-    // total of their workers and blocking caps. Pools built later are not
-    // in this line; it is the one startup reading of the ledger.
-    {
-      ShekylBuffer budget = shekyl_thread_budget_report();
-      if (budget.ptr != nullptr && budget.len > 0)
-      {
-        MGINFO(std::string(reinterpret_cast<char const *>(budget.ptr), budget.len));
-        shekyl_buffer_free(budget.ptr, budget.len);
-      }
-    }
-
     MGINFO("Starting p2p net loop...");
     mp_internals->p2p.run(); // blocks until p2p goes down
     MGINFO("p2p net loop stopped");

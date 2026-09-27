@@ -4071,7 +4071,6 @@ dependencies = [
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
- "shekyl-runtime",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
@@ -4656,6 +4655,7 @@ dependencies = [
 name = "shekyl-runtime"
 version = "3.1.0"
 dependencies = [
+ "shekyl-thread-ledger",
  "tokio",
 ]
 
@@ -4768,12 +4768,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-thread-ledger"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-timing-engine"
 version = "3.1.0"
 dependencies = [
  "criterion",
  "proptest",
- "shekyl-runtime",
+ "shekyl-thread-ledger",
 ]
 
 [[package]]

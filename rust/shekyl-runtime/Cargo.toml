@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-runtime"
-description = "The one constructor for a daemon runtime. The worker count is an input."
+description = "The one constructor for a daemon Tokio runtime. Worker count and blocking cap are inputs. The pool is a row on shekyl-thread-ledger."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# The row. This crate builds the runtime; the ledger does not.
+shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time"] }
 
 [lints]
