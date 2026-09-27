@@ -6,12 +6,13 @@
 //! The Tor connector.
 //!
 //! The Tor stream is the transport contract. There is no Noise layer and
-//! no handshake on the blocking pool. Outbound dials an onion through the
+//! no handshake on the blocking pool. The byte cap and the socket copy
+//! are [`shekyl_capped_stream`]. Outbound dials an onion through the
 //! operator's SOCKS5 proxy ([`shekyl_socks`]). The dial clock is one
 //! engine owner covering that exchange, the circuit build, and
-//! rendezvous. Inbound is [`Sockets::accept_tor`]: the zone, no address,
-//! then the gap timer. Onion-service proof-of-work and `MaxStreams` are
-//! the accept bound. This crate does not add another.
+//! rendezvous. Inbound is [`Sockets::accept_tor`], then the same copy
+//! with the gap as one arm of the wait. Onion-service proof-of-work and
+//! `MaxStreams` are the accept bound. This crate does not add another.
 //!
 //! `--tx-proxy` and `--anonymous-inbound` stay parsed in C++. They arrive
 //! here as [`Config`]. A bind failure returns before a listener exists,
@@ -21,24 +22,24 @@
 #![deny(unsafe_code)]
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use shekyl_capped_stream::accept_error_is_transient;
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::Pool;
 use shekyl_timing_engine::{Clock, Handle, Tick};
 use shekyl_transport_layer::{CloseCause, CloseKind, Sockets};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot, Notify};
+use tokio::sync::{mpsc, oneshot};
 
 mod drive;
 mod publish;
 
 pub use publish::{publish_forward, publish_with_control, InboundPosture, PublishFault};
 
-use drive::{accept_one, dial_one, Accept, ByteQueue, Dial, PushError};
+use drive::{accept_one, dial_one, Accept, Dial};
 
 /// Caller inputs. The dial span, the gap span, and the send-queue byte
 /// cap are unmeasured until a measurement names them.
@@ -46,8 +47,7 @@ pub struct Config {
     /// The operator's SOCKS5 proxy. Outbound dials go here.
     pub proxy: SocketAddr,
     /// Binds from `--anonymous-inbound`. These are the operator's onions.
-    /// They are not published here, and they are not subject to the
-    /// loopback check on [`publish_forward`].
+    /// They are not a [`ForwardAddr`], so [`publish_forward`] cannot name them.
     pub anonymous_inbound: Vec<OperatorInbound>,
     pub ceiling: InboundCeiling,
     /// Covers the SOCKS exchange, circuit build, and rendezvous.
@@ -61,7 +61,7 @@ pub struct Config {
 }
 
 /// An onion the operator already published. The daemon binds `bind` and
-/// does not publish it, and does not apply the loopback rule.
+/// does not publish it. There is no conversion to [`ForwardAddr`].
 #[derive(Clone, Copy, Debug)]
 pub struct OperatorInbound {
     bind: SocketAddr,
@@ -77,23 +77,59 @@ impl OperatorInbound {
     }
 }
 
-pub struct Session {
-    inbound: mpsc::Receiver<Vec<u8>>,
-    queue: ByteQueue,
-    overfull: Arc<Notify>,
-    overfull_flag: Arc<AtomicBool>,
-    established: Option<oneshot::Sender<()>>,
+/// The loopback port a managed onion forwards to.
+///
+/// [`listen`] mints this from the forward listener. [`publish_forward`]
+/// is the only publisher, and it takes this type. [`OperatorInbound`]
+/// does not convert into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForwardAddr {
+    socket: SocketAddr,
 }
 
-impl Drop for Session {
-    fn drop(&mut self) {
-        self.queue.close();
+impl ForwardAddr {
+    pub(crate) fn from_bound(socket: SocketAddr) -> std::io::Result<Self> {
+        if socket.ip().is_loopback() {
+            Ok(Self { socket })
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "tor forward listener is not loopback",
+            ))
+        }
+    }
+
+    /// The socket `ADD_ONION` targets.
+    #[must_use]
+    pub fn socket(self) -> SocketAddr {
+        self.socket
     }
 }
 
+/// One Tor stream's session bytes, plus the gap signal.
+///
+/// `established` is dropped first. A drop before
+/// [`Self::session_established`] ends the connection with
+/// [`CloseKind::LocalClose`] instead of waiting out the gap.
+pub struct Session {
+    established: Option<oneshot::Sender<()>>,
+    bytes: shekyl_capped_stream::Session,
+}
+
 impl Session {
+    pub(crate) fn open(
+        bytes: shekyl_capped_stream::Session,
+        established: oneshot::Sender<()>,
+    ) -> Self {
+        Self {
+            established: Some(established),
+            bytes,
+        }
+    }
+
+    /// The next bytes off the stream. `None` means the reader stopped.
     pub async fn recv(&mut self) -> Option<Vec<u8>> {
-        self.inbound.recv().await
+        self.bytes.recv().await
     }
 
     /// Queue bytes up to the caller's cap. A buffer that does not fit is
@@ -101,18 +137,10 @@ impl Session {
     /// [`CloseKind::SendQueueFull`]. The cap is unmeasured until PWD-T6's
     /// session-established limit plus measurement names it.
     pub fn try_send(&self, bytes: Vec<u8>) -> Result<(), CloseKind> {
-        match self.queue.try_push(bytes) {
-            Ok(()) => Ok(()),
-            Err(PushError::Full) => {
-                self.overfull_flag.store(true, Ordering::Release);
-                self.overfull.notify_waiters();
-                Err(CloseKind::SendQueueFull)
-            }
-            Err(PushError::Closed) => Err(CloseKind::IoError),
-        }
+        self.bytes.try_send(bytes)
     }
 
-    /// The Levin handshake is done. The gap timer stops.
+    /// The Levin handshake is done. The gap arm is disarmed.
     pub fn session_established(&mut self) {
         if let Some(sender) = self.established.take() {
             match sender.send(()) {
@@ -131,7 +159,7 @@ pub struct Listener<C: Clock + Clone> {
     pool: Option<Pool>,
     handle: tokio::runtime::Handle,
     shutdown_timeout: Duration,
-    forward: SocketAddr,
+    forward: ForwardAddr,
     extra: Vec<SocketAddr>,
     pub sessions: mpsc::UnboundedReceiver<Session>,
     engine: Handle<C>,
@@ -145,8 +173,9 @@ pub struct Listener<C: Clock + Clone> {
 }
 
 impl<C: Clock + Clone> Listener<C> {
-    /// The loopback forward target. Publish names this port.
-    pub fn forward_addr(&self) -> SocketAddr {
+    /// The loopback forward target. Publish takes this value.
+    #[must_use]
+    pub fn forward_addr(&self) -> ForwardAddr {
         self.forward
     }
 
@@ -198,40 +227,11 @@ impl<C: Clock + Clone> Drop for Listener<C> {
     }
 }
 
-/// A transient `accept` failure. The same class as the clearnet listener.
-pub(crate) fn accept_error_is_transient(err: &std::io::Error) -> bool {
-    matches!(
-        err.kind(),
-        std::io::ErrorKind::ConnectionAborted
-            | std::io::ErrorKind::ConnectionReset
-            | std::io::ErrorKind::Interrupted
-            | std::io::ErrorKind::WouldBlock
-    ) || too_many_open_files(err.raw_os_error())
-}
-
-fn too_many_open_files(code: Option<i32>) -> bool {
-    let Some(code) = code else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        code == 24 || code == 23
-    }
-    #[cfg(windows)]
-    {
-        code == 4
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = code;
-        false
-    }
-}
-
 /// Bind the loopback forward target and any anonymous-inbound addresses.
 ///
-/// `sockets` is the process-wide admission table. The ceiling counts
-/// every connector that shares it. This function does not mint a table.
+/// `sockets` is the process-wide admission table. Clones share it, and
+/// the ceiling counts every connector on that table. This function keeps
+/// a clone and does not mint a table.
 ///
 /// One failed bind drops the listeners that succeeded and returns the
 /// error. The caller does not insert the zone. An accepted socket is
@@ -240,15 +240,15 @@ fn too_many_open_files(code: Option<i32>) -> bool {
 pub fn listen<C>(
     pool: Pool,
     engine: &Handle<C>,
-    sockets: Sockets,
+    sockets: &Sockets,
     config: &Config,
 ) -> std::io::Result<Listener<C>>
 where
     C: Clock + Clone + Send + Sync + 'static,
 {
     let handle = pool.handle().clone();
-    let (forward, extras) = pool.block_on(bind_all(&config.anonymous_inbound))?;
-    let forward_addr = forward.local_addr()?;
+    let (forward_listener, extras) = pool.block_on(bind_all(&config.anonymous_inbound))?;
+    let forward = ForwardAddr::from_bound(forward_listener.local_addr()?)?;
     let mut extra_addrs = Vec::with_capacity(extras.len());
     for listener in &extras {
         extra_addrs.push(listener.local_addr()?);
@@ -268,43 +268,44 @@ where
     let on_cause = Arc::clone(&config.on_cause);
     let engine = engine.clone();
     let mut listeners = extras;
-    listeners.push(forward);
-    pool.spawn(async move {
-        for listener in listeners {
-            let sockets = sockets.clone();
-            let sessions = sessions_tx.clone();
-            let on_cause = Arc::clone(&on_cause);
-            let engine = engine.clone();
-            tokio::spawn(async move {
-                loop {
-                    match listener.accept().await {
-                        Ok((stream, _)) => {
-                            let accept = Accept {
-                                stream,
-                                sockets: sockets.clone(),
-                                ceiling,
-                                gap_within,
-                                sessions: sessions.clone(),
-                                on_cause: Arc::clone(&on_cause),
-                                send_queue_bytes,
-                            };
-                            tokio::spawn(accept_one(accept, engine.clone()));
-                        }
-                        Err(error) if accept_error_is_transient(&error) => {
-                            on_cause(CloseCause::new(CloseKind::IoError));
-                            tokio::time::sleep(backoff).await;
-                        }
-                        Err(_) => break,
+    listeners.push(forward_listener);
+    for listener in listeners {
+        let sockets = sockets.clone();
+        let sessions = sessions_tx.clone();
+        let on_cause = Arc::clone(&on_cause);
+        let engine = engine.clone();
+        handle.spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, _)) => {
+                        let accept = Accept {
+                            stream,
+                            sockets: sockets.clone(),
+                            ceiling,
+                            gap_within,
+                            sessions: sessions.clone(),
+                            on_cause: Arc::clone(&on_cause),
+                            send_queue_bytes,
+                        };
+                        tokio::spawn(accept_one(accept, engine.clone()));
+                    }
+                    Err(error) if accept_error_is_transient(&error) => {
+                        on_cause(CloseCause::new(CloseKind::IoError));
+                        tokio::time::sleep(backoff).await;
+                    }
+                    Err(_) => {
+                        on_cause(CloseCause::new(CloseKind::IoError));
+                        break;
                     }
                 }
-            });
-        }
-    });
+            }
+        });
+    }
     Ok(Listener {
         pool: Some(pool),
         handle,
         shutdown_timeout,
-        forward: forward_addr,
+        forward,
         extra: extra_addrs,
         sessions: sessions_rx,
         engine: engine_keep,
@@ -340,7 +341,7 @@ mod tests {
     use shekyl_peer_policy::InboundCeiling;
     use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
     use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
-    use shekyl_transport_layer::{CloseCause, CloseKind, Sockets};
+    use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, Direction, Sockets};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
@@ -411,7 +412,7 @@ mod tests {
         let listener = listen(
             pool,
             &engine.handle(),
-            Sockets::new(),
+            &Sockets::new(),
             &config(
                 proxy,
                 Vec::new(),
@@ -475,7 +476,7 @@ mod tests {
         let result = listen(
             pool,
             &engine.handle(),
-            Sockets::new(),
+            &Sockets::new(),
             &config(
                 SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
                 vec![taken],
@@ -539,7 +540,7 @@ mod tests {
         let mut listener = listen(
             pool,
             &engine.handle(),
-            Sockets::new(),
+            &Sockets::new(),
             &config(
                 SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port)),
                 Vec::new(),
@@ -591,7 +592,7 @@ mod tests {
         let listener = listen(
             pool,
             &engine.handle(),
-            Sockets::new(),
+            &Sockets::new(),
             &config(
                 SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port)),
                 Vec::new(),
@@ -616,7 +617,7 @@ mod tests {
             InboundCeiling::Bounded(4),
             Tick::new(400_000_000),
         );
-        let mut client = StdStream::connect(listener.forward_addr()).expect("connect");
+        let mut client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
         client.set_read_timeout(Some(Duration::from_secs(2))).ok();
         client.write_all(b"levin").expect("write");
         let handle = listener.runtime_handle().clone();
@@ -629,6 +630,119 @@ mod tests {
         assert_eq!(&buf, b"out");
         let cause = wait_kind(&seen, CloseKind::LevinHandshakeTimeout);
         assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
+    fn session_established_disarms_the_gap() {
+        let (engine, mut listener, seen) = start(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            InboundCeiling::Bounded(4),
+            Tick::new(1_000_000_000),
+        );
+        let mut client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("timeout");
+        client
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .expect("timeout");
+        let handle = listener.runtime_handle().clone();
+        let mut session = handle.block_on(next_session(&mut listener.sessions));
+        session.session_established();
+        std::thread::sleep(Duration::from_millis(1_500));
+        assert!(
+            seen.lock()
+                .expect("causes")
+                .iter()
+                .all(|cause| cause.kind() != CloseKind::LevinHandshakeTimeout),
+            "the gap fired after the session was established"
+        );
+        client.write_all(b"still").expect("write");
+        let got = handle.block_on(session.recv()).expect("bytes");
+        assert_eq!(got, b"still");
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
+    fn a_name_that_is_not_onion_v3_is_not_dialed() {
+        let (engine, listener, seen) = start(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            InboundCeiling::Bounded(4),
+            Tick::new(5_000_000_000),
+        );
+        listener.dial(NetworkAddress::Tor {
+            host: "not-a-v3-name.onion".into(),
+            port: 18081,
+        });
+        let cause = wait_kind(&seen, CloseKind::DialFailed);
+        assert_eq!(cause.reply_code(), 0);
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
+    fn dropping_an_unestablished_session_releases_the_slot() {
+        let engine = EngineService::start(MonotonicClock::new());
+        let pool = runtime(budget(), &name()).expect("runtime");
+        let recorded = causes();
+        let sockets = Sockets::new();
+        let mut listener = listen(
+            pool,
+            &engine.handle(),
+            &sockets,
+            &config(
+                SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+                Vec::new(),
+                InboundCeiling::Bounded(4),
+                Tick::new(5_000_000_000),
+                Tick::new(30_000_000_000),
+                recorded.sink,
+            ),
+        )
+        .expect("listen");
+        assert!(listener.forward_addr().socket().ip().is_loopback());
+        let client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
+        let handle = listener.runtime_handle().clone();
+        let session = handle.block_on(next_session(&mut listener.sessions));
+        drop(session);
+        let cause = wait_kind(&recorded.seen, CloseKind::LocalClose);
+        assert_eq!(cause.kind(), CloseKind::LocalClose);
+        assert_eq!(
+            sockets.socket_count(ConnectorId::Tor, Direction::Inbound),
+            0
+        );
+        drop(client);
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
+    fn a_send_that_does_not_fit_closes_the_connection() {
+        let engine = EngineService::start(MonotonicClock::new());
+        let pool = runtime(budget(), &name()).expect("runtime");
+        let recorded = causes();
+        let mut capped = config(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            Vec::new(),
+            InboundCeiling::Bounded(4),
+            Tick::new(5_000_000_000),
+            Tick::new(30_000_000_000),
+            recorded.sink,
+        );
+        capped.send_queue_bytes = 0;
+        let mut listener =
+            listen(pool, &engine.handle(), &Sockets::new(), &capped).expect("listen");
+        let client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
+        let handle = listener.runtime_handle().clone();
+        let session = handle.block_on(next_session(&mut listener.sessions));
+        let rejected = session.try_send(b"x".to_vec()).expect_err("over cap");
+        assert_eq!(rejected, CloseKind::SendQueueFull);
+        let cause = wait_kind(&recorded.seen, CloseKind::SendQueueFull);
+        assert_eq!(cause.kind(), CloseKind::SendQueueFull);
+        drop(client);
         listener.shutdown();
         drop(engine);
     }

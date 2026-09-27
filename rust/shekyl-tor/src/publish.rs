@@ -13,13 +13,16 @@
 //!
 //! The address this returns is what the session layer stores as
 //! `m_our_address`. The C++ options stay where they are parsed.
+//! [`crate::ForwardAddr`] is the only address this function accepts.
+//! [`crate::OperatorInbound`] does not convert into it.
 
 use std::future::Future;
-use std::net::SocketAddr;
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_tor_control_client::control::onion::ServiceId;
 use shekyl_tor_control_daemon::{DaemonTorControl, DaemonTorPublishError, OnionPow};
+
+use crate::ForwardAddr;
 
 /// What inbound is after the forward listener is bound.
 #[derive(Debug)]
@@ -38,28 +41,13 @@ pub enum PublishFault {
     Failed,
 }
 
-/// The only address this daemon publishes. `operator` binds are excluded.
-/// A non-loopback managed forward is not published either.
-pub fn publish_targets(
-    managed: SocketAddr,
-    operator: &[crate::OperatorInbound],
-) -> Vec<SocketAddr> {
-    let _operator = operator;
-    if managed.ip().is_loopback() {
-        vec![managed]
-    } else {
-        Vec::new()
-    }
-}
-
 /// Publish `forward` once, with [`OnionPow::Enabled`].
 ///
-/// This is the onion the daemon manages. Its forward target is the
-/// loopback listener. An [`crate::OperatorInbound`] is not passed here.
-/// `publish` is called once. A non-loopback forward is refused before
-/// that call. `virtual_port` is the port peers dial. It is the caller's.
+/// `forward` is the listener's loopback target. An
+/// [`crate::OperatorInbound`] cannot be passed here. `publish` is called
+/// once. `virtual_port` is the port peers dial. It is the caller's.
 pub async fn publish_forward<F, Fut>(
-    forward: SocketAddr,
+    forward: ForwardAddr,
     virtual_port: u16,
     publish: F,
 ) -> InboundPosture
@@ -67,11 +55,7 @@ where
     F: FnOnce(OnionPow) -> Fut,
     Fut: Future<Output = Result<ServiceId, DaemonTorPublishError>>,
 {
-    if publish_targets(forward, &[]).is_empty() {
-        return InboundPosture::OutboundOnly {
-            fault: PublishFault::Failed,
-        };
-    }
+    debug_assert!(forward.socket().ip().is_loopback());
     match publish(OnionPow::Enabled).await {
         Ok(id) => InboundPosture::Published {
             address: NetworkAddress::Tor {
@@ -91,12 +75,13 @@ where
 /// The production call. One `ADD_ONION`, proof-of-work on.
 pub async fn publish_with_control(
     control: &DaemonTorControl,
-    forward: SocketAddr,
+    forward: ForwardAddr,
     virtual_port: u16,
     max_streams: u16,
 ) -> InboundPosture {
+    let socket = forward.socket();
     publish_forward(forward, virtual_port, |pow| {
-        control.publish(virtual_port, forward, max_streams, pow)
+        control.publish(virtual_port, socket, max_streams, pow)
     })
     .await
 }
@@ -108,10 +93,12 @@ mod tests {
     use shekyl_tor_control_client::control::onion::ServiceId;
     use shekyl_tor_control_daemon::{DaemonTorPublishError, OnionPow};
     use std::net::{Ipv4Addr, SocketAddr};
+
+    use crate::ForwardAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn loopback() -> SocketAddr {
-        SocketAddr::from((Ipv4Addr::LOCALHOST, 18080))
+    fn loopback() -> ForwardAddr {
+        ForwardAddr::from_bound(SocketAddr::from((Ipv4Addr::LOCALHOST, 18080))).expect("loopback")
     }
 
     fn id() -> ServiceId {
@@ -153,30 +140,10 @@ mod tests {
     }
 
     #[test]
-    fn an_operator_inbound_is_not_a_publish_target() {
-        let operator =
-            crate::OperatorInbound::new(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 18080)));
-        assert!(!operator.bind().ip().is_loopback());
-        let managed = loopback();
-        let targets = super::publish_targets(managed, &[operator]);
-        assert_eq!(targets, vec![managed]);
-    }
-
-    #[tokio::test]
-    async fn a_routable_forward_is_not_published() {
-        let calls = AtomicUsize::new(0);
-        let routable = SocketAddr::from((Ipv4Addr::new(1, 2, 3, 4), 18080));
-        let posture = publish_forward(routable, 18080, |_pow| {
-            calls.fetch_add(1, Ordering::Relaxed);
-            async { Ok(id()) }
-        })
-        .await;
-        assert_eq!(calls.load(Ordering::Relaxed), 0);
-        match posture {
-            InboundPosture::OutboundOnly {
-                fault: PublishFault::Failed,
-            } => {}
-            other => panic!("expected a refusal before publish, got {other:?}"),
-        }
+    fn a_routable_socket_is_not_a_forward_address() {
+        let routable = SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 18080));
+        assert!(ForwardAddr::from_bound(routable).is_err());
+        let operator = crate::OperatorInbound::new(routable);
+        assert!(ForwardAddr::from_bound(operator.bind()).is_err());
     }
 }

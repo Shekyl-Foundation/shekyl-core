@@ -14,6 +14,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-runtime = { path = "../shekyl-runtime" }

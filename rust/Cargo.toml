@@ -250,6 +250,9 @@ members = [
     # SOCKS5 CONNECT, no authentication. Clearnet's --proxy and the Tor
     # connector share it. It does not know which connector is calling.
     "shekyl-socks",
+    # The session byte cap and the socket copy under a connector.
+    # Framing stays in the connector. Clearnet and Tor both call it.
+    "shekyl-capped-stream",
     # Clearnet connector. Keeps the transport runtime. Plaintext while the
     # option is off, Noise while it is on, both from the stack plan.
     # See docs/design/P2P_TRANSPORT_LAYER.md.
