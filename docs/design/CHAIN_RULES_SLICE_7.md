@@ -2,9 +2,11 @@
 
 **Status:** OPEN — **Round 0 pre-flight, written 2026-09-26 against `dev` @
 `ad557ac5a` (post-#874, slice 6 closed out; post-#873, DRS-E3's curve-writer
-pre-flight).** Q7 RULED 2026-09-26; Q8's two G2 loci ruled with it; Q1–Q6
-and Q8's remaining loci unruled. Implementation begins when §8 is ruled.
-Registered before implementation (rule 94 §5); process per
+pre-flight).** **Round 0 RULED 2026-09-26 — Q1, Q3–Q8 ruled, Q9 re-ruled
+at parity, Q2 deferred to the floor bench at commit 2 with its fallback
+pre-empted (§8, each line-local). Implementation begins on §5 in order;
+this file amended on review, the index row and §5.1's expectation are
+commit 1.** Registered before implementation (rule 94 §5); process per
 `26-sub-pr-design-discipline.mdc` (cited here as the pre-flight's shape:
 substrate re-read at the pin, artifact execution before a budget becomes a
 gate).
@@ -221,6 +223,18 @@ line reports. The *substitution* case — a valid body not in the declared
 list connects, N hashes committed and N bodies recorded with one covered
 by no block id — is real and comes second: it at least leaves a detectable
 orphan.
+
+**The merkle is checked by the identity, not by a rule — written down so
+nobody adds the missing check.** Monero's connect compares a computed
+`tree_hash` against the block; the census's G-rows were read against that
+habit twice on review (Q8's "root arm", Q9's first ruling). In this design
+the tree hash over the declared list is an *input to the identity*: B6
+records the identity computed over it, D2 judges the PoW over it, and a
+different list is a different block — there is no mismatch left for a rule
+to detect, and a rule added to detect one would compare a value to itself.
+The only hash-against-hash comparison 4.G owns is G2's, bodies against the
+declared list, per index. Same shape as Q9: the census names a check, and
+the implementation reaches the requirement by another route.
 
 **This makes G2 a precondition for E3's correctness, not only a 4.G row.**
 E3's drain order is the tree's leaf order and the leaf order is consensus;
@@ -504,16 +518,51 @@ when an operand is absent. Wave B extends the sequence in place.
 
 Ten commits is the rule-06 ceiling; commit 9 is the one that may leave.
 
-### 5.1 The expectation, to be written at commit 1
+### 5.1 The expectation, written at commit 1 (2026-09-26, before commit 2)
 
-Left empty on purpose: the cost column is written after commit 2's three
-measurements, not before them (B9). What is already known: slice 6 §5.1
-predicts *the fixture class should be smaller* here because every fixture
-already carries `weight` and `long_term_weight`. The counter-evidence to
-watch for is Q2 (a) — if `RecordedBlock` grows two fields, **ten**
-construction sites move (`rg 'RecordedBlock \{'` at the pin: store 4,
-rules 6), and the prediction is falsified by the read shape rather than by
-the rules.
+Two kinds of number, split on purpose. **Commit counts and coverage** are
+written now, before any measurement, so the overrun signal has a subject
+(slice 6 §5.1's rule). **The one budget** — what a connect may spend
+reading the weights window on the Pi 4 floor — is written by commit 2's
+bench, not before it (B9: a budget set from intuition is the failure the
+bench exists to catch). Its cell below says so.
+
+| commit | lands | cost | falsifier applies |
+| --- | --- | --- | --- |
+| 1 | this file on review; index; this table | 1 (**landed**: #877) | — |
+| 2 | four measurements, no rules (§5 row 2): the two-body driver block with the reorder and a substitution replayed; the pruned-form fixture located or added; the weights-read bench on the floor; the `Unmutable` census over the corpus | 2 — the driver has never listed two bodies, and the first attempt at anything the driver has never done has cost a commit each time (slice 6 §5.3.3) | yes |
+| 3 | `ChainView::{weights_window, has_transaction}` — trait, `BatchView`, `MockChain`, the store's conformance test, one commit both sides | 1 | yes |
+| 4 | G6 / G6b in `judge_emission`; the two windows generated; boundary and low-height fixtures | 2 | yes |
+| 5 | F14, F14b, F16, G12 through the paid reward; four `ConnectFacts` fields read off the verdict; four composed lines deleted | 2 | yes |
+| 6 | G2 as a `FormRule`; `ReorderedBodies` flips; `MissingBody`, `SubstitutedBody` | 1 | yes |
+| 7 | G1 before the loop, G7/G9/G10 after; the order pinned; seven mutations | 2 | yes |
+| 8 | G3/G4/G5 by construction; conformance re-check | 1 | yes |
+| 9 | wave B if E3's leaf count has landed; else the FOLLOWUPS row | 2, or 1 for the deferral | yes |
+| 10 | docs: census 4.G re-pin and the G6/G6b correction; the register's two rows re-reviewed; crate contract; index; FOLLOWUPS; CHANGELOG | 1 | yes |
+
+**Expectation: fifteen commits, fourteen if wave B defers.** Registry
+`implemented 75 → 86` after wave A (`→ 90` with B), `by-construction 11 →
+14`; E2's family `12 → 19` mutations, `WrongReward` and `ReorderedBodies`
+flipped from pinned to refusing. **The signal:** more than **eighteen**
+commits *excluding wave B* means the substrate was not as finished as this
+table claims — the answerable form, as slice 6 wrote it.
+
+**Slice 6's prediction, held here as the thing this slice can falsify:**
+*the fixture class should be smaller* (slice 6 §5.1 — seven fixture
+commits there, because the substrate had constructed state no rule asked
+about). Every fixture already carries `weight` and `long_term_weight`, so
+the prediction is **≤ 2 fixture commits**. The counter-evidence to watch
+for is Q2 (a) — if `RecordedBlock` grows two fields, **ten** construction
+sites move (`rg 'RecordedBlock \{'` at the pin: store 4, rules 6) and the
+prediction fails through the read shape rather than through the rules,
+which would be a different lesson from slice 6's and should be recorded
+as one.
+
+**The budget cell, empty until commit 2:** *a connect's weights read on
+the Pi 4 floor: ____ ms for the 100 000-row window, ____ for the 100-row;
+against a connect budget of ____ (from GAP-7's 7.23 s zone-point figure,
+the read must be a small fraction of the verify it precedes).* Q2's shape
+is chosen from these three numbers and nothing else.
 
 ## 6. What this slice does not build
 
