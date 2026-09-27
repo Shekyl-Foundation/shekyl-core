@@ -1,0 +1,20 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-runtime"
+description = "The one constructor for a daemon runtime. The worker count is an input."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time"] }
+
+[lints]
+workspace = true

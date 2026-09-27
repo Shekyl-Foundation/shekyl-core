@@ -133,7 +133,7 @@ implementation. They are not a reason to wait before the service.
 
 ---
 
-## Logic core — this increment (2026-09-26)
+## Logic core — LANDED (PR #875, 2026-09-26)
 
 Rule 26 is cited. This is not a new round and not a second pre-flight.
 The pass above is discharged. This note is the scope of the first
@@ -177,12 +177,26 @@ In this increment:
   the C++ build fails if the typedef no longer matches that layout.
   There is no second table to edit.
 
-Not in this increment: sockets, the D5 runtime constructor, a thread
-count, a deadline, an accept rate, the seam, the differential harness,
-and cutover. The constructor is the next increment. It takes the budget
-as an input. The clearnet connector waits on it. Moving the daemon-RPC
-and Tor-control runtimes onto that constructor is a follow-up of the
-constructor, not a precondition.
+Not in that increment: sockets, a thread count, a deadline, an accept
+rate, the seam, the differential harness, and cutover. The constructor
+is the next section. Moving the daemon-RPC and Tor-control runtimes
+onto it stays a follow-up of the constructor, not a precondition.
+
+## Runtime constructor — this increment (2026-09-26)
+
+The crate is `shekyl-runtime`. [`runtime`](../../rust/shekyl-runtime/src/lib.rs)
+takes a `NonZeroUsize` worker count and a thread name, and builds one
+multi-thread runtime with that many workers. Tokio's unset count, one
+worker per core, is the default D5 refuses, so the function has no
+count of its own. `net` and `time` are on, so the runtime can host
+sockets and deadlines. The blocking-pool cap stays Tokio's default
+until D6's measurement names one.
+
+Nothing here keeps a runtime. The clearnet connector is the first
+caller that does, and it waits on this function. The daemon-RPC builder
+at `shekyl-daemon-rpc` `ffi_exports.rs` and the Tor-control builder at
+`shekyl-tor-control-daemon` `blocking.rs` still construct their own.
+That move is the follow-up.
 
 ---
 
@@ -483,7 +497,10 @@ and does not set a worker count, so it takes one worker per core;
 `shekyl-tor-control-daemon` `blocking.rs:120` sets `.worker_threads(1)`).
 On a 4-core Pi-4 those two are five workers. A third runtime that also
 took the default would make nine, plus blocking pools. The transport
-layer does not add one that way.
+layer does not add one that way. The constructor is
+`shekyl-runtime::runtime`: the worker count and a thread name go in,
+and no count lives in the crate. The two call sites above are not on
+it yet.
 
 ---
 
