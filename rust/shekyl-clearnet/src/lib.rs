@@ -22,11 +22,11 @@
 //!
 //! The handshake deadline is one [`OwnerClass::Transport`] owner per
 //! connection. It is armed at accept, before the read and before the job
-//! is queued, so time spent waiting for a blocking thread counts. When the
-//! job is dequeued it checks that deadline. A job whose deadline has
-//! already fired does not run the handshake. [`HandshakeTally`] counts
-//! those skips against the handshakes that were computed. D10's flood test
-//! reads that pair.
+//! is queued, so time spent waiting for a blocking thread counts. The home
+//! awaits that owner's wake. When the job is dequeued it checks whether
+//! the wake has already been delivered, and skips the handshake if it has.
+//! [`HandshakeTally`] counts those skips against the handshakes that were
+//! computed. D10's flood test reads that pair.
 //!
 //! Before the flip, ruling 4's exception is still in force. The option off
 //! omits the Noise layer the declaration adds, and the socket bytes are the
@@ -136,6 +136,14 @@ pub struct Config {
     pub handshake_within: Tick,
     /// Passed to [`Pool::shutdown`](shekyl_runtime::Pool::shutdown).
     pub shutdown_timeout: Duration,
+    /// Bytes of session plaintext the writer will hold. PWD-T6's
+    /// session-established limit plus measurement. Unmeasured until that
+    /// derivation is a number. A send that does not fit closes with
+    /// [`CloseKind::SendQueueFull`].
+    pub send_queue_bytes: usize,
+    /// Pause after a transient `accept` error, so the loop does not spin.
+    /// Not a protocol deadline.
+    pub accept_backoff: Duration,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
 }
 
@@ -175,7 +183,8 @@ impl Overfull {
 
 pub struct Session {
     inbound: mpsc::Receiver<Vec<u8>>,
-    outbound: mpsc::Sender<Vec<u8>>,
+    outbound: mpsc::UnboundedSender<drive::Queued>,
+    queue: drive::SendQueue,
     overfull: Arc<Overfull>,
 }
 
@@ -184,18 +193,14 @@ impl Session {
         self.inbound.recv().await
     }
 
-    /// Queue one plaintext buffer. A full queue closes the connection.
-    /// The queue length is one buffer, not a second admission ceiling:
-    /// the connection is already reserved.
+    /// Queue plaintext up to the connection's byte cap. A buffer that does
+    /// not fit closes the connection. The cap is the caller's.
     pub fn try_send(&self, bytes: Vec<u8>) -> Result<(), CloseKind> {
-        match self.outbound.try_send(bytes) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                self.overfull.trip();
-                Err(CloseKind::SendQueueFull)
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(CloseKind::IoError),
-        }
+        let queued = self.queue.try_enqueue(bytes).map_err(|()| {
+            self.overfull.trip();
+            CloseKind::SendQueueFull
+        })?;
+        self.outbound.send(queued).map_err(|_| CloseKind::IoError)
     }
 }
 
@@ -241,6 +246,39 @@ impl Drop for Listener {
     }
 }
 
+/// A transient `accept` failure. `EMFILE`, `ENFILE`, and `ECONNABORTED`
+/// are what a flood produces. They are not the listener closing.
+pub(crate) fn accept_error_is_transient(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::WouldBlock
+    ) || too_many_open_files(err.raw_os_error())
+}
+
+fn too_many_open_files(code: Option<i32>) -> bool {
+    let Some(code) = code else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        // EMFILE and ENFILE. Linux and the BSDs use these numbers.
+        code == 24 || code == 23
+    }
+    #[cfg(windows)]
+    {
+        // ERROR_TOO_MANY_OPEN_FILES.
+        code == 4
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = code;
+        false
+    }
+}
+
 /// Bind on `pool` and accept. `pool` was built with [`shekyl_runtime::runtime`].
 pub fn listen<C>(pool: Pool, engine: &Handle<C>, config: Config) -> std::io::Result<Listener>
 where
@@ -259,8 +297,14 @@ where
     let tally_loop = Arc::clone(&tally);
     pool.spawn(async move {
         loop {
-            let Ok((stream, _)) = listener.accept().await else {
-                break;
+            let stream = match listener.accept().await {
+                Ok((stream, _)) => stream,
+                Err(error) if accept_error_is_transient(&error) => {
+                    (config.on_cause)(CloseCause::new(CloseKind::IoError));
+                    tokio::time::sleep(config.accept_backoff).await;
+                    continue;
+                }
+                Err(_) => break,
             };
             let accept = Accept {
                 stream,
@@ -272,6 +316,7 @@ where
                 tally: Arc::clone(&tally_loop),
                 sessions: sessions_tx.clone(),
                 on_cause: Arc::clone(&config.on_cause),
+                send_queue_bytes: config.send_queue_bytes,
             };
             let engine = engine.clone();
             tokio::spawn(accept_one(accept, engine));
@@ -355,6 +400,10 @@ mod tests {
             ceiling,
             handshake_within: within,
             shutdown_timeout: Duration::from_millis(50),
+            // Harness inputs. Not PWD-T6's derived limit, and not a
+            // measured accept pause.
+            send_queue_bytes: 64,
+            accept_backoff: Duration::from_millis(1),
             on_cause,
         }
     }
@@ -395,6 +444,27 @@ mod tests {
             .await
             .expect("session wait")
             .expect("session")
+    }
+
+    #[test]
+    fn a_flood_of_accept_errors_is_transient() {
+        let refused = std::io::Error::from_raw_os_error(24);
+        assert!(super::accept_error_is_transient(&refused));
+        let aborted = std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "aborted");
+        assert!(super::accept_error_is_transient(&aborted));
+        let closed = std::io::Error::new(std::io::ErrorKind::NotConnected, "closed");
+        assert!(!super::accept_error_is_transient(&closed));
+    }
+
+    #[test]
+    fn the_send_queue_counts_bytes_and_holds_more_than_one_buffer() {
+        let queue = super::drive::SendQueue::new(4);
+        let first = queue.try_enqueue(b"ab".to_vec()).expect("first");
+        let second = queue.try_enqueue(b"cd".to_vec()).expect("second");
+        assert!(queue.try_enqueue(b"e".to_vec()).is_err());
+        drop(first);
+        assert!(queue.try_enqueue(b"ef".to_vec()).is_ok());
+        drop(second);
     }
 
     #[test]

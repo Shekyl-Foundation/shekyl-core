@@ -8,22 +8,21 @@
 //! blocking queue counts.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use shekyl_p2p_transport::{
     prefix_for, Established, NetworkId, Responder, SendHalf, MESSAGE1_LEN, PREFIX_LEN,
 };
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_timing_engine::{Clock, Handle, OwnerClass, OwnerHandle, Tick};
+use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick, WakeWait};
 use shekyl_transport_layer::{CloseCause, CloseKind, CloseResult, OpenError, Sockets};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-use crate::inode::socket_descriptors;
 use crate::seam::{SeamRecv, SeamSend};
 use crate::{ChannelChoice, HandshakeTally, Session};
 
@@ -37,10 +36,12 @@ pub struct Accept {
     pub tally: Arc<HandshakeTally>,
     pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
+    pub send_queue_bytes: usize,
 }
 
 struct Outbound {
-    tx: mpsc::Sender<Vec<u8>>,
+    tx: mpsc::UnboundedSender<Queued>,
+    queue: SendQueue,
 }
 
 pub async fn accept_one<C>(accept: Accept, engine: Handle<C>)
@@ -57,6 +58,7 @@ where
         tally,
         sessions,
         on_cause,
+        send_queue_bytes,
     } = accept;
     let Ok(peer) = stream.peer_addr() else {
         finish_before_channel(&mut stream, &on_cause, CloseKind::TransportHandshakeFailed).await;
@@ -83,6 +85,7 @@ where
         handshake_within,
         tally,
         sessions,
+        send_queue_bytes,
         peer,
     )
     .await;
@@ -103,31 +106,27 @@ async fn finish_before_channel(
 
 #[allow(clippy::too_many_arguments)]
 async fn serve<C>(
-    mut stream: TcpStream,
+    stream: TcpStream,
     engine: Handle<C>,
     kind: ChannelChoice,
     network_id: NetworkId,
     handshake_within: Tick,
     tally: Arc<HandshakeTally>,
     sessions: mpsc::UnboundedSender<Session>,
+    send_queue_bytes: usize,
     _peer: SocketAddr,
 ) -> CloseCause
 where
     C: Clock + Clone + Send + 'static,
 {
-    let fd = std::os::unix::io::AsRawFd::as_raw_fd(&stream);
-    if socket_descriptors(fd).ok() != Some(1) {
-        drop(stream.shutdown().await);
-        return CloseCause::new(CloseKind::TransportHandshakeFailed);
-    }
     let (mut read, write) = stream.into_split();
-    if socket_descriptors(fd).ok() != Some(1) {
-        drop(write);
-        return CloseCause::new(CloseKind::TransportHandshakeFailed);
-    }
     let overfull = Arc::new(crate::Overfull::new());
-    let (out_tx, out_rx) = mpsc::channel(1);
-    let outbound = Outbound { tx: out_tx };
+    let queue = SendQueue::new(send_queue_bytes);
+    let (out_tx, out_rx) = mpsc::unbounded_channel();
+    let outbound = Outbound {
+        tx: out_tx,
+        queue: queue.clone(),
+    };
     let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
     let writer = tokio::spawn(write_half(write, setup_rx, out_rx, Arc::clone(&overfull)));
     let (inbound_tx, inbound_rx) = mpsc::channel(1);
@@ -163,6 +162,7 @@ where
     let session = Session {
         inbound: inbound_rx,
         outbound: outbound.tx.clone(),
+        queue: outbound.queue.clone(),
         overfull: Arc::clone(&overfull),
     };
     if sessions.send(session).is_err() {
@@ -184,7 +184,7 @@ enum Setup {
 async fn write_half(
     mut write: OwnedWriteHalf,
     setup: tokio::sync::oneshot::Receiver<Setup>,
-    mut outbound: mpsc::Receiver<Vec<u8>>,
+    mut outbound: mpsc::UnboundedReceiver<Queued>,
     overfull: Arc<crate::Overfull>,
 ) -> Option<CloseCause> {
     let setup = setup.await.ok()?;
@@ -209,11 +209,11 @@ async fn write_half(
                 return Some(CloseCause::new(CloseKind::SendQueueFull));
             }
             next = outbound.recv() => {
-                let Some(plain) = next else {
+                let Some(queued) = next else {
                     drop(write.shutdown().await);
                     return None;
                 };
-                let Ok(wire) = seam.encode(&plain) else {
+                let Ok(wire) = seam.encode(&queued.bytes) else {
                     drop(write.shutdown().await);
                     return Some(CloseCause::new(CloseKind::RecordRejected));
                 };
@@ -245,9 +245,8 @@ async fn read_half(
             return CloseCause::new(CloseKind::RecordRejected);
         };
         for piece in pieces {
-            if inbound.try_send(piece).is_err() {
-                overfull.trip();
-                return CloseCause::new(CloseKind::SendQueueFull);
+            if inbound.send(piece).await.is_err() {
+                return CloseCause::new(CloseKind::LocalClose);
             }
         }
     }
@@ -273,9 +272,9 @@ where
         .arm(deadline)
         .map_err(|_| CloseKind::TransportHandshakeFailed)?;
     let fired = Arc::new(AtomicBool::new(false));
-    let clock = owner.clock().clone();
+    let mut wake = std::pin::pin!(owner.wait_wake_async());
     let mut prefix = [0u8; PREFIX_LEN];
-    if let Err(kind) = read_or_due(read, &mut prefix, &clock, deadline, &fired).await {
+    if let Err(kind) = read_or_wake(read, &mut prefix, &mut wake, &fired).await {
         note_skip(tally, kind);
         ignore(owner.deregister());
         return Err(kind);
@@ -285,7 +284,7 @@ where
         return Err(CloseKind::PrefixMismatch);
     }
     let mut message1 = vec![0u8; MESSAGE1_LEN];
-    if let Err(kind) = read_or_due(read, &mut message1, &clock, deadline, &fired).await {
+    if let Err(kind) = read_or_wake(read, &mut message1, &mut wake, &fired).await {
         note_skip(tally, kind);
         ignore(owner.deregister());
         return Err(kind);
@@ -296,20 +295,26 @@ where
         return Err(CloseKind::TransportTimeout);
     }
     tally.queue();
-    let tally = Arc::clone(tally);
+    let tally_job = Arc::clone(tally);
     let network_id = *network_id;
     let fired_job = Arc::clone(&fired);
     let join = tokio::task::spawn_blocking(move || {
-        handshake_job(owner, &message1, network_id, &fired_job, &tally)
+        handshake_job(&message1, network_id, &fired_job, &tally_job)
     });
     tokio::pin!(join);
-    let mut watch = std::pin::pin!(until_due(clock, deadline, Arc::clone(&fired)));
     let job = loop {
         tokio::select! {
-            () = &mut watch => {}
+            biased;
+            result = wake.as_mut(), if !fired.load(Ordering::Acquire) => {
+                fired.store(true, Ordering::Release);
+                match result {
+                    Ok(_) | Err(_) => {}
+                }
+            }
             result = &mut join => break result,
         }
     };
+    ignore(owner.deregister());
     let (send, recv, flight) = match job {
         Ok(Ok(done)) => done,
         Ok(Err(SkipOrFail::Skipped)) => return Err(CloseKind::TransportTimeout),
@@ -341,19 +346,15 @@ enum SkipOrFail {
     Failed,
 }
 
-#[allow(clippy::needless_pass_by_value)] // the blocking job owns the owner and drops it here
 fn handshake_job(
-    owner: OwnerHandle<impl Clock>,
     message1: &[u8],
     network_id: NetworkId,
     fired: &AtomicBool,
     tally: &HandshakeTally,
 ) -> Result<(SendHalf, SeamRecv, Vec<u8>), SkipOrFail> {
-    let due = fired.load(Ordering::Acquire) || deadline_already_fired(&owner);
-    if due {
+    if fired.load(Ordering::Acquire) {
         tally.skip();
         tally.dequeue();
-        ignore(owner.deregister());
         return Err(SkipOrFail::Skipped);
     }
     let result = (|| {
@@ -364,7 +365,6 @@ fn handshake_job(
         Ok((established, message2))
     })();
     tally.dequeue();
-    ignore(owner.deregister());
     let (established, message2) = result?;
     tally.compute();
     let (send, recv) = established_halves(established);
@@ -387,24 +387,19 @@ fn established_halves(
     established.split()
 }
 
-fn deadline_already_fired(owner: &OwnerHandle<impl Clock>) -> bool {
-    match owner.poll_wake() {
-        Ok(Some(_)) | Err(_) => true,
-        Ok(None) => false,
-    }
-}
-
-async fn read_or_due<C: Clock + Clone>(
+async fn read_or_wake<C: Clock>(
     read: &mut OwnedReadHalf,
     buf: &mut [u8],
-    clock: &C,
-    deadline: Tick,
-    fired: &Arc<AtomicBool>,
+    wake: &mut Pin<&mut WakeWait<'_, C>>,
+    fired: &AtomicBool,
 ) -> Result<(), CloseKind> {
-    let clock = clock.clone();
     tokio::select! {
         biased;
-        () = until_due(clock, deadline, Arc::clone(fired)) => {
+        result = wake.as_mut() => {
+            fired.store(true, Ordering::Release);
+            match result {
+                Ok(_) | Err(_) => {}
+            }
             Err(CloseKind::TransportTimeout)
         }
         result = read.read_exact(buf) => {
@@ -415,18 +410,70 @@ async fn read_or_due<C: Clock + Clone>(
     }
 }
 
-async fn until_due<C: Clock>(clock: C, deadline: Tick, fired: Arc<AtomicBool>) {
-    loop {
-        if fired.load(Ordering::Acquire) {
-            return;
+#[derive(Clone)]
+pub(crate) struct SendQueue {
+    queued: Arc<AtomicUsize>,
+    limit: usize,
+}
+
+struct Permit {
+    queued: Arc<AtomicUsize>,
+    bytes: usize,
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        self.queued.fetch_sub(self.bytes, Ordering::Release);
+    }
+}
+
+pub(crate) struct Queued {
+    bytes: Vec<u8>,
+    _permit: Permit,
+}
+
+impl SendQueue {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            queued: Arc::new(AtomicUsize::new(0)),
+            limit,
         }
-        match clock.wait_for(deadline) {
-            Some(Duration::ZERO) => {
-                fired.store(true, Ordering::Release);
-                return;
+    }
+
+    /// Reserve `bytes.len()` against the byte cap. A buffer that does not
+    /// fit is not queued.
+    pub(crate) fn try_enqueue(&self, bytes: Vec<u8>) -> Result<Queued, ()> {
+        let n = bytes.len();
+        if n == 0 {
+            return Ok(Queued {
+                bytes,
+                _permit: Permit {
+                    queued: Arc::clone(&self.queued),
+                    bytes: 0,
+                },
+            });
+        }
+        loop {
+            let current = self.queued.load(Ordering::Acquire);
+            let Some(next) = current.checked_add(n) else {
+                return Err(());
+            };
+            if next > self.limit {
+                return Err(());
             }
-            Some(wait) => tokio::time::sleep(wait).await,
-            None => tokio::task::yield_now().await,
+            if self
+                .queued
+                .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Ok(Queued {
+                    bytes,
+                    _permit: Permit {
+                        queued: Arc::clone(&self.queued),
+                        bytes: n,
+                    },
+                });
+            }
         }
     }
 }

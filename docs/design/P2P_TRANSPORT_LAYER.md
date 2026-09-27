@@ -260,8 +260,20 @@ computed against skipped. D10's flood test reads that pair.
 
 **The deadline includes the time spent queued.** One
 `OwnerClass::Transport` owner per connection, armed at accept, not when
-computation starts. A deadline that started at dequeue would let a flood
-keep a connection alive for as long as the queue held it.
+computation starts. The home awaits that owner's wake
+(`wait_wake_async`). A Tokio timer on the transport runtime is not the
+deadline. A deadline that started at dequeue would let a flood keep a
+connection alive for as long as the queue held it.
+
+One descriptor per socket is a test assertion (D11). The accept path
+does not walk `/proc/self/fd`. A transient `accept` error
+(`EMFILE`, `ENFILE`, `ECONNABORTED`) is recorded and the listener keeps
+accepting. Shutdown is what ends that loop. The outbound queue is a
+byte cap, the caller's, labelled unmeasured until PWD-T6's
+session-established limit plus measurement names it. A send that does
+not fit closes with `SendQueueFull`. The inbound reader awaits space
+instead of closing: a slow consumer on this side stops reading, and TCP
+flow control pushes back on the peer.
 
 Before the flip, ruling 4's exception is still in force. The option off
 omits the Noise layer the declaration adds, and the socket bytes are the
