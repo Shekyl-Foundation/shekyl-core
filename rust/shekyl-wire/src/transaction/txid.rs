@@ -86,8 +86,9 @@ pub fn empty_region_prunable_hash() -> PrunableHash {
 /// retires them atomically) that yields `keccak256("")` and `None`, so a pruned
 /// node would read its own discarded spends as carrying **no** good and drop them
 /// from the domain — while an archival node keeps them. The two would then
-/// disagree on shard boundaries, which is a consensus split. `txid.rs:92-101`
-/// states the recomputation's behaviour for exactly these cases. The store reads
+/// disagree on shard boundaries, which is a consensus split.
+/// [`Transaction::prunable_hash`] states the recomputation's behaviour for
+/// exactly these cases. The store reads
 /// the permanent rows instead (`txs_prunable_hash`, `txs_pqc_auth_hash`), which a
 /// prune never deletes, and `shekyl-chain-store`'s `tx_carries_archival_good` is
 /// the production path.

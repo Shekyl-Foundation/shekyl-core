@@ -720,7 +720,7 @@ fn a_retention_below_the_in_force_cap_is_refused_at_open_and_at_connect() {
 /// body yields `keccak256("")` and no component, which would place a node's own
 /// discarded spends *outside* the domain and split shard boundaries against an
 /// archival peer. `shekyl-wire` therefore exposes the predicate only over
-/// explicit row values, and `ChainReadSnapshot::tx_carries_archival_good` is the
+/// explicit row values, and [`ReadSnapshot::tx_carries_archival_good`] is the
 /// only production path.
 ///
 /// Every id is recorded before the boundary that discards shard 0 and compared

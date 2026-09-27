@@ -13,9 +13,9 @@ on the measured numbers `U1a` is **unresolved at `T = 200`** rather than three
 orders of magnitude slack. The selection rule is re-pointed at the **lower**
 edge with the asymmetry argument it was missing, `SHT-Q1`'s price for the
 ordinal domain is **withdrawn** (dev already does the lookup it was charged
-for), and `SHT-7` is added. `SHT-Q1` (the partition domain) is
-**posed, not ruled** — it is steering's, and it comes before the bounds because
-it decides which constraints exist. Findings `SHT-1`…`SHT-6` are at-pin
+for), and `SHT-7` is added. `SHT-Q1` (the partition domain) was posed by this round
+and **RULED on 2026-09-27** (§2) — it came before the bounds because it decides
+which constraints exist, and it now has. Findings `SHT-1`…`SHT-9` are at-pin
 findings of this round. Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
@@ -154,9 +154,10 @@ and does not say so.** It is not merely stale; it presumes the answer to
 > to what counts as archival good activates by height and applies only past it.
 >
 > **The predicate reads the two digests as recorded at ingest, never recomputed
-> from a possibly-pruned body.** `txid.rs:92-101`: when the prunable region is
-> absent — *"a coinbase, or a storage-pruned spend"* — a recomputation yields
-> `keccak256("")`, and under `PDM-Q6` the region and `pqc_auths` retire together,
+> from a possibly-pruned body.** `Transaction::prunable_hash`'s own contract says
+> why: when the prunable region is absent — *"a coinbase, or a storage-pruned
+> spend"* — it returns `keccak256("")` while the txid substitutes the null hash,
+> and under `PDM-Q6` the region and `pqc_auths` retire together,
 > so a recomputation over a discarded body yields no component either. A node
 > evaluating the predicate that way would place its **own discarded spends outside
 > the domain** while an archival node keeps them inside: the two would disagree on
@@ -190,11 +191,12 @@ it on a pruned node. No second classification is minted: it reads the
 implementation's was deleted. `Transaction::txid_parts()` *recomputes* both
 digests from the object in hand, so on a body whose regions have been discarded it
 yields `keccak256("")` and `None` — the recompute-from-a-pruned-body hazard the
-ruling's text now names. A method one call away from admission code is that hazard
+ruling's text now names (`Transaction::prunable_hash`'s contract states it for
+exactly these cases). A method one call away from admission code is that hazard
 in the most convenient possible form.
 
 **The production path** is
-`shekyl-chain-store`'s `ChainReadSnapshot::tx_carries_archival_good`
+`shekyl-chain-store`'s `ReadSnapshot::tx_carries_archival_good`
 (`store/tx_reads.rs`, `carries_archival_good_at`), which reads
 `txs_prunable_hash` (written at `store/connect.rs:575`, mandatory — its absence
 below the count is SI-7) and `txs_pqc_auth_hash` (`:584-586`, present ⇔ the txid
@@ -202,8 +204,8 @@ is 4-part) and hands them to the predicate. A prune deletes the regions and neve
 these rows.
 
 **One correction the ruling's wording needs.** The ruling says "a non-null
-prunable hash". **The stored prunable hash is never null.** `txid.rs:92-101` is
-explicit: when the region is absent the *txid component* substitutes the null
+prunable hash". **The stored prunable hash is never null.**
+`Transaction::prunable_hash`'s own contract is explicit: when the region is absent the *txid component* substitutes the null
 hash, while the **row** is `keccak256("")` — "the C++ store's row for a coinbase
 is the latter". A predicate written against non-null would therefore read **every
 coinbase as carrying good** and the equivalence would be false at landing. The
@@ -423,8 +425,10 @@ chosen `T` within the mining era.
 `k = λ·D/E` per block ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md):79)
 and each drawable pair receives 3 derived challenges per epoch (`:243`), with
 the settlement writer enumerating drawable pairs. Work scales as
-pairs ∝ shards × holders ∝ `X/T`. Same direction as `L2` and strictly weaker
-than it at any `T` where `L2` is satisfied. *Domain:* both. *Grade:* **soft**.
+pairs ∝ shards × holders ∝ `X/T`. Same direction as `L2`'s per-shard state count
+— and since `L2` was **withdrawn as a bound** on 2026-09-27 (its cap bounds a
+list, not an operator), this row and that count are what remain of the
+bookkeeping floor. *Domain:* both. *Grade:* **soft**.
 *Falsifier:* a settlement-writer cost measurement at the chosen `T` exceeding
 the per-block budget on the rule-76 floor device.
 
@@ -628,8 +632,9 @@ So the rule has **one open input, not two**: `L1`'s threshold. A smaller gap tha
 the round first reported, and still a gap — a lower-edge rule whose lower edge is
 an underived threshold. That is the correct
 state of the work and not a defect in the rule — but the deliverable here is the
-*rule plus its three owed inputs* (`L1`'s threshold, `L2`'s ruling, and `U1a`'s
-two undischarged quantities), not a value for `T`.
+*rule plus its owed inputs* — `L1`'s threshold and `U1a`'s two undischarged
+quantities — not a value for `T`. (*`L2`'s ruling was the third until
+2026-09-27, when it was ruled and withdrawn as a bound; §3.*)
 
 **Pre-registered falsifiers on any `T` this round selects.**
 
@@ -677,7 +682,8 @@ track the measurement upward".
    ceiling sits near the low end of [140, 490], and `T = 200` is at or over the
    edge — `U1a` fires and `T` must come down. If `t_fixed` is a *large* share,
    the ceiling is well above 200 and `U1a` stops being the binding constraint,
-   which hands selection back to `L1`/`L2`. The threshold between those readings
+   which hands selection back to `L1`/`L3` (`L2` having been withdrawn as a bound,
+§3). The threshold between those readings
    is where the heavy-end ceiling crosses the selected `T` at the target miss
    rate — computable from (1)–(3) the moment the fit exists, and not before.
 5. **What it also re-grounds.** `L`'s fetch span, stated **per byte** instead of
