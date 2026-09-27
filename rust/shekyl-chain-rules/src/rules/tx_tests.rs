@@ -944,6 +944,19 @@ fn h20_every_departure_from_the_serve_credit_shape_is_refused() {
     assert!(tx_form(&pass_records, TxSlot::Lone, &RuleSet::GENESIS)
         .expect("pass records are not spend material")
         .contains(CenRow::H20));
+    // The `Null` CT departure the doc above has named since slice 5 without
+    // a fixture asking for it (E6 slice 7 commit 2's sweep, the I14/H18
+    // class): the class is derived from the inputs, the CT type is H15's,
+    // and H15 fires before H20 sees the shape — now asked at both sites.
+    let null_ct = mutate(&|tx| {
+        tx.ct = Ct::Null(CtBase {
+            enc_amounts: Vec::new(),
+            enc_labels: Vec::new(),
+            commitments: Vec::new(),
+        });
+    });
+    refused_lone(&null_ct, CenRow::H15);
+    refused_listed(&null_ct, CenRow::H15);
     assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
         .expect("a spend")
         .contains(CenRow::H20));
