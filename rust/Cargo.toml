@@ -254,6 +254,10 @@ members = [
     # option is off, Noise while it is on, both from the stack plan.
     # See docs/design/P2P_TRANSPORT_LAYER.md.
     "shekyl-clearnet",
+    # Tor connector. The stream is the channel: no Noise, no handshake on
+    # the blocking pool. Dial is SOCKS5 through shekyl-socks. Inbound is
+    # accept_tor, then the gap timer. See P2P_TRANSPORT_LAYER.md.
+    "shekyl-tor",
 
     # Persona serving loop: loopback shard server behind the P onion
     # service (2d-2 serving path; provisional THROWAWAY framing)

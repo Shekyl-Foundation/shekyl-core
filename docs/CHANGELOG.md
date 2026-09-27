@@ -16,6 +16,8 @@
   thread off the ledger until that thread exits. The clearnet connector
   keeps one runtime: plaintext while its option is off, Noise while it
   is on. It dials directly or through SOCKS5 CONNECT (`shekyl-socks`).
+  The Tor connector uses that same SOCKS client. Its stream is the
+  channel, and a failed bind does not insert the zone.
 
 ### CLI wallet shell
 

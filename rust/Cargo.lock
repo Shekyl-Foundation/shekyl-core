@@ -4802,6 +4802,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-tor"
+version = "3.1.0"
+dependencies = [
+ "shekyl-net-address",
+ "shekyl-onion-v3",
+ "shekyl-peer-policy",
+ "shekyl-runtime",
+ "shekyl-socks",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-tor-control-client"
 version = "3.1.0"
 dependencies = [

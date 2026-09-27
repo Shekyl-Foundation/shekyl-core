@@ -1,0 +1,29 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-tor"
+description = "Tor connector. The Tor stream is the channel. Dial is SOCKS5. Inbound is the zone, then the gap timer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shekyl-net-address = { path = "../shekyl-net-address" }
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-socks = { path = "../shekyl-socks" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[dev-dependencies]
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+
+[lints]
+workspace = true

@@ -282,6 +282,14 @@ the Tor connector uses the same crate. A refusal is `ProxyRefused` with
 the reply byte. The initiator handshake runs on the blocking pool under
 the same engine owner, armed when the socket exists.
 
+The Tor connector is `shekyl-tor`. The stream is the channel: no Noise,
+no handshake on the blocking pool. Outbound is SOCKS5 through
+`shekyl-socks`, and one engine owner covers that exchange, the circuit
+build, and rendezvous. Inbound is `accept_tor`, then the gap timer.
+A failed bind drops every listener that succeeded, so the zone is not
+inserted. Onion-service proof-of-work and `MaxStreams` are the accept
+bound.
+
 Before the flip, ruling 4's exception is still in force. The option off
 omits the Noise layer the declaration adds, and the socket bytes are the
 session bytes: that is the differential harness, byte parity with epee.
