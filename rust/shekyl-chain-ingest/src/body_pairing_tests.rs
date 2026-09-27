@@ -48,10 +48,11 @@ use shekyl_wire::{Block, Transaction};
 
 use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, RunReport};
-use crate::scenario::{placeholder_root_after, Mined, Scenario, RULES};
+use crate::scenario::{Mined, Scenario, RULES};
 use crate::source::IngestEvent;
 use crate::test_support::{
-    anchor, cleanup, key_image, open_store, spend, tmp, Family, Scripted, EPOCH, FIRST_SPEND_HEIGHT,
+    anchor, cleanup, key_image, open_store, spend, tmp, Family, GrownTree, Scripted, EPOCH,
+    FIRST_SPEND_HEIGHT,
 };
 use crate::trace::{Facts, Trace, TraceWriter};
 
@@ -75,12 +76,15 @@ impl Driven {
     }
 
     /// The facts the driver's producer recorded per block — the trace the
-    /// replay passes through, so the replay's `connect` sees the roots the
-    /// driver's headers carry (B5) and the rewards the driver priced. A
-    /// replay from the harness's `trace_of` refuses at height 1 on B5: its
-    /// synthetic roots are not the driver's placeholders.
+    /// replay passes through, so the replay's `connect` sees the rewards the
+    /// driver priced. The root after each block is the validator's
+    /// derivation (DRS-E3): the replay derives it again and holds it to this
+    /// row (CTW-5), so the row carries what the same blocks grow
+    /// (`GrownTree`, the production `tree_after` over the driver's chain) —
+    /// a root the driver's headers carry (B5) and the replay must reproduce.
     fn trace(&self) -> Trace {
         let mut w = TraceWriter::new(Vec::new()).expect("header");
+        let tree = GrownTree::over(&self.chain());
         let mut coins = AtomicUnits::ZERO;
         for m in &self.mined {
             coins = AtomicUnits::from_raw(shekyl_economics::advance_already_generated(
@@ -92,7 +96,7 @@ impl Driven {
                 long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
                 coins_generated: coins,
                 burned: m.template.fees_burned,
-                root_after: placeholder_root_after(m.height),
+                root_after: tree.root_after(m.height.to_raw()),
                 long_term_effective_median: LongTermWeight::from_raw(FULL_REWARD_ZONE),
                 cumulative_difficulty: CumulativeDifficulty::from_raw(
                     u128::from(m.height.to_raw()) + 1,
