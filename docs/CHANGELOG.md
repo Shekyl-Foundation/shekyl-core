@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+### Daemon store — the curve tree is grown by the Rust stack (DRS-E3)
+
+- **Consensus.** The validator derives the curve-tree root: `validate` drains
+  the outputs that matured at the connecting height — block
+  `h − mined_money_unlock_window`'s coinbase outputs, then block
+  `h − tx_spendable_age`'s listed outputs, in that order — grows the tree over
+  the frontier (`shekyl_chain_rules::grow`, equal to a rebuild chunk for
+  chunk), and carries `root_after` and the `Drain` on the verdict. The store
+  records what it is handed and computes nothing (`store/grow.rs`):
+  `curve_tree_leaves`, `output_to_leaf` / `leaf_to_output` (SI-17),
+  `curve_tree_layers`, `curve_tree_meta`, and `curve_tree_leaf_counts[h + 1]`
+  on every connect (SI-18); `curve_tree_roots[h + 1]` is the verdict's root.
+  `RuleSet` gains `tx_spendable_age` (10) beside `mined_money_unlock_window`
+  (60). Verified against the four captured C++ chains at every one of their
+  1 979 heights (derived root == the LMDB trace's root) and the daemon's tip
+  digest; a wallet-side `CurveTreeClient` over the same blocks agrees with
+  the store at every header root.
+- **Store layout 14 → 15** (rebuild, never migrate): `pending_tree_leaves`,
+  `pending_tree_drain`, `block_pending_additions`, `curve_tree_checkpoints`
+  are **not ported** (the pending set is a function of the block index; the
+  two journals are the C++'s pop mechanism, ours is `undo_log`; the
+  checkpoint is a view of the summary); `output_to_leaf` / `leaf_to_output`
+  typed; `curve_tree_leaf_counts` born. `ConnectFacts.root_after` deleted —
+  the root is derived — so the `passed_through_facts` vocabulary shrinks
+  6 → 5.
+- **API.** `ChainView` gains `tree_frontier`, `leaf_count_at`, `outputs_at`
+  and the provided `depth_at` (CEN-I13's operand); `Corrupt` gains
+  `LeafNotConstructible` / `TreeUnservable`; `StoreInvariant` gains
+  `PositionMapsNotBijective` (SI-17) / `LeafCountRewritten` (SI-18). The
+  replay driver asserts the derived root against the trace's at every
+  covered height (`RunReport::roots`; a divergence is
+  `Disagreement::RootDiverged`) and the scenario driver mines a real
+  `shekyl-tx-builder` spend against the grown tree (`scenario_spend.rs`).
+- **Chunk arities.** `SELENE_CHUNK_WIDTH` (38) / `HELIOS_CHUNK_WIDTH` (18) are
+  Shekyl-named constants in `shekyl-fcmp`, const-asserted against the
+  library — not `consensus_constants.json` keys (the file's second
+  membership test: nameable-differently by a schedule, network or operator).
+
 ### CLI wallet shell
 
 - **`shekyl-cli` speaks one command language.** Subjects then verbs
