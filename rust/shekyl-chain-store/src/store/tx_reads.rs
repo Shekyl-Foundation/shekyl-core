@@ -150,6 +150,12 @@ impl<K: BlobKind> SegmentBytes<K> {
         self.bytes
     }
 
+    /// The segment's wire bytes, borrowed.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     /// The segment's length in bytes — the one fact about the bytes a
     /// caller may learn without taking them (a fee or size estimate is not
     /// a parse).
@@ -514,6 +520,48 @@ pub(super) fn prunable_at<T: ReadTables>(
         None => Prunable::Discarded,
     };
     Ok(AtIndex::Recorded(answer))
+}
+
+/// **T4b.** Whether the transaction at `id` is in the **archival shard
+/// partition's domain** — `SHT-Q1` RULED (Rick, 2026-09-27, design-owner lane).
+///
+/// The production path for the ruling's predicate. It reads the two digests **as
+/// recorded at ingest** — `txs_prunable_hash` (written at `connect.rs:575`, leg
+/// (i), mandatory) and `txs_pqc_auth_hash` (`connect.rs:584-586`, present ⇔ the
+/// txid is 4-part) — and hands them to [`shekyl_wire::carries_archival_good`].
+///
+/// **Why the rows and not the body.** A prune deletes the regions and never these
+/// rows (`schema.rs` on `TXS_PQC_AUTH_HASH`: a row without its segment is
+/// *discarded*, §7.7 leg (iii), not a fault). Recomputing the digests from a
+/// pruned body instead would yield `keccak256("")` and `None`, so a pruned node
+/// would read its own discarded spends as carrying **no** good and place them
+/// outside the domain while an archival node keeps them inside — the two would
+/// disagree on shard boundaries, which is a consensus split. That is why
+/// `shekyl-wire` exposes the predicate only over explicit row values, and why
+/// this answer is stable across a prune (pinned by
+/// `the_predicate_survives_a_prune_on_the_stored_rows`).
+///
+/// Bound first, as [`prunable_at`]: at or beyond the count, no row is read.
+pub(super) fn carries_archival_good_at<T: ReadTables>(
+    txn: &T,
+    id: TxStorageId,
+) -> Result<AtIndex<bool>, ReadFault> {
+    if let Admitted::Beyond = admit(txn, id)? {
+        return Ok(AtIndex::BeyondCount);
+    }
+    let raw = id.to_raw();
+    // Leg (i): the prunable hash row is permanent and mandatory — its absence
+    // below the count is SI-7, the same fault `prunable_at` reports, because the
+    // answer is *about* the region whose digest that row is.
+    let Some(prunable_hash) = hash_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", raw)? else {
+        return Err(absent("txs_prunable_hash"));
+    };
+    // Absent ⇔ the txid is 3-part. Not a fault: that is what no row means here.
+    let pqc_auth_hash = hash_row(txn, TXS_PQC_AUTH_HASH, "txs_pqc_auth_hash", raw)?;
+    Ok(AtIndex::Recorded(shekyl_wire::carries_archival_good(
+        pqc_auth_hash,
+        prunable_hash,
+    )))
 }
 
 /// **T5.** The `output_amounts` indices of the transaction at `id`'s

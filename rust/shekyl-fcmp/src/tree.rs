@@ -29,6 +29,7 @@
 //! tree is the sole layer-0 case and is the `selene_hash_init()` sentinel,
 //! handled by the caller, not an indexed `build_layers` result.
 
+pub use crate::leaf::LeafInput;
 use crate::leaf::ShekylLeaf;
 
 use ciphersuite::{
@@ -44,11 +45,21 @@ use shekyl_fcmp_proofs::fcmps;
 /// Shekyl uses 4-scalar leaves: {O.x, I.x, C.x, CM.x} (`PL-D3`).
 pub const SCALARS_PER_LEAF: usize = 4;
 
-/// Number of outputs per leaf-layer chunk (C1/Selene branching factor).
-pub const SELENE_CHUNK_WIDTH: usize = fcmps::LAYER_ONE_LEN;
+/// Outputs per leaf-layer chunk (Selene). Shekyl's arity (`CTW-Q7`);
+/// asserted equal to `fcmps::LAYER_ONE_LEN` below.
+pub const SELENE_CHUNK_WIDTH: usize = 38;
 
-/// Number of children per Helios-layer chunk.
-pub const HELIOS_CHUNK_WIDTH: usize = fcmps::LAYER_TWO_LEN;
+/// Children per Helios-layer chunk. Shekyl's arity; see [`SELENE_CHUNK_WIDTH`].
+pub const HELIOS_CHUNK_WIDTH: usize = 18;
+
+const _: () = assert!(
+    SELENE_CHUNK_WIDTH == fcmps::LAYER_ONE_LEN,
+    "CTW-Q7: SELENE_CHUNK_WIDTH must equal fcmps::LAYER_ONE_LEN"
+);
+const _: () = assert!(
+    HELIOS_CHUNK_WIDTH == fcmps::LAYER_TWO_LEN,
+    "CTW-Q7: HELIOS_CHUNK_WIDTH must equal fcmps::LAYER_TWO_LEN"
+);
 
 /// Total leaf scalars per leaf-layer chunk.
 pub const LEAF_CHUNK_SCALARS: usize = SCALARS_PER_LEAF * SELENE_CHUNK_WIDTH;
@@ -488,40 +499,36 @@ pub fn ed25519_point_to_selene_scalar(compressed: &[u8; 32]) -> Option<[u8; 32]>
     Some(x.to_repr())
 }
 
-/// Construct a 128-byte curve tree leaf from an output's public key, commitment,
-/// and published PQC leaf commitment point.
+/// 128-byte leaf `{O.x, I.x, C.x, CM.x}` (`PL-D3`). `I = Hp(O)`.
 ///
-/// Computes Hp(O) (Monero's hash-to-curve), then extracts the Wei25519
-/// x-coordinates of O, Hp(O), C and `CM` — the 4th scalar is `CM.x`, where
-/// `CM` is the compressed Ed25519 point at the front of the output's `0x07`
-/// entry (`PL-D3`). The x-extraction of all four points happens here, the one
-/// leaf constructor the daemon (over FFI) and the wallet replica share, so the
-/// two cannot diverge (`CT2_DRAIN_ORDER.md` §3.2).
+/// The x-extraction of all four points happens here, the one constructor the
+/// daemon and the wallet replica share (`CT2_DRAIN_ORDER.md` §3.2).
 ///
-/// Returns `None` if any of the four inputs is not a decompressible point. A
-/// `CM` that fails admission (non-canonical, small-order, identity) never
-/// reaches this function on an admitted chain
-/// (`shekyl_wire::tx_extra::check_pqc_leaf_entries`); there is no zero
-/// placeholder — an output without an admissible commitment is not a leaf.
+/// # Errors
+///
+/// [`LeafInput`] — the caller-supplied point that did not decompress. A `CM`
+/// that fails admission never reaches this function on an admitted chain
+/// (`shekyl_wire::tx_extra::check_pqc_leaf_entries`).
 pub fn construct_leaf(
     output_key: &[u8; 32],
     commitment: &[u8; 32],
     pqc_leaf_commitment: &[u8; 32],
-) -> Option<[u8; 128]> {
+) -> Result<[u8; 128], LeafInput> {
     let hp_point = shekyl_curve_generators::biased_hash_to_point(*output_key);
     let hp_bytes: [u8; 32] = hp_point.compress().to_bytes();
 
-    let o_x = ed25519_point_to_selene_scalar(output_key)?;
-    let i_x = ed25519_point_to_selene_scalar(&hp_bytes)?;
-    let c_x = ed25519_point_to_selene_scalar(commitment)?;
-    let cm_x = ed25519_point_to_selene_scalar(pqc_leaf_commitment)?;
+    let o_x = ed25519_point_to_selene_scalar(output_key).ok_or(LeafInput::OutputKey)?;
+    let i_x = ed25519_point_to_selene_scalar(&hp_bytes).ok_or(LeafInput::OutputKey)?;
+    let c_x = ed25519_point_to_selene_scalar(commitment).ok_or(LeafInput::Commitment)?;
+    let cm_x =
+        ed25519_point_to_selene_scalar(pqc_leaf_commitment).ok_or(LeafInput::LeafCommitment)?;
 
     let mut leaf = [0u8; 128];
     leaf[0..32].copy_from_slice(&o_x);
     leaf[32..64].copy_from_slice(&i_x);
     leaf[64..96].copy_from_slice(&c_x);
     leaf[96..128].copy_from_slice(&cm_x);
-    Some(leaf)
+    Ok(leaf)
 }
 
 /// Re-assemble a 128-byte leaf from a served chunk entry: the three
@@ -895,7 +902,7 @@ mod tests {
         let basepoint = ED25519_BASEPOINT_COMPRESSED.to_bytes();
         let pqc_hash = [0x42u8; 32];
 
-        if let Some(leaf) = construct_leaf(&basepoint, &basepoint, &pqc_hash) {
+        if let Ok(leaf) = construct_leaf(&basepoint, &basepoint, &pqc_hash) {
             assert_eq!(leaf.len(), 128);
             assert_ne!(&leaf[0..32], &[0u8; 32]);
             assert_ne!(&leaf[32..64], &[0u8; 32]);
@@ -910,7 +917,7 @@ mod tests {
         let basepoint = ED25519_BASEPOINT_COMPRESSED.to_bytes();
         let zero_pqc = [0u8; 32];
 
-        if let Some(leaf) = construct_leaf(&basepoint, &basepoint, &zero_pqc) {
+        if let Ok(leaf) = construct_leaf(&basepoint, &basepoint, &zero_pqc) {
             assert_eq!(&leaf[96..128], &[0u8; 32]);
         }
     }
@@ -921,7 +928,7 @@ mod tests {
             1u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0,
         ];
-        let _ = construct_leaf(&identity, &identity, &[0u8; 32]);
+        assert!(construct_leaf(&identity, &identity, &[0u8; 32]).is_err());
     }
 
     #[test]
@@ -950,11 +957,15 @@ mod tests {
         let leaf = construct_leaf(&o, &o, &cm).expect("leaf");
         let cm_x = ed25519_point_to_selene_scalar(&cm).expect("CM.x");
         assert_eq!(&leaf[96..128], &cm_x);
-        assert!(
-            construct_leaf(&o, &o, &[0u8; 32]).is_none(),
+        assert_eq!(
+            construct_leaf(&o, &o, &[0u8; 32]),
+            Err(LeafInput::LeafCommitment),
             "zero is not a point"
         );
-        assert!(construct_leaf(&o, &o, &[0xffu8; 32]).is_none());
+        assert_eq!(
+            construct_leaf(&o, &o, &[0xffu8; 32]),
+            Err(LeafInput::LeafCommitment)
+        );
     }
 
     #[test]

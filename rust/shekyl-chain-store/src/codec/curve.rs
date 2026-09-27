@@ -119,17 +119,36 @@ impl LeafCount {
     }
 }
 
+/// `curve_tree_leaf_counts[h]` — the count at a height, stored as its raw
+/// LE `u64` (DRS-E3, `CTW-Q4`): the primitive `depth_at` derives from.
+impl Canonical for LeafCount {
+    const NAME: &'static str = "leaf_count";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
 /// The tree's summary — `curve_tree_meta`'s one row (module docs).
 ///
 /// Layout (41 bytes): `root`[32] ‖ `depth` u8 ‖ `leaf_count` u64 LE.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct CurveTreeState {
-    /// The root stored with this summary. The seal writes [`Self::EMPTY`],
-    /// and `connect` records `curve_tree_roots` whether or not the tree has
-    /// grown (SI-4), so an EMPTY row is not a claim about the live root.
-    /// Once the grow path replaces EMPTY, this field is that live root
-    /// (`curve_tree_roots[tip + 1]`, or [`CurveTreeRoot::EMPTY`] on an empty
-    /// chain) and the summary read refuses a disagreement (SI-12).
+    /// The root stored with this summary — **the live root**,
+    /// `curve_tree_roots[tip + 1]` (or [`CurveTreeRoot::EMPTY`] on an empty
+    /// chain), on every row including the seal's [`Self::EMPTY`]. `connect`
+    /// records the validator's derived root on every connect (SI-4), so an
+    /// EMPTY summary claims nothing has drained and the recorded root must
+    /// be EMPTY too; the grow path (`store/grow.rs`, DRS-E3) moves both at
+    /// the first drain. The summary read refuses a disagreement
+    /// unconditionally (SI-12).
     pub root: CurveTreeRoot,
     /// Layers above the leaf layer.
     pub depth: TreeDepth,

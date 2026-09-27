@@ -781,6 +781,14 @@ pub struct OwnerHandle<C: Clock> {
     slot: Arc<Slot>,
 }
 
+impl<C: Clock> Drop for OwnerHandle<C> {
+    fn drop(&mut self) {
+        // A cancelled task drops the handle without reaching `deregister`.
+        // The second call is `UnknownOwner` once an explicit one has run.
+        ignore(self.deregister());
+    }
+}
+
 impl<C: Clock> OwnerHandle<C> {
     pub fn id(&self) -> OwnerId {
         self.id

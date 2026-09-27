@@ -24,7 +24,7 @@ use shekyl_wire::{Block, Transaction};
 use crate::connector::{Apply, Connector, ConnectorArgs, RunFault};
 use crate::facts::{block_weight, Composed, Priced, PricedAt};
 use crate::schedule::ChainRules;
-use crate::test_support::{chain, cleanup, h, open_store, root_after, tmp};
+use crate::test_support::{chain, cleanup, h, open_store, tmp};
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
     fixed_difficulty: None,
@@ -40,14 +40,13 @@ impl PricedAt for Table {
     }
 }
 
-/// `height` priced at `reward`, burning `burned`, the fixture root after.
+/// `height` priced at `reward`, burning `burned`.
 fn priced(height: u64, reward: u64, burned: u64) -> (u64, Priced) {
     (
         height,
         Priced {
             block_reward: AtomicUnits::from_raw(reward),
             burned: AtomicUnits::from_raw(burned),
-            root_after: root_after(height),
             long_term_effective_median: LongTermWeight::from_raw(300_000),
         },
     )
@@ -109,11 +108,13 @@ async fn composed_folds_the_priced_reward_onto_the_parents_record() {
     assert_eq!(coins, vec![10, 30, 60]);
     // The burn is recorded per block and folded.
     assert_eq!(read.total_burned().expect("read").to_raw(), 7);
-    // The root after `h` is the state at `h + 1` (SCW-19).
+    // The root after `h` is the state at `h + 1` (SCW-19) — the verdict's
+    // derivation, which `Composed` no longer supplies (DRS-E3): three
+    // blocks in, nothing has matured and every row is the empty tree.
     for hh in 0..3u64 {
         assert_eq!(
             read.root_at(h(hh + 1)).expect("read"),
-            AtHeight::Recorded(root_after(hh)),
+            AtHeight::Recorded(CurveTreeRoot::EMPTY),
             "root_after({hh}) at {}",
             hh + 1
         );
@@ -217,7 +218,6 @@ fn every_composed_origin_is_passed_through_until_its_row_lands() {
             10,
             "genesis folds from zero"
         );
-        assert_eq!(facts.root_after.value, root_after(0));
         let table = [
             ("weight", facts.weight.origin, Why::Composed),
             (
@@ -231,7 +231,6 @@ fn every_composed_origin_is_passed_through_until_its_row_lands() {
                 Why::Composed,
             ),
             ("burned", facts.burned.origin, Why::Composed),
-            ("root_after", facts.root_after.origin, Why::NoSourceYet),
             (
                 "long_term_effective_median",
                 facts.long_term_effective_median.origin,
@@ -254,9 +253,8 @@ fn every_composed_origin_is_passed_through_until_its_row_lands() {
             .count();
         assert_eq!(
             (composed, unsourced),
-            (4, 2),
-            "passed-through = 4 composed + 2 unsourced"
+            (4, 1),
+            "passed-through = 4 composed + 1 unsourced (root_after left with DRS-E3)"
         );
     });
-    let _ = CurveTreeRoot::EMPTY;
 }

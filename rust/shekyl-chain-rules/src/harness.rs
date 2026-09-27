@@ -36,9 +36,10 @@ use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::substrate::Substrate;
+use crate::tree_growth::TreeFrontier;
 use crate::validate::form;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
-use crate::view::{AtHeight, ChainView, RecordedBlock, Tip};
+use crate::view::{AtHeight, BlockOutputs, ChainView, RecordedBlock, Tip};
 
 /// Invariant brand, as in `verdict.rs`.
 type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
@@ -196,6 +197,29 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     fn tip(&self) -> Result<Option<Tip>, Infallible> {
         Ok(self.chain.tip())
     }
+
+    /// A mock chain records no outputs, so its tree never grows: the
+    /// frontier is empty, every recorded height's outputs are none and its
+    /// leaf count is zero. Rules that read the tree's operands (F17, I13)
+    /// see an empty tree; the growth derivation appends nothing and the
+    /// verdict carries `root_at(connecting)` forward unchanged.
+    fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+        Ok(TreeFrontier::EMPTY)
+    }
+
+    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+        Ok(match self.chain.root(height) {
+            AtHeight::Recorded(_) => AtHeight::Recorded(0),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
+    }
+
+    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+        Ok(match self.chain.block(height) {
+            AtHeight::Recorded(_) => AtHeight::Recorded(BlockOutputs::default()),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
+    }
 }
 
 /// The fault a [`FaultingView`] raises.
@@ -210,6 +234,18 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
     type Fault = Faulted;
 
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Faulted> {
+        Err(Faulted)
+    }
+
+    fn tree_frontier(&self) -> Result<TreeFrontier, Faulted> {
+        Err(Faulted)
+    }
+
+    fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Faulted> {
         Err(Faulted)
     }
 
@@ -297,6 +333,18 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
 
     fn tip(&self) -> Result<Option<Tip>, Infallible> {
         self.inner.tip()
+    }
+
+    fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+        self.inner.tree_frontier()
+    }
+
+    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+        self.inner.leaf_count_at(height)
+    }
+
+    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+        self.inner.outputs_at(height)
     }
 }
 

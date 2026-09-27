@@ -145,7 +145,7 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
     assert_eq!(
         format!("{genesis:?}"),
         format!(
-            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held, at-open and by-construction rows excluded), header_major_version: 1, difficulty: Lwma1, mined_money_unlock_window: BlockCount(60), reorg_cap: BlockCount(720) }}",
+            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held, at-open and by-construction rows excluded), header_major_version: 1, difficulty: Lwma1, mined_money_unlock_window: BlockCount(60), reorg_cap: BlockCount(720), tx_spendable_age: BlockCount(10) }}",
             v = CenRow::ALL.len() - 14,
             n = CenRow::ALL.len()
         )
@@ -180,6 +180,53 @@ fn the_unlock_window_is_the_cxx_define() {
         BlockCount::from_raw(value)
     );
     assert_eq!(value, 60, "the shipped window");
+}
+
+// ---- DRS-E3 CTW-Q5: the spendable age is the window's sibling ----
+
+/// The listed-output maturity is the C++ `#define`, read from
+/// `cryptonote_config.h` as the window is.
+#[test]
+fn the_spendable_age_is_the_cxx_define() {
+    let config_h = include_str!("../../../src/cryptonote_config.h");
+    let line = config_h
+        .lines()
+        .find(|l| l.contains("#define CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE"))
+        .expect("cryptonote_config.h defines CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE");
+    let value: u64 = line
+        .split_whitespace()
+        .nth(2)
+        .expect("the define carries a value")
+        .parse()
+        .expect("the value is an integer");
+    assert_eq!(
+        RuleSet::GENESIS.tx_spendable_age(),
+        BlockCount::from_raw(value)
+    );
+    assert_eq!(value, 10, "the shipped age");
+}
+
+/// The maturity pair the tree grows by is the pair the wallet side's
+/// eligibility arithmetic assumes (`shekyl_engine_state::transfer::SPENDABLE_AGE`
+/// is `shekyl_consensus::DEFAULT_LOCK_WINDOW`; `recon::maturity_height` reads
+/// both) — two names for one number on each side, held equal here so the
+/// daemon's insertion height and the wallet's eligibility height cannot
+/// drift (CTW-6: the age had two Rust homes and neither was this crate).
+#[test]
+fn the_maturity_pair_is_the_wallet_sides_lock_windows() {
+    let g = RuleSet::GENESIS;
+    assert_eq!(
+        g.tx_spendable_age().to_raw(),
+        u64::try_from(shekyl_consensus::DEFAULT_LOCK_WINDOW).expect("fits"),
+    );
+    assert_eq!(
+        g.mined_money_unlock_window().to_raw(),
+        u64::try_from(shekyl_consensus::COINBASE_LOCK_WINDOW).expect("fits"),
+    );
+    assert!(
+        g.tx_spendable_age() < g.mined_money_unlock_window(),
+        "a listed output enters the tree before the same block's coinbase (SOK-10)"
+    );
 }
 
 // ---- PR #861 review: the reorg cap is rule-set data ----

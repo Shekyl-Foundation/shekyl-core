@@ -40,7 +40,7 @@ fn three_blocks() -> Vec<(Vec<u8>, Vec<Vec<u8>>)> {
         .iter()
         .enumerate()
         .map(|(hh, txs)| {
-            let b = block(hh as u64, previous, txs);
+            let b = block(CurveTreeRoot::EMPTY, hh as u64, previous, txs);
             previous = b.hash();
             wire(&b, txs)
         })
@@ -95,13 +95,17 @@ fn the_trace_round_trips_through_both_doors_and_the_borrow_is_passed_through() {
     // The borrow door mints only passed-through facts.
     let cf: ConnectFacts = trace.borrow(h(2)).expect("covered").into();
     assert_eq!(cf.weight.value, BlockWeight::from_raw(1_002));
-    assert_eq!(cf.root_after.value, CurveTreeRoot::from_bytes([0xc2; 32]));
+    // The trace still records the root (the oracle's comparison input);
+    // the door no longer mints a fact from it.
+    assert_eq!(
+        trace.borrow(h(2)).expect("covered").value().root_after,
+        CurveTreeRoot::from_bytes([0xc2; 32])
+    );
     for origin in [
         cf.weight.origin,
         cf.long_term_weight.origin,
         cf.coins_generated.origin,
         cf.burned.origin,
-        cf.root_after.origin,
         cf.long_term_effective_median.origin,
     ] {
         assert_eq!(origin, Origin::PassedThrough);

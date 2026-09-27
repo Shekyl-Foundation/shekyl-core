@@ -45,6 +45,7 @@ use shekyl_wire::Transaction;
 
 use crate::block::{Candidate, StructurallyValid, ValidatedBlock};
 use crate::coverage::RuleCoverage;
+use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
@@ -198,6 +199,15 @@ pub fn form<S: Substrate>(
 ///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
 ///         Ok(None)
 ///     }
+///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+///         Ok(TreeFrontier::EMPTY)
+///     }
+///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
 /// }
 /// // Each call brands a fresh view, as the store's `write` does.
 /// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
@@ -211,9 +221,14 @@ pub fn form<S: Substrate>(
 ///
 /// with_view(|outer| {
 ///     with_view(|inner| {
-///         let valid = validate(formed(), &inner, &RuleSet::GENESIS)
-///             .unwrap()
-///             .unwrap();
+///         let valid = validate(
+///             formed(),
+///             &inner,
+///             &RuleSet::GENESIS,
+///             &Trust::UNANCHORED,
+///         )
+///         .unwrap()
+///         .unwrap();
 ///         connect(&outer, valid); // judged against `inner`: does not compile
 ///     })
 /// });
@@ -245,6 +260,15 @@ pub fn form<S: Substrate>(
 ///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
 ///         Ok(None)
 ///     }
+///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+///         Ok(TreeFrontier::EMPTY)
+///     }
+///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
 /// }
 /// struct Evil;
 /// impl<'id> ChainView<'id> for Evil {
@@ -261,6 +285,15 @@ pub fn form<S: Substrate>(
 ///     }
 ///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
 ///         Ok(None)
+///     }
+///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+///         Ok(TreeFrontier::EMPTY)
+///     }
+///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+///         Ok(AtHeight::AboveTip)
 ///     }
 /// }
 /// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}
@@ -350,9 +383,23 @@ pub fn validate<'id, V: ChainView<'id>>(
         return Ok(Err(refused));
     }
 
+    // The drain (DRS-E3 §3.2): what matured at this height and the root
+    // the tree has once it is appended. Not a rule — the last rule has
+    // passed — but the derivation the verdict carries because the root
+    // determines future validity (`CTW-Q1`). Runs after every refusal
+    // could have fired so a refused block never grows anything.
+    let (root_after, drained) = drain::tree_after(view, connecting, rule_set)?;
+
     let hash = formed.hash();
     let (candidate, _stateless) = formed.into_parts();
-    let block = ValidatedBlock::derive(candidate, hash, target, cumulative_difficulty);
+    let block = ValidatedBlock::derive(
+        candidate,
+        hash,
+        target,
+        cumulative_difficulty,
+        root_after,
+        drained,
+    );
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }
 

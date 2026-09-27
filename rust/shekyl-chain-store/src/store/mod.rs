@@ -94,10 +94,12 @@ mod chain_reads;
 mod connect;
 mod curve_reads;
 mod error;
+mod grow;
 mod halt;
 mod header;
 mod invariant;
 mod keyed;
+mod leaf_reads;
 mod output_reads;
 mod pop;
 mod prune;
@@ -113,8 +115,8 @@ pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
 pub use error::{
-    AltCannot, CellFault, EngineError, ErrorClass, LeafDensity, PoolCannot, StoreCannot,
-    StoreError, StoreInvariant, UndoFault,
+    AltCannot, CellFault, EngineError, ErrorClass, LeafCountFault, LeafDensity, PoolCannot,
+    StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
@@ -638,6 +640,11 @@ mod prune_tests;
 #[cfg(test)]
 #[path = "amendments_tests.rs"]
 mod amendments_tests;
+/// E6 slice 7 commit 2 (c): the CEN-G6 weights-read bench (`#[ignore]`d;
+/// decides Q2 on the floor).
+#[cfg(test)]
+#[path = "weights_read_bench_tests.rs"]
+mod weights_read_bench_tests;
 
 #[cfg(test)]
 #[path = "read_tests.rs"]
@@ -654,6 +661,9 @@ mod archival_read_tests;
 #[cfg(test)]
 #[path = "alt_tests.rs"]
 mod alt_tests;
+#[cfg(test)]
+#[path = "leaf_read_tests.rs"]
+mod leaf_read_tests;
 #[cfg(test)]
 #[path = "output_read_tests.rs"]
 mod output_read_tests;

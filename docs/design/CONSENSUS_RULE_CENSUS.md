@@ -1225,6 +1225,21 @@ input, not fixes.
     three (`FOLLOWUPS.md`, the sweep-subject row): *what was each sweep's
     file and call-direction subject, and which of them excluded reads?*
 
+    **A fourth ground, recorded 2026-09-26 (DRS-E3, `DRS_E3_CURVE_WRITER.md`
+    CTW-9 / `CTW-Q7`):** *which library constants would refuse a shape
+    independently of any censused rule?* The curve-tree chunk arities
+    (`fcmps::LAYER_ONE_LEN` 38 / `LAYER_TWO_LEN` 18) arrived from a library
+    re-exported and unratified; a different arity is a different chain, yet
+    no row names them because no rule *reads* them — every proof simply
+    stops verifying. Disposition: Shekyl-named, const-asserted constants in
+    `shekyl-fcmp` (`SELENE_CHUNK_WIDTH`, `HELIOS_CHUNK_WIDTH`), **not**
+    `consensus_constants.json` keys (the JSON's second membership test:
+    nameable-differently by a schedule, network or operator — a
+    proof-system parameter is not). No census row: growth is an operand of
+    F17 / I12 / I13 / I15, not a rule; the behavioural pin is E2's root
+    oracle (a wrong arity is a wrong root on the first grown chunk, at every
+    height of every captured chain).
+
 ---
 
 ## 8. Evidence-archaeology payload — disposition of every item

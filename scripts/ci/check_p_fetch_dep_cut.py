@@ -16,7 +16,7 @@ crate, `shekyl-p-fetch`, and rules where its edges may and may not run:
     `shekyl-p-host`, or `shekyl-p-transport` (wallet-side; the client is the
     daemon's), and none of them depends on it — the two ends of the route are
     siblings under one grammar, never each other's dependency;
-  * the SOCKS dial (`tokio-socks`) enters **no consensus, chain-store, or RPC
+  * the SOCKS dial (`shekyl-socks`) enters **no consensus, chain-store, or RPC
     crate** — a daemon that could not fetch would still validate, store, and
     answer;
   * `shekyl-p-serve`'s `test-signer` feature (an ephemeral attestation key
@@ -35,7 +35,7 @@ dependencies are followed transitively over `[dependencies]`,
 `[dev-dependencies]` are **not** followed — a test build is not a shipped
 graph, and `resolver = "2"` keeps dev-only feature unification out of release
 targets (the premise `check_test_only_features.py` documents). External
-crates (`tokio-socks`) are matched by name on the same edges.
+crates (`shekyl-socks`) are matched by name on the same edges.
 
 Features are **resolved, not grepped**. `test-signer` can be enabled by its
 own name on an edge, by a consumer's `default`, by an alias
@@ -63,7 +63,7 @@ cannot quietly empty the set.
 
 Rule 47 throughout: every negative limb is paired with a positive one that
 would fail if the subject it protects went missing — `shekyl-p-fetch` exists
-and does depend on the shared codec and on `tokio-socks`; `test-signer` is
+and does depend on the shared codec and on `shekyl-socks`; `test-signer` is
 declared and at least one dev edge enables it; the resolver detects a planted
 forward. A cut that cannot be observed holding is not a cut.
 """
@@ -82,7 +82,7 @@ BUILD_RUST = REPO / "cmake" / "BuildRust.cmake"
 
 CLIENT = "shekyl-p-fetch"
 SERVER = "shekyl-p-serve"
-SOCKS = "tokio-socks"
+SOCKS = "shekyl-socks"
 
 # The client reaches the grammar here and nowhere else (codec shared, not
 # mirrored). The positive limb of the cut.
@@ -125,7 +125,7 @@ NO_SOCKS = (
 # RPC crates are derived (every member whose name carries `rpc`), and these
 # two must be among them or the derivation has drifted from the tree. They
 # are held out of `NO_SOCKS` on purpose: `shekyl-daemon-rpc` already reaches
-# `tokio-socks` through `shekyl-rpc-transport`'s own SOCKS5h connector (RT-1,
+# `shekyl-socks` through `shekyl-rpc-transport`'s own SOCKS5h connector (RT-1,
 # ruled long before SF-D4), so "no SOCKS" there would fail on a pre-existing
 # edge that is not this cut's subject. What SF-D4 keeps out of RPC is the
 # shard-fetch *client*.
@@ -453,7 +453,7 @@ def main() -> int:
         print(f"FAIL: {msg}")
 
     # ── Rule 47: the subjects exist, and the derived sets read what they claim ──
-    for name in (CLIENT, SERVER, *CLIENT_MUST_REACH[:-1], *NO_SOCKS, *RPC_SENTINELS):
+    for name in (CLIENT, SERVER, *CLIENT_MUST_REACH, *NO_SOCKS, *RPC_SENTINELS):
         if name not in members:
             failed(f"{name} is not a workspace member; every limb naming it would pass vacuously.")
     rpc = rpc_crates(members)
@@ -478,7 +478,7 @@ def main() -> int:
     # shared codec, the onion transform, and the dial. `reaches` is
     # conservative (it counts disabled optional edges) and is the right
     # tool for the negative cuts below; here it would stay green if
-    # tokio-socks were made optional-and-off. Rule 47: a subject that is
+    # shekyl-socks were made optional-and-off. Rule 47: a subject that is
     # not in the default graph is a subject this limb cannot see.
     client_resolved = resolve_features(CLIENT, members, workspace_deps)
     for dep in CLIENT_MUST_REACH:

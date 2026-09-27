@@ -259,7 +259,7 @@ where
         Arc::clone(&overfull),
     )
     .await;
-    let (writer, recv) = match opened {
+    let (mut writer, recv) = match opened {
         Ok(pair) => pair,
         Err(kind) => {
             drop(outbound);
@@ -276,10 +276,22 @@ where
         drop(writer.await);
         return CloseCause::new(CloseKind::LocalClose);
     }
-    let read_cause = read_half(read, recv, inbound_tx, Arc::clone(&overfull)).await;
-    drop(outbound);
-    let write_cause = writer.await.ok().flatten();
-    write_cause.unwrap_or(read_cause)
+    let read_fut = read_half(read, recv, inbound_tx, Arc::clone(&overfull));
+    tokio::pin!(read_fut);
+    tokio::select! {
+        read_cause = &mut read_fut => {
+            drop(outbound);
+            writer.abort();
+            drop(writer.await);
+            read_cause
+        }
+        write_cause = &mut writer => {
+            write_cause
+                .ok()
+                .flatten()
+                .unwrap_or(CloseCause::new(CloseKind::LocalClose))
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -390,11 +402,24 @@ async fn write_half(
                     drop(write.shutdown().await);
                     return Some(CloseCause::new(CloseKind::RecordRejected));
                 };
-                if !wire.is_empty() && write.write_all(&wire).await.is_err() {
+                if !wire.is_empty() {
+                    tokio::select! {
+                        biased;
+                        () = overfull.wait() => {
+                            outbound.release(n);
+                            drop(write.shutdown().await);
+                            return Some(CloseCause::new(CloseKind::SendQueueFull));
+                        }
+                        result = write.write_all(&wire) => {
+                            outbound.release(n);
+                            if result.is_err() {
+                                return Some(CloseCause::new(CloseKind::IoError));
+                            }
+                        }
+                    }
+                } else {
                     outbound.release(n);
-                    return Some(CloseCause::new(CloseKind::IoError));
                 }
-                outbound.release(n);
             }
         }
     }
@@ -411,10 +436,14 @@ async fn read_half(
         if overfull.tripped() {
             return CloseCause::new(CloseKind::SendQueueFull);
         }
-        let n = match read.read(&mut buf).await {
-            Ok(0) => return CloseCause::new(CloseKind::PeerClosed),
-            Ok(n) => n,
-            Err(_) => return CloseCause::new(CloseKind::IoError),
+        let n = tokio::select! {
+            biased;
+            () = overfull.wait() => return CloseCause::new(CloseKind::SendQueueFull),
+            result = read.read(&mut buf) => match result {
+                Ok(0) => return CloseCause::new(CloseKind::PeerClosed),
+                Ok(n) => n,
+                Err(_) => return CloseCause::new(CloseKind::IoError),
+            },
         };
         let Ok(pieces) = seam.push(&buf[..n]) else {
             return CloseCause::new(CloseKind::RecordRejected);
@@ -491,8 +520,8 @@ where
     };
     ignore(owner.deregister());
     let (send, recv, flight) = match job {
-        Ok(Ok(done)) => done,
-        Ok(Err(SkipOrFail::Skipped)) => return Err(CloseKind::TransportTimeout),
+        Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
+        Ok(Ok(_) | Err(SkipOrFail::Skipped)) => return Err(CloseKind::TransportTimeout),
         Ok(Err(SkipOrFail::Failed)) | Err(_) => {
             return Err(CloseKind::TransportHandshakeFailed);
         }
@@ -591,8 +620,8 @@ where
         tokio::task::spawn_blocking(move || initiator_job(network_id, &fired_job, &tally_job));
     let job = await_job(join, &mut wake, &fired).await;
     let (initiator, message1) = match job {
-        Ok(Ok(done)) => done,
-        Ok(Err(SkipOrFail::Skipped)) => {
+        Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
+        Ok(Ok(_) | Err(SkipOrFail::Skipped)) => {
             ignore(owner.deregister());
             drop(write.shutdown().await);
             return Err(CloseKind::TransportTimeout);
@@ -614,19 +643,16 @@ where
     flight.extend_from_slice(&message1);
     if write.write_all(&flight).await.is_err() {
         ignore(owner.deregister());
-        tally.dequeue();
         return Err(CloseKind::TransportHandshakeFailed);
     }
     let mut prefix = [0u8; PREFIX_LEN];
     if let Err(kind) = read_or_wake(read, &mut prefix, &mut wake, &fired).await {
         note_skip(tally, kind);
-        tally.dequeue();
         ignore(owner.deregister());
         drop(write.shutdown().await);
         return Err(kind);
     }
     if prefix != prefix_for(&network_id) {
-        tally.dequeue();
         ignore(owner.deregister());
         drop(write.shutdown().await);
         return Err(CloseKind::PrefixMismatch);
@@ -634,18 +660,17 @@ where
     let mut message2 = vec![0u8; MESSAGE2_LEN];
     if let Err(kind) = read_or_wake(read, &mut message2, &mut wake, &fired).await {
         note_skip(tally, kind);
-        tally.dequeue();
         ignore(owner.deregister());
         drop(write.shutdown().await);
         return Err(kind);
     }
     if fired.load(Ordering::Acquire) {
         tally.skip();
-        tally.dequeue();
         ignore(owner.deregister());
         drop(write.shutdown().await);
         return Err(CloseKind::TransportTimeout);
     }
+    tally.queue();
     let tally_job = Arc::clone(tally);
     let fired_job = Arc::clone(&fired);
     let join = tokio::task::spawn_blocking(move || {
@@ -654,8 +679,8 @@ where
     let job = await_job(join, &mut wake, &fired).await;
     ignore(owner.deregister());
     let (send, recv) = match job {
-        Ok(Ok(done)) => done,
-        Ok(Err(SkipOrFail::Skipped)) => {
+        Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
+        Ok(Ok(_) | Err(SkipOrFail::Skipped)) => {
             drop(write.shutdown().await);
             return Err(CloseKind::TransportTimeout);
         }
@@ -678,7 +703,10 @@ fn initiator_job(
         return Err(SkipOrFail::Skipped);
     }
     match Initiator::new(&network_id) {
-        Ok(done) => Ok(done),
+        Ok(done) => {
+            tally.dequeue();
+            Ok(done)
+        }
         Err(_) => {
             tally.dequeue();
             Err(SkipOrFail::Failed)
@@ -763,12 +791,12 @@ async fn read_or_wake<C: Clock>(
 pub(crate) struct ByteQueue {
     inner: Arc<Mutex<ByteQueueInner>>,
     data: Arc<tokio::sync::Notify>,
-    closed: Arc<AtomicBool>,
 }
 
 struct ByteQueueInner {
     limit: usize,
     used: usize,
+    closed: bool,
     items: VecDeque<Vec<u8>>,
 }
 
@@ -784,19 +812,22 @@ impl ByteQueue {
             inner: Arc::new(Mutex::new(ByteQueueInner {
                 limit,
                 used: 0,
+                closed: false,
                 items: VecDeque::new(),
             })),
             data: Arc::new(tokio::sync::Notify::new()),
-            closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub(crate) fn try_push(&self, bytes: Vec<u8>) -> Result<(), PushError> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(PushError::Closed);
-        }
         let n = bytes.len();
         let mut inner = self.inner.lock().expect("outbound");
+        if inner.closed {
+            return Err(PushError::Closed);
+        }
+        if n == 0 {
+            return Ok(());
+        }
         let Some(next) = inner.used.checked_add(n) else {
             return Err(PushError::Full);
         };
@@ -821,7 +852,7 @@ impl ByteQueue {
     }
 
     pub(crate) fn close(&self) {
-        self.closed.store(true, Ordering::Release);
+        self.inner.lock().expect("outbound").closed = true;
         self.data.notify_waiters();
     }
 
@@ -829,13 +860,14 @@ impl ByteQueue {
     /// The byte count is released by [`Self::release`] after the write.
     pub(crate) async fn pop(&self) -> Option<Vec<u8>> {
         loop {
-            let notified = self.data.notified();
+            let mut notified = std::pin::pin!(self.data.notified());
+            notified.as_mut().enable();
             {
                 let mut inner = self.inner.lock().expect("outbound");
                 if let Some(bytes) = inner.items.pop_front() {
                     return Some(bytes);
                 }
-                if self.closed.load(Ordering::Acquire) {
+                if inner.closed {
                     return None;
                 }
             }

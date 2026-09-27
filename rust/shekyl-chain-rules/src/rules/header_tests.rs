@@ -249,6 +249,21 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         fn tip(&self) -> Result<Option<Tip>, Self::Fault> {
             Ok(None)
         }
+        fn tree_frontier(&self) -> Result<crate::TreeFrontier, Self::Fault> {
+            Ok(crate::TreeFrontier::EMPTY)
+        }
+        fn leaf_count_at(
+            &self,
+            _: shekyl_types::BlockHeight,
+        ) -> Result<AtHeight<u64>, Self::Fault> {
+            Ok(AtHeight::AboveTip)
+        }
+        fn outputs_at(
+            &self,
+            _: shekyl_types::BlockHeight,
+        ) -> Result<AtHeight<crate::BlockOutputs>, Self::Fault> {
+            Ok(AtHeight::AboveTip)
+        }
     }
     let genesis = formed(candidate(Vec::new()));
     let verdict = infallible(B5::check(

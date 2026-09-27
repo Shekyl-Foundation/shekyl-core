@@ -18,7 +18,7 @@ use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    at, candidate, connect_chain, facts, judge, spend, spend_at, spendable_prefix,
+    at, candidate, connect_chain, facts, judge, root_going_into, spend, spend_at, spendable_prefix,
     FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreError, StoreInvariant};
@@ -546,7 +546,8 @@ fn the_redb_digest_is_the_hasher_over_the_files_three_families() {
     // The same three families the C++ walker hands the FFI, read from the
     // redb file: height-ordered block hashes, the spent-key set, and the
     // live root — `curve_tree_roots[tip + 1]`, the state after the tip's
-    // drain (SCW-19), which is `facts(tip).root_after`.
+    // drain (SCW-19), read back off the store: the derived root since
+    // DRS-E3, which no fixture computes from the height.
     let path = tmp("read-digest-chain");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let hashes = connect_chain(
@@ -554,20 +555,21 @@ fn the_redb_digest_is_the_hasher_over_the_files_three_families() {
         &spendable_prefix(&[vec![spend(9, 2)], vec![spend(10, 2)]]),
     );
     let tip = FIRST_SPEND_HEIGHT + 1;
+    let live_root = root_going_into(&store, tip + 1);
     let snap = store.begin_read().expect("read");
     let by_hand = {
         let blocks: Vec<[u8; 32]> = hashes.iter().map(|h| *h.as_bytes()).collect();
         // The spent images are the fixtures' by name (`spend(9, _)`,
         // `spend(10, _)`), not literals that would follow the code.
         let spent = [fixture::point(9), fixture::point(10)];
-        crate::digest_v0::digest_v0(&blocks, &spent, facts(tip, 0).root_after.value.as_bytes())
+        crate::digest_v0::digest_v0(&blocks, &spent, live_root.as_bytes())
     };
     assert_eq!(snap.logical_state_digest_v0().expect("digest"), by_hand);
     // Order-insensitive in the spent family, as the hasher promises.
     let swapped = crate::digest_v0::digest_v0(
         &hashes.iter().map(|h| *h.as_bytes()).collect::<Vec<_>>(),
         &[fixture::point(10), fixture::point(9)],
-        facts(tip, 0).root_after.value.as_bytes(),
+        live_root.as_bytes(),
     );
     assert_eq!(by_hand, swapped);
     cleanup(&path);

@@ -43,9 +43,11 @@
 
 use core::fmt;
 
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_fcmp::LeafInput;
+use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex};
 
 use crate::rule_set::RuleSet;
+use crate::tree_growth::FrontierFault;
 
 /// What `validate` can fail with: the view's own fault, or one of the two
 /// kinds this crate defines. Matched arm by arm — `?` on the caller's side
@@ -95,7 +97,8 @@ pub enum Stale {
     /// set must carry the value. Not a reason to reverse Q10 (the
     /// fixed-difficulty lever being impossible on public nets *by type* is
     /// worth more than a struct's width). It mattered when `reorg_cap`
-    /// joined the set (PR #861: `RuleSet` 56, `Fault` past clippy's 128) and
+    /// joined the set (PR #861: `RuleSet` 56, `Fault` past clippy's 128;
+    /// `tx_spendable_age` took it to 64 at DRS-E3 commit 2, absorbed) and
     /// the fix is the one written here in advance — **the payload is
     /// boxed**, which keeps the by-value comparison the Fakechain caveat
     /// requires — not shrinking `RuleSet`, and not keeping limits off it
@@ -123,6 +126,13 @@ pub enum PerHeightRecord {
     Block,
     /// [`crate::ChainView::root_at`]. The store's `curve_tree_roots` cell.
     CurveTreeRoot,
+    /// [`crate::ChainView::leaf_count_at`]. The store's
+    /// `curve_tree_leaf_counts` cell (DRS-E3).
+    LeafCount,
+    /// [`crate::ChainView::outputs_at`]. The store's block body and output
+    /// rows at a height below the tip (DRS-E3: the drain's two source
+    /// blocks).
+    Outputs,
 }
 
 impl fmt::Display for PerHeightRecord {
@@ -130,6 +140,8 @@ impl fmt::Display for PerHeightRecord {
         f.write_str(match self {
             Self::Block => "block",
             Self::CurveTreeRoot => "curve-tree root",
+            Self::LeafCount => "curve-tree leaf count",
+            Self::Outputs => "block outputs",
         })
     }
 }
@@ -181,6 +193,27 @@ pub enum Corrupt {
         at: BlockHeight,
         /// Which record was missing. The store maps this onto the cell.
         record: PerHeightRecord,
+    },
+    /// A recorded output's points do not decompress — `construct_leaf`
+    /// refused them (DRS-E3 §3.2). Every admitted output's key, commitment
+    /// and `0x07` point were gated as canonical prime-order points at
+    /// admission (CEN-L11's argument, made a halt rather than a panic), so
+    /// a recorded one that is not is bytes no conforming store holds.
+    /// [`LeafInput`] names which point, so the store halts on the cell that
+    /// holds it: `O` and `C` live in `output_amounts`, `CM` in the pruned
+    /// transaction's `0x07` field.
+    LeafNotConstructible {
+        /// The output whose leaf could not be made.
+        output: GlobalOutputIndex,
+        /// Which point did not decompress.
+        input: LeafInput,
+    },
+    /// The frontier the view served could not be grown ([`FrontierFault`]).
+    /// An empty batch is not this arm: [`crate::GrowFault::NoLeaves`] is the
+    /// caller's, and the drain does not ask `grow` to append nothing.
+    TreeUnservable {
+        /// What the served frontier refused.
+        fault: FrontierFault,
     },
 }
 
@@ -321,6 +354,11 @@ impl fmt::Display for Corrupt {
                 f,
                 "no {record} recorded at height {at:?}, below the connecting height (SI-7)"
             ),
+            Self::LeafNotConstructible { output, input } => write!(
+                f,
+                "recorded output {output:?} has a {input} that does not decompress; its leaf cannot be constructed"
+            ),
+            Self::TreeUnservable { fault } => write!(f, "curve tree cannot be grown: {fault}"),
         }
     }
 }

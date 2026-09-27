@@ -7,8 +7,8 @@
 //! DRS-E2 RD-Q4). Own file so `connect_tests` stays the write-set and belt
 //! suite rather than growing past the 1k line.
 
-use shekyl_chain_rules::{ChainView, RuleSet};
-use shekyl_types::BlockHeight;
+use shekyl_chain_rules::{ChainView, FrontierFault, LeafInput, RuleSet};
+use shekyl_types::{BlockHeight, GlobalOutputIndex};
 
 use super::connect_fixtures::{candidate, connect_chain, facts, judge};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
@@ -226,6 +226,142 @@ fn a_missing_root_below_the_tip_is_si7_on_curve_tree_roots() {
             at_height: BlockHeight::from_raw(1),
             row,
         }
+    );
+    cleanup(&path);
+}
+
+/// `O` fails to decompress: the point lives on `output_amounts`. `CM` is a
+/// different cell, so this arm must not name `txs_pruned`.
+#[test]
+fn an_output_key_that_does_not_decompress_halts_on_output_amounts() {
+    let path = tmp("connect-refuse-corrupt-output-key");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::LeafNotConstructible {
+                output: GlobalOutputIndex::from_raw(1),
+                input: LeafInput::OutputKey,
+            })
+            .into())
+    });
+    expect_row(
+        &out,
+        StoreInvariant::CellCorrupt {
+            key: "output_amounts",
+            fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+                codec: "output_key",
+                reason: "the output key does not decompress",
+            }),
+        },
+    );
+    cleanup(&path);
+}
+
+/// `C` fails to decompress: same cell as `O`, a different point.
+#[test]
+fn an_amount_commitment_that_does_not_decompress_halts_on_output_amounts() {
+    let path = tmp("connect-refuse-corrupt-commitment");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::LeafNotConstructible {
+                output: GlobalOutputIndex::from_raw(1),
+                input: LeafInput::Commitment,
+            })
+            .into())
+    });
+    expect_row(
+        &out,
+        StoreInvariant::CellCorrupt {
+            key: "output_amounts",
+            fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+                codec: "commitment",
+                reason: "the amount commitment does not decompress",
+            }),
+        },
+    );
+    cleanup(&path);
+}
+
+/// `CM` fails to decompress: the point lives in the pruned transaction's
+/// `0x07` field, not on `output_amounts`.
+#[test]
+fn a_leaf_commitment_that_does_not_decompress_halts_on_txs_pruned() {
+    let path = tmp("connect-refuse-corrupt-leaf-commitment");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::LeafNotConstructible {
+                output: GlobalOutputIndex::from_raw(1),
+                input: LeafInput::LeafCommitment,
+            })
+            .into())
+    });
+    expect_row(
+        &out,
+        StoreInvariant::CellCorrupt {
+            key: "txs_pruned",
+            fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+                codec: "pqc_leaf_commitment",
+                reason: "the leaf commitment does not decompress",
+            }),
+        },
+    );
+    cleanup(&path);
+}
+
+/// A last-chunk hash off its curve is the layer table. A frontier whose
+/// layer count disagrees with the summary's leaf count is the summary.
+/// An empty grow is not either cell.
+#[test]
+fn a_served_frontier_halts_on_the_cell_that_disagreed() {
+    let path = tmp("connect-refuse-corrupt-frontier");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let off_curve: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::TreeUnservable {
+                fault: FrontierFault::NotOnCurve { layer: 1 },
+            })
+            .into())
+    });
+    expect_row(
+        &off_curve,
+        StoreInvariant::CellCorrupt {
+            key: "curve_tree_layers",
+            fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+                codec: "layer_hash",
+                reason: "a last chunk's hash is not a point of its layer's curve",
+            }),
+        },
+    );
+    cleanup(&path);
+
+    let path = tmp("connect-refuse-corrupt-frontier-shape");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let shape: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::TreeUnservable {
+                fault: FrontierFault::Shape {
+                    layers: 1,
+                    expected: 2,
+                },
+            })
+            .into())
+    });
+    expect_row(
+        &shape,
+        StoreInvariant::CellCorrupt {
+            key: "curve_tree_meta",
+            fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+                codec: "curve_tree_state",
+                reason: "the frontier's layer count disagrees with the leaf count",
+            }),
+        },
     );
     cleanup(&path);
 }

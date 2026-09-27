@@ -509,16 +509,16 @@ impl ReadSnapshot<'_> {
     /// - **the live curve-tree root** — `curve_tree_roots[tip + 1]`, the
     ///   state *after* the tip's drain, which is what the C++'s single
     ///   `"root"` cell holds (`db_lmdb.cpp:9495`) and what `connect` wrote
-    ///   from `root_after` (SCW-19); [`CurveTreeRoot::EMPTY`] for an empty
-    ///   chain, where nothing has been written and the C++ cell is the
-    ///   identity.
+    ///   from the verdict's `root_after` (SCW-19); [`CurveTreeRoot::EMPTY`]
+    ///   for an empty chain, where nothing has been written and the C++
+    ///   cell is the identity.
     ///
     /// What the digest *proves* is the grader's business, not this read's:
-    /// under RD-Q9 the root component is **borrowed** while `root_after` is
-    /// passed through (it is LMDB's root copied in), so identity there is
-    /// never evidence; the block hashes and spent keys are real replay
-    /// products. This method reports the file; the grader carries the
-    /// per-component origin.
+    /// under RD-Q9 a root component was **borrowed** while `root_after` was
+    /// passed through (LMDB's root copied in), so identity there was never
+    /// evidence; since DRS-E3 the root is the validator's derivation and
+    /// all three families are real replay products. This method reports
+    /// the file; the grader carries the per-component origin.
     ///
     /// # Errors
     ///
@@ -716,6 +716,27 @@ impl ReadSnapshot<'_> {
         tx_reads::prunable_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
     }
 
+    /// **T4b.** Whether the transaction at `id` is in the **archival shard
+    /// partition's domain** — it carries archival good (`SHT-Q1` RULED, Rick
+    /// 2026-09-27; `docs/design/ARCHIVAL_SHARD_T_DERIVATION.md` §2).
+    ///
+    /// Answered from the two digests **as recorded at ingest**, which a prune
+    /// never deletes — so this is the one safe way to evaluate the ruling's
+    /// predicate on a node that has discarded bodies. Recomputing the digests
+    /// from a pruned body would place its own discarded spends outside the
+    /// domain and split shard boundaries against an archival node.
+    ///
+    /// Bound first, as [`tx_prunable`](Self::tx_prunable).
+    ///
+    /// # Errors
+    ///
+    /// An id below the count with no `txs_prunable_hash` row is **SI-7**;
+    /// engine errors pass through.
+    pub fn tx_carries_archival_good(&self, id: TxStorageId) -> Result<AtIndex<bool>, StoreError> {
+        tx_reads::carries_archival_good_at(&self.txn, id)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
     /// **T5.** The `output_amounts` indices of the outputs of the
     /// transaction at `id`, in `vout` order. Replaces
     /// `get_tx_amount_output_indices`. Bound first, as
@@ -789,10 +810,11 @@ impl ReadSnapshot<'_> {
     /// wrote** — so an absent row is SI-7 (`CellCorrupt { Absent }`), never
     /// a default, and no caller compares a root against the identity to
     /// learn whether the tree is empty (SCU-1). EMPTY stays the answer
-    /// after `connect` until the grow path (DRS-E3) replaces it: connect
-    /// records the live root in `curve_tree_roots` whether or not the tree
-    /// has grown (SI-4). A summary that is not EMPTY must carry that live
-    /// root (SI-12, [`StoreInvariant::SummaryRootDiverged`]). A count that
+    /// after `connect` until a drain appends the first leaf (`grow.rs`,
+    /// DRS-E3): connect records the live root in `curve_tree_roots` whether
+    /// or not the tree has grown (SI-4). The summary's root must be that
+    /// live root, EMPTY included (SI-12,
+    /// [`StoreInvariant::SummaryRootDiverged`]). A count that
     /// is not the leaf table's length is SI-11
     /// ([`LeafDensity::Length`](crate::store::LeafDensity::Length)).
     pub fn curve_tree(&self) -> Result<CurveTreeState, StoreError> {
@@ -823,9 +845,11 @@ impl ReadSnapshot<'_> {
     /// Successor to `get_curve_tree_leaves`, whose C++ consumer is retired
     /// (SCU-2); lands on completeness grounds (S-TX Q3's re-ruling — a range
     /// read is part of what makes a dense keyed table a table) with its
-    /// Rust consumer named: **DRS-E3**, the grow path, reads back what it
-    /// writes (`SCU-Q4`, rule 23 STAGED). A range is one chunk's worth of
-    /// leaves in practice; this is not a full-tree walk.
+    /// Rust consumer named: **DRS-E3**, the grow path (`SCU-Q4`). The
+    /// writer itself reads only the frontier (`leaf_reads::frontier`, the
+    /// layer table), never the leaves back; this range read serves the
+    /// proving side (DRS-D3c) and the operator surface. A range is one
+    /// chunk's worth of leaves in practice; this is not a full-tree walk.
     pub fn leaves(&self, range: Range<TreePosition>) -> Result<AtIndex<Vec<TreeLeaf>>, StoreError> {
         curve_reads::leaves(&self.txn, range).map_err(chain_reads::ReadFault::into_plain)
     }

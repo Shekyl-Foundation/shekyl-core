@@ -60,6 +60,7 @@ mod drive;
 mod inode;
 mod seam;
 
+#[cfg(unix)]
 pub use inode::socket_descriptors;
 pub use seam::ChannelChoice;
 
@@ -177,7 +178,8 @@ impl Overfull {
 
     async fn wait(&self) {
         loop {
-            let notified = self.notify.notified();
+            let mut notified = std::pin::pin!(self.notify.notified());
+            notified.as_mut().enable();
             if self.tripped() {
                 return;
             }
@@ -190,6 +192,12 @@ pub struct Session {
     inbound: mpsc::Receiver<Vec<u8>>,
     queue: drive::ByteQueue,
     overfull: Arc<Overfull>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.queue.close();
+    }
 }
 
 impl Session {
@@ -398,6 +406,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{Ipv4Addr, SocketAddr, TcpStream as StdStream};
     use std::num::NonZeroUsize;
+    #[cfg(target_os = "linux")]
     use std::os::unix::io::AsRawFd;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
@@ -411,6 +420,7 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::mpsc;
 
+    #[cfg(target_os = "linux")]
     use super::inode::socket_descriptors;
     use super::{
         channel_choice, listen, ChannelChoice, ChoiceError, ClearnetOption, Config, Listener,
@@ -510,8 +520,15 @@ mod tests {
 
     #[test]
     fn a_flood_of_accept_errors_is_transient() {
-        let refused = std::io::Error::from_raw_os_error(24);
-        assert!(super::accept_error_is_transient(&refused));
+        #[cfg(unix)]
+        let code = 24;
+        #[cfg(windows)]
+        let code = 4;
+        #[cfg(any(unix, windows))]
+        {
+            let refused = std::io::Error::from_raw_os_error(code);
+            assert!(super::accept_error_is_transient(&refused));
+        }
         let aborted = std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "aborted");
         assert!(super::accept_error_is_transient(&aborted));
         let closed = std::io::Error::new(std::io::ErrorKind::NotConnected, "closed");
@@ -549,6 +566,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn one_descriptor_after_the_socket_is_split() {
         let engine = EngineService::start(MonotonicClock::new());

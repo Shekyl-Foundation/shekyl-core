@@ -46,7 +46,7 @@ fuzz_target!(|data: &[u8]| {
         output_key.copy_from_slice(&data[..32]);
         commitment.copy_from_slice(&data[32..64]);
         cm.copy_from_slice(&data[64..96]);
-        if let Some(leaf) = construct_leaf(&output_key, &commitment, &cm) {
+        if let Ok(leaf) = construct_leaf(&output_key, &commitment, &cm) {
             let x =
                 PqcLeafScalar::from_commitment_point(&cm).expect("leaf built, so CM decompresses");
             assert_eq!(&leaf[96..128], &x.0);
