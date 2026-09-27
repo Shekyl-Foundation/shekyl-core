@@ -18,6 +18,9 @@
 //! Those are different types on purpose (`PWD-E9`: the serving P's Tor
 //! instance is wallet-owned; every other Tor process is daemon-owned).
 //! The transform they share is this one function of 32 public bytes.
+//! [`is_v3_onion_hostname`] is that encoding run backwards: decode, then
+//! compare to [`v3_service_id`]. It still holds no secret and names no
+//! Tor instance.
 
 #![deny(unsafe_code)]
 
@@ -51,6 +54,62 @@ pub fn v3_onion_hostname(pubkey: &[u8; 32]) -> String {
     let mut address = v3_service_id(pubkey);
     address.push_str(".onion");
     address
+}
+
+/// Whether `host` is a v3 onion hostname: 56 lowercase base32 characters,
+/// the `.onion` suffix, version byte 3, and the rend-spec checksum.
+///
+/// The checksum is [`v3_service_id`] of the decoded key. A hostname this
+/// function accepts re-encodes to itself.
+#[must_use]
+pub fn is_v3_onion_hostname(host: &str) -> bool {
+    let Some(id) = host.strip_suffix(".onion") else {
+        return false;
+    };
+    if id.len() != 56 {
+        return false;
+    }
+    let Some(raw) = base32_decode_35(id) else {
+        return false;
+    };
+    if raw[34] != ONION_ADDRESS_VERSION {
+        return false;
+    }
+    let mut pubkey = [0u8; 32];
+    pubkey.copy_from_slice(&raw[..32]);
+    v3_service_id(&pubkey) == id
+}
+
+/// Inverse of [`base32_lower`] for the 35-byte v3 address body.
+///
+/// 56 characters are exactly 35 bytes, so a leftover bit is a rejection.
+fn base32_decode_35(id: &str) -> Option<[u8; 35]> {
+    let mut out = [0u8; 35];
+    let mut filled = 0usize;
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for byte in id.bytes() {
+        let value = match byte {
+            b'a'..=b'z' => u32::from(byte) - u32::from(b'a'),
+            b'2'..=b'7' => u32::from(byte) - u32::from(b'2') + 26,
+            _ => return None,
+        };
+        acc = (acc << 5) | value;
+        bits += 5;
+        while bits >= 8 {
+            bits -= 8;
+            if filled == out.len() {
+                return None;
+            }
+            out[filled] = u8::try_from((acc >> bits) & 0xff).ok()?;
+            filled += 1;
+        }
+    }
+    if bits != 0 || filled != out.len() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// RFC 4648 base32, lowercase, unpadded.
@@ -136,5 +195,20 @@ mod tests {
             .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b)));
         // The version byte lands in the final base32 group: v3 ends in 'd'.
         assert!(host.ends_with('d'), "v3 addresses end in 'd': {host}");
+    }
+
+    #[test]
+    fn a_v3_hostname_verifies_and_a_changed_character_does_not() {
+        let host = v3_onion_hostname(&[0x11; 32]);
+        assert!(is_v3_onion_hostname(&host));
+        assert!(is_v3_onion_hostname(
+            "efjprum3peosirjsilqv6lvlns3476t3njpngaexsyhangeb3mjo7sad.onion"
+        ));
+        let mut chars: Vec<char> = host.chars().collect();
+        chars[0] = if chars[0] == 'a' { 'b' } else { 'a' };
+        let flipped: String = chars.into_iter().collect();
+        assert!(!is_v3_onion_hostname(&flipped));
+        assert!(!is_v3_onion_hostname("not-an-onion"));
+        assert!(!is_v3_onion_hostname(&host.to_ascii_uppercase()));
     }
 }

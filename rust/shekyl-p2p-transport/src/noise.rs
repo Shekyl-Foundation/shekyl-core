@@ -48,7 +48,7 @@ fn responder_dh(eph: &StaticSecret, remote_e: &[u8; 32]) -> x25519_dalek::Shared
 }
 
 #[derive(Debug)]
-pub(crate) enum HandshakeError {
+pub enum HandshakeError {
     Decrypt,
     Kem,
     Length,
@@ -131,14 +131,14 @@ impl Sym {
 }
 
 /// Initiator after message 1. The next call reads message 2.
-pub(crate) struct Initiator {
+pub struct Initiator {
     sym: Sym,
     eph: StaticSecret,
     dk: ml_kem_768::DecapsKey,
 }
 
 /// Responder before message 1.
-pub(crate) struct Responder {
+pub struct Responder {
     sym: Sym,
 }
 
@@ -146,21 +146,21 @@ pub(crate) struct Responder {
 ///
 /// `remote_ek` is the encapsulation key `read_message1` already accepted.
 /// An invalid key cannot be represented here.
-pub(crate) struct ResponderReady {
+pub struct ResponderReady {
     sym: Sym,
     remote_e: [u8; 32],
     remote_ek: ml_kem_768::EncapsKey,
 }
 
 /// Both messages are done. `INITIATOR` selects which `Split` half is send.
-pub(crate) struct Established<const INITIATOR: bool> {
+pub struct Established<const INITIATOR: bool> {
     sym: Sym,
     #[cfg(test)]
     pub(crate) ck_after_ee: Zeroizing<[u8; HASH_LEN]>,
 }
 
 impl Initiator {
-    pub(crate) fn new(network_id: &NetworkId) -> Result<(Self, Vec<u8>), HandshakeError> {
+    pub fn new(network_id: &NetworkId) -> Result<(Self, Vec<u8>), HandshakeError> {
         let eph = StaticSecret::random_from_rng(OsRng);
         let (ek, dk) =
             ml_kem_768::KG::try_keygen_with_rng(&mut OsRng).map_err(|_| HandshakeError::Kem)?;
@@ -187,10 +187,7 @@ impl Initiator {
         Ok((Self { sym, eph, dk }, msg))
     }
 
-    pub(crate) fn read_message2(
-        mut self,
-        message2: &[u8],
-    ) -> Result<Established<true>, HandshakeError> {
+    pub fn read_message2(mut self, message2: &[u8]) -> Result<Established<true>, HandshakeError> {
         if message2.len() != MESSAGE2_LEN {
             return Err(HandshakeError::Length);
         }
@@ -240,7 +237,7 @@ impl Initiator {
 }
 
 impl Responder {
-    pub(crate) fn new(network_id: &NetworkId) -> Self {
+    pub fn new(network_id: &NetworkId) -> Self {
         Self {
             sym: Sym::new(PROTOCOL_NAME, network_id),
         }
@@ -253,10 +250,7 @@ impl Responder {
         }
     }
 
-    pub(crate) fn read_message1(
-        mut self,
-        message1: &[u8],
-    ) -> Result<ResponderReady, HandshakeError> {
+    pub fn read_message1(mut self, message1: &[u8]) -> Result<ResponderReady, HandshakeError> {
         if message1.len() != MESSAGE1_LEN {
             return Err(HandshakeError::Length);
         }
@@ -291,7 +285,7 @@ impl Responder {
 }
 
 impl ResponderReady {
-    pub(crate) fn write_message2(self) -> Result<(Established<false>, Vec<u8>), HandshakeError> {
+    pub fn write_message2(self) -> Result<(Established<false>, Vec<u8>), HandshakeError> {
         self.finish(StaticSecret::random_from_rng(OsRng), &mut OsRng)
     }
 
@@ -357,7 +351,7 @@ impl ResponderReady {
 }
 
 impl<const INITIATOR: bool> Established<INITIATOR> {
-    pub(crate) fn split(mut self) -> (SendHalf, RecvHalf) {
+    pub fn split(mut self) -> (SendHalf, RecvHalf) {
         let ck = std::mem::replace(&mut self.sym.ck, Zeroizing::new([0u8; HASH_LEN]));
         let (first, second) = aead::hkdf(&ck, &[]);
         if INITIATOR {

@@ -72,12 +72,108 @@ impl Rng {
 #[derive(Debug, Clone)]
 pub struct Shard {
     pub age: f64,
+    /// Composition control key: an independent per-shard draw used **only** by the
+    /// decorrelated arm of the composition axis (`CompositionParams::decorrelated`).
+    /// `0.0` in every other scenario, and never drawn there, so the RNG stream — and
+    /// therefore every pre-composition result — is byte-identical.
+    pub size_seed: f64,
+    /// Storage units this shard occupies, relative to the mean shard — **fixed at
+    /// birth**. A shard's bytes are determined when it closes and never change again, so
+    /// this is stored state, not a function of the shard's *current* age: keying it on
+    /// current age would make a shard shrink as it ages under a dynamic window
+    /// (`advance_epoch`), which is physically wrong. `1.0` under a flat composition.
+    pub size: f64,
 }
 
 impl Shard {
     /// Deep-history shards require a per-shard retention bond. Hot shards do not.
     pub fn is_deep(&self, deep_threshold: f64) -> bool {
         self.age >= deep_threshold
+    }
+}
+
+/// **Composition axis** (`PDM-Q-F34`) — per-shard storage cost, the byte heterogeneity
+/// the fixed-cardinality partition admits.
+///
+/// A shard is `T = 200` consecutive storage ids, so its byte size is set by the usage
+/// **density of its era**, not by any per-transaction draw: a low-density era puts ~180
+/// coinbases (which carry no archival good at all — `prunable_hash` is `null_hash` and
+/// there are no `pqc_auths`) and ~20 spends in one shard, while a dense era puts four
+/// blocks of pure spends in it. Size therefore tracks the shard's **age**, and cost-band
+/// is confounded with age-band by construction. That is the substance, not a modelling
+/// artifact: channel 1 (`(1/R_market)·g(age)`, `REWARD_EMISSION_LEG.md` §4.1) takes **no
+/// byte operand**, so nothing prices a heavy shard except the realized thinness of its
+/// holder set — and `g(age)` pays the *most* for the era that is cheapest to hold.
+///
+/// `spread` is the heavy/light size ratio `S`. Sizes are normalized so the mean shard is
+/// one storage unit, which keeps total storage demand invariant in `S`: this axis
+/// **redistributes** cost, it does not add it (adding it is `storage_scale`). `S = 1` ⇒
+/// every size is exactly `1.0` ⇒ every pre-composition scenario is byte-identical.
+///
+/// `decorrelated` is the **control**: the same size marginal keyed on `Shard::size_seed`
+/// instead of age, which separates "heavy shards are under-held" from "old shards are
+/// under-held". Pre-genesis there is no realized composition to sample (`tests/data` is
+/// Monero-lineage), so `S` is **swept, not measured** — the bounding use
+/// `ARCHIVAL_PRUNED_DAEMON_MODE.md` §7.7 sanctions for a constant with no corpus behind it.
+#[derive(Debug, Clone, Copy)]
+pub struct CompositionParams {
+    /// Heavy/light size ratio `S` (`1.0` = flat, the pre-composition model).
+    pub spread: f64,
+    /// Key sizes on an independent draw instead of age (the confound control).
+    pub decorrelated: bool,
+}
+
+impl CompositionParams {
+    pub fn is_flat(&self) -> bool {
+        self.spread <= 1.0
+    }
+
+    /// Mean of the unnormalized shape over a uniform key — the divisor that holds total
+    /// storage demand fixed as `S` moves. A skewed age distribution shifts the *realized*
+    /// mean off `1.0`, which is why the realized mean is reported (`szMn`) rather than
+    /// assumed.
+    fn norm(&self) -> f64 {
+        1.0 + (self.spread - 1.0) / 2.0
+    }
+
+    /// Storage units a shard born in era `key` occupies, relative to the mean shard.
+    /// `key = 0` is the newest era (heaviest) and `key = 1` the oldest (lightest) —
+    /// monotone usage growth, the direction the deep-history premium is aimed against.
+    ///
+    /// Called **once per shard, at birth** (construction or window recycle); the result is
+    /// stored in `Shard::size`. Never call it against a live shard's current age.
+    pub fn size_at_birth(&self, key: f64) -> f64 {
+        if self.is_flat() {
+            return 1.0;
+        }
+        (1.0 + (self.spread - 1.0) * (1.0 - key)) / self.norm()
+    }
+
+    /// The era key a shard is born under: its age at birth, or — in the decorrelated
+    /// control — an independent draw, which is what separates a cost-band finding from an
+    /// age-band one.
+    pub fn birth_key(&self, age_at_birth: f64, size_seed: f64) -> f64 {
+        if self.decorrelated {
+            size_seed
+        } else {
+            age_at_birth
+        }
+    }
+
+    /// The size a shard was born with.
+    pub fn size(&self, shard: &Shard) -> f64 {
+        if self.is_flat() {
+            return 1.0;
+        }
+        shard.size
+    }
+
+    /// Realized mean size over a shard set (`1.0` when flat).
+    pub fn mean_size(&self, shards: &[Shard]) -> f64 {
+        if self.is_flat() || shards.is_empty() {
+            return 1.0;
+        }
+        shards.iter().map(|s| self.size(s)).sum::<f64>() / shards.len() as f64
     }
 }
 
@@ -220,8 +316,12 @@ impl World {
     /// holdings/locks/inflight by one (unheld, unlocked, not-in-flight) slot so the new
     /// shard is consistently indexable. No-op on legacy scenarios (never called when
     /// `!bootstrap`).
-    pub fn append_shard(&mut self, age: f64) {
-        self.shards.push(Shard { age });
+    pub fn append_shard(&mut self, age: f64, comp: &CompositionParams) {
+        self.shards.push(Shard {
+            age,
+            size_seed: 0.0,
+            size: comp.size_at_birth(comp.birth_key(age, 0.0)),
+        });
         for a in 0..self.actors.len() {
             self.holdings[a].push(false);
             self.locks[a].push(0);
@@ -242,12 +342,16 @@ impl World {
     /// Permanent archival of the truly-oldest state is a gate-5 foundation concern,
     /// out of this window — so "retire at age 1" is a window boundary, not a claim
     /// that irreplaceable data is discarded.
-    pub fn advance_epoch(&mut self, age_step: f64) {
+    pub fn advance_epoch(&mut self, age_step: f64, comp: &CompositionParams) {
         for (s, shard) in self.shards.iter_mut().enumerate() {
             shard.age += age_step;
             if shard.age >= 1.0 {
-                // Retire + recycle the slot.
+                // Retire + recycle the slot. The slot becomes a NEW shard, so it is
+                // re-sized at birth — a shard's bytes are fixed when it closes, so the
+                // one it replaces does not carry its size forward, and this one does not
+                // shrink as it ages.
                 shard.age = 0.0;
+                shard.size = comp.size_at_birth(comp.birth_key(0.0, shard.size_seed));
                 for a in 0..self.actors.len() {
                     self.holdings[a][s] = false;
                     self.locks[a][s] = 0;
@@ -443,13 +547,188 @@ pub fn r_target(age: f64, r_target_hot: f64, r_target_deep: f64) -> usize {
 }
 
 #[cfg(test)]
+mod composition_tests {
+    use super::{Actor, CompositionParams, Shard, World};
+
+    fn shard(age: f64) -> Shard {
+        Shard {
+            age,
+            size_seed: 0.0,
+            size: 1.0,
+        }
+    }
+
+    /// `spread = 1.0` is the pre-composition model: every shard costs exactly one unit.
+    /// This is what makes every pre-`PDM-Q-F34` scenario byte-identical, so it is pinned
+    /// rather than assumed.
+    #[test]
+    fn flat_spread_is_exactly_one_unit_per_shard() {
+        let c = CompositionParams {
+            spread: 1.0,
+            decorrelated: false,
+        };
+        for age in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert_eq!(c.size_at_birth(age), 1.0, "age {age}");
+            assert_eq!(c.size(&shard(age)), 1.0, "age {age}");
+        }
+        assert_eq!(c.mean_size(&[shard(0.0), shard(1.0)]), 1.0);
+    }
+
+    /// The axis REDISTRIBUTES cost, it does not add it: the mean shard stays one unit over
+    /// a uniform age distribution at every spread. Without this the arm would be a
+    /// disguised `storage_scale` sweep and a coverage change would be unattributable.
+    #[test]
+    fn spread_is_mean_preserving_over_uniform_ages() {
+        for spread in [2.0, 4.0, 10.0, 60.0] {
+            let c = CompositionParams {
+                spread,
+                decorrelated: false,
+            };
+            let shards: Vec<Shard> = (0..1000)
+                .map(|i| {
+                    let age = i as f64 / 999.0;
+                    Shard {
+                        age,
+                        size_seed: 0.0,
+                        size: c.size_at_birth(age),
+                    }
+                })
+                .collect();
+            let mean = c.mean_size(&shards);
+            assert!(
+                (mean - 1.0).abs() < 1e-3,
+                "spread {spread}: mean size {mean} is not ~1.0"
+            );
+        }
+    }
+
+    /// Size tracks era density, so the young end is heavy and the old end light — the
+    /// direction that puts the `g(age)` premium on the CHEAP shards. A sign flip here
+    /// inverts the whole reading of the arm.
+    #[test]
+    fn young_shards_are_heavier_than_old_ones() {
+        let c = CompositionParams {
+            spread: 60.0,
+            decorrelated: false,
+        };
+        let young = c.size_at_birth(0.0);
+        let old = c.size_at_birth(1.0);
+        assert!(young > old, "young {young} must exceed old {old}");
+        // The extremes are the stated ratio apart; the mean-preserving normalizer is what
+        // keeps the heavy END near 2x the MEAN, which is why `S` is a ratio between bands
+        // and not a multiple of the mean.
+        assert!((young / old - 60.0).abs() < 1e-6, "ratio {}", young / old);
+        assert!(young < 2.5, "heavy end {young} is not near 2x the mean");
+    }
+
+    /// **A shard's bytes are fixed when it closes.** Size is therefore stored at birth and
+    /// must not track the shard's *current* age: under a dynamic window `advance_epoch`
+    /// ages every shard, and an age-keyed size would make a shard SHRINK as it aged, which
+    /// is physically wrong and would silently invert the arm's reading. Pinned because the
+    /// primitive is what a later dynamic-window increment will be built on — no scenario on
+    /// this branch reaches it.
+    #[test]
+    fn size_is_fixed_at_birth_and_does_not_track_current_age() {
+        let comp = CompositionParams {
+            spread: 60.0,
+            decorrelated: false,
+        };
+        // Born at the oldest era (light), then aged forward.
+        let born_old = comp.size_at_birth(comp.birth_key(1.0, 0.0));
+        let mut w = World::new(
+            vec![Shard {
+                age: 0.40,
+                size_seed: 0.0,
+                size: born_old,
+            }],
+            vec![Actor {
+                storage_capacity: 4,
+                capital: 100.0,
+                is_whale: false,
+                reservation: 0.0,
+            }],
+        );
+        for _ in 0..5 {
+            w.advance_epoch(0.05, &comp);
+        }
+        assert!(w.shards[0].age > 0.60, "the shard must have aged");
+        assert_eq!(
+            comp.size(&w.shards[0]),
+            born_old,
+            "size must not change as the shard ages"
+        );
+    }
+
+    /// A recycled slot is a NEW shard, so it is re-sized at birth — at the newest era,
+    /// which under monotone growth is the heaviest. Without this, a retiring light shard
+    /// would hand its size to the fresh frontier shard replacing it.
+    #[test]
+    fn a_recycled_slot_is_reborn_at_the_newest_era() {
+        let comp = CompositionParams {
+            spread: 60.0,
+            decorrelated: false,
+        };
+        let light = comp.size_at_birth(1.0);
+        let mut w = World::new(
+            vec![Shard {
+                age: 0.99,
+                size_seed: 0.0,
+                size: light,
+            }],
+            vec![Actor {
+                storage_capacity: 4,
+                capital: 100.0,
+                is_whale: false,
+                reservation: 0.0,
+            }],
+        );
+        w.advance_epoch(0.05, &comp);
+        assert_eq!(w.shards[0].age, 0.0, "the slot must have recycled");
+        assert_eq!(
+            comp.size(&w.shards[0]),
+            comp.size_at_birth(0.0),
+            "a reborn slot carries the newest era's size, not the retired shard's"
+        );
+        assert!(comp.size(&w.shards[0]) > light);
+    }
+
+    /// The control keys on the independent draw, so age carries no size information —
+    /// the one thing that separates a cost-band finding from an age-band one.
+    #[test]
+    fn decorrelated_keys_on_the_seed_not_the_age() {
+        let c = CompositionParams {
+            spread: 10.0,
+            decorrelated: true,
+        };
+        // Young but seeded light vs old but seeded heavy: the seed must decide.
+        let young_light = c.size_at_birth(c.birth_key(0.0, 1.0));
+        let old_heavy = c.size_at_birth(c.birth_key(1.0, 0.0));
+        assert!(
+            young_light < old_heavy,
+            "seed must dominate age in the control arm"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     /// Two deep shards, one actor with capacity 2. `s = 0` is the under-target shard
     /// the predicate is asked about.
     fn one_actor_world(capacity: usize) -> World {
-        let shards = vec![Shard { age: 1.0 }, Shard { age: 1.0 }];
+        let shards = vec![
+            Shard {
+                age: 1.0,
+                size_seed: 0.0,
+                size: 1.0,
+            },
+            Shard {
+                age: 1.0,
+                size_seed: 0.0,
+                size: 1.0,
+            },
+        ];
         let actors = vec![Actor {
             storage_capacity: capacity,
             capital: 100.0,

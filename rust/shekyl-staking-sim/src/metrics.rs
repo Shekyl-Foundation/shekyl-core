@@ -7,7 +7,7 @@
 //! *only* place the bond's actor-level deterrence can be measured. A pseudonym-level
 //! line is reported as the secondary "what an on-chain observer would (mis)conclude."
 
-use crate::model::{bond_age, r_target, World};
+use crate::model::{bond_age, r_target, CompositionParams, World};
 use crate::reward::RewardEval;
 use serde::Serialize;
 
@@ -150,6 +150,44 @@ pub struct TargetParams {
     /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
     /// Smaller shards clear more actors' storage leg, enlarging the co-located pool.
     pub deep_shard_size: f64,
+    /// Composition axis (`PDM-Q-F34`): per-shard size heterogeneity. The co-located
+    /// seating leg divides by the **realized mean** size, so the aggregate ratio is
+    /// unchanged by a redistribution — which is exactly why the aggregate cannot see
+    /// this axis and the size-banded read (`size_band_under`) is the instrument.
+    pub comp: CompositionParams,
+}
+
+/// Coverage banded by **size** tercile — light / mid / heavy — plus the realized mean
+/// size. This is the composition instrument: every other coverage read in this file is
+/// either aggregate or banded by age, and a redistribution of cost at constant total is
+/// invisible to both. Returned as `([light, mid, heavy], mean_size)`; with `S = 1` all
+/// three bands are one partition of an equal-size set and the read is degenerate by
+/// construction (reported, not asserted on).
+pub fn size_band_under(world: &World, r: &[usize], tp: &TargetParams) -> ([f64; 3], f64) {
+    let n = world.shards.len();
+    let mean = tp.comp.mean_size(&world.shards);
+    if n == 0 {
+        return ([0.0; 3], mean);
+    }
+    let mut idx: Vec<usize> = (0..n).collect();
+    idx.sort_by(|&a, &b| {
+        tp.comp
+            .size(&world.shards[a])
+            .partial_cmp(&tp.comp.size(&world.shards[b]))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut bands = [0.0f64; 3];
+    for (band, chunk) in idx.chunks(n.div_ceil(3)).take(3).enumerate() {
+        let under = chunk
+            .iter()
+            .filter(|&&s| {
+                let tgt = r_target(world.shards[s].age, tp.r_target_hot, tp.r_target_deep);
+                r[s] < tgt
+            })
+            .count();
+        bands[band] = under as f64 / chunk.len() as f64;
+    }
+    (bands, mean)
 }
 
 pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> CoverageMetrics {
@@ -287,7 +325,11 @@ pub fn coverage_with_r(
     let bonded = tp.bond_rate > 0.0;
     let n_actors_total = world.actors.len();
     // Storage leg: how many deep shards (of size `deep_shard_size`) an actor can store.
-    let storage_slots = |stor: usize| (stor as f64 / tp.deep_shard_size).floor() as usize;
+    // Composition axis: an actor's storage leg is measured in MEAN shards, so a pure
+    // redistribution leaves this seating count fixed (and `S = 1` leaves it identical).
+    let size_mean = tp.comp.mean_size(&world.shards);
+    let storage_slots =
+        |stor: usize| (stor as f64 / (tp.deep_shard_size * size_mean)).floor() as usize;
     let bands: Vec<AgeBandMetrics> = (0..N_BANDS)
         .map(|b| {
             let lo = b as f64 / N_BANDS as f64;

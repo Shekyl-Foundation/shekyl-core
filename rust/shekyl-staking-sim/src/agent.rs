@@ -17,7 +17,7 @@
 //! rate, carrying the competitive-share servo's dilution into the marginal decision.
 
 use crate::model::Rng;
-use crate::model::{bond_age, bond_duration, fetch_latency, g_age, World};
+use crate::model::{bond_age, bond_duration, fetch_latency, g_age, CompositionParams, World};
 
 #[derive(Debug, Clone)]
 pub struct AgentParams {
@@ -37,6 +37,9 @@ pub struct AgentParams {
     /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
     /// `1.0` = iteration-1 behavior (every shard costs one unit).
     pub deep_shard_size: f64,
+    /// Composition axis: per-shard size multiplier on top of `deep_shard_size`
+    /// (`spread = 1.0` ⇒ every shard one unit ⇒ byte-identical).
+    pub comp: CompositionParams,
     // --- L9 duration axis (iteration 2; inert when `bond_dur_base == 0`) ---
     /// Flat retention-commitment horizon in epochs.
     pub bond_dur_base: f64,
@@ -152,7 +155,17 @@ fn best_response(
     let cap_storage = cap_storage as f64;
     // Storage a shard occupies: deep shards cost `deep_shard_size` units (the L8 storage
     // leg / granularity lever); hot shards cost one unit.
-    let stor_cost = |deep: bool| if deep { ap.deep_shard_size } else { 1.0 };
+    // Composition axis: scaled per shard, so a heavy shard both eats more of the storage
+    // budget and costs more to carry — while its VALUE term below stays byte-blind, which
+    // is channel 1's actual shape.
+    let stor_cost = |s: usize| {
+        let base = if world.shards[s].is_deep(ap.deep_threshold) {
+            ap.deep_shard_size
+        } else {
+            1.0
+        };
+        base * ap.comp.size(&world.shards[s])
+    };
 
     let mut new_held = vec![false; n_shard];
     let mut used_storage = 0.0f64;
@@ -170,7 +183,7 @@ fn best_response(
         if world.locks[actor][s] > 0 && world.holdings[actor][s] {
             new_held[s] = true;
             // Bond already in `used_bond` via the pre-charge seed; add only storage.
-            used_storage += stor_cost(world.shards[s].is_deep(ap.deep_threshold));
+            used_storage += stor_cost(s);
         }
     }
 
@@ -186,7 +199,8 @@ fn best_response(
         let age = world.shards[s].age;
         let deep = world.shards[s].is_deep(ap.deep_threshold);
         let value = price * (1.0 / r_eff as f64) * g_age(age, age_weight);
-        let mut cost = ap.storage_unit_cost + if deep { ap.bond_carry } else { 0.0 };
+        let mut cost = ap.storage_unit_cost * ap.comp.size(&world.shards[s])
+            + if deep { ap.bond_carry } else { 0.0 };
         // Anticipatory lock cost: acquiring a deep shard commits storage for its
         // (age-scaled) duration, foregone if value later drops. Charged only on a
         // *fresh* acquisition (not already held), proportional to the horizon — so
@@ -224,7 +238,7 @@ fn best_response(
         }
         // Storage budget: deep shards may cost >1 unit, so skip-and-continue (a smaller
         // hot shard may still fit) rather than break.
-        if used_storage + stor_cost(deep) > cap_storage {
+        if used_storage + stor_cost(s) > cap_storage {
             continue;
         }
         // Capital budget on posted bonds. A pre-charged deep shard (held at epoch start under
@@ -260,7 +274,7 @@ fn best_response(
             }
         }
         new_held[s] = true;
-        used_storage += stor_cost(deep);
+        used_storage += stor_cost(s);
         if charges_bond {
             used_bond += bond;
         }
@@ -286,8 +300,13 @@ fn best_response(
     for s in 0..n_shard {
         let deep = world.shards[s].is_deep(ap.deep_threshold);
         if new_held[s] && !was_held[s] {
-            world.inflight[actor][s] =
-                fetch_latency(deep, ap.deep_shard_size, ap.fetch_latency_per_unit);
+            // Egress is the shard's own bytes (the possession read is whole-shard,
+            // `SF-D1`), so the backfill lag scales with size too.
+            world.inflight[actor][s] = fetch_latency(
+                deep,
+                ap.deep_shard_size * ap.comp.size(&world.shards[s]),
+                ap.fetch_latency_per_unit,
+            );
         } else if !new_held[s] {
             world.inflight[actor][s] = 0;
         }

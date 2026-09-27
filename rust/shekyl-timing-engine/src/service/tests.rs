@@ -14,6 +14,42 @@ use super::*;
 use crate::{ManualClock, OwnerClass, Tick};
 
 #[test]
+fn the_engine_thread_is_a_dedicated_ledger_row() {
+    let service = EngineService::start(ManualClock::new(Tick::new(0)));
+    let id = service.ledger_id();
+    let row = shekyl_thread_ledger::ledger()
+        .into_iter()
+        .find(|row| row.id == id)
+        .expect("the engine thread is recorded while it is alive");
+    assert_eq!(row.name.as_str(), ENGINE_THREAD_NAME);
+    assert_eq!(row.kind, shekyl_thread_ledger::RowKind::DedicatedThread);
+    assert_eq!(
+        row.kind.threads(),
+        shekyl_thread_ledger::DEDICATED_THREAD_COUNT
+    );
+    drop(service);
+    assert!(shekyl_thread_ledger::ledger()
+        .iter()
+        .all(|row| row.id != id));
+}
+
+#[test]
+fn stopping_the_engine_thread_removes_its_ledger_row() {
+    let mut service = EngineService::start(ManualClock::new(Tick::new(0)));
+    let id = service.ledger_id();
+    service.wait_stopped();
+    assert!(shekyl_thread_ledger::ledger()
+        .iter()
+        .all(|row| row.id != id));
+}
+
+#[test]
+fn the_service_is_shareable_across_threads() {
+    fn assert_sync<T: Sync>() {}
+    assert_sync::<EngineService<ManualClock>>();
+}
+
+#[test]
 fn a_later_arm_is_not_sent_until_the_wake_resets_the_handle() {
     let service = EngineService::start(ManualClock::new(Tick::new(0)));
     let owner = service
@@ -154,7 +190,7 @@ fn every_handle_refuses_once_the_service_is_closed() {
 
 #[test]
 fn a_command_queued_before_close_is_not_applied() {
-    let service = EngineService::start_paused(ManualClock::new(Tick::new(1_000)));
+    let mut service = EngineService::start_paused(ManualClock::new(Tick::new(1_000)));
     let owner = service
         .handle()
         .register(OwnerClass::Transport)
@@ -304,7 +340,7 @@ fn after_close_returns_a_poll_stays_closed() {
 
 #[test]
 fn a_wait_on_a_registration_closed_before_it_is_applied_returns_closed() {
-    let service = EngineService::start_paused(ManualClock::new(Tick::new(0)));
+    let mut service = EngineService::start_paused(ManualClock::new(Tick::new(0)));
     let owner = service.handle().register(OwnerClass::Transport).unwrap();
     let slot = Arc::clone(&owner.slot);
     let (tx, rx) = mpsc::channel();
@@ -340,7 +376,7 @@ fn both_waits(
 
 #[test]
 fn a_wake_pending_at_close_is_handed_out_once() {
-    let service = EngineService::start(ManualClock::new(Tick::new(0)));
+    let mut service = EngineService::start(ManualClock::new(Tick::new(0)));
     let owner = service.handle().register(OwnerClass::Transport).unwrap();
     owner.arm(Tick::new(1)).unwrap();
     service.barrier();
@@ -370,7 +406,7 @@ fn a_wake_pending_at_deregister_is_handed_out_once() {
 
 #[test]
 fn a_deregistered_handle_does_not_poll_an_empty_slot_as_idle() {
-    let service = EngineService::start_paused(ManualClock::new(Tick::new(0)));
+    let mut service = EngineService::start_paused(ManualClock::new(Tick::new(0)));
     let owner = service.handle().register(OwnerClass::Relay).unwrap();
     owner.deregister().unwrap();
     assert!(matches!(owner.poll_wake(), Err(EngineError::UnknownOwner)));
