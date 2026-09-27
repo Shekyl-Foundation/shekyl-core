@@ -31,11 +31,18 @@ use shekyl_archival_retention::{frozen_segment_count, ARCHIVAL_BOND_FLOOR_ATOMIC
 /// Atomic units per SKL — the SKL/atomic conversion factor.
 pub const COIN: u64 = 1_000_000_000;
 
-/// Bytes an archiver stores per frozen shard. Design-doc §2 corpus figure:
-/// `SEGMENT_LEAF_COUNT` (25,992) leaves ≈ **3.33 MB** (~128 B/leaf; the whole
-/// ~4,096-shard corpus ≈ 13.6 GB). A sim model parameter, **not** a consensus
-/// constant — the wire leaf size is gate-2/3 open (§6.0), so this is the §2
-/// estimate, swept in the byte-size sensitivity arm if it moves.
+/// Bytes an archiver stores per frozen shard — a **modelling mean**, and a
+/// stale one by unit: it is `SEGMENT_LEAF_COUNT` (25,992) leaves ≈ **3.33 MB**
+/// (~128 B/leaf; the whole ~4,096-shard corpus ≈ 13.6 GB), i.e. the size of the
+/// **retired leaf segment**, not a transaction-composition mean. `PDM-Q6` item 5
+/// (2026-09-23) made a shard a fixed *count* of transactions (`T = 200`) and
+/// retired `SHARD_BYTES` as consensus; this constant shares that name and is
+/// **not** it. Using a mean here is correct for what this module asks — total
+/// burden against total budget genuinely is a mean-of-means question — but the
+/// figure describes a unit that no longer exists, and the distributional
+/// question it cannot see is `PDM-Q-F34` / `STAKER_ARCHIVAL_SIM.md` §L19.
+/// A sim model parameter, **never** a consensus constant; swept in the
+/// byte-size sensitivity arm if it moves.
 pub const SHARD_BYTES: f64 = 3.33e6;
 
 /// Outputs per ordinary transaction (1-in / 2-out typical traffic). Drives the
