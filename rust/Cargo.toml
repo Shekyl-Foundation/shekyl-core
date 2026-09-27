@@ -111,6 +111,17 @@ members = [
     # See docs/design/P2P_TIMING_ENGINE.md.
     "shekyl-timing-engine",
 
+    # D5's thread-budget ledger. Dependency-free: the timing engine
+    # records its one thread here and does not gain a Tokio runtime to
+    # do it. See docs/design/P2P_TRANSPORT_LAYER.md.
+    "shekyl-thread-ledger",
+
+    # D5's one runtime constructor. The worker count and the blocking
+    # cap are inputs. The pool is a row on shekyl-thread-ledger.
+    # Daemon-RPC and Tor-control still build their own until their
+    # budgets are measured. See docs/design/P2P_TRANSPORT_LAYER.md.
+    "shekyl-runtime",
+
     # Peer-attribution policy (PWD-B7): whether a rejection justifies severing
     # the connection that carried it. Deliberately NOT in shekyl-relay, whose
     # charter is the relay scheduler, and NOT in shekyl-consensus, because two
@@ -228,6 +239,15 @@ members = [
     "shekyl-p-transport",
     "shekyl-p2p-transport",
 
+    # The peer address union. Levin frames it; the transport layer selects
+    # a connector from it. Neither crate defines a second copy.
+    "shekyl-net-address",
+
+    # Transport-layer logic (P2P_TRANSPORT_LAYER.md): declarations, the
+    # stack plan, socket counts, the ban list. No sockets. The Noise
+    # layer stays shekyl-p2p-transport. Levin is the session above the plan.
+    "shekyl-transport-layer",
+
     # Persona serving loop: loopback shard server behind the P onion
     # service (2d-2 serving path; provisional THROWAWAY framing)
     "shekyl-p-serve",
@@ -337,6 +357,7 @@ exclude = [
     "shekyl-archival-retention/fuzz",
     "shekyl-wire/fuzz",
     "shekyl-engine-state/fuzz",
+    "shekyl-p2p-transport/fuzz",
     # FCMP++ research crypto, vendored from the monero-oxide fork (pinned by
     # UPSTREAM_MONERO_OXIDE_COMMIT). The clean upstream-formatted mirror lives on
     # the fork — the EC-membership review artifact; this vendored copy is

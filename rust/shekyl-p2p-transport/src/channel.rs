@@ -22,7 +22,7 @@ const LENGTH_AAD: &[u8] = b"len";
 const BODY_AAD: &[u8] = b"body";
 
 #[derive(Debug)]
-pub(crate) enum RecordError {
+pub enum RecordError {
     Decrypt,
     Empty,
     Oversize,
@@ -75,11 +75,11 @@ impl Direction {
     }
 }
 
-pub(crate) struct SendHalf {
+pub struct SendHalf {
     dir: Direction,
 }
 
-pub(crate) struct RecvHalf {
+pub struct RecvHalf {
     dir: Direction,
     /// Length already decrypted. Its nonce is spent; the body nonce is not,
     /// until those bytes arrive or the half is poisoned.
@@ -116,7 +116,8 @@ impl SendHalf {
         out
     }
 
-    pub(crate) fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, RecordError> {
+    /// Seal `plaintext` as records. An empty slice is not a record.
+    pub fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, RecordError> {
         if plaintext.is_empty() {
             return Ok(Vec::new());
         }
@@ -143,7 +144,7 @@ impl RecvHalf {
     ///
     /// [`RecordError::Truncated`] keeps the half usable: a short read has not
     /// spent the body nonce. Any other error poisons the half.
-    pub(crate) fn open_one(&mut self, buf: &[u8]) -> Result<(Vec<u8>, usize), RecordError> {
+    pub fn open_one(&mut self, buf: &[u8]) -> Result<(Vec<u8>, usize), RecordError> {
         if self.dead {
             return Err(RecordError::State);
         }

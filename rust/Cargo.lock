@@ -4390,6 +4390,7 @@ version = "3.1.0"
 dependencies = [
  "proptest",
  "shekyl-archival-retention",
+ "shekyl-net-address",
  "shekyl-portable-storage",
  "thiserror 2.0.18",
  "zstd",
@@ -4426,6 +4427,10 @@ dependencies = [
  "thiserror 2.0.18",
  "zeroize",
 ]
+
+[[package]]
+name = "shekyl-net-address"
+version = "3.1.0"
 
 [[package]]
 name = "shekyl-onion-v3"
@@ -4647,6 +4652,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-runtime"
+version = "3.1.0"
+dependencies = [
+ "shekyl-thread-ledger",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-scanner"
 version = "3.1.0"
 dependencies = [
@@ -4755,11 +4768,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-thread-ledger"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-timing-engine"
 version = "3.1.0"
 dependencies = [
  "criterion",
  "proptest",
+ "shekyl-thread-ledger",
 ]
 
 [[package]]
@@ -4812,6 +4830,18 @@ dependencies = [
  "kameo",
  "shekyl-tor-control-client",
  "tokio",
+]
+
+[[package]]
+name = "shekyl-transport-layer"
+version = "3.1.0"
+dependencies = [
+ "proptest",
+ "shekyl-net-address",
+ "shekyl-onion-v3",
+ "shekyl-p2p-transport",
+ "shekyl-peer-policy",
+ "shekyl-timing-engine",
 ]
 
 [[package]]

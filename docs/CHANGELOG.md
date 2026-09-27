@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Daemon
+
+- **Thread budgets are a ledger and one constructor.** A runtime names
+  its worker count and its blocking-pool cap. A dedicated thread is one
+  OS thread with no blocking pool; the timing engine's thread is that
+  spawn. The process total is printed once daemon-RPC and Tor-control
+  build their runtimes through the constructor. They still build their
+  own, so the daemon does not print a total yet.
+
 ### CLI wallet shell
 
 - **`shekyl-cli` speaks one command language.** Subjects then verbs
