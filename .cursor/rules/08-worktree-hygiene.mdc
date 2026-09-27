@@ -151,7 +151,13 @@ So the durable mitigation is not another check. It is the form of the edit:
   and still an out-of-editor rewrite: it detects the drift it inherits and
   can seed the next one. The edit tool is anchored and is not a rewrite.
   Prefer it; when a script is the tool, check `git status` after it as
-  after `cargo fmt`.
+  after `cargo fmt`. **This covers untracked files too, and they are the
+  worse case, not the exempt one:** an untracked file rewritten by a
+  script drifts the same way (the fourteenth instance, 2026-09-26, was a
+  new test file rewritten whole before its first commit), and it has no
+  `HEAD` for `git checkout --` to recover it from — the reverted text is
+  simply what is there. It came back only because the commit had already
+  been made from the correct bytes.
 - **An anchored edit that fails to match is a finding, not a nuisance.**
   Do not "fix" it by loosening the anchor or by re-reading the file and
   re-targeting the edit against what is there now. Run `git diff` on the
