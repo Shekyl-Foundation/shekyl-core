@@ -38,11 +38,11 @@
 
 use redb::ReadableTable;
 use shekyl_chain_rules::{AtHeight, BlockOutputs, LeafSource, TreeFrontier};
-use shekyl_types::{BlockHeight, GlobalOutputIndex};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, TxHash};
 use shekyl_wire::tx_extra::{admitted_leaf_blob, parse, pqc_leaf_entries_per_output};
 use shekyl_wire::Transaction;
 
-use crate::codec::{BlockInfo, CodecError};
+use crate::codec::{BlockInfo, CodecError, LeafCount};
 use crate::ids::{ChunkIndex, LayerChunk, OutputSlot, TreeLayer};
 use crate::schema::{CURVE_TREE_LAYERS, CURVE_TREE_LEAF_COUNTS, OUTPUT_AMOUNTS};
 
@@ -50,6 +50,7 @@ use super::at_index::AtIndex;
 use super::chain_reads::{self, absent, undecodable, ReadFault, ReadTables};
 use super::curve_reads;
 use super::error::StoreInvariant;
+use super::output_reads;
 use super::tx_reads;
 
 const LAYERS: &str = "curve_tree_layers";
@@ -90,9 +91,15 @@ pub(super) fn leaf_count_at<T: ReadTables>(
         Some((tip, _)) if h <= tip.saturating_add(1) => {}
         _ => return Ok(AtHeight::AboveTip),
     }
-    let count = chain_reads::cell(txn, CURVE_TREE_LEAF_COUNTS, h, LEAF_COUNTS)?
-        .ok_or_else(|| absent(LEAF_COUNTS))?;
-    Ok(AtHeight::Recorded(count.to_raw()))
+    leaf_count_row(txn, h).map(AtHeight::Recorded)
+}
+
+/// `curve_tree_leaf_counts[key]`, which a conforming store holds for every
+/// `1..=tip + 1`; absent is SI-7. The writer's SI-18 predecessor read.
+pub(super) fn leaf_count_row<T: ReadTables>(txn: &T, key: u64) -> Result<u64, ReadFault> {
+    chain_reads::cell(txn, CURVE_TREE_LEAF_COUNTS, key, LEAF_COUNTS)?
+        .map(LeafCount::to_raw)
+        .ok_or_else(|| absent(LEAF_COUNTS))
 }
 
 /// The recorded block at `height`'s outputs as leaf sources (module docs).
@@ -106,7 +113,7 @@ pub(super) fn outputs_at<T: ReadTables>(
         AtHeight::AboveTip => return Ok(AtHeight::AboveTip),
     };
     let miner_hash = block.miner_transaction.txid_parts().hash;
-    let coinbase = sources_of(txn, &block.miner_transaction, &miner_hash)?;
+    let coinbase = sources_of(txn, &block.miner_transaction, &miner_hash, height)?;
     let mut listed = Vec::new();
     for hash in &block.transaction_hashes {
         let Some(record) = tx_reads::record_at(txn, hash)? else {
@@ -116,22 +123,35 @@ pub(super) fn outputs_at<T: ReadTables>(
         };
         let tx = Transaction::read(&mut record.pruned.as_bytes())
             .map_err(|_| pruned_invalid("pruned segment does not decode"))?;
-        listed.extend(sources_of(txn, &tx, hash)?);
+        listed.extend(sources_of(txn, &tx, hash, height)?);
     }
     Ok(AtHeight::Recorded(BlockOutputs { coinbase, listed }))
 }
 
 /// One transaction's outputs as leaf sources: its recorded global indices
 /// paired with the recorded key and commitment, and the `CM` point of each
-/// output's `0x07` entry.
+/// output's `0x07` entry. Every row on the way is held to the block that
+/// named the transaction — the index row's height, and each output's
+/// `output_txs` origin (`(tx_hash, local_index)`) — so a corrupt or stale
+/// index cannot hand the drain another transaction's outputs, or pair one
+/// output's `CM` with another's `O` and `C`, and grow a wrong root where a
+/// conforming store would have halted.
 fn sources_of<T: ReadTables>(
     txn: &T,
     tx: &Transaction,
-    hash: &shekyl_types::TxHash,
+    hash: &TxHash,
+    height: BlockHeight,
 ) -> Result<Vec<LeafSource>, ReadFault> {
     let Some(location) = tx_reads::location_at(txn, hash)? else {
         return Err(absent("tx_indices"));
     };
+    if location.height != height {
+        return Err(index_invalid(
+            "tx_indices",
+            "tx_index",
+            "the row's height is not the block's that lists the transaction",
+        ));
+    }
     let indices = match tx_reads::output_indices_at(txn, location.id)? {
         AtIndex::Recorded(indices) => indices.0,
         AtIndex::BeyondCount => return Err(absent("tx_outputs")),
@@ -152,9 +172,21 @@ fn sources_of<T: ReadTables>(
     }
     let outputs_table = txn.table(OUTPUT_AMOUNTS)?;
     let mut sources = Vec::with_capacity(n_outputs);
-    for (index, entry) in indices.into_iter().zip(entries) {
+    for (position, (index, entry)) in indices.into_iter().zip(entries).enumerate() {
         // SOK-2: one bucket, so the amount index is the global index.
         let output = GlobalOutputIndex::from_raw(index.to_raw());
+        // The primary row owns the index (SI-9): it must name this
+        // transaction at this position, or `tx_outputs` points at an output
+        // that is not the transaction's.
+        let origin = match output_reads::origin_at(txn, output)? {
+            AtIndex::Recorded(origin) => origin,
+            AtIndex::BeyondCount => return Err(ReadFault::Invariant(StoreInvariant::IdNotFresh)),
+        };
+        let owned = origin.tx_hash == *hash
+            && usize::try_from(origin.local_index.to_raw()).ok() == Some(position);
+        if !owned {
+            return Err(ReadFault::Invariant(StoreInvariant::IdNotFresh));
+        }
         let slot = OutputSlot::confidential(output);
         let Some(guard) = outputs_table.get(slot.key())? else {
             return Err(ReadFault::Invariant(StoreInvariant::IdNotFresh));
@@ -179,11 +211,11 @@ fn sources_of<T: ReadTables>(
 }
 
 fn pruned_invalid(reason: &'static str) -> ReadFault {
-    undecodable(
-        "txs_pruned",
-        CodecError::Invalid {
-            codec: "transaction",
-            reason,
-        },
-    )
+    index_invalid("txs_pruned", "transaction", reason)
+}
+
+/// A row that decoded but does not describe the chain the block body does —
+/// SI-7's `CellCorrupt`, naming the cell.
+fn index_invalid(cell: &'static str, codec: &'static str, reason: &'static str) -> ReadFault {
+    undecodable(cell, CodecError::Invalid { codec, reason })
 }

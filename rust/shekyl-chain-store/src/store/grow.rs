@@ -30,7 +30,12 @@
 //! on **every** connect, grown or not, exactly as `curve_tree_roots[h + 1]`
 //! is (SI-4) — the count going into `h + 1` is a fact whether or not it
 //! moved, and `leaf_count_at` reads it without a fallback (SCW-19's rule
-//! for the roots, applied to the count it is keyed like).
+//! for the roots, applied to the count it is keyed like). Before the row
+//! is written, the row the previous connect wrote (`[h]`; `0` by
+//! definition at genesis) is held equal to the summary's count the drain
+//! continues from: SI-18 is a statement about the *chain* of counts, and a
+//! per-height row nothing re-reads is exactly where a corrupt value would
+//! sit unnoticed until `depth_at` served it.
 //!
 //! No pending table, no checkpoint, no segment freeze (§3.5, §3.7,
 //! `CTW-Q3`): the C++'s `locked_outputs` was a stored view of the drain
@@ -51,7 +56,8 @@ use crate::schema::{
 };
 
 use super::curve_reads;
-use super::error::{LeafDensity, StoreError, StoreInvariant};
+use super::error::{LeafCountFault, LeafDensity, StoreError, StoreInvariant};
+use super::leaf_reads;
 use super::write::WriteBatch;
 
 impl<'id> WriteBatch<'_, 'id> {
@@ -67,12 +73,32 @@ impl<'id> WriteBatch<'_, 'id> {
         // is the count's owner (SCU-Q1); the leaf table's length is SI-11's
         // other side and the summary read has already held them equal.
         let before = curve_reads::summary(self.txn()).map_err(|f| self.arm_read_fault(f))?;
+        // SI-18, the predecessor: the count recorded going into `height` is
+        // the count the tree holds. At genesis the row is the definition.
+        let recorded = match height {
+            0 => 0,
+            _ => leaf_reads::leaf_count_row(self.txn(), height)
+                .map_err(|f| self.arm_read_fault(f))?,
+        };
+        if recorded != before.leaf_count.to_raw() {
+            return Err(self.poison().arm(StoreInvariant::LeafCountNotAdvanced {
+                observed: LeafCountFault::PredecessorDisagrees {
+                    recorded,
+                    summary: before.leaf_count.to_raw(),
+                },
+            }));
+        }
         let after = match valid.block().drain() {
             None => before.leaf_count,
             Some(drain) => self.append(before, drain)?,
         };
-        self.open_insert_table(CURVE_TREE_LEAF_COUNTS, StoreInvariant::LeafCountRewritten)?
-            .insert(height + 1, after.encoded().as_encoded())?;
+        self.open_insert_table(
+            CURVE_TREE_LEAF_COUNTS,
+            StoreInvariant::LeafCountNotAdvanced {
+                observed: LeafCountFault::SuccessorPresent,
+            },
+        )?
+        .insert(height + 1, after.encoded().as_encoded())?;
         Ok(())
     }
 

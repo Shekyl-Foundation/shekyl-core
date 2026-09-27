@@ -198,11 +198,37 @@ pub enum StoreInvariant {
     /// number of outputs than leaves, or when either map already holds the
     /// key it is about to insert (DRS-E3 `CTW-4`, §3.7).
     PositionMapsNotBijective,
-    /// **SI-18** — `curve_tree_leaf_counts[h + 1]` is written exactly once
-    /// per connect, and is the count the verdict's drain left. Armed when
-    /// the row is already present at the connecting height's successor —
-    /// the tip moved without its count row, or a write bypassed `connect`.
-    LeafCountRewritten,
+    /// **SI-18** — the per-height leaf count advances by exactly what
+    /// drained: `curve_tree_leaf_counts[h + 1] − curve_tree_leaf_counts[h]`
+    /// is the connect of `h`'s drained leaf count, and the row is written
+    /// once per connect. Armed by the writer (`grow.rs`) at the two places
+    /// the chain of counts can break: the row it is about to write is
+    /// already present ([`LeafCountFault::SuccessorPresent`] — the tip moved
+    /// without its count row, or a write bypassed `connect`), or the row
+    /// the previous connect wrote does not equal the summary's count the
+    /// drain continues from ([`LeafCountFault::PredecessorDisagrees`] — a
+    /// historical count nobody would otherwise re-read, which `leaf_count_at`
+    /// / `depth_at` would then serve as fact).
+    LeafCountNotAdvanced {
+        /// Which break the writer observed.
+        observed: LeafCountFault,
+    },
+}
+
+/// What an SI-18 write observed (payload of
+/// [`StoreInvariant::LeafCountNotAdvanced`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeafCountFault {
+    /// `curve_tree_leaf_counts[h + 1]` already holds a row.
+    SuccessorPresent,
+    /// `curve_tree_leaf_counts[h]` (`0` by definition at `h = 0`) is not
+    /// the summary's leaf count the connect of `h` starts from.
+    PredecessorDisagrees {
+        /// The count the row at `h` records.
+        recorded: u64,
+        /// The count `curve_tree_meta` holds.
+        summary: u64,
+    },
 }
 
 /// What an SI-11 read observed. One invariant, two observations: a length
@@ -239,7 +265,7 @@ impl StoreInvariant {
             Self::ServeCreditWithoutBond { .. } => 15,
             Self::PoolEntryUnpaired { .. } => 16,
             Self::PositionMapsNotBijective => 17,
-            Self::LeafCountRewritten => 18,
+            Self::LeafCountNotAdvanced { .. } => 18,
         }
     }
 }
@@ -320,10 +346,18 @@ impl core::fmt::Display for StoreInvariant {
                  output or a leaf position is already mapped, or the drain names a different \
                  number of outputs than leaves",
             ),
-            Self::LeafCountRewritten => f.write_str(
-                "curve_tree_leaf_counts already holds a row at the connecting height's successor; \
-                 the count is written once per connect",
-            ),
+            Self::LeafCountNotAdvanced { observed } => match observed {
+                LeafCountFault::SuccessorPresent => f.write_str(
+                    "curve_tree_leaf_counts already holds a row at the connecting height's \
+                     successor; the count is written once per connect",
+                ),
+                LeafCountFault::PredecessorDisagrees { recorded, summary } => write!(
+                    f,
+                    "curve_tree_leaf_counts records {recorded} going into the connecting height but \
+                     curve_tree_meta holds {summary}; the per-height counts no longer chain to the \
+                     tree, rebuild from the block corpus"
+                ),
+            },
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -357,7 +391,7 @@ impl core::error::Error for StoreInvariant {
             | Self::ServeCreditWithoutBond { .. }
             | Self::PoolEntryUnpaired { .. }
             | Self::PositionMapsNotBijective
-            | Self::LeafCountRewritten
+            | Self::LeafCountNotAdvanced { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

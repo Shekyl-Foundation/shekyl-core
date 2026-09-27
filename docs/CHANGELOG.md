@@ -30,7 +30,7 @@
 - **API.** `ChainView` gains `tree_frontier`, `leaf_count_at`, `outputs_at`
   and the provided `depth_at` (CEN-I13's operand); `Corrupt` gains
   `LeafNotConstructible` / `TreeUnservable`; `StoreInvariant` gains
-  `PositionMapsNotBijective` (SI-17) / `LeafCountRewritten` (SI-18). The
+  `PositionMapsNotBijective` (SI-17) / `LeafCountNotAdvanced` (SI-18). The
   replay driver asserts the derived root against the trace's at every
   covered height (`RunReport::roots`; a divergence is
   `Disagreement::RootDiverged`) and the scenario driver mines a real

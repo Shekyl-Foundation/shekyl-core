@@ -14,14 +14,19 @@
 //! the frontier and the per-height count are the store's own rows, and a
 //! derived growth starts where they say the tree ends.
 
-use shekyl_chain_rules::{AtHeight, ChainView};
+use shekyl_chain_rules::{AtHeight, ChainView, RuleSet};
 use shekyl_types::{BlockHeight, CurveTreeRoot, GlobalOutputIndex};
 
 use super::connect_fixtures::{
-    candidate, candidate_over, connect_chain, judge, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
+    candidate, candidate_over, connect_chain, facts, judge, root_going_into, spend,
+    spendable_prefix, FIRST_SPEND_HEIGHT,
 };
+use super::error::{CellFault, LeafCountFault, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
+use crate::codec::{Canonical, LeafCount, OutTx, TxIndex};
+use crate::lmdb_order::LmdbHashKey;
+use crate::schema::{CURVE_TREE_LEAF_COUNTS, OUTPUT_TXS, TX_INDICES};
 
 fn h(height: u64) -> BlockHeight {
     BlockHeight::from_raw(height)
@@ -183,5 +188,183 @@ fn before_any_window_elapses_the_verdict_carries_the_root_forward_unchanged() {
         Ok(())
     });
     out.expect("derives");
+    cleanup(&path);
+}
+
+// ---------------------------------------------------------------------------
+// Negative controls (rule 47): each belt the drain and the writer carry must
+// be able to fire. Every plant is a raw redb write around `connect` — the
+// bypassing write the invariants exist to catch — then a connect or a judge
+// on the reopened store.
+// ---------------------------------------------------------------------------
+
+/// The spend's hash in the 63-block listing: block 53's one listed tx.
+fn listed_hash_at_53(store: &ChainStore) -> shekyl_types::TxHash {
+    let snap = store.begin_read().expect("read");
+    let AtHeight::Recorded(body) = snap.block(h(SPEND_HEIGHT)).expect("read") else {
+        panic!("recorded");
+    };
+    body.block.transaction_hashes[0]
+}
+
+#[test]
+fn a_leaf_count_row_that_does_not_chain_to_the_summary_halts_the_next_connect() {
+    // SI-18's predecessor half: `curve_tree_leaf_counts[tip + 1]` rewritten
+    // to a count the tree does not hold. The next connect reads it as the
+    // count it continues from and refuses before writing a row.
+    let path = tmp("leaf-si18-predecessor");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let hashes = connect_chain(&store, &listing());
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        txn.open_table(CURVE_TREE_LEAF_COUNTS)
+            .expect("t")
+            .insert(TIP + 1, LeafCount::from_raw(7).encoded().as_encoded())
+            .expect("plant");
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let root = root_going_into(&store, TIP + 1);
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let valid = judge(
+            &view,
+            candidate_over(
+                root,
+                TIP + 1,
+                hashes[usize::try_from(TIP).expect("small")],
+                Vec::new(),
+            ),
+        )?;
+        Ok(batch.connect(valid, facts(TIP + 1, 0), RuleSet::GENESIS)?)
+    });
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(StoreInvariant::LeafCountNotAdvanced {
+                observed: LeafCountFault::PredecessorDisagrees {
+                    recorded: 7,
+                    summary: 3,
+                },
+            })
+            .to_string()
+        ))
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn a_tx_index_row_pointing_at_another_height_is_corruption_not_a_drain() {
+    // The drain at 63 reads block 53's listed transaction through
+    // `tx_indices`; a row whose height is not 53 would hand it a transaction
+    // the block does not list. Planted: the spend's index row re-pointed at
+    // height 52 (same storage id, so `tx_outputs` still resolves).
+    let path = tmp("leaf-index-height");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let hashes = connect_chain(&store, &listing());
+    let hash = listed_hash_at_53(&store);
+    let planted = {
+        let snap = store.begin_read().expect("read");
+        let location = snap.tx_location(&hash).expect("read").expect("recorded");
+        TxIndex {
+            tx_id: location.id,
+            unlock_time: crate::codec::stored_timelock(0),
+            height: h(SPEND_HEIGHT - 1),
+        }
+    };
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        txn.open_table(TX_INDICES)
+            .expect("t")
+            .insert(LmdbHashKey::from(hash), planted.encoded().as_encoded())
+            .expect("plant");
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let root = root_going_into(&store, TIP + 1);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        judge(
+            &view,
+            candidate_over(
+                root,
+                TIP + 1,
+                hashes[usize::try_from(TIP).expect("small")],
+                Vec::new(),
+            ),
+        )?;
+        Ok(())
+    });
+    let expected = StoreError::from(StoreInvariant::CellCorrupt {
+        key: "tx_indices",
+        fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+            codec: "tx_index",
+            reason: "the row's height is not the block's that lists the transaction",
+        }),
+    })
+    .to_string();
+    assert_eq!(out, Err(TestErr::Store(expected)));
+    cleanup(&path);
+}
+
+#[test]
+fn an_output_txs_row_owned_by_another_transaction_is_si9_not_a_leaf() {
+    // The spend's first output (global 54) re-attributed to the coinbase of
+    // block 53: `tx_outputs` still lists 54 under the spend, but the primary
+    // row says otherwise. The drain refuses to pair the spend's `CM` with an
+    // output the store says is not the spend's.
+    let path = tmp("leaf-output-owner");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let hashes = connect_chain(&store, &listing());
+    let miner_hash = {
+        let snap = store.begin_read().expect("read");
+        let AtHeight::Recorded(body) = snap.block(h(SPEND_HEIGHT)).expect("read") else {
+            panic!("recorded");
+        };
+        body.block.miner_transaction.hash()
+    };
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        txn.open_table(OUTPUT_TXS)
+            .expect("t")
+            .insert(
+                SPEND_HEIGHT + 1,
+                OutTx {
+                    tx_hash: miner_hash,
+                    local_index: shekyl_types::OutputIndexInTx::from_raw(0),
+                }
+                .encoded()
+                .as_encoded(),
+            )
+            .expect("plant");
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let root = root_going_into(&store, TIP + 1);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        judge(
+            &view,
+            candidate_over(
+                root,
+                TIP + 1,
+                hashes[usize::try_from(TIP).expect("small")],
+                Vec::new(),
+            ),
+        )?;
+        Ok(())
+    });
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(StoreInvariant::IdNotFresh).to_string()
+        ))
+    );
     cleanup(&path);
 }
