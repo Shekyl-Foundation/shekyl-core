@@ -41,14 +41,15 @@ use shekyl_chain_store::store::{AtIndex, ChainStore, Horizons};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::FULL_REWARD_ZONE;
 use shekyl_types::{
-    BlockHash, BlockHeight, BlockWeight, GlobalOutputIndex, LongTermWeight, Timestamp, TxHash,
+    BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, GlobalOutputIndex, LongTermWeight,
+    Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, Transaction};
 
 use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, RunReport};
-use crate::scenario::{placeholder_root_after, Mined, Scenario, RULES};
+use crate::scenario::{Mined, Scenario, RULES};
 use crate::source::IngestEvent;
 use crate::test_support::{
     anchor, cleanup, key_image, open_store, spend, tmp, Family, Scripted, EPOCH, FIRST_SPEND_HEIGHT,
@@ -62,6 +63,9 @@ type Chain = Vec<(Block, Vec<Transaction>)>;
 /// one in the header's order.
 struct Driven {
     mined: Vec<Mined>,
+    /// The store's root after each mined block (`curve_tree_roots[h + 1]`).
+    /// DRS-E3 derives it; the trace keeps it as the replay's comparison input.
+    roots_after: Vec<CurveTreeRoot>,
     a: Transaction,
     b: Transaction,
 }
@@ -76,13 +80,13 @@ impl Driven {
 
     /// The facts the driver's producer recorded per block — the trace the
     /// replay passes through, so the replay's `connect` sees the roots the
-    /// driver's headers carry (B5) and the rewards the driver priced. A
-    /// replay from the harness's `trace_of` refuses at height 1 on B5: its
-    /// synthetic roots are not the driver's placeholders.
+    /// store recorded after each block (B5) and the rewards the driver
+    /// priced. A replay from the harness's `trace_of` refuses at height 1
+    /// on B5: its synthetic roots are not these.
     fn trace(&self) -> Trace {
         let mut w = TraceWriter::new(Vec::new()).expect("header");
         let mut coins = AtomicUnits::ZERO;
-        for m in &self.mined {
+        for (m, root_after) in self.mined.iter().zip(&self.roots_after) {
             coins = AtomicUnits::from_raw(shekyl_economics::advance_already_generated(
                 coins.to_raw(),
                 m.template.block_reward.to_raw(),
@@ -92,7 +96,7 @@ impl Driven {
                 long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
                 coins_generated: coins,
                 burned: m.template.fees_burned,
-                root_after: placeholder_root_after(m.height),
+                root_after: *root_after,
                 long_term_effective_median: LongTermWeight::from_raw(FULL_REWARD_ZONE),
                 cumulative_difficulty: CumulativeDifficulty::from_raw(
                     u128::from(m.height.to_raw()) + 1,
@@ -124,7 +128,22 @@ async fn two_body_chain(name: &str) -> Driven {
     );
     assert_eq!(two.height, BlockHeight::from_raw(at));
     mined.push(two);
-    Driven { mined, a, b }
+    let mut roots_after = Vec::with_capacity(mined.len());
+    for block in &mined {
+        let after = BlockHeight::from_raw(block.height.to_raw() + 1);
+        let root = scenario
+            .root_at(after)
+            .await
+            .expect("the store answers")
+            .expect("the store recorded the root after the block");
+        roots_after.push(root);
+    }
+    Driven {
+        mined,
+        roots_after,
+        a,
+        b,
+    }
 }
 
 /// Replay `chain` through the production pipeline into a fresh store at
