@@ -191,16 +191,28 @@ of them already has a defined answer for a shard that has not closed:
 | surface | what it needs | an open frontier shard |
 |---|---|---|
 | `h_scarce` and the discard calendar `D(E) = { k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3 }` | the `close_height` of shards **already closed**, reached by id arithmetic and one binary search | is not in the closed set, so not in `D(E)`. Never discarded — which is the cost, not a contradiction (`prune.rs:34-36`, `:472-500`) |
-| `g(age)` | `shard_age_milli(close_block_height, freeze_height, SEB)` — a **freeze** height, *if* frozen | already scores `age_milli = 0` when there is no frozen segment, by an explicit branch: *"the age term is `if shard.has_segment { shard_age_milli(..) } else { 0 }`"* (`admission.rs:305-341`; the function at `consensus_state.rs:235-252`) |
-| D2 escalation | `compute_burn_split_at(total_fees, burn_pct, n: FrozenSegmentCount)` — a **count** of frozen shards, not a height (`burn.rs:188-191`) | is not frozen, so not counted |
+| `g(age)` | `shard_age_milli(close_block_height, freeze_height, SEB)` — a **freeze** height, *if* frozen. Its no-segment branch is keyed on a **J-segment** (`admission.rs:305-341`, `consensus_state.rs:235-252`) | ⚠️ **NOT A PASS — evaluated against the retired geometry.** "Scores `age_milli = 0` with no frozen segment" is a true statement about *segments*, the leaf partition `PDM-Q12` retired, and says nothing about how an open **T-shard** behaves. The re-keyed form does not exist, so this surface **has not been run** |
+| D2 escalation | `compute_burn_split_at(total_fees, burn_pct, n: FrozenSegmentCount)` (`burn.rs:188-191`) — and `FrozenSegmentCount` counts **J-segments**: *"Zero frozen segments (genesis / empty tree)"* (`escalation.rs:48-58`) | ⚠️ **NOT A PASS — same defect.** "Not frozen, not counted" is true of segments. See `SHT-8`: the re-key is unspecified, and specifying it wrongly hands `T` a fifth job |
 | Foundation `CompleteTree` / seed coverage | an owed set of *"every **closed**, final shard"* (`WALLET_SIDE_STORE.md`:463, WSS-Q10) | is not owed |
 | Bootstrap | fills from closed shards through the same owed computation | likewise |
 
-**So nothing assumes height-driven closure**, and the shape of every one of
-those answers is the same: an unclosed shard is *representable* as "not closed"
-and each consumer already returns the right thing for it. The one consequence
-that is real is the one already priced above — the frontier shard is retained on
-every daemon until it closes.
+**Three of the five surfaces answer for T-shards and support (B):**
+`h_scarce`/`D(E)`, the `CompleteTree` owed set, and bootstrap. For those the
+shape is the same — an unclosed shard is *representable* as "not closed" and each
+returns the right thing — and the one real consequence is the one already priced:
+the frontier shard is retained on every daemon until it closes.
+
+**Two of the five are not evidence at all**, and the round's previous version
+reported them as passes. `g(age)` and D2 both key on the **J-segment**, the
+partition `PDM-Q12` retired, so what was checked was the *old* geometry's
+behaviour. Their re-keyed forms do not exist, so for those surfaces the falsifier
+**has not been run** — it is not shown not to fire. `SHT-8` carries the
+consequence, which is larger than the table error: specifying D2's re-key
+carelessly makes `T` an economic parameter.
+
+**This round does not claim (B)'s falsifier is discharged.** Three surfaces
+support it; two are unrun and must be specified under the ruled domain before
+the falsifier counts.
 
 Recorded because it cuts the other way too: **adding "or `H` blocks" to (B)
 would reintroduce exactly the defect (B) removes.** Any time-driven closure rule
@@ -558,6 +570,24 @@ that gate's bookkeeping:
   `T = 200`, §3 `L2`). A `T` re-pin moves that ceiling without touching the cap,
   so whichever of the two is intended to carry the obligation must be said out
   loud. Missing from the first pass's coupling list.
+- **`T` ↔ `shekyl_escalation_knee_n`** — **the coupling that must not be created.**
+  `staker_pool_share_at(n: FrozenSegmentCount, …)` (`escalation.rs:269`) ramps the
+  staker share from floor to asymptote and saturates at
+  `shekyl_escalation_knee_n = 100,000` (`config/economics_params.json:17`). Today
+  `n`'s unit is **J-segments**: 100,000 × `segment_leaf_count` (25,992) ≈ 2.6 × 10⁹
+  leaves, ~1.3 × 10⁹ transactions at two outputs each. Re-key `n` to *closed
+  T-shards* and the same literal means 100,000 × 200 = **2 × 10⁷ storage ids** — the
+  knee arrives roughly **65× sooner with no line of the economics changed**, and
+  every future `T` re-pin silently moves when the staker share saturates. That is
+  a **fifth job for `T`** — a clock on monetary policy — and exactly the rule-05
+  failure this round exists to stop, so it is recorded here as a coupling to
+  *refuse* rather than to re-pin. **Recommendation:** re-key `n` to a burden
+  quantity **independent of `T`** — under (B) the natural one is the count of
+  listed transactions in closed shards, read off `cumulative_tx_count` at the
+  closure frontier, so `T` enters only as rounding at the frontier and `knee_n` is
+  re-derived **once**, in transactions, against whatever burden the escalation was
+  meant to track. Whether that is "transactions archived" or "transactions below
+  the discard frontier" is the escalation owner's call; the unit must not be shards.
 - **`T` ↔ `SEB`** only through `U3`, and only under domain (B).
 - No coupling to `D_max`: `T` appears in no reorg-depth argument.
 
@@ -574,6 +604,7 @@ that gate's bookkeeping:
 | **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge |
 | **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
+| **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner, with no economics changed**, and every `T` re-pin thereafter moving when the staker share saturates. **Blast radius, bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so this is a clock on **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table; the re-key specification is **E4 / S-ARCH's**, not this lane's |
 | **`SHT-Q1` price, withdrawn** | The first pass charged (B) with making prune's mapping "stop being pure arithmetic on the id". **Wrong:** `cumulative_tx_count` *is* the non-coinbase ordinal (`prune.rs:421-428`), and `height_of_tx_id`'s binary search over the running total is already on dev's `h_scarce` path (`prune.rs:490-500`). Under (B) a boundary reads straight off the stored cell with **no coinbase term to add**, so (B) removes an addition from four sites rather than adding a lookup. `SHT-Q1`'s only remaining price is **closure liveness on a quiet chain**. | WITHDRAWN on review |
 
 ---
@@ -587,7 +618,11 @@ Each is a FOLLOWUPS row, not work for this round:
   sweep that would separate the cost signal from the capacity leg, and the
   per-band gate read (max over pre-registered age × cost bands, aggregate
   reported but not graded).
-- The segment-geometry deletion (E3 / E4).
+- The segment-geometry deletion (E3 / E4) — **and with it `SHT-8`'s re-key
+  specification for the escalation operand `n`.** It belongs beside the segment
+  deletion in E4 / S-ARCH's re-key table, not in the `T` lane: this round's job was
+  to find that the operand is segment-keyed and that a shard-keyed replacement
+  would price monetary policy off `T`, not to design the replacement.
 - Any change to channel 1.
 - Composition "attacks" — A4/W9 CLEARED, §12.11.
 - `SHT-5`'s measurement, and `SHT-3`'s stale-text correction in the `SF-` doc.
