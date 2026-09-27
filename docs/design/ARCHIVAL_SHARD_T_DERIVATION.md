@@ -152,6 +152,17 @@ and does not say so.** It is not merely stale; it presumes the answer to
 > **Stability:** closed shards never change membership. Any post-genesis change
 > to what counts as archival good activates by height and applies only past it.
 >
+> **The predicate reads the two digests as recorded at ingest, never recomputed
+> from a possibly-pruned body.** `txid.rs:92-101`: when the prunable region is
+> absent — *"a coinbase, or a storage-pruned spend"* — a recomputation yields
+> `keccak256("")`, and under `PDM-Q6` the region and `pqc_auths` retire together,
+> so a recomputation over a discarded body yields no component either. A node
+> evaluating the predicate that way would place its **own discarded spends outside
+> the domain** while an archival node keeps them inside: the two would disagree on
+> shard boundaries, which is a consensus split. The rows
+> (`txs_prunable_hash`, `txs_pqc_auth_hash`) are permanent — a prune deletes the
+> regions and never them — so they are the only admissible input.
+>
 > **Falsifiers (any reopens):** (i) the re-keyed D2 `n` or `g(age)` requires
 > shards to close by height; (ii) the equivalence breaks without a counter
 > change; (iii) evidence that an unbondable frontier shard on a quiet chain has a
@@ -166,13 +177,28 @@ gathered, kept because the falsifiers are stated against it.
 
 ### 2.1 The ruling as built
 
-**One predicate, one home.** `shekyl_wire::carries_archival_good(pqc_auth_hash,
-prunable_hash)` (`rust/shekyl-wire/src/transaction/txid.rs`), beside the txid
-structure it reads, with `TxidParts::carries_archival_good` forwarding to it. It
-takes **the two row values, not a `Transaction`**, so membership is structurally
-decidable without a body — which is what lets bond admission check it on a pruned
-node. No second classification is minted: the predicate reads the 3-part/4-part
-arity that already exists.
+**One predicate, one home, reachable only with row values.**
+`shekyl_wire::carries_archival_good(pqc_auth_hash, prunable_hash)`
+(`rust/shekyl-wire/src/transaction/txid.rs`), beside the txid structure it reads.
+It takes **the two row values, not a `Transaction`**, so membership is
+structurally decidable without a body — which is what lets bond admission check
+it on a pruned node. No second classification is minted: it reads the
+3-part/4-part arity that already exists.
+
+**There is deliberately no `TxidParts` convenience method**, and the first
+implementation's was deleted. `Transaction::txid_parts()` *recomputes* both
+digests from the object in hand, so on a body whose regions have been discarded it
+yields `keccak256("")` and `None` — the recompute-from-a-pruned-body hazard the
+ruling's text now names. A method one call away from admission code is that hazard
+in the most convenient possible form.
+
+**The production path** is
+`shekyl-chain-store`'s `ChainReadSnapshot::tx_carries_archival_good`
+(`store/tx_reads.rs`, `carries_archival_good_at`), which reads
+`txs_prunable_hash` (written at `store/connect.rs:575`, mandatory — its absence
+below the count is SI-7) and `txs_pqc_auth_hash` (`:584-586`, present ⇔ the txid
+is 4-part) and hands them to the predicate. A prune deletes the regions and never
+these rows.
 
 **One correction the ruling's wording needs.** The ruling says "a non-null
 prunable hash". **The stored prunable hash is never null.** `txid.rs:92-101` is
@@ -194,6 +220,7 @@ five cases:
 | `the_empty_region_digest_is_the_coinbases_row` | `keccak256("")` is the coinbase's row and is **not** the null hash (the correction above) |
 | `the_coinbase_carries_no_good_however_large_its_extra` | the coinbase at one output and at a maximal-attestation `extra`: attestation records live in `extra`, which is skeleton, so the ct stays `Null` and both legs stay false |
 | `the_counter_equals_the_predicate_over_a_mixed_chain` | over a synthetic chain mixing every class **with empty blocks**, boundaries from `cumulative_tx_count` equal boundaries from counting the predicate — compared **per transaction**, not only at the end, so offsetting errors cannot cancel. This is the leg that fails on divergence |
+| **(f)** `the_predicate_survives_a_prune_on_the_stored_rows` (`shekyl-chain-store`) | the **production path across a real prune**. A chain with spends in shard 0, a spend in shard 1 and empty blocks connects; every id's answer is recorded; the epoch-3 boundary discards shard 0; **every answer is unchanged** — the whole vector, not a sample — and the **discarded** spend is still in the domain. Also asserts the accessor agrees with the whole-body predicate on the *unpruned* store, and that both rows survived, with the surviving `txs_prunable_hash` identified as what alone keeps a 3-part-with-region transaction (a serve-credit form) in the domain. **Verified to be able to fail:** mutating the accessor to recompute from the pruned body turns it red on the "domain answer moved" assertion |
 
 **The negative leg (e) is cited, not re-asserted.** A non-coinbase transaction
 with no good is refused today: `BondPost` by **CEN-H21**'s `spends >= 1` +

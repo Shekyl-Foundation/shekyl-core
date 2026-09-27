@@ -55,14 +55,18 @@ fn class_at(tx: &Transaction, slot: TxSlot) -> TxClass {
         .class
 }
 
-/// The predicate under test, read off the body's own skeleton digests.
+/// The predicate over a **whole body's** digests — what this module's legs 1 and 2
+/// assert the *definition* against.
+///
+/// This is not the production path and must not become one: on a body whose
+/// regions have been discarded, `txid_parts()` recomputes `keccak256("")` and
+/// `None`, so a pruned node would read its discarded spends as carrying no good.
+/// The production path reads the permanent rows —
+/// `shekyl-chain-store`'s `tx_carries_archival_good`, pinned across a prune by
+/// `the_predicate_survives_a_prune_on_the_stored_rows`.
 fn in_domain(tx: &Transaction) -> bool {
     let parts = tx.txid_parts();
-    // The free function and the method are one definition; assert they agree
-    // so a future divergence between them cannot hide here.
-    let by_rows = carries_archival_good(parts.pqc_auth_hash, parts.prunable_hash);
-    assert_eq!(by_rows, parts.carries_archival_good());
-    by_rows
+    carries_archival_good(parts.pqc_auth_hash, parts.prunable_hash)
 }
 
 // ---- per-class bodies -------------------------------------------------------
