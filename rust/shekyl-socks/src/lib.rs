@@ -181,6 +181,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_nonzero_reply_byte_is_the_byte_the_proxy_sent() {
+        for reply in 1u8..=255 {
+            let (mut client, mut server) = duplex(64);
+            tokio::spawn(async move {
+                let mut greeting = [0u8; 3];
+                server.read_exact(&mut greeting).await.unwrap();
+                server.write_all(&[0x05, 0x00]).await.unwrap();
+                let mut request = [0u8; 10];
+                server.read_exact(&mut request).await.unwrap();
+                server
+                    .write_all(&[0x05, reply, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                    .await
+                    .unwrap();
+            });
+            match connect(&mut client, Destination::Ip(v4())).await {
+                Err(SocksError::Refused { reply: got }) => assert_eq!(got, reply, "reply {reply}"),
+                other => panic!("reply {reply} was not kept: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn a_hostname_is_carried_without_resolving_it() {
         let (mut client, mut server) = duplex(128);
         tokio::spawn(async move {

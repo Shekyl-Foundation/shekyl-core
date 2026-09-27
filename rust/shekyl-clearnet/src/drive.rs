@@ -7,10 +7,11 @@
 //! deadline is armed at accept, before any read, so time in the
 //! blocking queue counts.
 
+use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::{
@@ -63,8 +64,13 @@ pub struct Accept {
 }
 
 struct Outbound {
-    tx: mpsc::UnboundedSender<Queued>,
-    queue: SendQueue,
+    queue: ByteQueue,
+}
+
+impl Drop for Outbound {
+    fn drop(&mut self) {
+        self.queue.close();
+    }
 }
 
 pub async fn accept_one<C>(accept: Accept, engine: Handle<C>)
@@ -231,11 +237,8 @@ where
 {
     let (mut read, write) = stream.into_split();
     let overfull = Arc::new(crate::Overfull::new());
-    let queue = SendQueue::new(send_queue_bytes);
-    let (out_tx, out_rx) = mpsc::unbounded_channel();
     let outbound = Outbound {
-        tx: out_tx,
-        queue: queue.clone(),
+        queue: ByteQueue::new(send_queue_bytes),
     };
     let (inbound_tx, inbound_rx) = mpsc::channel(1);
     let opened = open_channel(
@@ -247,7 +250,7 @@ where
         &network_id,
         handshake_within,
         &tally,
-        out_rx,
+        outbound.queue.clone(),
         Arc::clone(&overfull),
     )
     .await;
@@ -260,7 +263,6 @@ where
     };
     let session = Session {
         inbound: inbound_rx,
-        outbound: outbound.tx.clone(),
         queue: outbound.queue.clone(),
         overfull: Arc::clone(&overfull),
     };
@@ -285,7 +287,7 @@ async fn open_channel<C>(
     network_id: &NetworkId,
     handshake_within: Tick,
     tally: &Arc<HandshakeTally>,
-    outbound: mpsc::UnboundedReceiver<Queued>,
+    outbound: ByteQueue,
     overfull: Arc<crate::Overfull>,
 ) -> Result<(tokio::task::JoinHandle<Option<CloseCause>>, SeamRecv), CloseKind>
 where
@@ -348,7 +350,7 @@ enum Setup {
 async fn write_half(
     mut write: OwnedWriteHalf,
     setup: tokio::sync::oneshot::Receiver<Setup>,
-    mut outbound: mpsc::UnboundedReceiver<Queued>,
+    outbound: ByteQueue,
     overfull: Arc<crate::Overfull>,
 ) -> Option<CloseCause> {
     let setup = setup.await.ok()?;
@@ -372,18 +374,22 @@ async fn write_half(
                 drop(write.shutdown().await);
                 return Some(CloseCause::new(CloseKind::SendQueueFull));
             }
-            next = outbound.recv() => {
-                let Some(queued) = next else {
+            next = outbound.pop() => {
+                let Some(bytes) = next else {
                     drop(write.shutdown().await);
                     return None;
                 };
-                let Ok(wire) = seam.encode(&queued.bytes) else {
+                let n = bytes.len();
+                let Ok(wire) = seam.encode(&bytes) else {
+                    outbound.release(n);
                     drop(write.shutdown().await);
                     return Some(CloseCause::new(CloseKind::RecordRejected));
                 };
                 if !wire.is_empty() && write.write_all(&wire).await.is_err() {
+                    outbound.release(n);
                     return Some(CloseCause::new(CloseKind::IoError));
                 }
+                outbound.release(n);
             }
         }
     }
@@ -745,70 +751,90 @@ async fn read_or_wake<C: Clock>(
     }
 }
 
+/// The outbound queue. Its only storage is a byte cap. A send that does
+/// not fit is not stored. Bytes stay counted until the writer finishes
+/// them, so a peer that stops reading cannot grow this past the cap.
 #[derive(Clone)]
-pub(crate) struct SendQueue {
-    queued: Arc<AtomicUsize>,
+pub(crate) struct ByteQueue {
+    inner: Arc<Mutex<ByteQueueInner>>,
+    data: Arc<tokio::sync::Notify>,
+    closed: Arc<AtomicBool>,
+}
+
+struct ByteQueueInner {
     limit: usize,
+    used: usize,
+    items: VecDeque<Vec<u8>>,
 }
 
-struct Permit {
-    queued: Arc<AtomicUsize>,
-    bytes: usize,
+#[derive(Debug)]
+pub(crate) enum PushError {
+    Full,
+    Closed,
 }
 
-impl Drop for Permit {
-    fn drop(&mut self) {
-        self.queued.fetch_sub(self.bytes, Ordering::Release);
-    }
-}
-
-pub(crate) struct Queued {
-    bytes: Vec<u8>,
-    _permit: Permit,
-}
-
-impl SendQueue {
+impl ByteQueue {
     pub(crate) fn new(limit: usize) -> Self {
         Self {
-            queued: Arc::new(AtomicUsize::new(0)),
-            limit,
+            inner: Arc::new(Mutex::new(ByteQueueInner {
+                limit,
+                used: 0,
+                items: VecDeque::new(),
+            })),
+            data: Arc::new(tokio::sync::Notify::new()),
+            closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Reserve `bytes.len()` against the byte cap. A buffer that does not
-    /// fit is not queued.
-    pub(crate) fn try_enqueue(&self, bytes: Vec<u8>) -> Result<Queued, ()> {
-        let n = bytes.len();
-        if n == 0 {
-            return Ok(Queued {
-                bytes,
-                _permit: Permit {
-                    queued: Arc::clone(&self.queued),
-                    bytes: 0,
-                },
-            });
+    pub(crate) fn try_push(&self, bytes: Vec<u8>) -> Result<(), PushError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(PushError::Closed);
         }
+        let n = bytes.len();
+        let mut inner = self.inner.lock().expect("outbound");
+        let Some(next) = inner.used.checked_add(n) else {
+            return Err(PushError::Full);
+        };
+        if next > inner.limit {
+            return Err(PushError::Full);
+        }
+        inner.used = next;
+        inner.items.push_back(bytes);
+        drop(inner);
+        self.data.notify_one();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pop_now(&self) -> Option<Vec<u8>> {
+        self.inner.lock().expect("outbound").items.pop_front()
+    }
+
+    pub(crate) fn release(&self, n: usize) {
+        let mut inner = self.inner.lock().expect("outbound");
+        inner.used = inner.used.saturating_sub(n);
+    }
+
+    pub(crate) fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.data.notify_waiters();
+    }
+
+    /// Take the next buffer. `None` means the queue was closed and is empty.
+    /// The byte count is released by [`Self::release`] after the write.
+    pub(crate) async fn pop(&self) -> Option<Vec<u8>> {
         loop {
-            let current = self.queued.load(Ordering::Acquire);
-            let Some(next) = current.checked_add(n) else {
-                return Err(());
-            };
-            if next > self.limit {
-                return Err(());
-            }
-            if self
-                .queued
-                .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
+            let notified = self.data.notified();
             {
-                return Ok(Queued {
-                    bytes,
-                    _permit: Permit {
-                        queued: Arc::clone(&self.queued),
-                        bytes: n,
-                    },
-                });
+                let mut inner = self.inner.lock().expect("outbound");
+                if let Some(bytes) = inner.items.pop_front() {
+                    return Some(bytes);
+                }
+                if self.closed.load(Ordering::Acquire) {
+                    return None;
+                }
             }
+            notified.await;
         }
     }
 }
