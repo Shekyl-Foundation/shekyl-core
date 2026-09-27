@@ -277,6 +277,16 @@ gindex)` order. The tests pin today's connects and flip when commit 6 lands
 G2 — a refusal before then means the row landed early, and the census
 flips, not the file.
 
+**Updated 2026-09-27 (#884).** The parenthetical above is the pre-E3 wall,
+and it is not the structure. `placeholder_root_after` is gone, and B5
+reads the header against the store, not against the trace. The replay
+trace is `trace_with` over the chain being replayed: the economics are
+what the driver priced, and `root_after` is that chain's `GrownTree`
+(the same constructor `trace_of` uses, so the root is the chain's).
+Each run holds CTW-5 — `roots.compared()` over every height,
+`diverged()` empty — on the chain it connected, swap and substitution
+included.
+
 **Where the pin has been witnessed, corrected.** The read's first
 statement — *the pin was never witnessed* — was wrong and is withdrawn.
 E2's family runs every mutation through the production pipeline against a
@@ -620,7 +630,7 @@ when an operand is absent. Wave B extends the sequence in place.
 | # | commit | gate |
 | --- | --- | --- |
 | 1 | **This file amended on review; the index row; the §5.1 expectation table** — written before commit 2, so the overrun signal has a subject | — |
-| 2 | **LANDED 2026-09-26 (cost 1 — the estimate said 2; the driver listed two bodies at the first attempt, and the one wall was a fixture's: `trace_of`'s roots are not the driver's, §3.1).** Measurements, no rules: (a) the two-body block through `mine_listing`, the reorder and a substitution replayed through it — all three connect; output order follows the bodies; the unlisted body is recorded (`body_pairing_tests.rs`, pins that flip at commit 6); (b) the pruned-form fixture at both sites — it was prose, and the row is **H18**, not H19 (§3.3); (c) the weights-read bench, `#[ignore]`d in `shekyl-chain-store` (`weights_read_bench_tests.rs`), run at N = 100 000 on the desktop and, cross-compiled, on the Pi 4 floor — (b) 36.6 ms against (a) 598 ms there, 0.5 % of the zone-point verify; **Q2 RULED (b)** (§5.1); the floor run is owed before Q2 closes (§5.1's cell); (d) the `Unmutable` census over the corpus — `ReorderedBodies` the only corpus-shape gap, `DoubleSpend` unreachable on the two spend-named chains (§3.7) | — |
+| 2 | **LANDED 2026-09-26 (cost 1 — the estimate said 2; the driver listed two bodies at the first attempt, and the one wall was a fixture's: `trace_of`'s roots are not the driver's, §3.1). 2026-09-27: that wall was the pre-E3 placeholder; §3.1's update is the structure.** Measurements, no rules: (a) the two-body block through `mine_listing`, the reorder and a substitution replayed through it — all three connect; output order follows the bodies; the unlisted body is recorded (`body_pairing_tests.rs`, pins that flip at commit 6); (b) the pruned-form fixture at both sites — it was prose, and the row is **H18**, not H19 (§3.3); (c) the weights-read bench, `#[ignore]`d in `shekyl-chain-store` (`weights_read_bench_tests.rs`), run at N = 100 000 on the desktop and, cross-compiled, on the Pi 4 floor — (b) 36.6 ms against (a) 598 ms there, 0.5 % of the zone-point verify; **Q2 RULED (b)** (§5.1); the floor run is owed before Q2 closes (§5.1's cell); (d) the `Unmutable` census over the corpus — `ReorderedBodies` the only corpus-shape gap, `DoubleSpend` unreachable on the two spend-named chains (§3.7) | — |
 | 3 | **`ChainView` grows** — the weights read (Q2's shape) and `has_transaction` — trait, `BatchView`, `MockChain`, the store's conformance test holding the mock to the store, **one commit, both sides** (slice 6 §5.1's rule) | commit 2 (c) |
 | 4 | **G6 / G6b** as `judge_emission`'s first two definitions in `rules/block_weight.rs`; the two windows as generated consts (Q6, with the two `#define`s repointed and the dead fee define deleted, §3.10); the mock holds the clamps at their boundaries **and the `min(window, h)` arm at low heights** (C2-R2 Q2's early-chain weakness — below 100 000 the window is the chain); the captured chains replay through both at parity (§3.8) | commit 3 |
 | 5 | **F14, F14b, F16, G12** — the sequence completed through the paid reward; `ConnectFacts.{weight, long_term_weight, long_term_effective_median, coins_generated}` read off the verdict, the ingest's four composed lines deleted (`Provenance::passed_through` re-counted with E3's) | commit 4 |
@@ -731,19 +741,22 @@ that, (b) plus the column with its check against the source (Q2's
 pre-empted fallback); (a) is not chosen at any result, and a floor run in
 which (a) beats (b) is a bench defect to find before it is a finding.
 
-Two fixture walls the bench met and the plan should know about, since
-slice 6 §5.1 predicted a smaller fixture class here: the shared
-`connect_fixtures` root is `[0xc0 + h; 32]` and stops at height 63 (slice 6
-met it too), and the shared `FixtureSubstrate`'s clock is fixed at
-1 000 000 — so a 100 000-block chain needs its own root, its own substrate
-clock, **and a fixed difficulty**: at a constant 120 s spacing the live LWMA
-floors a small genesis difficulty to zero over ~8 000 blocks (D6 refused;
-measured), and 1 s spacing overflows the cumulative sum within a second of
-wall time. The bench builds under `RuleSet::fakechain(Some(7), D_MAX)`, the
-ingest's regtest shape. These are the bench's walls, not the rules' — but
-they are the first evidence about slice 6's prediction, and they count
-against it (§5.1's fixture-commit tally: 0 so far; the bench's fixtures are
-its own file).
+The bench met three fixture walls, and DRS-E3 has since removed one of
+them. **Updated 2026-09-27:** the shared `connect_fixtures` root was
+`[0xc0 + h; 32]` and stopped at height 63 (slice 6 met that cap too).
+That function is gone. The bench reads `batch_root_going_into` — the
+in-batch `root_at`, the same read `connect_chain` and the prune builder
+use — and does not carry a root of its own. What remains is the shared
+`FixtureSubstrate`'s clock, fixed at 1 000 000, so a 100 000-block chain
+at 120 s spacing needs its own clock, **and a fixed difficulty**: at that
+spacing the live LWMA floors a small genesis difficulty to zero over
+~8 000 blocks (D6 refused; measured), and 1 s spacing overflows the
+cumulative sum within a second of wall time. The bench builds under
+`RuleSet::fakechain(Some(7), D_MAX)`, the ingest's regtest shape. The
+clock and the difficulty are the bench's walls, not the rules'. They are
+the first evidence about slice 6's prediction (§5.1's fixture-commit
+tally: 0 so far; the bench's chain builder is its own file, its root is
+not).
 
 ## 6. What this slice does not build
 
