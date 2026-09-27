@@ -54,12 +54,17 @@ use shekyl_types::BlockHeight;
 
 use crate::corpus::CorpusReader;
 use crate::metrics::Metrics;
+use crate::mutation::{Environment, Mutation, Unmutable};
 use crate::pipeline::{run, PipelineConfig, RunReport};
 use crate::schedule::ChainRules;
+use crate::source::{IngestEvent, Source};
 use crate::substrate::ProductionSubstrate;
+use crate::test_support::h;
 use crate::test_support::{cleanup, open_store, tmp};
 use crate::trace::Trace;
+use shekyl_chain_rules::Candidate;
 use shekyl_pow_randomx::CacheStore;
+use shekyl_wire::Input;
 
 /// `manifest.json`, as the capture writes it (format 2).
 #[derive(Deserialize, Debug)]
@@ -323,4 +328,175 @@ async fn replays_every_captured_chain_under_the_production_substrate() {
         let report = replay(&dir, &manifest, substrate.clone()).await;
         hold(&dir, &manifest, &report);
     }
+}
+
+/// What one mutation can do on one captured chain: apply at some height,
+/// or report why it cannot at every height.
+#[derive(Debug, PartialEq, Eq)]
+enum Reach {
+    /// The first height the mutation applies at.
+    Applies { first: u64 },
+    /// Every distinct cause the corpus reported, over every height, in
+    /// first-seen order.
+    Unmutable(Vec<Unmutable>),
+}
+
+fn note(causes: &mut Vec<Unmutable>, cause: Unmutable) {
+    if !causes.contains(&cause) {
+        causes.push(cause);
+    }
+}
+
+/// The key images a candidate's listed bodies spend.
+fn key_images_of(candidate: &Candidate) -> impl Iterator<Item = [u8; 32]> + '_ {
+    candidate
+        .transactions
+        .iter()
+        .flat_map(|tx| tx.prefix.inputs.iter())
+        .filter_map(|input| match input {
+            Input::ToKey { key_image, .. } => Some(*key_image),
+            _ => None,
+        })
+}
+
+/// Every candidate of one captured chain in connect order, with the key
+/// images spent strictly below it — the two operands `Mutation::apply`
+/// takes. A `Rewind` truncates, as the pipeline would, and the spent set
+/// after it is the retained tip's **post-block** state: its `spent_before`
+/// plus its own images (the first cut took `spent_before` alone, which
+/// would have called a `DoubleSpend` of the retained tip's image
+/// `NothingSpentBefore` — Copilot on #880; no captured chain rewinds, so
+/// the census's answer did not move).
+fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Vec<[u8; 32]>)> {
+    let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
+    let mut reader =
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+    let mut height = reader.first_height().to_raw();
+    let mut chain: Vec<(u64, Candidate, Vec<[u8; 32]>)> = Vec::new();
+    let mut spent: Vec<[u8; 32]> = Vec::new();
+    while let Some(event) = reader.next().expect("corpus reads") {
+        match event.event {
+            IngestEvent::Extend(candidate) => {
+                let before = spent.clone();
+                spent.extend(key_images_of(&candidate));
+                chain.push((height, *candidate, before));
+                height += 1;
+            }
+            IngestEvent::Rewind { to } => {
+                chain.truncate(usize::try_from(to.to_raw() + 1).expect("small"));
+                spent = match chain.last() {
+                    None => Vec::new(),
+                    Some((_, tip, before)) => {
+                        let mut after = before.clone();
+                        after.extend(key_images_of(tip));
+                        after
+                    }
+                };
+                height = to.to_raw() + 1;
+            }
+        }
+    }
+    chain
+}
+
+/// E6 slice 7 commit 2 (d): **the `Unmutable` census** (`CHAIN_RULES_SLICE_7.md`
+/// §3.7). The E2 family is judged over the harness chain, never over these
+/// captured chains; this test asks, for every mutation and every captured
+/// chain, whether the mutation *could* apply there at all — and holds the
+/// answer, so a mutation that is `Unmutable` on every chain in the corpus
+/// is a recorded fact about the corpus's shape rather than a status a
+/// reader mistakes for coverage.
+///
+/// Two causes are not the corpus's and are named apart: `PowUnderWrongSeed`
+/// needs a PoW environment this census does not supply, and `DoubleSpend`
+/// at a chain's first spend has nothing spent before it (it applies from
+/// the second). Everything else that is `Unmutable` everywhere is a hole in
+/// what the corpus carries.
+#[test]
+fn the_family_over_the_corpus_names_what_it_cannot_reach() {
+    let chains = captured_chains();
+    let env = Environment {
+        clock: MockSubstrate::CLOCK,
+        pow: None,
+    };
+    // Per mutation (by its position in `Mutation::ALL`): `Some(causes)`
+    // while it has been unreachable on every chain so far, `None` once one
+    // chain carried it.
+    let mut everywhere_unmutable: Vec<Option<Vec<Unmutable>>> =
+        vec![Some(Vec::new()); Mutation::ALL.len()];
+    let mut table = String::new();
+    for (dir, manifest) in &chains {
+        let candidates = corpus_candidates(dir);
+        assert!(
+            !candidates.is_empty(),
+            "{}: the corpus has blocks",
+            manifest.shape
+        );
+        for (i, mutation) in Mutation::ALL.into_iter().enumerate() {
+            let mut causes = Vec::new();
+            let mut reach = None;
+            for (height, candidate, spent_before) in &candidates {
+                match mutation.apply(candidate.clone(), &env, spent_before, h(*height)) {
+                    Ok(_) => {
+                        reach = Some(Reach::Applies { first: *height });
+                        break;
+                    }
+                    Err(cause) => note(&mut causes, cause),
+                }
+            }
+            let reach = reach.unwrap_or(Reach::Unmutable(causes));
+            use std::fmt::Write as _;
+            writeln!(
+                table,
+                "{:<16} {:<22} {reach:?}",
+                manifest.shape,
+                format!("{mutation:?}")
+            )
+            .expect("String write");
+            match (reach, &mut everywhere_unmutable[i]) {
+                (Reach::Unmutable(causes), Some(all)) => {
+                    for cause in causes {
+                        note(all, cause);
+                    }
+                }
+                (Reach::Applies { .. }, slot) => *slot = None,
+                (Reach::Unmutable(_), None) => {}
+            }
+        }
+    }
+    eprintln!(
+        "Unmutable census over {} captured chains:\n{table}",
+        chains.len()
+    );
+
+    let unreachable: Vec<(Mutation, Vec<Unmutable>)> = Mutation::ALL
+        .into_iter()
+        .zip(everywhere_unmutable)
+        .filter_map(|(m, causes)| causes.map(|c| (m, c)))
+        .collect();
+    // Two entries, and the census says which is whose. `PowUnderWrongSeed`
+    // is the environment's: this census carries no PoW leg. `ReorderedBodies`
+    // is the corpus's: every captured block lists at most one body (slice 6
+    // §5 row 8 measured it; slice 7 §3.7 names the class), so the one
+    // mutation that needs two is unreachable on all four chains — and it is
+    // the only one. Commit 2 (a) built the two-body block through the driver
+    // instead (`body_pairing_tests`). A change here is a change in the
+    // corpus's shape or in the family, and §3.7 moves with it.
+    assert_eq!(
+        unreachable,
+        vec![
+            (
+                Mutation::PowUnderWrongSeed,
+                vec![Unmutable::NoPowEnvironment]
+            ),
+            (
+                Mutation::ReorderedBodies,
+                vec![
+                    Unmutable::TooFewBodies { listed: 0 },
+                    Unmutable::TooFewBodies { listed: 1 },
+                ],
+            ),
+        ],
+        "the mutations no captured chain can carry, with why"
+    );
 }
