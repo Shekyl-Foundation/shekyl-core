@@ -154,3 +154,92 @@ fn the_scenario_rules_are_regtest_at_difficulty_one() {
         } if d.get() == 1
     ));
 }
+
+/// DRS-E3 commit 7 (`DRS_E3_CURVE_WRITER.md` §2.3, §6 row 7): the driver
+/// produces a **real** FCMP++ spend against the tree the store grew, and the
+/// store admits it — the object CEN-I15 and H19-verify wait for.
+///
+/// Two oracles in one test. The wallet-side tree (`shekyl_curve_tree`'s
+/// client, fed the same blocks) and the store's writer (`grow.rs`) are held
+/// equal at every root a header commits to — DRS-D3c's two Rust producers
+/// compared, §2.5 — and the spend's membership proof, assembled from the
+/// wallet side and self-verified against its root at the reference height,
+/// is listed in a block whose validity the store judges against its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree() {
+    use super::StepOutcome;
+    use crate::scenario_spend::Spender;
+    use shekyl_chain_rules::RuleSet;
+
+    // Block 0's coinbase matures at connect 60 (`mined_money_unlock_window`)
+    // and is in the tree going into 61; the newest admissible reference for a
+    // block connecting at `c` is `c − 10`, so the first block that can spend
+    // it against a root containing it connects at 71.
+    let window = RuleSet::GENESIS.mined_money_unlock_window().to_raw();
+    let age = RuleSet::GENESIS.tx_spendable_age().to_raw();
+    let connecting = window + age + 1;
+    let mut scenario = Scenario::open("scenario-spend");
+    let mined = scenario.mine(connecting).await;
+    assert_eq!(mined.len() as u64, connecting);
+
+    // Oracle 1: the wallet-side tree over the same blocks equals the store's
+    // at every height a header commits to — empty through the first drain,
+    // then moving with it. (The client answers reference heights at or
+    // below its tip, as a wallet asks them.)
+    let mut spender = Spender::over(&mined);
+    for h in 0..connecting {
+        let ours = scenario
+            .root_at(BlockHeight::from_raw(h))
+            .await
+            .expect("read")
+            .expect("recorded");
+        assert_eq!(
+            spender.root_at(h),
+            ours,
+            "wallet-side vs store root going into {h}"
+        );
+        if h <= window {
+            assert_eq!(
+                ours,
+                CurveTreeRoot::EMPTY,
+                "nothing matured before {window}"
+            );
+        } else {
+            assert_ne!(ours, CurveTreeRoot::EMPTY, "grown at {h}");
+        }
+    }
+
+    // The spend: block 0's coinbase, referenced at the newest admissible
+    // height, self-verified against the wallet-side root there.
+    let fee = 1_000_000;
+    let spend = spender.spend_coinbase(scenario.wallet(), 0, connecting, fee);
+    let block = scenario
+        .mine_listing(vec![spend.clone()])
+        .await
+        .unwrap_or_else(|outcome| panic!("the real spend is admitted: {outcome}"));
+    assert_eq!(block.height, BlockHeight::from_raw(connecting));
+    assert_eq!(block.template.transactions.len(), 1);
+    assert_eq!(block.template.transactions[0].hash(), spend.hash());
+    assert_eq!(block.template.total_fees.to_raw(), fee);
+
+    // Its key image is recorded: listing the same spend again is CEN-I7's
+    // refusal, not a second admission.
+    match scenario.mine_listing(vec![spend]).await {
+        Err(StepOutcome::Refused(refused)) => assert_eq!(refused.rule, CenRow::I7),
+        other => panic!("a double spend is refused by I7, got {other:?}"),
+    }
+
+    // Oracle 1 again, with a listed transaction in the tree's history: the
+    // roots still agree after the spend block and the block after it.
+    spender.push(&block);
+    let next = scenario.mine(1).await.pop().expect("one more block");
+    spender.push(&next);
+    let after = scenario
+        .root_at(BlockHeight::from_raw(connecting + 1))
+        .await
+        .expect("read")
+        .expect("recorded");
+    assert_eq!(spender.root_at(connecting + 1), after);
+
+    scenario.close().await;
+}

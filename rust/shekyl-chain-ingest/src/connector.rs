@@ -216,6 +216,16 @@ pub struct HashAt {
     pub height: BlockHeight,
 }
 
+/// The curve-tree root going into `height` — `curve_tree_roots[height]`,
+/// the state the header at `height` commits to (SCW-19; `EMPTY` at `0`).
+/// `None` above `tip + 1`. The read the scenario driver holds the
+/// wallet-side tree to (DRS-E3 §2.5).
+#[derive(Clone, Copy, Debug)]
+pub struct RootAt {
+    /// The height asked for.
+    pub height: BlockHeight,
+}
+
 /// What a block producer needs from the chain to build the next
 /// candidate, read on the view the validator will judge it against and
 /// through the definitions the validator uses (`tx_volume_window`,
@@ -572,6 +582,17 @@ impl<F: FactsFor + Send + Sync + 'static> Message<HashAt> for Connector<F> {
     async fn handle(&mut self, msg: HashAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         Ok(match self.writer.read()?.block_info(msg.height)? {
             AtHeight::Recorded(info) => Some(info.hash),
+            AtHeight::AboveTip => None,
+        })
+    }
+}
+
+impl<F: FactsFor + Send + Sync + 'static> Message<RootAt> for Connector<F> {
+    type Reply = Result<Option<CurveTreeRoot>, RunFault>;
+
+    async fn handle(&mut self, msg: RootAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        Ok(match self.writer.read()?.root_at(msg.height)? {
+            AtHeight::Recorded(root) => Some(root),
             AtHeight::AboveTip => None,
         })
     }

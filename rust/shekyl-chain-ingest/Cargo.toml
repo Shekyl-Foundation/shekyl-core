@@ -109,6 +109,20 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 # The driver's coinbase secret is a `Zeroizing<[u8; 32]>`, the type
 # `TemplateContext` takes (rule 35).
 zeroize = { workspace = true }
+# The scenario spend (DRS-E3 commit 7, `scenario_spend.rs`): the wallet-side
+# curve tree mirrors the store's over the same blocks — DRS-D3c's two Rust
+# producers compared — and assembles the membership path; the production
+# tx-builder signs the spend; the Bulletproof+ blob is read back for the
+# production wire encoder. All test-only: the driver is the instrument the
+# 4.I verification rows (CEN-I15, H19-verify) will be judged with.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+# The spend self-verifies through the consensus verifier (`proof::verify`)
+# against the wallet-side root before the driver lists it: until CEN-I15
+# lands, admission alone would not say the proof is sound.
+shekyl-fcmp = { path = "../shekyl-fcmp" }
 # Planting a corrupt row for the SI-10 path.
 redb = { workspace = true }
 # The mutation family's seed-sensitive mock longhash (`keccak256(blob ‖ seed)`,

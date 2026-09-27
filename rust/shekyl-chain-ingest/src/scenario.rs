@@ -61,13 +61,17 @@ use shekyl_chain_rules::{
     form, seed_height, Candidate, CenRow, FormAttempt, InvalidBlock, RuleSet, Substrate,
     EMISSION_SPLIT_EPOCH,
 };
-use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+use shekyl_crypto_pq::kem::{HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation};
 use shekyl_economics::{EconomicParams, FrozenSegmentCount, FULL_REWARD_ZONE};
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, LongTermWeight, PowHash, Timestamp};
+use shekyl_types::{
+    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, LongTermWeight, PowHash, Timestamp,
+};
 use shekyl_wire::Transaction;
+use zeroize::Zeroizing;
 
 use crate::connector::{
-    Apply, ChainFacts, Connector, ConnectorArgs, HashAt, Rewind, Rewound, RunFault, TemplateFacts,
+    Apply, ChainFacts, Connector, ConnectorArgs, HashAt, Rewind, Rewound, RootAt, RunFault,
+    TemplateFacts,
 };
 use crate::facts::{Composed, Priced, PricedAt};
 use crate::schedule::ChainRules;
@@ -200,7 +204,7 @@ pub struct Scenario<P> {
     connector: ActorRef<Connector<Composed<Ledger>>>,
     ledger: Arc<Composed<Ledger>>,
     substrate: Clocked<P>,
-    miner: MinerKeys,
+    wallet: MinerWallet,
     params: EconomicParams,
     rules: ChainRules,
     next_tx_secret: u64,
@@ -238,7 +242,7 @@ where
             connector,
             ledger,
             substrate: Clocked::new(pow),
-            miner: deterministic_miner(),
+            wallet: MinerWallet::deterministic(),
             params: EconomicParams::default(),
             rules: RULES,
             next_tx_secret: 1,
@@ -248,6 +252,11 @@ where
     /// The connector, for a test that wants to ask it something directly.
     pub const fn connector(&self) -> &ActorRef<Connector<Composed<Ledger>>> {
         &self.connector
+    }
+
+    /// The miner every block of this scenario pays, secrets included.
+    pub const fn wallet(&self) -> &MinerWallet {
+        &self.wallet
     }
 
     /// What the chain is now, as the producer reads it.
@@ -357,6 +366,14 @@ where
             .map_err(handler_error)
     }
 
+    /// The store's curve-tree root going into `height` (`RootAt`).
+    pub async fn root_at(&self, height: BlockHeight) -> Result<Option<CurveTreeRoot>, RunFault> {
+        self.connector
+            .ask(RootAt { height })
+            .await
+            .map_err(handler_error)
+    }
+
     /// Stop the connector, release the store, remove the file.
     pub async fn close(self) {
         self.connector.stop_gracefully().await.expect("stop");
@@ -373,7 +390,7 @@ where
     ) -> Result<Template, TemplateError> {
         // Written straight into the zeroizing cell: no bare copy of the
         // scalar's bytes exists on this stack after the context drops.
-        let mut tx_key_secret = zeroize::Zeroizing::new([0u8; 32]);
+        let mut tx_key_secret = Zeroizing::new([0u8; 32]);
         tx_key_secret[..8].copy_from_slice(&self.next_tx_secret.to_le_bytes());
         self.next_tx_secret += 1;
         let rule_set: RuleSet = self.rules.in_force(facts.connecting);
@@ -398,7 +415,7 @@ where
                 emission_split_epoch: EMISSION_SPLIT_EPOCH,
             },
             params: &self.params,
-            miner: &self.miner,
+            miner: &self.wallet.keys,
             tx_key_secret,
             extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
             listed,
@@ -415,18 +432,36 @@ fn handler_error<M>(e: kameo::error::SendError<M, RunFault>) -> RunFault {
     }
 }
 
-/// A miner with a fixed Edwards spend key and a fresh hybrid KEM keypair.
-/// The KEM keys are drawn per scenario (the library offers no seeded
-/// generation); every template in one scenario pays the same miner.
-fn deterministic_miner() -> MinerKeys {
-    let k = Scalar::from_bytes_mod_order([0x5c; 32]);
-    let (pk, _sk) = HybridX25519MlKem
-        .keypair_generate()
-        .expect("hybrid KEM keypair generation");
-    MinerKeys {
-        spend_public: EdwardsPoint::mul_base(&k).compress().to_bytes(),
-        x25519_pk: pk.x25519,
-        ml_kem_ek: pk.ml_kem,
+/// The scenario's miner, secrets included: a fixed Edwards spend key and a
+/// hybrid KEM keypair drawn per scenario (the library offers no seeded
+/// generation). Every template in one scenario pays this miner, and the
+/// spend the scenario can build (`scenario_spend`) spends what it was paid
+/// — which is why the secrets are kept rather than dropped at the keys.
+pub struct MinerWallet {
+    /// The Edwards spend secret `b`; `spend_public = b·G`.
+    pub spend_secret: Zeroizing<[u8; 32]>,
+    /// The hybrid KEM decapsulation keys the coinbase's `0x06` field was
+    /// encapsulated to.
+    pub kem_secret: HybridKemSecretKey,
+    /// What the template is handed.
+    pub keys: MinerKeys,
+}
+
+impl MinerWallet {
+    fn deterministic() -> Self {
+        let k = Scalar::from_bytes_mod_order([0x5c; 32]);
+        let (pk, sk) = HybridX25519MlKem
+            .keypair_generate()
+            .expect("hybrid KEM keypair generation");
+        Self {
+            spend_secret: Zeroizing::new(k.to_bytes()),
+            kem_secret: sk,
+            keys: MinerKeys {
+                spend_public: EdwardsPoint::mul_base(&k).compress().to_bytes(),
+                x25519_pk: pk.x25519,
+                ml_kem_ek: pk.ml_kem,
+            },
+        }
     }
 }
 
