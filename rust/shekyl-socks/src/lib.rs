@@ -146,7 +146,7 @@ where
     stream.write_all(&request).await.map_err(SocksError::Io)?;
     let mut head = [0u8; 4];
     stream.read_exact(&mut head).await.map_err(SocksError::Io)?;
-    if head[0] != VERSION {
+    if head[0] != VERSION || head[2] != 0 {
         return Err(SocksError::Malformed);
     }
     consume_bind(stream, head[3]).await?;

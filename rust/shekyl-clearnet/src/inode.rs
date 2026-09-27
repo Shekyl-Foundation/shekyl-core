@@ -6,8 +6,11 @@
 //! One descriptor per socket. The count is `readlink` results equal to
 //! that socket's `socket:[inode]`, not every descriptor in the process.
 
+#[cfg(unix)]
 use std::io;
+#[cfg(unix)]
 use std::os::unix::io::RawFd;
+#[cfg(target_os = "linux")]
 use std::path::Path;
 
 /// How many open descriptors name the same socket as `fd`.
@@ -32,9 +35,9 @@ fn link_matches(path: &Path, mine: &Path) -> bool {
     std::fs::read_link(path).is_ok_and(|link| link == mine)
 }
 
-/// Non-Linux builds have no `/proc` inode to count. The check is the
-/// Linux one D11 names.
-#[cfg(not(target_os = "linux"))]
+/// Unix builds other than Linux have no `/proc` inode to count. The
+/// check is the Linux one D11 names.
+#[cfg(all(unix, not(target_os = "linux")))]
 pub fn socket_descriptors(_fd: RawFd) -> io::Result<usize> {
     Ok(1)
 }
