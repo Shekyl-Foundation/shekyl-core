@@ -1570,6 +1570,13 @@ ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
 /// Gracefully stop the Axum daemon RPC server and free the handle.
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 
+/// The D5 thread ledger, one line: each live pool and the total of
+/// workers plus blocking caps. Empty of pools, the line is
+/// `thread budget: none; total 0`. The daemon prints it once, after
+/// startup has constructed the pools it owns. Free with
+/// `shekyl_buffer_free`.
+ShekylBuffer shekyl_thread_budget_report(void);
+
 // ---------------------------------------------------------------------------
 // shekyld control client (`shekyld <command>` → running daemon), the outbound
 // half of the daemon's HTTP surface. Plaintext loopback only — the daemon

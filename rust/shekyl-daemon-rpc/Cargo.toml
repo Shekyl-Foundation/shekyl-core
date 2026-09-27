@@ -32,6 +32,8 @@ hex = "0.4"
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 # The §2 wire contract (SubmitVerdict / RejectCause) — single Rust definition.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# D5's thread ledger. The daemon prints it once at startup.
+shekyl-runtime = { path = "../shekyl-runtime" }
 # Typed identities (TxHash / BlockHash / BlockHeight) per rule 18.
 shekyl-types = { path = "../shekyl-types" }
 # Phase-A parse + structural validation + canonical txid (§3.1, §3.4).

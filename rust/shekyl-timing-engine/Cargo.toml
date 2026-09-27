@@ -5,12 +5,16 @@
 
 [package]
 name = "shekyl-timing-engine"
-description = "P2P timing engine: time-ordered wake hints and the one-thread service around them. No sockets and no async runtime."
+description = "P2P timing engine: time-ordered wake hints and the one-thread service around them. No sockets. The thread is registered on shekyl-runtime's ledger."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+
+[dependencies]
+# The thread ledger only. This crate does not build a runtime.
+shekyl-runtime = { path = "../shekyl-runtime" }
 
 [dev-dependencies]
 # Already pinned in the workspace lockfile. The model test is the

@@ -4071,6 +4071,7 @@ dependencies = [
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
+ "shekyl-runtime",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
@@ -4772,6 +4773,7 @@ version = "3.1.0"
 dependencies = [
  "criterion",
  "proptest",
+ "shekyl-runtime",
 ]
 
 [[package]]

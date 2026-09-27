@@ -14,6 +14,18 @@ use super::*;
 use crate::{ManualClock, OwnerClass, Tick};
 
 #[test]
+fn the_engine_thread_is_on_the_budget_ledger() {
+    let service = EngineService::start(ManualClock::new(Tick::new(0)));
+    let row = shekyl_runtime::ledger()
+        .into_iter()
+        .find(|row| row.name == "shekyl-timing")
+        .expect("the engine thread is recorded while it is alive");
+    assert_eq!(row.workers, 1);
+    assert_eq!(row.blocking, 0);
+    drop(service);
+}
+
+#[test]
 fn a_later_arm_is_not_sent_until_the_wake_resets_the_handle() {
     let service = EngineService::start(ManualClock::new(Tick::new(0)));
     let owner = service

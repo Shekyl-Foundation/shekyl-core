@@ -338,6 +338,9 @@ pub struct EngineService<C: Clock> {
     ids: IdSource,
     clock: C,
     thread: Mutex<Option<JoinHandle<()>>>,
+    /// The engine thread's row on the process thread ledger. Taken after
+    /// the thread has joined, so the row is live for the thread's life.
+    budget: Option<shekyl_runtime::Registration>,
     #[cfg(test)]
     gate: Arc<Gate>,
     #[cfg(test)]
@@ -402,12 +405,14 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
                 }
             })
             .expect("timing engine thread");
+        let budget = shekyl_runtime::register_thread("shekyl-timing");
         Self {
             tx,
             closed,
             ids,
             clock,
             thread: Mutex::new(Some(thread)),
+            budget: Some(budget),
             #[cfg(test)]
             gate,
             #[cfg(test)]
@@ -454,6 +459,7 @@ impl<C: Clock> Drop for EngineService<C> {
         if let Some(thread) = self.thread.lock().expect("thread lock").take() {
             drop(thread.join());
         }
+        drop(self.budget.take());
     }
 }
 

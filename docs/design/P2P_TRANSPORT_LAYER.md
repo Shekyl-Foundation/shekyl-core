@@ -185,18 +185,25 @@ onto it stays a follow-up of the constructor, not a precondition.
 ## Runtime constructor — this increment (2026-09-26)
 
 The crate is `shekyl-runtime`. [`runtime`](../../rust/shekyl-runtime/src/lib.rs)
-takes a `NonZeroUsize` worker count and a thread name, and builds one
-multi-thread runtime with that many workers. Tokio's unset count, one
-worker per core, is the default D5 refuses, so the function has no
-count of its own. `net` and `time` are on, so the runtime can host
-sockets and deadlines. The blocking-pool cap stays Tokio's default
-until D6's measurement names one.
+takes a [`Budget`](../../rust/shekyl-runtime/src/lib.rs) — worker count
+and blocking-pool cap, both required — and a thread name, and builds
+one multi-thread runtime. Tokio's unset worker count (one per core)
+and its blocking cap (512) are the defaults D5 refuses, so neither
+number lives in the crate. `net` and `time` are on, so the runtime can
+host sockets and deadlines. A dedicated thread registers with
+`register_thread`: one worker, blocking cap 0, because it has no
+blocking pool. Tokio refuses a blocking cap of 0, so a runtime's cap
+is at least one.
 
-Nothing here keeps a runtime. The clearnet connector is the first
-caller that does, and it waits on this function. The daemon-RPC builder
-at `shekyl-daemon-rpc` `ffi_exports.rs` and the Tor-control builder at
-`shekyl-tor-control-daemon` `blocking.rs` still construct their own.
-That move is the follow-up.
+Every live pool is a row on the process ledger: name, workers, blocking
+cap. Dropping the pool removes the row. The timing engine's thread
+registers when it starts. The daemon prints the ledger and the total
+once, after startup, via `shekyl_thread_budget_report`. The clearnet
+connector is the first caller that keeps a runtime. Its call passes a
+blocking cap labelled unmeasured; D6's measurement replaces that value.
+The daemon-RPC builder at `shekyl-daemon-rpc` `ffi_exports.rs` and the
+Tor-control builder at `shekyl-tor-control-daemon` `blocking.rs` still
+construct their own. That move is the follow-up.
 
 ---
 
@@ -498,9 +505,11 @@ and does not set a worker count, so it takes one worker per core;
 On a 4-core Pi-4 those two are five workers. A third runtime that also
 took the default would make nine, plus blocking pools. The transport
 layer does not add one that way. The constructor is
-`shekyl-runtime::runtime`: the worker count and a thread name go in,
-and no count lives in the crate. The two call sites above are not on
-it yet.
+`shekyl-runtime::runtime(Budget { workers, blocking }, name)`. Both
+counts are inputs; Tokio's 512 blocking cap is not left in place. The
+ledger sums every live pool, including the timing engine's thread, and
+the daemon prints that sum once at startup. The two call sites above
+are not on the constructor yet.
 
 ---
 

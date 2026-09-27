@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Daemon
+
+- **Thread budgets are one startup line.** Each runtime names its worker
+  count and its blocking-pool cap. The timing engine's thread is on the
+  same list, with no blocking pool. The daemon prints the list and the
+  total once, before the p2p loop.
+
 ### CLI wallet shell
 
 - **`shekyl-cli` speaks one command language.** Subjects then verbs
