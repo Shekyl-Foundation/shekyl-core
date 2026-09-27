@@ -791,8 +791,9 @@ impl ReadSnapshot<'_> {
     /// learn whether the tree is empty (SCU-1). EMPTY stays the answer
     /// after `connect` until a drain appends the first leaf (`grow.rs`,
     /// DRS-E3): connect records the live root in `curve_tree_roots` whether
-    /// or not the tree has grown (SI-4). A summary that is not EMPTY must carry that live
-    /// root (SI-12, [`StoreInvariant::SummaryRootDiverged`]). A count that
+    /// or not the tree has grown (SI-4). The summary's root must be that
+    /// live root, EMPTY included (SI-12,
+    /// [`StoreInvariant::SummaryRootDiverged`]). A count that
     /// is not the leaf table's length is SI-11
     /// ([`LeafDensity::Length`](crate::store::LeafDensity::Length)).
     pub fn curve_tree(&self) -> Result<CurveTreeState, StoreError> {

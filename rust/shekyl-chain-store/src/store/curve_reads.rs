@@ -46,8 +46,8 @@
 //! # The belts are armed here as well as at the writer
 //!
 //! C1 compares the summary's count with the leaf table's length
-//! ([`LeafDensity::Length`]) and, once the summary is grown, its root with
-//! the live root (SI-12). C3 names the first position in range with no row
+//! ([`LeafDensity::Length`]) and its root with the live root, on every
+//! read (SI-12). C3 names the first position in range with no row
 //! ([`LeafDensity::Hole`]). The writer (`grow.rs`, DRS-E3) moves the count,
 //! the rows, and the summary root together in one batch.
 //! [`LeafDensity::NotContinued`] is a growth whose starting count is not

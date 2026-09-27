@@ -44,7 +44,7 @@
 //! disagreement; E3 and the mutation family keep the same actor and decide
 //! for themselves). A store halt is a fault.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -52,7 +52,7 @@ use kameo::actor::PreparedActor;
 use kameo::error::SendError;
 use shekyl_chain_rules::{form, FormAttempt, InvalidBlock, StructurallyValid, Substrate, Verdict};
 use shekyl_chain_store::store::{ChainStore, StoreError};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
@@ -122,10 +122,14 @@ pub struct RunReport {
     /// The derived-vs-trace root comparison, per connected height the trace
     /// has facts for (DRS-E3 CTW-5, `DRS_E3_CURVE_WRITER.md` §3.8): how many
     /// heights were compared, and every one that disagreed. **Every**
-    /// covered height, never a sample — this comparison exists only while
-    /// the LMDB trace does. Zero compared on a trace with facts is a run
-    /// that connected nothing, which the connected count already says; a
-    /// gate over this field asserts the count first (rule 47).
+    /// covered height of the **canonical** chain, never a sample — this
+    /// comparison exists only while the LMDB trace does. The trace is
+    /// indexed by height and describes the chain the daemon ended on, so a
+    /// height an abandoned branch connected is not a comparison against
+    /// anything: a `Rewind { to }` retracts every result above `to`, and the
+    /// re-extension compares afresh. Zero compared on a trace with facts is
+    /// a run that connected nothing, which the connected count already
+    /// says; a gate over this field asserts the count first (rule 47).
     pub roots: RootComparisons,
     /// The RandomX measurement (RD-F11), as of the run's end.
     pub metrics: MetricsArtifact,
@@ -136,13 +140,50 @@ pub struct RunReport {
     pub switches: Vec<Switch>,
 }
 
-/// The per-height root oracle's tally (`RunReport::roots`).
+/// The per-height root oracle's results (`RunReport::roots`), one per
+/// canonical height compared: `None` where the derived root was the
+/// recorded one, the divergence where it was not. Keyed by height so a
+/// rewind can retract the abandoned branch's results and a re-extension
+/// can replace them — a `Vec` of divergences would keep a popped height's
+/// verdict forever.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RootComparisons {
-    /// Connected heights whose trace facts carried a root to compare.
-    pub compared: u64,
-    /// Every height where the derived root was not the recorded one.
-    pub diverged: Vec<RootDivergence>,
+    results: BTreeMap<BlockHeight, Option<RootDivergence>>,
+}
+
+impl RootComparisons {
+    /// Connected canonical heights whose trace facts carried a root to
+    /// compare.
+    #[must_use]
+    pub fn compared(&self) -> u64 {
+        u64::try_from(self.results.len()).expect("a height count fits u64")
+    }
+
+    /// Every canonical height where the derived root was not the recorded
+    /// one, ascending.
+    pub fn diverged(&self) -> impl Iterator<Item = &RootDivergence> + '_ {
+        self.results.values().flatten()
+    }
+
+    /// Whether any compared height diverged.
+    #[must_use]
+    pub fn any_diverged(&self) -> bool {
+        self.diverged().next().is_some()
+    }
+
+    /// Record one height's comparison, replacing an earlier result at the
+    /// same height (a re-extension after a rewind).
+    fn record(&mut self, at: BlockHeight, ours: CurveTreeRoot, theirs: CurveTreeRoot) {
+        let result = (ours != theirs).then_some(RootDivergence { at, ours, theirs });
+        self.results.insert(at, result);
+    }
+
+    /// Retract every result above `to`: the heights a rewind popped were
+    /// connected on a branch the chain abandoned, and the trace's row at
+    /// those heights describes the branch it kept.
+    fn retract_above(&mut self, to: BlockHeight) {
+        self.results.retain(|height, _| *height <= to);
+    }
 }
 
 /// One height where the store's derived root differed from the trace's.
@@ -151,9 +192,9 @@ pub struct RootDivergence {
     /// The connected height whose drain produced the root.
     pub at: BlockHeight,
     /// The verdict's derivation, recorded at `curve_tree_roots[at + 1]`.
-    pub ours: shekyl_types::CurveTreeRoot,
+    pub ours: CurveTreeRoot,
     /// The trace's `root_after` — what the C++ grower left.
-    pub theirs: shekyl_types::CurveTreeRoot,
+    pub theirs: CurveTreeRoot,
 }
 
 /// The covered-tip checkpoint, compared.
@@ -237,8 +278,8 @@ impl RunReport {
                 .map(|(height, verdict)| (verdict.rule.as_str(), *height)),
             digest_identical: self.checkpoint.as_ref().map(Checkpoint::identical),
             roots: crate::grader::RootOracle {
-                compared: self.roots.compared,
-                diverged_at: self.roots.diverged.iter().map(|d| d.at).collect(),
+                compared: self.roots.compared(),
+                diverged_at: self.roots.diverged().map(|d| d.at).collect(),
             },
         }
     }
@@ -249,8 +290,7 @@ impl RunReport {
     pub fn disagreements(&self) -> impl Iterator<Item = Disagreement> + '_ {
         let roots = self
             .roots
-            .diverged
-            .iter()
+            .diverged()
             .map(|d| Disagreement::RootDiverged { at: d.at });
         let diverged = self
             .checkpoint
@@ -639,15 +679,9 @@ where
         // with DRS-E3); a disagreement is recorded, never patched.
         for (at, ours) in &applied.roots {
             if let Some(facts) = self.trace.borrow(*at) {
-                let theirs = facts.value().root_after;
-                self.report.roots.compared += 1;
-                if *ours != theirs {
-                    self.report.roots.diverged.push(RootDivergence {
-                        at: *at,
-                        ours: *ours,
-                        theirs,
-                    });
-                }
+                self.report
+                    .roots
+                    .record(*at, *ours, facts.value().root_after);
             }
         }
         if let Some(at) = self.checkpoint_at {
@@ -687,6 +721,10 @@ where
             popped: rewound.popped,
             digest,
         });
+        // The popped heights' root comparisons were against the trace's
+        // rows for a branch the chain has now left; the re-extension will
+        // compare the canonical blocks at those heights.
+        self.report.roots.retract_above(to);
         self.ledger.rewind_to(to);
         self.form_at = next_height(Some(to));
         Ok(())

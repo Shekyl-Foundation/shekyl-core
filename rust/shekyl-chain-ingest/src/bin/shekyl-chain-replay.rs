@@ -291,7 +291,7 @@ async fn replay(replay: Replay) -> Result<(), Failure> {
         report.connected.len(),
         report.popped(),
         usize::from(report.checkpoint.is_some()),
-        report.roots.compared,
+        report.roots.compared(),
     );
     for disagreement in report.disagreements() {
         match disagreement {

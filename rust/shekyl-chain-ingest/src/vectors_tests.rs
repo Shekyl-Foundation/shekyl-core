@@ -194,19 +194,23 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // asserted first (rule 47): a comparison that ran over nothing is not
     // a comparison.
     assert_eq!(
-        report.roots.compared, manifest.block_count,
+        report.roots.compared(),
+        manifest.block_count,
         "{}: {} of {} heights had a recorded root to compare against",
-        manifest.shape, report.roots.compared, manifest.block_count
+        manifest.shape,
+        report.roots.compared(),
+        manifest.block_count
     );
+    let diverged: Vec<_> = report.roots.diverged().collect();
     assert!(
-        report.roots.diverged.is_empty(),
+        diverged.is_empty(),
         "{} ({}): the derived curve-tree root differs from the daemon's at {} height(s), first at \
          {:?} — a FINDING, adjudicated against the spec (E2 §0), never a fixture problem: the \
          chain is one the C++ accepted and the root is the validator's derivation",
         manifest.shape,
         manifest.generator,
-        report.roots.diverged.len(),
-        report.roots.diverged.first()
+        diverged.len(),
+        diverged.first()
     );
     let (h0, connected_genesis) = report.connected[0];
     assert_eq!(h0, BlockHeight::from_raw(0));
@@ -322,7 +326,7 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
             manifest.shape,
             report.connected.len(),
             manifest.tip_height,
-            report.roots.compared,
+            report.roots.compared(),
             report.exercised.len()
         );
     }

@@ -756,6 +756,51 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
+    // The trace is indexed by height and describes the chain the daemon
+    // ended on. Heights the main chain connected past the fork point were
+    // compared against the fork's rows; once the rewind pops them, those
+    // results are not comparisons against anything and are retracted, and
+    // the re-extension compares the canonical blocks afresh (DRS-E3 CTW-5,
+    // #878 review). Main 0..=34 with two-output spends; rewind to 21; fork
+    // 22..=35 with three-output spends, so from 32 on (block 22's outputs
+    // maturing) the two trees differ — the premise is asserted, not assumed.
+    let path = tmp("pipeline-rewind-roots");
+    let r = reorg(35, 21, 14);
+    let main_tree = GrownTree::over(&r.main);
+    let fork_tree = GrownTree::over(&r.after);
+    assert_ne!(
+        main_tree.root_after(33),
+        fork_tree.root_after(33),
+        "the fixture's fork grows a different tree past the fork point"
+    );
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_of_reorg(&r);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        cfg(4),
+    )
+    .await
+    .expect("the reorg replays");
+    assert_eq!(report.popped(), 13, "22..=34 popped");
+    // 36 canonical heights compared — not 36 + 13: the popped heights'
+    // results are gone, the re-extended ones replaced them.
+    assert_eq!(report.roots.compared(), r.after.len() as u64);
+    assert_eq!(report.roots.diverged().count(), 0, "{:?}", report.roots);
+    assert_eq!(report.disagreements().count(), 0);
+    assert!(report.observations().roots.diverged_at.is_empty());
+    let Checkpoint { ours, theirs, .. } = report.checkpoint.expect("covered-tip checkpoint");
+    assert_eq!(ours, theirs);
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     // RD-Q7 through the pipeline: `--fixed-difficulty 7` → RuleSet::fakechain(7)
     // in force at every height, formed and validated under the same set,
@@ -1035,9 +1080,13 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         report.checkpoint.expect("covered tip").identical(),
         "the tip digest agrees: the interior root is invisible to it"
     );
-    assert_eq!(report.roots.compared, 3, "every connected height compared");
     assert_eq!(
-        report.roots.diverged,
+        report.roots.compared(),
+        3,
+        "every connected height compared"
+    );
+    assert_eq!(
+        report.roots.diverged().copied().collect::<Vec<_>>(),
         vec![crate::pipeline::RootDivergence {
             at: h(1),
             ours: tree.root_after(1),

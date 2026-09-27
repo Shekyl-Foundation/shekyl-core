@@ -401,10 +401,14 @@ pub fn chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
 
 /// The reorg family (§3.8, RD-Q13): a main chain of `main_len` blocks, a
 /// `Rewind { to }`, then `fork_len` fork blocks chained onto `main[to]`
-/// with nonces and key images the main chain never used. `fork_len` must
-/// exceed `main_len - 1 - to` so the fork's tip is beyond every pre-switch
-/// tip (corpus module docs: a checkpoint height is compared the first time
-/// it is the tip).
+/// with nonces and key images the main chain never used, and **three-output
+/// spends where the main chain's have two** — so the fork's tree differs
+/// from the main chain's once its own outputs mature, as a real fork's
+/// would, and a root comparison that failed to retract the abandoned
+/// branch would show it (`pipeline_tests`). `fork_len` must exceed
+/// `main_len - 1 - to` so the fork's tip is beyond every pre-switch tip
+/// (corpus module docs: a checkpoint height is compared the first time it
+/// is the tip).
 pub struct Reorg {
     /// The chain before the switch.
     pub main: Vec<(Block, Vec<Transaction>)>,
@@ -436,7 +440,7 @@ pub fn reorg(main_len: u64, to: u64, fork_len: u64) -> Reorg {
             vec![anchor(
                 &hashes,
                 height,
-                spend(key_image(Family::Fork, height)),
+                fixture::spend(key_image(Family::Fork, height), 3),
             )]
         };
         let b = block_with_nonce(
