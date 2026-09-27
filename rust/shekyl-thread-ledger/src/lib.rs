@@ -6,13 +6,14 @@
 //! The process ledger of thread budgets (D5).
 //!
 //! This crate does not build a Tokio runtime and does not open a socket.
-//! [`spawn_dedicated`] starts one OS thread and holds its [`JoinHandle`] in
-//! the guard, so the ledger row and the thread are one value. A Tokio pool
-//! is recorded with [`record_runtime`] by `shekyl-runtime`, which keeps the
-//! guard inside the pool. The timing engine depends on this crate and does
-//! not gain a runtime by doing so.
+//! [`spawn_dedicated`] starts one OS thread and returns a [`DedicatedThread`],
+//! which joins that thread before the row leaves. A Tokio pool is recorded
+//! with [`record_runtime`] by `shekyl-runtime`, which keeps the [`RuntimeRow`]
+//! inside the pool. A runtime row has no join. The timing engine depends on
+//! this crate and does not gain a runtime by doing so.
 //!
 //! Names are labels. Two rows may share a name. [`LedgerId`] is the identity.
+//! A name is a [`ThreadName`]: non-empty, and no interior NUL.
 //!
 //! The daemon prints [`report`] once every runtime it builds is recorded
 //! here. Daemon-RPC and Tor-control still build their own, so that print is
@@ -20,6 +21,7 @@
 
 #![deny(unsafe_code)]
 
+use std::fmt;
 use std::io;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,6 +35,66 @@ pub const DEDICATED_THREAD_COUNT: usize = 1;
 /// Identity of one ledger row. Names are not unique; this is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LedgerId(u64);
+
+/// Why [`ThreadName::new`] refused a string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadNameError {
+    /// The string was empty.
+    Empty,
+    /// The string contained a `NUL` byte.
+    InteriorNul,
+}
+
+impl fmt::Display for ThreadNameError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ThreadNameError::Empty => formatter.write_str("a thread name is empty"),
+            ThreadNameError::InteriorNul => {
+                formatter.write_str("a thread name contains a NUL byte")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ThreadNameError {}
+
+/// OS thread name and ledger label.
+///
+/// Empty is refused because a row with no name is not a row. An interior
+/// NUL is refused because [`std::thread::Builder`] panics on one, and that
+/// panic would otherwise land after the row had been inserted.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ThreadName(String);
+
+impl ThreadName {
+    /// Refuse an empty string and a string that contains a NUL byte.
+    pub fn new(name: &str) -> Result<Self, ThreadNameError> {
+        if name.is_empty() {
+            return Err(ThreadNameError::Empty);
+        }
+        if name.as_bytes().contains(&0) {
+            return Err(ThreadNameError::InteriorNul);
+        }
+        Ok(Self(name.to_owned()))
+    }
+
+    /// The name as the OS thread builder and the report see it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ThreadName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for ThreadName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
 
 /// Worker threads and the blocking-pool cap of one Tokio runtime.
 ///
@@ -54,6 +116,18 @@ pub enum RowKind {
     DedicatedThread,
 }
 
+/// Order of two budgets that share a name. A dedicated thread comes first,
+/// then a runtime with fewer workers, then a runtime with a smaller
+/// blocking cap. [`LedgerId`] is the tie-break after this.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BudgetOrder {
+    Dedicated,
+    Runtime {
+        workers: NonZeroUsize,
+        blocking: NonZeroUsize,
+    },
+}
+
 impl RowKind {
     /// Threads this row contributes.
     ///
@@ -68,84 +142,142 @@ impl RowKind {
             RowKind::DedicatedThread => DEDICATED_THREAD_COUNT,
         }
     }
+
+    fn budget_order(self) -> BudgetOrder {
+        match self {
+            RowKind::DedicatedThread => BudgetOrder::Dedicated,
+            RowKind::Runtime(RuntimeBudget { workers, blocking }) => {
+                BudgetOrder::Runtime { workers, blocking }
+            }
+        }
+    }
 }
 
-/// One row as observed by a reader. The guard is what keeps it alive.
+/// One row as observed by a reader. The owner is what keeps it alive.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LedgerRow {
-    /// Identity. Stable for the life of the guard.
+    /// Identity. Stable for the life of the owner.
     pub id: LedgerId,
     /// OS thread name, and the label [`report`] prints.
-    pub name: String,
+    pub name: ThreadName,
     /// Which budget this row is.
     pub kind: RowKind,
 }
 
 struct StoredRow {
     id: LedgerId,
-    name: String,
+    name: ThreadName,
     kind: RowKind,
 }
 
-struct GuardState {
-    id: Option<LedgerId>,
-    thread: Option<JoinHandle<()>>,
+enum DedicatedState {
+    /// The row is on the ledger. The OS thread has not been spawned, or
+    /// spawning it has not returned.
+    Reserved { id: LedgerId },
+    /// The row is on the ledger and this value owns the thread.
+    Live {
+        id: LedgerId,
+        thread: JoinHandle<()>,
+    },
+    /// The thread has been joined, or the reservation was dropped, and the
+    /// row has been removed.
+    Finished,
 }
 
-/// Keeps one row on the ledger.
+/// One OS thread and its ledger row.
 ///
-/// Drop joins a dedicated thread this guard spawned, then removes the row.
-/// A runtime guard has no thread. The pool in `shekyl-runtime` drops its
-/// runtime first and this guard after, so the row covers the workers'
-/// shutdown.
-#[must_use = "dropping the guard joins a dedicated thread and removes its ledger row"]
-pub struct RowGuard {
-    state: Mutex<GuardState>,
+/// [`join`](Self::join) takes `&mut self`, so a second caller cannot
+/// observe the thread while the first join is still in progress. Drop
+/// joins too. The row leaves after the thread has been joined.
+#[must_use = "dropping the thread joins it and removes its ledger row"]
+pub struct DedicatedThread {
+    state: DedicatedState,
 }
 
-impl RowGuard {
-    fn live(id: LedgerId, thread: Option<JoinHandle<()>>) -> Self {
-        Self {
-            state: Mutex::new(GuardState {
-                id: Some(id),
-                thread,
-            }),
-        }
-    }
+/// Removes a row when dropped, including when [`JoinHandle::join`] unwinds.
+struct RemoveAfterJoin(Option<LedgerId>);
 
-    /// The row, while this guard still holds it.
-    pub fn id(&self) -> Option<LedgerId> {
-        self.lock().id
-    }
-
-    /// Join the dedicated thread, if this guard spawned one, then remove the row.
-    ///
-    /// A second call does nothing. Drop calls this.
-    pub fn join(&self) {
-        self.finish();
-    }
-
-    fn finish(&self) {
-        let (thread, id) = {
-            let mut state = self.lock();
-            (state.thread.take(), state.id.take())
-        };
-        if let Some(thread) = thread {
-            drop(thread.join());
-        }
-        if let Some(id) = id {
+impl Drop for RemoveAfterJoin {
+    fn drop(&mut self) {
+        if let Some(id) = self.0.take() {
             remove(id);
         }
     }
+}
 
-    fn lock(&self) -> MutexGuard<'_, GuardState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+impl DedicatedThread {
+    fn reserve(id: LedgerId) -> Self {
+        Self {
+            state: DedicatedState::Reserved { id },
+        }
+    }
+
+    fn attach(&mut self, thread: JoinHandle<()>) {
+        let DedicatedState::Reserved { id } =
+            std::mem::replace(&mut self.state, DedicatedState::Finished)
+        else {
+            unreachable!("a dedicated thread is attached once, from the reserved row");
+        };
+        self.state = DedicatedState::Live { id, thread };
+    }
+
+    /// The row, while this thread still holds it.
+    pub fn id(&self) -> Option<LedgerId> {
+        match self.state {
+            DedicatedState::Reserved { id } | DedicatedState::Live { id, .. } => Some(id),
+            DedicatedState::Finished => None,
+        }
+    }
+
+    /// Join the thread, then remove the row.
+    ///
+    /// A panic in the thread is the `Err` this returns. A second call
+    /// returns `Ok(())`: the first call is the one that reports the panic.
+    /// Drop calls this and ignores that result.
+    pub fn join(&mut self) -> std::thread::Result<()> {
+        match std::mem::replace(&mut self.state, DedicatedState::Finished) {
+            DedicatedState::Finished => Ok(()),
+            DedicatedState::Reserved { id } => {
+                remove(id);
+                Ok(())
+            }
+            DedicatedState::Live { id, thread } => {
+                let removal = RemoveAfterJoin(Some(id));
+                let joined = thread.join();
+                drop(removal);
+                joined
+            }
+        }
     }
 }
 
-impl Drop for RowGuard {
+impl Drop for DedicatedThread {
     fn drop(&mut self) {
-        self.finish();
+        drop(self.join());
+    }
+}
+
+/// The ledger row of one Tokio runtime.
+///
+/// This value does not own the runtime and has no join. Dropping it
+/// removes the row. The pool in `shekyl-runtime` stores the runtime
+/// before this row, so the workers shut down first. This crate has no
+/// Tokio type; that field order is what keeps the shutdown inside the row.
+#[must_use = "dropping the row removes it from the ledger"]
+pub struct RuntimeRow {
+    id: LedgerId,
+}
+
+impl RuntimeRow {
+    /// The row, for the life of this value.
+    pub fn id(&self) -> LedgerId {
+        self.id
+    }
+}
+
+impl Drop for RuntimeRow {
+    fn drop(&mut self) {
+        remove(self.id);
     }
 }
 
@@ -156,15 +288,11 @@ fn rows() -> MutexGuard<'static, Vec<StoredRow>> {
     LEDGER.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn require_name(name: &str) {
-    assert!(!name.is_empty(), "a ledger row carries the thread's name");
-}
-
-fn insert(name: &str, kind: RowKind) -> LedgerId {
+fn insert(name: &ThreadName, kind: RowKind) -> LedgerId {
     let id = LedgerId(NEXT_ID.fetch_add(1, Ordering::Relaxed));
     rows().push(StoredRow {
         id,
-        name: name.to_owned(),
+        name: name.clone(),
         kind,
     });
     id
@@ -176,39 +304,31 @@ fn remove(id: LedgerId) {
 
 /// Spawn one dedicated thread and record it.
 ///
-/// `name` is the OS thread name and the ledger label. The row stays until
-/// the guard is joined or dropped, and the join happens before the row
-/// leaves.
-///
-/// # Panics
-///
-/// Panics if `name` is empty. The thread is not spawned in that case.
-pub fn spawn_dedicated(name: &str, body: impl FnOnce() + Send + 'static) -> io::Result<RowGuard> {
-    require_name(name);
-    let id = insert(name, RowKind::DedicatedThread);
-    match std::thread::Builder::new()
-        .name(name.to_owned())
-        .spawn(body)
-    {
-        Ok(handle) => Ok(RowGuard::live(id, Some(handle))),
-        Err(err) => {
-            remove(id);
-            Err(err)
-        }
-    }
+/// `name` is the OS thread name and the ledger label. The row is reserved
+/// before [`std::thread::Builder::spawn`] runs, so a failure or a panic
+/// from the builder drops the reservation and the row leaves. The returned
+/// thread joins the worker before the row leaves.
+pub fn spawn_dedicated(
+    name: &ThreadName,
+    body: impl FnOnce() + Send + 'static,
+) -> io::Result<DedicatedThread> {
+    let mut dedicated = DedicatedThread::reserve(insert(name, RowKind::DedicatedThread));
+    let thread = std::thread::Builder::new()
+        .name(name.as_str().to_owned())
+        .spawn(body)?;
+    dedicated.attach(thread);
+    Ok(dedicated)
 }
 
 /// Record a Tokio runtime's budget.
 ///
 /// `shekyl-runtime::runtime` is the constructor that calls this and stores
-/// the guard in the pool. The guard does not own the runtime.
-///
-/// # Panics
-///
-/// Panics if `name` is empty.
-pub fn record_runtime(name: &str, budget: RuntimeBudget) -> RowGuard {
-    require_name(name);
-    RowGuard::live(insert(name, RowKind::Runtime(budget)), None)
+/// the row in the pool. The row does not own the runtime. Dropping it
+/// removes the budget. There is no join.
+pub fn record_runtime(name: &ThreadName, budget: RuntimeBudget) -> RuntimeRow {
+    RuntimeRow {
+        id: insert(name, RowKind::Runtime(budget)),
+    }
 }
 
 /// Live rows, in registration order.
@@ -225,11 +345,21 @@ pub fn ledger() -> Vec<LedgerRow> {
 
 /// One line: each row, then the total of [`RowKind::threads`].
 ///
-/// Rows are ordered by name, then by [`LedgerId`], so the line does not
-/// depend on which pool registered first. An empty ledger is
-/// `thread budget: none; total 0`.
+/// Rows are ordered by name, then by budget (a dedicated thread, then a
+/// runtime's worker count, then its blocking cap), then by [`LedgerId`].
+/// Registration order decides only when the name and the budget are the
+/// same. An empty ledger is `thread budget: none; total 0`.
 pub fn report() -> String {
     format_report(&ledger())
+}
+
+fn sort_rows(rows: &mut [LedgerRow]) {
+    rows.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.kind.budget_order().cmp(&right.kind.budget_order()))
+            .then(left.id.cmp(&right.id))
+    });
 }
 
 fn format_report(rows: &[LedgerRow]) -> String {
@@ -237,7 +367,7 @@ fn format_report(rows: &[LedgerRow]) -> String {
         return "thread budget: none; total 0".to_owned();
     }
     let mut ordered = rows.to_vec();
-    ordered.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+    sort_rows(&mut ordered);
     let mut total = 0usize;
     for row in &ordered {
         total = total
@@ -266,7 +396,6 @@ impl LedgerRow {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
-    use std::sync::mpsc;
 
     use super::*;
 
@@ -277,10 +406,14 @@ mod tests {
         }
     }
 
+    fn thread_name(text: &str) -> ThreadName {
+        ThreadName::new(text).expect("thread name")
+    }
+
     fn row(id: u64, name: &str, kind: RowKind) -> LedgerRow {
         LedgerRow {
             id: LedgerId(id),
-            name: name.to_owned(),
+            name: thread_name(name),
             kind,
         }
     }
@@ -301,14 +434,51 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_name_orders_by_budget_then_id() {
+        let mut rows = vec![
+            row(2, "same", RowKind::Runtime(budget(4, 1))),
+            row(1, "same", RowKind::DedicatedThread),
+            row(4, "same", RowKind::Runtime(budget(4, 1))),
+            row(3, "same", RowKind::Runtime(budget(1, 9))),
+        ];
+        sort_rows(&mut rows);
+        assert_eq!(
+            rows.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![LedgerId(1), LedgerId(3), LedgerId(2), LedgerId(4)]
+        );
+        let total = DEDICATED_THREAD_COUNT + (1 + 9) + (4 + 1) + (4 + 1);
+        assert_eq!(
+            format_report(&rows),
+            format!(
+                "thread budget: same dedicated, same workers=1 blocking=9, same workers=4 blocking=1, same workers=4 blocking=1; total {total}"
+            )
+        );
+    }
+
+    #[test]
     fn an_empty_ledger_reports_no_rows() {
         assert_eq!(format_report(&[]), "thread budget: none; total 0");
     }
 
     #[test]
+    fn an_empty_name_is_refused() {
+        assert_eq!(ThreadName::new("").unwrap_err(), ThreadNameError::Empty);
+    }
+
+    #[test]
+    fn a_name_with_a_nul_is_refused_and_is_not_a_row() {
+        let text = "sk-ledger-\0nul";
+        assert_eq!(
+            ThreadName::new(text).unwrap_err(),
+            ThreadNameError::InteriorNul
+        );
+        assert!(ledger().iter().all(|entry| entry.name.as_str() != text));
+    }
+
+    #[test]
     fn a_dedicated_thread_is_named_and_joined_with_its_row() {
-        let (tx, rx) = mpsc::channel();
-        let guard = spawn_dedicated("sk-ledger-name", move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut guard = spawn_dedicated(&thread_name("sk-ledger-name"), move || {
             tx.send(std::thread::current().name().map(str::to_owned))
                 .expect("test thread");
         })
@@ -318,18 +488,31 @@ mod tests {
             .into_iter()
             .find(|entry| entry.id == id)
             .expect("recorded");
-        assert_eq!(found.name, "sk-ledger-name");
+        assert_eq!(found.name.as_str(), "sk-ledger-name");
         assert_eq!(found.kind, RowKind::DedicatedThread);
         assert_eq!(found.kind.threads(), DEDICATED_THREAD_COUNT);
         assert_eq!(rx.recv().expect("name").as_deref(), Some("sk-ledger-name"));
-        guard.join();
+        assert!(guard.join().is_ok());
+        assert!(guard.id().is_none());
+        assert!(guard.join().is_ok());
+        assert!(ledger().iter().all(|entry| entry.id != id));
+    }
+
+    #[test]
+    fn joining_a_panicked_thread_returns_the_panic() {
+        let mut guard = spawn_dedicated(&thread_name("sk-ledger-panic"), || {
+            panic!("ledger worker failed");
+        })
+        .expect("spawn");
+        let id = guard.id().expect("row");
+        assert!(guard.join().is_err());
         assert!(guard.id().is_none());
         assert!(ledger().iter().all(|entry| entry.id != id));
     }
 
     #[test]
-    fn dropping_the_guard_removes_the_row() {
-        let guard = spawn_dedicated("sk-ledger-drop", || {}).expect("spawn");
+    fn dropping_the_thread_removes_the_row() {
+        let guard = spawn_dedicated(&thread_name("sk-ledger-drop"), || {}).expect("spawn");
         let id = guard.id().expect("row");
         drop(guard);
         assert!(ledger().iter().all(|entry| entry.id != id));
@@ -337,8 +520,9 @@ mod tests {
 
     #[test]
     fn the_same_name_is_two_rows() {
-        let first = spawn_dedicated("sk-ledger-dup", || {}).expect("first");
-        let second = spawn_dedicated("sk-ledger-dup", || {}).expect("second");
+        let name = thread_name("sk-ledger-dup");
+        let first = spawn_dedicated(&name, || {}).expect("first");
+        let second = spawn_dedicated(&name, || {}).expect("second");
         let first_id = first.id().expect("first id");
         let second_id = second.id().expect("second id");
         assert_ne!(first_id, second_id);
@@ -353,28 +537,17 @@ mod tests {
     }
 
     #[test]
-    fn a_runtime_row_records_both_caps() {
-        let guard = record_runtime("sk-ledger-rt", budget(2, 3));
-        let id = guard.id().expect("row");
+    fn a_runtime_row_records_both_caps_and_has_its_id_until_drop() {
+        let name = thread_name("sk-ledger-rt");
+        let row = record_runtime(&name, budget(2, 3));
+        let id = row.id();
         let found = ledger()
             .into_iter()
             .find(|entry| entry.id == id)
             .expect("recorded");
         assert_eq!(found.kind, RowKind::Runtime(budget(2, 3)));
         assert_eq!(found.kind.threads(), 2 + 3);
-        drop(guard);
+        drop(row);
         assert!(ledger().iter().all(|entry| entry.id != id));
-    }
-
-    #[test]
-    #[should_panic(expected = "a ledger row carries the thread's name")]
-    fn a_dedicated_thread_without_a_name_is_not_spawned() {
-        let _guard = spawn_dedicated("", || {});
-    }
-
-    #[test]
-    #[should_panic(expected = "a ledger row carries the thread's name")]
-    fn a_runtime_row_without_a_name_is_not_recorded() {
-        let _guard = record_runtime("", budget(1, 1));
     }
 }

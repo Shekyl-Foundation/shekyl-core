@@ -22,7 +22,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use shekyl_thread_ledger::RowGuard;
+use shekyl_thread_ledger::{DedicatedThread, ThreadName};
 
 use crate::{
     Clock, Engine, EngineError, Generation, IdSource, OwnerClass, OwnerId, OwnerMint, Tick, Wake,
@@ -339,7 +339,7 @@ const ENGINE_THREAD_NAME: &str = "shekyl-timing";
 pub struct EngineService<C: Clock> {
     /// The engine thread and its ledger row. Drop joins it after sending
     /// shutdown, while the mailbox still exists.
-    row: RowGuard,
+    row: DedicatedThread,
     tx: Sender<Command>,
     closed: Arc<AtomicBool>,
     ids: IdSource,
@@ -388,7 +388,8 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
         let thread_gate = Arc::clone(&gate);
         #[cfg(test)]
         let thread_counts = Arc::clone(&counts);
-        let row = shekyl_thread_ledger::spawn_dedicated(ENGINE_THREAD_NAME, move || {
+        let name = ThreadName::new(ENGINE_THREAD_NAME).expect("shekyl-timing is a thread name");
+        let row = shekyl_thread_ledger::spawn_dedicated(&name, move || {
             let engine = Engine::new(engine_clock);
             let finished = catch_unwind(AssertUnwindSafe(|| {
                 worker(
@@ -450,10 +451,10 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
 }
 
 impl<C: Clock> EngineService<C> {
-    /// Queue shutdown and join the worker. The ledger row leaves with the join.
-    fn join_worker(&self) {
+    /// Queue shutdown and join the worker. The ledger row leaves after the join.
+    fn join_worker(&mut self) {
         drop(self.tx.send(Command::Shutdown));
-        self.row.join();
+        drop(self.row.join());
     }
 }
 
@@ -868,7 +869,7 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
     }
 
     /// Join the worker and remove its ledger row. The service stays alive.
-    fn wait_stopped(&self) {
+    fn wait_stopped(&mut self) {
         self.join_worker();
     }
 

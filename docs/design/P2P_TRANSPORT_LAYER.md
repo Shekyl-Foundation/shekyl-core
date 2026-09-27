@@ -186,19 +186,23 @@ onto it stays a follow-up of the constructor, not a precondition.
 
 The ledger is [`shekyl-thread-ledger`](../../rust/shekyl-thread-ledger/src/lib.rs).
 It has no Tokio dependency. [`spawn_dedicated`](../../rust/shekyl-thread-ledger/src/lib.rs)
-starts one OS thread, stores the `JoinHandle` in the guard, and uses
-that same string as the OS thread name and the row label. Joining or
-dropping the guard removes the row after the thread has been joined.
-The row's kind is `DedicatedThread`: one thread, and no blocking pool.
-A zero blocking cap is not that fact. Tokio refuses a blocking cap of
-zero, and a dedicated thread is not a Tokio runtime. [`LedgerId`](../../rust/shekyl-thread-ledger/src/lib.rs)
-is the row's identity. The name is a label and may be shared.
+starts one OS thread and returns a `DedicatedThread`, which owns the
+`JoinHandle`. Joining or dropping that value removes the row after the
+thread has been joined. `join` takes `&mut self`, so a second caller
+cannot return while the first join is still in progress. The row's kind
+is `DedicatedThread`: one thread, and no blocking pool. A zero blocking
+cap is not that fact. Tokio refuses a blocking cap of zero, and a
+dedicated thread is not a Tokio runtime. [`LedgerId`](../../rust/shekyl-thread-ledger/src/lib.rs)
+is the row's identity. The name is a [`ThreadName`](../../rust/shekyl-thread-ledger/src/lib.rs):
+non-empty, no interior NUL, and it may be shared. The report orders a
+shared name by budget, then by `LedgerId`.
 
 [`runtime`](../../rust/shekyl-runtime/src/lib.rs) takes a
 [`RuntimeBudget`](../../rust/shekyl-thread-ledger/src/lib.rs) — worker
-count and blocking-pool cap, both required — and a thread name, and
-builds one multi-thread runtime. The pool holds the ledger guard and
-drops the runtime first, so the row covers the workers' shutdown.
+count and blocking-pool cap, both required — and a `ThreadName`, and
+builds one multi-thread runtime. The pool holds a `RuntimeRow`, which
+has no join, and drops the runtime first, so the row covers the workers'
+shutdown.
 Tokio's unset worker count (one per core) and its blocking cap (512)
 are the defaults D5 refuses, so neither number lives in either crate.
 The runtime enables the I/O driver and the time driver. `net` and
@@ -517,7 +521,8 @@ On a 4-core Pi-4 those two are five workers. A third runtime that also
 took the default would make nine, plus blocking pools. The transport
 layer does not add one that way. The constructor is
 `shekyl-runtime::runtime(RuntimeBudget { workers, blocking }, name)`.
-Both counts are inputs; Tokio's 512 blocking cap is not left in place.
+Both counts are inputs, and `name` is a `ThreadName` (non-empty, no
+interior NUL). Tokio's 512 blocking cap is not left in place.
 The ledger is `shekyl-thread-ledger`, which does not depend on Tokio.
 It sums every live pool, including the timing engine's dedicated
 thread. The daemon prints that sum once at startup once the two call

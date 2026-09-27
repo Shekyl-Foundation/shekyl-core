@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-thread-ledger"
-description = "Process thread-budget ledger. No Tokio and no sockets. A dedicated thread is spawned here; shekyl-runtime records a pool."
+description = "Process thread-budget ledger. No Tokio and no sockets. A DedicatedThread is spawned here; a RuntimeRow records a pool."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
