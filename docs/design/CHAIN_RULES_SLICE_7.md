@@ -256,6 +256,27 @@ belt standing where the census placed a validator rule), reached *before*
 its peer path rather than after — which is the difference between a
 finding and an incident, and is why the row is disclosed and not escalated.
 
+**Commit 2 (a), measured 2026-09-26 — through the driver, as ruled.**
+`shekyl-chain-ingest/src/body_pairing_tests.rs`. The driver's first
+two-body block (`mine_listing(vec![a, b])`, two anchored harness spends at
+`FIRST_SPEND_HEIGHT`) **connects**; the template declares `[a, b]`. Replayed
+through the production pipeline against three fresh stores with the
+driver's own facts (the harness's `trace_of` refuses at height 1 on B5 — its
+synthetic roots are not the driver's placeholders — so the replay trace is
+built from what the driver priced): **as listed, connects; bodies swapped,
+connects, same block identities; `b` substituted by an unlisted `c`,
+connects.** The store's output order followed the bodies in every case —
+under `[a, b]` `a`'s outputs take the lower global indices, under `[b, a]`
+`b`'s do (`output_origin` over the whole table, the two vectors unequal) —
+and in the substitution `c`'s outputs are recorded while `b`, the hash the
+header committed to, has no body behind it. That is the divergence §3.1
+predicted, observed on two stores rather than argued: two honest nodes with
+the same block in different body orders hold different output tables, and
+`GlobalOutputIndex`'s own doc says leaves enter the tree in `(maturity,
+gindex)` order. The tests pin today's connects and flip when commit 6 lands
+G2 — a refusal before then means the row landed early, and the census
+flips, not the file.
+
 **Where the pin has been witnessed, corrected.** The read's first
 statement — *the pin was never witnessed* — was wrong and is withdrawn.
 E2's family runs every mutation through the production pipeline against a
@@ -303,6 +324,19 @@ not at all. That makes G5 by construction on a type — the F2/F8 shape —
 storage-pruned form, which `tx_form` refuses before this stage"*; the
 fixture that makes that sentence a test is located at commit 2, and added
 if it is prose.
+
+**Commit 2 (b), measured 2026-09-26: it was prose, and the guess about the
+row was wrong.** The one existing pruned-form test asked I14 *alone* on the
+body (`tx_inputs_tests.rs`, `i14_an_empty_proof_on_a_spend_is_refused`), with
+a comment saying `tx_form` would refuse it on **H19**'s layout first. Run
+through `tx_form` at both sites, the pruned spend is refused on **H18** —
+the cleartext balance, because the pseudo-outs it sums live in the prunable
+region and are gone with it. The fixture is now
+`g5_the_storage_pruned_spend_is_refused_before_any_block_rule_sees_it`, at
+both sites, naming H18; the I14 test's comment is corrected. G5's registry
+entry credits this test (commit 8). A sentence about which row fires is a
+claim about the implementation, and this one had been carried since slice 5
+without being run.
 
 ### 3.4 The two windows live only in `cryptonote_config.h`
 
@@ -384,6 +418,26 @@ report `Unmutable` — and with which cause? If `ReorderedBodies` is the only
 all-four `Unmutable`, the corpus is adequate and this was one gap; if
 others are, the corpus has the shape hole above and the driver's two-body
 block is the fix for the set. Either answer goes into §5.1 as a number.
+
+**Answered 2026-09-26** (`vectors_tests::the_family_over_the_corpus_names_what_it_cannot_reach`,
+which holds the answer as a test — a change in it is a change in the corpus's
+shape or the family's, and this section moves with it). Twelve mutations ×
+four chains: **two are unreachable on all four**, and the census says which
+is whose. `PowUnderWrongSeed` is the *environment's* (`NoPowEnvironment`: the
+census supplies no PoW leg). **`ReorderedBodies` is the corpus's** —
+`TooFewBodies { listed: 0 }` and `{ listed: 1 }` on every block of every
+chain — **and it is the only one.** So the corpus is adequate for eleven of
+twelve and this was one gap, closed by commit 2 (a)'s driver block. One
+more shape fact fell out, not asked for: **`DoubleSpend` is unreachable on
+the two chains named for spends** (`spend-1in-2out`, `spend-depth3` —
+`NothingSpentBefore`: each carries exactly **one** spend, at 81 and 761)
+and reachable on the two archival chains (`bond-post`, `emission-claim`,
+which carry two, at 71 and 98). The spend chains are the thinner spend
+witnesses; the family's `DoubleSpend` arm runs on the harness chain and is
+unaffected, but a captured-chain witness for I7/L1 would come from the
+archival captures, not the spend ones. The rows that fire everywhere fire
+from the heights one would expect: the header rows at 0, the timestamp
+rows at 1, the spend rows at each chain's first spend.
 
 ### 3.8 The ×50 is gone from the C++; the census and the register did not notice (read 2026-09-26)
 
@@ -506,7 +560,7 @@ when an operand is absent. Wave B extends the sequence in place.
 | # | commit | gate |
 | --- | --- | --- |
 | 1 | **This file amended on review; the index row; the §5.1 expectation table** — written before commit 2, so the overrun signal has a subject | — |
-| 2 | **Measurements, no rules:** (a) the two-body block through `mine_listing`, the reorder and a substitution replayed through it — G2's own witness, and the output-index divergence shown on two connects (§3.1); (b) locate or add the pruned-form fixture at both sites (§3.3); (c) the weights-read bench on the floor (§3.6); (d) the `Unmutable` census — every mutation over every captured chain, which apply and which report what (§3.7) — four numbers into §5.1 | — |
+| 2 | **LANDED 2026-09-26 (cost 1 — the estimate said 2; the driver listed two bodies at the first attempt, and the one wall was a fixture's: `trace_of`'s roots are not the driver's, §3.1).** Measurements, no rules: (a) the two-body block through `mine_listing`, the reorder and a substitution replayed through it — all three connect; output order follows the bodies; the unlisted body is recorded (`body_pairing_tests.rs`, pins that flip at commit 6); (b) the pruned-form fixture at both sites — it was prose, and the row is **H18**, not H19 (§3.3); (c) the weights-read bench, `#[ignore]`d in `shekyl-chain-store` (`weights_read_bench_tests.rs`), run on the desktop at N = 100 000 — the floor board was unreachable; the floor run is owed before Q2 closes (§5.1's cell); (d) the `Unmutable` census over the corpus — `ReorderedBodies` the only corpus-shape gap, `DoubleSpend` unreachable on the two spend-named chains (§3.7) | — |
 | 3 | **`ChainView` grows** — the weights read (Q2's shape) and `has_transaction` — trait, `BatchView`, `MockChain`, the store's conformance test holding the mock to the store, **one commit, both sides** (slice 6 §5.1's rule) | commit 2 (c) |
 | 4 | **G6 / G6b** as `judge_emission`'s first two definitions in `rules/block_weight.rs`; the two windows as generated consts (Q6, with the two `#define`s repointed and the dead fee define deleted, §3.10); the mock holds the clamps at their boundaries **and the `min(window, h)` arm at low heights** (C2-R2 Q2's early-chain weakness — below 100 000 the window is the chain); the captured chains replay through both at parity (§3.8) | commit 3 |
 | 5 | **F14, F14b, F16, G12** — the sequence completed through the paid reward; `ConnectFacts.{weight, long_term_weight, long_term_effective_median, coins_generated}` read off the verdict, the ingest's four composed lines deleted (`Provenance::passed_through` re-counted with E3's) | commit 4 |
@@ -558,11 +612,46 @@ prediction fails through the read shape rather than through the rules,
 which would be a different lesson from slice 6's and should be recorded
 as one.
 
-**The budget cell, empty until commit 2:** *a connect's weights read on
-the Pi 4 floor: ____ ms for the 100 000-row window, ____ for the 100-row;
-against a connect budget of ____ (from GAP-7's 7.23 s zone-point figure,
-the read must be a small fraction of the verify it precedes).* Q2's shape
-is chosen from these three numbers and nothing else.
+**The budget cell — the desktop reference filled at commit 2 (2026-09-26),
+the floor's still owed.** `shekyl-chain-store`'s `weights_read_bench`
+(`#[ignore]`d; `SHEKYL_WEIGHTS_BENCH_BLOCKS=100000 cargo test -p
+shekyl-chain-store --release weights_read_bench -- --ignored --nocapture`)
+builds a 100 000-block store through the production `judge` + `connect`
+and times the two Q2 shapes over one read snapshot. **Desktop, release
+(i9-11950H — not the floor, rule 76):**
+
+| read | long window (100 000 rows) | short window (100 rows) |
+| --- | ---: | ---: |
+| (a) `N` point reads through `block_info`, full decode each — Q2 (a) | **113.6 ms** | 0.11 ms |
+| (b) one range cursor over `block_info`, decoded once each — Q2 (b) | **10.2 ms** for both windows | — |
+| the two medians (`select_nth_unstable`) | 0.15 ms | |
+
+Same rows read (asserted equal). The shapes separate by **11×**, and
+neither the medians nor the short window are the cost — the long window's
+100 000 point lookups are. Against GAP-7's zone-point verify of 7.23 s
+**on the floor**, (a) is already a per-connect tax of order 0.1 s on the
+desktop and will be seconds on the Pi 4; (b) is a rounding error on the
+desktop and plausibly tens of milliseconds on the floor. **Provisional
+reading: Q2 (b), the bulk `weights_window` read, with the floor run
+confirming before commit 3 lands the trait method** — the board (`skl-pi`)
+was unreachable on 2026-09-26; the recipe above is what runs there.
+Nothing in this cell chooses (c): (b) costs the connect ~10 ms per
+100 000 rows on a desktop, so the materialised column Q2's fallback names
+is not reached for unless the floor multiplies that past the budget.
+
+Two fixture walls the bench met and the plan should know about, since
+slice 6 §5.1 predicted a smaller fixture class here: the shared
+`connect_fixtures` root is `[0xc0 + h; 32]` and stops at height 63 (slice 6
+met it too), and the shared `FixtureSubstrate`'s clock is fixed at
+1 000 000 — so a 100 000-block chain needs its own root, its own substrate
+clock, **and a fixed difficulty**: at a constant 120 s spacing the live LWMA
+floors a small genesis difficulty to zero over ~8 000 blocks (D6 refused;
+measured), and 1 s spacing overflows the cumulative sum within a second of
+wall time. The bench builds under `RuleSet::fakechain(Some(7), D_MAX)`, the
+ingest's regtest shape. These are the bench's walls, not the rules' — but
+they are the first evidence about slice 6's prediction, and they count
+against it (§5.1's fixture-commit tally: 0 so far; the bench's fixtures are
+its own file).
 
 ## 6. What this slice does not build
 

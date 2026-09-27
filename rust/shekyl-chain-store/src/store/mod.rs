@@ -638,6 +638,11 @@ mod prune_tests;
 #[cfg(test)]
 #[path = "amendments_tests.rs"]
 mod amendments_tests;
+/// E6 slice 7 commit 2 (c): the CEN-G6 weights-read bench (`#[ignore]`d;
+/// decides Q2 on the floor).
+#[cfg(test)]
+#[path = "weights_read_bench_tests.rs"]
+mod weights_read_bench_tests;
 
 #[cfg(test)]
 #[path = "read_tests.rs"]
