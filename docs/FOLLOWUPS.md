@@ -54,6 +54,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §3 `U1a`
   - Target: pre-genesis
 
+- **Leg (f) covers a connected serve-credit transaction only at the row level (`SHT-Q1`).** `the_predicate_survives_a_prune_on_the_stored_rows` connects spends and coinbases, so the case whose *only* claim on the domain is a surviving `txs_prunable_hash` row — a 3-part transaction carrying a region, i.e. the serve-credit form — is asserted over that row rather than end to end. The store's connect fixtures have no serve-credit, the chain-rules one is the shape consensus refuses (`SHT-9`), and a conforming one needs archival admission state (bond and pass records). Owed when a conforming fixture exists; **depends on `SHT-9`'s fix**.
+  - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §2.1
+  - Target: pre-genesis
+
 - **`harness::fixture::serve_credit_only` builds the pre-`RF-D1` shape, which consensus refuses (`SHT-9`).** `prunable: None` with empty `pqc_auths` — the form identified by the *absence* of a prunable region, before `RF-D1` inverted it. `Transaction::validate_context_free_pruned` refuses it (verified). Any test treating it as a valid serve-credit transaction is asserting over a shape that cannot reach a chain. The fix is either to build the conforming shape or to rename it as an explicitly invalid fixture — a fixture consensus rejects, sitting in a shared harness, will eventually mislead someone.
   - Owner: [`CHAIN_RULES_SLICE_5.md`](design/CHAIN_RULES_SLICE_5.md) §5
   - Target: pre-genesis

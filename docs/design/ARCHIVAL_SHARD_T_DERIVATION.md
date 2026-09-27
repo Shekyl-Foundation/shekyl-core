@@ -5,8 +5,9 @@ arm with `origin/dev@ad557ac5a` merged in); **AMENDED on review the same day
 (at `9e8c0bee0`)**; **`SHT-Q1` RULED (Rick, 2026-09-27, design-owner lane)** —
 the partition is over transactions that **carry archival good**, a property
 rather than a class list, with the equivalence to `cumulative_tx_count` recorded
-as an invariant and pinned by a test (§2.1). `L2` remains open and still blocks
-the selection rule's lower edge. The 2026-09-26 amendment moved the conclusion. `U1a` was derived against the wrong
+as an invariant and pinned by a test (§2.1). **`L2` RULED the same day
+(Rick, design-owner lane): withdrawn as a bound on `T`** (§3), leaving `L1`'s
+threshold as the selection rule's only open lower-edge input. The 2026-09-26 amendment moved the conclusion. `U1a` was derived against the wrong
 transport figure: W₂ has *measured* single-attempt fetch since 2026-09-16, and
 on the measured numbers `U1a` is **unresolved at `T = 200`** rather than three
 orders of magnitude slack. The selection rule is re-pointed at the **lower**
@@ -381,17 +382,36 @@ every closed, final shard — a configuration of the same store",
 the cap prices is a **large market archiver's persona count**, which is a
 privacy cost, not a capacity one.
 
-**The ceiling stated directly**, because a falsifier is not a substitute for
-the arithmetic: one bond record can hold at most
+#### `L2` RULED (Rick, 2026-09-27, design-owner lane) — **withdrawn as a bound on `T`**
 
-> `MAX_HOLDINGS_SHARDS × T × bytes-per-tx = 4096 × 200 × 16.7 KB ≈ 13.7 GB`
+> `MAX_HOLDINGS_SHARDS` is a **list-size bound on one bond record and one
+> transaction** — decode, the per-block admission reads, the record encode. It is
+> **not bond-size policy**. Personas are free (G-1) and splitting is the rational
+> response, so no per-persona limit binds anything; the cap's value comes from the
+> **list budget alone**. The byte products (13.6 GB, 13.7 GB) are **retired from
+> reasoning**.
 
-at `T = 200` — the most history a single persona can be obliged to. Whether
-forcing a larger archiver into a second persona is a **feature** (gate-6
-firewall cost, deliberately paid) or a **cost** (overhead on the honest
-operator who wants to hold more) is **a ruling, not a measurement**, and it is
-not one this round makes. Either way it couples `T` to a cap that freezes at
-genesis, so it belongs in §5. Per-shard consensus state (`archival_r_market`
+Verified at this pin. The sim states the premise outright — *"personas are free
+(G-1) and sybil-per-shard is capital-bounded only (TJ-7), so a cartel abandons the
+slashed record and bonds a FRESH pair on the same shard"*
+(`rust/shekyl-economics-sim/src/cartel.rs:702-712`) — and the rational play is
+modelled as partitioning across records: `Regime::RationalBestResponse` →
+`best_partition_credit_milli` (`distribution.rs:73`, `:138`), with `:27` and
+`:134` recording that the cap bounds **per-bond work**, structurally, and nothing
+else.
+
+**What this changes.** The round's earlier reading — that the cap prices a large
+archiver's persona count, and that `4096 × T × bytes-per-tx ≈ 13.7 GB` is "the
+most history a single persona can be obliged to" — is **withdrawn**. An operator
+wanting more holdings posts another record; the cap bounds a **list**, not an
+operator. So `L2` supplies **no lower bound on `T`**, the
+`T ↔ MAX_HOLDINGS_SHARDS` coupling is struck from §5, and §4's lower edge has one
+open input rather than two. What survives as a soft pull toward larger `T` is the
+per-shard state count — which is `L3`, and was always the stronger of the pair.
+
+*Domain:* both. *Grade:* **no longer a bound.** *Falsifier on the withdrawal:* a
+surface where the cap bounds an **operator** rather than a list — one where
+posting a second record is unavailable or not equivalent. Per-shard consensus state (`archival_r_market`
 rows, serve-credit rows per `(P, shard, E)`, settlement work per epoch) scales
 as rows ∝ shards × epochs ∝ `X/T` × epochs, so every one of those pulls the
 same direction: larger `T`, fewer rows. *Domain:* both. *Grade:* **soft** —
@@ -544,7 +564,7 @@ arm in which the per-band verdict at fixed headroom degrades monotonically in
 **Under (A) and under (B) alike**, the only hard bound with numbers is `U1a`,
 and on measured data its heavy-end ceiling is **~[140, 490]** — a band that
 **contains 200**. `L1` sits in the low hundreds on sim-sourced parameters;
-`L2`/`L3` pull upward and `L2` now has a stated ceiling of its own; `U1b` still
+`L3` pulls upward; `L2` **no longer bounds `T` at all** (RULED, §3); `U1b` still
 has no value. So the corrected state is:
 
 > **`T = 200` is not comfortably inside the feasible interval — it is sitting on
@@ -577,9 +597,12 @@ archival commitment a participant can take on*.
 
 **Proposed selection rule** (steering's to accept, amend or reject):
 
-> **Pick the smallest `T` that clears `L1`'s composition floor and `L2`'s
-> bookkeeping floor, subject to `U1a` shown clear at the heavy end of
+> **Pick the smallest `T` that clears `L1`'s composition floor and `L3`'s
+> per-shard-state floor, subject to `U1a` shown clear at the heavy end of
 > composition by measurement, not by a floor.**
+>
+> (*`L2` was the second floor until it was ruled out on 2026-09-27; `L3` was
+> always the stronger of the pair.*)
 
 Why this and not the ceiling-seeking form: it takes the cheap direction of the
 asymmetry above; it does **not** feed `L`'s 20 s premise — and so the retired
@@ -596,13 +619,14 @@ measure:
   one-fifth and put the *form* in its place (the net margin that flips a
   marginal holder's decision); nothing has replaced the number. So `L1` names a
   floor it cannot yet evaluate.
-- **`L2`'s floor depends on a ruling this round does not make** — whether the
-  ~13.7 GB per-bond ceiling is a feature (gate-6 firewall cost, deliberately
-  paid) or an overhead on an honest operator. The two answers put the floor in
-  different places.
+- **`L2` no longer supplies a lower edge at all** — RULED 2026-09-27 and
+  withdrawn as a bound on `T` (§3): the cap bounds a list, not an operator, so the
+  byte product is retired and nothing in it pulls on `T`. What survives is `L3`'s
+  per-shard state count.
 
-So the rule currently has **nothing to select from**: a lower-edge rule whose
-lower edges are one underived threshold and one open ruling. That is the correct
+So the rule has **one open input, not two**: `L1`'s threshold. A smaller gap than
+the round first reported, and still a gap — a lower-edge rule whose lower edge is
+an underived threshold. That is the correct
 state of the work and not a defect in the rule — but the deliverable here is the
 *rule plus its three owed inputs* (`L1`'s threshold, `L2`'s ruling, and `U1a`'s
 two undischarged quantities), not a value for `T`.
@@ -616,8 +640,10 @@ two undischarged quantities), not a value for `T`.
 2. A sustained serve-throughput figure on the floor device at which `U1b` binds
    below the selected `T`.
 3. A measured `CV_tx` whose `L1` bound exceeds the selected `T`.
-4. An honest single-persona archiver reaching `MAX_HOLDINGS_SHARDS` inside the
-   mining era at the selected `T`.
+4. ~~An honest single-persona archiver reaching `MAX_HOLDINGS_SHARDS`~~ —
+   **struck** with `L2`'s ruling: the cap bounds a list, and an operator posts
+   another record. Replaced by the withdrawal's own falsifier (§3 `L2`): a surface
+   where the cap bounds an *operator* rather than a list.
 5. A second home for `T` appears, or a shard boundary is derived from anything
    but `cumulative_tx_count` and `T` — inherited from the landed row
    (`rust/shekyl-types/src/archival.rs:88-101`).
@@ -670,11 +696,21 @@ that gate's bookkeeping:
   measurement upward. **They must re-pin together, or `T` must be selected
   inside the span `L` already states** — the selection rule in §4 takes the
   second option, which is why it is the cheaper one.
-- **`T` ↔ `MAX_HOLDINGS_SHARDS`** (`= 4096`, frozen in `shekyl-types`). Their
-  product times bytes-per-tx is the most history one bond can carry (~13.7 GB at
-  `T = 200`, §3 `L2`). A `T` re-pin moves that ceiling without touching the cap,
-  so whichever of the two is intended to carry the obligation must be said out
-  loud. Missing from the first pass's coupling list.
+- **`T` ↔ `MAX_HOLDINGS_SHARDS` — STRUCK** by `L2`'s ruling: the cap bounds a
+  list, not an operator, so their product bounds nothing and `T` does not couple to
+  it. Two couplings replace it, and both are owed **only if the cap's own value
+  moves**, never because `T` did:
+  - **`m_min`'s anchor.** The failure window's `m_min` is floor-set on the operator
+    axis *at* the cap — *"false-slash at MAX_HOLDINGS <= target … since every held
+    pair is independently exposed; per-pair alone understates it by up to {MH}x"*
+    (`rust/shekyl-economics-sim/src/mn_feasibility.rs:844-852`; the exposure itself
+    at `:269-273`). If the cap moves, `m_min` is re-anchored to a **deliberately
+    stated "largest honest operator holding"** rather than to a list bound, and
+    `mn_feasibility` re-run.
+  - **The sim populations that read the cap as "the big archiver"** —
+    `stranding.rs:51` (*"5% at the per-bond cap"*), `stage2.rs:1205`,
+    `cartel.rs:702-703`, `burden.rs:168-170` (the 13.6 GB honest-cost figure) and
+    `proxy.rs:56-60` (`max_holdings_bytes`) — re-point at that same stated figure.
 - **`T` ↔ `shekyl_escalation_knee_n`** — **the coupling that must not be created.**
   `staker_pool_share_at(n: FrozenSegmentCount, …)` (`escalation.rs:269`) ramps the
   staker share from floor to asymptote and saturates at
