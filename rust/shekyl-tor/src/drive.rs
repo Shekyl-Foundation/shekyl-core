@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_socks::{connect as socks_connect, Destination, SocksError};
+use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick};
 use shekyl_transport_layer::{CloseCause, CloseKind, CloseResult, OpenError, Sockets};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -133,13 +133,24 @@ where
         let Ok(mut stream) = TcpStream::connect(proxy).await else {
             return Err(CloseCause::new(CloseKind::DialFailed));
         };
-        match socks_connect(&mut stream, Destination::Name { host: &host, port }).await {
+        match socks_connect(
+            &mut stream,
+            Isolation::Principal,
+            Destination::Name { host: &host, port },
+        )
+        .await
+        {
             Ok(()) => Ok(stream),
             Err(SocksError::Refused { reply }) => {
                 drop(stream.shutdown().await);
                 Err(CloseCause::proxy_refused(u16::from(reply)))
             }
-            Err(SocksError::Io(_) | SocksError::Malformed) => {
+            Err(
+                SocksError::Io(_)
+                | SocksError::Malformed
+                | SocksError::AuthRejected { .. }
+                | SocksError::AuthFailed { .. },
+            ) => {
                 drop(stream.shutdown().await);
                 Err(CloseCause::new(CloseKind::DialFailed))
             }
