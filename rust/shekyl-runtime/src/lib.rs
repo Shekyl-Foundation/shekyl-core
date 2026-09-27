@@ -15,23 +15,34 @@
 //! timing engine depends on it alone. The row this constructor records
 //! has no join. Daemon-RPC and Tor-control still build their own runtimes.
 //! The clearnet connector will be the first caller that keeps one. That
-//! call is not in the tree yet. Its blocking cap will be labelled
-//! unmeasured until D6's measurement names it.
+//! call is not in the tree yet. Its blocking cap and its shutdown timeout
+//! are both labelled unmeasured until a measurement names them. This crate
+//! holds neither number.
 
 #![deny(unsafe_code)]
 
 use std::io;
 use std::ops::Deref;
+use std::time::Duration;
 
 use shekyl_thread_ledger::{LedgerId, RuntimeRow};
 use tokio::runtime::{Builder, Runtime};
 
 pub use shekyl_thread_ledger::{RuntimeBudget, ThreadName, ThreadNameError};
 
-/// One live runtime. Dropping it shuts the workers down, then removes the
-/// ledger row. Fields drop in declaration order, so the runtime is first.
-/// The row has no join of its own.
-#[must_use = "dropping the pool shuts the runtime down and removes its ledger row"]
+/// One live runtime.
+///
+/// [`shutdown`](Self::shutdown) is how a daemon stops it: the wait for a
+/// blocking task is bounded by the timeout the caller passes. Drop is the
+/// unbounded fallback. Tokio waits forever for a `spawn_blocking` task that
+/// is still running, and it panics if that wait happens inside an
+/// asynchronous context (`Cannot drop a runtime in a context where blocking
+/// is not allowed`). A `Pool` is therefore never dropped from inside a task,
+/// including a task on this pool. Call `shutdown` from outside the pool.
+///
+/// Fields drop in declaration order, so the runtime is first and the ledger
+/// row covers that shutdown. The row has no join of its own.
+#[must_use = "call shutdown from outside the pool; drop waits forever for a blocking task"]
 pub struct Pool {
     runtime: Runtime,
     row: RuntimeRow,
@@ -41,6 +52,18 @@ impl Pool {
     /// The ledger row of this pool, for the life of the pool.
     pub fn ledger_id(&self) -> LedgerId {
         self.row.id()
+    }
+
+    /// Stop the workers and wait at most `timeout` for blocking tasks.
+    ///
+    /// The ledger row leaves after that wait. `timeout` is the caller's
+    /// bound. This crate does not contain one. A call from inside a task
+    /// panics for the same reason drop does: the wait is not allowed in an
+    /// asynchronous context.
+    pub fn shutdown(self, timeout: Duration) {
+        let Pool { runtime, row } = self;
+        runtime.shutdown_timeout(timeout);
+        drop(row);
     }
 }
 
@@ -74,6 +97,7 @@ pub fn runtime(budget: RuntimeBudget, name: &ThreadName) -> io::Result<Pool> {
 mod tests {
     use std::collections::HashSet;
     use std::num::NonZeroUsize;
+    use std::time::{Duration, Instant};
 
     use shekyl_thread_ledger::{ledger, RowKind};
 
@@ -125,5 +149,26 @@ mod tests {
         });
         let distinct: HashSet<_> = ids.iter().collect();
         assert_eq!(distinct.len(), 1);
+    }
+
+    #[test]
+    fn shutdown_returns_while_a_blocking_task_is_still_running() {
+        let pool = runtime(budget(1, 1), &thread_name("sk-rt-stop")).expect("runtime");
+        let id = pool.ledger_id();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        pool.block_on(async move {
+            tokio::task::spawn_blocking(move || {
+                started_tx.send(()).expect("test thread");
+                std::thread::sleep(Duration::from_secs(5));
+            });
+        });
+        started_rx.recv().expect("blocking task started");
+        let began = Instant::now();
+        pool.shutdown(Duration::from_millis(50));
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "shutdown waited for the blocking task"
+        );
+        assert!(ledger().iter().all(|row| row.id != id));
     }
 }

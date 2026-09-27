@@ -201,8 +201,15 @@ shared name by budget, then by `LedgerId`.
 [`RuntimeBudget`](../../rust/shekyl-thread-ledger/src/lib.rs) — worker
 count and blocking-pool cap, both required — and a `ThreadName`, and
 builds one multi-thread runtime. The pool holds a `RuntimeRow`, which
-has no join, and drops the runtime first, so the row covers the workers'
-shutdown.
+has no join. [`Pool::shutdown`](../../rust/shekyl-runtime/src/lib.rs)
+takes a timeout and waits at most that long for a blocking task, then
+the row leaves. Drop is the unbounded fallback: Tokio waits forever for
+a `spawn_blocking` task that is still running, and it panics if that
+wait happens inside an asynchronous context. A pool is never dropped
+from inside a task. On drop the runtime field is first, so the row
+covers that wait too. The timeout is the caller's. This crate does not
+contain one.
+
 Tokio's unset worker count (one per core) and its blocking cap (512)
 are the defaults D5 refuses, so neither number lives in either crate.
 The runtime enables the I/O driver and the time driver. `net` and
@@ -212,13 +219,25 @@ The runtime enables the I/O driver and the time driver. `net` and
 each row, then the total of workers, blocking caps, and dedicated
 threads. The daemon prints it once every runtime it builds comes from
 `runtime`. The daemon-RPC builder at `shekyl-daemon-rpc`
-`ffi_exports.rs` and the Tor-control builder at
-`shekyl-tor-control-daemon` `blocking.rs` still construct their own, so
-the print is not wired. A total taken while those builders are off the
-ledger would omit the pools the sum exists to count. The clearnet
+`ffi_exports.rs:162` and the Tor-control builder at
+`shekyl-tor-control-daemon` `blocking.rs:120` still construct their own,
+so the print is not wired. A total taken while those builders are off
+the ledger would omit the pools the sum exists to count. The move and
+the print are one FOLLOWUPS row, owned by this document. The clearnet
 connector will be the first caller that keeps a runtime. That call is
-not in the tree yet. It will pass a blocking cap labelled unmeasured;
-D6's measurement replaces that value.
+not in the tree yet. It will pass a blocking cap and a shutdown timeout,
+each labelled unmeasured; measurement replaces those values.
+
+## Clearnet connector — handshake cryptography (RULED 2026-09-27)
+
+A responder handshake is 685 µs of CPU on the Pi 4 (C5). That work runs
+on the runtime's blocking pool, not on an async worker. A worker that
+computes the handshake holds that worker for most of a millisecond, and
+under a flood the accept loop and every other connection's I/O wait
+behind it. Worker threads stay on I/O and deadlines. The blocking cap is
+the bound on how many handshakes compute at once, in addition to D10's
+accept-rate bound. D10's flood test measures concurrent handshake CPU
+against that cap. No accept rate is written here.
 
 ---
 
@@ -527,7 +546,10 @@ The ledger is `shekyl-thread-ledger`, which does not depend on Tokio.
 It sums every live pool, including the timing engine's dedicated
 thread. The daemon prints that sum once at startup once the two call
 sites above construct through `runtime`. Printing before that move
-would omit the pools the sum exists to count.
+would omit the pools the sum exists to count. The move and the print
+are one FOLLOWUPS row, owned by this document. `Pool::shutdown` bounds
+the wait for a blocking task. Drop remains the unbounded fallback and
+is never taken from inside a task.
 
 ---
 
@@ -940,7 +962,11 @@ listener, and so a connection in the gap phase.
    No number is written before that measurement (rule 26 B9). The
    responder side of a handshake is 685 µs on the Pi 4 (C5, 2026-09-26).
    That is the per-connection cost. The accept-rate values still wait
-   on the stated CPU budget. The bound is clearnet-only: Tor inbound
+   on the stated CPU budget. The handshake's cryptography runs on the
+   runtime's blocking pool (clearnet connector, RULED 2026-09-27), so
+   the blocking cap bounds how many handshakes compute at once. The
+   flood test measures that, in addition to the accept-rate bound. No
+   rate is written. The bound is clearnet-only: Tor inbound
    does no Noise work on our side.
 
 4. **Tor is defended by Tor's proof-of-work, not by a daemon-side
