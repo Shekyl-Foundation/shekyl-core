@@ -716,6 +716,27 @@ impl ReadSnapshot<'_> {
         tx_reads::prunable_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
     }
 
+    /// **T4b.** Whether the transaction at `id` is in the **archival shard
+    /// partition's domain** — it carries archival good (`SHT-Q1` RULED, Rick
+    /// 2026-09-27; `docs/design/ARCHIVAL_SHARD_T_DERIVATION.md` §2).
+    ///
+    /// Answered from the two digests **as recorded at ingest**, which a prune
+    /// never deletes — so this is the one safe way to evaluate the ruling's
+    /// predicate on a node that has discarded bodies. Recomputing the digests
+    /// from a pruned body would place its own discarded spends outside the
+    /// domain and split shard boundaries against an archival node.
+    ///
+    /// Bound first, as [`tx_prunable`](Self::tx_prunable).
+    ///
+    /// # Errors
+    ///
+    /// An id below the count with no `txs_prunable_hash` row is **SI-7**;
+    /// engine errors pass through.
+    pub fn tx_carries_archival_good(&self, id: TxStorageId) -> Result<AtIndex<bool>, StoreError> {
+        tx_reads::carries_archival_good_at(&self.txn, id)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
     /// **T5.** The `output_amounts` indices of the outputs of the
     /// transaction at `id`, in `vout` order. Replaces
     /// `get_tx_amount_output_indices`. Bound first, as
