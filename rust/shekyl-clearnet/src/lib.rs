@@ -365,7 +365,10 @@ where
                     tokio::time::sleep(config.accept_backoff).await;
                     continue;
                 }
-                Err(_) => break,
+                Err(_) => {
+                    (config.on_cause)(CloseCause::new(CloseKind::IoError));
+                    break;
+                }
             };
             let accept = Accept {
                 stream,

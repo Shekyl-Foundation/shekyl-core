@@ -133,7 +133,6 @@ fn facts(height: u64) -> ConnectFacts {
         )),
         coins_generated: Fact::passed_through(AtomicUnits::from_raw((height + 1) * 1_000_000)),
         burned: Fact::passed_through(AtomicUnits::ZERO),
-        root_after: Fact::passed_through(root_after(height)),
         long_term_effective_median: Fact::passed_through(LongTermWeight::from_raw(300_000)),
     }
 }
