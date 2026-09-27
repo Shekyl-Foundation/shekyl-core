@@ -1,0 +1,23 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-socks"
+description = "SOCKS5 CONNECT, no authentication. Clearnet's proxy and the Tor connector share this. It does not know about connectors."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tokio = { version = "1", default-features = false, features = ["io-util"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt"] }
+
+[lints]
+workspace = true

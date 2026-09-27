@@ -3889,9 +3889,11 @@ dependencies = [
 name = "shekyl-clearnet"
 version = "3.1.0"
 dependencies = [
+ "shekyl-net-address",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-runtime",
+ "shekyl-socks",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "tokio",
@@ -4727,6 +4729,13 @@ dependencies = [
  "sha2",
  "sha3",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "shekyl-socks"
+version = "3.1.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]

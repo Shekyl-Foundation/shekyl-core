@@ -15,7 +15,7 @@
   inside a task. A timed-out shutdown can leave a detached blocking
   thread off the ledger until that thread exits. The clearnet connector
   keeps one runtime: plaintext while its option is off, Noise while it
-  is on.
+  is on. It dials directly or through SOCKS5 CONNECT (`shekyl-socks`).
 
 ### CLI wallet shell
 

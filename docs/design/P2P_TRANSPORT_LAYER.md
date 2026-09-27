@@ -275,6 +275,13 @@ not fit closes with `SendQueueFull`. The inbound reader awaits space
 instead of closing: a slow consumer on this side stops reading, and TCP
 flow control pushes back on the peer.
 
+The dialer checks the addressing cell, then `open_clearnet`. A direct
+dial connects to the address. A proxy dial connects to the SOCKS5
+endpoint and asks it to CONNECT; `shekyl-socks` is that handshake, and
+the Tor connector uses the same crate. A refusal is `ProxyRefused` with
+the reply byte. The initiator handshake runs on the blocking pool under
+the same engine owner, armed when the socket exists.
+
 Before the flip, ruling 4's exception is still in force. The option off
 omits the Noise layer the declaration adds, and the socket bytes are the
 session bytes: that is the differential harness, byte parity with epee.

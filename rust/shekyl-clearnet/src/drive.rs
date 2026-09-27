@@ -7,17 +7,22 @@
 //! deadline is armed at accept, before any read, so time in the
 //! blocking queue counts.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::{
-    prefix_for, Established, NetworkId, Responder, SendHalf, MESSAGE1_LEN, PREFIX_LEN,
+    prefix_for, Established, Initiator, NetworkId, Responder, SendHalf, MESSAGE1_LEN, MESSAGE2_LEN,
+    PREFIX_LEN,
 };
 use shekyl_peer_policy::InboundCeiling;
+use shekyl_socks::{connect as socks_connect, Destination, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick, WakeWait};
-use shekyl_transport_layer::{CloseCause, CloseKind, CloseResult, OpenError, Sockets};
+use shekyl_transport_layer::{
+    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, Sockets,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
@@ -25,6 +30,24 @@ use tokio::sync::mpsc;
 
 use crate::seam::{SeamRecv, SeamSend};
 use crate::{ChannelChoice, HandshakeTally, Session};
+
+pub(crate) enum Role {
+    Responder,
+    Initiator,
+}
+
+pub struct Dial {
+    pub address: NetworkAddress,
+    pub proxy: Option<SocketAddr>,
+    pub sockets: Sockets,
+    pub kind: ChannelChoice,
+    pub network_id: NetworkId,
+    pub handshake_within: Tick,
+    pub tally: Arc<HandshakeTally>,
+    pub sessions: mpsc::UnboundedSender<Session>,
+    pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
+    pub send_queue_bytes: usize,
+}
 
 pub struct Accept {
     pub stream: TcpStream,
@@ -87,12 +110,98 @@ where
         sessions,
         send_queue_bytes,
         peer,
+        Role::Responder,
     )
     .await;
     match reserved.close(cause) {
         CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
     }
     on_cause(cause);
+}
+
+pub async fn dial_one<C>(dial: Dial, engine: Handle<C>)
+where
+    C: Clock + Clone + Send + 'static,
+{
+    let Dial {
+        address,
+        proxy,
+        sockets,
+        kind,
+        network_id,
+        handshake_within,
+        tally,
+        sessions,
+        on_cause,
+        send_queue_bytes,
+    } = dial;
+    if let Err(cause) = check_dial(ConnectorId::Clearnet, &address) {
+        on_cause(cause);
+        return;
+    }
+    let Some((ip, port)) = socket_of(&address) else {
+        on_cause(CloseCause::new(CloseKind::DialFailed));
+        return;
+    };
+    let dest = SocketAddr::new(ip, port);
+    let target = proxy.unwrap_or(dest);
+    let Ok(mut stream) = TcpStream::connect(target).await else {
+        on_cause(CloseCause::new(CloseKind::DialFailed));
+        return;
+    };
+    if proxy.is_some() {
+        match socks_connect(&mut stream, Destination::Ip(dest)).await {
+            Ok(()) => {}
+            Err(SocksError::Refused { reply }) => {
+                drop(stream.shutdown().await);
+                on_cause(CloseCause::proxy_refused(u16::from(reply)));
+                return;
+            }
+            Err(SocksError::Io(_) | SocksError::Malformed) => {
+                drop(stream.shutdown().await);
+                on_cause(CloseCause::new(CloseKind::DialFailed));
+                return;
+            }
+        }
+    }
+    let now = engine.clock().now();
+    let reserved = match sockets.open_clearnet(ip, now) {
+        Ok(open) => open,
+        Err(OpenError::Refused(cause)) => {
+            drop(stream.shutdown().await);
+            on_cause(cause);
+            return;
+        }
+        Err(OpenError::Exhausted) => {
+            finish_before_channel(&mut stream, &on_cause, CloseKind::DialFailed).await;
+            return;
+        }
+    };
+    let cause = serve(
+        stream,
+        engine,
+        kind,
+        network_id,
+        handshake_within,
+        tally,
+        sessions,
+        send_queue_bytes,
+        dest,
+        Role::Initiator,
+    )
+    .await;
+    match reserved.close(cause) {
+        CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
+    }
+    on_cause(cause);
+}
+
+fn socket_of(address: &NetworkAddress) -> Option<(IpAddr, u16)> {
+    match address {
+        NetworkAddress::Ipv4 { ip, port } => Some((IpAddr::V4(*ip), *port)),
+        NetworkAddress::Ipv6 { ip, port } => Some((IpAddr::V6(*ip), *port)),
+        NetworkAddress::Tor { .. } | NetworkAddress::I2p { .. } => None,
+    }
 }
 
 async fn finish_before_channel(
@@ -115,6 +224,7 @@ async fn serve<C>(
     sessions: mpsc::UnboundedSender<Session>,
     send_queue_bytes: usize,
     _peer: SocketAddr,
+    role: Role,
 ) -> CloseCause
 where
     C: Clock + Clone + Send + 'static,
@@ -127,35 +237,24 @@ where
         tx: out_tx,
         queue: queue.clone(),
     };
-    let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
-    let writer = tokio::spawn(write_half(write, setup_rx, out_rx, Arc::clone(&overfull)));
     let (inbound_tx, inbound_rx) = mpsc::channel(1);
-    let mut setup_tx = Some(setup_tx);
-    let opened = match kind {
-        ChannelChoice::Plain => {
-            if let Some(tx) = setup_tx.take() {
-                drop(tx.send(Setup::Plain));
-            }
-            Ok(SeamRecv::Plain)
-        }
-        ChannelChoice::Noise => {
-            noise_handshake(
-                &mut read,
-                &engine,
-                &network_id,
-                handshake_within,
-                &tally,
-                &mut setup_tx,
-            )
-            .await
-        }
-    };
-    let recv = match opened {
-        Ok(recv) => recv,
+    let opened = open_channel(
+        kind,
+        role,
+        &mut read,
+        write,
+        &engine,
+        &network_id,
+        handshake_within,
+        &tally,
+        out_rx,
+        Arc::clone(&overfull),
+    )
+    .await;
+    let (writer, recv) = match opened {
+        Ok(pair) => pair,
         Err(kind) => {
-            drop(setup_tx);
             drop(outbound);
-            drop(writer.await);
             return CloseCause::new(kind);
         }
     };
@@ -174,6 +273,71 @@ where
     drop(outbound);
     let write_cause = writer.await.ok().flatten();
     write_cause.unwrap_or(read_cause)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn open_channel<C>(
+    kind: ChannelChoice,
+    role: Role,
+    read: &mut OwnedReadHalf,
+    write: OwnedWriteHalf,
+    engine: &Handle<C>,
+    network_id: &NetworkId,
+    handshake_within: Tick,
+    tally: &Arc<HandshakeTally>,
+    outbound: mpsc::UnboundedReceiver<Queued>,
+    overfull: Arc<crate::Overfull>,
+) -> Result<(tokio::task::JoinHandle<Option<CloseCause>>, SeamRecv), CloseKind>
+where
+    C: Clock + Clone + Send + 'static,
+{
+    match (kind, role) {
+        (ChannelChoice::Plain, _) => {
+            let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
+            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull));
+            drop(setup_tx.send(Setup::Plain));
+            Ok((writer, SeamRecv::Plain))
+        }
+        (ChannelChoice::Noise, Role::Responder) => {
+            let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
+            let writer = tokio::spawn(write_half(write, setup_rx, outbound, Arc::clone(&overfull)));
+            let mut setup_tx = Some(setup_tx);
+            match noise_handshake(
+                read,
+                engine,
+                network_id,
+                handshake_within,
+                tally,
+                &mut setup_tx,
+            )
+            .await
+            {
+                Ok(recv) => Ok((writer, recv)),
+                Err(kind) => {
+                    drop(setup_tx);
+                    drop(writer.await);
+                    Err(kind)
+                }
+            }
+        }
+        (ChannelChoice::Noise, Role::Initiator) => {
+            let (write, send, recv) =
+                initiator_handshake(read, write, engine, network_id, handshake_within, tally)
+                    .await?;
+            let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
+            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull));
+            if setup_tx
+                .send(Setup::Noise {
+                    flight: Vec::new(),
+                    send,
+                })
+                .is_err()
+            {
+                return Err(CloseKind::LocalClose);
+            }
+            Ok((writer, recv))
+        }
+    }
 }
 
 enum Setup {
@@ -381,10 +545,181 @@ fn handshake_job(
     ))
 }
 
-fn established_halves(
-    established: Established<false>,
+fn established_halves<const INITIATOR: bool>(
+    established: Established<INITIATOR>,
 ) -> (SendHalf, shekyl_p2p_transport::RecvHalf) {
     established.split()
+}
+
+async fn initiator_handshake<C>(
+    read: &mut OwnedReadHalf,
+    mut write: OwnedWriteHalf,
+    engine: &Handle<C>,
+    network_id: &NetworkId,
+    handshake_within: Tick,
+    tally: &Arc<HandshakeTally>,
+) -> Result<(OwnedWriteHalf, SendHalf, SeamRecv), CloseKind>
+where
+    C: Clock + Clone + Send + 'static,
+{
+    let owner = engine
+        .register(OwnerClass::Transport)
+        .map_err(|_| CloseKind::TransportHandshakeFailed)?;
+    let now = owner.clock().now();
+    let deadline = Tick::new(now.get().saturating_add(handshake_within.get()));
+    owner
+        .arm(deadline)
+        .map_err(|_| CloseKind::TransportHandshakeFailed)?;
+    let fired = Arc::new(AtomicBool::new(false));
+    let mut wake = std::pin::pin!(owner.wait_wake_async());
+    tally.queue();
+    let tally_job = Arc::clone(tally);
+    let network_id = *network_id;
+    let fired_job = Arc::clone(&fired);
+    let join =
+        tokio::task::spawn_blocking(move || initiator_job(network_id, &fired_job, &tally_job));
+    let job = await_job(join, &mut wake, &fired).await;
+    let (initiator, message1) = match job {
+        Ok(Ok(done)) => done,
+        Ok(Err(SkipOrFail::Skipped)) => {
+            ignore(owner.deregister());
+            drop(write.shutdown().await);
+            return Err(CloseKind::TransportTimeout);
+        }
+        Ok(Err(SkipOrFail::Failed)) => {
+            ignore(owner.deregister());
+            drop(write.shutdown().await);
+            return Err(CloseKind::TransportHandshakeFailed);
+        }
+        Err(_) => {
+            ignore(owner.deregister());
+            tally.dequeue();
+            drop(write.shutdown().await);
+            return Err(CloseKind::TransportHandshakeFailed);
+        }
+    };
+    let mut flight = Vec::with_capacity(PREFIX_LEN + message1.len());
+    flight.extend_from_slice(&prefix_for(&network_id));
+    flight.extend_from_slice(&message1);
+    if write.write_all(&flight).await.is_err() {
+        ignore(owner.deregister());
+        tally.dequeue();
+        return Err(CloseKind::TransportHandshakeFailed);
+    }
+    let mut prefix = [0u8; PREFIX_LEN];
+    if let Err(kind) = read_or_wake(read, &mut prefix, &mut wake, &fired).await {
+        note_skip(tally, kind);
+        tally.dequeue();
+        ignore(owner.deregister());
+        drop(write.shutdown().await);
+        return Err(kind);
+    }
+    if prefix != prefix_for(&network_id) {
+        tally.dequeue();
+        ignore(owner.deregister());
+        drop(write.shutdown().await);
+        return Err(CloseKind::PrefixMismatch);
+    }
+    let mut message2 = vec![0u8; MESSAGE2_LEN];
+    if let Err(kind) = read_or_wake(read, &mut message2, &mut wake, &fired).await {
+        note_skip(tally, kind);
+        tally.dequeue();
+        ignore(owner.deregister());
+        drop(write.shutdown().await);
+        return Err(kind);
+    }
+    if fired.load(Ordering::Acquire) {
+        tally.skip();
+        tally.dequeue();
+        ignore(owner.deregister());
+        drop(write.shutdown().await);
+        return Err(CloseKind::TransportTimeout);
+    }
+    let tally_job = Arc::clone(tally);
+    let fired_job = Arc::clone(&fired);
+    let join = tokio::task::spawn_blocking(move || {
+        finish_initiator(initiator, &message2, &fired_job, &tally_job)
+    });
+    let job = await_job(join, &mut wake, &fired).await;
+    ignore(owner.deregister());
+    let (send, recv) = match job {
+        Ok(Ok(done)) => done,
+        Ok(Err(SkipOrFail::Skipped)) => {
+            drop(write.shutdown().await);
+            return Err(CloseKind::TransportTimeout);
+        }
+        Ok(Err(SkipOrFail::Failed)) | Err(_) => {
+            drop(write.shutdown().await);
+            return Err(CloseKind::TransportHandshakeFailed);
+        }
+    };
+    Ok((write, send, recv))
+}
+
+fn initiator_job(
+    network_id: NetworkId,
+    fired: &AtomicBool,
+    tally: &HandshakeTally,
+) -> Result<(Initiator, Vec<u8>), SkipOrFail> {
+    if fired.load(Ordering::Acquire) {
+        tally.skip();
+        tally.dequeue();
+        return Err(SkipOrFail::Skipped);
+    }
+    match Initiator::new(&network_id) {
+        Ok(done) => Ok(done),
+        Err(_) => {
+            tally.dequeue();
+            Err(SkipOrFail::Failed)
+        }
+    }
+}
+
+fn finish_initiator(
+    initiator: Initiator,
+    message2: &[u8],
+    fired: &AtomicBool,
+    tally: &HandshakeTally,
+) -> Result<(SendHalf, SeamRecv), SkipOrFail> {
+    if fired.load(Ordering::Acquire) {
+        tally.skip();
+        tally.dequeue();
+        return Err(SkipOrFail::Skipped);
+    }
+    let established = initiator
+        .read_message2(message2)
+        .map_err(|_| SkipOrFail::Failed);
+    tally.dequeue();
+    let established = established?;
+    tally.compute();
+    let (send, recv) = established_halves(established);
+    Ok((
+        send,
+        SeamRecv::Noise {
+            recv,
+            pending: Vec::new(),
+        },
+    ))
+}
+
+async fn await_job<T, C: Clock>(
+    join: tokio::task::JoinHandle<T>,
+    wake: &mut Pin<&mut WakeWait<'_, C>>,
+    fired: &AtomicBool,
+) -> Result<T, tokio::task::JoinError> {
+    tokio::pin!(join);
+    loop {
+        tokio::select! {
+            biased;
+            result = wake.as_mut(), if !fired.load(Ordering::Acquire) => {
+                fired.store(true, Ordering::Release);
+                match result {
+                    Ok(_) | Err(_) => {}
+                }
+            }
+            result = &mut join => return result,
+        }
+    }
 }
 
 async fn read_or_wake<C: Clock>(

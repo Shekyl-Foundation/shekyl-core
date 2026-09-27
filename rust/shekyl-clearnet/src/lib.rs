@@ -33,6 +33,10 @@
 //! session bytes, which is what the differential harness compares with
 //! epee. The option on follows [`stack_plan`]. Neither arm matches on a
 //! network's identity.
+//!
+//! [`Listener::dial`] checks the addressing cell and then opens an
+//! outbound socket. A proxy is SOCKS5 CONNECT (`shekyl-socks`). The
+//! initiator handshake uses the same engine owner as the responder.
 
 #![deny(unsafe_code)]
 
@@ -41,6 +45,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::NetworkId;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::Pool;
@@ -206,16 +211,24 @@ impl Session {
 
 /// The listener. Drop shuts the pool down with the caller's timeout.
 /// Call [`shutdown`](Self::shutdown) from outside a task.
-pub struct Listener {
+pub struct Listener<C: Clock + Clone> {
     pool: Option<Pool>,
     handle: tokio::runtime::Handle,
     shutdown_timeout: Duration,
     local: SocketAddr,
     pub sessions: mpsc::UnboundedReceiver<Session>,
     pub tally: Arc<HandshakeTally>,
+    engine: Handle<C>,
+    sockets: Sockets,
+    kind: Choice,
+    network_id: NetworkId,
+    handshake_within: Tick,
+    send_queue_bytes: usize,
+    on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
+    sessions_tx: mpsc::UnboundedSender<Session>,
 }
 
-impl Listener {
+impl<C: Clock + Clone> Listener<C> {
     pub fn local_addr(&self) -> SocketAddr {
         self.local
     }
@@ -238,7 +251,34 @@ impl Listener {
     }
 }
 
-impl Drop for Listener {
+impl<C> Listener<C>
+where
+    C: Clock + Clone + Send + Sync + 'static,
+{
+    /// Dial `address`. `proxy` is a SOCKS5 endpoint. `None` connects directly.
+    ///
+    /// The addressing cell is checked first. A name this connector does not
+    /// dial is [`CloseKind::DialFailed`] and opens nothing. A SOCKS refusal
+    /// is [`CloseCause::proxy_refused`] with the reply byte.
+    pub fn dial(&self, address: NetworkAddress, proxy: Option<SocketAddr>) {
+        let dial = drive::Dial {
+            address,
+            proxy,
+            sockets: self.sockets.clone(),
+            kind: self.kind,
+            network_id: self.network_id,
+            handshake_within: self.handshake_within,
+            tally: Arc::clone(&self.tally),
+            sessions: self.sessions_tx.clone(),
+            on_cause: Arc::clone(&self.on_cause),
+            send_queue_bytes: self.send_queue_bytes,
+        };
+        let engine = self.engine.clone();
+        self.handle.spawn(drive::dial_one(dial, engine));
+    }
+}
+
+impl<C: Clock + Clone> Drop for Listener<C> {
     fn drop(&mut self) {
         if let Some(pool) = self.pool.take() {
             pool.shutdown(self.shutdown_timeout);
@@ -280,7 +320,7 @@ fn too_many_open_files(code: Option<i32>) -> bool {
 }
 
 /// Bind on `pool` and accept. `pool` was built with [`shekyl_runtime::runtime`].
-pub fn listen<C>(pool: Pool, engine: &Handle<C>, config: Config) -> std::io::Result<Listener>
+pub fn listen<C>(pool: Pool, engine: &Handle<C>, config: Config) -> std::io::Result<Listener<C>>
 where
     C: Clock + Clone + Send + Sync + 'static,
 {
@@ -294,6 +334,14 @@ where
     let sockets = Sockets::new();
     let (sessions_tx, sessions_rx) = mpsc::unbounded_channel();
     let engine = engine.clone();
+    let engine_dial = engine.clone();
+    let sockets_dial = sockets.clone();
+    let sessions_tx_dial = sessions_tx.clone();
+    let on_cause = Arc::clone(&config.on_cause);
+    let network_id = config.network_id;
+    let handshake_within = config.handshake_within;
+    let send_queue_bytes = config.send_queue_bytes;
+    let shutdown_timeout = config.shutdown_timeout;
     let tally_loop = Arc::clone(&tally);
     pool.spawn(async move {
         loop {
@@ -325,10 +373,18 @@ where
     Ok(Listener {
         pool: Some(pool),
         handle,
-        shutdown_timeout: config.shutdown_timeout,
+        shutdown_timeout,
         local,
         sessions: sessions_rx,
         tally,
+        engine: engine_dial,
+        sockets: sockets_dial,
+        kind,
+        network_id,
+        handshake_within,
+        send_queue_bytes,
+        on_cause,
+        sessions_tx: sessions_tx_dial,
     })
 }
 
@@ -341,6 +397,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    use shekyl_net_address::NetworkAddress;
     use shekyl_p2p_transport::{prefix_for, Initiator, MESSAGE2_LEN, PREFIX_LEN};
     use shekyl_peer_policy::InboundCeiling;
     use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
@@ -414,7 +471,7 @@ mod tests {
         ceiling: InboundCeiling,
     ) -> (
         EngineService<MonotonicClock>,
-        Listener,
+        Listener<MonotonicClock>,
         Arc<Mutex<Vec<CloseKind>>>,
     ) {
         let engine = EngineService::start(MonotonicClock::new());
@@ -652,6 +709,229 @@ mod tests {
         }
         assert_eq!(listener.tally.computed(), 0);
         assert_eq!(listener.tally.queued(), 0);
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
+    fn a_direct_dial_carries_plaintext_when_the_option_is_off() {
+        let (engine, mut listener, _) = start(
+            ClearnetOption::Off,
+            Tick::new(5_000_000_000),
+            InboundCeiling::Bounded(4),
+        );
+        let handle = listener.runtime_handle().clone();
+        let (port, got) = handle.block_on(async {
+            let server = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("bind");
+            let port = server.local_addr().expect("addr").port();
+            let got = tokio::spawn(async move {
+                let (mut sock, _) = server.accept().await.expect("accept");
+                let mut buf = [0u8; 3];
+                use tokio::io::AsyncReadExt;
+                sock.read_exact(&mut buf).await.expect("read");
+                buf
+            });
+            (port, got)
+        });
+        listener.dial(
+            NetworkAddress::Ipv4 {
+                ip: Ipv4Addr::LOCALHOST,
+                port,
+            },
+            None,
+        );
+        let session = handle.block_on(next_session(&mut listener.sessions));
+        session.try_send(b"out".to_vec()).expect("send");
+        assert_eq!(handle.block_on(got).expect("peer"), *b"out");
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
+    fn an_onion_name_is_not_dialed() {
+        let (engine, listener, seen) = start(
+            ClearnetOption::Off,
+            Tick::new(5_000_000_000),
+            InboundCeiling::Bounded(4),
+        );
+        listener.dial(
+            NetworkAddress::Tor {
+                host: "not-an-address.onion".to_string(),
+                port: 18080,
+            },
+            None,
+        );
+        let start = Instant::now();
+        while !seen
+            .lock()
+            .expect("causes")
+            .contains(&CloseKind::DialFailed)
+        {
+            assert!(start.elapsed() < Duration::from_secs(2), "dial");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
+    fn option_on_dials_and_both_sides_read_what_was_sent() {
+        let within = Tick::new(5_000_000_000);
+        let (engine_a, mut responder, _) =
+            start(ClearnetOption::On, within, InboundCeiling::Bounded(4));
+        let (engine_b, mut initiator, _) =
+            start(ClearnetOption::On, within, InboundCeiling::Bounded(4));
+        let port = responder.local_addr().port();
+        initiator.dial(
+            NetworkAddress::Ipv4 {
+                ip: Ipv4Addr::LOCALHOST,
+                port,
+            },
+            None,
+        );
+        let handle_a = responder.runtime_handle().clone();
+        let handle_b = initiator.runtime_handle().clone();
+        let mut from_responder = handle_a.block_on(next_session(&mut responder.sessions));
+        let mut from_initiator = handle_b.block_on(next_session(&mut initiator.sessions));
+        from_initiator.try_send(b"ping".to_vec()).expect("ping");
+        let got = handle_a.block_on(from_responder.recv()).expect("ping");
+        assert_eq!(got, b"ping");
+        from_responder.try_send(b"pong".to_vec()).expect("pong");
+        let got = handle_b.block_on(from_initiator.recv()).expect("pong");
+        assert_eq!(got, b"pong");
+        responder.shutdown();
+        initiator.shutdown();
+        drop((engine_a, engine_b));
+    }
+
+    #[test]
+    fn a_socks_proxy_is_the_path_and_a_refusal_keeps_the_reply() {
+        let (engine, mut listener, _) = start(
+            ClearnetOption::Off,
+            Tick::new(5_000_000_000),
+            InboundCeiling::Bounded(4),
+        );
+        let handle = listener.runtime_handle().clone();
+        let (proxy_port, dest_port, got) = handle.block_on(async {
+            let dest = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("dest");
+            let dest_port = dest.local_addr().expect("addr").port();
+            let proxy = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("proxy");
+            let proxy_port = proxy.local_addr().expect("addr").port();
+            let got = tokio::spawn(async move {
+                let (mut sock, _) = dest.accept().await.expect("accept");
+                let mut buf = [0u8; 3];
+                use tokio::io::AsyncReadExt;
+                sock.read_exact(&mut buf).await.expect("read");
+                buf
+            });
+            tokio::spawn(async move {
+                let (mut sock, _) = proxy.accept().await.expect("proxy accept");
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut greeting = [0u8; 3];
+                sock.read_exact(&mut greeting).await.expect("greet");
+                sock.write_all(&[0x05, 0x00]).await.expect("method");
+                let mut head = [0u8; 4];
+                sock.read_exact(&mut head).await.expect("head");
+                let mut addr = [0u8; 6];
+                sock.read_exact(&mut addr).await.expect("addr");
+                let ip = Ipv4Addr::new(addr[0], addr[1], addr[2], addr[3]);
+                let port = u16::from_be_bytes([addr[4], addr[5]]);
+                let mut upstream = TcpStream::connect(SocketAddr::from((ip, port)))
+                    .await
+                    .expect("upstream");
+                sock.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                    .await
+                    .expect("reply");
+                match tokio::io::copy_bidirectional(&mut sock, &mut upstream).await {
+                    Ok(_) | Err(_) => {}
+                }
+            });
+            (proxy_port, dest_port, got)
+        });
+        listener.dial(
+            NetworkAddress::Ipv4 {
+                ip: Ipv4Addr::LOCALHOST,
+                port: dest_port,
+            },
+            Some(SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port))),
+        );
+        let session = handle.block_on(next_session(&mut listener.sessions));
+        session.try_send(b"out".to_vec()).expect("send");
+        assert_eq!(handle.block_on(got).expect("peer"), *b"out");
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
+    fn a_socks_refusal_carries_the_reply_byte() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        let sink: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(move |cause| {
+            record.lock().expect("causes").push(cause);
+        });
+        let engine = EngineService::start(MonotonicClock::new());
+        let pool = runtime(harness_budget(), &name("sk-clearnet")).expect("runtime");
+        let listener = listen(
+            pool,
+            &engine.handle(),
+            config(
+                ClearnetOption::Off,
+                Tick::new(5_000_000_000),
+                InboundCeiling::Bounded(4),
+                sink,
+            ),
+        )
+        .expect("listen");
+        let handle = listener.runtime_handle().clone();
+        let proxy_port = handle.block_on(async {
+            let proxy = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("proxy");
+            let port = proxy.local_addr().expect("addr").port();
+            tokio::spawn(async move {
+                let (mut sock, _) = proxy.accept().await.expect("accept");
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut greeting = [0u8; 3];
+                sock.read_exact(&mut greeting).await.expect("greet");
+                sock.write_all(&[0x05, 0x00]).await.expect("method");
+                let mut head = [0u8; 4];
+                sock.read_exact(&mut head).await.expect("head");
+                let mut addr = [0u8; 6];
+                sock.read_exact(&mut addr).await.expect("addr");
+                sock.write_all(&[0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                    .await
+                    .expect("reply");
+            });
+            port
+        });
+        listener.dial(
+            NetworkAddress::Ipv4 {
+                ip: Ipv4Addr::LOCALHOST,
+                port: 9,
+            },
+            Some(SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port))),
+        );
+        let start = Instant::now();
+        let cause = loop {
+            if let Some(cause) = seen
+                .lock()
+                .expect("causes")
+                .iter()
+                .copied()
+                .find(|cause| cause.kind() == CloseKind::ProxyRefused)
+            {
+                break cause;
+            }
+            assert!(start.elapsed() < Duration::from_secs(2), "refusal");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(cause.reply_code(), 0x05);
         listener.shutdown();
         drop(engine);
     }
