@@ -1,6 +1,10 @@
 name: ci/gh-actions/depends
 
 on:
+  # No `merge_group:` trigger, deliberately (06-branching.mdc, the merge
+  # queue): `merge_group` takes no `paths` filter, so this would run six
+  # cross-compiles (~124 billed minutes) on every merge group; the depends
+  # tree is not the cross-lane surface the queue exists to test.
   pull_request:
     # Full six-target `make depends` only when the depends tree, the
     # Makefile target, or this workflow changes. Unrelated PRs used to
