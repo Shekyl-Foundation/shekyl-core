@@ -12,8 +12,9 @@
 //! coverage gate already derives — the denominator is never a hand-copied
 //! figure. The run arrives as [`Observations`]: which rules' verdicts the
 //! connected blocks exercised (the union of every `ChainValid`'s coverage),
-//! the refusal if one ended the run, and whether the redb digest agreed
-//! with the trace's checkpoint.
+//! the refusal if one ended the run, whether the redb digest agreed with
+//! the trace's checkpoint, and the per-height root oracle. The oracle is
+//! its own fact: the checkpoint carries only the live root.
 //!
 //! # The two clauses (RD-Q9, RULED)
 //!
@@ -200,9 +201,28 @@ pub struct Observations {
     /// The refusal that ended the run, if a verdict did: the refusing row
     /// and where.
     pub refused: Option<(&'static str, BlockHeight)>,
-    /// Whether the redb digest equalled the trace's checkpoint; `None` when
-    /// no checkpoint was compared. Several checkpoints fold to *all agreed*.
+    /// Whether the redb digest equalled the trace's checkpoint. `None` when
+    /// no checkpoint was compared.
     pub digest_identical: Option<bool>,
+    /// Derived root against the trace, per covered height. Independent of
+    /// [`Self::digest_identical`]: the digest carries only the live root.
+    pub roots: RootOracle,
+}
+
+/// The per-height derived-vs-trace root comparison (DRS-E3 CTW-5), as the
+/// grade records it.
+///
+/// `compared == 0` means the run did not compare. A non-empty
+/// [`Self::diverged_at`] fails the run on its own ([`GradedRun::passes`]).
+/// The checkpoint digest stays the digest clause: it carries only the live
+/// root, so an interior miss is a fact of this oracle.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct RootOracle {
+    /// Connected heights whose trace carried a root.
+    pub compared: u64,
+    /// Heights where the derived root differed from the trace, in the order
+    /// the run saw them.
+    pub diverged_at: Vec<BlockHeight>,
 }
 
 impl Observations {
@@ -355,6 +375,9 @@ pub struct GradedRun {
     pub rows: Vec<GradedRow>,
     /// The refusal that ended the run, if one did (module docs).
     pub refusal: Option<GradedRefusal>,
+    /// The root oracle. A non-empty `diverged_at` fails the run even when
+    /// [`Self::unadjudicated`] is empty.
+    pub root_oracle: RootOracle,
     /// Rows with a verdict clause that accepted as correct — **progress is
     /// this count** (RD-Q6).
     pub derived_and_conformant: usize,
@@ -362,17 +385,20 @@ pub struct GradedRun {
     pub borrowed: usize,
     /// Rows no connected block exercised.
     pub not_exercised: usize,
-    /// Open adjudications. The run passes iff this is empty (§1.3).
+    /// Open census adjudications (§1.3). The run also fails when
+    /// [`Self::root_oracle`] diverged; that miss is not a row of this list.
     pub unadjudicated: Vec<Unadjudicated>,
     /// DIVERGENT rows that diverged as expected and owe a reviewed record.
     pub owed_reviewed_divergence: Vec<String>,
 }
 
 impl GradedRun {
-    /// §1.3's success condition.
+    /// §1.3's success condition: no open census adjudication, and the root
+    /// oracle did not diverge. An oracle that was not compared does not
+    /// fail the run.
     #[must_use]
     pub fn passes(&self) -> bool {
-        self.unadjudicated.is_empty()
+        self.unadjudicated.is_empty() && self.root_oracle.diverged_at.is_empty()
     }
 
     /// The artifact as JSON.
@@ -507,6 +533,7 @@ pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
         schema_version: GRADE_SCHEMA.to_owned(),
         rows,
         refusal,
+        root_oracle: obs.roots.clone(),
         derived_and_conformant,
         borrowed,
         not_exercised,
@@ -710,6 +737,40 @@ mod tests {
             .unadjudicated
             .iter()
             .any(|u| u.id == "CEN-A1" && u.clause == Clause::Component));
+    }
+
+    #[test]
+    fn a_root_divergence_fails_the_run_and_leaves_the_digest_clause_alone() {
+        // The checkpoint matched. The interior root diverged at height 1.
+        // The digest clause records the checkpoint. The run fails on the
+        // oracle.
+        let mut obs = Observations::default();
+        obs.checkpoint(true);
+        obs.roots = RootOracle {
+            compared: 4,
+            diverged_at: vec![BlockHeight::from_raw(1)],
+        };
+        // Conformant rows only. A divergent row whose digest matched would
+        // already be an open adjudication, and would hide the oracle.
+        let conformant = Register::from_json(
+            r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-B5","state":"CHECKED-CONFORMANT"},{"id":"CEN-A1","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
+        )
+        .expect("register");
+        let g = grade_run(&conformant, &obs);
+        assert!(!g.passes());
+        assert!(
+            g.unadjudicated.is_empty(),
+            "the oracle fails the run with the census list empty"
+        );
+        assert_eq!(g.root_oracle.diverged_at, vec![BlockHeight::from_raw(1)]);
+        assert_eq!(
+            row(&g, "CEN-B5").component,
+            ComponentEvidence::Real { identical: true }
+        );
+        assert_eq!(
+            row(&g, "CEN-A1").component,
+            ComponentEvidence::Real { identical: true }
+        );
     }
 
     #[test]

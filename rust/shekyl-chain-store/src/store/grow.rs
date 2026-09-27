@@ -104,7 +104,7 @@ impl<'id> WriteBatch<'_, 'id> {
 
     /// 3a + 3b + 3c's summary: the writes a non-empty drain makes.
     fn append(&self, before: CurveTreeState, drain: &Drain) -> Result<LeafCount, StoreError> {
-        let growth = &drain.growth;
+        let growth = drain.growth();
         // The verdict was derived over this batch's own view, so a
         // disagreement here is the store's record changing under the
         // derivation. This is the summary's count against the count the
@@ -118,13 +118,10 @@ impl<'id> WriteBatch<'_, 'id> {
                 },
             }));
         }
-        // SI-17's precondition: one index per leaf, in the order the
-        // derivation assigned positions.
-        if drain.outputs.len() != growth.leaves.len() {
-            return Err(self.poison().arm(StoreInvariant::PositionMapsNotBijective));
-        }
 
         // ---- 3a. leaves and the position maps --------------------------
+        // Each entry is one output and its leaf. The length cannot disagree:
+        // `Drain` is that pair, built as one sequence.
         {
             let mut leaves = self.open_insert_table(
                 CURVE_TREE_LEAVES,
@@ -136,15 +133,15 @@ impl<'id> WriteBatch<'_, 'id> {
                 self.open_insert_table(OUTPUT_TO_LEAF, StoreInvariant::PositionMapsNotBijective)?;
             let mut to_output =
                 self.open_insert_table(LEAF_TO_OUTPUT, StoreInvariant::PositionMapsNotBijective)?;
-            for (i, (leaf, output)) in growth.leaves.iter().zip(&drain.outputs).enumerate() {
+            for (i, row) in drain.drained().iter().enumerate() {
                 let position =
                     growth.leaf_count_before + u64::try_from(i).expect("leaf count fits u64");
-                leaves.insert(position, leaf.encoded().as_encoded())?;
+                leaves.insert(position, row.leaf.encoded().as_encoded())?;
                 to_leaf.insert(
-                    output.to_raw(),
+                    row.output.to_raw(),
                     TreePosition::from_raw(position).encoded().as_encoded(),
                 )?;
-                to_output.insert(position, output.encoded().as_encoded())?;
+                to_output.insert(position, row.output.encoded().as_encoded())?;
             }
         }
 

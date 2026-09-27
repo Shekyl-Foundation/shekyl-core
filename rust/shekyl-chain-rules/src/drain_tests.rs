@@ -201,11 +201,16 @@ fn real_points_grow_the_tree_from_empty() {
     // Drain order: block 40's coinbase, then block 90's listed — never
     // block 40's listed or block 90's coinbase (SOK-10, §3.3).
     assert_eq!(
-        drained.outputs,
+        drained
+            .drained()
+            .iter()
+            .map(|row| row.output)
+            .collect::<Vec<_>>(),
         [0, 3, 4].map(GlobalOutputIndex::from_raw).to_vec()
     );
-    assert_eq!(drained.growth.leaf_count_before, 0);
-    assert_eq!(drained.growth.leaves.len(), 3);
-    assert_ne!(drained.growth.root, CurveTreeRoot::EMPTY);
-    assert_eq!(drained.growth.depth, 1);
+    assert_eq!(drained.growth().leaf_count_before, 0);
+    assert_eq!(drained.drained().len(), 3);
+    assert_eq!(drained.growth().leaves_appended, 3);
+    assert_ne!(drained.growth().root, CurveTreeRoot::EMPTY);
+    assert_eq!(drained.growth().depth, 1);
 }

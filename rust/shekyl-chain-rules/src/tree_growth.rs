@@ -121,13 +121,16 @@ pub struct LayerWrite {
 }
 
 /// What a grow produced: the writes, and the tree after them.
+///
+/// The leaves themselves stay with the caller. A [`crate::Drain`] pairs each
+/// one with the output it came from; echoing them here would be a second
+/// list that could disagree with that pair.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeGrowth {
     /// The leaf count before the grow — the position the first new leaf took.
     pub leaf_count_before: u64,
-    /// The leaves appended, in drain order; leaf `i` sits at position
-    /// `leaf_count_before + i`.
-    pub leaves: Vec<TreeLeaf>,
+    /// How many leaves this grow appended.
+    pub leaves_appended: u64,
     /// Every layer chunk the grow wrote, layer-major then chunk order.
     pub layer_writes: Vec<LayerWrite>,
     /// The root after the grow.
@@ -140,7 +143,7 @@ impl TreeGrowth {
     /// The leaf count after the grow.
     #[must_use]
     pub fn leaf_count_after(&self) -> u64 {
-        self.leaf_count_before + self.leaves.len() as u64
+        self.leaf_count_before + self.leaves_appended
     }
 
     /// The frontier after this grow: the last chunk of every layer, read off
@@ -329,7 +332,8 @@ pub fn grow(frontier: &TreeFrontier, leaves: &[TreeLeaf]) -> Result<TreeGrowth, 
         }));
     }
     let old = frontier.leaf_count;
-    let new = old + leaves.len() as u64;
+    let leaves_appended = u64::try_from(leaves.len()).expect("a grow's leaf count fits in u64");
+    let new = old + leaves_appended;
     let new_layers = layer_count_for_leaves(new);
     let width0 = SELENE_CHUNK_WIDTH as u64;
     let mut writes = Vec::new();
@@ -441,12 +445,14 @@ pub fn grow(frontier: &TreeFrontier, leaves: &[TreeLeaf]) -> Result<TreeGrowth, 
         changed = next;
     }
 
-    debug_assert_eq!(changed.len(), 1, "the top layer has one chunk");
-    debug_assert_eq!(changed[0].chunk, 0, "the root chunk is chunk 0");
+    // Release too. A walk that does not end at chunk 0 would otherwise mint
+    // `changed[0]` as the consensus root.
+    assert_eq!(changed.len(), 1, "the top layer has one chunk");
+    assert_eq!(changed[0].chunk, 0, "the root chunk is chunk 0");
     let root = CurveTreeRoot::from_bytes(changed[0].new);
     Ok(TreeGrowth {
         leaf_count_before: old,
-        leaves: leaves.to_vec(),
+        leaves_appended,
         layer_writes: writes,
         root,
         depth: new_layers - 1,

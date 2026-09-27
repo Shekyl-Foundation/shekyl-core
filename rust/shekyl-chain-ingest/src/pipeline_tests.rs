@@ -1049,12 +1049,24 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         vec![Disagreement::RootDiverged { at: h(1) }]
     );
     let obs = report.observations();
-    assert_eq!(obs.digest_identical, Some(false), "folded: not all agreed");
+    assert_eq!(
+        obs.digest_identical,
+        Some(true),
+        "the checkpoint matched; the interior root is the oracle's fact"
+    );
+    assert_eq!(obs.roots.compared, 3);
+    assert_eq!(obs.roots.diverged_at, vec![h(1)]);
     let register = Register::from_json(
         r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-B5","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
     )
     .expect("register");
-    assert!(!grade_run(&register, &obs).passes());
+    let graded = grade_run(&register, &obs);
+    assert!(!graded.passes(), "the oracle fails the graded run");
+    assert_eq!(graded.root_oracle.diverged_at, vec![h(1)]);
+    assert!(
+        graded.unadjudicated.is_empty(),
+        "the digest clause stays agreed"
+    );
     cleanup(&path);
 }
 

@@ -42,19 +42,57 @@ use crate::rule_set::RuleSet;
 use crate::tree_growth::{grow, GrowFault, TreeGrowth};
 use crate::view::{AtHeight, BlockOutputs, ChainView, LeafSource};
 
+/// One matured output and the leaf appended for it.
+///
+/// Drain order is the order of the vec that holds these. Entry `i` sits at
+/// tree position `growth.leaf_count_before + i`. The position maps record
+/// that pair (`output_to_leaf`, `leaf_to_output`; SI-17). One struct, so a
+/// drain cannot name a different number of outputs than leaves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DrainedOutput {
+    /// The output's chain-wide index — what `output_to_leaf` is keyed by.
+    pub output: GlobalOutputIndex,
+    /// The leaf written at that position.
+    pub leaf: TreeLeaf,
+}
+
 /// What a block's connect appends to the tree: the matured outputs **in
-/// drain order** and the growth their leaves produce. `outputs[i]` is the
-/// output whose leaf sits at position `growth.leaf_count_before + i` —
-/// the pair the position maps record (`output_to_leaf`, `leaf_to_output`;
-/// SI-17), carried on the verdict so the writer records the order the
-/// derivation used rather than re-deriving it (§3.3).
+/// drain order**, each paired with its leaf, and the growth those leaves
+/// produced. Built only by [`drain`], from one sequence, so the writer
+/// records the order the derivation used rather than re-deriving it (§3.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Drain {
-    /// The drained outputs' chain-wide indices, in drain order. Same
-    /// length as `growth.leaves`.
-    pub outputs: Vec<GlobalOutputIndex>,
-    /// The leaves, the layer chunks they change, and the root.
-    pub growth: TreeGrowth,
+    /// Drain order. `drained[i]` is the output whose leaf sits at
+    /// `growth.leaf_count_before + i`.
+    drained: Vec<DrainedOutput>,
+    /// The layer chunks the leaves changed, and the root.
+    growth: TreeGrowth,
+}
+
+impl Drain {
+    /// `drained` and `growth` describe one append. A length that disagrees
+    /// is this crate's own construction failing, and it halts here — the
+    /// store never sees a drain it would have to reject for that.
+    fn new(drained: Vec<DrainedOutput>, growth: TreeGrowth) -> Self {
+        let n = u64::try_from(drained.len()).expect("a drain's length fits in u64");
+        assert_eq!(
+            n, growth.leaves_appended,
+            "a drain was built over a growth that appended a different number of leaves"
+        );
+        Self { drained, growth }
+    }
+
+    /// The matured outputs and their leaves, in drain order.
+    #[must_use]
+    pub fn drained(&self) -> &[DrainedOutput] {
+        &self.drained
+    }
+
+    /// The layer writes and the root the leaves produced.
+    #[must_use]
+    pub fn growth(&self) -> &TreeGrowth {
+        &self.growth
+    }
 }
 
 /// The tree after the block at `connecting` drains: the growth its matured
@@ -73,20 +111,20 @@ pub(crate) fn drain<'id, V: ChainView<'id>>(
     rule_set: &RuleSet,
 ) -> Result<Option<Drain>, ViewRead<V::Fault>> {
     let sources = sources(connecting, rule_set);
-    let mut outputs: Vec<GlobalOutputIndex> = Vec::new();
-    let mut leaves: Vec<TreeLeaf> = Vec::new();
+    let mut drained: Vec<DrainedOutput> = Vec::new();
     if let Some(height) = sources.coinbase_of {
         let recorded = recorded_outputs(view, height)?;
-        extend(&mut outputs, &mut leaves, &recorded.coinbase)?;
+        extend(&mut drained, &recorded.coinbase)?;
     }
     if let Some(height) = sources.listed_of {
         let recorded = recorded_outputs(view, height)?;
-        extend(&mut outputs, &mut leaves, &recorded.listed)?;
+        extend(&mut drained, &recorded.listed)?;
     }
-    if leaves.is_empty() {
+    if drained.is_empty() {
         return Ok(None);
     }
     let frontier = view.tree_frontier().map_err(ViewRead::View)?;
+    let leaves: Vec<TreeLeaf> = drained.iter().map(|row| row.leaf).collect();
     let growth = grow(&frontier, &leaves).map_err(|fault| match fault {
         // The empty batch returned above. `grow` names the call so a direct
         // caller cannot mistake it for a root; this path has leaves.
@@ -95,7 +133,7 @@ pub(crate) fn drain<'id, V: ChainView<'id>>(
         }
         GrowFault::Frontier(fault) => ViewRead::Corrupt(Corrupt::TreeUnservable { fault }),
     })?;
-    Ok(Some(Drain { outputs, growth }))
+    Ok(Some(Drain::new(drained, growth)))
 }
 
 /// The two heights whose outputs mature at `connecting`: the block whose
@@ -166,8 +204,7 @@ fn recorded_outputs<'id, V: ChainView<'id>>(
 }
 
 fn extend<VF>(
-    outputs: &mut Vec<GlobalOutputIndex>,
-    leaves: &mut Vec<TreeLeaf>,
+    drained: &mut Vec<DrainedOutput>,
     sources: &[LeafSource],
 ) -> Result<(), ViewRead<VF>> {
     for source in sources {
@@ -178,8 +215,10 @@ fn extend<VF>(
                     input,
                 })
             })?;
-        outputs.push(source.output);
-        leaves.push(TreeLeaf::from_bytes(leaf));
+        drained.push(DrainedOutput {
+            output: source.output,
+            leaf: TreeLeaf::from_bytes(leaf),
+        });
     }
     Ok(())
 }

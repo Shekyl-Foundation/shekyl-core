@@ -145,14 +145,6 @@ pub struct RootComparisons {
     pub diverged: Vec<RootDivergence>,
 }
 
-impl RootComparisons {
-    /// Whether every compared root agreed; `None` when none was compared.
-    #[must_use]
-    pub fn identical(&self) -> Option<bool> {
-        (self.compared > 0).then_some(self.diverged.is_empty())
-    }
-}
-
 /// One height where the store's derived root differed from the trace's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RootDivergence {
@@ -230,28 +222,24 @@ impl RunReport {
     }
 
     /// What the grader reads (RD-Q9), derived from the report so the two
-    /// cannot disagree: exercised rows, the refusal, and whether every
-    /// comparison of the store's state against the trace agreed — the
-    /// covered-tip digest **and** every per-height root (CTW-5), folded as
-    /// *all agreed*; `None` when nothing was compared.
+    /// cannot disagree: exercised rows, the refusal, the covered-tip digest,
+    /// and the per-height root oracle (CTW-5). The digest and the oracle
+    /// stay separate. The digest carries only the live root, so an interior
+    /// miss is invisible to it; `digest_identical` is `None` when no
+    /// checkpoint was compared.
     #[must_use]
     pub fn observations(&self) -> Observations {
-        let compared = [
-            self.checkpoint.as_ref().map(Checkpoint::identical),
-            self.roots.identical(),
-        ];
-        let digest_identical = compared
-            .iter()
-            .flatten()
-            .copied()
-            .reduce(|all, one| all && one);
         Observations {
             exercised: self.exercised.clone(),
             refused: self
                 .refused
                 .as_ref()
                 .map(|(height, verdict)| (verdict.rule.as_str(), *height)),
-            digest_identical,
+            digest_identical: self.checkpoint.as_ref().map(Checkpoint::identical),
+            roots: crate::grader::RootOracle {
+                compared: self.roots.compared,
+                diverged_at: self.roots.diverged.iter().map(|d| d.at).collect(),
+            },
         }
     }
 

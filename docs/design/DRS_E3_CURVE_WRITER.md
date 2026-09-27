@@ -392,7 +392,10 @@ the same commit removes the thing being compared. Two clean shapes; the
 second is ruled: **the comparison lives in the replay driver**, which holds
 the `Trace` separately (`facts.rs:15`, the `Trace` / `Composed` seam) and
 does not need the field. The driver asserts `derived == trace` per block —
-a DIVERGE under the grader's law (RD-Q6), never a silent pass — across **all
+a DIVERGE under the grader's law (RD-Q6), recorded as the run's root oracle
+(`GradedRun::root_oracle`). The checkpoint digest stays the digest clause:
+it carries only the live root, so an interior miss is the oracle's fact.
+Across **all
 four captured chains at every height, not a sample**, because this
 comparison exists only while the LMDB trace does. Sequence: the oracle
 lands (commit 5) before the field is deleted (commit 6). `Origin::PassedThrough`

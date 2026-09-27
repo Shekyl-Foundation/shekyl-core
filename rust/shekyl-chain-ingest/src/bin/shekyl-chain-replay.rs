@@ -24,10 +24,12 @@
 //! # Exit status
 //!
 //! Non-zero on any fault, and on any **disagreement** the run itself
-//! reports — a refusal, a DIVERGE at the checkpoint — unless a register was
-//! given, in which case the grade decides (§1.3: the success condition is
-//! *no unadjudicated disagreement*, and with no register nothing is
-//! adjudicated). The metrics artifact is written on every path that ran
+//! reports — a refusal, a DIVERGE at the checkpoint, a derived root that
+//! differs from the trace — unless a register was given, in which case the
+//! grade decides (§1.3: the success condition is *no unadjudicated
+//! disagreement*, and the root oracle failing the grade on its own). With
+//! no register nothing is adjudicated. The metrics artifact is written on
+//! every path that ran
 //! the pipeline, a late fault included: hours of hashing are the
 //! measurement RD-F11 asked for whether or not the run finished.
 
@@ -344,6 +346,13 @@ fn grade(
         );
     }
     if !graded.passes() {
+        if graded.unadjudicated.is_empty() {
+            return Err(format!(
+                "root oracle diverged at {} height(s) (§1.3)",
+                graded.root_oracle.diverged_at.len()
+            )
+            .into());
+        }
         return Err("the run has unadjudicated disagreements (§1.3)".into());
     }
     Ok(())

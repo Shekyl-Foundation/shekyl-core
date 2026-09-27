@@ -195,9 +195,10 @@ pub enum StoreInvariant {
     /// **SI-17** — `output_to_leaf` and `leaf_to_output` are inverse
     /// bijections over the drained outputs: one position per drained
     /// output, one output per position, neither written twice. Armed by
-    /// the connect's phase 3 when a verdict's drain names a different
-    /// number of outputs than leaves, or when either map already holds the
-    /// key it is about to insert (DRS-E3 `CTW-4`, §3.7).
+    /// the connect's phase 3 when either map already holds the key it is
+    /// about to insert (DRS-E3 `CTW-4`, §3.7). A drain cannot name a
+    /// different number of outputs than leaves: that pair is
+    /// [`shekyl_chain_rules::DrainedOutput`], one sequence.
     PositionMapsNotBijective,
     /// **SI-18** — the per-height leaf count advances by exactly what
     /// drained: `curve_tree_leaf_counts[h + 1] − curve_tree_leaf_counts[h]`
@@ -362,8 +363,7 @@ impl core::fmt::Display for StoreInvariant {
             ),
             Self::PositionMapsNotBijective => f.write_str(
                 "output_to_leaf / leaf_to_output would stop being inverse bijections: a drained \
-                 output or a leaf position is already mapped, or the drain names a different \
-                 number of outputs than leaves",
+                 output or a leaf position is already mapped",
             ),
             Self::LeafCountNotAdvanced { observed } => match observed {
                 LeafCountFault::SuccessorPresent => f.write_str(

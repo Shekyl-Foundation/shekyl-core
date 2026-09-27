@@ -32,8 +32,9 @@ store-invariant register) in `shekyl-chain-rules` (`drain.rs`,
 `shekyl-chain-store` (`store/grow.rs`, `store/leaf_reads.rs`, layout 15),
 `shekyl-chain-ingest` (the root oracle, `scenario_spend.rs`) and
 `shekyl-fcmp` (the named chunk arities). Re-run at that tree (the review
-head, after the #878 findings): `cargo test -p shekyl-chain-rules` **256**,
-`-p shekyl-chain-store` **374** + 15 + 14, `-p shekyl-chain-ingest` **84** + 3
+head, after the #878 findings; ingest **85** once the root oracle is graded
+on its own): `cargo test -p shekyl-chain-rules` **256**,
+`-p shekyl-chain-store` **374** + 15 + 14, `-p shekyl-chain-ingest` **85** + 3
 (the four captured chains: derived root == trace root at all 1 979 heights);
 workspace `cargo clippy --locked --all-targets -- -D warnings` clean; every
 `scripts/ci/check_*` gate (`check_store_invariant_register` 16 ↔ 16 built,

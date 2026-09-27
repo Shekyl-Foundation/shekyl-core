@@ -150,10 +150,10 @@ impl GrownTree {
             .expect("a fixture chain's view is complete and its points decompress");
         let mut leaf_count = self.leaf_counts[at(height.to_raw())];
         if let Some(drain) = drain {
-            for write in &drain.growth.layer_writes {
+            for write in &drain.growth().layer_writes {
                 self.layers.insert((write.layer, write.chunk), write.hash);
             }
-            leaf_count = drain.growth.leaf_count_after();
+            leaf_count = drain.growth().leaf_count_after();
         }
         self.roots.push(root);
         self.leaf_counts.push(leaf_count);

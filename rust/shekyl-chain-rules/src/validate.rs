@@ -199,6 +199,15 @@ pub fn form<S: Substrate>(
 ///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
 ///         Ok(None)
 ///     }
+///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+///         Ok(TreeFrontier::EMPTY)
+///     }
+///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
 /// }
 /// // Each call brands a fresh view, as the store's `write` does.
 /// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
@@ -212,9 +221,14 @@ pub fn form<S: Substrate>(
 ///
 /// with_view(|outer| {
 ///     with_view(|inner| {
-///         let valid = validate(formed(), &inner, &RuleSet::GENESIS)
-///             .unwrap()
-///             .unwrap();
+///         let valid = validate(
+///             formed(),
+///             &inner,
+///             &RuleSet::GENESIS,
+///             &Trust::UNANCHORED,
+///         )
+///         .unwrap()
+///         .unwrap();
 ///         connect(&outer, valid); // judged against `inner`: does not compile
 ///     })
 /// });
@@ -246,6 +260,15 @@ pub fn form<S: Substrate>(
 ///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
 ///         Ok(None)
 ///     }
+///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+///         Ok(TreeFrontier::EMPTY)
+///     }
+///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
 /// }
 /// struct Evil;
 /// impl<'id> ChainView<'id> for Evil {
@@ -262,6 +285,15 @@ pub fn form<S: Substrate>(
 ///     }
 ///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
 ///         Ok(None)
+///     }
+///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+///         Ok(TreeFrontier::EMPTY)
+///     }
+///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+///         Ok(AtHeight::AboveTip)
 ///     }
 /// }
 /// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}

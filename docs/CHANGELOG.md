@@ -37,7 +37,10 @@
   `Occupied`, distinct from the summary-versus-table `Length`. The
   replay driver asserts the derived root against the trace's at every
   covered height (`RunReport::roots`; a divergence is
-  `Disagreement::RootDiverged`) and the scenario driver mines a real
+  `Disagreement::RootDiverged`, graded as `GradedRun::root_oracle` — the
+  checkpoint digest stays the digest, because it carries only the live
+  root). `Drain` carries each matured output paired with its leaf
+  (`DrainedOutput`). The scenario driver mines a real
   `shekyl-tx-builder` spend against the grown tree (`scenario_spend.rs`).
 - **Chunk arities.** `SELENE_CHUNK_WIDTH` (38) / `HELIOS_CHUNK_WIDTH` (18) are
   Shekyl-named constants in `shekyl-fcmp`, const-asserted against the

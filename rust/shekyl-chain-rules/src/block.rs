@@ -333,9 +333,9 @@ pub struct ValidatedBlock {
     /// store persists what it is handed. Equal to `root_at(height)` when
     /// nothing matured at this height.
     root_after: CurveTreeRoot,
-    /// What the drain at this height appended — outputs in drain order and
-    /// their growth — or `None` when no output matured (the tree and its
-    /// root are unchanged).
+    /// What the drain at this height appended — each matured output paired
+    /// with its leaf, and the growth those leaves produced — or `None` when
+    /// no output matured (the tree and its root are unchanged).
     drain: Option<Drain>,
 }
 
@@ -385,10 +385,10 @@ impl ValidatedBlock {
         self.root_after
     }
 
-    /// What the drain at this height appended — the matured outputs in
-    /// drain order, the leaves in position order and every layer chunk
-    /// their growth wrote — or `None` when no output matured here.
-    /// `connect` writes exactly this (DRS-E3 §3.2).
+    /// What the drain at this height appended — each matured output paired
+    /// with its leaf, and every layer chunk their growth wrote — or `None`
+    /// when no output matured here. `connect` writes exactly this
+    /// (DRS-E3 §3.2).
     #[must_use]
     pub const fn drain(&self) -> Option<&Drain> {
         self.drain.as_ref()

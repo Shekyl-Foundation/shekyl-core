@@ -148,18 +148,23 @@ fn the_verdict_derives_the_drain_in_drain_order_over_the_written_tree() {
             .drain()
             .expect("block 3's coinbase and block 53's listed matured");
         assert_eq!(
-            drain.growth.leaf_count_before, 3,
+            drain.growth().leaf_count_before,
+            3,
             "continues the written tree"
         );
-        assert_eq!(drain.growth.leaves.len(), 3, "one coinbase + two listed");
-        assert_eq!(drain.growth.depth, 1);
-        assert_eq!(block.root_after(), drain.growth.root);
+        assert_eq!(drain.drained().len(), 3, "one coinbase + two listed");
+        assert_eq!(drain.growth().depth, 1);
+        assert_eq!(block.root_after(), drain.growth().root);
         assert_ne!(block.root_after(), into_63);
         // Drain order (§3.3): block 3's coinbase (global 3) is leaf 0;
         // block 53's listed outputs (54, 55) follow. Block 53's coinbase
         // and block 3's (empty) listed half are not in this drain.
         assert_eq!(
-            drain.outputs,
+            drain
+                .drained()
+                .iter()
+                .map(|row| row.output)
+                .collect::<Vec<_>>(),
             [3, SPEND_HEIGHT + 1, SPEND_HEIGHT + 2]
                 .map(GlobalOutputIndex::from_raw)
                 .to_vec()
