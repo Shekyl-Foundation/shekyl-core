@@ -79,6 +79,19 @@ pub fn empty_region_prunable_hash() -> PrunableHash {
 ///   bytes. The comparison is against `keccak256("")`, **not** the null hash —
 ///   see [`empty_region_prunable_hash`].
 ///
+/// **Feed it the rows as recorded at ingest — never digests recomputed from a
+/// body.** There is deliberately **no** `TxidParts` convenience method, because
+/// [`Transaction::txid_parts`] *recomputes* both digests from the object in hand:
+/// on a body whose prunable region and `pqc_auths` have been discarded (`PDM-Q6`
+/// retires them atomically) that yields `keccak256("")` and `None`, so a pruned
+/// node would read its own discarded spends as carrying **no** good and drop them
+/// from the domain — while an archival node keeps them. The two would then
+/// disagree on shard boundaries, which is a consensus split. `txid.rs:92-101`
+/// states the recomputation's behaviour for exactly these cases. The store reads
+/// the permanent rows instead (`txs_prunable_hash`, `txs_pqc_auth_hash`), which a
+/// prune never deletes, and `shekyl-chain-store`'s `tx_carries_archival_good` is
+/// the production path.
+///
 /// The coinbase is outside the domain **by this definition, not by exclusion**:
 /// `Ct::Null` writes no prunable region and has no `pqc_auths`, so both legs are
 /// false however large its `extra` grows. Every other transaction class carries
@@ -91,15 +104,6 @@ pub fn carries_archival_good(
     prunable_hash: PrunableHash,
 ) -> bool {
     pqc_auth_hash.is_some() || prunable_hash != empty_region_prunable_hash()
-}
-
-impl TxidParts {
-    /// Whether this body is in the archival shard partition's domain
-    /// ([`carries_archival_good`] over this value's two digests).
-    #[must_use]
-    pub fn carries_archival_good(&self) -> bool {
-        carries_archival_good(self.pqc_auth_hash, self.prunable_hash)
-    }
 }
 
 impl Transaction {

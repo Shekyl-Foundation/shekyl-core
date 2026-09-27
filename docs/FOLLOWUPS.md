@@ -54,7 +54,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §3 `U1a`
   - Target: pre-genesis
 
-- **`harness::fixture::serve_credit_only` builds the pre-`RF-D1` shape, which consensus refuses (`SHT-9`).** `prunable: None` with empty `pqc_auths` — the form identified by the *absence* of a prunable region, before `RF-D1` inverted it. `Transaction::validate_context_free_pruned` refuses it (verified). Any test treating it as a valid serve-credit transaction is asserting over a shape that cannot reach a chain.
+- **`harness::fixture::serve_credit_only` builds the pre-`RF-D1` shape, which consensus refuses (`SHT-9`).** `prunable: None` with empty `pqc_auths` — the form identified by the *absence* of a prunable region, before `RF-D1` inverted it. `Transaction::validate_context_free_pruned` refuses it (verified). Any test treating it as a valid serve-credit transaction is asserting over a shape that cannot reach a chain. The fix is either to build the conforming shape or to rename it as an explicitly invalid fixture — a fixture consensus rejects, sitting in a shared harness, will eventually mislead someone.
   - Owner: [`CHAIN_RULES_SLICE_5.md`](design/CHAIN_RULES_SLICE_5.md) §5
   - Target: pre-genesis
 
