@@ -24,9 +24,9 @@ use super::connect_fixtures::{
 use super::error::{CellFault, LeafCountFault, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
-use crate::codec::{Canonical, LeafCount, OutTx, TxIndex};
+use crate::codec::{Canonical, LeafCount, OutTx, Raw, TxIndex, TxPrunedSegment};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{CURVE_TREE_LEAF_COUNTS, OUTPUT_TXS, TX_INDICES};
+use crate::schema::{CURVE_TREE_LEAF_COUNTS, OUTPUT_TXS, TXS_PRUNED, TX_INDICES};
 
 fn h(height: u64) -> BlockHeight {
     BlockHeight::from_raw(height)
@@ -365,6 +365,68 @@ fn an_output_txs_row_owned_by_another_transaction_is_corruption_not_a_leaf() {
         fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
             codec: "out_tx",
             reason: "the row does not name this transaction at this output position",
+        }),
+    })
+    .to_string();
+    assert_eq!(out, Err(TestErr::Store(expected)));
+    cleanup(&path);
+}
+
+#[test]
+fn a_pruned_row_holding_another_transactions_body_is_corruption_not_a_drain() {
+    // `txs_pruned[tx_id]` is reached through `tx_indices[hash]`; a mis-keyed
+    // row would lend another transaction's outputs and `0x07` points to the
+    // spend's leaves while the height and ownership belts still passed.
+    // Planted: block 53's coinbase body under the spend's storage id. The
+    // reconstructed identity is not the hash the block names, so the drain
+    // halts before it compares output counts.
+    let path = tmp("leaf-pruned-identity");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let hashes = connect_chain(&store, &listing());
+    let hash = listed_hash_at_53(&store);
+    let (tx_id, foreign) = {
+        let snap = store.begin_read().expect("read");
+        let location = snap.tx_location(&hash).expect("read").expect("recorded");
+        let AtHeight::Recorded(body) = snap.block(h(SPEND_HEIGHT)).expect("read") else {
+            panic!("recorded");
+        };
+        let segments = body
+            .block
+            .miner_transaction
+            .write_segments()
+            .expect("segments");
+        (location.id, segments.pruned)
+    };
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        txn.open_table(TXS_PRUNED)
+            .expect("t")
+            .insert(tx_id.to_raw(), Raw::<TxPrunedSegment>::new(&foreign))
+            .expect("plant");
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let root = root_going_into(&store, TIP + 1);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        judge(
+            &view,
+            candidate_over(
+                root,
+                TIP + 1,
+                hashes[usize::try_from(TIP).expect("small")],
+                Vec::new(),
+            ),
+        )?;
+        Ok(())
+    });
+    let expected = StoreError::from(StoreInvariant::CellCorrupt {
+        key: "txs_pruned",
+        fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+            codec: "transaction",
+            reason: "the pruned segment is not the transaction the block names",
         }),
     })
     .to_string();

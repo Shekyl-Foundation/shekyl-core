@@ -123,6 +123,17 @@ pub(super) fn outputs_at<T: ReadTables>(
         };
         let tx = Transaction::read(&mut record.pruned.as_bytes())
             .map_err(|_| pruned_invalid("pruned segment does not decode"))?;
+        // Bind the body to the identity the block names: the skeleton plus
+        // the recorded component digests must hash back to `hash`
+        // (`PDM-Q-F26`'s reconstruct-from-stored-digest), or a mis-keyed
+        // `txs_pruned` row could lend another transaction's outputs and
+        // `0x07` points to this one's leaves while every later check —
+        // index height, `output_txs` ownership — still passed.
+        if tx.hash_with_supplied_components(record.pqc_auth_hash, record.prunable_hash) != *hash {
+            return Err(pruned_invalid(
+                "the pruned segment is not the transaction the block names",
+            ));
+        }
         listed.extend(sources_of(txn, &tx, hash, height)?);
     }
     Ok(AtHeight::Recorded(BlockOutputs { coinbase, listed }))

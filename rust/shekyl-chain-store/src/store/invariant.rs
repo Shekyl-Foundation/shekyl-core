@@ -159,17 +159,17 @@ pub enum StoreInvariant {
         /// Which disagreement the read observed.
         observed: LeafDensity,
     },
-    /// **SI-12** — a grown summary's root is the live root. The seal writes
-    /// [`crate::codec::CurveTreeState::EMPTY`], and `connect` records
-    /// `curve_tree_roots` on every connect whether or not the tree has
-    /// grown (SI-4), so the EMPTY row is not a claim about that live root.
-    /// Once the summary is no longer EMPTY, its `root` is
-    /// `curve_tree_roots[tip + 1]` (or [`shekyl_types::CurveTreeRoot::EMPTY`]
-    /// when the chain has no tip). The summary read compares them.
-    ///
-    /// The grow path (DRS-E3, `grow.rs`) replaces EMPTY at the first
-    /// connect whose drain appends a leaf; a chain in which nothing has
-    /// matured keeps the seal's row and this belt stays quiet.
+    /// **SI-12** — the summary's root is the live root:
+    /// `curve_tree_meta.root == curve_tree_roots[tip + 1]` (or
+    /// [`shekyl_types::CurveTreeRoot::EMPTY`] when the chain has no tip),
+    /// **including** the seal's [`crate::codec::CurveTreeState::EMPTY`].
+    /// Since DRS-E3 the root `connect` records is the validator's derivation
+    /// (SI-4), so an EMPTY summary claims nothing has drained and the live
+    /// root must be EMPTY too; the grow path (`grow.rs`) moves both together
+    /// at the first drain. The summary read compares them on every read
+    /// (widened from grown-only 2026-09-27, #878 review: a non-empty live
+    /// root beneath the seal's row is a corrupt roots table that CEN-B5
+    /// would otherwise judge the honest next header against).
     SummaryRootDiverged,
     /// **SI-15** — every `archival_serve_credit` row belongs to a persona
     /// with a bond record. The connect hook that writes a pass bit refuses

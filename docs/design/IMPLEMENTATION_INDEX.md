@@ -24,8 +24,22 @@ the 2D2 plan §2/§12, the WI-1 "made the chain live" comment — PR #333 and th
 Round-0 exit.)
 
 **Verification stamp.** Statuses below were verified against landed code.
-The unified stamp is `dev` = `6bca79797` + the E6 slice 6 tree (PR #864) as
-of 2026-09-26 — moved by E6 slice 6, whose rows changed status in
+The unified stamp is `dev` = `ad557ac5a` + the DRS-E3 tree (PR #878) as of
+2026-09-27 — moved by DRS-E3, whose rows changed status (`CTW-`, `CTW-Q`,
+`DRS_E3_CURVE_WRITER.md`, `DRS_E1_SCURVE.md`, SI-17 / SI-18 in the
+store-invariant register) in `shekyl-chain-rules` (`drain.rs`,
+`tree_growth.rs`, `RuleSet::tx_spendable_age`, the three `ChainView` reads),
+`shekyl-chain-store` (`store/grow.rs`, `store/leaf_reads.rs`, layout 15),
+`shekyl-chain-ingest` (the root oracle, `scenario_spend.rs`) and
+`shekyl-fcmp` (the named chunk arities). Re-run at that tree (the review
+head, after the #878 findings): `cargo test -p shekyl-chain-rules` **255**,
+`-p shekyl-chain-store` **370** + 15 + 14, `-p shekyl-chain-ingest` **84** + 3
+(the four captured chains: derived root == trace root at all 1 979 heights);
+workspace `cargo clippy --locked --all-targets -- -D warnings` clean; every
+`scripts/ci/check_*` gate (`check_store_invariant_register` 16 ↔ 16 built,
+`check_redb_schema_bijection` with the `NOT_PORTED` direction, the doc
+gates). *Superseded stamp:* `dev` = `6bca79797` + the E6 slice 6 tree
+(PR #864) as of 2026-09-26 — moved by E6 slice 6, whose rows changed status in
 `shekyl-chain-rules` (coverage `66 → 73`; gate `implemented 75`),
 `shekyl-wire`, `shekyl-types`, `shekyl-crypto-pq`, `shekyl-ffi`,
 `shekyl-daemon-rpc`, `shekyl-tx-builder`, `shekyl-engine-core` and the

@@ -26,11 +26,14 @@
 //!   C++ defaulted three cells three ways and documented the resulting
 //!   root ambiguity for callers to disentangle with a second read (SCU-1).
 //!   No caller compares a root against `hash_init` here.
-//! - **EMPTY is the seal's row, not the live root.** `connect` records
-//!   `curve_tree_roots` on every connect, grown or not (SI-4). The grow
-//!   path (DRS-E3, `grow.rs`) replaces EMPTY at the first connect whose
-//!   drain appends a leaf; before that the live root is EMPTY too. Once the
-//!   summary is not EMPTY, its root must be that live root (**SI-12**).
+//! - **EMPTY is the seal's row, and it is the live root until the first
+//!   drain.** `connect` records `curve_tree_roots` on every connect, grown
+//!   or not (SI-4), and since DRS-E3 the root it records is the validator's
+//!   derivation — EMPTY while nothing has matured, then moving with the
+//!   grow path (`grow.rs`). So the summary's root is held to the live root
+//!   **unconditionally** (**SI-12**): the seal's row is a claim like any
+//!   other, and a non-empty `curve_tree_roots[tip + 1]` beneath it is a
+//!   corrupt roots table, not a tree the summary has yet to catch up with.
 //! - **A root above `tip + 1`** is [`AtHeight::AboveTip`]; a missing row at
 //!   or below it is SI-7. Row 0 is the empty tree by definition and is not
 //!   stored.
@@ -94,14 +97,15 @@ const fn hole_at(position: TreePosition) -> ReadFault {
 /// table's length is SI-11 [`LeafDensity::Length`] (module docs).
 pub(super) fn summary<T: ReadTables>(txn: &T) -> Result<CurveTreeState, ReadFault> {
     let state = summary_row(txn)?;
-    // EMPTY is the seal's row. connect records roots whether or not the
-    // grow path has replaced it, so this row does not claim to be the live
-    // root. A summary the grow path has written does.
-    if state != CurveTreeState::EMPTY {
-        let tip = chain_reads::tip_of(txn)?.map(|(height, _)| height);
-        if live_root(txn, tip)? != state.root {
-            return Err(ReadFault::Invariant(StoreInvariant::SummaryRootDiverged));
-        }
+    // SI-12, unconditionally: the summary's root is the live root. Since
+    // DRS-E3 the root `connect` records is the validator's derivation, so
+    // the seal's EMPTY summary *is* a claim — nothing has drained, and
+    // `curve_tree_roots[tip + 1]` must be EMPTY too. A non-empty live root
+    // over an EMPTY summary is a corrupt roots table, not a tree the
+    // summary has yet to catch up with (2026-09-27, #878 review).
+    let tip = chain_reads::tip_of(txn)?.map(|(height, _)| height);
+    if live_root(txn, tip)? != state.root {
+        return Err(ReadFault::Invariant(StoreInvariant::SummaryRootDiverged));
     }
     let rows = txn.table(CURVE_TREE_LEAVES)?.len()?;
     if rows != state.leaf_count.to_raw() {

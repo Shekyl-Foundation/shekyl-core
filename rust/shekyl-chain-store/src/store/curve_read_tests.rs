@@ -118,7 +118,7 @@ fn a_fresh_store_reads_the_empty_tree_as_a_row_not_a_default() {
 }
 
 #[test]
-fn an_ungrown_chain_keeps_the_seal_summary_while_the_live_root_moves() {
+fn an_ungrown_chain_keeps_the_seal_summary_and_the_live_root_is_empty_too() {
     let path = tmp("curve-c1-ungrown");
     connect_three(&path);
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
@@ -127,8 +127,35 @@ fn an_ungrown_chain_keeps_the_seal_summary_while_the_live_root_moves() {
     assert_eq!(
         snap.root_at(BlockHeight::from_raw(3)).expect("live"),
         AtHeight::Recorded(live_root_after_three()),
-        "connect recorded a live root the summary does not claim"
+        "the derived root of an ungrown tree is the empty tree, which the seal's summary claims"
     );
+    cleanup(&path);
+}
+
+#[test]
+fn a_live_root_planted_beneath_the_seal_summary_is_si12() {
+    // SI-12 applies to the seal's row too (DRS-E3): the recorded root is
+    // the validator's derivation, so a non-empty `curve_tree_roots[tip + 1]`
+    // under an EMPTY summary is a corrupt roots table — the read halts
+    // rather than let CEN-B5 judge the honest next header against it.
+    let path = tmp("curve-c1-empty-summary-live-root");
+    connect_three(&path);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        txn.open_table(crate::schema::CURVE_TREE_ROOTS)
+            .expect("t")
+            .insert(
+                3,
+                CurveTreeRoot::from_bytes([0xd1; 32]).encoded().as_encoded(),
+            )
+            .expect("plant");
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    let err = snap.curve_tree().expect_err("SI-12");
+    assert!(is_root_diverged(&err), "{err}");
     cleanup(&path);
 }
 
