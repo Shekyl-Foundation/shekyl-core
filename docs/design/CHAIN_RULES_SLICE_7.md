@@ -2,11 +2,11 @@
 
 **Status:** OPEN — **Round 0 pre-flight, written 2026-09-26 against `dev` @
 `ad557ac5a` (post-#874, slice 6 closed out; post-#873, DRS-E3's curve-writer
-pre-flight).** **Round 0 RULED 2026-09-26 — Q1, Q3–Q8 ruled, Q9 re-ruled
-at parity, Q2 deferred to the floor bench at commit 2 with its fallback
-pre-empted (§8, each line-local). Implementation begins on §5 in order;
-this file amended on review, the index row and §5.1's expectation are
-commit 1.** Registered before implementation (rule 94 §5); process per
+pre-flight).** **Round 0 CLOSED — Q1, Q3–Q8 ruled and Q9 re-ruled at
+parity 2026-09-26; Q2 ruled (b) 2026-09-27 by the floor bench (§5.1, §8,
+each line-local). Commit 1 landed as #877 (merged `ece3aa4fb`); commit 2,
+the four measurements, is #880.** Registered before implementation (rule
+94 §5); process per
 `26-sub-pr-design-discipline.mdc` (cited here as the pre-flight's shape:
 substrate re-read at the pin, artifact execution before a budget becomes a
 gate).
@@ -591,7 +591,7 @@ when an operand is absent. Wave B extends the sequence in place.
 | # | commit | gate |
 | --- | --- | --- |
 | 1 | **This file amended on review; the index row; the §5.1 expectation table** — written before commit 2, so the overrun signal has a subject | — |
-| 2 | **LANDED 2026-09-26 (cost 1 — the estimate said 2; the driver listed two bodies at the first attempt, and the one wall was a fixture's: `trace_of`'s roots are not the driver's, §3.1).** Measurements, no rules: (a) the two-body block through `mine_listing`, the reorder and a substitution replayed through it — all three connect; output order follows the bodies; the unlisted body is recorded (`body_pairing_tests.rs`, pins that flip at commit 6); (b) the pruned-form fixture at both sites — it was prose, and the row is **H18**, not H19 (§3.3); (c) the weights-read bench, `#[ignore]`d in `shekyl-chain-store` (`weights_read_bench_tests.rs`), run on the desktop at N = 100 000 — the floor board was unreachable; the floor run is owed before Q2 closes (§5.1's cell); (d) the `Unmutable` census over the corpus — `ReorderedBodies` the only corpus-shape gap, `DoubleSpend` unreachable on the two spend-named chains (§3.7) | — |
+| 2 | **LANDED 2026-09-26 (cost 1 — the estimate said 2; the driver listed two bodies at the first attempt, and the one wall was a fixture's: `trace_of`'s roots are not the driver's, §3.1).** Measurements, no rules: (a) the two-body block through `mine_listing`, the reorder and a substitution replayed through it — all three connect; output order follows the bodies; the unlisted body is recorded (`body_pairing_tests.rs`, pins that flip at commit 6); (b) the pruned-form fixture at both sites — it was prose, and the row is **H18**, not H19 (§3.3); (c) the weights-read bench, `#[ignore]`d in `shekyl-chain-store` (`weights_read_bench_tests.rs`), run at N = 100 000 on the desktop and, cross-compiled, on the Pi 4 floor — (b) 36.6 ms against (a) 598 ms there, 0.5 % of the zone-point verify; **Q2 RULED (b)** (§5.1); the floor run is owed before Q2 closes (§5.1's cell); (d) the `Unmutable` census over the corpus — `ReorderedBodies` the only corpus-shape gap, `DoubleSpend` unreachable on the two spend-named chains (§3.7) | — |
 | 3 | **`ChainView` grows** — the weights read (Q2's shape) and `has_transaction` — trait, `BatchView`, `MockChain`, the store's conformance test holding the mock to the store, **one commit, both sides** (slice 6 §5.1's rule) | commit 2 (c) |
 | 4 | **G6 / G6b** as `judge_emission`'s first two definitions in `rules/block_weight.rs`; the two windows as generated consts (Q6, with the two `#define`s repointed and the dead fee define deleted, §3.10); the mock holds the clamps at their boundaries **and the `min(window, h)` arm at low heights** (C2-R2 Q2's early-chain weakness — below 100 000 the window is the chain); the captured chains replay through both at parity (§3.8) | commit 3 |
 | 5 | **F14, F14b, F16, G12** — the sequence completed through the paid reward; `ConnectFacts.{weight, long_term_weight, long_term_effective_median, coins_generated}` read off the verdict, the ingest's four composed lines deleted (`Provenance::passed_through` re-counted with E3's) | commit 4 |
@@ -643,32 +643,40 @@ prediction fails through the read shape rather than through the rules,
 which would be a different lesson from slice 6's and should be recorded
 as one.
 
-**The budget cell — the desktop reference filled at commit 2 (2026-09-26),
-the floor's still owed.** `shekyl-chain-store`'s `weights_read_bench`
-(`#[ignore]`d; `SHEKYL_WEIGHTS_BENCH_BLOCKS=100000 cargo test -p
-shekyl-chain-store --release weights_read_bench -- --ignored --nocapture`)
-builds a 100 000-block store through the production `judge` + `connect`
-and times the two Q2 shapes over one read snapshot. **Desktop, release
-(i9-11950H — not the floor, rule 76):**
+**The budget cell — filled at commit 2: desktop 2026-09-26, the floor
+2026-09-27.** `shekyl-chain-store`'s `weights_read_bench` (`#[ignore]`d;
+`SHEKYL_WEIGHTS_BENCH_BLOCKS=100000 cargo test -p shekyl-chain-store
+--release weights_read_bench -- --ignored --nocapture`) builds a
+100 000-block store through the production `judge` + `connect` and times
+the two Q2 shapes over one read snapshot. The floor run is the same test
+binary cross-compiled for `aarch64-unknown-linux-gnu` (`cargo test
+--release --no-run --target …`, `aarch64-linux-gnu-gcc` as the linker) and
+run on **skl-pi — Raspberry Pi 4 Model B, Cortex-A72 ×4 (`CPU part 0xd08`),
+7.8 GB, Ubuntu 26.04**, one run of N = 100 000:
 
-| read | long window (100 000 rows) | short window (100 rows) |
-| --- | ---: | ---: |
-| (a) `N` point reads through `block_info`, full decode each — Q2 (a) | **113.6 ms** | 0.11 ms |
-| (b) one range cursor over `block_info`, decoded once each — Q2 (b) | **10.2 ms** for both windows | — |
-| the two medians (`select_nth_unstable`) | 0.15 ms | |
+| read | Pi 4 floor | desktop (i9-11950H) | floor multiplier |
+| --- | ---: | ---: | ---: |
+| (a) `N` point reads through `block_info`, full decode each — Q2 (a) | **598 ms** long, 0.56 ms short | 113.6 ms long, 0.11 ms short | 5.3× |
+| (b) one range cursor over `block_info`, decoded once each — Q2 (b) | **36.6 ms** for both windows | 10.2 ms | 3.6× |
+| the two medians (`select_nth_unstable`) | 0.93 ms | 0.15 ms | 6.2× |
 
-Same rows read (asserted equal). The shapes separate by **11×**, and
-neither the medians nor the short window are the cost — the long window's
-100 000 point lookups are. Against GAP-7's zone-point verify of 7.23 s
-**on the floor**, (a) is already a per-connect tax of order 0.1 s on the
-desktop and will be seconds on the Pi 4; (b) is a rounding error on the
-desktop and plausibly tens of milliseconds on the floor. **Provisional
-reading: Q2 (b), the bulk `weights_window` read, with the floor run
-confirming before commit 3 lands the trait method** — the board (`skl-pi`)
-was unreachable on 2026-09-26; the recipe above is what runs there.
-Nothing in this cell chooses (c): (b) costs the connect ~10 ms per
-100 000 rows on a desktop, so the materialised column Q2's fallback names
-is not reached for unless the floor multiplies that past the budget.
+Same rows read on both machines (asserted equal). The shapes separate by
+**16× on the floor** (11× on the desktop — the ratio **widened**, as the
+pre-statement below said the A72's caches would push a cursor-versus-
+descents comparison), and the long window's point lookups are the whole
+cost on either machine.
+
+**Q2 — RULED (b) by the floor run, under the decision rule written before
+it (below).** (b) costs a connect **36.6 ms** on the floor for the long
+window: **0.5 %** of GAP-7's 7.23 s zone-point verify on the same board,
+an order of magnitude under the 5 % line. (a) at 598 ms would have been
+8.3 % and failed the same rule. So: the bulk `ChainView::weights_window`
+read lands in commit 3; **no materialised column** — Q2's pre-empted
+fallback is not reached for. The negative control held: (a) did not beat
+(b) on either machine. The 100 000-block build itself ran at 4.2 ms a
+block on the Pi (422 s) against 0.56 ms on the desktop (56 s), a 7.5×
+multiplier on the connect path — recorded because it is the first floor
+figure for `judge` + `connect` per block, not because commit 3 needs it.
 
 **What the floor run can and cannot touch — stated before it runs (the I4
 round's discipline; review of commit 2).** The I4 round found BP+
@@ -678,10 +686,14 @@ structure does. The two shapes here have different memory-access profiles
 — 100 000 point lookups are 100 000 B-tree descents with little locality,
 one cursor is a sequential walk — and the A72's caches are far smaller, so
 the 11× **could widen or narrow**; that ratio is the floor's to set. What
-the floor **cannot** touch: the rows read are the same (asserted), the
-medians are three orders below either read on any machine, and (a) cannot
-become cheaper than (b) — a point read does everything a cursor step does
-and then some. So the floor decides **one thing**: whether (b)'s absolute
+the floor **cannot** touch: the rows read are the same (asserted), and (a)
+cannot become cheaper than (b) — a point read does everything a cursor
+step does and then some. *(The first cut also claimed the medians sit
+"three orders below either read on any machine"; that was wrong on the
+desktop's own table — 0.15 ms is 68× below the 10.2 ms cursor and above
+the 0.11 ms short point read — and a cross-machine ratio is exactly what
+rule 76 says to measure, not assert. Withdrawn on review; the floor set
+it at 0.93 ms, 39× below the cursor.)* So the floor decides **one thing**: whether (b)'s absolute
 cost sits inside the connect budget or the materialised column is reached
 for. **The decision rule, written now so the number does not write it:**
 (b) stands if its floor time for the long window is **≤ 5 % of the
@@ -764,7 +776,13 @@ its own file).
   with that check (an SI row: the column's entry at `h` equals
   `block_info[h]`'s, held on every connect and by the conformance test),
   never as an authority a rule reads without the source beside it. Written
-  now so the bench result does not decide it under pressure.
+  now so the bench result does not decide it under pressure. **RULED (b)
+  2026-09-27 by the floor run** (§5.1's cell): on the Pi 4 the range cursor
+  reads both windows in 36.6 ms — 0.5 % of the zone-point verify on the
+  same board, an order of magnitude inside the 5 % rule — against 598 ms
+  for the point reads; the ratio widened to 16× on the floor. The bulk
+  `weights_window` read lands in commit 3 with no materialised column;
+  the fallback stays pre-empted and unreached. Round 0 is closed.
 - **Q3 — G1's intra-block half. RULED 2026-09-26: the default, for a
   better reason than the one given.** G1 refuses *"already on the chain
   **or earlier in this block**"*. The reason is not tidiness ("one
