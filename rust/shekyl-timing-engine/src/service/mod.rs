@@ -12,14 +12,22 @@
 //! arm, and on clear and deregister. A wake that was already waiting
 //! carries the older arm's token, so taking it leaves the newer arm
 //! in place.
+//!
+//! A blocking home waits on the slot's condvar. An async home waits
+//! with [`OwnerHandle::wait_wake_async`], which registers that task's
+//! waker. Delivery wakes whichever is waiting. This thread is still
+//! not an async runtime.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::pin::Pin;
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use shekyl_thread_ledger::{DedicatedThread, ThreadName};
@@ -92,6 +100,9 @@ enum Terminal {
 struct SlotContents {
     pending: Option<Delivered>,
     terminal: Option<Terminal>,
+    /// The async home, if one is waiting. Taken and woken on delivery
+    /// and on seal. A blocking waiter uses `cvar` instead.
+    waker: Option<Waker>,
 }
 
 struct Slot {
@@ -109,6 +120,7 @@ impl Slot {
             contents: Mutex::new(SlotContents {
                 pending: None,
                 terminal: None,
+                waker: None,
             }),
             cvar: Condvar::new(),
             #[cfg(test)]
@@ -129,14 +141,22 @@ impl Slot {
     }
 
     fn deliver(&self, delivered: Delivered) {
-        let mut contents = self.lock();
-        if contents.terminal.is_some() {
-            return;
-        }
-        let notify = contents.pending.is_none();
-        contents.pending = Some(delivered);
-        if notify {
-            self.cvar.notify_one();
+        let waker = {
+            let mut contents = self.lock();
+            if contents.terminal.is_some() {
+                return;
+            }
+            let notify = contents.pending.is_none();
+            contents.pending = Some(delivered);
+            if notify {
+                self.cvar.notify_one();
+                contents.waker.take()
+            } else {
+                None
+            }
+        };
+        if let Some(waker) = waker {
+            waker.wake();
         }
     }
 
@@ -179,13 +199,42 @@ impl Slot {
         }
     }
 
-    fn seal(&self, terminal: Terminal) {
+    /// Register `cx`'s waker until a wake or a terminal mark is present.
+    ///
+    /// The waker is stored under the same lock as the wake, so a delivery
+    /// cannot land between the empty check and the registration.
+    fn poll_async(
+        &self,
+        cx: &mut Context<'_>,
+        idle: impl Fn() -> Result<(), EngineError>,
+    ) -> Poll<Result<Delivered, EngineError>> {
         let mut contents = self.lock();
-        if contents.terminal.is_some() {
-            return;
+        match Self::take(&mut contents) {
+            Ok(Some(delivered)) => Poll::Ready(Ok(delivered)),
+            Err(error) => Poll::Ready(Err(error)),
+            Ok(None) => match idle() {
+                Ok(()) => {
+                    contents.waker = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+                Err(error) => Poll::Ready(Err(error)),
+            },
         }
-        contents.terminal = Some(terminal);
-        self.cvar.notify_all();
+    }
+
+    fn seal(&self, terminal: Terminal) {
+        let waker = {
+            let mut contents = self.lock();
+            if contents.terminal.is_some() {
+                return;
+            }
+            contents.terminal = Some(terminal);
+            self.cvar.notify_all();
+            contents.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
 }
 
@@ -807,6 +856,14 @@ impl<C: Clock> OwnerHandle<C> {
         Ok(delivered.wake)
     }
 
+    /// The same wait as [`Self::wait_wake`], for a home that is an async
+    /// task. The slot stores the task's waker and wakes it on delivery.
+    /// The task does not block a worker, and this thread does not run
+    /// the task's runtime.
+    pub fn wait_wake_async(&self) -> WakeWait<'_, C> {
+        WakeWait { handle: self }
+    }
+
     fn ensure_open(&self) -> Result<(), EngineError> {
         if self.closed.load(Ordering::Acquire) {
             Err(EngineError::Closed)
@@ -837,6 +894,27 @@ impl<C: Clock> OwnerHandle<C> {
                 polled_at,
             },
         ));
+    }
+}
+
+/// [`OwnerHandle::wait_wake_async`]. Polling it registers the task waker.
+pub struct WakeWait<'a, C: Clock> {
+    handle: &'a OwnerHandle<C>,
+}
+
+impl<C: Clock> Future for WakeWait<'_, C> {
+    type Output = Result<Wake, EngineError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let handle = self.handle;
+        match handle.slot.poll_async(cx, || handle.idle()) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(delivered)) => {
+                handle.observe(&delivered);
+                Poll::Ready(Ok(delivered.wake))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+        }
     }
 }
 
