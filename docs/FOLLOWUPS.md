@@ -30,8 +30,32 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) `SF-D7`
   - Target: pre-genesis
 
-- **The `PDM-Q-F34` coverage arms the composition round did not run.** Three: the dynamic window with an era-density schedule, so a heavy era ages into the deep band with its bytes intact and is graded against `r_target_deep` with the `g(age)` premium (expressible since size-at-birth landed); a `storage_unit_cost` sweep at fixed `S`, which is what separates the cost signal from the capacity leg; and the per-band gate read — max over pre-registered age × cost bands, aggregate reported but not graded, since the aggregate certifies a failing band. The first is owed **after** `SHT-Q1`, because the domain decides what a "heavy era" is.
+- **F34: rebuild the sim's size model under the ruled domain (`SHT-Q1`, 2026-09-27).** L19's era-density shape is **coinbase dilution**, which exists only under the storage-id domain. Under the ruled domain — transactions carrying archival good — a shard is `T` such transactions in any era, so size comes from each transaction's own shape, mainly its input count, and the era term goes away. The model, not a parameter, changes.
   - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19
+  - Target: pre-genesis
+
+- **F34: run the heavy-era-ages-into-deep arm.** A dynamic window, size fixed at birth, and a usage schedule that plateaus or bursts, so a heavy era ages into the deep band with its bytes intact and is graded against `r_target_deep` with the `g(age)` premium on it. `be785f8e6` made it expressible; it is still only described (`STAKER_ARCHIVAL_SIM.md` §L19 residue). **This is the one arm that could still force a byte operand into channel 1** — item 5's `(g)` falsifier.
+  - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19
+  - Target: pre-genesis
+
+- **F34: sweep `storage_unit_cost` at fixed `S`.** L19's arm moved the per-shard carry cost and the per-shard capacity draw together, and capacity dominates at baseline parameters, so the arm measured the capacity leg made shard-dependent. This sweep is what separates the cost signal from it.
+  - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19
+  - Target: pre-genesis
+
+- **F34: implement the gate read — max over pre-registered bands, and the margin to target.** The aggregate `frac_under_target` certifies a state with a failing band, so the verdict must be the max over bands **registered before the run** (age × cost). And it must report the **margin to target**, not only a count below it: L19 found `min_R` falling `4 → 3` on the covered base while every band read `0.000`, because a threshold count cannot see a shard shedding a copy without crossing its bar. Today this is a recommendation in a doc, not a metric in the code.
+  - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19
+  - Target: pre-genesis
+
+- **F34: write the `PDM-Q-F34` charter row** with the evidence from the arms above. The finding is recorded in the sim's own lane (`STAKER_ARCHIVAL_SIM.md` §L19) and appears nowhere in the PDM charter.
+  - Owner: [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q6`
+  - Target: pre-genesis
+
+- **A shard-level heavy-end quantile of good-per-shard, computed from the captured chains' composition.** `U1a`'s ceiling band (~[140, 490]) contains the current `T = 200` only because of a heavy-shard multiplier taken from L19's **mean-preserving shape cap** — an artifact of that normalizer, not a measured shard size. On the mean basis every W₂ reading clears 200 by 1.4–4.9×. The quantile is per-transaction composition averaged over `T`, not the per-transaction extreme (which `√T` suppresses) and not the normalizer.
+  - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §3 `U1a`
+  - Target: pre-genesis
+
+- **`harness::fixture::serve_credit_only` builds the pre-`RF-D1` shape, which consensus refuses (`SHT-9`).** `prunable: None` with empty `pqc_auths` — the form identified by the *absence* of a prunable region, before `RF-D1` inverted it. `Transaction::validate_context_free_pruned` refuses it (verified). Any test treating it as a valid serve-credit transaction is asserting over a shape that cannot reach a chain.
+  - Owner: [`CHAIN_RULES_SLICE_5.md`](design/CHAIN_RULES_SLICE_5.md) §5
   - Target: pre-genesis
 
 - **Delete the clearnet pipe scaffolding at transport cutover.** `pipe.rs`, the descriptor-handoff FFI, and epee's `network_pipe_ops` are the interim host. The transport layer replaces them; they are not a test host for the option. The deletion set is D13 of the transport-layer design.

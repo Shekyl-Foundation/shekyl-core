@@ -49,6 +49,59 @@ pub struct TxidParts {
     pub prunable_hash: PrunableHash,
 }
 
+/// `keccak256("")` — the `prunable_hash` row of a body with **no prunable byte
+/// region**: a coinbase, or a storage-pruned spend whose region is absent.
+///
+/// This is the value [`Transaction::prunable_hash`] returns for such a body, and
+/// it is **not** the null hash. The txid's prunable *component* substitutes the
+/// null hash there; the store row does not. A predicate written against
+/// "non-null prunable hash" would therefore read **every** coinbase as carrying
+/// archival good, which is why [`carries_archival_good`] compares against this
+/// value instead. Pinned by `the_empty_region_digest_is_the_coinbases_row`.
+#[must_use]
+pub fn empty_region_prunable_hash() -> PrunableHash {
+    PrunableHash::from_bytes(keccak256(&[]))
+}
+
+/// Whether a transaction is in the **archival shard partition's domain** —
+/// `SHT-Q1` RULED (Rick, 2026-09-27, design-owner lane).
+///
+/// A transaction is in the domain **iff it carries archival good**: a non-empty
+/// prunable region, or a `pqc_auths` component. Both operands are skeleton data
+/// — the two digests every node retains after the bodies are discarded — so
+/// membership is decidable **without reading a body**, which is what lets bond
+/// admission check it on a pruned node. That is why this function takes the two
+/// row values and not a [`Transaction`].
+///
+/// - `pqc_auth_hash.is_some()` ⇔ the txid is **4-part** ⇔ the body carried a
+///   non-empty `pqc_auths` ([`Transaction::pqc_auth_hash`]).
+/// - `prunable_hash != empty_region_prunable_hash()` ⇔ the prunable region held
+///   bytes. The comparison is against `keccak256("")`, **not** the null hash —
+///   see [`empty_region_prunable_hash`].
+///
+/// The coinbase is outside the domain **by this definition, not by exclusion**:
+/// `Ct::Null` writes no prunable region and has no `pqc_auths`, so both legs are
+/// false however large its `extra` grows. Every other transaction class carries
+/// good; `shekyl-chain-rules`' `the_domain_is_every_non_coinbase_class` pins that
+/// class by class, exhaustively, so a new class cannot be added without deciding
+/// where it sits.
+#[must_use]
+pub fn carries_archival_good(
+    pqc_auth_hash: Option<PqcAuthHash>,
+    prunable_hash: PrunableHash,
+) -> bool {
+    pqc_auth_hash.is_some() || prunable_hash != empty_region_prunable_hash()
+}
+
+impl TxidParts {
+    /// Whether this body is in the archival shard partition's domain
+    /// ([`carries_archival_good`] over this value's two digests).
+    #[must_use]
+    pub fn carries_archival_good(&self) -> bool {
+        carries_archival_good(self.pqc_auth_hash, self.prunable_hash)
+    }
+}
+
 impl Transaction {
     /// The consensus transaction hash (`keccak256` over component hashes,
     /// GENESIS_TX_WIRE_FORMAT.md §11): **3-part** for the coinbase (`Null`) —

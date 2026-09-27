@@ -2,7 +2,11 @@
 
 **Status:** OPEN — Round 0 executed 2026-09-26 at `b72aac2fc` (the composition
 arm with `origin/dev@ad557ac5a` merged in); **AMENDED on review the same day
-(at `9e8c0bee0`)** — the conclusion moved. `U1a` was derived against the wrong
+(at `9e8c0bee0`)**; **`SHT-Q1` RULED (Rick, 2026-09-27, design-owner lane)** —
+the partition is over transactions that **carry archival good**, a property
+rather than a class list, with the equivalence to `cumulative_tx_count` recorded
+as an invariant and pinned by a test (§2.1). `L2` remains open and still blocks
+the selection rule's lower edge. The 2026-09-26 amendment moved the conclusion. `U1a` was derived against the wrong
 transport figure: W₂ has *measured* single-attempt fetch since 2026-09-16, and
 on the measured numbers `U1a` is **unresolved at `T = 200`** rather than three
 orders of magnitude slack. The selection rule is re-pointed at the **lower**
@@ -127,10 +131,84 @@ and does not say so.** It is not merely stale; it presumes the answer to
 
 ---
 
-## 2. `SHT-Q1` for steering — the partition domain
+## 2. `SHT-Q1` — the partition domain — **RULED**
 
-**This is a question with evidence, not a ruling.** It comes first because it
-decides which constraints in §3 exist at all.
+> **`SHT-Q1` RULED (Rick, 2026-09-27, design-owner lane): the partition is over
+> transactions that carry archival good.** A transaction is in the domain **iff**
+> it has a non-empty prunable region or `pqc_auths`. That is decidable from the
+> skeleton (txid structure and prunable hash) without the body. Shard `k` is the
+> domain's transactions `[k·T, (k+1)·T)` in chain order. **Shards close on count
+> only; there is no time-based closure** (a clock is the zero floor by another
+> name). The coinbase has no prunable region and is skeleton; it is outside the
+> domain **by the definition, not by exclusion**.
+>
+> **Implementation equivalence (invariant, not definition):** today the domain
+> equals the non-coinbase transactions. Every non-coinbase class carries good
+> (CEN-H21, CEN-H22 and the class rules) and the coinbase carries none, so
+> boundaries read from `cumulative_tx_count`. A test pins the equivalence. A
+> class or coinbase change that breaks it must change the counter in the same
+> cutover.
+>
+> **Stability:** closed shards never change membership. Any post-genesis change
+> to what counts as archival good activates by height and applies only past it.
+>
+> **Falsifiers (any reopens):** (i) the re-keyed D2 `n` or `g(age)` requires
+> shards to close by height; (ii) the equivalence breaks without a counter
+> change; (iii) evidence that an unbondable frontier shard on a quiet chain has a
+> real cost; (iv) a definition of archival good that cannot be decided from the
+> skeleton.
+
+The ruling is a **property**, which is why it is stronger than either option as
+this round posed them: the partition follows the good itself, so a future
+transaction type carrying prunable data joins automatically and one that does not
+stays out, with no class list to maintain. What follows is the evidence the round
+gathered, kept because the falsifiers are stated against it.
+
+### 2.1 The ruling as built
+
+**One predicate, one home.** `shekyl_wire::carries_archival_good(pqc_auth_hash,
+prunable_hash)` (`rust/shekyl-wire/src/transaction/txid.rs`), beside the txid
+structure it reads, with `TxidParts::carries_archival_good` forwarding to it. It
+takes **the two row values, not a `Transaction`**, so membership is structurally
+decidable without a body — which is what lets bond admission check it on a pruned
+node. No second classification is minted: the predicate reads the 3-part/4-part
+arity that already exists.
+
+**One correction the ruling's wording needs.** The ruling says "a non-null
+prunable hash". **The stored prunable hash is never null.** `txid.rs:92-101` is
+explicit: when the region is absent the *txid component* substitutes the null
+hash, while the **row** is `keccak256("")` — "the C++ store's row for a coinbase
+is the latter". A predicate written against non-null would therefore read **every
+coinbase as carrying good** and the equivalence would be false at landing. The
+predicate compares against `empty_region_prunable_hash()` instead, and
+`the_empty_region_digest_is_the_coinbases_row` pins that value against the
+coinbase's own row.
+
+**The equivalence test** is `rules::tx::tx_domain_tests` in `shekyl-chain-rules`,
+five cases:
+
+| leg | what it pins |
+|---|---|
+| `the_domain_is_every_non_coinbase_class` | an **exhaustive `match` over `TxClass` with no wildcard arm**, each arm citing the rule that forces good for that class. Verified to be a compile-time guarantee, not a claim: adding a probe variant to `TxClass` fails the build with `E0004: non-exhaustive patterns`, pointing at this match |
+| `each_leg_of_the_predicate_is_the_only_good_some_class_has` | both legs are independently load-bearing — the **fee-less emission** has the `pqc_auths` component and no region, the **serve-credit** form has the region and no component. Either leg alone puts one class outside the domain |
+| `the_empty_region_digest_is_the_coinbases_row` | `keccak256("")` is the coinbase's row and is **not** the null hash (the correction above) |
+| `the_coinbase_carries_no_good_however_large_its_extra` | the coinbase at one output and at a maximal-attestation `extra`: attestation records live in `extra`, which is skeleton, so the ct stays `Null` and both legs stay false |
+| `the_counter_equals_the_predicate_over_a_mixed_chain` | over a synthetic chain mixing every class **with empty blocks**, boundaries from `cumulative_tx_count` equal boundaries from counting the predicate — compared **per transaction**, not only at the end, so offsetting errors cannot cancel. This is the leg that fails on divergence |
+
+**The negative leg (e) is cited, not re-asserted.** A non-coinbase transaction
+with no good is refused today: `BondPost` by **CEN-H21**'s `spends >= 1` +
+`prunable: Some` + non-empty `fcmp_proof`
+(`rust/shekyl-chain-rules/src/rules/tx.rs:749-793`); a key-imaged `Spend` with no
+prunable at `rust/shekyl-wire/src/transaction.rs:2056-2060`; the serve-credit
+shape, including one **non-empty** pass record per credit vin, at
+`rust/shekyl-wire/src/transaction.rs:1692-1722` and
+`check_serve_credit_pruned_blob` (`:592-600`).
+
+### 2.2 The evidence the ruling was taken on
+
+The round posed the domain as two options. The ruling supersedes both with the
+property above; the options are kept because `SHT-Q1`'s falsifiers and `SHT-8`
+are stated against them.
 
 - **(A) As landed.** Storage ids, dense over every recorded transaction, one
   coinbase per block included. `k = ⌊storage_id / T⌋`.
@@ -192,7 +270,7 @@ of them already has a defined answer for a shard that has not closed:
 |---|---|---|
 | `h_scarce` and the discard calendar `D(E) = { k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3 }` | the `close_height` of shards **already closed**, reached by id arithmetic and one binary search | is not in the closed set, so not in `D(E)`. Never discarded — which is the cost, not a contradiction (`prune.rs:34-36`, `:472-500`) |
 | `g(age)` | `shard_age_milli(close_block_height, freeze_height, SEB)` — a **freeze** height, *if* frozen. Its no-segment branch is keyed on a **J-segment** (`admission.rs:305-341`, `consensus_state.rs:235-252`) | ⚠️ **NOT A PASS — evaluated against the retired geometry.** "Scores `age_milli = 0` with no frozen segment" is a true statement about *segments*, the leaf partition `PDM-Q12` retired, and says nothing about how an open **T-shard** behaves. The re-keyed form does not exist, so this surface **has not been run** |
-| D2 escalation | `compute_burn_split_at(total_fees, burn_pct, n: FrozenSegmentCount)` (`burn.rs:188-191`) — and `FrozenSegmentCount` counts **J-segments**: *"Zero frozen segments (genesis / empty tree)"* (`escalation.rs:48-58`) | ⚠️ **NOT A PASS — same defect.** "Not frozen, not counted" is true of segments. See `SHT-8`: the re-key is unspecified, and specifying it wrongly hands `T` a fifth job |
+| D2 escalation | `compute_burn_split_at(total_fees, burn_pct, n: FrozenSegmentCount)` (`burn.rs:188-191`); `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and on the C++ side `n` is **derived from the curve-tree leaf count** — `Blockchain::parent_frozen_segment_count` returns `shekyl_archival_frozen_segment_count(m_db->get_curve_tree_leaf_count())` (`src/cryptonote_core/blockchain.cpp:1494-1505`) and feeds `validate_miner_transaction` (`:1508`), under a throwing read-point assert | ⚠️ **NOT A PASS — same defect.** "Not frozen, not counted" is true of segments. See `SHT-8`: the re-key is unspecified, and specifying it wrongly hands `T` a fifth job |
 | Foundation `CompleteTree` / seed coverage | an owed set of *"every **closed**, final shard"* (`WALLET_SIDE_STORE.md`:463, WSS-Q10) | is not owed |
 | Bootstrap | fills from closed shards through the same owed computation | likewise |
 
@@ -604,7 +682,8 @@ that gate's bookkeeping:
 | **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge |
 | **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
-| **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner, with no economics changed**, and every `T` re-pin thereafter moving when the staker share saturates. **Blast radius, bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so this is a clock on **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table; the re-key specification is **E4 / S-ARCH's**, not this lane's |
+| **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner, with no economics changed**, and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee-split validity depends on it: a wrong re-key does not mis-price anything, it changes which coinbases are valid. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table; the re-key specification is **E4 / S-ARCH's**, not this lane's |
+| **`SHT-9`** | **A `shekyl-chain-rules` fixture carries a shape consensus refuses.** `harness::fixture::serve_credit_only` builds `prunable: None` with empty `pqc_auths` — the **pre-`RF-D1`** serve-credit form, identified by the *absence* of a prunable region. `RF-D1` inverted that: the region is now present and holds one non-empty pruned pass record per credit vin. Verified empirically rather than read off: `Transaction::validate_context_free_pruned` refuses it — *"serve_credit tx must be fee-only — no outputs, empty `pqc_auths`, no spend-proof material, and exactly one pruned pass record per serve-credit vin (§2.5, RF-D1)"*. It does **not** break `SHT-Q1`'s equivalence (a conforming serve-credit body carries good, and `tx_domain_tests` builds one), but a fixture that consensus would refuse is a false negative waiting for any test that assumes it is valid. | CONFIRMED — found while building the equivalence test; owner the `CHAIN_RULES_SLICE` lane, FOLLOWUPS |
 | **`SHT-Q1` price, withdrawn** | The first pass charged (B) with making prune's mapping "stop being pure arithmetic on the id". **Wrong:** `cumulative_tx_count` *is* the non-coinbase ordinal (`prune.rs:421-428`), and `height_of_tx_id`'s binary search over the running total is already on dev's `h_scarce` path (`prune.rs:490-500`). Under (B) a boundary reads straight off the stored cell with **no coinbase term to add**, so (B) removes an addition from four sites rather than adding a lookup. `SHT-Q1`'s only remaining price is **closure liveness on a quiet chain**. | WITHDRAWN on review |
 
 ---
