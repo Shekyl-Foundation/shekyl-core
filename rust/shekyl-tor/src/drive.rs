@@ -223,7 +223,8 @@ where
         established: Some(established_tx),
     };
     if sessions.send(session).is_err() {
-        gap.abort();
+        stop.trip(CloseCause::new(CloseKind::LocalClose));
+        drop(gap.await);
         return CloseCause::new(CloseKind::LocalClose);
     }
     let stop_read = Arc::clone(&stop);
@@ -311,7 +312,7 @@ where
     };
     drop(in_tx);
     let write_cause = writer.await.ok();
-    gap.abort();
+    drop(gap.await);
     stop.cause().unwrap_or(write_cause.unwrap_or(read_cause))
 }
 
@@ -347,6 +348,10 @@ async fn gap_owner<C>(
     }
     tokio::select! {
         biased;
+        _cause = stop.wait() => {
+            ignore(owner.deregister());
+            return;
+        }
         result = established => {
             if result.is_ok() {
                 ignore(owner.deregister());
@@ -403,7 +408,8 @@ impl Stop {
 
     async fn wait(&self) -> CloseCause {
         loop {
-            let notified = self.notify.notified();
+            let mut notified = std::pin::pin!(self.notify.notified());
+            notified.as_mut().enable();
             if let Some(cause) = self.cause() {
                 return cause;
             }
@@ -418,12 +424,12 @@ impl Stop {
 pub(crate) struct ByteQueue {
     inner: Arc<Mutex<ByteQueueInner>>,
     data: Arc<tokio::sync::Notify>,
-    closed: Arc<AtomicBool>,
 }
 
 struct ByteQueueInner {
     limit: usize,
     used: usize,
+    closed: bool,
     items: VecDeque<Vec<u8>>,
 }
 
@@ -439,19 +445,22 @@ impl ByteQueue {
             inner: Arc::new(Mutex::new(ByteQueueInner {
                 limit,
                 used: 0,
+                closed: false,
                 items: VecDeque::new(),
             })),
             data: Arc::new(tokio::sync::Notify::new()),
-            closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub(crate) fn try_push(&self, bytes: Vec<u8>) -> Result<(), PushError> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(PushError::Closed);
-        }
         let n = bytes.len();
         let mut inner = self.inner.lock().expect("outbound");
+        if inner.closed {
+            return Err(PushError::Closed);
+        }
+        if n == 0 {
+            return Ok(());
+        }
         let Some(next) = inner.used.checked_add(n) else {
             return Err(PushError::Full);
         };
@@ -471,19 +480,20 @@ impl ByteQueue {
     }
 
     pub(crate) fn close(&self) {
-        self.closed.store(true, Ordering::Release);
+        self.inner.lock().expect("outbound").closed = true;
         self.data.notify_waiters();
     }
 
     pub(crate) async fn pop(&self) -> Option<Vec<u8>> {
         loop {
-            let notified = self.data.notified();
+            let mut notified = std::pin::pin!(self.data.notified());
+            notified.as_mut().enable();
             {
                 let mut inner = self.inner.lock().expect("outbound");
                 if let Some(bytes) = inner.items.pop_front() {
                     return Some(bytes);
                 }
-                if self.closed.load(Ordering::Acquire) {
+                if inner.closed {
                     return None;
                 }
             }
