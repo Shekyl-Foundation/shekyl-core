@@ -18,7 +18,7 @@ and **`CTW-Q`** (questions), registered in `IMPLEMENTATION_INDEX.md` §2 with
 this file (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a)). Parent
 plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) — the **DRS-E3** node of
 the lane graph (`E1 → E2 → E3 → E4 → E5`), *"curve storage only"*; the
-boundary statement it builds against is [`DRS_E1_SCURVE.md`](DRS_E1_SCURVE.md)
+boundary statement it builds against is [`DRS_E1_SCURVE.md`](../completed/DRS_E1_SCURVE.md)
 §2.3. Template: the DRS-E1 pre-flight shape (`CHAIN_RULES_CRATE.md` §7.5.1
 applied to a store increment), as `DRS_E1_SCURVE.md` used it.
 

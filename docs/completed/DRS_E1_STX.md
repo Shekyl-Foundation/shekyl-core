@@ -1,6 +1,6 @@
 # DRS-E1 S-TX — transaction blob and existence: increment plan and Round-0 pre-flight
 
-**Status:** CLOSED-as-record — **archived 2026-09-21 by S-CURVE's pre-flight PR** ([`DRS_E1_SCURVE.md`](../design/DRS_E1_SCURVE.md) §2.5, the reader this row held the file in `design/` for); owns no open residue. History follows. **Increment LANDED 2026-09-19** (the §3 contract is code: `store/tx_reads.rs`, `store/read.rs` T1–T6, `store/tx_read_tests.rs`, the STX-9 gate `check_store_unlock_time_projection.py`; no layout change). Stays in `design/` until S-CURVE's pre-flight has read it (archive-or-contract per index §8 then). History: **Round 0 (pre-flight) executed 2026-09-19** at `dev` =
+**Status:** CLOSED-as-record — **archived 2026-09-21 by S-CURVE's pre-flight PR** ([`DRS_E1_SCURVE.md`](DRS_E1_SCURVE.md) §2.5, the reader this row held the file in `design/` for); owns no open residue. History follows. **Increment LANDED 2026-09-19** (the §3 contract is code: `store/tx_reads.rs`, `store/read.rs` T1–T6, `store/tx_read_tests.rs`, the STX-9 gate `check_store_unlock_time_projection.py`; no layout change). Stays in `design/` until S-CURVE's pre-flight has read it (archive-or-contract per index §8 then). History: **Round 0 (pre-flight) executed 2026-09-19** at `dev` =
 `8b48f574c` (the tree that merged PR #783, S-OUT-KI); re-based through `6c41bf820`
 (#784 … #790; the increment cut from `fbc92287a`). **Round 1 RULED 2026-09-19** (maintainer,
 on PR #786; §9, each ruling line-local): **Q1 B** (`Option`, the counter-rule's
