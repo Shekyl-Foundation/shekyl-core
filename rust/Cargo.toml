@@ -111,6 +111,17 @@ members = [
     # See docs/design/P2P_TIMING_ENGINE.md.
     "shekyl-timing-engine",
 
+    # D5's thread-budget ledger. Dependency-free: the timing engine
+    # records its one thread here and does not gain a Tokio runtime to
+    # do it. See docs/design/P2P_TRANSPORT_LAYER.md.
+    "shekyl-thread-ledger",
+
+    # D5's one runtime constructor. The worker count and the blocking
+    # cap are inputs. The pool is a row on shekyl-thread-ledger.
+    # Daemon-RPC and Tor-control still build their own until their
+    # budgets are measured. See docs/design/P2P_TRANSPORT_LAYER.md.
+    "shekyl-runtime",
+
     # Peer-attribution policy (PWD-B7): whether a rejection justifies severing
     # the connection that carried it. Deliberately NOT in shekyl-relay, whose
     # charter is the relay scheduler, and NOT in shekyl-consensus, because two

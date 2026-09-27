@@ -4652,6 +4652,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-runtime"
+version = "3.1.0"
+dependencies = [
+ "shekyl-thread-ledger",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-scanner"
 version = "3.1.0"
 dependencies = [
@@ -4760,11 +4768,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-thread-ledger"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-timing-engine"
 version = "3.1.0"
 dependencies = [
  "criterion",
  "proptest",
+ "shekyl-thread-ledger",
 ]
 
 [[package]]
