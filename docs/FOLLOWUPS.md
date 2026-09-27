@@ -14,6 +14,10 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **W₂ measured single-attempt fetch at one object size, so the per-byte cost cannot be separated from circuit setup (`SHT-7`, `U1a`).** Cold p99 48.27 s and soak p99 86.06 s for a 3.33 MB shard (`ARCHIVAL_SHARD_FETCH.md`:1091-1095) is one equation in two unknowns, so `T`'s hard transport ceiling is an interval (~[140, 490] at the heavy end of composition) that contains the current `T = 200`. Two or three object sizes separate `t_fixed` from the per-byte rate, drop the 180 KB/s "floor from a null result" out of every derivation leaning on it, and re-ground `L`'s fetch span per byte — `L`'s span was sized on "~20 s for 3.33 MB", which the same page's measurement contradicts by 2.4–4.3×. The harness exists (PR #746).
+  - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §3 `U1a`
+  - Target: pre-genesis
+
 - **No authority exists for an honest server's sustained egress over Tor on the rule-76 floor device (`SHT-5`).** The only transport figure in the tree is a requester-side burst floor near 180 KB/s, "a floor from a null result, not a sustained figure" (`ARCHIVAL_SHARD_FETCH.md`:1079). `U1b` — whether a `P` on a Pi 4 can serve its epoch's challenge, organic and band-2 reads at the selected `T` — is a bound with no value, and it cannot be closed by reasoning. A measurement at the drawable-pair count the epoch implies would close it.
   - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §3 `U1b`
   - Target: pre-genesis

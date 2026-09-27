@@ -1,7 +1,14 @@
 # `T` — deriving the archival shard cardinality
 
 **Status:** OPEN — Round 0 executed 2026-09-26 at `b72aac2fc` (the composition
-arm with `origin/dev@ad557ac5a` merged in). `SHT-Q1` (the partition domain) is
+arm with `origin/dev@ad557ac5a` merged in); **AMENDED on review the same day
+(at `9e8c0bee0`)** — the conclusion moved. `U1a` was derived against the wrong
+transport figure: W₂ has *measured* single-attempt fetch since 2026-09-16, and
+on the measured numbers `U1a` is **unresolved at `T = 200`** rather than three
+orders of magnitude slack. The selection rule is re-pointed at the **lower**
+edge with the asymmetry argument it was missing, `SHT-Q1`'s price for the
+ordinal domain is **withdrawn** (dev already does the lookup it was charged
+for), and `SHT-7` is added. `SHT-Q1` (the partition domain) is
 **posed, not ruled** — it is steering's, and it comes before the bounds because
 it decides which constraints exist. Findings `SHT-1`…`SHT-6` are at-pin
 findings of this round. Identifier families **`SHT-`** (findings) and
@@ -56,7 +63,8 @@ Numerics this round must reason against, all read at source:
 | `L` | `archival_attestation_anchor_lag = 4` blocks, of which **two blocks are the fetch-plus-retry span** | `config/consensus_constants.json:33`; [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1074-1090 |
 | `N` | in-flight fetch cap `8` (`shekyl_p_fetch::MAX_INFLIGHT`) | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):6, `:796` |
 | holdings cap | `MAX_HOLDINGS_SHARDS = 4096`, over `ShardSet(Vec<u64>)` | `rust/shekyl-types/src/archival.rs:73`, `:205` |
-| transport figure | **a burst floor near 180 KB/s** — "a floor from a null result, not a sustained figure" | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1079 |
+| transport figure (the one `L`'s span was sized on) | **a burst floor near 180 KB/s** — "a floor from a null result, not a sustained figure", quoted as "~20 s for 3.33 MB" | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1079 |
+| **transport figure, MEASURED** | **W₂, 2026-09-16, single-attempt, PR #746: cold p99 = 48.27 s, soak p99 = 86.06 s** for a 3.33 MB shard — i.e. **69.0 / 38.7 KB/s effective**, 2.4–4.3× worse than the 20 s premise on the same page | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1091-1095 |
 | good per spend | ~16.7 KB/tx = ~6.1 KB prunable + ~10.6 KB `pqc_auths` of a ~17–18 KB 2-in/2-out | [`ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md`](../completed/ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md):525 |
 
 ---
@@ -162,12 +170,17 @@ shard. And "ordinal" must count **all four** classes; if it counted only
 |---|---|---|
 | **Closure liveness** | A shard closes within **at most `T` blocks** whatever the usage — at `T = 200`, ≤ 400 min. The frontier shard is never stuck. | Close cadence depends **only on usage**. A quiet chain keeps its frontier shard open indefinitely: unbondable, and retained on every daemon because discard needs `close_epoch`. Against Q2's freeze-one-epoch rule and `discard(k) ⇔ current_epoch ≥ close_epoch(k) + 2`, an open frontier shard simply never enters the pipeline. Whether that is harmless (the good is small, so "no market" is the correct answer) or a gap (an unbounded universal-retention tail on a quiet chain) is the ruling's question. |
 | **The zero floor** | Admits coinbase-only shards with **zero good**, which a run of `T` empty blocks produces. Nothing in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) says what the draw does with one — drawable and trivially passable, unposeable, or unbondable. Unresolved at the pin. | Unrepresentable by the table above. |
-| **Consensus touch points** | `close_height`, the serve-credit preimage terms `(k·T, (k+1)·T)`, bond admission's closed-shard predicate (ruled 2026-09-19, unbuilt), and prune's range mapping — which must already tolerate interleaved coinbases having no body rows. | Same four, **all re-keyed**. `close_height(k)` becomes the height of the block containing listed ordinal `(k+1)·T − 1`; the preimage terms are ordinals, not ids; and `prune.rs:415-416`, `:490-493` are written against (A) — `⌊id / T⌋` becomes `⌊(id − height − 1) / T⌋`, which needs the height at the id, so the mapping stops being pure arithmetic on the id. That is the price of (B): a consensus-touching change to the only production consumer of `T`. |
+| **Consensus touch points** | `close_height`, the serve-credit preimage terms `(k·T, (k+1)·T)`, bond admission's closed-shard predicate (ruled 2026-09-19, unbuilt), and prune's range mapping — which must already tolerate interleaved coinbases having no body rows. Note `first_tx_id` must **add** the coinbase term (`listed + h + 1`) at every one of those sites. | Same four, re-keyed — but **cheaper, not dearer, and the round's first reading of this was wrong.** `cumulative_tx_count` *is* the non-coinbase ordinal (`prune.rs:421-428`, `listed_before`'s own contract), so under (B) a boundary is `⌊cumulative_tx_count / T⌋` read straight off the stored cell, with **no coinbase term to add**. Mapping a boundary ordinal back to a storage id is `height_of_tx_id`'s binary search over the running total — which **dev already performs under (A)**, on the `h_scarce` path (`prune.rs:490-500`). So (B) does not introduce a height lookup; it removes an addition from four sites. |
 | **Sizing** | `SHT-2`: the shard's good scales with usage; 3.33 MB is the saturation case. | The shard's good is `T` × per-spend good in **any** era — the case the JSON comment describes. |
 
-**Recommendation withheld.** The trade is closure liveness and a prune re-key
-(favouring A) against the zero floor and a size that means something
-(favouring B). Both legs are steering's call.
+**Recommendation withheld — but the trade is now one-sided on everything except
+liveness.** The prune-re-key cost charged against (B) above is **withdrawn**:
+the lookup it was charged for is already in dev. So (B) wins the zero floor and
+wins a size that means something (`SHT-2`), at the price of **closure liveness
+on a quiet chain and nothing else**. `SHT-Q1` therefore reduces to a single
+question for steering: *is an indefinitely-open frontier shard — unbondable,
+undiscardable, retained on every daemon — acceptable on a quiet chain, given
+that its good is small and "no market for it" may be the correct answer?*
 
 ---
 
@@ -223,7 +236,19 @@ At `T = 200`, one record covers 819,200 ids — about 3.1 years of chain at
 every closed, final shard — a configuration of the same store",
 [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md):463), not listed on a wire. What
 the cap prices is a **large market archiver's persona count**, which is a
-privacy cost, not a capacity one. Per-shard consensus state (`archival_r_market`
+privacy cost, not a capacity one.
+
+**The ceiling stated directly**, because a falsifier is not a substitute for
+the arithmetic: one bond record can hold at most
+
+> `MAX_HOLDINGS_SHARDS × T × bytes-per-tx = 4096 × 200 × 16.7 KB ≈ 13.7 GB`
+
+at `T = 200` — the most history a single persona can be obliged to. Whether
+forcing a larger archiver into a second persona is a **feature** (gate-6
+firewall cost, deliberately paid) or a **cost** (overhead on the honest
+operator who wants to hold more) is **a ruling, not a measurement**, and it is
+not one this round makes. Either way it couples `T` to a cap that freezes at
+genesis, so it belongs in §5. Per-shard consensus state (`archival_r_market`
 rows, serve-credit rows per `(P, shard, E)`, settlement work per epoch) scales
 as rows ∝ shards × epochs ∝ `X/T` × epochs, so every one of those pulls the
 same direction: larger `T`, fewer rows. *Domain:* both. *Grade:* **soft** —
@@ -257,28 +282,51 @@ because the conclusion is the one to distrust:**
   and F32's reason 2 (`T × MAX_TX_SIZE` as an in-flight ceiling at `N = 8`) was
   **refuted** on exactly that ground (`:897-901`). So the in-flight cost is one
   transaction, not `T`.
-- Where `T` **does** enter a ruled derivation is `L = 4`: its fetch-span
-  component is "two blocks of fetch-plus-retry (four minutes)", chosen against
-  "~20 s for 3.33 MB" at the 180 KB/s floor
-  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1074-1090). So
+- **What `T` is actually bounded by, on measured data.** W₂ has *measured*
+  single-attempt fetch since 2026-09-16 and this round's first pass missed it,
+  deriving the row against the 180 KB/s burst floor instead
+  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1091-1095): **cold
+  p99 = 48.27 s, soak p99 = 86.06 s** for a 3.33 MB shard, graded against a
+  **one-block (120 s)** criterion — "both under 120 s". That is 69.0 / 38.7 KB/s
+  effective, **2.4–4.3× worse than the 20 s premise** on the same page.
 
-> `T ≤ (span budget × throughput) / bytes-per-tx`
+  A single object size cannot separate circuit setup from transfer, and only
+  the second scales with `T`:
 
-  The full two-block span gives 240 s × 180 KB/s = 43 MB → `T ≲ 2,600` at
-  16.7 KB/tx. But the span must also absorb `SF-D6`'s bounded retries; if
-  retries may take two thirds of it, the single-attempt budget is ~80 s →
-  `T ≲ 860`. At the heavy end of composition (~2× the mean, L19) halve those:
-  **`T ≲ 430–1,300`**. The assumed retry share is stated, not derived — it is
-  `SF-D6`'s budget, which is a design quantity this round does not own.
+> `t(T) = t_fixed + (T · bytes-per-tx) / v`, with `t(200) ∈ {48.27, 86.06} s`
+
+  One measurement, two unknowns — so the bound is an interval, not a number.
+  At the **heavy end of composition** (~2× the mean, L19), against the 120 s
+  criterion:
+
+| calibration | `t_fixed` | implied `v` | heavy-end ceiling |
+|---|---|---|---|
+| soak p99 | 0 s | 38.7 KB/s | **`T ≲ 139`** |
+| soak p99 | 60 s | 127.8 KB/s | `T ≲ 230` |
+| cold p99 | 0 s | 69.0 KB/s | `T ≲ 248` |
+| cold p99 | 30 s | 182 KB/s | `T ≲ 491` |
+
+  So **the heavy-end ceiling lies somewhere in ~[140, 490], and `T = 200` is
+  inside that band.** `U1a` is therefore **unresolved at 200** — it may already
+  be violated at the heavy end (the `t_fixed = 0` reading) or clear by 2.5×
+  (the large-fixed-cost reading), and *nothing in the tree says which*. What it
+  is **not** any longer is slack: the round's first pass reported ~300× headroom
+  from `CHALLENGE_RESPONSE_BLOCKS`, and the measured single-attempt criterion
+  replaces that with a factor of at most ~2.5 either way.
+
+  `L`'s two-block fetch-plus-retry span is the outer envelope, but deriving `T`
+  from it would be **circular** — see `SHT-7`: that span was sized on the same
+  retired 3.33 MB byte count `T` itself came from.
 
 *Domain:* both — the read is of a shard's bytes either way, though under (A)
-the same `T` buys fewer bytes. *Grade:* **hard** — exceeding it makes honest
-witness misses systematic, and `L`'s own ruling forbids absorbing that by
-raising `L` ("the answer is **not** raise `L`"). *Falsifier:* the **W₂ /
-PD-F-2 fetch-latency dispersion measurement**, already owed as `L`'s falsifier
-(`config/consensus_constants.json:33`) — it is this round's falsifier too, and
-it is the measurement that converts `U1a` from a floor-based estimate into a
-bound.
+the same `T` buys fewer bytes. *Grade:* **hard, and possibly already violated**
+— exceeding it makes honest witness misses systematic, and `L`'s own ruling
+forbids absorbing that by raising `L` ("the answer is **not** raise `L`").
+*What closes it:* **W₂ re-run at two or three object sizes.** One size gives one
+equation in two unknowns; two sizes separate `t_fixed` from `v`, the 180 KB/s
+floor drops out of every derivation that currently leans on it, and this row
+becomes a number. The harness exists (PR #746). This is the single measurement
+the round most wants, and it is cheap.
 
 **`U1b` — the server's egress. No authority exists in the tree.** An honest `P`
 on the rule-76 floor device (Pi 4, whose "binding constraint is uplink and Tor
@@ -327,38 +375,60 @@ arm in which the per-band verdict at fixed headroom degrades monotonically in
 
 ## 4. The feasible interval, and a proposed selection rule
 
-**Under (A) and under (B) alike**, the only hard bound with a number is `U1a`:
-`T ≲ 430–1,300` at the heavy end, `≲ 860–2,600` at the mean, resting on a
-throughput *floor from a null result*. Every lower bound is soft and sits below
-200 (`L1` in the low hundreds on sim-sourced parameters; `L2`/`L3` pull upward
-without a floor). `U1b` has no value. So:
+**Under (A) and under (B) alike**, the only hard bound with numbers is `U1a`,
+and on measured data its heavy-end ceiling is **~[140, 490]** — a band that
+**contains 200**. `L1` sits in the low hundreds on sim-sourced parameters;
+`L2`/`L3` pull upward and `L2` now has a stated ceiling of its own; `U1b` still
+has no value. So the corrected state is:
 
-> **`T = 200` is inside the feasible interval, and the interval's only
-> quantified edge is 2–13× away from it.** The number is defensible; what it is
-> not, today, is *derived*.
+> **`T = 200` is not comfortably inside the feasible interval — it is sitting on
+> the edge of it, and which side is unresolved.** At the pessimistic reading of
+> the measurement (all of the 86 s is transfer) the heavy end of composition
+> already violates the one-block criterion at `T ≳ 139`. At the optimistic
+> reading (most of it is circuit setup) there is 2.5× of room. The number is
+> still not *derived*; what changed on review is that it is no longer obviously
+> *safe* either.
 
-That is the honest state, and it is why "200 is fine" must not be the round's
-conclusion: the interval is wide because two of its edges are unmeasured, not
-because the constraints are slack.
+### The direction, which the first pass left unargued
 
-**Proposed selection rule** (steering's to accept, amend or reject). Replace
-"as big as the old leaf segment" with the obligation itself:
+A rule of the form "the largest `T` transport allows" is the same move as "as
+big as the old segment" with a better-sourced ceiling. The direction has to be
+argued, and the tree already contains the argument in `L`'s own shape — *"the
+asymmetry decides the direction"*:
 
-> Pick `T` so that **one whole-shard possession read completes in a single
-> attempt, at the stated transport floor, inside `SF-D6`'s single-attempt share
-> of `L`'s fetch span, at the heavy end of composition, with a stated margin.**
-> `T = ⌊ (span_share × throughput_floor × margin) / bytes_per_tx_heavy ⌋`.
+- **Too large.** Honest witness misses: **unpriced, and they land on
+  operators**. `L`'s ruling refuses to absorb them by raising `L`. They are
+  invisible to the operator who suffers them, which is the same failure shape
+  rule 76 exists to refuse — a cost that sorts by hardware and never surfaces.
+- **Too small.** `L2`/`L3` rows: settlement rows, `r_market` rows, personas per
+  large archiver. **Node-local, visible, and recoverable** — they cost disk and
+  bookkeeping, and a wrong choice can be re-pinned without anyone silently
+  missing a witness.
 
-Why this rule and not another: it is the **only** constraint that is hard, that
-has a source, and that both domains share; it names `L` as the coupling rather
-than hiding it; and every quantity in it is either already ratified
-(`L`, `SF-D6`'s budget, 16.7 KB/tx) or is the measurement already owed
-(throughput). Its margin is a judgement, stated as one, exactly as `L = 4`
-states its own.
+The asymmetry is decisive and it points **down**: err small on `T`. Which is
+also the objective this round was opened against — *the smallest unit of
+archival commitment a participant can take on*.
+
+**Proposed selection rule** (steering's to accept, amend or reject):
+
+> **Pick the smallest `T` that clears `L1`'s composition floor and `L2`'s
+> bookkeeping floor, subject to `U1a` shown clear at the heavy end of
+> composition by measurement, not by a floor.**
+
+Why this and not the ceiling-seeking form: it takes the cheap direction of the
+asymmetry above; it does **not** feed `L`'s 20 s premise — and so the retired
+3.33 MB — back into `T`'s own bound, which the ceiling-seeking form did
+(`SHT-7`); and it makes the binding quantity a *floor* that sim and bookkeeping
+arithmetic can both produce, with the hard ceiling as a check rather than as the
+selector. It cannot be evaluated until W₂ runs at more than one object size,
+and saying so is the point.
 
 **Pre-registered falsifiers on any `T` this round selects.**
-1. The W₂ / PD-F-2 dispersion measurement lands such that the single-attempt
-   span at the selected `T` exceeds its share of `L` — `U1a` violated.
+
+1. W₂ at multiple object sizes resolves `t_fixed` such that the heavy-end
+   single-attempt read at the selected `T` exceeds the one-block criterion —
+   `U1a` violated. **This is the live one: at the pessimistic reading it is
+   already true at `T = 200`.**
 2. A sustained serve-throughput figure on the floor device at which `U1b` binds
    below the selected `T`.
 3. A measured `CV_tx` whose `L1` bound exceeds the selected `T`.
@@ -382,6 +452,11 @@ that gate's bookkeeping:
   measurement upward. **They must re-pin together, or `T` must be selected
   inside the span `L` already states** — the selection rule in §4 takes the
   second option, which is why it is the cheaper one.
+- **`T` ↔ `MAX_HOLDINGS_SHARDS`** (`= 4096`, frozen in `shekyl-types`). Their
+  product times bytes-per-tx is the most history one bond can carry (~13.7 GB at
+  `T = 200`, §3 `L2`). A `T` re-pin moves that ceiling without touching the cap,
+  so whichever of the two is intended to carry the obligation must be said out
+  loud. Missing from the first pass's coupling list.
 - **`T` ↔ `SEB`** only through `U3`, and only under domain (B).
 - No coupling to `D_max`: `T` appears in no reorg-depth argument.
 
@@ -394,9 +469,11 @@ that gate's bookkeeping:
 | **`SHT-1`** | `T = 200` is 3.33 MB ÷ 16.7 KB/tx, and 3.33 MB is the **retired leaf segment's** size (`SEGMENT_LEAF_COUNT × ~128 B`). `T`'s justification is inheritance from a retired geometry. 16.7 KB/tx is **not** circular — it is a component estimate predating `T` by ten days. | CONFIRMED — the round's subject |
 | **`SHT-2`** | The JSON comment's *"typical shard at ~16.7 KB/tx lands near 3.33 MB"* holds only under the **non-coinbase ordinal**. Under the landed storage-id domain, 3.33 MB is the *saturation* case; at 1 listed tx/block a shard holds ~1.7 MB. The sizing rationale presumes the answer to `SHT-Q1`. | CONFIRMED |
 | **`SHT-3`** | `SF-D7` still states *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"* ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):183). Item 5 retired the whole-shard materialise and refuted F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`. | STALE TEXT on a RULED row — owner `SF-` |
-| **`SHT-4`** | `U1`'s binding coupling is to `L`, **not** to `CHALLENGE_RESPONSE_BLOCKS`. The response deadline gives ~300× slack (10.8 GB budget vs 3.34 MB); the memory leg is retired. Recorded because the expectation going in was the opposite, and the arithmetic is what makes the conclusion checkable rather than merely asserted. | CONFIRMED — inverts the round's prior |
+| **`SHT-4`** | `U1` is not bounded by `CHALLENGE_RESPONSE_BLOCKS` (500 blocks ⇒ a 10.8 GB budget against a 3.34 MB shard) and the memory leg is retired by item 5. **AMENDED on review:** the first pass then derived the real bound against the 180 KB/s *burst floor* and reported the row as slack, having missed W₂'s **measured** single-attempt figures on the same page (`:1091-1095`). On the measurement the heavy-end ceiling is ~[140, 490] and **`T = 200` is inside it** — `U1a` is unresolved at 200, not slack. The steering prediction that `U1` is the bound most likely to set `T` is **reinstated**; what was wrong in it was only the denominator. | CONFIRMED, then AMENDED — the amendment is the round's headline |
+| **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge |
 | **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
+| **`SHT-Q1` price, withdrawn** | The first pass charged (B) with making prune's mapping "stop being pure arithmetic on the id". **Wrong:** `cumulative_tx_count` *is* the non-coinbase ordinal (`prune.rs:421-428`), and `height_of_tx_id`'s binary search over the running total is already on dev's `h_scarce` path (`prune.rs:490-500`). Under (B) a boundary reads straight off the stored cell with **no coinbase term to add**, so (B) removes an addition from four sites rather than adding a lookup. `SHT-Q1`'s only remaining price is **closure liveness on a quiet chain**. | WITHDRAWN on review |
 
 ---
 
@@ -413,3 +490,8 @@ Each is a FOLLOWUPS row, not work for this round:
 - Any change to channel 1.
 - Composition "attacks" — A4/W9 CLEARED, §12.11.
 - `SHT-5`'s measurement, and `SHT-3`'s stale-text correction in the `SF-` doc.
+- **W₂ re-run at two or three object sizes** (`SHT-7` / `U1a`). One size is one
+  equation in two unknowns, which is why `U1a` is an interval rather than a
+  number and why the 180 KB/s floor is still load-bearing in `L`'s text. The
+  harness exists (PR #746). This is the measurement that would make a derivation
+  possible, and it also re-grounds `L`'s span per byte.
