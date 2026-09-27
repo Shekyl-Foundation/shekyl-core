@@ -15,8 +15,7 @@
 //!   [`TreeFrontier::last_chunk_indices`]'s arithmetic, so the reader and
 //!   the grower cannot disagree about it. A layer whose last chunk is
 //!   absent is **SI-12**'s family — the summary and the layer table
-//!   disagree — raised as [`StoreInvariant::CellCorrupt`] on the layer
-//!   table.
+//!   disagree — raised as SI-7 (`CellCorrupt`) on the layer table.
 //! - [`leaf_count_at`] — `curve_tree_leaf_counts[h]`, keyed exactly as
 //!   `curve_tree_roots[h]` is (SCW-19): the count *going into* block `h`.
 //!   `0` at height `0` by definition, `AboveTip` past `tip + 1`, and an
@@ -39,17 +38,18 @@
 use redb::ReadableTable;
 use shekyl_chain_rules::{AtHeight, BlockOutputs, LeafSource, TreeFrontier};
 use shekyl_types::{BlockHeight, GlobalOutputIndex, TxHash};
-use shekyl_wire::tx_extra::{admitted_leaf_blob, parse, pqc_leaf_entries_per_output};
+use shekyl_wire::tx_extra::{
+    admitted_leaf_blob, parse, pqc_leaf_entries_per_output, PQC_LEAF_POINT_BYTES,
+};
 use shekyl_wire::Transaction;
 
 use crate::codec::{BlockInfo, CodecError, LeafCount};
-use crate::ids::{ChunkIndex, LayerChunk, OutputSlot, TreeLayer};
-use crate::schema::{CURVE_TREE_LAYERS, CURVE_TREE_LEAF_COUNTS, OUTPUT_AMOUNTS};
+use crate::ids::{ChunkIndex, LayerChunk, TreeLayer};
+use crate::schema::{CURVE_TREE_LAYERS, CURVE_TREE_LEAF_COUNTS};
 
 use super::at_index::AtIndex;
 use super::chain_reads::{self, absent, undecodable, ReadFault, ReadTables};
 use super::curve_reads;
-use super::error::StoreInvariant;
 use super::output_reads;
 use super::tx_reads;
 
@@ -136,6 +136,12 @@ pub(super) fn outputs_at<T: ReadTables>(
 /// index cannot hand the drain another transaction's outputs, or pair one
 /// output's `CM` with another's `O` and `C`, and grow a wrong root where a
 /// conforming store would have halted.
+///
+/// `O` and `C` come from [`output_reads::output_at`], which already checks
+/// the dense count and the `output_id` join (SI-9). The origin check is a
+/// different fact: a decoded `output_txs` row that names another transaction
+/// is SI-7 on that cell, the same shape as a `tx_indices` row at the wrong
+/// height.
 fn sources_of<T: ReadTables>(
     txn: &T,
     tx: &Transaction,
@@ -170,36 +176,42 @@ fn sources_of<T: ReadTables>(
     if entries.len() != n_outputs {
         return Err(pruned_invalid("leaf field disagrees with the output count"));
     }
-    let outputs_table = txn.table(OUTPUT_AMOUNTS)?;
     let mut sources = Vec::with_capacity(n_outputs);
     for (position, (index, entry)) in indices.into_iter().zip(entries).enumerate() {
         // SOK-2: one bucket, so the amount index is the global index.
         let output = GlobalOutputIndex::from_raw(index.to_raw());
-        // The primary row owns the index (SI-9): it must name this
-        // transaction at this position, or `tx_outputs` points at an output
-        // that is not the transaction's.
         let origin = match output_reads::origin_at(txn, output)? {
             AtIndex::Recorded(origin) => origin,
-            AtIndex::BeyondCount => return Err(ReadFault::Invariant(StoreInvariant::IdNotFresh)),
+            AtIndex::BeyondCount => {
+                return Err(index_invalid(
+                    "tx_outputs",
+                    "tx_output_indices",
+                    "an amount index is past the output count",
+                ));
+            }
         };
         let owned = origin.tx_hash == *hash
             && usize::try_from(origin.local_index.to_raw()).ok() == Some(position);
         if !owned {
-            return Err(ReadFault::Invariant(StoreInvariant::IdNotFresh));
+            return Err(index_invalid(
+                "output_txs",
+                "out_tx",
+                "the row does not name this transaction at this output position",
+            ));
         }
-        let slot = OutputSlot::confidential(output);
-        let Some(guard) = outputs_table.get(slot.key())? else {
-            return Err(ReadFault::Invariant(StoreInvariant::IdNotFresh));
+        // The join and the dense count are SI-9, inside `output_at`.
+        let record = match output_reads::output_at(txn, output)? {
+            AtIndex::Recorded(record) => record,
+            AtIndex::BeyondCount => {
+                return Err(index_invalid(
+                    "tx_outputs",
+                    "tx_output_indices",
+                    "an amount index is past the output count",
+                ));
+            }
         };
-        let record = guard
-            .value()
-            .decode()
-            .map_err(|cause| undecodable("output_amounts", cause))?;
-        if record.output_id.to_raw() != output.to_raw() {
-            return Err(ReadFault::Invariant(StoreInvariant::IdNotFresh));
-        }
-        let mut pqc_leaf_commitment = [0u8; 32];
-        pqc_leaf_commitment.copy_from_slice(&entry[..32]);
+        let mut pqc_leaf_commitment = [0u8; PQC_LEAF_POINT_BYTES];
+        pqc_leaf_commitment.copy_from_slice(&entry[..PQC_LEAF_POINT_BYTES]);
         sources.push(LeafSource {
             output,
             key: record.pubkey.to_bytes(),

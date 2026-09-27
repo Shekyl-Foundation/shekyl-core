@@ -42,10 +42,12 @@
 //! # What this is not
 //!
 //! Not a rule and not a coverage row (`DRS_E3_CURVE_WRITER.md` §3.1, RULED):
-//! growth refuses no input, it propagates faults. It is the operand F17,
-//! I12, I13 and I15 read. The one thing it refuses is a frontier whose shape
-//! does not match its leaf count ([`GrowFault::FrontierShape`]) — a view
-//! that could not describe the tree, which is the caller's `Corrupt`.
+//! growth refuses no block, it propagates faults. It is the operand F17,
+//! I12, I13 and I15 read. A frontier whose shape does not match its leaf
+//! count, or a chunk hash off its curve, is [`FrontierFault`] — the view
+//! could not describe the tree, which the caller raises as `Corrupt`.
+//! [`GrowFault::NoLeaves`] is the caller's empty batch, not a property of
+//! stored bytes, and does not become that `Corrupt`.
 
 use shekyl_fcmp::tree::{
     chunk_width, hash_grow_helios, hash_grow_selene, helios_hash_init,
@@ -163,33 +165,31 @@ impl TreeGrowth {
     }
 }
 
-/// Why a grow could not run.
+/// A frontier the view served cannot be grown. Both arms are properties of
+/// stored bytes, so the store halts and names the cell. [`GrowFault::NoLeaves`]
+/// is not one of them: an empty batch is the caller's, and the drain does
+/// not ask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GrowFault {
-    /// The frontier's `last_chunks` length is not the layer count its leaf
-    /// count implies — the view described a tree that cannot exist.
-    FrontierShape {
+pub enum FrontierFault {
+    /// `last_chunks` is not the layer count `leaf_count` implies.
+    Shape {
         /// What the frontier carried.
         layers: usize,
         /// What its leaf count implies.
         expected: u8,
     },
-    /// A stored chunk hash or a leaf scalar did not deserialise as a point
-    /// or a field element of its layer's curve — persisted bytes no
-    /// conforming tree holds.
+    /// A stored chunk hash or a leaf scalar is not a point or a field
+    /// element of its layer's curve.
     NotOnCurve {
         /// The layer whose input failed (`0` for a leaf scalar).
         layer: u8,
     },
-    /// Nothing to append. Callers skip the grow at a height that drained
-    /// nothing; asking anyway is a caller bug, named rather than a no-op.
-    NoLeaves,
 }
 
-impl core::fmt::Display for GrowFault {
+impl core::fmt::Display for FrontierFault {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::FrontierShape { layers, expected } => write!(
+            Self::Shape { layers, expected } => write!(
                 f,
                 "the tree frontier carries {layers} layer(s) but its leaf count implies {expected}"
             ),
@@ -197,9 +197,32 @@ impl core::fmt::Display for GrowFault {
                 f,
                 "a stored chunk hash or leaf scalar at layer {layer} is not a point or field element of that layer's curve"
             ),
+        }
+    }
+}
+
+/// Why [`grow`] could not run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrowFault {
+    /// The frontier the caller served cannot be grown ([`FrontierFault`]).
+    Frontier(FrontierFault),
+    /// Nothing to append. Callers skip the grow at a height that drained
+    /// nothing; asking anyway is a caller bug, named rather than a no-op,
+    /// and it is not a corrupt table.
+    NoLeaves,
+}
+
+impl core::fmt::Display for GrowFault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Frontier(fault) => fault.fmt(f),
             Self::NoLeaves => f.write_str("grow called with no leaves to append"),
         }
     }
+}
+
+fn off_curve(layer: u8) -> GrowFault {
+    GrowFault::Frontier(FrontierFault::NotOnCurve { layer })
 }
 
 /// The chunk count of layer `layer` in a tree of `leaf_count` leaves, or
@@ -248,11 +271,43 @@ fn grow_chunk(
 }
 
 /// A chunk the grow changed at one layer, with the hash it had before if
-/// it existed (only the layer's previously-last chunk can).
+/// it existed (only the layer's previously-last chunk can). `Copy`: a
+/// parent collects its children by value, including one unchanged sibling
+/// copied off the frontier.
+#[derive(Clone, Copy)]
 struct Changed {
     chunk: u64,
+    /// Hash before this grow, when the chunk already existed.
     old: Option<ChunkHash>,
     new: ChunkHash,
+}
+
+/// The child layer's old last chunk, when this grow did not rewrite it.
+///
+/// A full chunk is absent from `changed`. A **new** parent that spans it
+/// must hash it — it is the pre-existing sibling a parent built from
+/// `hash_init` would otherwise drop. An existing parent already has that
+/// sibling in its hash and must not see it again. `None` when the chunk
+/// was rewritten or the child layer was empty.
+fn unchanged_old_last(
+    changed: &[Changed],
+    frontier: &TreeFrontier,
+    child_layer: u8,
+    old_leaf_count: u64,
+) -> Option<Changed> {
+    let below = chunk_count(old_leaf_count, child_layer);
+    if below == 0 {
+        return None;
+    }
+    let chunk = below - 1;
+    if changed.iter().any(|c| c.chunk == chunk) {
+        return None;
+    }
+    Some(Changed {
+        chunk,
+        old: None,
+        new: frontier.last_chunks[usize::from(child_layer)],
+    })
 }
 
 /// Append `leaves` to the tree `frontier` describes.
@@ -260,17 +315,18 @@ struct Changed {
 /// # Errors
 ///
 /// [`GrowFault`] — a frontier whose shape contradicts its count, bytes that
-/// are not on their layer's curve, or no leaves.
+/// are not on their layer's curve, or no leaves. The first two are
+/// [`FrontierFault`]; the third is the caller's empty batch.
 pub fn grow(frontier: &TreeFrontier, leaves: &[TreeLeaf]) -> Result<TreeGrowth, GrowFault> {
     if leaves.is_empty() {
         return Err(GrowFault::NoLeaves);
     }
     let expected = frontier.layer_count();
     if frontier.last_chunks.len() != usize::from(expected) {
-        return Err(GrowFault::FrontierShape {
+        return Err(GrowFault::Frontier(FrontierFault::Shape {
             layers: frontier.last_chunks.len(),
             expected,
-        });
+        }));
     }
     let old = frontier.leaf_count;
     let new = old + leaves.len() as u64;
@@ -312,8 +368,7 @@ pub fn grow(frontier: &TreeFrontier, leaves: &[TreeLeaf]) -> Result<TreeGrowth, 
         let offset = usize::try_from(first_new).expect("chunk offset") * SCALARS_PER_LEAF;
         // A fresh leaf position's prior scalar is zero even inside an
         // existing chunk: scalars below `offset` are already in the hash.
-        let hash = grow_chunk(0, &existing, offset, &ZERO_SCALAR, &scalars)
-            .ok_or(GrowFault::NotOnCurve { layer: 0 })?;
+        let hash = grow_chunk(0, &existing, offset, &ZERO_SCALAR, &scalars).ok_or(off_curve(0))?;
         writes.push(LayerWrite {
             layer: 0,
             chunk,
@@ -330,6 +385,9 @@ pub fn grow(frontier: &TreeFrontier, leaves: &[TreeLeaf]) -> Result<TreeGrowth, 
     for layer in 1..new_layers {
         let width = chunk_width(layer) as u64;
         let old_count = chunk_count(old, layer);
+        // Resolved once per layer. Included only by a new parent whose span
+        // covers it; sorted into place so the order is the chunk index.
+        let unchanged = unchanged_old_last(&changed, frontier, layer - 1, old);
         let p_first = changed.first().expect("a changed chunk").chunk / width;
         let p_last = changed.last().expect("a changed chunk").chunk / width;
         let mut next: Vec<Changed> = Vec::new();
@@ -342,46 +400,33 @@ pub fn grow(frontier: &TreeFrontier, leaves: &[TreeLeaf]) -> Result<TreeGrowth, 
             } else {
                 init_for(layer)
             };
-            let mut children: Vec<&Changed> = changed
+            let mut children: Vec<Changed> = changed
                 .iter()
+                .copied()
                 .filter(|c| c.chunk / width == parent)
                 .collect();
-            // A fresh parent may span a child that already existed and did
-            // not change — the layer below's old last chunk, when it was
-            // full and a new sibling arrived beside it. It is not in
-            // `changed`, so it is taken from the frontier. This is the
-            // pre-existing sibling the C++'s incremental deepening dropped
-            // (the depth-3 divergence); an existing parent already has it
-            // baked in and never reaches this branch.
-            let below_old_count = chunk_count(old, layer - 1);
-            let sibling;
-            if !existed && below_old_count > 0 {
-                let old_last = below_old_count - 1;
-                if old_last / width == parent && changed.iter().all(|c| c.chunk != old_last) {
-                    sibling = Changed {
-                        chunk: old_last,
-                        old: None,
-                        new: frontier.last_chunks[usize::from(layer - 1)],
-                    };
-                    children.insert(0, &sibling);
+            if !existed {
+                if let Some(sibling) = unchanged {
+                    if sibling.chunk / width == parent {
+                        children.push(sibling);
+                    }
                 }
             }
+            children.sort_by_key(|c| c.chunk);
             let first = children.first().expect("a parent has a changed child");
             let offset = usize::try_from(first.chunk - parent * width).expect("chunk offset");
             // The one child that already sat in this parent is the one that
             // had an old hash; a fresh position's prior child is zero.
             let existing_child = match (existed, first.old) {
-                (true, Some(old_hash)) => {
-                    child_scalar(layer, &old_hash).ok_or(GrowFault::NotOnCurve { layer })?
-                }
+                (true, Some(old_hash)) => child_scalar(layer, &old_hash).ok_or(off_curve(layer))?,
                 _ => ZERO_SCALAR,
             };
             let scalars = children
                 .iter()
-                .map(|c| child_scalar(layer, &c.new).ok_or(GrowFault::NotOnCurve { layer }))
+                .map(|c| child_scalar(layer, &c.new).ok_or(off_curve(layer)))
                 .collect::<Result<Vec<_>, _>>()?;
             let hash = grow_chunk(layer, &existing, offset, &existing_child, &scalars)
-                .ok_or(GrowFault::NotOnCurve { layer })?;
+                .ok_or(off_curve(layer))?;
             writes.push(LayerWrite {
                 layer,
                 chunk: parent,

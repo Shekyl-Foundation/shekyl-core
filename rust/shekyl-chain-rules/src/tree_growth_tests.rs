@@ -15,7 +15,7 @@ use shekyl_fcmp::tree::{
 };
 use shekyl_types::{CurveTreeRoot, TreeLeaf};
 
-use super::{grow, GrowFault, TreeFrontier};
+use super::{grow, FrontierFault, GrowFault, TreeFrontier};
 
 /// A deterministic leaf whose four scalars are small integers — canonical
 /// field elements on both curves, distinct per leaf and per slot.
@@ -136,10 +136,10 @@ fn the_frontier_shape_is_checked_before_arithmetic() {
     };
     assert_eq!(
         grow(&bad, &[leaf(0)]),
-        Err(GrowFault::FrontierShape {
+        Err(GrowFault::Frontier(FrontierFault::Shape {
             layers: 3,
             expected: layer_count_for_leaves(5),
-        })
+        }))
     );
     assert_eq!(grow(&TreeFrontier::EMPTY, &[]), Err(GrowFault::NoLeaves));
 }
@@ -153,7 +153,10 @@ fn a_frontier_hash_off_the_curve_is_refused_at_its_layer() {
     // be taken, and the grow says so at layer 1, not with a wrong root.
     let out = grow(&frontier, &[leaf(1)]);
     assert!(
-        matches!(out, Err(GrowFault::NotOnCurve { layer: 1 })),
+        matches!(
+            out,
+            Err(GrowFault::Frontier(FrontierFault::NotOnCurve { layer: 1 }))
+        ),
         "{out:?}"
     );
 }

@@ -29,8 +29,12 @@
   6 → 5.
 - **API.** `ChainView` gains `tree_frontier`, `leaf_count_at`, `outputs_at`
   and the provided `depth_at` (CEN-I13's operand); `Corrupt` gains
-  `LeafNotConstructible` / `TreeUnservable`; `StoreInvariant` gains
-  `PositionMapsNotBijective` (SI-17) / `LeafCountNotAdvanced` (SI-18). The
+  `LeafNotConstructible` (names the point: `O`/`C` halt on `output_amounts`,
+  `CM` on `txs_pruned`) / `TreeUnservable` (a served frontier — an empty
+  grow is the caller's, not a corrupt layer row); `StoreInvariant` gains
+  `PositionMapsNotBijective` (SI-17) / `LeafCountNotAdvanced` (SI-18).
+  SI-11's writer observations are `LeafDensity::NotContinued` and
+  `Occupied`, distinct from the summary-versus-table `Length`. The
   replay driver asserts the derived root against the trace's at every
   covered height (`RunReport::roots`; a divergence is
   `Disagreement::RootDiverged`) and the scenario driver mines a real

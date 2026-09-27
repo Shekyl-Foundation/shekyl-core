@@ -39,7 +39,7 @@ use shekyl_types::{BlockHeight, CurveTreeRoot, GlobalOutputIndex, TreeLeaf};
 
 use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::rule_set::RuleSet;
-use crate::tree_growth::{grow, TreeGrowth};
+use crate::tree_growth::{grow, GrowFault, TreeGrowth};
 use crate::view::{AtHeight, BlockOutputs, ChainView, LeafSource};
 
 /// What a block's connect appends to the tree: the matured outputs **in
@@ -87,8 +87,14 @@ pub(crate) fn drain<'id, V: ChainView<'id>>(
         return Ok(None);
     }
     let frontier = view.tree_frontier().map_err(ViewRead::View)?;
-    let growth = grow(&frontier, &leaves)
-        .map_err(|fault| ViewRead::Corrupt(Corrupt::TreeUnservable { fault }))?;
+    let growth = grow(&frontier, &leaves).map_err(|fault| match fault {
+        // The empty batch returned above. `grow` names the call so a direct
+        // caller cannot mistake it for a root; this path has leaves.
+        GrowFault::NoLeaves => {
+            unreachable!("drain calls grow only with the leaves it just collected")
+        }
+        GrowFault::Frontier(fault) => ViewRead::Corrupt(Corrupt::TreeUnservable { fault }),
+    })?;
     Ok(Some(Drain { outputs, growth }))
 }
 
@@ -166,9 +172,12 @@ fn extend<VF>(
 ) -> Result<(), ViewRead<VF>> {
     for source in sources {
         let leaf = construct_leaf(&source.key, &source.commitment, &source.pqc_leaf_commitment)
-            .ok_or(ViewRead::Corrupt(Corrupt::LeafNotConstructible {
-                output: source.output,
-            }))?;
+            .map_err(|input| {
+                ViewRead::Corrupt(Corrupt::LeafNotConstructible {
+                    output: source.output,
+                    input,
+                })
+            })?;
         outputs.push(source.output);
         leaves.push(TreeLeaf::from_bytes(leaf));
     }

@@ -12,8 +12,32 @@
 //! reveals, so the key is bound to the spent leaf without the leaf value being
 //! a public function of the key — which is what closed `PL-D1`.
 
+use core::fmt;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
+
+/// Which caller-supplied point [`crate::tree::construct_leaf`] could not
+/// decompress. `I = Hp(O)` is derived, so a failure there is
+/// [`Self::OutputKey`]: the image is a function of `O`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeafInput {
+    /// The one-time output key `O`.
+    OutputKey,
+    /// The amount commitment `C`.
+    Commitment,
+    /// The `0x07` leaf-commitment point `CM`.
+    LeafCommitment,
+}
+
+impl fmt::Display for LeafInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::OutputKey => "output key",
+            Self::Commitment => "amount commitment",
+            Self::LeafCommitment => "leaf commitment",
+        })
+    }
+}
 
 /// The 32-byte 4th leaf scalar: the Wei25519 x-coordinate of the output's PQC
 /// leaf commitment point `CM` (a Selene scalar), as stored in the leaf.

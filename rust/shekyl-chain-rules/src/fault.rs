@@ -43,10 +43,11 @@
 
 use core::fmt;
 
+use shekyl_fcmp::LeafInput;
 use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex};
 
 use crate::rule_set::RuleSet;
-use crate::tree_growth::GrowFault;
+use crate::tree_growth::FrontierFault;
 
 /// What `validate` can fail with: the view's own fault, or one of the two
 /// kinds this crate defines. Matched arm by arm — `?` on the caller's side
@@ -198,17 +199,21 @@ pub enum Corrupt {
     /// and `0x07` point were gated as canonical prime-order points at
     /// admission (CEN-L11's argument, made a halt rather than a panic), so
     /// a recorded one that is not is bytes no conforming store holds.
+    /// [`LeafInput`] names which point, so the store halts on the cell that
+    /// holds it: `O` and `C` live in `output_amounts`, `CM` in the pruned
+    /// transaction's `0x07` field.
     LeafNotConstructible {
         /// The output whose leaf could not be made.
         output: GlobalOutputIndex,
+        /// Which point did not decompress.
+        input: LeafInput,
     },
-    /// The tree the view described could not be grown: its frontier's shape
-    /// contradicts its leaf count, or a stored chunk hash is not a point of
-    /// its layer's curve ([`GrowFault`]). The summary and the layer table
-    /// disagree — SI-12's family, observed from the validator's side.
+    /// The frontier the view served could not be grown ([`FrontierFault`]).
+    /// An empty batch is not this arm: [`crate::GrowFault::NoLeaves`] is the
+    /// caller's, and the drain does not ask `grow` to append nothing.
     TreeUnservable {
-        /// What the grow refused.
-        fault: GrowFault,
+        /// What the served frontier refused.
+        fault: FrontierFault,
     },
 }
 
@@ -349,9 +354,9 @@ impl fmt::Display for Corrupt {
                 f,
                 "no {record} recorded at height {at:?}, below the connecting height (SI-7)"
             ),
-            Self::LeafNotConstructible { output } => write!(
+            Self::LeafNotConstructible { output, input } => write!(
                 f,
-                "recorded output {output:?} has a point that does not decompress; its leaf cannot be constructed"
+                "recorded output {output:?} has a {input} that does not decompress; its leaf cannot be constructed"
             ),
             Self::TreeUnservable { fault } => write!(f, "curve tree cannot be grown: {fault}"),
         }

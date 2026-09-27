@@ -105,15 +105,16 @@ impl<'id> WriteBatch<'_, 'id> {
     /// 3a + 3b + 3c's summary: the writes a non-empty drain makes.
     fn append(&self, before: CurveTreeState, drain: &Drain) -> Result<LeafCount, StoreError> {
         let growth = &drain.growth;
-        // SI-11: the growth continues the tree the store holds. The
-        // verdict was derived over this batch's own view, so a
+        // The verdict was derived over this batch's own view, so a
         // disagreement here is the store's record changing under the
-        // derivation — a corrupt tree, not a stale claim.
+        // derivation. This is the summary's count against the count the
+        // growth starts from — not the leaf table's length, which `summary`
+        // has already held equal.
         if growth.leaf_count_before != before.leaf_count.to_raw() {
             return Err(self.poison().arm(StoreInvariant::LeavesNotDense {
-                observed: LeafDensity::Length {
-                    count: growth.leaf_count_before,
-                    rows: before.leaf_count.to_raw(),
+                observed: LeafDensity::NotContinued {
+                    from: growth.leaf_count_before,
+                    summary: before.leaf_count.to_raw(),
                 },
             }));
         }
@@ -128,10 +129,7 @@ impl<'id> WriteBatch<'_, 'id> {
             let mut leaves = self.open_insert_table(
                 CURVE_TREE_LEAVES,
                 StoreInvariant::LeavesNotDense {
-                    observed: LeafDensity::Length {
-                        count: growth.leaf_count_before,
-                        rows: before.leaf_count.to_raw(),
-                    },
+                    observed: LeafDensity::Occupied,
                 },
             )?;
             let mut to_leaf =

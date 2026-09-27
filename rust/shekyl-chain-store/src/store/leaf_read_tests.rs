@@ -312,7 +312,7 @@ fn a_tx_index_row_pointing_at_another_height_is_corruption_not_a_drain() {
 }
 
 #[test]
-fn an_output_txs_row_owned_by_another_transaction_is_si9_not_a_leaf() {
+fn an_output_txs_row_owned_by_another_transaction_is_corruption_not_a_leaf() {
     // The spend's first output (global 54) re-attributed to the coinbase of
     // block 53: `tx_outputs` still lists 54 under the spend, but the primary
     // row says otherwise. The drain refuses to pair the spend's `CM` with an
@@ -360,11 +360,14 @@ fn an_output_txs_row_owned_by_another_transaction_is_si9_not_a_leaf() {
         )?;
         Ok(())
     });
-    assert_eq!(
-        out,
-        Err(TestErr::Store(
-            StoreError::from(StoreInvariant::IdNotFresh).to_string()
-        ))
-    );
+    let expected = StoreError::from(StoreInvariant::CellCorrupt {
+        key: "output_txs",
+        fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+            codec: "out_tx",
+            reason: "the row does not name this transaction at this output position",
+        }),
+    })
+    .to_string();
+    assert_eq!(out, Err(TestErr::Store(expected)));
     cleanup(&path);
 }

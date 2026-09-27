@@ -134,6 +134,37 @@ fn a_recorded_output_whose_point_is_not_a_point_halts() {
         drain(&view, h(100), &RuleSet::GENESIS),
         Err(ViewRead::Corrupt(Corrupt::LeafNotConstructible {
             output: GlobalOutputIndex::from_raw(7),
+            input: shekyl_fcmp::LeafInput::OutputKey,
+        }))
+    );
+}
+
+#[test]
+fn a_bad_leaf_commitment_names_that_point() {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as G;
+    use curve25519_dalek::scalar::Scalar;
+    let point = |k: u64| (Scalar::from(k) * G).compress().to_bytes();
+    let source = LeafSource {
+        output: GlobalOutputIndex::from_raw(4),
+        key: point(1),
+        commitment: point(2),
+        pqc_leaf_commitment: [0xff; 32],
+    };
+    let view = OutputsOnly(move |height| {
+        if height == h(90) {
+            AtHeight::Recorded(BlockOutputs {
+                coinbase: Vec::new(),
+                listed: vec![source],
+            })
+        } else {
+            AtHeight::Recorded(BlockOutputs::default())
+        }
+    });
+    assert_eq!(
+        drain(&view, h(100), &RuleSet::GENESIS),
+        Err(ViewRead::Corrupt(Corrupt::LeafNotConstructible {
+            output: GlobalOutputIndex::from_raw(4),
+            input: shekyl_fcmp::LeafInput::LeafCommitment,
         }))
     );
 }

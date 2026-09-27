@@ -558,11 +558,11 @@ pub unsafe extern "C" fn shekyl_construct_curve_tree_leaf(
     };
 
     match shekyl_fcmp::tree::construct_leaf(&output_key, &commitment, &cm_point) {
-        Some(leaf) => {
+        Ok(leaf) => {
             std::ptr::copy_nonoverlapping(leaf.as_ptr(), leaf_out_ptr, 128);
             true
         }
-        None => false,
+        Err(_) => false,
     }
 }
 

@@ -145,15 +145,16 @@ pub enum StoreInvariant {
     /// bound; here the reads assert it instead of assuming it (DRS-E1
     /// S-CURVE §3.3, SCU-3).
     ///
-    /// Armed by the reads and by the writer (`grow.rs`, DRS-E3: a growth
-    /// that does not continue the tree the store holds is refused before a
-    /// row is written). The two observations are different and the payload
-    /// says which one
-    /// fired: [`LeafDensity::Length`] is the summary read comparing the
-    /// count with the table's length, [`LeafDensity::Hole`] is the leaf
-    /// walk naming the first missing position in the range it was asked
-    /// for. A length-preserving hole (a missing position made up for by a
-    /// row past the count) is visible to the walk only.
+    /// Armed by the reads and by the writer (`grow.rs`, DRS-E3). The payload
+    /// says which observation fired: [`LeafDensity::Length`] is the summary
+    /// read comparing the count with the table's length, [`LeafDensity::Hole`]
+    /// is the leaf walk naming the first missing position in the range it was
+    /// asked for, [`LeafDensity::NotContinued`] is the writer finding the
+    /// verdict's starting count is not the summary's, and
+    /// [`LeafDensity::Occupied`] is the writer finding a position it is about
+    /// to append already holds a row. A length-preserving hole (a missing
+    /// position made up for by a row past the count) is visible to the walk
+    /// only.
     LeavesNotDense {
         /// Which disagreement the read observed.
         observed: LeafDensity,
@@ -231,9 +232,11 @@ pub enum LeafCountFault {
     },
 }
 
-/// What an SI-11 read observed. One invariant, two observations: a length
-/// comparison does not know which position is missing, and a walk knows the
-/// position and not the table's length.
+/// What an SI-11 observation was. A length comparison does not know which
+/// position is missing, and a walk knows the position and not the table's
+/// length. The writer has two more, and neither of them is a length: the
+/// verdict's starting count against the summary, and a position the append
+/// found already occupied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeafDensity {
     /// `curve_tree_meta`'s `leaf_count` is not `curve_tree_leaves`' length.
@@ -243,6 +246,12 @@ pub enum LeafDensity {
     /// there. This is the first such position in the range the walk was
     /// asked for.
     Hole { position: u64 },
+    /// The growth continues a tree of `from` leaves; the summary holds
+    /// `summary`. The writer observed this before appending.
+    NotContinued { from: u64, summary: u64 },
+    /// A position the drain is about to write already holds a leaf. The
+    /// insert-once handle does not know which key.
+    Occupied,
 }
 
 impl StoreInvariant {
@@ -325,6 +334,16 @@ impl core::fmt::Display for StoreInvariant {
                     f,
                     "curve_tree_leaves has no row at position {position}; the summary's leaf \
                      count includes that position, rebuild from the block corpus"
+                ),
+                LeafDensity::NotContinued { from, summary } => write!(
+                    f,
+                    "the drain continues a tree of {from} leaves but curve_tree_meta holds \
+                     {summary}; the growth does not continue the tree the store holds, rebuild \
+                     from the block corpus"
+                ),
+                LeafDensity::Occupied => f.write_str(
+                    "a leaf position the drain is writing already holds a row; the append would \
+                     overlap the dense range, rebuild from the block corpus",
                 ),
             },
             Self::SummaryRootDiverged => f.write_str(

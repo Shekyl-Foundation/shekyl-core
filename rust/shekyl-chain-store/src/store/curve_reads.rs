@@ -46,9 +46,11 @@
 //! ([`LeafDensity::Length`]) and, once the summary is grown, its root with
 //! the live root (SI-12). C3 names the first position in range with no row
 //! ([`LeafDensity::Hole`]). The writer (`grow.rs`, DRS-E3) moves the count,
-//! the rows, and the summary root together in one batch and refuses a
-//! growth that does not continue the tree it holds; these belts are the
-//! second check, as SI-9's read-side belt is for `output_txs`.
+//! the rows, and the summary root together in one batch.
+//! [`LeafDensity::NotContinued`] is a growth whose starting count is not
+//! the summary's; [`LeafDensity::Occupied`] is a position the append found
+//! already holding a row. These belts are the second check, as SI-9's
+//! read-side belt is for `output_txs`.
 
 use core::ops::Range;
 
