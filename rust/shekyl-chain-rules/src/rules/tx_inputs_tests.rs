@@ -230,8 +230,10 @@ fn i9_the_pseudo_out_count_must_equal_the_input_count_on_a_spend() {
 }
 
 /// CEN-I14: a spend whose FCMP++ proof is empty is refused at both sites;
-/// so is the storage-pruned form (no prunable region at all — its BP+
-/// layout is H19's refusal first, so I14 is asked alone there).
+/// so is the storage-pruned form (no prunable region at all — its
+/// pseudo-outs are gone with it, so H18's balance refuses first, measured
+/// by `g5_the_storage_pruned_spend_is_refused_before_any_block_rule_sees_it`;
+/// I14 is asked alone here).
 #[test]
 fn i14_an_empty_proof_on_a_spend_is_refused() {
     let mut empty = listed(KI);
@@ -250,6 +252,26 @@ fn i14_an_empty_proof_on_a_spend_is_refused() {
     let mut coverage = RuleCoverage::EMPTY;
     let cx = TxContext::derive(&pruned, TxSlot::Lone, &mut coverage).expect("classifies");
     assert!(I14::check(&cx).is_err(), "no prunable region is no proof");
+}
+
+/// CEN-G5, by construction (E6 slice 7 §3.3, commit 2 (b)): the C++ refuses
+/// a block it holds only pruned bodies for because a pruned body has no
+/// weight. In Rust a storage-pruned spend never reaches the block-level
+/// rules at all — `tx_form` refuses it at both sites before any weight is
+/// summed, and it names the row: **H18**, the cleartext balance, because the
+/// pseudo-outs it sums live in the prunable region and are gone with it
+/// (measured 2026-09-26; the plan's first guess was H19's layout half, and
+/// the I14 test above said so too — both corrected to what `tx_form` does).
+/// This is the fixture G5's registry entry credits; if the form stage ever
+/// admitted a pruned body, this is the test that reds.
+#[test]
+fn g5_the_storage_pruned_spend_is_refused_before_any_block_rule_sees_it() {
+    let mut pruned = listed(KI);
+    if let Ct::Fcmp { prunable, .. } = &mut pruned.ct {
+        *prunable = None;
+    }
+    refused_lone(&pruned, CenRow::H18);
+    refused_listed(&pruned, CenRow::H18);
 }
 
 /// CEN-I16: each structural departure is refused at both sites — the

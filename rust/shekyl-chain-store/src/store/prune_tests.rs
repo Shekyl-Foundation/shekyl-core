@@ -16,15 +16,16 @@
 //! for long chains, with the same shape.
 
 use redb::ReadableTable;
-use shekyl_chain_rules::{Candidate, RuleSet};
+use shekyl_chain_rules::{AtHeight, Candidate, ChainView, RuleSet};
 use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
-    LongTermWeight, SHARD_TX_COUNT,
+    BlockCount, BlockHash, BlockHeight, BlockWeight, LongTermWeight, SHARD_TX_COUNT,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Transaction};
+use shekyl_wire::Transaction;
 
-use super::connect_fixtures::{anchor, coinbase, judge_under, spend};
+use super::connect_fixtures::{
+    anchor, candidate, candidate_over, judge_under, root_going_into, spend,
+};
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
 use crate::codec::{
@@ -50,36 +51,16 @@ fn horizons() -> Horizons {
     .expect("cap ≤ retention < epoch")
 }
 
-/// A curve root that is a function of the height, wide enough for long
-/// chains (the shared fixture packs the height into one byte).
-fn root_of(height: u64) -> CurveTreeRoot {
-    let mut bytes = [0xc0; 32];
-    bytes[..8].copy_from_slice(&height.to_le_bytes());
-    CurveTreeRoot::from_bytes(bytes)
-}
-
-fn root_before(height: u64) -> CurveTreeRoot {
-    match height.checked_sub(1) {
-        None => CurveTreeRoot::EMPTY,
-        Some(parent) => root_of(parent),
-    }
-}
-
-fn candidate(height: u64, previous: BlockHash, listed: Vec<Transaction>) -> Candidate {
-    let block = Block {
-        header: BlockHeader {
-            major_version: 1,
-            minor_version: 0,
-            timestamp: 1_000 + height * 60,
-            previous,
-            nonce: 7,
-            curve_tree_root: root_before(height),
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
-        },
-        miner_transaction: coinbase(height),
-        transaction_hashes: listed.iter().map(Transaction::hash).collect(),
-    };
-    Candidate::new(block, listed)
+/// A candidate for `height` on the committed `store`: its header carries
+/// the root the store recorded going into `height` (CEN-B5; the derived
+/// root since DRS-E3, so no function of the height can supply it).
+fn candidate_on(
+    store: &ChainStore,
+    height: u64,
+    previous: BlockHash,
+    listed: Vec<Transaction>,
+) -> Candidate {
+    candidate_over(root_going_into(store, height), height, previous, listed)
 }
 
 fn facts(height: u64) -> ConnectFacts {
@@ -88,7 +69,6 @@ fn facts(height: u64) -> ConnectFacts {
         long_term_weight: Fact::passed_through(LongTermWeight::from_raw(900 + height)),
         coins_generated: Fact::passed_through(AtomicUnits::from_raw((height + 1) * 1_000_000)),
         burned: Fact::passed_through(AtomicUnits::from_raw(0)),
-        root_after: Fact::passed_through(root_of(height)),
         long_term_effective_median: Fact::passed_through(LongTermWeight::from_raw(
             300_000 + 7 * height,
         )),
@@ -130,22 +110,24 @@ impl Builder {
         to: u64,
         listed: impl Fn(u64) -> Vec<Transaction>,
     ) -> Vec<Connected> {
-        let mut cands = Vec::new();
-        for h in from..=to {
-            let previous = self.hashes.last().copied().unwrap_or(BlockHash::NULL);
-            let txs: Vec<Transaction> = listed(h)
-                .into_iter()
-                .map(|tx| anchor(&self.hashes, h, tx))
-                .collect();
-            let cand = candidate(h, previous, txs.clone());
-            self.hashes.push(cand.block.hash());
-            self.listed.push(txs);
-            cands.push(cand);
-        }
         let out: Result<Vec<Connected>, TestErr> = store.write(|batch| {
             let view = batch.chain_view();
             let mut out = Vec::new();
-            for (h, cand) in (from..=to).zip(cands) {
+            for h in from..=to {
+                let previous = self.hashes.last().copied().unwrap_or(BlockHash::NULL);
+                let txs: Vec<Transaction> = listed(h)
+                    .into_iter()
+                    .map(|tx| anchor(&self.hashes, h, tx))
+                    .collect();
+                // The header carries the root the store recorded going
+                // into `h` — this batch's own previous connect (CEN-B5).
+                let root = match view.root_at(BlockHeight::from_raw(h))? {
+                    AtHeight::Recorded(root) => root,
+                    AtHeight::AboveTip => panic!("no root recorded going into height {h}"),
+                };
+                let cand = candidate_over(root, h, previous, txs.clone());
+                self.hashes.push(cand.block.hash());
+                self.listed.push(txs);
                 out.push(batch.connect(
                     judge_under(&view, cand, &self.rules)?,
                     facts(h),
@@ -186,6 +168,20 @@ fn prunable_state(store: &ChainStore, id: u64) -> Option<bool> {
     {
         AtIndex::Recorded(Prunable::Retained(_)) => Some(true),
         AtIndex::Recorded(Prunable::Discarded) => Some(false),
+        AtIndex::BeyondCount => None,
+    }
+}
+
+/// `tx_carries_archival_good` at `id` — the `SHT-Q1` domain answer from the
+/// **stored rows**, `None` beyond the count.
+fn good_state(store: &ChainStore, id: u64) -> Option<bool> {
+    match store
+        .begin_read()
+        .expect("read")
+        .tx_carries_archival_good(TxStorageId::from_raw(id))
+        .expect("read")
+    {
+        AtIndex::Recorded(good) => Some(good),
         AtIndex::BeyondCount => None,
     }
 }
@@ -405,7 +401,7 @@ fn a_decreasing_storage_id_total_refuses_the_boundary() {
     plant_listed(&path, 9, 5_000);
     let store = ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons).expect("reopen");
     let previous = b.hashes.last().copied().expect("parent");
-    let cand = candidate(40, previous, Vec::new());
+    let cand = candidate_on(&store, 40, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge_under(&view, cand, &SHORT)?, facts(40), SHORT)?)
@@ -449,7 +445,7 @@ fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
     plant_listed(&path, 29, 25);
     let store = ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons).expect("reopen");
     let previous = b.hashes.last().copied().expect("parent");
-    let cand = candidate(40, previous, Vec::new());
+    let cand = candidate_on(&store, 40, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge_under(&view, cand, &SHORT)?, facts(40), SHORT)?)
@@ -611,9 +607,9 @@ fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary(
     let store =
         ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("reopen");
     let previous = *b2.hashes.last().expect("399 connected");
+    let cand = candidate_on(&store, 400, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let cand = candidate(400, previous, Vec::new());
         Ok(batch.connect(judge_under(&view, cand, &RULES)?, facts(400), RULES)?)
     });
     assert_eq!(
@@ -690,5 +686,127 @@ fn a_retention_below_the_in_force_cap_is_refused_at_open_and_at_connect() {
             .is_none(),
         "nothing connected"
     );
+    cleanup(&path);
+}
+
+/// **`SHT-Q1` leg (f): the domain answer is stable across a prune.**
+///
+/// The ruling's predicate is decidable from the skeleton, which is only true if
+/// the digests it reads are the ones **recorded at ingest**. The store keeps both
+/// permanently — `txs_prunable_hash` and `txs_pqc_auth_hash` — and a prune
+/// deletes the *regions*, never the rows. So a node that has discarded a shard
+/// must still place its transactions **inside** the domain, exactly as an
+/// archival node does.
+///
+/// The hazard this pins is the opposite: recomputing the digests from a pruned
+/// body yields `keccak256("")` and no component, which would place a node's own
+/// discarded spends *outside* the domain and split shard boundaries against an
+/// archival peer. `shekyl-wire` therefore exposes the predicate only over
+/// explicit row values, and [`ReadSnapshot::tx_carries_archival_good`] is the
+/// only production path.
+///
+/// Every id is recorded before the boundary that discards shard 0 and compared
+/// after it — the whole vector, not a sample — so a flip anywhere fails.
+#[test]
+fn the_predicate_survives_a_prune_on_the_stored_rows() {
+    let path = tmp("prune-domain-stability");
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
+    let mut b = Builder::new();
+    // A mixed chain: spends in shard 0 (discarded at the epoch-3 boundary), a
+    // spend in shard 1 (retained), and empty blocks — the coinbase-only case —
+    // everywhere else.
+    let listed = |h: u64| match h {
+        5 => vec![spend(1, 2)],
+        7 => vec![spend(3, 2)],
+        250 => vec![spend(2, 2)],
+        _ => Vec::new(),
+    };
+    b.connect(&store, 0, 199, listed);
+    b.connect(&store, 200, 200, listed);
+    b.connect(&store, 201, 299, listed);
+
+    let count = store.begin_read().expect("read").tx_count().expect("count");
+    let before: Vec<Option<bool>> = (0..count).map(|id| good_state(&store, id)).collect();
+
+    // On the unpruned store the accessor agrees with the whole-body predicate:
+    // the rows are the body's own digests until a prune takes the regions.
+    {
+        let snap = store.begin_read().expect("read");
+        for txs in &b.listed {
+            for tx in txs {
+                let record = snap.tx_record(&tx.hash()).expect("read").expect("recorded");
+                let parts = tx.txid_parts();
+                assert_eq!(
+                    shekyl_wire::carries_archival_good(record.pqc_auth_hash, record.prunable_hash),
+                    shekyl_wire::carries_archival_good(parts.pqc_auth_hash, parts.prunable_hash),
+                    "the stored rows and the body's digests disagree before any prune"
+                );
+                assert_eq!(
+                    good_state(&store, record.location.id.to_raw()),
+                    Some(true),
+                    "a listed spend carries archival good"
+                );
+            }
+        }
+    }
+
+    // The boundary that discards shard 0.
+    let at_300 = b.connect(&store, 300, 300, listed).remove(0);
+    assert_eq!(
+        at_300.pruned.expect("a boundary").shards(),
+        0..1,
+        "D(3) is shard 0"
+    );
+    assert_eq!(
+        prunable_state(&store, 6),
+        Some(false),
+        "the spend at block 5 must actually be discarded, or this test proves nothing"
+    );
+
+    // Leg (f): every answer is unchanged, the discarded spend included.
+    let after: Vec<Option<bool>> = (0..count).map(|id| good_state(&store, id)).collect();
+    assert_eq!(
+        before, after,
+        "the domain answer moved across a prune — pruned and archival nodes would \
+         disagree on shard boundaries"
+    );
+    assert_eq!(
+        good_state(&store, 6),
+        Some(true),
+        "a DISCARDED spend is still in the domain: its rows outlive its regions"
+    );
+    assert_eq!(
+        good_state(&store, 5),
+        Some(false),
+        "a coinbase is outside the domain, before and after"
+    );
+
+    // Both rows survived the prune — the premise leg (f) rests on. Read through
+    // the record so a deleted row shows up as the absence it would be.
+    {
+        let snap = store.begin_read().expect("read");
+        let discarded = snap
+            .tx_record(&b.listed[5][0].hash())
+            .expect("read")
+            .expect("recorded");
+        assert_eq!(
+            discarded.pqc_auths,
+            Some(PqcAuths::Discarded),
+            "the region went with the shard"
+        );
+        assert!(
+            discarded.pqc_auth_hash.is_some(),
+            "the pqc hash row is permanent"
+        );
+        assert_ne!(
+            discarded.prunable_hash,
+            shekyl_wire::empty_region_prunable_hash(),
+            "the prunable hash row still records a non-empty region — this row alone \
+             is what keeps a 3-part transaction with a region (a serve-credit form) \
+             in the domain after a prune"
+        );
+    }
+
     cleanup(&path);
 }

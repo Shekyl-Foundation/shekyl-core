@@ -408,6 +408,24 @@ pub trait ChainView<'id> {
     /// B1 does not read the tip: the rule set is an input. `None` is the empty
     /// chain — slice 1, Q1.
     fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
+    // DRS-E3 (2026-09-26): the three reads the growth derivation consumes —
+    // not a rule's, `validate`'s (`drain.rs`), which runs after the last rule
+    // and derives `ValidatedBlock::{root_after, drain}` (CTW-Q1: the root
+    // determines future validity, so the authority over validity derives it).
+    /// The tree as the next grow needs it: leaf count + each layer's last
+    /// chunk hash (`TreeFrontier`; CTW-8 — the only chunks a grow changes).
+    fn tree_frontier(&self) -> Result<TreeFrontier, Self::Fault>;
+    /// The leaf count **going into** `height`, keyed as `root_at` is (SCW-19);
+    /// `0` at `0`. CEN-F17's operand; the primitive `depth_at` derives from
+    /// (CTW-Q4: no stored per-height depth).
+    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Self::Fault>;
+    /// A recorded block's outputs as leaf sources (`O`, `C`, the `0x07` `CM`,
+    /// the global index), coinbase and listed halves apart — the drain at `h`
+    /// reads `h − mined_money_unlock_window`'s coinbase half then
+    /// `h − tx_spendable_age`'s listed half (CTW-10: no pending table).
+    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Self::Fault>;
+    /// Provided: CEN-I13's operand, `layer_count_for_leaves(leaf_count_at(h)) − 1`.
+    fn depth_at(&self, height: BlockHeight) -> Result<AtHeight<u8>, Self::Fault> { /* derived */ }
 }
 
 /// The last recorded block. `Option`, not a bespoke absence enum: an empty

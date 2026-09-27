@@ -162,9 +162,9 @@ impl OutputSlot {
 }
 
 // ---------------------------------------------------------------------------
-// curve_tree_layers — (layer, chunk). In flight for the grow path (DRS-E3):
-// no writer calls these yet. The types are the key's shape, so E3 assembles
-// the tuple here and cannot spell a second order.
+// curve_tree_layers — (layer, chunk). The grow path (DRS-E3, `store/grow.rs`)
+// writes through these and `leaf_reads::frontier` reads through them; the
+// types are the key's shape, so neither can spell a second order.
 // ---------------------------------------------------------------------------
 
 /// A hashed layer's index above the leaf layer: `0` is the layer of chunk

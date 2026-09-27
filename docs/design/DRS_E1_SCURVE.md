@@ -136,6 +136,20 @@ CEN-I13 is slice 6's named successor** (`CHAIN_RULES_SLICE_6.md` §5 row 6;
 `rg 'fn depth_at' rust/shekyl-chain-rules/src/view.rs` → the trait method,
 with `BatchView`'s impl in `store/view.rs`.
 
+**ANSWERED 2026-09-26 (DRS-E3, [`DRS_E3_CURVE_WRITER.md`](DRS_E3_CURVE_WRITER.md)
+§3.4, `CTW-Q4`).** The shape E3 chose is the second one: a table keyed as the
+roots are — `curve_tree_leaf_counts[h]`, the leaf count *going into* `h`,
+written on every connect — with **depth derived**, not stored
+(`ChainView::depth_at` is a provided method over `leaf_count_at` through
+`layer_count_for_leaves`; a stored per-height depth would be a second copy of
+a pure function of the count). The falsifier above holds: `fn depth_at` is on
+the trait with `BatchView`'s `leaf_count_at` in `store/view.rs` →
+`store/leaf_reads.rs`. The three tables this increment typed are written by
+`store/grow.rs` from the verdict's `Drain`; the frontier read (`tree_frontier`)
+reads `curve_tree_layers` at the positions `TreeFrontier::last_chunk_indices`
+names, so the writer and the reader cannot disagree about which chunk is last.
+CEN-I13 is now E6's commit, not E3's.
+
 ### 2.4 What DRS-E2 gets
 
 Nothing new to compare — `digest_v0`'s root family already reads
@@ -246,7 +260,7 @@ semantics; otherwise `Option`. Applied:
 | Row | Statement | Armed where |
 |---|---|---|
 | **SI-11** | **The tree is dense and its summary is its count:** `curve_tree_leaves` holds exactly the positions `[0, leaf_count)` and `CurveTreeState.leaf_count == leaves.len()`. Two observations, one row: `LeafDensity::Length { count, rows }` when the lengths differ (C1, which does not know the missing position), `LeafDensity::Hole { position }` when a walk finds the first missing position in its range (C3). | C1 (length) and C3 (the hole); E3 on write (the count and the rows move in one batch) |
-| **SI-12** | **A grown summary carries the live root.** Any `CurveTreeState` other than the seal's `EMPTY` has `root == curve_tree_roots[tip + 1]` (`CurveTreeRoot::EMPTY` when there is no tip). `EMPTY` is not that claim: `connect` records roots grown or not (SI-4), and E3 is what replaces the seal's row. | C1, once the summary is not `EMPTY` |
+| **SI-12** | **A grown summary carries the live root** — as ruled here: any `CurveTreeState` other than the seal's `EMPTY` has `root == curve_tree_roots[tip + 1]` (`CurveTreeRoot::EMPTY` when there is no tip), and `EMPTY` was not that claim while `connect` recorded a passed-through root. **WIDENED 2026-09-27 (DRS-E3, #878 review):** the recorded root is the validator's derivation, so the seal's row is the claim too and C1 compares unconditionally (`STORE_INVARIANT_REGISTER.md` SI-12 is the row of record). | C1, every read |
 | **SI-7** (restated) | A `curve_tree_meta` row that does not decode, or is absent, is `CellCorrupt` — `EMPTY` is a written row, not a default. | C1 |
 
 SI-11's register row landed with commit 1; SI-12 with the review on the implementation PR (`STORE_INVARIANT_REGISTER.md`).

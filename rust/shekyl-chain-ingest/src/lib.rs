@@ -68,6 +68,10 @@
 
 #[cfg(test)]
 mod artifact_tests;
+/// E6 slice 7 commit 2 (a): the CEN-G2 measurement through the driver —
+/// pins today's gap; flips when G2 lands (commit 6).
+#[cfg(all(test, feature = "pipeline"))]
+mod body_pairing_tests;
 #[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
@@ -88,6 +92,8 @@ pub mod pipeline;
 mod pipeline_tests;
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario;
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod scenario_spend;
 #[cfg(feature = "pipeline")]
 pub mod schedule;
 #[cfg(feature = "pipeline")]

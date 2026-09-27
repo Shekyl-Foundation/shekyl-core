@@ -62,7 +62,7 @@ use shekyl_chain_rules::{
     Retry, Stale, StructurallyValid, Verdict, ViewRead,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
 
 use crate::facts::{FactsFault, FactsFor};
 use crate::schedule::ChainRules;
@@ -171,6 +171,12 @@ pub enum RunFault {
 pub struct Applied {
     /// Connected blocks, in order.
     pub connected: Vec<(BlockHeight, BlockHash)>,
+    /// The curve-tree root **after** each connected block's drain — the
+    /// verdict's derivation (`ValidatedBlock::root_after`, DRS-E3), one per
+    /// entry of `connected`, in the same order. The replay compares each
+    /// against the trace's recorded root at that height (CTW-5): the
+    /// per-height oracle the LMDB trace makes possible while it exists.
+    pub roots: Vec<(BlockHeight, CurveTreeRoot)>,
     /// The census rows the connected blocks' verdicts exercised — the
     /// union of each `ChainValid`'s coverage, for the grader's clause (1).
     pub exercised: BTreeSet<&'static str>,
@@ -206,6 +212,16 @@ pub struct Digest;
 /// docs). `None` above the tip.
 #[derive(Clone, Copy, Debug)]
 pub struct HashAt {
+    /// The height asked for.
+    pub height: BlockHeight,
+}
+
+/// The curve-tree root going into `height` — `curve_tree_roots[height]`,
+/// the state the header at `height` commits to (SCW-19; `EMPTY` at `0`).
+/// `None` above `tip + 1`. The read the scenario driver holds the
+/// wallet-side tree to (DRS-E3 §2.5).
+#[derive(Clone, Copy, Debug)]
+pub struct RootAt {
     /// The height asked for.
     pub height: BlockHeight,
 }
@@ -391,11 +407,13 @@ impl<F: FactsFor + Send + Sync + 'static> Message<Apply> for Connector<F> {
                             }
                         };
                         let hash = valid.block().hash();
+                        let root_after = valid.block().root_after();
                         applied
                             .exercised
                             .extend(valid.coverage().iter().map(CenRow::as_str));
                         batch.connect(valid, facts, in_force)?;
                         applied.connected.push((height, hash));
+                        applied.roots.push((height, root_after));
                     }
                     Ok(Err(refused)) => {
                         applied.refused = Some((height, refused));
@@ -564,6 +582,17 @@ impl<F: FactsFor + Send + Sync + 'static> Message<HashAt> for Connector<F> {
     async fn handle(&mut self, msg: HashAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         Ok(match self.writer.read()?.block_info(msg.height)? {
             AtHeight::Recorded(info) => Some(info.hash),
+            AtHeight::AboveTip => None,
+        })
+    }
+}
+
+impl<F: FactsFor + Send + Sync + 'static> Message<RootAt> for Connector<F> {
+    type Reply = Result<Option<CurveTreeRoot>, RunFault>;
+
+    async fn handle(&mut self, msg: RootAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        Ok(match self.writer.read()?.root_at(msg.height)? {
+            AtHeight::Recorded(root) => Some(root),
             AtHeight::AboveTip => None,
         })
     }

@@ -203,8 +203,10 @@ pub enum TraceFault {
     TrailingBytes,
 }
 
-/// The six passed-through facts for one height, plus the accumulator D4
-/// reads — what LMDB recorded and Rust does not derive yet (§3.4).
+/// The five passed-through facts for one height, plus the two values LMDB
+/// recorded that Rust now derives and the replay holds it to (§3.4): the
+/// accumulator D4 reads (SI-10's observer) and the root after the drain
+/// (DRS-E3's oracle, CTW-5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Facts {
     /// `block_info.bi_weight`.
@@ -215,7 +217,12 @@ pub struct Facts {
     pub coins_generated: AtomicUnits,
     /// `block_burn[h]`, zero when the row is absent.
     pub burned: AtomicUnits,
-    /// `curve_tree_roots[h + 1]`.
+    /// `curve_tree_roots[h + 1]` — the root the C++ grower left after this
+    /// block's drain. **Not passed through** since DRS-E3: `validate`
+    /// derives the root and `connect` records the verdict's. Kept in the
+    /// record as the comparison input for the derived-vs-trace oracle
+    /// (`DRS_E3_CURVE_WRITER.md` §3.8, CTW-5), and read by CEN-B5 through
+    /// the next captured header regardless.
     pub root_after: CurveTreeRoot,
     /// The long-term effective median in force for the block (S-CHAIN-R
     /// A1, SCR-19). LMDB stores no such row: the exporter re-derives it
@@ -289,7 +296,6 @@ impl From<Borrowed<Facts>> for ConnectFacts {
             long_term_weight: Fact::passed_through(f.long_term_weight),
             coins_generated: Fact::passed_through(f.coins_generated),
             burned: Fact::passed_through(f.burned),
-            root_after: Fact::passed_through(f.root_after),
             long_term_effective_median: Fact::passed_through(f.long_term_effective_median),
         }
     }

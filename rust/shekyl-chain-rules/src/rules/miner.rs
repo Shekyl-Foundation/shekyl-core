@@ -45,11 +45,16 @@
 //!
 //! F14/F14b (the weight penalty), F16 (the split) and F18 (the exact
 //! payout) need the effective median in force for the candidate — CEN-G6's
-//! derivation, slice 7 — and stay `pending` (Q1 (a)). F17 needs the
-//! frozen-segment count, which reads a curve tree DRS-E3 has not written
-//! (§3.2). The arithmetic bodies for all of them are Rust already
-//! (`shekyl-economics`, adopted by the slice-4 precursor); what waits is
-//! the operand, not the function.
+//! derivation, slice 7 — and stay `pending` (Q1 (a)). F17 needs its
+//! operand `n` ruled: the C++ read `frozen_segment_count(leaf_count)`, a
+//! partition of tree leaves the retired freeze pipeline defined (`PDM-Q12`);
+//! the tree and its per-height count are written and readable since DRS-E3
+//! (`ChainView::leaf_count_at`), but whether D2's `n` counts leaf segments
+//! or closed `T`-shards is the shard re-key's question (E4 / S-ARCH,
+//! `ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q6 item 4) — §3.2, FOLLOWUPS. The
+//! arithmetic bodies for all of them are Rust already (`shekyl-economics`,
+//! adopted by the slice-4 precursor); what waits is the operand, not the
+//! function.
 //!
 //! # The economic parameters
 //!

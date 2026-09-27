@@ -46,8 +46,8 @@ pub enum StoreInvariant {
     /// tx).
     TxHashNotFresh,
     /// **SI-4** — the curve-tree root at height *h*+1 is written exactly
-    /// once per connect and is the root the consensus transition handed
-    /// `connect` (`ConnectFacts::root_after`).
+    /// once per connect and is the root the verdict derived
+    /// (`ValidatedBlock::root_after`, DRS-E3 `CTW-Q1`).
     RootRewritten,
     /// **SI-6** — the undo log's top entry is the tip height, and a pop
     /// consumes exactly that entry.
@@ -145,27 +145,31 @@ pub enum StoreInvariant {
     /// bound; here the reads assert it instead of assuming it (DRS-E1
     /// S-CURVE §3.3, SCU-3).
     ///
-    /// Armed by the reads, since the grow path (DRS-E3) is not yet built.
-    /// The two observations are different and the payload says which one
-    /// fired: [`LeafDensity::Length`] is the summary read comparing the
-    /// count with the table's length, [`LeafDensity::Hole`] is the leaf
-    /// walk naming the first missing position in the range it was asked
-    /// for. A length-preserving hole (a missing position made up for by a
-    /// row past the count) is visible to the walk only.
+    /// Armed by the reads and by the writer (`grow.rs`, DRS-E3). The payload
+    /// says which observation fired: [`LeafDensity::Length`] is the summary
+    /// read comparing the count with the table's length, [`LeafDensity::Hole`]
+    /// is the leaf walk naming the first missing position in the range it was
+    /// asked for, [`LeafDensity::NotContinued`] is the writer finding the
+    /// verdict's starting count is not the summary's, and
+    /// [`LeafDensity::Occupied`] is the writer finding a position it is about
+    /// to append already holds a row. A length-preserving hole (a missing
+    /// position made up for by a row past the count) is visible to the walk
+    /// only.
     LeavesNotDense {
         /// Which disagreement the read observed.
         observed: LeafDensity,
     },
-    /// **SI-12** — a grown summary's root is the live root. The seal writes
-    /// [`crate::codec::CurveTreeState::EMPTY`], and `connect` records
-    /// `curve_tree_roots` on every connect whether or not the tree has
-    /// grown (SI-4), so the EMPTY row is not a claim about that live root.
-    /// Once the summary is no longer EMPTY, its `root` is
-    /// `curve_tree_roots[tip + 1]` (or [`shekyl_types::CurveTreeRoot::EMPTY`]
-    /// when the chain has no tip). The summary read compares them.
-    ///
-    /// The grow path (DRS-E3) is what replaces EMPTY. Until it does, a
-    /// connected chain keeps the seal's row and this belt stays quiet.
+    /// **SI-12** — the summary's root is the live root:
+    /// `curve_tree_meta.root == curve_tree_roots[tip + 1]` (or
+    /// [`shekyl_types::CurveTreeRoot::EMPTY`] when the chain has no tip),
+    /// **including** the seal's [`crate::codec::CurveTreeState::EMPTY`].
+    /// Since DRS-E3 the root `connect` records is the validator's derivation
+    /// (SI-4), so an EMPTY summary claims nothing has drained and the live
+    /// root must be EMPTY too; the grow path (`grow.rs`) moves both together
+    /// at the first drain. The summary read compares them on every read
+    /// (widened from grown-only 2026-09-27, #878 review: a non-empty live
+    /// root beneath the seal's row is a corrupt roots table that CEN-B5
+    /// would otherwise judge the honest next header against).
     SummaryRootDiverged,
     /// **SI-15** — every `archival_serve_credit` row belongs to a persona
     /// with a bond record. The connect hook that writes a pass bit refuses
@@ -188,11 +192,52 @@ pub enum StoreInvariant {
         /// The transaction whose two rows disagree.
         txid: shekyl_types::TxHash,
     },
+    /// **SI-17** — `output_to_leaf` and `leaf_to_output` are inverse
+    /// bijections over the drained outputs: one position per drained
+    /// output, one output per position, neither written twice. Armed by
+    /// the connect's phase 3 when either map already holds the key it is
+    /// about to insert (DRS-E3 `CTW-4`, §3.7). A drain cannot name a
+    /// different number of outputs than leaves: that pair is
+    /// [`shekyl_chain_rules::DrainedOutput`], one sequence.
+    PositionMapsNotBijective,
+    /// **SI-18** — the per-height leaf count advances by exactly what
+    /// drained: `curve_tree_leaf_counts[h + 1] − curve_tree_leaf_counts[h]`
+    /// is the connect of `h`'s drained leaf count, and the row is written
+    /// once per connect. Armed by the writer (`grow.rs`) at the two places
+    /// the chain of counts can break: the row it is about to write is
+    /// already present ([`LeafCountFault::SuccessorPresent`] — the tip moved
+    /// without its count row, or a write bypassed `connect`), or the row
+    /// the previous connect wrote does not equal the summary's count the
+    /// drain continues from ([`LeafCountFault::PredecessorDisagrees`] — a
+    /// historical count nobody would otherwise re-read, which `leaf_count_at`
+    /// / `depth_at` would then serve as fact).
+    LeafCountNotAdvanced {
+        /// Which break the writer observed.
+        observed: LeafCountFault,
+    },
 }
 
-/// What an SI-11 read observed. One invariant, two observations: a length
-/// comparison does not know which position is missing, and a walk knows the
-/// position and not the table's length.
+/// What an SI-18 write observed (payload of
+/// [`StoreInvariant::LeafCountNotAdvanced`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeafCountFault {
+    /// `curve_tree_leaf_counts[h + 1]` already holds a row.
+    SuccessorPresent,
+    /// `curve_tree_leaf_counts[h]` (`0` by definition at `h = 0`) is not
+    /// the summary's leaf count the connect of `h` starts from.
+    PredecessorDisagrees {
+        /// The count the row at `h` records.
+        recorded: u64,
+        /// The count `curve_tree_meta` holds.
+        summary: u64,
+    },
+}
+
+/// What an SI-11 observation was. A length comparison does not know which
+/// position is missing, and a walk knows the position and not the table's
+/// length. The writer has two more, and neither of them is a length: the
+/// verdict's starting count against the summary, and a position the append
+/// found already occupied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeafDensity {
     /// `curve_tree_meta`'s `leaf_count` is not `curve_tree_leaves`' length.
@@ -202,6 +247,12 @@ pub enum LeafDensity {
     /// there. This is the first such position in the range the walk was
     /// asked for.
     Hole { position: u64 },
+    /// The growth continues a tree of `from` leaves; the summary holds
+    /// `summary`. The writer observed this before appending.
+    NotContinued { from: u64, summary: u64 },
+    /// A position the drain is about to write already holds a leaf. The
+    /// insert-once handle does not know which key.
+    Occupied,
 }
 
 impl StoreInvariant {
@@ -223,6 +274,8 @@ impl StoreInvariant {
             Self::IdNotFresh => 9,
             Self::ServeCreditWithoutBond { .. } => 15,
             Self::PoolEntryUnpaired { .. } => 16,
+            Self::PositionMapsNotBijective => 17,
+            Self::LeafCountNotAdvanced { .. } => 18,
         }
     }
 }
@@ -283,6 +336,16 @@ impl core::fmt::Display for StoreInvariant {
                     "curve_tree_leaves has no row at position {position}; the summary's leaf \
                      count includes that position, rebuild from the block corpus"
                 ),
+                LeafDensity::NotContinued { from, summary } => write!(
+                    f,
+                    "the drain continues a tree of {from} leaves but curve_tree_meta holds \
+                     {summary}; the growth does not continue the tree the store holds, rebuild \
+                     from the block corpus"
+                ),
+                LeafDensity::Occupied => f.write_str(
+                    "a leaf position the drain is writing already holds a row; the append would \
+                     overlap the dense range, rebuild from the block corpus",
+                ),
             },
             Self::SummaryRootDiverged => f.write_str(
                 "the grown curve_tree_meta root is not the live root at curve_tree_roots[tip + 1]; \
@@ -298,6 +361,22 @@ impl core::fmt::Display for StoreInvariant {
                 "pool entry {txid} has a row in one of pool_meta / pool_blob and not the other; \
                  a write bypassed the pool store"
             ),
+            Self::PositionMapsNotBijective => f.write_str(
+                "output_to_leaf / leaf_to_output would stop being inverse bijections: a drained \
+                 output or a leaf position is already mapped",
+            ),
+            Self::LeafCountNotAdvanced { observed } => match observed {
+                LeafCountFault::SuccessorPresent => f.write_str(
+                    "curve_tree_leaf_counts already holds a row at the connecting height's \
+                     successor; the count is written once per connect",
+                ),
+                LeafCountFault::PredecessorDisagrees { recorded, summary } => write!(
+                    f,
+                    "curve_tree_leaf_counts records {recorded} going into the connecting height but \
+                     curve_tree_meta holds {summary}; the per-height counts no longer chain to the \
+                     tree, rebuild from the block corpus"
+                ),
+            },
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -330,6 +409,8 @@ impl core::error::Error for StoreInvariant {
             | Self::SummaryRootDiverged
             | Self::ServeCreditWithoutBond { .. }
             | Self::PoolEntryUnpaired { .. }
+            | Self::PositionMapsNotBijective
+            | Self::LeafCountNotAdvanced { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

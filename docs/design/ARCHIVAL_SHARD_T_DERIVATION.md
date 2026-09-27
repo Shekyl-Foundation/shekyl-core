@@ -2,15 +2,20 @@
 
 **Status:** OPEN — Round 0 executed 2026-09-26 at `b72aac2fc` (the composition
 arm with `origin/dev@ad557ac5a` merged in); **AMENDED on review the same day
-(at `9e8c0bee0`)** — the conclusion moved. `U1a` was derived against the wrong
+(at `9e8c0bee0`)**; **`SHT-Q1` RULED (Rick, 2026-09-27, design-owner lane)** —
+the partition is over transactions that **carry archival good**, a property
+rather than a class list, with the equivalence to `cumulative_tx_count` recorded
+as an invariant and pinned by a test (§2.1). **`L2` RULED the same day
+(Rick, design-owner lane): withdrawn as a bound on `T`** (§3), leaving `L1`'s
+threshold as the selection rule's only open lower-edge input. The 2026-09-26 amendment moved the conclusion. `U1a` was derived against the wrong
 transport figure: W₂ has *measured* single-attempt fetch since 2026-09-16, and
 on the measured numbers `U1a` is **unresolved at `T = 200`** rather than three
 orders of magnitude slack. The selection rule is re-pointed at the **lower**
 edge with the asymmetry argument it was missing, `SHT-Q1`'s price for the
 ordinal domain is **withdrawn** (dev already does the lookup it was charged
-for), and `SHT-7` is added. `SHT-Q1` (the partition domain) is
-**posed, not ruled** — it is steering's, and it comes before the bounds because
-it decides which constraints exist. Findings `SHT-1`…`SHT-6` are at-pin
+for), and `SHT-7` is added. `SHT-Q1` (the partition domain) was posed by this round
+and **RULED on 2026-09-27** (§2) — it came before the bounds because it decides
+which constraints exist, and it now has. Findings `SHT-1`…`SHT-9` are at-pin
 findings of this round. Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
@@ -127,10 +132,113 @@ and does not say so.** It is not merely stale; it presumes the answer to
 
 ---
 
-## 2. `SHT-Q1` for steering — the partition domain
+## 2. `SHT-Q1` — the partition domain — **RULED**
 
-**This is a question with evidence, not a ruling.** It comes first because it
-decides which constraints in §3 exist at all.
+> **`SHT-Q1` RULED (Rick, 2026-09-27, design-owner lane): the partition is over
+> transactions that carry archival good.** A transaction is in the domain **iff**
+> it has a non-empty prunable region or `pqc_auths`. That is decidable from the
+> skeleton (txid structure and prunable hash) without the body. Shard `k` is the
+> domain's transactions `[k·T, (k+1)·T)` in chain order. **Shards close on count
+> only; there is no time-based closure** (a clock is the zero floor by another
+> name). The coinbase has no prunable region and is skeleton; it is outside the
+> domain **by the definition, not by exclusion**.
+>
+> **Implementation equivalence (invariant, not definition):** today the domain
+> equals the non-coinbase transactions. Every non-coinbase class carries good
+> (CEN-H21, CEN-H22 and the class rules) and the coinbase carries none, so
+> boundaries read from `cumulative_tx_count`. A test pins the equivalence. A
+> class or coinbase change that breaks it must change the counter in the same
+> cutover.
+>
+> **Stability:** closed shards never change membership. Any post-genesis change
+> to what counts as archival good activates by height and applies only past it.
+>
+> **The predicate reads the two digests as recorded at ingest, never recomputed
+> from a possibly-pruned body.** `Transaction::prunable_hash`'s own contract says
+> why: when the prunable region is absent — *"a coinbase, or a storage-pruned
+> spend"* — it returns `keccak256("")` while the txid substitutes the null hash,
+> and under `PDM-Q6` the region and `pqc_auths` retire together,
+> so a recomputation over a discarded body yields no component either. A node
+> evaluating the predicate that way would place its **own discarded spends outside
+> the domain** while an archival node keeps them inside: the two would disagree on
+> shard boundaries, which is a consensus split. The rows
+> (`txs_prunable_hash`, `txs_pqc_auth_hash`) are permanent — a prune deletes the
+> regions and never them — so they are the only admissible input.
+>
+> **Falsifiers (any reopens):** (i) the re-keyed D2 `n` or `g(age)` requires
+> shards to close by height; (ii) the equivalence breaks without a counter
+> change; (iii) evidence that an unbondable frontier shard on a quiet chain has a
+> real cost; (iv) a definition of archival good that cannot be decided from the
+> skeleton.
+
+The ruling is a **property**, which is why it is stronger than either option as
+this round posed them: the partition follows the good itself, so a future
+transaction type carrying prunable data joins automatically and one that does not
+stays out, with no class list to maintain. What follows is the evidence the round
+gathered, kept because the falsifiers are stated against it.
+
+### 2.1 The ruling as built
+
+**One predicate, one home, reachable only with row values.**
+`shekyl_wire::carries_archival_good(pqc_auth_hash, prunable_hash)`
+(`rust/shekyl-wire/src/transaction/txid.rs`), beside the txid structure it reads.
+It takes **the two row values, not a `Transaction`**, so membership is
+structurally decidable without a body — which is what lets bond admission check
+it on a pruned node. No second classification is minted: it reads the
+3-part/4-part arity that already exists.
+
+**There is deliberately no `TxidParts` convenience method**, and the first
+implementation's was deleted. `Transaction::txid_parts()` *recomputes* both
+digests from the object in hand, so on a body whose regions have been discarded it
+yields `keccak256("")` and `None` — the recompute-from-a-pruned-body hazard the
+ruling's text now names (`Transaction::prunable_hash`'s contract states it for
+exactly these cases). A method one call away from admission code is that hazard
+in the most convenient possible form.
+
+**The production path** is
+`shekyl-chain-store`'s `ReadSnapshot::tx_carries_archival_good`
+(`store/tx_reads.rs`, `carries_archival_good_at`), which reads
+`txs_prunable_hash` (written at `store/connect.rs:575`, mandatory — its absence
+below the count is SI-7) and `txs_pqc_auth_hash` (`:584-586`, present ⇔ the txid
+is 4-part) and hands them to the predicate. A prune deletes the regions and never
+these rows.
+
+**One correction the ruling's wording needs.** The ruling says "a non-null
+prunable hash". **The stored prunable hash is never null.**
+`Transaction::prunable_hash`'s own contract is explicit: when the region is absent the *txid component* substitutes the null
+hash, while the **row** is `keccak256("")` — "the C++ store's row for a coinbase
+is the latter". A predicate written against non-null would therefore read **every
+coinbase as carrying good** and the equivalence would be false at landing. The
+predicate compares against `empty_region_prunable_hash()` instead, and
+`the_empty_region_digest_is_the_coinbases_row` pins that value against the
+coinbase's own row.
+
+**The equivalence test** is `rules::tx::tx_domain_tests` in `shekyl-chain-rules`,
+five cases:
+
+| leg | what it pins |
+|---|---|
+| `the_domain_is_every_non_coinbase_class` | an **exhaustive `match` over `TxClass` with no wildcard arm**, each arm citing the rule that forces good for that class. Verified to be a compile-time guarantee, not a claim: adding a probe variant to `TxClass` fails the build with `E0004: non-exhaustive patterns`, pointing at this match |
+| `each_leg_of_the_predicate_is_the_only_good_some_class_has` | both legs are independently load-bearing — the **fee-less emission** has the `pqc_auths` component and no region, the **serve-credit** form has the region and no component. Either leg alone puts one class outside the domain |
+| `the_empty_region_digest_is_the_coinbases_row` | `keccak256("")` is the coinbase's row and is **not** the null hash (the correction above) |
+| `the_coinbase_carries_no_good_however_large_its_extra` | the coinbase at one output and at a maximal-attestation `extra`: attestation records live in `extra`, which is skeleton, so the ct stays `Null` and both legs stay false |
+| `the_counter_equals_the_predicate_over_a_mixed_chain` | over a synthetic chain mixing every class **with empty blocks**, boundaries from `cumulative_tx_count` equal boundaries from counting the predicate — compared **per transaction**, not only at the end, so offsetting errors cannot cancel. This is the leg that fails on divergence |
+| **(f)** `the_predicate_survives_a_prune_on_the_stored_rows` (`shekyl-chain-store`) | the **production path across a real prune**. A chain with spends in shard 0, a spend in shard 1 and empty blocks connects; every id's answer is recorded; the epoch-3 boundary discards shard 0; **every answer is unchanged** — the whole vector, not a sample — and the **discarded** spend is still in the domain. Also asserts the accessor agrees with the whole-body predicate on the *unpruned* store, and that both rows survived, with the surviving `txs_prunable_hash` identified as what alone keeps a 3-part-with-region transaction (a serve-credit form) in the domain. **Verified to be able to fail:** mutating the accessor to recompute from the pruned body turns it red on the "domain answer moved" assertion |
+
+**The negative leg (e) is cited, not re-asserted.** A non-coinbase transaction
+with no good is refused today: `BondPost` by **CEN-H21**'s `spends >= 1` +
+`prunable: Some` + non-empty `fcmp_proof`
+(`rust/shekyl-chain-rules/src/rules/tx.rs:749-793`); a key-imaged `Spend` with no
+prunable at `rust/shekyl-wire/src/transaction.rs:2056-2060`; the serve-credit
+shape, including one **non-empty** pass record per credit vin, at
+`rust/shekyl-wire/src/transaction.rs:1692-1722` and
+`check_serve_credit_pruned_blob` (`:592-600`).
+
+### 2.2 The evidence the ruling was taken on
+
+The round posed the domain as two options. The ruling supersedes both with the
+property above; the options are kept because `SHT-Q1`'s falsifiers and `SHT-8`
+are stated against them.
 
 - **(A) As landed.** Storage ids, dense over every recorded transaction, one
   coinbase per block included. `k = ⌊storage_id / T⌋`.
@@ -181,6 +289,44 @@ on a quiet chain and nothing else**. `SHT-Q1` therefore reduces to a single
 question for steering: *is an indefinitely-open frontier shard — unbondable,
 undiscardable, retained on every daemon — acceptable on a quiet chain, given
 that its good is small and "no market for it" may be the correct answer?*
+
+### The falsifier for "(B) with no clock", run at the pin
+
+The stated falsifier is **any consumer that needs a shard to close by height**.
+Checked at source across the five surfaces, and **it does not fire** — every one
+of them already has a defined answer for a shard that has not closed:
+
+| surface | what it needs | an open frontier shard |
+|---|---|---|
+| `h_scarce` and the discard calendar `D(E) = { k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3 }` | the `close_height` of shards **already closed**, reached by id arithmetic and one binary search | is not in the closed set, so not in `D(E)`. Never discarded — which is the cost, not a contradiction (`prune.rs:34-36`, `:472-500`) |
+| `g(age)` | `shard_age_milli(close_block_height, freeze_height, SEB)` — a **freeze** height, *if* frozen. Its no-segment branch is keyed on a **J-segment** (`admission.rs:305-341`, `consensus_state.rs:235-252`) | ⚠️ **NOT A PASS — evaluated against the retired geometry.** "Scores `age_milli = 0` with no frozen segment" is a true statement about *segments*, the leaf partition `PDM-Q12` retired, and says nothing about how an open **T-shard** behaves. The re-keyed form does not exist, so this surface **has not been run** |
+| D2 escalation | `compute_burn_split_at(total_fees, burn_pct, n: FrozenSegmentCount)` (`burn.rs:188-191`); `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and on the C++ side `n` is **derived from the curve-tree leaf count** — `Blockchain::parent_frozen_segment_count` returns `shekyl_archival_frozen_segment_count(m_db->get_curve_tree_leaf_count())` (`src/cryptonote_core/blockchain.cpp:1494-1505`) and feeds `validate_miner_transaction` (`:1508`), under a throwing read-point assert | ⚠️ **NOT A PASS — same defect.** "Not frozen, not counted" is true of segments. See `SHT-8`: the re-key is unspecified, and specifying it wrongly hands `T` a fifth job |
+| Foundation `CompleteTree` / seed coverage | an owed set of *"every **closed**, final shard"* (`WALLET_SIDE_STORE.md`:463, WSS-Q10) | is not owed |
+| Bootstrap | fills from closed shards through the same owed computation | likewise |
+
+**Three of the five surfaces answer for T-shards and support (B):**
+`h_scarce`/`D(E)`, the `CompleteTree` owed set, and bootstrap. For those the
+shape is the same — an unclosed shard is *representable* as "not closed" and each
+returns the right thing — and the one real consequence is the one already priced:
+the frontier shard is retained on every daemon until it closes.
+
+**Two of the five are not evidence at all**, and the round's previous version
+reported them as passes. `g(age)` and D2 both key on the **J-segment**, the
+partition `PDM-Q12` retired, so what was checked was the *old* geometry's
+behaviour. Their re-keyed forms do not exist, so for those surfaces the falsifier
+**has not been run** — it is not shown not to fire. `SHT-8` carries the
+consequence, which is larger than the table error: specifying D2's re-key
+carelessly makes `T` an economic parameter.
+
+**This round does not claim (B)'s falsifier is discharged.** Three surfaces
+support it; two are unrun and must be specified under the ruled domain before
+the falsifier counts.
+
+Recorded because it cuts the other way too: **adding "or `H` blocks" to (B)
+would reintroduce exactly the defect (B) removes.** Any time-driven closure rule
+closes a shard holding *fewer than `T` transactions of good*, and a coinbase-only
+shard under (A) is precisely that rule firing on an empty chain. A clock is the
+zero floor by another name.
 
 ---
 
@@ -238,17 +384,36 @@ every closed, final shard — a configuration of the same store",
 the cap prices is a **large market archiver's persona count**, which is a
 privacy cost, not a capacity one.
 
-**The ceiling stated directly**, because a falsifier is not a substitute for
-the arithmetic: one bond record can hold at most
+#### `L2` RULED (Rick, 2026-09-27, design-owner lane) — **withdrawn as a bound on `T`**
 
-> `MAX_HOLDINGS_SHARDS × T × bytes-per-tx = 4096 × 200 × 16.7 KB ≈ 13.7 GB`
+> `MAX_HOLDINGS_SHARDS` is a **list-size bound on one bond record and one
+> transaction** — decode, the per-block admission reads, the record encode. It is
+> **not bond-size policy**. Personas are free (G-1) and splitting is the rational
+> response, so no per-persona limit binds anything; the cap's value comes from the
+> **list budget alone**. The byte products (13.6 GB, 13.7 GB) are **retired from
+> reasoning**.
 
-at `T = 200` — the most history a single persona can be obliged to. Whether
-forcing a larger archiver into a second persona is a **feature** (gate-6
-firewall cost, deliberately paid) or a **cost** (overhead on the honest
-operator who wants to hold more) is **a ruling, not a measurement**, and it is
-not one this round makes. Either way it couples `T` to a cap that freezes at
-genesis, so it belongs in §5. Per-shard consensus state (`archival_r_market`
+Verified at this pin. The sim states the premise outright — *"personas are free
+(G-1) and sybil-per-shard is capital-bounded only (TJ-7), so a cartel abandons the
+slashed record and bonds a FRESH pair on the same shard"*
+(`rust/shekyl-economics-sim/src/cartel.rs:702-712`) — and the rational play is
+modelled as partitioning across records: `Regime::RationalBestResponse` →
+`best_partition_credit_milli` (`distribution.rs:73`, `:138`), with `:27` and
+`:134` recording that the cap bounds **per-bond work**, structurally, and nothing
+else.
+
+**What this changes.** The round's earlier reading — that the cap prices a large
+archiver's persona count, and that `4096 × T × bytes-per-tx ≈ 13.7 GB` is "the
+most history a single persona can be obliged to" — is **withdrawn**. An operator
+wanting more holdings posts another record; the cap bounds a **list**, not an
+operator. So `L2` supplies **no lower bound on `T`**, the
+`T ↔ MAX_HOLDINGS_SHARDS` coupling is struck from §5, and §4's lower edge has one
+open input rather than two. What survives as a soft pull toward larger `T` is the
+per-shard state count — which is `L3`, and was always the stronger of the pair.
+
+*Domain:* both. *Grade:* **no longer a bound.** *Falsifier on the withdrawal:* a
+surface where the cap bounds an **operator** rather than a list — one where
+posting a second record is unavailable or not equivalent. Per-shard consensus state (`archival_r_market`
 rows, serve-credit rows per `(P, shard, E)`, settlement work per epoch) scales
 as rows ∝ shards × epochs ∝ `X/T` × epochs, so every one of those pulls the
 same direction: larger `T`, fewer rows. *Domain:* both. *Grade:* **soft** —
@@ -260,8 +425,10 @@ chosen `T` within the mining era.
 `k = λ·D/E` per block ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md):79)
 and each drawable pair receives 3 derived challenges per epoch (`:243`), with
 the settlement writer enumerating drawable pairs. Work scales as
-pairs ∝ shards × holders ∝ `X/T`. Same direction as `L2` and strictly weaker
-than it at any `T` where `L2` is satisfied. *Domain:* both. *Grade:* **soft**.
+pairs ∝ shards × holders ∝ `X/T`. Same direction as `L2`'s per-shard state count
+— and since `L2` was **withdrawn as a bound** on 2026-09-27 (its cap bounds a
+list, not an operator), this row and that count are what remain of the
+bookkeeping floor. *Domain:* both. *Grade:* **soft**.
 *Falsifier:* a settlement-writer cost measurement at the chosen `T` exceeding
 the per-block budget on the rule-76 floor device.
 
@@ -296,32 +463,55 @@ because the conclusion is the one to distrust:**
 > `t(T) = t_fixed + (T · bytes-per-tx) / v`, with `t(200) ∈ {48.27, 86.06} s`
 
   One measurement, two unknowns — so the bound is an interval, not a number.
-  At the **heavy end of composition** (~2× the mean, L19), against the 120 s
-  criterion:
+  Against the 120 s criterion, on the **mean** shard and on a **heavy** shard
+  taken at twice the mean:
 
-| calibration | `t_fixed` | implied `v` | heavy-end ceiling |
-|---|---|---|---|
-| soak p99 | 0 s | 38.7 KB/s | **`T ≲ 139`** |
-| soak p99 | 60 s | 127.8 KB/s | `T ≲ 230` |
-| cold p99 | 0 s | 69.0 KB/s | `T ≲ 248` |
-| cold p99 | 30 s | 182 KB/s | `T ≲ 491` |
+| calibration | `t_fixed` | implied `v` | mean-basis ceiling | ×2 basis |
+|---|---|---|---|---|
+| soak p99 | 0 s | 38.7 KB/s | `T ≲ 278` | **`T ≲ 139`** |
+| soak p99 | 60 s | 127.8 KB/s | `T ≲ 459` | `T ≲ 230` |
+| cold p99 | 0 s | 69.0 KB/s | `T ≲ 496` | `T ≲ 248` |
+| cold p99 | 30 s | 182 KB/s | `T ≲ 982` | `T ≲ 491` |
 
-  So **the heavy-end ceiling lies somewhere in ~[140, 490], and `T = 200` is
-  inside that band.** `U1a` is therefore **unresolved at 200** — it may already
-  be violated at the heavy end (the `t_fixed = 0` reading) or clear by 2.5×
-  (the large-fixed-cost reading), and *nothing in the tree says which*. What it
-  is **not** any longer is slack: the round's first pass reported ~300× headroom
-  from `CHALLENGE_RESPONSE_BLOCKS`, and the measured single-attempt criterion
-  replaces that with a factor of at most ~2.5 either way.
+  **On the mean basis every reading clears `T = 200`, by 1.4× to 4.9×. It is
+  only the heavy-shard multiplier that puts 200 inside the band** (~[140, 490]),
+  which makes that multiplier the load-bearing quantity — and it is **not
+  measured**. Two qualifications, both of which must be discharged before this
+  row decides anything:
+
+  **(i) The ×2 is a property of L19's shape function, not of any shard.** L19's
+  size model is linear and *mean-preserving*, which caps its heavy end just
+  under 2× the mean at every `S` — the cap L19 records as its own residue. So
+  "~2× the mean" is a limit of that normalizer, not a measured shard size, and
+  citing L19 for it (as this row's first version did) is citing the model for
+  one of its artifacts. **What the row actually needs is a shard-level quantile
+  of *good per shard*** — under (B), per-transaction composition averaged over
+  `T` plus whatever era correlation survives that averaging. It is neither the
+  per-transaction extreme (which `√T` suppresses) nor L19's normalizer. Until
+  that quantile exists the [140, 490] band **rests on an assumption**, and the
+  honest reading is the mean-basis row: clear at 200, by a factor this round
+  cannot yet name precisely.
+
+  **(ii) The criterion as stated stacks two worst cases.** A p99 circuit *and* a
+  heavy shard at the same draw is a joint event; the criterion compounds them as
+  if it were one. What the bound should be derived against is a **target
+  witness-miss rate** — `P(t > 120 s) = P(slow circuit ∧ heavy shard)` — with the
+  two components' dependence stated. If they are roughly independent the joint
+  probability is small and **the ceiling loosens materially**. Either way the
+  miss rate is a number someone must *choose*, the way `L = 4` chose "err
+  large", rather than something that falls out of multiplying two p99s. **Owed
+  before `U1a` is treated as a bound.**
 
   `L`'s two-block fetch-plus-retry span is the outer envelope, but deriving `T`
   from it would be **circular** — see `SHT-7`: that span was sized on the same
   retired 3.33 MB byte count `T` itself came from.
 
 *Domain:* both — the read is of a shard's bytes either way, though under (A)
-the same `T` buys fewer bytes. *Grade:* **hard, and possibly already violated**
-— exceeding it makes honest witness misses systematic, and `L`'s own ruling
-forbids absorbing that by raising `L` ("the answer is **not** raise `L`").
+the same `T` buys fewer bytes. *Grade:* **hard; whether it is violated at 200 is
+unresolved and rests on two undischarged quantities** (the heavy-shard quantile
+and the target miss rate above) — exceeding it makes honest witness misses
+systematic, and `L`'s own ruling forbids absorbing that by raising `L` ("the
+answer is **not** raise `L`").
 *What closes it:* **W₂ re-run at two or three object sizes.** One size gives one
 equation in two unknowns; two sizes separate `t_fixed` from `v`, the 180 KB/s
 floor drops out of every derivation that currently leans on it, and this row
@@ -378,7 +568,7 @@ arm in which the per-band verdict at fixed headroom degrades monotonically in
 **Under (A) and under (B) alike**, the only hard bound with numbers is `U1a`,
 and on measured data its heavy-end ceiling is **~[140, 490]** — a band that
 **contains 200**. `L1` sits in the low hundreds on sim-sourced parameters;
-`L2`/`L3` pull upward and `L2` now has a stated ceiling of its own; `U1b` still
+`L3` pulls upward; `L2` **no longer bounds `T` at all** (RULED, §3); `U1b` still
 has no value. So the corrected state is:
 
 > **`T = 200` is not comfortably inside the feasible interval — it is sitting on
@@ -411,17 +601,40 @@ archival commitment a participant can take on*.
 
 **Proposed selection rule** (steering's to accept, amend or reject):
 
-> **Pick the smallest `T` that clears `L1`'s composition floor and `L2`'s
-> bookkeeping floor, subject to `U1a` shown clear at the heavy end of
+> **Pick the smallest `T` that clears `L1`'s composition floor and `L3`'s
+> per-shard-state floor, subject to `U1a` shown clear at the heavy end of
 > composition by measurement, not by a floor.**
+>
+> (*`L2` was the second floor until it was ruled out on 2026-09-27; `L3` was
+> always the stronger of the pair.*)
 
 Why this and not the ceiling-seeking form: it takes the cheap direction of the
 asymmetry above; it does **not** feed `L`'s 20 s premise — and so the retired
 3.33 MB — back into `T`'s own bound, which the ceiling-seeking form did
 (`SHT-7`); and it makes the binding quantity a *floor* that sim and bookkeeping
 arithmetic can both produce, with the hard ceiling as a check rather than as the
-selector. It cannot be evaluated until W₂ runs at more than one object size,
-and saying so is the point.
+selector.
+
+**The rule is not ready to apply, and this section must not read as if it
+were.** Pointing it down lands it squarely on the two edges this round could not
+measure:
+
+- **`L1`'s threshold is not derived.** The round removed the illustrative
+  one-fifth and put the *form* in its place (the net margin that flips a
+  marginal holder's decision); nothing has replaced the number. So `L1` names a
+  floor it cannot yet evaluate.
+- **`L2` no longer supplies a lower edge at all** — RULED 2026-09-27 and
+  withdrawn as a bound on `T` (§3): the cap bounds a list, not an operator, so the
+  byte product is retired and nothing in it pulls on `T`. What survives is `L3`'s
+  per-shard state count.
+
+So the rule has **one open input, not two**: `L1`'s threshold. A smaller gap than
+the round first reported, and still a gap — a lower-edge rule whose lower edge is
+an underived threshold. That is the correct
+state of the work and not a defect in the rule — but the deliverable here is the
+*rule plus its owed inputs* — `L1`'s threshold and `U1a`'s two undischarged
+quantities — not a value for `T`. (*`L2`'s ruling was the third until
+2026-09-27, when it was ruled and withdrawn as a bound; §3.*)
 
 **Pre-registered falsifiers on any `T` this round selects.**
 
@@ -432,13 +645,50 @@ and saying so is the point.
 2. A sustained serve-throughput figure on the floor device at which `U1b` binds
    below the selected `T`.
 3. A measured `CV_tx` whose `L1` bound exceeds the selected `T`.
-4. An honest single-persona archiver reaching `MAX_HOLDINGS_SHARDS` inside the
-   mining era at the selected `T`.
+4. ~~An honest single-persona archiver reaching `MAX_HOLDINGS_SHARDS`~~ —
+   **struck** with `L2`'s ruling: the cap bounds a list, and an operator posts
+   another record. Replaced by the withdrawal's own falsifier (§3 `L2`): a surface
+   where the cap bounds an *operator* rather than a list.
 5. A second home for `T` appears, or a shard boundary is derived from anything
    but `cumulative_tx_count` and `T` — inherited from the landed row
    (`rust/shekyl-types/src/archival.rs:88-101`).
 
 ---
+
+## 4.1 The W₂ re-run, pre-registered
+
+This measurement now decides both `T` and `L` (`SHT-7`), so its analysis is
+registered **before** it runs. Otherwise it is the one number in the round that
+could be read after the fact to land on 200 — the shape rule 76 refuses in a
+constant and the same reason `L`'s own falsifier says "the re-pin must not simply
+track the measurement upward".
+
+1. **Model.** `t = t_fixed + bytes / v`, fitted **per percentile** (a p99 fit,
+   not a fit through means), over **two or three object sizes** spanning at
+   least a 4× byte range. Two sizes identify the pair; a third tests linearity,
+   and a poor fit is itself a result — it would say the transport does not
+   decompose this way and the ceiling needs a different model.
+2. **Governing regime: soak, not cold.** Witness fetches share circuits with
+   the requester's other traffic and recur every epoch, so the steady-state
+   figure is the one an honest holder lives under. Cold p99 is the outer bound
+   and is reported, not used to select. (This is the stricter of the two, which
+   is the point: it is the direction the asymmetry in §4 says to err.)
+3. **Target witness-miss rate.** Stated as a probability before the fit, with
+   the dependence between circuit latency and shard size stated (the §3 `U1a`
+   qualification (ii)). The bound is then `P(t_fixed + bytes(T)/v > 120 s) ≤`
+   that target over the joint distribution, **not** a product of two p99s.
+4. **Decision thresholds, written down now.** If the fitted `t_fixed` is a
+   *small* share of the measured p99, the per-byte term dominates, the heavy-end
+   ceiling sits near the low end of [140, 490], and `T = 200` is at or over the
+   edge — `U1a` fires and `T` must come down. If `t_fixed` is a *large* share,
+   the ceiling is well above 200 and `U1a` stops being the binding constraint,
+   which hands selection back to `L1`/`L3` (`L2` having been withdrawn as a bound,
+§3). The threshold between those readings
+   is where the heavy-end ceiling crosses the selected `T` at the target miss
+   rate — computable from (1)–(3) the moment the fit exists, and not before.
+5. **What it also re-grounds.** `L`'s fetch span, stated **per byte** instead of
+   per 3.33 MB object (`SHT-7`), which is what stops `T` and `L` from resting on
+   the same retired number.
 
 ## 5. Re-pin plan
 
@@ -452,11 +702,39 @@ that gate's bookkeeping:
   measurement upward. **They must re-pin together, or `T` must be selected
   inside the span `L` already states** — the selection rule in §4 takes the
   second option, which is why it is the cheaper one.
-- **`T` ↔ `MAX_HOLDINGS_SHARDS`** (`= 4096`, frozen in `shekyl-types`). Their
-  product times bytes-per-tx is the most history one bond can carry (~13.7 GB at
-  `T = 200`, §3 `L2`). A `T` re-pin moves that ceiling without touching the cap,
-  so whichever of the two is intended to carry the obligation must be said out
-  loud. Missing from the first pass's coupling list.
+- **`T` ↔ `MAX_HOLDINGS_SHARDS` — STRUCK** by `L2`'s ruling: the cap bounds a
+  list, not an operator, so their product bounds nothing and `T` does not couple to
+  it. Two couplings replace it, and both are owed **only if the cap's own value
+  moves**, never because `T` did:
+  - **`m_min`'s anchor.** The failure window's `m_min` is floor-set on the operator
+    axis *at* the cap — *"false-slash at MAX_HOLDINGS <= target … since every held
+    pair is independently exposed; per-pair alone understates it by up to {MH}x"*
+    (`rust/shekyl-economics-sim/src/mn_feasibility.rs:844-852`; the exposure itself
+    at `:269-273`). If the cap moves, `m_min` is re-anchored to a **deliberately
+    stated "largest honest operator holding"** rather than to a list bound, and
+    `mn_feasibility` re-run.
+  - **The sim populations that read the cap as "the big archiver"** —
+    `stranding.rs:51` (*"5% at the per-bond cap"*), `stage2.rs:1205`,
+    `cartel.rs:702-703`, `burden.rs:168-170` (the 13.6 GB honest-cost figure) and
+    `proxy.rs:56-60` (`max_holdings_bytes`) — re-point at that same stated figure.
+- **`T` ↔ `shekyl_escalation_knee_n`** — **the coupling that must not be created.**
+  `staker_pool_share_at(n: FrozenSegmentCount, …)` (`escalation.rs:269`) ramps the
+  staker share from floor to asymptote and saturates at
+  `shekyl_escalation_knee_n = 100,000` (`config/economics_params.json:17`). Today
+  `n`'s unit is **J-segments**: 100,000 × `segment_leaf_count` (25,992) ≈ 2.6 × 10⁹
+  leaves, ~1.3 × 10⁹ transactions at two outputs each. Re-key `n` to *closed
+  T-shards* and the same literal means 100,000 × 200 = **2 × 10⁷ storage ids** — the
+  knee arrives roughly **65× sooner with no line of the economics changed**, and
+  every future `T` re-pin silently moves when the staker share saturates. That is
+  a **fifth job for `T`** — a clock on monetary policy — and exactly the rule-05
+  failure this round exists to stop, so it is recorded here as a coupling to
+  *refuse* rather than to re-pin. **Recommendation:** re-key `n` to a burden
+  quantity **independent of `T`** — under (B) the natural one is the count of
+  listed transactions in closed shards, read off `cumulative_tx_count` at the
+  closure frontier, so `T` enters only as rounding at the frontier and `knee_n` is
+  re-derived **once**, in transactions, against whatever burden the escalation was
+  meant to track. Whether that is "transactions archived" or "transactions below
+  the discard frontier" is the escalation owner's call; the unit must not be shards.
 - **`T` ↔ `SEB`** only through `U3`, and only under domain (B).
 - No coupling to `D_max`: `T` appears in no reorg-depth argument.
 
@@ -473,6 +751,8 @@ that gate's bookkeeping:
 | **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge |
 | **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
+| **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner, with no economics changed**, and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee-split validity depends on it: a wrong re-key does not mis-price anything, it changes which coinbases are valid. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table; the re-key specification is **E4 / S-ARCH's**, not this lane's |
+| **`SHT-9`** | **A `shekyl-chain-rules` fixture carries a shape consensus refuses.** `harness::fixture::serve_credit_only` builds `prunable: None` with empty `pqc_auths` — the **pre-`RF-D1`** serve-credit form, identified by the *absence* of a prunable region. `RF-D1` inverted that: the region is now present and holds one non-empty pruned pass record per credit vin. Verified empirically rather than read off: `Transaction::validate_context_free_pruned` refuses it — *"serve_credit tx must be fee-only — no outputs, empty `pqc_auths`, no spend-proof material, and exactly one pruned pass record per serve-credit vin (§2.5, RF-D1)"*. It does **not** break `SHT-Q1`'s equivalence (a conforming serve-credit body carries good, and `tx_domain_tests` builds one), but a fixture that consensus would refuse is a false negative waiting for any test that assumes it is valid. | CONFIRMED — found while building the equivalence test; owner the `CHAIN_RULES_SLICE` lane, FOLLOWUPS |
 | **`SHT-Q1` price, withdrawn** | The first pass charged (B) with making prune's mapping "stop being pure arithmetic on the id". **Wrong:** `cumulative_tx_count` *is* the non-coinbase ordinal (`prune.rs:421-428`), and `height_of_tx_id`'s binary search over the running total is already on dev's `h_scarce` path (`prune.rs:490-500`). Under (B) a boundary reads straight off the stored cell with **no coinbase term to add**, so (B) removes an addition from four sites rather than adding a lookup. `SHT-Q1`'s only remaining price is **closure liveness on a quiet chain**. | WITHDRAWN on review |
 
 ---
@@ -486,7 +766,11 @@ Each is a FOLLOWUPS row, not work for this round:
   sweep that would separate the cost signal from the capacity leg, and the
   per-band gate read (max over pre-registered age × cost bands, aggregate
   reported but not graded).
-- The segment-geometry deletion (E3 / E4).
+- The segment-geometry deletion (E3 / E4) — **and with it `SHT-8`'s re-key
+  specification for the escalation operand `n`.** It belongs beside the segment
+  deletion in E4 / S-ARCH's re-key table, not in the `T` lane: this round's job was
+  to find that the operand is segment-keyed and that a shard-keyed replacement
+  would price monetary policy off `T`, not to design the replacement.
 - Any change to channel 1.
 - Composition "attacks" — A4/W9 CLEARED, §12.11.
 - `SHT-5`'s measurement, and `SHT-3`'s stale-text correction in the `SF-` doc.

@@ -10,7 +10,11 @@
 use core::fmt;
 
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{BlockHash, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash};
+use shekyl_types::{
+    BlockHash, CurveTreeRoot, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash,
+};
+
+use crate::drain::Drain;
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use crate::coverage::RuleCoverage;
@@ -321,6 +325,18 @@ pub struct ValidatedBlock {
     transactions: Vec<(TxIdentity, Transaction)>,
     target: Target,
     cumulative_difficulty: CumulativeDifficulty,
+    /// The curve-tree root **after** this block's drain — the state the next
+    /// header must carry (CEN-B5) and a spend referencing `height + 1`
+    /// anchors to (CEN-I12); recorded by `connect` at `curve_tree_roots[h+1]`.
+    /// Derived here because the root determines future validity (DRS-E3
+    /// §3.1, `CTW-Q1`): the authority over validity carries it, and the
+    /// store persists what it is handed. Equal to `root_at(height)` when
+    /// nothing matured at this height.
+    root_after: CurveTreeRoot,
+    /// What the drain at this height appended — each matured output paired
+    /// with its leaf, and the growth those leaves produced — or `None` when
+    /// no output matured (the tree and its root are unchanged).
+    drain: Option<Drain>,
 }
 
 impl ValidatedBlock {
@@ -341,6 +357,8 @@ impl ValidatedBlock {
         hash: BlockHash,
         target: Target,
         cumulative_difficulty: CumulativeDifficulty,
+        root_after: CurveTreeRoot,
+        drain: Option<Drain>,
     ) -> Self {
         let Candidate {
             block,
@@ -356,7 +374,24 @@ impl ValidatedBlock {
                 .collect(),
             target,
             cumulative_difficulty,
+            root_after,
+            drain,
         }
+    }
+
+    /// The tree root after this block's drain (module docs on the field).
+    #[must_use]
+    pub const fn root_after(&self) -> CurveTreeRoot {
+        self.root_after
+    }
+
+    /// What the drain at this height appended — each matured output paired
+    /// with its leaf, and every layer chunk their growth wrote — or `None`
+    /// when no output matured here. `connect` writes exactly this
+    /// (DRS-E3 §3.2).
+    #[must_use]
+    pub const fn drain(&self) -> Option<&Drain> {
+        self.drain.as_ref()
     }
 
     /// The difficulty this block was judged against (CEN-D4, D6).

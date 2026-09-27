@@ -858,5 +858,9 @@ mod tx_tests;
 pub(crate) use tx_tests::{emission, refused_listed, refused_lone, spend, with_inputs};
 
 #[cfg(test)]
+#[path = "tx_domain_tests.rs"]
+mod tx_domain_tests;
+
+#[cfg(test)]
 #[path = "tx_conformance_tests.rs"]
 mod tx_conformance_tests;

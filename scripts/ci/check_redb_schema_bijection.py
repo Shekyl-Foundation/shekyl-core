@@ -67,6 +67,19 @@
 # refuse. Self-asserting like the other two: an entry naming a table not in
 # the X-macro, one that IS defined here, one whose host is NOT defined here,
 # or one with a token for a reason, is red.
+#
+# NOT PORTED (DRS-E3, CTW-2 / CTW-3 / CTW-10 / CTW-Q3). The fifth direction: an
+# X-macro table whose JOB the redb store does without a table — by a function
+# (the pending set is `f(height, is_miner)` over blocks the store holds), by
+# the undo journal (the C++'s per-surface pop journals), or by a row that
+# already exists (the checkpoint is the meta row at intervals). `schema.rs`
+# carries `NOT_PORTED: &[(&str, &str)]` as `(lmdb_name, reason)`. Every entry
+# must be in the X-macro, must NOT be defined in `schema.rs`, must not also
+# be mirrored or folded, and carries a sentence naming what does the job now;
+# a censused table missing from `schema.rs` is red unless it is mirrored,
+# folded, or named here. Not a widening of the other maps: a twin is opened,
+# a host is a definition, and "nothing" is checked by the absence of both —
+# a fourth relationship needs its own message. Self-asserting like the rest.
 import re
 import sys
 from pathlib import Path
@@ -83,6 +96,7 @@ DEF_RE = re.compile(r'(?:Multimap)?TableDefinition::new\("([^"]+)"\)')
 RUST_ONLY_RE = re.compile(r"pub const RUST_ONLY_TABLES\s*:[^=]*=\s*&\[(.*?)\];", re.S)
 MIRRORED_RE = re.compile(r"pub const MIRRORED_ELSEWHERE\s*:[^=]*=\s*&\[(.*?)\];", re.S)
 FOLDED_RE = re.compile(r"pub const FOLDED_INTO\s*:[^=]*=\s*&\[(.*?)\];", re.S)
+NOT_PORTED_RE = re.compile(r"pub const NOT_PORTED\s*:[^=]*=\s*&\[(.*?)\];", re.S)
 # One string literal inside a const-tuple field. A reason may be several,
 # joined, including a `\` newline continuation that the parser elides.
 LIT_RE = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
@@ -172,7 +186,20 @@ def parse_folded(schema: str):
     return out
 
 
-def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=(), folded=None):
+def parse_not_ported(schema: str) -> dict:
+    """`NOT_PORTED` as {lmdb_name: reason}. Raises if the const is absent —
+    the map is part of the gate's subject."""
+    rows = parse_const_tuples(schema, "NOT_PORTED", NOT_PORTED_RE, 2)
+    out = {}
+    for name, reason in rows:
+        if name in out:
+            raise ValueError(f"NOT_PORTED: `{name}` listed twice")
+        out[name] = reason
+    return out
+
+
+def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=(), folded=None,
+          not_ported=None):
     """The set arithmetic over the three surfaces plus the Rust-only map.
     Returns the failure list; empty means the surfaces agree."""
     failures = []
@@ -205,7 +232,8 @@ def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=(),
 
     mirrored = mirrored or {}
     folded = folded or {}
-    missing = sorted(set(censused) - set(defined) - set(mirrored) - set(folded))
+    not_ported = not_ported or {}
+    missing = sorted(set(censused) - set(defined) - set(mirrored) - set(folded) - set(not_ported))
     extra = sorted(set(defined) - set(censused))
     if missing:
         failures.append(
@@ -215,7 +243,8 @@ def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=(),
               "missing a table LMDB has. A table whose twin lives in another file of the "
               "crate is named in MIRRORED_ELSEWHERE with the twin and the reason; one whose "
               "bytes are a field of another table's record is named in FOLDED_INTO with the "
-              "host and the reason.")
+              "host and the reason; one whose job is done without a table is named in "
+              "NOT_PORTED with the reason.")
 
     # FIFTH SURFACE: the mirrored-elsewhere map (S-POOL). Each entry is a
     # censused table with no definition here and a twin defined in the pool
@@ -294,6 +323,35 @@ def check(censused, defined, classed, rust_only, mirrored=None, pool_defined=(),
             f"{len(unreasoned_f)} FOLDED_INTO entr(y/ies) carry no reason (a sentence, "
             f"not a token):\n    " + ", ".join(unreasoned_f))
 
+    # SEVENTH SURFACE: the not-ported map (DRS-E3). Each entry is a censused
+    # table with no definition anywhere in this crate and no forwarding
+    # address — its job is done by a function, the journal or an existing row.
+    np_not_censused = sorted(set(not_ported) - set(censused))
+    if np_not_censused:
+        failures.append(
+            f"{len(np_not_censused)} NOT_PORTED entr(y/ies) name a table that is NOT in the "
+            f"X-macro:\n    " + ", ".join(np_not_censused)
+            + "\n    The map is for censused tables the store does without; a name LMDB never "
+              "had was never a table to port.")
+    np_also_here = sorted(set(not_ported) & set(defined))
+    if np_also_here:
+        failures.append(
+            f"{len(np_also_here)} NOT_PORTED entr(y/ies) name a table that IS defined in "
+            f"schema.rs:\n    " + ", ".join(np_also_here)
+            + "\n    A table is ported or it is not; a definition beside a not-ported entry is "
+              "the table coming back without its reason being withdrawn.")
+    np_forwarded = sorted((set(not_ported) & set(mirrored)) | (set(not_ported) & set(folded)))
+    if np_forwarded:
+        failures.append(
+            f"{len(np_forwarded)} table(s) are named in NOT_PORTED and also mirrored or "
+            f"folded:\n    " + ", ".join(np_forwarded)
+            + "\n    Not-ported means no forwarding address; a twin or a host is one.")
+    unreasoned_np = sorted(n for n, r in not_ported.items() if len(r.split()) < 8)
+    if unreasoned_np:
+        failures.append(
+            f"{len(unreasoned_np)} NOT_PORTED entr(y/ies) carry no reason (a sentence, "
+            f"not a token):\n    " + ", ".join(unreasoned_np))
+
     # FOURTH SURFACE: the Rust-only map. Every extra definition must be named
     # there with a reason; everything named there must be an extra definition.
     unnamed = sorted(set(extra) - set(rust_only))
@@ -347,6 +405,7 @@ def main():
         rust_only = parse_rust_only(schema)
         mirrored = parse_mirrored(schema)
         folded = parse_folded(schema)
+        not_ported = parse_not_ported(schema)
     except ValueError as e:
         report([str(e)])
     if not POOL_SCHEMA.is_file():
@@ -373,13 +432,16 @@ def main():
     if not classed:
         report([f"{CLASSES.name}: parsed ZERO class entries — third surface missing"])
 
-    report(check(censused, defined, classed, rust_only, mirrored, pool_defined, folded))
+    report(check(censused, defined, classed, rust_only, mirrored, pool_defined, folded,
+                 not_ported))
     here = len(set(defined) & set(censused))
     print(f"redb schema bijection: {len(censused)} censused LMDB tables <-> "
           f"{here} mirrored redb table definitions in schema.rs + {len(mirrored)} mirrored in "
           f"the pool file ({', '.join(f'{n}->{t}' for n, (t, _) in sorted(mirrored.items()))}) "
           f"+ {len(folded)} folded into a record here "
           f"({', '.join(f'{n}->{h}' for n, (h, _) in sorted(folded.items()))}) "
+          f"+ {len(not_ported)} not ported with a named reason "
+          f"({', '.join(sorted(not_ported))}) "
           f"<-> {len(classed)} accumulator classes; "
           f"+ {len(rust_only)} Rust-only table(s) with a named reason "
           f"({', '.join(sorted(rust_only))}); {len(defined)} definitions total; "
@@ -562,7 +624,41 @@ pub const FOLDED_INTO: &[(&str, &str, &str)] = &[
             raise SystemExit(f"selftest absent folded map: wrong message {e}")
     else:
         raise SystemExit("selftest absent folded map: expected a refusal")
-    print("redb schema bijection selftest: 4 clean shapes pass, 19 refusals fire")
+    # The not-ported direction (DRS-E3).
+    np_ok = {"c": "the c table's job is done by a function over rows the store already holds"}
+    clean_np = check(censused, ["a", "b", "undo_log"], classed, rust_only, {}, [], {}, np_ok)
+    if clean_np:
+        raise SystemExit("selftest not-ported clean: expected no failures, got:\n  " + "\n  ".join(clean_np))
+    _expect("not-ported entry not censused",
+            check(censused, ["a", "b", "c", "undo_log"], classed, rust_only, {}, [], {},
+                  {"zzz": "a reason long enough to pass the eight-word floor here"}),
+            "NOT_PORTED entr(y/ies) name a table that is NOT in the X-macro")
+    _expect("not-ported entry also defined here",
+            check(censused, ["a", "b", "c", "undo_log"], classed, rust_only, {}, [], {}, np_ok),
+            "NOT_PORTED entr(y/ies) name a table that IS defined in schema.rs")
+    _expect("not-ported entry also folded",
+            check(censused, ["a", "b", "undo_log"], classed, rust_only, {}, [], folded_ok, np_ok),
+            "NOT_PORTED and also mirrored or folded")
+    _expect("not-ported entry with a token for a reason",
+            check(censused, ["a", "b", "undo_log"], classed, rust_only, {}, [], {}, {"c": "gone"}),
+            "NOT_PORTED entr(y/ies) carry no reason")
+    parsed_np = parse_not_ported('''
+pub const NOT_PORTED: &[(&str, &str)] = &[
+    // the pending set
+    ("pending_tree_leaves", "a view of the block index, not a fact: maturity is \\
+     a pure function"),
+];
+''')
+    if parsed_np != {"pending_tree_leaves": "a view of the block index, not a fact: maturity is a pure function"}:
+        raise SystemExit(f"selftest not-ported parse: got {parsed_np!r}")
+    try:
+        parse_not_ported("pub const OTHER: u8 = 1;")
+    except ValueError as e:
+        if "subject missing" not in str(e):
+            raise SystemExit(f"selftest absent not-ported map: wrong message {e}")
+    else:
+        raise SystemExit("selftest absent not-ported map: expected a refusal")
+    print("redb schema bijection selftest: 5 clean shapes pass, 23 refusals fire")
 
 
 if __name__ == "__main__":

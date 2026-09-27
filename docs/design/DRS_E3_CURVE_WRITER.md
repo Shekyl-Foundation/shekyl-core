@@ -1,6 +1,11 @@
 # DRS-E3 — the curve-tree writer: pre-flight
 
-**Status:** OPEN — Round 0 executed 2026-09-26 at `dev@1aa48eff9` (#864
+**Status:** LANDED — **implemented 2026-09-26** on the E3 increment cut from
+`dev@ad557ac5a` (nine commits; §6's record of what moved: 4 split into 4a/4b,
+the oracle after the writer, the field deleted with the writer). Stays in
+`design/`: E4's hook phases cite §3.2, and §3.7's fact-or-view table is the
+test the lane's remaining inherited tables are asked. Pre-flight history:
+Round 0 executed 2026-09-26 at `dev@1aa48eff9` (#864
 merged; #861 merged); **Round 1 RULED 2026-09-26 (maintainer, on PR #873)** —
 `CTW-Q1` ruled with a corrected justification, `CTW-Q2` **dissolved** (the
 table it asked about does not survive), `CTW-Q3` default, `CTW-Q4` ruled with
@@ -17,7 +22,8 @@ boundary statement it builds against is [`DRS_E1_SCURVE.md`](DRS_E1_SCURVE.md)
 §2.3. Template: the DRS-E1 pre-flight shape (`CHAIN_RULES_CRATE.md` §7.5.1
 applied to a store increment), as `DRS_E1_SCURVE.md` used it.
 
-**One sentence.** The daemon store's connect has an empty `[E3 hook]` at
+**One sentence (as it stood at the pre-flight; landed 2026-09-26).** The
+daemon store's connect has an empty `[E3 hook]` at
 phase 3 and records a curve-tree root it was *handed* (`facts.root_after`,
 borrowed from the LMDB record on replay — `DRS_E2_REPLAY_DRIVER.md` RD-Q9);
 E3 makes the Rust stack **grow the tree itself** — the matured outputs of
@@ -386,7 +392,10 @@ the same commit removes the thing being compared. Two clean shapes; the
 second is ruled: **the comparison lives in the replay driver**, which holds
 the `Trace` separately (`facts.rs:15`, the `Trace` / `Composed` seam) and
 does not need the field. The driver asserts `derived == trace` per block —
-a DIVERGE under the grader's law (RD-Q6), never a silent pass — across **all
+a DIVERGE under the grader's law (RD-Q6), recorded as the run's root oracle
+(`GradedRun::root_oracle`). The checkpoint digest stays the digest clause:
+it carries only the live root, so an interior miss is the oracle's fact.
+Across **all
 four captured chains at every height, not a sample**, because this
 comparison exists only while the LMDB trace does. Sequence: the oracle
 lands (commit 5) before the field is deleted (commit 6). `Origin::PassedThrough`
@@ -553,21 +562,75 @@ table, disclosed in the commit that sheds it. Slipped that way it is a
 disposition and the count remains checkable; slipped as "we'll get to it" it
 is what makes the next estimate unfalsifiable.
 
+### 6.1 What the table got wrong about its members — RECORD 2026-09-26
+
+Nine commits landed against eight planned; none slipped, and the count is
+not an overrun. The table was wrong about the **order and the grouping**,
+and the correction is recorded here rather than absorbed:
+
+- **Row 4 was two commits.** 4a (`tree_growth.rs`, the arithmetic alone —
+  where the C++'s depth-3 divergence was reproduced and fixed against
+  `try_build_layers`) and 4b (the view reads, `drain.rs`, the verdict
+  carrying `root_after` + `Drain`). The arithmetic wanted a test surface of
+  its own before a view existed to feed it.
+- **Rows 5 and 6 were in the wrong order, and the field went with the
+  writer.** The derived-vs-trace comparison is meaningless before the store
+  grows — before commit 5 (writer) every derived growth started at leaf 0
+  over the seal's frontier — so the oracle (§3.8, `CTW-Q6`) landed **after**
+  the phase-3 body, as commit 6. And `ConnectFacts.root_after` could not
+  survive the writer by one commit honestly: a passed-through root the store
+  ignores is a lie about provenance, and comparing it refuses every caller
+  (the driver's placeholder, the fixtures' `0xc0 + h`). It was deleted in the
+  writer's commit; the trace record keeps `root_after` as the oracle's
+  comparison input, which is the shape `CTW-Q6` ruled ("the driver holds the
+  trace"). Commit 6 is the oracle and nothing else. The B5 header check was
+  the oracle in the interim: every captured header carries the C++'s root.
+- **Row 7 built on the wallet-side tree, not a store-side path read.**
+  `scenario_spend.rs` assembles the membership path from
+  `shekyl_curve_tree::CurveTreeClient` fed the same blocks, and holds its
+  root equal to the store's at every height — DRS-D3c's two producers
+  compared, which a store-side `assemble_path` would not have given. The
+  first attempt signed the PQC auths over the prefix hash, as
+  `fcmp_spend_e2e` does; CEN-I18 refused it. The rule was right; the payload
+  is `pqc_signing_payload_hashes` over the body with the key in place.
+- **Commit 5 (the protected one) reported no disagreement.** Derived root ==
+  trace root at all 1 979 heights of the four chains, including
+  `spend-depth3`'s 762; the tip digests match. The protection was not needed
+  this time; it stays in the text for the next lane.
+
+**Shard geometry, recorded here (maintainer finding, 2026-09-26).** Two
+definitions of "shard" are live on `dev`: `T` (`archival_shard_tx_count`,
+one production consumer — `prune.rs`'s discard) and the retired leaf segment
+(`segment_leaf_count`, `SEGMENT_LAYER_J`, `leaves_per_segment()` in
+`shekyl-fcmp/src/tree.rs`, consumed by `frozen_segment_count`, the FFI
+schedule, `shekyl-curve-tree`'s wallet-side store and served frame,
+`p-fetch`'s sizing, the economics sim and bench). The second sits beside the
+widths E3 writes with; E3 did not touch it: the drain is `f(height,
+is_miner)`, growth is `grow(frontier, leaves)`, no segment boundary, no
+freeze step, no read of either geometry or of `T` (§7's row). Its deletion is
+each consumer's lane's — E4 / S-ARCH for escalation, coverage and pop
+revert; p-fetch for sizing (`N × MAX_TX_SIZE`, SF-D7); DRS-D3c for the
+wallet-side partition; the sim's — and `segment_leaf_count` leaves the JSON
+with it (§3.9). The `CTW-1` hook comment named the freeze; it was corrected in
+commit 5, the commit that landed the body it stood in for.
+
 ---
 
 ## 7. What E3 unblocks, and the measurable
 
 | Waiting | Falsifier |
 | --- | --- |
-| E6 CEN-I13 | `rg 'fn depth_at' rust/shekyl-chain-rules/src/view.rs` → the trait method, `BatchView` impl in `store/view.rs` |
-| E6 CEN-I15, H19-verify | a scenario spend judged against a real tree (commit 7) |
-| CEN-F17 | `curve_tree().leaf_count > 0` after replaying a chain with outputs; `curve_tree_leaf_counts` read directly |
-| DRS-D3c | named in its FOLLOWUPS row (`:221`) |
-| `placeholder_root_after` | `rg placeholder_root_after rust/` → nothing |
-| `root_after`'s origin | **`Provenance::passed_through` decomposes from six (four composed, two no-source-yet) to five (four composed, one no-source-yet: `long_term_effective_median`, waiting on G6)** — the number the increment's record states, the way slice 6's §5.1 stated its commit count |
+| E6 CEN-I13 | `rg 'fn depth_at' rust/shekyl-chain-rules/src/view.rs` → the trait method, `BatchView` impl in `store/view.rs` — **HOLDS 2026-09-26** (provided over `leaf_count_at`) |
+| E6 CEN-I15, H19-verify | a scenario spend judged against a real tree (commit 7) — **HOLDS 2026-09-26** (`scenario_tests::a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree`) |
+| CEN-F17 | `curve_tree().leaf_count > 0` after replaying a chain with outputs; `curve_tree_leaf_counts` read directly — **HOLDS 2026-09-26**; the operand's *definition* (leaf segments vs closed `T`-shards) is E4's, FOLLOWUPS |
+| DRS-D3c | named in its FOLLOWUPS row (`:221`) — the wallet-side client and the store agree at every header root over a 72-block scenario (commit 7's oracle) |
+| `placeholder_root_after` | `rg placeholder_root_after rust/` → nothing — **HOLDS 2026-09-26** |
+| `root_after`'s origin | **`Provenance::passed_through` decomposes from six (four composed, two no-source-yet) to five (four composed, one no-source-yet: `long_term_effective_median`, waiting on G6)** — the number the increment's record states, the way slice 6's §5.1 stated its commit count — **HOLDS 2026-09-26** (`FACT_FIELDS` 5; the grader reports CEN-B5's component real with no harness change) |
+| The tree's structure stays uncoupled from the archival partition (§6.1) | `rg 'leaves_per_segment\|SEGMENT_LAYER_J\|frozen_segment_count' rust/shekyl-chain-rules rust/shekyl-chain-store` → nothing, and `rg SHARD_TX_COUNT rust/shekyl-chain-store/src rust/shekyl-chain-rules/src` → `prune.rs` only — **HOLDS 2026-09-26**. The deletion lanes' falsifier is separate: `rg segment_leaf_count config/consensus_constants.json` → nothing, lifting when E4 / S-ARCH, p-fetch and DRS-D3c re-key their consumers |
 
 Denominator at the pin: `cargo test -p shekyl-chain-store --lib` 360,
-`-p shekyl-chain-rules --lib` 241, `-p shekyl-chain-ingest` 82;
+`-p shekyl-chain-rules --lib` 241, `-p shekyl-chain-ingest` 82; **at
+landing: 365 / 255 / 84** (+5 store, +14 rules, +2 ingest);
 `check_redb_schema_bijection.py` / `check_redb_schema_key_types.py` (four tables out, one in: the set moves by −3); `check_store_invariant_register.py` (SI-17/18 — SI-16 is S-POOL's); the chain-rules coverage
 gate **unchanged** — growth is an operand, not a row (§3.1); the doc gates.
 Extended: the E2 conformance run with the root oracle on (commit 5).
@@ -612,4 +675,5 @@ LANDED, staying in `design/` while E4's hook phases cite §3.2.
 | 2026-09-26 | **Round 1 RULED on PR #873 (maintainer).** Q1 the verdict, justification corrected (the root's reach, not a rule that checks it; `Composed` assembles, never computes); Q2 dissolved with the pending table (CTW-10 — maturity is `f(height, is_miner)`, verified at `blockchain_db.cpp:554–567`); Q3 neither; Q4 the primitive, `curve_tree_leaf_counts`; Q5 yes, as F6's sibling; Q6 the oracle moves into the driver before the field goes. CTW-9 (library arities) and CTW-11 (drain order as invariant) added from the round; CTW-Q7 posed. §3.7's test — *fact, or a view of facts I already hold?* — recorded as the question asked of every table this lane inherits. Commit table with costs and the signal (§6) written before the work. |
 | 2026-09-26 | **Round 1, second pass (maintainer, PR #873).** CTW-Q7 RULED: Shekyl-named, const-asserted, not in the JSON — the nameable-differently discriminator recorded (§3.9), which also grounds SPR-10's sourcing answer. **Third pass, same day:** `T` stays in the JSON — it passes the discriminator (an archival policy unit a network could size differently); the ruling's sentence pairing `T` with the arities was the review's borrowed grouping, corrected on escalation (§3.9). No `RuleCoverage` row for growth: a rule refuses, growth propagates; growth is an operand of F17 / I12 / I13 / I15, and the instrument is `passed_through` 6 → 5 (§3.1, §7). Commit 5's halt named as a finding, not an overrun (§6). §3.7's fact-or-view table marked transferable. |
 | 2026-09-26 | **Pointers placed for the discriminator and the oracle (maintainer, PR #873).** §3.9's nameable-differently test is now the JSON's second membership test at the file's own `_comment` and in the digest pin's ADDED-key message (`shekyl-rpc-types/build.rs`), so the next lane adding a constant finds the test rather than its nearest neighbour. The grouping variant of rule 16's corollary recorded in the rule. Commit 5 protected in §6: a disagreement is a finding, adjudicated against the spec, never a fixture problem. |
+| 2026-09-26 | **Increment landed (nine commits, `feat/drs-e3-curve-writer` off `dev@ad557ac5a`).** §6.1 records what the table got wrong about its members: 4 → 4a/4b; the oracle after the writer; `ConnectFacts.root_after` deleted with the writer, commit 6 the oracle alone; commit 7 on the wallet-side tree. The protected commit reported no disagreement: derived == trace at all 1 979 heights of the four captured chains, tip digests matching. Two rules caught the increment's own mistakes on the way: CEN-I18 refused PQC auths signed over the prefix hash (the payload is the body hash), and `clippy` refused a constant assertion. The maintainer's shard-geometry finding (two live definitions, one beside E3's widths) validated at source and recorded in §6.1 with an E3-scoped falsifier in §7; the consumer list corrected upward (the wallet-side store and served frame are the largest consumer). |
 | 2026-09-26 | **#873 review (Copilot), six findings, all validated at source.** CTW-6 corrected (two Rust homes, neither the rules crate — not "no Rust home"); CTW-7 corrected (`TreePosition` is in `shekyl-types`; the open item is the table key); SI-17/18 (SI-16 is S-POOL's); `CTW-Q-C` → `CTW-Q6`; index Q7 status → ruled; the table-set arithmetic (four out, one in, −3). The JSON's second test reconciled with the file: `segment_leaf_count` grandfathered and scheduled, CEN-I4's cap is not a structural counter-example. Two of the six were the rule-16 corollary inside a finding about sourcing — written from a plan's prose and a C++ define instead of the Rust tree. |

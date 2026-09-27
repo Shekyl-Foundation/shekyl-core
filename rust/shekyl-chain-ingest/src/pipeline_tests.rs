@@ -34,7 +34,8 @@ use crate::source::{IngestEvent, SequenceNo, Sequenced};
 use crate::test_support::{anchor, at};
 use crate::test_support::{
     block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg, expected_state, h,
-    key_image, open_store, reorg, spend, tmp, trace_of, Family, Scripted, FIRST_SPEND_HEIGHT,
+    key_image, open_store, reorg, spend, tmp, trace_of, Family, GrownTree, Scripted,
+    FIRST_SPEND_HEIGHT,
 };
 use crate::trace::Trace;
 
@@ -415,7 +416,13 @@ async fn a_refusal_ends_the_run_and_is_a_disagreement_the_report_names() {
     let path = tmp("pipeline-refusal");
     let main = chain(3);
     // Block 2 chained on a wrong parent: A2 refuses it.
-    let orphan = block_with_nonce(2, BlockHash::from_bytes([0x77; 32]), &[], 5);
+    let orphan = block_with_nonce(
+        CurveTreeRoot::EMPTY,
+        2,
+        BlockHash::from_bytes([0x77; 32]),
+        &[],
+        5,
+    );
     let trace = Arc::new(trace_of(&main, false));
     let events = vec![
         IngestEvent::Extend(Box::new(candidate(&main[0].0, &main[0].1))),
@@ -627,8 +634,11 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
         anchor(hashes, height, spend(key_image(Family::Fork, height)))
     };
     let mut fork_hashes = main_hashes[..=at(f)].to_vec();
+    // The fork's tree is the main chain's through `f`, then its own.
+    let mut fork_tree = GrownTree::over(&main[..=at(f)]);
     let fork_a_spend = fork_spend(&fork_hashes, f + 1);
     let fork_a = block_with_nonce(
+        fork_tree.root_going_into(f + 1),
         f + 1,
         main_hashes[at(f)],
         core::slice::from_ref(&fork_a_spend),
@@ -636,8 +646,10 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     );
     assert_ne!(fork_a.hash(), main_hashes[at(f + 1)]);
     fork_hashes.push(fork_a.hash());
+    fork_tree.push(&fork_a, core::slice::from_ref(&fork_a_spend));
     let fork_b_spend = fork_spend(&fork_hashes, f + 2);
     let fork_b = block_with_nonce(
+        fork_tree.root_going_into(f + 2),
         f + 2,
         fork_a.hash(),
         core::slice::from_ref(&fork_b_spend),
@@ -740,6 +752,51 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
     assert_eq!(at, h(boundary + 1));
     assert_eq!(ours, theirs, "the fork's tip matches its own trace");
     assert_eq!(ours, expected_state(&r.after));
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
+    // The trace is indexed by height and describes the chain the daemon
+    // ended on. Heights the main chain connected past the fork point were
+    // compared against the fork's rows; once the rewind pops them, those
+    // results are not comparisons against anything and are retracted, and
+    // the re-extension compares the canonical blocks afresh (DRS-E3 CTW-5,
+    // #878 review). Main 0..=34 with two-output spends; rewind to 21; fork
+    // 22..=35 with three-output spends, so from 32 on (block 22's outputs
+    // maturing) the two trees differ — the premise is asserted, not assumed.
+    let path = tmp("pipeline-rewind-roots");
+    let r = reorg(35, 21, 14);
+    let main_tree = GrownTree::over(&r.main);
+    let fork_tree = GrownTree::over(&r.after);
+    assert_ne!(
+        main_tree.root_after(33),
+        fork_tree.root_after(33),
+        "the fixture's fork grows a different tree past the fork point"
+    );
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_of_reorg(&r);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        cfg(4),
+    )
+    .await
+    .expect("the reorg replays");
+    assert_eq!(report.popped(), 13, "22..=34 popped");
+    // 36 canonical heights compared — not 36 + 13: the popped heights'
+    // results are gone, the re-extended ones replaced them.
+    assert_eq!(report.roots.compared(), r.after.len() as u64);
+    assert_eq!(report.roots.diverged().count(), 0, "{:?}", report.roots);
+    assert_eq!(report.disagreements().count(), 0);
+    assert!(report.observations().roots.diverged_at.is_empty());
+    let Checkpoint { ours, theirs, .. } = report.checkpoint.expect("covered-tip checkpoint");
+    assert_eq!(ours, theirs);
     cleanup(&path);
 }
 
@@ -928,9 +985,13 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
     let chain = chain(3);
     let trace = {
         let mut w = TraceWriter::new(Vec::new()).expect("header");
+        let tree = GrownTree::over(&chain);
         for hh in 0..3u64 {
-            w.push_facts(h(hh), &crate::test_support::facts_at(hh))
-                .expect("facts");
+            w.push_facts(
+                h(hh),
+                &crate::test_support::facts_at(hh, tree.root_after(hh)),
+            )
+            .expect("facts");
         }
         w.push_checkpoint(&[0xEE; 32]).expect("a wrong checkpoint");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
@@ -971,6 +1032,89 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
             Clause::Component,
             GradedAcceptance::FailedConformantDiffered
         )
+    );
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
+    // The root oracle's negative control (rule 47; DRS-E3 CTW-5): a trace
+    // whose recorded `root_after` at one interior height is not what the
+    // validator derives DIVERGEs at that height — with the checkpoint
+    // still matching, because the digest carries only the *live* root —
+    // and the observation folds it in so a graded run does not pass. This
+    // is exactly the disagreement the covered-tip checkpoint cannot see.
+    use crate::grader::{grade_run, Register};
+    use crate::pipeline::Disagreement;
+    use crate::trace::{Trace, TraceWriter};
+    use shekyl_types::CurveTreeRoot;
+    let path = tmp("pipeline-root-oracle-control");
+    let chain = chain(3);
+    let tree = GrownTree::over(&chain);
+    let wrong = CurveTreeRoot::from_bytes([0xEE; 32]);
+    let trace = {
+        let mut w = TraceWriter::new(Vec::new()).expect("header");
+        for hh in 0..3u64 {
+            let root = if hh == 1 { wrong } else { tree.root_after(hh) };
+            w.push_facts(h(hh), &crate::test_support::facts_at(hh, root))
+                .expect("facts");
+        }
+        w.push_checkpoint(&expected_state(&chain))
+            .expect("the true checkpoint");
+        Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
+    };
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the run itself completes; the verdict is the grader's");
+    assert!(
+        report.checkpoint.expect("covered tip").identical(),
+        "the tip digest agrees: the interior root is invisible to it"
+    );
+    assert_eq!(
+        report.roots.compared(),
+        3,
+        "every connected height compared"
+    );
+    assert_eq!(
+        report.roots.diverged().copied().collect::<Vec<_>>(),
+        vec![crate::pipeline::RootDivergence {
+            at: h(1),
+            ours: tree.root_after(1),
+            theirs: wrong,
+        }]
+    );
+    assert_eq!(
+        report.disagreements().collect::<Vec<_>>(),
+        vec![Disagreement::RootDiverged { at: h(1) }]
+    );
+    let obs = report.observations();
+    assert_eq!(
+        obs.digest_identical,
+        Some(true),
+        "the checkpoint matched; the interior root is the oracle's fact"
+    );
+    assert_eq!(obs.roots.compared, 3);
+    assert_eq!(obs.roots.diverged_at, vec![h(1)]);
+    let register = Register::from_json(
+        r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-B5","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
+    )
+    .expect("register");
+    let graded = grade_run(&register, &obs);
+    assert!(!graded.passes(), "the oracle fails the graded run");
+    assert_eq!(graded.root_oracle.diverged_at, vec![h(1)]);
+    assert!(
+        graded.unadjudicated.is_empty(),
+        "the digest clause stays agreed"
     );
     cleanup(&path);
 }
