@@ -162,7 +162,7 @@ today — and are **not** corrected here; the census re-pin is commit 10's).
 | row | b | what the C++ does at `ad557ac5a` | Rust body today | proposed disposition |
 | --- | --- | --- | --- | --- |
 | **G1** | 4 | `m_db->tx_exists(tx_id)` → `reject_block_form` (`:5516–5522`); the miner tx is not in `tx_hashes`; a duplicate *inside* `tx_hashes` is refused by the second insert (`TX_EXISTS`, L3) | store belt SI-3 (`tx_indices` insert, `connect.rs:529`); **no view read** for the question | **`BlockRule`** over a new `ChainView::has_transaction(&TxHash) -> bool` (the `has_key_image` shape, K1; one body with the store's read); refuses at the listing's `Locus`. Q3 asks whether the Rust rule also refuses the intra-block duplicate the C++ leaves to its belt |
-| **G2** | 4 | `take_tx` from the pool, else the block supplement; a hash resolving to neither → `MISSING_TXS` outcome, not a rejection (`:5551–5588`); **body ↔ hash agreement is established by lookup under the computed hash** | **nothing binds a listed body to `tx_hashes[i]`** — E2's `ReorderedBodies` connects (§1.1) | **`FormRule`** (form stage, no view — `rules/mod.rs:156`): `transactions.len() == tx_hashes.len()` and `hash(body_i) == tx_hashes[i]` for every `i`; refuses at `Locus::Listed { slot }`. The *resolution* half (pool/supplement) is the ingest's and E5's, not a rule; the *agreement* half is consensus and is the row (§3.1) |
+| **G2** | 4 | `take_tx` from the pool, else the block supplement; a hash resolving to neither → `MISSING_TXS` outcome, not a rejection (`:5551–5588`); **body ↔ hash agreement is established by lookup under the computed hash** | **nothing binds a listed body to `tx_hashes[i]`** — E2's `ReorderedBodies` connects (§1.1) | **`FormRule`** (form stage, no view — `rules/mod.rs:156`): `transactions.len() == tx_hashes.len()` and `hash(body_i) == tx_hashes[i]` for every `i`; refuses at `Locus::Tx { slot: TxSlot::Listed(i) }` for the first mismatching index, `Locus::Block` for a length mismatch. The *resolution* half (pool/supplement) is the ingest's and E5's, not a rule; the *agreement* half is consensus and is the row (§3.1) |
 | **G3** | 4 | supplement txs pass `ver_non_input_consensus` before connect (`:5440`) | `validate` runs `tx_form` on **every** listed body regardless of where the ingest got it (`validate.rs:336`); there is no pool path into `validate` | **`by_construction`** on `validate`'s slot loop; falsifier: a listed body failing an H row refuses the block (exists: the slot-loop tests) |
 | **G4** | 1 | every listed tx through `check_tx_inputs` at connect (`:5636–5648`); pool-verified txs skip only the FCMP re-verify, hash-gated (M8) | `tx_against` on every slot, unconditionally (`validate.rs:340`); the crate has no admission cache and no skip | **`by_construction`** on the same loop; the M8 skip is a *cost* behaviour of the C++ (a re-verify of a proof already verified over the same bytes has the same verdict), recorded as such — **not** a divergence (§3.2). Falsifier: a listed spend failing I7 refuses the block (exists) |
 | **G5** | 4 | `n_pruned > 0` → `reject_block_internal` (`:5659–5663`): a pruned block has no weight source | `tx_form` refuses the storage-pruned form before this stage (H-rows; the wire's `into_full` is the only door, `transaction.rs:2089`) | **`by_construction`** on the wire's full-transaction type; falsifier: the H fixture that refuses the pruned form. Confirm at commit 2 that such a fixture exists at both sites; if not, it is this slice's to add (§3.3) |
@@ -261,8 +261,8 @@ the row's own witness is the driver's, per `50-testing.mdc`.
 **Q7 — RULED 2026-09-26, the proposed grading taken:** the *set* is bound
 by the merkle, the *pairing* is not; G2 lands as a `FormRule` —
 `transactions.len() == transaction_hashes.len()` at `Locus::Block`,
-`hash(body_i) == transaction_hashes[i]` at `Locus::Listed { slot }` for the
-first mismatch — consensus-relevant, one CHANGELOG line, disclosed as L1's
+`hash(body_i) == transaction_hashes[i]` at `Locus::Tx { slot:
+TxSlot::Listed(i) }` for the first mismatching index — consensus-relevant, one CHANGELOG line, disclosed as L1's
 class reached before its peer path existed, not as an incident. The corpus
 loader's check stays, tested as a belt (slice 6 re-pointed the SI-1 tests
 the same way).
@@ -476,7 +476,8 @@ file, left in good shape; disclosed, not "while we're here").
 | stage | rows | why |
 | --- | --- | --- |
 | form (`FormRule`, no view) | G2 | body ↔ hash is a property of the candidate's bytes alone |
-| `validate`, after the slot loop (`BlockRule`, view) | G1, G7, G9, G10 | span the slots; G1 reads the chain, the others read only the block |
+| `validate`, **before** the slot loop (`BlockRule`, view) | **G1** | the C++'s order (`tx_exists` `:5516` before `check_tx_inputs` `:5639`), the cheap check first — and the only order under which G1 has a witness on spends: after the loop, I7 refuses a re-listed spend at its input and L1 refuses a doubled one, and G1 never fires (Q8). Pinned by a test that fails if the order flips |
+| `validate`, after the slot loop (`BlockRule`, view) | G7, G9, G10 | span the slots; read only the block; beside L1 |
 | `validate`, definition rows (before the coinbase's 4.F consumers) | G6, G6b, then F14 → F14b → F16 → G12 (→ F17 → F18 → G11/G13 in wave B) | the D4 arrangement: the median yields, the penalty consumes, the paid reward advances the supply |
 | by construction | G3, G4, G5 | the slot loop and the wire's full type |
 
@@ -495,8 +496,8 @@ when an operand is absent. Wave B extends the sequence in place.
 | 3 | **`ChainView` grows** — the weights read (Q2's shape) and `has_transaction` — trait, `BatchView`, `MockChain`, the store's conformance test holding the mock to the store, **one commit, both sides** (slice 6 §5.1's rule) | commit 2 (c) |
 | 4 | **G6 / G6b** as `judge_emission`'s first two definitions in `rules/block_weight.rs`; the two windows as generated consts (Q6, with the two `#define`s repointed and the dead fee define deleted, §3.10); the mock holds the clamps at their boundaries **and the `min(window, h)` arm at low heights** (C2-R2 Q2's early-chain weakness — below 100 000 the window is the chain); the captured chains replay through both at parity (§3.8) | commit 3 |
 | 5 | **F14, F14b, F16, G12** — the sequence completed through the paid reward; `ConnectFacts.{weight, long_term_weight, long_term_effective_median, coins_generated}` read off the verdict, the ingest's four composed lines deleted (`Provenance::passed_through` re-counted with E3's) | commit 4 |
-| 6 | **G2** as a `FormRule` in `form`; E2's `ReorderedBodies` flips from pinned-connects to refusing at `Locus::Listed` | commit 2 (a) |
-| 7 | **G1, G7, G9, G10** as `BlockRule`s after L1; G9's admitted pair as a positive fixture; the driver gains `DuplicateListing`, `DuplicateServeCredit`, `DuplicateClaim`, `DuplicateBondPost` spec-first in `DRS_E2_REPLAY_DRIVER.md` §3.10 | commit 3 |
+| 6 | **G2** as a `FormRule` in `form`; E2's `ReorderedBodies` flips from pinned-connects to refusing at `Locus::Tx { slot: Listed(0) }`; `MissingBody` (→ `Locus::Block`) and `SubstitutedBody` (→ `Listed(i)`) join it | commit 2 (a) |
+| 7 | **G1** as a `BlockRule` **before** the slot loop, **G7, G9, G10** after it beside L1 (§4); the order pinned by a test in which a re-listed spend is refused on G1, not I7; G9's admitted pair as a positive fixture; the driver gains `RelistedTransaction` and `DoubledListing` (→ G1, `Locus::Tx { slot: Listed(second) }`), `DuplicateServeCredit`, `DuplicateClaim`, `DuplicateBondPost` (→ `Locus::Input` at the second occurrence), `OverweightBlock` (→ F14, `Locus::Block`) — **written spec-first in `DRS_E2_REPLAY_DRIVER.md` §3.10 at commit 2**, each row's locus derived from the refusal's own evidence (Q8), so the rows carry the distinguishing work before there is code to check them against | commit 3 |
 | 8 | **G3, G4, G5** registry entries, `by_construction` with their falsifiers named; conformance re-check (the register's G rows, `:640–646`, re-read against the crate) | commit 7 |
 | 9 | **Wave B — F17, F18, G11, G13** if E3's `leaf_count` has landed; else **the named successor**, one FOLLOWUPS row, falsifier `rg 'fn leaf_count_at\|fn depth_at' rust/shekyl-chain-rules/src/view.rs` → present with `BatchView`'s impl, then this row lands as one commit extending `judge_emission` and `WrongReward` flips | E3 commit 4 |
 | 10 | **Docs:** census 4.G re-pinned at the landing tree, **G6/G6b's *"shipped ×50 … until the port"* clauses corrected** (§3.8); the register's CEN-G6/G6b rows **re-reviewed at the landing tree** (DIVERGENT → CHECKED-CONFORMANT if the read holds; tally derived from `check_conformance_coverage.py`, not by hand); `CHAIN_RULES_CRATE.md` §4.3 (the two reads), §4.6 (`judge_emission`, the verdict's seven values and Q5's test); `DAEMON_REDB_STORE.md` §7.5; index; FOLLOWUPS (the F14-family residue closed; the wave-B row if deferred; the two rows §3.9/§3.10 opened); CHANGELOG — G2 (Q7, one line), and if the tally is 127 / 1 / 5, that CEN-I4 is the register's only recorded divergence | — |
@@ -536,7 +537,7 @@ the rules.
   (`rules/mod.rs:156`). A view-less `BlockRule` is not a class the crate
   has.
 - **Q7 RULED 2026-09-26**, and Q8's two G2 loci with it: length mismatch at
-  `Locus::Block`, first hash mismatch at `Locus::Listed`. The claim that
+  `Locus::Block`, first hash mismatch at `Locus::Tx { slot: Listed(i) }`. The claim that
   the `ReorderedBodies` pin was never witnessed is withdrawn in §3.1: the
   pin ran on the harness chain (`mutation_tests.rs:261`, two bodies at
   `:361`); the captured chains are `TooFewBodies` and the family does not
@@ -645,13 +646,54 @@ the rules.
   pin ran on the harness chain, never on a captured one (§3.7). The
   alternative — a pairing gap with no security line — was the first cut
   of §3.1, and the connect read refutes it.
-- **Q8 — the loci.** G2's two loci RULED with Q7: length mismatch at
-  `Locus::Block`, first hash mismatch at `Locus::Listed { slot }` (§3.1).
-  The rest default: G1 at `Locus::Listed { slot }`. G7 at `Locus::Input { slot, input }`
-  (the vin carries the triple); G9/G10 at `Locus::Input` likewise; F14
-  at `Locus::Block`; the definitions record only. Default as stated;
-  E2's §3.10 rows are written from these before the rules exist, as
-  slice 6 did.
+- **Q8 — the loci. RULED 2026-09-26 under two tests, read at the code
+  rather than from the labels.** *The first test:* **a locus must be
+  derivable from the refusal's own evidence** — what the rule computed on
+  its way to refusing, not what the fixture author knows or the mutation
+  changed. A rule that cannot name the place has a coarser locus than
+  claimed, and an `ExpectedPlace` at the finer one asserts what the rule
+  never established. *The second:* **two rows sharing a locus and a
+  trigger are indistinguishable to a mutation**, and `ExpectedPlace`
+  passes silently when the wrong row refuses (slice 5's Q8, `WrongReward`
+  keyed to a row that would never refuse) — so for each shared locus
+  there must be a mutation that trips one row and not the other, written
+  before commit 2's table, not after. **Two corrections to the doc
+  first:** `Locus::Listed { slot }` is not a variant — `Locus` is `Block |
+  Tx { slot: TxSlot } | Input { slot, input }`, `TxSlot` is `Miner |
+  Listed(usize) | Lone` (`verdict.rs:136–165`); the spelling is `Locus::Tx
+  { slot: TxSlot::Listed(i) }`. And the review's premise that G1 has a
+  *root arm* whose evidence names no slot is refused at the line: **no
+  rule compares a merkle root to anything** — the tree hash over the
+  declared list is an *input to the identity* (`Block::pow_blob`,
+  `shekyl-wire/src/block.rs:233–235`; B6 records it, D2 judges the PoW
+  over it), so a different list is a different block, not a mismatch. The
+  only hash-against-hash comparison in 4.G is G2's, per index by
+  construction. **Under the first test:** G2 — length at `Locus::Block`
+  (no slot in evidence), first mismatching index at `Locus::Tx { slot:
+  Listed(i) }` (the rule computed exactly *i*); G1 — both arms (on the
+  chain / earlier in this block) at `Locus::Tx { slot: Listed(i) }`, the
+  slot whose hash the rule looked up, the second occurrence for the
+  intra-block arm; G7/G9/G10 at `Locus::Input { slot, input }`, the vin
+  the key was read from; F14 at `Locus::Block` — the census cell (`:391`)
+  is the weight-limit arm, whose evidence is the block's summed weight;
+  the coinbase's claim is F18's (`:396`) at `Locus::Tx { slot: Miner }`,
+  where `WrongReward` already points. Definitions record only. **Under
+  the second test, the finding — an ordering, not a locus:** G1's
+  chain-duplicate arm shares its *trigger* with I7 (a re-listed spend's
+  key image is spent) and its intra-block arm with L1 (a doubled spend's
+  image appears twice). If G1 runs after the slot loop, I7 refuses at
+  `Locus::Input` first and L1 catches the double before G1 sees the hash
+  — **G1 would have no witness on any spend**. So G1 runs **before** the
+  slot loop (§4), the C++'s own order (`tx_exists` `:5516` before
+  `check_tx_inputs` `:5639`), and the order is pinned by a test that
+  fails when it flips — ordering arguments being the class wrong twice
+  this month. The remaining shared loci separate by trigger:
+  `Locus::Block` carries G2-length (`MissingBody`) and F14
+  (`OverweightBlock`) beside B5/C1/C2/D1, each with a mutation that trips
+  one and not the others; `Locus::Input` carries G7/G9/G10 beside L1, I7
+  and I18, each keyed to a different input variant, so one body cannot
+  trip two. The seven mutation rows (§5 row 7) are written spec-first at
+  commit 2 from these loci.
 - **Q9 — the divergence going live. RE-RULED 2026-09-26: G6 lands at
   parity; the divergence is in the record, not the code.** *Records-was,
   the question as asked:* with G6 the Rust validator would refuse a block
