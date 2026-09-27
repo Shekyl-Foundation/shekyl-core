@@ -212,8 +212,9 @@ threads. The daemon prints it once every runtime it builds comes from
 `shekyl-tor-control-daemon` `blocking.rs` still construct their own, so
 the print is not wired. A total taken while those builders are off the
 ledger would omit the pools the sum exists to count. The clearnet
-connector is the first caller that keeps a runtime. Its call passes a
-blocking cap labelled unmeasured; D6's measurement replaces that value.
+connector will be the first caller that keeps a runtime. That call is
+not in the tree yet. It will pass a blocking cap labelled unmeasured;
+D6's measurement replaces that value.
 
 ---
 

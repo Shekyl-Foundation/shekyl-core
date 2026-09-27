@@ -13,9 +13,9 @@
 //! The pool's row lives on [`shekyl_thread_ledger`]. A dedicated thread is
 //! spawned there, not here: that crate has no Tokio dependency, and the
 //! timing engine depends on it alone. Daemon-RPC and Tor-control still
-//! build their own runtimes. The clearnet connector is the first caller
-//! that keeps one, and it passes a blocking cap labelled unmeasured until
-//! D6's measurement replaces that value.
+//! build their own runtimes. The clearnet connector will be the first
+//! caller that keeps one. That call is not in the tree yet. Its blocking
+//! cap will be labelled unmeasured until D6's measurement names it.
 
 #![deny(unsafe_code)]
 
