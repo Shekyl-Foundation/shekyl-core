@@ -12,7 +12,10 @@
   own, so the daemon does not print a total yet. That move and the
   print are a FOLLOWUPS row. `Pool::shutdown` bounds the wait for a
   blocking task; drop waits without a bound and is never taken from
-  inside a task.
+  inside a task. A timed-out shutdown can leave a detached blocking
+  thread off the ledger until that thread exits. The clearnet connector
+  keeps one runtime: plaintext while its option is off, Noise while it
+  is on.
 
 ### CLI wallet shell
 

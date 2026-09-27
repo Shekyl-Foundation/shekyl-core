@@ -3886,6 +3886,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-clearnet"
+version = "3.1.0"
+dependencies = [
+ "shekyl-p2p-transport",
+ "shekyl-peer-policy",
+ "shekyl-runtime",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-cli"
 version = "3.1.0"
 dependencies = [

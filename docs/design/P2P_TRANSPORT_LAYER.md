@@ -228,9 +228,9 @@ threads. The daemon prints it once every runtime it builds comes from
 so the print is not wired. A total taken while those builders are off
 the ledger would omit the pools the sum exists to count. The move and
 the print are one FOLLOWUPS row, owned by this document. The clearnet
-connector will be the first caller that keeps a runtime. That call is
-not in the tree yet. It will pass a blocking cap and a shutdown timeout,
-each labelled unmeasured; measurement replaces those values.
+connector is the first caller that keeps a runtime. Its blocking cap,
+shutdown timeout, and handshake span are the caller's, each labelled
+unmeasured; measurement replaces those values.
 
 ## Clearnet connector — handshake cryptography (RULED 2026-09-27)
 
@@ -240,8 +240,37 @@ computes the handshake holds that worker for most of a millisecond, and
 under a flood the accept loop and every other connection's I/O wait
 behind it. Worker threads stay on I/O and deadlines. The blocking cap is
 the bound on how many handshakes compute at once, in addition to D10's
-accept-rate bound. D10's flood test measures concurrent handshake CPU
-against that cap. No accept rate is written here.
+accept-rate bound. No accept rate is written here.
+
+**The handshake queue is bounded by admission, not by Tokio.**
+`spawn_blocking` queues without limit once the blocking cap is busy.
+A handshake is queued only for a connection the inbound ceiling has
+already reserved. The queue cannot outgrow those connections. A length
+on the Tokio queue would refuse a handshake the ceiling had admitted,
+or admit one the ceiling had refused, so the queue is not given a
+length that rejects. The same shape as the timing engine's mailbox:
+admission bounds how many owners exist, and the queue does not apply a
+second cap.
+
+**A dequeued job checks the deadline before it computes.** Under a
+flood many connections pass their pre-channel deadline while the job is
+still queued. A job that starts on a dead connection spends 685 µs for
+nothing. The job checks at dequeue and skips. `HandshakeTally` counts
+computed against skipped. D10's flood test reads that pair.
+
+**The deadline includes the time spent queued.** One
+`OwnerClass::Transport` owner per connection, armed at accept, not when
+computation starts. A deadline that started at dequeue would let a flood
+keep a connection alive for as long as the queue held it.
+
+Before the flip, ruling 4's exception is still in force. The option off
+omits the Noise layer the declaration adds, and the socket bytes are the
+session bytes: that is the differential harness, byte parity with epee.
+The option on follows the stack plan: clearnet's plan is Noise, and that
+is what step 7 evaluates. Neither arm matches on a network's identity.
+The worker count, the blocking cap, the shutdown timeout, and the
+handshake span are the caller's, labelled unmeasured until a measurement
+names them.
 
 ---
 

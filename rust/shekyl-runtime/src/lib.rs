@@ -14,10 +14,9 @@
 //! spawned there, not here: that crate has no Tokio dependency, and the
 //! timing engine depends on it alone. The row this constructor records
 //! has no join. Daemon-RPC and Tor-control still build their own runtimes.
-//! The clearnet connector will be the first caller that keeps one. That
-//! call is not in the tree yet. Its blocking cap and its shutdown timeout
-//! are both labelled unmeasured until a measurement names them. This crate
-//! holds neither number.
+//! The clearnet connector is the first caller that keeps one. Its blocking
+//! cap and its shutdown timeout are both the caller's, labelled unmeasured
+//! until a measurement names them. This crate holds neither number.
 
 #![deny(unsafe_code)]
 
