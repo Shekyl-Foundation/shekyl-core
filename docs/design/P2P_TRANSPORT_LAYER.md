@@ -105,8 +105,9 @@ and 100 MiB (`abstract_tcp_server2.h:72-73`). The asio pool is 10
 (`net_node.inl:1150`). The daemon-rpc runtime is still the default
 multi-thread builder (`ffi_exports.rs:162`). Tor control still sets
 `.worker_threads(1)` (`blocking.rs:120`). `Driver::next_wake` is
-`driver/mod.rs:158`. `tokio-socks` 0.5.3 is still the pin in
-`shekyl-p-fetch` and `shekyl-rpc-transport`. D6's third falsifier does
+`driver/mod.rs:158`. `shekyl-p-fetch` and `shekyl-rpc-transport` dial
+through `shekyl-socks`. `shekyl-p-transport` still enables ureq's
+`socks-proxy`. D6's third falsifier does
 not fire: the timing-engine round opened 2026-09-25.
 
 **What is built, and what the first commit is.** The crypto core is
@@ -278,17 +279,20 @@ flow control pushes back on the peer.
 
 The dialer checks the addressing cell, then `open_clearnet`. A direct
 dial connects to the address. A proxy dial connects to the SOCKS5
-endpoint and asks it to CONNECT; `shekyl-socks` is that handshake, and it is the one SOCKS client.
-It keeps the proxy's reply byte, which `ProxyRefused` carries.
-`tokio-socks` 0.5.3 maps the byte onto a fixed set of variants
-(`receive_reply`) and collapses every other value, including Tor's
-extended onion-service codes, to `UnknownAuthMethod`. `shekyl-p-fetch`
-and `shekyl-rpc-transport` still call it. Moving them onto
-`shekyl-socks` and dropping `tokio-socks` is a FOLLOWUPS row. A refusal
-is `ProxyRefused` with the reply byte. `ExtendedErrors` on the
-operator's `SocksPort` is what makes Tor's extended codes appear. That
-belongs in the operator docs. The initiator handshake runs on the blocking pool under
-the same engine owner, armed when the socket exists.
+endpoint and asks it to CONNECT. `shekyl-socks` is that handshake.
+Every call passes an isolation: `Principal` offers only no
+authentication, and `Persona` offers only username/password. A proxy
+that selects any other method fails the handshake before CONNECT, so a
+persona cannot be dropped onto the principal's circuits. The daemon's
+p2p dials, `shekyl-rpc-transport`, and `shekyl-p-fetch` pass
+`Principal`. The persona-username derivation stays in
+`shekyl-p-transport`, which still dials through ureq. Moving that HTTP
+client onto `shekyl-socks` is a FOLLOWUPS row. The handshake keeps the
+proxy's reply byte, which `ProxyRefused` carries. A refusal is
+`ProxyRefused` with that byte. `ExtendedErrors` on the operator's
+`SocksPort` is what makes Tor's extended codes appear. That belongs in
+the operator docs. The initiator handshake runs on the blocking pool
+under the same engine owner, armed when the socket exists.
 
 Before the flip, ruling 4's exception is still in force. The option off
 omits the Noise layer the declaration adds, and the socket bytes are the
@@ -513,7 +517,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. The operator's RPC reaches it through the FFI (`block_host`, `unblock_host`, `get_blocked_hosts`). A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
 | SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **Its own per-connector clock, derived under D9.** It does not inherit the timeout from `src/net/socks`. |
-| SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust. `tokio-socks` 0.5.3 is already a workspace dependency (`shekyl-p-fetch/Cargo.toml:40`, `shekyl-rpc-transport/Cargo.toml:43`). Reusing it adds no supply-chain surface (rule 17). A separate `socks` 0.3.4 crate is in `Cargo.lock` because `ureq` 3.3.0 depends on it, and `shekyl-p-transport` enables `ureq/socks-proxy` via its `tor-socks` feature. The connector uses `tokio-socks`, not that crate. |
+| SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust through `shekyl-socks`. `shekyl-p-fetch` and `shekyl-rpc-transport` call it with `Isolation::Principal`. `shekyl-p-transport` still enables `ureq/socks-proxy` (`socks` 0.3.4). Moving that HTTP client is a FOLLOWUPS row. |
 | Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry for Tor now, and for I2P when an I2P connector exists (D14 item 2).** Do not attribute from the socket. Inbound arrives on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host. This is where LV-3's OBSERVED endpoint originates. |
 | Tor forward listener | `net_node.inl:863-880` | Carry. Bound to `127.0.0.1` on port 0. The OS-assigned port is read back with `get_binded_port` (`:881`) and handed to Tor control. Bind failure erases the zone (`:878`). |
 | Local versus remote timers | `m_local` at `abstract_tcp_server2.inl:992`; timers at `:100-112` and `:1001-1004`. Local new-connection is 1,200,000 ms (20 minutes), not the "2 minutes" comment on `:60` | **Refuse (D14).** D2 already refuses a timeout whose only justification is that epee uses it. The class is loopback or RFC 1918, so any LAN host gets 20 minutes before a Levin session, against 10 seconds for everyone else. Container port-forwarding makes this worse: inbound peers arrive from the bridge gateway's private address, every peer looks local, and admission's per-host view collapses to one host. A test rig that needs a longer timer sets it explicitly. |

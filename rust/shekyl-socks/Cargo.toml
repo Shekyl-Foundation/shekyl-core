@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-socks"
-description = "SOCKS5 CONNECT, no authentication. Clearnet's proxy and the Tor connector share this. It does not know about connectors."
+description = "SOCKS5 CONNECT. The caller names Principal or Persona; this crate only carries those bytes."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,6 +15,7 @@ publish = false
 
 [dependencies]
 tokio = { version = "1", default-features = false, features = ["io-util"] }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt"] }

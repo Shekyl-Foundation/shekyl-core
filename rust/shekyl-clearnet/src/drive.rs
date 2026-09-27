@@ -19,7 +19,7 @@ use shekyl_p2p_transport::{
     PREFIX_LEN,
 };
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_socks::{connect as socks_connect, Destination, SocksError};
+use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick, WakeWait};
 use shekyl_transport_layer::{
     check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, Sockets,
@@ -156,14 +156,19 @@ where
         return;
     };
     if proxy.is_some() {
-        match socks_connect(&mut stream, Destination::Ip(dest)).await {
+        match socks_connect(&mut stream, Isolation::Principal, Destination::Ip(dest)).await {
             Ok(()) => {}
             Err(SocksError::Refused { reply }) => {
                 drop(stream.shutdown().await);
                 on_cause(CloseCause::proxy_refused(u16::from(reply)));
                 return;
             }
-            Err(SocksError::Io(_) | SocksError::Malformed) => {
+            Err(
+                SocksError::Io(_)
+                | SocksError::Malformed
+                | SocksError::AuthRejected { .. }
+                | SocksError::AuthFailed { .. },
+            ) => {
                 drop(stream.shutdown().await);
                 on_cause(CloseCause::new(CloseKind::DialFailed));
                 return;

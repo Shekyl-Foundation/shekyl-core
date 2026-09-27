@@ -18,7 +18,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Move `shekyl-p-fetch` and `shekyl-rpc-transport` onto `shekyl-socks`, then drop `tokio-socks`.** `shekyl-socks` keeps the proxy reply byte, which `ProxyRefused` carries. `tokio-socks` 0.5.3 maps that byte onto a fixed set of variants and sends every other value, including Tor's extended onion-service codes, to `UnknownAuthMethod` (`socks5.rs` `receive_reply`). Falsify by neither crate depending on `tokio-socks` and `Cargo.lock` no longer naming it.
+- **Move `shekyl-p-transport` onto `shekyl-socks`.** The handshake there already requires `Isolation::Principal` or `Isolation::Persona`, offers a persona only username/password, and fails closed if the proxy selects anything else. What remains is ureq's `socks` 0.3.4 connector, which is that crate's HTTP client. Falsify by `shekyl-p-transport` dialing through `shekyl_socks::connect` with `Isolation::Persona` and no longer enabling ureq's `socks-proxy`.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
