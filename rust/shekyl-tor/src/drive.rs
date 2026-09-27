@@ -9,8 +9,9 @@
 //! exchange, circuit build, and rendezvous. Inbound, `accept_tor` is
 //! channel established, and the gap timer starts then.
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shekyl_net_address::NetworkAddress;
@@ -198,15 +199,14 @@ where
         Arc::clone(&stop),
         established_rx,
     ));
-    let queue = SendQueue::new(send_queue_bytes);
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Queued>();
+    let queue = ByteQueue::new(send_queue_bytes);
+    let outbound = queue.clone();
     let (in_tx, in_rx) = mpsc::channel(1);
     let overfull = Arc::new(Notify::new());
     let overfull_flag = Arc::new(AtomicBool::new(false));
     let session = Session {
         inbound: in_rx,
-        outbound: out_tx,
-        queue: queue.clone(),
+        queue,
         overfull: Arc::clone(&overfull),
         overfull_flag: Arc::clone(&overfull_flag),
         established: Some(established_tx),
@@ -234,17 +234,20 @@ where
                 () = overfull => {
                     return finish(&stop_write, &mut write, CloseKind::SendQueueFull).await;
                 }
-                next = out_rx.recv() => {
-                    let Some(queued) = next else {
+                next = outbound.pop() => {
+                    let Some(bytes) = next else {
                         return finish(&stop_write, &mut write, CloseKind::LocalClose).await;
                     };
+                    let n = bytes.len();
                     tokio::select! {
                         biased;
                         cause = stop_write.wait() => {
+                            outbound.release(n);
                             drop(write.shutdown().await);
                             return cause;
                         }
-                        result = write.write_all(&queued.bytes) => {
+                        result = write.write_all(&bytes) => {
+                            outbound.release(n);
                             if result.is_err() {
                                 return finish(&stop_write, &mut write, CloseKind::IoError).await;
                             }
@@ -398,68 +401,82 @@ impl Stop {
     }
 }
 
+/// Outbound bytes. The cap is the only storage limit. A send that does
+/// not fit is not stored.
 #[derive(Clone)]
-pub(crate) struct SendQueue {
-    queued: Arc<AtomicUsize>,
+pub(crate) struct ByteQueue {
+    inner: Arc<Mutex<ByteQueueInner>>,
+    data: Arc<tokio::sync::Notify>,
+    closed: Arc<AtomicBool>,
+}
+
+struct ByteQueueInner {
     limit: usize,
+    used: usize,
+    items: VecDeque<Vec<u8>>,
 }
 
-struct Permit {
-    queued: Arc<AtomicUsize>,
-    bytes: usize,
+#[derive(Debug)]
+pub(crate) enum PushError {
+    Full,
+    Closed,
 }
 
-impl Drop for Permit {
-    fn drop(&mut self) {
-        self.queued.fetch_sub(self.bytes, Ordering::Release);
-    }
-}
-
-pub(crate) struct Queued {
-    bytes: Vec<u8>,
-    _permit: Permit,
-}
-
-impl SendQueue {
+impl ByteQueue {
     pub(crate) fn new(limit: usize) -> Self {
         Self {
-            queued: Arc::new(AtomicUsize::new(0)),
-            limit,
+            inner: Arc::new(Mutex::new(ByteQueueInner {
+                limit,
+                used: 0,
+                items: VecDeque::new(),
+            })),
+            data: Arc::new(tokio::sync::Notify::new()),
+            closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub(crate) fn try_enqueue(&self, bytes: Vec<u8>) -> Result<Queued, ()> {
-        let n = bytes.len();
-        if n == 0 {
-            return Ok(Queued {
-                bytes,
-                _permit: Permit {
-                    queued: Arc::clone(&self.queued),
-                    bytes: 0,
-                },
-            });
+    pub(crate) fn try_push(&self, bytes: Vec<u8>) -> Result<(), PushError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(PushError::Closed);
         }
+        let n = bytes.len();
+        let mut inner = self.inner.lock().expect("outbound");
+        let Some(next) = inner.used.checked_add(n) else {
+            return Err(PushError::Full);
+        };
+        if next > inner.limit {
+            return Err(PushError::Full);
+        }
+        inner.used = next;
+        inner.items.push_back(bytes);
+        drop(inner);
+        self.data.notify_one();
+        Ok(())
+    }
+
+    pub(crate) fn release(&self, n: usize) {
+        let mut inner = self.inner.lock().expect("outbound");
+        inner.used = inner.used.saturating_sub(n);
+    }
+
+    pub(crate) fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.data.notify_waiters();
+    }
+
+    pub(crate) async fn pop(&self) -> Option<Vec<u8>> {
         loop {
-            let current = self.queued.load(Ordering::Acquire);
-            let Some(next) = current.checked_add(n) else {
-                return Err(());
-            };
-            if next > self.limit {
-                return Err(());
-            }
-            if self
-                .queued
-                .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
+            let notified = self.data.notified();
             {
-                return Ok(Queued {
-                    bytes,
-                    _permit: Permit {
-                        queued: Arc::clone(&self.queued),
-                        bytes: n,
-                    },
-                });
+                let mut inner = self.inner.lock().expect("outbound");
+                if let Some(bytes) = inner.items.pop_front() {
+                    return Some(bytes);
+                }
+                if self.closed.load(Ordering::Acquire) {
+                    return None;
+                }
             }
+            notified.await;
         }
     }
 }

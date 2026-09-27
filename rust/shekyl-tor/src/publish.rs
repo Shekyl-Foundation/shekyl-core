@@ -38,8 +38,24 @@ pub enum PublishFault {
     Failed,
 }
 
+/// The only address this daemon publishes. `operator` binds are excluded.
+/// A non-loopback managed forward is not published either.
+pub fn publish_targets(
+    managed: SocketAddr,
+    operator: &[crate::OperatorInbound],
+) -> Vec<SocketAddr> {
+    let _operator = operator;
+    if managed.ip().is_loopback() {
+        vec![managed]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Publish `forward` once, with [`OnionPow::Enabled`].
 ///
+/// This is the onion the daemon manages. Its forward target is the
+/// loopback listener. An [`crate::OperatorInbound`] is not passed here.
 /// `publish` is called once. A non-loopback forward is refused before
 /// that call. `virtual_port` is the port peers dial. It is the caller's.
 pub async fn publish_forward<F, Fut>(
@@ -51,7 +67,7 @@ where
     F: FnOnce(OnionPow) -> Fut,
     Fut: Future<Output = Result<ServiceId, DaemonTorPublishError>>,
 {
-    if !forward.ip().is_loopback() {
+    if publish_targets(forward, &[]).is_empty() {
         return InboundPosture::OutboundOnly {
             fault: PublishFault::Failed,
         };
@@ -134,6 +150,16 @@ mod tests {
             },
             InboundPosture::OutboundOnly { .. } => panic!("expected a published onion"),
         }
+    }
+
+    #[test]
+    fn an_operator_inbound_is_not_a_publish_target() {
+        let operator =
+            crate::OperatorInbound::new(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 18080)));
+        assert!(!operator.bind().ip().is_loopback());
+        let managed = loopback();
+        let targets = super::publish_targets(managed, &[operator]);
+        assert_eq!(targets, vec![managed]);
     }
 
     #[tokio::test]

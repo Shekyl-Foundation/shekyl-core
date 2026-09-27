@@ -291,7 +291,9 @@ belongs in the operator docs. The initiator handshake runs on the blocking pool 
 the same engine owner, armed when the socket exists.
 
 The Tor connector is `shekyl-tor`. The stream is the channel: no Noise,
-no handshake on the blocking pool. Outbound is SOCKS5 through
+no handshake on the blocking pool. Its outbound queue is the same byte
+cap as clearnet's, the caller's, and a send that does not fit closes
+with `SendQueueFull`. Outbound is SOCKS5 through
 `shekyl-socks`, and one engine owner covers that exchange, the circuit
 build, and rendezvous. Inbound is `accept_tor`, then the gap timer.
 A failed bind drops every listener that succeeded, so the zone is not
@@ -300,6 +302,9 @@ bound. Publication is one `ADD_ONION` through `DaemonTorControl` with
 proof-of-work on. `PowRefused` is not followed by a publish without
 proof-of-work. Any other publish failure leaves the zone outbound-only.
 The address is what the session layer stores as `m_our_address`.
+The loopback check applies only to that managed forward. An
+`--anonymous-inbound` bind is the operator's onion. It is not a publish
+target and is not passed through that check.
 
 Before the flip, ruling 4's exception is still in force. The option off
 omits the Noise layer the declaration adds, and the socket bytes are the

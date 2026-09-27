@@ -38,16 +38,17 @@ mod publish;
 
 pub use publish::{publish_forward, publish_with_control, InboundPosture, PublishFault};
 
-use drive::{accept_one, dial_one, Accept, Dial, Queued, SendQueue};
+use drive::{accept_one, dial_one, Accept, ByteQueue, Dial, PushError};
 
 /// Caller inputs. The dial span, the gap span, and the send-queue byte
 /// cap are unmeasured until a measurement names them.
 pub struct Config {
     /// The operator's SOCKS5 proxy. Outbound dials go here.
     pub proxy: SocketAddr,
-    /// Extra binds from `--anonymous-inbound`, beside the loopback port
-    /// the OS assigns.
-    pub anonymous_inbound: Vec<SocketAddr>,
+    /// Binds from `--anonymous-inbound`. These are the operator's onions.
+    /// They are not published here, and they are not subject to the
+    /// loopback check on [`publish_forward`].
+    pub anonymous_inbound: Vec<OperatorInbound>,
     pub ceiling: InboundCeiling,
     /// Covers the SOCKS exchange, circuit build, and rendezvous.
     pub dial_within: Tick,
@@ -59,13 +60,35 @@ pub struct Config {
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
 }
 
+/// An onion the operator already published. The daemon binds `bind` and
+/// does not publish it, and does not apply the loopback rule.
+#[derive(Clone, Copy, Debug)]
+pub struct OperatorInbound {
+    bind: SocketAddr,
+}
+
+impl OperatorInbound {
+    pub fn new(bind: SocketAddr) -> Self {
+        Self { bind }
+    }
+
+    pub fn bind(self) -> SocketAddr {
+        self.bind
+    }
+}
+
 pub struct Session {
     inbound: mpsc::Receiver<Vec<u8>>,
-    outbound: mpsc::UnboundedSender<Queued>,
-    queue: SendQueue,
+    queue: ByteQueue,
     overfull: Arc<Notify>,
     overfull_flag: Arc<AtomicBool>,
     established: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.queue.close();
+    }
 }
 
 impl Session {
@@ -73,15 +96,20 @@ impl Session {
         self.inbound.recv().await
     }
 
-    /// Queue bytes up to the caller's cap. A buffer that does not fit
-    /// closes the connection. The reader awaits space instead.
+    /// Queue bytes up to the caller's cap. A buffer that does not fit is
+    /// not stored, and the connection closes with
+    /// [`CloseKind::SendQueueFull`]. The cap is unmeasured until PWD-T6's
+    /// session-established limit plus measurement names it.
     pub fn try_send(&self, bytes: Vec<u8>) -> Result<(), CloseKind> {
-        let queued = self.queue.try_enqueue(bytes).map_err(|()| {
-            self.overfull_flag.store(true, Ordering::Release);
-            self.overfull.notify_waiters();
-            CloseKind::SendQueueFull
-        })?;
-        self.outbound.send(queued).map_err(|_| CloseKind::IoError)
+        match self.queue.try_push(bytes) {
+            Ok(()) => Ok(()),
+            Err(PushError::Full) => {
+                self.overfull_flag.store(true, Ordering::Release);
+                self.overfull.notify_waiters();
+                Err(CloseKind::SendQueueFull)
+            }
+            Err(PushError::Closed) => Err(CloseKind::IoError),
+        }
     }
 
     /// The Levin handshake is done. The gap timer stops.
@@ -290,11 +318,11 @@ where
     })
 }
 
-async fn bind_all(extra: &[SocketAddr]) -> std::io::Result<(TcpListener, Vec<TcpListener>)> {
+async fn bind_all(extra: &[OperatorInbound]) -> std::io::Result<(TcpListener, Vec<TcpListener>)> {
     let forward = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
     let mut bound = Vec::with_capacity(extra.len());
     for addr in extra {
-        bound.push(TcpListener::bind(addr).await?);
+        bound.push(TcpListener::bind(addr.bind()).await?);
     }
     Ok((forward, bound))
 }
@@ -316,7 +344,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
-    use super::{listen, Config, Listener};
+    use super::{listen, Config, Listener, OperatorInbound};
 
     fn nz(n: usize) -> NonZeroUsize {
         NonZeroUsize::new(n).expect("nonzero")
@@ -357,7 +385,7 @@ mod tests {
     ) -> Config {
         Config {
             proxy,
-            anonymous_inbound: inbound,
+            anonymous_inbound: inbound.into_iter().map(OperatorInbound::new).collect(),
             ceiling,
             dial_within: dial,
             gap_within: gap,
