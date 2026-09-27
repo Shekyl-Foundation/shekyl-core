@@ -25,8 +25,8 @@ use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{
-    block_with_nonce, chain_listing, chain_listing_with, cleanup, h, key_image, open_store,
-    root_at, spend, tmp, trace_of, Family, Scripted, FIRST_SPEND_HEIGHT,
+    block_with_nonce, chain_listing, chain_listing_with, cleanup, h, key_image, open_store, spend,
+    tmp, trace_of, Family, GrownTree, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -82,13 +82,14 @@ fn seed_for(height: u64, hash_at: impl Fn(u64) -> BlockHash) -> BlockHash {
 /// [`MINED_DIFFICULTY`].
 fn nonce_meeting_target(
     seed: &BlockHash,
+    root: CurveTreeRoot,
     height: u64,
     previous: BlockHash,
     txs: &[Transaction],
 ) -> u32 {
     let difficulty = Difficulty::from_raw(MINED_DIFFICULTY);
     first_nonce(NONCE_BUDGET, |nonce| {
-        let block = block_with_nonce(height, previous, txs, nonce);
+        let block = block_with_nonce(root, height, previous, txs, nonce);
         check_hash(seeded_keccak(&block.pow_blob(), seed).as_bytes(), difficulty)
     })
     .unwrap_or_else(|| {
@@ -115,12 +116,12 @@ fn mined_chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
         })
         .collect();
     let mut recorded: Vec<BlockHash> = Vec::with_capacity(listed.len());
-    chain_listing_with(listed, |height, previous, txs| {
+    chain_listing_with(listed, |root, height, previous, txs| {
         let seed = seed_for(height, |at| {
             recorded[usize::try_from(at).expect("seed height fits an index")]
         });
-        let nonce = nonce_meeting_target(&seed, height, previous, txs);
-        let block = block_with_nonce(height, previous, txs, nonce);
+        let nonce = nonce_meeting_target(&seed, root, height, previous, txs);
+        let block = block_with_nonce(root, height, previous, txs, nonce);
         recorded.push(block.hash());
         block
     })
@@ -685,7 +686,7 @@ fn the_unheld_root_is_not_a_fixture_root() {
     let root = candidate.block.header.curve_tree_root;
     assert_eq!(root.as_bytes(), &UNHELD_ROOT);
     assert_ne!(root, CurveTreeRoot::EMPTY);
-    assert_ne!(root, root_at(AT));
+    assert_ne!(root, GrownTree::over(&chain).root_going_into(AT));
 }
 
 #[test]

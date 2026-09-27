@@ -69,13 +69,15 @@ use core::marker::PhantomData;
 use redb::{Key, ReadableTable, TableDefinition, TableHandle, WriteTransaction};
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
-use crate::codec::{post_image, Canonical, ChainState, PropertyCell, TotalBurnedCell, UndoEntry};
+use crate::codec::{
+    post_image, Canonical, ChainState, CodecError, PropertyCell, TotalBurnedCell, UndoEntry,
+};
 use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 
 use super::chain_reads::ReadFault;
 use super::prune::Horizons;
 
-use shekyl_chain_rules::{Corrupt, PerHeightRecord};
+use shekyl_chain_rules::{Corrupt, FrontierFault, LeafInput, PerHeightRecord};
 use shekyl_units::AtomicUnits;
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
@@ -297,8 +299,57 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                 key: match record {
                     PerHeightRecord::Block => "block_info",
                     PerHeightRecord::CurveTreeRoot => "curve_tree_roots",
+                    PerHeightRecord::LeafCount => "curve_tree_leaf_counts",
+                    PerHeightRecord::Outputs => "blocks",
                 },
                 fault: CellFault::Absent,
+            },
+            // The drain found a recorded point that does not decompress.
+            // `O` and `C` are the `output_amounts` row; `CM` is the pruned
+            // transaction's `0x07` field. The cell is the point's.
+            Corrupt::LeafNotConstructible { output: _, input } => {
+                let (key, codec, reason) = match input {
+                    LeafInput::OutputKey => (
+                        "output_amounts",
+                        "output_key",
+                        "the output key does not decompress",
+                    ),
+                    LeafInput::Commitment => (
+                        "output_amounts",
+                        "commitment",
+                        "the amount commitment does not decompress",
+                    ),
+                    LeafInput::LeafCommitment => (
+                        "txs_pruned",
+                        "pqc_leaf_commitment",
+                        "the leaf commitment does not decompress",
+                    ),
+                };
+                StoreInvariant::CellCorrupt {
+                    key,
+                    fault: CellFault::Undecodable(CodecError::Invalid { codec, reason }),
+                }
+            }
+            // A frontier the store's own read assembled. `NotOnCurve` is a
+            // layer-table hash that decoded and is not a point of its curve.
+            // `Shape` is the summary's leaf count disagreeing with the layer
+            // count that count implies — the chunks were read; the count's
+            // implication was not. An empty grow is not this arm.
+            Corrupt::TreeUnservable { fault } => match fault {
+                FrontierFault::NotOnCurve { .. } => StoreInvariant::CellCorrupt {
+                    key: "curve_tree_layers",
+                    fault: CellFault::Undecodable(CodecError::Invalid {
+                        codec: "layer_hash",
+                        reason: "a last chunk's hash is not a point of its layer's curve",
+                    }),
+                },
+                FrontierFault::Shape { .. } => StoreInvariant::CellCorrupt {
+                    key: "curve_tree_meta",
+                    fault: CellFault::Undecodable(CodecError::Invalid {
+                        codec: "curve_tree_state",
+                        reason: "the frontier's layer count disagrees with the leaf count",
+                    }),
+                },
             },
         };
         self.poison.arm(row)

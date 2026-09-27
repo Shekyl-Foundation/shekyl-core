@@ -33,10 +33,10 @@
 //!
 //! # What this does not cover, and where it is covered
 //!
-//! The chain is short (the store fixtures' `root_after` bytes are
-//! `0xc0 + h`, so heights above 63 cannot be built with them), which
-//! exercises the MTP window, its genesis padding, the seed at block 0 and
-//! the DAA's genesis-constant range — not a full LWMA-1 window past `N`.
+//! The chain is short (three coinbase-only blocks: nothing has matured, so
+//! every root is the empty tree), which exercises the MTP window, its
+//! genesis padding, the seed at block 0 and the DAA's genesis-constant
+//! range — not a full LWMA-1 window past `N`, and not a grown tree.
 //! The E2 replay is the instrument for that: it runs the real store past
 //! `N` against the C++'s verdicts, which is the comparison this file's
 //! short chain cannot make.
@@ -177,10 +177,11 @@ where
 
 /// A chain of `len` coinbase-only blocks, connected into a real store AND
 /// mirrored into a `MockChain` from the same inputs: the blocks the store
-/// fixtures build, the `root_after` the connect facts carry (the mock keys
+/// fixtures build, the `root_after` the verdict derived (the mock keys
 /// roots the way SCW-19 does, so a keying drift shows here), and the
-/// cumulative work the validator derived for each block (read back off the
-/// verdict the store connected — the record both views must then agree on).
+/// cumulative work the validator derived for each block (both read back off
+/// the verdict the store connected — the record both views must then agree
+/// on).
 fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Candidate>) {
     let path = tmp(&format!("conformance-{len}"));
     let store = ChainStore::create(&path, EPOCH).expect("create");
@@ -191,14 +192,17 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
         let cand = candidate(h, previous, Vec::new());
         previous = cand.block.hash();
         blocks.push(cand.clone());
-        let work: Result<_, TestErr> = store.write(|batch| {
+        let derived: Result<_, TestErr> = store.write(|batch| {
             let view = batch.chain_view();
             let valid = judge(&view, cand.clone())?;
-            let work = valid.block().cumulative_difficulty();
+            let derived = (
+                valid.block().cumulative_difficulty(),
+                valid.block().root_after(),
+            );
             batch.connect(valid, facts(h, 0), RuleSet::GENESIS)?;
-            Ok(work)
+            Ok(derived)
         });
-        let work = work.expect("connects");
+        let (work, root_after) = derived.expect("connects");
         mock = mock.push(
             RecordedBlock {
                 hash: cand.block.hash(),
@@ -210,7 +214,7 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
                 coins_generated: facts(h, 0).coins_generated.value,
                 cumulative_tx_count: 0,
             },
-            facts(h, 0).root_after.value,
+            root_after,
         );
     }
     (store, path, mock, blocks)
@@ -360,9 +364,11 @@ fn every_landed_rule_judges_identically_over_batch_view_and_the_mock() {
 #[test]
 fn a_drifted_mock_is_caught_by_the_comparison() {
     // Negative control (rule 47): the comparison must be able to go red.
-    // A mock whose root keying is off by one — the SCW-19 drift the file
-    // exists to catch — disagrees with the real view on the well-formed
-    // candidate: the store passes it, the drifted mock refuses it on B5.
+    // A mock whose roots are not the store's — here a root that claims the
+    // tree grew where the store's derivation says nothing matured, the
+    // shape a SCW-19 keying drift takes once roots differ per height —
+    // disagrees with the real view on the well-formed candidate: the store
+    // passes it, the drifted mock refuses it on B5.
     let (store, path, mock, blocks) = twin_chains(3);
     let mut drifted = MockChain::default();
     for (h, b) in blocks.iter().enumerate() {
@@ -372,9 +378,8 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
             Ok(AtHeight::AboveTip) => unreachable!("built above"),
             Err(never) => match never {},
         });
-        // The root the connect of h − 1 wrote, pushed as h's `root_after`:
-        // one height late.
-        let late_root = facts(h.saturating_sub(1), 0).root_after.value;
+        // A root the store never recorded, pushed as h's `root_after`.
+        let late_root = CurveTreeRoot::from_bytes([0xd0 + u8::try_from(h).expect("small"); 32]);
         drifted = drifted.push(
             RecordedBlock {
                 hash: b.block.hash(),

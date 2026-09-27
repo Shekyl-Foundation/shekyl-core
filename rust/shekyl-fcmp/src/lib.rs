@@ -26,7 +26,8 @@ pub use proof::ProveInputLeafChunk;
 pub use proof::{BranchLayer, ProveError, ProveInput, ProveResult, ShekylFcmpProof, VerifyError};
 pub use tree::{
     construct_leaf, ed25519_point_to_selene_scalar, HashGrowResult, HashTrimResult, LayerUpdate,
-    TreeOp, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
+    LeafInput, TreeOp, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF,
+    SELENE_CHUNK_WIDTH,
 };
 
 pub use shekyl_fcmp_proofs::sal::SpendAuthAndLinkability;

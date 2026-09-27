@@ -127,8 +127,8 @@ use shekyl_chain_rules::{CenRow, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     BadInterval, BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot,
-    LongTermWeight, OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash, SettlementEpoch,
-    ShardId, Timestamp, TreeLeaf, TreePosition, TxHash,
+    GlobalOutputIndex, LongTermWeight, OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash,
+    SettlementEpoch, ShardId, Timestamp, TreeLeaf, TreePosition, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -330,7 +330,7 @@ impl Fixtures for PassedThroughFacts {
             ("burned", PassedThroughFacts::of_positions([3])),
             // Every field: the six-name spelling is the layout —
             // `cumulative_difficulty` left at SCHEMA_VERSION 7 (E6 slice 2).
-            ("all", PassedThroughFacts::of_positions(0..6)),
+            ("all", PassedThroughFacts::of_positions(0..5)),
         ]
     }
 }
@@ -407,6 +407,29 @@ impl Fixtures for TreePosition {
             ("zero", TreePosition::from_raw(0)),
             ("byte_order", TreePosition::from_raw(0x0102_0304_0506_0708)),
             ("max", TreePosition::from_raw(u64::MAX)),
+        ]
+    }
+}
+
+impl Fixtures for GlobalOutputIndex {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", GlobalOutputIndex::from_raw(0)),
+            (
+                "byte_order",
+                GlobalOutputIndex::from_raw(0x0102_0304_0506_0708),
+            ),
+            ("max", GlobalOutputIndex::from_raw(u64::MAX)),
+        ]
+    }
+}
+
+impl Fixtures for LeafCount {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", LeafCount::ZERO),
+            ("byte_order", LeafCount::from_raw(0x0102_0304_0506_0708)),
+            ("max", LeafCount::from_raw(u64::MAX)),
         ]
     }
 }
@@ -1205,6 +1228,8 @@ snapshotted_codecs! {
     OutKey => codec_snapshot_out_key,
     TxOutputIndices => codec_snapshot_tx_output_indices,
     TreePosition => codec_snapshot_tree_position,
+    GlobalOutputIndex => codec_snapshot_global_output_index,
+    LeafCount => codec_snapshot_leaf_count,
     TreeLeaf => codec_snapshot_tree_leaf,
     CurveTreeState => codec_snapshot_curve_tree_state,
     LayerHash => codec_snapshot_layer_hash,

@@ -31,7 +31,7 @@ use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{BlockInfo, Canonical, CurveTreeState};
 use crate::schema::{
-    self, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_CHECKPOINTS, CURVE_TREE_LEAVES,
+    self, ARCHIVAL_BUDGET_ACCRUAL, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_LEAVES,
     CURVE_TREE_META, TXS_PQC_AUTH_HASH, UNDO_LOG,
 };
 
@@ -175,8 +175,8 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // presence for, and creating them would make "no writer yet" a fact the
     // file could not tell from "empty".
     assert!(
-        snap.open_table(CURVE_TREE_CHECKPOINTS).is_err(),
-        "curve_tree_checkpoints is Unshaped and not sealed"
+        snap.open_table(ARCHIVAL_BUDGET_ACCRUAL).is_err(),
+        "archival_budget_accrual is Unshaped and not sealed"
     );
     // S-CURVE's shaped curve tables are sealed; the summary is a **written**
     // row, not an empty table (`SCU-Q1`, SCU-1).
@@ -210,8 +210,12 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // shaped `alt_blocks` and **folded** `archival_alt_attestation_witness`
     // into it (`DRS_E1_SALT.md` §4; `FOLDED_INTO`). The journals,
     // settlement, slash-applied, accrual and segment rows stay `Unshaped`
-    // for their increments.
-    assert_eq!(unshaped, 18, "the §11.1(f) count at this layout");
+    // for their increments. 18 → 12 at layout 15: DRS-E3 commit 1 **did not
+    // port** four (`NOT_PORTED`: the pending set is a view of the block
+    // index, two were the C++'s pop journals, the checkpoint is a view of
+    // the meta row — `DRS_E3_CURVE_WRITER.md` §3.7) and **shaped** the two
+    // position maps (`Coded<TreePosition>` / `Coded<GlobalOutputIndex>`).
+    assert_eq!(unshaped, 12, "the §11.1(f) count at this layout");
     cleanup(&path);
 }
 
@@ -391,15 +395,20 @@ fn the_second_rust_only_table_is_catalogued_last_and_named() {
         catalogue_len,
         "txs_pqc_auth_hash is the final catalogue slot"
     );
-    // 44 LMDB mirrors plus the two Rust-only tables (`undo_log`,
-    // `txs_pqc_auth_hash`) at SCHEMA_VERSION 13 — 47 mirrors until S-POOL
-    // moved `txpool_meta` / `txpool_blob` to the pool file (layout 12,
-    // `schema::MIRRORED_ELSEWHERE`), 45 until S-ALT folded
-    // `archival_alt_attestation_witness` into `alt_blocks` (layout 13,
-    // `schema::FOLDED_INTO`).
-    assert_eq!(catalogue_len, 46);
+    // 40 LMDB mirrors plus the three Rust-only tables
+    // (`curve_tree_leaf_counts`, `undo_log`, `txs_pqc_auth_hash`) at
+    // SCHEMA_VERSION 15 — 47 mirrors until S-POOL moved `txpool_meta` /
+    // `txpool_blob` to the pool file (layout 12, `schema::MIRRORED_ELSEWHERE`),
+    // 45 until S-ALT folded `archival_alt_attestation_witness` into
+    // `alt_blocks` (layout 13, `schema::FOLDED_INTO`), 44 until DRS-E3 did
+    // not port four tree-side tables (layout 15, `schema::NOT_PORTED`) and
+    // added `curve_tree_leaf_counts`.
+    assert_eq!(catalogue_len, 43);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
-    assert_eq!(names, ["undo_log", "txs_pqc_auth_hash"]);
+    assert_eq!(
+        names,
+        ["curve_tree_leaf_counts", "undo_log", "txs_pqc_auth_hash"]
+    );
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.
     assert_eq!(
         <shekyl_types::PqcAuthHash as Canonical>::FIXED_WIDTH,

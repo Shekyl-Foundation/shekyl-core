@@ -123,11 +123,13 @@ mod anchors;
 mod block;
 mod census;
 mod coverage;
+mod drain;
 mod fault;
 mod reorg;
 mod rule_set;
 mod rules;
 mod substrate;
+mod tree_growth;
 mod trust;
 mod validate;
 mod verdict;
@@ -151,6 +153,7 @@ pub use anchors::{Anchor, ReleaseAnchors};
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
+pub use drain::{tree_after, Drain, DrainedOutput};
 pub use fault::{
     Corrupt, Fault, FormAttempt, PerHeightRecord, Retry, Stale, ViewRead, MAX_FORM_ATTEMPTS,
 };
@@ -165,8 +168,12 @@ pub use rules::recorded;
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;
 pub use rules::tx_against::{REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
+pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;
+pub use tree_growth::{
+    grow, ChunkHash, FrontierFault, GrowFault, LayerWrite, TreeFrontier, TreeGrowth,
+};
 pub use trust::Trust;
 pub use validate::{form, tx_against, tx_form, validate};
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
-pub use view::{AtHeight, ChainView, RecordedBlock, Tip};
+pub use view::{AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, Tip};

@@ -113,7 +113,14 @@ SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
 # `schema.rs` as a field of `alt_blocks`' record (`FOLDED_INTO`) — its one
 # `compare_hash32` constraint went with it; `alt_blocks` itself keeps its
 # `LmdbHashKey` and still fires. Re-derived by counting.
-MIN_CONSTRAINTS = 24
+# 23 since redb v15 (DRS-E3 commit 1): four X-macro tables left `schema.rs`
+# unported (`NOT_PORTED`) — `pending_tree_leaves`, `pending_tree_drain`,
+# `block_pending_additions` (composite `&[u8]` keys, which fire no ordering
+# constraint here) and `curve_tree_checkpoints` (INTEGERKEY: the one
+# constraint that went). `curve_tree_leaf_counts` was born Rust-only and is
+# outside this gate's domain (no LMDB flags to derive an order from).
+# Re-derived by counting.
+MIN_CONSTRAINTS = 23
 
 # Tables the C++ no longer writes at all, with the put shape they carried
 # when they were last written. The classifying fact for a uint64-dupsort

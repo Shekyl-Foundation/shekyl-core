@@ -38,9 +38,12 @@
 //! `unwrap_or_default`.
 
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_fcmp::tree::layer_count_for_leaves;
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::BlockHeader;
+
+use crate::tree_growth::TreeFrontier;
 
 /// A by-height lookup against the recorded chain.
 ///
@@ -157,6 +160,38 @@ pub struct RecordedBlock {
     pub cumulative_tx_count: u64,
 }
 
+/// What one recorded output contributes to its curve-tree leaf — the three
+/// points `construct_leaf` takes (`O`, `C`, and the `0x07` entry's
+/// commitment `CM`, `PL-D3`) and the chain-wide index the leaf's position
+/// map records (DRS-E3 §3.2, §3.3). The points are carried as the recorded
+/// bytes: decompressing them is the derivation's, and a byte string that is
+/// not a point is `Corrupt`, never a leaf.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeafSource {
+    /// The output's chain-wide dense index — what `output_to_leaf` is keyed
+    /// by. Never a tree position (`SOK-10`).
+    pub output: GlobalOutputIndex,
+    /// The one-time output key `O`, compressed Ed25519.
+    pub key: [u8; 32],
+    /// The amount commitment `C`, compressed Ed25519.
+    pub commitment: [u8; 32],
+    /// The `0x07` entry's leaf-commitment point `CM`, compressed Ed25519.
+    pub pqc_leaf_commitment: [u8; 32],
+}
+
+/// A recorded block's outputs, split by the maturity each half drains at:
+/// the coinbase's at `height + mined_money_unlock_window`, the listed
+/// transactions' at `height + tx_spendable_age` (DRS-E3 §3.2; CTW-10 — the
+/// pending set is a function of the block index, not a table). Each half
+/// is in output order, which is global-index order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BlockOutputs {
+    /// The miner transaction's outputs.
+    pub coinbase: Vec<LeafSource>,
+    /// The listed transactions' outputs, transaction order then output order.
+    pub listed: Vec<LeafSource>,
+}
+
 /// The narrow, read-only view a rule consumes.
 ///
 /// `'id` is the transaction brand (`WriteBatch<'_, 'id>`). `validate` mints
@@ -222,4 +257,44 @@ pub trait ChainView<'id> {
     /// CEN-A2 (`hash`); B5 and later 4.C / CEN-F5 (`height`, via
     /// [`Tip::connecting_height`]).
     fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
+
+    /// The curve tree as the next grow needs it: its leaf count and every
+    /// layer's last chunk hash (DRS-E3 §3.1; CTW-8 — the only chunks a grow
+    /// can change). [`TreeFrontier::EMPTY`] for a tree nothing has grown.
+    ///
+    /// Read by the growth derivation in `validate`, which is not a rule
+    /// (it refuses nothing) but the operand F17, I12, I13 and I15 read.
+    fn tree_frontier(&self) -> Result<TreeFrontier, Self::Fault>;
+
+    /// The leaf count **at** chain height `height` — after the block at
+    /// `height − 1` drained, before the block at `height` drains — keyed
+    /// exactly as [`root_at`](Self::root_at) is (SCW-19). `0` at height
+    /// `0`. The primitive [`depth_at`](Self::depth_at) derives from
+    /// (`CTW-Q4`: depth is a function of this count and is never stored
+    /// per height) and CEN-F17's operand.
+    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Self::Fault>;
+
+    /// The recorded block at `height`'s outputs, as leaf sources, split by
+    /// the maturity each half drains at (DRS-E3 §3.2). The drain at
+    /// connecting height `h` reads two of these: `h − mined_money_unlock_window`
+    /// (its coinbase half) and `h − tx_spendable_age` (its listed half).
+    ///
+    /// Not a rule's read: the growth derivation's.
+    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Self::Fault>;
+
+    /// The tree's depth **at** `height` — layers above the leaf layer
+    /// (`fcmp_layers = depth + 1`) — derived from
+    /// [`leaf_count_at`](Self::leaf_count_at) by the library's layer
+    /// arithmetic, so a per-height depth is never stored beside the count
+    /// it is a function of (`CTW-Q4`). `0` for an empty tree.
+    ///
+    /// CEN-I13's operand (E6 slice 6 Q8: the depth the spend's proof was
+    /// built over, at `ref_height`, never the current depth).
+    fn depth_at(&self, height: BlockHeight) -> Result<AtHeight<u8>, Self::Fault> {
+        Ok(match self.leaf_count_at(height)? {
+            AtHeight::Recorded(0) => AtHeight::Recorded(0),
+            AtHeight::Recorded(count) => AtHeight::Recorded(layer_count_for_leaves(count) - 1),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
+    }
 }

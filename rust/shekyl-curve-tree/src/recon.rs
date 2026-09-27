@@ -20,8 +20,7 @@
 use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, TargetKind};
 use shekyl_consensus::{COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW};
 use shekyl_fcmp::tree::{
-    build_layers, construct_leaf, ed25519_point_to_selene_scalar, selene_hash_init,
-    SCALARS_PER_LEAF,
+    build_layers, construct_leaf, selene_hash_init, LeafInput, SCALARS_PER_LEAF,
 };
 
 /// Size in bytes of one per-output `0x07` entry: the leaf commitment point
@@ -211,20 +210,12 @@ pub fn try_build_leaf(out: &OutputIdentity) -> Result<Option<[u8; 128]>, LeafPoi
     // daemon, so x-extraction of all four points — `CM.x` included —
     // cannot diverge; CT2_DRAIN_ORDER.md §3.2).
     match construct_leaf(out.output_key.as_bytes(), commitment.as_bytes(), &out.cm) {
-        Some(leaf) => Ok(Some(leaf)),
-        None => {
-            // Name the failing input, in `construct_leaf`'s own probe
-            // order. `I = Hp(O)` is derived (hash-to-point, infallible),
-            // so if `O` and `C` decompress the failure is `CM`.
-            let point = if ed25519_point_to_selene_scalar(out.output_key.as_bytes()).is_none() {
-                LeafPoint::OutputKey
-            } else if ed25519_point_to_selene_scalar(commitment.as_bytes()).is_none() {
-                LeafPoint::Commitment
-            } else {
-                LeafPoint::LeafCommitment
-            };
-            Err(point)
-        }
+        Ok(leaf) => Ok(Some(leaf)),
+        Err(input) => Err(match input {
+            LeafInput::OutputKey => LeafPoint::OutputKey,
+            LeafInput::Commitment => LeafPoint::Commitment,
+            LeafInput::LeafCommitment => LeafPoint::LeafCommitment,
+        }),
     }
 }
 

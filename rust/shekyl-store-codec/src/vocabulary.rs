@@ -20,8 +20,8 @@
 //! value's *name* is new.
 
 use shekyl_types::{
-    BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash, SettlementEpoch, ShardId, TreeLeaf,
-    TreePosition,
+    BlockHeight, CurveTreeRoot, GlobalOutputIndex, PqcAuthHash, PrunableHash, SettlementEpoch,
+    ShardId, TreeLeaf, TreePosition,
 };
 use shekyl_units::AtomicUnits;
 
@@ -124,6 +124,26 @@ impl Canonical for AtomicUnits {
 /// this is the codec they share.
 impl Canonical for TreePosition {
     const NAME: &'static str = "tree_position";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+/// `leaf_to_output[position]` — the chain-wide dense output index whose
+/// leaf sits at a tree position (DRS-E3, SI-17): the `shekyl-types` newtype,
+/// stored as its raw LE `u64`. Never a tree position (`SOK-10`: the two
+/// orders diverge in the first block that carries a transaction), which is
+/// why it has its own codec name rather than sharing `tree_position`'s.
+impl Canonical for GlobalOutputIndex {
+    const NAME: &'static str = "global_output_index";
     const FIXED_WIDTH: Option<usize> = Some(8);
 
     fn encode_into(&self, out: &mut Vec<u8>) {

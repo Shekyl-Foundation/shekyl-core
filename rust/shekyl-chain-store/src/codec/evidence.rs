@@ -43,7 +43,7 @@ use super::{Canonical, CodecError};
 /// The `ConnectFacts` fields, in declaration order — the bit assignment of
 /// [`PassedThroughFacts`] and the names it encodes. `ConnectFacts::DELETED_BY`
 /// is held to this list by a test in `store::connect`.
-pub const FACT_FIELDS: [&str; 6] = [
+pub const FACT_FIELDS: [&str; 5] = [
     "weight",
     "long_term_weight",
     // `cumulative_difficulty` sat here until E6 slice 2 derived it
@@ -53,7 +53,10 @@ pub const FACT_FIELDS: [&str; 6] = [
     // and that rides SCHEMA_VERSION 7 (rule 42; rebuild, never migrate).
     "coins_generated",
     "burned",
-    "root_after",
+    // `root_after` sat here until DRS-E3 derived it (2026-09-26, `CTW-Q1`:
+    // `validate` grows the tree and `connect` records the verdict's root).
+    // Same mechanism as `cumulative_difficulty`: the vocabulary shrinks
+    // 6 → 5 under SCHEMA_VERSION 15.
     // Appended, not inserted (S-CHAIN-R §3.6; SCHEMA_VERSION 4).
     "long_term_effective_median",
 ];
