@@ -68,6 +68,7 @@ pub(crate) const READ_LEN_CAP: usize = 1_000_000;
 
 pub use block::{Block, BlockHeader};
 pub use transaction::{
-    BondPost, BondPostKind, BpPlus, Ct, CtBase, FullTransaction, Holdings, Input, Output, PqcAuth,
-    PqcSigningPreimage, Prunable, PrunedError, Transaction, TxPrefix, TxSegments, TxidParts,
+    carries_archival_good, empty_region_prunable_hash, BondPost, BondPostKind, BpPlus, Ct, CtBase,
+    FullTransaction, Holdings, Input, Output, PqcAuth, PqcSigningPreimage, Prunable, PrunedError,
+    Transaction, TxPrefix, TxSegments, TxidParts,
 };
