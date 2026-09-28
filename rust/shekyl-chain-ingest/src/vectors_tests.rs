@@ -526,29 +526,22 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
         .zip(everywhere_unmutable)
         .filter_map(|(m, causes)| causes.map(|c| (m, c)))
         .collect();
-    // Two entries, and the census says which is whose. `PowUnderWrongSeed`
-    // is the environment's: this census carries no PoW leg. `ReorderedBodies`
-    // is the corpus's: every captured block lists at most one body (slice 6
-    // §5 row 8 measured it; slice 7 §3.7 names the class), so the one
-    // mutation that needs two is unreachable on all four chains — and it is
-    // the only one. Commit 2 (a) built the two-body block through the driver
-    // instead (`body_pairing_tests`). A change here is a change in the
-    // corpus's shape or in the family, and §3.7 moves with it.
+    // One entry, and the census says whose. `PowUnderWrongSeed` is the
+    // environment's: this census carries no PoW leg. `ReorderedBodies` was
+    // the corpus's until 2026-09-28 — every captured block listed at most
+    // one body (slice 6 §5 row 8 measured it; slice 7 §3.7 names the class)
+    // — and is reachable since the `median-full` capture (slice 7 commit
+    // 4 (c)): its block 211 lists 23 bodies, so the one mutation that needs
+    // two has a corpus witness there, first at 211, and `DoubleSpend` a
+    // witness at 212 on a chain whose spends are its subject. A change here
+    // is a change in the corpus's shape or in the family, and §3.7 moves
+    // with it.
     assert_eq!(
         unreachable,
-        vec![
-            (
-                Mutation::PowUnderWrongSeed,
-                vec![Unmutable::NoPowEnvironment]
-            ),
-            (
-                Mutation::ReorderedBodies,
-                vec![
-                    Unmutable::TooFewBodies { listed: 0 },
-                    Unmutable::TooFewBodies { listed: 1 },
-                ],
-            ),
-        ],
+        vec![(
+            Mutation::PowUnderWrongSeed,
+            vec![Unmutable::NoPowEnvironment]
+        )],
         "the mutations no captured chain can carry, with why"
     );
 }

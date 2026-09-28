@@ -165,6 +165,15 @@ struct GetInfoResp {
     /// destroyed half is nonetheless evidence about the pool half.
     #[serde(default)]
     total_burned: u64,
+    /// The C++'s block-weight limit in force for the next block —
+    /// `Blockchain::get_current_cumulative_block_weight_limit`, twice the
+    /// effective median (CEN-G6b). What the C++ template fills up to.
+    #[serde(default)]
+    block_weight_limit: u64,
+    /// The C++'s effective median in force for the next block
+    /// (`get_current_cumulative_block_weight_median`).
+    #[serde(default)]
+    block_weight_median: u64,
 }
 
 /// `generateblocks` result fields we care about.
@@ -427,6 +436,17 @@ impl RegtestDaemon {
             .tx_pool_size
     }
 
+    /// The C++'s `(effective median, block-weight limit)` in force for the
+    /// next block, as `get_info` reports them.
+    pub(super) async fn weight_limit(&self) -> (u64, u64) {
+        let info = self
+            .rpc
+            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .await
+            .expect("get_info");
+        (info.block_weight_median, info.block_weight_limit)
+    }
+
     /// Non-coinbase transaction hashes carried by the block named by `hash`
     /// (lowercase hex, as `generateblocks` returns them).
     ///
@@ -456,6 +476,28 @@ impl RegtestDaemon {
             .await
             .expect("get_block");
         res.tx_hashes
+    }
+
+    /// The weight the daemon recorded for the block named by `hash`
+    /// (`block_header.block_weight`) and the listed transactions it
+    /// carries — the C++'s own account of how full the block it built is.
+    pub(super) async fn block_weight_of(&self, hash: &str) -> (u64, usize) {
+        let res: GetBlockResponse = self
+            .rpc
+            .json_rpc_call(
+                "get_block",
+                Some(
+                    serde_json::to_value(GetBlockRequest {
+                        hash: hash.to_owned(),
+                        height: 0,
+                        fill_pow_hash: false,
+                    })
+                    .expect("encode get_block request"),
+                ),
+            )
+            .await
+            .expect("get_block");
+        (res.block_header.block_weight, res.tx_hashes.len())
     }
 
     /// Cumulative `total_burned` — the destroyed half of the §9.5 fee
@@ -1545,6 +1587,186 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
         "spend-depth3",
         "e2e_fcmp_spend_over_depth3_tree",
         Some(accepted),
+    )
+    .await;
+}
+
+/// CEN-G6/G6b's parity capture (`CHAIN_RULES_SLICE_7.md` §3.5, Q9 (iii)):
+/// **the fullest block the C++ producer builds**, taken while both
+/// implementations exist — the same reasoning and the same window as
+/// I17's signing-preimage KAT, opposite sign (a parity pin, not a
+/// divergence pin).
+///
+/// The pool is overfilled with daemon-accepted spends (each ≈ 13.2 KB at
+/// one input, the I4 measurement) to more than the C++'s consensus limit
+/// (`get_info.block_weight_limit` = 2 × the effective median = 600 000 on
+/// a young chain, the zone's floor arm), then one block is mined.
+///
+/// **What the first run found (2026-09-28), and what this therefore
+/// captures.** The premise was a block *at the limit*. The C++ producer
+/// does not build one: `tx_pool::fill_block_template` admits a transaction
+/// past the median only if its fee outweighs the coinbase penalty it
+/// causes (*"would decrease coinbase"*, `tx_pool.cpp:2135–2146`), so at
+/// standard fees the template stops one transaction past the **median**
+/// — 305 738 bytes, 23 spends, 27 left in the pool, against a limit of
+/// 600 000. The 2 × median bound is the *validator's* refusal (CEN-F14); no
+/// C++ producer reaches it, and a block at it is a Rust-producer-built
+/// object for F14's own live-lane test (slice 7 row 5). What the C++ does
+/// build is sharper for G6 than the limit would have been: a block whose
+/// weight sits at the C++'s **median** — the fee/penalty equilibrium is
+/// a function of `M` — so a Rust median that differed would price a
+/// different penalty on this very block (F14b, F18). Held here by the
+/// daemon's own account: the weight is under the limit, the pool is not
+/// dry (the template was bounded by its policy, not by the pool), and the
+/// block crossed the median by less than two more spends would reach.
+/// Then the pool is drained by further blocks so the captured chain is
+/// whole.
+///
+/// Captured under `SHEKYL_CAPTURE_CHAIN_VECTORS` as the `median-full`
+/// vector: the replay (`vectors_tests`) holds the Rust validator to it —
+/// the G6/G6b medians against the trace's at every height now, the
+/// penalty and the paid reward on a block over the median once F14b/F18
+/// land. None of the other captured chains carries a block over the
+/// median, or more than one listed body; this is the one on record.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; ~50 spends into the pool, several min"]
+async fn e2e_cxx_template_fills_to_its_median() {
+    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use shekyl_economics::FULL_REWARD_ZONE;
+    use shekyl_units::AtomicUnits;
+    use shekyl_wire::Transaction;
+
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24;
+    /// Matured coinbase outputs to spend, one per pool transaction — more
+    /// than the ≈ 45 that would fill a 600 000-byte limit at ≈ 13.2 KB
+    /// each, so the pool overfills the limit with room and the producer's
+    /// stop is its own, not the pool's.
+    const POOL_SPENDS: usize = 60;
+
+    let daemon = RegtestDaemon::start().await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x77).await;
+    let arc = Arc::new(RwLock::new(wallet));
+
+    // Enough matured coinbases to spend one per transaction: the unlock
+    // window, then `POOL_SPENDS` more blocks, then the window again so the
+    // last of them has matured too.
+    mine_until_spendable(&daemon, &arc, &address, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
+    let extra = u64::try_from(POOL_SPENDS).expect("fits") + MINE_BATCH_BLOCKS * 8;
+    daemon.generate_blocks(extra, &address).await;
+    refresh(&arc).await;
+
+    let (median, limit) = daemon.weight_limit().await;
+    assert_eq!(
+        median, FULL_REWARD_ZONE,
+        "a young, light chain's effective median is the zone (the floor arm)"
+    );
+    assert_eq!(limit, 2 * median, "the C++'s limit is twice its median");
+    eprintln!("C++ weight limit in force: {limit} (median {median})");
+
+    // Overfill the pool: build and submit spends without mining between
+    // them. Each build reserves its inputs (F14's lock), so the next picks
+    // other outputs; a spend of a small fixed amount takes one input.
+    let mut pool_weight = 0u64;
+    let mut weights: Vec<u64> = Vec::new();
+    for n in 0..POOL_SPENDS {
+        let request = TxRequest {
+            recipients: vec![TxRecipient {
+                address: address.clone(),
+                amount_atomic_units: AtomicUnits::from_raw(1_000_000),
+            }],
+            priority: FeePriority::Standard,
+        };
+        let pending = {
+            let g = arc.read().await;
+            g.build_pending_tx_async(&request)
+                .await
+                .unwrap_or_else(|e| panic!("build pool spend {n}: {e:?}"))
+        };
+        let weight = u64::try_from(
+            Transaction::from_bytes(&pending.tx_bytes)
+                .expect("a built spend parses")
+                .weight(),
+        )
+        .expect("fits");
+        let outcome = {
+            let g = arc.read().await;
+            g.submit_pending_tx_async(pending.id, pending.content_gen)
+                .await
+                .unwrap_or_else(|e| panic!("daemon must accept pool spend {n}: {e:?}"))
+        };
+        let txid = require_fresh_accept(outcome, "a pool spend");
+        pool_weight += weight;
+        weights.push(weight);
+        eprintln!("pool spend {n}: {txid}, weight {weight}, pool weight {pool_weight}");
+        // Enough once the pool would fill the limit twice over with a
+        // margin: the block is bounded by the limit, never by the pool.
+        if pool_weight > limit + 4 * weight {
+            break;
+        }
+    }
+    assert!(
+        pool_weight > limit,
+        "the pool ({pool_weight}) must overfill the limit ({limit}) so the template is \
+         bounded by the limit and not by the pool running dry"
+    );
+    let pool_before = daemon.tx_pool_size().await;
+    assert_eq!(pool_before, u64::try_from(weights.len()).expect("fits"));
+
+    // The fullest block the C++ producer builds from that pool.
+    let mined = daemon.generate_blocks(1, &address).await;
+    assert_eq!(mined.blocks.len(), 1);
+    let (block_weight, carried) = daemon.block_weight_of(&mined.blocks[0]).await;
+    let pool_after = daemon.tx_pool_size().await;
+    let lightest_left = *weights.iter().min().expect("at least one spend");
+    eprintln!(
+        "C++ built a block of weight {block_weight} carrying {carried} spends against median \
+         {median} / limit {limit}; {pool_after} spend(s) left in the pool"
+    );
+    assert!(
+        block_weight <= limit,
+        "the C++ never exceeds its own limit: {block_weight} > {limit}"
+    );
+    assert!(
+        pool_after >= 1,
+        "the template must have been bounded by its own policy: the pool ran dry instead"
+    );
+    // The producer's stop is the fee/penalty equilibrium just past the
+    // median (the doc above): one more spend would have been refused for
+    // decreasing the coinbase, and the block is within two spends of `M`
+    // on the heavy side — not at the limit, and not under the median with
+    // room to spare.
+    assert!(
+        block_weight + lightest_left > median,
+        "one more spend ({lightest_left}) would have kept the block under the median: \
+         {block_weight} + {lightest_left} <= {median} — the pool, not the policy, bounded it"
+    );
+    assert!(
+        block_weight < median + 2 * lightest_left,
+        "the C++ producer took the block {block_weight} more than two spends past its median \
+         {median}: the fee/penalty stop is not where tx_pool.cpp:2135–2146 says it is"
+    );
+    assert!(
+        carried >= 20,
+        "a 300 000-byte median carries ≈ 23 spends of ≈ 13.2 KB; {carried} means the spends are \
+         not the shape the I4 measurement pinned"
+    );
+
+    // Drain the pool so the captured chain carries every spend, then one
+    // empty block so the tip is a plain coinbase block like the others.
+    for _ in 0..8 {
+        if daemon.tx_pool_size().await == 0 {
+            break;
+        }
+        daemon.generate_blocks(1, &address).await;
+    }
+    assert_eq!(daemon.tx_pool_size().await, 0, "the pool drains");
+    daemon.generate_blocks(1, &address).await;
+    maybe_capture_chain_vector(
+        &daemon,
+        "median-full",
+        "e2e_cxx_template_fills_to_its_median",
+        None,
     )
     .await;
 }
