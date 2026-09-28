@@ -14,6 +14,14 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **Move daemon RPC and Tor control onto `shekyl-runtime::runtime`, then print the thread ledger once at startup.** Both still build their own (`shekyl-daemon-rpc` `ffi_exports.rs:162`, `shekyl-tor-control-daemon` `blocking.rs:120`). A startup total taken before that move omits those pools. After both call `runtime`, `shekyld` prints `shekyl_thread_ledger::report` once before the p2p loop. Falsify by: those two builders call `runtime`, and `daemon.cpp` logs the report before the p2p loop. Reopen if another `Builder::new_multi_thread` appears outside `shekyl-runtime`.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
+  - Target: pre-genesis
+
+- **Move `shekyl-p-transport` onto `shekyl-socks`.** The handshake there already requires `Isolation::Principal` or `Isolation::Persona`, offers a persona only username/password, and fails closed if the proxy selects anything else. What remains is ureq's `socks` 0.3.4 connector, which is that crate's HTTP client. Falsify by `shekyl-p-transport` dialing through `shekyl_socks::connect` with `Isolation::Persona` and no longer enabling ureq's `socks-proxy`.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
+  - Target: pre-genesis
+
 - **The D2 escalation operand `n` is segment-keyed, and re-keying it to shards would price monetary policy off `T` (`SHT-8`).** `staker_pool_share_at(n: FrozenSegmentCount, …)` (`escalation.rs:269`) saturates at `shekyl_escalation_knee_n = 100,000`, whose unit today is J-segments — the partition `PDM-Q12` retired. Re-keyed to closed T-shards the same literal means 2 × 10⁷ storage ids instead of ~1.3 × 10⁹ transactions: the knee ~65× sooner with no economics changed, and every future `T` re-pin moving when the staker share saturates. Per `FL-V4` it cannot move a fee rung, so what it clocks is the burn's redirection to the staker pool. Re-key `n` to a `T`-independent burden quantity — under the non-coinbase ordinal, listed transactions in closed shards off `cumulative_tx_count` at the closure frontier — and re-derive `knee_n` once, in transactions. `n` is in **no** row of `PDM-Q6` item 4's re-key table, so the re-key census missed it. The same re-key is owed for `g(age)`'s segment-keyed no-segment branch, without which `SHT-Q1`'s falsifier cannot be called run for those two surfaces.
   - Owner: [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q6` item 4 re-key table (landing site E4 / S-ARCH)
   - Target: pre-genesis

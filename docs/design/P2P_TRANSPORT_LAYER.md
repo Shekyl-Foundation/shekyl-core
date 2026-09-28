@@ -105,8 +105,9 @@ and 100 MiB (`abstract_tcp_server2.h:72-73`). The asio pool is 10
 (`net_node.inl:1150`). The daemon-rpc runtime is still the default
 multi-thread builder (`ffi_exports.rs:162`). Tor control still sets
 `.worker_threads(1)` (`blocking.rs:120`). `Driver::next_wake` is
-`driver/mod.rs:158`. `tokio-socks` 0.5.3 is still the pin in
-`shekyl-p-fetch` and `shekyl-rpc-transport`. D6's third falsifier does
+`driver/mod.rs:158`. `shekyl-p-fetch` and `shekyl-rpc-transport` dial
+through `shekyl-socks`. `shekyl-p-transport` still enables ureq's
+`socks-proxy`. D6's third falsifier does
 not fire: the timing-engine round opened 2026-09-25.
 
 **What is built, and what the first commit is.** The crypto core is
@@ -201,8 +202,19 @@ shared name by budget, then by `LedgerId`.
 [`RuntimeBudget`](../../rust/shekyl-thread-ledger/src/lib.rs) — worker
 count and blocking-pool cap, both required — and a `ThreadName`, and
 builds one multi-thread runtime. The pool holds a `RuntimeRow`, which
-has no join, and drops the runtime first, so the row covers the workers'
-shutdown.
+has no join. [`Pool::shutdown`](../../rust/shekyl-runtime/src/lib.rs)
+takes a timeout and waits at most that long for a blocking task, then
+the row leaves. Drop is the unbounded fallback: Tokio waits forever for
+a `spawn_blocking` task that is still running, and it panics if that
+wait happens inside an asynchronous context. A pool is never dropped
+from inside a task. On drop the runtime field is first, so the row
+covers that wait too. The timeout is the caller's. This crate does not
+contain one. A blocking task still running when `shutdown` returns
+keeps its OS thread. That thread is detached and the row is already
+gone, so the ledger undercounts until the thread exits. At process
+exit that does not matter. A pool shut down and replaced while the
+daemon keeps running omits those threads from the next total.
+
 Tokio's unset worker count (one per core) and its blocking cap (512)
 are the defaults D5 refuses, so neither number lives in either crate.
 The runtime enables the I/O driver and the time driver. `net` and
@@ -212,13 +224,84 @@ The runtime enables the I/O driver and the time driver. `net` and
 each row, then the total of workers, blocking caps, and dedicated
 threads. The daemon prints it once every runtime it builds comes from
 `runtime`. The daemon-RPC builder at `shekyl-daemon-rpc`
-`ffi_exports.rs` and the Tor-control builder at
-`shekyl-tor-control-daemon` `blocking.rs` still construct their own, so
-the print is not wired. A total taken while those builders are off the
-ledger would omit the pools the sum exists to count. The clearnet
-connector will be the first caller that keeps a runtime. That call is
-not in the tree yet. It will pass a blocking cap labelled unmeasured;
-D6's measurement replaces that value.
+`ffi_exports.rs:162` and the Tor-control builder at
+`shekyl-tor-control-daemon` `blocking.rs:120` still construct their own,
+so the print is not wired. A total taken while those builders are off
+the ledger would omit the pools the sum exists to count. The move and
+the print are one FOLLOWUPS row, owned by this document. The clearnet
+connector is the first caller that keeps a runtime. Its blocking cap,
+shutdown timeout, and handshake span are the caller's, each labelled
+unmeasured; measurement replaces those values.
+
+## Clearnet connector — handshake cryptography (RULED 2026-09-27)
+
+A responder handshake is 685 µs of CPU on the Pi 4 (C5). That work runs
+on the runtime's blocking pool, not on an async worker. A worker that
+computes the handshake holds that worker for most of a millisecond, and
+under a flood the accept loop and every other connection's I/O wait
+behind it. Worker threads stay on I/O and deadlines. The blocking cap is
+the bound on how many handshakes compute at once, in addition to D10's
+accept-rate bound. No accept rate is written here.
+
+**The handshake queue is bounded by admission, not by Tokio.**
+`spawn_blocking` queues without limit once the blocking cap is busy.
+A handshake is queued only for a connection the inbound ceiling has
+already reserved. The queue cannot outgrow those connections. A length
+on the Tokio queue would refuse a handshake the ceiling had admitted,
+or admit one the ceiling had refused, so the queue is not given a
+length that rejects. The same shape as the timing engine's mailbox:
+admission bounds how many owners exist, and the queue does not apply a
+second cap.
+
+**A dequeued job checks the deadline before it computes.** Under a
+flood many connections pass their pre-channel deadline while the job is
+still queued. A job that starts on a dead connection spends 685 µs for
+nothing. The job checks at dequeue and skips. `HandshakeTally` counts
+computed against skipped. D10's flood test reads that pair.
+
+**The deadline includes the time spent queued.** One
+`OwnerClass::Transport` owner per connection, armed at accept, not when
+computation starts. The home awaits that owner's wake
+(`wait_wake_async`). A Tokio timer on the transport runtime is not the
+deadline. A deadline that started at dequeue would let a flood keep a
+connection alive for as long as the queue held it.
+
+One descriptor per socket is a test assertion (D11). The accept path
+does not walk `/proc/self/fd`. A transient `accept` error
+(`EMFILE`, `ENFILE`, `ECONNABORTED`) is recorded and the listener keeps
+accepting. Shutdown is what ends that loop. The outbound queue is that byte cap and nothing else. It is not an
+unbounded channel with a counter beside it. The caller passes the cap,
+labelled unmeasured until PWD-T6's session-established limit plus
+measurement names it. A send that does not fit is not stored, and the
+connection closes with `SendQueueFull`. The inbound reader awaits space
+instead of closing: a slow consumer on this side stops reading, and TCP
+flow control pushes back on the peer.
+
+The dialer checks the addressing cell, then `open_clearnet`. A direct
+dial connects to the address. A proxy dial connects to the SOCKS5
+endpoint and asks it to CONNECT. `shekyl-socks` is that handshake.
+Every call passes an isolation: `Principal` offers only no
+authentication, and `Persona` offers only username/password. A proxy
+that selects any other method fails the handshake before CONNECT, so a
+persona cannot be dropped onto the principal's circuits. The daemon's
+p2p dials, `shekyl-rpc-transport`, and `shekyl-p-fetch` pass
+`Principal`. The persona-username derivation stays in
+`shekyl-p-transport`, which still dials through ureq. Moving that HTTP
+client onto `shekyl-socks` is a FOLLOWUPS row. The handshake keeps the
+proxy's reply byte, which `ProxyRefused` carries. A refusal is
+`ProxyRefused` with that byte. `ExtendedErrors` on the operator's
+`SocksPort` is what makes Tor's extended codes appear. That belongs in
+the operator docs. The initiator handshake runs on the blocking pool
+under the same engine owner, armed when the socket exists.
+
+Before the flip, ruling 4's exception is still in force. The option off
+omits the Noise layer the declaration adds, and the socket bytes are the
+session bytes: that is the differential harness, byte parity with epee.
+The option on follows the stack plan: clearnet's plan is Noise, and that
+is what step 7 evaluates. Neither arm matches on a network's identity.
+The worker count, the blocking cap, the shutdown timeout, and the
+handshake span are the caller's, labelled unmeasured until a measurement
+names them.
 
 ---
 
@@ -434,7 +517,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. The operator's RPC reaches it through the FFI (`block_host`, `unblock_host`, `get_blocked_hosts`). A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
 | SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **Its own per-connector clock, derived under D9.** It does not inherit the timeout from `src/net/socks`. |
-| SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust. `tokio-socks` 0.5.3 is already a workspace dependency (`shekyl-p-fetch/Cargo.toml:40`, `shekyl-rpc-transport/Cargo.toml:43`). Reusing it adds no supply-chain surface (rule 17). A separate `socks` 0.3.4 crate is in `Cargo.lock` because `ureq` 3.3.0 depends on it, and `shekyl-p-transport` enables `ureq/socks-proxy` via its `tor-socks` feature. The connector uses `tokio-socks`, not that crate. |
+| SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust through `shekyl-socks`. `shekyl-p-fetch` and `shekyl-rpc-transport` call it with `Isolation::Principal`. `shekyl-p-transport` still enables `ureq/socks-proxy` (`socks` 0.3.4). Moving that HTTP client is a FOLLOWUPS row. |
 | Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry for Tor now, and for I2P when an I2P connector exists (D14 item 2).** Do not attribute from the socket. Inbound arrives on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host. This is where LV-3's OBSERVED endpoint originates. |
 | Tor forward listener | `net_node.inl:863-880` | Carry. Bound to `127.0.0.1` on port 0. The OS-assigned port is read back with `get_binded_port` (`:881`) and handed to Tor control. Bind failure erases the zone (`:878`). |
 | Local versus remote timers | `m_local` at `abstract_tcp_server2.inl:992`; timers at `:100-112` and `:1001-1004`. Local new-connection is 1,200,000 ms (20 minutes), not the "2 minutes" comment on `:60` | **Refuse (D14).** D2 already refuses a timeout whose only justification is that epee uses it. The class is loopback or RFC 1918, so any LAN host gets 20 minutes before a Levin session, against 10 seconds for everyone else. Container port-forwarding makes this worse: inbound peers arrive from the bridge gateway's private address, every peer looks local, and admission's per-host view collapses to one host. A test rig that needs a longer timer sets it explicitly. |
@@ -527,7 +610,10 @@ The ledger is `shekyl-thread-ledger`, which does not depend on Tokio.
 It sums every live pool, including the timing engine's dedicated
 thread. The daemon prints that sum once at startup once the two call
 sites above construct through `runtime`. Printing before that move
-would omit the pools the sum exists to count.
+would omit the pools the sum exists to count. The move and the print
+are one FOLLOWUPS row, owned by this document. `Pool::shutdown` bounds
+the wait for a blocking task. Drop remains the unbounded fallback and
+is never taken from inside a task.
 
 ---
 
@@ -940,7 +1026,11 @@ listener, and so a connection in the gap phase.
    No number is written before that measurement (rule 26 B9). The
    responder side of a handshake is 685 µs on the Pi 4 (C5, 2026-09-26).
    That is the per-connection cost. The accept-rate values still wait
-   on the stated CPU budget. The bound is clearnet-only: Tor inbound
+   on the stated CPU budget. The handshake's cryptography runs on the
+   runtime's blocking pool (clearnet connector, RULED 2026-09-27), so
+   the blocking cap bounds how many handshakes compute at once. The
+   flood test measures that, in addition to the accept-rate bound. No
+   rate is written. The bound is clearnet-only: Tor inbound
    does no Noise work on our side.
 
 4. **Tor is defended by Tor's proof-of-work, not by a daemon-side

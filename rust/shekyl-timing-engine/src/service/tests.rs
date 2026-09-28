@@ -5,8 +5,10 @@
 
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::task::{Context, Poll, Wake as TaskWake, Waker};
 use std::thread;
 use std::time::Duration;
 
@@ -460,4 +462,57 @@ fn a_second_wake_replaces_the_one_still_in_the_slot() {
     assert_eq!(wake.deadline, Tick::new(4));
     assert!(matches!(owner.poll_wake(), Ok(None)));
     assert_eq!(service.lateness(OwnerClass::Transport).replaced_wakes, 1);
+}
+
+struct FlagWaker(AtomicBool);
+
+impl TaskWake for FlagWaker {
+    fn wake(self: Arc<Self>) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+fn poll_wait<C: crate::Clock>(
+    wait: &mut std::pin::Pin<&mut WakeWait<'_, C>>,
+    flag: &Arc<FlagWaker>,
+) -> Poll<Result<crate::Wake, EngineError>> {
+    let waker = Waker::from(Arc::clone(flag));
+    let mut cx = Context::from_waker(&waker);
+    wait.as_mut().poll(&mut cx)
+}
+
+#[test]
+fn an_async_home_is_woken_when_the_deadline_is_delivered() {
+    let service = EngineService::start(ManualClock::new(Tick::new(0)));
+    let owner = service.handle().register(OwnerClass::Transport).unwrap();
+    owner.arm(Tick::new(10)).unwrap();
+    service.barrier();
+    let flag = Arc::new(FlagWaker(AtomicBool::new(false)));
+    let mut wait = std::pin::pin!(owner.wait_wake_async());
+    assert!(matches!(poll_wait(&mut wait, &flag), Poll::Pending));
+    assert!(!flag.0.load(Ordering::Acquire));
+    service.advance(Tick::new(10));
+    service.barrier();
+    assert!(flag.0.load(Ordering::Acquire));
+    match poll_wait(&mut wait, &flag) {
+        Poll::Ready(Ok(wake)) => assert_eq!(wake.deadline, Tick::new(10)),
+        other => panic!("the delivered wake was not ready: {other:?}"),
+    }
+}
+
+#[test]
+fn an_async_home_sees_close_without_a_wake() {
+    let service = EngineService::start(ManualClock::new(Tick::new(0)));
+    let owner = service.handle().register(OwnerClass::Transport).unwrap();
+    owner.arm(Tick::new(100)).unwrap();
+    service.barrier();
+    let flag = Arc::new(FlagWaker(AtomicBool::new(false)));
+    let mut wait = std::pin::pin!(owner.wait_wake_async());
+    assert!(matches!(poll_wait(&mut wait, &flag), Poll::Pending));
+    service.close();
+    assert!(flag.0.load(Ordering::Acquire));
+    assert!(matches!(
+        poll_wait(&mut wait, &flag),
+        Poll::Ready(Err(EngineError::Closed))
+    ));
 }
