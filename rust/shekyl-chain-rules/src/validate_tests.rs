@@ -44,8 +44,10 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         // rows (F1, F3, F7, F9, F10 in form; F4, F5, F6 view-bound; F11,
         // F13, F15, F20 the emission definitions), slice 7's two
         // block-weight definitions (G6 before the slot loop, G6b after
-        // it), and nothing else (the per-tx entry points are still empty;
-        // F2/F8/F19/F21 hold by construction and are never in a coverage).
+        // it) and its reward chain after them (F14 the bound, F14b the
+        // paid reward, F16 the split, G12 the supply), and nothing else
+        // (the per-tx entry points are still empty; F2/F8/F19/F21 hold by
+        // construction and are never in a coverage).
         assert_eq!(
             valid.coverage().iter().collect::<Vec<_>>(),
             [
@@ -76,10 +78,14 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::F10,
                 CenRow::F11,
                 CenRow::F13,
+                CenRow::F14,
+                CenRow::F14b,
                 CenRow::F15,
+                CenRow::F16,
                 CenRow::F20,
                 CenRow::G6,
                 CenRow::G6b,
+                CenRow::G12,
                 CenRow::H1,
                 CenRow::H3,
                 CenRow::H4,

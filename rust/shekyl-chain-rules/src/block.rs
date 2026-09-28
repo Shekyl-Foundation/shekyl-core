@@ -22,6 +22,7 @@ use crate::fault::FormAttempt;
 use crate::rule_set::{RuleSet, RuleSetId};
 use crate::rules::block_weight::Weights;
 use crate::rules::difficulty::Target;
+use crate::rules::reward::PaidEmission;
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
 ///
@@ -345,6 +346,30 @@ pub struct ValidatedBlock {
     /// effective median from here; the effective median is F14's limit
     /// and F14b's penalty operand.
     weights: Weights,
+    /// The paid reward, its miner / staker split and the gross emission
+    /// through this block (CEN-F14b, F16, G12; slice 7 commit 5). `connect`
+    /// records `coins_generated` from here; the paid reward is F18's and
+    /// G11's operand (wave B).
+    emission: PaidEmission,
+}
+
+/// What `validate` derived for a block beyond its bytes — the values a
+/// [`ValidatedBlock`] carries that no candidate declares. One struct so the
+/// assembly names each by field rather than by position (six of the same
+/// few types would otherwise be transposable at the call).
+pub(crate) struct Derived {
+    /// CEN-D4's target.
+    pub(crate) target: Target,
+    /// CEN-D4's cumulative work through this block.
+    pub(crate) cumulative_difficulty: CumulativeDifficulty,
+    /// The root after this block's drain (DRS-E3).
+    pub(crate) root_after: CurveTreeRoot,
+    /// The drain, if anything matured (DRS-E3).
+    pub(crate) drain: Option<Drain>,
+    /// CEN-G6/G6b's weights and medians.
+    pub(crate) weights: Weights,
+    /// CEN-F14b / F16 / G12's paid emission.
+    pub(crate) emission: PaidEmission,
 }
 
 impl ValidatedBlock {
@@ -358,22 +383,22 @@ impl ValidatedBlock {
     /// (`CHAIN_RULES_SLICE_3.md` F8, Q7). The transaction identities are
     /// derived here, once; the target and the cumulative work are CEN-D4's
     /// derivation, recorded where it ran; the weights are CEN-G6/G6b's,
-    /// derived once every transaction was judged. The 4.F emission is
-    /// derived in `validate` and recorded in coverage; it stays off this
-    /// type until F14b produces the paid reward `connect` persists.
-    pub(crate) fn derive(
-        candidate: Candidate,
-        hash: BlockHash,
-        target: Target,
-        cumulative_difficulty: CumulativeDifficulty,
-        root_after: CurveTreeRoot,
-        drain: Option<Drain>,
-        weights: Weights,
-    ) -> Self {
+    /// derived once every transaction was judged, and the paid emission
+    /// is the reward chain's (F14b, F16, G12) over them — all six arrive as
+    /// one [`Derived`], named field by field at the call site.
+    pub(crate) fn derive(candidate: Candidate, hash: BlockHash, derived: Derived) -> Self {
         let Candidate {
             block,
             transactions,
         } = candidate;
+        let Derived {
+            target,
+            cumulative_difficulty,
+            root_after,
+            drain,
+            weights,
+            emission,
+        } = derived;
         Self {
             hash,
             miner_tx: TxIdentity::of(&block.miner_transaction),
@@ -387,6 +412,7 @@ impl ValidatedBlock {
             root_after,
             drain,
             weights,
+            emission,
         }
     }
 
@@ -395,6 +421,13 @@ impl ValidatedBlock {
     #[must_use]
     pub const fn weights(&self) -> &Weights {
         &self.weights
+    }
+
+    /// The paid reward, its split and the gross emission through this
+    /// block (CEN-F14b, F16, G12; the field's docs).
+    #[must_use]
+    pub const fn emission(&self) -> &PaidEmission {
+        &self.emission
     }
 
     /// The tree root after this block's drain (module docs on the field).

@@ -166,6 +166,7 @@ pub use rules::block_weight::{effective_median_at, EffectiveMedian, Weights};
 pub use rules::difficulty::Target;
 pub use rules::miner::{tx_volume_window, EMISSION_SPLIT_EPOCH};
 pub use rules::recorded;
+pub use rules::reward::PaidEmission;
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;
 pub use rules::tx_against::{REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};

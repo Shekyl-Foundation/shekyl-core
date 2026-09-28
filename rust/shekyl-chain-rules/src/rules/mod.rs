@@ -78,6 +78,7 @@ pub(crate) mod header;
 pub(crate) mod miner;
 pub(crate) mod pow;
 pub use pow::seed_height;
+pub(crate) mod reward;
 pub(crate) mod timestamps;
 pub(crate) mod topology;
 pub(crate) mod tx;

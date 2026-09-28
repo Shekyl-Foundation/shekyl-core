@@ -124,12 +124,18 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::F10,
             CenRow::F11,
             CenRow::F13,
+            // Slice 7 commit 5: the reward chain (`CHAIN_RULES_SLICE_7.md`
+            // §5 row 5) — F14, F14b, F16 here, G12 below.
+            CenRow::F14,
+            CenRow::F14b,
             CenRow::F15,
+            CenRow::F16,
             CenRow::F20,
             // Slice 7 commit 4: the two block-weight definitions
             // (`CHAIN_RULES_SLICE_7.md` §5 row 4).
             CenRow::G6,
             CenRow::G6b,
+            CenRow::G12,
             CenRow::H1,
             CenRow::H3,
             CenRow::H4,
