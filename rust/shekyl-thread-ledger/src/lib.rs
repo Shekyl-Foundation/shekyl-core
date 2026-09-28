@@ -9,8 +9,11 @@
 //! [`spawn_dedicated`] starts one OS thread and returns a [`DedicatedThread`],
 //! which joins that thread before the row leaves. A Tokio pool is recorded
 //! with [`record_runtime`] by `shekyl-runtime`, which keeps the [`RuntimeRow`]
-//! inside the pool. A runtime row has no join. The timing engine depends on
-//! this crate and does not gain a runtime by doing so.
+//! inside the pool. A runtime row has no join. A socketless executor is
+//! recorded with [`record_executor`]: [`ExecutorBudget`] names its worker
+//! count and has no blocking cap, and [`ExecutorRow`] does not spawn or join.
+//! The timing engine depends on this crate and does not gain a runtime by
+//! doing so.
 //!
 //! Names are labels. Two rows may share a name. [`LedgerId`] is the identity.
 //! A name is a [`ThreadName`]: non-empty, and no interior NUL.
@@ -107,21 +110,126 @@ pub struct RuntimeBudget {
     pub blocking: NonZeroUsize,
 }
 
+/// Threads of one executor that can block waiting for a post that same
+/// executor has to run.
+///
+/// [`ExecutorBudget::above_floor`] adds one to this count. The extra thread
+/// is what runs the post. Zero lanes is a floor of one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockingLanes(usize);
+
+impl BlockingLanes {
+    /// `lanes` threads may sit blocked. The executor needs one more.
+    #[must_use]
+    pub const fn new(lanes: usize) -> Self {
+        Self(lanes)
+    }
+
+    /// The lane count the caller passed.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// Why [`ExecutorBudget::above_floor`] refused the worker count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutorBudgetError {
+    /// `lanes + 1` does not fit in `usize`.
+    FloorOverflow(BlockingLanes),
+    /// `workers` is below one more than the blocking lanes.
+    BelowFloor {
+        /// The lanes the caller named.
+        lanes: BlockingLanes,
+        /// The worker count the caller asked for.
+        workers: usize,
+        /// One more than `lanes`.
+        floor: usize,
+    },
+}
+
+impl fmt::Display for ExecutorBudgetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FloorOverflow(lanes) => write!(
+                formatter,
+                "executor floor overflows usize at {} blocking lanes",
+                lanes.get()
+            ),
+            Self::BelowFloor {
+                lanes,
+                workers,
+                floor,
+            } => write!(
+                formatter,
+                "executor workers {workers} are below the floor {floor} for {} blocking lanes",
+                lanes.get()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ExecutorBudgetError {}
+
+/// Worker threads of one socketless executor.
+///
+/// There is no Tokio blocking pool on this budget. The ledger counts
+/// `workers` once. [`record_executor`] inserts that row and does not spawn
+/// or join the threads: the executor owns their lifetime, the way a Tokio
+/// runtime owns its workers under [`RuntimeRow`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExecutorBudget {
+    workers: NonZeroUsize,
+}
+
+impl ExecutorBudget {
+    /// Accept `workers` when it is at least one more than `lanes`.
+    ///
+    /// A smaller pool leaves every thread blocked on a post the pool itself
+    /// would have to run. `lanes` of zero still requires one worker.
+    pub fn above_floor(lanes: BlockingLanes, workers: usize) -> Result<Self, ExecutorBudgetError> {
+        let Some(floor) = lanes.get().checked_add(1) else {
+            return Err(ExecutorBudgetError::FloorOverflow(lanes));
+        };
+        if workers < floor {
+            return Err(ExecutorBudgetError::BelowFloor {
+                lanes,
+                workers,
+                floor,
+            });
+        }
+        let workers = NonZeroUsize::new(workers).expect("the floor is at least one worker");
+        Ok(Self { workers })
+    }
+
+    /// The worker count this budget contributes.
+    #[must_use]
+    pub const fn workers(self) -> NonZeroUsize {
+        self.workers
+    }
+}
+
 /// What one row contributes to the process budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowKind {
     /// A Tokio runtime whose caps the caller named.
     Runtime(RuntimeBudget),
-    /// One OS thread and no blocking pool.
+    /// One OS thread and no blocking pool. [`spawn_dedicated`] owns the join.
     DedicatedThread,
+    /// A socketless executor. Workers only. No join on this row.
+    Executor(ExecutorBudget),
 }
 
 /// Order of two budgets that share a name. A dedicated thread comes first,
-/// then a runtime with fewer workers, then a runtime with a smaller
-/// blocking cap. [`LedgerId`] is the tie-break after this.
+/// then an executor with fewer workers, then a runtime with fewer workers,
+/// then a runtime with a smaller blocking cap. [`LedgerId`] is the tie-break
+/// after this.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum BudgetOrder {
     Dedicated,
+    Executor {
+        workers: NonZeroUsize,
+    },
     Runtime {
         workers: NonZeroUsize,
         blocking: NonZeroUsize,
@@ -140,12 +248,16 @@ impl RowKind {
                 .checked_add(blocking.get())
                 .expect("thread budget fits in usize"),
             RowKind::DedicatedThread => DEDICATED_THREAD_COUNT,
+            RowKind::Executor(budget) => budget.workers().get(),
         }
     }
 
     fn budget_order(self) -> BudgetOrder {
         match self {
             RowKind::DedicatedThread => BudgetOrder::Dedicated,
+            RowKind::Executor(budget) => BudgetOrder::Executor {
+                workers: budget.workers(),
+            },
             RowKind::Runtime(RuntimeBudget { workers, blocking }) => {
                 BudgetOrder::Runtime { workers, blocking }
             }
@@ -281,6 +393,29 @@ impl Drop for RuntimeRow {
     }
 }
 
+/// The ledger row of one socketless executor.
+///
+/// This value does not own the threads and has no join. Dropping it removes
+/// the row. The executor joins its own threads; recording them again as
+/// [`DedicatedThread`] rows would count each worker twice.
+#[must_use = "dropping the row removes it from the ledger"]
+pub struct ExecutorRow {
+    id: LedgerId,
+}
+
+impl ExecutorRow {
+    /// The row, for the life of this value.
+    pub fn id(&self) -> LedgerId {
+        self.id
+    }
+}
+
+impl Drop for ExecutorRow {
+    fn drop(&mut self) {
+        remove(self.id);
+    }
+}
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static LEDGER: Mutex<Vec<StoredRow>> = Mutex::new(Vec::new());
 
@@ -328,6 +463,17 @@ pub fn spawn_dedicated(
 pub fn record_runtime(name: &ThreadName, budget: RuntimeBudget) -> RuntimeRow {
     RuntimeRow {
         id: insert(name, RowKind::Runtime(budget)),
+    }
+}
+
+/// Record a socketless executor's worker count.
+///
+/// The caller has already built the budget with [`ExecutorBudget::above_floor`].
+/// This function does not spawn threads and does not check the floor again.
+/// Dropping the returned row removes the budget. There is no join.
+pub fn record_executor(name: &ThreadName, budget: ExecutorBudget) -> ExecutorRow {
+    ExecutorRow {
+        id: insert(name, RowKind::Executor(budget)),
     }
 }
 
@@ -386,6 +532,9 @@ impl LedgerRow {
     fn label(&self) -> String {
         match self.kind {
             RowKind::DedicatedThread => format!("{} dedicated", self.name),
+            RowKind::Executor(budget) => {
+                format!("{} executor workers={}", self.name, budget.workers())
+            }
             RowKind::Runtime(RuntimeBudget { workers, blocking }) => {
                 format!("{} workers={workers} blocking={blocking}", self.name)
             }
@@ -534,6 +683,72 @@ mod tests {
             .collect();
         assert_eq!(left, vec![second_id]);
         drop(second);
+    }
+
+    #[test]
+    fn an_executor_at_the_floor_counts_workers_and_leaves_on_drop() {
+        let lanes = BlockingLanes::new(1);
+        let budget = ExecutorBudget::above_floor(lanes, 2).expect("floor");
+        assert_eq!(budget.workers().get(), 2);
+        assert_eq!(
+            ExecutorBudget::above_floor(lanes, 1).expect_err("below"),
+            ExecutorBudgetError::BelowFloor {
+                lanes,
+                workers: 1,
+                floor: 2,
+            }
+        );
+        assert_eq!(
+            ExecutorBudget::above_floor(BlockingLanes::new(0), 1)
+                .expect("one worker")
+                .workers()
+                .get(),
+            1
+        );
+        assert_eq!(
+            ExecutorBudget::above_floor(BlockingLanes::new(usize::MAX), 1).expect_err("overflow"),
+            ExecutorBudgetError::FloorOverflow(BlockingLanes::new(usize::MAX))
+        );
+
+        let name = thread_name("sk-ledger-executor");
+        let row = record_executor(&name, budget);
+        let id = row.id();
+        let found = ledger()
+            .into_iter()
+            .find(|entry| entry.id == id)
+            .expect("recorded");
+        assert_eq!(found.kind, RowKind::Executor(budget));
+        assert_eq!(found.kind.threads(), 2);
+        drop(row);
+        assert!(ledger().iter().all(|entry| entry.id != id));
+    }
+
+    #[test]
+    fn a_shared_name_orders_a_dedicated_thread_then_an_executor_then_a_runtime() {
+        let mut rows = vec![
+            row(3, "same", RowKind::Runtime(budget(1, 1))),
+            row(
+                2,
+                "same",
+                RowKind::Executor(
+                    ExecutorBudget::above_floor(BlockingLanes::new(1), 2).expect("floor"),
+                ),
+            ),
+            row(1, "same", RowKind::DedicatedThread),
+        ];
+        sort_rows(&mut rows);
+        assert_eq!(
+            rows.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![LedgerId(1), LedgerId(2), LedgerId(3)]
+        );
+        let executor_workers = 2;
+        let total = DEDICATED_THREAD_COUNT + executor_workers + (1 + 1);
+        assert_eq!(
+            format_report(&rows),
+            format!(
+                "thread budget: same dedicated, same executor workers=2, same workers=1 blocking=1; total {total}"
+            )
+        );
     }
 
     #[test]
