@@ -85,6 +85,16 @@ text** — and what closes or reopens that finding.
   this makes: instance seventeen will be a file `cargo fmt` reformatted
   (or a script wrote whole) while open, not a file the edit tool alone
   touched. Caught by constraint 1; restored from `HEAD`.
+- **`wt-e7-c3` (2026-09-28) — instance seventeen, as predicted.** Six
+  files showed modified two hours after their commits had been pushed and
+  verified from a fresh clone: every one a file `cargo fmt` had reformatted
+  that evening, none a file only the edit tool had touched, all six with
+  **one `mtime`** (`00:06:14`) — a single buffer flush — and each holding
+  its pre-`fmt` text (`rustfmt --check` passes on every `HEAD` blob and
+  fails on every working copy). Caught by constraint 1 (`git diff --stat`
+  before a one-file doc commit listed seven files); the commit had staged
+  its one path and nothing travelled. The prediction above is confirmed on
+  its first test; the falsifier stands unchanged.
 
 Most of these were caught by a human or an agent reading the diff. That does not
 scale, and it is not the dangerous case. **The dangerous case is a drift
