@@ -90,7 +90,29 @@ use std::path::PathBuf;
 /// `archival_reorg_depth_blocks`, `challenge_resolution_blocks`) — one
 /// authority, read by `rust/shekyl-types/build.rs`. No behaviour changes;
 /// the digest moves because the binding grew.
-const PINNED_DIGEST: &str = "5aece7b2512ebfcad20c0747087773831b82d6b6b8b444d6f7bcbe68a9257860";
+/// **Re-pinned 2026-09-27 (`SCC-4`, the shard-count cutover census): a key was
+/// ADDED — `archival_max_holdings_shards = 4096` in
+/// `consensus_constants.json`.** The chain question, answered: the cap is what a
+/// codec refuses a holdings set *at*, so a node at 4096 and a node at 2048 admit
+/// different bond posts for the same bytes — a different chain. It belongs here.
+/// The second test (`DRS_E3_CURVE_WRITER.md` §3.9), answered: it is a **resource
+/// cap**, which this file's own rule names as passing — the `CEN-I4` input-count
+/// case, not a proof-system structural parameter — so a network could
+/// legitimately name it differently.
+///
+/// Why it moved at all: the value had **six independent definitions** and nothing
+/// tied them — `shekyl_types::MAX_HOLDINGS_SHARDS`, an **unguarded** crate-private
+/// literal in `shekyl-wire` that is what enforces the wire bound, and four C++
+/// `kMaxHoldings` (one authority on `ArchivalBondValue` plus three
+/// `static_assert`-guarded revert mirrors). The C++ four could not drift from each
+/// other, but neither Rust pair nor either language was tied to the other, so a
+/// re-pin would have moved one side silently: a holdings set the store accepts
+/// and the wire refuses. The move gives it one authority and two generated
+/// readers (`rust/shekyl-types/build.rs`; the C++ macro, from which all four
+/// `kMaxHoldings` are now defined). **No behaviour changes** — the value is the
+/// 4096 every definition already carried; the digest moves because the binding
+/// grew.
+const PINNED_DIGEST: &str = "6e5e80842d003971adce0ba28dc58f27f8dd1f6f781b258a3fcd02b6791e3f46";
 
 fn main() {
     let manifest_dir =

@@ -70,7 +70,7 @@ use core::fmt;
 /// Upper bound on the shard ids one bond's `ShardSetCompact` holdings may
 /// list (gate-4 §3.4.1; the C++ codec's `kMaxHoldings`). A decode past it is
 /// refused before any allocation is sized from the count.
-pub const MAX_HOLDINGS_SHARDS: usize = 4096;
+pub const MAX_HOLDINGS_SHARDS: usize = ARCHIVAL_MAX_HOLDINGS_SHARDS;
 
 /// `T` — transactions per archival shard: shard `k` is the storage ids
 /// `[k·T, (k+1)·T)`, `k = ⌊tx_id / T⌋` (`PDM-Q6` item 5, RULED
@@ -99,6 +99,16 @@ include!(concat!(
 ));
 
 const _: () = assert!(SHARD_TX_COUNT > 0, "a shard holds at least one transaction");
+
+// The cap bounds a `Vec` length, so `build.rs` emits it as `usize` rather than
+// `u64` like its neighbour: there is no cast to lint, and a value exceeding
+// `usize` on a 32-bit target fails to compile at the generated literal instead
+// of wrapping into a SMALLER bound — which would make a wire decoder refuse
+// holdings the store accepts.
+const _: () = assert!(
+    MAX_HOLDINGS_SHARDS > 0,
+    "a compact holdings set holds at least one shard"
+);
 
 /// Storage ids issued through `height` inclusive.
 ///

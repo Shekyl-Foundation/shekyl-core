@@ -1,7 +1,10 @@
 # The shard-count cutover — census and tracking
 
 **Status:** OPEN — **Round 0 executed 2026-09-27 at `9d549ead2`** (census and
-tracking only; no code changes). Identifier families **`SCC-`** (findings) and
+tracking). **AMENDED the same day** on the design owner's review: `SCC-4` widened
+from two definitions to **six** and **fixed here** (the one code change this round
+carries, `SCC-Q5`), and `SCC-Q1`, `SCC-Q3`, `SCC-Q4`, `SCC-Q5` answered — `SCC-Q2`
+stands as Rick's ruling. Identifier families **`SCC-`** (findings) and
 **`SCC-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file (rule 94
 §1; `check_index_prefix_uniqueness.py` branch (a) — `SCC` parses as its own
@@ -124,30 +127,53 @@ Two of the five seeded rows did not survive verification as written.
 | **The `F-A` anti-sybil argument** | **CONFIRMED.** `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md:139` leans on `MAX_HOLDINGS_SHARDS = 4096` and `:145` concludes a bulk holder *"needs **≥ 4 bonds**, not one"*; `:544` makes it conditional on the cap never rising, and `:596` carries it into W1's disposition. Under `L2`'s ruling the cap bounds a **list**, so that argument must stand on the curve, not on a list bound. A finding for that round's owner. Note its cite points at `rust/shekyl-archival-retention/src/bond_wire.rs:33`, which is a **re-export**, not the definition. |
 | **The equivalence invariant (`SHT-Q1`)** | **CONFIRMED and pinned.** The domain equals the non-coinbase transactions today; `tx_domain_tests` pins it class by class with an exhaustive `match` (no wildcard), and leg (f) pins the production path across a real prune. The **serve-credit end-to-end gap** is tracked in FOLLOWUPS. |
 
-### `SCC-4` — a live defect the census found: an unguarded duplicate of the holdings cap
+### `SCC-4` — the holdings cap had **six** definitions. FIXED here.
 
-`MAX_HOLDINGS_SHARDS` has **two definitions**:
+**As first written this row said two.** The design owner's review found four
+more, and the corrected count is **six**:
 
-- `rust/shekyl-types/src/archival.rs:73` — `pub const MAX_HOLDINGS_SHARDS: usize = 4096`, the canonical home.
-- `rust/shekyl-wire/src/transaction.rs:104` — `const MAX_HOLDINGS_SHARDS: usize = 4096`, crate-private, **unguarded**, and its comment points at `bond_wire.rs` (which only re-exports the `shekyl-types` one).
+| # | site | guarded? |
+|---|---|---|
+| 1 | `rust/shekyl-types/src/archival.rs:73` — `pub const MAX_HOLDINGS_SHARDS` | the canonical Rust home |
+| 2 | `rust/shekyl-wire/src/transaction.rs:104` — crate-private `const`, and **it is what enforces the wire bound** (`:529`, `:745`) | **no** — tied to nothing |
+| 3 | `src/blockchain_db/shekyl_types.h:1129` — `ArchivalBondValue::kMaxHoldings` | the C++ authority |
+| 4–6 | `src/blockchain_db/shekyl_types.h:781`, `:899`, `:989` — the three revert-value codecs | **yes**, `static_assert` against site 3 (`:1461`, `:1466`, `:1469`) |
 
-The wire literal is what **enforces the consensus bound on the wire**
-(`rust/shekyl-wire/src/transaction.rs:529`, `:745`), and `shekyl-wire` **already depends on
-`shekyl-types`** (`rust/shekyl-wire/Cargo.toml:26`), so nothing prevents unification.
+**The precise shape of the defect, which decides the fix.** The C++ four *could
+not* drift from each other — three are `static_assert`-pinned to the authority.
+What nothing tied was **the Rust pair to each other** and **either language to
+the other**. So a re-pin would have moved one side silently: a holdings set the
+store accepts and the wire refuses, which is a consensus split arriving through a
+private literal. Delete-the-duplicate, not synchronize-it — and, as the design
+owner observed, **not the one-line fix this row first claimed**.
 
-**Why it matters here rather than as hygiene.** `L2`'s surviving couplings are
-owed *"if the cap's value moves"*. If it moved in `shekyl-types`, the wire would
-go on refusing at 4096 **silently** — a holdings set the store accepts and the
-wire rejects, which is a consensus split arriving through a private literal. This
-is the delete-the-duplicate class, not the synchronize-it class.
+**FIXED in this PR.** The value now has one authority and two generated readers:
 
-**Fix:** delete the literal and use the `shekyl-types` constant. One line, no
-behaviour change at the current value. Out of this round's stated no-code scope,
-so it is recorded with a FOLLOWUPS row — but it is the one item here I would land
-immediately on its own commit if authorized.
+1. **`config/consensus_constants.json`** gains `archival_max_holdings_shards =
+   4096`, with both membership tests argued at the key: a different value admits a
+   different set of bond posts (**a different chain**), and it is a **resource
+   cap** — the `CEN-I4` input-count case this file's own rule names as passing the
+   nameable-differently test, not a proof-system structural parameter.
+2. **Rust** reads it through `rust/shekyl-types/build.rs`, which emits it as
+   **`usize`** rather than `u64` like its neighbour: the consumer bounds a `Vec`
+   length, so emitting the consumer's width leaves no cast to lint, and a value
+   exceeding `usize` on a 32-bit target fails to compile **at the generated
+   literal** instead of wrapping into a *smaller* bound — which is the direction
+   that would make a decoder refuse holdings the store accepts.
+3. **C++** reads `SHEKYL_ARCHIVAL_MAX_HOLDINGS_SHARDS` from
+   `cmake/generate_consensus_constants.py`; **all four** `kMaxHoldings` are now
+   defined from it, and the three `static_assert`s stay as belts against a
+   hand-edit rather than as the only tie.
+4. All five literals are deleted, and `git grep` finds no remaining copy under any
+   name. The other `4096` hits in the tree are prose or
+   `rust/shekyl-shard-visual/src/lib.rs:58`'s unrelated pixel cap.
+
+**No behaviour change**: every definition already carried 4096. The
+consensus-constants digest moved because the **binding grew**, and
+`rust/shekyl-rpc-types/build.rs`'s `PINNED_DIGEST` is re-pinned with the
+added-key case answered in place, as `VC-D12` requires.
 
 ---
-
 ## D. Calibrated constants whose units change
 
 | constant | value | unit **today** | where it was derived | on cutover |
@@ -157,7 +183,7 @@ immediately on its own commit if authorized.
 | `T` (`archival_shard_tx_count`) | `200`, PROVISIONAL | transactions per shard | `3.33 MB ÷ 16.7 KB/tx`, where 3.33 MB is the **retired leaf segment's** size (`SHT-1`) | value re-derived by the `T` round; the **unit does not change** (a count either way), but *which* transactions it counts does |
 | `L` (`archival_attestation_anchor_lag`) | `4` blocks | blocks | its fetch-span component was sized on "~20 s for 3.33 MB" — the same retired byte count (`SHT-7`), which its own page's W₂ measurement contradicts 2.4–4.3× | restate the span **per byte**, or re-pin with `T` |
 | `SHARD_BYTES` (sim only) | `3.33e6` (`rust/shekyl-economics-sim/src/burden.rs:36`) | bytes per **leaf segment** | `SEGMENT_LEAF_COUNT × ~128 B` | a modelling mean for a unit that no longer exists; re-baseline with the sims |
-| `MAX_HOLDINGS_SHARDS` | `4096` | **list entries** — not bytes, not operators (`L2`) | the list budget | unchanged by this cutover; see `SCC-4` and §E |
+| `MAX_HOLDINGS_SHARDS` | `4096` (`config/consensus_constants.json`, `archival_max_holdings_shards`) | **list entries** — not bytes, not operators (`L2`) | the list budget; **no recorded derivation of the 4096 itself** | unchanged by this cutover. Since `SCC-4` it has **one** authority and two generated readers, so §E's couplings can now hold |
 
 ---
 
@@ -174,7 +200,9 @@ Not owed if `T` moves — that coupling was struck by `L2`'s ruling.
 2. **Re-point the sim populations** that read the cap as "the big archiver":
    `rust/shekyl-economics-sim/src/stranding.rs:51`, `rust/shekyl-economics-sim/src/stage2.rs:1205`, `rust/shekyl-economics-sim/src/cartel.rs:702-703`, `rust/shekyl-economics-sim/src/burden.rs:168-170`,
    `rust/shekyl-economics-sim/src/proxy.rs:56-60` — at that same stated figure.
-3. **`SCC-4` first**, or the wire will not move with it.
+3. ~~`SCC-4` first, or the wire will not move with it.~~ **Done** (`SCC-4`): the
+   cap is one JSON key read by both languages, so a re-pin now moves every reader
+   together instead of leaving the wire refusing at the old value.
 
 ---
 
@@ -213,23 +241,44 @@ ordinal and a wallet on storage ids name different shards with the same integer.
 
 Numbered, and none resolved here.
 
-1. **`SCC-Q1` — what exactly is `n`'s replacement burden count?** `SHT-8`
-   recommends "listed transactions in closed shards, from `cumulative_tx_count`".
-   Is the quantity *transactions archived* or *transactions below the discard
-   frontier*? They differ by the retention window, and the escalation was
-   calibrated against neither.
-2. **`SCC-Q2` — does `knee_n`'s re-derivation preserve its saturation *point* or
-   its saturation *schedule*?** Re-deriving to hit the same chain size keeps the
-   ramp; re-deriving to hit the same wall-clock date changes it. `FL-V4` bounds
-   the blast radius to the burn split, not the ladder, but this is monetary policy
-   and it is a ruling.
-3. **`SCC-Q3` — does `g(age)`'s re-keyed form need a shard's close *height*?** If
-   it does, `SHT-Q1`'s falsifier (i) fires and the no-clock ruling reopens. Today
-   an unfrozen shard scores `age_milli = 0` by an explicit branch, which is a
-   defined answer and not a height read — but that is the *segment* form.
-4. **`SCC-Q4` — does the `F-A` anti-sybil argument survive on the curve alone?**
-   Under `L2` it can no longer rest on "≥ 4 bonds to plateau". That is that
-   round's owner's call, and it is a genesis-relevant economic claim.
-5. **`SCC-Q5` — is `SCC-4` in scope for this effort or its own fix?** It is a
-   one-line unification with no behaviour change at the current value, and it is a
-   precondition of §E's couplings actually holding.
+1. **`SCC-Q1` — `n`'s replacement burden count. ANSWERED (design owner,
+   2026-09-27): transactions below the discard frontier, not transactions
+   archived.** The escalation exists to redirect burned value toward stakers *as
+   the burden on archivers grows*, and that burden starts when bodies **leave
+   ordinary daemons** — not when shards close. Inside the retention window every
+   daemon still holds them, so nothing is yet borne by archivers. Computable at the
+   parent state from `cumulative_tx_count` and `D(E)` on both sides, and it moves
+   in **epoch steps**, as the segment count did — so the operand keeps the step
+   shape the ramp was built against.
+2. **`SCC-Q2` — `knee_n`'s re-derivation. NEITHER, and the question had a false
+   premise (design owner, 2026-09-27); the ruling is Rick's.** `knee_n = 100,000`
+   has **no recorded derivation** — it is provisional-until-testnet
+   (`CLIENT_VERSION_CONSTANTS_VALIDATION.md:943`), so there is no calibrated point
+   *or* schedule to preserve and nothing to port. **Recommendation: re-derive, not
+   port** — set the knee at the **burden level**, in transactions below the
+   frontier (`SCC-Q1`), where archival cost justifies the full redirect; the
+   economics sim sets the provisional value against the **(B)-domain** burden, and
+   it is pinned at testnet per §3.12. Monetary policy, so **Rick's ruling, open**.
+3. **`SCC-Q3` — does `g(age)`'s re-keyed form need a shard's close height?
+   ANSWERED: no, and the question conflated two things (design owner,
+   2026-09-27).** `SHT-Q1`'s falsifier (i) is about a shard needing **to close by
+   height** — a clock. *Reading* the close height of a shard that closed **on
+   count** is not that: under the domain it is the height of the block containing
+   the domain's `((k+1)·T)`th transaction, found by the **existing** binary search
+   over `cumulative_tx_count` (`rust/shekyl-chain-store/src/store/prune.rs:498`).
+   An open shard has no age, so the explicit `age_milli = 0` branch carries over
+   unchanged. **The ruling does not reopen.**
+4. **`SCC-Q4` — the `F-A` anti-sybil argument. HANDED OFF (design owner,
+   2026-09-27): not this effort's.** It goes to the owner of the `F-A` round as a
+   **genesis-relevant finding** — under `L2` the argument can no longer rest on
+   "≥ 4 bonds to plateau" and must stand on the curve — and **it does not block
+   this cutover**. Recorded as handed off.
+5. **`SCC-Q5` — is `SCC-4` in scope? ANSWERED: in scope, and landed here**
+   (design owner, 2026-09-27) — as corrected, since it is six sites across two
+   languages rather than the one line this round first claimed. See `SCC-4` for
+   what shipped. It was a precondition of §E's couplings holding, and §E item 3 is
+   now discharged.
+
+**Standing after Round 0:** `SCC-Q1`, `SCC-Q3`, `SCC-Q4` and `SCC-Q5` are
+**answered**; `SCC-Q2` is **open as Rick's ruling**, with the design owner's
+recommendation recorded above. No other question is open.

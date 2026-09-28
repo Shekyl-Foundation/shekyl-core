@@ -62,10 +62,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §3 `U1a`
   - Target: pre-genesis
 
-- **`shekyl-wire` carries an unguarded duplicate of `MAX_HOLDINGS_SHARDS` and it enforces the wire's consensus bound (`SCC-4`).** `rust/shekyl-wire/src/transaction.rs:104` defines a crate-private `const MAX_HOLDINGS_SHARDS: usize = 4096` — used at `:529` and `:745` to refuse an oversized holdings set — while the canonical home is `rust/shekyl-types/src/archival.rs:73`, and `shekyl-wire` already depends on that crate (`Cargo.toml:26`). Nothing ties the two. If the cap moved in `shekyl-types` the wire would go on refusing at 4096 silently, so a holdings set the store accepts would be rejected on the wire: a consensus split arriving through a private literal. Delete the literal and use the `shekyl-types` constant — one line, no behaviour change at the current value. Precondition of the `L2` couplings in `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §E actually holding.
-  - Owner: [`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](design/ARCHIVAL_SHARD_COUNT_CUTOVER.md) §C `SCC-4`
-  - Target: pre-genesis
-
 - **Leg (f) covers a connected serve-credit transaction only at the row level (`SHT-Q1`).** `the_predicate_survives_a_prune_on_the_stored_rows` connects spends and coinbases, so the case whose *only* claim on the domain is a surviving `txs_prunable_hash` row — a 3-part transaction carrying a region, i.e. the serve-credit form — is asserted over that row rather than end to end. The store's connect fixtures have no serve-credit, the chain-rules one is the shape consensus refuses (`SHT-9`), and a conforming one needs archival admission state (bond and pass records). Owed when a conforming fixture exists; **depends on `SHT-9`'s fix**.
   - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §2.1
   - Target: pre-genesis
