@@ -117,6 +117,16 @@ pub(crate) struct LedgerState {
     pub(crate) slots_adopted_this_session: std::collections::BTreeSet<u32>,
 }
 
+impl LedgerState {
+    /// Whether bond-watch adopted a slot this session.
+    ///
+    /// The only definition of `recovery_pending_reopen`: a non-empty
+    /// [`Self::slots_adopted_this_session`].
+    pub(crate) fn recovery_pending_reopen(&self) -> bool {
+        !self.slots_adopted_this_session.is_empty()
+    }
+}
+
 /// Stage 1 implementor of [`LedgerEngine`](super::traits::LedgerEngine).
 ///
 /// Wraps [`LedgerState`] in a synchronous [`RwLock`] so the existing

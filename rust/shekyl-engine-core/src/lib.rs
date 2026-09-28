@@ -15,6 +15,7 @@ pub mod outbound_label;
 pub mod scan;
 
 pub use consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
+pub use engine::balance_view::{BalanceSnapshot, BalanceView, BalanceViewError, StakedTotals};
 pub use engine::local_ledger_ops::{AbandonTxError, AbandonTxOutcome, SetTxNoteError};
 pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 /// The MS-5 multisig signer marker — only present under `--features multisig`.

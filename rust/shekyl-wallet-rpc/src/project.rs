@@ -5,14 +5,13 @@
 
 //! Domain → OpenAPI projections (accounting facts only; no secrets).
 
+use shekyl_engine_core::BalanceView;
 use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
-use shekyl_engine_core::StakedBalance;
 use shekyl_engine_core::SubmitOutcome;
 use shekyl_engine_state::{
     DisputeReason, ReceiveAttribution, SendRecord, SendState, TransferDetails, UnspendableReason,
 };
-use shekyl_scanner::BalanceSummary;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 
@@ -29,65 +28,23 @@ pub fn atomic_units_string(amount: AtomicUnits) -> String {
     amount.to_raw().to_string()
 }
 
-/// Map scanner balance + the authoritative staking view into the locked
-/// OpenAPI balance shape (WI-RPC-5: staking fields carry live values, never
-/// the pre-Stage-3 `"0"` placeholder).
-///
-/// `staked` is the checked sum of the two bonded legs `get_staked_balance`
-/// keeps separate (confirmed + in-flight sealed principal);
-/// `claimable_rewards` is `rewards_received_unspent` — received-and-unspent
-/// staking-side money, not a claim-era entitlement. `liquid` mirrors
-/// `unlocked` until staking splits liquid from locked principal. For a
-/// non-staker the caller passes `Some(&StakedBalance::ZERO)`, which is a
-/// true zero (nothing is staked), not a placeholder.
-///
-/// `staking: None` is the **degrade** arm — the sealed staking read failed
-/// — and projects the staking fields *absent*: the liquid fields stay
-/// authoritative while nothing fabricates a zero over a bad seal (the
-/// engine's fail-closed pin, carried onto the wire as structural absence
-/// rather than a `-32603` blackout of the whole balance surface).
-///
-/// # Errors
-///
-/// A bonded-principal sum that overflows the money type is a corrupt view
-/// (the supply cap keeps any legitimate sum far below `u64::MAX`). That
-/// arm answers [`WalletRpcError::InternalError`]: checked, not saturating,
-/// because a clamped `u64::MAX` would render as a plausible (absurd)
-/// balance instead of failing loudly — and a structured error, not a
-/// panic, because the workspace builds with `panic = "abort"`, so a panic
-/// on this hot path would take the whole wallet-rpc server down for a
-/// state one wallet file caused (same disposition as `transfer_view`'s
-/// internal-error arm and `StakeInError::CoverOverflow`). Deliberately
-/// NOT folded into the degrade arm: a view that *loaded* but sums past
-/// the money type is corrupt-loud territory, while the degrade arm is
-/// for a view that could not load at all.
-pub fn get_balance_result(
-    b: &BalanceSummary,
-    staking: Option<&StakedBalance>,
-) -> Result<GetBalanceResult, WalletRpcError> {
-    let unlocked = atomic_units_string(b.unlocked);
-    let staked = staking
-        .map(|s| {
-            s.bonded_principal_confirmed
-                .to_raw()
-                .checked_add(s.bonded_principal_pending.to_raw())
-                .map(|sum| sum.to_string())
-                .ok_or_else(|| {
-                    WalletRpcError::InternalError(
-                        "bonded principal legs exceed the money type (corrupt staking view)"
-                            .to_owned(),
-                    )
-                })
-        })
-        .transpose()?;
-    Ok(GetBalanceResult {
-        liquid: unlocked.clone(),
-        staked,
-        unlocked,
-        unspendable: atomic_units_string(b.unspendable),
-        claimable_rewards: staking.map(|s| atomic_units_string(s.rewards_received_unspent)),
-        pending: atomic_units_string(b.awaiting_confirmation),
-    })
+/// Serialize the engine's one-glance balance ([`BalanceView`]) as the
+/// contract's `get_balance` result. Pure wire shaping: which leg is liquid,
+/// how the bonded legs sum, and what an unreadable staking seal does to the
+/// staking fields are decided by [`shekyl_engine_core::StakeFacade::balance_view`],
+/// once, for every consumer. This function spells the decimal strings and
+/// carries the engine's absence onto the wire as absence.
+pub fn get_balance_result(view: &BalanceView) -> GetBalanceResult {
+    GetBalanceResult {
+        liquid: atomic_units_string(view.liquid),
+        staked: view.staking.map(|s| atomic_units_string(s.staked)),
+        unlocked: atomic_units_string(view.unlocked),
+        unspendable: atomic_units_string(view.unspendable),
+        claimable_rewards: view
+            .staking
+            .map(|s| atomic_units_string(s.claimable_rewards)),
+        pending: atomic_units_string(view.pending),
+    }
 }
 
 /// Stable transfer id: `{tx_hash_hex}:{internal_output_index}`.
@@ -694,79 +651,37 @@ mod tests {
     }
 
     #[test]
-    fn balance_maps_unlocked_to_liquid() {
-        let b = BalanceSummary {
-            total: AtomicUnits::from_raw(100),
+    fn balance_result_spells_the_engine_view_and_keeps_absence_absent() {
+        use shekyl_engine_core::StakedTotals;
+        let view = BalanceView {
+            liquid: AtomicUnits::from_raw(40),
             unlocked: AtomicUnits::from_raw(40),
-            locked_by_timelock: AtomicUnits::from_raw(10),
-            frozen: AtomicUnits::ZERO,
+            pending: AtomicUnits::from_raw(5),
             unspendable: AtomicUnits::from_raw(7),
-            awaiting_confirmation: AtomicUnits::from_raw(5),
+            staking: Some(StakedTotals {
+                staked: AtomicUnits::from_raw(100_000),
+                claimable_rewards: AtomicUnits::from_raw(1_234),
+            }),
         };
-        let r = get_balance_result(&b, Some(&StakedBalance::ZERO)).expect("legs cannot overflow");
-        assert_eq!(r.unlocked, "40");
+        let r = get_balance_result(&view);
         assert_eq!(r.liquid, "40");
+        assert_eq!(r.unlocked, "40");
         assert_eq!(r.pending, "5");
         assert_eq!(r.unspendable, "7");
-        // A non-staker's zeros are true zeros (nothing staked), not the
-        // pre-WI-RPC-5 placeholder.
-        assert_eq!(r.staked.as_deref(), Some("0"));
-        assert_eq!(r.claimable_rewards.as_deref(), Some("0"));
-    }
-
-    /// WI-RPC-5: `staked` sums the two bonded legs `get_staked_balance`
-    /// keeps separate; `claimable_rewards` is `rewards_received_unspent`
-    /// verbatim. Bites against reverting to the hardcoded `"0"` projection
-    /// or against summing the wrong legs; it does NOT verify the Engine
-    /// aggregation behind `staking_read_view` (the engine-core staking_read
-    /// KATs cover that).
-    #[test]
-    fn balance_staking_fields_project_the_staking_view_legs() {
-        let b = BalanceSummary {
-            total: AtomicUnits::from_raw(100),
-            unlocked: AtomicUnits::from_raw(40),
-            locked_by_timelock: AtomicUnits::ZERO,
-            frozen: AtomicUnits::ZERO,
-            unspendable: AtomicUnits::ZERO,
-            awaiting_confirmation: AtomicUnits::ZERO,
-        };
-        let staking = StakedBalance {
-            bonded_principal_confirmed: AtomicUnits::from_raw(70_000),
-            bonded_principal_pending: AtomicUnits::from_raw(30_000),
-            rewards_received_unspent: AtomicUnits::from_raw(1_234),
-        };
-        let r = get_balance_result(&b, Some(&staking)).expect("legs cannot overflow");
-        assert_eq!(
-            r.staked.as_deref(),
-            Some("100000"),
-            "confirmed + pending bonded legs"
-        );
+        assert_eq!(r.staked.as_deref(), Some("100000"));
         assert_eq!(r.claimable_rewards.as_deref(), Some("1234"));
-        assert_eq!(r.unlocked, "40", "principal legs are untouched");
-    }
 
-    /// A bonded-principal sum past the money type is a corrupt view and must
-    /// answer a structured internal error — not saturate to a plausible
-    /// (absurd) balance, and not panic (the workspace builds `panic = "abort"`,
-    /// so a panic here would abort the whole server on every `get_balance`
-    /// call against the corrupt state).
-    #[test]
-    fn balance_staking_leg_overflow_is_a_structured_error_not_a_panic() {
-        let b = BalanceSummary {
-            total: AtomicUnits::ZERO,
-            unlocked: AtomicUnits::ZERO,
-            locked_by_timelock: AtomicUnits::ZERO,
-            frozen: AtomicUnits::ZERO,
-            unspendable: AtomicUnits::ZERO,
-            awaiting_confirmation: AtomicUnits::ZERO,
+        // The degrade arm: absence crosses the wire as absence, never "0".
+        let degraded = BalanceView {
+            staking: None,
+            ..view
         };
-        let staking = StakedBalance {
-            bonded_principal_confirmed: AtomicUnits::from_raw(u64::MAX),
-            bonded_principal_pending: AtomicUnits::from_raw(1),
-            rewards_received_unspent: AtomicUnits::ZERO,
-        };
-        let err = get_balance_result(&b, Some(&staking)).expect_err("overflow must not project");
-        assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
+        let r = get_balance_result(&degraded);
+        assert_eq!(r.staked, None);
+        assert_eq!(r.claimable_rewards, None);
+        assert_eq!(r.liquid, "40", "liquid fields stay authoritative");
+        let json = serde_json::to_value(&r).unwrap();
+        assert!(json.get("staked").is_none() && json.get("claimable_rewards").is_none());
     }
 
     fn sample_send_record(state: SendState) -> SendRecord {
