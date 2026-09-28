@@ -49,6 +49,19 @@
 
 ### Daemon
 
+- **Regtest carries the issued networks' hard-fork table.** The
+  inherited regtest table `{(1, 0), (latest, 1)}` lost its second row to
+  `HardFork::add_fork`'s version guard (mainnet's latest version is 1) and
+  became `[(1, 0)]`, so `get_earliest_ideal_height_for_version(
+  HF_VERSION_SHEKYL_NG)` — CEN-F21's epoch, the height the staker share's
+  decay is measured from — was 0 on regtest and 1 on mainnet, testnet and
+  stagenet. Regtest coinbases, the relay fee floor and
+  `get_info.staker_emission_share_effective` were one share-unit off the
+  issued networks at ≈ 5.7 % of heights. The table is now version 1 at
+  height 1 on regtest too (`cryptonote_core.cpp`,
+  `shekyl_e2_trace_export.cpp`); a regtest chain built before this refuses
+  to replay under the corrected daemon and is regenerated
+  (`CHAIN_RULES_SLICE_7.md` §3.11).
 - **Thread budgets are a ledger and one constructor.** A runtime names
   its worker count and its blocking-pool cap. A dedicated thread is one
   OS thread with no blocking pool; the timing engine's thread is that
