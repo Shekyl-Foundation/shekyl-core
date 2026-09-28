@@ -4855,3 +4855,142 @@ At `S = 4`, `age_weight` 8 clears with the control's hot band at `0.214` absolut
 sends (g)'s question to Rick. The route he set is §L19h: calibrate `storage_unit_cost`
 against real-world holding cost before the breach is read as a pricing case, since
 §L19f showed that the carry signal carries the whole breach.
+
+---
+
+## L19h — the calibrated `storage_unit_cost` arm: pre-registration (2026-09-28)
+
+**Committed before its code.** §L19f found that the carry signal carries the whole
+covered-Burst breach: at `storage_unit_cost ≤ 0.01` nothing is under-held, and at 0.03
+it breaches. `0.03` was never calibrated against anything. This section derives
+the value the real world implies, fixes the grid and dispositions, and only then runs.
+
+### 1. What `storage_unit_cost` is, and the one number that calibrates it
+
+In the sim, an actor weighs `value = price · (1/R) · g(age)` against
+`storage_unit_cost · size` per shard per epoch (`agent.rs`). `price = budget / Σ capped
+work` (`reward.rs`), with `budget = 100` per epoch. At its nominal holdings `H`, the sim
+therefore spends a fraction
+
+> `φ = storage_unit_cost · H / budget_sim`
+
+of the budget on holding cost. The real world has the same fraction:
+
+> `φ = (fiat cost of holding every replica for one epoch) / (fiat budget(E))`
+> `  = c · N · R̄ / (budget_SKL(E) · P_SKL)`
+
+where `c` is the holding cost of one shard for one epoch, `N` the number of shards, `R̄`
+the mean replication, and `P_SKL` the fiat price. **The calibration is
+`storage_unit_cost = φ · budget_sim / H`.**
+
+`H` is **nominal and pinned here, not measured**: `n_shard × mean r_target` =
+240 × 4.5 = **1,080**. The baseline has `n_shard = 240` (`scenarios.rs` `baseline()`);
+`deep_threshold = 0.5` over a uniform age puts half the shards hot (`r_target_hot = 3`)
+and half deep (`6`). A measured `H` would be endogenous to the cost being calibrated. So
+`storage_unit_cost` 0.01 is **φ = 0.108** and 0.03 is **φ = 0.324**. In §L19f's arm,
+holding cost at the breach point consumed about a third of the budget.
+
+`flow_cost_fiat` / `token_price` (`scenarios.rs`, `participation.rs`) price a
+**different decision**: an operator's exit APR, not a shard's place in the allocation.
+They are not a second instrument over this field, and this arm adds no price axis to
+the sim.
+
+### 2. The inputs, each with its source
+
+| input | value | source |
+|---|---|---|
+| epoch | 10,000 blocks × 120 s = **13.9 days** | `settlement_epoch_blocks`, `daa_target_seconds` (`config/consensus_constants.json`) |
+| shard bytes | 200 × 19.6 KB = **3.92 MB** | a 2-input, 2-output single-sig spend's good from code constants (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.1: 10,778 B of authorizations + 8,128 B FCMP++ at 8 layers + ~643 B BP+ + 64 B pseudo-outs). Not the 16.7 KB/tx that sized `T = 200`, an estimate made before the domain ruling |
+| reads per (P, shard) per epoch | **3** whole-shard reads | `CHALLENGES_PER_PAIR_PER_EPOCH = 3` (`ARCHIVAL_CHALLENGE_MECHANISM.md`). Organic and band-2 serving are **excluded**: there is no authority for them (`SHT-5`), so `c` is a lower bound on that leg |
+| storage, floor device | $145/TB portable SSD over 36 months = **$4.03/TB-month** | [cheapestssd.com, portable SSDs by $/TB, September 2026](https://cheapestssd.com/portable-ssd/) (SanDisk Extreme 2 TB at $145/TB); rule 76's floor is a Pi 4 with attached storage |
+| storage, rented | Hetzner Storage Box €3.20 ≈ **$3.70/TB-month**, traffic included; Backblaze B2 **$6.95/TB-month** | [Hetzner Storage Box review, 2026](https://hiltonsoftware.co/tools/hetzner-storage); [Backblaze B2 pricing](https://www.backblaze.com/cloud-storage/pricing) |
+| egress | home flat-rate **$0 marginal**; AWS **$0.09/GB** (first 10 TB) | [EgressCost.com, AWS data transfer out](https://egresscost.com/aws/data-transfer-pricing/) |
+| `budget(E)`, emission leg | **2,413,775 / 960,334 / 304,084 / 3,004 SKL per epoch** at years 1 / 5 / 10 / 30 | computed, not hand-derived: `shekyl_economics::emission::base_block_reward` + `emission_share::compute_emission_split` over `EconomicParams::default()` block by block, at baseline volume (`M_r = 1`). The **fee leg** (the staker pool's 25 % of burned fees) is excluded — unknowable before genesis — so `budget` is a **floor** and every `storage_unit_cost` below is an **upper bound** at its price |
+| `N` | domain tx/day × 365 × years ÷ 200; **10 k and 100 k tx/day** | assumption axis, stated |
+| `R̄` | **4.5**; `φ` scales linearly across [3, 6] (×0.67 to ×1.33) | assumption axis, stated |
+| `P_SKL` | **unsourceable before genesis** | assumption axis: $0.001–$0.1 (FDV $4.3 M–$430 M against the 4.29 × 10⁹ SKL asymptote), led by the **break-even price** it needs no guess for |
+
+**Holding cost per shard per epoch, `c`:** **low $7.31 × 10⁻⁶** (the floor device's SSD, home egress), **high $1.071 × 10⁻³** (B2 storage + AWS egress for three reads). When egress is paid, it outweighs storage ~80×. The Hetzner box, with traffic included, is below the low bound ($6.7 × 10⁻⁶). Electricity and the device itself are per-operator, not per-byte, so they belong to `flow_cost`, not here.
+
+### 3. The calibrated range
+
+`storage_unit_cost` implied at each price, and the break-even price `P*` at which it
+reaches the §L19f band (0.01 clear, 0.03 breach at `S = 4`):
+
+| tx/day | year | `N` | `c` | cost/epoch | uc at $0.001 | uc at $0.01 | uc at $0.1 | `P*` for 0.01 | `P*` for 0.03 |
+|---|---|---|---|---|---|---|---|---|---|
+| 10 k | 1 | 18,250 | low | $0.60 | 2.3 × 10⁻⁵ | 2.3 × 10⁻⁶ | 2.3 × 10⁻⁷ | $2.3 × 10⁻⁶ | $7.7 × 10⁻⁷ |
+| 10 k | 1 | | high | $88 | 3.4 × 10⁻³ | 3.4 × 10⁻⁴ | 3.4 × 10⁻⁵ | $3.4 × 10⁻⁴ | $1.1 × 10⁻⁴ |
+| 10 k | 5 | 91,250 | low | $3.00 | 2.9 × 10⁻⁴ | 2.9 × 10⁻⁵ | 2.9 × 10⁻⁶ | $2.9 × 10⁻⁵ | $9.7 × 10⁻⁶ |
+| 10 k | 5 | | high | $440 | 0.042 | 4.2 × 10⁻³ | 4.2 × 10⁻⁴ | $4.2 × 10⁻³ | $1.4 × 10⁻³ |
+| 10 k | 10 | 182,500 | low | $6.00 | 1.8 × 10⁻³ | 1.8 × 10⁻⁴ | 1.8 × 10⁻⁵ | $1.8 × 10⁻⁴ | $6.1 × 10⁻⁵ |
+| 10 k | 10 | | high | $880 | 0.27 | 0.027 | 2.7 × 10⁻³ | $0.027 | $8.9 × 10⁻³ |
+| 100 k | 1 | 182,500 | low | $6.00 | 2.3 × 10⁻⁴ | 2.3 × 10⁻⁵ | 2.3 × 10⁻⁶ | $2.3 × 10⁻⁵ | $7.7 × 10⁻⁶ |
+| 100 k | 1 | | high | $880 | 0.034 | 3.4 × 10⁻³ | 3.4 × 10⁻⁴ | $3.4 × 10⁻³ | $1.1 × 10⁻³ |
+| 100 k | 5 | 912,500 | low | $30 | 2.9 × 10⁻³ | 2.9 × 10⁻⁴ | 2.9 × 10⁻⁵ | $2.9 × 10⁻⁴ | $9.7 × 10⁻⁵ |
+| 100 k | 5 | | high | $4,398 | 0.42 | 0.042 | 4.2 × 10⁻³ | $0.042 | $0.014 |
+| 100 k | 10 | 1,825,000 | low | $60 | 0.018 | 1.8 × 10⁻³ | 1.8 × 10⁻⁴ | $1.8 × 10⁻³ | $6.1 × 10⁻⁴ |
+| 100 k | 10 | | high | $8,796 | 2.7 | 0.27 | 0.027 | $0.27 | $0.089 |
+
+**The end of the mining era (year 30) is not a price question.** The emission leg is
+3,004 SKL per epoch, so `budget(E)` is the fee leg, which cannot be computed before
+genesis. What the calibration gives instead is the **break-even fiat budget per epoch**,
+`cost / φ*`:
+
+| tx/day | `N` | `c` | cost/epoch | fiat `budget(E)` to reach 0.01 | to reach 0.03 |
+|---|---|---|---|---|---|
+| 10 k | 547,500 | low | $18 | $167 | $56 |
+| 10 k | | high | $2,639 | $24,400 | $8,100 |
+| 100 k | 5,475,000 | low | $180 | $1,670 | $560 |
+| 100 k | | high | $26,387 | $244,000 | $81,000 |
+
+A year-30 archival budget above the first column keeps `storage_unit_cost` at or below
+0.01; below the second, it is at or above 0.03.
+
+**So the calibrated range spans the whole axis.** It depends on era, on whether egress
+is paid, and on price, far more than on any single figure. On the floor device with home
+egress it stays at or below 0.003 through year 5 at any price of $0.001 or more. With
+paid egress it reaches the band at year 5 below $0.004 (10 k tx/day) or $0.04
+(100 k tx/day). The run cannot settle that; what it can
+settle is where the breach threshold sits at realistic spreads.
+
+### 4. The grid and the method, fixed here
+
+- **Subject:** covered base (`storage_scale` 1.3), `EraShape::Burst`, baseline
+  `age_weight` 2.
+- **Spread:** `S ∈ {1.5, 2, 2.5}`. §8.1's input-count analysis bounds the realistic
+  per-transaction spread at ~1.3–2.4, which is why §L19f's `S = 4` and `10` are not
+  repeated.
+- **Unit cost:** `storage_unit_cost ∈ {0.001, 0.003, 0.01, 0.02, 0.03, 0.06}`. This spans
+  the band and the table's resolvable part. Above 0.06 the control collapses (§L19f:
+  worst cell 1.000 at 0.10), so those points are outside the instrument.
+- **Method:** L19a's and its amendment's — demand-matched sizes (realized mean asserted
+  1.000), `N = 8` paired seeds against each point's own control, cell-wise worst-band
+  delta, in-frame check.
+- **Verdict, under §L19g §4's ruling:**
+  - **BREACH** if every seed's delta exceeds 0.05;
+  - **CLEAR** if every seed is at or under;
+  - **SPLIT** otherwise;
+  - **VOID** if any seed's control worst cell reads exactly 1.000, or any seed is out of
+    frame or off the realized mean.
+
+  The old registered `verdict` is printed beside it, unchanged, so §L19a–§L19f still
+  reproduce.
+
+### 5. Dispositions, fixed before the run
+
+For each `S`, let `uc_b(S)` be the lowest grid point that is BREACH. A calibrated cell
+(§3) **reaches the breach at `S`** if its `storage_unit_cost ≥ uc_b(S)`. It is
+**unresolved** if it falls between the highest CLEAR point below `uc_b(S)` and
+`uc_b(S)`.
+
+| outcome | disposition |
+|---|---|
+| **no grid point is BREACH at any `S`** | F34 **closes as a cost-assumption artifact**; (g) does not fire |
+| **breaches exist, but no calibrated cell reaches one** | F34 **closes as a cost-assumption artifact** — the breach exists only outside the calibrated range; (g) does not fire |
+| **some calibrated cells reach a breach** | **To the design owner with the calibrated numbers:** which cells (era × rate × egress × price), `uc_b(S)`, and each cell's break-even price or fiat budget |
+| **a SPLIT decides whether a cell reaches the breach** | that cell is **unresolved**; F34 stays open on it, with the seed counts reported. A SPLIT needs more seeds, not a disposition (§L19g §3) |
+| **VOID points** | outside the instrument; reported, not graded |
+
+The year-30 rows enter only through their break-even fiat budgets: the fee leg, not the
+price, decides them.
