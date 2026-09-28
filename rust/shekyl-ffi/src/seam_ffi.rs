@@ -140,7 +140,23 @@ fn hub() -> Option<Hub> {
     STATE.lock().expect("seam state").clone()
 }
 
+/// One admission table for the process. A new binding does not mint ids
+/// again: a `reap` that arrives after the swap names an id the new hub
+/// does not hold.
+fn process_sockets() -> shekyl_seam::Sockets {
+    static TABLE: std::sync::OnceLock<shekyl_seam::Sockets> = std::sync::OnceLock::new();
+    TABLE.get_or_init(shekyl_seam::Sockets::new).clone()
+}
+
+/// Close the published hub, join its harness threads, then publish `next`.
+///
+/// The previous hub stays published through [`Hub::shutdown`], so a strand
+/// callback during the close still reaches it. The next hub is published
+/// only after that returns.
 fn store(next: Option<Hub>) {
+    if let Some(current) = hub() {
+        current.shutdown();
+    }
     *STATE.lock().expect("seam state") = next;
 }
 
@@ -172,10 +188,14 @@ fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundCeiling> {
 /// Returns 0 when the seam is installed or cleared, and -1 when `ceiling`
 /// is not a known decision.
 ///
+/// A previous binding is closed and its harness threads are joined before
+/// this call publishes the next one. `ctx` from that binding stays valid
+/// until this call returns.
+///
 /// # Safety
-/// `post` stays callable, and `ctx` stays valid, until the next bind.
 /// `post` does not call back into the seam before it returns.
-/// `ceiling` is readable when non-null.
+/// `ctx` stays valid until the next bind returns, because shutdown still
+/// posts to the previous callback. `ceiling` is readable when non-null.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_seam_bind(
     ctx: *mut c_void,
@@ -204,7 +224,7 @@ pub unsafe extern "C" fn shekyl_seam_bind(
         post,
     };
     store(Some(Hub::with_clock(
-        shekyl_seam::Sockets::new(),
+        process_sockets(),
         ceiling,
         Arc::new(move |item: Post| post_one(&bound, item)),
     )));

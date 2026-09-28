@@ -160,6 +160,23 @@ namespace
     const shekyl_seam_open_result opened = shekyl_seam_open(&addr, inbound);
     return opened.id;
   }
+
+  // `closed` posts destruction onto the strand. Stopping the context before
+  // that post runs abandons the handler, and destroying it drops the link
+  // after the config is gone.
+  void wait_until_links_close(pool& ex)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      {
+        std::lock_guard<std::mutex> lock(ex.mu);
+        if (ex.links.empty())
+          return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
 }
 
 TEST(seam_endpoint, the_executor_refuses_one_below_the_floor)
@@ -285,6 +302,7 @@ TEST(seam_endpoint, two_connections_keep_distinct_registry_keys)
 
   shekyl_seam_close(first);
   shekyl_seam_close(second);
+  wait_until_links_close(ex);
   ex.io.stop();
   runner.join();
   shekyl_seam_bind(nullptr, nullptr, nullptr);
@@ -324,6 +342,7 @@ TEST(seam_endpoint, a_second_established_does_not_replace_the_link)
   }
 
   shekyl_seam_close(id);
+  wait_until_links_close(ex);
   ex.io.stop();
   runner.join();
   shekyl_seam_bind(nullptr, nullptr, nullptr);

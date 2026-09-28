@@ -505,6 +505,11 @@ exists.
 
 `shekyl_seam_bind` takes the ceiling the caller already resolved
 (`shekyl_inbound_ceiling_resolve`). It does not resolve a second one.
+Replacing a binding closes the previous hub and joins its harness
+threads before the next hub is published. The admission table is one
+for the process, so a `reap` of an old id does not name a new
+connection. One bind serves every zone: zone bind installs its dialer
+with `Hub::install_dial` on that hub and does not bind a second seam.
 `shekyl_seam_set_ceiling` replaces that bound when the reservations
 change. `shekyl_seam_open` asks the installed dialer for a channel,
 posts `established`, and waits until the handler is armed or the arm

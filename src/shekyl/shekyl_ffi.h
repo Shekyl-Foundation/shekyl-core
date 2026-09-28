@@ -4219,7 +4219,9 @@ using shekyl_seam_post_fn = void (*)(void* ctx, std::uint64_t id, std::uint32_t 
     const shekyl_close_cause* cause);
 
 /// Install `post` and `ceiling`. A null `post` clears the seam.
-/// Returns 0 when installed or cleared, -1 when `ceiling` is not a decision.
+/// The previous binding is closed and its harness threads are joined
+/// before the next one is published. Returns 0 when installed or
+/// cleared, -1 when `ceiling` is not a decision.
 int shekyl_seam_bind(void* ctx, shekyl_seam_post_fn post, const shekyl_inbound_ceiling* ceiling);
 /// Replace the inbound bound on a bound seam. 0 on success, -1 otherwise.
 int shekyl_seam_set_ceiling(const shekyl_inbound_ceiling* ceiling);

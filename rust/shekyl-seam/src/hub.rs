@@ -155,12 +155,41 @@ impl Hub {
         self.lock().ceiling = ceiling;
     }
 
+    /// Install the dialer zone bind will use. The previous dialer is dropped
+    /// after the write lock is released: its drop joins the harness pump,
+    /// and that pump calls [`Self::finish`], which takes the same lock.
+    pub fn install_dial(&self, dial: Arc<dyn Dial>) {
+        let previous = {
+            let mut slot = self.dial.write().expect("seam dial");
+            slot.replace(dial)
+        };
+        drop(previous);
+    }
+
     /// Install the in-memory harness dialer. Zone bind installs a connector
     /// dialer instead, on the same [`Sockets`] this hub already holds.
     pub fn install_loopback(&self, send_cap: usize) {
         let sockets = self.lock().sockets.clone();
-        let dial = Loopback::new(sockets, send_cap);
-        *self.dial.write().expect("seam dial") = Some(Arc::new(dial));
+        self.install_dial(Arc::new(Loopback::new(sockets, send_cap)));
+    }
+
+    /// Close every row and join the dialer's threads.
+    ///
+    /// The hub stays published while this runs, so a strand callback still
+    /// reaches this binding. Rows are removed after the threads have joined.
+    /// A later [`Self::reap`] for one of those ids finds nothing.
+    pub fn shutdown(&self) {
+        let ids: Vec<SocketId> = self.lock().conns.keys().copied().collect();
+        for id in ids {
+            self.finish(id, CloseCause::new(CloseKind::LocalClose));
+        }
+        let previous = {
+            let mut slot = self.dial.write().expect("seam dial");
+            slot.take()
+        };
+        drop(previous);
+        self.lock().conns.clear();
+        self.ready.notify_all();
     }
 
     fn now(&self) -> Tick {
@@ -719,6 +748,40 @@ mod tests {
         .expect_err("ceiling");
         assert_eq!(err.kind(), CloseKind::AdmissionRefused);
         drop(ends);
+    }
+
+    #[test]
+    fn replacing_the_dialer_joins_the_pump_and_the_next_hub_keeps_the_id() {
+        let sockets = Sockets::new();
+        let posts = Arc::new(Mutex::new(VecDeque::new()));
+        let clock = ManualClock::new(Tick::new(1));
+        let first = Hub::new(
+            sockets.clone(),
+            InboundCeiling::Bounded(8),
+            queue_poster(&posts),
+            Arc::new(clock.clone()),
+        );
+        first.install_loopback(32);
+        let endpoint = endpoint(doc_ip(), Direction::Outbound);
+        let attached = first.connect(&endpoint).expect("open");
+        let id = attached.id;
+        let hub = first.clone();
+        let pump = thread::spawn(move || drive_inbound(&hub, id, attached.session));
+        first.track_pump(id, pump);
+        first.install_loopback(32);
+        first.shutdown();
+        assert!(first.cause(id).is_none());
+        let second = Hub::new(
+            sockets,
+            InboundCeiling::Bounded(8),
+            queue_poster(&posts),
+            Arc::new(clock),
+        );
+        second.install_loopback(32);
+        let again = second.connect(&endpoint).expect("next id");
+        assert_ne!(again.id, id);
+        drop(again);
+        second.shutdown();
     }
 
     #[test]
