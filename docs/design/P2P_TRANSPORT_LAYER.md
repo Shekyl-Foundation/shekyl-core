@@ -333,9 +333,15 @@ names them.
 
 ## Seam — construction contract (RULED 2026-09-28)
 
-Both connectors are in. The seam is what calls them. epee still owns
-every production socket until cutover. This note is the build before
-the differential harness and the cutover. D4 and D6 stay the rulings. What follows is how those
+Both connectors are in. The seam is the handler boundary they attach to:
+one `Sockets` table, the connector's `Session`, and the posts onto that
+connection's strand. A `Dial` is how a channel is born. Zone bind, which
+installs the connector dialer and runs `drive_inbound` on the transport
+runtime, is the cutover and is not in this change. The loopback dialer is
+the strand harness: it admits on the hub's table and discards outbound
+bytes. It is not a connector. epee still owns every production socket.
+This note is the build before the differential harness and the cutover.
+D4 and D6 stay the rulings. What follows is how those
 rulings are built, including the three points the seam has to settle.
 No measured thread budget, deadline, or accept rate is written here.
 The executor's floor is counted from the lanes that block on it.
@@ -495,7 +501,18 @@ started on the seam. I2P gets no seam server and no new epee server.
 The cutover states that I2P support is removed until an I2P connector
 exists.
 
-**The FFI is six calls, plus configuration.**
+**The FFI is the posts, the completions, and the synchronous connect.**
+
+`shekyl_seam_bind` takes the ceiling the caller already resolved
+(`shekyl_inbound_ceiling_resolve`). It does not resolve a second one.
+`shekyl_seam_set_ceiling` replaces that bound when the reservations
+change. `shekyl_seam_open` asks the installed dialer for a channel,
+posts `established`, and waits until the handler is armed or the arm
+fails. With no dialer the cause is `DialFailed`. The opener drives
+inbound on a thread `reap` joins. That thread is the synchronous
+connect's reader until zone bind moves the drive onto the transport
+runtime, which is already a `RuntimeRow`. The loopback harness is
+`shekyl_seam_install_loopback`; zone bind does not call it.
 
 Rust posts these onto the connection's strand, and the strand runs them:
 
@@ -515,16 +532,26 @@ Rust posts these onto the connection's strand, and the strand runs them:
   follows as the close rule above says. `cause` is the `repr(C)`
   `CloseCause` already in the FFI header.
 
+The strand calls back:
+
+- `handler_armed(id, ok)` — `ok` false records `LocalClose` and wakes
+  the opener. A failed arm does not leave the opener parked.
+- `delivery_finished(id, accepted)` — a refusal records `SessionRefused`
+  only when no cause is recorded yet and `closed` has not started.
+- `handler_gone(id)` — `closed` has started. A later refusal records
+  nothing.
+- `reap(id)` — the executor dropped the link. The row is removed and
+  the harness threads are joined. The cause already rode the `closed`
+  post; the table does not keep it.
+
 C++ calls these:
 
-- `connect` keeps the synchronous shape `net_node` already uses. The
+- `open` keeps the synchronous shape `net_node` already uses. The
   address is the connector plus the address bytes, the same union
-  peer exchange uses, so clearnet, onion, and a proxy dial cross one
-  call. It returns after the channel exists and the strand has
-  constructed the handler, or it returns the D12 cause. No handler
-  was created on the failure path. The waiter holds no lock the
-  strand needs. The caller is often an executor thread. See the floor
-  below.
+  peer exchange uses, decoded once into `Endpoint`. It returns after
+  the channel exists and the strand has constructed the handler, or it
+  returns the D12 cause. The waiter holds no lock the strand needs.
+  The caller is often an executor thread. See the floor below.
 - `send(id, bytes)` is exactly one whole Levin message, copied into
   the byte cap as a single unit during the call. C++ frees its buffer
   after the return. More than one context sends on the same

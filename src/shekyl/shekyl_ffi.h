@@ -4167,9 +4167,9 @@ struct ShekylOwnedBuffer {
 /// `n_blocks` or `n_spent` overflowed `size_t` when widened to bytes.
 #define SHEKYL_CHAIN_DIGEST_V0_ERR_OVERFLOW           -2
 
-/// The p2p seam. `shekyl_seam_bind` installs the post. The post enqueues
-/// onto the connection's strand and returns. Kinds: 1 established,
-/// 2 deliver, 3 closed.
+/// The p2p seam. `shekyl_seam_bind` installs the post and the caller's
+/// already-resolved ceiling. The post enqueues onto the connection's strand
+/// and returns. Kinds: 1 established, 2 deliver, 3 closed.
 constexpr std::uint32_t SHEKYL_SEAM_ESTABLISHED = 1;
 constexpr std::uint32_t SHEKYL_SEAM_DELIVER = 2;
 constexpr std::uint32_t SHEKYL_SEAM_CLOSED = 3;
@@ -4181,6 +4181,7 @@ constexpr std::uint8_t SHEKYL_ADDR_IPV4 = 1;
 constexpr std::uint8_t SHEKYL_ADDR_IPV6 = 2;
 constexpr std::uint8_t SHEKYL_ADDR_I2P = 3;
 constexpr std::uint8_t SHEKYL_ADDR_TOR = 4;
+/// A v3 onion hostname, including `.onion`.
 constexpr std::uint16_t SHEKYL_SEAM_HOST_MAX = 62;
 
 extern "C" {
@@ -4217,16 +4218,22 @@ using shekyl_seam_post_fn = void (*)(void* ctx, std::uint64_t id, std::uint32_t 
     const shekyl_seam_observed* observed, const std::uint8_t* bytes, std::size_t len,
     const shekyl_close_cause* cause);
 
-void shekyl_seam_bind(void* ctx, shekyl_seam_post_fn post);
+/// Install `post` and `ceiling`. A null `post` clears the seam.
+/// Returns 0 when installed or cleared, -1 when `ceiling` is not a decision.
+int shekyl_seam_bind(void* ctx, shekyl_seam_post_fn post, const shekyl_inbound_ceiling* ceiling);
+/// Replace the inbound bound on a bound seam. 0 on success, -1 otherwise.
+int shekyl_seam_set_ceiling(const shekyl_inbound_ceiling* ceiling);
+/// Install the in-memory harness dialer. Zone bind does not call this.
+int shekyl_seam_install_loopback(void);
 shekyl_seam_open_result shekyl_seam_open(const shekyl_seam_address* addr, std::uint8_t inbound);
-int shekyl_seam_await_handler(std::uint64_t id);
-void shekyl_seam_handler_ready(std::uint64_t id);
+/// `armed` nonzero: the handler exists. Zero: arm failed, record local close.
+void shekyl_seam_handler_armed(std::uint64_t id, int armed);
 int shekyl_seam_deliver(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
-int shekyl_seam_deliver_result(std::uint64_t id, const std::uint8_t* bytes, std::size_t len, int accepted);
+void shekyl_seam_delivery_finished(std::uint64_t id, int accepted);
 void shekyl_seam_handler_gone(std::uint64_t id);
+void shekyl_seam_reap(std::uint64_t id);
 int shekyl_seam_send(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
 void shekyl_seam_close(std::uint64_t id);
-int shekyl_seam_cause(std::uint64_t id, shekyl_close_cause* out);
 std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
 std::uint64_t shekyl_seam_inbound_held(void);
 int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);

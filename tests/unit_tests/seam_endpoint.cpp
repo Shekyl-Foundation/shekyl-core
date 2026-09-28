@@ -40,6 +40,7 @@ namespace
 
   using config_t = epee::levin::async_protocol_handler_config<context>;
   using handler_t = epee::levin::async_protocol_handler<context>;
+  using link_t = shekyl::seam_link<context, handler_t, config_t>;
 
   struct commands : public epee::levin::levin_commands_handler<context>
   {
@@ -56,7 +57,8 @@ namespace
     config_t config;
     std::map<std::uint64_t, std::shared_ptr<boost::asio::io_context::strand>> strands;
     std::vector<std::uint32_t> order;
-    std::map<std::uint64_t, std::unique_ptr<shekyl::seam_link<context, handler_t, config_t>>> links;
+    std::map<std::uint64_t, shekyl_close_cause> causes;
+    std::map<std::uint64_t, std::shared_ptr<link_t>> links;
 
     std::shared_ptr<boost::asio::io_context::strand> strand_for(std::uint64_t id)
     {
@@ -70,33 +72,38 @@ namespace
 
   void on_strand(pool* ex, std::uint64_t id, std::uint32_t kind, shekyl_seam_observed observed, bool have_observed, std::vector<std::uint8_t> bytes)
   {
-    shekyl::seam_link<context, handler_t, config_t>* link = nullptr;
+    std::shared_ptr<link_t> link;
     {
       std::lock_guard<std::mutex> lock(ex->mu);
       ex->order.push_back(kind);
       if (kind == SHEKYL_SEAM_ESTABLISHED && have_observed)
       {
-        auto created = std::make_unique<shekyl::seam_link<context, handler_t, config_t>>(
-            ex->io, *ex->strands.at(id), ex->config, id, observed);
-        link = created.get();
-        ex->links.emplace(id, std::move(created));
+        if (ex->links.find(id) != ex->links.end())
+          return;
+        auto created = link_t::create(ex->io, *ex->strands.at(id), ex->config, id, observed,
+            [ex](std::uint64_t retired) {
+              std::lock_guard<std::mutex> retire_lock(ex->mu);
+              ex->links.erase(retired);
+            });
+        ex->links.emplace(id, created);
+        link = std::move(created);
       }
       else
       {
         auto found = ex->links.find(id);
         if (found != ex->links.end())
-          link = found->second.get();
+          link = found->second;
       }
     }
 
-    if (kind == SHEKYL_SEAM_ESTABLISHED && link != nullptr && link->arm())
-      shekyl_seam_handler_ready(id);
-    else if (kind == SHEKYL_SEAM_DELIVER && link != nullptr)
+    if (kind == SHEKYL_SEAM_ESTABLISHED && link)
+      shekyl_seam_handler_armed(id, link->arm() ? 1 : 0);
+    else if (kind == SHEKYL_SEAM_DELIVER && link)
     {
       const bool accepted = link->take_bytes(bytes.data(), bytes.size());
-      shekyl_seam_deliver_result(id, bytes.data(), bytes.size(), accepted ? 1 : 0);
+      shekyl_seam_delivery_finished(id, accepted ? 1 : 0);
     }
-    else if (kind == SHEKYL_SEAM_CLOSED && link != nullptr)
+    else if (kind == SHEKYL_SEAM_CLOSED && link)
     {
       shekyl_seam_handler_gone(id);
       link->begin_closed();
@@ -104,7 +111,7 @@ namespace
   }
 
   void post_to_strand(void* ctx, std::uint64_t id, std::uint32_t kind, const shekyl_seam_observed* observed,
-      const std::uint8_t* bytes, std::size_t len, const shekyl_close_cause*)
+      const std::uint8_t* bytes, std::size_t len, const shekyl_close_cause* cause)
   {
     auto* ex = static_cast<pool*>(ctx);
     std::vector<std::uint8_t> copy;
@@ -114,6 +121,11 @@ namespace
     const bool have = observed != nullptr;
     if (have)
       stored = *observed;
+    if (cause != nullptr)
+    {
+      std::lock_guard<std::mutex> lock(ex->mu);
+      ex->causes[id] = *cause;
+    }
     auto strand = ex->strand_for(id);
     boost::asio::post(*strand, [ex, id, kind, stored, have, copy] {
       on_strand(ex, id, kind, stored, have, copy);
@@ -132,6 +144,14 @@ namespace
     addr.bytes[2] = 113;
     addr.bytes[3] = 10;
     return addr;
+  }
+
+  void bind_harness(pool& ex)
+  {
+    shekyl_inbound_ceiling ceiling{};
+    shekyl_inbound_ceiling_resolve(0, 0, &ceiling);
+    ASSERT_EQ(shekyl_seam_bind(&ex, &post_to_strand, &ceiling), 0);
+    ASSERT_EQ(shekyl_seam_install_loopback(), 0);
   }
 
   std::uint64_t open_clearnet(std::uint8_t inbound)
@@ -156,7 +176,7 @@ TEST(seam_endpoint, connect_from_the_executor_completes_at_the_floor)
   commands cmds;
   pool ex;
   ex.config.set_handler(&cmds, nullptr);
-  shekyl_seam_bind(&ex, &post_to_strand);
+  bind_harness(ex);
 
   boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work(ex.io.get_executor());
   boost::thread_group threads;
@@ -167,7 +187,7 @@ TEST(seam_endpoint, connect_from_the_executor_completes_at_the_floor)
   auto waited = done.get_future();
   boost::asio::post(ex.io, [&done] {
     const std::uint64_t id = open_clearnet(0);
-    done.set_value(id == 0 ? -1 : shekyl_seam_await_handler(id));
+    done.set_value(id == 0 ? -1 : 0);
   });
 
   ASSERT_EQ(waited.wait_for(std::chrono::seconds(2)), std::future_status::ready);
@@ -175,7 +195,7 @@ TEST(seam_endpoint, connect_from_the_executor_completes_at_the_floor)
 
   ex.io.stop();
   threads.join_all();
-  shekyl_seam_bind(nullptr, nullptr);
+  shekyl_seam_bind(nullptr, nullptr, nullptr);
   shekyl_executor_release(handle);
 }
 
@@ -184,14 +204,13 @@ TEST(seam_endpoint, a_delivery_posted_before_closed_is_parsed)
   commands cmds;
   pool ex;
   ex.config.set_handler(&cmds, nullptr);
-  shekyl_seam_bind(&ex, &post_to_strand);
+  bind_harness(ex);
 
   boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work(ex.io.get_executor());
   boost::thread runner([&ex] { ex.io.run(); });
 
   const std::uint64_t id = open_clearnet(1);
   ASSERT_NE(id, 0u);
-  ASSERT_EQ(shekyl_seam_await_handler(id), 0);
 
   const std::uint8_t bytes[] = {'h', 'e', 'l', 'l', 'o'};
   ASSERT_EQ(shekyl_seam_deliver(id, bytes, sizeof(bytes)), 0);
@@ -200,8 +219,12 @@ TEST(seam_endpoint, a_delivery_posted_before_closed_is_parsed)
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (std::chrono::steady_clock::now() < deadline)
   {
-    std::lock_guard<std::mutex> lock(ex.mu);
-    if (ex.order.size() >= 3)
+    bool done = false;
+    {
+      std::lock_guard<std::mutex> lock(ex.mu);
+      done = ex.order.size() >= 3 && ex.links.find(id) == ex.links.end();
+    }
+    if (done)
       break;
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
@@ -213,20 +236,97 @@ TEST(seam_endpoint, a_delivery_posted_before_closed_is_parsed)
   EXPECT_EQ(ex.order[0], SHEKYL_SEAM_ESTABLISHED);
   EXPECT_EQ(ex.order[1], SHEKYL_SEAM_DELIVER);
   EXPECT_EQ(ex.order[2], SHEKYL_SEAM_CLOSED);
+  auto cause = ex.causes.find(id);
+  ASSERT_NE(cause, ex.causes.end());
+  // `close` and a refused `handle_recv` race. The first cause wins.
+  EXPECT_TRUE(cause->second.kind == SHEKYL_CLOSE_LOCAL_CLOSE
+      || cause->second.kind == SHEKYL_CLOSE_SESSION_REFUSED);
+  EXPECT_TRUE(ex.links.find(id) == ex.links.end());
+  shekyl_seam_bind(nullptr, nullptr, nullptr);
+}
 
-  shekyl_close_cause cause{};
-  EXPECT_EQ(shekyl_seam_cause(id, &cause), 1);
-  EXPECT_EQ(cause.kind, SHEKYL_CLOSE_LOCAL_CLOSE);
+TEST(seam_endpoint, two_connections_keep_distinct_registry_keys)
+{
+  commands cmds;
+  pool ex;
+  ex.config.set_handler(&cmds, nullptr);
+  bind_harness(ex);
+
+  boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work(ex.io.get_executor());
+  boost::thread runner([&ex] { ex.io.run(); });
+
+  const std::uint64_t first = open_clearnet(1);
+  const std::uint64_t second = open_clearnet(1);
+  ASSERT_NE(first, 0u);
+  ASSERT_NE(second, 0u);
+  ASSERT_NE(first, second);
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < deadline)
   {
     std::lock_guard<std::mutex> lock(ex.mu);
-    auto found = ex.links.find(id);
-    ASSERT_NE(found, ex.links.end());
-    EXPECT_TRUE(found->second->context().m_is_income);
-    EXPECT_EQ(found->second->context().m_remote_address.get_type_id(), epee::net_utils::address_type::ipv4);
-    EXPECT_EQ(found->second->context().m_remote_address.as<epee::net_utils::ipv4_network_address>().host_str(),
-        "203.0.113.10");
+    if (ex.links.count(first) == 1 && ex.links.count(second) == 1)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-  shekyl_seam_bind(nullptr, nullptr);
+
+  {
+    std::lock_guard<std::mutex> lock(ex.mu);
+    ASSERT_EQ(ex.links.count(first), 1u);
+    ASSERT_EQ(ex.links.count(second), 1u);
+    const auto left_id = ex.links.at(first)->context().m_connection_id;
+    const auto right_id = ex.links.at(second)->context().m_connection_id;
+    EXPECT_NE(left_id, right_id);
+    EXPECT_NE(left_id, boost::uuids::nil_uuid());
+    EXPECT_EQ(left_id, shekyl::seam_connection_id(first));
+    EXPECT_EQ(right_id, shekyl::seam_connection_id(second));
+  }
+  EXPECT_EQ(ex.config.get_connections_count(), 2u);
+
+  shekyl_seam_close(first);
+  shekyl_seam_close(second);
+  ex.io.stop();
+  runner.join();
+  shekyl_seam_bind(nullptr, nullptr, nullptr);
+}
+
+TEST(seam_endpoint, a_second_established_does_not_replace_the_link)
+{
+  commands cmds;
+  pool ex;
+  ex.config.set_handler(&cmds, nullptr);
+  bind_harness(ex);
+
+  boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work(ex.io.get_executor());
+  boost::thread runner([&ex] { ex.io.run(); });
+
+  const std::uint64_t id = open_clearnet(1);
+  ASSERT_NE(id, 0u);
+  link_t* first = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(ex.mu);
+    ASSERT_EQ(ex.links.count(id), 1u);
+    first = ex.links.at(id).get();
+  }
+  shekyl_seam_observed obs{};
+  obs.connector = SHEKYL_CONNECTOR_CLEARNET;
+  obs.direction = SHEKYL_DIRECTION_INBOUND;
+  obs.address_type = SHEKYL_ADDR_IPV4;
+  obs.port = 18080;
+  obs.len = 4;
+  obs.bytes[0] = 203;
+  obs.bytes[3] = 10;
+  on_strand(&ex, id, SHEKYL_SEAM_ESTABLISHED, obs, true, {});
+  {
+    std::lock_guard<std::mutex> lock(ex.mu);
+    ASSERT_EQ(ex.links.count(id), 1u);
+    EXPECT_EQ(ex.links.at(id).get(), first);
+  }
+
+  shekyl_seam_close(id);
+  ex.io.stop();
+  runner.join();
+  shekyl_seam_bind(nullptr, nullptr, nullptr);
 }
 
 TEST(seam_endpoint, add_ref_fails_once_closed_and_does_not_use_a_destroyed_handler)
@@ -243,7 +343,7 @@ TEST(seam_endpoint, add_ref_fails_once_closed_and_does_not_use_a_destroyed_handl
   obs.len = 4;
   obs.bytes[0] = 203;
   obs.bytes[3] = 10;
-  auto link = std::make_unique<shekyl::seam_link<context, handler_t, config_t>>(ex.io, strand, ex.config, 7, obs);
+  auto link = link_t::create(ex.io, strand, ex.config, 7, obs, {});
   ASSERT_TRUE(link->arm());
   auto* raw = link.get();
 

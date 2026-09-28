@@ -114,7 +114,6 @@ shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
 # records the cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 shekyl-seam = { path = "../shekyl-seam" }
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
-shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is

@@ -25,4 +25,4 @@ mod session;
 pub use accept::accept_error_is_transient;
 pub use copy::{read_capped, write_capped, READ_CHUNK_BYTES};
 pub use queue::{ByteQueue, Overfull, PushError};
-pub use session::{QueueHold, Session, StreamEnds, UNREAD_FRAMES};
+pub use session::{FrameSender, QueueHold, SendHalf, Session, StreamEnds, UNREAD_FRAMES};

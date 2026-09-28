@@ -16,7 +16,6 @@ publish = false
 [dependencies]
 shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
-shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 

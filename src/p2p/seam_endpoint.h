@@ -12,10 +12,10 @@
 //!
 //! The executor owns the strand for the life of the connection, and it owns
 //! this link. The link owns the handler until the destroy post drops it.
-//! That post runs on the strand and is not the last owner of the link: it
-//! drops the handler only. The executor drops the link after the post has
-//! finished. A walker that got `add_ref` true still holds a count, so the
-//! destroy post has not run.
+//! That post runs on the strand, drops the handler, tells Rust to reap the
+//! row, then asks the owner to drop its `shared_ptr`. The post holds its
+//! own `shared_ptr`, so the erase does not free the link while the post
+//! is still on the stack.
 
 #pragma once
 
@@ -23,6 +23,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -38,6 +39,16 @@
 
 namespace shekyl
 {
+  /// Registry key for `socket_id`. Zero is not an id, so the result is
+  /// never the nil UUID. Two socket ids never share a key.
+  inline boost::uuids::uuid seam_connection_id(std::uint64_t socket_id)
+  {
+    boost::uuids::uuid id{};
+    static_assert(sizeof(socket_id) == 8, "socket id is 8 bytes");
+    std::memcpy(id.data + 8, &socket_id, sizeof(socket_id));
+    return id;
+  }
+
   inline epee::net_utils::network_address seam_network_address(const shekyl_seam_observed& obs)
   {
     using epee::net_utils::ipv4_network_address;
@@ -50,6 +61,8 @@ namespace shekyl
     if (obs.address_type == SHEKYL_ADDR_IPV4 && obs.len == 4)
     {
       // The FFI carries an IPv4 address as its four octets, in network order.
+      // `s_addr` is those octets in memory. `memcpy` is that copy on either
+      // endian.
       std::uint32_t ip = 0;
       std::memcpy(&ip, obs.bytes, 4);
       return network_address{ipv4_network_address(ip, obs.port)};
@@ -84,21 +97,22 @@ namespace shekyl
   /// count at that instant. Destruction is posted only when that count is
   /// zero, or when `release` takes it to zero afterwards.
   template <class t_context, class t_handler, class t_config>
-  class seam_link final : public epee::net_utils::i_service_endpoint
+  class seam_link final : public epee::net_utils::i_service_endpoint,
+                          public std::enable_shared_from_this<seam_link<t_context, t_handler, t_config>>
   {
   public:
     static constexpr std::uint32_t kClosing = 0x80000000u;
     static constexpr std::uint32_t kCount = 0x7fffffffu;
 
-    seam_link(boost::asio::io_context& io, boost::asio::io_context::strand& strand, t_config& config,
-        std::uint64_t id, const shekyl_seam_observed& observed)
-      : m_io(io),
-        m_strand(strand),
-        m_context(boost::uuids::nil_uuid(), seam_network_address(observed),
-            observed.direction == SHEKYL_DIRECTION_INBOUND, false),
-        m_id(id)
+    using retire_fn = std::function<void(std::uint64_t)>;
+
+    static std::shared_ptr<seam_link> create(boost::asio::io_context& io,
+        boost::asio::io_context::strand& strand, t_config& config, std::uint64_t id,
+        const shekyl_seam_observed& observed, retire_fn retire)
     {
-      m_handler = std::make_unique<t_handler>(this, config, m_context);
+      auto link = std::shared_ptr<seam_link>(new seam_link(io, strand, config, id, observed, std::move(retire)));
+      link->m_self = link;
+      return link;
     }
 
     const t_context& context() const { return m_context; }
@@ -145,14 +159,21 @@ namespace shekyl
 
     bool request_callback() override
     {
-      // The queued callback runs on the strand. Holding a count until it
-      // returns keeps `begin_closed` from destroying the link first.
+      // The queued callback runs on the strand. The count keeps
+      // `begin_closed` from destroying the handler first. The
+      // `shared_ptr` keeps the allocation alive until the callback returns.
       if (!add_ref())
         return false;
-      boost::asio::post(m_strand, [this] {
-        if (m_handler)
-          m_handler->handle_qued_callback();
+      auto self = m_self.lock();
+      if (!self)
+      {
         release();
+        return false;
+      }
+      boost::asio::post(m_strand, [self] {
+        if (self->m_handler)
+          self->m_handler->handle_qued_callback();
+        self->release();
       });
       return true;
     }
@@ -194,6 +215,18 @@ namespace shekyl
     }
 
   private:
+    seam_link(boost::asio::io_context& io, boost::asio::io_context::strand& strand, t_config& config,
+        std::uint64_t id, const shekyl_seam_observed& observed, retire_fn retire)
+      : m_io(io),
+        m_strand(strand),
+        m_context(seam_connection_id(id), seam_network_address(observed),
+            observed.direction == SHEKYL_DIRECTION_INBOUND, false),
+        m_id(id),
+        m_retire(std::move(retire))
+    {
+      m_handler = std::make_unique<t_handler>(this, config, m_context);
+    }
+
     std::uint32_t mark_closing()
     {
       std::uint32_t cur = m_word.load(std::memory_order_acquire);
@@ -210,9 +243,15 @@ namespace shekyl
     {
       if (m_destroy_posted.exchange(true, std::memory_order_acq_rel))
         return;
-      boost::asio::post(m_strand, [this] {
-        m_handler.reset();
-        m_destroyed.store(true, std::memory_order_release);
+      auto self = m_self.lock();
+      if (!self)
+        return;
+      boost::asio::post(m_strand, [self] {
+        self->m_handler.reset();
+        self->m_destroyed.store(true, std::memory_order_release);
+        shekyl_seam_reap(self->m_id);
+        if (self->m_retire)
+          self->m_retire(self->m_id);
       });
     }
 
@@ -221,6 +260,8 @@ namespace shekyl
     t_context m_context;
     std::unique_ptr<t_handler> m_handler;
     std::uint64_t m_id;
+    retire_fn m_retire;
+    std::weak_ptr<seam_link> m_self;
     std::atomic<std::uint32_t> m_word{0};
     std::atomic<bool> m_destroy_posted{false};
     std::atomic<bool> m_destroyed{false};
