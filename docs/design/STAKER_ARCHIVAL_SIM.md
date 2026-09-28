@@ -4470,3 +4470,80 @@ carry and fetch legs in isolation, and it is not reported as a leg finding. What
 does show is that the verdict is **sensitive to capacity changes of a few percent** —
 which is evidence about the headroom lever the (g) question now turns on, and a reason
 to test that lever directly rather than infer it.
+
+---
+
+## L19c — the lever test on covered Burst: pre-registration (2026-09-28)
+
+**Committed before any of its code.** L19b found a concentrated heavy era aged into the
+deep band under-held on the covered base at fixed total bytes. Item 5's **(g)** fires
+only if **no non-byte lever** removes that breach. This section fixes which levers, at
+which values, and what each outcome means, before the first run.
+
+**Subject:** covered base (`storage_scale` 1.3), `EraShape::Burst`, `S ∈ {4, 10}` —
+the two arms that breached there.
+
+### 1. `r_target` is the bar, not a lever — excluded
+
+`r_target_hot` and `r_target_deep` stay at the ratified 3 and 6. They define what
+"under-held" means; sweeping them moves the bar rather than the system. Verified at the
+pin: `model::r_target` is called from `metrics.rs` (the coverage reads),
+`scenarios.rs:1395`, `:1533`, `:1733` (the serving under-count, the floored bootstrap
+gap and the +1-margin gate — all measurement) and two `main.rs` tests; **`agent.rs`,
+`participation.rs` and `reward.rs` never read it.** An actor's decision is
+`value = price · (1/R) · g_age(age, age_weight)` against a size-scaled carry cost
+(`agent.rs:201-203`). *(The relayed premise said "called only in `metrics.rs`"; the
+conclusion holds, the call-site claim does not, and this records the accurate one.)*
+
+### 2. The levers, one at a time from the covered baseline
+
+**Headroom — `storage_scale`:** `1.30` (baseline), `1.36`, `1.40`, `1.45`, `1.50`,
+`1.60`, `1.75`, `2.00`.
+
+Actor storage is **an integer rounded from `storage_scale`** (`round(22 · s)` for the
+storage-rich, `round(10 · s)` for the capital-rich), so the effective slack moves in
+whole slots:
+
+| `storage_scale` | rich | poor | slots per pair | vs 1.30 |
+|---|---|---|---|---|
+| 1.30 | 29 | 13 | 42 | — |
+| 1.36 | 30 | 14 | 44 | +4.8 % |
+| 1.40 | 31 | 14 | 45 | +7.1 % |
+| 1.45 | 32 | 14 | 46 | +9.5 % |
+| 1.50 | 33 | 15 | 48 | +14.3 % |
+| 1.60 | 35 | 16 | 51 | +21.4 % |
+| 1.75 | 38 | 18 | 56 | +33.3 % |
+| 2.00 | 44 | 20 | 64 | +52.4 % |
+
+`1.32` and `1.34` round to **exactly** 1.30's capacities, so they would be duplicate
+runs, not small steps, and are omitted. **+4.8 % is the finest headroom step these
+capacities admit**, which is the resolution of "sensitive at a few percent".
+
+**Deep-history premium — `age_weight`:** `0`, `1`, `2` (baseline), `3`, `4`, `6`, `8`.
+
+**One 2-D corner:** `storage_scale 2.00` × `age_weight 8`.
+
+### 3. Method — L19a and its amendment, unchanged
+
+Demand-matched sizes with the realized mean asserted at 1.000; `N = 8` paired seeds;
+each lever point graded against **its own** dynamic, demand-matched control (the same
+lever values, composition off) — so a lever that also moves the flat control is
+credited only with what it does to the heavy era; cell-wise worst-band delta;
+**BREACH ⇔ `min over seeds > 0.05`**; the heavy era asserted in the deep band.
+
+### 4. Outputs
+
+For headroom, the **lowest clearing `storage_scale`** and its effective slack. For
+`age_weight`, the lowest clearing value, or **"none in ladder"**. At every point, where
+the worst cell sits.
+
+### 5. Dispositions, fixed before running
+
+| outcome | disposition |
+|---|---|
+| **headroom clears at `X`** | (g) **not fired**. `PDM-Q-F34` becomes a **headroom requirement**, with `X` and its effective slack as the evidence. |
+| **only `age_weight` clears** | (g) **not fired**. The clearing slope is an **input to gate 4/5**. |
+| **neither clears in the ladders** | Report to the design owner; **(g)'s question goes to Rick**; no `PDM-Q-F34` draft. |
+
+If both clear, both are reported; the headroom row governs `PDM-Q-F34` because it is the
+lever the network does not have to ratify a new curve to use.
