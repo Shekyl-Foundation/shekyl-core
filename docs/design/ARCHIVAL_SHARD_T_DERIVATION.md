@@ -16,7 +16,10 @@ ordinal domain is **withdrawn** (dev already does the lookup it was charged
 for), and `SHT-7` is added. `SHT-Q1` (the partition domain) was posed by this round
 and **RULED on 2026-09-27** (§2) — it came before the bounds because it decides
 which constraints exist, and it now has. Findings `SHT-1`…`SHT-9` are at-pin
-findings of this round. Identifier families **`SHT-`** (findings) and
+findings of this round; **`SHT-10`…`SHT-12` and `SHT-Q2` (a computed-weight partition,
+OPEN for Rick) were added 2026-09-28 after F34 (§8)**, with the input-count proposal
+recorded as not adopted and `PDM-Q6` item 5's rejection re-read as one of *stored
+lengths*, not of byte-proportional boundaries. Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
 (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
@@ -753,6 +756,9 @@ that gate's bookkeeping:
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
 | **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table; the re-key specification is **E4 / S-ARCH's**, not this lane's |
 | **`SHT-9`** | **A `shekyl-chain-rules` fixture carries a shape consensus refuses.** `harness::fixture::serve_credit_only` builds `prunable: None` with empty `pqc_auths` — the **pre-`RF-D1`** serve-credit form, identified by the *absence* of a prunable region. `RF-D1` inverted that: the region is now present and holds one non-empty pruned pass record per credit vin. Verified empirically rather than read off: `Transaction::validate_context_free_pruned` refuses it — *"serve_credit tx must be fee-only — no outputs, empty `pqc_auths`, no spend-proof material, and exactly one pruned pass record per serve-credit vin (§2.5, RF-D1)"*. It does **not** break `SHT-Q1`'s equivalence (a conforming serve-credit body carries good, and `tx_domain_tests` builds one), but a fixture that consensus would refuse is a false negative waiting for any test that assumes it is valid. | CONFIRMED — found while building the equivalence test; owner the `CHAIN_RULES_SLICE` lane, FOLLOWUPS |
+| **`SHT-10`** | **An FCMP++ proof verifies with trailing bytes.** `Fcmp::read` consumes exactly `proof_size(n, layers)` bytes (`shekyl-oxide/crypto/fcmps/src/lib.rs`), and neither the verifier (`shekyl-fcmp/src/proof.rs`) nor any consensus rule compares `fcmp_proof.len()` with it — the rows check emptiness only (`rules/tx.rs`, `rules/tx_inputs.rs`; C++ `blockchain.cpp`). Probe: a valid proof extended by 1, 64 and 4,096 zero bytes verifies `Ok(true)`. Every hybrid signature binds `prunable_hash`, so only the signer can pad (paying fee), but the good is not a closed function of structure and the encoding is not canonical. Fix: `fcmp_proof.len() == proof_size(n_spend, depth + 1)`. | CONFIRMED by probe — consensus canonical-form gap; fix needs ratification (rule 07) |
+| **`SHT-11`** | **A serve-credit path verifies with zero scalars appended to a branch layer.** `recompute_subroot` hashes each layer as `hash_grow(init, 0, ZERO, chunk)`, a vector commitment on which a zero scalar contributes nothing (`shekyl-archival-retention/src/path.rs`); widths are bounded only by `MAX_BRANCH_SCALARS = 256`. Probe: the `assembled_path_crosscheck` fixture's Helios layer widened 5 → 6 and 5 → 45 verifies `Ok(())`. The ML-DSA countersignature binds `encode(path)`, so only the bonded signer can pad. Fix: canonical widths for a frozen segment, or refuse trailing zero scalars. | CONFIRMED by probe — consensus canonical-form gap; fix needs ratification (rule 07) |
+| **`SHT-12`** | **An input's authorization size is not skeleton-bound.** `scheme_id`, the multisig key container's `n_total` and threshold, and the signature count all live in the `pqc_auths` segment, which the archival prune discards (`shekyl-chain-store/src/store/prune.rs`). The spent output carries no marker (`Output` is amount, key, view tag) and FCMP++ hides which output is spent. So the skeleton cannot tell a 5,389 B single-sig authorization from a 27,083 B 5-of-5 one. The premise that "multisig parameters sit in prefixes the txid binds" does not hold at source. | CONFIRMED at source — the structural question inside `SHT-Q2` (§8.3) |
 | **`SHT-Q1` price, withdrawn** | The first pass charged (B) with making prune's mapping "stop being pure arithmetic on the id". **Wrong:** `cumulative_tx_count` *is* the non-coinbase ordinal (`prune.rs:421-428`), and `height_of_tx_id`'s binary search over the running total is already on dev's `h_scarce` path (`prune.rs:490-500`). Under (B) a boundary reads straight off the stored cell with **no coinbase term to add**, so (B) removes an addition from four sites rather than adding a lookup. `SHT-Q1`'s only remaining price is **closure liveness on a quiet chain**. | WITHDRAWN on review |
 
 ---
@@ -779,3 +785,203 @@ Each is a FOLLOWUPS row, not work for this round:
   number and why the 180 KB/s floor is still load-bearing in `L`'s text. The
   harness exists (PR #746). This is the measurement that would make a derivation
   possible, and it also re-grounds `L`'s span per byte.
+
+---
+
+## 8. After F34: input count, item 5 re-read, and `SHT-Q2` (2026-09-28)
+
+F34's lever test (`STAKER_ARCHIVAL_SIM.md` §L19b–§L19g, PR #893) found a
+concentrated heavy era, aged into the deep band, under-held at fixed total bytes. Under
+the governing all-seeds reading, no non-byte lever clears it at `S = 10`. Before that
+result is turned into a case for pricing bytes, this section asks whether the
+**partition** can make shards equal-cost instead. That would let the byte-blind price
+clear coverage without a byte operand.
+
+### 8.1 Counting inputs instead of transactions — done, not adopted
+
+The proposal: close shards on cumulative **input** count, because `pqc_auths` holds one
+authorization per input (`pqc_auths == nvin`, CEN-H21/H22).
+
+Checked at source (tree depth 8 layers, single-sig, 2 outputs):
+
+| component | size | scaling | source |
+|---|---|---|---|
+| PQC authorization, single-sig | **5,389 B** per input | exactly linear | `4 + v(1996) + 1996 + v(3385) + 3385`; `PQC_HYBRID_SINGLE_{KEY,SIG}_LEN`, `shekyl-wire/src/transaction.rs` |
+| FCMP++ proof | 6,624 B at 1 input, 16,640 B at 8 | affine, strongly sublinear | `FcmpPlusPlus::proof_size(n, layers)`, `shekyl-fcmp-proofs/src/lib.rs` |
+| BP+ range proof | ~640 B at 2 outputs | logarithmic in outputs | 6 + 2·⌈log₂(64·m)⌉ points, hand-derived from the layout |
+| pseudo-outs | 32 B per spend input | linear | `Prunable.pseudo_outs` |
+
+A single-sig spend's good is therefore **12.7 KB at 1 input and 60.7 KB at 8** (the cap,
+`FCMP_MAX_INPUTS_PER_TX = 8` on total vins). Per input that is 12.7 KB down to 7.6 KB.
+
+**Not adopted.** Counting inputs narrows the per-transaction shape spread from ~4.8× to
+~1.7×, but:
+
+- **It reverses the heavy direction.** The FCMP++ base is amortized over more inputs, so a
+  consolidation wave becomes the *light* era per input and a period of single-input spends
+  the heavy one.
+- **It misses multisig.** A 3-of-5 authorization is 20,310 B, **~3.8×** a single-sig one
+  (`MultisigKeyContainer::expected_blob_len`, `MultisigSigContainer::expected_sig_len`,
+  `shekyl-crypto-pq/src/multisig.rs`).
+- **It misses tree depth.** A one-input proof grows ~20 % from 4 to 8 layers, and depth
+  tracks the chain's age.
+- **It costs a schema cell anyway.** `cumulative_tx_count` also feeds the fee ladder's
+  volume window (CEN-F20; `rules/miner.rs:553`), so an input cell is added, not swapped.
+- **Correction to the figures reported with it.** The serve-credit record's "~9,965 B"
+  (`ARCHIVAL_RESPONSE_FORMAT.md` §1.1) includes the leaf chunk, which `RF-D8` took off
+  the wire (`shekyl-archival-retention/src/path.rs`). Today's record is the 3,309 B ML-DSA
+  leg plus the branch layers.
+
+### 8.2 What `PDM-Q6` item 5 rejected — the corrected reading
+
+Item 5 (`ARCHIVAL_PRUNED_DAEMON_MODE.md`, RULED 2026-09-23) retired item 3's byte bound
+because **"nothing the checkpoint reaches binds a *length*"**: `C` → block hashes → txids
+→ `H(prefix) · H(base) · prunable_hash · pqc_auth_hash`. A peer serving the skeleton
+below `C` "can state any length", and one wrong value forks the node at admission.
+
+What it rejected is **boundaries computed from stored lengths**: values neither bound by
+the checkpoint chain nor recomputable by a node that has discarded the bodies. It did
+not reject **byte-proportional boundaries as such**. A weight computed from structure the
+txid binds has neither defect, because every node derives the same value from kept data.
+
+Item 5's second argument — that channel 1 "absorbs size variance as it absorbs everything
+else" — is the premise F34 tested. Under the governing reading it does not hold at
+`S = 10` in the sim (§L19g §4), pending the calibrated arm (§L19h).
+
+This is a correction to item 5's reasoning, not a reversal of its principle. The
+principle — a boundary never reads a value the skeleton cannot bind — is what `SHT-Q2`
+below states as its invariant.
+
+### 8.3 `SHT-Q2` — a computed-weight partition — for Rick's ruling
+
+**The question.** Should shard `k` close on cumulative **computed weight** instead of
+transaction count?
+
+**Invariant it must satisfy.** Every shard boundary is a pure function of data every node
+keeps forever, under a weight function pinned by height:
+
+1. **Inputs only from the kept skeleton.** Nothing from proof bodies or recorded lengths.
+2. **Deterministic per class.** Each domain class's prunable + `pqc_auths` size is a
+   closed function of those inputs.
+3. **Pinned by height.** The weight function is consensus code. A wire change that moves a
+   proof size updates it at an activation height, and closed shards never move — the
+   stability clause `SHT-Q1` already carries.
+
+**Where tree depth at a height comes from.** `curve_tree_leaf_counts[h]`: a stored,
+skeleton-derived cell (CTW-Q4 RULED — "own table, storing the primitive",
+`DRS_E3_CURVE_WRITER.md`; SI-18, `STORE_INVARIANT_REGISTER.md`), read through
+`ChainView::depth_at` (`shekyl-chain-rules/src/view.rs`) as `layer_count_for_leaves(count)
+− 1`. It is not a cache: the schema describes it as "a function of the leaf table the
+digest's root already commits to" (`shekyl-chain-store/src/schema.rs`). **One gap.**
+CEN-I13's equality — the declared depth equals the depth at `ref_height` (E6 slice 6 Q8) —
+is `pending` in the Rust validator (`census.rs`). The C++ only range-checks
+`1 ≤ depth ≤ current depth` (`blockchain.cpp`, spend arm "Step 3"). Today the depth is
+pinned only **implicitly**: the proof is verified against the root at `ref_height`, and a
+probe at depth + 1 returns `InvalidTreeRoot`.
+
+**Per component, at the pin.** "Determined" means a closed function of skeleton-bound
+structure.
+
+| component | carried by | determined? | what pins it, or what breaks it |
+|---|---|---|---|
+| spend inputs `n_spend`, serve-credit vin count, output count `m` | prefix | **yes** | the txid binds the prefix |
+| pseudo-outs | Spend, BondPost, Emission w/ fee | **yes** | `32 · n_spend` (CEN-I9 and the H21/H22 spend-subset counts) |
+| BP+ | the shapes that carry one | **yes** | `nbp == 1` (`cryptonote_format_utils.cpp:151`); `|L| = |R| = log₂` of the padded generator count (`shekyl-bulletproofs/src/plus/weighted_inner_product.rs:353`), fixed by `m`. Whether a fee-less emission carries one is a shape rule this section does not settle — H22 admits `prunable: None`, `:151` asks one range proof of every non-serve-credit BP+ shape — and either way it is fixed by class and `m` |
+| FCMP++ proof (full and membership-only) | Spend, BondPost, Emission w/ fee | **no — signer-paddable** (`SHT-10`) | `Fcmp::read` consumes exactly `proof_size(n, layers)` bytes and nothing checks the remainder. The closed function exists; the wire does not hold to it |
+| curve-tree depth | same | **yes, via the stored cell** | `depth_at(ref_height)` above. The explicit equality (I13) is pending; the implicit one is verification |
+| PQC authorization | Spend, BondPost, Emission (one per vin) | **no — not skeleton-bound** (`SHT-12`) | `scheme_id`, `n_total`, threshold and the signature count all live in the `pqc_auths` segment, which the archival prune discards (`prune.rs`). The skeleton cannot tell a single-sig input (5,389 B) from a 5-of-5 one (27,083 B) |
+| serve-credit pruned record | ServeCreditOnly (one per vin) | **no — signer-paddable** (`SHT-11`) | the ML-DSA leg is fixed (3,309 B, `ML_DSA_COUNTERSIGNATURE_LEN`) and the record parses exactly (`read_exact`), but `verify_segment_path` accepts zero scalars appended to a branch layer |
+
+**Per class:**
+
+| class | determined today? | breaks on |
+|---|---|---|
+| **Spend**, single-sig | no | `SHT-12` (the skeleton cannot tell it is single-sig), `SHT-10` |
+| **Spend**, multisig | no | `SHT-12`, `SHT-10` |
+| **BondPost** (funding spends + the post vin) | no | `SHT-12` (every vin carries an auth), `SHT-10` |
+| **Emission** with fee inputs | no | `SHT-12`, `SHT-10` |
+| **Emission** without fee inputs | no | `SHT-12` (its only good is the auth). The emission vin's membership proof and hybrid signatures are in the **prefix** (`Input::ArchivalRewardEmission`'s blob), so they are skeleton, not good |
+| **ServeCreditOnly** | no | `SHT-11` |
+
+**So no class is determined at the pin, and the breaks are exactly three components:**
+
+- **`SHT-10` and `SHT-11` are canonical-form gaps, and each has a local fix:**
+  - require `fcmp_proof.len() == proof_size(n_spend, depth + 1)`;
+  - require each branch layer's width to equal the canonical width for a frozen segment,
+    or refuse trailing zero scalars.
+
+  With those, both components are closed functions. Neither is a third-party malleability
+  hole: every hybrid signature binds `prunable_hash` (`signing_preimage.rs`), and the
+  serve-credit ML-DSA countersignature binds `encode(path)`. Only the signer can pad, and
+  pays for it in fee.
+- **`SHT-12` is structural, and it is the question inside `SHT-Q2`.** Two ways out, for
+  Rick:
+  - **(a) Bind a per-input scheme descriptor in the prefix** — `scheme_id`, `n_total`, and
+    the signature count. This is a wire change. It makes the authorization a closed
+    function, and every class is then determined once `SHT-10`/`SHT-11` are fixed and I13
+    lands. **It has a privacy cost, and privacy is the product (rule 00, commitment 2).**
+    An input's multisig shape is public today only while the `pqc_auths` segment
+    survives. A prefix descriptor makes it permanent on every node's skeleton. The spent
+    output carries no scheme marker (`Output` is amount, key and view tag), and FCMP++
+    hides which output is spent, so nothing already on the skeleton reveals it.
+  - **(b) Weight every authorization at the single-sig constant.** Multisig inputs then
+    carry up to 21.7 KB more than their weight, so shards stay equal-cost except where
+    multisig concentrates. That is the same kind of residue F34 measures, bounded to one
+    component.
+
+**What a weight function would be, given (a):**
+
+> `w(tx) = Σ_vins A(scheme_i) + [spend-bearing] · (BP(m) + F(n_spend, depth_at(ref) + 1) + 32·n_spend + varints) + Σ_credit-vins (P + 3,309 + varints)`
+
+- `A(single) = 5,389`.
+- `A(multisig n, s) = 4 + v(3 + 2028n) + 3 + 2028n + v(1 + 3386s) + 1 + 3386s`.
+- `F` is `FcmpPlusPlus::proof_size` (or the membership-only form). It is closed in
+  `(n, layers)`, though not monotone in `layers`, because of IPA row padding.
+- `P` is the canonical path size for a frozen segment.
+
+**The boundary rule and its overshoot.** Transactions are indivisible, so shard `k` closes
+on the first transaction that takes the cumulative weight past `(k + 1)`'s threshold,
+measured from the previous boundary. A closed shard then holds between `W` and
+`W + w_max`. The overshoot depends on whether padding is fixed:
+
+- **Unfixed (`SHT-10`/`SHT-11` left open):** the actual bytes are bounded only by
+  `MAX_TX_SIZE` = 1 MB (`shekyl-wire/src/transaction.rs`), ~30 % of a ~3.33 MB shard, and
+  the computed weight can understate them.
+- **Fixed:** `w_max` is the weight function's own maximum:
+  - ~238 KB for 8 inputs of 5-of-5 multisig with 16 outputs at ≤ 12 layers;
+  - ~65 KB single-sig.
+
+  That is ≤ ~7 % of 3.33 MB.
+
+**The `T` constraint, restated in weight:** `W ≫ w_max`, with the overshoot fraction
+`w_max / W` stated at the selected `W`. This joins the §3 constraints — which were
+already reasoning in bytes through `U1a` — in place of the transaction count.
+
+**Cost:**
+
+- the weight function, as consensus code with one home;
+- `SHT-10` and `SHT-11`'s canonical-form rules;
+- I13's equality, landed as ruled;
+- option (a)'s prefix descriptor, if chosen;
+- a cumulative-weight cell in `block_info` beside `cumulative_tx_count`, which stays
+  because it feeds the fee ladder. That is +8 B per block, 104 → 112 B, and a rule-42
+  schema bump;
+- `SHT-Q1`'s text amended from "`T` transactions" to "weight `W`";
+- the cutover census's family-1 rows re-keyed, and `SHARD_TX_COUNT` /
+  `archival_shard_tx_count` renamed, because the unit is in the name.
+
+**If ruled yes, what it removes.** Shards become equal-cost by construction up to
+`w_max / W` (and, under (b), multisig). F34's composition question largely goes away,
+and with it `U1a`'s heavy-end quantile and the `√T` composition bound. `T` becomes `W`,
+derived in bytes directly.
+
+**Not ruled here.**
+
+**How the three findings were established.** `SHT-10`: the `prove_verify_roundtrip`
+fixture (`shekyl-fcmp/src/proof.rs`), with the proof's data extended by 1, 64 and 4,096
+zero bytes, verifies `Ok(true)` each time; the same proof at depth + 1 returns
+`InvalidTreeRoot`. `SHT-11`: the `assembled_path_crosscheck` fixture
+(`shekyl-archival-retention/tests/`), with its Helios branch layer widened from 5 to 6
+and to 45 scalars by appending zeros, verifies `Ok(())`. Both probes were run as
+uncommitted edits and reverted. The library verifiers probed are the ones the consensus
+FFI calls; neither was replayed through a full block connect.
