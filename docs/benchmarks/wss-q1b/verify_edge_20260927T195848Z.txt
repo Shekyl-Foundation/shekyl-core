@@ -1,0 +1,9 @@
+verify edge — worst case — sustained block-weight ceiling (row 2's density)
+  population     770880 leaves over 730 blocks (1056 leaves/block)
+  segments       29 complete, 17112 leaves in tail (E = 25992)
+  UNFROZEN       393.944 s per call (converged: false)
+  frozen ctrl    8.772 s per call  (44.9x faster)
+  mixed path     true  root stable: true
+  cadence        328.29 % of a 120 s block (informational)
+  GRADING        baseline — no ruled threshold. CT-6 Q4 is pending as a derivation and grades the amortized advance; this is the naive cost that form replaces. CT-6 increment 6 re-grades against this record.
+verify_edge (nominal): 4 segment(s) already frozen — the unfrozen phase would measure a cost this population is supposed to contain
