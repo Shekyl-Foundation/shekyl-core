@@ -44,7 +44,7 @@
 use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
-use shekyl_types::{BlockHash, PCanonicalId, PrefixHash};
+use shekyl_types::{BlockHash, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS};
 
 use crate::bytes::{read_array, read_byte};
 use crate::tx_extra::{check_tx_extra_shape, parse as parse_tx_extra, ExtraSubject};
@@ -100,8 +100,6 @@ pub const HOLDINGS_COMPLETE_TREE: u8 = 1;
 /// the oversized *transaction* independently.
 pub const ARCHIVAL_EMISSION_VIN_MAX_BYTES: usize = 1024 * 1024;
 
-/// Consensus bound: max shards in a compact holdings set (`bond_wire.rs`).
-const MAX_HOLDINGS_SHARDS: usize = 4096;
 /// Consensus bound: max branch scalars per path layer (`wire.rs`).
 const MAX_BRANCH_SCALARS: usize = 256;
 /// Consensus bound: max path layers per curve (`wire.rs`).

@@ -64,6 +64,13 @@ KEYS_INTEGER = {
     # src/blockchain_db/shekyl_types.h. Rust mirror:
     # rust/shekyl-archival-retention/build.rs (MAX_CLAIM_AGE_W).
     "max_claim_age_w": "u64",
+    # Max shard ids in one compact holdings set: a list-size bound on one
+    # bond record and one transaction, not bond-size policy (L2 RULED
+    # 2026-09-27). C++ consumer: ArchivalBondValue::kMaxHoldings in
+    # src/blockchain_db/shekyl_types.h, which the three revert-value
+    # mirrors static_assert against. Rust mirror:
+    # rust/shekyl-types/build.rs (MAX_HOLDINGS_SHARDS).
+    "archival_max_holdings_shards": "u64",
     # Segment/shard geometry (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2):
     # level-2 subtree leaf count, 38 * 18 * 38. C++ consumer: the freeze
     # writer's row value field ONLY — the boundary division lives solely
@@ -230,6 +237,16 @@ def main() -> int:
 // rust/shekyl-archival-retention/build.rs (MAX_CLAIM_AGE_W).
 #define SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W \
     {emit("max_claim_age_w")}
+
+// Max shard ids in one compact holdings set (`L2` RULED 2026-09-27,
+// ARCHIVAL_SHARD_T_DERIVATION.md §3): a LIST-SIZE bound on one bond
+// record and one transaction, not bond-size policy. C++ defines
+// `ArchivalBondValue::kMaxHoldings` from this macro and the three
+// revert-value structs static_assert against that one, so the four C++
+// codecs cannot drift from each other or from Rust. Rust mirror:
+// rust/shekyl-types/build.rs (MAX_HOLDINGS_SHARDS).
+#define SHEKYL_ARCHIVAL_MAX_HOLDINGS_SHARDS \\
+    {emit("archival_max_holdings_shards")}
 
 // Segment/shard geometry (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2):
 // SEGMENT_LEAF_COUNT, the level-2 subtree leaf count under the

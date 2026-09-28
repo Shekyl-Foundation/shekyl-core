@@ -777,8 +777,11 @@ struct ArchivalBondUnbondRevertValue {
     // rejected at decode per the pre-genesis posture: no migration, reset.
     static constexpr uint8_t kVersion = 2;
     /// Same bounds as `ArchivalBondValue` (defined further down this header;
-    /// the static_asserts after it pin the pairs to the same values).
-    static constexpr size_t kMaxHoldings = 4096;
+    /// the static_asserts after it pin the pairs to the same values). Both
+    /// come from the JSON authority (`archival_max_holdings_shards`), so the
+    /// assert is a belt against a hand-edit, not the only tie.
+    static constexpr size_t kMaxHoldings =
+        static_cast<size_t>(SHEKYL_ARCHIVAL_MAX_HOLDINGS_SHARDS);
     static constexpr size_t kMaxBadIntervals = 256;
     // ver, p_id, pre_bonded_total, pre_holdings_kind, shard count, interval count
     static constexpr size_t kFixedSize = 1 + 32 + 8 + 1 + 4 + 4;
@@ -895,8 +898,10 @@ struct ArchivalBondHoldingsUpdateRevertValue {
     // Born at v1 (pre-genesis; no migration, reset on any format change).
     static constexpr uint8_t kVersion = 1;
     /// Same holdings bound as `ArchivalBondValue` (the static_assert after it
-    /// pins the pair to the same value).
-    static constexpr size_t kMaxHoldings = 4096;
+    /// pins the pair to the same value); both from the JSON authority
+    /// (`archival_max_holdings_shards`).
+    static constexpr size_t kMaxHoldings =
+        static_cast<size_t>(SHEKYL_ARCHIVAL_MAX_HOLDINGS_SHARDS);
     // ver, p_id, pre_bonded_total, shard count
     static constexpr size_t kFixedSize = 1 + 32 + 8 + 4;
 
@@ -985,8 +990,10 @@ using ArchivalBondReinstateLogKey = ArchivalSlashLogKey;
 struct ArchivalBondReinstateRevertValue {
     // Born at v1 (pre-genesis; no migration, reset on any format change).
     static constexpr uint8_t kVersion = 1;
-    /// Same holdings bound as `ArchivalBondValue` (static_assert below).
-    static constexpr size_t kMaxHoldings = 4096;
+    /// Same holdings bound as `ArchivalBondValue` (static_assert below); both
+    /// from the JSON authority (`archival_max_holdings_shards`).
+    static constexpr size_t kMaxHoldings =
+        static_cast<size_t>(SHEKYL_ARCHIVAL_MAX_HOLDINGS_SHARDS);
     // ver, p_id, pre_bonded_total, closed idx, closed start, shard count
     static constexpr size_t kFixedSize = 1 + 32 + 8 + 4 + 8 + 4;
 
@@ -1126,7 +1133,16 @@ struct ArchivalBondValue {
     static constexpr uint8_t kHoldingsShardSetCompact = 0;
     static constexpr uint8_t kHoldingsCompleteTree = 1;
     static constexpr size_t kMaxPubkeyLen = 2048;
-    static constexpr size_t kMaxHoldings = 4096;
+    /// Max shard ids in one compact holdings set — the authority the three
+    /// revert-value mirrors static_assert against. Defined from the JSON
+    /// single source of truth (`archival_max_holdings_shards`) rather than a
+    /// literal, so this codec, the Rust wire decoder and
+    /// `shekyl_types::MAX_HOLDINGS_SHARDS` cannot drift: before `SCC-4` the
+    /// value had six independent definitions and nothing tied the languages
+    /// together, so a re-pin would have refused on one side and admitted on
+    /// the other.
+    static constexpr size_t kMaxHoldings =
+        static_cast<size_t>(SHEKYL_ARCHIVAL_MAX_HOLDINGS_SHARDS);
     /// Interval-log entry cap. GENESIS-FROZEN CONSENSUS CONSTANT, not a codec
     /// tunable: Release verify rejects a record at this cap (the connect's
     /// clean interval-close could not append — `IntervalLogFull`,
