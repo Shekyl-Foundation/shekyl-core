@@ -1082,9 +1082,19 @@ Default. Lands before genesis if it should exist at launch.
     `src/compositor.rs`, `src/palette.rs`, `src/entropy.rs`, the encode path in `src/lib.rs`, and a version
     change in the `image`/`imageproc`/`png` dependencies. Naming a subset would let a regression enter through
     the part that was left out.
-  - **How:** cross-compile `--example budget_matrix` for `aarch64-unknown-linux-gnu` (the floor device has no Rust
-    toolchain), run the `floor` profile on the floor device — ping the board first, no sudo — and commit the capture
-    under `docs/benchmarks/`.
+  - **How:** cross-compile `--example budget_matrix` for `aarch64-unknown-linux-gnu`, run the `floor` profile on
+    the floor device — ping the board first, no sudo — and commit the capture under `docs/benchmarks/`.
+    **The method is unchanged; its stated reason was wrong and is corrected (2026-09-28).** This read *"the floor
+    device has no Rust toolchain"*, which stopped being true on 2026-09-27: the `WSS-Q1`(b) rig session installed
+    rustup **1.94.0** for the `shekyl` user on the floor device and built the bench crate natively there
+    ([`WSS_Q1B_BENCH_SPEC.md`](design/WSS_Q1B_BENCH_SPEC.md) §7.3). **Cross-compiling is still right, for two
+    reasons that outlive the toolchain's absence and are worth stating so nobody "simplifies" this into a native
+    build:** *(1)* [`V3_SHARD_VISUALIZATION.md`](V3_SHARD_VISUALIZATION.md) §8.2 requires the x86 and aarch64
+    binaries to come **from the same commit** — that is what makes the raster-parity claim (RMS = 0 across
+    architectures) mean anything, and two independent builds cannot assert it; *(2)* a release build on the floor
+    device **heats the board it is about to measure**, which a thermally-bracketed benchmark cannot absorb — the
+    `WSS-Q1`(b) session used its own 18-minute build as deliberate thermal conditioning and still settled 180 s
+    before timing. A premise that is merely stale invites exactly the wrong repair; these two do not go stale.
   - **Verdict discipline:** over-budget cells are a REGRESSION to record against the 2026-09-06 baseline.
     **Never a quiet retune** — moving a number so the matrix passes is the one response that is always wrong.
     A threshold moves only by a *recorded amendment* citing the measurement and ratified by the decider (the
