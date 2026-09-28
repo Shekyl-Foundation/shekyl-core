@@ -351,6 +351,10 @@ pub enum WithheldRead {
     BlockAt(BlockHeight),
     /// [`ChainView::root_at`] at this height — the curve-tree root.
     RootAt(BlockHeight),
+    /// [`ChainView::weights_window`] ending at this height — the weights
+    /// projection answers `AboveTip` for a height the tip says is
+    /// recorded (slice 7, CEN-G6's read).
+    WeightsBelow(BlockHeight),
 }
 
 /// A [`MockView`] with one per-height read withheld.
@@ -415,6 +419,11 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
         end: BlockHeight,
         at_most: BlockCount,
     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+        if let WithheldRead::WeightsBelow(at) = self.withheld {
+            if end == at {
+                return Ok(AtHeight::AboveTip);
+            }
+        }
         self.inner.weights_window(end, at_most)
     }
 

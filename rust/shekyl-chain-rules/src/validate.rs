@@ -49,6 +49,7 @@ use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
+use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::difficulty::D4;
 use crate::rules::header::{B1, B2, B5, B6, B7};
 use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
@@ -388,6 +389,11 @@ pub fn validate<'id, V: ChainView<'id>>(
     // reward, so the value does not ride on the verdict yet. Nothing here
     // refuses; a fault is the view's.
     Emission::derive(view, connecting, &mut coverage)?;
+    // CEN-G6: the two medians in force for this height, one window read
+    // (slice 7 Q2 (b)). Before the slot loop with the other definitions —
+    // it reads only the view; the block's own weight joins it after the
+    // loop (G6b), once every transaction has been judged.
+    let medians = Medians::derive(view, connecting, &mut coverage)?;
 
     let candidate = cx.candidate();
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);
@@ -413,6 +419,12 @@ pub fn validate<'id, V: ChainView<'id>>(
         return Ok(Err(refused));
     }
 
+    // CEN-G6b: the block's weight and the long-term weight `connect`
+    // records for it, under the medians derived above. After the loop so
+    // every body's weight is a judged body's (H1 bounded it); the
+    // definition the 4.F consumers (F14, F14b — commit 5) read next.
+    let weights = Weights::derive(medians, cx.candidate(), &mut coverage);
+
     // The drain (DRS-E3 §3.2): what matured at this height and the root
     // the tree has once it is appended. Not a rule — the last rule has
     // passed — but the derivation the verdict carries because the root
@@ -429,6 +441,7 @@ pub fn validate<'id, V: ChainView<'id>>(
         cumulative_difficulty,
         root_after,
         drained,
+        weights,
     );
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }

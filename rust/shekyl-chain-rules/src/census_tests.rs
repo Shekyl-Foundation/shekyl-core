@@ -126,6 +126,10 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::F13,
             CenRow::F15,
             CenRow::F20,
+            // Slice 7 commit 4: the two block-weight definitions
+            // (`CHAIN_RULES_SLICE_7.md` §5 row 4).
+            CenRow::G6,
+            CenRow::G6b,
             CenRow::H1,
             CenRow::H3,
             CenRow::H4,

@@ -20,6 +20,7 @@ use shekyl_wire::{Block, BlockHeader, Transaction};
 use crate::coverage::RuleCoverage;
 use crate::fault::FormAttempt;
 use crate::rule_set::{RuleSet, RuleSetId};
+use crate::rules::block_weight::Weights;
 use crate::rules::difficulty::Target;
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
@@ -337,6 +338,13 @@ pub struct ValidatedBlock {
     /// with its leaf, and the growth those leaves produced — or `None` when
     /// no output matured (the tree and its root are unchanged).
     drain: Option<Drain>,
+    /// The block's weight, its long-term weight, and the two medians it
+    /// was judged under (CEN-G6/G6b, slice 7). On the verdict because
+    /// every value is one the validator had to compute (slice 7 Q5): the
+    /// store records `weight`, `long_term_weight` and the long-term
+    /// effective median from here; the effective median is F14's limit
+    /// and F14b's penalty operand.
+    weights: Weights,
 }
 
 impl ValidatedBlock {
@@ -349,9 +357,10 @@ impl ValidatedBlock {
     /// that no rule reads the identity; E1 refuted the premise
     /// (`CHAIN_RULES_SLICE_3.md` F8, Q7). The transaction identities are
     /// derived here, once; the target and the cumulative work are CEN-D4's
-    /// derivation, recorded where it ran. The 4.F emission is derived in
-    /// `validate` and recorded in coverage; it stays off this type until
-    /// F14b produces the paid reward `connect` persists.
+    /// derivation, recorded where it ran; the weights are CEN-G6/G6b's,
+    /// derived once every transaction was judged. The 4.F emission is
+    /// derived in `validate` and recorded in coverage; it stays off this
+    /// type until F14b produces the paid reward `connect` persists.
     pub(crate) fn derive(
         candidate: Candidate,
         hash: BlockHash,
@@ -359,6 +368,7 @@ impl ValidatedBlock {
         cumulative_difficulty: CumulativeDifficulty,
         root_after: CurveTreeRoot,
         drain: Option<Drain>,
+        weights: Weights,
     ) -> Self {
         let Candidate {
             block,
@@ -376,7 +386,15 @@ impl ValidatedBlock {
             cumulative_difficulty,
             root_after,
             drain,
+            weights,
         }
+    }
+
+    /// The block's weight, long-term weight and the medians it was judged
+    /// under (CEN-G6/G6b; the field's docs).
+    #[must_use]
+    pub const fn weights(&self) -> &Weights {
+        &self.weights
     }
 
     /// The tree root after this block's drain (module docs on the field).

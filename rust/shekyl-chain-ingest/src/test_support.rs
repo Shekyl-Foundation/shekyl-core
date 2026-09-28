@@ -34,8 +34,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    tree_after, AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, RecordedWeights,
-    RuleSet, Tip, TreeFrontier,
+    effective_median_at, tree_after, AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock,
+    RecordedWeights, RuleSet, Tip, TreeFrontier,
 };
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
@@ -105,6 +105,15 @@ pub struct GrownTree {
     /// `(layer, chunk)` → hash, every chunk any grow wrote.
     layers: BTreeMap<(u8, u64), [u8; 32]>,
     next_output: u64,
+    /// `weights[h]` — block `h`'s weight and long-term weight, derived as
+    /// the validator derives them (CEN-G6/G6b, slice 7): the wire weight
+    /// of the block, clamped under the long-term effective median in
+    /// force at `h`. What `weights_window` answers.
+    weights: Vec<RecordedWeights>,
+    /// `medians[h]` — the long-term effective median in force **for**
+    /// block `h` (over the weights below it), what the trace's row at `h`
+    /// records and the validator's verdict must equal.
+    medians: Vec<LongTermWeight>,
 }
 
 impl GrownTree {
@@ -148,10 +157,42 @@ impl GrownTree {
         self.roots[at(height + 1)]
     }
 
+    /// Block `height`'s weight and long-term weight as this chain derives
+    /// them — what the store's `block_info` would hold.
+    #[must_use]
+    pub fn weights_of(&self, height: u64) -> RecordedWeights {
+        self.weights[at(height)]
+    }
+
+    /// The long-term effective median in force for block `height` — the
+    /// value the validator's verdict carries for it and the trace's row
+    /// records.
+    #[must_use]
+    pub fn median_for(&self, height: u64) -> LongTermWeight {
+        self.medians[at(height)]
+    }
+
     /// Connect `block` at the next height: derive its drain over the tree
-    /// as it stands, apply the growth, then register its outputs.
+    /// as it stands, apply the growth, then register its outputs — and
+    /// derive its weights under the medians the chain so far yields, the
+    /// same production definition the validator runs
+    /// (`effective_median_at`), so a trace built over this chain cannot
+    /// record a median the chain did not have.
     pub fn push(&mut self, block: &Block, txs: &[Transaction]) {
         let height = h(self.built());
+        let medians = effective_median_at(self, height)
+            .expect("a fixture chain's weights are complete below its tip");
+        let weight = core::iter::once(&block.miner_transaction)
+            .chain(txs)
+            .map(|tx| u64::try_from(tx.weight()).expect("a fixture body's weight fits u64"))
+            .fold(0u64, u64::saturating_add);
+        let long_term =
+            shekyl_economics::long_term_weight(medians.long_term_effective_median.to_raw(), weight);
+        self.weights.push(RecordedWeights {
+            weight: BlockWeight::from_raw(weight),
+            long_term_weight: LongTermWeight::from_raw(long_term),
+        });
+        self.medians.push(medians.long_term_effective_median);
         let (root, drain) = tree_after(self, height, &RuleSet::GENESIS)
             .expect("a fixture chain's view is complete and its points decompress");
         let mut leaf_count = self.leaf_counts[at(height.to_raw())];
@@ -223,12 +264,24 @@ impl<'id> ChainView<'id> for GrownTree {
         Ok(None)
     }
 
+    /// The weights of the blocks below `end`, at most `at_most` of them —
+    /// the store's contract, so `effective_median_at` over this tree is
+    /// the validator's own read (CEN-G6).
     fn weights_window(
         &self,
-        _: BlockHeight,
-        _: BlockCount,
+        end: BlockHeight,
+        at_most: BlockCount,
     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-        Ok(AtHeight::AboveTip)
+        let Ok(end) = usize::try_from(end.to_raw()) else {
+            return Ok(AtHeight::AboveTip);
+        };
+        if end > self.weights.len() {
+            return Ok(AtHeight::AboveTip);
+        }
+        let span = usize::try_from(at_most.to_raw())
+            .unwrap_or(usize::MAX)
+            .min(end);
+        Ok(AtHeight::Recorded(self.weights[end - span..end].to_vec()))
     }
 
     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
@@ -523,35 +576,40 @@ pub fn corpus_from(first: BlockHeight, chain: &[(Block, Vec<Transaction>)]) -> V
     w.finish().expect("count").into_inner()
 }
 
-/// The trace row's economics. `root_after` is not a field: [`trace_with`]
-/// writes it from the chain's [`GrownTree`], so a trace built this way
-/// cannot record a root the chain it names did not grow.
+/// The trace row's economics — the values a chain does **not** determine.
+///
+/// `root_after` is not a field: [`trace_with`] writes it from the chain's
+/// [`GrownTree`], so a trace built this way cannot record a root the chain
+/// it names did not grow. Since slice 7 commit 4 the same holds for the
+/// three weight values (`weight`, `long_term_weight`,
+/// `long_term_effective_median`): the tree derives them by the validator's
+/// own definition as it grows, and a caller cannot name them — a trace
+/// whose medians disagreed with its chain would be the fixture problem
+/// the weights oracle exists to rule out, and the type makes it
+/// unrepresentable rather than the test-writer's to avoid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceEconomics {
-    /// `block_info.bi_weight`.
-    pub weight: BlockWeight,
-    /// `block_info.bi_long_term_block_weight`.
-    pub long_term_weight: LongTermWeight,
     /// `block_info.bi_coins`.
     pub coins_generated: AtomicUnits,
     /// `block_burn[h]`, zero when the row is absent.
     pub burned: AtomicUnits,
-    /// The long-term effective median in force for the block.
-    pub long_term_effective_median: LongTermWeight,
     /// `block_info.bi_diff` — the accumulator the trace holds the
     /// validator's derivation to.
     pub cumulative_difficulty: CumulativeDifficulty,
 }
 
 impl TraceEconomics {
-    fn with_root(self, root_after: CurveTreeRoot) -> Facts {
+    /// The row: what the chain determined (`tree`, at `height`) beside
+    /// what it did not (`self`).
+    fn over(self, tree: &GrownTree, height: u64) -> Facts {
+        let weights = tree.weights_of(height);
         Facts {
-            weight: self.weight,
-            long_term_weight: self.long_term_weight,
+            weight: weights.weight,
+            long_term_weight: weights.long_term_weight,
             coins_generated: self.coins_generated,
             burned: self.burned,
-            root_after,
-            long_term_effective_median: self.long_term_effective_median,
+            root_after: tree.root_after(height),
+            long_term_effective_median: tree.median_for(height),
             cumulative_difficulty: self.cumulative_difficulty,
         }
     }
@@ -561,22 +619,35 @@ impl TraceEconomics {
 /// accumulator `height + 1`.
 fn synthetic_economics(height: u64) -> TraceEconomics {
     TraceEconomics {
-        weight: BlockWeight::from_raw(1_000 + height),
-        long_term_weight: LongTermWeight::from_raw(900 + height),
         coins_generated: AtomicUnits::from_raw((height + 1) * 1_000_000),
         burned: AtomicUnits::from_raw(0),
-        long_term_effective_median: LongTermWeight::from_raw(300_000 + 7 * height),
         cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height) + 1),
     }
 }
 
-/// Facts for `height` whose recorded root after the drain is `root_after`.
+/// Facts for `height` whose recorded root after the drain is `root_after`
+/// and whose weights are `weights` under `long_term_effective_median`.
 ///
-/// The door for a caller that must name the root. The CTW-5 negative
-/// control plants a wrong one here; a trace for a chain uses [`trace_with`],
-/// which fills the root from that chain and does not take one.
-pub fn facts_at(height: u64, root_after: CurveTreeRoot) -> Facts {
-    synthetic_economics(height).with_root(root_after)
+/// The door for a caller that must name what a chain determines. The
+/// CTW-5 negative control plants a wrong root here, the G6 negative
+/// control a wrong median; a trace for a chain uses [`trace_with`], which
+/// fills every derived value from that chain and takes none.
+pub fn facts_at(
+    height: u64,
+    root_after: CurveTreeRoot,
+    weights: RecordedWeights,
+    long_term_effective_median: LongTermWeight,
+) -> Facts {
+    let economics = synthetic_economics(height);
+    Facts {
+        weight: weights.weight,
+        long_term_weight: weights.long_term_weight,
+        coins_generated: economics.coins_generated,
+        burned: economics.burned,
+        root_after,
+        long_term_effective_median,
+        cumulative_difficulty: economics.cumulative_difficulty,
+    }
 }
 
 /// The spent-key set of `chain` after its last block: one key image per
@@ -594,9 +665,11 @@ pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<[u8; 32]> {
 }
 
 /// A trace for `chain`. Each row's `root_after` is [`GrownTree::root_after`]
-/// of this chain; `economics` supplies everything else and is called once
-/// per height, from genesis, in order. `checkpoint` appends the digest of
-/// that same tree after the tip.
+/// of this chain and its three weight values are the tree's derivation at
+/// that height ([`GrownTree::weights_of`], [`GrownTree::median_for`]);
+/// `economics` supplies the rest and is called once per height, from
+/// genesis, in order. `checkpoint` appends the digest of that same tree
+/// after the tip.
 ///
 /// Heights are the chain's indices. A chain whose first block is not
 /// genesis is not this constructor's input.
@@ -609,7 +682,7 @@ pub fn trace_with(
     let tree = GrownTree::over(chain);
     for index in 0..chain.len() {
         let height = u64::try_from(index).expect("a fixture height fits");
-        let facts = economics(height).with_root(tree.root_after(height));
+        let facts = economics(height).over(&tree, height);
         w.push_facts(h(height), &facts).expect("facts");
     }
     if checkpoint && !chain.is_empty() {

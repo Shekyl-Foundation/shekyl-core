@@ -287,11 +287,13 @@ async fn replay(replay: Replay) -> Result<(), Failure> {
     let report = outcome?;
 
     eprintln!(
-        "connected {} block(s), popped {}, {} checkpoint digested, {} root(s) compared",
+        "connected {} block(s), popped {}, {} checkpoint digested, {} root(s) compared, \
+         {} weight row(s) compared",
         report.connected.len(),
         report.popped(),
         usize::from(report.checkpoint.is_some()),
         report.roots.compared(),
+        report.weights.compared(),
     );
     for disagreement in report.disagreements() {
         match disagreement {
@@ -303,6 +305,9 @@ async fn replay(replay: Replay) -> Result<(), Failure> {
             }
             Disagreement::RootDiverged { at } => {
                 eprintln!("curve-tree root after height {at}: derived != trace, DIVERGE");
+            }
+            Disagreement::WeightsDiverged { at } => {
+                eprintln!("block weights at height {at}: derived != trace, DIVERGE");
             }
         }
     }

@@ -72,6 +72,7 @@
 //! (`view.rs`, "Three answers, three positions").
 
 pub(crate) mod anchors;
+pub(crate) mod block_weight;
 pub(crate) mod difficulty;
 pub(crate) mod header;
 pub(crate) mod miner;

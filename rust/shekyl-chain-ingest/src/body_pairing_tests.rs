@@ -39,10 +39,7 @@ use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::Candidate;
 use shekyl_chain_store::store::{AtIndex, ChainStore, Horizons};
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_economics::FULL_REWARD_ZONE;
-use shekyl_types::{
-    BlockHash, BlockHeight, BlockWeight, GlobalOutputIndex, LongTermWeight, Timestamp, TxHash,
-};
+use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex, Timestamp, TxHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, Transaction};
 
@@ -114,11 +111,8 @@ impl Driven {
                 // Regtest difficulty is 1, so the accumulator after this
                 // block is `height + 1`.
                 TraceEconomics {
-                    weight: BlockWeight::from_raw(mined.template.block_weight),
-                    long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
                     coins_generated: coins,
                     burned: mined.template.fees_burned,
-                    long_term_effective_median: LongTermWeight::from_raw(FULL_REWARD_ZONE),
                     cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height) + 1),
                 }
             },

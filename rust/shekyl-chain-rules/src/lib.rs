@@ -162,6 +162,7 @@ pub use rule_set::{
     AdmissionPolicy, AdmissionPolicyId, DifficultyRule, RuleSchedule, RuleSet, RuleSetId,
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
+pub use rules::block_weight::{effective_median_at, EffectiveMedian, Weights};
 pub use rules::difficulty::Target;
 pub use rules::miner::{tx_volume_window, EMISSION_SPLIT_EPOCH};
 pub use rules::recorded;

@@ -42,9 +42,10 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         // form; D3's verification, D4 the target, D6 at its mint, D1b the
         // comparison, D1 the predicate), slice 3's E1, and slice 4's 4.F
         // rows (F1, F3, F7, F9, F10 in form; F4, F5, F6 view-bound; F11,
-        // F13, F15, F20 the emission definitions), and nothing else (the
-        // per-tx entry points are still empty; F2/F8/F19/F21 hold by
-        // construction and are never in a coverage).
+        // F13, F15, F20 the emission definitions), slice 7's two
+        // block-weight definitions (G6 before the slot loop, G6b after
+        // it), and nothing else (the per-tx entry points are still empty;
+        // F2/F8/F19/F21 hold by construction and are never in a coverage).
         assert_eq!(
             valid.coverage().iter().collect::<Vec<_>>(),
             [
@@ -77,6 +78,8 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::F13,
                 CenRow::F15,
                 CenRow::F20,
+                CenRow::G6,
+                CenRow::G6b,
                 CenRow::H1,
                 CenRow::H3,
                 CenRow::H4,

@@ -217,6 +217,32 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         diverged.len(),
         diverged.first()
     );
+    // CEN-G6/G6b (slice 7 commit 4): the verdict's weight, long-term
+    // weight and long-term effective median are held to the C++'s two
+    // recorded columns and the exporter's re-derived median at **every**
+    // connected height — the medians' parity pin over a chain the C++
+    // built, taken while the LMDB trace exists. Same discipline as the
+    // root: count first, then no divergence, and a divergence is a
+    // finding about the derivation, never a fixture to patch.
+    assert_eq!(
+        report.weights.compared(),
+        manifest.block_count,
+        "{}: {} of {} heights had recorded weights to compare against",
+        manifest.shape,
+        report.weights.compared(),
+        manifest.block_count
+    );
+    let diverged: Vec<_> = report.weights.diverged().collect();
+    assert!(
+        diverged.is_empty(),
+        "{} ({}): a derived weight value differs from the daemon's at {} height(s), first at \
+         {:?} — a FINDING about CEN-G6/G6b's derivation, adjudicated against the spec, never a \
+         fixture problem",
+        manifest.shape,
+        manifest.generator,
+        diverged.len(),
+        diverged.first()
+    );
     let (h0, connected_genesis) = report.connected[0];
     assert_eq!(h0, BlockHeight::from_raw(0));
     assert_eq!(
@@ -326,12 +352,13 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
         hold(&dir, &manifest, &report);
         eprintln!(
-            "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, rows \
-             exercised: {}",
+            "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, weights \
+             MATCH at all {} heights, rows exercised: {}",
             manifest.shape,
             report.connected.len(),
             manifest.tip_height,
             report.roots.compared(),
+            report.weights.compared(),
             report.exercised.len()
         );
     }
