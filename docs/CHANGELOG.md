@@ -24,6 +24,80 @@
   drifts; this is its single home, so the GUI's `get_balance` can adopt the
   contract's shape by consuming it (its own increment, in its own repo).
 
+### `CT-6 Q1` ruled by derivation — and the derivation deletes the geometry
+
+- **`s = ⌊2.000 / 0.53759⌋ = 3 blocks.`** Budget from a ruled product judgment
+  (`max(2 s, 15 % of proving)`, 2026-09-19) over a converged rig denominator
+  (proving `6.055 s`, reproduced across four runs); rate from three converged
+  windows (50/100/200 blocks, `n = 6` each) flat to **0.36 %**.
+- **The capped run became the proof rather than the problem.**
+  `537.59 ms × 725 = 389.750 s` against the full-window run's `388.822 s` —
+  **0.24 %**. The series that could not be *graded* is the one that shows the
+  graded quantity extrapolates, so linearity is verified across 50 → 725 blocks
+  instead of extrapolated 14× off the short end.
+- **Two properties keep the rate honest.** Every working set is **≥ 6.76×** the
+  A72's 1 MB L2, so measured and extrapolated ranges share one memory regime.
+  And thermal drift is excluded **by direction**: the smallest window — the only
+  one that could have sampled a cool board — came in *fastest*, which a
+  cool-board bias cannot produce.
+- **RULED: one dense ring over the reorg horizon.** At `s = 3` a sparse tier
+  holds 240 snapshots against a dense ring's 720 — **4.64 MB** bought for a
+  spacing constant, an eviction policy, a dense/sparse boundary and the reader
+  logic across it, on an 8 GB rig. The tier geometry is **deleted**; `s` ceases
+  to exist as a quantity the round carries. A rule-21 reopening of `Q1`'s own
+  Round-1 shape on its derivation's substrate — the measurement did not fill the
+  constant in, it removed the structure the constant was for.
+- **The rewind bound follows from totality, not spacing:** one block's replay,
+  **0.538 s, 3.72× inside budget** — and totality over the horizon is exactly
+  what `Q2`'s armed examiner already grades.
+- **Scope, so increment 4 inherits it correctly:** the collapse deletes **`Q1`'s
+  intra-ring geometry only**. `Q2`'s seam and its examiner are unaffected —
+  its subjects are `row.segment` and `row.snapshot`, the moving freeze boundary,
+  never an intra-ring sparse/dense seam.
+- Increment 4's gate opens on a simpler subject than the round planned for: one
+  ring, total over the horizon, one seam — already guarded by an examiner armed
+  before its subject existed.
+
+### `WSS-Q1(b)` — the pinned-rig session: rig accepted, row 2 still not graded
+
+- **The rig was accepted for the first time.** `rig.grading` is `true`: the
+  process enforced arch, userland, RAM and device, and recorded the two
+  attestations it cannot observe — `usb-ssd` and sustained thermals — on the
+  maintainer's authorization. Verbatim Pocket SSD (`18a5:0481`, ext4), with
+  repo, build target and every measured store on that device.
+- **Row 2 did not grade, and not because of the rig.** The replay series never
+  converged: `MIN_ITERATIONS` is 6, one iteration is ~389 s, and
+  `MAX_WALL_SECONDS` is 1 800 — so **6 × 389 = 2 334 s** and the convergence
+  test never ran. `converged: false` here means *too few samples to test
+  stability*, not *unstable*. The cap behaved exactly as its doc describes.
+- **Stability comes from reproduction instead.** Across two sessions, different
+  storage, four days apart: spend replay **0.15 %**, verify worst case
+  **0.07 %**, verify nominal **0.02 %**, proving **1.3 %** — against a
+  convergence tolerance of 5 %. Whether that substitutes for intra-run
+  convergence is the maintainer's to rule; §7.3 records both and claims
+  neither.
+- **The miss is not in doubt.** 388.8 s delta against a 2.000 s threshold —
+  194× — with the **absolute floor binding on a third machine** across a 5.5×
+  speed range. §6.3.4 row 2's pre-registered *amortized replay first* is the
+  landing.
+- **Both densities, read apart.** Verify is **393.944 s** at the adversarial
+  sustained ceiling and **53.667 s** at the nominal full-reward zone — 45 % of
+  a 120 s block, so the wallet keeps up. An earlier reading of this session
+  quoted the worst-case number as the operating condition and concluded the
+  wallet "never syncs"; that is false at any realistic density and §7.3
+  corrects it rather than dropping it.
+- **Storage is not the variable.** The SSD moved verify **0.07 %** and proving
+  **1.3 %** — both axes are CPU-bound. **FCMP++ proving on a Cortex-A72 is
+  `6.052 s`** against 1.105 s on x86: a 5.5× penalty that is purely the
+  processor and irreducible by amortization. Whether the rule-76 floor is the
+  right floor is **not** answerable from this session, because the reducible
+  terms dominate every total; it becomes answerable at increment 6's re-grade.
+- **An instrument defect surfaced:** `--store` is per-invocation but the store
+  is opened per-density, so `--store` with `--density both` shares one file —
+  the worst-case control froze the population the nominal run then measured.
+  Rule 47's precondition refused it and named the count, which is why this is a
+  re-run and not a fabricated figure.
+
 ### Daemon store — the curve tree is grown by the Rust stack (DRS-E3)
 
 - **Consensus.** The validator derives the curve-tree root: `validate` drains
@@ -1529,7 +1603,7 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
 - **LWMA-1 genesis difficulty is 400** (`daa_genesis_difficulty` in
   `config/consensus_constants.json`). The first 90 blocks still share
   one constant until the LWMA window fills; 400 is the testnet
-  calibration against `skl-miner-test` (4 threads), replacing the
+  calibration against the testnet miner (4 threads), replacing the
   zawy12 example value of 100 that produced ~20s blocks on that
   miner. This is a consensus-constant change: `CONSENSUS_CONSTANTS_DIGEST`
   moves, alpha.8 nodes will refuse an alpha.9 daemon on the digest
@@ -2321,7 +2395,7 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   tests); full-recipe KATs for
   all nine fixtures on both implementations (shekyl-dev pins a copy of
   the same artifact); two-limb avalanche on the pixel axis (sweep min
-  RMS 34.165 ≥ floor 20). Floor-device results (skl-pi, Pi 4, thermal
+  RMS 34.165 ≥ floor 20). Floor-device results (Pi 4, thermal
   bracket 50.6–59.4 °C at stock 1800 MHz): raster parity measured
   **RMS = 0.000000 on all nine fixtures at 128px** (bit-identical to
   the x86 goldens — recorded as measured, does not reopen the
@@ -19459,7 +19533,7 @@ production callers.
     recoverable derivation.
   - **RUST.md §1.2 reference clone**: removed the
     contributor-specific absolute path
-    `/home/torvaldsl/shekyl/RandomX/` (committing a single
+    `<randomx-checkout>/` (committing a single
     developer's `$HOME` path is non-reproducible). Replaced with a
     portable description noting that Phase 0 contributors may keep
     a sibling clone at the same pin as a contributor-local

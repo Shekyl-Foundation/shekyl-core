@@ -58,7 +58,7 @@ OUT_FILE="${OUT_DIR}/gap7_block_verify_pi4_${PHASE}_${STAMP}.txt"
 
 read_temp() {
   # sysfs primary: vcgencmd can EXIST while /dev/vcio does not (observed on
-  # skl-pi during the pins capture — the command's presence is not its
+  # the floor device during the pins capture — the command's presence is not its
   # workingness), and sysfs needs no device node or sudo.
   printf 'temp_mC=%s clock_kHz=%s' \
     "$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)" \

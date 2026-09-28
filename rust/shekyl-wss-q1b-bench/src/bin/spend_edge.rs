@@ -522,6 +522,23 @@ fn summarize(record: &SpendEdgeRecord, controls: &[ControlExperiment]) {
     );
     eprintln!("  VERDICT        {:?}", b.verdict);
     if matches!(b.verdict, Verdict::Ungraded) {
-        eprintln!("                 (measurement only — not the pinned rig, or --grade not given)");
+        // **Name the reason this run was not graded, not a list of the reasons
+        // a run might not be.** `Verdict::Ungraded` has three causes now — off
+        // the pinned rig, `--grade` withheld, or a timing series that never
+        // converged — and the parenthetical used to assert the first two. On
+        // the 2026-09-27 rig session that made the summary contradict its own
+        // record, which carried `rig.grading: true` three lines above a line
+        // claiming the run was off-rig. The record already holds what
+        // distinguishes them, so the summary reads it instead of guessing.
+        eprintln!("                 ({})", ungraded_reason(record));
     }
+}
+
+/// Why `verdict` is [`Verdict::Ungraded`], read from the record rather than
+/// assumed.
+fn ungraded_reason(record: &SpendEdgeRecord) -> &'static str {
+    if !record.rig.grading {
+        return "measurement only — not the pinned rig, or --grade not given";
+    }
+    "pinned rig, but a timing series did not converge — see stopped_because"
 }

@@ -1,6 +1,6 @@
 # Pi-4 wake_hints — timing engine, 2026-09-26
 #
-# Host: skl-pi (10.10.14.15), aarch64, 4 cores, 8 GB. No sudo.
+# Host: <floor-device>, aarch64, 4 cores, 8 GB. No sudo.
 # Source: shekyl-core dev 5a8d2ae78 (wake_hints bench as merged in #865).
 # Build: cargo build --release --target aarch64-unknown-linux-gnu -p shekyl-timing-engine --bench wake_hints
 # Run: ./wake_hints --bench

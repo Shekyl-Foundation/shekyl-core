@@ -1,7 +1,7 @@
 # GAP-7 floor capture — worst-case cold-block connect verification
 # phase=pins
 # captured_utc=20260905T175137Z
-# host=skl-pi  uname=Linux skl-pi 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
+# host=<floor-device>  uname=Linux <floor-device> 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
 # device_row: Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (PERFORMANCE_BASELINE.md §8.2)
 # git_rev=8af70a60a6d444daa858d94d8b34e71b7e54eb49
 # rustc=rustc 1.94.0 (4a4ef493e 2026-03-02)
@@ -294,7 +294,7 @@
 # thermal 17:53:23 temp_mC=62809 clock_kHz=1800000
    Compiling crypto-bigint v0.5.5
    Compiling zerocopy v0.8.48
-   Compiling generalized-bulletproofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/generalized-bulletproofs)
+   Compiling generalized-bulletproofs v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/generalized-bulletproofs)
 warning: variant `InconsistentWitness` is never constructed
   --> shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs:97:5
    |
@@ -311,18 +311,18 @@ warning: `generalized-bulletproofs` (lib) generated 1 warning (1 duplicate)
    Compiling zerocopy-derive v0.8.48
 warning: `generalized-bulletproofs` (lib) generated 1 warning
    Compiling dalek-ff-group v0.5.0
-   Compiling ec-divisors v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/divisors)
+   Compiling ec-divisors v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/divisors)
 # thermal 17:53:38 temp_mC=63296 clock_kHz=1800000
-   Compiling generalized-bulletproofs-circuit-abstraction v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/fcmps/circuit-abstraction)
+   Compiling generalized-bulletproofs-circuit-abstraction v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/fcmps/circuit-abstraction)
    Compiling generic-array v1.3.5
-   Compiling generalized-bulletproofs-ec-gadgets v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/fcmps/ec-gadgets)
+   Compiling generalized-bulletproofs-ec-gadgets v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/fcmps/ec-gadgets)
    Compiling jobserver v0.1.34
    Compiling once_cell v1.21.4
    Compiling find-msvc-tools v0.1.9
    Compiling shlex v1.3.0
    Compiling cc v1.2.59
-   Compiling full-chain-membership-proofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/fcmps)
-   Compiling helioselene v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/helioselene)
+   Compiling full-chain-membership-proofs v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/fcmps)
+   Compiling helioselene v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/helioselene)
 # thermal 17:53:53 temp_mC=63296 clock_kHz=1800000
 warning: use of deprecated method `blake2::digest::generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
   --> shekyl-oxide/crypto/helioselene/src/ciphersuite.rs:35:38
@@ -338,8 +338,8 @@ warning: use of deprecated method `blake2::digest::generic_array::GenericArray::
 74 |         uniform.copy_from_slice(hash.as_slice());
    |                                      ^^^^^^^^
 
-   Compiling shekyl-curve-io v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-curve-io)
-   Compiling shekyl-curve-generators v0.4.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-curve-generators)
+   Compiling shekyl-curve-io v0.1.0 (<bench-checkout>/rust/shekyl-curve-io)
+   Compiling shekyl-curve-generators v0.4.0 (<bench-checkout>/rust/shekyl-curve-generators)
    Compiling inout v0.1.4
 # thermal 17:54:08 temp_mC=63296 clock_kHz=1800000
    Compiling crossbeam-utils v0.8.21
@@ -357,7 +357,7 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
    Compiling poly1305 v0.8.0
    Compiling chacha20 v0.9.1
    Compiling ppv-lite86 v0.2.21
-   Compiling shekyl-crypto-hash v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-crypto-hash)
+   Compiling shekyl-crypto-hash v3.1.0 (<bench-checkout>/rust/shekyl-crypto-hash)
 # thermal 17:54:24 temp_mC=63296 clock_kHz=1800000
    Compiling tracing-attributes v0.1.31
    Compiling aead v0.5.2
@@ -367,14 +367,14 @@ warning: `helioselene` (lib) generated 2 warnings
    Compiling signature v2.2.0
    Compiling pin-project-lite v0.2.17
    Compiling ed25519 v2.2.3
-   Compiling shekyl-encoding v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-encoding)
+   Compiling shekyl-encoding v3.1.0 (<bench-checkout>/rust/shekyl-encoding)
    Compiling chacha20poly1305 v0.10.1
    Compiling rand_chacha v0.3.1
    Compiling unicode-normalization v0.1.25
    Compiling bitcoin_hashes v0.14.1
    Compiling tracing v0.1.44
    Compiling argon2 v0.5.3
-   Compiling shekyl-curve-primitives v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-curve-primitives)
+   Compiling shekyl-curve-primitives v0.1.0 (<bench-checkout>/rust/shekyl-curve-primitives)
    Compiling postcard-derive v0.2.2
 # thermal 17:54:39 temp_mC=64757 clock_kHz=1800000
    Compiling hmac v0.12.1
@@ -386,11 +386,11 @@ warning: `helioselene` (lib) generated 2 warnings
    Compiling bip39 v2.2.2
    Compiling rand v0.8.6
    Compiling regex-automata v0.4.14
-   Compiling shekyl-address v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-address)
+   Compiling shekyl-address v3.1.0 (<bench-checkout>/rust/shekyl-address)
 # thermal 17:54:54 temp_mC=64270 clock_kHz=1800000
    Compiling ed25519-dalek v2.2.0
-   Compiling shekyl-fcmp-proofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-fcmp-proofs)
-   Compiling shekyl-units v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-units)
+   Compiling shekyl-fcmp-proofs v0.1.0 (<bench-checkout>/rust/shekyl-fcmp-proofs)
+   Compiling shekyl-units v3.1.0 (<bench-checkout>/rust/shekyl-units)
    Compiling fips203 v0.4.3
    Compiling fips205 v0.4.1
 # thermal 17:55:09 temp_mC=64757 clock_kHz=1800000
@@ -404,7 +404,7 @@ warning: `helioselene` (lib) generated 2 warnings
    Compiling deranged v0.5.8
    Compiling time-macros v0.2.27
 # thermal 17:55:39 temp_mC=65731 clock_kHz=1800000
-   Compiling shekyl-crypto-pq v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-crypto-pq)
+   Compiling shekyl-crypto-pq v3.1.0 (<bench-checkout>/rust/shekyl-crypto-pq)
 # thermal 17:55:54 temp_mC=67192 clock_kHz=1800000
 # thermal 17:56:09 temp_mC=69140 clock_kHz=1800000
    Compiling hybrid-array v0.4.12
@@ -423,7 +423,7 @@ warning: `helioselene` (lib) generated 2 warnings
    Compiling crypto-common v0.2.2
    Compiling inout v0.2.2
    Compiling matchers v0.2.0
-   Compiling shekyl-bulletproofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-bulletproofs)
+   Compiling shekyl-bulletproofs v0.1.0 (<bench-checkout>/rust/shekyl-bulletproofs)
    Compiling ring v0.17.14
    Compiling derive_more-impl v2.1.1
 # thermal 17:57:10 temp_mC=71575 clock_kHz=1800000
@@ -442,14 +442,14 @@ warning: `helioselene` (lib) generated 2 warnings
 # thermal 17:57:55 temp_mC=72062 clock_kHz=1800000
    Compiling cipher v0.5.2
    Compiling crossbeam-deque v0.8.6
-   Compiling shekyl-ct-balance v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-ct-balance)
+   Compiling shekyl-ct-balance v3.1.0 (<bench-checkout>/rust/shekyl-ct-balance)
    Compiling crossbeam-channel v0.5.15
    Compiling half v2.7.1
 # thermal 17:58:10 temp_mC=72549 clock_kHz=1800000
-   Compiling shekyl-archival-retention v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-archival-retention)
-   Compiling shekyl-difficulty v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-difficulty)
-   Compiling shekyl-curve-tree v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-curve-tree)
-   Compiling shekyl-economics v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-economics)
+   Compiling shekyl-archival-retention v3.1.0 (<bench-checkout>/rust/shekyl-archival-retention)
+   Compiling shekyl-difficulty v3.1.0 (<bench-checkout>/rust/shekyl-difficulty)
+   Compiling shekyl-curve-tree v3.1.0 (<bench-checkout>/rust/shekyl-curve-tree)
+   Compiling shekyl-economics v3.1.0 (<bench-checkout>/rust/shekyl-economics)
    Compiling gungraun-macros v0.9.1
    Compiling proc-macro-error-attr3 v3.0.2
    Compiling cpufeatures v0.3.0
@@ -485,28 +485,28 @@ warning: `helioselene` (lib) generated 2 warnings
 # thermal 18:00:41 temp_mC=72549 clock_kHz=1800000
    Compiling pem v3.0.6
 # thermal 18:00:56 temp_mC=71575 clock_kHz=1800000
-   Compiling shekyl-wire v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-wire)
+   Compiling shekyl-wire v3.1.0 (<bench-checkout>/rust/shekyl-wire)
 # thermal 18:01:11 temp_mC=71575 clock_kHz=1800000
    Compiling cobs v0.3.0
-   Compiling shekyl-consensus v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-consensus)
+   Compiling shekyl-consensus v3.1.0 (<bench-checkout>/rust/shekyl-consensus)
 # thermal 18:01:27 temp_mC=72062 clock_kHz=1800000
-   Compiling shekyl-portable-storage v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-portable-storage)
+   Compiling shekyl-portable-storage v3.1.0 (<bench-checkout>/rust/shekyl-portable-storage)
 # thermal 18:01:42 temp_mC=73036 clock_kHz=1800000
    Compiling either-or-both v0.3.1
-   Compiling shekyl-types v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-types)
+   Compiling shekyl-types v3.1.0 (<bench-checkout>/rust/shekyl-types)
    Compiling rustls-pki-types v1.14.0
    Compiling bitflags v2.11.0
 # thermal 18:01:57 temp_mC=73036 clock_kHz=1800000
    Compiling linux-raw-sys v0.12.1
    Compiling same-file v1.0.6
-   Compiling shekyl-relay-privacy v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-relay-privacy)
+   Compiling shekyl-relay-privacy v3.1.0 (<bench-checkout>/rust/shekyl-relay-privacy)
    Compiling gungraun v0.19.3
    Compiling cast v0.3.0
    Compiling unty-next v0.1.1
    Compiling bincode-next v2.1.0
    Compiling criterion-plot v0.5.0
 # thermal 18:02:12 temp_mC=72062 clock_kHz=1800000
-   Compiling shekyl-relay v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-relay)
+   Compiling shekyl-relay v3.1.0 (<bench-checkout>/rust/shekyl-relay)
 # thermal 18:02:27 temp_mC=74497 clock_kHz=1800000
    Compiling walkdir v2.5.0
 # thermal 18:02:42 temp_mC=72549 clock_kHz=1800000
@@ -514,21 +514,21 @@ warning: `helioselene` (lib) generated 2 warnings
    Compiling gungraun-runner v0.19.3
 # thermal 18:02:57 temp_mC=73523 clock_kHz=1800000
 # thermal 18:03:13 temp_mC=74010 clock_kHz=1800000
-   Compiling shekyl-levin v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-levin)
+   Compiling shekyl-levin v3.1.0 (<bench-checkout>/rust/shekyl-levin)
 # thermal 18:03:28 temp_mC=74497 clock_kHz=1800000
    Compiling postcard v1.1.3
    Compiling rayon v1.11.0
 # thermal 18:03:43 temp_mC=74984 clock_kHz=1800000
    Compiling plotters v0.3.7
-   Compiling shekyl-pow-randomx v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-pow-randomx)
+   Compiling shekyl-pow-randomx v3.1.0 (<bench-checkout>/rust/shekyl-pow-randomx)
 # thermal 18:03:58 temp_mC=74497 clock_kHz=1800000
-   Compiling shekyl-logging v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-logging)
+   Compiling shekyl-logging v3.1.0 (<bench-checkout>/rust/shekyl-logging)
    Compiling clap v4.6.0
    Compiling ciborium v0.2.2
-   Compiling shekyl-proofs v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-proofs)
+   Compiling shekyl-proofs v3.1.0 (<bench-checkout>/rust/shekyl-proofs)
 # thermal 18:04:13 temp_mC=75471 clock_kHz=1800000
    Compiling regex v1.12.3
-   Compiling shekyl-chacha v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-chacha)
+   Compiling shekyl-chacha v3.1.0 (<bench-checkout>/rust/shekyl-chacha)
    Compiling tinytemplate v1.2.1
    Compiling is-terminal v0.4.17
    Compiling fastrand v2.4.1
@@ -554,14 +554,14 @@ warning: `helioselene` (lib) generated 2 warnings
 # thermal 18:08:14 temp_mC=65731 clock_kHz=1800000
 # thermal 18:08:29 temp_mC=65731 clock_kHz=1800000
 # thermal 18:08:44 temp_mC=66218 clock_kHz=1800000
-   Compiling shekyl-fcmp v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-fcmp)
-   Compiling shekyl-tx-builder v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-tx-builder)
+   Compiling shekyl-fcmp v3.1.0 (<bench-checkout>/rust/shekyl-fcmp)
+   Compiling shekyl-tx-builder v3.1.0 (<bench-checkout>/rust/shekyl-tx-builder)
 # thermal 18:08:59 temp_mC=66705 clock_kHz=1800000
 # thermal 18:09:14 temp_mC=70114 clock_kHz=1800000
 # thermal 18:09:29 temp_mC=69140 clock_kHz=1800000
 # thermal 18:09:45 temp_mC=71088 clock_kHz=1800000
 # thermal 18:10:00 temp_mC=69140 clock_kHz=1800000
-   Compiling shekyl-ffi v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-ffi)
+   Compiling shekyl-ffi v3.1.0 (<bench-checkout>/rust/shekyl-ffi)
 # thermal 18:10:15 temp_mC=70114 clock_kHz=1800000
 # thermal 18:10:30 temp_mC=70601 clock_kHz=1800000
 # thermal 18:10:45 temp_mC=70114 clock_kHz=1800000

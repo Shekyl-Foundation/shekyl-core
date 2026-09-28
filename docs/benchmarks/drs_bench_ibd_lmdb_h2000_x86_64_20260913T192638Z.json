@@ -9,7 +9,7 @@
       "--no-igd",
       "--non-interactive",
       "--log-level=1",
-      "--data-dir=/home/torvaldsl/shekyl/drsbench-work/subject",
+      "--data-dir=<drsbench-work>/subject",
       "--p2p-bind-port=39965",
       "--rpc-bind-port=45739",
       "--add-exclusive-node=127.0.0.1:43025"

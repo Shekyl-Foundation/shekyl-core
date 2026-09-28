@@ -34,7 +34,7 @@ computable from quantum-recoverable view material on the single-sig main path.
 They are not reachable on tested hardware today. That is a **budget fail**, not
 a wire or T6 verdict.
 
-### 2.1 Measured micro gate (Pi 4, skl-pi, USB3 SSD)
+### 2.1 Measured micro gate (Pi 4 floor device, USB3 SSD)
 
 Harness: `fa6_decap_prefilter_gate` (`--path fa6|classical`, scenario A =
 2,016,000 outputs). Classical captures used
