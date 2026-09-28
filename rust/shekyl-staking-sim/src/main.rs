@@ -1885,6 +1885,10 @@ fn main() {
         return;
     }
 
+    if std::env::args().any(|a| a == "--f34-unit-cost") {
+        f34_heavy_era::print_f34_unit_cost_report();
+        return;
+    }
     if std::env::args().any(|a| a == "--f34-levers") {
         f34_heavy_era::print_f34_levers_report();
         return;

@@ -65,6 +65,20 @@ pub struct Levers {
     pub storage_scale: f64,
     /// The deep-history premium.
     pub age_weight: f64,
+    /// The per-unit carry cost of storage (§L19e).
+    pub storage_unit_cost: f64,
+}
+
+impl Levers {
+    /// The covered baseline's levers at a given headroom.
+    fn at_scale(storage_scale: f64) -> Self {
+        let b = baseline();
+        Self {
+            storage_scale,
+            age_weight: b.age_weight,
+            storage_unit_cost: b.storage_unit_cost,
+        }
+    }
 }
 
 fn dynamic_cfg(name: String, lv: Levers, seed: u64) -> SimConfig {
@@ -73,6 +87,7 @@ fn dynamic_cfg(name: String, lv: Levers, seed: u64) -> SimConfig {
     c.axis = "f34_l19a".into();
     c.storage_scale = lv.storage_scale;
     c.age_weight = lv.age_weight;
+    c.storage_unit_cost = lv.storage_unit_cost;
     c.dynamic = true;
     c.epoch_aging = EPOCH_AGING;
     c.seed = seed;
@@ -252,10 +267,7 @@ pub fn print_f34_heavy_era_report() {
 
     for (base, scale) in bases {
         for (shape, spread) in arms {
-            let lv = Levers {
-                storage_scale: scale,
-                age_weight: baseline().age_weight,
-            };
+            let lv = Levers::at_scale(scale);
             let (rows, g) = grade_point(shape, spread, lv, true);
             let diag_min_delta = rows
                 .iter()
@@ -331,14 +343,10 @@ fn slots(scale: f64) -> (usize, usize) {
 /// is the grading bar and is not swept.
 pub fn print_f34_levers_report() {
     const COVERED: f64 = 1.30;
-    let base_aw = baseline().age_weight;
     let mut rows = Vec::new();
     for spread in [4.0, 10.0] {
         for &sc in &HEADROOM_LADDER {
-            let lv = Levers {
-                storage_scale: sc,
-                age_weight: base_aw,
-            };
+            let lv = Levers::at_scale(sc);
             let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
             rows.push(LeverRow {
                 lever: "headroom",
@@ -350,8 +358,8 @@ pub fn print_f34_levers_report() {
         }
         for &aw in &AGE_WEIGHT_LADDER {
             let lv = Levers {
-                storage_scale: COVERED,
                 age_weight: aw,
+                ..Levers::at_scale(COVERED)
             };
             let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
             rows.push(LeverRow {
@@ -363,8 +371,8 @@ pub fn print_f34_levers_report() {
             });
         }
         let lv = Levers {
-            storage_scale: HEADROOM_LADDER[HEADROOM_LADDER.len() - 1],
             age_weight: AGE_WEIGHT_LADDER[AGE_WEIGHT_LADDER.len() - 1],
+            ..Levers::at_scale(HEADROOM_LADDER[HEADROOM_LADDER.len() - 1])
         };
         let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
         rows.push(LeverRow {
@@ -419,6 +427,61 @@ pub fn print_f34_levers_report() {
             )),
             lowest("age_weight")
                 .map_or("none in ladder".into(), |l| format!("{:.1}", l.age_weight)),
+        );
+    }
+}
+
+/// `STAKER_ARCHIVAL_SIM.md` §L19e's `storage_unit_cost` ladder, fixed before the run
+/// (`0.03` is the baseline).
+pub const UNIT_COST_LADDER: [f64; 6] = [0.0, 0.01, 0.03, 0.06, 0.10, 0.20];
+
+/// **`--f34-unit-cost`** — §L19e (item 7): the carry signal separated from the capacity
+/// leg on the L19d subject. `0.0` removes the size-scaled carry term but not the
+/// size-scaled L10 fetch lag — inert here because `fetch_latency_per_unit` is `0.0` at
+/// baseline — so that point is capacity + (inert) fetch.
+pub fn print_f34_unit_cost_report() {
+    #[derive(serde::Serialize)]
+    struct Row {
+        spread: f64,
+        storage_unit_cost: f64,
+        grade: Grade,
+    }
+    let mut rows = Vec::new();
+    for spread in [4.0, 10.0] {
+        for &uc in &UNIT_COST_LADDER {
+            let lv = Levers {
+                storage_unit_cost: uc,
+                ..Levers::at_scale(1.30)
+            };
+            let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
+            rows.push(Row {
+                spread,
+                storage_unit_cost: uc,
+                grade: g,
+            });
+        }
+    }
+    match serde_json::to_string_pretty(&rows) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 unit-cost report: {e}"),
+    }
+    eprintln!(
+        "F34 item 7 (§L19e), covered Burst: storage_unit_cost sweep, N = {SEEDS} paired seeds"
+    );
+    eprintln!("  S  | unit_cost |  minDelta  median | worst cell (seeds) | VERDICT");
+    for r in &rows {
+        eprintln!(
+            "{:>3.0} | {:>9.2} | {:>9} {:>7} | {:?} ({}/{}) | {}",
+            r.spread,
+            r.storage_unit_cost,
+            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade
+                .median_delta
+                .map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.modal_worst_band,
+            r.grade.modal_worst_band_seeds,
+            SEEDS,
+            r.grade.verdict
         );
     }
 }
