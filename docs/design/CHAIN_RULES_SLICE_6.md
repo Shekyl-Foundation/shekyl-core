@@ -319,6 +319,28 @@ remains: I4. The census's two false annotations and §10 R8's
 mis-attribution are corrected in this slice's docs commit; the sweep is
 recorded here so the correction is checkable against these lines.
 
+**UPDATE 2026-09-28 — the conclusion above is REFUTED as a claim about
+nettype-varying behaviour; it stands as a claim about its subject.** Slice
+7 commit 5's live-lane test (`CHAIN_RULES_SLICE_7.md` §3.11) found a second
+nettype-conditional consensus behaviour: CEN-F21's epoch —
+`get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)`, the height
+the staker share's decay is measured from — was **0 on regtest and 1 on
+every issued network**, read by `validate_miner_transaction`, the
+template, the relay floor and the fee RPC (six sites). The cause is the
+row this table dismissed: `:341`/`:348` *"hard-fork table construction —
+data, not a check"*. The regtest table `{(1, 0), (mainnet latest = 1, 1)}`
+lost its second row to `HardFork::add_fork`'s version guard and became
+`[(1, 0)]`. **No `m_nettype` gate is anywhere near it** — nettype selected
+a *table*, and the table carried a different value — so this sweep's
+instrument could not have found it however carefully it was run. The
+subject was every `m_nettype … FAKECHAIN` gate; the conclusion was stated
+about nettype-varying behaviour; those are different sets. The remedy is a
+different enumeration — the per-nettype *data*: hard-fork tables, genesis
+blocks, `original_version_till_height`, constant overrides, anything
+indexed by network — posed to the census lane as the fifth ground of the
+sweep-subject question (`CONSENSUS_RULE_CENSUS.md` §7). The C++ table is
+fixed in slice 7's PR (#889); the test is the falsifier.
+
 ### 3.5 Half the family is stateless, and the census filed it under inputs
 
 Eleven of twenty rows (I1, I3, I4, I5, I6, I8, I9, I14, I16, I19, I20) need

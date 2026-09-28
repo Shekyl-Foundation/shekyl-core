@@ -1240,6 +1240,26 @@ input, not fixes.
     oracle (a wrong arity is a wrong root on the first grown chunk, at every
     height of every captured chain).
 
+    **A fifth ground, recorded 2026-09-28 (E6 slice 7 commit 5,
+    `CHAIN_RULES_SLICE_7.md` §3.11; refutes slice 6 §3.4's conclusion):**
+    *which per-nettype data — not branches — carries a consensus value?*
+    Slice 6 swept every `m_nettype … FAKECHAIN` gate in the consensus C++
+    and concluded one nettype-conditional behaviour remained (I4). A
+    second existed the whole time and no gate was near it: the regtest
+    hard-fork table (`cryptonote_core.cpp:618`, `{(1, 0), (latest, 1)}`)
+    lost its second row to `HardFork::add_fork`'s version guard, so
+    `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` — CEN-F21's
+    epoch, read at six sites — was 0 on regtest and 1 on the issued
+    networks. Slice 6's own table saw the construction and filed it *"data,
+    not a check"*. The sweep was correct about its subject (gates) and its
+    conclusion named a larger set (behaviour). The enumeration that would
+    have found it: hard-fork tables, genesis blocks and nonces,
+    `original_version_till_height`, seed-epoch and constant overrides,
+    anything a nettype indexes — read for the *value* each network gets,
+    then asked which of those values a rule reads. Found by the Rust
+    producer's block at the consensus bound being refused for its coinbase
+    (F18's check, F21's cause); fixed in the C++ table in #889.
+
 ---
 
 ## 8. Evidence-archaeology payload — disposition of every item

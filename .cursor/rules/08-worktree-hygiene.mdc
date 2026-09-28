@@ -95,6 +95,17 @@ text** — and what closes or reopens that finding.
   before a one-file doc commit listed seven files); the commit had staged
   its one path and nothing travelled. The prediction above is confirmed on
   its first test; the falsifier stands unchanged.
+- **`wt-e7-c3` (2026-09-28) — instance eighteen, same signature.** Two
+  chain-ingest files (`pipeline_tests.rs`, `test_support.rs`) showed
+  modified 54 minutes after their commit, both with one `mtime`
+  (`03:20:03.894`), both holding pre-`fmt` text — an unsorted `use`, three
+  assertions on one line that rustfmt had broken. Both were files `cargo
+  fmt` had reformatted while open. Caught by a `git status` run for a
+  different reason (reverting an abandoned edit elsewhere) — that is, by
+  habit, which is the weakest of the three constraints; restored from
+  `HEAD`. Three instances in twenty-six hours on one worktree with the same
+  writer named each time is a rate, not a coincidence: run `git status`
+  after every `cargo fmt`, not only before every commit.
 
 Most of these were caught by a human or an agent reading the diff. That does not
 scale, and it is not the dangerous case. **The dangerous case is a drift

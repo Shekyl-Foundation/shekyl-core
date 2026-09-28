@@ -600,12 +600,24 @@ and the correction is recorded here rather than absorbed:
   at `dev@ad557ac5a`: the derived root equalled the LMDB trace's `root_after`
   at **every** height of every chain — `bond-post` 109/109 (tip 108),
   `emission-claim` 1026/1026 (tip 1025), `spend-1in-2out` 82/82 (tip 81),
-  `spend-depth3` 762/762 (tip 761); 1 979 heights, zero divergences, and the
-  daemon's tip digest matched on all four. No adjudication was needed. This
-  was the one window in which the trace was an oracle rather than a source;
-  it is not reproducible once the trace stops being consulted, so the
-  numbers live here and not only in the PR. The protection was not needed
-  this time; it stays in the text for the next lane.
+  `spend-depth3` 762/762 (tip 761); 1 979 heights, zero **root**
+  divergences, and the daemon's tip digest matched on all four. No
+  adjudication was needed. This was the one window in which the trace was
+  an oracle rather than a source; it is not reproducible once the trace
+  stops being consulted, so the numbers live here and not only in the PR.
+  The protection was not needed this time; it stays in the text for the
+  next lane.
+
+  **Bounded 2026-09-28: the result is about roots, and the corpus it was
+  taken on was not clean elsewhere.** Those same four chains carried ≈ 5.7 %
+  of coinbases paying a miner leg one share-unit off the ratified split —
+  the C++ regtest measured CEN-F21's decay from height 0, the issued
+  networks from 1 (`CHAIN_RULES_SLICE_7.md` §3.11; the regtest hard-fork
+  table, fixed in #889) — and the root oracle cannot see a coinbase amount.
+  "Zero divergences at every height" is true of this oracle's subject and
+  would be read as broader than it was; the corpus at `dev@ad557ac5a` is
+  superseded by the re-capture under the corrected table, so this figure
+  stays as the record of that era and is not reproducible.
 
 **Shard geometry, recorded here (maintainer finding, 2026-09-26).** Two
 definitions of "shard" are live on `dev`: `T` (`archival_shard_tx_count`,
