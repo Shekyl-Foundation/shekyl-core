@@ -5,6 +5,11 @@
 
 //! One connection on the seam.
 //!
+//! This file is interim translation. The Rust types and the FFI are the
+//! contract: the typed address, the observed endpoint, and the D12 cause.
+//! The conversions here serve the code above the seam until LV-3 replaces
+//! it. They do not shape a Rust type.
+//!
 //! The executor owns the strand for the life of the connection, and it owns
 //! this link. The link owns the handler until the destroy post drops it.
 //! That post runs on the strand and is not the last owner of the link: it
@@ -44,7 +49,7 @@ namespace shekyl
       return network_address{net::i2p_address::unknown()};
     if (obs.address_type == SHEKYL_ADDR_IPV4 && obs.len == 4)
     {
-      // The four octets in memory, which is what `in_addr.s_addr` holds.
+      // The FFI carries an IPv4 address as its four octets, in network order.
       std::uint32_t ip = 0;
       std::memcpy(&ip, obs.bytes, 4);
       return network_address{ipv4_network_address(ip, obs.port)};

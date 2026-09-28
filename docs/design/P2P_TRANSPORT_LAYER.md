@@ -323,7 +323,8 @@ not a publish target.
 
 Before the flip, ruling 4's exception is still in force. The option off
 omits the Noise layer the declaration adds, and the socket bytes are the
-session bytes: that is the differential harness, byte parity with epee.
+session bytes. The differential harness compares those Levin bytes and
+the session result, as the seam section states.
 The option on follows the stack plan: clearnet's plan is Noise, and that
 is what step 7 evaluates. Neither arm matches on a network's identity.
 The worker count, the blocking cap, the shutdown timeout, and the
@@ -338,6 +339,35 @@ the differential harness and the cutover. D4 and D6 stay the rulings. What follo
 rulings are built, including the three points the seam has to settle.
 No measured thread budget, deadline, or accept rate is written here.
 The executor's floor is counted from the lanes that block on it.
+
+**Our types come first (2026-09-28).** Rust and the FFI are shaped by
+the rulings: the typed address, the observed endpoint, "this zone, no
+address", the D12 causes, and the capped queue. An IPv4 address on
+the FFI is its four octets in network order. The C++ adapter copies
+those bytes into the address word the code above the seam reads.
+`seam_link`, those conversions, and the `i_service_endpoint` methods
+are interim translation. They stay thin, and they go when LV-3
+replaces what sits above the seam. Nothing in the adapter shapes a
+Rust type.
+
+**Harness parity is the wire and the session result (2026-09-28).**
+The differential harness checks that a peer sees the same Levin bytes
+and gets the same session result. Its document lists these
+divergences first, and a difference on one of them is expected:
+
+- deadlines derived per connector;
+- typed close causes, the first cause wins, and FIN after zero bytes
+  written;
+- admission in Rust, the check and the reservation in one step;
+- no local/remote timer split;
+- no TOS knob;
+- send and receive bounds in bytes.
+
+**A decision cites a ruling (2026-09-28).** The strand exists because
+D4 requires one delivery at a time, in order. The executor exists
+because C++ still runs above the seam until the timing-engine bridge.
+A reason that can only be stated as what the stack being replaced
+did is where the design stops.
 
 The id that crosses the boundary is the admission `SocketId`. C++
 learns it when the channel exists. A socket that dies before that
@@ -402,8 +432,9 @@ several threads. asio does not order two posts onto that context:
 two `deliver`s for one connection can run together or out of order,
 and `closed` can run before the last `deliver`. The Levin reader
 needs the bytes in order. D4 requires one delivery at a time, in
-order. epee met that with a strand per connection
-(`connection_basic.hpp:115`, posts at `abstract_tcp_server2.inl:416`).
+order, which is why each connection has its own strand. *Records-was:
+the stack being replaced posted on a strand
+(`connection_basic.hpp:115`, `abstract_tcp_server2.inl:416`).*
 
 Each connection gets its own strand on this executor. `established`,
 every `deliver`, and `closed` are posted to that strand. The handler
@@ -1205,8 +1236,8 @@ network, not as a duplicated protocol stack, and a test proves none of
 them leaks across networks.** A single registry with one broadcast loop
 over every session would be a cross-network leak.
 
-Through cutover, the per-network Levin instances stay as they are. The
-differential harness needs parity with epee. The design input for LV-3
+Through cutover, Levin framing stays C++ (D14). The harness compares
+the Levin bytes a peer sees and the session result. The design input for LV-3
 is one Levin and p2p layer serving every connector, with these
 partitions as tested policy. Items 1, 3, and 6 of D1 are that work.
 The existing C++ zone branches move with LV-3 and the P2P-3 slices, not
@@ -1441,11 +1472,16 @@ parameters stay. Tuning before that measurement is refused.
 These are the gates for the implementation PR, written now so the
 round can reject them.
 
-- **Differential harness against epee, before any deletion.** The same
-  Levin traffic through both transports, option off, on loopback.
-  Compare delivered bytes, close causes, and timeout behaviour. epee
-  stays in the tree as the reference until this passes. It is not a
-  test host for the option.
+- **Differential harness, before any deletion (UPDATE 2026-09-28).**
+  The same Levin traffic through both transports, option off, on
+  loopback. The harness compares the Levin bytes a peer sees and the
+  session result. *Records-was: compare close causes and timeout
+  behaviour.* Deadlines per connector, typed first-wins causes, FIN
+  after zero bytes, Rust admission, no local/remote timer split, no
+  TOS knob, and byte bounds are listed in the harness document as
+  expected. A difference on one of them is not a regression. The
+  current server stays in the tree as the wire reference until this
+  passes. It is not a test host for the option.
 - **Cross-build interop.** A connector node and an epee node, option
   off, peering on testnet through sync, relay, and both dial
   directions. The loopback harness is one build. The claim that
