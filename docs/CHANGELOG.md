@@ -54,7 +54,13 @@
   OS thread with no blocking pool; the timing engine's thread is that
   spawn. The process total is printed once daemon-RPC and Tor-control
   build their runtimes through the constructor. They still build their
-  own, so the daemon does not print a total yet.
+  own, so the daemon does not print a total yet. That move and the
+  print are a FOLLOWUPS row. `Pool::shutdown` bounds the wait for a
+  blocking task; drop waits without a bound and is never taken from
+  inside a task. A timed-out shutdown can leave a detached blocking
+  thread off the ledger until that thread exits. The clearnet connector
+  keeps one runtime: plaintext while its option is off, Noise while it
+  is on. It dials directly or through SOCKS5 CONNECT (`shekyl-socks`).
 
 ### CLI wallet shell
 

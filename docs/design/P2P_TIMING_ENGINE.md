@@ -366,6 +366,12 @@ with no timeout when none is. There is no async runtime on that thread.
 Its budget is one thread, counted in D5, and it needs no reactor. It is
 not the transport runtime.
 
+**An async home waits on the slot's waker.** `wait_wake` blocks on the
+condvar, so a Tokio task cannot be that home. `wait_wake_async` registers
+the task's waker under the same lock as the wake, and delivery wakes it.
+The engine thread still does not run the task. A home on the transport
+runtime awaits that future.
+
 **The handle applies the earlier-only rule before anything is queued.**
 Admission bounds how many owners exist. It does not bound how often one
 owner sends. The engine's earlier-only rule runs when it applies an

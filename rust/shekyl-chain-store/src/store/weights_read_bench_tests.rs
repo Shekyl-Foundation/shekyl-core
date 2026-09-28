@@ -41,7 +41,6 @@ use shekyl_chain_rules::{
     form, seed_height, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt,
     RuleSet, Substrate, Trust,
 };
-use shekyl_crypto_hash::keccak256;
 use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight, PowHash,
     Timestamp,
@@ -49,6 +48,7 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader};
 
+use super::connect_fixtures::batch_root_going_into;
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::view::BatchView;
 use super::*;
@@ -116,14 +116,6 @@ fn judge<'b, 'id>(
     }
 }
 
-/// A root the bench can derive at any height: the shared fixtures' is
-/// `[0xc0 + h; 32]` and stops at 63 (slice 6 met the same wall).
-fn root_after(height: u64) -> CurveTreeRoot {
-    let mut preimage = *b"shekyl-weights-bench-root-after\0";
-    preimage[24..].copy_from_slice(&height.to_le_bytes());
-    CurveTreeRoot::from_bytes(keccak256(&preimage))
-}
-
 fn facts(height: u64) -> ConnectFacts {
     ConnectFacts {
         // Distinct per height so the medians are of something.
@@ -133,12 +125,13 @@ fn facts(height: u64) -> ConnectFacts {
         )),
         coins_generated: Fact::passed_through(AtomicUnits::from_raw((height + 1) * 1_000_000)),
         burned: Fact::passed_through(AtomicUnits::ZERO),
-        root_after: Fact::passed_through(root_after(height)),
         long_term_effective_median: Fact::passed_through(LongTermWeight::from_raw(300_000)),
     }
 }
 
-fn candidate(height: u64, previous: BlockHash) -> Candidate {
+/// A candidate whose header carries `root` — [`batch_root_going_into`] at
+/// this height (CEN-B5).
+fn candidate(height: u64, previous: BlockHash, root: CurveTreeRoot) -> Candidate {
     let block = Block {
         header: BlockHeader {
             major_version: 1,
@@ -146,10 +139,7 @@ fn candidate(height: u64, previous: BlockHash) -> Candidate {
             timestamp: 1_000 + height * SPACING,
             previous,
             nonce: 7,
-            curve_tree_root: match height.checked_sub(1) {
-                None => CurveTreeRoot::EMPTY,
-                Some(parent) => root_after(parent),
-            },
+            curve_tree_root: root,
             attestation_root: AttestationRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: fixture::coinbase(height),
@@ -171,7 +161,8 @@ fn build_chain(store: &ChainStore, n: u64, per_batch: u64) {
         let out: Result<(), TestErr> = store.write(|batch| {
             let view = batch.chain_view();
             for h in height..end {
-                let cand = candidate(h, previous);
+                let root = batch_root_going_into(&view, h)?;
+                let cand = candidate(h, previous, root);
                 previous = cand.block.hash();
                 batch.connect(judge(&view, cand, &substrate)?, facts(h), RULES)?;
             }

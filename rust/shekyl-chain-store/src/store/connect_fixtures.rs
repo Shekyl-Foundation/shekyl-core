@@ -4,8 +4,9 @@
 // BSD-3-Clause
 
 //! Shared `connect` / `pop` test fixtures. One place with `facts` so the
-//! header root a candidate carries (`root_at_height`) cannot drift from the
-//! root the connect of the parent wrote.
+//! header root a candidate carries — [`root_going_into`] on a committed
+//! snapshot, [`batch_root_going_into`] inside a batch — cannot drift from
+//! the root the connect of the parent wrote.
 
 use core::convert::Infallible;
 
@@ -58,7 +59,7 @@ pub(super) fn spend(key_image: usize, outputs: usize) -> Transaction {
 /// DRS-E3 the root is the validator's derivation, recorded by `connect`,
 /// so a fixture cannot compute it from the height alone: a candidate for a
 /// grown height reads the root off the store ([`root_going_into`] on a
-/// snapshot, `view.root_at(height)` inside a batch) and builds with
+/// snapshot, [`batch_root_going_into`] inside a batch) and builds with
 /// [`candidate_over`]. [`connect_chain`] does exactly that per block.
 pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transaction>) -> Candidate {
     candidate_over(CurveTreeRoot::EMPTY, height, previous, listed)
@@ -88,17 +89,33 @@ pub(super) fn candidate_over(
     Candidate::new(block, listed)
 }
 
-/// The root a header connecting at `height` must carry: `root_at(height)`
-/// as the committed store holds it (`AboveTip` is a fixture bug, named).
+/// `root_at(height)` as the root a header connecting there must carry
+/// (CEN-B5). `AboveTip` is a fixture bug: height 0 is the seal's empty
+/// tree, and every later height is the row the previous connect wrote.
+fn recorded_root(
+    at: Result<AtHeight<CurveTreeRoot>, StoreError>,
+    height: u64,
+) -> Result<CurveTreeRoot, StoreError> {
+    let AtHeight::Recorded(root) = at? else {
+        panic!("no root recorded going into height {height}");
+    };
+    Ok(root)
+}
+
+/// The root a header connecting at `height` must carry, as the committed
+/// store holds it. A read fault is a fixture bug.
 pub(super) fn root_going_into(store: &ChainStore, height: u64) -> CurveTreeRoot {
     let snap = store.begin_read().expect("read");
-    match snap
-        .root_at(BlockHeight::from_raw(height))
-        .expect("root read")
-    {
-        AtHeight::Recorded(root) => root,
-        AtHeight::AboveTip => panic!("no root recorded going into height {height}"),
-    }
+    recorded_root(snap.root_at(BlockHeight::from_raw(height)), height).expect("root read")
+}
+
+/// [`root_going_into`] read from the batch's view, which sees this batch's
+/// own connects. A store fault propagates; `AboveTip` is still a fixture bug.
+pub(super) fn batch_root_going_into(
+    view: &BatchView<'_, '_>,
+    height: u64,
+) -> Result<CurveTreeRoot, StoreError> {
+    recorded_root(view.root_at(BlockHeight::from_raw(height)), height)
 }
 
 pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
@@ -296,8 +313,8 @@ pub(super) fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Tran
 /// Connect `listed` as consecutive blocks from genesis in one batch,
 /// handing each `facts(h, 0)`. Every listed transaction is anchored on the
 /// chain as it is built ([`anchor`]), and every header carries the root
-/// the store recorded going into its height (`view.root_at(h)`, the
-/// derived root of the previous connect — CEN-B5), so a caller lists bare
+/// the store recorded going into its height ([`batch_root_going_into`],
+/// the derived root of the previous connect — CEN-B5), so a caller lists bare
 /// [`spend`]s and the reference and the root are written where they are
 /// known. Returns each block's hash.
 pub(super) fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<BlockHash> {
@@ -334,10 +351,7 @@ pub(super) fn connect_chain_anchored(
                 .map(|tx| anchor(&hashes, h, tx.clone()))
                 .collect();
             anchored.push(txs.clone());
-            let root = match view.root_at(BlockHeight::from_raw(h))? {
-                AtHeight::Recorded(root) => root,
-                AtHeight::AboveTip => panic!("no root recorded going into height {h}"),
-            };
+            let root = batch_root_going_into(&view, h)?;
             let cand = candidate_over(root, h, previous, txs);
             previous = cand.block.hash();
             hashes.push(previous);

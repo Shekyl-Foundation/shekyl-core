@@ -1,6 +1,6 @@
 # DRS-E1 S-CURVE — curve-tree reads: increment plan and Round-0 pre-flight
 
-**Status:** LANDED — **implemented 2026-09-21** on the S-CURVE PR cut from
+**Status:** CLOSED-as-record — **archived 2026-09-27** (its own condition met: E3's plan, [`DRS_E3_CURVE_WRITER.md`](../design/DRS_E3_CURVE_WRITER.md) §3.2 / §3.4, owns the boundary statement §2.3 held this file in `design/` for, and §2.3's ask is answered in place); owns no open residue — the SI rows are [`STORE_INVARIANT_REGISTER.md`](../design/STORE_INVARIANT_REGISTER.md)'s, the reads are `store/curve_reads.rs`, the writer is `store/grow.rs`. History follows. **LANDED — implemented 2026-09-21** on the S-CURVE PR cut from
 `dev` @ `fdb5db954` (three commits, §7); **Round 0 executed 2026-09-21** at
 `b680d59e0`, **Round 1 RULED 2026-09-21** (maintainer, on PR #815; §9, each
 row line-local): **SCU-Q1 one row, SCU-Q2 move to `shekyl-types` and write
@@ -8,35 +8,35 @@ the rule down (done: `18-type-placement.mdc`), SCU-Q3 overridden to a tuple
 key, SCU-Q4 now with E3 named; SCU-1 regraded the worst of its class.** This
 file stays in `design/` as the E3 boundary statement (§2.3) until E3's plan
 owns that statement; then it archives (rule 95). Implements *from*
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7 (the S-CURVE row:
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §7 (the S-CURVE row:
 extraction order **6**, "reads only; the arithmetic lives in `shekyl-fcmp`,
 not here; depends on chain state but nothing depends on it, so it can move
 once the chain surfaces are stable" — they are, §1), §7.6 (parity first; the
 comparator projects logical content) and the E3 boundary (§7.5 table 2:
 CEN-I19 / CEN-L11 / CEN-L12 are **E3 S-CURVE** — the *grow* path is E3's, and
 this increment mints the shapes it will write into); from
-[`DRS_E1_SCHAIN_R.md`](../completed/DRS_E1_SCHAIN_R.md) (the read handle,
+[`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) (the read handle,
 `AtHeight`, the fault policy — this surface is more reads on `ReadSnapshot`);
-from [`DRS_E1_SOUT_KI.md`](../completed/DRS_E1_SOUT_KI.md) (`AtIndex<T>` for
+from [`DRS_E1_SOUT_KI.md`](DRS_E1_SOUT_KI.md) (`AtIndex<T>` for
 the one dense-position read here); from
-[`DRS_E1_STX.md`](../completed/DRS_E1_STX.md) §3.3 (three absence shapes, one
+[`DRS_E1_STX.md`](DRS_E1_STX.md) §3.3 (three absence shapes, one
 discriminator — applied, not re-derived, in §3.3; and the Q3 re-ruling that a
 range read over a keyed dense table is completeness, not a feature, which
 decides the chunk read's fate in §6 item 2); and from
-[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) **`PDM-Q3`**
+[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](../design/ARCHIVAL_PRUNED_DAEMON_MODE.md) **`PDM-Q3`**
 and **`PDM-Q12`** (the serve-credit verifier and the segment-freeze pipeline
 are retired by ruling and die at E4 / S-ARCH) — the two rulings that decide
 which of this surface's C++ callers are already dead. Process per
 `26-sub-pr-design-discipline.mdc`; identifier families **`SCU-`** (findings)
 and **`SCU-Q`** (round questions) registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 by the PR that adds
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 by the PR that adds
 this file (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a): the two
 parse to distinct prefixes and clear the 91 registered).
 
 **Two stores, stated once so they are not conflated.** The *daemon's*
 curve tree — the consensus accumulator every node grows per accepted output
 (CEN-L11) — lives in the daemon store's `curve_tree_*` tables and is this
-surface. The *wallet-side* store ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md),
+surface. The *wallet-side* store ([`WALLET_SIDE_STORE.md`](../design/WALLET_SIDE_STORE.md),
 `rust/shekyl-curve-tree/src/store/`) is a serving store rebuilt around
 prunable bodies (`PDM-Q12`); it shares the tree's **vocabulary**
 (`TreePosition`, the 128-byte leaf) and nothing else. §3.4 and `SCU-Q2` are
@@ -136,7 +136,7 @@ CEN-I13 is slice 6's named successor** (`CHAIN_RULES_SLICE_6.md` §5 row 6;
 `rg 'fn depth_at' rust/shekyl-chain-rules/src/view.rs` → the trait method,
 with `BatchView`'s impl in `store/view.rs`.
 
-**ANSWERED 2026-09-26 (DRS-E3, [`DRS_E3_CURVE_WRITER.md`](DRS_E3_CURVE_WRITER.md)
+**ANSWERED 2026-09-26 (DRS-E3, [`DRS_E3_CURVE_WRITER.md`](../design/DRS_E3_CURVE_WRITER.md)
 §3.4, `CTW-Q4`).** The shape E3 chose is the second one: a table keyed as the
 roots are — `curve_tree_leaf_counts[h]`, the leaf count *going into* `h`,
 written on every connect — with **depth derived**, not stored

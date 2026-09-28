@@ -17,6 +17,12 @@
 //! crate's), driven over a fixture view; not a second definition of the
 //! drain.
 //!
+//! [`trace_with`] is how a fixture trace is built. It grows that tree over
+//! the chain it is given and writes each row's `root_after` from it; the
+//! caller supplies the economics and cannot name a root. [`trace_of`] is
+//! [`trace_with`] with the synthetic economics. [`facts_at`] is the other
+//! door, for a caller that must name the root.
+//!
 //! Every key image a fixture spends encodes the **whole height** and a
 //! family tag ([`key_image`]), so no chain or fork length collides on
 //! SI-1 (a `u8` per height would have made height 251 respend height 1's
@@ -505,21 +511,60 @@ pub fn corpus_from(first: BlockHeight, chain: &[(Block, Vec<Transaction>)]) -> V
     w.finish().expect("count").into_inner()
 }
 
-/// Facts for `height`, whose recorded root after the drain is `root_after`
-/// — the tree's ([`GrownTree::root_after`]) for a chain the store will
-/// connect, so the trace carries what the store derives (the derived-vs-
-/// trace comparison holds trivially on a synthetic chain; the captured
-/// chains are where it is a comparison).
-pub fn facts_at(height: u64, root_after: CurveTreeRoot) -> Facts {
-    Facts {
+/// The trace row's economics. `root_after` is not a field: [`trace_with`]
+/// writes it from the chain's [`GrownTree`], so a trace built this way
+/// cannot record a root the chain it names did not grow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TraceEconomics {
+    /// `block_info.bi_weight`.
+    pub weight: BlockWeight,
+    /// `block_info.bi_long_term_block_weight`.
+    pub long_term_weight: LongTermWeight,
+    /// `block_info.bi_coins`.
+    pub coins_generated: AtomicUnits,
+    /// `block_burn[h]`, zero when the row is absent.
+    pub burned: AtomicUnits,
+    /// The long-term effective median in force for the block.
+    pub long_term_effective_median: LongTermWeight,
+    /// `block_info.bi_diff` — the accumulator the trace holds the
+    /// validator's derivation to.
+    pub cumulative_difficulty: CumulativeDifficulty,
+}
+
+impl TraceEconomics {
+    fn with_root(self, root_after: CurveTreeRoot) -> Facts {
+        Facts {
+            weight: self.weight,
+            long_term_weight: self.long_term_weight,
+            coins_generated: self.coins_generated,
+            burned: self.burned,
+            root_after,
+            long_term_effective_median: self.long_term_effective_median,
+            cumulative_difficulty: self.cumulative_difficulty,
+        }
+    }
+}
+
+/// Synthetic economics for `height`: distinct per height, zero burn, the
+/// accumulator `height + 1`.
+fn synthetic_economics(height: u64) -> TraceEconomics {
+    TraceEconomics {
         weight: BlockWeight::from_raw(1_000 + height),
         long_term_weight: LongTermWeight::from_raw(900 + height),
         coins_generated: AtomicUnits::from_raw((height + 1) * 1_000_000),
         burned: AtomicUnits::from_raw(0),
-        root_after,
         long_term_effective_median: LongTermWeight::from_raw(300_000 + 7 * height),
         cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height) + 1),
     }
+}
+
+/// Facts for `height` whose recorded root after the drain is `root_after`.
+///
+/// The door for a caller that must name the root. The CTW-5 negative
+/// control plants a wrong one here; a trace for a chain uses [`trace_with`],
+/// which fills the root from that chain and does not take one.
+pub fn facts_at(height: u64, root_after: CurveTreeRoot) -> Facts {
+    synthetic_economics(height).with_root(root_after)
 }
 
 /// The spent-key set of `chain` after its last block: one key image per
@@ -536,34 +581,51 @@ pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<[u8; 32]> {
         .collect()
 }
 
-/// A trace with facts for every height of `chain` and, when `checkpoint`
-/// is set, the LMDB-shaped checkpoint after the last block — computed
-/// from the chain itself, the way the daemon's walker would from LMDB.
-pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace {
+/// A trace for `chain`. Each row's `root_after` is [`GrownTree::root_after`]
+/// of this chain; `economics` supplies everything else and is called once
+/// per height, from genesis, in order. `checkpoint` appends the digest of
+/// that same tree after the tip.
+///
+/// Heights are the chain's indices. A chain whose first block is not
+/// genesis is not this constructor's input.
+pub fn trace_with(
+    chain: &[(Block, Vec<Transaction>)],
+    mut economics: impl FnMut(u64) -> TraceEconomics,
+    checkpoint: bool,
+) -> Trace {
     let mut w = TraceWriter::new(Vec::new()).expect("header");
     let tree = GrownTree::over(chain);
-    for (hh, _) in chain.iter().enumerate() {
-        let hh = hh as u64;
-        w.push_facts(h(hh), &facts_at(hh, tree.root_after(hh)))
-            .expect("facts");
+    for index in 0..chain.len() {
+        let height = u64::try_from(index).expect("a fixture height fits");
+        let facts = economics(height).with_root(tree.root_after(height));
+        w.push_facts(h(height), &facts).expect("facts");
     }
     if checkpoint && !chain.is_empty() {
-        w.push_checkpoint(&expected_state(chain))
+        let tip = u64::try_from(chain.len() - 1).expect("a non-empty chain has a tip");
+        w.push_checkpoint(&digest_of(chain, tree.root_after(tip).as_bytes()))
             .expect("checkpoint");
     }
     Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read")
 }
 
+/// [`trace_with`] with the synthetic economics: distinct per height, zero burn.
+pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace {
+    trace_with(chain, synthetic_economics, checkpoint)
+}
+
+/// The redb-shaped digest of `chain` given the root after its tip.
+fn digest_of(chain: &[(Block, Vec<Transaction>)], root_after_tip: &[u8; 32]) -> Digest {
+    let hashes: Vec<[u8; 32]> = chain
+        .iter()
+        .map(|(block, _)| block.hash().to_bytes())
+        .collect();
+    digest_v0(&hashes, &spent_keys_of(chain), root_after_tip)
+}
+
 /// The redb-shaped digest one would expect after `chain`.
 pub fn expected_state(chain: &[(Block, Vec<Transaction>)]) -> Digest {
-    let hashes: Vec<[u8; 32]> = chain.iter().map(|(b, _)| b.hash().to_bytes()).collect();
-    let last = chain.len() as u64 - 1;
-    let tree = GrownTree::over(chain);
-    digest_v0(
-        &hashes,
-        &spent_keys_of(chain),
-        tree.root_after(last).as_bytes(),
-    )
+    let last = u64::try_from(chain.len() - 1).expect("a chain has a tip");
+    digest_of(chain, GrownTree::over(chain).root_after(last).as_bytes())
 }
 
 pub fn open_store(path: &std::path::Path) -> ChainStore {

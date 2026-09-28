@@ -765,7 +765,7 @@ impl<C: Clock> Engine<C> {
 
 mod service;
 
-pub use service::{EngineService, Handle, OwnerHandle};
+pub use service::{EngineService, Handle, OwnerHandle, WakeWait};
 
 #[cfg(test)]
 mod model;

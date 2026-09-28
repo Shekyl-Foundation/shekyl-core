@@ -17,10 +17,11 @@ use shekyl_curve_tree::serving_route::{
     CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX, SERVING_VIRTUAL_PORT,
 };
 use shekyl_curve_tree::{leaves_per_segment, LEAF_BYTES};
+use shekyl_socks::{connect as socks_connect, Destination, Isolation};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
-use tokio_socks::tcp::Socks5Stream;
 
 use crate::error::{FetchError, Malformed, Stall};
 use crate::header::RequestHeader;
@@ -307,16 +308,27 @@ impl PFetchClient {
     /// leak `SF-D3` exists to close; there is no code path that could,
     /// because an onion has no IP to resolve to — but the shape is kept
     /// deliberately so a future non-onion endpoint would not acquire one.
-    async fn dial(
-        &self,
-        endpoint: &ServingEndpoint,
-    ) -> Result<Socks5Stream<tokio::net::TcpStream>, FetchError> {
+    async fn dial(&self, endpoint: &ServingEndpoint) -> Result<TcpStream, FetchError> {
         let host = endpoint.onion_address();
-        let connect = Socks5Stream::connect(self.proxy, (host.as_str(), SERVING_VIRTUAL_PORT));
+        let connect = async {
+            let mut stream = TcpStream::connect(self.proxy)
+                .await
+                .map_err(|err| FetchError::Stall(Stall::Dial(err.to_string())))?;
+            socks_connect(
+                &mut stream,
+                Isolation::Principal,
+                Destination::Name {
+                    host: host.as_str(),
+                    port: SERVING_VIRTUAL_PORT,
+                },
+            )
+            .await
+            .map_err(|err| FetchError::Stall(Stall::Dial(err.to_string())))?;
+            Ok(stream)
+        };
         match timeout(self.timeouts.dial, connect).await {
             Err(_elapsed) => Err(FetchError::Stall(Stall::DialTimeout)),
-            Ok(Err(e)) => Err(FetchError::Stall(Stall::Dial(e.to_string()))),
-            Ok(Ok(stream)) => Ok(stream),
+            Ok(result) => result,
         }
     }
 }

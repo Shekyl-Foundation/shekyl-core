@@ -25,7 +25,7 @@ four CEN-L14 sites are **E4 S-ARCH** — the archival *writers* are E4's, and
 this increment mints the shapes they will write into) and §7.1.1 (the E2
 digest excludes `archival_*` and E2 may not act on any S-ARCH row until
 archival digest coverage exists); from
-[`DRS_E1_SCURVE.md`](DRS_E1_SCURVE.md) (the E1 shape this increment repeats:
+[`DRS_E1_SCURVE.md`](../completed/DRS_E1_SCURVE.md) (the E1 shape this increment repeats:
 reads on `ReadSnapshot`, typed absence, vocabulary in `shekyl-types`, the
 writer named and left to its own increment); from
 [`DRS_E1_STX.md`](../completed/DRS_E1_STX.md) §3.3 (the absence

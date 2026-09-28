@@ -18,7 +18,7 @@ and **`CTW-Q`** (questions), registered in `IMPLEMENTATION_INDEX.md` §2 with
 this file (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a)). Parent
 plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) — the **DRS-E3** node of
 the lane graph (`E1 → E2 → E3 → E4 → E5`), *"curve storage only"*; the
-boundary statement it builds against is [`DRS_E1_SCURVE.md`](DRS_E1_SCURVE.md)
+boundary statement it builds against is [`DRS_E1_SCURVE.md`](../completed/DRS_E1_SCURVE.md)
 §2.3. Template: the DRS-E1 pre-flight shape (`CHAIN_RULES_CRATE.md` §7.5.1
 applied to a store increment), as `DRS_E1_SCURVE.md` used it.
 
@@ -593,9 +593,18 @@ and the correction is recorded here rather than absorbed:
   first attempt signed the PQC auths over the prefix hash, as
   `fcmp_spend_e2e` does; CEN-I18 refused it. The rule was right; the payload
   is `pqc_signing_payload_hashes` over the body with the key in place.
-- **Commit 5 (the protected one) reported no disagreement.** Derived root ==
-  trace root at all 1 979 heights of the four chains, including
-  `spend-depth3`'s 762; the tip digests match. The protection was not needed
+- **Commit 5 (the protected one) reported no disagreement — the CTW-5
+  result of record.** Run 2026-09-26 at `0a6686bd9` (B5 as the oracle) and
+  again at `d2daea472` (the explicit per-height comparison), under
+  `MockSubstrate`, against `shekyl-chain-ingest/tests/vectors/` as committed
+  at `dev@ad557ac5a`: the derived root equalled the LMDB trace's `root_after`
+  at **every** height of every chain — `bond-post` 109/109 (tip 108),
+  `emission-claim` 1026/1026 (tip 1025), `spend-1in-2out` 82/82 (tip 81),
+  `spend-depth3` 762/762 (tip 761); 1 979 heights, zero divergences, and the
+  daemon's tip digest matched on all four. No adjudication was needed. This
+  was the one window in which the trace was an oracle rather than a source;
+  it is not reproducible once the trace stops being consulted, so the
+  numbers live here and not only in the PR. The protection was not needed
   this time; it stays in the text for the next lane.
 
 **Shard geometry, recorded here (maintainer finding, 2026-09-26).** Two
@@ -624,7 +633,7 @@ commit 5, the commit that landed the body it stood in for.
 | E6 CEN-I15, H19-verify | a scenario spend judged against a real tree (commit 7) — **HOLDS 2026-09-26** (`scenario_tests::a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree`) |
 | CEN-F17 | `curve_tree().leaf_count > 0` after replaying a chain with outputs; `curve_tree_leaf_counts` read directly — **HOLDS 2026-09-26**; the operand's *definition* (leaf segments vs closed `T`-shards) is E4's, FOLLOWUPS |
 | DRS-D3c | named in its FOLLOWUPS row (`:221`) — the wallet-side client and the store agree at every header root over a 72-block scenario (commit 7's oracle) |
-| `placeholder_root_after` | `rg placeholder_root_after rust/` → nothing — **HOLDS 2026-09-26** |
+| `placeholder_root_after` | `rg placeholder_root_after rust/` → nothing — **HOLDS 2026-09-26**; **re-held 2026-09-27**: #880 (cut before #878 landed) had kept a second root in two fixtures — `placeholder_root_after` in the G2 trace, a height-keyed hash in the weights bench — so `dev` at `9fb8fb3f9` did not compile either test target. Both now take the derived root and cannot name another: the trace through `trace_with` (the root is the replayed chain's `GrownTree`; the caller supplies economics only), the bench through `batch_root_going_into` (the store's in-batch `root_at`, shared with `connect_chain` and the prune builder) |
 | `root_after`'s origin | **`Provenance::passed_through` decomposes from six (four composed, two no-source-yet) to five (four composed, one no-source-yet: `long_term_effective_median`, waiting on G6)** — the number the increment's record states, the way slice 6's §5.1 stated its commit count — **HOLDS 2026-09-26** (`FACT_FIELDS` 5; the grader reports CEN-B5's component real with no harness change) |
 | The tree's structure stays uncoupled from the archival partition (§6.1) | `rg 'leaves_per_segment\|SEGMENT_LAYER_J\|frozen_segment_count' rust/shekyl-chain-rules rust/shekyl-chain-store` → nothing, and `rg SHARD_TX_COUNT rust/shekyl-chain-store/src rust/shekyl-chain-rules/src` → `prune.rs` only — **HOLDS 2026-09-26**. The deletion lanes' falsifier is separate: `rg segment_leaf_count config/consensus_constants.json` → nothing, lifting when E4 / S-ARCH, p-fetch and DRS-D3c re-key their consumers |
 

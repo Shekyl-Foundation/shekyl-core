@@ -48,12 +48,13 @@ use shekyl_wire::{Block, Transaction};
 
 use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, RunReport};
-use crate::scenario::{placeholder_root_after, Mined, Scenario, RULES};
+use crate::scenario::{Mined, Scenario, RULES};
 use crate::source::IngestEvent;
 use crate::test_support::{
-    anchor, cleanup, key_image, open_store, spend, tmp, Family, Scripted, EPOCH, FIRST_SPEND_HEIGHT,
+    anchor, cleanup, key_image, open_store, spend, tmp, trace_with, Family, Scripted,
+    TraceEconomics, EPOCH, FIRST_SPEND_HEIGHT,
 };
-use crate::trace::{Facts, Trace, TraceWriter};
+use crate::trace::Trace;
 
 /// A chain the driver built: every block's template, as `(block, bodies)`.
 type Chain = Vec<(Block, Vec<Transaction>)>;
@@ -74,33 +75,55 @@ impl Driven {
             .collect()
     }
 
-    /// The facts the driver's producer recorded per block — the trace the
-    /// replay passes through, so the replay's `connect` sees the roots the
-    /// driver's headers carry (B5) and the rewards the driver priced. A
-    /// replay from the harness's `trace_of` refuses at height 1 on B5: its
-    /// synthetic roots are not the driver's placeholders.
-    fn trace(&self) -> Trace {
-        let mut w = TraceWriter::new(Vec::new()).expect("header");
-        let mut coins = AtomicUnits::ZERO;
-        for m in &self.mined {
-            coins = AtomicUnits::from_raw(shekyl_economics::advance_already_generated(
-                coins.to_raw(),
-                m.template.block_reward.to_raw(),
-            ));
-            let facts = Facts {
-                weight: BlockWeight::from_raw(m.template.block_weight),
-                long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
-                coins_generated: coins,
-                burned: m.template.fees_burned,
-                root_after: placeholder_root_after(m.height),
-                long_term_effective_median: LongTermWeight::from_raw(FULL_REWARD_ZONE),
-                cumulative_difficulty: CumulativeDifficulty::from_raw(
-                    u128::from(m.height.to_raw()) + 1,
-                ),
-            };
-            w.push_facts(m.height, &facts).expect("facts");
+    /// The trace for replaying `chain`. Economics are what the driver priced
+    /// for the block at that height. The root after each block is what
+    /// `chain` grows: [`trace_with`](crate::test_support::trace_with) writes
+    /// it from that chain's tree, so the row describes these bodies.
+    ///
+    /// `chain` is the driver's blocks in order. Body order is not part of
+    /// the block hash, so a mutation of the listed bodies still names the
+    /// block the driver mined.
+    fn trace(&self, chain: &Chain) -> Trace {
+        assert_eq!(
+            chain.len(),
+            self.mined.len(),
+            "a replay trace covers every block the driver mined"
+        );
+        for (index, (mined, (block, _))) in self.mined.iter().zip(chain).enumerate() {
+            let height = u64::try_from(index).expect("a fixture height fits");
+            assert_eq!(
+                mined.height.to_raw(),
+                height,
+                "the driver mined densely from genesis"
+            );
+            assert_eq!(
+                mined.hash,
+                block.hash(),
+                "height {height}: the replayed header is the block the driver mined"
+            );
         }
-        Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read")
+        let mut coins = AtomicUnits::ZERO;
+        trace_with(
+            chain,
+            |height| {
+                let mined = &self.mined[usize::try_from(height).expect("a fixture height fits")];
+                coins = AtomicUnits::from_raw(shekyl_economics::advance_already_generated(
+                    coins.to_raw(),
+                    mined.template.block_reward.to_raw(),
+                ));
+                // Regtest difficulty is 1, so the accumulator after this
+                // block is `height + 1`.
+                TraceEconomics {
+                    weight: BlockWeight::from_raw(mined.template.block_weight),
+                    long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
+                    coins_generated: coins,
+                    burned: mined.template.fees_burned,
+                    long_term_effective_median: LongTermWeight::from_raw(FULL_REWARD_ZONE),
+                    cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height) + 1),
+                }
+            },
+            false,
+        )
     }
 }
 
@@ -128,8 +151,8 @@ async fn two_body_chain(name: &str) -> Driven {
 }
 
 /// Replay `chain` through the production pipeline into a fresh store at
-/// `name`, with the driver's facts, returning the report and the store's
-/// path (the caller cleans up after reading it).
+/// `name` under `trace`. Returns the report and the store's path; the
+/// caller cleans up after reading it.
 async fn replay(name: &str, chain: &Chain, trace: Trace) -> (RunReport, std::path::PathBuf) {
     let path = tmp(&format!("g2-{name}"));
     let mut source = Scripted::new(
@@ -195,6 +218,21 @@ fn connected_through(report: &RunReport, chain: &Chain, name: &str) {
         chain.len(),
         "{name}: every block connected"
     );
+    // CTW-5. The count is first (rule 47): a comparison that ran over
+    // nothing is not a comparison. The trace was built for this chain, so
+    // a divergence here is the oracle disagreeing with the store.
+    let heights = u64::try_from(chain.len()).expect("a fixture chain fits");
+    assert_eq!(
+        report.roots.compared(),
+        heights,
+        "{name}: {heights} blocks connected and {} had a recorded root",
+        report.roots.compared()
+    );
+    assert!(
+        !report.roots.any_diverged(),
+        "{name}: the derived root differs from the trace at {:?}",
+        report.roots.diverged().map(|d| d.at).collect::<Vec<_>>()
+    );
 }
 
 /// (1) and (2): the driver's two-body block connects; the same block with
@@ -206,7 +244,7 @@ async fn a_reordered_two_body_block_connects_and_two_stores_disagree_on_output_o
     let (chain, a, b) = (driven.chain(), &driven.a, &driven.b);
     let at = usize::try_from(FIRST_SPEND_HEIGHT).expect("small");
 
-    let (as_listed, listed_path) = replay("as-listed", &chain, driven.trace()).await;
+    let (as_listed, listed_path) = replay("as-listed", &chain, driven.trace(&chain)).await;
     connected_through(&as_listed, &chain, "as listed");
 
     let mut swapped = chain.clone();
@@ -216,7 +254,7 @@ async fn a_reordered_two_body_block_connects_and_two_stores_disagree_on_output_o
         vec![a.hash(), b.hash()],
         "the header still declares [a, b]; only the bodies moved"
     );
-    let (reordered, swapped_path) = replay("swapped", &swapped, driven.trace()).await;
+    let (reordered, swapped_path) = replay("swapped", &swapped, driven.trace(&swapped)).await;
     connected_through(&reordered, &swapped, "swapped");
     assert_eq!(
         as_listed.connected, reordered.connected,
@@ -276,7 +314,7 @@ async fn a_substituted_body_the_header_never_listed_connects() {
         vec![a.hash(), b.hash()],
         "the header still declares b"
     );
-    let (report, path) = replay("substituted", &substituted, driven.trace()).await;
+    let (report, path) = replay("substituted", &substituted, driven.trace(&substituted)).await;
     connected_through(&report, &substituted, "substituted");
 
     let order = output_origins(&path);

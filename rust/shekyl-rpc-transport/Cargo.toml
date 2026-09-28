@@ -27,7 +27,7 @@ digest_auth = { version = "0.3", default-features = false }
 # sync = Mutex (auth serialization), time = request timeout, net = the TCP
 # stream the SOCKS connector dials. Previously pulled in transitively via
 # simple-request; made explicit now that it is gone.
-tokio = { version = "1", default-features = false, features = ["sync", "time", "net"] }
+tokio = { version = "1", default-features = false, features = ["sync", "time", "net", "io-util"] }
 
 # Small hyper client owned in `http_client` (re-absorbed from simple-request so
 # a SOCKS5h connector can be added). Feature flags mirror what simple-request's
@@ -37,10 +37,9 @@ hyper-util = { version = "0.1", default-features = false, features = ["http1", "
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "rustls-native-certs", "native-tokio"] }
 http-body-util = { version = "0.1", default-features = false }
 tower-service = { version = "0.3", default-features = false }
-# SOCKS5h (remote-DNS) proxy support for the daemon transport. Verified at
-# source (rule 17): no `unsafe`, `+thiserror` only; a `Domain` target makes the
-# proxy resolve the hostname, so the local resolver never sees it.
-tokio-socks = { version = "0.5.3", default-features = false, features = ["tokio"] }
+# SOCKS5h (remote-DNS) handshake. The proxy resolves the hostname. This
+# transport is the principal: no SOCKS authentication.
+shekyl-socks = { path = "../shekyl-socks" }
 
 shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, features = ["std"] }
 
