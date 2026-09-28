@@ -56,6 +56,14 @@ KEYS_INTEGER = {
     # as an argument on every call (CHAIN_RULES_SLICE_4.md §3.1 S8). Rust
     # owner: shekyl-economics::EconomicParams::full_reward_zone.
     "block_weight_full_reward_zone_bytes": "u64",
+    # The two block-weight medians' windows (CEN-G6; CHAIN_RULES_SLICE_7.md
+    # Q6). C++-only #defines until slice 7 (CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_
+    # WINDOW_SIZE, CRYPTONOTE_REWARD_BLOCKS_WINDOW), now defined from these
+    # macros. Rust owner: shekyl-economics::params::{BLOCK_WEIGHT_LONG_TERM_
+    # WINDOW, BLOCK_WEIGHT_SHORT_TERM_WINDOW}; the medians are built in
+    # shekyl_chain_rules::rules::block_weight.
+    "block_weight_long_term_window_blocks": "u64",
+    "block_weight_short_term_window_blocks": "u64",
     # Archival retention bond floor, FOUNDATION_GENESIS_IDENTITY_SET.md §9.3.
     "archival_bond_floor_atomic": "u64",
     # Archival claim-age window W, ARCHIVAL_TIMING_CONSTANTS.md §1 /
@@ -213,6 +221,18 @@ def main() -> int:
 // in cryptonote_config.h is defined from it.
 #define SHEKYL_BLOCK_WEIGHT_FULL_REWARD_ZONE_BYTES \
     {emit("block_weight_full_reward_zone_bytes")}
+
+// The two block-weight medians' windows (CEN-G6). The long-term effective
+// median is over the min(window, height) recorded long-term weights below
+// the connecting block; the short-term median over the last min(window,
+// height) weights, then clamped by shekyl_effective_block_weight_median.
+// cryptonote_config.h's CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE and
+// CRYPTONOTE_REWARD_BLOCKS_WINDOW are defined from these; the Rust owner is
+// shekyl-economics::params.
+#define SHEKYL_BLOCK_WEIGHT_LONG_TERM_WINDOW_BLOCKS \
+    {emit("block_weight_long_term_window_blocks")}
+#define SHEKYL_BLOCK_WEIGHT_SHORT_TERM_WINDOW_BLOCKS \
+    {emit("block_weight_short_term_window_blocks")}
 
 // Archival per-shard retention bond floor (ARCHIVAL_BOND_FLOOR). Emitted
 // alongside the FCMP/DAA constants because genesis foundation identities and

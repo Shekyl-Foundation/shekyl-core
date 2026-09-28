@@ -90,7 +90,20 @@ use std::path::PathBuf;
 /// `archival_reorg_depth_blocks`, `challenge_resolution_blocks`) — one
 /// authority, read by `rust/shekyl-types/build.rs`. No behaviour changes;
 /// the digest moves because the binding grew.
-const PINNED_DIGEST: &str = "5aece7b2512ebfcad20c0747087773831b82d6b6b8b444d6f7bcbe68a9257860";
+///
+/// **Re-pinned 2026-09-27 (E6 slice 7 commit 4, `CHAIN_RULES_SLICE_7.md` Q6):
+/// two keys were ADDED — `block_weight_long_term_window_blocks = 100000` and
+/// `block_weight_short_term_window_blocks = 100` in
+/// `consensus_constants.json`.** The chain question, answered for each: a
+/// different window is a different median, a different block-weight limit
+/// and a different set of valid blocks (CEN-G6/G6b), so both belong here.
+/// The values are the ones every node already ran — the hand-written C++
+/// `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` and
+/// `CRYPTONOTE_REWARD_BLOCKS_WINDOW`, with no Rust home until the Rust
+/// validator built the medians; the move gives each one authority and two
+/// generated readers (`shekyl_economics::params`, the C++ macros). No
+/// behaviour changes; the digest moves because the binding grew.
+const PINNED_DIGEST: &str = "bff518aeb943c38e9e2242b756d69b3ca54d84afef0475e099cd14490921a452";
 
 fn main() {
     let manifest_dir =
