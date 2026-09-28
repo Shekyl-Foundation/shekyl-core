@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+### `WSS-Q1(b)` — the pinned-rig session: rig accepted, row 2 still not graded
+
+- **The rig was accepted for the first time.** `rig.grading` is `true`: the
+  process enforced arch, userland, RAM and device, and recorded the two
+  attestations it cannot observe — `usb-ssd` and sustained thermals — on the
+  maintainer's authorization. Verbatim Pocket SSD (`18a5:0481`, ext4), with
+  repo, build target and every measured store on that device.
+- **Row 2 did not grade, and not because of the rig.** The replay series never
+  converged: `MIN_ITERATIONS` is 6, one iteration is ~389 s, and
+  `MAX_WALL_SECONDS` is 1 800 — so **6 × 389 = 2 334 s** and the convergence
+  test never ran. `converged: false` here means *too few samples to test
+  stability*, not *unstable*. The cap behaved exactly as its doc describes.
+- **Stability comes from reproduction instead.** Across two sessions, different
+  storage, four days apart: spend replay **0.15 %**, verify worst case
+  **0.07 %**, verify nominal **0.02 %**, proving **1.3 %** — against a
+  convergence tolerance of 5 %. Whether that substitutes for intra-run
+  convergence is the maintainer's to rule; §7.3 records both and claims
+  neither.
+- **The miss is not in doubt.** 388.8 s delta against a 2.000 s threshold —
+  194× — with the **absolute floor binding on a third machine** across a 5.5×
+  speed range. §6.3.4 row 2's pre-registered *amortized replay first* is the
+  landing.
+- **Both densities, read apart.** Verify is **393.944 s** at the adversarial
+  sustained ceiling and **53.667 s** at the nominal full-reward zone — 45 % of
+  a 120 s block, so the wallet keeps up. An earlier reading of this session
+  quoted the worst-case number as the operating condition and concluded the
+  wallet "never syncs"; that is false at any realistic density and §7.3
+  corrects it rather than dropping it.
+- **Storage is not the variable.** The SSD moved verify **0.07 %** and proving
+  **1.3 %** — both axes are CPU-bound. **FCMP++ proving on a Cortex-A72 is
+  `6.052 s`** against 1.105 s on x86: a 5.5× penalty that is purely the
+  processor and irreducible by amortization. Whether the rule-76 floor is the
+  right floor is **not** answerable from this session, because the reducible
+  terms dominate every total; it becomes answerable at increment 6's re-grade.
+- **An instrument defect surfaced:** `--store` is per-invocation but the store
+  is opened per-density, so `--store` with `--density both` shares one file —
+  the worst-case control froze the population the nominal run then measured.
+  Rule 47's precondition refused it and named the count, which is why this is a
+  re-run and not a fabricated figure.
+
 ### Daemon store — the curve tree is grown by the Rust stack (DRS-E3)
 
 - **Consensus.** The validator derives the curve-tree root: `validate` drains

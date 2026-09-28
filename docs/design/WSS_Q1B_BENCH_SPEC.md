@@ -2,9 +2,13 @@
 
 **Status:** ACTIVE CONTRACT — **written 2026-09-20**, the corpus and protocol
 for the two **timed** measurements [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
-§6.3.4 makes `WSS-Q1`(b)'s adoption conditional on. **The instrument is built;
-the grading run on the pinned rig has not happened**, so `WSS-Q1`(b) remains
-adopted-subject-to.
+§6.3.4 makes `WSS-Q1`(b)'s adoption conditional on. **The instrument is built; the pinned-rig session ran
+2026-09-27 (§7.3) and the rig was accepted — `rig.grading` true, pins enforced,
+attestations recorded — but row 2 did not grade**, because the replay series
+cannot converge inside `MAX_WALL_SECONDS` at its own ruled density. Row 3 has
+not run (no daemon). So `WSS-Q1`(b) remains **adopted-subject-to**, and what
+the session settled is the *direction* — a 194× miss reproduced across two
+sessions — not a stamped verdict.
 
 **Amended 2026-09-22 — a third measurement, ungraded (§8).** The verify edge
 measures `root_at_count` on an unfrozen population. It is **not** a §6.3.4 row
@@ -857,6 +861,133 @@ replay's. The derivation memo is owed against a **graded** session.
 **The graded session remains owed**, and the verify figure is the reason to
 expect movement: 394 s contains an I/O term over 770 880 leaves, and microSD
 versus USB-SSD is precisely the axis the pin was written about.
+
+### 7.3 The pinned-rig session — 2026-09-27, **rig accepted, row 2 not graded**
+
+**The rig was accepted.** `rig.grading` is `true` for the first time: the
+process enforced `arch == aarch64`, `userland == 64-bit`, `RAM >= 7.5 GB` and
+`device matches ["Raspberry Pi 4", "BCM2711"]`, and recorded the two operator
+attestations it cannot observe — `storage == usb-ssd` and
+`thermals == sustained steady state` — on the maintainer's authorization.
+Storage was a **Verbatim Pocket SSD** (`18a5:0481`, `rotational=0`, ext4 at
+`/mnt/ssd`), with the repository, build target and every measured store on that
+device; the OS remains microSD and no longer touches a measured path.
+`Raspberry Pi 4 Model B Rev 1.4`, kernel `7.0.0-1020-raspi`, prover
+`shekyl-fcmp 3.1.0` at `ece3aa4fb` — clean, not dirty.
+
+**And row 2 still did not grade.** Not because of the rig: because the replay
+series never converged.
+
+```
+not grading: a timing series did not converge
+(replay: wall-clock cap, path: converged, proving: converged)
+```
+
+#### 7.3.1 Why row 2 cannot be graded at its own ruled density
+
+`MIN_ITERATIONS` is 6 — two windows of 3. One replay iteration is ~389 s.
+`MAX_WALL_SECONDS` is 1 800. **6 × 389 = 2 334 s**, so the convergence test
+*never ran*: the series was stopped at roughly four samples, and
+`converged: false` here means "too few samples to test stability", not "the
+measurement was unstable".
+
+This is not a defect in the cap. Its own doc says what it is for — a bound on a
+*harness that runs on the machine it exists to measure*, where the count stops
+a fast-but-noisy workload and the clock stops a slow one, and neither
+substitutes a different statistic. It behaved exactly as written.
+
+**What supplies the stability the intra-run test could not.** The same
+quantities reproduce across two independent sessions — different storage, a
+different build, four days apart:
+
+| Quantity | 2026-09-23 (microSD) | 2026-09-27 (SSD) | Spread |
+| --- | --- | --- | --- |
+| Spend replay | 389.406 s | 388.822 s | **0.15 %** |
+| Verify, worst case | 394.238 s | 393.944 s | **0.07 %** |
+| Verify, nominal | 53.676 s | 53.667 s | **0.02 %** |
+| Proving | 6.133 s | 6.052 s | **1.3 %** |
+
+The convergence criterion's tolerance is **5 %**. Cross-run reproduction is
+between 4× and 250× tighter than the test that could not run, and it varies
+conditions a within-run sample sequence never does. **Whether that substitutes
+for intra-run convergence is the maintainer's to rule; this document records
+both and claims neither.**
+
+#### 7.3.2 Row 2 — the numbers, at the ruled worst-case density
+
+| Term | Value |
+| --- | --- |
+| Replay | **388.822 s**, `wall-clock cap` |
+| Path read-off + construction | 0.007 s |
+| **Delta** | **388.829 s** |
+| **Denominator (proving)** | **6.052 s**, converged |
+| Threshold | **2.000 s** — absolute floor binds (15 % of 6.052 = 0.908 s) |
+| Ratio | 6 425 % |
+| Controls d4 / d5 | +0.06 % / +0.02 %, `paths_verified: true` |
+
+**The floor has now bound on three machines** spanning a 5.5× speed range. The
+relative arm has never bound, which is why §6.3.4 asks for the seconds beside
+the ratio.
+
+**The miss is not in doubt; only its stamp is.** 388.8 s against 2 s is 194×
+over, and the direction is reproduced. §6.3.4 row 2's pre-registered response —
+**amortized replay first** — is therefore the landing, and `WSS-Q1`(b) reopens
+only if the amortized form also fails.
+
+#### 7.3.3 The verify edge, both densities
+
+| | Worst case | Nominal |
+| --- | --- | --- |
+| Population | 770 880 leaves / 730 blocks | 105 120 leaves / 730 blocks |
+| Unfrozen segments | 29 | 4 |
+| **Per call** | **393.944 s** (`wall-clock cap`) | **53.667 s** (converged) |
+| Frozen control | 8.772 s | 0.595 s |
+| Collapse | **44.9×** | **90.2×** |
+| Cadence fraction | 328 % | **45 %** |
+
+**Read the two densities apart, because they say different things.** The
+worst-case figure is the *sustained block-weight ceiling* — every block full,
+forever — an adversarial bound, not an operating condition. At the nominal
+full-reward zone the per-block verify is **45 % of a 120 s block**: the wallet
+keeps up, and spends half its interval doing it. An earlier reading of this
+session stated the worst-case number as the operating condition and concluded
+the wallet "never syncs"; that is **false at any realistic density** and is
+corrected here rather than quietly dropped.
+
+#### 7.3.4 Storage is not the variable — the processor is
+
+The SSD moved the verify edge **0.07 %** and proving **1.3 %**. Both axes are
+CPU-bound curve work. The rig's storage pin remains correct for what §6.3.4
+wrote it about — buffer refetch and replay, row 3 — but it does not bind on
+either quantity measured here, and a faster disk will not move them.
+
+**FCMP++ proving on a Cortex-A72 is `6.052 s`**, against 1.105 s on x86: a
+**5.5× penalty that is purely the processor**, irreducible by any amortization,
+because it is the prover rather than this project's code. That figure is the
+one bearing on whether the rule-76 floor is the right floor — a question this
+session **cannot** answer, because the reducible terms dominate every measured
+total and would be answering for our unoptimised code under the board's name.
+It becomes answerable when increment 4 exists and increment 6 re-grades it.
+
+#### 7.3.5 Row 3 did not run
+
+The open edge needs a live daemon and none was running. Still owed.
+
+#### 7.3.6 An instrument defect this session surfaced
+
+`verify_edge --store <path>` is parsed once per invocation, but the store is
+opened once per **density** — so `--store` with `--density both` shares one
+file across two populations. The worst-case run's frozen control froze all 29
+segments, and the nominal run then opened that file and found four already
+frozen. Rule 47's precondition **refused it and named the count** rather than
+reporting a cheap number over a pre-frozen population, which is the only reason
+this is a re-run instead of a fabricated figure. The nominal row above is from
+a clean re-run with its own store.
+
+The binary should derive per-density paths or refuse the combination; it does
+neither today. It also cost the worst-case JSON record, because the
+one-density-failed exit discards the sibling that succeeded — the worst-case
+row above is transcribed from that run's stderr summary.
 
 ---
 
