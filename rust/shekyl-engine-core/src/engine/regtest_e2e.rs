@@ -1591,6 +1591,433 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     .await;
 }
 
+/// What [`overfill_pool`] left: the C++'s `(M, 2·M)` in force and the
+/// weight of every spend it put in the pool, in submission order.
+struct Overfilled {
+    /// The C++'s effective median in force for the next block.
+    median: u64,
+    /// The C++'s consensus limit for it — `2 · M`
+    /// (`blockchain.cpp:6099`), read back from `get_info`.
+    limit: u64,
+    /// Each pool spend's wire weight (`Transaction::weight`).
+    weights: Vec<u64>,
+}
+
+/// Mine a wallet enough matured coinbases, then build and submit one-input
+/// spends without mining between them until the pool's weight exceeds the
+/// C++'s consensus limit with a margin of spends — so whatever bounds a
+/// block built from that pool is a bound, never the pool running dry. Each
+/// build reserves its inputs (F14's lock), so the next picks other
+/// outputs; a spend of a small fixed amount takes one input (≈ 13.2 KB,
+/// the I4 measurement).
+///
+/// Asserts the regime it leaves the daemon in: a young, light chain, so
+/// the effective median is the zone (the floor arm) and the limit twice
+/// it.
+async fn overfill_pool(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+) -> Overfilled {
+    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use shekyl_economics::FULL_REWARD_ZONE;
+    use shekyl_units::AtomicUnits;
+    use shekyl_wire::Transaction;
+
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24;
+    /// Matured coinbase outputs to spend, one per pool transaction — more
+    /// than the ≈ 45 that fill a limit of twice the zone at ≈ 13.2 KB
+    /// each.
+    const POOL_SPENDS: usize = 60;
+
+    // Enough matured coinbases to spend one per transaction: the unlock
+    // window, then `POOL_SPENDS` more blocks, then the window again so the
+    // last of them has matured too.
+    mine_until_spendable(daemon, arc, address, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
+    let extra = u64::try_from(POOL_SPENDS).expect("fits") + MINE_BATCH_BLOCKS * 8;
+    daemon.generate_blocks(extra, address).await;
+    refresh(arc).await;
+
+    let (median, limit) = daemon.weight_limit().await;
+    assert_eq!(
+        median, FULL_REWARD_ZONE,
+        "a young, light chain's effective median is the zone (the floor arm)"
+    );
+    assert_eq!(limit, 2 * median, "the C++'s limit is twice its median");
+    eprintln!("C++ weight limit in force: {limit} (median {median})");
+
+    let mut pool_weight = 0u64;
+    let mut weights: Vec<u64> = Vec::new();
+    for n in 0..POOL_SPENDS {
+        let request = TxRequest {
+            recipients: vec![TxRecipient {
+                address: address.to_owned(),
+                amount_atomic_units: AtomicUnits::from_raw(1_000_000),
+            }],
+            priority: FeePriority::Standard,
+        };
+        let pending = {
+            let g = arc.read().await;
+            g.build_pending_tx_async(&request)
+                .await
+                .unwrap_or_else(|e| panic!("build pool spend {n}: {e:?}"))
+        };
+        let weight = u64::try_from(
+            Transaction::from_bytes(&pending.tx_bytes)
+                .expect("a built spend parses")
+                .weight(),
+        )
+        .expect("fits");
+        let outcome = {
+            let g = arc.read().await;
+            g.submit_pending_tx_async(pending.id, pending.content_gen)
+                .await
+                .unwrap_or_else(|e| panic!("daemon must accept pool spend {n}: {e:?}"))
+        };
+        let txid = require_fresh_accept(outcome, "a pool spend");
+        pool_weight += weight;
+        weights.push(weight);
+        eprintln!("pool spend {n}: {txid}, weight {weight}, pool weight {pool_weight}");
+        // Enough once the pool overfills the limit by a margin of spends.
+        if pool_weight > limit + 4 * weight {
+            break;
+        }
+    }
+    assert!(
+        pool_weight > limit,
+        "the pool ({pool_weight}) must overfill the limit ({limit}) so a block built from it \
+         is bounded by the limit and not by the pool running dry"
+    );
+    assert_eq!(
+        daemon.tx_pool_size().await,
+        u64::try_from(weights.len()).expect("fits")
+    );
+    Overfilled {
+        median,
+        limit,
+        weights,
+    }
+}
+
+/// CEN-F14's live-lane parity test (`CHAIN_RULES_SLICE_7.md` §5 row 5;
+/// Q9 (iii) as amended): **the Rust producer builds a block at the
+/// consensus weight bound and the C++ daemon judges it.** The heaviest
+/// block the pool allows under the bound is accepted; the same block
+/// naming one more body — over the bound — is refused. The judgement the
+/// C++ gives is the one the Rust validator gives under F14
+/// (`reward_tests`: exactly `2 · M` accepted at zero subsidy, one over
+/// refused at `Locus::Block`), so the two implementations meet at the same
+/// point on the same object.
+///
+/// **The bound is a relationship, not a figure.** `2 · M` is the C++'s
+/// `m_current_block_cumul_weight_limit = m_current_block_cumul_weight_median
+/// * 2` (`blockchain.cpp:6099`; `:1718` and `:4330` read it back as
+/// `limit / 2`), read here from `get_info` rather than computed, and its
+/// value follows the zone and the penalty rulings —
+/// `CONSENSUS_C2_R2_WEIGHT_FEES.md` treats the zone, the surge factor and
+/// the quadratic penalty as one control system (`:214–215`) and examined
+/// the ceiling's behaviour as a system (`:347–366`). **What this test
+/// claims is that the C++ agrees with Shekyl's ratified bound**, not that
+/// Shekyl matches the C++: if the zone round moves `M` or a penalty round
+/// moves the multiplier, the expected values here move with the ruling,
+/// and a C++ built against the old value would be the side that diverges.
+/// That sentence is for whoever finds this after the C++ is gone.
+///
+/// Why the C++ producer cannot build the object (§3.5): its template stops
+/// at its fee/penalty equilibrium just past `M`, so a block at the bound
+/// exists only as a Rust-built one. The Rust template is built against the
+/// C++'s own state — its template's header (parent, curve-tree root,
+/// attestation root, versions, timestamp), `get_miner_data`'s median and
+/// accumulator, the pool's bodies, the F20 volume window from the headers
+/// — so the only thing that differs between the two blocks submitted is
+/// one listed hash, and the only rule that can tell them apart is F14.
+/// Regtest difficulty is one, so the PoW is moot and no nonce search is
+/// needed.
+///
+/// Over the bound **no reward is defined**, so there is no coinbase that
+/// is right for the over-bound block: the Rust producer refuses to build
+/// it (`TemplateError::Emission(BlockTooBig)` — F14 on the producing
+/// side), and the negative control is the accepted block's list naming
+/// one more body, coinbase unchanged. The C++ finds the same absence
+/// (`get_block_reward` fails on the cumulative weight inside
+/// `validate_miner_transaction`) and refuses.
+///
+/// The accepted block is also F14b's and F18's live parity: the C++
+/// refuses a coinbase that does not pay exactly the penalised miner leg
+/// plus the fee income, so a Rust template whose penalty or split differed
+/// from the C++'s is refused here for the *right* reason before F14 could
+/// accept it. The over-bound block is not distinguishable from an F18
+/// refusal by the RPC's generic error alone; the accepted block one body
+/// lighter is what says the refusal was the weight's.
+///
+/// **What the first run found (2026-09-28).** The over-bound block was
+/// refused for its weight (`Block cumulative weight is too big: 610143,
+/// expected at most 600000`) and the block at the bound was refused for
+/// its coinbase: the miner leg differed by `33 595` atomic units — one
+/// unit of the staker share in `10⁶` — because the C++ *regtest* measured
+/// CEN-F21's decay from height 0 while every issued network, and
+/// `EMISSION_SPLIT_EPOCH`, measure it from height 1. The regtest hardfork
+/// table was `{(1, 0), (1, 1)}` with the second row rejected by
+/// `HardFork::add_fork` (version ≤ back), a nettype-conditional
+/// consensus datum no `m_nettype` sweep could see (rule 71). Fixed in the
+/// table (`cryptonote_core.cpp`, `shekyl_e2_trace_export.cpp`) in the same
+/// PR; this test is the falsifier. Fee income agreed to the unit both
+/// times.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; ~50 spends into the pool, several min"]
+async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
+    use curve25519_dalek::{EdwardsPoint, Scalar};
+    use shekyl_block_template::{
+        build, EmissionOperands, MinerKeys, TemplateContext, TemplateError,
+    };
+    use shekyl_chain_rules::{RuleSet, EMISSION_SPLIT_EPOCH};
+    use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+    use shekyl_economics::params::TX_VOLUME_WINDOW;
+    use shekyl_economics::{EconomicParams, EmissionError, FrozenSegmentCount, TxVolume};
+    use shekyl_rpc_types::{GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse};
+    use shekyl_types::{AttestationRoot, BlockCount, BlockHeight, Timestamp};
+    use shekyl_wire::{Block, Transaction};
+    use zeroize::Zeroizing;
+
+    let daemon = RegtestDaemon::start().await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x79).await;
+    let arc = Arc::new(RwLock::new(wallet));
+    let Overfilled {
+        median,
+        limit,
+        weights: _,
+    } = overfill_pool(&daemon, &arc, &address).await;
+
+    // --- the C++'s state for the next block, read rather than assumed ---
+    // The C++'s own template supplies the header a block at this height
+    // must carry: parent, curve-tree root (B5), attestation root, the
+    // version pair, and a timestamp past the MTP (C2).
+    let cxx_template: serde_json::Value = daemon
+        .rpc
+        .json_rpc_call(
+            "get_block_template",
+            Some(json!({ "wallet_address": address, "reserve_size": 0 })),
+        )
+        .await
+        .expect("get_block_template");
+    let cxx_block = Block::from_bytes(&hex_decode(
+        cxx_template["blocktemplate_blob"]
+            .as_str()
+            .expect("blocktemplate_blob"),
+    ))
+    .expect("the C++ template parses");
+    let height = cxx_template["height"].as_u64().expect("height");
+    let miner_data: serde_json::Value = daemon
+        .rpc
+        .json_rpc_call("get_miner_data", None)
+        .await
+        .expect("get_miner_data");
+    assert_eq!(miner_data["height"].as_u64(), Some(height));
+    assert_eq!(
+        miner_data["median_weight"].as_u64(),
+        Some(median),
+        "get_miner_data's median is get_info's"
+    );
+    let already_generated = miner_data["already_generated_coins"]
+        .as_u64()
+        .expect("already_generated_coins");
+    let total_burned = daemon
+        .rpc
+        .json_rpc_call::<GetInfoResp>("get_info", None)
+        .await
+        .expect("get_info")
+        .total_burned;
+    // CEN-F20's operand over the C++'s headers: the listed-transaction
+    // count over the prior `min(height, W)` blocks.
+    let window = height.min(TX_VOLUME_WINDOW);
+    let headers: GetBlockHeadersRangeResponse = daemon
+        .rpc
+        .json_rpc_call(
+            "get_block_headers_range",
+            Some(
+                serde_json::to_value(GetBlockHeadersRangeRequest {
+                    start_height: height - window,
+                    end_height: height - 1,
+                    fill_pow_hash: false,
+                })
+                .expect("encode"),
+            ),
+        )
+        .await
+        .expect("get_block_headers_range");
+    assert_eq!(headers.headers.len() as u64, window);
+    let tx_volume = TxVolume::window(headers.headers.iter().map(|h| h.num_txes).sum(), window);
+
+    // The pool's bodies, as the daemon holds them.
+    let pool: serde_json::Value = daemon
+        .rpc
+        .rpc_call("get_transaction_pool", None::<serde_json::Value>)
+        .await
+        .expect("get_transaction_pool");
+    let mut bodies: Vec<Transaction> = pool["transactions"]
+        .as_array()
+        .expect("transactions")
+        .iter()
+        .map(|t| {
+            Transaction::from_bytes(&hex_decode(t["tx_blob"].as_str().expect("tx_blob")))
+                .expect("a pool body parses")
+        })
+        .collect();
+    // Heaviest first, so the block fills to the bound with the fewest
+    // bodies and the one-body step is as large as it can be.
+    bodies.sort_by_key(|b| std::cmp::Reverse(b.weight()));
+    assert!(bodies.len() >= 46, "the pool holds {} bodies", bodies.len());
+
+    // --- the Rust producer's template against that state ---
+    let spend_secret = Scalar::from_bytes_mod_order([0x5d; 32]);
+    let (kem_pk, _kem_sk) = HybridX25519MlKem
+        .keypair_generate()
+        .expect("hybrid KEM keypair generation");
+    let miner = MinerKeys {
+        spend_public: EdwardsPoint::mul_base(&spend_secret).compress().to_bytes(),
+        x25519_pk: kem_pk.x25519,
+        ml_kem_ek: kem_pk.ml_kem,
+    };
+    let params = EconomicParams::default();
+    let rule_set = RuleSet::GENESIS;
+    let build_with = |listed: &[Transaction]| {
+        build(&TemplateContext {
+            height: BlockHeight::from_raw(height),
+            previous: cxx_block.header.previous,
+            curve_tree_root: cxx_block.header.curve_tree_root,
+            attestation_root: AttestationRoot::from_bytes(
+                *cxx_block.header.attestation_root.as_bytes(),
+            ),
+            major_version: cxx_block.header.major_version,
+            minor_version: cxx_block.header.minor_version,
+            // The C++'s template timestamp is already `max(now, MTP + 1)`;
+            // claiming it with no median reproduces it exactly.
+            now: Timestamp::from_raw(cxx_block.header.timestamp),
+            median_timestamp: None,
+            unlock_window: BlockCount::from_raw(rule_set.mined_money_unlock_window().to_raw()),
+            emission: EmissionOperands {
+                already_generated_coins: shekyl_units::AtomicUnits::from_raw(already_generated),
+                total_burned: shekyl_units::AtomicUnits::from_raw(total_burned),
+                median_weight: median,
+                tx_volume,
+                frozen_segments: FrozenSegmentCount::ZERO,
+                emission_split_epoch: EMISSION_SPLIT_EPOCH,
+            },
+            params: &params,
+            miner: &miner,
+            tx_key_secret: Zeroizing::new([0x42; 32]),
+            extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
+            listed,
+        })
+    };
+
+    // The heaviest body count the producer will price. Over the bound no
+    // reward is defined, so the Rust producer refuses to build at all —
+    // `TemplateError::Emission(BlockTooBig)` is F14 on the producing side,
+    // the same absence the C++ validator finds below — and the search
+    // steps down until it prices.
+    let mut under = bodies.len();
+    let at_bound = loop {
+        match build_with(&bodies[..under]) {
+            Ok(template) => break template,
+            Err(TemplateError::Emission(EmissionError::BlockTooBig)) => {
+                assert!(under > 0, "even the empty block is over the bound");
+                under -= 1;
+            }
+            Err(e) => panic!("the Rust template builds against the C++'s state: {e}"),
+        }
+    };
+    assert!(
+        under < bodies.len(),
+        "the pool must overfill the bound: all {} bodies priced",
+        bodies.len()
+    );
+    assert!(at_bound.block_weight <= limit);
+    assert!(
+        at_bound.block_weight + bodies[under].weight() as u64 > limit,
+        "one more body crosses the bound"
+    );
+    assert!(
+        at_bound.block_weight > median,
+        "the accepted block is over the median: the penalty is live on it"
+    );
+    // The negative control: the same block naming one more body. Its
+    // coinbase is the at-bound one — no coinbase is *right* for a block
+    // over the bound, which is what the refusal says.
+    let mut over = at_bound.block.clone();
+    over.transaction_hashes.push(bodies[under].hash());
+    eprintln!(
+        "Rust-built block at height {height}: {under} bodies / {} B under 2·M = {limit}; the \
+         producer refused {} bodies (BlockTooBig); penalised reward {}",
+        at_bound.block_weight,
+        under + 1,
+        at_bound.block_reward.to_raw()
+    );
+    eprintln!(
+        "operands: already_generated={already_generated} total_burned={total_burned} \
+         tx_volume={tx_volume:?}; coinbase pays miner_emission={} + miner_fee_income={}",
+        at_bound.miner_emission.to_raw(),
+        at_bound.miner_fee_income.to_raw(),
+    );
+
+    // --- the C++ judges both, on the same parent ---
+    let submit = |block: &Block| {
+        let hex = hex::encode(block.serialize());
+        let rpc = &daemon.rpc;
+        async move {
+            rpc.json_rpc_call::<serde_json::Value>("submit_block", Some(json!([hex])))
+                .await
+        }
+    };
+    // The over-limit block first, so both are judged against one parent.
+    let refused = submit(&over).await;
+    assert!(
+        refused.is_err(),
+        "the C++ must refuse a block over twice its median (F14); it accepted {refused:?}"
+    );
+    let before = daemon.height().await;
+    let accepted = submit(&at_bound.block).await.unwrap_or_else(|e| {
+        panic!(
+            "the C++ accepts the Rust-built block at the bound (F14, F14b, F18 at parity): \
+             {e:?}\n--- daemon log tail ---\n{}",
+            daemon.log_tail()
+        )
+    });
+    assert_eq!(daemon.height().await, before + 1, "the block connected");
+    let block_id = accepted["block_id"].as_str().expect("block_id").to_owned();
+    let (recorded_weight, carried) = daemon.block_weight_of(&block_id).await;
+    assert_eq!(
+        recorded_weight, at_bound.block_weight,
+        "the C++ weighs it as we did"
+    );
+    assert_eq!(carried, under);
+    let (median_after, _) = daemon.weight_limit().await;
+    eprintln!(
+        "C++ accepted the Rust block at {recorded_weight} B carrying {carried} bodies; median \
+         now {median_after}"
+    );
+
+    // Drain the pool and capture the chain: the block at the bound is on
+    // record for the replay, where the Rust validator judges it under F14
+    // and the emission oracle holds the penalised reward to the C++'s.
+    for _ in 0..8 {
+        if daemon.tx_pool_size().await == 0 {
+            break;
+        }
+        daemon.generate_blocks(1, &address).await;
+    }
+    assert_eq!(daemon.tx_pool_size().await, 0, "the pool drains");
+    daemon.generate_blocks(1, &address).await;
+    maybe_capture_chain_vector(
+        &daemon,
+        "limit-full",
+        "e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx",
+        None,
+    )
+    .await;
+}
+
 /// CEN-G6/G6b's parity capture (`CHAIN_RULES_SLICE_7.md` §3.5, Q9 (iii)):
 /// **the fullest block the C++ producer builds**, taken while both
 /// implementations exist — the same reasoning and the same window as
@@ -1631,87 +2058,14 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; ~50 spends into the pool, several min"]
 async fn e2e_cxx_template_fills_to_its_median() {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
-    use shekyl_economics::FULL_REWARD_ZONE;
-    use shekyl_units::AtomicUnits;
-    use shekyl_wire::Transaction;
-
-    const MINE_BATCH_BLOCKS: u64 = 10;
-    const MAX_MINE_BATCHES: usize = 24;
-    /// Matured coinbase outputs to spend, one per pool transaction — more
-    /// than the ≈ 45 that would fill a 600 000-byte limit at ≈ 13.2 KB
-    /// each, so the pool overfills the limit with room and the producer's
-    /// stop is its own, not the pool's.
-    const POOL_SPENDS: usize = 60;
-
     let daemon = RegtestDaemon::start().await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x77).await;
     let arc = Arc::new(RwLock::new(wallet));
-
-    // Enough matured coinbases to spend one per transaction: the unlock
-    // window, then `POOL_SPENDS` more blocks, then the window again so the
-    // last of them has matured too.
-    mine_until_spendable(&daemon, &arc, &address, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
-    let extra = u64::try_from(POOL_SPENDS).expect("fits") + MINE_BATCH_BLOCKS * 8;
-    daemon.generate_blocks(extra, &address).await;
-    refresh(&arc).await;
-
-    let (median, limit) = daemon.weight_limit().await;
-    assert_eq!(
-        median, FULL_REWARD_ZONE,
-        "a young, light chain's effective median is the zone (the floor arm)"
-    );
-    assert_eq!(limit, 2 * median, "the C++'s limit is twice its median");
-    eprintln!("C++ weight limit in force: {limit} (median {median})");
-
-    // Overfill the pool: build and submit spends without mining between
-    // them. Each build reserves its inputs (F14's lock), so the next picks
-    // other outputs; a spend of a small fixed amount takes one input.
-    let mut pool_weight = 0u64;
-    let mut weights: Vec<u64> = Vec::new();
-    for n in 0..POOL_SPENDS {
-        let request = TxRequest {
-            recipients: vec![TxRecipient {
-                address: address.clone(),
-                amount_atomic_units: AtomicUnits::from_raw(1_000_000),
-            }],
-            priority: FeePriority::Standard,
-        };
-        let pending = {
-            let g = arc.read().await;
-            g.build_pending_tx_async(&request)
-                .await
-                .unwrap_or_else(|e| panic!("build pool spend {n}: {e:?}"))
-        };
-        let weight = u64::try_from(
-            Transaction::from_bytes(&pending.tx_bytes)
-                .expect("a built spend parses")
-                .weight(),
-        )
-        .expect("fits");
-        let outcome = {
-            let g = arc.read().await;
-            g.submit_pending_tx_async(pending.id, pending.content_gen)
-                .await
-                .unwrap_or_else(|e| panic!("daemon must accept pool spend {n}: {e:?}"))
-        };
-        let txid = require_fresh_accept(outcome, "a pool spend");
-        pool_weight += weight;
-        weights.push(weight);
-        eprintln!("pool spend {n}: {txid}, weight {weight}, pool weight {pool_weight}");
-        // Enough once the pool would fill the limit twice over with a
-        // margin: the block is bounded by the limit, never by the pool.
-        if pool_weight > limit + 4 * weight {
-            break;
-        }
-    }
-    assert!(
-        pool_weight > limit,
-        "the pool ({pool_weight}) must overfill the limit ({limit}) so the template is \
-         bounded by the limit and not by the pool running dry"
-    );
-    let pool_before = daemon.tx_pool_size().await;
-    assert_eq!(pool_before, u64::try_from(weights.len()).expect("fits"));
+    let Overfilled {
+        median,
+        limit,
+        weights,
+    } = overfill_pool(&daemon, &arc, &address).await;
 
     // The fullest block the C++ producer builds from that pool.
     let mined = daemon.generate_blocks(1, &address).await;
