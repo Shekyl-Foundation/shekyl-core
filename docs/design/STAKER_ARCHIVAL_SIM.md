@@ -4354,6 +4354,26 @@ carry/fetch — and is reported as one rather than averaged away.
   ratified for an aggregate and means something else applied to a max over cells
   (§L19b item 3).
 
+**Amendment to §2, 2026-09-28 — committed after `cd1f87651` and before the
+implementation commit.** §2 as first written left two things undefined, and either
+could have been chosen after seeing a result, which is what this ordering exists to
+prevent:
+
+- **Pairing.** Each arm and its dynamic, demand-matched control run on the **same
+  `N = 8` seeds** (common random numbers). The delta is formed **per seed**:
+  `delta_i` compares arm seed `i` with control seed `i`, never a rule across two
+  independent sets of eight. Pairing removes the seed-to-seed variance the arm and
+  its control share, so the bar tests the axis rather than the draw.
+- **Which worst-band delta.** Per seed, it is the **worst of the differences** —
+  `max over the nine cells of (arm − control)`, taken **cell by cell** — not the
+  difference of the two worsts (`max(arm) − max(control)`). The two disagree when
+  the arm's and the control's worst cells differ; the cell-wise form attributes a
+  breach to a specific band, and it cannot pass merely because the control happens
+  to be bad somewhere else.
+- **BREACH ⇔ `min over i` of that per-seed worst-band delta `> X = 0.05`.**
+- The `storage_scale`-scaled variant is **diagnostic and ungraded**, with the same
+  pairing.
+
 ### 3. Both bases, with the dispositions written in advance
 
 Run on the **marginal** base (`storage_scale` 1.0) and the **covered** base
