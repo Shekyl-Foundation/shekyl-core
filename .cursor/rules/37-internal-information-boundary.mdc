@@ -1,0 +1,120 @@
+---
+description: shekyl-core is public. Foundation host identities, operational state, and local filesystem paths belong in the private shekyl-dev repo. Name the role, never the host.
+alwaysApply: true
+---
+
+# Internal-information boundary
+
+**`shekyl-core` is a public repository.** Everything committed to it —
+code, design docs, benchmark captures, CHANGELOG entries, commit
+messages, FOLLOWUPS rows — is world-readable the moment it is pushed,
+permanently, and is mirrored by forks and archivers beyond our reach.
+
+**Internal operational information belongs in `shekyl-dev`**, which is
+private. Not in a public doc with the sensitive parts softened; in the
+other repository.
+
+This rule is codified because manual vigilance already failed here. A
+commit titled *"docs: generalise the operator note; this repo is public"*
+cleaned one operator note and left the seed-estate survey tables
+directly beneath it — per-seed addresses, reachability, which
+configuration files were still the pristine example, and one seed's
+unrestricted RPC port. The author knew the repository was public and
+still missed it, because "be careful about internal details" has no
+mechanical surface. A bright line and a gate do.
+
+## The three forbidden classes
+
+**1. Host identities of Foundation machines.** Hostnames of our seeds,
+miners, build boxes, benchmark devices, web hosts, and workstations —
+`skl-*`, bare seed names, personal machine names. Also the LAN
+addressing that reaches them.
+
+**2. Operational state and per-host configuration.** Whether a host is
+up or down; which host was down during an incident; per-host peer
+limits, port layout, or RPC exposure; whether a config file is the
+pristine example or has been edited; service unit and config filenames
+tied to a named host; the shape of the fleet at a moment in time.
+
+This class is the dangerous one. A hostname alone is a naming
+convention. A hostname joined to "its config is the unedited example
+file" is a target.
+
+**3. Local filesystem paths and personal identifiers.** `/home/<user>/…`
+build paths, workstation names, pasted shell output carrying either.
+Benchmark captures are the usual carrier, because raw `cargo` output
+prints the absolute path of every crate it compiles.
+
+## Write the role, not the host
+
+A measurement's reader needs to know *what kind of machine* produced a
+number. They never need to know which box it was. The role is the
+useful half; the hostname is the half an attacker wants.
+
+| Instead of | Write |
+|---|---|
+| `skl-pi` | **the floor device** (Pi 4 Model B — see `76-device-provisioning-floor.mdc`) |
+| `skl-miner-test` | **the testnet miner** |
+| `skl-seedusw`, `seedusw` | **the US-West seed** |
+| `skl-foundation` | **an internal node** |
+| `/home/rick/gap7-bench/…` | a path relative to the repo root, or `$BENCH_DIR` |
+| `10.10.12.253` | *a LAN address*, or an RFC 5737 documentation literal |
+
+This is not a loss of precision. "The floor device" states the thing the
+provisioning floor rule cares about; `skl-pi` states a DNS name.
+Substituting the role usually makes the document better.
+
+**Evidence is never the thing removed.** Timings, histograms, failure
+counts, captures, and the reasoning that reads them all stay. Only
+identity and operational state leave. If a redaction would destroy a
+claim's evidence, the claim's evidence moves to `shekyl-dev` and the
+public doc cites it by document name — never by a summary that
+reconstitutes what was moved.
+
+## Carve-outs, and why they are not exceptions
+
+**The compiled seed list** (`src/p2p/net_node.inl`, `get_seed_nodes`) is
+shipped protocol data. Every node binary contains these addresses;
+bootstrap does not work without them. They are public by necessity, and
+removing them from the source would not unpublish them. **Their
+operational state is still class 2** — "the seeds are at `A`…`F`" is
+shipped fact, "`seedusw` is down and unconfigured" is not.
+
+**RFC 1918 and loopback literals as protocol examples** in code, tests,
+and wire documentation (`192.168.0.0/16` in a local-address predicate,
+`127.0.0.1` in an RPC default) describe the protocol, not our network.
+
+**Generic service-account paths** in shipped tooling — the container's
+own `/home/shekyl`, an env-overridable fleet default — describe the
+deployment the tooling creates, not a host we run.
+
+A carve-out is a statement that the material is *already* public or
+*not ours*. "It is useful" and "it is only a hostname" are not
+carve-outs.
+
+## Pointing at what moved
+
+A public document may say that internal material exists and where:
+
+> The seed-estate survey and its per-host readouts are in `shekyl-dev`,
+> `docs/Q12_D6A_SEED_ESTATE.md`.
+
+It may not summarise the moved content in a way that rebuilds it. A
+pointer that says "…where four of six seeds are recorded as
+misconfigured" has moved nothing.
+
+## Enforcement
+
+`scripts/ci/check_internal_information.py`, run by
+`.github/workflows/docs-gates.yml`, greps the tree for all three
+classes. Its allowlist is the carve-out list above, by exact path and
+pattern, with a reason on every entry. Adding an allowlist entry is a
+deliberate act reviewed as part of the PR — which is the point. Silence
+from the gate is only meaningful if the gate asserts its own subject
+exists (`47-gate-subject-assertion.mdc`); it does.
+
+Companion rules: `36-secret-locality.mdc` (where key material lives),
+`95-documentation-lifecycle.mdc` (which repo a document class belongs
+to), `90-commits.mdc` (commit messages are published too — a redacted
+file with the hostname still in the commit that removed it has not been
+redacted).
