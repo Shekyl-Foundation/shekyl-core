@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Engine — the one-glance balance is projected once, in engine-core
+
+- `shekyl_engine_core::BalanceView` (`engine/balance_view.rs`) is the
+  contract's `get_balance` as engine facts — `liquid`, `unlocked`,
+  `pending`, `unspendable`, and `staking: Option<StakedTotals>` (the two
+  bonded legs summed with checked arithmetic, plus `claimable_rewards`).
+  `Engine::balance_view` / `balance_snapshot_with` own the lock
+  choreography (one brief ledger guard, dropped, then the sealed staking
+  read) and the degrade/loud split: an unreadable staking seal degrades to
+  `staking: None` — absence, never a fabricated zero — and a corrupt total
+  is `BalanceViewError::Overflow`, an error rather than a saturated
+  balance or a panic. `project_balance` is the pure half, unit-tested at
+  the source.
+- Wallet RPC's `get_balance` and `get_wallet_info` serialize that view;
+  `project::get_balance_result` is now wire shaping only, and the server's
+  private `ledger_snapshot_with_staking` / `degrade_or_loud` are deleted.
+  Why: the projection lived in the RPC server alone, and the desktop
+  wallet — which embeds the engine — either restated it or shipped a
+  different balance under the same name. A projection restated is one that
+  drifts; this is its single home, and the GUI's `get_balance` adopts the
+  contract's shape by consuming it.
+
 ### Daemon store — the curve tree is grown by the Rust stack (DRS-E3)
 
 - **Consensus.** The validator derives the curve-tree root: `validate` drains

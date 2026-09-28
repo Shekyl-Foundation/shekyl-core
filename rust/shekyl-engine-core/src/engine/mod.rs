@@ -199,6 +199,13 @@ pub(crate) mod curve_tree_decode;
 /// candidates exclusively through it and owns the Q11 fee-exclusion
 /// (`DesignatedBacking::fee_sweep`).
 pub(crate) mod backing_set;
+/// F-D1 amount stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): the drain amount
+/// is chosen from `{user target, cadence, RNG}` and an aggregate-scalar
+/// affordability check only — a guarded module the M1 import-check arm keeps
+/// blind to the per-output reward vector.
+/// The one-glance balance (`get_balance`), projected once from the ledger
+/// summary and the sealed staking view; the RPC and the GUI both serialize it.
+pub mod balance_view;
 pub(crate) mod block_fetch;
 /// WI-2 (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`): production bond assembly — the
 /// `PBoundBytes` P-1 provenance boundary (single private mint site), the D-A2
@@ -230,10 +237,6 @@ pub(crate) mod claim_dispatch;
 pub(crate) mod claim_orchestrator;
 pub mod daemon;
 pub(crate) mod diagnostics;
-/// F-D1 amount stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): the drain amount
-/// is chosen from `{user target, cadence, RNG}` and an aggregate-scalar
-/// affordability check only — a guarded module the M1 import-check arm keeps
-/// blind to the per-output reward vector.
 pub(crate) mod drain_amount;
 /// F-D2 drain assembly (`ARCHIVAL_P_DRAIN.md` §DS-PR-1): the `P`→principal
 /// value-out transaction builder. Produces a **transfer-shaped** tx (two
@@ -488,6 +491,9 @@ pub use drain_read::DrainBalanceReadError;
 // wallet-RPC layer (the same shape as `FirstStakeError` above): the public
 // drain façade's outcome/error pair and the `stake_in` error the handler
 // matches on for its refusal codes.
+pub use balance_view::{
+    project_balance, BalanceSnapshot, BalanceView, BalanceViewError, StakedTotals,
+};
 pub use drain_facade::{DrainOutcome, DrainToPrincipalError};
 pub use principal_stake::StakeInError;
 pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};

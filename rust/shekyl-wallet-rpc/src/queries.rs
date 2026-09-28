@@ -192,14 +192,13 @@ pub(crate) async fn get_balance(
     require_empty_object(params, "get_balance")?;
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
-    // The non-reentrant-lock choreography (snapshot under one ledger guard →
-    // drop it → sealed staking read) lives in the shared helper; an
-    // unreadable staking seal degrades to absent staking fields rather than
-    // blacking out the liquid balance, while a corrupt-total read (`?`) fails
-    // loud (`ledger_snapshot_with_staking` docs).
-    let (summary, (), staking_view) =
-        crate::staking::ledger_snapshot_with_staking(&engine, |_| ())?;
-    let result = get_balance_result(&summary, staking_view.as_ref().map(|v| &v.balance))?;
+    // The engine owns the snapshot-then-read choreography and the
+    // degrade/loud split (`Engine::balance_snapshot_with`): an unreadable
+    // staking seal degrades to absent staking fields, a corrupt total fails
+    // loud. The sealed-file leg is synchronous I/O, hence `block_in_place`.
+    let view = tokio::task::block_in_place(|| engine.balance_view())
+        .map_err(crate::staking::map_balance_view)?;
+    let result = get_balance_result(&view);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_balance: {e}")))
 }
@@ -249,17 +248,21 @@ pub(crate) async fn get_wallet_info(
     let (identity, balance, staking, wallet_height, restore_height, daemon) = {
         let engine = shared.read().await;
 
-        // The non-reentrant-lock choreography lives in the shared helper
-        // (`ledger_snapshot_with_staking`): heights ride the closure so they
+        // The engine owns the snapshot-then-read choreography
+        // (`Engine::balance_snapshot_with`): heights ride the closure so they
         // stay coherent with the balance summary under ONE ledger guard.
-        let (summary, (wallet_height, restore_height), staking_view) =
-            crate::staking::ledger_snapshot_with_staking(&engine, |wallet| {
+        let snapshot = tokio::task::block_in_place(|| {
+            engine.balance_snapshot_with(|wallet| {
                 let wallet_height =
                     i64::try_from(wallet.ledger.height().to_raw()).unwrap_or(i64::MAX);
                 let restore_height = i64::try_from(wallet.sync_state.restore_from_height.to_raw())
                     .unwrap_or(i64::MAX);
                 (wallet_height, restore_height)
-            })?;
+            })
+        })
+        .map_err(crate::staking::map_balance_view)?;
+        let (wallet_height, restore_height) = snapshot.extra;
+        let staking_view = snapshot.staking;
 
         let address = engine
             .primary_address()
@@ -279,7 +282,7 @@ pub(crate) async fn get_wallet_info(
         // degrade arm: an unreadable staking seal leaves BOTH the balance's
         // staking fields and the `staking` block absent while the wallet's
         // identity/height/liquid facts stay served.
-        let balance = get_balance_result(&summary, staking_view.as_ref().map(|v| &v.balance))?;
+        let balance = get_balance_result(&snapshot.view);
         let staking = staking_view.map(|staking_view| StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
             balance: GetStakedBalanceResult {
