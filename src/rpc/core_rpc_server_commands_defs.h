@@ -228,6 +228,10 @@ namespace cryptonote
       uint64_t alt_blocks_count;
       uint64_t outgoing_connections_count;
       uint64_t incoming_connections_count;
+      uint64_t public_incoming_socket_count;
+      uint64_t public_outgoing_socket_count;
+      uint64_t tor_incoming_socket_count;
+      uint64_t tor_outgoing_socket_count;
       uint64_t rpc_connections_count;
       uint64_t white_peerlist_size;
       uint64_t grey_peerlist_size;
@@ -275,6 +279,10 @@ namespace cryptonote
         KV_SERIALIZE(alt_blocks_count)
         KV_SERIALIZE(outgoing_connections_count)
         KV_SERIALIZE(incoming_connections_count)
+        KV_SERIALIZE(public_incoming_socket_count)
+        KV_SERIALIZE(public_outgoing_socket_count)
+        KV_SERIALIZE(tor_incoming_socket_count)
+        KV_SERIALIZE(tor_outgoing_socket_count)
         KV_SERIALIZE(rpc_connections_count)
         KV_SERIALIZE(white_peerlist_size)
         KV_SERIALIZE(grey_peerlist_size)

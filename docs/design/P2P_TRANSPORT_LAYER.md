@@ -332,9 +332,9 @@ names them.
 
 ## Seam — construction contract (RULED 2026-09-28)
 
-Both connectors are in. Nothing calls them, and epee still owns every
-socket. This note is the last build before the differential harness
-and the cutover. D4 and D6 stay the rulings. What follows is how those
+Both connectors are in. The seam is what calls them. epee still owns
+every production socket until cutover. This note is the build before
+the differential harness and the cutover. D4 and D6 stay the rulings. What follows is how those
 rulings are built, including the three points the seam has to settle.
 No measured thread budget, deadline, or accept rate is written here.
 The executor's floor is counted from the lanes that block on it.
@@ -420,10 +420,27 @@ The callback that raises `ev` runs on the strand, from `deliver` or
 from the timer completion posted there. The handshake function stays
 on the idle thread: posting it onto the strand would wait for a
 completion the strand cannot start. The waiter holds no lock the
-strand needs. A `foreach_connection` walk keeps the outer-call pair
-and reads the connection context on the walker. It does not block
-the walker's strand waiting for a connection strand. The invoke
-install is the mutation that moves.
+strand needs.
+
+`foreach_connection` (`levin_protocol_handler_async.h:890`) is epee's
+walk, unchanged. It collects handlers under the registry lock, then
+calls each callback outside that lock, on the walking thread, and
+hands it `get_context_ref()`, a mutable reference to the connection
+context. The connection's strand reads and writes that same context.
+That is a data race, and in C++ it is undefined behaviour. epee has
+had it all along: the walkers and the handlers already share one
+thread pool. The seam does not create it and does not make it worse.
+The seam does not fix it either. Posting each read onto the
+connection's strand and waiting for the answer would block a walker
+on a strand from inside executor work, which is the deadlock the
+floor and close-by-posting keep off this path. The fix is LV-3 step
+c, the registry: the strand is the only writer, walkers read an
+immutable snapshot, and a walker that must change a connection posts
+that change to the strand. Step c is the first LV-3 work and it
+follows the transport cutover. It does not wait behind steps a and b.
+The call sites at this pin are 15 in `net_node.inl` and 2 in
+`levin_notify.cpp` (`:190`, `:232`). A third mention in
+`levin_notify.cpp:472` is a comment, not a call.
 
 The transport thread's only act toward C++ is the post onto that
 strand. Idle handlers stay on the context. They are not per

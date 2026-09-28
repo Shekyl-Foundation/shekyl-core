@@ -4381,7 +4381,10 @@ dependencies = [
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-relay-privacy",
+ "shekyl-seam",
+ "shekyl-thread-ledger",
  "shekyl-tor-control-daemon",
+ "shekyl-transport-layer",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
@@ -4719,6 +4722,17 @@ dependencies = [
  "tokio",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-seam"
+version = "3.1.0"
+dependencies = [
+ "shekyl-capped-stream",
+ "shekyl-peer-policy",
+ "shekyl-thread-ledger",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
 ]
 
 [[package]]

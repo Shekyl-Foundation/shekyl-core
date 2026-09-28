@@ -4167,5 +4167,34 @@ struct ShekylOwnedBuffer {
 /// `n_blocks` or `n_spent` overflowed `size_t` when widened to bytes.
 #define SHEKYL_CHAIN_DIGEST_V0_ERR_OVERFLOW           -2
 
+/// The p2p seam. `shekyl_seam_bind` installs the post. The post enqueues
+/// onto the connection's strand and returns. Kinds: 1 established,
+/// 2 deliver, 3 closed.
+constexpr std::uint32_t SHEKYL_SEAM_ESTABLISHED = 1;
+constexpr std::uint32_t SHEKYL_SEAM_DELIVER = 2;
+constexpr std::uint32_t SHEKYL_SEAM_CLOSED = 3;
+constexpr std::uint32_t SHEKYL_CONNECTOR_CLEARNET = 0;
+constexpr std::uint32_t SHEKYL_CONNECTOR_TOR = 1;
+constexpr std::uint32_t SHEKYL_DIRECTION_INBOUND = 0;
+constexpr std::uint32_t SHEKYL_DIRECTION_OUTBOUND = 1;
+
+using shekyl_seam_post_fn = void (*)(void* ctx, std::uint64_t id, std::uint32_t kind,
+    const std::uint8_t* bytes, std::size_t len, const shekyl_close_cause* cause);
+
+void shekyl_seam_bind(void* ctx, shekyl_seam_post_fn post);
+std::uint64_t shekyl_seam_open_outbound(std::uint32_t ipv4);
+int shekyl_seam_await_handler(std::uint64_t id);
+void shekyl_seam_handler_ready(std::uint64_t id);
+int shekyl_seam_deliver(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
+int shekyl_seam_deliver_result(std::uint64_t id, const std::uint8_t* bytes, std::size_t len, int accepted);
+void shekyl_seam_handler_gone(std::uint64_t id);
+int shekyl_seam_send(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
+void shekyl_seam_close(std::uint64_t id);
+int shekyl_seam_cause(std::uint64_t id, shekyl_close_cause* out);
+std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
+std::uint64_t shekyl_seam_inbound_held(void);
+int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);
+void shekyl_executor_release(std::uint64_t handle);
+
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
 /// (C-compatible header used by both memwipe.c and mlocker.cpp).

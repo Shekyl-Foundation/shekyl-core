@@ -215,6 +215,10 @@ namespace cryptonote
     uint64_t total_conn = restricted ? 0 : m_p2p.get_public_connections_count();
     res.outgoing_connections_count = restricted ? 0 : m_p2p.get_public_outgoing_connections_count();
     res.incoming_connections_count = restricted ? 0 : (total_conn - res.outgoing_connections_count);
+    res.public_incoming_socket_count = restricted ? 0 : shekyl_seam_socket_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_INBOUND);
+    res.public_outgoing_socket_count = restricted ? 0 : shekyl_seam_socket_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND);
+    res.tor_incoming_socket_count = restricted ? 0 : shekyl_seam_socket_count(SHEKYL_CONNECTOR_TOR, SHEKYL_DIRECTION_INBOUND);
+    res.tor_outgoing_socket_count = restricted ? 0 : shekyl_seam_socket_count(SHEKYL_CONNECTOR_TOR, SHEKYL_DIRECTION_OUTBOUND);
     // Always zero, and the reason is not the restriction. The C++ server has
     // not owned the RPC connections since the Axum cutover, so the accessor
     // this read was a literal `return 0` with two identical arms — a dead

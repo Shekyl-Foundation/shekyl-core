@@ -1419,6 +1419,10 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::r
   INSERT_INTO_JSON_OBJECT(dest, alt_blocks_count, info.alt_blocks_count);
   INSERT_INTO_JSON_OBJECT(dest, outgoing_connections_count, info.outgoing_connections_count);
   INSERT_INTO_JSON_OBJECT(dest, incoming_connections_count, info.incoming_connections_count);
+  INSERT_INTO_JSON_OBJECT(dest, public_incoming_socket_count, info.public_incoming_socket_count);
+  INSERT_INTO_JSON_OBJECT(dest, public_outgoing_socket_count, info.public_outgoing_socket_count);
+  INSERT_INTO_JSON_OBJECT(dest, tor_incoming_socket_count, info.tor_incoming_socket_count);
+  INSERT_INTO_JSON_OBJECT(dest, tor_outgoing_socket_count, info.tor_outgoing_socket_count);
   INSERT_INTO_JSON_OBJECT(dest, white_peerlist_size, info.white_peerlist_size);
   INSERT_INTO_JSON_OBJECT(dest, grey_peerlist_size, info.grey_peerlist_size);
   INSERT_INTO_JSON_OBJECT(dest, mainnet, info.mainnet);
@@ -1460,6 +1464,10 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::DaemonInfo& inf
   GET_FROM_JSON_OBJECT(val, info.alt_blocks_count, alt_blocks_count);
   GET_FROM_JSON_OBJECT(val, info.outgoing_connections_count, outgoing_connections_count);
   GET_FROM_JSON_OBJECT(val, info.incoming_connections_count, incoming_connections_count);
+  GET_FROM_JSON_OBJECT(val, info.public_incoming_socket_count, public_incoming_socket_count);
+  GET_FROM_JSON_OBJECT(val, info.public_outgoing_socket_count, public_outgoing_socket_count);
+  GET_FROM_JSON_OBJECT(val, info.tor_incoming_socket_count, tor_incoming_socket_count);
+  GET_FROM_JSON_OBJECT(val, info.tor_outgoing_socket_count, tor_outgoing_socket_count);
   GET_FROM_JSON_OBJECT(val, info.white_peerlist_size, white_peerlist_size);
   GET_FROM_JSON_OBJECT(val, info.grey_peerlist_size, grey_peerlist_size);
   GET_FROM_JSON_OBJECT(val, info.mainnet, mainnet);

@@ -261,6 +261,9 @@ members = [
     # the blocking pool. Dial is SOCKS5 through shekyl-socks. Inbound is
     # accept_tor, then the gap timer. See P2P_TRANSPORT_LAYER.md.
     "shekyl-tor",
+    # The seam: SocketId, one cause, posts onto the connection strand.
+    # Production still builds epee's server until cutover.
+    "shekyl-seam",
 
     # Persona serving loop: loopback shard server behind the P onion
     # service (2d-2 serving path; provisional THROWAWAY framing)
