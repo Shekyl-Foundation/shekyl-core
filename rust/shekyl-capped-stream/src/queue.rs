@@ -84,7 +84,7 @@ impl ByteQueue {
     }
 
     /// Return `n` bytes of cap after the writer finishes that buffer.
-    pub(crate) fn release(&self, n: usize) {
+    pub fn release(&self, n: usize) {
         let mut inner = self.inner.lock().expect("outbound");
         inner.used = inner.used.saturating_sub(n);
     }
@@ -113,9 +113,17 @@ impl ByteQueue {
         }
     }
 
+    /// The next buffer, if one is waiting. Does not wait, and does not
+    /// return the bytes to the cap: the writer calls [`Self::release`]
+    /// after it finishes them.
+    #[must_use]
+    pub fn try_pop(&self) -> Option<Vec<u8>> {
+        self.inner.lock().expect("outbound").items.pop_front()
+    }
+
     #[cfg(test)]
     pub(crate) fn pop_now(&self) -> Option<Vec<u8>> {
-        self.inner.lock().expect("outbound").items.pop_front()
+        self.try_pop()
     }
 }
 

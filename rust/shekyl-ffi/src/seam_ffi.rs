@@ -15,6 +15,7 @@ use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
+use shekyl_peer_policy::InboundCeiling;
 use shekyl_seam::{Hub, Observed, Peer, Post, ADDR_I2P, ADDR_IPV4, ADDR_IPV6, ADDR_TOR, HOST_MAX};
 use shekyl_thread_ledger::{record_executor, BlockingLanes, ExecutorRow, ThreadName};
 use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, Direction, SocketId};
@@ -182,6 +183,7 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
                 );
             }
         }),
+        InboundCeiling::resolve(crate::inbound_ceiling_ffi::observe_descriptors(), 0, 0),
     ));
 }
 

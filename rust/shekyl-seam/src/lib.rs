@@ -21,10 +21,10 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 
-use shekyl_capped_stream::StreamEnds;
+use shekyl_capped_stream::{ByteQueue, Overfull, StreamEnds};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_thread_ledger::{BlockingLanes, ExecutorBudget, ExecutorBudgetError};
-use shekyl_timing_engine::Tick;
+use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 use shekyl_transport_layer::{
     CloseCause, CloseKind, CloseResult, ConnectorId, Direction, NetworkAddress, SocketId, Sockets,
 };
@@ -83,6 +83,17 @@ pub enum PostKind {
     Closed = 3,
 }
 
+/// The connector's write half for one connection.
+///
+/// `write_capped` drains `queue`. This crate has no socket, so it does not
+/// spawn that writer. The zone bind does, with the socket it already owns.
+pub struct OutboundWrite {
+    /// The capped queue `send` pushes into.
+    pub queue: ByteQueue,
+    /// Trips when a send does not fit, which is how the writer stops.
+    pub overfull: Arc<Overfull>,
+}
+
 /// One seam. Clones share the table.
 #[derive(Clone)]
 pub struct Hub {
@@ -90,11 +101,15 @@ pub struct Hub {
     ready: Arc<Condvar>,
     post: Arc<dyn Fn(Post) + Send + Sync>,
     send_cap: usize,
+    clock: Arc<dyn Clock + Send + Sync>,
+    ceiling: InboundCeiling,
 }
 
 struct Inner {
     sockets: Sockets,
     conns: std::collections::HashMap<SocketId, Conn>,
+    /// Raw FFI id to the minted id. Lookup stays O(1) as connections close.
+    raw: std::collections::HashMap<u64, SocketId>,
 }
 
 struct Conn {
@@ -107,26 +122,49 @@ struct Conn {
     handler_ready: bool,
     /// `closed` has started on the strand. A later deliver is the guard.
     handler_gone: bool,
-    /// Bytes `deliver_result` accepted, in order. The test reads this.
-    parsed: Vec<u8>,
     /// Filled into the context when the strand runs `established`.
     observed: Observed,
 }
 
 impl Hub {
     /// `send_cap` is the outbound byte cap for each connection.
-    /// `post` enqueues onto that connection's strand and returns.
+    /// `post` enqueues onto that connection's strand and returns. It must
+    /// not call back into the hub: posts run while the table lock is held
+    /// so `established` cannot land after `closed`.
+    /// `ceiling` is the descriptor-derived inbound bound.
     #[must_use]
-    pub fn new(send_cap: usize, post: Arc<dyn Fn(Post) + Send + Sync>) -> Self {
+    pub fn new(
+        send_cap: usize,
+        post: Arc<dyn Fn(Post) + Send + Sync>,
+        ceiling: InboundCeiling,
+    ) -> Self {
+        Self::with_clock(send_cap, post, ceiling, Arc::new(MonotonicClock::new()))
+    }
+
+    /// `clock` is the monotonic clock ban expiry is read against.
+    #[must_use]
+    pub fn with_clock(
+        send_cap: usize,
+        post: Arc<dyn Fn(Post) + Send + Sync>,
+        ceiling: InboundCeiling,
+        clock: Arc<dyn Clock + Send + Sync>,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 sockets: Sockets::new(),
                 conns: std::collections::HashMap::new(),
+                raw: std::collections::HashMap::new(),
             })),
             ready: Arc::new(Condvar::new()),
             post,
             send_cap,
+            clock,
+            ceiling,
         }
+    }
+
+    fn now(&self) -> Tick {
+        self.clock.now()
     }
 
     /// The socket table. Ban-list and count reads use this.
@@ -140,9 +178,12 @@ impl Hub {
     /// Refusal is a D12 cause. Nothing is reserved in that case.
     pub fn open(&self, peer: &Peer) -> Result<SocketId, CloseCause> {
         let observed = peer.observed()?;
+        let now = self.now();
+        let ceiling = self.ceiling;
         let mut inner = self.lock();
-        let open = admit(&inner.sockets, peer)?;
+        let open = admit(&inner.sockets, peer, now, ceiling)?;
         let id = open.id();
+        inner.raw.insert(id.get(), id);
         inner.conns.insert(
             id,
             Conn {
@@ -152,7 +193,6 @@ impl Hub {
                 delivering: false,
                 handler_ready: false,
                 handler_gone: false,
-                parsed: Vec::new(),
                 observed,
             },
         );
@@ -164,20 +204,23 @@ impl Hub {
     /// The waiter holds no lock the strand needs. An executor thread may
     /// call this only when another executor thread is free to run the post.
     pub fn await_handler(&self, id: SocketId) -> bool {
-        let post = {
+        let poster = Arc::clone(&self.post);
+        {
             let inner = self.lock();
-            if !inner.conns.contains_key(&id) {
+            let Some(conn) = inner.conns.get(&id) else {
+                return false;
+            };
+            if conn.cause.is_some() {
                 return false;
             }
-            Post {
+            poster(Post {
                 id,
                 kind: PostKind::Established,
                 bytes: Vec::new(),
                 cause: None,
-                observed: Some(inner.conns[&id].observed.clone()),
-            }
-        };
-        (self.post)(post);
+                observed: Some(conn.observed.clone()),
+            });
+        }
         let mut inner = self.lock();
         loop {
             let Some(conn) = inner.conns.get(&id) else {
@@ -210,24 +253,22 @@ impl Hub {
     /// `false` means the id is gone, the handler is already gone, or a
     /// delivery is still on the strand. The bytes are not posted.
     pub fn deliver(&self, id: SocketId, bytes: &[u8]) -> bool {
-        let post = {
-            let mut inner = self.lock();
-            let Some(conn) = inner.conns.get_mut(&id) else {
-                return false;
-            };
-            if conn.handler_gone || conn.cause.is_some() || conn.delivering {
-                return false;
-            }
-            conn.delivering = true;
-            Post {
-                id,
-                kind: PostKind::Deliver,
-                bytes: bytes.to_vec(),
-                cause: None,
-                observed: None,
-            }
+        let poster = Arc::clone(&self.post);
+        let mut inner = self.lock();
+        let Some(conn) = inner.conns.get_mut(&id) else {
+            return false;
         };
-        (self.post)(post);
+        if conn.handler_gone || conn.cause.is_some() || conn.delivering {
+            return false;
+        }
+        conn.delivering = true;
+        poster(Post {
+            id,
+            kind: PostKind::Deliver,
+            bytes: bytes.to_vec(),
+            cause: None,
+            observed: None,
+        });
         true
     }
 
@@ -237,7 +278,7 @@ impl Hub {
     /// nothing: that is the guard for a post that escaped the strand.
     /// A false return records [`CloseKind::SessionRefused`] only when
     /// no cause is recorded yet.
-    pub fn deliver_result(&self, id: SocketId, bytes: &[u8], accepted: bool) -> bool {
+    pub fn deliver_result(&self, id: SocketId, _bytes: &[u8], accepted: bool) -> bool {
         let mut inner = self.lock();
         let Some(conn) = inner.conns.get_mut(&id) else {
             return false;
@@ -251,14 +292,18 @@ impl Hub {
             let _ = self.record(id, CloseCause::new(CloseKind::SessionRefused));
             return true;
         }
-        conn.parsed.extend_from_slice(bytes);
         true
     }
 
-    /// Bytes the handler accepted, in order.
+    /// The connector's writer for `id`, while the connection is open.
     #[must_use]
-    pub fn parsed(&self, id: SocketId) -> Option<Vec<u8>> {
-        self.lock().conns.get(&id).map(|conn| conn.parsed.clone())
+    pub fn outbound(&self, id: SocketId) -> Option<OutboundWrite> {
+        let inner = self.lock();
+        let ends = inner.conns.get(&id)?.ends.as_ref()?;
+        Some(OutboundWrite {
+            queue: ends.writer_queue.clone(),
+            overfull: Arc::clone(&ends.overfull),
+        })
     }
 
     /// One whole message. A buffer that does not fit is not stored.
@@ -314,7 +359,33 @@ impl Hub {
         if raw == 0 {
             return None;
         }
-        self.lock().conns.keys().copied().find(|id| id.get() == raw)
+        self.lock().raw.get(&raw).copied()
+    }
+
+    /// Ban `host` until `until` and post `closed` for each live socket the
+    /// ban drops. `until` is a monotonic tick. A deadline that has already
+    /// passed bans nothing.
+    pub fn ban_host(&self, host: IpAddr, until: Tick) -> Vec<SocketId> {
+        let now = self.now();
+        let ids = self.lock().sockets.ban_host(host, until, now);
+        for id in &ids {
+            let _ = self.record(*id, CloseCause::new(CloseKind::LocalClose));
+        }
+        ids
+    }
+
+    /// Ban an IPv4 subnet the same way as [`Self::ban_host`].
+    pub fn ban_subnet(
+        &self,
+        subnet: shekyl_transport_layer::Ipv4Subnet,
+        until: Tick,
+    ) -> Vec<SocketId> {
+        let now = self.now();
+        let ids = self.lock().sockets.ban_subnet(subnet, until, now);
+        for id in &ids {
+            let _ = self.record(*id, CloseCause::new(CloseKind::LocalClose));
+        }
+        ids
     }
 
     /// Per-connector socket count. Accept does not read this.
@@ -335,32 +406,31 @@ impl Hub {
     /// AEAD rejection, is a close. Scoring is a separate call the
     /// session layer makes when it has judged misbehaviour.
     fn record(&self, id: SocketId, cause: CloseCause) -> CloseResult {
-        let result = {
-            let mut inner = self.lock();
-            let Some(conn) = inner.conns.get_mut(&id) else {
-                return CloseResult::AlreadyClosed;
-            };
-            if conn.cause.is_some() {
-                return CloseResult::AlreadyClosed;
-            }
-            conn.cause = Some(cause);
-            conn.ends.take();
-            match conn.open.take() {
-                Some(open) => open.close(cause),
-                None => CloseResult::AlreadyClosed,
-            }
+        let poster = Arc::clone(&self.post);
+        let mut inner = self.lock();
+        let Some(conn) = inner.conns.get_mut(&id) else {
+            return CloseResult::AlreadyClosed;
         };
-        if matches!(result, CloseResult::Recorded(_)) {
-            (self.post)(Post {
-                id,
-                kind: PostKind::Closed,
-                bytes: Vec::new(),
-                cause: Some(cause),
-                observed: None,
-            });
-            self.ready.notify_all();
+        if conn.cause.is_some() {
+            return CloseResult::AlreadyClosed;
         }
-        result
+        conn.cause = Some(cause);
+        conn.ends.take();
+        conn.observed.bytes.clear();
+        // The ban list may already have dropped the table entry. The
+        // handler still needs `closed`, which is this post.
+        if let Some(open) = conn.open.take() {
+            let _ = open.close(cause);
+        }
+        poster(Post {
+            id,
+            kind: PostKind::Closed,
+            bytes: Vec::new(),
+            cause: Some(cause),
+            observed: None,
+        });
+        self.ready.notify_all();
+        CloseResult::Recorded(cause)
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -408,9 +478,12 @@ impl Peer {
     }
 }
 
-fn admit(sockets: &Sockets, peer: &Peer) -> Result<shekyl_transport_layer::OpenSocket, CloseCause> {
-    let now = Tick::new(1);
-    let ceiling = InboundCeiling::Bounded(1024);
+fn admit(
+    sockets: &Sockets,
+    peer: &Peer,
+    now: Tick,
+    ceiling: InboundCeiling,
+) -> Result<shekyl_transport_layer::OpenSocket, CloseCause> {
     let opened = match (
         peer.connector,
         peer.address_type,
@@ -557,22 +630,40 @@ mod tests {
         }
     }
 
-    fn hub(cap: usize) -> (Hub, Arc<Mutex<VecDeque<Post>>>) {
+    fn hub(
+        cap: usize,
+    ) -> (
+        Hub,
+        Arc<Mutex<VecDeque<Post>>>,
+        shekyl_timing_engine::ManualClock,
+    ) {
         let posts = Arc::new(Mutex::new(VecDeque::new()));
-        let hub = Hub::new(cap, queue_poster(&posts));
-        (hub, posts)
+        let clock = shekyl_timing_engine::ManualClock::new(Tick::new(1));
+        let hub = Hub::with_clock(
+            cap,
+            queue_poster(&posts),
+            InboundCeiling::Bounded(8),
+            Arc::new(clock.clone()),
+        );
+        (hub, posts, clock)
     }
 
     #[test]
     fn a_delivery_posted_before_closed_is_parsed() {
-        let (hub, posts) = hub(32);
+        let (hub, posts, _clock) = hub(32);
         let id = hub
             .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
         assert!(hub.deliver(id, b"hello"));
         hub.close(id);
+        let kinds: Vec<_> = posts
+            .lock()
+            .expect("posts")
+            .iter()
+            .map(|post| post.kind)
+            .collect();
+        assert_eq!(kinds, vec![PostKind::Deliver, PostKind::Closed]);
         run_in_post_order(&hub, &posts);
-        assert_eq!(hub.parsed(id).as_deref(), Some(b"hello".as_slice()));
         assert_eq!(
             hub.cause(id).map(CloseCause::kind),
             Some(CloseKind::LocalClose)
@@ -581,18 +672,17 @@ mod tests {
 
     #[test]
     fn a_delivery_after_the_handler_is_gone_is_the_guard() {
-        let (hub, _posts) = hub(32);
+        let (hub, _posts, _clock) = hub(32);
         let id = hub
             .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
         hub.handler_gone(id);
         assert!(!hub.deliver_result(id, b"late", true));
-        assert_eq!(hub.parsed(id).as_deref(), Some(b"".as_slice()));
     }
 
     #[test]
     fn send_after_close_returns_false_and_keeps_the_cause() {
-        let (hub, posts) = hub(32);
+        let (hub, posts, _clock) = hub(32);
         let id = hub
             .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
@@ -607,7 +697,7 @@ mod tests {
 
     #[test]
     fn a_message_that_does_not_fit_is_send_queue_full_and_the_false_recv_leaves_it() {
-        let (hub, _posts) = hub(4);
+        let (hub, _posts, _clock) = hub(4);
         let id = hub
             .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
@@ -626,7 +716,7 @@ mod tests {
 
     #[test]
     fn two_closes_keep_the_first_cause() {
-        let (hub, _posts) = hub(32);
+        let (hub, _posts, _clock) = hub(32);
         let id = hub
             .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
@@ -650,7 +740,7 @@ mod tests {
 
     #[test]
     fn await_handler_finishes_when_another_thread_runs_the_post() {
-        let (hub, posts) = hub(32);
+        let (hub, posts, _clock) = hub(32);
         let id = hub
             .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
@@ -659,7 +749,7 @@ mod tests {
 
     #[test]
     fn socket_count_is_the_open_outbound_and_inbound_held_leaves_it_out() {
-        let (hub, _posts) = hub(32);
+        let (hub, _posts, _clock) = hub(32);
         let _id = hub
             .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
@@ -672,7 +762,7 @@ mod tests {
 
     #[test]
     fn a_clearnet_open_refuses_a_tor_address_with_dial_failed() {
-        let (hub, _posts) = hub(32);
+        let (hub, _posts, _clock) = hub(32);
         let err = hub
             .open(&Peer {
                 connector: ConnectorId::Clearnet,
@@ -688,7 +778,7 @@ mod tests {
 
     #[test]
     fn a_banned_clearnet_host_is_admission_refused() {
-        let (hub, _posts) = hub(32);
+        let (hub, _posts, _clock) = hub(32);
         let ip = Ipv4Addr::new(203, 0, 113, 10);
         let _closed = hub
             .sockets()
@@ -701,7 +791,7 @@ mod tests {
     fn a_transport_close_does_not_ban_the_host() {
         let host = Ipv4Addr::new(203, 0, 113, 10);
         for kind in CloseKind::ALL {
-            let (hub, _posts) = hub(32);
+            let (hub, _posts, _clock) = hub(32);
             let id = hub.open(&clearnet(host)).expect("open");
             let cause = if *kind == CloseKind::ProxyRefused {
                 CloseCause::proxy_refused(1)
@@ -718,7 +808,7 @@ mod tests {
 
     #[test]
     fn established_carries_the_observed_endpoint() {
-        let (hub, posts) = hub(32);
+        let (hub, posts, _clock) = hub(32);
         let ip = Ipv4Addr::new(203, 0, 113, 10);
         let id = hub.open(&clearnet(ip)).expect("open");
         assert!(await_handler_on_two_threads(&hub, id, &posts));
@@ -733,5 +823,34 @@ mod tests {
         assert_eq!(observed.address_type, ADDR_IPV4);
         assert_eq!(observed.bytes, ip.octets());
         assert!(!observed.zone_only);
+    }
+
+    #[test]
+    fn a_ban_posts_closed_for_a_live_socket_and_expires() {
+        let (hub, posts, clock) = hub(32);
+        let ip = Ipv4Addr::new(203, 0, 113, 10);
+        let id = hub.open(&clearnet(ip)).expect("open");
+        let closed = hub.ban_host(IpAddr::V4(ip), Tick::new(50));
+        assert_eq!(closed, vec![id]);
+        run_in_post_order(&hub, &posts);
+        assert_eq!(
+            hub.cause(id).map(CloseCause::kind),
+            Some(CloseKind::LocalClose)
+        );
+        clock.set(Tick::new(50));
+        assert!(hub.open(&clearnet(ip)).is_ok());
+    }
+
+    #[test]
+    fn send_is_readable_by_the_connector_writer() {
+        let (hub, _posts, _clock) = hub(32);
+        let id = hub
+            .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
+            .expect("open");
+        let outbound = hub.outbound(id).expect("writer");
+        assert!(hub.send(id, b"hello".to_vec()));
+        let bytes = outbound.queue.try_pop().expect("queued");
+        outbound.queue.release(bytes.len());
+        assert_eq!(bytes, b"hello");
     }
 }

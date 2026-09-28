@@ -145,9 +145,14 @@ namespace shekyl
 
     bool request_callback() override
     {
+      // The queued callback runs on the strand. Holding a count until it
+      // returns keeps `begin_closed` from destroying the link first.
+      if (!add_ref())
+        return false;
       boost::asio::post(m_strand, [this] {
         if (m_handler)
           m_handler->handle_qued_callback();
+        release();
       });
       return true;
     }
