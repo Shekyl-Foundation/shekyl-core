@@ -2254,8 +2254,8 @@ settings this per-IP cap is the only inbound resource bound the daemon has.**
 
 **Stated at defaults deliberately, because the deployed fleet is not at
 defaults.** Checked on the live testnet hosts rather than assumed: both
-`skl-foundation` and `skl-seeduse` set `in-peers=128` (with `out-peers=64`)
-explicitly in `/etc/shekyl/shekyld-testnet.conf`. **As deployed, the inbound
+two of the live testnet hosts set `in-peers=128` (with `out-peers=64`)
+explicitly in their `shekyld-testnet.conf`. **As deployed, the inbound
 bound is 128 and the per-IP cap is not the only one** — the unbounded form is a
 property of the shipped default, not of this network. Both statements are load-
 bearing and they are not interchangeable: the default is what an ordinary
@@ -2478,8 +2478,8 @@ fleet**, and checking the wrong one reports a running daemon as down:
 | Host class | Unit | Config |
 | --- | --- | --- |
 | the six seeds | `shekyld-testnet.service` | `shekyld-testnet.conf` |
-| `skl-miner-test` (A) | **`shekyld.service`** | `shekyld-miner-testnet.conf` |
-| `skl-foundation` (B) | **`shekyld-testnet-rpc.service`** | `shekyld-testnet.conf` |
+| the testnet miner (A) | **`shekyld.service`** | `shekyld-miner-testnet.conf` |
+| an internal node (B) | **`shekyld-testnet-rpc.service`** | `shekyld-testnet.conf` |
 
 *This is not pedantry: "A's daemon is down" was reported and relayed on the
 strength of `systemctl is-active shekyld-testnet` against a host that runs
@@ -2504,7 +2504,7 @@ channel the timing delta reads.
 **RECOVERY, AND A CORRECTED CAUSE, 2026-09-21.** `seedeu` was excluded on the
 strength of the survey above. Re-probed after the Frankfurt incident cleared,
 it is **OPEN from all five vantage points that previously measured it closed**
-— this box, `seedaus`, `seedjp`, `seeduse`, and `skl-foundation`. **It was a
+— this box, `seedaus`, `seedjp`, `seeduse`, and an internal node. **It was a
 transient provider outage, not the standing firewall misconfiguration the
 survey inferred**, and the exclusion is lifted: the live set is **six**.
 
@@ -2577,8 +2577,8 @@ established outbound connections to the six compiled seeds:
 
 | | Unit | out-peers | Seeds held |
 | --- | --- | --- | --- |
-| **A** (`skl-miner-test`) | `shekyld.service` | **12** (compiled default) | `seedaus`, `seedbrz`, `seedjp`, `seeduse` — **4** |
-| **B** (`skl-foundation`) | `shekyld-testnet-rpc.service` | 64 | `seedusw`, `seedeu` — **2** |
+| **A** (the testnet miner) | `shekyld.service` | **12** (compiled default) | `seedaus`, `seedbrz`, `seedjp`, `seeduse` — **4** |
+| **B** (an internal node) | `shekyld-testnet-rpc.service` | 64 | `seedusw`, `seedeu` — **2** |
 | **Overlap** | | | **ZERO** |
 | **Union** | | | **6 of 6** |
 
@@ -2677,8 +2677,8 @@ measured on the same network at the same moment.
 **And the two connections are the two distinct daemons, not one daemon twice
 — checked from the dialing side to close that reading:**
 
-- **A** (`skl-miner-test`) holds **all six**.
-- **B** (`skl-foundation`) holds **exactly the three raised seeds**.
+- **A** (the testnet miner) holds **all six**.
+- **B** (an internal node) holds **exactly the three raised seeds**.
 - **Overlap = {seedaus, seeduse, seedusw} = the raised set precisely. Zero on
   the unraised set.**
 

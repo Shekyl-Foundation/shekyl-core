@@ -1500,7 +1500,7 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
 - **LWMA-1 genesis difficulty is 400** (`daa_genesis_difficulty` in
   `config/consensus_constants.json`). The first 90 blocks still share
   one constant until the LWMA window fills; 400 is the testnet
-  calibration against `skl-miner-test` (4 threads), replacing the
+  calibration against the testnet miner (4 threads), replacing the
   zawy12 example value of 100 that produced ~20s blocks on that
   miner. This is a consensus-constant change: `CONSENSUS_CONSTANTS_DIGEST`
   moves, alpha.8 nodes will refuse an alpha.9 daemon on the digest
@@ -2292,7 +2292,7 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   tests); full-recipe KATs for
   all nine fixtures on both implementations (shekyl-dev pins a copy of
   the same artifact); two-limb avalanche on the pixel axis (sweep min
-  RMS 34.165 ≥ floor 20). Floor-device results (skl-pi, Pi 4, thermal
+  RMS 34.165 ≥ floor 20). Floor-device results (Pi 4, thermal
   bracket 50.6–59.4 °C at stock 1800 MHz): raster parity measured
   **RMS = 0.000000 on all nine fixtures at 128px** (bit-identical to
   the x86 goldens — recorded as measured, does not reopen the
@@ -19430,7 +19430,7 @@ production callers.
     recoverable derivation.
   - **RUST.md §1.2 reference clone**: removed the
     contributor-specific absolute path
-    `/home/torvaldsl/shekyl/RandomX/` (committing a single
+    `<randomx-checkout>/` (committing a single
     developer's `$HOME` path is non-reproducible). Replaced with a
     portable description noting that Phase 0 contributors may keep
     a sibling clone at the same pin as a contributor-local

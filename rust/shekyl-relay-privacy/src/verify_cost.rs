@@ -280,7 +280,7 @@ const fn pi4(millis: f64, basis: TreeBasis, msg_bytes: u32) -> VerifyCell {
 /// slack.
 const NODE_CRYPTO_PASSES: f64 = 10.0;
 
-/// MEASURED floor AES-128-CTR on `skl-pi` (the reference Pi 4 Model B),
+/// MEASURED floor AES-128-CTR on the floor device (the reference Pi 4 Model B),
 /// 2026-08-21. Units: **decimal** bytes/sec. `openssl speed` reports "in 1000s
 /// of bytes per second"; the 8 KB-block figure was `138993.66k`, so
 /// `138_993.66 * 1000 = 138_993_660` B/s — used EXACTLY, not rounded to
