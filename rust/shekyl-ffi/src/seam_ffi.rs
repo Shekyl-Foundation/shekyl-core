@@ -12,13 +12,12 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
-use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use shekyl_seam::{Hub, Post};
+use shekyl_seam::{Hub, Observed, Peer, Post, ADDR_I2P, ADDR_IPV4, ADDR_IPV6, ADDR_TOR, HOST_MAX};
 use shekyl_thread_ledger::{record_executor, BlockingLanes, ExecutorRow, ThreadName};
-use shekyl_transport_layer::{CloseCause, ConnectorId, Direction, SocketId};
+use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, Direction, SocketId};
 
 const SEND_CAP: usize = 64 * 1024;
 
@@ -36,12 +35,55 @@ const _: () = {
     assert!(ConnectorId::Tor as u8 as u32 == SHEKYL_CONNECTOR_TOR);
     assert!(Direction::Inbound.index() == SHEKYL_DIRECTION_INBOUND as usize);
     assert!(Direction::Outbound.index() == SHEKYL_DIRECTION_OUTBOUND as usize);
+    assert!(ADDR_IPV4 == 1 && ADDR_IPV6 == 2 && ADDR_I2P == 3 && ADDR_TOR == 4);
+    assert!(HOST_MAX == 62);
 };
+
+/// One peer address. `address_type` is the peer-exchange tag.
+/// `bytes` holds the octets or the host. `zone_only` is an overlay
+/// inbound with no peer address.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ShekylSeamAddress {
+    pub connector: u8,
+    pub address_type: u8,
+    pub zone_only: u8,
+    pub _pad: u8,
+    pub port: u16,
+    pub len: u16,
+    pub bytes: [u8; HOST_MAX],
+}
+
+/// What `established` carries upward. The adapter writes this into the
+/// connection context before the handler is armed.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ShekylSeamObserved {
+    pub connector: u8,
+    pub direction: u8,
+    pub address_type: u8,
+    pub zone_only: u8,
+    pub port: u16,
+    pub len: u16,
+    pub bytes: [u8; HOST_MAX],
+}
+
+/// `id` is zero when the open was refused. `cause.kind` is then the D12
+/// discriminant, and zero when `id` is a socket.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ShekylSeamOpenResult {
+    pub id: u64,
+    pub cause_kind: u8,
+    pub _pad: u8,
+    pub reply_code: u16,
+}
 
 type PostFn = unsafe extern "C" fn(
     ctx: *mut c_void,
     id: u64,
     kind: u32,
+    observed: *const ShekylSeamObserved,
     bytes: *const u8,
     len: usize,
     cause: *const CloseCause,
@@ -120,11 +162,17 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
                 shekyl_seam::PostKind::Deliver => 2,
                 shekyl_seam::PostKind::Closed => 3,
             };
+            let observed = item.observed.as_ref().map(observed_c);
+            let observed_ptr = observed
+                .as_ref()
+                .map(std::ptr::from_ref)
+                .unwrap_or(std::ptr::null());
             unsafe {
                 (bound.post)(
                     bound.ctx.get(),
                     item.id.get(),
                     kind,
+                    observed_ptr,
                     bytes.as_ptr(),
                     bytes.len(),
                     cause
@@ -137,15 +185,54 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
     ));
 }
 
-/// Reserve an outbound clearnet socket. `0` is refusal.
+/// Reserve a socket for `addr`. `inbound` is nonzero when this node accepted.
+///
+/// `id` is zero and `cause` is the D12 cause when the address is refused.
+///
+/// # Safety
+/// `addr` is readable.
 #[no_mangle]
-pub extern "C" fn shekyl_seam_open_outbound(ipv4: u32) -> u64 {
-    let Some(hub) = hub() else {
-        return 0;
+pub unsafe extern "C" fn shekyl_seam_open(
+    addr: *const ShekylSeamAddress,
+    inbound: u8,
+) -> ShekylSeamOpenResult {
+    let refused = |cause: CloseCause| ShekylSeamOpenResult {
+        id: 0,
+        cause_kind: cause.kind() as u8,
+        _pad: 0,
+        reply_code: cause.reply_code(),
     };
-    hub.open_outbound(Ipv4Addr::from(ipv4))
-        .map(SocketId::get)
-        .unwrap_or(0)
+    if addr.is_null() {
+        return refused(CloseCause::new(CloseKind::DialFailed));
+    }
+    let Some(hub) = hub() else {
+        return refused(CloseCause::new(CloseKind::DialFailed));
+    };
+    let addr = unsafe { &*addr };
+    let Some(connector) = connector_of(u32::from(addr.connector)) else {
+        return refused(CloseCause::new(CloseKind::DialFailed));
+    };
+    let len = usize::from(addr.len);
+    if len > HOST_MAX {
+        return refused(CloseCause::new(CloseKind::DialFailed));
+    }
+    let peer = Peer {
+        connector,
+        inbound: inbound != 0,
+        address_type: addr.address_type,
+        zone_only: addr.zone_only != 0,
+        port: addr.port,
+        bytes: addr.bytes[..len].to_vec(),
+    };
+    match hub.open(&peer) {
+        Ok(id) => ShekylSeamOpenResult {
+            id: id.get(),
+            cause_kind: 0,
+            _pad: 0,
+            reply_code: 0,
+        },
+        Err(cause) => refused(cause),
+    }
 }
 
 /// Post `established` and wait until the strand has built the handler.
@@ -357,6 +444,25 @@ pub unsafe extern "C" fn shekyl_executor_record(
 #[no_mangle]
 pub extern "C" fn shekyl_executor_release(handle: u64) {
     EXECUTORS.lock().expect("executor table").remove(&handle);
+}
+
+fn observed_c(observed: &Observed) -> ShekylSeamObserved {
+    let mut bytes = [0u8; HOST_MAX];
+    let len = observed.bytes.len().min(HOST_MAX);
+    bytes[..len].copy_from_slice(&observed.bytes[..len]);
+    let direction = match observed.direction {
+        Direction::Inbound => u8::try_from(SHEKYL_DIRECTION_INBOUND).expect("direction fits"),
+        Direction::Outbound => u8::try_from(SHEKYL_DIRECTION_OUTBOUND).expect("direction fits"),
+    };
+    ShekylSeamObserved {
+        connector: observed.connector as u8,
+        direction,
+        address_type: observed.address_type,
+        zone_only: u8::from(observed.zone_only),
+        port: observed.port,
+        len: u16::try_from(len).expect("host length fits"),
+        bytes,
+    }
 }
 
 fn connector_of(id: u32) -> Option<ConnectorId> {

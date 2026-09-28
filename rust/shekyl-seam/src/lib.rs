@@ -17,16 +17,43 @@
 #![deny(unsafe_code)]
 
 use std::collections::VecDeque;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 
 use shekyl_capped_stream::StreamEnds;
+use shekyl_peer_policy::InboundCeiling;
 use shekyl_thread_ledger::{BlockingLanes, ExecutorBudget, ExecutorBudgetError};
 use shekyl_timing_engine::Tick;
 use shekyl_transport_layer::{
-    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, SocketId, Sockets,
+    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, NetworkAddress, SocketId, Sockets,
 };
+
+/// `epee::net_utils::address_type`. The peer-exchange union uses these tags.
+pub const ADDR_IPV4: u8 = 1;
+pub const ADDR_IPV6: u8 = 2;
+pub const ADDR_I2P: u8 = 3;
+pub const ADDR_TOR: u8 = 4;
+
+/// Host bytes, not counting a trailing NUL. Tor's buffer holds 62.
+pub const HOST_MAX: usize = 62;
+
+/// What `established` tells the adapter to write into the connection context.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Observed {
+    /// Clearnet or Tor.
+    pub connector: ConnectorId,
+    /// Inbound or outbound.
+    pub direction: Direction,
+    /// [`ADDR_IPV4`], [`ADDR_IPV6`], [`ADDR_I2P`], or [`ADDR_TOR`].
+    pub address_type: u8,
+    /// Tor or I2P inbound with no peer address. The adapter writes `unknown()`.
+    pub zone_only: bool,
+    /// The port the union carries. Unused when `zone_only` is set.
+    pub port: u16,
+    /// Address octets or host bytes. Empty when `zone_only` is set.
+    pub bytes: Vec<u8>,
+}
 
 /// What the strand is asked to run. The bytes and the cause are copies.
 /// The post returns before the strand runs.
@@ -40,6 +67,8 @@ pub struct Post {
     pub bytes: Vec<u8>,
     /// `Closed` carries the cause that won. The other kinds carry none.
     pub cause: Option<CloseCause>,
+    /// `Established` carries the endpoint the adapter writes before `arm`.
+    pub observed: Option<Observed>,
 }
 
 /// The three posts onto one connection's strand.
@@ -80,6 +109,8 @@ struct Conn {
     handler_gone: bool,
     /// Bytes `deliver_result` accepted, in order. The test reads this.
     parsed: Vec<u8>,
+    /// Filled into the context when the strand runs `established`.
+    observed: Observed,
 }
 
 impl Hub {
@@ -104,17 +135,13 @@ impl Hub {
         self.lock().sockets.clone()
     }
 
-    /// Outbound clearnet. The channel is this socket: the caller has
-    /// finished the connector handshake before asking for a handler.
-    pub fn open_outbound(&self, ip: Ipv4Addr) -> Result<SocketId, CloseCause> {
+    /// Reserve a socket for `peer` and remember the endpoint `established` posts.
+    ///
+    /// Refusal is a D12 cause. Nothing is reserved in that case.
+    pub fn open(&self, peer: &Peer) -> Result<SocketId, CloseCause> {
+        let observed = peer.observed()?;
         let mut inner = self.lock();
-        let open = match inner.sockets.open_clearnet(IpAddr::V4(ip), Tick::new(1)) {
-            Ok(open) => open,
-            Err(shekyl_transport_layer::OpenError::Refused(cause)) => return Err(cause),
-            Err(shekyl_transport_layer::OpenError::Exhausted) => {
-                return Err(CloseCause::new(CloseKind::AdmissionRefused));
-            }
-        };
+        let open = admit(&inner.sockets, peer)?;
         let id = open.id();
         inner.conns.insert(
             id,
@@ -126,6 +153,7 @@ impl Hub {
                 handler_ready: false,
                 handler_gone: false,
                 parsed: Vec::new(),
+                observed,
             },
         );
         Ok(id)
@@ -146,6 +174,7 @@ impl Hub {
                 kind: PostKind::Established,
                 bytes: Vec::new(),
                 cause: None,
+                observed: Some(inner.conns[&id].observed.clone()),
             }
         };
         (self.post)(post);
@@ -195,6 +224,7 @@ impl Hub {
                 kind: PostKind::Deliver,
                 bytes: bytes.to_vec(),
                 cause: None,
+                observed: None,
             }
         };
         (self.post)(post);
@@ -321,6 +351,7 @@ impl Hub {
                 kind: PostKind::Closed,
                 bytes: Vec::new(),
                 cause: Some(cause),
+                observed: None,
             });
             self.ready.notify_all();
         }
@@ -330,6 +361,115 @@ impl Hub {
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().expect("seam table lock poisoned")
     }
+}
+
+/// A peer the seam may reserve a socket for.
+///
+/// `address_type` is the peer-exchange tag. `bytes` are the octets or the
+/// host. `zone_only` is Tor or I2P inbound with no peer address.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Peer {
+    /// Clearnet or Tor.
+    pub connector: ConnectorId,
+    /// Accepted, rather than dialed.
+    pub inbound: bool,
+    /// [`ADDR_IPV4`], [`ADDR_IPV6`], [`ADDR_I2P`], or [`ADDR_TOR`].
+    pub address_type: u8,
+    /// No peer address. The adapter writes `unknown()`.
+    pub zone_only: bool,
+    /// Port. Unused when `zone_only` is set.
+    pub port: u16,
+    /// Address octets or host bytes.
+    pub bytes: Vec<u8>,
+}
+
+impl Peer {
+    fn observed(&self) -> Result<Observed, CloseCause> {
+        if self.bytes.len() > HOST_MAX {
+            return Err(CloseCause::new(CloseKind::DialFailed));
+        }
+        Ok(Observed {
+            connector: self.connector,
+            direction: if self.inbound {
+                Direction::Inbound
+            } else {
+                Direction::Outbound
+            },
+            address_type: self.address_type,
+            zone_only: self.zone_only,
+            port: self.port,
+            bytes: self.bytes.clone(),
+        })
+    }
+}
+
+fn admit(sockets: &Sockets, peer: &Peer) -> Result<shekyl_transport_layer::OpenSocket, CloseCause> {
+    let now = Tick::new(1);
+    let ceiling = InboundCeiling::Bounded(1024);
+    let opened = match (
+        peer.connector,
+        peer.address_type,
+        peer.inbound,
+        peer.zone_only,
+    ) {
+        (ConnectorId::Clearnet, ADDR_IPV4, false, false) => {
+            let ip = ipv4(peer)?;
+            sockets.open_clearnet(IpAddr::V4(ip), now)
+        }
+        (ConnectorId::Clearnet, ADDR_IPV4, true, false) => {
+            let ip = ipv4(peer)?;
+            sockets.accept_clearnet(IpAddr::V4(ip), ceiling, now)
+        }
+        (ConnectorId::Clearnet, ADDR_IPV6, false, false) => {
+            let ip = ipv6(peer)?;
+            sockets.open_clearnet(IpAddr::V6(ip), now)
+        }
+        (ConnectorId::Clearnet, ADDR_IPV6, true, false) => {
+            let ip = ipv6(peer)?;
+            sockets.accept_clearnet(IpAddr::V6(ip), ceiling, now)
+        }
+        (ConnectorId::Tor, ADDR_TOR, true, true) => sockets.accept_tor(ceiling),
+        (ConnectorId::Tor, ADDR_TOR, false, false) => {
+            let host = host(peer)?;
+            sockets.open_tor(&NetworkAddress::Tor {
+                host,
+                port: peer.port,
+            })
+        }
+        _ => return Err(CloseCause::new(CloseKind::DialFailed)),
+    };
+    match opened {
+        Ok(open) => Ok(open),
+        Err(shekyl_transport_layer::OpenError::Refused(cause)) => Err(cause),
+        Err(shekyl_transport_layer::OpenError::Exhausted) => {
+            Err(CloseCause::new(CloseKind::AdmissionRefused))
+        }
+    }
+}
+
+fn ipv4(peer: &Peer) -> Result<Ipv4Addr, CloseCause> {
+    let bytes: [u8; 4] = peer
+        .bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| CloseCause::new(CloseKind::DialFailed))?;
+    Ok(Ipv4Addr::from(bytes))
+}
+
+fn ipv6(peer: &Peer) -> Result<Ipv6Addr, CloseCause> {
+    let bytes: [u8; 16] = peer
+        .bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| CloseCause::new(CloseKind::DialFailed))?;
+    Ok(Ipv6Addr::from(bytes))
+}
+
+fn host(peer: &Peer) -> Result<String, CloseCause> {
+    if peer.bytes.is_empty() {
+        return Err(CloseCause::new(CloseKind::DialFailed));
+    }
+    String::from_utf8(peer.bytes.clone()).map_err(|_| CloseCause::new(CloseKind::DialFailed))
 }
 
 /// The floor the seam's executor uses while `idle_worker` blocks on it.
@@ -401,6 +541,17 @@ pub fn await_handler_on_two_threads(
 mod tests {
     use super::*;
 
+    fn clearnet(ip: Ipv4Addr) -> Peer {
+        Peer {
+            connector: ConnectorId::Clearnet,
+            inbound: false,
+            address_type: ADDR_IPV4,
+            zone_only: false,
+            port: 18080,
+            bytes: ip.octets().to_vec(),
+        }
+    }
+
     fn hub(cap: usize) -> (Hub, Arc<Mutex<VecDeque<Post>>>) {
         let posts = Arc::new(Mutex::new(VecDeque::new()));
         let hub = Hub::new(cap, queue_poster(&posts));
@@ -411,7 +562,7 @@ mod tests {
     fn a_delivery_posted_before_closed_is_parsed() {
         let (hub, posts) = hub(32);
         let id = hub
-            .open_outbound(Ipv4Addr::new(203, 0, 113, 10))
+            .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
         assert!(hub.deliver(id, b"hello"));
         hub.close(id);
@@ -427,7 +578,7 @@ mod tests {
     fn a_delivery_after_the_handler_is_gone_is_the_guard() {
         let (hub, _posts) = hub(32);
         let id = hub
-            .open_outbound(Ipv4Addr::new(203, 0, 113, 10))
+            .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
         hub.handler_gone(id);
         assert!(!hub.deliver_result(id, b"late", true));
@@ -438,7 +589,7 @@ mod tests {
     fn send_after_close_returns_false_and_keeps_the_cause() {
         let (hub, posts) = hub(32);
         let id = hub
-            .open_outbound(Ipv4Addr::new(203, 0, 113, 10))
+            .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
         hub.close(id);
         assert!(!hub.send(id, b"more".to_vec()));
@@ -453,7 +604,7 @@ mod tests {
     fn a_message_that_does_not_fit_is_send_queue_full_and_the_false_recv_leaves_it() {
         let (hub, _posts) = hub(4);
         let id = hub
-            .open_outbound(Ipv4Addr::new(203, 0, 113, 10))
+            .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
         assert!(hub.send(id, b"ab".to_vec()));
         assert!(!hub.send(id, b"cdef".to_vec()));
@@ -472,7 +623,7 @@ mod tests {
     fn two_closes_keep_the_first_cause() {
         let (hub, _posts) = hub(32);
         let id = hub
-            .open_outbound(Ipv4Addr::new(203, 0, 113, 10))
+            .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
         hub.close(id);
         hub.close(id);
@@ -496,7 +647,7 @@ mod tests {
     fn await_handler_finishes_when_another_thread_runs_the_post() {
         let (hub, posts) = hub(32);
         let id = hub
-            .open_outbound(Ipv4Addr::new(203, 0, 113, 10))
+            .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
         assert!(await_handler_on_two_threads(&hub, id, &posts));
     }
@@ -505,12 +656,58 @@ mod tests {
     fn socket_count_is_the_open_outbound_and_inbound_held_leaves_it_out() {
         let (hub, _posts) = hub(32);
         let _id = hub
-            .open_outbound(Ipv4Addr::new(203, 0, 113, 10))
+            .open(&clearnet(Ipv4Addr::new(203, 0, 113, 10)))
             .expect("open");
         assert_eq!(
             hub.socket_count(ConnectorId::Clearnet, Direction::Outbound),
             1
         );
         assert_eq!(hub.inbound_held(), 0);
+    }
+
+    #[test]
+    fn a_clearnet_open_refuses_a_tor_address_with_dial_failed() {
+        let (hub, _posts) = hub(32);
+        let err = hub
+            .open(&Peer {
+                connector: ConnectorId::Clearnet,
+                inbound: false,
+                address_type: ADDR_TOR,
+                zone_only: false,
+                port: 18080,
+                bytes: b"example.onion".to_vec(),
+            })
+            .expect_err("not a clearnet address");
+        assert_eq!(err.kind(), CloseKind::DialFailed);
+    }
+
+    #[test]
+    fn a_banned_clearnet_host_is_admission_refused() {
+        let (hub, _posts) = hub(32);
+        let ip = Ipv4Addr::new(203, 0, 113, 10);
+        let _closed = hub
+            .sockets()
+            .ban_host(IpAddr::V4(ip), Tick::new(50), Tick::new(1));
+        let err = hub.open(&clearnet(ip)).expect_err("banned");
+        assert_eq!(err.kind(), CloseKind::AdmissionRefused);
+    }
+
+    #[test]
+    fn established_carries_the_observed_endpoint() {
+        let (hub, posts) = hub(32);
+        let ip = Ipv4Addr::new(203, 0, 113, 10);
+        let id = hub.open(&clearnet(ip)).expect("open");
+        assert!(await_handler_on_two_threads(&hub, id, &posts));
+        let observed = hub
+            .lock()
+            .conns
+            .get(&id)
+            .map(|conn| conn.observed.clone())
+            .expect("connection");
+        assert_eq!(observed.connector, ConnectorId::Clearnet);
+        assert_eq!(observed.direction, Direction::Outbound);
+        assert_eq!(observed.address_type, ADDR_IPV4);
+        assert_eq!(observed.bytes, ip.octets());
+        assert!(!observed.zone_only);
     }
 }

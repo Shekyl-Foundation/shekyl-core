@@ -4177,12 +4177,48 @@ constexpr std::uint32_t SHEKYL_CONNECTOR_CLEARNET = 0;
 constexpr std::uint32_t SHEKYL_CONNECTOR_TOR = 1;
 constexpr std::uint32_t SHEKYL_DIRECTION_INBOUND = 0;
 constexpr std::uint32_t SHEKYL_DIRECTION_OUTBOUND = 1;
+constexpr std::uint8_t SHEKYL_ADDR_IPV4 = 1;
+constexpr std::uint8_t SHEKYL_ADDR_IPV6 = 2;
+constexpr std::uint8_t SHEKYL_ADDR_I2P = 3;
+constexpr std::uint8_t SHEKYL_ADDR_TOR = 4;
+constexpr std::uint16_t SHEKYL_SEAM_HOST_MAX = 62;
+
+extern "C" {
+
+struct shekyl_seam_address {
+  std::uint8_t connector;
+  std::uint8_t address_type;
+  std::uint8_t zone_only;
+  std::uint8_t _pad;
+  std::uint16_t port;
+  std::uint16_t len;
+  std::uint8_t bytes[SHEKYL_SEAM_HOST_MAX];
+};
+
+struct shekyl_seam_observed {
+  std::uint8_t connector;
+  std::uint8_t direction;
+  std::uint8_t address_type;
+  std::uint8_t zone_only;
+  std::uint16_t port;
+  std::uint16_t len;
+  std::uint8_t bytes[SHEKYL_SEAM_HOST_MAX];
+};
+
+struct shekyl_seam_open_result {
+  std::uint64_t id;
+  std::uint8_t cause_kind;
+  std::uint8_t _pad;
+  std::uint16_t reply_code;
+};
+static_assert(sizeof(shekyl_seam_open_result) == 16, "seam open result");
 
 using shekyl_seam_post_fn = void (*)(void* ctx, std::uint64_t id, std::uint32_t kind,
-    const std::uint8_t* bytes, std::size_t len, const shekyl_close_cause* cause);
+    const shekyl_seam_observed* observed, const std::uint8_t* bytes, std::size_t len,
+    const shekyl_close_cause* cause);
 
 void shekyl_seam_bind(void* ctx, shekyl_seam_post_fn post);
-std::uint64_t shekyl_seam_open_outbound(std::uint32_t ipv4);
+shekyl_seam_open_result shekyl_seam_open(const shekyl_seam_address* addr, std::uint8_t inbound);
 int shekyl_seam_await_handler(std::uint64_t id);
 void shekyl_seam_handler_ready(std::uint64_t id);
 int shekyl_seam_deliver(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
@@ -4195,6 +4231,8 @@ std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t di
 std::uint64_t shekyl_seam_inbound_held(void);
 int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);
 void shekyl_executor_release(std::uint64_t handle);
+
+} // extern "C"
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
 /// (C-compatible header used by both memwipe.c and mlocker.cpp).
