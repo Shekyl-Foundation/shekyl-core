@@ -129,9 +129,11 @@ fn captured_chains() -> Vec<(PathBuf, Manifest)> {
 /// The shapes `regtest_e2e.rs` captures, by the names its `maybe_capture_chain_vector`
 /// calls write into `manifest.json` (§5.2). Adding a capture there adds a
 /// name here; the corpus is enumerated, not discovered.
-const CAPTURED_SHAPES: [&str; 4] = [
+const CAPTURED_SHAPES: [&str; 6] = [
     "bond-post",
     "emission-claim",
+    "limit-full",
+    "median-full",
     "spend-1in-2out",
     "spend-depth3",
 ];
