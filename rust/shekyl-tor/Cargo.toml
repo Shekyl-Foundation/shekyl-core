@@ -4,8 +4,8 @@
 # BSD-3-Clause
 
 [package]
-name = "shekyl-clearnet"
-description = "Clearnet connector. One runtime, plaintext while the option is off, Noise while it is on. The choice is the declaration's stack plan."
+name = "shekyl-tor"
+description = "Tor connector. The Tor stream is the channel. Dial is SOCKS5. Inbound is the zone, then the gap timer."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,13 +16,17 @@ publish = false
 [dependencies]
 shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-net-address = { path = "../shekyl-net-address" }
-shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
-shekyl-socks = { path = "../shekyl-socks" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-socks = { path = "../shekyl-socks" }
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[dev-dependencies]
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 
 [lints]
 workspace = true

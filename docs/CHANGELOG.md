@@ -61,6 +61,13 @@
   thread off the ledger until that thread exits. The clearnet connector
   keeps one runtime: plaintext while its option is off, Noise while it
   is on. It dials directly or through SOCKS5 CONNECT (`shekyl-socks`).
+  The Tor connector uses that same SOCKS client. Its stream is the
+  channel, and a failed bind does not insert the zone. The byte cap
+  and the socket copy are `shekyl-capped-stream`, shared with clearnet.
+  A send that does not fit cancels a write already in progress.
+  Dropping a Tor session releases the admission slot. Onion publication
+  takes the listener's loopback forward address. It is one `ADD_ONION`
+  with proof-of-work on. A refusal is not retried without it.
 
 ### CLI wallet shell
 

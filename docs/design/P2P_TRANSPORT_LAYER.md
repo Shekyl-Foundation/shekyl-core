@@ -272,10 +272,14 @@ does not walk `/proc/self/fd`. A transient `accept` error
 accepting. Shutdown is what ends that loop. The outbound queue is that byte cap and nothing else. It is not an
 unbounded channel with a counter beside it. The caller passes the cap,
 labelled unmeasured until PWD-T6's session-established limit plus
-measurement names it. A send that does not fit is not stored, and the
-connection closes with `SendQueueFull`. The inbound reader awaits space
-instead of closing: a slow consumer on this side stops reading, and TCP
-flow control pushes back on the peer.
+measurement names it. `shekyl-capped-stream` is that cap and the socket
+copy. Clearnet and Tor both call it. A connector passes framing in;
+this crate does not know which connector it is. A send that does not
+fit is not stored, and a write already in progress is cancelled with
+`SendQueueFull`. The inbound reader awaits space instead of closing:
+a slow consumer on this side stops reading, and TCP pushes back on
+the peer. Dropping the connection's queue hold closes the cap even
+when the caller still holds the session.
 
 The dialer checks the addressing cell, then `open_clearnet`. A direct
 dial connects to the address. A proxy dial connects to the SOCKS5
@@ -293,6 +297,25 @@ proxy's reply byte, which `ProxyRefused` carries. A refusal is
 `SocksPort` is what makes Tor's extended codes appear. That belongs in
 the operator docs. The initiator handshake runs on the blocking pool
 under the same engine owner, armed when the socket exists.
+
+The Tor connector is `shekyl-tor`. The stream is the channel: no Noise,
+no handshake on the blocking pool. It uses the same byte cap and the
+same socket copy as clearnet. The gap is an arm of that wait. Holding
+the session without `session_established` is the Levin handshake
+timeout. Dropping the session ends the connection and releases the
+admission slot. Outbound is SOCKS5 through `shekyl-socks`, and one
+engine owner covers that exchange, the circuit build, and rendezvous.
+Inbound is `accept_tor`, then that wait. A listener that stops
+accepting reports the cause. A failed bind drops every listener that
+succeeded, so the zone is not inserted. Onion-service proof-of-work
+and `MaxStreams` are the accept bound. Publication is one `ADD_ONION`
+through `DaemonTorControl` with proof-of-work on. `PowRefused` is not
+followed by a publish without proof-of-work. Any other publish failure
+leaves the zone outbound-only. The address is what the session layer
+stores as `m_our_address`. That address is the listener's `ForwardAddr`,
+minted from the loopback bind. An `--anonymous-inbound` bind is
+`OperatorInbound`. It does not convert into `ForwardAddr`, so it is
+not a publish target.
 
 Before the flip, ruling 4's exception is still in force. The option off
 omits the Noise layer the declaration adds, and the socket bytes are the
