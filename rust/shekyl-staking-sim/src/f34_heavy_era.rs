@@ -215,6 +215,10 @@ pub struct Grade {
     pub void_runs: usize,
     pub mean_off_one: usize,
     pub verdict: &'static str,
+    /// The verdict under `STAKER_ARCHIVAL_SIM.md` §L19g §4's ruling (2026-09-28), which
+    /// governs `PDM-Q-F34` and every pre-registration from §L19h on. `verdict` above is
+    /// §L19a's registered rule, kept unchanged so §L19a–§L19f reproduce.
+    pub governing_verdict: &'static str,
     /// The worst cell on the most seeds, and on how many.
     pub modal_worst_band: (usize, usize),
     pub modal_worst_band_seeds: usize,
@@ -268,10 +272,18 @@ impl Grade {
         } else {
             "clear"
         };
+        let governing_verdict = governing_verdict(
+            void_runs,
+            mean_off_one,
+            rows.iter().any(|r| r.ctl_worst >= 1.0),
+            ds.len(),
+            seeds_over_x,
+        );
         Self {
             min_delta,
             median_delta,
             max_delta,
+            governing_verdict,
             seeds_over_x,
             void_runs,
             mean_off_one,
@@ -414,9 +426,49 @@ pub const UNIT_COST_LADDER: [f64; 6] = [0.0, 0.01, 0.03, 0.06, 0.10, 0.20];
 /// size-scaled L10 fetch lag — inert here because `fetch_latency_per_unit` is `0.0` at
 /// baseline — so that point is capacity + (inert) fetch.
 pub fn unit_cost_report() -> Vec<UnitCostRow> {
+    unit_cost_sweep(&[4.0, 10.0], &UNIT_COST_LADDER)
+}
+
+/// §L19g §4's three-valued verdict, plus void. BREACH needs every seed over `X` and
+/// CLEAR every seed at or under it; anything between is a SPLIT, which calls for more
+/// seeds rather than a disposition. A point is void when any seed's subject is out of
+/// frame or has no delta, when demand is not matched, or when any seed's **control** has
+/// collapsed (worst cell `1.000`): `frac_under` is bounded at 1, so a delta against a
+/// saturated control stops reading the arm (§L19f).
+#[must_use]
+pub fn governing_verdict(
+    void_runs: usize,
+    mean_off_one: usize,
+    control_collapsed: bool,
+    n_deltas: usize,
+    seeds_over_x: usize,
+) -> &'static str {
+    if void_runs > 0 || n_deltas == 0 {
+        "VOID (subject not in frame)"
+    } else if mean_off_one > 0 {
+        "VOID (demand not matched)"
+    } else if control_collapsed {
+        "VOID (control collapsed)"
+    } else if seeds_over_x == n_deltas {
+        "BREACH"
+    } else if seeds_over_x == 0 {
+        "CLEAR"
+    } else {
+        "SPLIT"
+    }
+}
+
+/// §L19h's spreads — the realistic per-transaction band (`ARCHIVAL_SHARD_T_DERIVATION.md`
+/// §8.1 bounds it at ~1.3–2.4) — fixed before the run.
+pub const CALIBRATED_SPREADS: [f64; 3] = [1.5, 2.0, 2.5];
+/// §L19h's `storage_unit_cost` grid, fixed before the run: it spans §L19f's band
+/// (0.01 clear, 0.03 breach at `S = 4`) and stops below the control's collapse at 0.10.
+pub const CALIBRATED_UNIT_COST_LADDER: [f64; 6] = [0.001, 0.003, 0.01, 0.02, 0.03, 0.06];
+
+fn unit_cost_sweep(spreads: &[f64], ladder: &[f64]) -> Vec<UnitCostRow> {
     let mut rows = Vec::new();
-    for spread in [4.0, 10.0] {
-        for &uc in &UNIT_COST_LADDER {
+    for &spread in spreads {
+        for &uc in ladder {
             let lv = Levers {
                 storage_unit_cost: uc,
                 ..Levers::at_scale(1.30)
@@ -431,6 +483,12 @@ pub fn unit_cost_report() -> Vec<UnitCostRow> {
         }
     }
     rows
+}
+
+/// **`--f34-calibrated`** — §L19h: covered Burst at the realistic spreads across the
+/// calibrated `storage_unit_cost` grid, graded by [`governing_verdict`].
+pub fn calibrated_report() -> Vec<UnitCostRow> {
+    unit_cost_sweep(&CALIBRATED_SPREADS, &CALIBRATED_UNIT_COST_LADDER)
 }
 
 fn median(xs: impl Iterator<Item = f64>) -> f64 {
@@ -466,6 +524,33 @@ mod tests {
         ctl[0][0] = 0.6;
         let d = cellwise_worst_delta(&verdict_with(arm, 10), &verdict_with(ctl, 10)).unwrap();
         assert!((d - 0.5).abs() < 1e-12, "cell-wise delta {d}");
+    }
+
+    /// §L19g §4: BREACH and CLEAR each need all eight seeds; a mixed point is a SPLIT,
+    /// not the "clear" §L19a's rule would print; and a collapsed control voids the point
+    /// whatever the deltas say.
+    #[test]
+    fn governing_verdict_is_three_valued_with_void() {
+        assert_eq!(governing_verdict(0, 0, false, 8, 8), "BREACH");
+        assert_eq!(governing_verdict(0, 0, false, 8, 0), "CLEAR");
+        assert_eq!(governing_verdict(0, 0, false, 8, 7), "SPLIT");
+        assert_eq!(governing_verdict(0, 0, false, 8, 1), "SPLIT");
+        assert_eq!(
+            governing_verdict(0, 0, true, 8, 0),
+            "VOID (control collapsed)"
+        );
+        assert_eq!(
+            governing_verdict(0, 1, false, 8, 8),
+            "VOID (demand not matched)"
+        );
+        assert_eq!(
+            governing_verdict(1, 0, false, 7, 7),
+            "VOID (subject not in frame)"
+        );
+        assert_eq!(
+            governing_verdict(0, 0, false, 0, 0),
+            "VOID (subject not in frame)"
+        );
     }
 
     /// A cell empty in either run contributes nothing; all empty ⇒ no delta (void).

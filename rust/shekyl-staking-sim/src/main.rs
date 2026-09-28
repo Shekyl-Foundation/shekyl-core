@@ -616,6 +616,44 @@ fn print_f34_levers_report() {
     }
 }
 
+/// **`--f34-calibrated`** — §L19h: the realistic spreads across the calibrated
+/// `storage_unit_cost` grid. The governing (three-valued) verdict is the graded column;
+/// §L19a's registered verdict is printed beside it for continuity only.
+fn print_f34_calibrated_report() {
+    use f34_heavy_era::{BREACH_X, SEEDS};
+    let rows = f34_heavy_era::calibrated_report();
+    match serde_json::to_string_pretty(&rows) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 calibrated report: {e}"),
+    }
+    eprintln!(
+        "F34 §L19h, covered Burst: calibrated storage_unit_cost grid, N = {SEEDS} paired seeds, X = {BREACH_X}"
+    );
+    eprintln!(
+        "  S  | unit_cost |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | GOVERNING | (L19a rule)"
+    );
+    for r in &rows {
+        eprintln!(
+            "{:>4.1} | {:>9.3} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {} | ({})",
+            r.spread,
+            r.storage_unit_cost,
+            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade
+                .median_delta
+                .map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.seeds_over_x,
+            r.grade.median_arm_worst,
+            r.grade.median_ctl_worst,
+            r.grade.modal_worst_band,
+            r.grade.modal_worst_band_seeds,
+            SEEDS,
+            r.grade.governing_verdict,
+            r.grade.verdict
+        );
+    }
+}
+
 /// **`--f34-unit-cost`** — §L19e/§L19f: the `storage_unit_cost` sweep (item 7).
 fn print_f34_unit_cost_report() {
     use f34_heavy_era::SEEDS;
@@ -2009,6 +2047,10 @@ fn main() {
         return;
     }
 
+    if std::env::args().any(|a| a == "--f34-calibrated") {
+        print_f34_calibrated_report();
+        return;
+    }
     if std::env::args().any(|a| a == "--f34-unit-cost") {
         print_f34_unit_cost_report();
         return;
