@@ -690,7 +690,7 @@ as one.
 the two Q2 shapes over one read snapshot. The floor run is the same test
 binary cross-compiled for `aarch64-unknown-linux-gnu` (`cargo test
 --release --no-run --target …`, `aarch64-linux-gnu-gcc` as the linker) and
-run on **skl-pi — Raspberry Pi 4 Model B, Cortex-A72 ×4 (`CPU part 0xd08`),
+run on **the floor device — Raspberry Pi 4 Model B, Cortex-A72 ×4 (`CPU part 0xd08`),
 7.8 GB, Ubuntu 26.04**, one run of N = 100 000:
 
 | read | Pi 4 floor | desktop (i9-11950H) | floor multiplier |

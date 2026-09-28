@@ -1,7 +1,7 @@
 # GAP-7 floor capture — worst-case cold-block connect verification
 # phase=rust
 # captured_utc=20260905T034720Z
-# host=skl-pi  uname=Linux skl-pi 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
+# host=<floor-device>  uname=Linux <floor-device> 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
 # device_row: Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (PERFORMANCE_BASELINE.md §8.2)
 # git_rev=aa63f4ce996d3b8f12547db51ca60a8fb69cd84a
 # rustc=rustc 1.97.1 (8bab26f4f 2026-07-14)
@@ -41,7 +41,7 @@ warning: use of deprecated method `blake2::digest::generic_array::GenericArray::
 
 warning: `helioselene` (lib) generated 2 warnings
 warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
-   Compiling shekyl-ffi v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-ffi)
+   Compiling shekyl-ffi v3.1.0 (<bench-checkout>/rust/shekyl-ffi)
 # thermal 03:47:35 temp_mC=65731 clock_kHz=1800000
 # thermal 03:47:50 temp_mC=68653 clock_kHz=1800000
 # thermal 03:48:05 temp_mC=66705 clock_kHz=1800000
@@ -621,4 +621,4 @@ Benchmarking block_connect_pow/randomx_once_per_block: Warming up for 3.0000 s
 error: bench failed, to rerun pass `-p shekyl-ffi --bench block_connect_verify`
 
 Caused by:
-  process didn't exit successfully: `/home/torvaldsl/gap7-bench/shekyl-core/rust/target/release/deps/block_connect_verify-cd5810a9515d9f05 --bench` (signal: 4, SIGILL: illegal instruction)
+  process didn't exit successfully: `<bench-checkout>/rust/target/release/deps/block_connect_verify-cd5810a9515d9f05 --bench` (signal: 4, SIGILL: illegal instruction)

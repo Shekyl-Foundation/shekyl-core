@@ -57,6 +57,10 @@ what that row deletes.
 
 The design round is closed. D6 is ruled: a socketless `io_context` is a
 bounded interim that ends when the timing engine lands, not at LV-3.
+The seam note (2026-09-28) is the construction contract for the build
+that sits between the connectors and the harness. It measures nothing
+and deletes nothing.
+
 What is not a number yet is named in the section that owns it: deadline
 values (D9) and the executor's thread budget (D6), both measured on the
 step-5 build before cutover, and the fixed-window size and whether
@@ -325,6 +329,261 @@ is what step 7 evaluates. Neither arm matches on a network's identity.
 The worker count, the blocking cap, the shutdown timeout, and the
 handshake span are the caller's, labelled unmeasured until a measurement
 names them.
+
+## Seam — construction contract (RULED 2026-09-28)
+
+Both connectors are in. Nothing calls them, and epee still owns every
+socket. This note is the last build before the differential harness
+and the cutover. D4 and D6 stay the rulings. What follows is how those
+rulings are built, including the three points the seam has to settle.
+No measured thread budget, deadline, or accept rate is written here.
+The executor's floor is counted from the lanes that block on it.
+
+The id that crosses the boundary is the admission `SocketId`. C++
+learns it when the channel exists. A socket that dies before that
+never publishes an id. Rust holds no C++ pointer. C++ holds no Rust
+pointer. The pipe's `ctx` callback, invoked on the reader thread, is
+the arrangement this contract replaces.
+
+**Close.** The transport layer owns the socket. C++ owns the Levin
+handler and the connection context. Neither side's destructor calls
+the other.
+
+- Rust records the D12 cause through `Sockets::close`. The first
+  `CloseResult::Recorded` wins. `AlreadyClosed` leaves that cause
+  where the first call put it.
+- Rust then drops the socket and posts `closed(id, cause)` onto that
+  connection's strand. The post carries the id and the cause. After
+  the socket is gone, a C++ `send` or `close` for that id finds no
+  socket and returns false.
+- The strand runs `closed` only after every `deliver` already posted
+  to it. `closed` calls `release_protocol`
+  (`levin_protocol_handler_async.h:390`). That swaps out the invoke
+  list and `cancel` runs `finish_outer_call` on this stack
+  (`:271-277`). The outer-call count and the adapter's `add_ref` /
+  `release` are one pair: `start_outer_call` (`:371`) does both,
+  `finish_outer_call` (`:382`) undoes both.
+- Destruction is one later post on the same strand. `closed` posts it
+  when the count is zero after that inline cancel. A completion that
+  was already queued still holds the count, and the
+  `finish_outer_call` that lands on zero posts destruction, once.
+  The strand runs one handler at a time, so `handle_recv` has
+  returned before the destroy post starts. Nothing sleeps on the
+  count. Sleeping inside `closed` would hold the strand the
+  completion has to run on, which is the deadlock the floor exists
+  to keep off the idle lane. A timeout that destroys a handler still
+  inside `handle_recv` is not added.
+- A `deliver` posted before `closed` runs first, and the handler
+  parses those bytes. A `deliver` that finds the handler already
+  destroyed is refused and is not parsed. A test that posts a
+  `deliver` before `closed` and finds it refused has found an
+  ordering bug.
+- C++ `close` is an id lookup into Rust. It does not free the handler
+  inside that call. `add_ref` returns false when the id is already
+  gone, so a new outer call does not start. Destruction stays the
+  post above. The adapter does not keep epee's `shared_ptr` bump
+  (`abstract_tcp_server2.inl:1461`).
+- `handle_recv` returns false when it refuses the buffer, and also
+  when its own response send fails
+  (`levin_protocol_handler_async.h:596`). A false return records
+  `SessionRefused` only when `Sockets::close` returns `Recorded`.
+  `AlreadyClosed` leaves the earlier cause. The bytes are not
+  delivered again. A true return, including a short read the parser
+  has buffered, releases the read window.
+
+**One strand per connection.** The executor is one `io_context` with
+several threads. asio does not order two posts onto that context:
+two `deliver`s for one connection can run together or out of order,
+and `closed` can run before the last `deliver`. The Levin reader
+needs the bytes in order. D4 requires one delivery at a time, in
+order. epee met that with a strand per connection
+(`connection_basic.hpp:115`, posts at `abstract_tcp_server2.inl:416`).
+
+Each connection gets its own strand on this executor. `established`,
+every `deliver`, and `closed` are posted to that strand. The handler
+is created, called, and destroyed on it. `request_callback` and an
+invoke-timer completion that touches the handler are posted there
+too. Two connections may run at once, on two strands. The send
+writer stays the transport's. Callers enqueue. D3's refusal to copy
+the strand is the send path: C++ does not write the socket. The
+delivery strand stays.
+
+Handler state is touched on that strand. That is `start_outer_call`,
+the invoke map, and the invoke timer. `do_handshake_with_peer` reaches
+`async_invoke_remote_command2` (`levin_abstract_invoke2.h:98`), which
+calls `invoke_async` (`levin_protocol_handler_async.h:882`) on the
+idle thread and mutates the handler there. On the seam the idle
+thread posts that install onto the connection strand and waits until
+the strand has armed the timer. `start_outer_call` runs on the
+strand. The idle thread then waits at `ev.wait()` (`net_node.inl:1323`).
+The callback that raises `ev` runs on the strand, from `deliver` or
+from the timer completion posted there. The handshake function stays
+on the idle thread: posting it onto the strand would wait for a
+completion the strand cannot start. The waiter holds no lock the
+strand needs. A `foreach_connection` walk keeps the outer-call pair
+and reads the connection context on the walker. It does not block
+the walker's strand waiting for a connection strand. The invoke
+install is the mutation that moves.
+
+The transport thread's only act toward C++ is the post onto that
+strand. Idle handlers stay on the context. They are not per
+connection.
+
+**One server per zone.** A zone whose server is the seam does not
+construct `boosted_tcp_server`. Public and Tor switch in the same
+cutover (D14). A bind failure, a publish failure, or a seam error
+does not start epee for that zone. Tor bind failure still drops the
+zone. Publish failure still leaves it outbound-only. The epee server
+stays in the tree as the harness reference until D13, and production
+keeps calling it until the cutover replaces that call. The reference
+is a separate server. It is not a branch inside a zone that already
+started on the seam. I2P gets no seam server and no new epee server.
+The cutover states that I2P support is removed until an I2P connector
+exists.
+
+**The FFI is six calls, plus configuration.**
+
+Rust posts these onto the connection's strand, and the strand runs them:
+
+- `established(id, observed endpoint, direction)` creates the handler
+  and the context and inserts the id. The endpoint is the one the
+  connector observed. Tor inbound is the zone with no address.
+- `deliver(id, bytes)` runs `handle_recv`. The bytes are valid for
+  the callback. C++ copies what it keeps. A true return releases the
+  read window, including a short read the parser has only buffered.
+  A false return records `SessionRefused` only when the id is still
+  open, as the close rule above says. The next delivery is not
+  posted until this one has returned.
+- `closed(id, cause)` runs the inline cancel. The destroy post
+  follows as the close rule above says. `cause` is the `repr(C)`
+  `CloseCause` already in the FFI header.
+
+C++ calls these:
+
+- `connect` keeps the synchronous shape `net_node` already uses. It
+  returns after the channel exists and the strand has constructed
+  the handler, or it returns the D12 cause. No handler was created
+  on the failure path. The waiter holds no lock the strand needs.
+  The caller is often an executor thread. See the floor below.
+- `send(id, bytes)` is exactly one whole Levin message, copied into
+  the byte cap as a single unit during the call. C++ frees its buffer
+  after the return. More than one context sends on the same
+  connection: the handler's responses run on the connection's strand,
+  and `levin_notify`'s relay sends run on that zone's strand
+  (`levin_notify.cpp:464`). Concurrent senders interleave whole
+  messages only. The single writer then seals those buffers in queue
+  order, which is the nonce order. A message that does not fit is not
+  partly queued. `send` records `SendQueueFull` with `Sockets::close`
+  before it returns, so `handle_recv`'s false return finds the id
+  already closed and leaves that cause in place.
+- `close(id)` records `LocalClose` when no cause is recorded yet,
+  then drops the socket.
+
+Nothing else is a per-connection call. Keys, the handshake hash, and
+the transcript stay in the connector.
+
+The vtable still has the methods Levin calls. `get_io_context`
+returns the one socketless context. `request_callback` posts
+`handle_qued_callback` onto that connection's strand. `send_done`
+returns true and does not touch the queue, which is what
+`connection::send_done` does today.
+`call_run_once_service_io` returns false and does not poll. D3
+deletes its caller. A new caller is D15's second falsifier.
+
+**The executor.** One `io_context`, with no acceptor and no socket.
+Its threads run that context.
+[`runtime`](../../rust/shekyl-runtime/src/lib.rs) is the transport's
+reactor: one Tokio pool, worker count and blocking cap, recorded as
+one `RuntimeRow`. The executor is a second row on the same ledger.
+Its budget is [`ExecutorBudget`](../../rust/shekyl-thread-ledger/src/lib.rs),
+from `ExecutorBudget::above_floor`
+(`shekyl-thread-ledger/src/lib.rs:190`). The row is
+[`record_executor`](../../rust/shekyl-thread-ledger/src/lib.rs)
+(`shekyl-thread-ledger/src/lib.rs:474`). `ExecutorRow` does not spawn
+or join. These threads have no `RuntimeRow` and no `DedicatedThread`
+row. A dedicated row is one thread `spawn_dedicated` joins. A runtime
+row counts a blocking cap this pool does not have. A second row for
+the same threads would count each worker twice. The hard-coded `10` at
+`net_node.inl:1150` is the worker count `above_floor` replaces. The
+measured count stays unwritten until the cutover record.
+`above_floor` is what refuses a count below the floor. Shutdown
+stays D6's order: the transport stops accepting, the transport
+cancels its tasks, the executor drains, the executor stops.
+
+**The floor.** An executor thread may block on work the executor
+itself performs only when another executor thread is free to do that
+work. Otherwise the blocked thread is waiting for a post that nothing
+will run. `idle_worker` (`net_node.inl:2217`) is that lane today. It
+is an idle handler on the context (`:1146`), and it calls
+`connections_maker` (`:2220`). `connect` returns only after the
+strand runs `established`. `do_handshake_with_peer` (`:1243`) then
+waits at `ev.wait()` (`:1323`) for the strand to deliver the
+handshake response. epee has the same dependency. The hard-coded 10
+hides it. A measured count that replaces 10 can expose it.
+
+The floor is one more than the number of lanes that can block on the
+executor. Today that lane is the idle lane, so the caller passes
+`BlockingLanes::new(1)` and `above_floor` accepts a worker count of
+2 or more. The 1 is `idle_worker`. `on_idle` returns without waiting
+for a strand post, so it is not a second lane. The 1 is counted, not
+measured. The floor check lives on `ExecutorBudget`. That budget has
+no blocking cap, and `shekyl-runtime::runtime` does not apply it. A
+test runs
+`connect` and then `do_handshake_with_peer`'s `ev.wait()` from an
+executor thread on a pool of that size, and both return because the
+other thread runs the strand. One worker below the floor is
+`ExecutorBudgetError::BelowFloor` and does not start. When the
+timing-engine bridge moves `idle_worker` onto the transport blocking
+pool, the lane count passed to `above_floor` drops, and this note
+records the new count.
+
+**Configuration the six calls leave to the side.**
+
+- `block_host`, `unblock_host`, and `get_blocked_hosts` call the Rust
+  ban list. A ban closes the sockets the list returns. It does not
+  walk the Levin registry. A duration that does not fit a `Tick`
+  (nanoseconds, `shekyl-timing-engine`) is refused at this boundary.
+  The permanent sentinel `block_host` uses today
+  (`numeric_limits<time_t>::max()` at `net_node.inl:575`) is its own
+  arm, read at that call when the seam is written.
+- Socket admission reserves inside `accept_clearnet`
+  (`admission.rs:273-283`) and `accept_tor` (`:310-312`): the ceiling
+  check and the mint hold one table lock. `socket_count` is the
+  per-connector, per-direction snapshot `get_info` reads. It is not
+  the accept decision. `census_inbound` stops being that decision.
+  The ceiling's `inbound_held` is `Sockets::inbound_held`
+  (`admission.rs:384`), the sum of every connector's inbound row.
+  Outbound sockets stay in the process fd count. Their cap is what
+  `reserved` subtracts (D8).
+- A `Published` onion is written to the Tor zone's `m_our_address`.
+  `OutboundOnly` leaves the address unset. `OperatorInbound` is not
+  a publish result and is not written there.
+- `get_info` keeps `incoming_connections_count` and
+  `outgoing_connections_count` as the public zone's session counts,
+  from the Levin registry. Socket counts are
+  `public_incoming_socket_count`, `public_outgoing_socket_count`,
+  `tor_incoming_socket_count`, and `tor_outgoing_socket_count`.
+  A restricted caller receives zero for all six, as it does for the
+  session counts today.
+
+The seam's tests are the close races and the floor. A `send` after
+Rust has dropped the socket returns false. A simultaneous close keeps
+the first cause. A full send records `SendQueueFull` before
+`handle_recv` returns, and the false return leaves that cause.
+A refused delivery with no cause yet is `SessionRefused`. A true
+`handle_recv` on a short read keeps the connection. One connection's
+bytes arrive in order, on its strand, with the read window stopped
+until the callback returns, and `closed` runs after those
+deliveries. `closed` cancels invokes inline and posts destruction.
+It does not sleep. A delivery posted before `closed` is parsed.
+`connect` and the handshake `ev.wait()` called from the executor on
+a floor-sized pool both complete. `above_floor` with one worker
+below the floor returns `BelowFloor` and records no row.
+`inbound_held` counts inbound rows and leaves outbound out. The
+differential harness and the cross-build interop run are the next
+step. Cutover waits on the thread budget and the per-connector
+deadlines, measured on this build and written down. The budget is
+at least the floor.
 
 ---
 
@@ -665,9 +924,12 @@ a hard-coded 10 threads (`:1150`). It hosts:
    the transport-layer cutover until the timing-engine round lands,
    not until LV-3. While it lives:
    - there is one executor for all networks;
-   - its pool is built by D5's single constructor, with a measured
-     budget that counts toward the Pi-4 total, replacing the
-     hard-coded 10;
+   - its pool is one `io_context` whose worker count is an
+     `ExecutorBudget` on D5's ledger (seam construction, 2026-09-28).
+     That budget counts toward the Pi-4 total and replaces the
+     hard-coded 10. `shekyl-runtime::runtime` stays the transport's
+     Tokio reactor. It is a different row, and it carries the blocking
+     cap this pool does not;
    - it hosts the full list above;
    - the only C++ executed on a transport thread is posting work to it;
    - shutdown runs in this order: the transport stops accepting, the
@@ -943,12 +1205,14 @@ died mid-handshake. The reservation does not repeat that.
 - The session layer owns session counts, held in the Levin registry
   until LV-3.
 - Neither layer derives its count from the other's state.
-- Socket admission reads the socket count through that atomic
-  reservation. There is no snapshot and no recount on the admission
-  path.
-- The ceiling's `inbound_held` input comes from this count
-  (`InboundCeiling::resolve`). That is valid because D11 asserts one
-  descriptor per socket.
+- Socket admission reserves under the table lock, in the same step
+  as the ceiling check. There is no snapshot and no recount on the
+  admission path. `socket_count` is the later read.
+- The ceiling's `inbound_held` input is `Sockets::inbound_held`, the
+  sum of every connector's inbound row (`InboundCeiling::resolve`).
+  `socket_count` stays the per-connector, per-direction read.
+  Outbound rows are not part of that sum. The sum is valid because
+  D11 asserts one descriptor per socket.
 - The transport layer exposes outbound socket counts per connector.
   Which count governs filling outbound slots is discovery policy,
   slice 3's decision.
@@ -977,7 +1241,7 @@ single global handshake deadline would break on a network whose mixing
 delay is seconds. No deadline is written into this document before that
 measurement. Rule 26 B9.
 
-Pi-4 C5 run, 2026-09-26, `skl-pi` (aarch64, 4 cores), about 90 seconds:
+Pi-4 C5 run, 2026-09-26, the floor device (aarch64, 4 cores), about 90 seconds:
 [`p2p_c5_pi4_20260926T005507Z.txt`](../benchmarks/p2p_c5_pi4_20260926T005507Z.txt).
 Initiator 928 µs, responder 685 µs, one rekey 5.06 µs, seal/open of
 65,535 bytes 889 µs. The responder figure is the per-connection cost

@@ -232,10 +232,11 @@ pub type AtomicUnitsString = String;
 
 /// `get_balance` result.
 ///
-/// As of WI-RPC-5 the staking fields carry live values projected from the
-/// same authoritative staking view `get_staked_balance` reads (see
-/// `project::get_balance_result`). For a non-staker wallet they are a
-/// genuine `"0"` — nothing is staked — never a placeholder.
+/// As of WI-RPC-5 the staking fields carry the engine's
+/// [`shekyl_engine_core::BalanceView`] (see `project::get_balance_result`),
+/// projected from the same staking read `get_staked_balance` uses. For a
+/// non-staker wallet they are a genuine `"0"` — nothing is staked — never
+/// a placeholder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetBalanceResult {
     /// Spendable liquid balance (maps from unlocked until staking splits

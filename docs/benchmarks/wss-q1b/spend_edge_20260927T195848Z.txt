@@ -1,0 +1,24 @@
+── control: sparse vs dense at depth 4 ──
+   25993 leaves: dense 5.044 s vs sparse 5.048 s (+0.1 %)
+── control: sparse vs dense at depth 5 ──
+   467857 leaves: dense 5.398 s vs sparse 5.400 s (+0.0 %)
+   -> sparse licensed (2 rung(s), deepest 5; grading at 6)
+── corpus: 765600 leaves over 725 blocks ──
+not grading: a timing series did not converge (replay: wall-clock cap, path: converged, proving: converged)
+
+── WSS-Q1(b) spend edge ──
+  machine        aarch64 / 64-bit
+  depth          6
+  window         765600 leaves over 725 blocks
+  leaf rate      1056 leaves/block (ceiling 2400000 weight)
+  control d4     dense 5.044 s vs sparse 5.048 s (+0.1 %)
+  control d5     dense 5.398 s vs sparse 5.400 s (+0.0 %)
+  path source    synthesized sparse, one rung above the deepest control arm
+  replay         388.822 s (converged: false)
+  path build     0.007 s
+  DELTA          388.829 s
+  per block      536 ms  (amortized frontier advance, worst case)
+  proving        6.052 s (converged: true)
+  ratio          6425.0 %  (threshold 2.000 s, binding arm: absolute floor (2 s))
+  VERDICT        Ungraded
+                 (measurement only — not the pinned rig, or --grade not given)

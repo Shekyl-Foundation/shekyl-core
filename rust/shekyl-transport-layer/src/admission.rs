@@ -365,9 +365,27 @@ impl Sockets {
     }
 
     /// How many live sockets this connector has in this direction.
+    ///
+    /// This is a snapshot for reporting. Accept does not read it.
+    /// [`Self::accept_clearnet`] and [`Self::accept_tor`] hold the table
+    /// lock across the ceiling check and the mint.
     #[must_use]
     pub fn socket_count(&self, connector: ConnectorId, direction: Direction) -> u64 {
         self.lock().occupancy.get(connector, direction)
+    }
+
+    /// Inbound sockets on every connector.
+    ///
+    /// This is the `inbound_held` input of the descriptor ceiling: fds
+    /// already inside the process count, so a later derive does not charge
+    /// them twice. Outbound sockets stay in that process count. Their cap
+    /// is reserved separately. Accept does not read this sum.
+    #[must_use]
+    pub fn inbound_held(&self) -> u64 {
+        self.lock()
+            .occupancy
+            .process_inbound()
+            .expect("inbound socket count fits in u64")
     }
 
     /// How many sockets are live, in every connector and direction.
@@ -568,6 +586,25 @@ mod tests {
             .accept_clearnet(host, InboundCeiling::Bounded(4), Tick::new(2_000))
             .expect("expired");
         assert_eq!(sockets.live(), 1);
+    }
+
+    #[test]
+    fn inbound_held_sums_inbound_rows_and_leaves_outbound_out() {
+        let sockets = Sockets::new();
+        let ceiling = InboundCeiling::Bounded(4);
+        let _clearnet = sockets
+            .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
+            .expect("clearnet inbound");
+        let _tor = sockets.accept_tor(ceiling).expect("tor inbound");
+        let _outbound = sockets
+            .open_clearnet(ip([10, 0, 0, 2]), now())
+            .expect("clearnet outbound");
+        assert_eq!(sockets.inbound_held(), 2);
+        assert_eq!(sockets.live(), 3);
+        assert_eq!(
+            sockets.socket_count(ConnectorId::Clearnet, Direction::Outbound),
+            1
+        );
     }
 
     #[test]

@@ -1,0 +1,8 @@
+verify edge — nominal — full-reward zone, MIN_BLOCK_WEIGHT (row 3's density)
+  population     105120 leaves over 730 blocks (144 leaves/block)
+  segments       4 complete, 1152 leaves in tail (E = 25992)
+  UNFROZEN       53.667 s per call (converged: true)
+  frozen ctrl    0.595 s per call  (90.2x faster)
+  mixed path     true  root stable: true
+  cadence        44.72 % of a 120 s block (informational)
+  GRADING        baseline — no ruled threshold. CT-6 Q4 is pending as a derivation and grades the amortized advance; this is the naive cost that form replaces. CT-6 increment 6 re-grades against this record.

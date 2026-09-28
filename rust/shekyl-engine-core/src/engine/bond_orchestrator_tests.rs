@@ -577,6 +577,19 @@ async fn recovered_mid_session_first_stake_names_the_reopen_remedy() {
     );
     let view = engine.staking_read_view().expect("staking read view");
     assert!(view.recovery_pending_reopen);
+    let snap = engine
+        .stake()
+        .balance_snapshot_with(|_| ())
+        .expect("balance snapshot shares the staking read's guard");
+    assert_eq!(
+        snap.staking.as_ref().map(|s| s.recovery_pending_reopen),
+        Some(true),
+        "the glance must report the same session-adoption flag as the staking read"
+    );
+    assert!(
+        snap.view.staking.is_some(),
+        "a readable seal projects staking totals"
+    );
 
     let arc = std::sync::Arc::new(tokio::sync::RwLock::new(engine));
     let err = Engine::first_stake(arc, 0, StakePosture::FoundationCompleteTree)
