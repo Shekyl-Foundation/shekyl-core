@@ -15,6 +15,7 @@
 #pragma once
 
 #include <atomic>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -43,10 +44,9 @@ namespace shekyl
       return network_address{net::i2p_address::unknown()};
     if (obs.address_type == SHEKYL_ADDR_IPV4 && obs.len == 4)
     {
-      const std::uint32_t ip = std::uint32_t(obs.bytes[0])
-        | (std::uint32_t(obs.bytes[1]) << 8)
-        | (std::uint32_t(obs.bytes[2]) << 16)
-        | (std::uint32_t(obs.bytes[3]) << 24);
+      // The four octets in memory, which is what `in_addr.s_addr` holds.
+      std::uint32_t ip = 0;
+      std::memcpy(&ip, obs.bytes, 4);
       return network_address{ipv4_network_address(ip, obs.port)};
     }
     if (obs.address_type == SHEKYL_ADDR_IPV6 && obs.len == 16)
@@ -168,7 +168,11 @@ namespace shekyl
       {
         const std::uint32_t count = cur & kCount;
         if (count == 0)
-          return true;
+        {
+          // A release with no outstanding add_ref is a mismatched pair.
+          assert(false && "seam_link::release without a matching add_ref");
+          return false;
+        }
         const std::uint32_t next = (cur & kClosing) | (count - 1);
         if (m_word.compare_exchange_weak(cur, next, std::memory_order_acq_rel, std::memory_order_acquire))
         {

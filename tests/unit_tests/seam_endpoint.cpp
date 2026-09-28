@@ -223,8 +223,8 @@ TEST(seam_endpoint, a_delivery_posted_before_closed_is_parsed)
     ASSERT_NE(found, ex.links.end());
     EXPECT_TRUE(found->second->context().m_is_income);
     EXPECT_EQ(found->second->context().m_remote_address.get_type_id(), epee::net_utils::address_type::ipv4);
-    EXPECT_EQ(found->second->context().m_remote_address.as<epee::net_utils::ipv4_network_address>().ip(),
-        (std::uint32_t(203) | (std::uint32_t(0) << 8) | (std::uint32_t(113) << 16) | (std::uint32_t(10) << 24)));
+    EXPECT_EQ(found->second->context().m_remote_address.as<epee::net_utils::ipv4_network_address>().host_str(),
+        "203.0.113.10");
   }
   shekyl_seam_bind(nullptr, nullptr);
 }
