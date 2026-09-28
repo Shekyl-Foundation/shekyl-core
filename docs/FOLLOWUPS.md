@@ -38,23 +38,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) `SF-D7`
   - Target: pre-genesis
 
-- **F34: rebuild the sim's size model under the ruled domain (`SHT-Q1`, 2026-09-27).** L19's era-density shape is **coinbase dilution**, which exists only under the storage-id domain. Under the ruled domain — transactions carrying archival good — a shard is `T` such transactions in any era, so size comes from each transaction's own shape, mainly its input count, and the era term goes away. The model, not a parameter, changes.
-  - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19
-  - Target: pre-genesis
-
-- **F34: run the heavy-era-ages-into-deep arm.** A dynamic window, size fixed at birth, and a usage schedule that plateaus or bursts, so a heavy era ages into the deep band with its bytes intact and is graded against `r_target_deep` with the `g(age)` premium on it. `be785f8e6` made it expressible; it is still only described (`STAKER_ARCHIVAL_SIM.md` §L19 residue). **This is the one arm that could still force a byte operand into channel 1** — item 5's `(g)` falsifier.
-  - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19
-  - Target: pre-genesis
-
-- **F34: sweep `storage_unit_cost` at fixed `S`.** L19's arm moved the per-shard carry cost and the per-shard capacity draw together, and capacity dominates at baseline parameters, so the arm measured the capacity leg made shard-dependent. This sweep is what separates the cost signal from it.
-  - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19
-  - Target: pre-genesis
-
-- **F34: implement the gate read — max over pre-registered bands, and the margin to target.** The aggregate `frac_under_target` certifies a state with a failing band, so the verdict must be the max over bands **registered before the run** (age × cost). And it must report the **margin to target**, not only a count below it: L19 found `min_R` falling `4 → 3` on the covered base while every band read `0.000`, because a threshold count cannot see a shard shedding a copy without crossing its bar. Today this is a recommendation in a doc, not a metric in the code.
-  - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19
-  - Target: pre-genesis
-
-- **F34: write the `PDM-Q-F34` charter row** with the evidence from the arms above. The finding is recorded in the sim's own lane (`STAKER_ARCHIVAL_SIM.md` §L19) and appears nowhere in the PDM charter.
+- **F34: write the `PDM-Q-F34` charter row** with the evidence from the arms (`STAKER_ARCHIVAL_SIM.md` §L19a–§L19g; the calibrated arm follows in §L19h/§L19i). The finding is recorded in the sim's own lane and appears nowhere in the PDM charter. **Held** until the design owner reads it: `PDM-Q-F34` is read all-seeds (ruled 2026-09-28, §L19g §4).
   - Owner: [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q6`
   - Target: pre-genesis
 
