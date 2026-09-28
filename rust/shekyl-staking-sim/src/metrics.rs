@@ -163,6 +163,107 @@ pub struct TargetParams {
 /// invisible to both. Returned as `([light, mid, heavy], mean_size)`; with `S = 1` all
 /// three bands are one partition of an equal-size set and the read is degenerate by
 /// construction (reported, not asserted on).
+/// **Pre-registered grading bands** (`PDM-Q-F34`), fixed here **before** any arm ran
+/// so the verdict cannot be chosen after seeing a result.
+///
+/// Three age bands × three cost terciles. Age uses the same `deep_threshold` split the
+/// coverage target already keys on, subdivided so the deep half is not one bucket:
+/// `[0, 1/3)` hot, `[1/3, 2/3)` mid, `[2/3, 1]` deep. Cost is the size tercile.
+pub const GRADING_AGE_BANDS: usize = 3;
+/// Cost terciles, paired with [`GRADING_AGE_BANDS`].
+pub const GRADING_COST_BANDS: usize = 3;
+
+/// **The graded verdict** (`PDM-Q-F34`): the worst `frac_under_target` over the
+/// pre-registered age × cost bands, and the worst **margin to target** over the same
+/// grid.
+///
+/// Why the max and not the aggregate: the aggregate `frac_under_target` **certifies a
+/// state with a failing band** — L19 measured it improving (`0.050 → 0.021`) while the
+/// heavy band degraded to `0.113`, because cheap shards are over-subscribed and pull the
+/// mean down. So the aggregate is reported and **not graded**.
+///
+/// Why the margin and not only a count: a threshold count cannot see a shard shedding a
+/// copy without crossing its bar. L19 watched `min_R` fall `4 → 3` on a covered base
+/// while every band read `0.000`. [`Self::worst_margin`] is
+/// `min(r[s] − r_target(s))` over the grid — negative means *under* target, and it moves
+/// before the count does.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct BandedVerdict {
+    /// Worst band's `frac_under_target` — the value the `covered` bar is applied to.
+    pub worst_frac_under: f64,
+    /// `min(r − r_target)` over every graded shard. Negative ⇒ under target. Reported
+    /// even when `worst_frac_under` is `0.0`, which is the case it exists for.
+    pub worst_margin: i64,
+    /// Which `(age, cost)` band carried the worst `frac_under`, for triage.
+    pub worst_band: (usize, usize),
+    /// Occupancy of the worst band, so a `1/1` band is not read as a population.
+    pub worst_band_n: usize,
+}
+
+/// Grade the pre-registered `(age × cost)` grid. See [`BandedVerdict`].
+pub fn banded_verdict(world: &World, r: &[usize], tp: &TargetParams) -> BandedVerdict {
+    let n = world.shards.len();
+    let mut out = BandedVerdict {
+        worst_frac_under: 0.0,
+        worst_margin: i64::MAX,
+        worst_band: (0, 0),
+        worst_band_n: 0,
+    };
+    if n == 0 {
+        out.worst_margin = 0;
+        return out;
+    }
+    // Cost tercile by size rank, so the split is population-balanced rather than
+    // threshold-based (a threshold on size would put every shard in one band when the
+    // axis is off).
+    let mut by_size: Vec<usize> = (0..n).collect();
+    by_size.sort_by(|&a, &b| {
+        tp.comp
+            .size(&world.shards[a])
+            .partial_cmp(&tp.comp.size(&world.shards[b]))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut cost_band = vec![0usize; n];
+    let per = n.div_ceil(GRADING_COST_BANDS);
+    for (rank, &s) in by_size.iter().enumerate() {
+        cost_band[s] = (rank / per).min(GRADING_COST_BANDS - 1);
+    }
+
+    let mut under = [[0usize; GRADING_COST_BANDS]; GRADING_AGE_BANDS];
+    let mut total = [[0usize; GRADING_COST_BANDS]; GRADING_AGE_BANDS];
+    for s in 0..n {
+        let age = world.shards[s].age;
+        let a = ((age * GRADING_AGE_BANDS as f64) as usize).min(GRADING_AGE_BANDS - 1);
+        let c = cost_band[s];
+        let tgt = r_target(age, tp.r_target_hot, tp.r_target_deep);
+        total[a][c] += 1;
+        let margin = r[s] as i64 - tgt as i64;
+        if margin < out.worst_margin {
+            out.worst_margin = margin;
+        }
+        if r[s] < tgt {
+            under[a][c] += 1;
+        }
+    }
+    for a in 0..GRADING_AGE_BANDS {
+        for c in 0..GRADING_COST_BANDS {
+            if total[a][c] == 0 {
+                continue;
+            }
+            let frac = under[a][c] as f64 / total[a][c] as f64;
+            if frac > out.worst_frac_under {
+                out.worst_frac_under = frac;
+                out.worst_band = (a, c);
+                out.worst_band_n = total[a][c];
+            }
+        }
+    }
+    if out.worst_margin == i64::MAX {
+        out.worst_margin = 0;
+    }
+    out
+}
+
 pub fn size_band_under(world: &World, r: &[usize], tp: &TargetParams) -> ([f64; 3], f64) {
     let n = world.shards.len();
     let mean = tp.comp.mean_size(&world.shards);

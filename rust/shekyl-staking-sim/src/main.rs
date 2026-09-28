@@ -1971,7 +1971,7 @@ fn main() {
 mod tests {
     use crate::metrics::gini;
     use crate::model::{bond_age, bond_duration, g_age, r_target, World};
-    use crate::model::{Actor, CompositionParams, Shard};
+    use crate::model::{Actor, CompositionParams, EraShape, Shard};
     use crate::participation::{foundation_floor, foundation_floor_aged};
 
     #[test]
@@ -2068,6 +2068,8 @@ mod tests {
             0.05,
             &CompositionParams {
                 spread: 1.0,
+                era_shape: EraShape::Monotone,
+                cv_tx: 0.0,
                 decorrelated: false,
             },
         );
