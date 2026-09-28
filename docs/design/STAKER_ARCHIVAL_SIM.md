@@ -4397,3 +4397,76 @@ This is not ceremony. The arm's second failed pass read "clear" for burst purely
 because the heavy era had aged out of the window before the snapshot: the verdict
 read the subject's *absence* and reported it as a pass. A run that cannot show its
 subject in frame is void, not passing.
+
+---
+
+## L19b — the heavy-era arm: the passes that failed, and the run under L19a (2026-09-28)
+
+### The passes that failed, and why none of them is a result
+
+Each produced a confident number that meant nothing, and each was found by running
+the arm, not by reading it:
+
+1. **The era key collapsed under a dynamic window.** Recycled slots are re-born at
+   age 0 and the era was keyed on age-at-birth, so every shard came to carry the
+   newest era's size: realized mean size **2.22** (Plateau, `S = 4`) and **0.57**
+   (Burst). "Coverage collapsed" meant "every shard got 2.2× bigger".
+2. **Run-normalized time put the subject out of frame.** A shard lives 50 epochs,
+   so the graded snapshot spans only the last third of the run's eras; Burst's heavy
+   era had **aged out entirely**, which is the sole reason it read "clear".
+3. **The first pre-registered bar was the wrong test.** "BREACH iff
+   `worst_frac_under ≥ 0.05`" reused the ratified `covered` bar, which was set for an
+   aggregate; on a max over nine cells the flat control trips it (0.050 → 0.214).
+4. **Meeting L19a's in-frame requirement exposed three fixture defects**, fixed
+   before any graded run: Burst centred in the *mid* band; Plateau shaped as "still
+   growing", confining every heavy to the hot and mid bands; and
+   `epochs × epoch_aging` = 0.78, so initial shards younger than 0.22 never recycled
+   and ended in the deep band carrying a *young* era's size.
+
+### The run under L19a — valid
+
+`--f34-heavy-era` at `edd92550b`, implementing L19a as committed and amended. **0 void
+runs, 0 runs with realized mean off 1.000**, subject in frame on every seed (Burst
+55/55 heavies deep; Plateau 30/76 and 32/61).
+
+| base | shape | `S` | min Δ | median Δ | max Δ | verdict |
+|---|---|---|---|---|---|---|
+| marginal | Plateau | 4 | +0.000 | +0.337 | +0.710 | clear |
+| marginal | Plateau | 10 | **+0.500** | +0.658 | +0.811 | **BREACH** |
+| marginal | Burst | 4 | **+0.652** | +0.745 | +0.859 | **BREACH** |
+| marginal | Burst | 10 | **+0.725** | +0.745 | +0.859 | **BREACH** |
+| covered | Plateau | 4 | +0.000 | +0.000 | +0.000 | clear |
+| covered | Plateau | 10 | +0.000 | +0.112 | +0.394 | clear |
+| covered | Burst | 4 | **+0.213** | +0.417 | +0.636 | **BREACH** |
+| covered | Burst | 10 | **+0.652** | +0.697 | +0.797 | **BREACH** |
+
+Δ is the per-seed cell-wise worst-band delta against the paired dynamic,
+demand-matched control; the verdict is `min Δ > 0.05`.
+
+**Attribution.** On every breaching seed the worst cell is **(deep, heavy)** — the
+subject cell, not a cell the control happened to lose. The margin agrees: the arm's
+worst margin is −1 to −3 where the control's is −1 to +1.
+
+**Disposition, as pre-registered: breach on the covered base ⇒ report to the design
+owner before any `PDM-Q-F34` draft.** A concentrated heavy era aged into the deep band
+is under-held at fixed total bytes even with 30 % storage headroom. **(g) has not
+fired:** it fires only if no non-byte lever — headroom, `r_target` — removes the
+breach, and that has not been tested. Plateau breaches on the marginal base only at
+`S = 10`, which is the headroom-only disposition.
+
+### The diagnostic disagrees, and the disagreement is not a clean leg attribution
+
+The `storage_scale`-scaled variant (ungraded) disagrees with the graded run in a
+direction that **flips with the shape**: lower for Plateau (covered `S = 10` median
++0.000 against graded +0.112), higher for Burst (covered `S = 10` median +0.958
+against +0.697). The flip tracks the sign of each shape's **unmatched** realized mean —
+Plateau 0.99–1.03, Burst 0.88–1.01 — because the variant scales `storage_scale` by
+that mean, and actor storage is an **integer rounded from it**
+(`scale = round(s × storage_scale)`). So where the mean exceeds 1 the variant hands
+storage-rich actors an extra slot, and where it is below 1 it takes one away.
+
+What the variant therefore measures is a **quantized capacity perturbation**, not the
+carry and fetch legs in isolation, and it is not reported as a leg finding. What it
+does show is that the verdict is **sensitive to capacity changes of a few percent** —
+which is evidence about the headroom lever the (g) question now turns on, and a reason
+to test that lever directly rather than infer it.
