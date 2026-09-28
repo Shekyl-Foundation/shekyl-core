@@ -574,7 +574,10 @@ records the new count.
   seconds, and `getbans` returns seconds remaining. At cutover the
   conversion is `now + duration` onto the monotonic clock, and the
   remaining time is computed back from it. No `time_t` crosses the
-  boundary. A duration that does not fit a `Tick` is refused.
+  boundary. A duration that does not fit a `Tick` is refused. The
+  session layer is the second writer, through the same duration: ban
+  this host for this long. A transport close does not write the list
+  and does not call `add_host_fail`.
 - Socket admission reserves inside `accept_clearnet`
   (`admission.rs:273-283`) and `accept_tor` (`:310-312`): the ceiling
   check and the mint hold one table lock. `socket_count` is the
@@ -596,7 +599,10 @@ records the new count.
   still holds the sockets would read as no connections. A restricted
   caller receives zero for the session counts, as it does today.
 
-The seam's tests are the close races and the floor. A `send` after
+The seam's tests are the close races and the floor. Recording a
+transport cause, including `PrefixMismatch`, `RecordRejected`,
+`TransportTimeout`, and `SendQueueFull`, leaves the host unbanned.
+A `send` after
 Rust has dropped the socket returns false. A simultaneous close keeps
 the first cause. A full send records `SendQueueFull` before
 `handle_recv` returns, and the false return leaves that cause.
@@ -734,13 +740,18 @@ LV-3 (D14).
 
 **Each layer owns its own admission.** The transport layer owns socket
 admission: may this socket exist? That is the ban list and the inbound
-ceiling, enforced in Rust at accept, from values given to it — the
-operator's ban entries, and the ceiling derived by
-`shekyl-peer-policy`. The session layer (Levin framing and the p2p
+ceiling, enforced in Rust at accept and before dialing. The ceiling
+comes from `shekyl-peer-policy`. The ban list has two writers, both
+in durations (corrected 2026-09-28): the operator, through RPC, and
+the session layer, through one call that bans a host for a duration.
+The session layer judges misbehaviour. The transport layer enforces
+the ban. It does not score a host, and a transport close does not
+call `add_host_fail`. The session layer (Levin framing and the p2p
 protocol) owns session admission: may this peer have a session? That
 is `network_id`, the self-detection nonce, support flags, and
-PWD-B3's per-command caps, in `handle_handshake`. Neither layer reads
-the other's state to decide.
+PWD-B3's per-command caps, in `handle_handshake`, plus the judgment
+that issues the ban call. Neither layer reads the other's state to
+decide. No wall-clock time crosses that call.
 
 **Decoupling rule.** Levin framing, the p2p protocol, and the cryptonote
 protocol run over the transport contract and nothing else. The transport
@@ -825,8 +836,8 @@ and the mechanism does not. "Refuse" means it does not survive.
 
 | Duty | Read at this pin | Disposition |
 | --- | --- | --- |
-| Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator. The transport layer does not own those values. It does not call into C++ admission. |
-| Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. The operator's RPC reaches it through the FFI (`block_host`, `unblock_host`, `get_blocked_hosts`). A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. |
+| Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator and from the session layer's ban call. The transport layer does not own those values and does not score. It does not call into C++ admission. |
+| Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902`. Automatic scoring is `add_host_fail` at `net_node.inl:413` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. Two writers, both in durations (corrected 2026-09-28): the operator's RPC (`block_host`, `unblock_host`, `get_blocked_hosts`) and the session layer's call to ban a host for a duration. A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. A transport close does not write the list. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
 | SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **Its own per-connector clock, derived under D9.** It does not inherit the timeout from `src/net/socks`. |
 | SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust through `shekyl-socks`. `shekyl-p-fetch` and `shekyl-rpc-transport` call it with `Isolation::Principal`. `shekyl-p-transport` still enables `ureq/socks-proxy` (`socks` 0.3.4). Moving that HTTP client is a FOLLOWUPS row. |
@@ -888,6 +899,16 @@ and the mechanism does not. "Refuse" means it does not survive.
   queue closes the connection with `SendQueueFull`.
 - **Close from either side is idempotent** and records exactly one
   cause. On a simultaneous close, the first recorded cause wins.
+  A transport cause (`PrefixMismatch`, `RecordRejected`,
+  `TransportTimeout`, `SendQueueFull`, and every other transport
+  close) does not ban the host and does not call `add_host_fail`.
+  Scoring is the session layer's judgment, issued as its own ban
+  call, not by this close.
+- **The ban list has two writers (corrected 2026-09-28).** The
+  operator writes through RPC. The session layer writes through one
+  call, ban this host for this long, after it has judged
+  misbehaviour. Both pass a duration. The transport layer enforces
+  the entry at accept and before dialing.
 - **FFI (rule 40).** Every call names its direction and who owns the
   buffer. A callback context is not a raw `this`.
 

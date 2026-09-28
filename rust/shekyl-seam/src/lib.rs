@@ -329,6 +329,11 @@ impl Hub {
         self.lock().sockets.inbound_held()
     }
 
+    /// Record `cause`, drop the socket, and post `closed`.
+    ///
+    /// This does not ban the host. A transport failure, including an
+    /// AEAD rejection, is a close. Scoring is a separate call the
+    /// session layer makes when it has judged misbehaviour.
     fn record(&self, id: SocketId, cause: CloseCause) -> CloseResult {
         let result = {
             let mut inner = self.lock();
@@ -690,6 +695,25 @@ mod tests {
             .ban_host(IpAddr::V4(ip), Tick::new(50), Tick::new(1));
         let err = hub.open(&clearnet(ip)).expect_err("banned");
         assert_eq!(err.kind(), CloseKind::AdmissionRefused);
+    }
+
+    #[test]
+    fn a_transport_close_does_not_ban_the_host() {
+        let host = Ipv4Addr::new(203, 0, 113, 10);
+        for kind in CloseKind::ALL {
+            let (hub, _posts) = hub(32);
+            let id = hub.open(&clearnet(host)).expect("open");
+            let cause = if *kind == CloseKind::ProxyRefused {
+                CloseCause::proxy_refused(1)
+            } else {
+                CloseCause::new(*kind)
+            };
+            assert!(matches!(hub.record(id, cause), CloseResult::Recorded(_)));
+            assert!(
+                !hub.sockets().is_banned(IpAddr::V4(host), Tick::new(1)),
+                "{kind:?} banned the host"
+            );
+        }
     }
 
     #[test]
