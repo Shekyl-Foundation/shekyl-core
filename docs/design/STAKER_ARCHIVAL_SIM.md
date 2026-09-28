@@ -4306,3 +4306,74 @@ not reach — what the challenge draw does with a closed shard whose good is zer
 (`Σ(prunable_len + pqc_auths_len) = 0`, reachable on any run of `T` coinbase ids), and what
 `serve_credit_bit` is when the read has nothing to return. That is a rule question, not a sim
 arm.
+
+---
+
+## L19a — the heavy-era arm under the ruled domain: pre-registration (2026-09-28)
+
+**Committed before the demand-matched run.** `SHT-Q1` (2026-09-27) put the
+partition over transactions carrying archival good, so L19's era-density shape —
+coinbase dilution — does not survive it. The model is rebuilt on two axes
+(`cv_tx`, suppressed by `√T`, and an era-mean shape), and this section fixes the
+arm's method **before** the run that decides it, because the first three passes at
+this arm each produced a confident number that meant nothing (§L19b).
+
+### What is being asked
+
+Does a **heavy era, aged into the deep band with its bytes intact**, breach
+coverage at `r_target_deep` when **total bytes are held fixed**? This is the one
+arm that could force a byte operand into channel 1 — `PDM-Q6` item 5's **(g)**
+falsifier. It fires only if the breach survives every non-byte lever.
+
+### 1. Demand matching, and what it normalizes
+
+**Sizes, not the storage budget.** Each live shard's size is divided by the live
+population's realized mean at the graded snapshot, so **every leg** — the capacity
+draw, the per-shard carry cost, and the L10 fetch lag — sees the same total bytes
+as the control. Normalizing `storage_scale` instead would fix the capacity leg and
+leave carry and fetch scaled, which is the confound this exists to remove.
+
+**Assertion:** the realized mean (`szMn`) reads **1.000** on every demand-matched
+run. A run that does not is not evidence.
+
+**The `storage_scale`-scaled variant is run beside it.** If the two disagree, that
+is itself a finding about **which leg carries the breach** — capacity versus
+carry/fetch — and is reported as one rather than averaged away.
+
+### 2. Seeds and the bar, both fixed here
+
+- **`N = 8` seeds** per arm and per control. Eight because the verdict is a
+  worst-of-nine-cells statistic, whose across-seed spread is what the bar must
+  clear; eight distinguishes a shifted distribution from a tail draw without
+  making the run cost dominate.
+- **BREACH ⇔ the *minimum* across-seed worst-band delta versus the dynamic,
+  demand-matched control exceeds `X = 0.05`.** The *minimum*, not the mean: one
+  seed's excursion is not a breach, and requiring every seed to clear the bar is
+  what makes the claim about the distribution rather than about a draw.
+- The absolute `frac_under_target` bar is **reported, not graded** — it was
+  ratified for an aggregate and means something else applied to a max over cells
+  (§L19b item 3).
+
+### 3. Both bases, with the dispositions written in advance
+
+Run on the **marginal** base (`storage_scale` 1.0) and the **covered** base
+(`storage_scale` 1.3).
+
+| outcome | disposition, fixed before the run |
+|---|---|
+| **breach on marginal only** | Coverage needs **headroom**. The response is the per-band gate read plus a headroom input to gate 4/5 — **item 5's (g) is not implicated**, because a lever that is not a byte operand removes the breach. |
+| **breach on covered too** | **Report to the design owner before drafting `PDM-Q-F34`.** (g) fires **only** if no non-byte lever — headroom, `r_target` — removes it. A breach that survives headroom is not yet proof that the price needs bytes; it is proof that the question belongs to steering. |
+| **no breach on either** | The era axis does not threaten coverage at fixed bytes under the ruled domain, and the residue is `cv_tx`'s `√T`-suppressed floor alone. |
+
+### 4. The subject must be in frame
+
+Before the verdict is read, the fixture asserts that **at the graded snapshot**:
+
+- the **burst** era sits in the **deep** band (age ≥ 2/3), and
+- the **plateau** shape carries **deep heavies** — its heavy cost tercile is not
+  confined to the hot band.
+
+This is not ceremony. The arm's second failed pass read "clear" for burst purely
+because the heavy era had aged out of the window before the snapshot: the verdict
+read the subject's *absence* and reported it as a pass. A run that cannot show its
+subject in frame is void, not passing.
