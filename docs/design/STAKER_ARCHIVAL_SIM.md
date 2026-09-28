@@ -4547,3 +4547,64 @@ the worst cell sits.
 
 If both clear, both are reported; the headroom row governs `PDM-Q-F34` because it is the
 lever the network does not have to ratify a new curve to use.
+
+---
+
+## L19d — the lever test: results (2026-09-28)
+
+`--f34-levers` at `ad782b6db`, implementing §L19c as committed at `2915b6877`. **No point
+is void**: every realized mean read 1.000 and the heavy era was in the deep band on
+every seed.
+
+**Correction to §L19c's slack table, dated to its writing.** It was computed with
+Python's `round`, which rounds half to even; the sim uses Rust's `f64::round`, which
+rounds half away from zero. Two rows were wrong: `1.45` is **32 / 15** (47 slots per
+pair, **+11.9 %**), not 32 / 14; `1.75` is **39 / 18** (57, **+35.7 %**), not 38 / 18. The
+ladder, the method and the dispositions are unaffected; the slots reported below are
+the ones the run used. The omission of `1.32` and `1.34` still holds under either rule.
+
+### Results
+
+| lever | `S` | lowest clearing value | effective slack | min Δ there |
+|---|---|---|---|---|
+| headroom | 4 | **`storage_scale` 1.45** | 32 / 15, **+11.9 %** | +0.042 |
+| headroom | 10 | **none in ladder** | — (even 2.00, +52.4 %, reads +0.412) | — |
+| `age_weight` | 4 | **4.0** | — | +0.000 |
+| `age_weight` | 10 | **8.0** — the top of the ladder | — | **+0.042** |
+| corner (2.00 × 8) | 4 and 10 | clears | — | +0.000 |
+
+At every breaching point the worst cell is **(deep, heavy)** on all eight seeds. Where
+the arm clears at high headroom or premium, the worst cell moves to **(hot, light)** —
+the breach does not migrate to another band, it goes away.
+
+### Dispositions, applied as pre-registered
+
+- **`S = 4` — headroom clears at 1.45 (+11.9 %), and so does `age_weight` at 4.0.**
+  Both clear; per §L19c the **headroom row governs**: (g) **not fired**, and
+  `PDM-Q-F34` becomes a headroom requirement with `storage_scale` 1.45 and +11.9 %
+  whole-slot slack as its evidence.
+- **`S = 10` — headroom does not clear anywhere in the ladder; only `age_weight`
+  does, at 8.0.** (g) **not fired**; the clearing slope is an input to gate 4/5.
+
+So **(g) does not fire at either `S`.** A non-byte lever removes the breach in both
+cases, which is the condition §L19a set for it.
+
+### What the split means, and what the pre-registration did not anticipate
+
+The dispositions were written per outcome, not per `S`, and the two spreads land in
+**different rows**. At the realized-scale spread (`S = 4`) ordinary headroom is enough.
+At the deliberately harsh spread (`S = 10`) headroom alone is not — +52 % slack still
+leaves a +0.41 breach — and only the deep-history premium clears it, **at the top of the
+ladder and by a margin of 0.008** (`min Δ` +0.042 against a bar of 0.05). That is a
+clearing value, but not a robust one: the ladder ends where the clearance begins.
+Which row governs `PDM-Q-F34` when the two spreads disagree is **not** something the
+pre-registration decided, and it is not decided here.
+
+### An observation, not graded
+
+`age_weight` is **not monotone** in its effect: `0` reads +0.152, `1` reads +0.652 and
+`2` reads +0.213 at `S = 4` (similarly at `S = 10`). Each point is graded against its own
+control, and `age_weight` moves the flat control too, so this is the premium's effect on
+the heavy era *relative to* its effect on a flat population. It is recorded because a
+gate-4/5 slope read off this ladder should not assume the curve is monotone below the
+baseline.
