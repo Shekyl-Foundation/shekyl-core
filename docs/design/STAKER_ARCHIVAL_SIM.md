@@ -5060,8 +5060,11 @@ lands:
 - **Every floor-device cell with home egress is CLEAR** at every stated price, through
   year 10, at every realistic spread.
 - **The unresolved cells** (U) are the paid-egress cells one price step above the breaching
-  ones. They stay open under §L19h §5. A SPLIT decides one of them (`S = 2.5` at 0.03),
-  and that calls for more seeds, not a disposition.
+  ones. They stay open under §L19h §5. The `S = 2.5` SPLIT at 0.03 moves that spread's
+  highest CLEAR point down to 0.02, so it decides **two** cells: 10 k/year 10/high at
+  $0.01 and 100 k/year 10/high at $0.1, both at 0.027. A SPLIT calls for more seeds, not
+  a disposition. One further grid point, 0.045, would split the (0.03, 0.06) band that
+  holds the other U cells.
 - **In the fee era,** the breach needs a fiat budget per epoch below $28–$40,721,
   depending on chain size and egress.
 
