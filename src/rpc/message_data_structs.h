@@ -182,10 +182,6 @@ namespace rpc
     uint64_t alt_blocks_count;
     uint64_t outgoing_connections_count;
     uint64_t incoming_connections_count;
-    uint64_t public_incoming_socket_count;
-    uint64_t public_outgoing_socket_count;
-    uint64_t tor_incoming_socket_count;
-    uint64_t tor_outgoing_socket_count;
     uint64_t white_peerlist_size;
     uint64_t grey_peerlist_size;
     bool mainnet;

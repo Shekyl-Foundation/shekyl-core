@@ -347,7 +347,12 @@ the arrangement this contract replaces.
 
 **Close.** The transport layer owns the socket. C++ owns the Levin
 handler and the connection context. Neither side's destructor calls
-the other.
+the other. The executor owns the per-connection strand and the
+`seam_link`. The link owns the handler until the destroy post. That
+post drops the handler only: it is not the last owner of the link,
+and it does not free the strand. The executor drops the link after
+the post has finished. A walker whose `add_ref` returned true still
+holds a count, so the destroy post has not run.
 
 - Rust records the D12 cause through `Sockets::close`. The first
   `CloseResult::Recorded` wins. `AlreadyClosed` leaves that cause
@@ -379,10 +384,11 @@ the other.
   `deliver` before `closed` and finds it refused has found an
   ordering bug.
 - C++ `close` is an id lookup into Rust. It does not free the handler
-  inside that call. `add_ref` returns false when the id is already
-  gone, so a new outer call does not start. Destruction stays the
-  post above. The adapter does not keep epee's `shared_ptr` bump
-  (`abstract_tcp_server2.inl:1461`).
+  inside that call. The closing bit and the call count are one atomic
+  word. `add_ref` fails when the bit is set, so a new outer call does
+  not start. `begin_closed` sets the bit and reads the count at that
+  instant. Destruction stays the post above. The adapter does not keep
+  epee's `shared_ptr` bump (`abstract_tcp_server2.inl:1461`).
 - `handle_recv` returns false when it refuses the buffer, and also
   when its own response send fails
   (`levin_protocol_handler_async.h:596`). A false return records
@@ -462,9 +468,12 @@ exists.
 
 Rust posts these onto the connection's strand, and the strand runs them:
 
-- `established(id, observed endpoint, direction)` creates the handler
-  and the context and inserts the id. The endpoint is the one the
-  connector observed. Tor inbound is the zone with no address.
+- `established(id, observed endpoint, direction, connector)` creates
+  the handler and the context and inserts the id. The endpoint is the
+  one the connector observed: a clearnet address, or Tor's zone with
+  no address (`tor_address::unknown()`). The adapter fills
+  `m_remote_address`, `m_is_income`, and the zone from that record
+  before `after_init_connection`.
 - `deliver(id, bytes)` runs `handle_recv`. The bytes are valid for
   the callback. C++ copies what it keeps. A true return releases the
   read window, including a short read the parser has only buffered.
@@ -477,11 +486,14 @@ Rust posts these onto the connection's strand, and the strand runs them:
 
 C++ calls these:
 
-- `connect` keeps the synchronous shape `net_node` already uses. It
-  returns after the channel exists and the strand has constructed
-  the handler, or it returns the D12 cause. No handler was created
-  on the failure path. The waiter holds no lock the strand needs.
-  The caller is often an executor thread. See the floor below.
+- `connect` keeps the synchronous shape `net_node` already uses. The
+  address is the connector plus the address bytes, the same union
+  peer exchange uses, so clearnet, onion, and a proxy dial cross one
+  call. It returns after the channel exists and the strand has
+  constructed the handler, or it returns the D12 cause. No handler
+  was created on the failure path. The waiter holds no lock the
+  strand needs. The caller is often an executor thread. See the floor
+  below.
 - `send(id, bytes)` is exactly one whole Levin message, copied into
   the byte cap as a single unit during the call. C++ frees its buffer
   after the return. More than one context sends on the same
@@ -558,11 +570,11 @@ records the new count.
 
 - `block_host`, `unblock_host`, and `get_blocked_hosts` call the Rust
   ban list. A ban closes the sockets the list returns. It does not
-  walk the Levin registry. A duration that does not fit a `Tick`
-  (nanoseconds, `shekyl-timing-engine`) is refused at this boundary.
-  The permanent sentinel `block_host` uses today
-  (`numeric_limits<time_t>::max()` at `net_node.inl:575`) is its own
-  arm, read at that call when the seam is written.
+  walk the Levin registry. RPC speaks in durations: `setbans` takes
+  seconds, and `getbans` returns seconds remaining. At cutover the
+  conversion is `now + duration` onto the monotonic clock, and the
+  remaining time is computed back from it. No `time_t` crosses the
+  boundary. A duration that does not fit a `Tick` is refused.
 - Socket admission reserves inside `accept_clearnet`
   (`admission.rs:273-283`) and `accept_tor` (`:310-312`): the ceiling
   check and the mint hold one table lock. `socket_count` is the
@@ -577,11 +589,12 @@ records the new count.
   a publish result and is not written there.
 - `get_info` keeps `incoming_connections_count` and
   `outgoing_connections_count` as the public zone's session counts,
-  from the Levin registry. Socket counts are
-  `public_incoming_socket_count`, `public_outgoing_socket_count`,
-  `tor_incoming_socket_count`, and `tor_outgoing_socket_count`.
-  A restricted caller receives zero for all six, as it does for the
-  session counts today.
+  from the Levin registry. Socket counts
+  (`public_incoming_socket_count`, `public_outgoing_socket_count`,
+  `tor_incoming_socket_count`, `tor_outgoing_socket_count`) are not
+  on `get_info` until the daemon binds the seam. A zero while epee
+  still holds the sockets would read as no connections. A restricted
+  caller receives zero for the session counts, as it does today.
 
 The seam's tests are the close races and the floor. A `send` after
 Rust has dropped the socket returns false. A simultaneous close keeps
