@@ -5082,3 +5082,65 @@ lands:
 - **The realistic spread moved the threshold.** §L19f put it between 0.01 and 0.03 at
   `S = 4`. At `S ≤ 2.5` it sits between 0.03 and 0.06, which is what makes the floor-device
   cells clear with margin.
+
+---
+
+## L19j — the design owner's F34 disposition, and the two runs that settle it: pre-registration (2026-09-28)
+
+### 1. The disposition (Rick, 2026-09-28, design-owner lane)
+
+**Composition: no mechanism owed, and (g) does not fire — pending two cheap runs** that
+settle §L19i's unresolved cells:
+
+- (a) one more grid point, `storage_unit_cost = 0.045`;
+- (b) more seeds at `S = 2.5` to resolve its SPLIT.
+
+If `SHT-Q2` lands byte-proportional shards (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.3–§8.4),
+composition variance goes away regardless.
+
+**Funding: a gate 4/5 budget-sizing finding, handed to that lane.** Every calibrated
+cell that breaches has `φ` between 2.9 and 29 — holding cost above the whole archival
+budget. That happens with paid egress at a low SKL price, in years 5–10. The cost driver
+is whole-shard challenge egress: three reads per pair per epoch (§L19h §2). That is
+worth noting for the gate 4/5 owner, and it is that lane's, not this one's.
+
+**`PDM-Q-F34` is drafted once (a) and (b) are in.**
+
+### 2. The runs, fixed before their code
+
+Same subject and method as §L19h §4: covered base, Burst, `age_weight` 2, demand-matched
+sizes, cell-wise delta, in-frame check, graded by the governing three-valued verdict with
+void-on-collapsed-control.
+
+- **(a)** `storage_unit_cost = 0.045` at `S ∈ {1.5, 2, 2.5}`, `N = 8` paired seeds (the
+  same eight as §L19i).
+- **(b)** `S = 2.5` at `storage_unit_cost ∈ {0.03, 0.045}`, **`N = 32`** paired seeds.
+  These are seeds `SEED0 … SEED0 + 31`, so the first eight are §L19i's. Thirty-two
+  because §L19i's SPLIT had 2 of 8 over. At that rate, 32 seeds give an over-`X`
+  fraction to about ±0.08 (one binomial standard error at `p` ≈ 0.25), enough to tell a
+  tail draw from a mixed regime. The all-seeds rule is unchanged, and more seeds make
+  CLEAR and BREACH harder to reach, not easier.
+
+### 3. Reading, fixed before the run
+
+Cells map onto the grid as §L19h §5 registered. A cell **reaches the breach** at `S` if
+its `storage_unit_cost` is at or above the lowest BREACH point. It is **CLEAR** if it lies
+at or below a CLEAR point with every lower point CLEAR. Otherwise it is **unresolved**.
+The (b) verdict supersedes the `N = 8` verdict at `S = 2.5` for the points it re-runs.
+
+| outcome | reading |
+|---|---|
+| every calibrated cell with `φ < 1` is CLEAR | **composition closes:** no mechanism owed, (g) not fired, as the disposition states; `PDM-Q-F34` is drafted |
+| **some calibrated cell with `φ < 1` reaches BREACH** | a composition breach in a **funded** regime — the disposition's premise fails; **back to the design owner** before any `PDM-Q-F34` draft |
+| (b) is still SPLIT at `N = 32` | the point is a **mixed regime**, not a tail draw: the over-`X` fraction and its standard error are reported, and the cells it decides are reported as mixed. If those cells have `φ < 1`, they go to the design owner with the fraction; they are not read as CLEAR |
+| any VOID point | outside the instrument; reported, not graded |
+
+The cells these runs can move (from §L19i):
+
+- `10 k / year 5 / high` at $0.001 — 0.042, φ 0.45;
+- `100 k / year 1 / high` at $0.001 — 0.034, φ 0.37;
+- `100 k / year 5 / high` at $0.01 — 0.042, φ 0.45;
+- at `S = 2.5` only, `10 k / year 10 / high` at $0.01 and `100 k / year 10 / high` at
+  $0.1 — 0.027, φ 0.29.
+
+**All have `φ < 1`: these are exactly the funded cells the disposition turns on.**
