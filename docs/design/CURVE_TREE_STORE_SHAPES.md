@@ -239,7 +239,7 @@ could not tell it from data:
    read the caller may skip." One table over, a caller did skip it (instance 1).
    Closed in Rust by one typed row whose `EMPTY` is **written at store
    creation**, so absence is SI-7 and emptiness is a value
-   ([`DRS_E1_SCURVE.md`](DRS_E1_SCURVE.md) §3.3).
+   ([`DRS_E1_SCURVE.md`](../completed/DRS_E1_SCURVE.md) §3.3).
 
 The discriminator is already written where the rules crate reads by height
 (`rust/shekyl-chain-rules/src/view.rs` §"Absence is a case, not a `None`",

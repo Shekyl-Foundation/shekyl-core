@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-timing-engine"
-description = "P2P timing engine: time-ordered wake hints and the one-thread service around them. No sockets and no async runtime. The thread is a shekyl-thread-ledger row."
+description = "P2P timing engine: time-ordered wake hints and the one-thread service around them. No sockets. The thread is not an async runtime. An async home waits on the slot's waker."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

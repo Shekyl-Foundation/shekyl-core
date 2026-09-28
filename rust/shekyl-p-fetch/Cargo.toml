@@ -35,9 +35,9 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # content-verify hole are CPU work that must not sit on the executor thread).
 tokio = { version = "1", default-features = false, features = ["net", "io-util", "time", "sync", "rt"] }
 # SOCKS5h dial into the daemon's tor zone (`SF-D2`, `SF-D3`): the proxy
-# resolves the `.onion`; this crate never resolves anything. Same crate and
-# pin as `shekyl-rpc-transport`'s SOCKS connector.
-tokio-socks = { version = "0.5.3", default-features = false, features = ["tokio"] }
+# resolves the `.onion`; this crate never resolves anything. Principal:
+# no SOCKS authentication. Persona isolation is `shekyl-p-transport`.
+shekyl-socks = { path = "../shekyl-socks" }
 # The request nonce. OS entropy, nothing derived.
 getrandom = "0.2"
 
