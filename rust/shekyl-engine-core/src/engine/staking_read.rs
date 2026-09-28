@@ -48,7 +48,7 @@ use std::collections::BTreeSet;
 
 use shekyl_engine_file::WalletFileError;
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PScanState};
-use shekyl_engine_state::{PendingPostBlock, WalletLedgerError};
+use shekyl_engine_state::{PendingPostBlock, WalletLedger, WalletLedgerError};
 #[cfg(test)]
 use shekyl_types::ChainCount;
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
@@ -311,39 +311,13 @@ impl<
         P: PendingTxEngine,
     > Engine<S, D, LocalLedger, E, R, P, shekyl_engine_file::WalletFile>
 {
-    /// Compute the authoritative [`StakingReadView`] — staked balance,
-    /// unspent staked outputs, staking-enabled flag, and P-scan frontier.
-    ///
-    /// **Read-only**: takes a brief ledger read guard for `staking_enabled`,
-    /// then opens the two sealed sibling files (`.wallet.pscan`,
-    /// `.wallet.pending`) without mutating either. An absent seal is the
-    /// ordinary non-staker / never-scanned case and reads as empty; a corrupt
-    /// or version-mismatched seal **fails closed** as
-    /// [`StakingReadError`] — the caller must not render "nothing staked"
-    /// over a bad seal.
-    ///
-    /// Callers that already hold a [`crate::engine::LedgerReadGuard`] must
-    /// **not** call this method while that guard is live: `std::sync::RwLock`
-    /// is not re-entrant, and the nested `ledger.read()` deadlocks the
-    /// worker. Snapshot `staking_enabled` from the held guard, drop it, then
-    /// call [`Self::staking_read_view_with_snapshot`].
-    ///
-    /// Small synchronous file I/O (the same class as
-    /// [`WalletFile::open_pscan_state`]'s other callers); async callers on a
-    /// multi-threaded runtime should treat it like the other sealed-file
-    /// opens.
-    ///
-    /// # Errors
-    ///
-    /// [`StakingReadError`] on seal-open failure, codec/version refusal, or
-    /// money-sum overflow.
-    /// Whether the bond watch adopted a recovered staked slot this session
+    /// Whether bond-watch adopted a recovered staked slot this session
     /// (see [`StakingReadView::recovery_pending_reopen`]). Takes a brief
     /// ledger read guard — callers already holding a
     /// [`crate::engine::LedgerReadGuard`] must drop it first (non-reentrant
     /// lock).
     pub fn staking_recovery_pending_reopen(&self) -> bool {
-        !self.ledger.read().slots_adopted_this_session.is_empty()
+        self.ledger.read().recovery_pending_reopen()
     }
 
     /// Open the two sealed sibling files raw — the decoded [`PScanState`] and
@@ -369,15 +343,61 @@ impl<
         Ok((pscan, pending))
     }
 
-    pub fn staking_read_view(&self) -> Result<StakingReadView, StakingReadError> {
-        let (staking_enabled, recovery_pending_reopen) = {
+    /// Ledger facts under one read guard, then the sealed staking read.
+    ///
+    /// `under_guard` runs while the guard is held, so its result is coherent
+    /// with `staking_enabled` and [`StakingReadView::recovery_pending_reopen`].
+    /// The guard drops before the seals open. The closure's value comes back
+    /// even when the seal read fails, so a caller can still serve the ledger
+    /// half (the balance view's degrade arm).
+    ///
+    /// The closure must not take the ledger lock: `std::sync::RwLock` is not
+    /// re-entrant.
+    pub(super) fn staking_read_with_ledger<T>(
+        &self,
+        under_guard: impl FnOnce(&WalletLedger) -> T,
+    ) -> (T, Result<StakingReadView, StakingReadError>) {
+        let (staking_enabled, recovery_pending_reopen, extra) = {
             let guard = self.ledger.read();
             (
                 guard.ledger.staking.staking_enabled,
-                !guard.slots_adopted_this_session.is_empty(),
+                guard.recovery_pending_reopen(),
+                under_guard(&guard.ledger),
             )
         };
-        self.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
+        let view = self.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen);
+        (extra, view)
+    }
+
+    /// Compute the authoritative [`StakingReadView`] — staked balance,
+    /// unspent staked outputs, staking-enabled flag, and P-scan frontier.
+    ///
+    /// **Read-only**: one brief ledger read guard for the staking flags, then
+    /// the two sealed sibling files (`.wallet.pscan`, `.wallet.pending`).
+    /// An absent seal is the ordinary non-staker / never-scanned case and
+    /// reads as empty; a corrupt or version-mismatched seal **fails closed**
+    /// as [`StakingReadError`] — the caller must not render "nothing staked"
+    /// over a bad seal.
+    ///
+    /// Callers that already hold a [`crate::engine::LedgerReadGuard`] must
+    /// **not** call this method while that guard is live: `std::sync::RwLock`
+    /// is not re-entrant. Snapshot the flags, drop the guard, then call
+    /// [`Self::staking_read_view_with_snapshot`]. A caller in this crate who
+    /// also needs its own read under that same guard uses
+    /// `staking_read_with_ledger`.
+    ///
+    /// Small synchronous file I/O (the same class as
+    /// [`WalletFile::open_pscan_state`]'s other callers); async callers on a
+    /// multi-threaded runtime should treat it like the other sealed-file
+    /// opens.
+    ///
+    /// # Errors
+    ///
+    /// [`StakingReadError`] on seal-open failure, codec/version refusal, or
+    /// money-sum overflow.
+    pub fn staking_read_view(&self) -> Result<StakingReadView, StakingReadError> {
+        let ((), view) = self.staking_read_with_ledger(|_| ());
+        view
     }
 
     /// Like [`Self::staking_read_view`], but uses a caller-supplied

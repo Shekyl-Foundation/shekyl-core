@@ -248,9 +248,11 @@ where
     ///
     /// # Errors
     ///
-    /// [`super::balance_view::BalanceViewError::Overflow`] for corrupt
-    /// staking totals. An unreadable staking seal is not an error: it
-    /// degrades to `staking: None`.
+    /// [`super::balance_view::BalanceViewError::BondedLegs`] when the two
+    /// bonded legs sum past the money type, and
+    /// [`super::balance_view::BalanceViewError::SealedTotals`] when the
+    /// sealed staking totals themselves overflow. An unreadable staking
+    /// seal is not an error: it degrades to `staking: None`.
     pub fn balance_snapshot_with<T>(
         &self,
         under_guard: impl FnOnce(&shekyl_engine_state::WalletLedger) -> T,
@@ -338,5 +340,39 @@ mod tests {
             .expect("copy must not consume the view");
         b.staking_read_view()
             .expect("copy must not consume the view");
+    }
+
+    /// An absent staking seal is a true zero on the glance, not the degrade
+    /// arm. The session-adoption flag on that snapshot is the staking read's.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn balance_view_on_a_non_staker_is_present_zeros() {
+        use crate::engine::balance_view::StakedTotals;
+
+        let (_tmp, engine) = non_staker_engine(SEED);
+        let view = engine
+            .stake()
+            .balance_view()
+            .expect("a non-staker glance is honest zeros");
+        assert_eq!(view.liquid, AtomicUnits::ZERO);
+        assert_eq!(view.unlocked, view.liquid);
+        assert_eq!(view.pending, AtomicUnits::ZERO);
+        assert_eq!(view.unspendable, AtomicUnits::ZERO);
+        assert_eq!(
+            view.staking,
+            Some(StakedTotals {
+                staked: AtomicUnits::ZERO,
+                claimable_rewards: AtomicUnits::ZERO,
+            })
+        );
+        let snap = engine
+            .stake()
+            .balance_snapshot_with(|_| ())
+            .expect("snapshot");
+        let read = engine.stake().staking_read_view().expect("staking read");
+        assert_eq!(
+            snap.staking.as_ref().map(|v| v.recovery_pending_reopen),
+            Some(read.recovery_pending_reopen)
+        );
+        assert!(!read.recovery_pending_reopen);
     }
 }

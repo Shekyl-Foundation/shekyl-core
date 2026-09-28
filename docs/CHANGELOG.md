@@ -9,13 +9,15 @@
   `pending`, `unspendable`, and `staking: Option<StakedTotals>` (the two
   bonded legs summed with checked arithmetic, plus `claimable_rewards`).
   `StakeFacade::balance_view` / `balance_snapshot_with` (the façade door;
-  no new inherent `Engine::` method) own the lock
-  choreography (one brief ledger guard, dropped, then the sealed staking
-  read) and the degrade/loud split: an unreadable staking seal degrades to
-  `staking: None` — absence, never a fabricated zero — and a corrupt total
-  is `BalanceViewError::Overflow`, an error rather than a saturated
-  balance or a panic. `project_balance` is the pure half, unit-tested at
-  the source.
+  no new inherent `Engine::` method) classify and project. The lock
+  choreography — one brief ledger guard, dropped, then the sealed staking
+  read — is the staking read's (`staking_read_with_ledger`), so
+  `recovery_pending_reopen` has one definition. An unreadable staking seal
+  degrades to `staking: None` — absence, never a fabricated zero — and a
+  corrupt total is `BalanceViewError::BondedLegs` or `SealedTotals`, the
+  two client messages this surface already served, an error rather than a
+  saturated balance or a panic. `project_balance` is the crate-private
+  pure half, unit-tested at the source.
 - Wallet RPC's `get_balance` and `get_wallet_info` serialize that view;
   `project::get_balance_result` is now wire shaping only, and the server's
   private `ledger_snapshot_with_staking` / `degrade_or_loud` are deleted.

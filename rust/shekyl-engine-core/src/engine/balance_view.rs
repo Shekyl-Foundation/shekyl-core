@@ -24,18 +24,20 @@
 //!   `None`. Absence is structurally distinct from `0` — a staker must never
 //!   be shown "nothing staked" over a bad seal.
 //! - **Loud.** A seal that *loaded* but whose money totals overflow the
-//!   money type ([`StakingReadError::Overflow`], or the two bonded legs
-//!   summing past `u64`) is corrupt state and answers
-//!   [`BalanceViewError::Overflow`]: checked, not saturating — a clamped
-//!   `u64::MAX` would render as a plausible (absurd) balance — and an error,
-//!   not a panic, because hosts build with `panic = "abort"`.
+//!   money type is corrupt state and answers a [`BalanceViewError`]:
+//!   [`BalanceViewError::SealedTotals`] when the staking read's own sums
+//!   overflow, [`BalanceViewError::BondedLegs`] when those two legs each fit
+//!   and their sum does not. Checked, not saturating — a clamped `u64::MAX`
+//!   would render as a plausible (absurd) balance — and an error, not a
+//!   panic, because hosts build with `panic = "abort"`. The two arms keep
+//!   the client messages that predate this module.
 //!
 //! # Lock choreography
 //!
-//! The ledger lock is not re-entrant. The snapshot is taken under one brief
-//! ledger read guard, the guard is dropped, and only then are the sealed
-//! staking files opened — the one safe order, owned here so no caller can
-//! nest a `ledger.read()` under a live guard and deadlock the worker.
+//! The ledger lock is not re-entrant. The staking read owns the one safe
+//! order (`staking_read_with_ledger`: the caller's read under one guard,
+//! the guard dropped, then the seals). This module only classifies that
+//! result and projects it, so the session-adoption flag has one definition.
 
 use shekyl_engine_state::WalletLedger;
 use shekyl_scanner::{BalanceSummary, WalletLedgerExt as _};
@@ -100,13 +102,24 @@ pub struct BalanceSnapshot<T> {
 
 /// The loud arm: corrupt money totals. Every unreadable-seal case degrades
 /// instead (see the module docs).
+///
+/// The two variants are the two client messages wallet RPC already served.
+/// [`Self::BondedLegs`] is the glance sum; [`Self::SealedTotals`] is the
+/// staking read's own aggregation. The [`Display`] text is that client
+/// message, so the RPC mapping does not rephrase it.
+///
+/// [`Display`]: std::fmt::Display
 #[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
 pub enum BalanceViewError {
-    /// Bonded principal legs, or the sealed staking totals, exceed the money
-    /// type. The supply cap keeps any legitimate sum far below `u64::MAX`,
-    /// so this is corrupt state, not a large wallet.
-    #[error("balance view: staking totals exceed the money type (corrupt staking state)")]
-    Overflow,
+    /// The two bonded legs each fit in the money type and their sum does not.
+    /// The supply cap keeps any legitimate sum far below `u64::MAX`, so this
+    /// is corrupt state, not a large wallet.
+    #[error("bonded principal legs exceed the money type (corrupt staking view)")]
+    BondedLegs,
+    /// [`StakingReadError::Overflow`]: the sealed totals overflowed while the
+    /// staking read aggregated them.
+    #[error("staking totals overflowed the money type (corrupt staking state)")]
+    SealedTotals,
 }
 
 /// Project the one-glance balance from its two inputs. Pure; the
@@ -117,8 +130,8 @@ pub enum BalanceViewError {
 ///
 /// # Errors
 ///
-/// [`BalanceViewError::Overflow`] when the two bonded legs sum past `u64`.
-pub fn project_balance(
+/// [`BalanceViewError::BondedLegs`] when the two bonded legs sum past `u64`.
+pub(crate) fn project_balance(
     summary: &BalanceSummary,
     staking: Option<&StakedBalance>,
 ) -> Result<BalanceView, BalanceViewError> {
@@ -130,7 +143,7 @@ pub fn project_balance(
                     staked,
                     claimable_rewards: s.rewards_received_unspent,
                 })
-                .ok_or(BalanceViewError::Overflow)
+                .ok_or(BalanceViewError::BondedLegs)
         })
         .transpose()?;
     Ok(BalanceView {
@@ -155,15 +168,14 @@ fn degrade_or_loud(
         }
         Err(e @ StakingReadError::Overflow) => {
             tracing::warn!(error = %e, "staking read corrupt; balance fails loud");
-            Err(BalanceViewError::Overflow)
+            Err(BalanceViewError::SealedTotals)
         }
     }
 }
 
-// `F = WalletFile` / `L = LocalLedger`: the same specialization as
-// `Engine::staking_read_view_with_snapshot`, which this composes. Free
-// functions, not inherent `Engine::` methods: the product door is
-// `StakeFacade::balance_view` / `balance_snapshot_with`, which forward here
+// `F = WalletFile` / `L = LocalLedger`: the same specialization as the staking
+// read this composes. Free function, not an inherent `Engine::` method: the
+// product door is `StakeFacade::balance_view` / `balance_snapshot_with`
 // (`ENGINE_COMPOSITION_DECOMPOSITION.md`, the 2026-09-02 inherent-API freeze).
 #[allow(private_bounds)]
 pub(super) fn balance_snapshot_with<S, D, E, R, P, T>(
@@ -177,19 +189,12 @@ where
     R: RefreshEngine,
     P: PendingTxEngine,
 {
-    let (summary, staking_enabled, recovery_pending_reopen, extra) = {
-        let guard = engine.ledger.read();
-        (
-            guard.ledger.balance(),
-            guard.ledger.staking.staking_enabled,
-            !guard.slots_adopted_this_session.is_empty(),
-            under_guard(&guard.ledger),
-        )
-    };
-    let staking = degrade_or_loud(
-        engine.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen),
+    let ((summary, extra), read) =
+        engine.staking_read_with_ledger(|wallet| (wallet.balance(), under_guard(wallet)));
+    let staking = degrade_or_loud(read)?;
+    let view = project_balance(&summary, staking.as_ref().map(|v| &v.balance)).inspect_err(
+        |e| tracing::warn!(error = %e, "balance projection refused a corrupt staking total"),
     )?;
-    let view = project_balance(&summary, staking.as_ref().map(|v| &v.balance))?;
     Ok(BalanceSnapshot {
         view,
         extra,
@@ -267,7 +272,7 @@ mod tests {
         };
         assert_eq!(
             project_balance(&summary(0, 0, 0), Some(&staking)).unwrap_err(),
-            BalanceViewError::Overflow
+            BalanceViewError::BondedLegs
         );
     }
 
@@ -285,9 +290,19 @@ mod tests {
             std::io::Error::other("disk gone"),
         ));
         assert!(degrade_or_loud(Err(unreadable)).unwrap().is_none());
+        let undecodable = StakingReadError::Codec(
+            shekyl_engine_state::WalletLedgerError::UnsupportedFormatVersion { file: 1, binary: 2 },
+        );
+        assert!(degrade_or_loud(Err(undecodable)).unwrap().is_none());
+        let sealed = degrade_or_loud(Err(StakingReadError::Overflow)).unwrap_err();
+        assert_eq!(sealed, BalanceViewError::SealedTotals);
         assert_eq!(
-            degrade_or_loud(Err(StakingReadError::Overflow)).unwrap_err(),
-            BalanceViewError::Overflow
+            sealed.to_string(),
+            "staking totals overflowed the money type (corrupt staking state)"
+        );
+        assert_eq!(
+            BalanceViewError::BondedLegs.to_string(),
+            "bonded principal legs exceed the money type (corrupt staking view)"
         );
     }
 }

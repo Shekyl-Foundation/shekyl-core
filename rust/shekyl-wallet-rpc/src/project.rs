@@ -31,9 +31,9 @@ pub fn atomic_units_string(amount: AtomicUnits) -> String {
 /// Serialize the engine's one-glance balance ([`BalanceView`]) as the
 /// contract's `get_balance` result. Pure wire shaping: which leg is liquid,
 /// how the bonded legs sum, and what an unreadable staking seal does to the
-/// staking fields are all decided in `shekyl_engine_core::project_balance`,
-/// once, for every consumer — this function only spells the decimal
-/// strings and carries the engine's absence onto the wire as absence.
+/// staking fields are decided by [`shekyl_engine_core::StakeFacade::balance_view`],
+/// once, for every consumer. This function spells the decimal strings and
+/// carries the engine's absence onto the wire as absence.
 pub fn get_balance_result(view: &BalanceView) -> GetBalanceResult {
     GetBalanceResult {
         liquid: atomic_units_string(view.liquid),

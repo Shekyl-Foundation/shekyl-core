@@ -132,16 +132,15 @@ fn map_staking_read(
     })
 }
 
-/// The loud arm of the engine's balance projection
-/// (`StakeFacade::balance_snapshot_with`): a seal that loaded but whose money
-/// totals overflowed is corrupt state and answers `-32603`, with a stable,
-/// detail-free client message. The unreadable-seal arm never reaches here —
-/// the engine degrades it to absent staking fields.
+/// Map a loud [`shekyl_engine_core::BalanceViewError`] to `-32603`.
+///
+/// The client message is the error's own text, so
+/// [`shekyl_engine_core::BalanceViewError::BondedLegs`] and
+/// [`shekyl_engine_core::BalanceViewError::SealedTotals`] stay distinct.
+/// An unreadable seal never reaches here: the engine degrades it to absent
+/// staking fields, and the engine is the one that logs the loud arm.
 pub(crate) fn map_balance_view(e: shekyl_engine_core::BalanceViewError) -> WalletRpcError {
-    tracing::warn!(error = %e, "balance view corrupt");
-    WalletRpcError::InternalError(
-        "staking totals overflowed the money type (corrupt staking state)".into(),
-    )
+    WalletRpcError::InternalError(e.to_string())
 }
 
 /// Acquire the engine read guard and compute the authoritative view.
@@ -216,5 +215,17 @@ mod tests {
             Some("foundation_complete_tree")
         );
         assert_eq!(posture_str(None), None);
+    }
+
+    #[test]
+    fn balance_overflows_keep_their_client_messages() {
+        use shekyl_engine_core::BalanceViewError;
+        for err in [BalanceViewError::BondedLegs, BalanceViewError::SealedTotals] {
+            let mapped = map_balance_view(err);
+            assert!(
+                matches!(mapped, WalletRpcError::InternalError(ref message) if message == &err.to_string()),
+                "{err:?} must reach the client as its own text, got {mapped:?}"
+            );
+        }
     }
 }

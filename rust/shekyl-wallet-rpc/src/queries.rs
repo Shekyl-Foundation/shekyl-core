@@ -222,8 +222,9 @@ pub(crate) async fn get_primary_address(
 /// One-round-trip aggregate of live wallet reads (WI-RPC-4).
 ///
 /// CLI `engine_info` is the sole production consumer at land time. No new
-/// Engine API — composes balance / height / address / staking_info under
-/// one engine hold (+ one daemon height probe).
+/// inherent `Engine` method: the balance and the staking block come from
+/// one [`shekyl_engine_core::StakeFacade::balance_snapshot_with`], so they
+/// share a ledger snapshot, plus one daemon height probe.
 pub(crate) async fn get_wallet_info(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
