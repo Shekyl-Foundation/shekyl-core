@@ -59,7 +59,7 @@ use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
     recorded, validate, AtHeight, CenRow, ChainView, Corrupt, EffectiveMedian, Fault, InvalidBlock,
-    PerHeightRecord, Retry, Stale, StructurallyValid, Verdict, ViewRead, Weights,
+    PaidEmission, PerHeightRecord, Retry, Stale, StructurallyValid, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
@@ -185,6 +185,14 @@ pub struct Applied {
     /// `block_info` columns and the exporter's re-derived median — the
     /// parity oracle for the medians while the LMDB trace exists.
     pub weights: Vec<(BlockHeight, Weights)>,
+    /// Each connected block's paid emission — the reward F14b priced, its
+    /// split, the accumulator G12 advanced (`ValidatedBlock::emission`,
+    /// slice 7 commit 5) — one per entry of `connected`. The replay
+    /// compares the accumulator against the trace's `coins_generated` at
+    /// that height: the C++'s `block_info.bi_coins`, hence the paid reward
+    /// at every height by difference — the penalty's parity oracle on the
+    /// one captured block over the median.
+    pub emission: Vec<(BlockHeight, PaidEmission)>,
     /// The census rows the connected blocks' verdicts exercised — the
     /// union of each `ChainValid`'s coverage, for the grader's clause (1).
     pub exercised: BTreeSet<&'static str>,
@@ -423,6 +431,7 @@ impl<F: FactsFor + Send + Sync + 'static> Message<Apply> for Connector<F> {
                         let hash = valid.block().hash();
                         let root_after = valid.block().root_after();
                         let weights = *valid.block().weights();
+                        let emission = *valid.block().emission();
                         applied
                             .exercised
                             .extend(valid.coverage().iter().map(CenRow::as_str));
@@ -430,6 +439,7 @@ impl<F: FactsFor + Send + Sync + 'static> Message<Apply> for Connector<F> {
                         applied.connected.push((height, hash));
                         applied.roots.push((height, root_after));
                         applied.weights.push((height, weights));
+                        applied.emission.push((height, emission));
                     }
                     Ok(Err(refused)) => {
                         applied.refused = Some((height, refused));

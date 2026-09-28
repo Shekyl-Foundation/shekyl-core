@@ -119,7 +119,7 @@ use super::{
     LeafCount, OriginatedPhase, OutKey, OutTx, PassedThroughFacts, PoolRecord, ProbeCell,
     PropertyCell, RMarket, Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion,
     SettlementEpochBlocks, SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
-    PROPERTY_CELLS, SCHEMA_VERSION,
+    FACT_FIELDS, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -327,10 +327,16 @@ impl Fixtures for PassedThroughFacts {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
             ("none", PassedThroughFacts::NONE),
-            ("burned", PassedThroughFacts::of_positions([3])),
-            // Every field: the six-name spelling is the layout —
-            // `cumulative_difficulty` left at SCHEMA_VERSION 7 (E6 slice 2).
-            ("all", PassedThroughFacts::of_positions(0..5)),
+            // `burned` is position 0 and the whole vocabulary since E6 slice
+            // 7 (SCHEMA_VERSION 16) — `cumulative_difficulty` left at 7,
+            // `root_after` at 15, the two weights, the median and
+            // `coins_generated` at 16. "burned" and "all" are one fixture
+            // now; both names are kept so the `.snap` shows the collapse.
+            ("burned", PassedThroughFacts::of_positions([0])),
+            (
+                "all",
+                PassedThroughFacts::of_positions(0..FACT_FIELDS.len()),
+            ),
         ]
     }
 }

@@ -288,12 +288,13 @@ async fn replay(replay: Replay) -> Result<(), Failure> {
 
     eprintln!(
         "connected {} block(s), popped {}, {} checkpoint digested, {} root(s) compared, \
-         {} weight row(s) compared",
+         {} weight row(s) compared, {} accumulator(s) compared",
         report.connected.len(),
         report.popped(),
         usize::from(report.checkpoint.is_some()),
         report.roots.compared(),
         report.weights.compared(),
+        report.emission.compared(),
     );
     for disagreement in report.disagreements() {
         match disagreement {
@@ -308,6 +309,9 @@ async fn replay(replay: Replay) -> Result<(), Failure> {
             }
             Disagreement::WeightsDiverged { at } => {
                 eprintln!("block weights at height {at}: derived != trace, DIVERGE");
+            }
+            Disagreement::EmissionDiverged { at } => {
+                eprintln!("coins_generated at height {at}: derived != trace, DIVERGE");
             }
         }
     }

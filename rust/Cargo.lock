@@ -3885,6 +3885,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-crypto-hash",
  "shekyl-difficulty",
+ "shekyl-economics",
  "shekyl-store-codec",
  "shekyl-types",
  "shekyl-units",

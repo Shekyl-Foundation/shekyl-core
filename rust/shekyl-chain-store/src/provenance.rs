@@ -222,7 +222,7 @@ mod tests {
         );
 
         let passed =
-            Provenance::FULL.widened_by_passed_through(PassedThroughFacts::of_positions([3]));
+            Provenance::FULL.widened_by_passed_through(PassedThroughFacts::of_positions([0]));
         assert!(!passed.is_parity_evidence());
         assert_eq!(
             passed.artifact_stamp(),

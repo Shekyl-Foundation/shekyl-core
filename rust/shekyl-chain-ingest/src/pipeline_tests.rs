@@ -23,6 +23,7 @@ use shekyl_chain_store::schema::{BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
 use shekyl_chain_store::store::{ConnectState, StoreError, StoreInvariant};
 use shekyl_difficulty::{CumulativeDifficulty, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_units::AtomicUnits;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, RunEnd, RunFault};
 use crate::corpus::CorpusReader;
@@ -798,6 +799,14 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
     // canonical heights compare clean.
     assert_eq!(report.weights.compared(), r.after.len() as u64);
     assert_eq!(report.weights.diverged().count(), 0, "{:?}", report.weights);
+    // And the emission oracle (CEN-F14b / G12), the same way.
+    assert_eq!(report.emission.compared(), r.after.len() as u64);
+    assert_eq!(
+        report.emission.diverged().count(),
+        0,
+        "{:?}",
+        report.emission
+    );
     assert_eq!(report.disagreements().count(), 0);
     assert!(report.observations().roots.diverged_at.is_empty());
     let Checkpoint { ours, theirs, .. } = report.checkpoint.expect("covered-tip checkpoint");
@@ -999,6 +1008,7 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
                     tree.root_after(hh),
                     tree.weights_of(hh),
                     tree.median_for(hh),
+                    tree.coins_generated_at(hh),
                 ),
             )
             .expect("facts");
@@ -1068,7 +1078,13 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
             let root = if hh == 1 { wrong } else { tree.root_after(hh) };
             w.push_facts(
                 h(hh),
-                &crate::test_support::facts_at(hh, root, tree.weights_of(hh), tree.median_for(hh)),
+                &crate::test_support::facts_at(
+                    hh,
+                    root,
+                    tree.weights_of(hh),
+                    tree.median_for(hh),
+                    tree.coins_generated_at(hh),
+                ),
             )
             .expect("facts");
         }
@@ -1158,6 +1174,7 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
                     tree.root_after(hh),
                     tree.weights_of(hh),
                     median,
+                    tree.coins_generated_at(hh),
                 ),
             )
             .expect("facts");
@@ -1216,6 +1233,82 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::WeightsDiverged { at: h(1) }]
+    );
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_height() {
+    // The emission oracle's negative control (rule 47; CEN-F14b / G12,
+    // slice 7 commit 5): a trace whose `coins_generated` at one height is
+    // one atomic unit off what the chain's paid rewards sum to is a
+    // disagreement at that height and no other — the checkpoint cannot see
+    // it (no accumulator is digested), and the root and weights oracles
+    // compare clean, so the report names the reward chain and nothing else.
+    use crate::pipeline::{Disagreement, EmissionDivergence};
+    use crate::trace::{Trace, TraceWriter};
+    let path = tmp("pipeline-emission-oracle-control");
+    let chain = chain(3);
+    let tree = GrownTree::over(&chain);
+    let wrong = AtomicUnits::from_raw(tree.coins_generated_at(2).to_raw() + 1);
+    let trace = {
+        let mut w = TraceWriter::new(Vec::new()).expect("header");
+        for hh in 0..3u64 {
+            let coins = if hh == 2 {
+                wrong
+            } else {
+                tree.coins_generated_at(hh)
+            };
+            w.push_facts(
+                h(hh),
+                &crate::test_support::facts_at(
+                    hh,
+                    tree.root_after(hh),
+                    tree.weights_of(hh),
+                    tree.median_for(hh),
+                    coins,
+                ),
+            )
+            .expect("facts");
+        }
+        w.push_checkpoint(&expected_state(&chain))
+            .expect("the true checkpoint");
+        Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
+    };
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the run itself completes");
+    assert!(report.checkpoint.expect("covered tip").identical());
+    assert_eq!(report.roots.diverged().count(), 0);
+    assert_eq!(report.weights.diverged().count(), 0);
+    assert_eq!(
+        report.emission.compared(),
+        3,
+        "every connected height compared"
+    );
+    let diverged: Vec<EmissionDivergence> = report.emission.diverged().copied().collect();
+    assert_eq!(diverged.len(), 1);
+    assert_eq!(diverged[0].at, h(2));
+    assert_eq!(diverged[0].theirs, wrong);
+    assert_eq!(diverged[0].ours.coins_generated, tree.coins_generated_at(2));
+    // The verdict's chain: the paid reward is what advanced the parent.
+    assert_eq!(
+        diverged[0].ours.coins_generated.to_raw(),
+        tree.coins_generated_at(1).to_raw() + diverged[0].ours.paid.to_raw()
+    );
+    assert_eq!(
+        report.disagreements().collect::<Vec<_>>(),
+        vec![Disagreement::EmissionDiverged { at: h(2) }]
     );
     cleanup(&path);
 }

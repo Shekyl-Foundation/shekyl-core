@@ -292,12 +292,11 @@ where
         // `Composed` answers `connect` from this ledger.
         self.ledger.priced().0.lock().expect("ledger lock").insert(
             height.to_raw(),
+            // The one figure the producer still hands `connect` (F17/G11
+            // are wave B's); the reward it priced is judged by F14b/F18
+            // and recorded from the verdict, never handed.
             Priced {
-                block_reward: template.block_reward,
                 burned: template.fees_burned,
-                // G6: the median the producer priced against, read through
-                // the validator's own definition (`ChainFacts::medians`).
-                long_term_effective_median: facts.medians.long_term_effective_median,
             },
         );
 

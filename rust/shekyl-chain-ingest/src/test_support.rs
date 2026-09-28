@@ -34,13 +34,14 @@ use std::collections::{BTreeMap, VecDeque};
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    effective_median_at, tree_after, AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock,
-    RecordedWeights, RuleSet, Tip, TreeFrontier,
+    effective_median_at, tree_after, tx_volume_window, AtHeight, BlockOutputs, ChainView,
+    LeafSource, RecordedBlock, RecordedWeights, RuleSet, Tip, TreeFrontier,
 };
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_economics::EconomicParams;
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
     GlobalOutputIndex, KeyImage, LongTermWeight, TxHash,
@@ -114,6 +115,13 @@ pub struct GrownTree {
     /// block `h` (over the weights below it), what the trace's row at `h`
     /// records and the validator's verdict must equal.
     medians: Vec<LongTermWeight>,
+    /// `blocks[h]` — block `h` as the store would record it: identity,
+    /// header, the work through it (a synthetic chain is regtest at
+    /// difficulty one, so `h + 1`), the accumulator this tree derived
+    /// (below) and the listed-transaction prefix sum. What `block_at`
+    /// answers, so `tx_volume_window` (CEN-F20) reads this tree the way
+    /// the validator reads the store.
+    blocks: Vec<RecordedBlock>,
 }
 
 impl GrownTree {
@@ -172,6 +180,14 @@ impl GrownTree {
         self.medians[at(height)]
     }
 
+    /// The gross emission through block `height` as this chain derives it
+    /// — the parent's plus the paid reward (CEN-F14b, G12): what the
+    /// validator's verdict carries and the trace's row records.
+    #[must_use]
+    pub fn coins_generated_at(&self, height: u64) -> AtomicUnits {
+        self.blocks[at(height)].coins_generated
+    }
+
     /// Connect `block` at the next height: derive its drain over the tree
     /// as it stands, apply the growth, then register its outputs — and
     /// derive its weights under the medians the chain so far yields, the
@@ -188,6 +204,55 @@ impl GrownTree {
             .fold(0u64, u64::saturating_add);
         let long_term =
             shekyl_economics::long_term_weight(medians.long_term_effective_median.to_raw(), weight);
+        // The accumulator, by the ratified composition the validator runs
+        // (CEN-F13/F15 → F14b → G12, `FL-R12′`): the parent's gross
+        // emission advanced by the paid reward — the release-modulated,
+        // tail-floored emission over the F20 volume window, under the
+        // weight penalty at this block's weight against the effective
+        // median in force. At genesis the configured coinbase total stands
+        // (F11). Read through the rules crate's own definitions
+        // (`tx_volume_window`) and `shekyl-economics`' one owner
+        // (`paid_block_reward`), never restated.
+        let parent_coins = height
+            .to_raw()
+            .checked_sub(1)
+            .map_or(0, |parent| self.blocks[at(parent)].coins_generated.to_raw());
+        let paid = if height.is_zero() {
+            block
+                .miner_transaction
+                .prefix
+                .outputs
+                .iter()
+                .fold(0u64, |acc, o| acc.saturating_add(o.amount))
+        } else {
+            let tx_volume = tx_volume_window(self, height)
+                .expect("a fixture chain's records are complete below its tip");
+            shekyl_economics::paid_block_reward(
+                medians.effective_median.to_raw(),
+                weight,
+                parent_coins,
+                tx_volume,
+                &EconomicParams::default(),
+            )
+            .expect("a fixture block is priced: under twice the median, no overflow")
+        };
+        let coins_generated = AtomicUnits::from_raw(shekyl_economics::advance_already_generated(
+            parent_coins,
+            paid,
+        ));
+        let listed_before = height
+            .to_raw()
+            .checked_sub(1)
+            .map_or(0, |parent| self.blocks[at(parent)].cumulative_tx_count);
+        self.blocks.push(RecordedBlock {
+            hash: block.hash(),
+            header: block.header.clone(),
+            // Regtest at difficulty one: the work through `h` is `h + 1`.
+            cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height.to_raw()) + 1),
+            coins_generated,
+            cumulative_tx_count: listed_before
+                + u64::try_from(txs.len()).expect("a fixture body count fits"),
+        });
         self.weights.push(RecordedWeights {
             weight: BlockWeight::from_raw(weight),
             long_term_weight: LongTermWeight::from_raw(long_term),
@@ -256,8 +321,11 @@ impl<'id> ChainView<'id> for GrownTree {
         Ok(false)
     }
 
-    fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-        Ok(AtHeight::AboveTip)
+    /// The block as the store would record it (CEN-F20's prefix sums,
+    /// F13's accumulator), so the rules' definitions read this tree as they
+    /// read the store.
+    fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
+        Ok(Self::recorded(&self.blocks, height))
     }
 
     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
@@ -582,15 +650,14 @@ pub fn corpus_from(first: BlockHeight, chain: &[(Block, Vec<Transaction>)]) -> V
 /// [`GrownTree`], so a trace built this way cannot record a root the chain
 /// it names did not grow. Since slice 7 commit 4 the same holds for the
 /// three weight values (`weight`, `long_term_weight`,
-/// `long_term_effective_median`): the tree derives them by the validator's
-/// own definition as it grows, and a caller cannot name them — a trace
-/// whose medians disagreed with its chain would be the fixture problem
-/// the weights oracle exists to rule out, and the type makes it
-/// unrepresentable rather than the test-writer's to avoid.
+/// `long_term_effective_median`), and since commit 5 for `coins_generated`:
+/// the tree derives them by the validator's own definitions as it grows,
+/// and a caller cannot name them — a trace whose medians or accumulator
+/// disagreed with its chain would be the fixture problem the oracles exist
+/// to rule out, and the type makes it unrepresentable rather than the
+/// test-writer's to avoid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceEconomics {
-    /// `block_info.bi_coins`.
-    pub coins_generated: AtomicUnits,
     /// `block_burn[h]`, zero when the row is absent.
     pub burned: AtomicUnits,
     /// `block_info.bi_diff` — the accumulator the trace holds the
@@ -606,7 +673,7 @@ impl TraceEconomics {
         Facts {
             weight: weights.weight,
             long_term_weight: weights.long_term_weight,
-            coins_generated: self.coins_generated,
+            coins_generated: tree.coins_generated_at(height),
             burned: self.burned,
             root_after: tree.root_after(height),
             long_term_effective_median: tree.median_for(height),
@@ -615,34 +682,33 @@ impl TraceEconomics {
     }
 }
 
-/// Synthetic economics for `height`: distinct per height, zero burn, the
-/// accumulator `height + 1`.
+/// Synthetic economics for `height`: zero burn, the accumulator `height + 1`.
 fn synthetic_economics(height: u64) -> TraceEconomics {
     TraceEconomics {
-        coins_generated: AtomicUnits::from_raw((height + 1) * 1_000_000),
         burned: AtomicUnits::from_raw(0),
         cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height) + 1),
     }
 }
 
-/// Facts for `height` whose recorded root after the drain is `root_after`
-/// and whose weights are `weights` under `long_term_effective_median`.
+/// Facts for `height` naming every value a chain determines: the root
+/// after the drain, the weights under the median, the accumulator.
 ///
-/// The door for a caller that must name what a chain determines. The
-/// CTW-5 negative control plants a wrong root here, the G6 negative
-/// control a wrong median; a trace for a chain uses [`trace_with`], which
-/// fills every derived value from that chain and takes none.
+/// The door for a caller that must name them. The CTW-5 negative control
+/// plants a wrong root here, the G6 control a wrong median, the F14b/G12
+/// control a wrong accumulator; a trace for a chain uses [`trace_with`],
+/// which fills every derived value from that chain and takes none.
 pub fn facts_at(
     height: u64,
     root_after: CurveTreeRoot,
     weights: RecordedWeights,
     long_term_effective_median: LongTermWeight,
+    coins_generated: AtomicUnits,
 ) -> Facts {
     let economics = synthetic_economics(height);
     Facts {
         weight: weights.weight,
         long_term_weight: weights.long_term_weight,
-        coins_generated: economics.coins_generated,
+        coins_generated,
         burned: economics.burned,
         root_after,
         long_term_effective_median,

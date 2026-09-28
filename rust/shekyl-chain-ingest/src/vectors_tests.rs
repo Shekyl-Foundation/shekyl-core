@@ -243,6 +243,33 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         diverged.len(),
         diverged.first()
     );
+    // CEN-F14b / G12 (slice 7 commit 5): the verdict's accumulator against
+    // the C++'s `block_info.bi_coins` at every connected height — the paid
+    // reward at each height by difference, so the penalty curve is held
+    // wherever a captured block is over the median (`median-full`, 211).
+    // The expected value is Shekyl's ratified composition (FL-R12′: the
+    // release-modulated, tail-floored emission under C2-R2 Q4's penalty,
+    // `paid_block_reward`), which the C++ marshals; the C++ is the oracle
+    // only insofar as it agrees with that.
+    assert_eq!(
+        report.emission.compared(),
+        manifest.block_count,
+        "{}: {} of {} heights had a recorded accumulator to compare against",
+        manifest.shape,
+        report.emission.compared(),
+        manifest.block_count
+    );
+    let diverged: Vec<_> = report.emission.diverged().collect();
+    assert!(
+        diverged.is_empty(),
+        "{} ({}): the derived accumulator differs from the daemon's at {} height(s), first at \
+         {:?} — a FINDING about CEN-F14b / G12's derivation, adjudicated against the ratified \
+         composition, never a fixture problem",
+        manifest.shape,
+        manifest.generator,
+        diverged.len(),
+        diverged.first()
+    );
     let (h0, connected_genesis) = report.connected[0];
     assert_eq!(h0, BlockHeight::from_raw(0));
     assert_eq!(
@@ -353,12 +380,13 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         hold(&dir, &manifest, &report);
         eprintln!(
             "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, weights \
-             MATCH at all {} heights, rows exercised: {}",
+             MATCH at all {} heights, accumulator MATCH at all {} heights, rows exercised: {}",
             manifest.shape,
             report.connected.len(),
             manifest.tip_height,
             report.roots.compared(),
             report.weights.compared(),
+            report.emission.compared(),
             report.exercised.len()
         );
     }

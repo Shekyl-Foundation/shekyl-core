@@ -357,11 +357,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         let popped = batch.pop()?;
         assert_eq!(popped.height, BlockHeight::from_raw(top));
         batch.insert_alt_block(&main[at(top)], &alt(top, &main_top_bytes, None))?;
-        batch.connect(
-            judge(&view, alt_cand.clone())?,
-            facts(top, 0),
-            RuleSet::GENESIS,
-        )?;
+        batch.connect(judge(&view, alt_cand.clone())?, facts(0), RuleSet::GENESIS)?;
         batch.remove_alt_block(&alt_top)?;
         Ok(promoted.attestation_witness().expect("witness").to_vec())
     });
@@ -395,7 +391,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
                 &view,
                 candidate(top, main[at(s)], vec![spend_at(&main, top, 10, 2)]),
             )?,
-            facts(top, 0),
+            facts(0),
             RuleSet::GENESIS,
         )?;
         batch.remove_alt_block(&main[at(top)])?;

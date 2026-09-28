@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! The facts seam, exercised through the connector it feeds: `Composed`
-//! folds the producer's priced figures onto the parent's record and hands
-//! `connect` what the store persists; a height nobody priced is
+//! hands `connect` the one figure the producer still prices (the burn) and
+//! the store records the rest from the verdict; a height nobody priced is
 //! `NoFacts`, not a default.
 
 use std::collections::BTreeMap;
@@ -17,12 +17,12 @@ use shekyl_chain_rules::{
     form, AtHeight, Candidate, FormAttempt, RuleSet, StructurallyValid, Verdict,
 };
 use shekyl_chain_store::store::Origin;
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, LongTermWeight};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, Transaction};
 
 use crate::connector::{Apply, Connector, ConnectorArgs, RunFault};
-use crate::facts::{block_weight, Composed, Priced, PricedAt};
+use crate::facts::{Composed, Priced, PricedAt};
 use crate::schedule::ChainRules;
 use crate::test_support::{chain, cleanup, h, open_store, tmp};
 
@@ -40,14 +40,12 @@ impl PricedAt for Table {
     }
 }
 
-/// `height` priced at `reward`, burning `burned`.
-fn priced(height: u64, reward: u64, burned: u64) -> (u64, Priced) {
+/// `height` burning `burned` — the one figure a producer still prices.
+fn priced(height: u64, burned: u64) -> (u64, Priced) {
     (
         height,
         Priced {
-            block_reward: AtomicUnits::from_raw(reward),
             burned: AtomicUnits::from_raw(burned),
-            long_term_effective_median: LongTermWeight::from_raw(300_000),
         },
     )
 }
@@ -70,11 +68,11 @@ fn formed(
 }
 
 #[tokio::test]
-async fn composed_folds_the_priced_reward_onto_the_parents_record() {
+async fn composed_hands_the_burn_and_the_store_records_the_verdicts_rest() {
     let path = tmp("facts-composed-fold");
     let chain = chain(3);
     let table = Table(
-        [priced(0, 10, 0), priced(1, 20, 3), priced(2, 30, 4)]
+        [priced(0, 0), priced(1, 3), priced(2, 4)]
             .into_iter()
             .collect(),
     );
@@ -98,14 +96,19 @@ async fn composed_folds_the_priced_reward_onto_the_parents_record() {
 
     let store = open_store(&path);
     let read = store.begin_read().expect("read");
-    // CEN-F13's accumulator: each record is its parent's plus its reward.
+    // CEN-G12's accumulator is the verdict's, not a producer's figure: the
+    // fixture's genesis coinbase pays nothing (F11 stands), and each later
+    // record is its parent's plus the paid reward F14b priced — so the
+    // series starts at zero and strictly climbs, and no `Priced` names a
+    // reward it could have moved.
     let coins: Vec<u64> = (0..3)
         .map(|hh| match read.block_info(h(hh)).expect("read") {
             AtHeight::Recorded(info) => info.coins_generated.to_raw(),
             AtHeight::AboveTip => panic!("recorded"),
         })
         .collect();
-    assert_eq!(coins, vec![10, 30, 60]);
+    assert_eq!(coins[0], 0, "genesis: the configured (zero) coinbase");
+    assert!(coins[1] > 0 && coins[2] > coins[1], "{coins:?}");
     // The burn is recorded per block and folded.
     assert_eq!(read.total_burned().expect("read").to_raw(), 7);
     // The root after `h` is the state at `h + 1` (SCW-19) — the verdict's
@@ -142,7 +145,7 @@ async fn a_height_nobody_priced_is_no_facts_and_the_writer_stays_up() {
     let path = tmp("facts-composed-unpriced");
     let chain = chain(2);
     // Height 1 is missing from the ledger.
-    let table = Table([priced(0, 10, 0)].into_iter().collect());
+    let table = Table([priced(0, 0)].into_iter().collect());
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path),
         rules: GENESIS_RULES,
@@ -182,22 +185,20 @@ async fn a_height_nobody_priced_is_no_facts_and_the_writer_stays_up() {
 enum Why {
     /// A provisional source of our own; a deletion when the row lands.
     Composed,
-    /// Nothing of ours produces it; the caller supplies it as the trace did.
-    NoSourceYet,
 }
 
 #[test]
 fn every_composed_origin_is_passed_through_until_its_row_lands() {
-    // The honesty pin: `Composed` marks nothing `Derived` today — `Derived`
-    // is what `Provenance::is_parity_evidence` trusts, and a self-computed
+    // The honesty pin: `Composed` marks nothing `Derived` — `Derived` is
+    // what `Provenance::is_parity_evidence` trusts, and a self-computed
     // field marked so would let a driver-built store claim parity evidence
-    // for a field no rule judged. The `DeletedBy` rows that make each
-    // field the validator's have not landed on the verdict. When one does,
-    // this test names the field whose origin flips — and the `Why` column
-    // says how far each field is from that: four have a provisional source
-    // here, two have none.
+    // for a field no rule judged. One field is left (the burn; F17/G11 are
+    // wave B's): when its rows land, this test names the origin that
+    // flips. Four fields left this table on 2026-09-28 by leaving
+    // `ConnectFacts` — the verdict carries them — and the "no source yet"
+    // arm went with the last of them (the median was it).
     let chain = chain(1);
-    let table = Table([priced(0, 10, 0)].into_iter().collect());
+    let table = Table([priced(0, 0)].into_iter().collect());
     let composed = Composed::new(table);
     let mock = shekyl_chain_rules::harness::MockChain::default();
     let (h0, f0) = formed(0, &chain[0].0, &chain[0].1, BlockHash::NULL);
@@ -212,49 +213,28 @@ fn every_composed_origin_is_passed_through_until_its_row_lands() {
         .expect("genesis validates on an empty chain");
         let facts =
             crate::facts::FactsFor::facts_for(&composed, h0, &valid, &view).expect("priced");
-        assert_eq!(facts.weight.value, block_weight(&valid));
+        // What the verdict carries and `Composed` no longer composes: the
+        // genesis coinbase's configured (zero) amount as the accumulator,
+        // the wire weight of the block.
+        assert_eq!(valid.block().emission().coins_generated, AtomicUnits::ZERO);
         assert_eq!(
-            facts.coins_generated.value.to_raw(),
-            10,
-            "genesis folds from zero"
+            valid.block().weights().weight.to_raw(),
+            u64::try_from(chain[0].0.miner_transaction.weight()).expect("fits")
         );
-        let table = [
-            ("weight", facts.weight.origin, Why::Composed),
-            (
-                "long_term_weight",
-                facts.long_term_weight.origin,
-                Why::Composed,
-            ),
-            (
-                "coins_generated",
-                facts.coins_generated.origin,
-                Why::Composed,
-            ),
-            ("burned", facts.burned.origin, Why::Composed),
-            (
-                "long_term_effective_median",
-                facts.long_term_effective_median.origin,
-                Why::NoSourceYet,
-            ),
-        ];
+        let table = [("burned", facts.burned.origin, Why::Composed)];
         for (field, origin, _) in table {
             assert_eq!(origin, Origin::PassedThrough, "{field}");
         }
-        // The decomposition of the E6 counter: how many passed-through
-        // fields are one deletion from `Derived`, and how many wait on a
-        // source that does not exist here yet.
+        // The E6 counter: one passed-through field, one deletion from
+        // `Derived`; nothing waits on a source that does not exist.
         let composed = table
             .iter()
             .filter(|(_, _, why)| *why == Why::Composed)
             .count();
-        let unsourced = table
-            .iter()
-            .filter(|(_, _, why)| *why == Why::NoSourceYet)
-            .count();
         assert_eq!(
-            (composed, unsourced),
-            (4, 1),
-            "passed-through = 4 composed + 1 unsourced (root_after left with DRS-E3)"
+            composed, 1,
+            "passed-through = 1 composed (the weights, the median and coins_generated left \
+             with E6 slice 7; root_after with DRS-E3; cumulative_difficulty with slice 2)"
         );
     });
 }

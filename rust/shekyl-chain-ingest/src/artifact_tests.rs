@@ -92,24 +92,20 @@ fn the_trace_round_trips_through_both_doors_and_the_borrow_is_passed_through() {
     assert_eq!(trace.expect(h(2)).expect("checkpointed").value(), &state);
     assert!(trace.expect(h(1)).is_none());
 
-    // The borrow door mints only passed-through facts.
+    // The borrow door mints only passed-through facts — one, the burn.
     let cf: ConnectFacts = trace.borrow(h(2)).expect("covered").into();
-    assert_eq!(cf.weight.value, BlockWeight::from_raw(1_002));
-    // The trace still records the root (the oracle's comparison input);
-    // the door no longer mints a fact from it.
+    assert_eq!(cf.burned.value, facts_at(2).burned);
+    assert_eq!(cf.burned.origin, Origin::PassedThrough);
+    // The trace still records every derived value (the oracles' comparison
+    // inputs); the door mints no fact from them.
+    let recorded = *trace.borrow(h(2)).expect("covered").value();
+    assert_eq!(recorded.weight, BlockWeight::from_raw(1_002));
+    assert_eq!(recorded.root_after, CurveTreeRoot::from_bytes([0xc2; 32]));
+    assert_eq!(recorded.coins_generated, facts_at(2).coins_generated);
     assert_eq!(
-        trace.borrow(h(2)).expect("covered").value().root_after,
-        CurveTreeRoot::from_bytes([0xc2; 32])
+        recorded.long_term_effective_median,
+        facts_at(2).long_term_effective_median
     );
-    for origin in [
-        cf.weight.origin,
-        cf.long_term_weight.origin,
-        cf.coins_generated.origin,
-        cf.burned.origin,
-        cf.long_term_effective_median.origin,
-    ] {
-        assert_eq!(origin, Origin::PassedThrough);
-    }
 }
 
 #[test]

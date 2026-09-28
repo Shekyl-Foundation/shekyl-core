@@ -17,9 +17,7 @@
 
 use redb::ReadableTable;
 use shekyl_chain_rules::{Candidate, RuleSet};
-use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, BlockWeight, LongTermWeight, SHARD_TX_COUNT,
-};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, SHARD_TX_COUNT};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
@@ -63,15 +61,10 @@ fn candidate_on(
     candidate_over(root_going_into(store, height), height, previous, listed)
 }
 
-fn facts(height: u64) -> ConnectFacts {
+/// The one fact `connect` is still handed (E6 slice 7): no burn.
+fn facts(_height: u64) -> ConnectFacts {
     ConnectFacts {
-        weight: Fact::passed_through(BlockWeight::from_raw(1_000 + height)),
-        long_term_weight: Fact::passed_through(LongTermWeight::from_raw(900 + height)),
-        coins_generated: Fact::passed_through(AtomicUnits::from_raw((height + 1) * 1_000_000)),
         burned: Fact::passed_through(AtomicUnits::from_raw(0)),
-        long_term_effective_median: Fact::passed_through(LongTermWeight::from_raw(
-            300_000 + 7 * height,
-        )),
     }
 }
 

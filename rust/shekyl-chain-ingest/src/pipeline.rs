@@ -51,12 +51,13 @@ use std::sync::Arc;
 use kameo::actor::PreparedActor;
 use kameo::error::SendError;
 use shekyl_chain_rules::{
-    form, FormAttempt, InvalidBlock, StructurallyValid, Substrate, Verdict, Weights,
+    form, FormAttempt, InvalidBlock, PaidEmission, StructurallyValid, Substrate, Verdict, Weights,
 };
 use shekyl_chain_store::store::{ChainStore, StoreError};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight,
 };
+use shekyl_units::AtomicUnits;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
@@ -144,6 +145,13 @@ pub struct RunReport {
     /// the two medians over every captured chain, taken while the LMDB
     /// trace exists; a divergence is recorded, never patched.
     pub weights: WeightComparisons,
+    /// The derived-vs-trace **emission** comparison (CEN-F14b / G12, slice
+    /// 7 commit 5), the same shape: at every connected height the trace
+    /// has facts for, the verdict's `coins_generated` against the C++'s
+    /// `block_info.bi_coins`. Consecutive rows differ by the paid reward,
+    /// so this is the penalty's parity oracle wherever a captured block is
+    /// over the median (`median-full`'s block 211 is the one on record).
+    pub emission: EmissionComparisons,
     /// The RandomX measurement (RD-F11), as of the run's end.
     pub metrics: MetricsArtifact,
     /// One entry per committed `Rewind`: the digest **after the pop**, at
@@ -291,6 +299,58 @@ pub struct WeightDivergence {
     pub theirs: RecordedWeightFacts,
 }
 
+/// The per-height emission oracle's results (`RunReport::emission`), keyed
+/// by height for the same reason the other two are.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EmissionComparisons {
+    results: BTreeMap<BlockHeight, Option<EmissionDivergence>>,
+}
+
+impl EmissionComparisons {
+    /// Connected canonical heights whose trace facts carried an
+    /// accumulator to compare.
+    #[must_use]
+    pub fn compared(&self) -> u64 {
+        u64::try_from(self.results.len()).expect("a height count fits u64")
+    }
+
+    /// Every canonical height where the derived accumulator was not the
+    /// recorded one, ascending.
+    pub fn diverged(&self) -> impl Iterator<Item = &EmissionDivergence> + '_ {
+        self.results.values().flatten()
+    }
+
+    /// Whether any compared height diverged.
+    #[must_use]
+    pub fn any_diverged(&self) -> bool {
+        self.diverged().next().is_some()
+    }
+
+    fn record(&mut self, at: BlockHeight, ours: PaidEmission, theirs: AtomicUnits) {
+        let result =
+            (ours.coins_generated != theirs).then_some(EmissionDivergence { at, ours, theirs });
+        self.results.insert(at, result);
+    }
+
+    fn retract_above(&mut self, to: BlockHeight) {
+        self.results.retain(|height, _| *height <= to);
+    }
+}
+
+/// One height where the derived accumulator differed from the trace's.
+/// Carries the whole `PaidEmission`: the paid reward and its split are the
+/// context that says whether the penalty, the emission curve or the fold
+/// moved it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmissionDivergence {
+    /// The connected height.
+    pub at: BlockHeight,
+    /// The verdict's derivation.
+    pub ours: PaidEmission,
+    /// The trace's `coins_generated` — the C++'s `block_info.bi_coins`.
+    pub theirs: AtomicUnits,
+}
+
 /// The covered-tip checkpoint, compared.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Checkpoint {
@@ -355,6 +415,12 @@ pub enum Disagreement {
         /// The connected height.
         at: BlockHeight,
     },
+    /// The derived accumulator — the parent's plus the paid reward
+    /// (CEN-F14b / G12) — differed from the trace's `coins_generated`.
+    EmissionDiverged {
+        /// The connected height.
+        at: BlockHeight,
+    },
 }
 
 impl RunReport {
@@ -398,6 +464,10 @@ impl RunReport {
             .weights
             .diverged()
             .map(|d| Disagreement::WeightsDiverged { at: d.at });
+        let emission = self
+            .emission
+            .diverged()
+            .map(|d| Disagreement::EmissionDiverged { at: d.at });
         let diverged = self
             .checkpoint
             .as_ref()
@@ -410,7 +480,11 @@ impl RunReport {
                 height: *height,
                 verdict: *verdict,
             });
-        roots.chain(weights).chain(diverged).chain(refused)
+        roots
+            .chain(weights)
+            .chain(emission)
+            .chain(diverged)
+            .chain(refused)
     }
 }
 
@@ -799,6 +873,14 @@ where
                     .record(*at, *ours, RecordedWeightFacts::from(facts.value()));
             }
         }
+        // CEN-F14b / G12: the verdict's accumulator against the trace's.
+        for (at, ours) in &applied.emission {
+            if let Some(facts) = self.trace.borrow(*at) {
+                self.report
+                    .emission
+                    .record(*at, *ours, facts.value().coins_generated);
+            }
+        }
         if let Some(at) = self.checkpoint_at {
             if applied.connected.iter().any(|(h, _)| *h == at) {
                 let ours = self.connector.ask(Digest).await.map_err(collapse)?;
@@ -841,6 +923,7 @@ where
         // compare the canonical blocks at those heights.
         self.report.roots.retract_above(to);
         self.report.weights.retract_above(to);
+        self.report.emission.retract_above(to);
         self.ledger.rewind_to(to);
         self.form_at = next_height(Some(to));
         Ok(())
