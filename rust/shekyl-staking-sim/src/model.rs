@@ -113,9 +113,11 @@ impl Shard {
 ///    is suppressed by `√T`. This is `L1`'s form exactly, and under the ruled
 ///    domain it is the **only** composition term that survives on its own.
 /// 2. **Era-level mean shift** ([`Self::spread`] with [`Self::era_shape`]) — the
-///    *typical transaction* can still differ era to era: a busy era's transactions
-///    carry more inputs than a quiet one's. So "a heavy era" survives the ruling
-///    with a **different mechanism** — bigger transactions, not fuller blocks.
+///    *typical transaction* can still differ era to era — a consolidation wave, say,
+///    whose transactions each sweep many inputs. So "a heavy era" survives the
+///    ruling with a **different mechanism**: bigger transactions, not fuller blocks.
+///    Busyness is not that mechanism — under a count partition a busy era only
+///    closes its shards sooner; it does not make them heavier.
 ///
 /// > `size_at_birth = era_mean(birth_era) · (1 + cv_tx · z / √T)`
 ///
