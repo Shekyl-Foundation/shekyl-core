@@ -527,6 +527,130 @@ fn print_failure_confirmation_report(axis_filter: Option<&str>) {
     }
 }
 
+/// **`--f34-heavy-era`** — `STAKER_ARCHIVAL_SIM.md` §L19a/§L19b: JSON to stdout, the
+/// graded table to stderr.
+fn print_f34_heavy_era_report() {
+    use f34_heavy_era::{BREACH_X, SEEDS};
+    let reports = f34_heavy_era::heavy_era_report();
+    match serde_json::to_string_pretty(&reports) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 report: {e}"),
+    }
+    eprintln!("F34 heavy-era arm (§L19a): N = {SEEDS} paired seeds, BREACH iff min over seeds of max-over-cells (arm − control) > {BREACH_X}");
+    eprintln!("base      shape      S |  minDelta   diagMin | void mOff |  deepHeavy | VERDICT");
+    for r in &reports {
+        let dh: Vec<String> = r
+            .seeds
+            .iter()
+            .map(|s| format!("{}/{}", s.deep_heavy, s.heavy))
+            .collect();
+        eprintln!(
+            "{:<9} {:<8} {:>3.0} | {:>9} {:>9} | {:>4} {:>4} | {:>10} | {}",
+            r.base,
+            r.shape,
+            r.spread,
+            r.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.diag_min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.void_runs,
+            r.mean_off_one,
+            dh.first().cloned().unwrap_or_default(),
+            r.verdict
+        );
+    }
+}
+
+/// **`--f34-levers`** — §L19c/§L19d: the lever test on covered Burst. The table prints
+/// the seeds over `X` and the absolute arm/control state beside every registered
+/// verdict (§L19g).
+fn print_f34_levers_report() {
+    use f34_heavy_era::{slots, BREACH_X, SEEDS};
+    let rows = f34_heavy_era::lever_report();
+    match serde_json::to_string_pretty(&rows) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 lever report: {e}"),
+    }
+    eprintln!("F34 lever test (§L19c), covered Burst: N = {SEEDS} paired seeds, BREACH iff min over seeds > {BREACH_X}");
+    eprintln!(
+        "lever       S  | scale   aw | slots   |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | VERDICT"
+    );
+    for r in &rows {
+        eprintln!(
+            "{:<10} {:>3.0} | {:>5.2} {:>4.1} | {:>3}/{:<3} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
+            r.lever,
+            r.spread,
+            r.levers.storage_scale,
+            r.levers.age_weight,
+            r.slots.0,
+            r.slots.1,
+            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade
+                .median_delta
+                .map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.seeds_over_x,
+            r.grade.median_arm_worst,
+            r.grade.median_ctl_worst,
+            r.grade.modal_worst_band,
+            r.grade.modal_worst_band_seeds,
+            SEEDS,
+            r.grade.verdict
+        );
+    }
+    for spread in [4.0, 10.0] {
+        let lowest = |lever: &str| {
+            rows.iter()
+                .filter(|r| r.lever == lever && r.spread == spread && r.grade.verdict == "clear")
+                .map(|r| r.levers)
+                .next()
+        };
+        eprintln!(
+            "S = {spread:.0}: lowest clearing headroom {} | lowest clearing age_weight {}",
+            lowest("headroom").map_or("none in ladder".into(), |l| format!(
+                "{:.2} (slots {:?})",
+                l.storage_scale,
+                slots(l.storage_scale)
+            )),
+            lowest("age_weight")
+                .map_or("none in ladder".into(), |l| format!("{:.1}", l.age_weight)),
+        );
+    }
+}
+
+/// **`--f34-unit-cost`** — §L19e/§L19f: the `storage_unit_cost` sweep (item 7).
+fn print_f34_unit_cost_report() {
+    use f34_heavy_era::SEEDS;
+    let rows = f34_heavy_era::unit_cost_report();
+    match serde_json::to_string_pretty(&rows) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 unit-cost report: {e}"),
+    }
+    eprintln!(
+        "F34 item 7 (§L19e), covered Burst: storage_unit_cost sweep, N = {SEEDS} paired seeds"
+    );
+    eprintln!(
+        "  S  | unit_cost |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | VERDICT"
+    );
+    for r in &rows {
+        eprintln!(
+            "{:>3.0} | {:>9.2} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
+            r.spread,
+            r.storage_unit_cost,
+            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade
+                .median_delta
+                .map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.seeds_over_x,
+            r.grade.median_arm_worst,
+            r.grade.median_ctl_worst,
+            r.grade.modal_worst_band,
+            r.grade.modal_worst_band_seeds,
+            SEEDS,
+            r.grade.verdict
+        );
+    }
+}
+
 fn print_timing_cluster_report() {
     let report = timing_cluster::verify();
     eprintln!("shekyl-staking-sim — archival timing cluster pin (ARCHIVAL_TIMING_CONSTANTS.md)");
@@ -1886,15 +2010,15 @@ fn main() {
     }
 
     if std::env::args().any(|a| a == "--f34-unit-cost") {
-        f34_heavy_era::print_f34_unit_cost_report();
+        print_f34_unit_cost_report();
         return;
     }
     if std::env::args().any(|a| a == "--f34-levers") {
-        f34_heavy_era::print_f34_levers_report();
+        print_f34_levers_report();
         return;
     }
     if std::env::args().any(|a| a == "--f34-heavy-era") {
-        f34_heavy_era::print_f34_heavy_era_report();
+        print_f34_heavy_era_report();
         return;
     }
     if std::env::args().any(|a| a == "--budget-throttle") {

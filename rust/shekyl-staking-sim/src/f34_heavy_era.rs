@@ -112,40 +112,40 @@ fn in_frame(shape: EraShape, r: &ScenarioResult) -> bool {
 }
 
 #[derive(serde::Serialize)]
-struct SeedRow {
-    seed: u64,
-    delta: Option<f64>,
-    worst_band: (usize, usize),
-    margin_arm: i64,
-    margin_ctl: i64,
-    size_mean: f64,
-    deep_heavy: usize,
-    heavy: usize,
-    in_frame: bool,
+pub struct SeedRow {
+    pub seed: u64,
+    pub delta: Option<f64>,
+    pub worst_band: (usize, usize),
+    pub margin_arm: i64,
+    pub margin_ctl: i64,
+    pub size_mean: f64,
+    pub deep_heavy: usize,
+    pub heavy: usize,
+    pub in_frame: bool,
     /// Absolute worst-band `frac_under` of the arm and of its control — reported so a
     /// delta between two saturated (or two collapsed) runs is visible as such.
-    arm_worst: f64,
-    ctl_worst: f64,
+    pub arm_worst: f64,
+    pub ctl_worst: f64,
     /// Shards in the arm's worst cell, and the control's own worst cell — the control
     /// can fail somewhere the arm does not, which the cell-wise delta nets out.
-    arm_worst_band_n: usize,
-    ctl_worst_band: (usize, usize),
+    pub arm_worst_band_n: usize,
+    pub ctl_worst_band: (usize, usize),
     /// The diagnostic `storage_scale`-scaled variant's delta for the same seed.
-    diag_delta: Option<f64>,
-    diag_unmatched_mean: f64,
+    pub diag_delta: Option<f64>,
+    pub diag_unmatched_mean: f64,
 }
 
 #[derive(serde::Serialize)]
-struct ArmReport {
-    base: &'static str,
-    shape: String,
-    spread: f64,
-    seeds: Vec<SeedRow>,
-    min_delta: Option<f64>,
-    void_runs: usize,
-    mean_off_one: usize,
-    verdict: &'static str,
-    diag_min_delta: Option<f64>,
+pub struct ArmReport {
+    pub base: &'static str,
+    pub shape: String,
+    pub spread: f64,
+    pub seeds: Vec<SeedRow>,
+    pub min_delta: Option<f64>,
+    pub void_runs: usize,
+    pub mean_off_one: usize,
+    pub verdict: &'static str,
+    pub diag_min_delta: Option<f64>,
 }
 
 /// One lever point graded as L19a registers it: `N` paired seeds, each arm against
@@ -284,7 +284,9 @@ impl Grade {
     }
 }
 
-pub fn print_f34_heavy_era_report() {
+/// **`--f34-heavy-era`** — §L19a's graded arms on both bases, with the diagnostic
+/// `storage_scale` variant. Rendered by `main.rs`.
+pub fn heavy_era_report() -> Vec<ArmReport> {
     let bases: [(&'static str, f64); 2] = [("marginal", 1.0), ("covered", 1.3)];
     let arms = [
         (EraShape::Plateau, 4.0),
@@ -315,32 +317,7 @@ pub fn print_f34_heavy_era_report() {
             });
         }
     }
-
-    match serde_json::to_string_pretty(&reports) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing f34 report: {e}"),
-    }
-    eprintln!("F34 heavy-era arm (§L19a): N = {SEEDS} paired seeds, BREACH iff min over seeds of max-over-cells (arm − control) > {BREACH_X}");
-    eprintln!("base      shape      S |  minDelta   diagMin | void mOff |  deepHeavy | VERDICT");
-    for r in &reports {
-        let dh: Vec<String> = r
-            .seeds
-            .iter()
-            .map(|s| format!("{}/{}", s.deep_heavy, s.heavy))
-            .collect();
-        eprintln!(
-            "{:<9} {:<8} {:>3.0} | {:>9} {:>9} | {:>4} {:>4} | {:>10} | {}",
-            r.base,
-            r.shape,
-            r.spread,
-            r.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.diag_min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.void_runs,
-            r.mean_off_one,
-            dh.first().cloned().unwrap_or_default(),
-            r.verdict
-        );
-    }
+    reports
 }
 
 /// `STAKER_ARCHIVAL_SIM.md` §L19c's headroom ladder, fixed before the run. `1.32` and
@@ -350,17 +327,17 @@ pub const HEADROOM_LADDER: [f64; 8] = [1.30, 1.36, 1.40, 1.45, 1.50, 1.60, 1.75,
 pub const AGE_WEIGHT_LADDER: [f64; 7] = [0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0];
 
 #[derive(serde::Serialize)]
-struct LeverRow {
-    lever: &'static str,
-    spread: f64,
-    levers: Levers,
+pub struct LeverRow {
+    pub lever: &'static str,
+    pub spread: f64,
+    pub levers: Levers,
     /// Whole storage slots for a storage-rich / capital-rich actor at this point.
-    slots: (usize, usize),
-    grade: Grade,
-    seeds: Vec<SeedRow>,
+    pub slots: (usize, usize),
+    pub grade: Grade,
+    pub seeds: Vec<SeedRow>,
 }
 
-fn slots(scale: f64) -> (usize, usize) {
+pub fn slots(scale: f64) -> (usize, usize) {
     let b = baseline();
     (
         ((b.storage_rich_storage as f64 * scale).round() as usize).max(1),
@@ -371,7 +348,7 @@ fn slots(scale: f64) -> (usize, usize) {
 /// **`--f34-levers`** — `STAKER_ARCHIVAL_SIM.md` §L19c on covered Burst: headroom and
 /// `age_weight`, one at a time from the covered baseline, then the corner. `r_target`
 /// is the grading bar and is not swept.
-pub fn print_f34_levers_report() {
+pub fn lever_report() -> Vec<LeverRow> {
     const COVERED: f64 = 1.30;
     let mut rows = Vec::new();
     for spread in [4.0, 10.0] {
@@ -416,56 +393,16 @@ pub fn print_f34_levers_report() {
             seeds,
         });
     }
+    rows
+}
 
-    match serde_json::to_string_pretty(&rows) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing f34 lever report: {e}"),
-    }
-    eprintln!("F34 lever test (§L19c), covered Burst: N = {SEEDS} paired seeds, BREACH iff min over seeds > {BREACH_X}");
-    eprintln!(
-        "lever       S  | scale   aw | slots   |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | VERDICT"
-    );
-    for r in &rows {
-        eprintln!(
-            "{:<10} {:>3.0} | {:>5.2} {:>4.1} | {:>3}/{:<3} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
-            r.lever,
-            r.spread,
-            r.levers.storage_scale,
-            r.levers.age_weight,
-            r.slots.0,
-            r.slots.1,
-            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade
-                .median_delta
-                .map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade.seeds_over_x,
-            r.grade.median_arm_worst,
-            r.grade.median_ctl_worst,
-            r.grade.modal_worst_band,
-            r.grade.modal_worst_band_seeds,
-            SEEDS,
-            r.grade.verdict
-        );
-    }
-    for spread in [4.0, 10.0] {
-        let lowest = |lever: &str| {
-            rows.iter()
-                .filter(|r| r.lever == lever && r.spread == spread && r.grade.verdict == "clear")
-                .map(|r| r.levers)
-                .next()
-        };
-        eprintln!(
-            "S = {spread:.0}: lowest clearing headroom {} | lowest clearing age_weight {}",
-            lowest("headroom").map_or("none in ladder".into(), |l| format!(
-                "{:.2} (slots {:?})",
-                l.storage_scale,
-                slots(l.storage_scale)
-            )),
-            lowest("age_weight")
-                .map_or("none in ladder".into(), |l| format!("{:.1}", l.age_weight)),
-        );
-    }
+/// One `storage_unit_cost` point of §L19e.
+#[derive(serde::Serialize)]
+pub struct UnitCostRow {
+    pub spread: f64,
+    pub storage_unit_cost: f64,
+    pub grade: Grade,
+    pub seeds: Vec<SeedRow>,
 }
 
 /// `STAKER_ARCHIVAL_SIM.md` §L19e's `storage_unit_cost` ladder, fixed before the run
@@ -476,14 +413,7 @@ pub const UNIT_COST_LADDER: [f64; 6] = [0.0, 0.01, 0.03, 0.06, 0.10, 0.20];
 /// leg on the L19d subject. `0.0` removes the size-scaled carry term but not the
 /// size-scaled L10 fetch lag — inert here because `fetch_latency_per_unit` is `0.0` at
 /// baseline — so that point is capacity + (inert) fetch.
-pub fn print_f34_unit_cost_report() {
-    #[derive(serde::Serialize)]
-    struct Row {
-        spread: f64,
-        storage_unit_cost: f64,
-        grade: Grade,
-        seeds: Vec<SeedRow>,
-    }
+pub fn unit_cost_report() -> Vec<UnitCostRow> {
     let mut rows = Vec::new();
     for spread in [4.0, 10.0] {
         for &uc in &UNIT_COST_LADDER {
@@ -492,7 +422,7 @@ pub fn print_f34_unit_cost_report() {
                 ..Levers::at_scale(1.30)
             };
             let (seeds, g) = grade_point(EraShape::Burst, spread, lv, false);
-            rows.push(Row {
+            rows.push(UnitCostRow {
                 spread,
                 storage_unit_cost: uc,
                 grade: g,
@@ -500,35 +430,7 @@ pub fn print_f34_unit_cost_report() {
             });
         }
     }
-    match serde_json::to_string_pretty(&rows) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing f34 unit-cost report: {e}"),
-    }
-    eprintln!(
-        "F34 item 7 (§L19e), covered Burst: storage_unit_cost sweep, N = {SEEDS} paired seeds"
-    );
-    eprintln!(
-        "  S  | unit_cost |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | VERDICT"
-    );
-    for r in &rows {
-        eprintln!(
-            "{:>3.0} | {:>9.2} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
-            r.spread,
-            r.storage_unit_cost,
-            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade
-                .median_delta
-                .map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade.seeds_over_x,
-            r.grade.median_arm_worst,
-            r.grade.median_ctl_worst,
-            r.grade.modal_worst_band,
-            r.grade.modal_worst_band_seeds,
-            SEEDS,
-            r.grade.verdict
-        );
-    }
+    rows
 }
 
 fn median(xs: impl Iterator<Item = f64>) -> f64 {
