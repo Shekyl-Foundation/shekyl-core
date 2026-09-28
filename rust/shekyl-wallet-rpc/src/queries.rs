@@ -193,10 +193,10 @@ pub(crate) async fn get_balance(
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
     // The engine owns the snapshot-then-read choreography and the
-    // degrade/loud split (`Engine::balance_snapshot_with`): an unreadable
+    // degrade/loud split (`StakeFacade::balance_snapshot_with`): an unreadable
     // staking seal degrades to absent staking fields, a corrupt total fails
     // loud. The sealed-file leg is synchronous I/O, hence `block_in_place`.
-    let view = tokio::task::block_in_place(|| engine.balance_view())
+    let view = tokio::task::block_in_place(|| engine.stake().balance_view())
         .map_err(crate::staking::map_balance_view)?;
     let result = get_balance_result(&view);
     serde_json::to_value(result)
@@ -249,10 +249,10 @@ pub(crate) async fn get_wallet_info(
         let engine = shared.read().await;
 
         // The engine owns the snapshot-then-read choreography
-        // (`Engine::balance_snapshot_with`): heights ride the closure so they
+        // (`StakeFacade::balance_snapshot_with`): heights ride the closure so they
         // stay coherent with the balance summary under ONE ledger guard.
         let snapshot = tokio::task::block_in_place(|| {
-            engine.balance_snapshot_with(|wallet| {
+            engine.stake().balance_snapshot_with(|wallet| {
                 let wallet_height =
                     i64::try_from(wallet.ledger.height().to_raw()).unwrap_or(i64::MAX);
                 let restore_height = i64::try_from(wallet.sync_state.restore_from_height.to_raw())

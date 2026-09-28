@@ -15,25 +15,27 @@ pub mod outbound_label;
 pub mod scan;
 
 pub use consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
+pub use engine::balance_view::{
+    project_balance, BalanceSnapshot, BalanceView, BalanceViewError, StakedTotals,
+};
 pub use engine::local_ledger_ops::{AbandonTxError, AbandonTxOutcome, SetTxNoteError};
 pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 /// The MS-5 multisig signer marker — only present under `--features multisig`.
 #[cfg(feature = "multisig")]
 pub use engine::MultisigSignerV2;
 pub use engine::{
-    project_balance, BalanceSnapshot, BalanceView, BalanceViewError, Capability, CapabilityInput,
-    ChangePasswordError, CollectOutcome, CollectUnstakedError, Credentials, DaemonClient,
-    DaemonExpectation, DaemonOp, DiagnosticSink, DrainBalanceReadError, DrainOutcome,
-    DrainToPrincipalError, Engine, EngineCreateParams, EngineSignerKind, FakechainPolicy,
-    FeePriority, FeeTierQuote, FirstStakeError, FirstStakeOutcome, InputCount, IoError, KeyError,
-    LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount,
-    PScanHandle, PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
-    RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
-    RefreshReorgEvent, RefreshSummary, ReservationId, ScannableBlock, SendError, SoloSigner,
-    StakeInError, StakePosture, StakedBalance, StakedOutput, StakedTotals, StakingReadError,
-    StakingReadView, StateWrapKey, SubmitOutcome, SuppressedClass, TracingDiagnosticSink, TxError,
-    TxHash, TxRecipient, TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError,
-    UnstakeOutcome, ViewMaterial,
+    Capability, CapabilityInput, ChangePasswordError, CollectOutcome, CollectUnstakedError,
+    Credentials, DaemonClient, DaemonExpectation, DaemonOp, DiagnosticSink, DrainBalanceReadError,
+    DrainOutcome, DrainToPrincipalError, Engine, EngineCreateParams, EngineSignerKind,
+    FakechainPolicy, FeePriority, FeeTierQuote, FirstStakeError, FirstStakeOutcome, InputCount,
+    IoError, KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError,
+    OpenedEngine, OutputCount, PScanHandle, PScanStartError, PendingTx, PendingTxError,
+    PersistenceError, ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle,
+    RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
+    ReservationId, ScannableBlock, SendError, SoloSigner, StakeInError, StakePosture,
+    StakedBalance, StakedOutput, StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome,
+    SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary,
+    TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
 };
 pub use outbound_label::label_plaintext_for_payment_uri;
 // The exclusive upper bound of `stake_in`'s system-drawn cover

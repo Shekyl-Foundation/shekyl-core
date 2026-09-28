@@ -226,6 +226,47 @@ where
     }
 }
 
+// `L = LocalLedger` / `F = WalletFile`: the one-glance balance composes the
+// ledger summary with the sealed staking read, so it lives behind the same
+// façade as that read (the 2026-09-02 freeze: new behaviour lands on the
+// façade, never as a new inherent `Engine::` method).
+#[allow(private_bounds, clippy::type_complexity)]
+impl<S, D, E, R, P> StakeFacade<'_, S, D, LocalLedger, E, R, P, WalletFile>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+{
+    /// The one-glance balance (the contract's `get_balance`) with the
+    /// caller's own read taken under the same ledger guard — see
+    /// [`super::balance_view`] for the choreography and the degrade / loud
+    /// split. Small synchronous file I/O on the staking leg; async callers
+    /// on a multi-threaded runtime run it through `block_in_place`, as they
+    /// do the other sealed-file reads.
+    ///
+    /// # Errors
+    ///
+    /// [`super::balance_view::BalanceViewError::Overflow`] for corrupt
+    /// staking totals. An unreadable staking seal is not an error: it
+    /// degrades to `staking: None`.
+    pub fn balance_snapshot_with<T>(
+        &self,
+        under_guard: impl FnOnce(&shekyl_engine_state::WalletLedger) -> T,
+    ) -> Result<super::balance_view::BalanceSnapshot<T>, super::balance_view::BalanceViewError>
+    {
+        super::balance_view::balance_snapshot_with(self.engine, under_guard)
+    }
+
+    /// [`Self::balance_snapshot_with`] with nothing else read under the guard.
+    pub fn balance_view(
+        &self,
+    ) -> Result<super::balance_view::BalanceView, super::balance_view::BalanceViewError> {
+        self.balance_snapshot_with(|_| ()).map(|s| s.view)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

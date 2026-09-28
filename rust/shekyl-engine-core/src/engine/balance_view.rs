@@ -161,60 +161,40 @@ fn degrade_or_loud(
 }
 
 // `F = WalletFile` / `L = LocalLedger`: the same specialization as
-// `Engine::staking_read_view_with_snapshot`, which this composes.
+// `Engine::staking_read_view_with_snapshot`, which this composes. Free
+// functions, not inherent `Engine::` methods: the product door is
+// `StakeFacade::balance_view` / `balance_snapshot_with`, which forward here
+// (`ENGINE_COMPOSITION_DECOMPOSITION.md`, the 2026-09-02 inherent-API freeze).
 #[allow(private_bounds)]
-impl<
-        S: EngineSignerKind,
-        D: DaemonEngine,
-        E: EconomicsEngine,
-        R: RefreshEngine,
-        P: PendingTxEngine,
-    > Engine<S, D, LocalLedger, E, R, P, shekyl_engine_file::WalletFile>
+pub(super) fn balance_snapshot_with<S, D, E, R, P, T>(
+    engine: &Engine<S, D, LocalLedger, E, R, P, shekyl_engine_file::WalletFile>,
+    under_guard: impl FnOnce(&WalletLedger) -> T,
+) -> Result<BalanceSnapshot<T>, BalanceViewError>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
 {
-    /// The one-glance balance, with the caller's own read taken under the
-    /// same ledger guard.
-    ///
-    /// Choreography: snapshot the balance summary, `staking_enabled`, the
-    /// session-adoption flag and `under_guard(..)` under one brief ledger
-    /// read guard; drop it; then open the sealed staking files through
-    /// [`Self::staking_read_view_with_snapshot`]. Small synchronous file I/O
-    /// on the staking leg — async callers on a multi-threaded runtime should
-    /// run it through `block_in_place`, as they do the other sealed-file
-    /// reads.
-    ///
-    /// # Errors
-    ///
-    /// [`BalanceViewError::Overflow`] for corrupt staking totals. An
-    /// unreadable staking seal is not an error: it degrades to
-    /// `staking: None`.
-    pub fn balance_snapshot_with<T>(
-        &self,
-        under_guard: impl FnOnce(&WalletLedger) -> T,
-    ) -> Result<BalanceSnapshot<T>, BalanceViewError> {
-        let (summary, staking_enabled, recovery_pending_reopen, extra) = {
-            let guard = self.ledger.read();
-            (
-                guard.ledger.balance(),
-                guard.ledger.staking.staking_enabled,
-                !guard.slots_adopted_this_session.is_empty(),
-                under_guard(&guard.ledger),
-            )
-        };
-        let staking = degrade_or_loud(
-            self.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen),
-        )?;
-        let view = project_balance(&summary, staking.as_ref().map(|v| &v.balance))?;
-        Ok(BalanceSnapshot {
-            view,
-            extra,
-            staking,
-        })
-    }
-
-    /// [`Self::balance_snapshot_with`] with nothing else read under the guard.
-    pub fn balance_view(&self) -> Result<BalanceView, BalanceViewError> {
-        self.balance_snapshot_with(|_| ()).map(|s| s.view)
-    }
+    let (summary, staking_enabled, recovery_pending_reopen, extra) = {
+        let guard = engine.ledger.read();
+        (
+            guard.ledger.balance(),
+            guard.ledger.staking.staking_enabled,
+            !guard.slots_adopted_this_session.is_empty(),
+            under_guard(&guard.ledger),
+        )
+    };
+    let staking = degrade_or_loud(
+        engine.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen),
+    )?;
+    let view = project_balance(&summary, staking.as_ref().map(|v| &v.balance))?;
+    Ok(BalanceSnapshot {
+        view,
+        extra,
+        staking,
+    })
 }
 
 #[cfg(test)]

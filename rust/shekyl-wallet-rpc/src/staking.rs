@@ -15,7 +15,7 @@
 //! [`shekyl_engine_core::StakeFacade`] when reachable.
 //!
 //! `get_balance` / `get_wallet_info` snapshot-then-read through the engine's
-//! own `Engine::balance_snapshot_with` — nested `ledger.read()` under a live
+//! own `StakeFacade::balance_snapshot_with` — nested `ledger.read()` under a live
 //! [`shekyl_engine_core::LedgerReadGuard`] deadlocks, so the guard-drop
 //! choreography and the degrade/loud split live in engine-core, once, for
 //! this server and the desktop wallet alike; [`map_balance_view`] is the
@@ -98,7 +98,7 @@ pub(crate) async fn staking_info(
 /// `staking_enabled`; nesting that under a held guard deadlocks on
 /// non-reentrant `std::sync::RwLock`. Callers that already observed the flag
 /// under a ledger guard must drop that guard and use
-/// `Engine::balance_snapshot_with` instead (`get_wallet_info` is the exemplar).
+/// `StakeFacade::balance_snapshot_with` instead (`get_wallet_info` is the exemplar).
 ///
 /// `staking_read_view` opens and decrypts the sealed `.wallet.pscan` /
 /// `.wallet.pending` files inline (envelope KDF + AEAD + postcard decode), so
@@ -133,7 +133,7 @@ fn map_staking_read(
 }
 
 /// The loud arm of the engine's balance projection
-/// (`Engine::balance_snapshot_with`): a seal that loaded but whose money
+/// (`StakeFacade::balance_snapshot_with`): a seal that loaded but whose money
 /// totals overflowed is corrupt state and answers `-32603`, with a stable,
 /// detail-free client message. The unreadable-seal arm never reaches here —
 /// the engine degrades it to absent staking fields.

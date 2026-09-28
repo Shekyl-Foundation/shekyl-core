@@ -8,7 +8,8 @@
   contract's `get_balance` as engine facts — `liquid`, `unlocked`,
   `pending`, `unspendable`, and `staking: Option<StakedTotals>` (the two
   bonded legs summed with checked arithmetic, plus `claimable_rewards`).
-  `Engine::balance_view` / `balance_snapshot_with` own the lock
+  `StakeFacade::balance_view` / `balance_snapshot_with` (the façade door;
+  no new inherent `Engine::` method) own the lock
   choreography (one brief ledger guard, dropped, then the sealed staking
   read) and the degrade/loud split: an unreadable staking seal degrades to
   `staking: None` — absence, never a fabricated zero — and a corrupt total
