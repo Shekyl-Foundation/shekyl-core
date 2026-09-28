@@ -887,9 +887,10 @@ not grading: a timing series did not converge
 
 `MIN_ITERATIONS` is 6 — two windows of 3. One replay iteration is ~389 s.
 `MAX_WALL_SECONDS` is 1 800. **6 × 389 = 2 334 s**, so the convergence test
-*never ran*: the series was stopped at roughly four samples, and
-`converged: false` here means "too few samples to test stability", not "the
-measurement was unstable".
+*never ran*: the committed record carries **five** `iterations_s` samples
+against a `MIN_ITERATIONS` of six, and `converged: false` here means "too few
+samples to test stability", not "the measurement was unstable". (Proving, by
+contrast, took ten samples and converged; path construction took 8 597.)
 
 This is not a defect in the cap. Its own doc says what it is for — a bound on a
 *harness that runs on the machine it exists to measure*, where the count stops
