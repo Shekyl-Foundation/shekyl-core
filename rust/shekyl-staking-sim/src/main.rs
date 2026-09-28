@@ -616,6 +616,46 @@ fn print_f34_levers_report() {
     }
 }
 
+/// **`--f34-l19j`** — §L19j: the two runs that settle §L19i's unresolved cells, graded
+/// by the governing verdict, with the over-`X` fraction and its binomial standard error.
+fn print_f34_l19j_report() {
+    use f34_heavy_era::BREACH_X;
+    let rows = f34_heavy_era::l19j_report();
+    match serde_json::to_string_pretty(&rows) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 l19j report: {e}"),
+    }
+    eprintln!("F34 §L19j, covered Burst, X = {BREACH_X}");
+    eprintln!(
+        "run  S  | unit_cost |  N |  minDelta  median     max  >X  frac (±se) | arm / ctl worst (median) | worst cell (seeds) | GOVERNING"
+    );
+    for r in &rows {
+        let g = &r.point.grade;
+        let (over, n) = (g.seeds_over_x as f64, r.n_seeds as f64);
+        let frac = over / n;
+        let se = (frac * (1.0 - frac) / n).sqrt();
+        eprintln!(
+            " {}  {:>3.1} | {:>9.3} | {:>2} | {:>9} {:>7} {:>7} {:>3}  {:.3} (±{:.3}) | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
+            r.run,
+            r.point.spread,
+            r.point.storage_unit_cost,
+            r.n_seeds,
+            g.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            g.median_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            g.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            g.seeds_over_x,
+            frac,
+            se,
+            g.median_arm_worst,
+            g.median_ctl_worst,
+            g.modal_worst_band,
+            g.modal_worst_band_seeds,
+            r.n_seeds,
+            g.governing_verdict
+        );
+    }
+}
+
 /// **`--f34-calibrated`** — §L19h: the realistic spreads across the calibrated
 /// `storage_unit_cost` grid. The governing (three-valued) verdict is the graded column;
 /// §L19a's registered verdict is printed beside it for continuity only.
@@ -2047,6 +2087,10 @@ fn main() {
         return;
     }
 
+    if std::env::args().any(|a| a == "--f34-l19j") {
+        print_f34_l19j_report();
+        return;
+    }
     if std::env::args().any(|a| a == "--f34-calibrated") {
         print_f34_calibrated_report();
         return;

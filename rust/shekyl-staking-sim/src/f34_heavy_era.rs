@@ -158,8 +158,20 @@ fn grade_point(
     lv: Levers,
     diagnostic: bool,
 ) -> (Vec<SeedRow>, Grade) {
+    grade_point_seeds(shape, spread, lv, diagnostic, SEEDS)
+}
+
+/// [`grade_point`] over the first `n_seeds` of the fixed seed sequence, so a larger
+/// `N` (§L19j) is a superset of the registered eight and stays paired with them.
+fn grade_point_seeds(
+    shape: EraShape,
+    spread: f64,
+    lv: Levers,
+    diagnostic: bool,
+    n_seeds: u64,
+) -> (Vec<SeedRow>, Grade) {
     let mut rows = Vec::new();
-    for i in 0..SEEDS {
+    for i in 0..n_seeds {
         let seed = SEED0 + i;
         let mut cc = dynamic_cfg("ctl".into(), lv, seed);
         cc.demand_match = true;
@@ -489,6 +501,51 @@ fn unit_cost_sweep(spreads: &[f64], ladder: &[f64]) -> Vec<UnitCostRow> {
 /// calibrated `storage_unit_cost` grid, graded by [`governing_verdict`].
 pub fn calibrated_report() -> Vec<UnitCostRow> {
     unit_cost_sweep(&CALIBRATED_SPREADS, &CALIBRATED_UNIT_COST_LADDER)
+}
+
+/// §L19j (a)'s grid point, fixed before the run.
+pub const L19J_UNIT_COST: f64 = 0.045;
+/// §L19j (b)'s seed count at `S = 2.5`, fixed before the run.
+pub const L19J_SEEDS: u64 = 32;
+
+/// One §L19j point: which registered run it belongs to and how many seeds graded it.
+#[derive(serde::Serialize)]
+pub struct L19jRow {
+    pub run: &'static str,
+    pub n_seeds: u64,
+    pub point: UnitCostRow,
+}
+
+/// **`--f34-l19j`** — §L19j: (a) `storage_unit_cost` 0.045 at the three realistic
+/// spreads, `N = 8`; (b) `S = 2.5` at 0.03 and 0.045, `N = 32`.
+pub fn l19j_report() -> Vec<L19jRow> {
+    let point = |spread: f64, uc: f64, n_seeds: u64| {
+        let lv = Levers {
+            storage_unit_cost: uc,
+            ..Levers::at_scale(1.30)
+        };
+        let (seeds, grade) = grade_point_seeds(EraShape::Burst, spread, lv, false, n_seeds);
+        UnitCostRow {
+            spread,
+            storage_unit_cost: uc,
+            grade,
+            seeds,
+        }
+    };
+    let mut rows: Vec<L19jRow> = CALIBRATED_SPREADS
+        .iter()
+        .map(|&spread| L19jRow {
+            run: "a",
+            n_seeds: SEEDS,
+            point: point(spread, L19J_UNIT_COST, SEEDS),
+        })
+        .collect();
+    rows.extend([0.03, L19J_UNIT_COST].map(|uc| L19jRow {
+        run: "b",
+        n_seeds: L19J_SEEDS,
+        point: point(2.5, uc, L19J_SEEDS),
+    }));
+    rows
 }
 
 fn median(xs: impl Iterator<Item = f64>) -> f64 {
