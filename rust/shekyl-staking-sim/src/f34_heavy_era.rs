@@ -122,6 +122,14 @@ struct SeedRow {
     deep_heavy: usize,
     heavy: usize,
     in_frame: bool,
+    /// Absolute worst-band `frac_under` of the arm and of its control — reported so a
+    /// delta between two saturated (or two collapsed) runs is visible as such.
+    arm_worst: f64,
+    ctl_worst: f64,
+    /// Shards in the arm's worst cell, and the control's own worst cell — the control
+    /// can fail somewhere the arm does not, which the cell-wise delta nets out.
+    arm_worst_band_n: usize,
+    ctl_worst_band: (usize, usize),
     /// The diagnostic `storage_scale`-scaled variant's delta for the same seed.
     diag_delta: Option<f64>,
     diag_unmatched_mean: f64,
@@ -182,6 +190,10 @@ fn grade_point(
             deep_heavy: arm.in_frame.deep_heavy,
             heavy: arm.in_frame.heavy,
             in_frame: in_frame(shape, &arm),
+            arm_worst: arm.banded.worst_frac_under,
+            ctl_worst: ctl.banded.worst_frac_under,
+            arm_worst_band_n: arm.banded.worst_band_n,
+            ctl_worst_band: ctl.banded.worst_band,
             diag_delta,
             diag_unmatched_mean,
         });
@@ -195,12 +207,23 @@ fn grade_point(
 pub struct Grade {
     pub min_delta: Option<f64>,
     pub median_delta: Option<f64>,
+    pub max_delta: Option<f64>,
+    /// Seeds whose delta exceeds `BREACH_X`. The registered BREACH needs all `SEEDS`; its
+    /// complement, "clear", needs only one seed at or under the bar — so a clear is read
+    /// with this count beside it, never alone.
+    pub seeds_over_x: usize,
     pub void_runs: usize,
     pub mean_off_one: usize,
     pub verdict: &'static str,
     /// The worst cell on the most seeds, and on how many.
     pub modal_worst_band: (usize, usize),
     pub modal_worst_band_seeds: usize,
+    /// Median across seeds of the arm's and of the control's **absolute** worst-cell
+    /// `frac_under`. The verdict reads only the delta; these show when a delta is taken
+    /// between two runs that have both collapsed (or a control that has), where a
+    /// `frac_under` bounded at 1 caps the delta and it stops reading the arm.
+    pub median_arm_worst: f64,
+    pub median_ctl_worst: f64,
 }
 
 impl Grade {
@@ -216,6 +239,8 @@ impl Grade {
         let mut ds: Vec<f64> = rows.iter().filter_map(|r| r.delta).collect();
         ds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let min_delta = ds.first().copied();
+        let max_delta = ds.last().copied();
+        let seeds_over_x = ds.iter().filter(|&&d| d > BREACH_X).count();
         let median_delta = if ds.is_empty() {
             None
         } else {
@@ -246,11 +271,15 @@ impl Grade {
         Self {
             min_delta,
             median_delta,
+            max_delta,
+            seeds_over_x,
             void_runs,
             mean_off_one,
             verdict,
             modal_worst_band: modal.0,
             modal_worst_band_seeds: modal.1,
+            median_arm_worst: median(rows.iter().map(|r| r.arm_worst)),
+            median_ctl_worst: median(rows.iter().map(|r| r.ctl_worst)),
         }
     }
 }
@@ -328,6 +357,7 @@ struct LeverRow {
     /// Whole storage slots for a storage-rich / capital-rich actor at this point.
     slots: (usize, usize),
     grade: Grade,
+    seeds: Vec<SeedRow>,
 }
 
 fn slots(scale: f64) -> (usize, usize) {
@@ -347,13 +377,14 @@ pub fn print_f34_levers_report() {
     for spread in [4.0, 10.0] {
         for &sc in &HEADROOM_LADDER {
             let lv = Levers::at_scale(sc);
-            let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
+            let (seeds, g) = grade_point(EraShape::Burst, spread, lv, false);
             rows.push(LeverRow {
                 lever: "headroom",
                 spread,
                 levers: lv,
                 slots: slots(sc),
                 grade: g,
+                seeds,
             });
         }
         for &aw in &AGE_WEIGHT_LADDER {
@@ -361,26 +392,28 @@ pub fn print_f34_levers_report() {
                 age_weight: aw,
                 ..Levers::at_scale(COVERED)
             };
-            let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
+            let (seeds, g) = grade_point(EraShape::Burst, spread, lv, false);
             rows.push(LeverRow {
                 lever: "age_weight",
                 spread,
                 levers: lv,
                 slots: slots(COVERED),
                 grade: g,
+                seeds,
             });
         }
         let lv = Levers {
             age_weight: AGE_WEIGHT_LADDER[AGE_WEIGHT_LADDER.len() - 1],
             ..Levers::at_scale(HEADROOM_LADDER[HEADROOM_LADDER.len() - 1])
         };
-        let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
+        let (seeds, g) = grade_point(EraShape::Burst, spread, lv, false);
         rows.push(LeverRow {
             lever: "corner",
             spread,
             levers: lv,
             slots: slots(lv.storage_scale),
             grade: g,
+            seeds,
         });
     }
 
@@ -390,11 +423,11 @@ pub fn print_f34_levers_report() {
     }
     eprintln!("F34 lever test (§L19c), covered Burst: N = {SEEDS} paired seeds, BREACH iff min over seeds > {BREACH_X}");
     eprintln!(
-        "lever       S  | scale   aw | slots   |  minDelta  median | worst cell (seeds) | VERDICT"
+        "lever       S  | scale   aw | slots   |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | VERDICT"
     );
     for r in &rows {
         eprintln!(
-            "{:<10} {:>3.0} | {:>5.2} {:>4.1} | {:>3}/{:<3} | {:>9} {:>7} | {:?} ({}/{}) | {}",
+            "{:<10} {:>3.0} | {:>5.2} {:>4.1} | {:>3}/{:<3} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
             r.lever,
             r.spread,
             r.levers.storage_scale,
@@ -405,6 +438,10 @@ pub fn print_f34_levers_report() {
             r.grade
                 .median_delta
                 .map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.seeds_over_x,
+            r.grade.median_arm_worst,
+            r.grade.median_ctl_worst,
             r.grade.modal_worst_band,
             r.grade.modal_worst_band_seeds,
             SEEDS,
@@ -445,6 +482,7 @@ pub fn print_f34_unit_cost_report() {
         spread: f64,
         storage_unit_cost: f64,
         grade: Grade,
+        seeds: Vec<SeedRow>,
     }
     let mut rows = Vec::new();
     for spread in [4.0, 10.0] {
@@ -453,11 +491,12 @@ pub fn print_f34_unit_cost_report() {
                 storage_unit_cost: uc,
                 ..Levers::at_scale(1.30)
             };
-            let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
+            let (seeds, g) = grade_point(EraShape::Burst, spread, lv, false);
             rows.push(Row {
                 spread,
                 storage_unit_cost: uc,
                 grade: g,
+                seeds,
             });
         }
     }
@@ -468,22 +507,34 @@ pub fn print_f34_unit_cost_report() {
     eprintln!(
         "F34 item 7 (§L19e), covered Burst: storage_unit_cost sweep, N = {SEEDS} paired seeds"
     );
-    eprintln!("  S  | unit_cost |  minDelta  median | worst cell (seeds) | VERDICT");
+    eprintln!(
+        "  S  | unit_cost |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | VERDICT"
+    );
     for r in &rows {
         eprintln!(
-            "{:>3.0} | {:>9.2} | {:>9} {:>7} | {:?} ({}/{}) | {}",
+            "{:>3.0} | {:>9.2} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
             r.spread,
             r.storage_unit_cost,
             r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
             r.grade
                 .median_delta
                 .map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.seeds_over_x,
+            r.grade.median_arm_worst,
+            r.grade.median_ctl_worst,
             r.grade.modal_worst_band,
             r.grade.modal_worst_band_seeds,
             SEEDS,
             r.grade.verdict
         );
     }
+}
+
+fn median(xs: impl Iterator<Item = f64>) -> f64 {
+    let mut v: Vec<f64> = xs.collect();
+    v.sort_by(f64::total_cmp);
+    v.get(v.len() / 2).copied().unwrap_or(f64::NAN)
 }
 
 #[cfg(test)]
