@@ -68,6 +68,23 @@ text** — and what closes or reopens that finding.
   written against was not there (`:4354` was `:4353` again). Nothing was
   written; the file was restored from `HEAD`; the edit was re-run against
   the restored text and applied cleanly. See "The edit form that notices".
+- **`wt-e7-c3` (2026-09-27) — the window, measured.** Instance sixteen:
+  `read_tests.rs` was committed with rustfmt's bytes and, **nineteen
+  seconds after the commit**, the working copy held the pre-`cargo fmt`
+  text again — the file's `mtime` sits 19 s after the commit's timestamp,
+  and `rustfmt --check` passes on `HEAD`'s blob and fails on the working
+  copy's. Nothing but `cargo fmt` had rewritten that file, and it had been
+  open in an editor since the edit tool created its hunk. That is tighter
+  than any earlier instance and it sharpens the `wt-e6-s6` mechanism from
+  *a file an editor has open* to **a file an editor has open that
+  something else has since rewritten on disk** — the buffer is holding
+  the file as it stood *before* the rewrite, and it is that older text
+  that comes back. So the hazard window is not the open file; it is the
+  interval between an out-of-editor rewrite and the buffer next flushing,
+  and `cargo fmt` is the writer that opens it most often. The prediction
+  this makes: instance seventeen will be a file `cargo fmt` reformatted
+  (or a script wrote whole) while open, not a file the edit tool alone
+  touched. Caught by constraint 1; restored from `HEAD`.
 
 Most of these were caught by a human or an agent reading the diff. That does not
 scale, and it is not the dangerous case. **The dangerous case is a drift
