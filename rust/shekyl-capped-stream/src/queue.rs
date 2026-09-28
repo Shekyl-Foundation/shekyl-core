@@ -59,16 +59,28 @@ impl ByteQueue {
             return Ok(());
         }
         let Some(next) = inner.used.checked_add(n) else {
-            return Err(PushError::Full);
+            return self.overflow(inner);
         };
         if next > inner.limit {
-            return Err(PushError::Full);
+            return self.overflow(inner);
         }
         inner.used = next;
         inner.items.push_back(bytes);
         drop(inner);
         self.data.notify_one();
         Ok(())
+    }
+
+    /// The buffer does not fit. The queue closes under the caller's lock,
+    /// so a later send cannot land in the gap before the copy task exits.
+    fn overflow(
+        &self,
+        mut inner: std::sync::MutexGuard<'_, ByteQueueInner>,
+    ) -> Result<(), PushError> {
+        inner.closed = true;
+        drop(inner);
+        self.data.notify_waiters();
+        Err(PushError::Full)
     }
 
     /// Return `n` bytes of cap after the writer finishes that buffer.
@@ -154,10 +166,23 @@ mod tests {
     fn the_cap_counts_bytes_and_holds_more_than_one_buffer() {
         let queue = ByteQueue::new(4);
         queue.try_push(b"ab".to_vec()).expect("first");
-        queue.try_push(b"cd".to_vec()).expect("second");
-        assert!(queue.try_push(b"e".to_vec()).is_err());
         let first = queue.pop_now().expect("queued");
         queue.release(first.len());
-        assert!(queue.try_push(b"ef".to_vec()).is_ok());
+        queue
+            .try_push(b"cdef".to_vec())
+            .expect("the release freed the cap");
+    }
+
+    #[test]
+    fn a_send_that_does_not_fit_closes_the_queue() {
+        let queue = ByteQueue::new(4);
+        queue.try_push(b"ab".to_vec()).expect("fits");
+        assert_eq!(
+            queue.try_push(b"cdef".to_vec()),
+            Err(super::PushError::Full)
+        );
+        assert_eq!(queue.try_push(b"c".to_vec()), Err(super::PushError::Closed));
+        assert_eq!(queue.pop_now().as_deref(), Some(b"ab".as_slice()));
+        assert!(queue.pop_now().is_none());
     }
 }
