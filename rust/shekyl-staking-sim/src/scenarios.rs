@@ -78,6 +78,10 @@ pub struct SimConfig {
     /// **Per-transaction shape dispersion** — the CV of per-transaction good, which
     /// the shard sum suppresses by `√T`. `0.0` = off, and no RNG is drawn.
     pub cv_tx: f64,
+    /// **Demand matching** (§L19a item 1): rescale the live population's sizes to mean
+    /// 1 every epoch, so total bytes are fixed across every leg. `false` for every
+    /// pre-L19a scenario, byte-identical.
+    pub demand_match: bool,
 
     // L9 duration axis + dynamic world (iteration 2; inert when `!dynamic`).
     /// Dynamic frontier-window: shards age each epoch and recycle at age 1.
@@ -634,6 +638,8 @@ pub struct ScenarioResult {
     /// aggregate `final_metrics.frac_under_target` is reported beside it and **not**
     /// graded — it certifies a state with a failing band.
     pub banded: crate::metrics::BandedVerdict,
+    /// Whether the arm's subject is in frame at the graded snapshot (§L19a item 4).
+    pub in_frame: crate::metrics::InFrame,
     /// Actor Gini, windowed mean over the churn window (steady-state spread read).
     pub gini_actor_window: f64,
     /// Max single-actor share, peak over the churn window (conservative spread read).
@@ -659,6 +665,16 @@ impl SimConfig {
             decorrelated: self.size_decorrelated,
         }
     }
+}
+
+/// The age a shard born (or last recycled) at epoch `ep` with age `age_now` will have at
+/// the graded snapshot, the final epoch — the key that makes era and age coincide
+/// exactly where the verdict reads. `advance_epoch` runs at epochs `1..epochs`, so a
+/// shard present after epoch `ep`'s advance is aged `epochs − 1 − ep` more times; an
+/// initial shard (`ep = 0`, before any advance) is aged `epochs − 1` times.
+fn eventual_age(cfg: &SimConfig, ep: usize, age_now: f64) -> f64 {
+    let steps = cfg.epochs.saturating_sub(1).saturating_sub(ep) as f64;
+    (age_now + steps * cfg.epoch_aging).min(1.0)
 }
 
 fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
@@ -690,6 +706,17 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
                 // exactly; under a dynamic window it is what keeps a shard's bytes from
                 // changing as it ages.
                 let comp = cfg.composition();
+                // Under a dynamic window, key the era on the age this shard will have at
+                // the graded snapshot, not the age it starts at. `epochs` × `epoch_aging`
+                // is 39 × 0.02 = 0.78 by default, so every initial shard younger than
+                // 0.22 NEVER recycles: it ends the run in the deep band, and keyed on its
+                // starting age it would carry a YOUNG era's size there. The static
+                // snapshot is the case where the two coincide.
+                let key_age = if cfg.dynamic {
+                    eventual_age(cfg, 0, age)
+                } else {
+                    age
+                };
                 // The per-transaction shape draw. Consumed ONLY when `cv_tx > 0`, so a
                 // scenario that does not use this axis keeps its RNG stream and stays
                 // byte-identical — the same discipline `size_seed` follows.
@@ -700,7 +727,7 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
                 } else {
                     0.0
                 };
-                let size = comp.size_at_birth(comp.birth_key(age, size_seed), z);
+                let size = comp.size_at_birth(comp.birth_key(key_age, size_seed), z);
                 Shard {
                     age,
                     size_seed,
@@ -925,6 +952,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     );
     let mut rng = Rng::new(cfg.seed);
     let mut world = build_world(cfg, &mut rng);
+    if cfg.demand_match {
+        world.renormalize_sizes();
+    }
 
     let mut rp = RewardParams {
         budget: cfg.budget,
@@ -1102,7 +1132,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             // newest-era heavies (mean 1.18–1.29, ADDING demand rather than
             // redistributing it) while Burst's heavy era had aged out of frame
             // entirely (mean 0.82–0.89), which is why it read "clear".
-            let era_now = (((cfg.epochs.saturating_sub(ep)) as f64) * cfg.epoch_aging).min(1.0);
+            let era_now = eventual_age(cfg, ep, 0.0);
             world.advance_epoch(cfg.epoch_aging, &cfg.composition(), era_now);
         }
 
@@ -1112,9 +1142,15 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         if cfg.bootstrap && ep > 0 && world.shards.len() < cfg.n_shard {
             let room = cfg.n_shard - world.shards.len();
             for _ in 0..cfg.shard_growth_per_epoch.min(room) {
-                let era_now = (((cfg.epochs.saturating_sub(ep)) as f64) * cfg.epoch_aging).min(1.0);
+                let era_now = eventual_age(cfg, ep, 0.0);
                 world.append_shard(0.0, &cfg.composition(), era_now);
             }
+        }
+
+        // §L19a demand matching: the window has moved, so rescale to mean 1 before any
+        // agent reads a size this epoch.
+        if cfg.demand_match {
+            world.renormalize_sizes();
         }
 
         // L13 fee-era: shrink the base subsidy toward the terminal floor, then (if the
@@ -1917,6 +1953,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // a cost redistribution; this one can.
     let (size_band_under_target, size_mean) = size_band_under(&world, &last_eval.r, &tp);
     let banded = crate::metrics::banded_verdict(&world, &last_eval.r, &tp);
+    let in_frame = crate::metrics::in_frame(&world, &tp);
 
     ScenarioResult {
         name: cfg.name.clone(),
@@ -1974,6 +2011,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         size_mean,
         size_band_under_target,
         banded,
+        in_frame,
         gini_actor_window,
         max_actor_share_window,
         claims: SubClaims {
@@ -2010,7 +2048,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
 /// The high-bond sweep is where capital binds and the empty-window threat (bond high
 /// enough to deter the whale but high enough to price out storage-rich archivers)
 /// surfaces.
-fn baseline() -> SimConfig {
+pub(crate) fn baseline() -> SimConfig {
     SimConfig {
         name: "baseline".into(),
         axis: "baseline".into(),
@@ -2043,6 +2081,7 @@ fn baseline() -> SimConfig {
         size_decorrelated: false,
         era_shape: EraShape::Monotone,
         cv_tx: 0.0, // off: no shape draw, so the RNG stream is untouched
+        demand_match: false,
         // Static iteration-1 world by default; the L9 dynamic/duration scenarios opt in.
         dynamic: false,
         epoch_aging: 0.0,

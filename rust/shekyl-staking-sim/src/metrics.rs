@@ -198,6 +198,40 @@ pub struct BandedVerdict {
     pub worst_band: (usize, usize),
     /// Occupancy of the worst band, so a `1/1` band is not read as a population.
     pub worst_band_n: usize,
+    /// Every cell's `frac_under_target`, `[age][cost]` — what the pre-registered
+    /// **cell-wise** delta is taken over (§L19a amendment: `max over cells of
+    /// (arm − control)`, never the difference of the two worsts).
+    pub cells: [[f64; GRADING_COST_BANDS]; GRADING_AGE_BANDS],
+    /// Each cell's occupancy; a cell empty in either run contributes no delta.
+    pub cell_n: [[usize; GRADING_COST_BANDS]; GRADING_AGE_BANDS],
+}
+
+/// **Is the subject in frame?** (`STAKER_ARCHIVAL_SIM.md` §L19a item 4.) Counts the
+/// **deep heavies** at the graded snapshot — shards in the deep grading band
+/// (age ≥ 2/3) whose size is above the mean — and what share of all above-mean
+/// shards they are. A run whose arm has no deep heavy is void, not passing: the arm's
+/// second failed pass read "clear" purely because its heavy era had aged out of frame.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+pub struct InFrame {
+    /// Shards with age ≥ 2/3 and size above the mean.
+    pub deep_heavy: usize,
+    /// Shards with size above the mean.
+    pub heavy: usize,
+}
+
+/// See [`InFrame`].
+pub fn in_frame(world: &World, tp: &TargetParams) -> InFrame {
+    let mean = tp.comp.mean_size(&world.shards);
+    let mut out = InFrame::default();
+    for sh in &world.shards {
+        if tp.comp.size(sh) > mean * (1.0 + 1e-9) {
+            out.heavy += 1;
+            if sh.age >= 2.0 / 3.0 {
+                out.deep_heavy += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Grade the pre-registered `(age × cost)` grid. See [`BandedVerdict`].
@@ -208,6 +242,8 @@ pub fn banded_verdict(world: &World, r: &[usize], tp: &TargetParams) -> BandedVe
         worst_margin: i64::MAX,
         worst_band: (0, 0),
         worst_band_n: 0,
+        cells: [[0.0; GRADING_COST_BANDS]; GRADING_AGE_BANDS],
+        cell_n: [[0; GRADING_COST_BANDS]; GRADING_AGE_BANDS],
     };
     if n == 0 {
         out.worst_margin = 0;
@@ -251,6 +287,8 @@ pub fn banded_verdict(world: &World, r: &[usize], tp: &TargetParams) -> BandedVe
                 continue;
             }
             let frac = under[a][c] as f64 / total[a][c] as f64;
+            out.cells[a][c] = frac;
+            out.cell_n[a][c] = total[a][c];
             if frac > out.worst_frac_under {
                 out.worst_frac_under = frac;
                 out.worst_band = (a, c);

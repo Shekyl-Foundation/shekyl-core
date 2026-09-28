@@ -154,13 +154,18 @@ pub enum EraShape {
     /// under `2 ×` the mean at every `S`, which is why it could not express a
     /// genuinely heavy band.
     Monotone,
-    /// Growth to a plateau: usage rises, then levels. The realistic steady state, and
-    /// the shape under which a heavy era **ages into the deep band** rather than
-    /// always sitting at the frontier.
+    /// Growth to a plateau, **seen from today**: usage rose early and has been level
+    /// and heavy since, so everything younger than the early ramp is heavy and only
+    /// the oldest quarter is light. That puts heavies in the **deep** band, which is
+    /// the configuration the arm exists to grade. (The first version ramped heavy over
+    /// the *young* half and was flat-light over the old half — that is "still
+    /// growing", not "plateaued", and it confined every heavy to the hot and mid
+    /// bands, so it could never have shown a deep heavy.)
     Plateau,
-    /// A burst: one era markedly heavier than its neighbours, the rest flat. The
-    /// shape that puts a heavy band at a *chosen* depth, which is what grades the
-    /// `g(age)` premium against real bytes.
+    /// A burst: one era markedly heavier than its neighbours, the rest flat, centred
+    /// at key 5/6 so the whole burst sits inside the **deep** grading band
+    /// (`[2/3, 1]`). (The first version centred it at 0.5, which is the *mid* band —
+    /// the pre-registered in-frame check would have voided every run.)
     Burst,
 }
 
@@ -170,16 +175,18 @@ impl EraShape {
         match self {
             // Newest heaviest, falling linearly to 1.0 at the oldest.
             Self::Monotone => 1.0 + (spread - 1.0) * (1.0 - key),
-            // Heavy for the newest third, then levelling to 1.0 — so the heavy band
-            // is a *band*, not a single frontier shard.
+            // Heavy for keys below 0.75 (the long plateau), ramping down to 1.0 over
+            // the oldest quarter (the early growth).
             Self::Plateau => {
-                let t = (key / 0.5).min(1.0);
-                1.0 + (spread - 1.0) * (1.0 - t)
+                if key < 0.75 {
+                    spread
+                } else {
+                    spread + (1.0 - spread) * ((key - 0.75) / 0.25)
+                }
             }
-            // One heavy era centred at key 0.5 — mid-depth, so it is deep enough to
-            // be graded against `r_target_deep` and old enough to carry a premium.
+            // One heavy era centred at key 5/6: inside the deep band end to end.
             Self::Burst => {
-                let d = (key - 0.5).abs();
+                let d = (key - 5.0 / 6.0).abs();
                 if d < 0.125 {
                     spread
                 } else {
@@ -194,8 +201,8 @@ impl EraShape {
     fn norm(self, spread: f64) -> f64 {
         match self {
             Self::Monotone => 1.0 + (spread - 1.0) / 2.0,
-            // The ramp occupies the first half and averages `(spread + 1)/2` there.
-            Self::Plateau => 1.0 + (spread - 1.0) / 4.0,
+            // Three quarters at `spread`, the last quarter averaging `(spread + 1)/2`.
+            Self::Plateau => 0.875 * spread + 0.125,
             // The burst occupies a quarter of the key range.
             Self::Burst => 1.0 + (spread - 1.0) / 4.0,
         }
@@ -444,6 +451,28 @@ impl World {
     /// Permanent archival of the truly-oldest state is a gate-5 foundation concern,
     /// out of this window — so "retire at age 1" is a window boundary, not a claim
     /// that irreplaceable data is discarded.
+    /// **Demand matching** (`STAKER_ARCHIVAL_SIM.md` §L19a item 1): rescale every live
+    /// shard's size by the live population's realized mean, so total storage demand is
+    /// exactly one unit per shard and every leg that reads a size — the capacity draw,
+    /// the per-shard carry cost and the L10 fetch lag — sees the same total bytes as a
+    /// flat control. A uniform factor preserves every *relative* size, so the
+    /// distribution under test is unchanged; what is removed is the total-demand
+    /// drift that confounded the unmatched arm (realized means 1.07–1.43). Returns the
+    /// mean it divided by.
+    pub fn renormalize_sizes(&mut self) -> f64 {
+        let n = self.shards.len();
+        if n == 0 {
+            return 1.0;
+        }
+        let mean = self.shards.iter().map(|s| s.size).sum::<f64>() / n as f64;
+        if mean > 0.0 {
+            for s in &mut self.shards {
+                s.size /= mean;
+            }
+        }
+        mean
+    }
+
     /// `birth_era_key` is the era a **recycled** slot is born into — simulation time,
     /// not the shard's age. Keying it on age instead collapses the era distribution:
     /// every recycled slot is born at age 0, so under a dynamic window *every* shard

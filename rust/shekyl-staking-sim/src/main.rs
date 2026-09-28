@@ -37,6 +37,7 @@ mod budget_throttle;
 mod clustering;
 mod cover;
 mod curve;
+mod f34_heavy_era;
 mod failure_confirmation;
 mod fingerprint;
 mod gf7_breakeven;
@@ -1884,6 +1885,10 @@ fn main() {
         return;
     }
 
+    if std::env::args().any(|a| a == "--f34-heavy-era") {
+        f34_heavy_era::print_f34_heavy_era_report();
+        return;
+    }
     if std::env::args().any(|a| a == "--budget-throttle") {
         print_budget_throttle_report();
         return;
