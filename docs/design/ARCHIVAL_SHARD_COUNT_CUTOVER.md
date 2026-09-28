@@ -22,7 +22,8 @@ conversation is not a record.
 geometry it inherited is retiring, so every consumer that counts shards, closes
 them, or reads a constant calibrated in *segment* units has to be found,
 classified and cut over — in two atomic groups, because one of those constants
-decides which coinbases are valid.
+feeds the coinbase's fee split — harmlessly today, since the escalation ships
+flat, and decisively the moment the GF-7 ceremony turns the ramp on.
 
 ---
 
@@ -34,7 +35,7 @@ home; the operative consequences are restated only as far as this census needs.
 | input | ruling | home |
 |---|---|---|
 | **`SHT-Q1`** | **RULED (Rick, 2026-09-27, design-owner lane): the partition is over transactions that carry archival good** — a non-empty prunable region or `pqc_auths`, decided from the **rows recorded at ingest**, never recomputed from a possibly-pruned body. Shard `k` is the domain's transactions `[k·T, (k+1)·T)` in chain order. **Shards close on count only; there is no clock.** The coinbase is outside by the definition, not by exclusion. Closed shards never change membership; any later change to what counts as good activates by height. The equality with the non-coinbase set is an **invariant, not a definition**, pinned by `rules::tx::tx_domain_tests` and leg (f). | [`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md) §2 |
-| **`SHT-8`** | D2's operand `n` and `g(age)`'s no-segment branch are keyed on the **retired** segment count. `n` reaches consensus and a shard-unit re-key would move `escalation_knee_n` ~65× sooner and make `T` a clock on monetary policy. | same doc, §6 and §5 |
+| **`SHT-8`** | D2's operand `n` and `g(age)`'s no-segment branch are keyed on the **retired** segment count. `n` reaches consensus, and a shard-unit re-key would move `escalation_knee_n` ~65× sooner and make `T` a clock on monetary policy — **once the escalation is switched on**. It is flat at the shipped parameters (§G `SCC-Q2`), so the re-key is behaviour-neutral today. | same doc, §6 and §5 |
 | **`L2`** | **RULED and withdrawn as a bound on `T`.** `MAX_HOLDINGS_SHARDS` is a **list-size bound** on one bond record and one transaction, not bond-size policy; personas are free (G-1) and splitting is rational, so no per-persona limit binds. The 13.6/13.7 GB byte products are retired from reasoning. Two couplings survive, owed **only if the cap's own value moves** (§E). | same doc, §3 `L2` |
 
 **Out of scope for this round:** any code change, any re-derivation of a
@@ -119,7 +120,7 @@ Two of the five seeded rows did not survive verification as written.
 
 | row | verdict at `9d549ead2` |
 |---|---|
-| **D2 `n` / `knee_n` (`SHT-8`)** | **CONFIRMED.** Re-key `n` to a `T`-independent burden count — listed transactions in closed shards, from `cumulative_tx_count` — and re-derive `knee_n` **once, in transactions**. Never shard units. It is monetary policy (`FL-V4`: the escalation splits the *burned* amount and cannot move a fee rung) **and** it changes coinbase validity (`src/cryptonote_core/blockchain.cpp:1508`). |
+| **D2 `n` / `knee_n` (`SHT-8`)** | **CONFIRMED.** Re-key `n` to a `T`-independent burden count — listed transactions in closed shards, from `cumulative_tx_count` — and re-derive `knee_n` **once, in transactions**. Never shard units. It is monetary policy (`FL-V4`: the escalation splits the *burned* amount and cannot move a fee rung). **Corrected 2026-09-27:** the earlier "it changes coinbase validity" is true only **once the ramp is on** — at the shipped neutral parameters the split is 25 % whatever `n` is (§G `SCC-Q2`), so the re-key is behaviour-neutral now. The atomicity requirement is unchanged and its reason is sharper: the operand is computed on **both** sides, and a mismatch that is harmless while flat becomes a chain split the moment the ceremony raises the asymptote. |
 | **`g(age)`** | **CONFIRMED.** `shard_age_milli`'s no-segment branch is segment-keyed (`rust/shekyl-archival-retention/src/admission.rs:305-341`, function at `rust/shekyl-archival-retention/src/consensus_state.rs:235-252`). Re-key under `SHT-Q1`. It is also one of `SHT-Q1`'s falsifiers: the ruling reopens if the re-keyed form needs height-driven closure. |
 | **`CompleteTree` challenge/slash** | **CONFIRMED, mechanical only.** Enumerates via the segment registry (`src/blockchain_db/lmdb/db_lmdb.cpp:5720-5728`). Re-key to closed **domain** shards. Landed semantics to preserve: a failure **demotes the whole record** to `ShardSetCompact` and clears its shards (`src/blockchain_db/lmdb/db_lmdb.cpp:5515-5520`), and **`Reinstate` is refused** on a `CompleteTree` record (`rust/shekyl-archival-retention/src/bond_post.rs:75-76`, `:159-162`). `CompleteTree` is a non-economic backstop by construction — no shard ids, so nothing to claim. |
 | **The segment-geometry deletion, incl. the E3 handoff** | **PARTLY REFUTED — `SCC-3`.** The deletion row stands (the JSON's own prose at `:52` already says `segment_leaf_count` "leaves this file when E4 / S-ARCH deletes the freeze"), and the falsifier *"two shard geometries in `consensus_constants.json`"* is right. But the handoff's premise does **not** hold: `connect.rs` carries **no** segment-geometry comment to correct. `:22` is the module doc's *"3. tree — the verdict's drain → `curve_tree_leaves`"* and `:409` is `// ---- 4. root ----`; the only `segment` tokens in that file are **transaction body** segments (`:556-568`). `SCC-1`'s overloaded word produced this row. **What survives:** the deletion must also remove `rust/shekyl-archival-retention/src/segment_freeze.rs:63`'s compile-time assert and the JSON key, and the digest re-pins when it goes. |
@@ -178,7 +179,7 @@ added-key case answered in place, as `VC-D12` requires.
 
 | constant | value | unit **today** | where it was derived | on cutover |
 |---|---|---|---|---|
-| `escalation_knee_n` | `100000` (`config/economics_params.json:17`) | **J-segments** ⇒ ~2.6 × 10⁹ leaves ⇒ ~1.3 × 10⁹ transactions at 2 outputs | the escalation ramp's saturation point | **must be re-derived in transactions.** Re-keyed to closed T-shards the same literal is 2 × 10⁷ storage ids — the knee ~65× sooner (`SHT-8`) |
+| `escalation_knee_n` | `100000` (`config/economics_params.json:17`) | **J-segments** (`frozen_segment_count`) ⇒ ~2.6 × 10⁹ leaves ⇒ ~1.3 × 10⁹ transactions at 2 outputs | **sim-derived: the middle of the Stage-2 `KNEE_BAND = [25_000, 100_000, 250_000]`** (`rust/shekyl-economics-sim/src/escalation.rs:63`), swept against `ASYMPTOTE_BAND` but **never selected** — Stage 3 froze the *shape* only | **re-expressed, not ported** (§G `SCC-Q2`): the sweep re-runs with its band in transactions below the discard frontier. Inert today — the ramp is flat |
 | `segment_leaf_count` | `25992` (`config/consensus_constants.json:53`) | leaves per level-2 subtree (`38·18·38`) | the curve-tree widths, const-asserted to the proof topology | **leaves the JSON** with the freeze; the digest re-pins |
 | `T` (`archival_shard_tx_count`) | `200`, PROVISIONAL | transactions per shard | `3.33 MB ÷ 16.7 KB/tx`, where 3.33 MB is the **retired leaf segment's** size (`SHT-1`) | value re-derived by the `T` round; the **unit does not change** (a count either way), but *which* transactions it counts does |
 | `L` (`archival_attestation_anchor_lag`) | `4` blocks | blocks | its fetch-span component was sized on "~20 s for 3.33 MB" — the same retired byte count (`SHT-7`), which its own page's W₂ measurement contradicts 2.4–4.3× | restate the span **per byte**, or re-pin with `T` |
@@ -214,11 +215,20 @@ consensus verdict that would otherwise disagree with itself mid-flight.
 **Family 2 — validator + template + FFI + sim calibration, as one.** The binding
 reason: `n` feeds `validate_miner_transaction` under a read-point assert that
 *template and connect must read the same parent state*
-(`src/cryptonote_core/blockchain.cpp:1494-1505`). A template built on one operand definition and a
-connect validating on the other do not merely disagree on a number — they
-disagree on **which coinbases are valid**. `escalation_knee_n`'s re-derivation
-rides in the same change, or the ramp saturates at a different chain size than the
-one it was derived for.
+(`src/cryptonote_core/blockchain.cpp:1494-1505`). A template built on one operand
+definition and a connect validating on the other disagree about the coinbase's
+fee split.
+
+**Corrected 2026-09-27:** that disagreement is **latent, not live**. At the
+shipped parameters the escalation is flat — `shekyl_escalation_asymptote_share`
+equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`,
+*"the DELIBERATE pre-ceremony NEUTRAL value"*) — so the split is 25 % whatever `n`
+is and a mismatched operand changes no coinbase's validity today. **The atomicity
+requirement stands, and this is the better argument for it:** a split operand is
+harmless while the ramp is flat and becomes a chain split the moment the GF-7
+ceremony raises the asymptote, which is exactly the kind of defect that ships
+unnoticed and detonates later. `escalation_knee_n`'s re-expression rides the same
+change so the ceremony is never handed a number in the wrong unit.
 
 **Family 1 — daemon + wallet, as one.** Bond admission checks domain membership,
 and the wallet posts the holdings it will be judged on. A daemon on the domain
@@ -250,15 +260,29 @@ Numbered, and none resolved here.
    parent state from `cumulative_tx_count` and `D(E)` on both sides, and it moves
    in **epoch steps**, as the segment count did — so the operand keeps the step
    shape the ramp was built against.
-2. **`SCC-Q2` — `knee_n`'s re-derivation. NEITHER, and the question had a false
-   premise (design owner, 2026-09-27); the ruling is Rick's.** `knee_n = 100,000`
-   has **no recorded derivation** — it is provisional-until-testnet
-   (`CLIENT_VERSION_CONSTANTS_VALIDATION.md:943`), so there is no calibrated point
-   *or* schedule to preserve and nothing to port. **Recommendation: re-derive, not
-   port** — set the knee at the **burden level**, in transactions below the
-   frontier (`SCC-Q1`), where archival cost justifies the full redirect; the
-   economics sim sets the provisional value against the **(B)-domain** burden, and
-   it is pinned at testnet per §3.12. Monetary policy, so **Rick's ruling, open**.
+2. **`SCC-Q2` RULED (Rick, 2026-09-27, design-owner lane): `knee_n` is
+   re-expressed, not ported.**
+   - The Stage-2 escalation sweep (`KNEE_BAND × ASYMPTOTE_BAND`,
+     `rust/shekyl-economics-sim/src/escalation.rs:63`) is **re-run with the knee
+     band in transactions below the discard frontier** — the `SCC-Q1` unit —
+     derived from `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §6.0's
+     *wide-but-slow* constraint in that unit, as part of the sim re-baseline.
+   - The config carries **that sweep's middle candidate**, provisional.
+   - The escalation **stays neutral** (asymptote = floor = 250,000,
+     `config/economics_params.json:16-18`) until the **GF-7 ceremony** (§11.4) pins
+     both numbers.
+   - Converting the old band (~13k transactions per J-segment) is a **sanity check
+     only, not a derivation**: segments counted coinbase leaves and were never a
+     burden measure.
+
+   **Provenance correction.** `100,000` **is** sim-derived — it is the middle of
+   the Stage-2 `KNEE_BAND = [25_000, 100_000, 250_000]`, swept against
+   `ASYMPTOTE_BAND` but **never selected**, because Stage 2 recommends and Stage 3
+   freezes, and Stage 3 froze the **shape** only. This round's earlier *"no
+   recorded derivation"* was wrong: what is missing is a **selection**, not a
+   derivation. The band's own doc comment carries the reasoning (*"a larger knee is
+   a slower ratchet"*; `25_000` ≈ baseline traffic at ~10 y, `250_000` only
+   saturates deep in a sustained-growth chain).
 3. **`SCC-Q3` — does `g(age)`'s re-keyed form need a shard's close height?
    ANSWERED: no, and the question conflated two things (design owner,
    2026-09-27).** `SHT-Q1`'s falsifier (i) is about a shard needing **to close by
@@ -279,6 +303,5 @@ Numbered, and none resolved here.
    what shipped. It was a precondition of §E's couplings holding, and §E item 3 is
    now discharged.
 
-**Standing after Round 0:** `SCC-Q1`, `SCC-Q3`, `SCC-Q4` and `SCC-Q5` are
-**answered**; `SCC-Q2` is **open as Rick's ruling**, with the design owner's
-recommendation recorded above. No other question is open.
+**Standing after Round 0: every question is closed.** `SCC-Q1`, `SCC-Q3`,
+`SCC-Q4`, `SCC-Q5` answered; **`SCC-Q2` RULED** 2026-09-27. Nothing in §G is open.
