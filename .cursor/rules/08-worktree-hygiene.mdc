@@ -68,44 +68,29 @@ text** — and what closes or reopens that finding.
   written against was not there (`:4354` was `:4353` again). Nothing was
   written; the file was restored from `HEAD`; the edit was re-run against
   the restored text and applied cleanly. See "The edit form that notices".
-- **`wt-e7-c3` (2026-09-27) — the window, measured.** Instance sixteen:
-  `read_tests.rs` was committed with rustfmt's bytes and, **nineteen
-  seconds after the commit**, the working copy held the pre-`cargo fmt`
-  text again — the file's `mtime` sits 19 s after the commit's timestamp,
-  and `rustfmt --check` passes on `HEAD`'s blob and fails on the working
-  copy's. Nothing but `cargo fmt` had rewritten that file, and it had been
-  open in an editor since the edit tool created its hunk. That is tighter
-  than any earlier instance and it sharpens the `wt-e6-s6` mechanism from
-  *a file an editor has open* to **a file an editor has open that
-  something else has since rewritten on disk** — the buffer is holding
-  the file as it stood *before* the rewrite, and it is that older text
-  that comes back. So the hazard window is not the open file; it is the
-  interval between an out-of-editor rewrite and the buffer next flushing,
-  and `cargo fmt` is the writer that opens it most often. The prediction
-  this makes: instance seventeen will be a file `cargo fmt` reformatted
-  (or a script wrote whole) while open, not a file the edit tool alone
-  touched. Caught by constraint 1; restored from `HEAD`.
-- **`wt-e7-c3` (2026-09-28) — instance seventeen, as predicted.** Six
-  files showed modified two hours after their commits had been pushed and
-  verified from a fresh clone: every one a file `cargo fmt` had reformatted
-  that evening, none a file only the edit tool had touched, all six with
-  **one `mtime`** (`00:06:14`) — a single buffer flush — and each holding
-  its pre-`fmt` text (`rustfmt --check` passes on every `HEAD` blob and
-  fails on every working copy). Caught by constraint 1 (`git diff --stat`
-  before a one-file doc commit listed seven files); the commit had staged
-  its one path and nothing travelled. The prediction above is confirmed on
-  its first test; the falsifier stands unchanged.
-- **`wt-e7-c3` (2026-09-28) — instance eighteen, same signature.** Two
-  chain-ingest files (`pipeline_tests.rs`, `test_support.rs`) showed
-  modified 54 minutes after their commit, both with one `mtime`
-  (`03:20:03.894`), both holding pre-`fmt` text — an unsorted `use`, three
-  assertions on one line that rustfmt had broken. Both were files `cargo
-  fmt` had reformatted while open. Caught by a `git status` run for a
-  different reason (reverting an abandoned edit elsewhere) — that is, by
-  habit, which is the weakest of the three constraints; restored from
-  `HEAD`. Three instances in twenty-six hours on one worktree with the same
-  writer named each time is a rate, not a coincidence: run `git status`
-  after every `cargo fmt`, not only before every commit.
+- **`wt-e7-c3` (2026-09-27/28) — the mechanism, stated as a rule.** Three
+  instances in twenty-six hours on one worktree, one signature, three
+  intervals: `read_tests.rs` **19 seconds** after its commit (sixteen); six
+  files **two hours** after theirs, all with one `mtime` `00:06:14`
+  (seventeen); two chain-ingest files **54 minutes** after theirs, one
+  `mtime` `03:20:03.894` (eighteen). Every file was one `cargo fmt` had
+  reformatted while an editor buffer held it; not one was a file only the
+  edit tool had touched; every working copy held the pre-`fmt` bytes
+  (`rustfmt --check` passes on each `HEAD` blob, fails on each working
+  copy). Sixteen predicted seventeen's shape; seventeen and eighteen
+  confirmed it at intervals that share nothing. So the entry stops
+  counting and states what it has established:
+
+  **Any file `cargo fmt` (or any out-of-editor writer) rewrites while a
+  buffer holds it will revert to the buffer's bytes at an unpredictable
+  later moment — the trigger is a single flush event touching every open
+  buffer, and the interval is arbitrary. Nothing in the flush announces
+  itself. Only constraint 1 catches it, and only if `git status` is run
+  after the rewrite, not merely before the next commit.** Sixteen and
+  seventeen were caught by constraint 1; eighteen by a `git status` run for
+  an unrelated reason — habit, the weakest catch. Run `git status` after
+  every `cargo fmt`. The falsifier for the mechanism stands as `wt-e6-s6`
+  wrote it.
 
 Most of these were caught by a human or an agent reading the diff. That does not
 scale, and it is not the dangerous case. **The dangerous case is a drift

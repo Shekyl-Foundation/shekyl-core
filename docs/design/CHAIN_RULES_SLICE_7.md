@@ -715,7 +715,10 @@ table** (the old five cannot survive it — `shekyl_e2_trace_export` itself
 would refuse them), and the parity oracles re-run. The same inherited
 shape lives in the C++ core_tests' fakechain tables
 (`tests/core_tests/block_validation.h:373–419`); those test the C++
-against itself and are not this lane's, disclosed here.
+against itself and are not this lane's — but they now run epoch 0 while
+the daemon runs 1, so *"the C++ core_tests pass"* asserts less than it
+did for any split-reading check. A `FOLLOWUPS.md` row carries it with
+its falsifier, not only this note.
 
 Second run, corrected table: the one-over block refused for its weight;
 the block at the bound — 596 908 bytes, 45 bodies, penalty live, coinbase
