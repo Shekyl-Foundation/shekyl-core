@@ -1087,7 +1087,23 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
         // agents react. Skip on the first epoch so the initial distribution settles.
         if cfg.dynamic && ep > 0 {
-            world.advance_epoch(cfg.epoch_aging, &cfg.composition());
+            // The era a recycled slot is born into, chosen so the arm tests what it
+            // claims. A shard born at epoch `ep` will, at the final epoch `E`, have
+            // age `(E − ep) · epoch_aging`. Keying its era on that value makes era
+            // and age COINCIDE in the final snapshot — which is the only snapshot the
+            // verdict reads — so a heavy era genuinely sits at a chosen DEPTH there.
+            //
+            // Two wrong keys were measured before this one, and both produced
+            // confident nonsense. Keying on the shard's age at birth: every recycled
+            // slot is born at age 0, so the window fills with one era and the realized
+            // mean size ran to 2.22 (`S = 4`, Plateau). Keying on run-normalized time:
+            // a shard lives `1 / epoch_aging` = 50 epochs, so the final window spans
+            // only the last third of the run's eras — Plateau's window filled with
+            // newest-era heavies (mean 1.18–1.29, ADDING demand rather than
+            // redistributing it) while Burst's heavy era had aged out of frame
+            // entirely (mean 0.82–0.89), which is why it read "clear".
+            let era_now = (((cfg.epochs.saturating_sub(ep)) as f64) * cfg.epoch_aging).min(1.0);
+            world.advance_epoch(cfg.epoch_aging, &cfg.composition(), era_now);
         }
 
         // L12 chain growth: append fresh hot shards until the window reaches its
@@ -1096,7 +1112,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         if cfg.bootstrap && ep > 0 && world.shards.len() < cfg.n_shard {
             let room = cfg.n_shard - world.shards.len();
             for _ in 0..cfg.shard_growth_per_epoch.min(room) {
-                world.append_shard(0.0, &cfg.composition());
+                let era_now = (((cfg.epochs.saturating_sub(ep)) as f64) * cfg.epoch_aging).min(1.0);
+                world.append_shard(0.0, &cfg.composition(), era_now);
             }
         }
 
@@ -4056,16 +4073,42 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // not new bars):
     //   * base: `storage_scale` 1.3 — the COVERED point, so a breach is this axis's
     //     doing and not a pre-existing shortfall;
-    //   * BREACH ⇔ `banded.worst_frac_under >= 0.05`, the ratified `covered` bar
-    //     applied to the worst pre-registered band instead of the aggregate;
-    //   * WATCH ⇔ `banded.worst_margin < 0` with `worst_frac_under` still 0 — a shard
-    //     under target that no threshold count can see;
+    //   * BREACH ⇔ the arm's `banded.worst_frac_under` exceeds the CONTROL's
+    //     (`f34_aged_control`: same config, composition off) — a delta, because the
+    //     ratified 0.05 bar was set for an aggregate and means something else applied
+    //     to a max over nine cells (the flat baseline reads 0.214 against its own
+    //     aggregate of 0.050). CORRECTED after the control was read; the absolute bar
+    //     is reported, not graded;
+    //   * WATCH ⇔ `banded.worst_margin` below the control's while the count matches —
+    //     a shard under target that no threshold count can see;
     //   * shapes: `Plateau` (usage rises then levels — the realistic steady state) and
     //     `Burst` (one heavy era mid-depth — a heavy band at a chosen depth);
     //   * `S` in {4, 10}: the realized per-tx spread and a deliberately harsher one.
     //     `S = 60` is NOT run here — it is `MAX_TX_SIZE / mean`, a per-transaction
     //     ceiling, and at the era level it would assert a whole era of maximal
     //     transactions, which no fee market produces.
+    // THE CONTROL, and it is load-bearing twice over. The dynamic window costs
+    // coverage on its own — shards age, the frontier recycles, and backfill lags — so
+    // an arm compared against a STATIC baseline would credit the era axis with the
+    // window's cost. This is the same config with composition OFF.
+    //
+    // It also re-calibrates the verdict. The pre-registered rule first read "BREACH iff
+    // worst_frac_under >= 0.05", reusing the ratified `covered` bar. That bar was
+    // ratified for an AGGREGATE; applied to a MAX OVER NINE CELLS it is a different
+    // test, and the flat `baseline` scenario trips it (aggregate 0.050, worst band
+    // 0.214) while being the control. A threshold whose job changes when the statistic
+    // changes is not the same threshold. So the verdict is a DELTA against this
+    // control, and the absolute bar is reported, not graded.
+    {
+        let mut c = baseline();
+        c.name = "f34_aged_control".into();
+        c.axis = "f34_heavy_era_aged".into();
+        c.storage_scale = 1.3;
+        c.dynamic = true;
+        c.epoch_aging = 0.02;
+        out.push(c);
+    }
+
     for (label, shape) in [("plateau", EraShape::Plateau), ("burst", EraShape::Burst)] {
         for s in [4.0, 10.0] {
             let mut c = baseline();

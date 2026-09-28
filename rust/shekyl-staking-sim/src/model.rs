@@ -418,11 +418,11 @@ impl World {
     /// holdings/locks/inflight by one (unheld, unlocked, not-in-flight) slot so the new
     /// shard is consistently indexable. No-op on legacy scenarios (never called when
     /// `!bootstrap`).
-    pub fn append_shard(&mut self, age: f64, comp: &CompositionParams) {
+    pub fn append_shard(&mut self, age: f64, comp: &CompositionParams, birth_era_key: f64) {
         self.shards.push(Shard {
             age,
             size_seed: 0.0,
-            size: comp.size_at_birth(comp.birth_key(age, 0.0), 0.0),
+            size: comp.size_at_birth(comp.birth_key(birth_era_key, 0.0), 0.0),
         });
         for a in 0..self.actors.len() {
             self.holdings[a].push(false);
@@ -444,7 +444,14 @@ impl World {
     /// Permanent archival of the truly-oldest state is a gate-5 foundation concern,
     /// out of this window — so "retire at age 1" is a window boundary, not a claim
     /// that irreplaceable data is discarded.
-    pub fn advance_epoch(&mut self, age_step: f64, comp: &CompositionParams) {
+    /// `birth_era_key` is the era a **recycled** slot is born into — simulation time,
+    /// not the shard's age. Keying it on age instead collapses the era distribution:
+    /// every recycled slot is born at age 0, so under a dynamic window *every* shard
+    /// eventually carries the newest era's size and the axis stops modelling eras at
+    /// all. (Measured: it drove the realized mean size to 2.22 at `S = 4` under
+    /// `Plateau` and 0.57 under `Burst`, starving or gifting coverage wholesale.)
+    /// A static snapshot is the special case where age *is* the birth era.
+    pub fn advance_epoch(&mut self, age_step: f64, comp: &CompositionParams, birth_era_key: f64) {
         for (s, shard) in self.shards.iter_mut().enumerate() {
             shard.age += age_step;
             if shard.age >= 1.0 {
@@ -453,7 +460,8 @@ impl World {
                 // one it replaces does not carry its size forward, and this one does not
                 // shrink as it ages.
                 shard.age = 0.0;
-                shard.size = comp.size_at_birth(comp.birth_key(0.0, shard.size_seed), 0.0);
+                shard.size =
+                    comp.size_at_birth(comp.birth_key(birth_era_key, shard.size_seed), 0.0);
                 for a in 0..self.actors.len() {
                     self.holdings[a][s] = false;
                     self.locks[a][s] = 0;
@@ -759,7 +767,7 @@ mod composition_tests {
             }],
         );
         for _ in 0..5 {
-            w.advance_epoch(0.05, &comp);
+            w.advance_epoch(0.05, &comp, 0.0);
         }
         assert!(w.shards[0].age > 0.60, "the shard must have aged");
         assert_eq!(
@@ -794,7 +802,7 @@ mod composition_tests {
                 reservation: 0.0,
             }],
         );
-        w.advance_epoch(0.05, &comp);
+        w.advance_epoch(0.05, &comp, 0.0);
         assert_eq!(w.shards[0].age, 0.0, "the slot must have recycled");
         assert_eq!(
             comp.size(&w.shards[0]),

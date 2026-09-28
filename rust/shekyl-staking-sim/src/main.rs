@@ -2072,6 +2072,7 @@ mod tests {
                 cv_tx: 0.0,
                 decorrelated: false,
             },
+            0.0,
         );
         // Shard 0 crossed age 1.0 → retired/recycled: age reset, holding+lock cleared.
         assert!((w.shards[0].age - 0.0).abs() < 1e-12);
