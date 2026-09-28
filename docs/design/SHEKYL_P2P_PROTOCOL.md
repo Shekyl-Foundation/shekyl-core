@@ -2253,14 +2253,15 @@ connection-count limiter — `get_connections_count()`
 settings this per-IP cap is the only inbound resource bound the daemon has.**
 
 **Stated at defaults deliberately, because the deployed fleet is not at
-defaults.** Checked on the live testnet hosts rather than assumed: both
-two of the live testnet hosts set `in-peers=128` (with `out-peers=64`)
-explicitly in their `shekyld-testnet.conf`. **As deployed, the inbound
-bound is 128 and the per-IP cap is not the only one** — the unbounded form is a
-property of the shipped default, not of this network. Both statements are load-
-bearing and they are not interchangeable: the default is what an ordinary
-operator inherits, the 128 is what the seeds this observation was made against
-were actually running. *(Noted because the stronger claim — "the only inbound
+defaults.** Checked on the live testnet hosts rather than assumed: they set
+`in-peers` explicitly rather than inheriting it. **As deployed, the inbound
+bound is that explicit value and the per-IP cap is not the only one** — the
+unbounded form is a property of the shipped default, not of this network. Both
+statements are load-bearing and they are not interchangeable: the default is
+what an ordinary operator inherits, and the configured value is what the hosts
+this observation was made against were actually running. The per-host values
+are deployment state and are in `shekyl-dev`, `docs/Q12_D6A_SEED_ESTATE.md`;
+nothing in the argument turns on the number, only on it being set. *(Noted because the stronger claim — "the only inbound
 bound", unqualified — is falsified by the maintainer's own seed config, and a
 pricing argument that dies on contact with the deployment is worse than no
 argument.)* There is no read-only RPC reporting `max_in_connection_count`; the
@@ -2575,12 +2576,18 @@ without touching production.
 Both share one WAN address (`173.9.20.245`, confirmed on each). Their
 established outbound connections to the six compiled seeds:
 
-| | Unit | out-peers | Seeds held |
-| --- | --- | --- | --- |
-| **A** (the testnet miner) | `shekyld.service` | **12** (compiled default) | `seedaus`, `seedbrz`, `seedjp`, `seeduse` — **4** |
-| **B** (an internal node) | `shekyld-testnet-rpc.service` | 64 | `seedusw`, `seedeu` — **2** |
-| **Overlap** | | | **ZERO** |
-| **Union** | | | **6 of 6** |
+| | Seeds held |
+| --- | --- |
+| **A** (the testnet miner) | `seedaus`, `seedbrz`, `seedjp`, `seeduse` — **4** |
+| **B** (an internal node) | `seedusw`, `seedeu` — **2** |
+| **Overlap** | **ZERO** |
+| **Union** | **6 of 6** |
+
+Neither arm was outbound-capacity-limited: both had headroom for more seeds
+than they held, which is what makes the zero overlap a partition rather than
+an artefact of running out of slots. The per-host unit names and outbound
+limits are deployment state and are in `shekyl-dev`,
+`docs/Q12_D6A_SEED_ESTATE.md`.
 
 **Reading the evidence in the right direction.** Zero overlap is *not* an
 improbable coincidence — at cap 1 it is **forced**, because each seed holds

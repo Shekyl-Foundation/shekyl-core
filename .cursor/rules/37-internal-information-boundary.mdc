@@ -106,12 +106,34 @@ misconfigured" has moved nothing.
 ## Enforcement
 
 `scripts/ci/check_internal_information.py`, run by
-`.github/workflows/docs-gates.yml`, greps the tree for all three
-classes. Its allowlist is the carve-out list above, by exact path and
-pattern, with a reason on every entry. Adding an allowlist entry is a
-deliberate act reviewed as part of the PR — which is the point. Silence
-from the gate is only meaningful if the gate asserts its own subject
-exists (`47-gate-subject-assertion.mdc`); it does.
+`.github/workflows/docs-gates.yml`, scans **classes 1 and 3 only** —
+host identities, LAN addresses, and local filesystem paths. It matches
+every `skl-` name and every `/home/` account and then exempts an
+enumerated set, so a machine or a contributor account that nobody has
+written down yet **fails** rather than passes. Adding an entry to that
+set is a deliberate act reviewed as part of the PR, which is the point;
+a gate that listed only the names its author already knew would have
+nothing to review.
+
+**Class 2 is not mechanically enforced, and the gate says so on
+success.** "Its config is the unedited example", "unrestricted RPC on
+`:12030`", "that seed was down during the incident" — no grep
+recognises those, because the danger is in what the sentence means, not
+in any token it contains. Class 2 is a reviewer's job. Treat a green
+gate as "no forbidden identifiers", never as "the rule is satisfied":
+a document can pass it while publishing the estate's whole
+configuration in prose.
+
+Silence from the gate is only meaningful if the gate asserts its own
+subject exists (`47-gate-subject-assertion.mdc`); it fails when it
+enumerates implausibly few files. Note it reads tracked files only, so
+an unstaged file is not scanned — which is correct for CI and a trap
+when testing locally.
+
+Not to be confused with the absolute-path guard in
+`.github/workflows/build.yml`: that one scans Cargo manifests for build
+reproducibility, not for disclosure. The two overlap in pattern and not
+in purpose; neither replaces the other.
 
 Companion rules: `36-secret-locality.mdc` (where key material lives),
 `95-documentation-lifecycle.mdc` (which repo a document class belongs

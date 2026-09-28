@@ -157,19 +157,21 @@ Four findings:
    forward delay, PRs #384–#386, #430, #431. **They do not contain the code
    under test.** Measuring discovery against them would be the stale-daemon
    oracle in its purest form.
-2. **One seed's daemon is not running** and its config is the unedited
-   example template. Which one, and its readout, are in the internal record.
-3. **No tor process on any host** — but ~~the SP-T3 spike's pinned Tor Expert
-   Bundle is gone~~ **CORRECTED: the bundle is present on all four**, at
-   `/opt/shekyl/tor-expert-bundle-15.0.17/tor/tor`, with signed tarballs in
-   `~shekyl`. The original claim was drawn from `pgrep tor` returning nothing,
+2. **The estate was not in a measurable state.** A daemon was down and the
+   configurations had diverged. Which host, and the readout that shows it, are
+   in the internal record; §4 lists what has to change. What this run needs
+   from the finding is only that the precondition was unmet.
+3. **No tor process running** — but ~~the SP-T3 spike's pinned Tor Expert
+   Bundle is gone~~ **CORRECTED: the bundle is present**, at
+   `/opt/shekyl/tor-expert-bundle-15.0.17/tor/tor`, with signed tarballs
+   alongside. The original claim was drawn from `pgrep tor` returning nothing,
    which shows that no service is *running*, not that the software is absent —
    the wrong observable for the question. No onion service existed at the time
    of the probe; §9.3 has since generated four.
-4. **Configs diverge**, but one seed's restricted/unrestricted RPC split is
-   **correct for its web front-end role**, not a defect. The other three are
-   simply plainer. The port layout is an admin surface and is not recorded
-   here.
+4. **Divergence is not automatically defect.** One host's arrangement follows
+   from the role it serves rather than from neglect, which is why §4's
+   remediation is not simply "make them identical". The per-host specifics are
+   an admin surface and stay in the internal record.
 
 Also: the testnet chain is at **height 1, difficulty 1** — genesis, nothing
 mined, `grey_peerlist_size: 0`. §6 depends on this.
@@ -293,8 +295,8 @@ constant**. It adds no C++ surface area for the Rust rewrite to pay down.
 > is the finding.
 
 **Q12-R-W2 — the seed estate.** Rebuild `shekyld` from current `dev` on all
-four (§2.5 finding 1 is on the critical path for any measurement); restart
-`skl-seedusw` with a real config; install the pinned Tor Expert Bundle;
+four (§2.5 finding 1 is on the critical path for any measurement); bring the host that
+was down up on a real config; install the pinned Tor Expert Bundle;
 generate one hidden service per seed; add `--anonymous-inbound` and
 `--tx-proxy`; cross-`--add-peer` the four onions so the seeds interconnect and
 begin self-announcing.
@@ -819,14 +821,18 @@ editing `/etc/shekyl/*.conf`, converging the systemd units, and restarting.
 
 **Two estate defects found while grounding, both needing that access:**
 
-1. **`skl-seedusw` is in a restart loop, not crashed.** Its unit runs
-   `/opt/shekyl/shekyld --config-file …` with **no `--non-interactive`** — the
-   daemon starts, finds no console, exits `status=0/SUCCESS`, and systemd
-   restarts it forever. It also points at `/opt/shekyl/shekyld` where the others
-   use `/usr/local/bin/shekyld`.
-2. **The units have diverged into two naming schemes** —
-   `shekyld-testnet.service` on `seedaus`/`seedeu`, `shekyld-test.service` on
-   `seeduse`/`seedusw`. Worth converging while the estate is open.
+1. **A unit was in a restart loop, not crashed.** It ran the daemon with **no
+   `--non-interactive`**: the daemon starts, finds no console, exits
+   `status=0/SUCCESS`, and systemd restarts it forever. The trap generalises
+   beyond this estate and is the reason it is recorded here — the exit status
+   is *success*, so the unit never enters a failed state, nothing alerts, and
+   `Restart=` will hide a daemon that has never once served a peer. A
+   supervision policy that only watches for non-zero exits cannot see it.
+2. **The units had diverged into two naming schemes**, worth converging while
+   the estate was open.
+
+Which hosts, which binary paths and which unit names are per-host state and are
+in `shekyl-dev`, `docs/Q12_D6A_SEED_ESTATE.md`.
 
 ---
 

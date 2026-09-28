@@ -44,11 +44,19 @@ MIN_SCANNED = 200
 FORBIDDEN: list[tuple[str, re.Pattern[str], str]] = [
     (
         "host",
-        # Enumerated host roles, not a bare `skl-` prefix, for two reasons: the
-        # shipped fleet units are `skl-node@`, `skl-tor@`, `skl-clearnet@` and
-        # `skl-fleet`, which are generic templates that must keep their names;
-        # and `skl-seed*` is public seed identity, carved out below.
-        re.compile(r"\bskl-(?:foundation|miner-test|pi|web|dev)\b"),
+        # Every `skl-` name, with the permitted ones enumerated in SKL_ALLOWED
+        # below -- deny by default, not allow by default.
+        #
+        # An earlier version listed the five hostnames that existed when it was
+        # written. That gate could only ever catch what its author already knew
+        # about: `skl-build`, added next month, would pass in silence, and the
+        # rule's claim that an allowlist entry is "a deliberate act reviewed as
+        # part of the PR" would be false -- there would be nothing to review.
+        # Inverting it makes a new machine identity fail until someone writes
+        # down why it is allowed. 47-gate-subject-assertion.mdc is the same
+        # instinct one level up: absence of signal is first evidence the gate
+        # looked in the wrong place.
+        re.compile(r"\bskl-([a-z0-9][a-z0-9-]*)"),
         "non-public Foundation hostname; write the role (see the rule's table)",
     ),
     # Seed identity -- hostname, clearnet IP, onion address -- is deliberately NOT
@@ -82,10 +90,47 @@ FORBIDDEN: list[tuple[str, re.Pattern[str], str]] = [
         # rather than excluded in the pattern. A real contributor's username is
         # what this class is for, so the allowed set is enumerated and anything
         # outside it fails -- including the next person's.
-        re.compile(r"/home/([a-z][a-z0-9_-]*)"),
+        # The whole path component, not `[a-z][a-z0-9_-]*`: that earlier class
+        # stopped at the first `.` or capital, so `/home/Rick/` matched as
+        # nothing and `/home/rick.dawson/` matched only "rick", both of which
+        # are exactly the personal paths this class exists to catch. Matching
+        # the component and normalising it below means a name fails unless it
+        # is one of the accounts that names nobody.
+        # Plausible account characters only. A `/home/` inside a regex literal
+        # -- `grep -E '/home/|/Users/'`, as .github/workflows/build.yml does to
+        # guard Cargo manifests against absolute paths -- is a pattern, not a
+        # path, and stops matching here. So does `/home/$USER` and `/home/<user>`.
+        re.compile(r"/home/([A-Za-z0-9._-]+)"),
         "local filesystem path; use a repo-relative path or an env var",
     ),
 ]
+
+# `skl-` names that are not a machine we run.
+#
+# Two kinds, and the distinction is the reason this set is small and the
+# default is denial:
+#   templates  systemd unit templates shipped in utils/fleet. `skl-node@%i` is
+#              a service name, instantiated per index on whatever host runs it;
+#              it identifies no machine.
+#   seeds      public seed identity. A seed exists to be dialed by strangers,
+#              its address ships in every binary's `get_seed_nodes`, and its
+#              onion is headed there. Publishing the name discloses nothing an
+#              intending peer cannot already learn.
+#
+# Seed *operational state* is not covered by this and the rule still forbids
+# it: "the seeds are at A..F" is shipped fact, "this one's config is the
+# unedited example and its unrestricted RPC is on :12030" is an exposed admin
+# surface. That is class 2, which is prose and not a pattern -- see main().
+SKL_ALLOWED = {
+    "oe-run",  # a bench data directory under $TMPDIR, not a machine
+    "clearnet",  # template: skl-clearnet@.service
+    "fleet",  # template: skl-fleet.target
+    "node",  # template: skl-node@.service
+    "tor",  # template: skl-tor@.service
+}
+SKL_ALLOWED_PREFIXES = (
+    "seed",  # public seed identity: skl-seedaus, skl-seedusw, ...
+)
 
 # Home directories that name nobody: service accounts created by our own
 # tooling, build-environment accounts, documentation placeholders, and the
@@ -120,6 +165,23 @@ ALLOW: list[tuple[str, str | None, str]] = [
         "this gate",
     ),
 ]
+
+
+def exempt(cls: str, name: str) -> bool:
+    """Is this captured name one that identifies nobody?
+
+    Case and punctuation are normalised before the comparison, so `/home/Rick`
+    and `/home/rick` are the same question. A name carrying a placeholder
+    marker -- `<user>`, `$HOME`, `{{ user }}` -- is documentation, not a path.
+    """
+    if any(c in name for c in "<>${}"):
+        return True
+    key = name.strip("/").lower()
+    if cls == "path":
+        return key in GENERIC_HOMES
+    if cls == "host":
+        return key in SKL_ALLOWED or key.startswith(SKL_ALLOWED_PREFIXES)
+    return False
 
 
 def allowed(path: str, cls: str) -> bool:
@@ -170,7 +232,7 @@ def main() -> int:
                 continue
             for n, line in enumerate(lines, 1):
                 for m in pattern.finditer(line):
-                    if cls == "path" and m.group(1) in GENERIC_HOMES:
+                    if m.groups() and exempt(cls, m.group(1)):
                         continue
                     violations.append((rel, n, cls, reason, line.strip()[:120]))
                     break
