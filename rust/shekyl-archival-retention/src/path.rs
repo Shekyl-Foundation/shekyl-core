@@ -80,6 +80,29 @@ fn leaf_node_from_layer_scalars(scalars: &[[u8; 32]]) -> [u8; 32] {
         .expect("valid leaf-layer scalars hash to a Selene node")
 }
 
+/// `SHT-11`: every branch layer the prover supplies is non-empty and ends in a non-zero
+/// scalar.
+///
+/// `recompute_subroot` hashes a layer as `hash_grow(init, 0, ZERO, chunk)`: a vector
+/// commitment `Σ chunk[i]·G_i`, positional, so a scalar dropped or moved changes the
+/// hash — but a zero scalar **appended** adds nothing. Without this check a layer
+/// widened with zeros (up to `MAX_BRANCH_SCALARS`) verified, a second encoding of the
+/// same opening, bound only by the ML-DSA leg over `encode(path)`. An honest layer is
+/// the chunk as built (`shekyl_curve_tree::assemble`, unpadded), and its last entry is
+/// a child's x-coordinate — a hash output, never zero. A frontier chunk shorter than the
+/// width stays valid: the rule is about trailing zeros, not width.
+fn refuse_non_canonical_layers(path: &SegmentPathOpening) -> Result<(), VerifyError> {
+    for (family, layers) in [("c1", &path.c1_layers), ("c2", &path.c2_layers)] {
+        if let Some(index) = layers
+            .iter()
+            .position(|chunk| chunk.last().is_none_or(|last| *last == ZERO))
+        {
+            return Err(VerifyError::NonCanonicalBranchLayer { family, index });
+        }
+    }
+    Ok(())
+}
+
 /// Re-hash branch chunks from layer 1 upward; top hash is the sub-root.
 fn recompute_subroot(path: &SegmentPathOpening) -> [u8; 32] {
     let depth = path.segment_path_depth();
@@ -145,6 +168,7 @@ pub fn verify_segment_path(
     if depth < 2 {
         return Err(VerifyError::PathTooShallow);
     }
+    refuse_non_canonical_layers(path)?;
 
     if challenged_leaf_bytes(leaf_layer_scalars, leaf_offset_in_chunk).is_none() {
         return Err(VerifyError::LeafNotInOpening);

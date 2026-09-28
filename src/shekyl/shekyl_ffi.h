@@ -1704,6 +1704,8 @@ static_assert(offsetof(struct shekyl_archival_verify_ctx, segment_leaf_count) ==
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
 /// PC-D3: ctx.prev_block_hash was the all-zero unpopulated sentinel.
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED 15
+/// SHT-11: a pruned-record branch layer is empty or ends in a zero scalar.
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_NON_CANONICAL_PATH 16
 /// PWD-B7: drop verdict for a shekyl_archival_verify_serve_credit_vin error code.
 uint8_t shekyl_archival_verify_drop_verdict(uint8_t code);
 

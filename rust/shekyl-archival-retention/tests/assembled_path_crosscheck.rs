@@ -6,7 +6,9 @@
 //! Cross-check `verify_segment_path` against the CT-4 assembled-path KAT.
 
 use serde_json::Value;
-use shekyl_archival_retention::{challenged_leaf_bytes, verify_segment_path, SegmentPathOpening};
+use shekyl_archival_retention::{
+    challenged_leaf_bytes, verify_segment_path, SegmentPathOpening, VerifyError,
+};
 use shekyl_curve_tree::{
     AssembleInput, BlockHash, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, CurveTreeRoot,
     Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
@@ -262,5 +264,39 @@ fn tj_f_forged_material_does_not_verify() {
     assert!(
         verify_segment_path(&layer_scalars, leaf_offset, &opening, &wrong_rk).is_err(),
         "coherent material against a non-committed R_k must not verify"
+    );
+
+    // Control for the two below: the canonical opening verifies against this root.
+    let root = reference.curve_tree_root.to_bytes();
+    verify_segment_path(&layer_scalars, leaf_offset, &opening, &root)
+        .expect("the canonical opening verifies");
+
+    // Forgery 3 (SHT-11): zero scalars appended to a branch layer. The layer hash is a
+    // positional vector commitment, so the recomputed root is unchanged — this verified
+    // before the canonical-layer rule — and it must now be refused as non-canonical.
+    for pad in [1usize, 40] {
+        let mut padded = opening.clone();
+        let last = padded.c2_layers.len() - 1;
+        padded.c2_layers[last].extend(std::iter::repeat_n([0u8; 32], pad));
+        assert_eq!(
+            verify_segment_path(&layer_scalars, leaf_offset, &padded, &root),
+            Err(VerifyError::NonCanonicalBranchLayer {
+                family: "c2",
+                index: last
+            }),
+            "a branch layer padded with {pad} zero scalars must be refused"
+        );
+    }
+
+    // Forgery 4 (SHT-11): an empty branch layer has no last scalar to be canonical.
+    let mut emptied = opening.clone();
+    emptied.c2_layers[0].clear();
+    assert_eq!(
+        verify_segment_path(&layer_scalars, leaf_offset, &emptied, &root),
+        Err(VerifyError::NonCanonicalBranchLayer {
+            family: "c2",
+            index: 0
+        }),
+        "an empty branch layer must be refused"
     );
 }
