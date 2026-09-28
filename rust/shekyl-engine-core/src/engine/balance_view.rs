@@ -13,8 +13,8 @@
 //! fields — lived in `shekyl-wallet-rpc` alone, and every other consumer of
 //! the engine (the desktop wallet embeds it directly) either restated it or
 //! shipped a different balance under the same name. A projection restated
-//! is a projection that drifts; this is its single home, and the RPC and
-//! the GUI both serialize it.
+//! is a projection that drifts; this is its single home, for the RPC to
+//! serialize and for the GUI to consume.
 //!
 //! # Two arms, never a fabricated zero
 //!

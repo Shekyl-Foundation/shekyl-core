@@ -21,8 +21,8 @@
   Why: the projection lived in the RPC server alone, and the desktop
   wallet — which embeds the engine — either restated it or shipped a
   different balance under the same name. A projection restated is one that
-  drifts; this is its single home, and the GUI's `get_balance` adopts the
-  contract's shape by consuming it.
+  drifts; this is its single home, so the GUI's `get_balance` can adopt the
+  contract's shape by consuming it (its own increment, in its own repo).
 
 ### Daemon store — the curve tree is grown by the Rust stack (DRS-E3)
 
