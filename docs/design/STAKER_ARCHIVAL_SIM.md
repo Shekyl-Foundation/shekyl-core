@@ -4608,3 +4608,40 @@ control, and `age_weight` moves the flat control too, so this is the premium's e
 the heavy era *relative to* its effect on a flat population. It is recorded because a
 gate-4/5 slope read off this ladder should not assume the curve is monotone below the
 baseline.
+
+---
+
+## L19e — item 7, separating the cost signal from the capacity leg: pre-registration (2026-09-28)
+
+**Committed before its code.** L19 recorded that its arm moved the per-shard **carry
+cost** and the per-shard **capacity draw** together, and that at baseline parameters
+capacity dominates (`storage_unit_cost = 0.03` against a value term of order 0.2–0.5).
+This sweep separates them.
+
+**Subject:** covered base (`storage_scale` 1.3), `EraShape::Burst`, `S ∈ {4, 10}`,
+baseline `age_weight` — the L19d subject, unchanged.
+
+**The lever:** `storage_unit_cost ∈ {0.0, 0.01, 0.03 (baseline), 0.06, 0.10, 0.20}`, one
+at a time.
+
+**What `0.0` isolates, stated precisely.** It removes the size-scaled carry term from
+every actor's decision. It does **not** remove the size-scaled **L10 fetch lag**, which
+does not read `storage_unit_cost`. So the `0.0` point is **capacity + fetch**, not
+capacity alone; the fetch leg is inert at baseline (`fetch_latency_per_unit = 0`), which
+is why the two coincide here, and the report says so rather than assuming it.
+
+**Method:** L19a's, unchanged — demand-matched sizes (mean 1.000 asserted), `N = 8`
+paired seeds, each point against its own control at the same `storage_unit_cost`,
+cell-wise worst-band delta, `min over seeds`, in-frame check.
+
+**Readings, fixed before the run:**
+
+| outcome | reading |
+|---|---|
+| `min Δ` at `0.0` ≈ `min Δ` at `0.03` | the **capacity leg carries the breach**; the carry signal is not doing the work |
+| `min Δ` rises with `storage_unit_cost` | the **carry signal contributes**, and its share is the rise from `0.0` |
+| `min Δ` falls with `storage_unit_cost` | the carry signal **relieves** the breach — heavier shards priced out of lighter holders' portfolios — and is reported as such |
+
+"≈" means within the across-seed spread at `0.03` (L19d's range at that point), so the
+comparison does not turn on a single seed. This sweep is **diagnostic**: it does not
+reopen (g), which L19c/L19d settled at the non-byte levers.
