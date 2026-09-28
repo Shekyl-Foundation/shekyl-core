@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+### `CT-6 Q1` ruled by derivation — and the derivation deletes the geometry
+
+- **`s = ⌊2.000 / 0.53759⌋ = 3 blocks.`** Budget from a ruled product judgment
+  (`max(2 s, 15 % of proving)`, 2026-09-19) over a converged rig denominator
+  (proving `6.055 s`, reproduced across four runs); rate from three converged
+  windows (50/100/200 blocks, `n = 6` each) flat to **0.36 %**.
+- **The capped run became the proof rather than the problem.**
+  `537.59 ms × 725 = 389.750 s` against the full-window run's `388.822 s` —
+  **0.24 %**. The series that could not be *graded* is the one that shows the
+  graded quantity extrapolates, so linearity is verified across 50 → 725 blocks
+  instead of extrapolated 14× off the short end.
+- **Two properties keep the rate honest.** Every working set is **≥ 6.76×** the
+  A72's 1 MB L2, so measured and extrapolated ranges share one memory regime.
+  And thermal drift is excluded **by direction**: the smallest window — the only
+  one that could have sampled a cool board — came in *fastest*, which a
+  cool-board bias cannot produce.
+- **RULED: one dense ring over the reorg horizon.** At `s = 3` a sparse tier
+  holds 240 snapshots against a dense ring's 720 — **4.64 MB** bought for a
+  spacing constant, an eviction policy, a dense/sparse boundary and the reader
+  logic across it, on an 8 GB rig. The tier geometry is **deleted**; `s` ceases
+  to exist as a quantity the round carries. A rule-21 reopening of `Q1`'s own
+  Round-1 shape on its derivation's substrate — the measurement did not fill the
+  constant in, it removed the structure the constant was for.
+- **The rewind bound follows from totality, not spacing:** one block's replay,
+  **0.538 s, 3.72× inside budget** — and totality over the horizon is exactly
+  what `Q2`'s armed examiner already grades.
+- **Scope, so increment 4 inherits it correctly:** the collapse deletes **`Q1`'s
+  intra-ring geometry only**. `Q2`'s seam and its examiner are unaffected —
+  its subjects are `row.segment` and `row.snapshot`, the moving freeze boundary,
+  never an intra-ring sparse/dense seam.
+- Increment 4's gate opens on a simpler subject than the round planned for: one
+  ring, total over the horizon, one seam — already guarded by an examiner armed
+  before its subject existed.
+
 ### `WSS-Q1(b)` — the pinned-rig session: rig accepted, row 2 still not graded
 
 - **The rig was accepted for the first time.** `rig.grading` is `true`: the
