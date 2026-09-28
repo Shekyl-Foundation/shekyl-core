@@ -19,6 +19,14 @@
 name: ci/gh-actions/gui-drift
 
 on:
+  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
+  # not only the branch head — the class of failure neither PR's CI can
+  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
+  # filter, so this runs on every group regardless of the PR filter above
+  # or below.
+  merge_group:
+    types: [checks_requested]
+    branches: [dev]
   pull_request:
     paths:
       - 'rust/**'
@@ -74,7 +82,13 @@ jobs:
       # per-pull-request refs stop two branches from cancelling each other's
       # runs the way two same-named refs could.
       #
+      # Under the merge queue the group is published the same way — a real
+      # ref, `refs/heads/gh-readonly-queue/dev/pr-N-<sha>`, fetchable by its
+      # full name for the life of the group, which is the life of this run.
+      # `github.ref` is that full name; `github.ref_name` would hand the
+      # callee a short name it cannot fetch (#886 review).
+      #
       # One line deliberately: in a folded scalar (`>-`) a more-indented
       # continuation is kept literal rather than folded, so wrapping this
       # expression embeds newlines inside `${{ }}`. Observed while writing it.
-      core_ref: "${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref_name }}"
+      core_ref: "${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.event_name == 'merge_group' && github.ref || github.ref_name }}"

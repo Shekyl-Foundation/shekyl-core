@@ -119,6 +119,10 @@ on:
       - '.github/actions/build-randomx-v2-ref/**'
       - '.github/workflows/randomx-v2-differential.yml'
       - '.github/workflows/randomx-v2-adversarial-ratio.yml'
+  # No `merge_group:` trigger, deliberately (06-branching.mdc, the merge
+  # queue): the PoW parity lane has its own push / schedule legs and a
+  # path filter `merge_group` would discard; its cost per group is minutes
+  # the class it would catch does not pay for.
   pull_request:
     paths:
       - 'rust/shekyl-randomx-differential/**'

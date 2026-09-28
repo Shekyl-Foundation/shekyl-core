@@ -1,6 +1,14 @@
 name: ci/gh-actions/cli
 
 on:
+  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
+  # not only the branch head — the class of failure neither PR's CI can
+  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
+  # filter, so this runs on every group regardless of the PR filter above
+  # or below.
+  merge_group:
+    types: [checks_requested]
+    branches: [dev]
   push:
     # `main` only. PRs are covered by `pull_request` (the merge commit into
     # the base — the stronger signal). A push-to-dev trigger used to
@@ -81,6 +89,9 @@ jobs:
           base=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            # The queue's group: its base is the `dev` tip the group merges onto.
+            base="${{ github.event.merge_group.base_sha }}"
           else
             base="${{ github.event.before }}"
           fi

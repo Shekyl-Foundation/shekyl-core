@@ -53,6 +53,9 @@
 name: ci/benchmarks
 
 on:
+  # No `merge_group:` trigger, deliberately (06-branching.mdc, the merge
+  # queue): a PR-comment comparator whose jobs are gated on the PR
+  # payload; there is no group to compare against or comment on.
   pull_request:
     branches: [dev]
     paths:

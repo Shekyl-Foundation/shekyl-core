@@ -99,6 +99,37 @@ analogous to LWMA-1 Phase 4" — it is "does this PR meet the four
 named criteria in `07-consensus-atomic-cutovers.mdc`?" The exception
 is auditable mechanically against the criteria, not by precedent.
 
+## The merge queue tests the merge result
+
+`dev` merges through GitHub's merge queue. A PR's CI runs on the PR's own
+head merged onto the `dev` of the moment it was pushed; the queue reruns the
+required checks on the **actual merge result** just before it lands. That
+is the only check that sees a *semantic* conflict — two PRs each green
+alone, broken together — and four landed in one month before the queue
+(#771×#772 on the schema bump, #853×#858 on the alt fixtures and I1,
+#878×#880 twice, on `placeholder_root_after` and `ConnectFacts.root_after`),
+each caught by a person reading `dev` after the fact, with `dev`'s test
+targets not compiling in between. The mechanism is the workflows'
+`merge_group:` trigger (every PR gate carries one; a gate that runs on the
+PR but not on the group has a hole exactly where this class lives) plus the
+`dev` ruleset. Consequences:
+
+- **A stacked PR cannot enter the queue until its base merges and it
+  re-targets `dev`.** That was already the discipline; the queue makes it
+  load-bearing. Expect it, do not fight it.
+- **"Require branches to be up to date" is not the cheaper alternative.**
+  It tests the same thing by making every author rebase and re-run CI after
+  every other merge — with six lanes open, each merge invalidates the other
+  five. The queue does the rebase-and-test once, on the group.
+- **`merge_group` takes no `paths` filter.** A path-filtered gate runs on
+  every group; the cheap gates carry the trigger anyway, the expensive
+  non-gate workflows (the depends cross-compiles, the RandomX differential
+  lane, the benchmark comparator) do not, and are named as such in their
+  files.
+- **A failure in the queue is `dev`'s finding, not the PR's** (the PR was
+  green on its own head): read the group's diff against the base, find the
+  other lane's change, fix on the PR, re-queue.
+
 ## When to ask the user instead of proceeding
 
 - Any request that mentions `main` directly ("commit this to main",
