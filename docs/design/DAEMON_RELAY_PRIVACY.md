@@ -12444,7 +12444,7 @@ unreproducible and an artifact indistinguishable from a property:
   thermal throttling directly. Measured **69 °C under sustained compile load** —
   the heaviest work the box sees — so the margin is ~11 °C before the first
   threshold.
-- **Storage — and it is not what was assumed.** `skl-pi` has **no NVMe**
+- **Storage — and it is not what was assumed.** The floor device has **no NVMe**
   (`/dev/nvme*` absent). Root is the **SD card** (`/dev/mmcblk0p2`). The
   attached USB device is a **WD easystore 2648 / WD10SDRW-11A0XS0, 931 GB,
   `rotational = 1`** — a *spinning* 2.5" disk, not solid state — and it is
@@ -16222,7 +16222,7 @@ becomes a project.
 a shipped `hop`, this term is either measured on the floor device or explicitly
 ruled negligible with a number attached. *"We did not measure it"* is not a
 finding that it is small. **DISCHARGED 2026-08-21 via the first branch —
-measured on the floor device (`skl-pi`); see §94.9.**
+measured on the floor device; see §94.9.**
 
 ### 94.8 The transit round does NOT reopen err-high — §44.3 already settled it (2026-08-21)
 
@@ -16413,7 +16413,7 @@ shape that hid the 12-second jump inside a 4 ms fold.
 
 §94.7 left the node's own Tor/TLS/circuit crypto owed a floor-device measurement
 *or* a negligibility ruling with a number. **It is measured on the floor device
-(`skl-pi`, the reference Raspberry Pi 4 Model B), which is the criterion's first
+(the reference Raspberry Pi 4 Model B), which is the criterion's first
 and stronger branch** — and a first draft of this section, which took the second
 branch on a *bounded* Pi rate, got the bound wrong in a way only the measurement
 caught. That correction is kept in view below, because it is the case for
@@ -16453,7 +16453,7 @@ while transit itself is measured with far larger spread would be false precision
 
 **Why the correction matters more than the result.** The disposition (negligible,
 excluded) is unchanged, but the draft reached it through a hardware assumption
-that was wrong and a rate that was 5.8× off, and only measuring on `skl-pi`
+that was wrong and a rate that was 5.8× off, and only measuring on the floor device
 surfaced either. A grep that had found the host earlier would have replaced a
 plausible-but-wrong bound with the measurement three steps sooner — the same
 ground-at-source lesson this arc keeps re-learning.

@@ -477,7 +477,7 @@ touched. Reference run producing the committed goldens
 `655d31cb2`, release profile, rustc 1.94.0 (the version
 `rust/rust-toolchain.toml` pins; the machine's default 1.95.0 does not
 apply inside `rust/`), x86_64-unknown-linux-gnu
-(i9-11950H). Floor device: `skl-pi`, Raspberry Pi 4 Model B Rev 1.4,
+(i9-11950H). Floor device: Raspberry Pi 4 Model B Rev 1.4,
 aarch64, binaries cross-compiled from the same commit. Thermal
 regime: 50.6 °C at start, 59.4 °C at end, governor verified reaching
 stock 1800 MHz under load mid-render. The firmware throttle flag is
@@ -901,7 +901,7 @@ quietly: bump `RENDER_REVISION` or CI's
 `scripts/ci/check_golden_revision_bump.py` fails the change; regenerate
 the nine goldens from a clean tree (`_reference_run` must record
 `dirty: false`); regenerate the Python twin's copy of `recipes.json` if
-any recipe field moves; and re-run the floor budget matrix on `skl-pi`,
+any recipe field moves; and re-run the floor budget matrix on the floor device,
 committing the capture — the change would be inside the timed path.
 
 ## Rendering discipline

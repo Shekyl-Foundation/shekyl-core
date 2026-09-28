@@ -3808,6 +3808,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-capped-stream"
+version = "3.1.0"
+dependencies = [
+ "shekyl-transport-layer",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-chacha"
 version = "3.1.0"
 dependencies = [
@@ -3897,6 +3905,7 @@ dependencies = [
 name = "shekyl-clearnet"
 version = "3.1.0"
 dependencies = [
+ "shekyl-capped-stream",
  "shekyl-net-address",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
@@ -4810,6 +4819,23 @@ dependencies = [
  "criterion",
  "proptest",
  "shekyl-thread-ledger",
+]
+
+[[package]]
+name = "shekyl-tor"
+version = "3.1.0"
+dependencies = [
+ "shekyl-capped-stream",
+ "shekyl-net-address",
+ "shekyl-onion-v3",
+ "shekyl-peer-policy",
+ "shekyl-runtime",
+ "shekyl-socks",
+ "shekyl-timing-engine",
+ "shekyl-tor-control-client",
+ "shekyl-tor-control-daemon",
+ "shekyl-transport-layer",
+ "tokio",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 # Shard-visual ruling B — candidate.v1 floor budget matrix
 # subject=render+PNG-encode latency vs docs/V3_SHARD_VISUALIZATION.md "Performance targets"
 # captured_utc=20260906T090000Z
-# host=skl-pi  device_row: Raspberry Pi 4 Model B Rev 1.4, aarch64, 4 cores, 8 GB
+# host=<floor-device>  device_row: Raspberry Pi 4 Model B Rev 1.4, aarch64, 4 cores, 8 GB
 # git_rev=655d31cb2 (rust/shekyl-shard-visual; binaries cross-compiled on x86_64, not built on device)
 # rustc=rustc 1.94.0 (4a4ef493e 2026-03-02)  target=aarch64-unknown-linux-gnu  profile=release
 # rustc_correction: this header first recorded 1.95.0, read from a shell whose cwd was OUTSIDE

@@ -34,6 +34,14 @@
 name: ci/gf7-no-emit-guard
 
 on:
+  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
+  # not only the branch head — the class of failure neither PR's CI can
+  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
+  # filter, so this runs on every group regardless of the PR filter above
+  # or below.
+  merge_group:
+    types: [checks_requested]
+    branches: [dev]
   pull_request:
     branches: [dev]
     paths:

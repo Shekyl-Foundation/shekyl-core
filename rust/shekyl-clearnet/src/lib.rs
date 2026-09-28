@@ -37,14 +37,17 @@
 //! [`Listener::dial`] checks the addressing cell and then opens an
 //! outbound socket. A proxy is SOCKS5 CONNECT (`shekyl-socks`). The
 //! initiator handshake uses the same engine owner as the responder.
+//! The outbound cap and the socket copy are [`shekyl_capped_stream`].
+//! This connector passes the seam as the frame functions.
 
 #![deny(unsafe_code)]
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use shekyl_capped_stream::accept_error_is_transient;
 use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::NetworkId;
 use shekyl_peer_policy::InboundCeiling;
@@ -63,6 +66,7 @@ mod seam;
 #[cfg(unix)]
 pub use inode::socket_descriptors;
 pub use seam::ChannelChoice;
+pub use shekyl_capped_stream::Session;
 
 use drive::{accept_one, zero_tally, Accept};
 use seam::ChannelChoice as Choice;
@@ -153,75 +157,6 @@ pub struct Config {
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
 }
 
-/// One accepted connection's session bytes, above the seam.
-pub(crate) struct Overfull {
-    flag: AtomicBool,
-    notify: tokio::sync::Notify,
-}
-
-impl Overfull {
-    fn new() -> Self {
-        Self {
-            flag: AtomicBool::new(false),
-            notify: tokio::sync::Notify::new(),
-        }
-    }
-
-    fn trip(&self) {
-        self.flag.store(true, Ordering::Release);
-        self.notify.notify_waiters();
-    }
-
-    fn tripped(&self) -> bool {
-        self.flag.load(Ordering::Acquire)
-    }
-
-    async fn wait(&self) {
-        loop {
-            let mut notified = std::pin::pin!(self.notify.notified());
-            notified.as_mut().enable();
-            if self.tripped() {
-                return;
-            }
-            notified.await;
-        }
-    }
-}
-
-pub struct Session {
-    inbound: mpsc::Receiver<Vec<u8>>,
-    queue: drive::ByteQueue,
-    overfull: Arc<Overfull>,
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        self.queue.close();
-    }
-}
-
-impl Session {
-    pub async fn recv(&mut self) -> Option<Vec<u8>> {
-        self.inbound.recv().await
-    }
-
-    /// Queue plaintext up to the connection's byte cap. A buffer that does
-    /// not fit is not stored, and the connection closes with
-    /// [`CloseKind::SendQueueFull`]. The cap is the caller's, from
-    /// PWD-T6's session-established limit plus measurement, and unmeasured
-    /// until that limit is a number.
-    pub fn try_send(&self, bytes: Vec<u8>) -> Result<(), CloseKind> {
-        match self.queue.try_push(bytes) {
-            Ok(()) => Ok(()),
-            Err(drive::PushError::Full) => {
-                self.overfull.trip();
-                Err(CloseKind::SendQueueFull)
-            }
-            Err(drive::PushError::Closed) => Err(CloseKind::IoError),
-        }
-    }
-}
-
 /// The listener. Drop shuts the pool down with the caller's timeout.
 /// Call [`shutdown`](Self::shutdown) from outside a task.
 pub struct Listener<C: Clock + Clone> {
@@ -296,39 +231,6 @@ impl<C: Clock + Clone> Drop for Listener<C> {
         if let Some(pool) = self.pool.take() {
             pool.shutdown(self.shutdown_timeout);
         }
-    }
-}
-
-/// A transient `accept` failure. `EMFILE`, `ENFILE`, and `ECONNABORTED`
-/// are what a flood produces. They are not the listener closing.
-pub(crate) fn accept_error_is_transient(err: &std::io::Error) -> bool {
-    matches!(
-        err.kind(),
-        std::io::ErrorKind::ConnectionAborted
-            | std::io::ErrorKind::ConnectionReset
-            | std::io::ErrorKind::Interrupted
-            | std::io::ErrorKind::WouldBlock
-    ) || too_many_open_files(err.raw_os_error())
-}
-
-fn too_many_open_files(code: Option<i32>) -> bool {
-    let Some(code) = code else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        // EMFILE and ENFILE. Linux and the BSDs use these numbers.
-        code == 24 || code == 23
-    }
-    #[cfg(windows)]
-    {
-        // ERROR_TOO_MANY_OPEN_FILES.
-        code == 4
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = code;
-        false
     }
 }
 
@@ -519,34 +421,6 @@ mod tests {
             .await
             .expect("session wait")
             .expect("session")
-    }
-
-    #[test]
-    fn a_flood_of_accept_errors_is_transient() {
-        #[cfg(unix)]
-        let code = 24;
-        #[cfg(windows)]
-        let code = 4;
-        #[cfg(any(unix, windows))]
-        {
-            let refused = std::io::Error::from_raw_os_error(code);
-            assert!(super::accept_error_is_transient(&refused));
-        }
-        let aborted = std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "aborted");
-        assert!(super::accept_error_is_transient(&aborted));
-        let closed = std::io::Error::new(std::io::ErrorKind::NotConnected, "closed");
-        assert!(!super::accept_error_is_transient(&closed));
-    }
-
-    #[test]
-    fn the_send_queue_counts_bytes_and_holds_more_than_one_buffer() {
-        let queue = super::drive::ByteQueue::new(4);
-        queue.try_push(b"ab".to_vec()).expect("first");
-        queue.try_push(b"cd".to_vec()).expect("second");
-        assert!(queue.try_push(b"e".to_vec()).is_err());
-        let first = queue.pop_now().expect("queued");
-        queue.release(first.len());
-        assert!(queue.try_push(b"ef".to_vec()).is_ok());
     }
 
     #[test]

@@ -28,7 +28,7 @@ use shekyl_shard_visual::{fixtures, parameters_from_aggregate, render_candidate_
 const TIMED_RUNS: usize = 5;
 
 /// Amended floor targets (spec *Performance targets*, 2026-09-06): 2× over the
-/// corpus-worst median measured on skl-pi, capture
+/// corpus-worst median measured on the floor device, capture
 /// `docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt`.
 /// Changing these requires a recorded amendment citing a new measurement.
 const FLOOR_TARGETS: [(u32, u128); 4] = [(128, 350), (256, 800), (512, 4_000), (1024, 25_000)];

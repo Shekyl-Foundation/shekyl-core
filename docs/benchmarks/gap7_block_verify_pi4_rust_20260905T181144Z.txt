@@ -1,7 +1,7 @@
 # GAP-7 floor capture — worst-case cold-block connect verification
 # phase=rust
 # captured_utc=20260905T181144Z
-# host=skl-pi  uname=Linux skl-pi 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
+# host=<floor-device>  uname=Linux <floor-device> 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
 # device_row: Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (PERFORMANCE_BASELINE.md §8.2)
 # git_rev=8af70a60a6d444daa858d94d8b34e71b7e54eb49
 # rustc=rustc 1.94.0 (4a4ef493e 2026-03-02)
@@ -41,7 +41,7 @@ warning: use of deprecated method `blake2::digest::generic_array::GenericArray::
 
 warning: `helioselene` (lib) generated 2 warnings
 warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
-   Compiling shekyl-ffi v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-ffi)
+   Compiling shekyl-ffi v3.1.0 (<bench-checkout>/rust/shekyl-ffi)
 # thermal 18:11:59 temp_mC=68653 clock_kHz=1800000
 # thermal 18:12:14 temp_mC=70114 clock_kHz=1800000
 # thermal 18:12:30 temp_mC=68166 clock_kHz=1800000

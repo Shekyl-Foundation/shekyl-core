@@ -51,6 +51,14 @@
 name: ci/schema-snapshot
 
 on:
+  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
+  # not only the branch head — the class of failure neither PR's CI can
+  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
+  # filter, so this runs on every group regardless of the PR filter above
+  # or below.
+  merge_group:
+    types: [checks_requested]
+    branches: [dev]
   pull_request:
     branches: [dev]
     paths:
@@ -148,8 +156,10 @@ jobs:
 
       - name: Compute paired-change verdict
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Under the merge queue the PR payload is absent; the group's
+          # base/head are the `dev` tip and the merge result — the same pair.
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
 

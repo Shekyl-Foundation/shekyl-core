@@ -1,7 +1,7 @@
 # GAP-7 floor capture — worst-case cold-block connect verification
 # phase=cpp
 # captured_utc=20260905T053148Z
-# host=skl-pi  uname=Linux skl-pi 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
+# host=<floor-device>  uname=Linux <floor-device> 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
 # device_row: Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (PERFORMANCE_BASELINE.md §8.2)
 # git_rev=aa63f4ce996d3b8f12547db51ca60a8fb69cd84a
 # rustc=NA

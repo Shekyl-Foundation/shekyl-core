@@ -1,0 +1,21 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-capped-stream"
+description = "The session byte cap and the socket copy under a connector. Framing stays in the connector."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "sync", "time"] }
+
+[lints]
+workspace = true

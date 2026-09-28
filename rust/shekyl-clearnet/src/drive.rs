@@ -7,12 +7,13 @@
 //! deadline is armed at accept, before any read, so time in the
 //! blocking queue counts.
 
-use std::collections::VecDeque;
+use std::borrow::Cow;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use shekyl_capped_stream::{read_capped, write_capped, ByteQueue, Overfull, StreamEnds};
 use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::{
     prefix_for, Established, Initiator, NetworkId, Responder, SendHalf, MESSAGE1_LEN, MESSAGE2_LEN,
@@ -61,16 +62,6 @@ pub struct Accept {
     pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
-}
-
-struct Outbound {
-    queue: ByteQueue,
-}
-
-impl Drop for Outbound {
-    fn drop(&mut self) {
-        self.queue.close();
-    }
 }
 
 pub async fn accept_one<C>(accept: Accept, engine: Handle<C>)
@@ -241,11 +232,13 @@ where
     C: Clock + Clone + Send + 'static,
 {
     let (mut read, write) = stream.into_split();
-    let overfull = Arc::new(crate::Overfull::new());
-    let outbound = Outbound {
-        queue: ByteQueue::new(send_queue_bytes),
-    };
-    let (inbound_tx, inbound_rx) = mpsc::channel(1);
+    let StreamEnds {
+        session,
+        writer_queue,
+        hold,
+        overfull,
+        inbound,
+    } = StreamEnds::open(send_queue_bytes);
     let opened = open_channel(
         kind,
         role,
@@ -255,37 +248,33 @@ where
         &network_id,
         handshake_within,
         &tally,
-        outbound.queue.clone(),
+        writer_queue,
         Arc::clone(&overfull),
     )
     .await;
     let (mut writer, recv) = match opened {
         Ok(pair) => pair,
         Err(kind) => {
-            drop(outbound);
+            drop(hold);
             return CloseCause::new(kind);
         }
     };
-    let session = Session {
-        inbound: inbound_rx,
-        queue: outbound.queue.clone(),
-        overfull: Arc::clone(&overfull),
-    };
     if sessions.send(session).is_err() {
-        drop(outbound);
+        drop(hold);
         drop(writer.await);
         return CloseCause::new(CloseKind::LocalClose);
     }
-    let read_fut = read_half(read, recv, inbound_tx, Arc::clone(&overfull));
+    let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull));
     tokio::pin!(read_fut);
     tokio::select! {
         read_cause = &mut read_fut => {
-            drop(outbound);
+            drop(hold);
             writer.abort();
             drop(writer.await);
             read_cause
         }
         write_cause = &mut writer => {
+            drop(hold);
             write_cause
                 .ok()
                 .flatten()
@@ -305,7 +294,7 @@ async fn open_channel<C>(
     handshake_within: Tick,
     tally: &Arc<HandshakeTally>,
     outbound: ByteQueue,
-    overfull: Arc<crate::Overfull>,
+    overfull: Arc<Overfull>,
 ) -> Result<(tokio::task::JoinHandle<Option<CloseCause>>, SeamRecv), CloseKind>
 where
     C: Clock + Clone + Send + 'static,
@@ -368,7 +357,7 @@ async fn write_half(
     mut write: OwnedWriteHalf,
     setup: tokio::sync::oneshot::Receiver<Setup>,
     outbound: ByteQueue,
-    overfull: Arc<crate::Overfull>,
+    overfull: Arc<Overfull>,
 ) -> Option<CloseCause> {
     let setup = setup.await.ok()?;
     let mut seam = match setup {
@@ -380,80 +369,25 @@ async fn write_half(
             SeamSend::Noise(send)
         }
     };
-    loop {
-        if overfull.tripped() {
-            drop(write.shutdown().await);
-            return Some(CloseCause::new(CloseKind::SendQueueFull));
-        }
-        tokio::select! {
-            biased;
-            () = overfull.wait() => {
-                drop(write.shutdown().await);
-                return Some(CloseCause::new(CloseKind::SendQueueFull));
-            }
-            next = outbound.pop() => {
-                let Some(bytes) = next else {
-                    drop(write.shutdown().await);
-                    return None;
-                };
-                let n = bytes.len();
-                let Ok(wire) = seam.encode(&bytes) else {
-                    outbound.release(n);
-                    drop(write.shutdown().await);
-                    return Some(CloseCause::new(CloseKind::RecordRejected));
-                };
-                if !wire.is_empty() {
-                    tokio::select! {
-                        biased;
-                        () = overfull.wait() => {
-                            outbound.release(n);
-                            drop(write.shutdown().await);
-                            return Some(CloseCause::new(CloseKind::SendQueueFull));
-                        }
-                        result = write.write_all(&wire) => {
-                            outbound.release(n);
-                            if result.is_err() {
-                                return Some(CloseCause::new(CloseKind::IoError));
-                            }
-                        }
-                    }
-                } else {
-                    outbound.release(n);
-                }
-            }
-        }
-    }
+    let cause = write_capped(&mut write, &outbound, &overfull, |plain| {
+        seam.encode(plain)
+            .map(Cow::Owned)
+            .map_err(|_| CloseKind::RecordRejected)
+    })
+    .await;
+    Some(cause)
 }
 
 async fn read_half(
     mut read: OwnedReadHalf,
     mut seam: SeamRecv,
     inbound: mpsc::Sender<Vec<u8>>,
-    overfull: Arc<crate::Overfull>,
+    overfull: Arc<Overfull>,
 ) -> CloseCause {
-    let mut buf = [0u8; 8192];
-    loop {
-        if overfull.tripped() {
-            return CloseCause::new(CloseKind::SendQueueFull);
-        }
-        let n = tokio::select! {
-            biased;
-            () = overfull.wait() => return CloseCause::new(CloseKind::SendQueueFull),
-            result = read.read(&mut buf) => match result {
-                Ok(0) => return CloseCause::new(CloseKind::PeerClosed),
-                Ok(n) => n,
-                Err(_) => return CloseCause::new(CloseKind::IoError),
-            },
-        };
-        let Ok(pieces) = seam.push(&buf[..n]) else {
-            return CloseCause::new(CloseKind::RecordRejected);
-        };
-        for piece in pieces {
-            if inbound.send(piece).await.is_err() {
-                return CloseCause::new(CloseKind::LocalClose);
-            }
-        }
-    }
+    read_capped(&mut read, inbound, &overfull, |chunk| {
+        seam.push(chunk).map_err(|_| CloseKind::RecordRejected)
+    })
+    .await
 }
 
 async fn noise_handshake<C>(
@@ -780,98 +714,6 @@ async fn read_or_wake<C: Clock>(
             result
                 .map(|_| ())
                 .map_err(|_| CloseKind::TransportHandshakeFailed)
-        }
-    }
-}
-
-/// The outbound queue. Its only storage is a byte cap. A send that does
-/// not fit is not stored. Bytes stay counted until the writer finishes
-/// them, so a peer that stops reading cannot grow this past the cap.
-#[derive(Clone)]
-pub(crate) struct ByteQueue {
-    inner: Arc<Mutex<ByteQueueInner>>,
-    data: Arc<tokio::sync::Notify>,
-}
-
-struct ByteQueueInner {
-    limit: usize,
-    used: usize,
-    closed: bool,
-    items: VecDeque<Vec<u8>>,
-}
-
-#[derive(Debug)]
-pub(crate) enum PushError {
-    Full,
-    Closed,
-}
-
-impl ByteQueue {
-    pub(crate) fn new(limit: usize) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(ByteQueueInner {
-                limit,
-                used: 0,
-                closed: false,
-                items: VecDeque::new(),
-            })),
-            data: Arc::new(tokio::sync::Notify::new()),
-        }
-    }
-
-    pub(crate) fn try_push(&self, bytes: Vec<u8>) -> Result<(), PushError> {
-        let n = bytes.len();
-        let mut inner = self.inner.lock().expect("outbound");
-        if inner.closed {
-            return Err(PushError::Closed);
-        }
-        if n == 0 {
-            return Ok(());
-        }
-        let Some(next) = inner.used.checked_add(n) else {
-            return Err(PushError::Full);
-        };
-        if next > inner.limit {
-            return Err(PushError::Full);
-        }
-        inner.used = next;
-        inner.items.push_back(bytes);
-        drop(inner);
-        self.data.notify_one();
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pop_now(&self) -> Option<Vec<u8>> {
-        self.inner.lock().expect("outbound").items.pop_front()
-    }
-
-    pub(crate) fn release(&self, n: usize) {
-        let mut inner = self.inner.lock().expect("outbound");
-        inner.used = inner.used.saturating_sub(n);
-    }
-
-    pub(crate) fn close(&self) {
-        self.inner.lock().expect("outbound").closed = true;
-        self.data.notify_waiters();
-    }
-
-    /// Take the next buffer. `None` means the queue was closed and is empty.
-    /// The byte count is released by [`Self::release`] after the write.
-    pub(crate) async fn pop(&self) -> Option<Vec<u8>> {
-        loop {
-            let mut notified = std::pin::pin!(self.data.notified());
-            notified.as_mut().enable();
-            {
-                let mut inner = self.inner.lock().expect("outbound");
-                if let Some(bytes) = inner.items.pop_front() {
-                    return Some(bytes);
-                }
-                if inner.closed {
-                    return None;
-                }
-            }
-            notified.await;
         }
     }
 }

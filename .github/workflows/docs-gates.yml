@@ -34,6 +34,14 @@
 name: ci/docs-gates
 
 on:
+  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
+  # not only the branch head — the class of failure neither PR's CI can
+  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
+  # filter, so this runs on every group regardless of the PR filter above
+  # or below.
+  merge_group:
+    types: [checks_requested]
+    branches: [dev]
   pull_request:
     branches: [dev]
     # NO `paths:` FILTER, DELIBERATELY. This job's name is a REQUIRED status
@@ -176,6 +184,16 @@ jobs:
         # after H1 read as current SoT. Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_doc_status_banners.py
+
+      - name: Run internal-information boundary check
+        # shekyl-core is public. Non-public Foundation hostnames, internal LAN
+        # addresses, and local filesystem paths, per
+        # 37-internal-information-boundary.mdc. Seed identity is carved out:
+        # a seed exists to be dialed by strangers. Per-host operational state is
+        # prose, not a pattern, and the gate says so rather than implying it
+        # checked. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_internal_information.py
 
       - name: Run forbidden-fossil check
         # Live RCTType* names, GENESIS_STRATEGY.md, privacy-security.mdc in

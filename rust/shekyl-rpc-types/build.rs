@@ -103,7 +103,36 @@ use std::path::PathBuf;
 /// validator built the medians; the move gives each one authority and two
 /// generated readers (`shekyl_economics::params`, the C++ macros). No
 /// behaviour changes; the digest moves because the binding grew.
-const PINNED_DIGEST: &str = "bff518aeb943c38e9e2242b756d69b3ca54d84afef0475e099cd14490921a452";
+///
+/// **Re-pinned 2026-09-27 (`SCC-4`, the shard-count cutover census): a key was
+/// ADDED — `archival_max_holdings_shards = 4096` in
+/// `consensus_constants.json`.** The chain question, answered: the cap is what a
+/// codec refuses a holdings set *at*, so a node at 4096 and a node at 2048 admit
+/// different bond posts for the same bytes — a different chain. It belongs here.
+/// The second test (`DRS_E3_CURVE_WRITER.md` §3.9), answered: it is a **resource
+/// cap**, which this file's own rule names as passing — the `CEN-I4` input-count
+/// case, not a proof-system structural parameter — so a network could
+/// legitimately name it differently.
+///
+/// Why it moved at all: the value had **six independent definitions** and nothing
+/// tied them — `shekyl_types::MAX_HOLDINGS_SHARDS`, an **unguarded** crate-private
+/// literal in `shekyl-wire` that is what enforces the wire bound, and four C++
+/// `kMaxHoldings` (one authority on `ArchivalBondValue` plus three
+/// `static_assert`-guarded revert mirrors). The C++ four could not drift from each
+/// other, but neither Rust pair nor either language was tied to the other, so a
+/// re-pin would have moved one side silently: a holdings set the store accepts
+/// and the wire refuses. The move gives it one authority and two generated
+/// readers (`rust/shekyl-types/build.rs`; the C++ macro, from which all four
+/// `kMaxHoldings` are now defined). **No behaviour changes** — the value is the
+/// 4096 every definition already carried; the digest moves because the binding
+/// grew.
+///
+/// **Re-pinned 2026-09-28 (merge of `dev` into #889):** the two re-pins above
+/// landed on separate branches the same day — Q6's two window keys on slice 7,
+/// `SCC-4`'s cap on `dev` — and each pinned a digest over a file without the
+/// other's keys. This value digests the merged file, all three keys present;
+/// no value moved on either side.
+const PINNED_DIGEST: &str = "b5530d56b1310f69fe99c5a4959486134a59b8739daea36bc2b13b826a84bb34";
 
 fn main() {
     let manifest_dir =

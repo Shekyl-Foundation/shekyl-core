@@ -145,14 +145,10 @@ all**, which Q12-R2 turns from a defect into a convenience for this run.
 
 ### 2.5 The seed estate is not currently configured correctly
 
-Probed over ssh, 2026-08-11:
-
-| host | IP | daemon | binary date | tor | note |
-| --- | --- | --- | --- | --- | --- |
-| `skl-seedaus` | 134.199.166.22 | testnet, up | 2026-03-30 | **none** | RPC 127.0.0.1:12029 |
-| `skl-seedeu` | 45.77.66.189 | testnet, up | 2026-03-30 | **none** | RPC 127.0.0.1:12029 |
-| `skl-seeduse` | 45.77.147.65 | testnet, up | 2026-03-30 | **none** | restricted RPC public :12029, unrestricted :12030 |
-| `skl-seedusw` | 45.76.171.128 | **DOWN** | 2026-03-30 | **none** | conf is the pristine `(example)` file |
+Probed over ssh, 2026-08-11, across the four seeds that existed then. The
+per-host readout — daemon state, binary date, RPC port layout, and which
+configuration files were still the shipped example — is operational state and
+lives in `shekyl-dev`, `docs/Q12_D6A_SEED_ESTATE.md`. The findings it produced are the part this run turns on:
 
 Four findings:
 
@@ -161,18 +157,21 @@ Four findings:
    forward delay, PRs #384–#386, #430, #431. **They do not contain the code
    under test.** Measuring discovery against them would be the stale-daemon
    oracle in its purest form.
-2. **`skl-seedusw`'s daemon is not running** and its config is the unedited
-   example template.
-3. **No tor process on any host** — but ~~the SP-T3 spike's pinned Tor Expert
-   Bundle is gone~~ **CORRECTED: the bundle is present on all four**, at
-   `/opt/shekyl/tor-expert-bundle-15.0.17/tor/tor`, with signed tarballs in
-   `~shekyl`. The original claim was drawn from `pgrep tor` returning nothing,
+2. **The estate was not in a measurable state.** A daemon was down and the
+   configurations had diverged. Which host, and the readout that shows it, are
+   in the internal record; §4 lists what has to change. What this run needs
+   from the finding is only that the precondition was unmet.
+3. **No tor process running** — but ~~the SP-T3 spike's pinned Tor Expert
+   Bundle is gone~~ **CORRECTED: the bundle is present**, at
+   `/opt/shekyl/tor-expert-bundle-15.0.17/tor/tor`, with signed tarballs
+   alongside. The original claim was drawn from `pgrep tor` returning nothing,
    which shows that no service is *running*, not that the software is absent —
    the wrong observable for the question. No onion service existed at the time
    of the probe; §9.3 has since generated four.
-4. **Configs diverge**, but `skl-seeduse`'s split (unrestricted RPC on
-   127.0.0.1:12030, *restricted* RPC public on :12029) is **correct for its
-   `shekyl-web` role**, not a defect. The other three are simply plainer.
+4. **Divergence is not automatically defect.** One host's arrangement follows
+   from the role it serves rather than from neglect, which is why §4's
+   remediation is not simply "make them identical". The per-host specifics are
+   an admin surface and stay in the internal record.
 
 Also: the testnet chain is at **height 1, difficulty 1** — genesis, nothing
 mined, `grey_peerlist_size: 0`. §6 depends on this.
@@ -296,8 +295,8 @@ constant**. It adds no C++ surface area for the Rust rewrite to pay down.
 > is the finding.
 
 **Q12-R-W2 — the seed estate.** Rebuild `shekyld` from current `dev` on all
-four (§2.5 finding 1 is on the critical path for any measurement); restart
-`skl-seedusw` with a real config; install the pinned Tor Expert Bundle;
+four (§2.5 finding 1 is on the critical path for any measurement); bring the host that
+was down up on a real config; install the pinned Tor Expert Bundle;
 generate one hidden service per seed; add `--anonymous-inbound` and
 `--tx-proxy`; cross-`--add-peer` the four onions so the seeds interconnect and
 begin self-announcing.
@@ -538,7 +537,7 @@ makes the reopen fire on a technicality rather than on evidence.
 
 **Why discovery goes first.** The testnet is at height 1 with difficulty 1:
 **no spendable outputs exist.** The isolation arm needs mining
-(`skl-miner-test`), coinbase maturity and funded wallets on top of U1/U2.
+(the testnet miner), coinbase maturity and funded wallets on top of U1/U2.
 Discovery needs none of that — it is pure peerlist gossip with zero chain
 activity. Running it first keeps the fleet off the critical path of both the
 funding step and the U1/U2 build, and its result could invalidate the anon-stem
@@ -711,13 +710,13 @@ plan against them:
 | §9 says | Surveyed 2026-09-21 |
 | --- | --- |
 | **four** `skl-` seeds | **six** — `seedjp` and `seedbrz` were provisioned after this snapshot and are reachable, serving, and compiled into `get_seed_nodes` |
-| `skl-seedusw` **down**, pristine `(example)` config | **up, serving at the fleet height**, with a real `shekyld-testnet.conf` (`out-peers=64`, `in-peers=128`) |
+| one seed **down** with an unedited example config | **up, serving at the fleet height**, with a real configuration |
 | *(not covered)* | `skl-seedeu`'s `12021` was **closed during a Frankfurt provider incident on 2026-09-21 and has since recovered** — a transient, not a configuration state |
 
 **What is unchanged and still load-bearing:** the portable-baseline ruling
 (§9.1), the build artifact (§9.2), and the hidden-service key custody
 precondition (§9.3) — the HS secret-key backup being a single copy on one
-machine beside the genesis wallet, which still gates Q12-R1.
+machine, which still gates Q12-R1.
 
 **Also measured 2026-09-21, and not previously recorded anywhere:** all six
 seeds run the **identical binary** (`sha256` `8a8b1db0…`) at the **same
@@ -801,11 +800,14 @@ virtual port and the local port are different kinds of thing.
 Verified on the running estate — every seed shows both `0.0.0.0:12021` and
 `127.0.0.1:12023` listening.
 
-**Keys are backed up off-host** to `~/.shekyl/seed-hs-backup/<host>/` on the dev
-box, `0700`, with every `hs_ed25519_secret_key` sha256-verified against its
-source. That discharges §4's requirement — but **the backup itself is now a
-single copy on one machine**, alongside the genesis wallet, and wants a second
-location before these addresses are compiled into source.
+**Keys are backed up off-host**, with every `hs_ed25519_secret_key`
+sha256-verified against its source. That discharges §4's requirement — but
+**the backup is a single copy on one machine**, and wants a second location
+before these addresses are compiled into source.
+
+The location, and what else that machine holds, are in `shekyl-dev`, `docs/Q12_D6A_SEED_ESTATE.md`: naming a host
+that holds both the seed hidden-service secret keys and the genesis wallet
+would publish one target for two unrelated compromises.
 
 They are **not** in `get_seed_nodes` yet, per Q12-R2: compiling the testnet list
 before the runs would give every fleet binary four unsuppressable anon seeds and
@@ -819,14 +821,18 @@ editing `/etc/shekyl/*.conf`, converging the systemd units, and restarting.
 
 **Two estate defects found while grounding, both needing that access:**
 
-1. **`skl-seedusw` is in a restart loop, not crashed.** Its unit runs
-   `/opt/shekyl/shekyld --config-file …` with **no `--non-interactive`** — the
-   daemon starts, finds no console, exits `status=0/SUCCESS`, and systemd
-   restarts it forever. It also points at `/opt/shekyl/shekyld` where the others
-   use `/usr/local/bin/shekyld`.
-2. **The units have diverged into two naming schemes** —
-   `shekyld-testnet.service` on `seedaus`/`seedeu`, `shekyld-test.service` on
-   `seeduse`/`seedusw`. Worth converging while the estate is open.
+1. **A unit was in a restart loop, not crashed.** It ran the daemon with **no
+   `--non-interactive`**: the daemon starts, finds no console, exits
+   `status=0/SUCCESS`, and systemd restarts it forever. The trap generalises
+   beyond this estate and is the reason it is recorded here — the exit status
+   is *success*, so the unit never enters a failed state, nothing alerts, and
+   `Restart=` will hide a daemon that has never once served a peer. A
+   supervision policy that only watches for non-zero exits cannot see it.
+2. **The units had diverged into two naming schemes**, worth converging while
+   the estate was open.
+
+Which hosts, which binary paths and which unit names are per-host state and are
+in `shekyl-dev`, `docs/Q12_D6A_SEED_ESTATE.md`.
 
 ---
 
@@ -1179,8 +1185,8 @@ the fleet artifact and the release artifact drift.
    `--add-peer` flags at provisioning. Q12-R1's "HS keys are infrastructure the
    moment they are compiled into source" therefore does **not** attach to them:
    these are disposable fixtures, destroyed with the fleet, and carry no backup
-   obligation. The *testnet* seed keys in `~/.shekyl/seed-hs-backup/` are a
-   separate thing and still do.
+   obligation. The *testnet* seed keys are a separate thing and still do; their
+   custody is §9.3.
 3. **Bootstrap must use `--add-peer`, not `--seed-node`.** Verified at
    [`net_node.inl:527-533`](../../src/p2p/net_node.inl#L527): `--seed-node`
    parses into `public_zone.m_seed_nodes` **only** — it is public-zone by
