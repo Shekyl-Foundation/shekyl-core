@@ -58,19 +58,29 @@ pub fn cellwise_worst_delta(arm: &BandedVerdict, ctl: &BandedVerdict) -> Option<
     worst
 }
 
-fn dynamic_cfg(name: String, base_scale: f64, seed: u64) -> SimConfig {
+/// The lever values a run is taken at. `age_weight` defaults to the baseline's.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct Levers {
+    /// Headroom.
+    pub storage_scale: f64,
+    /// The deep-history premium.
+    pub age_weight: f64,
+}
+
+fn dynamic_cfg(name: String, lv: Levers, seed: u64) -> SimConfig {
     let mut c = baseline();
     c.name = name;
     c.axis = "f34_l19a".into();
-    c.storage_scale = base_scale;
+    c.storage_scale = lv.storage_scale;
+    c.age_weight = lv.age_weight;
     c.dynamic = true;
     c.epoch_aging = EPOCH_AGING;
     c.seed = seed;
     c
 }
 
-fn arm_cfg(shape: EraShape, spread: f64, base_scale: f64, seed: u64, matched: bool) -> SimConfig {
-    let mut c = dynamic_cfg(format!("arm_{shape:?}_s{spread:.0}"), base_scale, seed);
+fn arm_cfg(shape: EraShape, spread: f64, lv: Levers, seed: u64, matched: bool) -> SimConfig {
+    let mut c = dynamic_cfg(format!("arm_{shape:?}_s{spread:.0}"), lv, seed);
     c.era_shape = shape;
     c.size_spread = spread;
     c.demand_match = matched;
@@ -115,6 +125,121 @@ struct ArmReport {
     diag_min_delta: Option<f64>,
 }
 
+/// One lever point graded as L19a registers it: `N` paired seeds, each arm against
+/// the control at the **same lever values** (so a lever that moves the flat control is
+/// credited only with its effect on the heavy era), cell-wise delta, demand matching,
+/// in-frame check. `diagnostic` adds L19a's ungraded `storage_scale` variant.
+fn grade_point(
+    shape: EraShape,
+    spread: f64,
+    lv: Levers,
+    diagnostic: bool,
+) -> (Vec<SeedRow>, Grade) {
+    let mut rows = Vec::new();
+    for i in 0..SEEDS {
+        let seed = SEED0 + i;
+        let mut cc = dynamic_cfg("ctl".into(), lv, seed);
+        cc.demand_match = true;
+        let ctl = run_sim(&cc);
+        let arm = run_sim(&arm_cfg(shape, spread, lv, seed, true));
+        let delta = cellwise_worst_delta(&arm.banded, &ctl.banded);
+        let (diag_delta, diag_unmatched_mean) = if diagnostic {
+            let unmatched = run_sim(&arm_cfg(shape, spread, lv, seed, false));
+            let scaled_lv = Levers {
+                storage_scale: lv.storage_scale * unmatched.size_mean,
+                ..lv
+            };
+            let diag = run_sim(&arm_cfg(shape, spread, scaled_lv, seed, false));
+            (
+                cellwise_worst_delta(&diag.banded, &ctl.banded),
+                unmatched.size_mean,
+            )
+        } else {
+            (None, f64::NAN)
+        };
+        rows.push(SeedRow {
+            seed,
+            delta,
+            worst_band: arm.banded.worst_band,
+            margin_arm: arm.banded.worst_margin,
+            margin_ctl: ctl.banded.worst_margin,
+            size_mean: arm.size_mean,
+            deep_heavy: arm.in_frame.deep_heavy,
+            heavy: arm.in_frame.heavy,
+            in_frame: in_frame(shape, &arm),
+            diag_delta,
+            diag_unmatched_mean,
+        });
+    }
+    let g = Grade::of(&rows);
+    (rows, g)
+}
+
+/// The registered verdict over one point's seeds.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct Grade {
+    pub min_delta: Option<f64>,
+    pub median_delta: Option<f64>,
+    pub void_runs: usize,
+    pub mean_off_one: usize,
+    pub verdict: &'static str,
+    /// The worst cell on the most seeds, and on how many.
+    pub modal_worst_band: (usize, usize),
+    pub modal_worst_band_seeds: usize,
+}
+
+impl Grade {
+    fn of(rows: &[SeedRow]) -> Self {
+        let void_runs = rows
+            .iter()
+            .filter(|r| !r.in_frame || r.delta.is_none())
+            .count();
+        let mean_off_one = rows
+            .iter()
+            .filter(|r| (r.size_mean - 1.0).abs() > 1e-9)
+            .count();
+        let mut ds: Vec<f64> = rows.iter().filter_map(|r| r.delta).collect();
+        ds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let min_delta = ds.first().copied();
+        let median_delta = if ds.is_empty() {
+            None
+        } else {
+            Some(ds[ds.len() / 2])
+        };
+        let mut counts = [[0usize; GRADING_COST_BANDS]; GRADING_AGE_BANDS];
+        for r in rows {
+            counts[r.worst_band.0][r.worst_band.1] += 1;
+        }
+        let mut modal = ((0, 0), 0);
+        for (a, row) in counts.iter().enumerate() {
+            for (c, &n) in row.iter().enumerate() {
+                if n > modal.1 {
+                    modal = ((a, c), n);
+                }
+            }
+        }
+        // A verdict with a void run or a mean off 1.000 is not a verdict.
+        let verdict = if void_runs > 0 {
+            "VOID (subject not in frame)"
+        } else if mean_off_one > 0 {
+            "VOID (demand not matched)"
+        } else if min_delta.is_some_and(|d| d > BREACH_X) {
+            "BREACH"
+        } else {
+            "clear"
+        };
+        Self {
+            min_delta,
+            median_delta,
+            void_runs,
+            mean_off_one,
+            verdict,
+            modal_worst_band: modal.0,
+            modal_worst_band_seeds: modal.1,
+        }
+    }
+}
+
 pub fn print_f34_heavy_era_report() {
     let bases: [(&'static str, f64); 2] = [("marginal", 1.0), ("covered", 1.3)];
     let arms = [
@@ -126,82 +251,25 @@ pub fn print_f34_heavy_era_report() {
     let mut reports = Vec::new();
 
     for (base, scale) in bases {
-        // One control per (base, seed): composition off, so matched and unmatched are
-        // the same run, and it serves every arm on that base.
-        let controls: Vec<ScenarioResult> = (0..SEEDS)
-            .map(|i| {
-                let mut c = dynamic_cfg(format!("ctl_{base}"), scale, SEED0 + i);
-                c.demand_match = true;
-                run_sim(&c)
-            })
-            .collect();
-
         for (shape, spread) in arms {
-            let mut rows = Vec::new();
-            for i in 0..SEEDS {
-                let seed = SEED0 + i;
-                let ctl = &controls[i as usize];
-                let arm = run_sim(&arm_cfg(shape, spread, scale, seed, true));
-                let delta = cellwise_worst_delta(&arm.banded, &ctl.banded);
-                let frame = in_frame(shape, &arm);
-
-                // Diagnostic, ungraded: hold bytes fixed on the CAPACITY leg only, by
-                // scaling the budget by this seed's unmatched realized mean.
-                let unmatched = run_sim(&arm_cfg(shape, spread, scale, seed, false));
-                let mut scaled = arm_cfg(shape, spread, scale * unmatched.size_mean, seed, false);
-                scaled.name = format!("{}_scaled", scaled.name);
-                let diag = run_sim(&scaled);
-                let diag_delta = cellwise_worst_delta(&diag.banded, &ctl.banded);
-
-                rows.push(SeedRow {
-                    seed,
-                    delta,
-                    worst_band: arm.banded.worst_band,
-                    margin_arm: arm.banded.worst_margin,
-                    margin_ctl: ctl.banded.worst_margin,
-                    size_mean: arm.size_mean,
-                    deep_heavy: arm.in_frame.deep_heavy,
-                    heavy: arm.in_frame.heavy,
-                    in_frame: frame,
-                    diag_delta,
-                    diag_unmatched_mean: unmatched.size_mean,
-                });
-            }
-            let void_runs = rows
-                .iter()
-                .filter(|r| !r.in_frame || r.delta.is_none())
-                .count();
-            let mean_off_one = rows
-                .iter()
-                .filter(|r| (r.size_mean - 1.0).abs() > 1e-9)
-                .count();
-            let min_delta = rows
-                .iter()
-                .filter_map(|r| r.delta)
-                .fold(None, |m: Option<f64>, d| Some(m.map_or(d, |m| m.min(d))));
+            let lv = Levers {
+                storage_scale: scale,
+                age_weight: baseline().age_weight,
+            };
+            let (rows, g) = grade_point(shape, spread, lv, true);
             let diag_min_delta = rows
                 .iter()
                 .filter_map(|r| r.diag_delta)
                 .fold(None, |m: Option<f64>, d| Some(m.map_or(d, |m| m.min(d))));
-            // A verdict with a void run or a mean off 1.000 is not a verdict.
-            let verdict = if void_runs > 0 {
-                "VOID (subject not in frame)"
-            } else if mean_off_one > 0 {
-                "VOID (demand not matched)"
-            } else if min_delta.is_some_and(|d| d > BREACH_X) {
-                "BREACH"
-            } else {
-                "clear"
-            };
             reports.push(ArmReport {
                 base,
                 shape: format!("{shape:?}"),
                 spread,
                 seeds: rows,
-                min_delta,
-                void_runs,
-                mean_off_one,
-                verdict,
+                min_delta: g.min_delta,
+                void_runs: g.void_runs,
+                mean_off_one: g.mean_off_one,
+                verdict: g.verdict,
                 diag_min_delta,
             });
         }
@@ -230,6 +298,127 @@ pub fn print_f34_heavy_era_report() {
             r.mean_off_one,
             dh.first().cloned().unwrap_or_default(),
             r.verdict
+        );
+    }
+}
+
+/// `STAKER_ARCHIVAL_SIM.md` §L19c's headroom ladder, fixed before the run. `1.32` and
+/// `1.34` round to exactly `1.30`'s whole-slot capacities and are omitted.
+pub const HEADROOM_LADDER: [f64; 8] = [1.30, 1.36, 1.40, 1.45, 1.50, 1.60, 1.75, 2.00];
+/// §L19c's `age_weight` ladder, fixed before the run (`2.0` is the baseline).
+pub const AGE_WEIGHT_LADDER: [f64; 7] = [0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0];
+
+#[derive(serde::Serialize)]
+struct LeverRow {
+    lever: &'static str,
+    spread: f64,
+    levers: Levers,
+    /// Whole storage slots for a storage-rich / capital-rich actor at this point.
+    slots: (usize, usize),
+    grade: Grade,
+}
+
+fn slots(scale: f64) -> (usize, usize) {
+    let b = baseline();
+    (
+        ((b.storage_rich_storage as f64 * scale).round() as usize).max(1),
+        ((b.capital_rich_storage as f64 * scale).round() as usize).max(1),
+    )
+}
+
+/// **`--f34-levers`** — `STAKER_ARCHIVAL_SIM.md` §L19c on covered Burst: headroom and
+/// `age_weight`, one at a time from the covered baseline, then the corner. `r_target`
+/// is the grading bar and is not swept.
+pub fn print_f34_levers_report() {
+    const COVERED: f64 = 1.30;
+    let base_aw = baseline().age_weight;
+    let mut rows = Vec::new();
+    for spread in [4.0, 10.0] {
+        for &sc in &HEADROOM_LADDER {
+            let lv = Levers {
+                storage_scale: sc,
+                age_weight: base_aw,
+            };
+            let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
+            rows.push(LeverRow {
+                lever: "headroom",
+                spread,
+                levers: lv,
+                slots: slots(sc),
+                grade: g,
+            });
+        }
+        for &aw in &AGE_WEIGHT_LADDER {
+            let lv = Levers {
+                storage_scale: COVERED,
+                age_weight: aw,
+            };
+            let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
+            rows.push(LeverRow {
+                lever: "age_weight",
+                spread,
+                levers: lv,
+                slots: slots(COVERED),
+                grade: g,
+            });
+        }
+        let lv = Levers {
+            storage_scale: HEADROOM_LADDER[HEADROOM_LADDER.len() - 1],
+            age_weight: AGE_WEIGHT_LADDER[AGE_WEIGHT_LADDER.len() - 1],
+        };
+        let (_, g) = grade_point(EraShape::Burst, spread, lv, false);
+        rows.push(LeverRow {
+            lever: "corner",
+            spread,
+            levers: lv,
+            slots: slots(lv.storage_scale),
+            grade: g,
+        });
+    }
+
+    match serde_json::to_string_pretty(&rows) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 lever report: {e}"),
+    }
+    eprintln!("F34 lever test (§L19c), covered Burst: N = {SEEDS} paired seeds, BREACH iff min over seeds > {BREACH_X}");
+    eprintln!(
+        "lever       S  | scale   aw | slots   |  minDelta  median | worst cell (seeds) | VERDICT"
+    );
+    for r in &rows {
+        eprintln!(
+            "{:<10} {:>3.0} | {:>5.2} {:>4.1} | {:>3}/{:<3} | {:>9} {:>7} | {:?} ({}/{}) | {}",
+            r.lever,
+            r.spread,
+            r.levers.storage_scale,
+            r.levers.age_weight,
+            r.slots.0,
+            r.slots.1,
+            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade
+                .median_delta
+                .map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.modal_worst_band,
+            r.grade.modal_worst_band_seeds,
+            SEEDS,
+            r.grade.verdict
+        );
+    }
+    for spread in [4.0, 10.0] {
+        let lowest = |lever: &str| {
+            rows.iter()
+                .filter(|r| r.lever == lever && r.spread == spread && r.grade.verdict == "clear")
+                .map(|r| r.levers)
+                .next()
+        };
+        eprintln!(
+            "S = {spread:.0}: lowest clearing headroom {} | lowest clearing age_weight {}",
+            lowest("headroom").map_or("none in ladder".into(), |l| format!(
+                "{:.2} (slots {:?})",
+                l.storage_scale,
+                slots(l.storage_scale)
+            )),
+            lowest("age_weight")
+                .map_or("none in ladder".into(), |l| format!("{:.1}", l.age_weight)),
         );
     }
 }
