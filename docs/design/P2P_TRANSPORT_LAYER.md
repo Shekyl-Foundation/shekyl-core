@@ -433,10 +433,16 @@ C++ calls these:
   the handler, or it returns the D12 cause. No handler was created
   on the failure path. The waiter holds no lock the strand needs.
   The caller is often an executor thread. See the floor below.
-- `send(id, bytes)` copies into the byte cap during the call. C++
-  frees its buffer after the return. A queue that cannot take the
-  buffer records `SendQueueFull`, closes, and returns false. The
-  buffer is not stored.
+- `send(id, bytes)` is exactly one whole Levin message, copied into
+  the byte cap as a single unit during the call. C++ frees its buffer
+  after the return. More than one context sends on the same
+  connection: the handler's responses run on the connection's strand,
+  and `levin_notify`'s relay sends run on that zone's strand
+  (`levin_notify.cpp:464`). Concurrent senders interleave whole
+  messages only, which is what the receiving Levin reader and the
+  single writer's nonce order both require. A message that does not
+  fit is not partly queued. The whole message is refused and the
+  connection closes with `SendQueueFull`.
 - `close(id)` records `LocalClose` when no cause is recorded yet,
   then drops the socket.
 
