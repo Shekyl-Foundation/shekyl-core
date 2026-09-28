@@ -221,7 +221,7 @@
 //! measured span.** The paragraph is kept as the measurement that forced
 //! the change.
 //!
-//! # FLOOR RESULTS — skl-pi, Raspberry Pi 4 Model B Rev 1.4 (verify_floor)
+//! # FLOOR RESULTS — the floor device, Raspberry Pi 4 Model B Rev 1.4 (verify_floor)
 //!
 //! **Capture provenance note (review finding): the first rust-phase
 //! capture was taken under the FA-6 §8.2 flags, TERMINATED at the RandomX
@@ -311,7 +311,7 @@
 //!   the sweep pins depth 2, today's shallowest tree; depth grows with the
 //!   chain, no code change. Composing the relay bench's FLOOR-MEASURED
 //!   per-layer slope (DAEMON_RELAY_PRIVACY.md §85.3: 1-in +3.76 ms/layer on
-//!   skl-pi) onto this campaign's terms: **surge_max ≈ 6.5 at d2, ≈ 5.7 at
+//!   the floor device) onto this campaign's terms: **surge_max ≈ 6.5 at d2, ≈ 5.7 at
 //!   d7, ≈ 4.0 at the consensus-max d24** (composed, labeled — same
 //!   machine, different fixture generation). An upper bound on ALLOWED
 //!   surge is the unsafe direction to sit at: the consuming ruling margins

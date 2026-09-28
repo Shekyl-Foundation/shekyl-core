@@ -185,6 +185,16 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_doc_status_banners.py
 
+      - name: Run internal-information boundary check
+        # shekyl-core is public. Non-public Foundation hostnames, internal LAN
+        # addresses, and local filesystem paths, per
+        # 37-internal-information-boundary.mdc. Seed identity is carved out:
+        # a seed exists to be dialed by strangers. Per-host operational state is
+        # prose, not a pattern, and the gate says so rather than implying it
+        # checked. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_internal_information.py
+
       - name: Run forbidden-fossil check
         # Live RCTType* names, GENESIS_STRATEGY.md, privacy-security.mdc in
         # always-applied rules. Instance of 47-gate-subject-assertion.mdc.

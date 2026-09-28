@@ -812,7 +812,7 @@ End-to-end restore bench (§8.5.2) remains separate.
 Archive captures under
 `docs/benchmarks/fa6_decap_prefilter_pi4_<path>_<scenario>_<utc>.txt`.
 
-### Pi 4 (skl-pi, USB3 SSD, `rustc` 1.96.0 aarch64)
+### Pi 4 (floor device, USB3 SSD, `rustc` 1.96.0 aarch64)
 
 | Path | Scenario | `T_meas` | ns/out | `RUSTFLAGS` | `gate_outcome` |
 |------|----------|----------|--------|-------------|----------------|

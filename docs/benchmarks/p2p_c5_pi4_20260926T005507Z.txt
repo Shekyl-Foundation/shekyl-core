@@ -1,6 +1,6 @@
 # Pi-4 C5 — transport crypto cost, re-run 2026-09-26
 #
-# Host: skl-pi (10.10.14.15), aarch64, 4 cores, 8 GB. No sudo.
+# Host: <floor-device>, aarch64, 4 cores, 8 GB. No sudo.
 # Source: chore/p2p-c5-bench ad23ca944 (seal/open batches stop short of rekey;
 # the opened plaintext is consumed). Later commits on the branch do not change the bench.
 # Build: cargo build --release --target aarch64-unknown-linux-gnu -p shekyl-p2p-transport --features c5-bench --bench c5

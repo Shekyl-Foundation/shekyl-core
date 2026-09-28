@@ -1,4 +1,4 @@
-   Compiling shekyl-economics-sim v2.0.0 (/home/torvaldsl/projects/Shekyl/rust/shekyl-economics-sim)
+   Compiling shekyl-economics-sim v2.0.0 (<repo>/rust/shekyl-economics-sim)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s
      Running `target/debug/shekyl-economics-sim`
 Running scenario: baseline_steady_state ...

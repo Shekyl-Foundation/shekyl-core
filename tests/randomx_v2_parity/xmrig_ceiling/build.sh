@@ -25,7 +25,9 @@
 #   ./xmrig_parity /path/to/parity_corpus.dat   # full 1024-vector full-dataset differential
 set -euo pipefail
 
-XMRIG_DIR="${XMRIG_DIR:-/home/torvaldsl/shekyl/xmrig}"
+# No default: XMRig is not vendored here, so there is no path this script can
+# guess. Unset falls through to the actionable check below.
+XMRIG_DIR="${XMRIG_DIR:-}"
 X="$XMRIG_DIR/src/crypto/randomx"
 A="$XMRIG_DIR/src/3rdparty/argon2"
 here="$(cd "$(dirname "$0")" && pwd)"

@@ -197,7 +197,7 @@ saturated transport runtime means late relay wakes.
 An owner's `poll` is cheap and never blocks. Heavy work is posted
 elsewhere. That is what makes one thread enough.
 
-Pi-4 `wake_hints` run, 2026-09-26, `skl-pi` (aarch64, 4 cores), about
+Pi-4 `wake_hints` run, 2026-09-26, the floor device (aarch64, 4 cores), about
 four minutes:
 [`timing_engine_wake_hints_pi4_20260926T003745Z.txt`](../benchmarks/timing_engine_wake_hints_pi4_20260926T003745Z.txt).
 An earlier arm at 2^18 owners is 177 ns; one due poll is 377 ns. That

@@ -1,5 +1,5 @@
 # FA-6 decap pre-filter gate — Pi 4 scenario B capture
-# Host: skl-pi (Raspberry Pi 4, USB3 SSD)
+# Host: <floor-device> (Raspberry Pi 4, USB3 SSD)
 # Archive: 2026-06-08T22:06:14Z
 
 path=fa6
