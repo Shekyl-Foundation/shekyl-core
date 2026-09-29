@@ -96,26 +96,61 @@ fn workspace(rel: &str) -> PathBuf {
     manifest("..").join(rel)
 }
 
-/// One transaction the fixture carries: where its bytes came from, and the
-/// bytes. The provenance is recorded so a reader knows each shape was
-/// accepted by a daemon, not built to fit.
+/// One transaction the fixture carries: where its bytes came from, and how
+/// the emitter read them. The provenance is recorded so a reader knows each
+/// shape was accepted by a daemon, not built to fit.
+///
+/// The bytes are **not** loaded when a `Subject` is built. The verifying
+/// test reads them from the fixture's own `tx_hex` — the fixture is the
+/// record, and the gate must not depend on the files the record was taken
+/// from — and only the emitter follows `bytes` to those files. The six
+/// captured-chain sources were re-captured on 2026-09-28 under the
+/// corrected regtest hard-fork table (`CHAIN_RULES_SLICE_7.md` §3.11) and
+/// no longer hold these transactions; the emitter therefore reproduces the
+/// fixture only at the era it names, and the fixture stands on its own.
 struct Subject {
     name: &'static str,
     source: &'static str,
-    tx: Vec<u8>,
+    bytes: SubjectBytes,
 }
 
-fn json_hex_field(path: &std::path::Path, field: &str) -> Vec<u8> {
-    let doc: Value =
-        serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("json");
-    hex_bytes(doc[field].as_str().expect(field))
+/// Where the emitter read a subject's bytes at the capture era.
+enum SubjectBytes {
+    /// `shekyl-chain-ingest/tests/vectors/<shape>/txs/<txid>.tx`, as
+    /// committed at `dev@ad557ac5a` (before the 2026-09-28 re-capture).
+    CapturedChain {
+        shape: &'static str,
+        txid: &'static str,
+    },
+    /// A hex field of a fixture this crate owns.
+    Fixture {
+        path: &'static str,
+        field: &'static str,
+    },
 }
 
-fn captured_tx(shape: &str, txid: &str) -> Vec<u8> {
-    std::fs::read(workspace(&format!(
-        "shekyl-chain-ingest/tests/vectors/{shape}/txs/{txid}.tx"
-    )))
-    .expect("captured transaction")
+impl SubjectBytes {
+    /// Read the bytes from the era's files. The emitter's leg only.
+    fn read(&self) -> Vec<u8> {
+        match self {
+            Self::CapturedChain { shape, txid } => std::fs::read(workspace(&format!(
+                "shekyl-chain-ingest/tests/vectors/{shape}/txs/{txid}.tx"
+            )))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "captured transaction {shape}/{txid}: {e} — the vectors were re-captured \
+                     2026-09-28; the emitter reproduces the fixture at dev@ad557ac5a"
+                )
+            }),
+            Self::Fixture { path, field } => {
+                let doc: Value = serde_json::from_str(
+                    &std::fs::read_to_string(manifest(path)).expect("fixture"),
+                )
+                .expect("json");
+                hex_bytes(doc[field].as_str().expect(field))
+            }
+        }
+    }
 }
 
 /// The eight subjects, in the fixture's order.
@@ -124,63 +159,66 @@ fn subjects() -> Vec<Subject> {
         Subject {
             name: "spend-1in-2out",
             source: "shekyl-chain-ingest/tests/vectors/bond-post, the bond's funding spend (daemon-accepted, connected)",
-            tx: captured_tx(
-                "bond-post",
-                "566dd5081b0f51e218573f7269b79c670283e2e287d9775053487e39a963bbe3",
-            ),
+            bytes: SubjectBytes::CapturedChain {
+                shape: "bond-post",
+                txid: "566dd5081b0f51e218573f7269b79c670283e2e287d9775053487e39a963bbe3",
+            },
         },
         Subject {
             name: "spend-2in-2out",
             source: "shekyl-chain-ingest/tests/vectors/spend-depth3 (daemon-accepted, connected)",
-            tx: captured_tx(
-                "spend-depth3",
-                "afe08b8b69b1c3c72926eef98b49991e248d949e9988697b0748aa2039f4e9e1",
-            ),
+            bytes: SubjectBytes::CapturedChain {
+                shape: "spend-depth3",
+                txid: "afe08b8b69b1c3c72926eef98b49991e248d949e9988697b0748aa2039f4e9e1",
+            },
         },
         Subject {
             name: "spend-6in-2out",
             source: "shekyl-chain-ingest/tests/vectors/spend-1in-2out (daemon-accepted, connected)",
-            tx: captured_tx(
-                "spend-1in-2out",
-                "a220cc5d719c925e3fd26b7d5b09214d351fa31a4777af1ce63b01ed3f3ec76e",
-            ),
+            bytes: SubjectBytes::CapturedChain {
+                shape: "spend-1in-2out",
+                txid: "a220cc5d719c925e3fd26b7d5b09214d351fa31a4777af1ce63b01ed3f3ec76e",
+            },
         },
         Subject {
             name: "spend-6in-2out-live-oracle",
             source: "shekyl-wire/tests/fixtures/live_oracle_spend_v1.json (daemon-accepted, connected)",
-            tx: json_hex_field(&manifest("tests/fixtures/live_oracle_spend_v1.json"), "tx_hex"),
+            bytes: SubjectBytes::Fixture {
+                path: "tests/fixtures/live_oracle_spend_v1.json",
+                field: "tx_hex",
+            },
         },
         Subject {
             name: "bond-post-to_key-bond_post",
             source: "shekyl-chain-ingest/tests/vectors/bond-post (daemon-accepted, connected)",
-            tx: captured_tx(
-                "bond-post",
-                "1292cfc5035c57c704b6ad9c04aa462da7bd960839fba301dee97dbe9f58b8cc",
-            ),
+            bytes: SubjectBytes::CapturedChain {
+                shape: "bond-post",
+                txid: "1292cfc5035c57c704b6ad9c04aa462da7bd960839fba301dee97dbe9f58b8cc",
+            },
         },
         Subject {
             name: "emission-bond-post-to_key-bond_post",
             source: "shekyl-chain-ingest/tests/vectors/emission-claim (daemon-accepted, connected)",
-            tx: captured_tx(
-                "emission-claim",
-                "3e3c7e7951f66ec01ea1084be1e968712d9a3daf5f974795443e63a362ffa438",
-            ),
+            bytes: SubjectBytes::CapturedChain {
+                shape: "emission-claim",
+                txid: "3e3c7e7951f66ec01ea1084be1e968712d9a3daf5f974795443e63a362ffa438",
+            },
         },
         Subject {
             name: "emission-to_key-to_key-emission",
             source: "shekyl-chain-ingest/tests/vectors/emission-claim (daemon-accepted, connected)",
-            tx: captured_tx(
-                "emission-claim",
-                "a7244fa4c353a496c02e7fac8d635856094761e1834cf0354f9eb04d5b0ef96a",
-            ),
+            bytes: SubjectBytes::CapturedChain {
+                shape: "emission-claim",
+                txid: "a7244fa4c353a496c02e7fac8d635856094761e1834cf0354f9eb04d5b0ef96a",
+            },
         },
         Subject {
             name: "serve-credit-only",
             source: "shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json (no pqc_auths by consensus, CEN-H20; signed over the pass record instead, CEN-J10: no preimage)",
-            tx: json_hex_field(
-                &manifest("tests/fixtures/serve_credit_tx_parity_v1.json"),
-                "tx_hex",
-            ),
+            bytes: SubjectBytes::Fixture {
+                path: "tests/fixtures/serve_credit_tx_parity_v1.json",
+                field: "tx_hex",
+            },
         },
     ]
 }
@@ -189,20 +227,24 @@ fn subjects() -> Vec<Subject> {
 /// empty payload lists — for the C++ leg's capture mode to fill from the
 /// oracle. Run once, before the C++ assembly was deleted; kept so the
 /// fixture's construction is reproducible from a checkout and a build at
-/// the pre-deletion era, not a one-off.
+/// the pre-deletion era, not a one-off. That era is also the one whose
+/// captured chains hold the six vector-sourced subjects (`dev@ad557ac5a`);
+/// on a later tree [`SubjectBytes::read`] says so rather than emitting a
+/// fixture with different bytes under the same names.
 #[test]
 #[ignore = "writes tests/fixtures/pqc_signing_preimage_v1.json (inputs only; the C++ leg's capture mode fills the payloads)"]
 fn emit_pqc_signing_preimage_kat_inputs() {
     let entries: Vec<Value> = subjects()
         .into_iter()
         .map(|s| {
-            let tx = Transaction::from_bytes(&s.tx).expect("a captured transaction parses");
-            assert_eq!(tx.serialize(), s.tx, "{}: the bytes round-trip", s.name);
+            let bytes = s.bytes.read();
+            let tx = Transaction::from_bytes(&bytes).expect("a captured transaction parses");
+            assert_eq!(tx.serialize(), bytes, "{}: the bytes round-trip", s.name);
             serde_json::json!({
                 "name": s.name,
                 "source": s.source,
                 "inputs": tx.prefix.inputs.len(),
-                "tx_hex": hex_str(&s.tx),
+                "tx_hex": hex_str(&bytes),
                 "payloads_hex": [],
                 "signed_hashes_hex": [],
             })
