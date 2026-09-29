@@ -30,10 +30,11 @@
 //! is complete at genesis too: at height `0` the derivation is the
 //! *observation* that the amount is configured (F11), which is what the
 //! C++ does (`validate_miner_transaction`: `base_reward = money_in_use;
-//! return true`). The priced value stays local. F14b reads it inside
-//! `validate` when the median exists, and the amount `connect` persists
-//! is the paid reward that row produces — so [`Emission`] does not ride
-//! on the verdict until then.
+//! return true`). The priced value is F14b's operand: `rules::reward::
+//! judge_emission` applies the weight penalty to it under CEN-G6's median
+//! (slice 7 commit 5), and the paid reward, its split and the advanced
+//! supply ride on the verdict as `PaidEmission`; [`Emission`] itself stays
+//! local to `validate`.
 //!
 //! Four rows hold **by construction** (`RowStatus::ByConstruction`, Q4).
 //! F2 (the wire admits one transaction version) and F8 (one output tag)
@@ -43,9 +44,10 @@
 //!
 //! # What is not here
 //!
-//! F14/F14b (the weight penalty), F16 (the split) and F18 (the exact
-//! payout) need the effective median in force for the candidate — CEN-G6's
-//! derivation, slice 7 — and stay `pending` (Q1 (a)). F17 needs its
+//! F14/F14b (the weight penalty), F16 (the split) and G12 (the supply)
+//! are `rules::reward`'s — the definition chain after the medians (slice 7
+//! commit 5). F18 (the exact payout) needs F17's `miner_fee_income` and is
+//! wave B's. F17 needs its
 //! operand `n` ruled: the C++ read `frozen_segment_count(leaf_count)`, a
 //! partition of tree leaves the retired freeze pipeline defined (`PDM-Q12`);
 //! the tree and its per-height count are written and readable since DRS-E3
@@ -113,8 +115,8 @@ pub(crate) fn economics() -> &'static EconomicParams {
 /// `the_emission_split_epoch_is_the_hardfork_tables_first_row` pins this
 /// constant to those three tables.
 ///
-/// CEN-F16 passes it to `shekyl_economics::compute_emission_split` when the
-/// split lands (slice 7; the row is `pending` on CEN-G6's median). It
+/// CEN-F16 passes it to `shekyl_economics::compute_emission_split`
+/// (`rules::reward::judge_emission`, slice 7 commit 5). It
 /// becomes a [`crate::RuleSet`] field when a schedule step names a different
 /// epoch. Until then a field would be copied into every rule-set mismatch
 /// and no row would read it.
@@ -123,12 +125,6 @@ pub(crate) fn economics() -> &'static EconomicParams {
 /// the producer's split (`shekyl-block-template`) is priced at the epoch
 /// the validator will judge, read here, not restated.
 pub const EMISSION_SPLIT_EPOCH: BlockHeight = BlockHeight::from_raw(1);
-
-// The census pin is `use EMISSION_SPLIT_EPOCH as _`, and an unused import
-// does not count as a read. F16 is the reader. Until that call exists, the
-// lib holds the value so deleting the constant fails this crate, not only
-// its tests.
-const _: BlockHeight = EMISSION_SPLIT_EPOCH;
 
 // ---------------------------------------------------------------------------
 // Stateless predicates (form)
@@ -394,16 +390,19 @@ impl Rule for F20 {
 }
 
 /// What the 4.F derivations established for the candidate: the emission it
-/// is priced at. F14b reads this inside `validate` when the median exists
-/// and produces the paid reward `connect` persists; until that row lands
-/// the value stays here, recorded in coverage, and off the verdict
-/// (`CHAIN_RULES_SLICE_4.md` §4).
+/// is priced at, and the parent's gross emission it was priced from.
+/// `rules::reward::judge_emission` reads both: the subsidy as F14b's
+/// operand, the accumulator as G12's (the one parent read, made here and
+/// not repeated — F19's single-read discipline).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Emission {
     /// The volume window the release multiplier read (CEN-F20).
     tx_volume: TxVolume,
     /// The subsidy for this height.
     subsidy: Subsidy,
+    /// The parent's `coins_generated` — zero at genesis — the accumulator
+    /// F13 priced from and G12 advances.
+    parent_coins_generated: AtomicUnits,
 }
 
 /// The subsidy a candidate is priced at.
@@ -423,6 +422,19 @@ pub(crate) enum Subsidy {
 }
 
 impl Emission {
+    /// The volume window the release multiplier read (CEN-F20) — F14b's
+    /// operand through `paid_block_reward`.
+    pub(crate) const fn tx_volume(&self) -> TxVolume {
+        self.tx_volume
+    }
+
+    /// The subsidy this candidate is priced at — F14b's other operand,
+    /// and the arm (configured at genesis, derived after) the reward chain
+    /// branches on.
+    pub(crate) const fn subsidy(&self) -> Subsidy {
+        self.subsidy
+    }
+
     /// Derive the 4.F definitions for a candidate connecting at
     /// `connecting`, recording F11, F13, F15 and F20 as evaluated. Reads
     /// the parent's `coins_generated` and the two prefix sums that bound
@@ -439,29 +451,41 @@ impl Emission {
     ) -> Result<Self, Fault<V::Fault>> {
         let params = economics();
         let tx_volume = F20::window(view, connecting, coverage)?;
-        let subsidy = match connecting.to_raw().checked_sub(1) {
+        let (subsidy, parent_coins_generated) = match connecting.to_raw().checked_sub(1) {
             None => {
                 coverage.insert(F11::ROW);
                 coverage.insert(F13::ROW);
                 coverage.insert(F15::ROW);
-                Subsidy::Configured
+                (Subsidy::Configured, AtomicUnits::ZERO)
             }
             Some(parent) => {
-                let already_generated = recorded(view, BlockHeight::from_raw(parent))?
-                    .coins_generated
-                    .to_raw();
+                let parent_coins = recorded(view, BlockHeight::from_raw(parent))?.coins_generated;
+                let already_generated = parent_coins.to_raw();
                 let base = priced(base_block_reward(already_generated, params));
                 let effective = priced(effective_emission(already_generated, tx_volume, params));
                 coverage.insert(F11::ROW);
                 coverage.insert(F13::ROW);
                 coverage.insert(F15::ROW);
-                Subsidy::Derived {
-                    base: AtomicUnits::from_raw(base),
-                    effective: AtomicUnits::from_raw(effective),
-                }
+                (
+                    Subsidy::Derived {
+                        base: AtomicUnits::from_raw(base),
+                        effective: AtomicUnits::from_raw(effective),
+                    },
+                    parent_coins,
+                )
             }
         };
-        Ok(Self { tx_volume, subsidy })
+        Ok(Self {
+            tx_volume,
+            subsidy,
+            parent_coins_generated,
+        })
+    }
+
+    /// The parent's gross emission (zero at genesis) — G12's operand, read
+    /// once.
+    pub(crate) const fn parent_coins_generated(&self) -> AtomicUnits {
+        self.parent_coins_generated
     }
 }
 

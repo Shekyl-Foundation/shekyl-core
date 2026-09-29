@@ -336,8 +336,11 @@ int main(int argc, char* argv[])
     LOG_ERROR("Error opening database: " << e.what());
     return 1;
   }
-  const std::pair<uint8_t, uint64_t> regtest_hard_forks[3] = {
-    std::make_pair(1, 0),
+  // The daemon's regtest table (`cryptonote_core.cpp`, `core::init`): the
+  // issued networks' one row, version 1 at height 1. The two must agree or
+  // this export judges a regtest chain under a different CEN-F21 epoch
+  // than the daemon that built it.
+  const std::pair<uint8_t, uint64_t> regtest_hard_forks[2] = {
     std::make_pair(mainnet_hard_forks[num_mainnet_hard_forks - 1].version, 1),
     std::make_pair(0, 0)};
   const cryptonote::test_options regtest_test_options = {regtest_hard_forks, 0};

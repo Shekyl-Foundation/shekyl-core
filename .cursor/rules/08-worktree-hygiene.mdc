@@ -68,6 +68,29 @@ text** — and what closes or reopens that finding.
   written against was not there (`:4354` was `:4353` again). Nothing was
   written; the file was restored from `HEAD`; the edit was re-run against
   the restored text and applied cleanly. See "The edit form that notices".
+- **`wt-e7-c3` (2026-09-27/28) — the mechanism, stated as a rule.** Three
+  instances in twenty-six hours on one worktree, one signature, three
+  intervals: `read_tests.rs` **19 seconds** after its commit (sixteen); six
+  files **two hours** after theirs, all with one `mtime` `00:06:14`
+  (seventeen); two chain-ingest files **54 minutes** after theirs, one
+  `mtime` `03:20:03.894` (eighteen). Every file was one `cargo fmt` had
+  reformatted while an editor buffer held it; not one was a file only the
+  edit tool had touched; every working copy held the pre-`fmt` bytes
+  (`rustfmt --check` passes on each `HEAD` blob, fails on each working
+  copy). Sixteen predicted seventeen's shape; seventeen and eighteen
+  confirmed it at intervals that share nothing. So the entry stops
+  counting and states what it has established:
+
+  **Any file `cargo fmt` (or any out-of-editor writer) rewrites while a
+  buffer holds it will revert to the buffer's bytes at an unpredictable
+  later moment — the trigger is a single flush event touching every open
+  buffer, and the interval is arbitrary. Nothing in the flush announces
+  itself. Only constraint 1 catches it, and only if `git status` is run
+  after the rewrite, not merely before the next commit.** Sixteen and
+  seventeen were caught by constraint 1; eighteen by a `git status` run for
+  an unrelated reason — habit, the weakest catch. Run `git status` after
+  every `cargo fmt`. The falsifier for the mechanism stands as `wt-e6-s6`
+  wrote it.
 
 Most of these were caught by a human or an agent reading the diff. That does not
 scale, and it is not the dangerous case. **The dangerous case is a drift

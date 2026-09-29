@@ -16,6 +16,32 @@ pub const SCALE: u64 = GENERATED_SCALE;
 /// fee floor read the field, not a caller-supplied copy.
 pub const FULL_REWARD_ZONE: u64 = GENERATED_BLOCK_WEIGHT_FULL_REWARD_ZONE;
 
+/// The long-term median's window in blocks (CEN-G6): the long-term
+/// effective median is the median of `long_term_weight` over the
+/// `min(window, height)` recorded blocks below the connecting one, floored
+/// at [`FULL_REWARD_ZONE`].
+///
+/// Generated from `config/consensus_constants.json`
+/// `block_weight_long_term_window_blocks` (100 000 ≈ 139 days at 120 s,
+/// C2-R2 Q2). The C++ `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` is
+/// defined from the same key. Below this height the window *is* the chain
+/// — the early-chain arm C2-R2 Q2 names — and the surge factor is the
+/// only bound on weight growth.
+pub const BLOCK_WEIGHT_LONG_TERM_WINDOW: u64 = GENERATED_BLOCK_WEIGHT_LONG_TERM_WINDOW;
+
+/// The short-term median's window in blocks (CEN-G6b): the median of
+/// `weight` over the last `min(window, height)` blocks, clamped to
+/// `[LTEM, S · LTEM]` by [`effective_median`](crate::effective_median);
+/// the block-weight limit is twice the result.
+///
+/// Generated from `config/consensus_constants.json`
+/// `block_weight_short_term_window_blocks`. Three readers, one key: the
+/// median, the fee estimator's `grace_blocks` assertion and the RPC
+/// `grace_blocks` ceiling (the ceiling is the median's horizon by
+/// derivation). The C++ `CRYPTONOTE_REWARD_BLOCKS_WINDOW` is defined from
+/// the same key.
+pub const BLOCK_WEIGHT_SHORT_TERM_WINDOW: u64 = GENERATED_BLOCK_WEIGHT_SHORT_TERM_WINDOW;
+
 /// The emission curve's asymptote in atomic units
 /// (`emission_curve_asymptote` from `config/economics_params.json`) — the
 /// value `curve = (asymptote − already_generated) >> esf` decays toward,

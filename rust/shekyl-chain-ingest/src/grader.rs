@@ -553,7 +553,7 @@ mod tests {
               "rows": [
                 {"id": "CEN-A1", "state": "CHECKED-CONFORMANT"},
                 {"id": "CEN-B5", "state": "CHECKED-CONFORMANT"},
-                {"id": "CEN-G6", "state": "DIVERGENT"},
+                {"id": "CEN-F17", "state": "DIVERGENT"},
                 {"id": "CEN-L8", "state": "UNREVIEWED"},
                 {"id": "CEN-Z9", "state": "DIVERGENT"}
               ],
@@ -611,10 +611,14 @@ mod tests {
             b5.component_acceptance,
             Some(GradedAcceptance::AcceptedAsCorrect)
         );
-        // G6: DIVERGENT producer, not exercised: nothing graded, nothing owed.
-        let g6 = row(&g, "CEN-G6");
-        assert_eq!(g6.verdict, VerdictEvidence::NotExercised);
-        assert!(matches!(g6.component, ComponentEvidence::Borrowed { .. }));
+        // F17: DIVERGENT producer (the burn's, per DELETED_BY — the one
+        // passed-through fact left after E6 slice 7), not exercised:
+        // nothing graded, nothing owed. Until slice 7 this fixture row was
+        // CEN-G6, a producer of the weights; the medians are the verdict's
+        // now and G6 is graded like any landed row.
+        let f17 = row(&g, "CEN-F17");
+        assert_eq!(f17.verdict, VerdictEvidence::NotExercised);
+        assert!(matches!(f17.component, ComponentEvidence::Borrowed { .. }));
         // X1: unrecorded → UNREVIEWED by absence; component real but grants nothing.
         let x1 = row(&g, "CEN-X1");
         assert!(!x1.recorded);
@@ -626,7 +630,7 @@ mod tests {
         assert_eq!(g.derived_and_conformant, 2);
         assert_eq!(
             g.borrowed, 1,
-            "G6 remains; B5 stopped borrowing with DRS-E3"
+            "F17 remains; B5 stopped borrowing with DRS-E3, G6 with E6 slice 7"
         );
         assert_eq!(g.not_exercised, 4);
     }
@@ -730,7 +734,7 @@ mod tests {
         let g = grade_run(&register(), &obs);
         assert!(g.owed_reviewed_divergence.contains(&"CEN-Z9".to_owned()));
         assert!(
-            !g.owed_reviewed_divergence.contains(&"CEN-G6".to_owned()),
+            !g.owed_reviewed_divergence.contains(&"CEN-F17".to_owned()),
             "borrowed: not graded"
         );
         assert!(g
@@ -824,6 +828,11 @@ mod tests {
                 assert!(p.contains_key(row), "{row} from {}", d.field);
             }
         }
-        assert_eq!(p.get("CEN-G6"), Some(&"weight"), "first field wins");
+        assert_eq!(p.get("CEN-F17"), Some(&"burned"));
+        assert_eq!(
+            p.len(),
+            2,
+            "F17 and G11, the burn's: every other producer row landed and left DELETED_BY"
+        );
     }
 }

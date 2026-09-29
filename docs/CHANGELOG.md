@@ -181,6 +181,19 @@
 
 ### Daemon
 
+- **Regtest carries the issued networks' hard-fork table.** The
+  inherited regtest table `{(1, 0), (latest, 1)}` lost its second row to
+  `HardFork::add_fork`'s version guard (mainnet's latest version is 1) and
+  became `[(1, 0)]`, so `get_earliest_ideal_height_for_version(
+  HF_VERSION_SHEKYL_NG)` — CEN-F21's epoch, the height the staker share's
+  decay is measured from — was 0 on regtest and 1 on mainnet, testnet and
+  stagenet. Regtest coinbases, the relay fee floor and
+  `get_info.staker_emission_share_effective` were one share-unit off the
+  issued networks at ≈ 5.7 % of heights. The table is now version 1 at
+  height 1 on regtest too (`cryptonote_core.cpp`,
+  `shekyl_e2_trace_export.cpp`); a regtest chain built before this refuses
+  to replay under the corrected daemon and is regenerated
+  (`CHAIN_RULES_SLICE_7.md` §3.11).
 - **Thread budgets are a ledger and one constructor.** A runtime names
   its worker count and its blocking-pool cap. A dedicated thread is one
   OS thread with no blocking pool; the timing engine's thread is that
@@ -220,6 +233,24 @@
 - **CompleteTree left the prompt.** `--complete-tree-foundation` is a
   hidden startup flag. Unbounded disk, no reward. The password is not
   kept after that call.
+
+### Consensus validator — census 4.G's medians and the paid reward (DRS-E6 slice 7, commits 3–5)
+
+- **The Rust validator derives the block-weight medians and the paid
+  reward.** CEN-G6/G6b (`Medians::derive`, `Weights::derive` over the two
+  windows, now one key each in `consensus_constants.json`) and
+  CEN-F14/F14b/F16/G12 (`judge_emission`: a block over twice the effective
+  median is refused; the penalised reward, its miner/staker split and the
+  supply accumulator are the verdict's). `ConnectFacts` carries only
+  `burned`; the store schema is 16. Held to six daemon-built chains at every
+  height on roots, weights and accumulator (2 408 / 2 408), and to the C++
+  daemon live: a Rust-built block at the consensus bound is accepted, one
+  body over refused (`CHAIN_RULES_SLICE_7.md` §3.5, §3.11).
+- **The conformance register's CEN-G6/G6b rows are CHECKED-CONFORMANT.**
+  Both were graded DIVERGENT on 2026-09-11 for the shipped ×50 surge factor;
+  the factor became the ratified 4 on 2026-09-12 and the rows were not
+  re-graded until this PR. Tally 127 CHECKED-CONFORMANT / 1 DIVERGENT
+  (CEN-I4) / 5 UNREVIEWED, derived from the rows.
 
 ### Consensus validator — census 4.I, the transaction against the chain (DRS-E6 slice 6, commits 3–10)
 

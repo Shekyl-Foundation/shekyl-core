@@ -19,8 +19,10 @@ use core::marker::PhantomData;
 use std::collections::BTreeSet;
 
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
+use shekyl_economics::FULL_REWARD_ZONE;
 use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
+    AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
+    LongTermWeight, PowHash, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
@@ -39,7 +41,7 @@ use crate::substrate::Substrate;
 use crate::tree_growth::TreeFrontier;
 use crate::validate::form;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
-use crate::view::{AtHeight, BlockOutputs, ChainView, RecordedBlock, Tip};
+use crate::view::{AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip};
 
 /// Invariant brand, as in `verdict.rs`.
 type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
@@ -92,7 +94,18 @@ pub struct MockChain {
     recorded: Vec<RecordedBlock>,
     /// `roots[h]` = the tree state at height `h`; `roots.len() == recorded.len() + 1`.
     roots: Vec<CurveTreeRoot>,
+    /// `weights[h]` = block `h`'s two recorded weights; `weights.len() ==
+    /// recorded.len()`. What the store projects from `block_info` for
+    /// CEN-G6's medians (slice 7); [`push`](Self::push) records the
+    /// penalty-free zone for both, the value the C++ floors a short chain's
+    /// median to, so a fixture that is not about weights names none.
+    weights: Vec<RecordedWeights>,
     key_images: BTreeSet<KeyImage>,
+    /// Every transaction identity recorded on the chain — CEN-G1's read.
+    /// The mock cannot derive these from [`RecordedBlock`] (no bodies cross
+    /// the view, G13), so a fixture that lists a recorded transaction
+    /// records its hash here, as the store's `tx_indices` would hold it.
+    transactions: BTreeSet<TxHash>,
 }
 
 impl Default for MockChain {
@@ -100,7 +113,9 @@ impl Default for MockChain {
         Self {
             recorded: Vec::new(),
             roots: vec![CurveTreeRoot::EMPTY],
+            weights: Vec::new(),
             key_images: BTreeSet::new(),
+            transactions: BTreeSet::new(),
         }
     }
 }
@@ -108,16 +123,40 @@ impl Default for MockChain {
 impl MockChain {
     /// Append a block at `tip + 1` and the tree state **after** it — what
     /// `root_at(tip + 2)` will return, and what the header of the block
-    /// after it must carry (CEN-B5).
-    pub fn push(mut self, block: RecordedBlock, root_after: CurveTreeRoot) -> Self {
+    /// after it must carry (CEN-B5). The block's weights are the
+    /// penalty-free zone, both columns; a weights fixture uses
+    /// [`push_weighing`](Self::push_weighing).
+    pub fn push(self, block: RecordedBlock, root_after: CurveTreeRoot) -> Self {
+        let zone = RecordedWeights {
+            weight: BlockWeight::from_raw(FULL_REWARD_ZONE),
+            long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
+        };
+        self.push_weighing(block, root_after, zone)
+    }
+
+    /// [`push`](Self::push) with the block's recorded weights named — what
+    /// `weights_window` will return for its height.
+    pub fn push_weighing(
+        mut self,
+        block: RecordedBlock,
+        root_after: CurveTreeRoot,
+        weights: RecordedWeights,
+    ) -> Self {
         self.recorded.push(block);
         self.roots.push(root_after);
+        self.weights.push(weights);
         self
     }
 
     /// Record a spent key image.
     pub fn with_key_image(mut self, key_image: KeyImage) -> Self {
         self.key_images.insert(key_image);
+        self
+    }
+
+    /// Record a transaction identity as on the chain (CEN-G1's read).
+    pub fn with_transaction(mut self, hash: TxHash) -> Self {
+        self.transactions.insert(hash);
         self
     }
 
@@ -198,6 +237,35 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
         Ok(self.chain.tip())
     }
 
+    /// The store's contract, on the mock's vector: `end` past `tip + 1` is
+    /// `AboveTip`; otherwise the `min(at_most, end)` entries below `end`,
+    /// in height order. A hole cannot occur here — the vector is dense by
+    /// construction — which is why the SI-7 arm is the store's alone to
+    /// test (`read_tests`).
+    fn weights_window(
+        &self,
+        end: BlockHeight,
+        at_most: BlockCount,
+    ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+        // Classified before any conversion: a height no `usize` can index
+        // is past every recorded block, and a count past `usize` takes the
+        // whole prefix — neither is a panic, both are the contract's arms.
+        let Ok(end) = usize::try_from(end.to_raw()) else {
+            return Ok(AtHeight::AboveTip);
+        };
+        if end > self.chain.weights.len() {
+            return Ok(AtHeight::AboveTip);
+        }
+        let span = usize::try_from(at_most.to_raw()).map_or(end, |n| n.min(end));
+        Ok(AtHeight::Recorded(
+            self.chain.weights[end - span..end].to_vec(),
+        ))
+    }
+
+    fn has_transaction(&self, hash: &TxHash) -> Result<bool, Infallible> {
+        Ok(self.chain.transactions.contains(hash))
+    }
+
     /// A mock chain records no outputs, so its tree never grows: the
     /// frontier is empty, every recorded height's outputs are none and its
     /// leaf count is zero. Rules that read the tree's operands (F17, I13)
@@ -261,6 +329,18 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
         Err(Faulted)
     }
 
+    fn weights_window(
+        &self,
+        _: BlockHeight,
+        _: BlockCount,
+    ) -> Result<AtHeight<Vec<RecordedWeights>>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn has_transaction(&self, _: &TxHash) -> Result<bool, Faulted> {
+        Err(Faulted)
+    }
+
     fn tip(&self) -> Result<Option<Tip>, Faulted> {
         Err(Faulted)
     }
@@ -276,6 +356,10 @@ pub enum WithheldRead {
     BlockAt(BlockHeight),
     /// [`ChainView::root_at`] at this height — the curve-tree root.
     RootAt(BlockHeight),
+    /// [`ChainView::weights_window`] ending at this height — the weights
+    /// projection answers `AboveTip` for a height the tip says is
+    /// recorded (slice 7, CEN-G6's read).
+    WeightsBelow(BlockHeight),
 }
 
 /// A [`MockView`] with one per-height read withheld.
@@ -333,6 +417,23 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
 
     fn tip(&self) -> Result<Option<Tip>, Infallible> {
         self.inner.tip()
+    }
+
+    fn weights_window(
+        &self,
+        end: BlockHeight,
+        at_most: BlockCount,
+    ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+        if let WithheldRead::WeightsBelow(at) = self.withheld {
+            if end == at {
+                return Ok(AtHeight::AboveTip);
+            }
+        }
+        self.inner.weights_window(end, at_most)
+    }
+
+    fn has_transaction(&self, hash: &TxHash) -> Result<bool, Infallible> {
+        self.inner.has_transaction(hash)
     }
 
     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {

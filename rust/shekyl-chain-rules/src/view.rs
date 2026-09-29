@@ -39,11 +39,33 @@
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage};
+use shekyl_types::{
+    BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, GlobalOutputIndex, KeyImage,
+    LongTermWeight, TxHash,
+};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::BlockHeader;
 
 use crate::tree_growth::TreeFrontier;
+
+/// The two weights the store records for one block (`block_info.weight`,
+/// `block_info.long_term_weight`) — what CEN-G6's two rolling medians are
+/// over. A projection of the row, not the row: the window read that
+/// returns these decodes each `block_info` once and hands back only the
+/// columns the medians consume, which is why it is a read of its own
+/// rather than a loop over [`ChainView::block_at`] (E6 slice 7 Q2, ruled
+/// (b) on the Pi 4 floor — 36.6 ms against 598 ms for the 100 000-row
+/// window).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordedWeights {
+    /// The block's wire weight (`Transaction::weight` summed, CEN-F14's
+    /// operand) — CEN-G6b's short-term median is over these.
+    pub weight: BlockWeight,
+    /// The block's long-term weight, the clamp of `weight` to
+    /// `[LTEM/1.7, LTEM·1.7]` at its own connect (CEN-G6b) — CEN-G6's
+    /// long-term median is over these.
+    pub long_term_weight: LongTermWeight,
+}
 
 /// A by-height lookup against the recorded chain.
 ///
@@ -297,4 +319,35 @@ pub trait ChainView<'id> {
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
     }
+
+    /// The recorded weights of the up-to-`at_most` blocks **strictly
+    /// below** `end`, in height order — heights `[end − k, end)` with
+    /// `k = min(at_most, end)`. `end` is the height the caller is judging
+    /// *for* (a candidate's connecting height): the window holds what was
+    /// recorded before it, never the candidate itself. `end` above
+    /// `tip + 1` is [`AtHeight::AboveTip`] — the caller asked about blocks
+    /// the chain does not have; a hole inside the window is the view's
+    /// fault (SI-7: `block_info` is dense to the tip), never a shorter
+    /// vector.
+    ///
+    /// CEN-G6 / G6b: the long-term median over the last `min(100 000, h)`
+    /// long-term weights and the short-term median over the last 100
+    /// weights — one read for the long window, the short window its
+    /// suffix. The C++'s `get_long_term_block_weight_median(start, n)` and
+    /// `get_last_n_blocks_weights(n)`, as one bulk read (E6 slice 7 Q2).
+    fn weights_window(
+        &self,
+        end: BlockHeight,
+        at_most: BlockCount,
+    ) -> Result<AtHeight<Vec<RecordedWeights>>, Self::Fault>;
+
+    /// Whether a transaction with identity `hash` is recorded on the chain
+    /// — in any block, the miner transaction included (the store records
+    /// it under its identity like a listed one; the C++'s `tx_exists`).
+    /// By hash, so `bool` and not [`AtHeight`]: absence has one meaning.
+    ///
+    /// CEN-G1 (no listed transaction may already exist in the chain). The
+    /// store has carried this membership since S-CHAIN-W (`tx_indices`);
+    /// slice 7 lifts it onto the view.
+    fn has_transaction(&self, hash: &TxHash) -> Result<bool, Self::Fault>;
 }

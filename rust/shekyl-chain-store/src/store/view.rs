@@ -85,8 +85,10 @@
 //! every classified read, not only on a read of the tip itself
 //! (`chain_reads` module docs, *The tip is one decoded read*).
 
-use shekyl_chain_rules::{AtHeight, BlockOutputs, ChainView, RecordedBlock, Tip, TreeFrontier};
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_chain_rules::{
+    AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip, TreeFrontier,
+};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
 
 use crate::codec::BlockInfo;
 
@@ -94,6 +96,7 @@ use super::chain_reads::{self, ReadFault};
 use super::curve_reads;
 use super::error::StoreError;
 use super::leaf_reads;
+use super::tx_reads;
 use super::write::WriteBatch;
 
 /// The recorded chain as this batch sees it — including the batch's own
@@ -219,5 +222,25 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, StoreError> {
         let tip = self.tip_row()?;
         leaf_reads::outputs_at(self.batch.txn(), tip.as_ref(), height).map_err(|f| self.arm(f))
+    }
+
+    /// The two E6 slice 7 reads. The window is one range cursor over
+    /// `block_info` ([`chain_reads::weights_below`], shared with
+    /// `ReadSnapshot::weights_window`), classified against the same tip row
+    /// every other height-keyed read here uses; a hole inside the window is
+    /// SI-7 and arms the batch's poison. Membership is `tx_indices`'s
+    /// ([`tx_reads::has_transaction`], shared with the snapshot).
+    fn weights_window(
+        &self,
+        end: BlockHeight,
+        at_most: BlockCount,
+    ) -> Result<AtHeight<Vec<RecordedWeights>>, StoreError> {
+        let tip = self.tip_row()?;
+        chain_reads::weights_below(self.batch.txn(), tip.as_ref(), end, at_most)
+            .map_err(|f| self.arm(f))
+    }
+
+    fn has_transaction(&self, hash: &TxHash) -> Result<bool, StoreError> {
+        tx_reads::has_transaction(self.batch.txn(), hash).map_err(|f| self.arm(f))
     }
 }

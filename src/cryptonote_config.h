@@ -50,7 +50,14 @@
 
 // SHEKYL_EMISSION_CURVE_ASYMPTOTE/COIN/emission constants are generated from config/economics_params.json.
 
-#define CRYPTONOTE_REWARD_BLOCKS_WINDOW                 100
+// The short-term block-weight median's window (CEN-G6b), generated from
+// config/consensus_constants.json (`block_weight_short_term_window_blocks`)
+// so that C++ and Rust read one value; the legacy name is kept for its
+// call sites (rule 93: rename when touched). Three readers, one key: the
+// median (update_next_cumulative_weight_limit), the fee estimator's
+// grace_blocks assertion, and the RPC grace_blocks ceiling. Rust owner:
+// shekyl-economics::params::BLOCK_WEIGHT_SHORT_TERM_WINDOW.
+#define CRYPTONOTE_REWARD_BLOCKS_WINDOW                 SHEKYL_BLOCK_WEIGHT_SHORT_TERM_WINDOW_BLOCKS
 #define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2    60000 //size of block (bytes) after which reward for block calculated using block size
 #define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V1    20000 //size of block (bytes) after which reward for block calculated using block size - before first fork
 // The penalty-free zone is generated from config/consensus_constants.json
@@ -58,7 +65,11 @@
 // value; the legacy name is kept for its call sites (rule 93: rename when
 // touched). Rust owner: shekyl-economics::EconomicParams::full_reward_zone.
 #define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5    SHEKYL_BLOCK_WEIGHT_FULL_REWARD_ZONE_BYTES //size of block (bytes) after which reward for block calculated using block size - second change, from v5
-#define CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE   100000 // size in blocks of the long term block weight median window
+// The long-term block-weight median's window (CEN-G6), generated from
+// config/consensus_constants.json (`block_weight_long_term_window_blocks`);
+// the legacy name is kept for its call sites (rule 93). Rust owner:
+// shekyl-economics::params::BLOCK_WEIGHT_LONG_TERM_WINDOW.
+#define CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE   SHEKYL_BLOCK_WEIGHT_LONG_TERM_WINDOW_BLOCKS // size in blocks of the long term block weight median window
 #define CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE          600
 // Display precision and atomic-unit constant are generated from config/economics_params.json.
 
@@ -67,7 +78,6 @@
 #define FEE_PER_BYTE                                    ((uint64_t)300)
 #define DYNAMIC_FEE_PER_KB_BASE_FEE                     ((uint64_t)2000000) // 2 * pow(10, 6)
 #define DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD            ((uint64_t)10000000000) // 10 * pow(10, 9)
-#define DYNAMIC_FEE_PER_KB_BASE_FEE_V5                  ((uint64_t)2000000 * (uint64_t)CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2 / CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5)
 #define DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT         ((uint64_t)3000)
 
 // Four-component economics constants are generated from config/economics_params.json.

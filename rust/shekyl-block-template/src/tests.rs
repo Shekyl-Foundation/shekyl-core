@@ -180,10 +180,15 @@ fn admitted(chain: &MockChain, template: Template) -> Vec<CenRow> {
 // ---------------------------------------------------------------------------
 
 /// The 4.F rows the validator has landed: every one of them judged the
-/// template, and none refused it. Rows this list omits (F14, F16–F18) are
-/// pending on CEN-G6 (slice 7) and are held by construction below until
-/// they land; when they land they belong here.
-const LANDED_MINER_ROWS: [CenRow; 8] = [
+/// template, and none refused it. F14, F14b and F16 landed with slice 7
+/// commit 5 (the reward chain after the medians) and judge every template,
+/// the genesis one included — its arm records them as evaluated. The rows
+/// this list still omits (F17, F18) are wave B's and are held by
+/// construction below until they land; when they land they belong here.
+/// The 4.G rows that judge a template (G6, G6b, G12) are the validator's
+/// chain-side definitions, held to the corpus by the ingest's oracles, not
+/// miner rows — this list is the producer/validator ratchet on 4.F.
+const LANDED_MINER_ROWS: [CenRow; 11] = [
     CenRow::F1,
     CenRow::F3,
     CenRow::F4,
@@ -192,6 +197,9 @@ const LANDED_MINER_ROWS: [CenRow; 8] = [
     CenRow::F7,
     CenRow::F9,
     CenRow::F10,
+    CenRow::F14,
+    CenRow::F14b,
+    CenRow::F16,
 ];
 
 #[test]

@@ -20,7 +20,7 @@ use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    at, candidate, connect_chain, connect_chain_with_burn, connect_genesis,
+    at, candidate, connect_chain, connect_chain_with_burn, connect_genesis, connect_genesis_judged,
     connect_with_image_planted_under_the_token, facts, judge, spend_at, spendable_prefix,
     FIRST_SPEND_HEIGHT,
 };
@@ -46,7 +46,7 @@ use shekyl_chain_rules::harness::fixture;
 fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     let path = tmp("connect-genesis");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (connected, block) = connect_genesis(&store, 0);
+    let (connected, block, (weights, emission)) = connect_genesis_judged(&store, 0);
     assert_eq!(connected.height, BlockHeight::ZERO);
     // miner tx: spent_keys 0, tx_indices 1, txs_pruned 1, txs_prunable 1,
     // txs_prunable_hash 1, output_txs 1, output_amounts 1, tx_outputs 1;
@@ -86,24 +86,37 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .value()
         .decode()
         .expect("decodes");
+    // Every consensus-visible column is the verdict's (E6 slice 2, 7):
+    // the store recorded what the validator derived and nothing a fixture
+    // handed. The genesis fixture's coinbase pays nothing, so G12 starts
+    // the accumulator at zero; the medians are the zone on an empty
+    // window, and the coinbase-only block's weight clamps to the zone's
+    // lower long-term arm.
     assert_eq!(
         info,
         BlockInfo {
             timestamp: shekyl_types::Timestamp::from_raw(1_000),
-            coins_generated: AtomicUnits::from_raw(1_000_000),
-            weight: shekyl_types::BlockWeight::from_raw(1_000),
-            // Derived by the validator, not passed through: block 0's work
-            // is its own target, 1 (CEN-D4; E6 slice 2).
+            coins_generated: emission.coins_generated,
+            weight: weights.weight,
+            // Block 0's work is its own target, 1 (CEN-D4; E6 slice 2).
             cumulative_difficulty: CumulativeDifficulty::from_raw(1),
             hash: shekyl_types::BlockHash::from(block_hash),
             rct_outputs: 1,
-            long_term_weight: shekyl_types::LongTermWeight::from_raw(900),
+            long_term_weight: weights.long_term_weight,
             // `cum(0) == |transactions(0)|`: the genesis fixture lists none.
             cumulative_tx_count: 0,
-            // The value handed **for** height 0, read back at height 0
-            // (SCR-19): the fixture's `300_000 + 7 * h`.
-            long_term_effective_median: shekyl_types::LongTermWeight::from_raw(300_000),
+            // The median in force **for** height 0, at height 0 (SCR-19).
+            long_term_effective_median: weights.medians.long_term_effective_median,
         }
+    );
+    assert_eq!(emission.coins_generated, AtomicUnits::ZERO);
+    assert_eq!(
+        weights.medians.long_term_effective_median.to_raw(),
+        shekyl_economics::FULL_REWARD_ZONE
+    );
+    assert_eq!(
+        u64::try_from(block.miner_transaction.weight()).expect("fits"),
+        weights.weight.to_raw()
     );
     assert_eq!(
         snap.open_table(HF_VERSIONS)
@@ -283,10 +296,10 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
 
     let out: Result<(Connected, Connected), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let c0 = batch.connect(judge(&view, g)?, facts(s - 1, 0), RuleSet::GENESIS)?;
+        let c0 = batch.connect(judge(&view, g)?, facts(0), RuleSet::GENESIS)?;
         // The spend block is validated against a view that already holds
         // its parent and connected in the same batch.
-        let c1 = batch.connect(judge(&view, b1)?, facts(s, 25), RuleSet::GENESIS)?;
+        let c1 = batch.connect(judge(&view, b1)?, facts(25), RuleSet::GENESIS)?;
         Ok((c0, c1))
     });
     let (c0, c1) = out.expect("both connect");
@@ -458,7 +471,7 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
     let b1 = candidate(s, hashes[at(s - 1)], vec![spend_at(&hashes, s, 9, 2)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(s, 4), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b1)?, facts(4), RuleSet::GENESIS)?)
     });
     out.expect("the spend block connects");
     // `OUTPUT_TXS`: one more coinbase output, plus the spend's two (CEN-I1's
@@ -526,8 +539,8 @@ fn a_block_whose_parent_is_not_the_tip_is_si2() {
         let view = batch.chain_view();
         let first = judge(&view, sibling)?;
         let second = judge(&view, stale)?; // judged against the same tip: passes A2
-        batch.connect(first, facts(1, 0), RuleSet::GENESIS)?; // the tip moves
-        Ok(batch.connect(second, facts(1, 0), RuleSet::GENESIS)?) // stale: SI-2
+        batch.connect(first, facts(0), RuleSet::GENESIS)?; // the tip moves
+        Ok(batch.connect(second, facts(0), RuleSet::GENESIS)?) // stale: SI-2
     });
     expect_row(&out, StoreInvariant::TipMismatch);
     assert_eq!(StoreInvariant::TipMismatch.row(), 2);
@@ -563,7 +576,7 @@ fn plant_then_connect_is_si9(
     let b1 = candidate(1, genesis.hash(), Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b1)?, facts(0), RuleSet::GENESIS)?)
     });
     expect_row(&out, StoreInvariant::IdNotFresh);
     assert_eq!(
@@ -683,7 +696,7 @@ fn a_key_image_recorded_under_a_judged_token_is_si1() {
     let s = FIRST_SPEND_HEIGHT;
     let hashes = connect_chain(&store, &spendable_prefix(&[]));
     let b1 = candidate(s, hashes[at(s - 1)], vec![spend_at(&hashes, s, 9, 2)]);
-    let out = connect_with_image_planted_under_the_token(&store, b1, s);
+    let out = connect_with_image_planted_under_the_token(&store, b1);
     expect_row(&out, StoreInvariant::KeyImageNotFresh);
     let snap = store.begin_read().expect("read");
     assert_eq!(
@@ -711,13 +724,13 @@ fn the_same_transaction_in_two_blocks_is_si3() {
     let b1_hash = b1.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b1)?, facts(0), RuleSet::GENESIS)?)
     });
     out.expect("block 1");
     let b2 = candidate(2, b1_hash, vec![dup]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b2)?, facts(0), RuleSet::GENESIS)?)
     });
     expect_row(&out, StoreInvariant::TxHashNotFresh);
     cleanup(&path);
@@ -739,7 +752,7 @@ fn a_total_burned_fold_that_would_wrap_is_si8_never_a_saturate() {
         let view = batch.chain_view();
         Ok(batch.connect(
             judge(&view, candidate(1, genesis.hash(), Vec::new()))?,
-            facts(1, 1),
+            facts(1),
             RuleSet::GENESIS,
         )?)
     });
@@ -773,7 +786,7 @@ fn a_root_already_recorded_at_the_connecting_height_is_si4() {
         let view = batch.chain_view();
         Ok(batch.connect(
             judge(&view, candidate(0, BlockHash::NULL, Vec::new()))?,
-            facts(0, 0),
+            facts(0),
             RuleSet::GENESIS,
         )?)
     });
@@ -791,11 +804,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
 
     // Fully derived facts (the E6-complete shape): nothing is stamped.
     let derived = ConnectFacts {
-        weight: Fact::derived(shekyl_types::BlockWeight::from_raw(1_000)),
-        long_term_weight: Fact::derived(shekyl_types::LongTermWeight::from_raw(900)),
-        coins_generated: Fact::derived(AtomicUnits::from_raw(1_000_000)),
         burned: Fact::derived(AtomicUnits::ZERO),
-        long_term_effective_median: Fact::derived(shekyl_types::LongTermWeight::from_raw(300_000)),
     };
     let g = candidate(0, BlockHash::NULL, Vec::new());
     let g_hash = g.block.hash();
@@ -844,7 +853,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
     let b1 = candidate(1, g_hash, Vec::new());
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        batch.connect(judge(&view, b1.clone())?, facts(1, 0), RuleSet::GENESIS)?;
+        batch.connect(judge(&view, b1.clone())?, facts(0), RuleSet::GENESIS)?;
         Err(TestErr::Abort)
     });
     assert_eq!(out, Err(TestErr::Abort));
@@ -854,34 +863,25 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         "abort: nothing landed, no new taint"
     );
 
-    // A committed pass-through connect stamps exactly the passed fields.
-    let mut partial = facts(1, 0);
-    partial.burned = Fact::derived(AtomicUnits::ZERO);
+    // A committed pass-through connect stamps exactly the passed fields —
+    // one remains (`burned`, wave B's), so the stamp names one.
+    let passed = facts(0);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, partial, RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b1)?, passed, RuleSet::GENESIS)?)
     });
     out.expect("block 1");
     let prov = store.provenance();
     assert!(!prov.is_parity_evidence());
-    assert_eq!(
-        prov.passed_through().iter().collect::<Vec<_>>(),
-        [
-            "weight",
-            "long_term_weight",
-            "coins_generated",
-            "long_term_effective_median"
-        ]
-    );
+    assert_eq!(prov.passed_through().iter().collect::<Vec<_>>(), ["burned"]);
     assert_eq!(
         prov.coverage_gaps(),
         after_genesis.coverage_gaps(),
         "unchanged"
     );
-    assert!(prov.artifact_stamp().contains(
-        "passed-through=[weight,long_term_weight,coins_generated,\
-         long_term_effective_median] NOT-PARITY-EVIDENCE"
-    ));
+    assert!(prov
+        .artifact_stamp()
+        .contains("passed-through=[burned] NOT-PARITY-EVIDENCE"));
     // Monotone: a later fully-derived connect cannot narrow it, and a
     // read-only reopen reads the same record from the file.
     drop(store);
@@ -942,26 +942,22 @@ fn deleted_by_and_the_persisted_field_names_are_one_list() {
 
 #[test]
 fn passed_through_names_the_rows_that_delete_each_fact() {
-    let all = facts(0, 0);
+    let all = facts(0);
     let remaining: Vec<&str> = all.passed_through().map(|d| d.field).collect();
     assert_eq!(
         remaining,
-        [
-            "weight",
-            "long_term_weight",
-            "coins_generated",
-            "burned",
-            "long_term_effective_median"
-        ],
-        "five: cumulative_difficulty left with E6 slice 2 (CEN-D4 derives it), root_after \
-         with DRS-E3 (validate derives it)"
+        ["burned"],
+        "one: cumulative_difficulty left with E6 slice 2 (CEN-D4), root_after with DRS-E3, the \
+         two weights, the median and coins_generated with E6 slice 7 (CEN-G6/G6b, F14b, G12)"
     );
     let mut some = all;
-    some.coins_generated = Fact::derived(AtomicUnits::from_raw(1_000_000));
     some.burned = Fact::derived(AtomicUnits::ZERO);
     let remaining: Vec<DeletedBy> = some.passed_through().collect();
-    assert_eq!(remaining.len(), 3);
-    assert!(remaining
+    assert!(
+        remaining.is_empty(),
+        "every field derived: nothing passed through"
+    );
+    assert!(ConnectFacts::DELETED_BY
         .iter()
         .all(|d| !d.rows.is_empty() && !d.slice.is_empty()));
     assert!(ConnectFacts::DELETED_BY
@@ -969,7 +965,7 @@ fn passed_through_names_the_rows_that_delete_each_fact() {
         .any(|d| d.field == "burned" && d.rows.contains(&"CEN-F17")));
     assert_eq!(
         ConnectFacts::DELETED_BY.len(),
-        5,
-        "seven until E6 slice 2 derived cumulative_difficulty; six until DRS-E3 derived root_after"
+        1,
+        "seven until E6 slice 2; six until DRS-E3; five until E6 slice 7 commit 5"
     );
 }

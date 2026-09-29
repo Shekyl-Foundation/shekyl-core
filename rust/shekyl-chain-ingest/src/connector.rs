@@ -58,8 +58,8 @@ use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    recorded, validate, AtHeight, CenRow, ChainView, Corrupt, Fault, InvalidBlock, PerHeightRecord,
-    Retry, Stale, StructurallyValid, Verdict, ViewRead,
+    recorded, validate, AtHeight, CenRow, ChainView, Corrupt, EffectiveMedian, Fault, InvalidBlock,
+    PaidEmission, PerHeightRecord, Retry, Stale, StructurallyValid, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
@@ -177,6 +177,22 @@ pub struct Applied {
     /// against the trace's recorded root at that height (CTW-5): the
     /// per-height oracle the LMDB trace makes possible while it exists.
     pub roots: Vec<(BlockHeight, CurveTreeRoot)>,
+    /// Each connected block's weight, long-term weight and the long-term
+    /// effective median it was judged under — the verdict's derivation
+    /// (`ValidatedBlock::weights`, CEN-G6/G6b, slice 7), one per entry of
+    /// `connected`, in the same order. The replay compares each against
+    /// the trace's three recorded values at that height: the C++'s
+    /// `block_info` columns and the exporter's re-derived median — the
+    /// parity oracle for the medians while the LMDB trace exists.
+    pub weights: Vec<(BlockHeight, Weights)>,
+    /// Each connected block's paid emission — the reward F14b priced, its
+    /// split, the accumulator G12 advanced (`ValidatedBlock::emission`,
+    /// slice 7 commit 5) — one per entry of `connected`. The replay
+    /// compares the accumulator against the trace's `coins_generated` at
+    /// that height: the C++'s `block_info.bi_coins`, hence the paid reward
+    /// at every height by difference — the penalty's parity oracle on the
+    /// one captured block over the median.
+    pub emission: Vec<(BlockHeight, PaidEmission)>,
     /// The census rows the connected blocks' verdicts exercised — the
     /// union of each `ChainValid`'s coverage, for the grader's clause (1).
     pub exercised: BTreeSet<&'static str>,
@@ -253,6 +269,12 @@ pub struct ChainFacts {
     pub tx_volume: shekyl_economics::TxVolume,
     /// CEN-C2's median at `connecting`; `None` at genesis.
     pub median_timestamp: Option<shekyl_types::Timestamp>,
+    /// CEN-G6/G6b's two medians at `connecting` — what the producer's
+    /// coinbase is priced against and its body bounded by, read through
+    /// the validator's own definition (`effective_median_at`, slice 7 Q4:
+    /// one derivation, two consumers) and never from the store's recorded
+    /// `long_term_effective_median(tip)`, which is one block stale.
+    pub medians: EffectiveMedian,
 }
 
 /// What the actor is built from.
@@ -408,12 +430,16 @@ impl<F: FactsFor + Send + Sync + 'static> Message<Apply> for Connector<F> {
                         };
                         let hash = valid.block().hash();
                         let root_after = valid.block().root_after();
+                        let weights = *valid.block().weights();
+                        let emission = *valid.block().emission();
                         applied
                             .exercised
                             .extend(valid.coverage().iter().map(CenRow::as_str));
                         batch.connect(valid, facts, in_force)?;
                         applied.connected.push((height, hash));
                         applied.roots.push((height, root_after));
+                        applied.weights.push((height, weights));
+                        applied.emission.push((height, emission));
                     }
                     Ok(Err(refused)) => {
                         applied.refused = Some((height, refused));
@@ -486,7 +512,8 @@ impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F
 
     /// Read on the validator's view, inside a batch that aborts. Every
     /// operand — `total_burned` included — comes off that one view, and
-    /// `tx_volume_window` / `mtp_median_at` are the rules' own definitions.
+    /// `tx_volume_window` / `mtp_median_at` / `effective_median_at` are the
+    /// rules' own definitions.
     /// A hole or a decreasing prefix sum halts the writer; nothing commits.
     async fn handle(
         &mut self,
@@ -514,6 +541,10 @@ impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F
             )?;
             let median_timestamp =
                 definition(batch, shekyl_chain_rules::mtp_median_at(&view, connecting))?;
+            let medians = definition(
+                batch,
+                shekyl_chain_rules::effective_median_at(&view, connecting),
+            )?;
             Ok(ChainFacts {
                 connecting,
                 previous,
@@ -522,6 +553,7 @@ impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F
                 total_burned,
                 tx_volume,
                 median_timestamp,
+                medians,
             })
         })
     }

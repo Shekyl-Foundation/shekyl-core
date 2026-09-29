@@ -9,8 +9,9 @@
 //!
 //! - **A1** — `BlockInfo::cumulative_tx_count` is the store's running total
 //!   (`cum(0) == |txs(0)|`, `cum(h) − cum(h−1) == |txs(h)|`), through a pop
-//!   and a re-connect; `long_term_effective_median` is read back at exactly
-//!   the height it was handed **for** (SCR-19), and the journal reverses it.
+//!   and a re-connect; `long_term_effective_median` is the verdict's median
+//!   in force **for** the height (SCR-19; derived since E6 slice 7), written
+//!   at that height and reversed by the journal.
 //! - **A2** — every table with a writer exists from the seal, none of the
 //!   `Unshaped` ones do, and a sealed file missing one is refused (SI-7).
 //! - **A3** — `txs_pqc_auth_hash` has a row for a 4-part txid and none for
@@ -88,7 +89,7 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     );
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b2)?, facts(second, 0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b2)?, facts(0), RuleSet::GENESIS)?)
     });
     out.expect("reconnect");
     assert_eq!(cum(second) - cum(first), 3);
@@ -101,20 +102,26 @@ fn long_term_effective_median_is_stored_at_the_height_it_is_in_force_for() {
     let path = tmp("a1-ltem-index");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     connect_chain(&store, &[vec![], vec![], vec![]]);
-    // `facts(h, _)` hands a distinct median per height (`300_000 + 7h`); the
-    // row at `h` carries the value handed **for** `h` — not `h − 1`'s, not
-    // `h + 1`'s (SCR-19).
+    // Since E6 slice 7 the row is the **verdict's** median (CEN-G6), not a
+    // handed value: `Medians::derive(connecting)` reads the window that
+    // ends at the connecting height, so the row at `h` can only be the
+    // median in force **for** `h` (SCR-19) — the indexing is the
+    // derivation's, held where the window is (`block_weight_tests`, the
+    // store's conformance test). What the store owns is that it writes the
+    // verdict's value and reverses it: on a light chain every height reads
+    // the zone's floor arm.
+    let zone = LongTermWeight::from_raw(shekyl_economics::FULL_REWARD_ZONE);
     for h in 0..3u64 {
         assert_eq!(
             block_info(&store, h)
                 .expect("row")
                 .long_term_effective_median,
-            facts(h, 0).long_term_effective_median.value,
-            "block_info[{h}] carries the median in force for {h}"
+            zone,
+            "block_info[{h}] carries the median derived for {h}"
         );
     }
-    // A pop of 2 and a re-connect with a different value: the journal
-    // reverses the row, the new connect replaces it.
+    // A pop of 2 and a re-connect: the journal reverses the row, the new
+    // connect writes the re-derived one — and the parent's row is untouched.
     let popped: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
     popped.expect("pop");
     assert!(
@@ -122,25 +129,23 @@ fn long_term_effective_median_is_stored_at_the_height_it_is_in_force_for() {
         "the row went with the block"
     );
     let b1_hash = block_info(&store, 1).expect("row").hash;
-    let mut different = facts(2, 0);
-    different.long_term_effective_median = Fact::passed_through(LongTermWeight::from_raw(424_242));
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let b2 = candidate(2, b1_hash, Vec::new());
-        Ok(batch.connect(judge(&view, b2)?, different, RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b2)?, facts(0), RuleSet::GENESIS)?)
     });
     out.expect("reconnect");
     assert_eq!(
         block_info(&store, 2)
             .expect("row")
             .long_term_effective_median,
-        LongTermWeight::from_raw(424_242)
+        zone
     );
     assert_eq!(
         block_info(&store, 1)
             .expect("row")
             .long_term_effective_median,
-        facts(1, 0).long_term_effective_median.value,
+        zone,
         "the parent's row is not what a connect at 2 writes"
     );
     cleanup(&path);
