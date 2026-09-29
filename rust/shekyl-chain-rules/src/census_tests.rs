@@ -195,6 +195,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::F8,
             CenRow::F19,
             CenRow::F21,
+            CenRow::G3,
+            CenRow::G4,
+            CenRow::G5,
             CenRow::H2,
             CenRow::H8,
             CenRow::H12,
@@ -206,7 +209,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         "slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter; \
          slice 5 Q6: the same version (H2, H13) and tag (H12) for listed transactions, one \
          commitment per output (H8), and a parsed transaction as `tx_form`'s input (H23); \
-         slice 6 Q3: the CT type set plus H15 (I2) and the same version a fourth time (I3)"
+         slice 6 Q3: the CT type set plus H15 (I2) and the same version a fourth time (I3); \
+         slice 7 row 8: every listed body through `tx_form` and `tx_against` with no pool \
+         door and no skip (G3, G4), and the full form the only body a block rule sees (G5)"
     );
     assert!(PolicyRow::ALL
         .iter()
