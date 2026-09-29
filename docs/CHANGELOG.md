@@ -19,7 +19,11 @@
   door for an external `rid`. The wire is uniform either way
   (`enc_label` is fixed-width on every output), so nothing about privacy
   changes; what changes is that a payment between two wallets that pass
-  the `rid` through now attributes on arrival (`ReceiveAttribution::Matched`).
+  the `rid` through can attribute on arrival (`ReceiveAttribution::Matched`).
+  Proven as two halves that meet at the 8-byte plaintext: the sign-bridge
+  test recovers the written label as `Request(rid)`, and the attribution
+  tests match a recovered `Request(rid)` to a stored request; no single
+  test yet crosses payer to payee.
 - Contract: `TxRecipient.rid` (optional `PaymentRequestId`) on
   `build_pending_tx`; wallet-rpc parses it through the shared
   `params::parse_rid` (moved from `receiving.rs`). The send journal's own

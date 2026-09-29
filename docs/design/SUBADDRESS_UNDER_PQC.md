@@ -1438,7 +1438,9 @@ not "unattributed" — only possible if wire were optional (rejected).
   → `construct_output_with_label_plaintext`, exposed as the contract's
   `TxRecipient.rid`; a `rid` the u48 field cannot carry is refused at
   build, never downgraded. The desktop wallet passes a pasted link's `rid`
-  through, so between two of its wallets the cooperative label is live.
+  through. Proven as two halves meeting at the plaintext (sign-bridge
+  recovery of `Request(rid)`; attribution match of a recovered
+  `Request(rid)`); no single test yet crosses payer to payee.
 - [x] `k_label` / `label_tag` HKDF labels in `POST_QUANTUM_CRYPTOGRAPHY.md` + `derivation.rs`.
 - [x] `enc_label` wire field in `CtSigBase` (+ 1-byte `label_tag` parallel to amount).
 - [x] Tx-hash binding via `serialize_ctsig_base`; FCMP++ leaf explicitly excluded.
