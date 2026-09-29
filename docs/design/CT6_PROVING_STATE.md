@@ -280,7 +280,7 @@ DEPENDENCY** (owned elsewhere, not scheduled here), **PENDING AS DERIVATION**
 | **CT-6 Q1** | **Snapshot geometry.** Dense span, sparse spacing `s`, eviction. `s` bounds the worst rewind | **RULED 2026-09-28 — by derivation, and the derivation deletes the geometry it was asked to size.** `s = ⌊budget / rate⌋ = ⌊2.000 / 0.53759⌋ = **3 blocks** (§9). At `s = 3` a sparse tier holds 241 snapshots against a dense ring's 721 — **4.25 MB** bought at the price of a spacing constant, an eviction policy, a dense/sparse boundary and the reader logic across it, on an 8 GB rig. **Ruled: one dense ring over the reorg horizon; the tier geometry, the spacing constant, the eviction policy and the dense/sparse reader logic are deleted from the design.** A rule-21 reopening of this row's own Round-1 shape on its derivation's substrate — the measurement did not fill the constant in, it removed the structure the constant was for. **Scope:** the collapse deletes **`Q1`'s intra-ring geometry only**. `Q2`'s seam and its armed examiner are unaffected — frozen segments remain the landed tier, the ring remains the unfrozen tail's answerer, and the examiner grades exactly as armed at #838 |
 | **CT-6 Q2** | **Alignment.** CT-1 segments are leaf-count-aligned and freeze on burial; snapshots are height-keyed. Do they stay two mechanisms, or does the snapshot subsume the unfrozen-segment recompute (F3a)? | **RULED 2026-09-22 — two mechanisms, one reader**, as proposed. Segments keep the frozen tier; snapshots cover the unfrozen tail; `root_at_count` reads whichever covers the height. Subsuming would rewrite a landed consensus-adjacent boundary to fix a cache, and C4 already forbids the second literal. **The invariant is `total, and identical where both answer` — not `total and non-overlapping`.** The freeze boundary is a *burial condition* (`SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, `segment.rs:69`) that advances as blocks arrive, and it joins two coordinate systems — leaf-count-aligned segments against height-keyed snapshots. **Demanding non-overlap would force eviction (Q1's subject) to track freezing (this row's boundary) in lockstep, re-welding the two mechanisms this ruling separates.** Permitting overlap and requiring agreement keeps them independent, and C1's oracle already supplies the agreement test. Increment 2's red-bite states it in this form |
 | **CT-6 Q3** | **Persistence.** What rides which file, and at which save points | **RULED 2026-09-22, scoped.** Snapshots and the buffer ride the **ledger**; path sets ride the sealed file at existing save points; crash ⇒ rebuild from last save + refetch (C8). **The scope is part of the ruling:** it governs the wallet's **single proving state**, which is what Q5's dissolution establishes there is. **The reason the scope is stated rather than assumed:** C6's `identity-free` is a claim about *bytes*, not *access* (C6 as amended). Public content does not make the file it rides shared, so under a second proving consumer this default would have forced either a read of another identity's sealed file — `WSS-13` relocated, the defect §6.3.3 exists to foreclose — or a duplicate of the public state. Neither was stated, and the default read as though C6 licensed the first. Q5's dissolution removes the second consumer, so the question does not arise; **this row records why the scope is load-bearing rather than incidental** |
-| **CT-6 Q4** | **The advance budget** — the amortized form's own graded quantity: worst-case per-block advance as a fraction of block cadence, on the floor | **PENDING AS DERIVATION — pre-registered at ≤ 10 % of cadence, gated on a re-point.** Pre-registration ahead of the cost is methodologically what §6.3.4 rows 2 and 3 already are, and it carries their rule-21 reopener. **But the field it pre-registers against does not yet measure the quantity it names.** `per_block_advance_worst_case_s` is computed as `replay_median / REPLAY_WINDOW_BLOCKS` (`spend_edge.rs:386`) — a **quotient of the spend replay**, which is a legitimate *pre-build model estimate* (uniform hashing over the window) and an **illegitimate grade afterwards**, because the built advance does work the replay never did: snapshot writes and path capture. **So the pre-registration carries its own condition: increment 4 re-derives the field from the actual advance before anything is graded against this threshold**, rather than inheriting the quotient. A name that matches with a derivation that does not is the defect this catches one increment before it ships. **The re-point is built (increment 4, §10.4):** the field is now the median of a measured series over the built advance — frontier fold, snapshot encode, ring commit — and the retired quotient rides beside it as `per_block_advance_retired_quotient_s` so the two are comparable within one run. Record `schema_version` bumps 2 → 3, because the field changed derivation under an unchanged name, which is this row's own defect class. **Still PENDING:** the threshold is graded on the pinned rig, and increment 4 did not run there. Increment 6 is that seat |
+| **CT-6 Q4** | **The advance budget** — the amortized form's own graded quantity: worst-case per-block advance as a fraction of block cadence, on the floor | **PENDING AS DERIVATION — pre-registered at ≤ 10 % of cadence, gated on a re-point.** Pre-registration ahead of the cost is methodologically what §6.3.4 rows 2 and 3 already are, and it carries their rule-21 reopener. **But the field it pre-registers against does not yet measure the quantity it names.** `per_block_advance_worst_case_s` was computed as `replay_median / REPLAY_WINDOW_BLOCKS` — a **quotient of the spend replay**, which is a legitimate *pre-build model estimate* (uniform hashing over the window) and an **illegitimate grade afterwards**, because the built advance does work the replay never did: snapshot writes and path capture. **So the pre-registration carries its own condition: increment 4 re-derives the field from the actual advance before anything is graded against this threshold**, rather than inheriting the quotient. A name that matches with a derivation that does not is the defect this catches one increment before it ships. **The re-point is built (increment 4, §10.4):** the field is now the median of a measured series `AdvanceRig` takes over the built advance — frontier fold, snapshot encode, ring commit — and the retired quotient rides beside it as `per_block_advance_retired_quotient_s` so the two are comparable within one run. Record `schema_version` bumps 2 → 3, because the field changed derivation under an unchanged name, which is this row's own defect class. **Still PENDING:** the threshold is graded on the pinned rig, and increment 4 did not run there. Increment 6 is that seat |
 | **CT-6 Q5** | **Does `P` prove its own outputs?** F5 shows the two-consumer advance is assumed, not established | **CLOSED 2026-09-22 — by dissolution, not by ruling.** `P` proves nothing as a distinct actor; the proving state is **identity-blind**; there is **no second capture side**. The question therefore has **no subject**, and C6's second capture side is not built. **This is recorded as a dissolution rather than a negative ruling** because nothing was weighed: the premise F5 flagged as *assumed* is simply absent. **Rule-21 reopener, attached here to the dissolution itself rather than left as a live question:** this reopens only if a design gives `P` membership paths for proving — a substrate change, not a preference. Until then increment 5 builds one capture side and §6's graph carries no gate on this row |
 | **CT-6 Q6** | **`.curvetree` retirement sequencing.** The end state deletes the file (`WSS-18`'s closure), but `P`'s pins move out via the Tier-2 P-store lane | **NAMED DEPENDENCY.** Unchanged: name the dependency, do not race it. CT-6's last increment is gated on the P-store lane's unwind of `WSS-13`; this round does not schedule it. **That lane is itself daemon-gated** (the `b_*` partition on S-PRUNE's forward pass, and `WSS-22`'s bond-add answer), which is why increment 7 sits outside this round's daemon-independent envelope while increments 1–6 sit inside it |
 
@@ -387,16 +387,16 @@ measured:
 
 ### 9.4 What that licenses — the structure, not the constant
 
-At `s = 3` over the reorg horizon, the frontier encoding to **8 848 B**
-(a header plus one partial chunk per layer, each one child short of folding —
+At `s = 3` over the reorg horizon, the frontier encoding to **8 840 B**
+(the leaf count, then one partial chunk per layer, each one child short of folding —
 §10.1 derives it):
 
 | | Snapshots | Size |
 | --- | --- | --- |
 | Sparse at `s = 3` | 241 | **2.13 MB** |
-| Dense over the horizon | 721 | **6.38 MB** |
+| Dense over the horizon | 721 | **6.37 MB** |
 
-The two-tier structure buys **4.25 MB** on an 8 GB rig, and costs a spacing
+The two-tier structure buys **4.24 MB** on an 8 GB rig, and costs a spacing
 constant, an eviction policy, a dense/sparse boundary, and the reader logic that
 chooses across it.
 
@@ -406,11 +406,15 @@ chooses across it.
 > chunk — three 1 216 B chunks where the widths give three 576 B — and counted
 > every chunk at capacity. Row 4 is correct as written: **9 024 B for a path**.
 > A frontier is not a path; it holds each partial chunk one child short of
-> folding, so it encodes to **8 848 B** (§10.1). The row counts moved the same
-> day and for a second reason: the retained run `[h - horizon, h]` is **closed**,
-> so the ring holds `horizon + 1` = 721 rows, not 720 — the fencepost §10.1
-> corrects in the implementation, carried back into the figures it sizes.
-> **The ruling does not move** — the correction makes the dense ring cheaper
+> folding. The same day's first correction encoded that to **8 848 B** / 6.38 MB
+> / a **4.25 MB** delta, counting an 11 B header and a width byte per partial
+> layer, and moved the row counts for a second reason: the retained run
+> `[h - horizon, h]` is **closed**, so the ring holds `horizon + 1` = 721 rows,
+> not 720. Those header and width bytes restated `expected_shape`, so they left
+> before schema 6 froze. The encoding that ships is the 8 B leaf count plus the
+> scalars and nodes that count implies: **8 840 B**, a dense ring of **6.37 MB**,
+> and a delta of **4.24 MB** (8 840 × (721 − 241)).
+> **The ruling does not move** — each correction makes the dense ring cheaper
 > than the figure it was ruled against, so the argument it was ruled on only
 > strengthens.
 
@@ -450,7 +454,7 @@ the examiner guards lapses here.
   which is increment 6's.**
 - **Reopeners.** A material prover-pin move re-grades the denominator (the
   existing §6.3.4 clause). A change to the leaf-hash path re-measures the rate.
-  The ring's 6.38 MB is bounded by construction and carries no reopener.
+  The ring's 6.37 MB is bounded by construction and carries no reopener.
 
 ### 9.7 Effect
 
@@ -488,15 +492,20 @@ this design offers, and the subject of its own assertion.
 
 **Size, derived and not restated.** A production-depth frontier whose every
 partial chunk is one child short of folding encodes to
-`11 + (LEAF_CHUNK_SCALARS − 1)·32 + Σ_{k<5} (1 + (chunk_width(k+1) − 1)·32)`
-= **8 848 B**. §6.3.2 row 4 states **9 024 B**, and is correct — but it sizes a
+`8 + (LEAF_CHUNK_SCALARS − 1)·32 + Σ_{k<5} ((chunk_width(k+1) − 1)·32)`
+= **8 840 B**. §6.3.2 row 4 states **9 024 B**, and is correct — but it sizes a
 **path**, and a frontier is not a path: it holds each partial chunk one child
-short of folding and carries an 11 B header, so the two differ by 176 B. Row 4's
+short of folding and carries an 8 B leaf count, so the two differ by 184 B. Row 4's
 one overreach is the sentence that follows its arithmetic, “the frontier is the
 same size”; it is corrected there. The **9 664 B** §9.4 first carried was neither
 figure but a transcription of row 4 that inverted its Selene and Helios counts,
 corrected and dated in place. Over the horizon — a **closed** run, so
-`horizon + 1` rows — this is **6.38 MB**. No clause moves.
+`horizon + 1` rows — this is **6.37 MB**.
+
+**Corrected 2026-09-29, twice.** The first pass quoted **8 848 B** / 176 B /
+6.38 MB, which still stored a scalar count, a layer count, and a width byte on
+each partial layer. Those fields restated `Frontier::expected_shape` and left
+before schema 6 froze. No clause of the ruling moves.
 
 ### 10.2 Where it persists (`Q3`)
 
@@ -505,10 +514,12 @@ identity-free proving state, which is what `Q3` ruled rides the ledger. One row
 per height, keyed by a `BlockHeightKey` whose distinct redb `TypeName` is what
 stops a tree position or a gindex indexing it.
 
-**The bound is the write, not a policy.** `append_block_deltas` inserts the
+**The bound is the write, not a policy.** `append_block_with_snapshot` inserts the
 height it ingests and, in the same statement, removes everything *below*
 `height − SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` — so there is no eviction policy
-for anything to hold (`Q1` RULED 2026-09-28).
+for anything to hold (`Q1` RULED 2026-09-28). `append_block_deltas` performs the
+leaf, pending, and tip writes and cannot insert a ring row. An optional snapshot
+on that path would let a caller omit the row the ring's totality depends on.
 
 **The run is closed at the bottom, and the fencepost is derived rather than
 chosen.** A reorg of depth `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` *replaces* that
@@ -594,16 +605,18 @@ for a store the ring does not cover.
 the built advance — frontier fold, snapshot encode, ring commit — through the
 harness's existing `sustained_within_conditioned`
 (`shekyl-wss-q1b-bench/src/advance.rs`). The retired quotient rides beside it as
-`per_block_advance_retired_quotient_s` so the two are comparable **within one
-run**, which is the only way an off-rig figure says anything about the rig's.
-Record `schema_version` bumps **2 → 3**: the field changed derivation under an
-unchanged name, which is `Q4`'s own defect class.
+`per_block_advance_retired_quotient_s` so the two are comparable **within the
+run that produced them**. The measured advance is what a later run may compare.
+The quotient is an observation of that run's replay; it does not speak for the
+pinned rig. Record `schema_version` bumps **2 → 3**: the field changed derivation
+under an unchanged name, which is `Q4`'s own defect class.
 
 **A second defect the re-point surfaced.** The retired quotient divided by
 `REPLAY_WINDOW_BLOCKS` — the constant — while the corpus size is a `--window-leaves`
 flag. At the default window the two agree by construction; under an override the
 field divided a shrunken replay by the full window and emitted the result under
-a worst-case name. The denominator is now the blocks the corpus actually covers.
+a worst-case name. The denominator is now `replayed_blocks`, the blocks the
+corpus actually covers (`window_leaves / leaves_per_block`).
 
 **What is measured and what is not.** One iteration is one worst-case block's
 advance. It does **not** include the leaf and pending table writes, block decode

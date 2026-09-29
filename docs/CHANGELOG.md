@@ -38,10 +38,12 @@
   into two transcriptions of one rule; agreement with `build_layers` is
   graded at every count through two leaf-chunk folds and the first cascade.
 - **A per-height snapshot ring, total over `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`.**
-  `LeafStore` gains a `frontier_snapshots` table. `append_block_deltas`
+  `LeafStore` gains a `frontier_snapshots` table. `append_block_with_snapshot`
   writes the height it ingests and removes everything below
   `height − SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` in the *same statement*, so
-  the ring's bound is the write rather than an eviction policy. The run is
+  the ring's bound is the write rather than an eviction policy.
+  `append_block_deltas` is that leaf and pending write with no ring row, so
+  the totality of the ring is not a caller's choice to pass nothing. The run is
   closed at the bottom because a reorg of that depth has its **fork** at
   `tip − horizon`, and a rewind restores from the row at the fork. `CurveTreeClient::root_and_depth_at` answers
   in-horizon heights from it and falls through to `root_at_count` elsewhere;
@@ -66,19 +68,25 @@
   Nothing in-band stops a writer that cannot see the table, so the version cell
   is the mechanism — and refusing the store is what C8 already prescribes:
   *recovery is refuse-and-resync, never a migration*.
-- **The frontier's decoded shape is bound to its leaf count.** `leaf_count`
-  alone determines the leaf chunk's width and every partial width, so a width
-  can sit *under* its layer's capacity and still disagree with the count —
-  bytes that pass the C3 count check and compose the wrong root.
-  `Frontier::expected_shape` derives the shape and `decode` refuses anything
-  else (`FrontierError::ShapeDisagreesWithLeafCount`), graded against frontiers
-  `push_leaf` actually built.
-- **A frontier snapshot below `sync_tip` is refused**
-  (`StoreError::SnapshotBelowSyncTip`). `append_block_deltas` tolerates a
-  non-monotonic tip for the freeze clock, but production ingest only moves
-  forward and `rollback_to_fork` lowers the tip and truncates the ring in one
-  transaction, so a stale-tip snapshot is a caller bug rather than a state to
-  accommodate. Evicting around it would have made the bug work silently.
+- **The frontier's encoded body is the shape its leaf count implies.**
+  Eight bytes of `leaf_count`, then exactly the scalars and nodes
+  `Frontier::expected_shape` determines. A scalar count, a layer count, and a
+  width byte per partial layer restated that function, so they are not stored:
+  schema 6 has not shipped, and a second copy of the shape is not a check.
+  A count whose implied length is not the body is `FrontierError::Malformed`.
+  Content that decodes is graded by the Q2 examiner, which is what catches a
+  flipped node the framing could not. A production-depth frontier encodes to
+  **8 840 B** (the same shape with the redundant framing was 8 848 B); the
+  dense ring of 721 rows is **6.37 MB**.
+- **A frontier snapshot strictly below `sync_tip` is refused**
+  (`StoreError::SnapshotBelowSyncTip`), and only `append_block_with_snapshot`
+  can offer one. The meta cell is born at 0 and block 0 is a real first
+  capture, so equality at the tip stays legal — `<=` would refuse genesis.
+  `append_block_deltas` tolerates a non-monotonic tip for the freeze clock and
+  writes no ring row. Production ingest only moves forward, and
+  `rollback_to_fork` lowers the tip and truncates the ring in one transaction,
+  so a stale-tip snapshot is a caller bug rather than a state to accommodate.
+  Evicting around it would have made the bug work silently.
 - **`shekyl-wss-q1b-bench` record `schema_version` 2 → 3.**
   `per_block_advance_worst_case_s` was `replay_median / REPLAY_WINDOW_BLOCKS` —
   a share of the spend replay, which is a pre-build *model* of an advance
@@ -125,9 +133,12 @@
   one that could have sampled a cool board — came in *fastest*, which a
   cool-board bias cannot produce.
 - **RULED: one dense ring over the reorg horizon.** At `s = 3` a sparse tier
-  holds 241 snapshots against a dense ring's 721 — **4.25 MB** bought for a
-  spacing constant, an eviction policy, a dense/sparse boundary and the reader
-  logic across it, on an 8 GB rig. The tier geometry is **deleted**; `s` ceases
+  holds 241 snapshots against a dense ring's 721. The delta the ruling was
+  taken against was **4.25 MB** (8 848 B snapshots). Dropping the redundant
+  framing moved the same arithmetic to **4.24 MB** (8 840 B). Either figure
+  was bought for a spacing constant, an eviction policy, a dense/sparse
+  boundary and the reader logic across it, on an 8 GB rig. The tier geometry
+  is **deleted**; `s` ceases
   to exist as a quantity the round carries. A rule-21 reopening of `Q1`'s own
   Round-1 shape on its derivation's substrate — the measurement did not fill the
   constant in, it removed the structure the constant was for.
@@ -552,9 +563,10 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
 - **Rule 47 before any timing:** zero frozen segments at the start, a leaf count
   equal to the derived rate, and at least one complete segment — a population
   that froze by accident makes every number cheap and green. Ingest goes
-  through `append_block_deltas`, the production path, because `append_drained`
-  is a `#[cfg(test)]` wrapper and a baseline taken through a test-only door
-  would not describe refresh.
+  through `append_block_deltas`: the timed call is `root_at_count`, which does
+  not read the snapshot ring, so the builder writes no ring row.
+  `append_drained` is a `#[cfg(test)]` wrapper, and production ingest is
+  `append_block_with_snapshot`.
 
 ### `CT-6` Round 1 disposed — the proving-state round's questions get terminal statuses, per row
 
@@ -586,10 +598,11 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   `s` is not a stated judgment: it is the largest spacing whose worst-case
   rewind fits the budget already ruled at `WSS` §6.3.4 row 2, and two of its
   three terms fall out of the bench's per-iteration series. `Q4`'s threshold is
-  pre-registered but its field measures a **quotient of the spend replay**
-  (`spend_edge.rs:386`), a legitimate pre-build estimate and an illegitimate
-  grade afterwards — so the pre-registration carries its own condition that
-  increment 4 re-derives the field from the built advance first. **A banner
+  pre-registered. Its field was a **quotient of the spend replay**
+  (`replay_median / REPLAY_WINDOW_BLOCKS`), a legitimate pre-build estimate
+  and an illegitimate grade afterwards. Increment 4 discharges that condition:
+  `per_block_advance_worst_case_s` is now the median `AdvanceRig` measures,
+  and the grade on the pinned rig remains increment 6's. **A banner
   reading "ruled" over either row would put the map ahead of the territory.**
 - **Index:** the `CT-1…CT-5` family row is **amended** to `CT-1…CT-6` (rule 94
   §1) rather than added beside — `check_index_prefix_uniqueness` holds one row
