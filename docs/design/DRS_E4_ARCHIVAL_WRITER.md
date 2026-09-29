@@ -167,7 +167,7 @@ replacement KAT forces it to run).
    `emission-claim` (1 026 blocks, `SEB = 512`, `regtest_e2e.rs:3193`): one
    JoinMarket, accrual rows, two epoch closes, one claim — and the serve
    credit its claim is priced on was **injected** through the regtest RPC
-   `regtest_inject_archival_serve_credit` (`regtest_e2e.rs:3325`;
+   `regtest_inject_archival_serve_credit` (`regtest_e2e.rs:3330` (*`:3325` at the pin; moved by this PR's own edit to the file*);
    `core_rpc_server.cpp:958`; `blockchain.cpp:4709`), a direct LMDB write
    outside any block (S-ARCH census #18, *"the writer and its test injector
    land together"*). No captured chain carries a serve-credit transaction, a
@@ -304,8 +304,9 @@ replacement KAT forces it to run).
   by that row. **Deferred inside this plan, with the falsifier the row
   carries** (`git grep 'from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS)' rust/` →
   two constants): it is pass admission's constant, not the writer's, and
-  lands with the serve-credit rule in slice 8 — this document changes the
-  row's owner to that slice and records the disclosure here (rule 22).
+  lands with the serve-credit rule in slice 8 — the FOLLOWUPS row's *Owed*
+  and *Owner* lines now name slice 8 as the landing lane (edited in this PR,
+  on review) and the disclosure is recorded here (rule 22).
 - **A `Mock*` archival state** — not written (§5.2).
 
 ### 2.3 What E6 slice 8 gets
@@ -393,7 +394,8 @@ runs the retention crate's folds, and `ChainValid` carries an
 post-images, with the JoinMarket insert distinguished from an update), the
 serve-credit keys, the claim's record update, `Vec<Slash>` for the epochs
 whose deadline this height passes, `Option<EpochClose { epoch, r_market:
-Vec<(ShardId, RMarket)>, sigma_work, budget }>`, and the accrual. The store
+Vec<(ShardId, RMarket)>, sigma_work, budget }>`, the accrual, and the
+attestation witness the candidate's sidecar carried (§3.2 phase 5). The store
 writes each through its handle and checks what it can (§4). **The store
 holds no archival arithmetic**: `connect` does not know what a slash is,
 only that a record is replaced and a set gains a member.
@@ -423,7 +425,28 @@ inversion CEN-L16 was minted to name.
   journaled. `total_bonded_atomic` is not written (§3.4: a view).
 - **Phase 5**: `archival_attestation_witness[h] = witness` when the
   verdict's witness is non-empty (`blockchain_db.cpp:669–671`'s rule, A10's
-  two absences kept).
+  two absences kept). **Where the witness comes from (on review):** it is
+  not in the block. In the C++ it is a **wire sidecar** —
+  `block_complete_entry::attestation_witness`
+  (`cryptonote_protocol_defs.h:71`, `KV_SERIALIZE_OPT`), carried beside the
+  block bytes, handed to connect as `connect.attestation_witness`
+  (`cryptonote_protocol_handler.inl:122`), judged by CEN-B4
+  (`verify_block_attestation`, `blockchain.cpp:5300`) and only then stored.
+  So `Candidate` (`chain-rules/src/block.rs:100–105`: a block and its
+  bodies, nothing else) gains the sidecar as a third field,
+  `attestation_witness: Option<AttestationWitnessBytes>`, `None` for an
+  empty set; the verdict carries it to `connect` — **passed through with
+  `Origin::PassedThrough` until CEN-B4 lands in `validate`** (E6's row;
+  `passed_through_facts` names it meanwhile, so a file whose witnesses
+  were written unjudged says so); the corpus reader fills it `None` for
+  every format-2 capture, which is true of them (§1 item 6). The corpus
+  cannot carry a non-empty witness today for a second reason worth
+  recording: `/get_blocks_by_height.bin` returns `block_complete_entry`
+  but the RPC never populates the field — only the p2p handler does
+  (`cryptonote_core.cpp:1289`) — so a capture with a real witness needs a
+  one-line RPC marshal (rule 20's shim) and the corpus format to carry the
+  sidecar; both wait on the producer (FOLLOWUPS `:139`) and are named
+  there, not built here. Phase 5's witness is the scenario's.
 - **Phase 9**, in the C++'s order (`:689–693`): the accrual (§3.5); then the
   slashes — each a record upsert plus `archival_slash_applied` insert plus a
   `archival_slash_log` append, and `total_burned += slashed` **through the
@@ -524,11 +547,16 @@ The C++ writes a row per block and range-sums it once at the close
 (`blockchain_db.cpp:790`). Nothing reads a single height's accrual. The
 dissolved shape: `archival_budget_accruing[E]` — one `Coded<AtomicUnits>`
 row per open epoch, upserted every block with the pre-image journaled; the
-close reads it, writes `archival_budget[E]`, and the accruing row is left
-(or deleted — either is pop-symmetric through `undo_log`). Pop of a block
-restores the accumulator's pre-image; a pop across the close restores the
-budget row's absence and the accumulator; a re-close re-reads the
-accumulator. `ARCHIVAL_BUDGET_SCHEDULE.md` §3.2's KAT B3 (pop-and-re-close
+close reads it, writes `archival_budget[E]`, and **deletes the accruing
+row in the same transaction** (`ARW-Q3`'s second half, posed on review and
+defaulted here — the first half asked only per-height vs per-epoch): the
+table then holds **at most one row, the open epoch's**, which is the
+invariant SI-23 states and the digest's normalisation reads (§3.8 item 1);
+leaving closed accumulators would be a second copy of `archival_budget[E]`
+and the fact-or-view test refuses it. Pop of a block restores the
+accumulator's pre-image; a pop across the close restores the budget row's
+absence **and the accruing row the close deleted**, both from `undo_log`; a
+re-close re-reads it. `ARCHIVAL_BUDGET_SCHEDULE.md` §3.2's KAT B3 (pop-and-re-close
 reproduces the budget byte-identically) is the test, and it must pass on
 the new shape before the old one is deleted.
 
@@ -577,16 +605,34 @@ existing mechanism for the second real:
 1. **`digest_v1`** — v0's three families plus the archival state as
    *logical* sets: bond records (`p → canonical record`), serve-credit
    keys, `(shard, E) → r_market` with zero-rows projected out (§3.6),
-   `E → Σwork`, `E → budget`, `h → witness`, the slash log, `slash_applied`,
-   `last_slash_epoch`. Computed by the C++ walker over LMDB
+   `E → Σwork`, `E → budget`, **the open epoch's accrued total** (on review:
+   the accumulator is the input to the next close, and a missing or wrong
+   accrual write would otherwise match at every pre-close tip — the C++
+   side normalises its per-height rows over `[E_open·SEB, tip]` to the same
+   one logical value, the redb side reads its one accruing row), `h →
+   witness`, the slash log, `slash_applied`, `last_slash_epoch`. Computed by
+   the C++ walker over LMDB
    (`BlockchainLMDB::logical_state_digest_v0`'s sibling, a marshal into the
    Rust hasher — rule 20's shim, no C++ hashing) and by `ReadSnapshot` over
    redb; format tag bumped; the trace's checkpoint carries both. Tip-only,
    because that is what the C++ can produce (§1 item 5).
 2. **The sufficiency stamp armed**: with writers present, a session that
    stubs family X skips X's phase body and widens `Provenance.stubbed`
-   (`ARW-9`'s default), and the run's digest goes **red** against the trace
-   — the test that proves the apply ran, run once per family in CI.
+   (`ARW-9`'s default), and the run's digest goes **red** against the
+   oracle — the test that proves the apply ran. **Its denominator, stated
+   on review:** a stubbed family the run never writes leaves the digest
+   unchanged, so "red once per family" is only a claim over families the
+   run *exercises*. The test therefore has two halves, and the first is
+   rule 47's: (a) **every retained writable family names its exercising
+   witness** — `bond`, `r_market`, `sigma_work`, `budget` and the accruing
+   row by the corpus (`bond-post`, `emission-claim`); `serve_credit`,
+   `slash_log` / `slash_applied` and the `last_slash_epoch` cell, the
+   Release / Reinstate arms of `bond`, and `attestation_witness` by the
+   scenario driver (§2.4 — no capture carries them); a family with no
+   witness fails the test before any stub is tried; (b) **for each, stub it
+   and the run over its witness is red**. Families outside the denominator
+   are named, not silent: `settlement` (held, SO-D8's blocker) and the
+   seven `NOT_PORTED` rows (no writer exists to stub).
 3. **The injected serve credit as an event**: the `emission-claim` chain's
    archival state includes a write no block made (§1 item 6). The corpus
    format gains an out-of-band event — `IngestEvent::Inject(ServeCredit
@@ -616,7 +662,19 @@ existing mechanism for the second real:
    list in both directions (the generator writes the field from the
    injection it made, `regtest_e2e.rs` `maybe_capture_chain_vector`); the
    trace half — an `Inject` present iff the manifest lists one — lands with
-   commit 7. The corpus travels, and the inference is drawn where the data
+   commit 7. **Ordering (on review):** an `Inject` is a **pipeline barrier**,
+   exactly as `Rewind` is (`IngestEvent::is_barrier`, `source.rs:70–98`;
+   the sequencer drains formation around a barrier, `pipeline.rs`): every
+   `Extend` before it commits first, the injection is applied in its own
+   store transaction at the committed tip's height — the height it records
+   — and formation of the `Extend`s after it waits, because the injected
+   bit is state the later claim's admission and the close read. It is
+   **not journaled**: the C++ injection is not pop-reversible either (a pop
+   below the injection height leaves the bit; the generator keeps its pops
+   above it, `regtest_e2e.rs:3323–3327`), and a `Rewind` in the same run
+   to a height below an `Inject`'s is a `PipelineFault`, not a defined
+   behaviour — the corpus cannot contain one, and the semantics of orphan
+   state under a reorg are not something the replay should invent. The corpus travels, and the inference is drawn where the data
    is: a reader of `emission-claim/manifest.json` learns that one of its rows
    is not block-derived without opening this document.
 
@@ -659,6 +717,7 @@ they are not reference implementations of anything).
 | SI-20 (new) | **`Σ bonded_total` over `archival_bond` equals the total the delta implies** — the view's check: after a record write, the new sum equals the old sum plus the delta's signed change | phase 2 / phase 9; `ARW-Q9` |
 | SI-21 (new) | **an epoch closes whole**: `archival_sigma_work[E]` and `archival_budget[E]` exist together with every `(shard, E)` r-market row the snapshot named, or none does | phase 9 (insert-once on `E`; a second close of `E` is `StoreInvariant`, never a silent overwrite — CEN-L14's O-2 adversary) |
 | SI-22 (new) | **the slash log is dense per height** — `(h, seq)` rows for `seq ∈ [0, n)` and no other, and every row's `(p, shard, E)` is in `archival_slash_applied` | phase 9 |
+| SI-23 (new) | **the accruing table holds at most one row, the open epoch's** — the close deletes `archival_budget_accruing[E]` in the transaction that writes `archival_budget[E]` (§3.5); a second row is a close that did not finish or a re-key | phase 9 |
 | SI-6 | pop-ability is `undo_log[h]` — restated: **no archival table is a second pop mechanism** | by construction (§3.3); falsifier: a `Restorable` impl that reads an `archival_*_log` |
 
 Every one is a *store* property; whether a slash was due or a close was
@@ -670,7 +729,7 @@ correct is the validator's (§3.1).
 
 | Finding | Statement |
 | --- | --- |
-| **ARW-1** | **The corpus's only closed-epoch chain is priced on a write no block made.** `emission-claim`'s serve credit is the regtest injector's direct LMDB write (`regtest_e2e.rs:3325`, `core_rpc_server.cpp:958`); a block-driven replay cannot reproduce it, so an archival tip digest over that chain diverges by construction unless the injection is an event in the trace (§3.8 item 3). Found by reading the generator, not by running the replay — which would have reported a red that looked like a writer bug. **Confirmed at the line 2026-09-29 (maintainer, PR #904): `blockchain.cpp:4734–4735`, a bare `db_wtxn_guard` and `set_archival_serve_credit_bit` under the blockchain lock, outside any block's write batch.** Its value is the misdiagnosis it prevents: the divergence would have appeared at exactly the height a writer bug would produce one, on the one chain that exercises a closed epoch, and the natural response would have been to hunt the writer. It also bounded a claim the corpus had been carrying — `captured_by_daemon_version` and `built_at_dev_sha` assert what tree produced a chain; nothing asserted every row in it was block-derived — so every manifest now carries `out_of_band_writes` (§3.8), for the same reason the epoch-0 caveat went into the manifest and not only into a plan. |
+| **ARW-1** | **The corpus's only closed-epoch chain is priced on a write no block made.** `emission-claim`'s serve credit is the regtest injector's direct LMDB write (`regtest_e2e.rs:3330` (`:3325` at the pin), `core_rpc_server.cpp:958`); a block-driven replay cannot reproduce it, so an archival tip digest over that chain diverges by construction unless the injection is an event in the trace (§3.8 item 3). Found by reading the generator, not by running the replay — which would have reported a red that looked like a writer bug. **Confirmed at the line 2026-09-29 (maintainer, PR #904): `blockchain.cpp:4734–4735`, a bare `db_wtxn_guard` and `set_archival_serve_credit_bit` under the blockchain lock, outside any block's write batch.** Its value is the misdiagnosis it prevents: the divergence would have appeared at exactly the height a writer bug would produce one, on the one chain that exercises a closed epoch, and the natural response would have been to hunt the writer. It also bounded a claim the corpus had been carrying — `captured_by_daemon_version` and `built_at_dev_sha` assert what tree produced a chain; nothing asserted every row in it was block-derived — so every manifest now carries `out_of_band_writes` (§3.8), for the same reason the epoch-0 caveat went into the manifest and not only into a plan. |
 | **ARW-2** | **Five of the six revert logs are CTW-2/CTW-3's shape; the sixth is history.** `undo_log` holds every pre-image the C++ journals recompute or copy; `release_pop` and `reinstate_pop` exist only to reverse what a pre-image restores. The slash log alone is read forward (`holds_shard`), and its epoch-marker row kind exists only because the C++ had no pre-image of `last_slash_epoch` (§3.3). |
 | **ARW-3** | **The C++ decides in its storage class in three places, not one.** CEN-L16 minted the holds-shard fold; the challenge-failure decision (`archival_challenge_failed_at_height`, `:5459`) and the shard-enumeration of the slash scan (`:5720–5752`) are the same class — consensus predicates evaluated by `BlockchainLMDB` with no R8 row. The sweep that minted L16 covered reads; these are writes' preconditions. One census question, not three (the FOLLOWUPS sweep-subject row `SAR-Q7` opened). |
 | **ARW-4** | **The complete-tree slash arm walks the retired freeze registry.** `db_lmdb.cpp:5720–5744` enumerates `archival_shard_segment` to name a `CompleteTree` bond's shards; `PDM-Q12` retired the table. Under `PDM-Q6` item 5 the universe is `⌊cumulative_tx_count / T⌋` closed shards — a view the store already holds (§3.7). |
@@ -726,14 +785,14 @@ event kind; those are the two commits most likely to grow.
 
 | # | Commit | Cost | What would make it larger |
 | --- | --- | --- | --- |
-| 1 | **Tables and types.** `archival_slash_log`, `archival_slash_applied` typed; `archival_budget_accruing` added (`RUST_ONLY_TABLES`); seven tables leave as `NOT_PORTED` rows — the fifth direction, not `FOLDED_INTO` (§3.4's last paragraph says why); `total_bonded_atomic` not minted; layout 17; snapshots; SI-19…22 minted. `BondRecord` and its vocabulary to `shekyl-types` (`ARW-Q8`). | M | a hidden reader of a deleted table (falsify: `rg` each name outside `schema.rs` and `apply_policy.rs` before cutting) |
+| 1 | **Tables and types.** `archival_slash_log`, `archival_slash_applied` typed; `archival_budget_accruing` added (`RUST_ONLY_TABLES`); seven tables leave as `NOT_PORTED` rows — the fifth direction, not `FOLDED_INTO` (§3.4's last paragraph says why); `total_bonded_atomic` not minted; layout 17; snapshots; SI-19…23 minted. `BondRecord` and its vocabulary to `shekyl-types` (`ARW-Q8`). | M | a hidden reader of a deleted table (falsify: `rg` each name outside `schema.rs` and `apply_policy.rs` before cutting) |
 | 2 | **`ChainView` grows the archival reads** (§2.3) — trait, `BatchView`, `MockView` held to each other by the conformance test; A2 `slash_log_after` and `holds_shard_at` land (the `SAR-Q7` pair), with the LMDB as-of-height cases (`archival_substrate_lmdb.cpp:1674–1893`) as Rust tests. | M | `MockView` needing archival state it cannot construct honestly — the signal that a `Mock*` is being built (§5.2) |
 | 3 | **The shard universe** (§3.7): `closed_shards` on the view; CEN-F17's operand ruled; `segment_leaf_count` out of the JSON; the consensus-side `leaves_per_segment` readers deleted. | S | a wallet-side reader in the consensus closure (falsify: `cargo tree -i shekyl-fcmp -e features` shows the freeze module reached from `shekyl-chain-rules`) |
 | 4 | **The transition on the verdict** (§3.1): `ArchivalDelta` derived in `validate` from the vin arms and the folds; the slash scan and the close as functions of the view; carried on `ChainValid`. Tests: each arm on a driven chain; the KAT B3 pop-and-re-close on the accumulator shape. | **L** | the slash scan's view reads being the wrong shape (a scan over `archival_bond` needs a range read the view does not have — this is where it shows) |
-| 5 | **The phase bodies** (§3.2) with SI-19…22 built; the stubbed-family skip-and-widen (`ARW-9`); the regtest injector on the store; **the slash scan measured** (B9: once per epoch on the floor, against the C++'s own note) — the accrual's burn half a `Fact` until F17 (§3.5, disclosed). | M | `pop` of a block that closed an epoch: the journal's restore of insert-once rows under a tuple key (the `Restorable` impl the table did not need until now) |
+| 5 | **The phase bodies** (§3.2) with SI-19…23 built; `Candidate.attestation_witness` and its pass-through until CEN-B4; the stubbed-family skip-and-widen (`ARW-9`); the regtest injector on the store; **the slash scan measured** (B9: once per epoch on the floor, against the C++'s own note) — the accrual's burn half a `Fact` until F17 (§3.5, disclosed). | M | `pop` of a block that closed an epoch: the journal's restore of insert-once rows under a tuple key (the `Restorable` impl the table did not need until now) |
 | 6 | **`digest_v1`** (§3.8): the Rust hasher over the archival families; the C++ walker's marshal; the trace format's checkpoint carries v1; format tag bumped. **`LMDB_WRITE_ATOMICITY_AUDIT.md` §10 moves in this commit, not in commit 10**: the sixteen archival journals' `Digest v0` state → `v1` and the §7.1.1 exclusion retired, so the document and the mechanism move together — that exclusion is load-bearing for what the digest is allowed not to cover, and a stale sentence there does real damage (ruled 2026-09-29). | M | the C++ walker: the only C++ this increment adds, and rule 20 holds it to a marshal — if it grows arithmetic, stop |
-| 7 | **The injection event** (§3.8 item 3): `IngestEvent::Inject` with its stated scope (regtest-only, one row kind, the injector its sole producer), the exporter reading the injector's receipt, the connector applying it through the store's regtest door, the trace-half check (an `Inject` iff the manifest's `out_of_band_writes` names one); **re-capture of the four chains** under the corrected regtest table and the v1 checkpoint, the generator writing the injection's height and persona into the manifest. | M | the exporter cannot see the injection (no receipt in LMDB) — then the generator writes one, and the re-capture waits on it |
-| 8 | **The oracle** — the protected commit. Replay all four chains; the v1 digest at every tip; the sufficiency red once per family. A tip disagreement on `bond-post` or `emission-claim` **stops the PR** and is adjudicated against the spec (E2 §0), never toward the C++ — with one named exception: a divergence that traces to zero-as-absence (§3.6) is the projection's bug, not a finding. | S | a disagreement — which is what the commit exists to produce |
+| 7 | **The injection event** (§3.8 item 3): `IngestEvent::Inject` with its stated scope (regtest-only, one row kind, the injector its sole producer), the exporter reading the injector's receipt, the connector applying it through the store's regtest door, the trace-half check (an `Inject` iff the manifest's `out_of_band_writes` names one); **re-capture of all six captured chains** (`CAPTURED_SHAPES`, `vectors_tests.rs` — the format moves for the whole corpus or the all-captures gate refuses the two left behind) under the corrected regtest table and the v1 checkpoint, the generator writing the injection's height and persona into the manifest. | M | the exporter cannot see the injection (no receipt in LMDB) — then the generator writes one, and the re-capture waits on it |
+| 8 | **The oracle** — the protected commit. Replay all six chains; the v1 digest at every tip; the sufficiency red for every family the run exercises (§3.8 item 2). A tip disagreement on `bond-post` or `emission-claim` **stops the PR** and is adjudicated against the spec (E2 §0), never toward the C++ — with one named exception: a divergence that traces to zero-as-absence (§3.6) is the projection's bug, not a finding. | S | a disagreement — which is what the commit exists to produce |
 | 9 | **Rust deletions** (§3.9's Rust half). | S | — |
 | 10 | **Docs** (§9). | S | — |
 
@@ -747,12 +806,12 @@ makes that visible; use it to find the family, then read the rows.
 
 Commits 1–5 are the store and the validator; 6–8 are E2's instrument and the
 corpus. If the re-capture (commit 7) waits on the regtest generator, commits
-1–5 land as **PR-a** with the family stubs *on* for the four chains and the
+1–5 land as **PR-a** with the family stubs *on* for the six chains and the
 provenance widened — the file honestly not parity evidence — and 6–9 as
 **PR-b**. That is a **split** (rule 22: re-scheduled inside the scope, both
 PRs named here), not a deferral; PR-a's description says PR-b is owed and
 what its falsifier is (`rg 'digest_v1' rust/shekyl-chain-store/src` →
-present; the four manifests at `format_version: 3`).
+present; the six manifests at `format_version: 3`).
 
 ---
 
@@ -763,7 +822,7 @@ present; the four manifests at `format_version: 3`).
 | E6 slice 8 (4.J, 26 rows) | `rg 'fn bond_record\|fn slash_log_after' rust/shekyl-chain-rules/src/view.rs` → the trait methods with `BatchView` impls |
 | CEN-L16 | `rg 'fn holds_shard_at' rust/shekyl-archival-retention/src` → present; `rg 'archival_bond_holds_shard_of' src/blockchain_db` → still present until cutover, and the census row says both |
 | CEN-F17's operand | `rg 'fn closed_shards' rust/shekyl-chain-rules/src/view.rs`; `rg segment_leaf_count config/consensus_constants.json` → nothing |
-| E2's S-ARCH bar (SAR-11) | `rg 'digest_v1' rust/shekyl-chain-store/src` → present; each manifest's checkpoint at v1; the sufficiency test red for each family (`cargo test -p shekyl-chain-ingest stubbed_family_reddens`) |
+| E2's S-ARCH bar (SAR-11) | `rg 'digest_v1' rust/shekyl-chain-store/src` → present; each manifest's checkpoint at v1; the sufficiency test red for each **exercised** family, with rule 47's half first — every retained writable family names a witness (`cargo test -p shekyl-chain-ingest stubbed_family_reddens`; §3.8 item 2) |
 | The injected credit modelled | `rg 'Inject' rust/shekyl-chain-ingest/src/source.rs` → a variant; `emission-claim`'s trace carries one; **the manifest half HOLDS 2026-09-29**: `rg out_of_band_writes rust/shekyl-chain-ingest/tests/vectors/*/manifest.json` → six hits, one non-empty, and `vectors_tests::only_the_named_chains_carry_out_of_band_writes` green |
 | `SAR-Q7`'s staged pair | `rg 'fn slash_log_after' rust/shekyl-chain-store/src/store/archival_reads.rs` → present |
 | The daemon-uniformity sentence (FOLLOWUPS `:176`) | `rg -n 'no archival serving state' docs/design/DAEMON_REDB_STORE.md` → hits — **HOLDS 2026-09-29** (written by this PR) |
@@ -774,7 +833,7 @@ Denominator at the pin: `cargo test -p shekyl-chain-store --lib` 375,
 `-p shekyl-archival-retention` (unchanged in count until commit 9 deletes
 the pop folds' tests); `check_redb_schema_bijection.py` /
 `check_redb_schema_key_types.py` (six out, one in, `NOT_PORTED` +6,
-`RUST_ONLY_TABLES` +1); `check_store_invariant_register.py` (SI-19…22);
+`RUST_ONLY_TABLES` +1); `check_store_invariant_register.py` (SI-19…23);
 `check_lmdb_schema_coverage.py` **unchanged until cutover** (no C++ table
 dies here); the chain-rules coverage gate **unchanged** — the transition is
 an operand, not a row, as growth was (`CTW-Q1`'s corollary); the doc gates.
@@ -788,7 +847,7 @@ Extended: the E2 conformance run with `digest_v1` on (commit 8).
 | --- | --- | --- | --- |
 | **ARW-Q1** | Who derives the archival transition — the verdict (`validate` runs the folds over `ChainView`; `ChainValid` carries `ArchivalDelta`), or the store under principle 3's first clause (a `WriteBatch` method calling the retention crate inside the transaction, as the C++ does)? | **RULED: the verdict** | Slice 7's Q5 test: *a value belongs in the verdict iff the validator must compute it to reach the verdict.* The archival folds are read by the 4.J admission rules, so the validator computes them anyway — that makes `ArchivalDelta` free to carry and the store's "computes nothing" literal rather than aspirational. E3's `root_after` arrangement one lane over: the third application, so a precedent now rather than a case. (Posed on `CTW-Q1`'s reach argument and principle 3; those stand as corollaries.) **The E6 boundary, recorded here:** `PDM-Q6` item 4 row 1's *"E4 / S-ARCH in `shekyl-chain-rules`"* was a crate assignment, not a lane binding — E4 owns the typed state and the transition, slice 8 the admission rule that reads them (§2.2). Reopens if commit 5's measurement shows the deadline-height scan through the view is the connect's dominant cost on the floor **and** profiling attributes it to the view boundary rather than the fold (B9). |
 | **ARW-Q2** | The six journals: dissolve all six into `undo_log`, or keep the slash log as history? And does any consumer of as-of-height holdings survive `PDM-Q3`'s re-key? | **RULED: five dissolve; the slash log is kept and typed** (§3.3); the epoch-marker row kind is deleted | ARW-2's discriminator, applied as the ruling: `undo_log` holds every pre-image, so a journal whose only job is reversal is a **materialised view of the undo log**; the slash log is read forward by `holds_shard`, which makes it a fact. The marker's retirement follows from the same cut — its job is the `last_slash_epoch` cell's own pre-image, so it dissolves with the other five. Reopens if slice 8's re-keyed J8 drops the as-of-height operand — then the table and the fold go, and CEN-L16 → bucket 3. |
-| **ARW-Q3** | The accrual: per-height rows range-summed at the close (the C++), or one accumulator row per epoch? | **RULED: one row per epoch** | §3.5: nothing reads a single height's accrual; pop-symmetry through the pre-image; KAT B3 is the test. **Q3 and Q9 are one question with opposite answers** — the fact-or-view test: per-height rows collapse to one per epoch because nothing reads a single height; `total_bonded_atomic` becomes a sum because nothing reads it but its own maintainers. One principle, two dispositions; SI-20's delta check is what makes the second safe. |
+| **ARW-Q3** | The accrual: per-height rows range-summed at the close (the C++), or one accumulator row per epoch? | **RULED: one row per epoch.** *Second half, posed on review 2026-09-29 (the question as ruled asked only per-height vs per-epoch): at close, the accruing row is **deleted** in the close's transaction (default) or left as a closed-epoch copy. Awaiting ruling.* | §3.5: nothing reads a single height's accrual; pop-symmetry through the pre-image; KAT B3 is the test. Second half's default: a left row is a second copy of `archival_budget[E]` (fact-or-view refuses it), and "at most one row" is a statable invariant (SI-23) the digest's normalisation reads. **Q3 and Q9 are one question with opposite answers** — the fact-or-view test: per-height rows collapse to one per epoch because nothing reads a single height; `total_bonded_atomic` becomes a sum because nothing reads it but its own maintainers. One principle, two dispositions; SI-20's delta check is what makes the second safe. |
 | **ARW-Q4** | The close's zero rows: skip (the C++), or write `RMarket(0)` for every shard in the snapshot? | **RULED: write them**; the digest projects zero-rows out on both sides | §3.6, and the reason is the better half of the ruling: zero must be distinguishable from absent, and the C++ skipping `r_market == 0` on the same screen that writes a zero budget row *because* zero must be distinguishable is the **absence-as-value class caught mid-contradiction**. |
 | **ARW-Q5** | The §7.1.1 discharge: an archival digest family tip-compared plus the stamp, or a replacement KAT only (stub-reddens, no digest)? | **RULED: both** — `digest_v1` and the stamp; `IngestEvent::Inject` with the scope §3.8 states (regtest-only, one row kind, the injector its sole producer, present in no captured chain but the one) | the gate's own text names either; a digest without the stamp cannot attribute a red to a family, and a stamp without a digest never compares content. Neither alone is the gate's intent. |
 | **ARW-Q6** | The shard universe for the complete-tree challenge set and F17's `n`: closed `T`-shards `⌊cumulative_tx_count / T⌋` on the view, or a stored count? | **RULED: the view** | §3.7: a function of a fact the store holds; a stored count is `curve_tree_meta`'s shape with no C1-style one-row read to justify it. |
@@ -804,7 +863,7 @@ Extended: the E2 conformance run with `digest_v1` on (commit 8).
 LANDED with the write half; §7.5 table 2's E4 rows flipped; the lane graph's
 E4 node; §7.1.1 re-read against the tree — the gate discharged, how);
 `DRS_E1_SARCH.md` → `docs/completed/` (its §0/§2.2/§2.3 boundary statement
-is owned here from landing); `STORE_INVARIANT_REGISTER.md` (SI-19…22;
+is owned here from landing); `STORE_INVARIANT_REGISTER.md` (SI-19…23;
 SI-15's writer check; SI-6's restatement); `CONSENSUS_RULE_CENSUS.md`
 (CEN-L10 → bucket 3 at cutover — **not here**, the C++ is live;
 L7/L8/L9/L14/L16's store sites re-cited; `ARW-3`'s two siblings minted or
