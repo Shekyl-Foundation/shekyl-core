@@ -324,6 +324,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    use shekyl_levin::PortableMap;
     use shekyl_net_address::NetworkAddress;
     use shekyl_p2p_transport::{prefix_for, Initiator, MESSAGE2_LEN, PREFIX_LEN};
     use shekyl_peer_policy::InboundCeiling;
@@ -402,17 +403,26 @@ mod tests {
         Listener<MonotonicClock>,
         Arc<Mutex<Vec<CloseKind>>>,
     ) {
+        start_with_send_cap(option, within, ceiling, 64)
+    }
+
+    fn start_with_send_cap(
+        option: ClearnetOption,
+        within: Tick,
+        ceiling: InboundCeiling,
+        send_queue_bytes: usize,
+    ) -> (
+        EngineService<MonotonicClock>,
+        Listener<MonotonicClock>,
+        Arc<Mutex<Vec<CloseKind>>>,
+    ) {
         let engine = EngineService::start(MonotonicClock::new());
         let pool = runtime(harness_budget(), &name("sk-clearnet")).expect("runtime");
         let recorded = causes();
         let seen = Arc::clone(&recorded.seen);
-        let listener = listen(
-            pool,
-            &engine.handle(),
-            Sockets::new(),
-            config(option, within, ceiling, recorded.sink),
-        )
-        .expect("listen");
+        let mut cfg = config(option, within, ceiling, recorded.sink);
+        cfg.send_queue_bytes = send_queue_bytes;
+        let listener = listen(pool, &engine.handle(), Sockets::new(), cfg).expect("listen");
         (engine, listener, seen)
     }
 
@@ -496,35 +506,89 @@ mod tests {
         drop(engine);
     }
 
-    /// D11's option-off leg. The peer's socket and the session both see the
-    /// Levin notify, and the reader recovers the command.
+    /// D11's option-off leg. `COMMAND_HANDSHAKE` is an invoke: the dialer
+    /// sends it and waits. The session is established only after the
+    /// handshake response comes back.
     #[test]
-    fn option_off_shows_the_peer_the_levin_notify() {
-        let bucket = shekyl_levin::notify(shekyl_levin::COMMAND_HANDSHAKE, b"ping");
-        let (engine, mut listener, _) = start(
+    fn option_off_handshake_invoke_establishes_when_the_response_returns() {
+        let request = shekyl_levin::HandshakeRequest {
+            node_data: shekyl_levin::BasicNodeData {
+                network_id: [0x11; 16],
+                address: shekyl_net_address::NetworkAddress::Ipv4 {
+                    ip: Ipv4Addr::new(0, 0, 0, 0),
+                    port: 18_080,
+                },
+                support_flags: shekyl_levin::SupportFlags::default(),
+            },
+            payload_data: shekyl_levin::CoreSyncData {
+                current_height: 1,
+                cumulative_difficulty: 2,
+                cumulative_difficulty_top64: 0,
+                top_id: [0xab; 32],
+                top_version: 0,
+            },
+            nonce: [0x5a; 32],
+        };
+        let reply = shekyl_levin::HandshakeResponse {
+            node_data: request.node_data.clone(),
+            payload_data: request.payload_data.clone(),
+            local_peerlist_new: Vec::new(),
+        };
+        let invoke = shekyl_levin::invoke(
+            shekyl_levin::COMMAND_HANDSHAKE,
+            &request.store().expect("request"),
+        );
+        let response = shekyl_levin::response(
+            shekyl_levin::COMMAND_HANDSHAKE,
+            &reply.store().expect("response"),
+        );
+        let bound = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("peer");
+        let port = bound.local_addr().expect("port").port();
+        let expect = invoke.clone();
+        let answer = response.clone();
+        let peer = std::thread::spawn(move || {
+            let (mut sock, _) = bound.accept().expect("accept");
+            sock.set_read_timeout(Some(Duration::from_secs(3))).ok();
+            sock.set_write_timeout(Some(Duration::from_secs(3))).ok();
+            let mut got = vec![0u8; expect.len()];
+            sock.read_exact(&mut got).expect("invoke");
+            assert_eq!(got, expect);
+            sock.write_all(&answer).expect("reply");
+        });
+        // One handshake bucket. Not the measured session limit.
+        let (engine, mut listener, _) = start_with_send_cap(
             ClearnetOption::Off,
             Tick::new(5_000_000_000),
             InboundCeiling::Bounded(4),
+            64 * 1024,
         );
-        let mut client = connect(listener.local_addr());
-        client.write_all(&bucket).expect("write");
+        listener.dial(
+            NetworkAddress::Ipv4 {
+                ip: Ipv4Addr::LOCALHOST,
+                port,
+            },
+            None,
+        );
         let handle = listener.runtime_handle().clone();
         let mut session = handle.block_on(next_session(&mut listener.sessions));
-        let got = handle.block_on(session.recv()).expect("frame");
-        assert_eq!(got, bucket);
+        session.try_send(invoke).expect("invoke");
+        let got = handle.block_on(session.recv()).expect("response");
+        assert_eq!(got, response);
         let mut reader = shekyl_levin::BucketReader::new();
         reader.feed(&got).expect("feed");
-        assert_eq!(
-            reader.next_message().expect("parse"),
-            Some(shekyl_levin::Received::Notification {
-                command: shekyl_levin::COMMAND_HANDSHAKE,
-                payload: b"ping".to_vec(),
-            })
-        );
-        session.try_send(bucket.clone()).expect("send");
-        let mut seen = vec![0u8; bucket.len()];
-        client.read_exact(&mut seen).expect("peer");
-        assert_eq!(seen, bucket);
+        match reader.next_message().expect("parse") {
+            Some(shekyl_levin::Received::Response { command, payload }) => {
+                assert_eq!(command, shekyl_levin::COMMAND_HANDSHAKE);
+                assert_eq!(
+                    shekyl_levin::HandshakeResponse::load(&payload).expect("body"),
+                    reply
+                );
+                reader.complete_handshake(shekyl_levin::DEFAULT_MAX_PACKET_SIZE);
+            }
+            other => panic!("handshake response required, got {other:?}"),
+        }
+        assert!(reader.next_message().expect("drain").is_none());
+        peer.join().expect("peer");
         listener.shutdown();
         drop(engine);
     }

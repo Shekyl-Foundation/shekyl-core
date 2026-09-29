@@ -681,8 +681,9 @@ below the floor returns `BelowFloor` and records no row.
 `inbound_held` counts inbound rows and leaves outbound out. The
 differential harness is
 [`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md). Its
-clearnet leg is in. The epee leg and the cross-build interop run are
-still open. Cutover waits on the thread budget and the per-connector
+clearnet handshake invoke is in. The epee leg of that exchange, and
+the other in-process legs, are still open. The cross-build run waits
+on the zone-binding commit. Cutover waits on the thread budget and the per-connector
 deadlines, measured on this build and written down. The budget is
 at least the floor.
 
@@ -1515,14 +1516,20 @@ round can reject them.
   TOS knob, and byte bounds are listed in
   [`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md) as
   expected. The clearnet leg is
-  `option_off_shows_the_peer_the_levin_notify`. The epee leg and the
-  cross-build run are still open in that document. A difference on one of them is not a regression. The
+  `option_off_handshake_invoke_establishes_when_the_response_returns`:
+  a handshake invoke, the response, and the session established when
+  that response is back. The epee leg of that exchange is still open.
+  The cross-build run waits on the zone-binding commit, not on this
+  harness. A difference on one of them is not a regression. The
   current server stays in the tree as the wire reference until this
   passes. It is not a test host for the option.
 - **Cross-build interop.** A connector node and an epee node, option
   off, peering on testnet through sync, relay, and both dial
-  directions. The loopback harness is one build. The claim that
-  cutover is not a flag day is about two builds talking to each other.
+  directions. It waits on the zone-binding commit: production still
+  uses epee, so a daemon whose zones use the seam does not exist yet.
+  The in-process harness is not what blocks it. The loopback harness
+  is one build. The claim that cutover is not a flag day is about two
+  builds talking to each other.
 - **One descriptor per connection.** Count `readlink` results equal to
   that socket's `socket:[inode]`. Assert one. Do not count
   `/proc/self/fd` for the whole process.
