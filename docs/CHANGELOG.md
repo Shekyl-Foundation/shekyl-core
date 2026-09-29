@@ -10,7 +10,11 @@
   Generalized Bulletproofs takes the zkSecurity fixes for findings 03–05
   (upstream `31c26d96`); finding 03 can reject some full-rank matrices.
   Helios/Selene zeroizes sampling, wide reduction, and invert intermediates
-  (upstream `77788c36`). Pin: `chore/oxide-crypto-2026-09` @ `a08001f1`.
+  (upstream `77788c36`). Pin: `chore/oxide-crypto-2026-09` @ `a08001f1`. The
+  `fcmps` crate is Shekyl's PL-D3 fork and is not mirrored from the pin
+  (`SHEKYL_OXIDE_VENDORING.md` §"What the pin covers"); upstream shipped no
+  `fcmps` logic change, so it is unchanged. Q6 re-vetted: the proof's content,
+  length, and framing are unchanged (`GENESIS_TX_WIRE_FORMAT.md` Q6).
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 

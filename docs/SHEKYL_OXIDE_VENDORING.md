@@ -33,6 +33,25 @@ Vendored snapshot metadata + integrity:
   push/PR (`scripts/ci/check_vendored_crypto_manifest.sh`), so an in-place edit
   that bypasses the fork workflow fails CI.
 
+## What the pin covers
+
+The pin names the fork commit the subtree was taken from; it is not a claim that
+the subtree is byte-identical to that commit. Verified 2026-09-29 by reformatting
+the fork's `crypto/` at the pin with the workspace `rustfmt.toml` and diffing:
+
+- `helioselene`, `divisors`, `generalized-bulletproofs`, `fcmps/ec-gadgets`,
+  `fcmps/circuit-abstraction` are **mirrors** of the pin. The only differences
+  are the workspace formatting, the dropped `[lints] workspace = true` (these
+  crates are workspace-excluded, so there is no workspace to inherit from), and
+  the Shekyl `A5-12` soundness note appended to the Bulletproofs README.
+- `fcmps` (the crate itself) is **Shekyl's PL-D3 fork**, not a mirror. Its leaf
+  is the `K`-point commitment shape (`output_cm`, `leaves_cm_x`); the fork's
+  `fcmps` still carries the June `EXTRA_LEAF_SCALARS` shape. Upstream `fcmps`
+  fixes are ported by hand into this crate and re-vetted against the Q6 freeze;
+  a wholesale copy from the fork would delete PL-D3. Upstream has shipped no
+  `fcmps` logic change since `0662298` (only the `497f60b` dependency
+  reconciliation), so nothing is pending.
+
 ## Required update workflow
 
 When upstream ships a fix to the crypto crates, use this sequence (do **not** do

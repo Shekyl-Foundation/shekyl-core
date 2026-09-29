@@ -596,7 +596,8 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   tx; `shekyl-pow-randomx` consumes the blob. Rename the crate (it's more than
   "tx-wire"); see §1/§4.
 - **Q6 — proof / Bp+ canonical-serialization coverage.** *(RESOLVED → freeze by
-  reference; **re-vetted 2026-06-25 on pin `2753111c50`**)* The wire layer
+  reference; **re-vetted 2026-09-29 on pin `a08001f14c`**, earlier 2026-06-25 on
+  `2753111c50`)* The wire layer
   length-prefixes the FCMP++ proof as **opaque bytes** (`shekyl-wire`
   `Prunable::write`: `V(proof_len) ‖ fcmp_proof`) and writes the Bp+ by its fixed
   fields (`BpPlus`: `a‖a1‖b‖r1‖s1‖d1‖V(|L|)·L‖V(|R|)·R`); the canonical *interiors*
@@ -621,6 +622,21 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   `kat_fcmp_proof_size_depth1_row` matches it to the **real** `sign_transaction` proof;
   (c) the `fcmps` proof self-consistency suite is green on the new pin (7/7). Q6 is
   **frozen on `2753111c50`**.
+
+  **Re-vet (2026-09-29, pin `2753111c50` → `a08001f14c`, shekyl-core #911).** The
+  re-vendor took four upstream crypto commits (`76399e58`, `b4dd1c99`, `31c26d96`,
+  `77788c36`) and left the frozen interiors alone: `rust/shekyl-oxide/crypto/fcmps/`
+  is byte-identical to `dev` (Shekyl's PL-D3 crate is not mirrored from the fork —
+  `SHEKYL_OXIDE_VENDORING.md` §"What the pin covers"), and the Bp+ interior is
+  first-party `shekyl-bulletproofs`, untouched. What did change is refusal-only: the
+  Bulletproofs statement rejects an unconstrained Pedersen commitment
+  (`DidNotConstrainCommitment`), the inner-product witness rejects a non-power-of-two
+  length, `Generators::new` rejects a duplicated `g`, and Helios/Selene `from_bytes`
+  rejects the sign-set encoding of the identity. None of these alters what an honest
+  prover emits or how it is framed, so the proof's content, length, and serialization
+  are unchanged. Verified: `kat_fcmp_proof_size_depth1_row` (engine-core) still matches
+  `FCMP_PROOF_SIZE_KAT`, and `cargo test --locked -p shekyl-fcmp` is green (79/79).
+  The freeze **holds** at `a08001f14c`.
 - **Q7 — tag-numbering decision.** *(RESOLVED → clean dense renumber)* Monero is a
   proven *pattern*, not a *basis*: tags renumbered to the §2.0 dense scheme
   (inputs `0x00`–`0x04`, outputs `0x00`–`0x01`, ct `Null=0x00`/`Fcmp=0x01`); dead
