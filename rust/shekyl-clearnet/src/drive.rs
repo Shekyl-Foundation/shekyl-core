@@ -23,7 +23,7 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick, WakeWait};
 use shekyl_transport_layer::{
-    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, Sockets,
+    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -38,6 +38,18 @@ pub(crate) enum Role {
     Initiator,
 }
 
+/// A channel the connector admitted, with the peer it was admitted for.
+///
+/// The zone host takes `open` into the seam. The connector does not close
+/// that reservation. Absent this handoff, the connector keeps it until the
+/// socket ends.
+pub struct Admitted {
+    pub open: OpenSocket,
+    pub session: Session,
+    pub ip: IpAddr,
+    pub port: u16,
+}
+
 pub struct Dial {
     pub address: NetworkAddress,
     pub proxy: Option<SocketAddr>,
@@ -49,6 +61,7 @@ pub struct Dial {
     pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
+    pub handoff: Option<mpsc::UnboundedSender<Admitted>>,
 }
 
 pub struct Accept {
@@ -62,6 +75,7 @@ pub struct Accept {
     pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
+    pub handoff: Option<mpsc::UnboundedSender<Admitted>>,
 }
 
 pub async fn accept_one<C>(accept: Accept, engine: Handle<C>)
@@ -79,6 +93,7 @@ where
         sessions,
         on_cause,
         send_queue_bytes,
+        handoff,
     } = accept;
     let Ok(peer) = stream.peer_addr() else {
         finish_before_channel(&mut stream, &on_cause, CloseKind::TransportHandshakeFailed).await;
@@ -97,22 +112,43 @@ where
             return;
         }
     };
-    let cause = serve(
-        stream,
-        engine,
-        kind,
-        network_id,
-        handshake_within,
-        tally,
-        sessions,
-        send_queue_bytes,
-        peer,
-        Role::Responder,
-    )
-    .await;
-    match reserved.close(cause) {
-        CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
-    }
+    let cause = if let Some(tx) = handoff {
+        serve(
+            stream,
+            engine,
+            kind,
+            network_id,
+            handshake_within,
+            tally,
+            sessions,
+            send_queue_bytes,
+            peer,
+            Role::Responder,
+            Some(reserved),
+            Some(tx),
+        )
+        .await
+    } else {
+        let cause = serve(
+            stream,
+            engine,
+            kind,
+            network_id,
+            handshake_within,
+            tally,
+            sessions,
+            send_queue_bytes,
+            peer,
+            Role::Responder,
+            None,
+            None,
+        )
+        .await;
+        match reserved.close(cause) {
+            CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
+        }
+        cause
+    };
     on_cause(cause);
 }
 
@@ -131,6 +167,7 @@ where
         sessions,
         on_cause,
         send_queue_bytes,
+        handoff,
     } = dial;
     if let Err(cause) = check_dial(ConnectorId::Clearnet, &address) {
         on_cause(cause);
@@ -179,22 +216,43 @@ where
             return;
         }
     };
-    let cause = serve(
-        stream,
-        engine,
-        kind,
-        network_id,
-        handshake_within,
-        tally,
-        sessions,
-        send_queue_bytes,
-        dest,
-        Role::Initiator,
-    )
-    .await;
-    match reserved.close(cause) {
-        CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
-    }
+    let cause = if let Some(tx) = handoff {
+        serve(
+            stream,
+            engine,
+            kind,
+            network_id,
+            handshake_within,
+            tally,
+            sessions,
+            send_queue_bytes,
+            dest,
+            Role::Initiator,
+            Some(reserved),
+            Some(tx),
+        )
+        .await
+    } else {
+        let cause = serve(
+            stream,
+            engine,
+            kind,
+            network_id,
+            handshake_within,
+            tally,
+            sessions,
+            send_queue_bytes,
+            dest,
+            Role::Initiator,
+            None,
+            None,
+        )
+        .await;
+        match reserved.close(cause) {
+            CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
+        }
+        cause
+    };
     on_cause(cause);
 }
 
@@ -225,8 +283,10 @@ async fn serve<C>(
     tally: Arc<HandshakeTally>,
     sessions: mpsc::UnboundedSender<Session>,
     send_queue_bytes: usize,
-    _peer: SocketAddr,
+    peer: SocketAddr,
     role: Role,
+    mut reserved: Option<OpenSocket>,
+    handoff: Option<mpsc::UnboundedSender<Admitted>>,
 ) -> CloseCause
 where
     C: Clock + Clone + Send + 'static,
@@ -256,10 +316,33 @@ where
         Ok(pair) => pair,
         Err(kind) => {
             drop(hold);
-            return CloseCause::new(kind);
+            let cause = CloseCause::new(kind);
+            if let Some(open) = reserved.take() {
+                match open.close(cause) {
+                    CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
+                }
+            }
+            return cause;
         }
     };
-    if sessions.send(session).is_err() {
+    if let Some(tx) = handoff {
+        let Some(open) = reserved.take() else {
+            drop(hold);
+            drop(writer.await);
+            return CloseCause::new(CloseKind::LocalClose);
+        };
+        let admitted = Admitted {
+            open,
+            session,
+            ip: peer.ip(),
+            port: peer.port(),
+        };
+        if tx.send(admitted).is_err() {
+            drop(hold);
+            drop(writer.await);
+            return CloseCause::new(CloseKind::LocalClose);
+        }
+    } else if sessions.send(session).is_err() {
         drop(hold);
         drop(writer.await);
         return CloseCause::new(CloseKind::LocalClose);

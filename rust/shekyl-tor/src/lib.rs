@@ -39,7 +39,7 @@ mod publish;
 
 pub use publish::{publish_forward, publish_with_control, InboundPosture, PublishFault};
 
-use drive::{accept_one, dial_one, Accept, Dial};
+pub use drive::{accept_one, dial_one, Accept, Admitted, Dial};
 
 /// Caller inputs. The dial span, the gap span, and the send-queue byte
 /// cap are unmeasured until a measurement names them.
@@ -140,6 +140,13 @@ impl Session {
         self.bytes.try_send(bytes)
     }
 
+    /// Split the gap signal from the byte session. The seam holds the
+    /// bytes. The caller keeps the sender and fires it when the handshake
+    /// completes, which is what disarms the gap.
+    pub fn into_seam(self) -> (Option<oneshot::Sender<()>>, shekyl_capped_stream::Session) {
+        (self.established, self.bytes)
+    }
+
     /// The Levin handshake is done. The gap arm is disarmed.
     pub fn session_established(&mut self) {
         if let Some(sender) = self.established.take() {
@@ -213,6 +220,7 @@ where
             sessions: self.sessions_tx.clone(),
             on_cause: Arc::clone(&self.on_cause),
             send_queue_bytes: self.send_queue_bytes,
+            handoff: None,
         };
         let engine = self.engine.clone();
         self.handle.spawn(dial_one(dial, engine));
@@ -286,6 +294,7 @@ where
                             sessions: sessions.clone(),
                             on_cause: Arc::clone(&on_cause),
                             send_queue_bytes,
+                            handoff: None,
                         };
                         tokio::spawn(accept_one(accept, engine.clone()));
                     }

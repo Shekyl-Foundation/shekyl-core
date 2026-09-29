@@ -4243,6 +4243,36 @@ std::uint64_t shekyl_seam_inbound_held(void);
 int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);
 void shekyl_executor_release(std::uint64_t handle);
 
+/// Spans and the transport-runtime budget. The caller supplies every
+/// number. `network_id` is 16 bytes.
+struct shekyl_zone_params {
+  const std::uint8_t* network_id;
+  std::uint64_t handshake_within_ns;
+  std::uint64_t send_queue_bytes;
+  std::uint64_t shutdown_timeout_ns;
+  std::size_t workers;
+  std::size_t blocking;
+};
+
+/// Bind clearnet. Writes the bound ports. `ipv6` and `proxy_host` may be
+/// null. Returns 0, or -1 when the bind fails.
+int shekyl_zone_listen_clearnet(
+    const char* ipv4, std::uint16_t port,
+    const char* ipv6, std::uint16_t port_v6, int use_ipv6,
+    const char* proxy_host, std::uint16_t proxy_port,
+    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
+    int* out_port, int* out_port_v6);
+/// Bind the Tor forward listener. `extra` may be null. Returns 0, or -1
+/// when the bind fails.
+int shekyl_zone_listen_tor(
+    const char* socks_host, std::uint16_t socks_port,
+    const char* extra, std::uint16_t extra_port,
+    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
+    int* out_port);
+int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
+void shekyl_zone_session_established(std::uint64_t id);
+void shekyl_zone_shutdown(void);
+
 } // extern "C"
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h

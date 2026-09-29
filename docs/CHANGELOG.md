@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### P2P zones listen through the seam
+
+- `--clearnet-transport-encrypt` is removed. Each zone's server is the
+  seam: clearnet and Tor bind there, and a bind failure fails that zone's
+  start. The Levin connection registry is unchanged.
+
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 
 - `shekyl_engine_core::TxRecipient` carries `rid: Option<PaymentRequestId>`,

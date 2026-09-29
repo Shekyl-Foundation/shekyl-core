@@ -29,6 +29,15 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::Session;
 
+/// A Tor channel handed to the seam. `onion` is the dialed host. Inbound
+/// has none: the zone is the address.
+pub struct Admitted {
+    pub open: OpenSocket,
+    pub bytes: shekyl_capped_stream::Session,
+    pub gap: Option<oneshot::Sender<()>>,
+    pub onion: Option<(String, u16)>,
+}
+
 pub struct Accept {
     pub stream: TcpStream,
     pub sockets: Sockets,
@@ -37,6 +46,7 @@ pub struct Accept {
     pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
+    pub handoff: Option<mpsc::UnboundedSender<Admitted>>,
 }
 
 pub struct Dial {
@@ -48,6 +58,7 @@ pub struct Dial {
     pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
+    pub handoff: Option<mpsc::UnboundedSender<Admitted>>,
 }
 
 pub async fn accept_one<C>(accept: Accept, engine: Handle<C>)
@@ -62,6 +73,7 @@ where
         sessions,
         on_cause,
         send_queue_bytes,
+        handoff,
     } = accept;
     let reserved = match sockets.accept_tor(ceiling) {
         Ok(open) => open,
@@ -76,8 +88,33 @@ where
             return;
         }
     };
-    let cause = run(stream, &engine, gap_within, sessions, send_queue_bytes).await;
-    settle(reserved, cause, &on_cause);
+    if let Some(tx) = handoff {
+        let cause = run(
+            stream,
+            &engine,
+            gap_within,
+            sessions,
+            send_queue_bytes,
+            Some(tx),
+            Some(reserved),
+            None,
+        )
+        .await;
+        on_cause(cause);
+    } else {
+        let cause = run(
+            stream,
+            &engine,
+            gap_within,
+            sessions,
+            send_queue_bytes,
+            None,
+            None,
+            None,
+        )
+        .await;
+        settle(reserved, cause, &on_cause);
+    }
 }
 
 pub async fn dial_one<C>(dial: Dial, engine: Handle<C>)
@@ -93,6 +130,7 @@ where
         sessions,
         on_cause,
         send_queue_bytes,
+        handoff,
     } = dial;
     let NetworkAddress::Tor { host, port } = &address else {
         on_cause(CloseCause::new(CloseKind::DialFailed));
@@ -103,6 +141,7 @@ where
         return;
     }
     let host = host.clone();
+    let onion_host = host.clone();
     let port = *port;
     let reserved = match sockets.open_tor(&address) {
         Ok(open) => open,
@@ -176,8 +215,33 @@ where
             return;
         }
     };
-    let cause = run(stream, &engine, gap_within, sessions, send_queue_bytes).await;
-    settle(reserved, cause, &on_cause);
+    if let Some(tx) = handoff {
+        let cause = run(
+            stream,
+            &engine,
+            gap_within,
+            sessions,
+            send_queue_bytes,
+            Some(tx),
+            Some(reserved),
+            Some((onion_host, port)),
+        )
+        .await;
+        on_cause(cause);
+    } else {
+        let cause = run(
+            stream,
+            &engine,
+            gap_within,
+            sessions,
+            send_queue_bytes,
+            None,
+            None,
+            None,
+        )
+        .await;
+        settle(reserved, cause, &on_cause);
+    }
 }
 
 fn settle(open: OpenSocket, cause: CloseCause, on_cause: &Arc<dyn Fn(CloseCause) + Send + Sync>) {
@@ -187,12 +251,16 @@ fn settle(open: OpenSocket, cause: CloseCause, on_cause: &Arc<dyn Fn(CloseCause)
     on_cause(cause);
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run<C>(
     stream: TcpStream,
     engine: &Handle<C>,
     gap_within: Tick,
     sessions: mpsc::UnboundedSender<Session>,
     send_queue_bytes: usize,
+    handoff: Option<mpsc::UnboundedSender<Admitted>>,
+    mut reserved: Option<OpenSocket>,
+    onion: Option<(String, u16)>,
 ) -> CloseCause
 where
     C: Clock + Clone + Send + Sync + 'static,
@@ -217,7 +285,27 @@ where
     } = StreamEnds::open(send_queue_bytes);
     let (established_tx, mut established_rx) = oneshot::channel();
     let session = Session::open(bytes, established_tx);
-    if sessions.send(session).is_err() {
+    if let Some(tx) = handoff {
+        let Some(open) = reserved.take() else {
+            ignore(owner.deregister());
+            drop(hold);
+            return CloseCause::new(CloseKind::LocalClose);
+        };
+        let (gap, bytes) = session.into_seam();
+        if tx
+            .send(Admitted {
+                open,
+                bytes,
+                gap,
+                onion,
+            })
+            .is_err()
+        {
+            ignore(owner.deregister());
+            drop(hold);
+            return CloseCause::new(CloseKind::LocalClose);
+        }
+    } else if sessions.send(session).is_err() {
         ignore(owner.deregister());
         drop(hold);
         return CloseCause::new(CloseKind::LocalClose);

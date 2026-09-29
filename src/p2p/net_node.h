@@ -64,6 +64,7 @@
 #include "net/parse.h"
 #include "common/command_line.h"
 #include "shekyl/shekyl_ffi.h"
+#include "p2p/zone_server.h"
 
 PUSH_WARNINGS
 DISABLE_VS_WARNINGS(4355)
@@ -192,11 +193,6 @@ namespace nodetool
   //! `network_address::host_str()` so they compare equal to a candidate.
   std::set<std::string> local_interface_hosts();
 
-  // hides boost::future and chrono stuff from mondo template file
-  std::optional<boost::asio::ip::tcp::socket>
-  socks_connect_internal(const std::atomic<bool>& stop_signal, boost::asio::io_context& service, const net::socks::endpoint& proxy, const epee::net_utils::network_address& remote);
-
-
   // There is no announced node identifier of any kind. The eclipse-oracle
   // doctrine that once pinned the anon-zone `peer_id` sentinel is preserved
   // as the rationale for the field's ABSENCE at `basic_node_data`
@@ -295,6 +291,17 @@ namespace nodetool
         m_in_timedsync(false)
     {}
 
+    // The base address fields are const. This is the same reconstruction
+    // `connection_context_base::set_details` uses, so a seam link can name
+    // the connection without an epee `connection` friend.
+    p2p_connection_context_t(boost::uuids::uuid connection_id, const epee::net_utils::network_address& remote_address, bool is_income, bool ssl)
+      : p2p_connection_context_t()
+    {
+      auto* base = static_cast<epee::net_utils::connection_context_base*>(this);
+      base->~connection_context_base();
+      new (base) epee::net_utils::connection_context_base(connection_id, remote_address, is_income, ssl);
+    }
+
     uint32_t support_flags;
     bool m_in_timedsync;
     std::set<epee::net_utils::network_address> sent_addresses;
@@ -302,9 +309,7 @@ namespace nodetool
 
   template<class t_payload_net_handler>
   class node_server: public epee::levin::levin_commands_handler<p2p_connection_context_t<typename t_payload_net_handler::connection_context> >,
-                     public i_p2p_endpoint<typename t_payload_net_handler::connection_context>,
-                     public epee::net_utils::i_connection_filter,
-                     public epee::net_utils::i_connection_limit
+                     public i_p2p_endpoint<typename t_payload_net_handler::connection_context>
   {
     struct by_conn_id{};
     struct by_addr{};
@@ -315,7 +320,7 @@ namespace nodetool
     typedef COMMAND_TIMED_SYNC_T<typename t_payload_net_handler::payload_type> COMMAND_TIMED_SYNC;
     static_assert(p2p_connection_context::handshake_command() == COMMAND_HANDSHAKE::ID, "invalid handshake command id");
 
-    typedef epee::net_utils::boosted_tcp_server<epee::levin::async_protocol_handler<p2p_connection_context>> net_server;
+    typedef shekyl::zone_server<epee::levin::async_protocol_handler<p2p_connection_context>> net_server;
 
     struct network_zone;
     using connect_func = std::optional<p2p_connection_context>(network_zone&, epee::net_utils::network_address const&, epee::net_utils::ssl_support_t);
@@ -336,7 +341,7 @@ namespace nodetool
     {
       network_zone()
         : m_connect(nullptr),
-          m_net_server(epee::net_utils::e_connection_type_P2P),
+          m_net_server(),
           m_seed_nodes(),
           m_bind_ip(),
           m_bind_ipv6_address(),
@@ -358,7 +363,7 @@ namespace nodetool
 
       network_zone(boost::asio::io_context& public_service)
         : m_connect(nullptr),
-          m_net_server(public_service, epee::net_utils::e_connection_type_P2P),
+          m_net_server(public_service),
           m_seed_nodes(),
           m_bind_ip(),
           m_bind_ipv6_address(),
@@ -580,11 +585,7 @@ namespace nodetool
     virtual void for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f);
     virtual bool for_connection(const boost::uuids::uuid&, std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f);
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score = 1);
-    //----------------- i_connection_filter  --------------------------------------------------------
-    virtual bool is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t = NULL);
-    //----------------- i_connection_limit  ---------------------------------------------------------
-    virtual bool is_host_limit(const epee::net_utils::network_address &address);
-    //-----------------------------------------------------------------------------------------------
+    bool is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t = NULL);
 
     bool parse_peer_from_string(epee::net_utils::network_address& pe, const std::string& node_addr, uint16_t default_port = 0);
     bool handle_command_line(
@@ -740,7 +741,8 @@ namespace nodetool
 
 
     static std::optional<p2p_connection_context> public_connect(network_zone&, epee::net_utils::network_address const&, epee::net_utils::ssl_support_t);
-    static std::optional<p2p_connection_context> socks_connect(network_zone&, epee::net_utils::network_address const&, epee::net_utils::ssl_support_t);
+    shekyl_zone_params transport_spans() const;
+    shekyl_inbound_ceiling transport_ceiling() const;
 
 
     /* A `std::map` provides constant iterators and key/value pointers even with
@@ -815,7 +817,6 @@ namespace nodetool
     extern const command_line::arg_descriptor<int64_t> arg_limit_rate_down;
     extern const command_line::arg_descriptor<int64_t> arg_limit_rate;
     extern const command_line::arg_descriptor<bool> arg_pad_transactions;
-    extern const command_line::arg_descriptor<bool> arg_clearnet_transport_encrypt;
 }
 
 POP_WARNINGS

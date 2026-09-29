@@ -136,7 +136,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 
 | id | status | evidence | alpha.8? (ruled) |
 |---|---|---|---|
-| **T1** handshake `Noise_NNhfs…` | **IMPLEMENTED** (as of 2026-09-24) | `rust/shekyl-p2p-transport`: `Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`, messages 1216 and 1152. The public-zone server releases the TCP descriptor to that pipe when `--clearnet-transport-encrypt` is set. Levin stays the session above the pipe | **No** — Rick ruled; the default flip is a later commit |
+| **T1** handshake `Noise_NNhfs…` | **IMPLEMENTED** (as of 2026-09-24) | `rust/shekyl-p2p-transport`: `Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`, messages 1216 and 1152. The zone server binds clearnet through the seam; the pipe flag is gone. Levin stays the session. Encryption is not yet unconditional | **No** — Rick ruled; the default flip is a later commit |
 | **T2** PW-3 retired, no padding band | NOT IMPLEMENTED | no padding band present or pinned | No — transport cluster |
 | **T3** BOLT-8 rekeying | **IMPLEMENTED** (as of 2026-09-24) | `channel.rs` `REKEY_NONCES = 1000`; each record spends two nonces (encrypted length, then body), so 500 records | No — transport cluster |
 | **T4** `e1` / `ekem1` normative | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` writes `e, e1` then `e, ee, ekem1`; empty payloads | No — transport cluster |

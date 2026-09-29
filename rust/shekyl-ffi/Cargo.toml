@@ -113,6 +113,12 @@ shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
 # The p2p seam. C++ posts onto the connection strand; this crate
 # records the cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 shekyl-seam = { path = "../shekyl-seam" }
+shekyl-clearnet = { path = "../shekyl-clearnet" }
+shekyl-tor = { path = "../shekyl-tor" }
+shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-capped-stream = { path = "../shekyl-capped-stream" }
+shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
@@ -123,6 +129,7 @@ rcgen = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "sync", "time"] }
 zeroize = { workspace = true }
 libc = "0.2"
 dalek-ff-group = "0.5"

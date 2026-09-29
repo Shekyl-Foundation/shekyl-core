@@ -131,7 +131,6 @@ namespace nodetool
     command_line::add_arg(desc, arg_limit_rate_down);
     command_line::add_arg(desc, arg_limit_rate);
     command_line::add_arg(desc, arg_pad_transactions);
-    command_line::add_arg(desc, arg_clearnet_transport_encrypt);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -227,30 +226,6 @@ namespace nodetool
     return true;
   }
   //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::is_host_limit(const epee::net_utils::network_address &address)
-  {
-    // Live walk, same reason `get_outgoing_connections_count` refreshes its
-    // counter itself: `m_current_number_of_in_peers` is rewritten once a
-    // second and is not incremented on accept. The candidate is not in the
-    // list yet — this runs before the connection is inserted.
-    const inbound_census census = census_inbound(address.get_zone());
-    const network_zone& zone = m_network_zones.at(address.get_zone());
-    if (zone.m_inbound_cap_explicit
-        && census.zone >= zone.m_config.m_net_config.max_in_connection_count)
-    {
-      MWARNING("Exceeded max incoming connections, so dropping this one.");
-      return true;
-    }
-    if (m_process_inbound_ceiling && census.process >= *m_process_inbound_ceiling)
-    {
-      MWARNING("Exceeded the inbound descriptor ceiling (" << *m_process_inbound_ceiling
-               << "), so dropping this one.");
-      return true;
-    }
-    return false;
-  }
-
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::block_host(epee::net_utils::network_address addr, time_t seconds, bool add_only)
@@ -619,7 +594,7 @@ namespace nodetool
         MERROR("Listed --" << arg_tx_proxy.name << " twice with " << epee::net_utils::zone_to_string(proxy.zone));
         return false;
       }
-      zone.m_connect = &socks_connect;
+      zone.m_connect = &public_connect;
       zone.m_proxy_address = std::move(proxy.address);
 
       if (!set_max_out_peers(zone, proxy.max_connections))
@@ -675,7 +650,6 @@ namespace nodetool
 
       zone.m_bind_ip = std::move(inbound.local_ip);
       zone.m_port = std::move(inbound.local_port);
-      zone.m_net_server.set_default_remote(std::move(inbound.default_remote));
       zone.m_our_address = std::move(inbound.our_address);
 
       if (!set_max_in_peers(zone, inbound.max_connections))
@@ -868,10 +842,9 @@ namespace nodetool
     // zone whose public bind may still succeed.
     const bool pad_txs = command_line::get_arg(vm, arg_pad_transactions);
     network_zone& zone = add_zone(epee::net_utils::zone::tor);
-    zone.m_net_server.set_connection_filter(this);
-    zone.m_net_server.set_connection_limit(this);
-    if (!zone.m_net_server.init_server("0", "127.0.0.1", "", "", false, true,
-        epee::net_utils::ssl_support_t::e_ssl_support_disabled))
+    zone.m_proxy_address = *proxy_endpoint;
+    if (!zone.m_net_server.listen_tor(proxy_endpoint->address, "", "", false,
+        reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling(), transport_spans()))
     {
       MERROR("Cannot bind the ephemeral tor forward listener on 127.0.0.1 (OS-assigned port); tearing tor down");
       shekyl_daemon_tor_shutdown();
@@ -880,9 +853,7 @@ namespace nodetool
     }
     const uint16_t local_port = static_cast<uint16_t>(zone.m_net_server.get_binded_port());
 
-    zone.m_connect = &socks_connect;
-    zone.m_proxy_address = *proxy_endpoint;
-    zone.m_net_server.set_default_remote(net::tor_address::unknown());
+    zone.m_connect = &public_connect;
     set_max_out_peers(zone, -1);
     m_payload_handler.set_max_out_peers(epee::net_utils::zone::tor, zone.m_config.m_net_config.max_out_connection_count);
     set_max_in_peers(zone, -1);
@@ -929,7 +900,7 @@ namespace nodetool
       const auto endpoint = net::socks::endpoint::get(proxy);
       CHECK_AND_ASSERT_MES(endpoint, false, "Failed to parse proxy: " << proxy << " - " << endpoint.error().message());
       network_zone& public_zone = m_network_zones[epee::net_utils::zone::public_];
-      public_zone.m_connect = &socks_connect;
+      public_zone.m_connect = &public_connect;
       public_zone.m_proxy_address = *endpoint;
       public_zone.m_can_announce = false;
     }
@@ -949,28 +920,6 @@ namespace nodetool
 
     m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
     network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
-    {
-      const bool encrypt = command_line::get_arg(vm, arg_clearnet_transport_encrypt);
-      if (encrypt)
-      {
-        static const epee::net_utils::network_pipe_ops clearnet_noise_pipe = {
-          &shekyl_clearnet_attach,
-          &shekyl_clearnet_start,
-          &shekyl_clearnet_pin,
-          &shekyl_clearnet_unpin,
-          &shekyl_clearnet_write,
-          &shekyl_clearnet_detach,
-          &shekyl_clearnet_read_done,
-        };
-        public_zone.m_net_server.set_network_pipe(
-          reinterpret_cast<const uint8_t*>(&m_network_id), &clearnet_noise_pipe);
-        MINFO("public-zone clearnet transport encryption is on (Noise NNhfs test gate)");
-      }
-      else
-      {
-        MINFO("public-zone clearnet channel is unencrypted; this is temporary and the off path is deleted before genesis");
-      }
-    }
 
     if ((m_nettype == cryptonote::MAINNET && public_zone.m_port != std::to_string(::config::P2P_DEFAULT_PORT))
         || (m_nettype == cryptonote::TESTNET && public_zone.m_port != std::to_string(::config::testnet::P2P_DEFAULT_PORT))
@@ -1049,20 +998,33 @@ namespace nodetool
       zone.second.m_net_server.get_config_object().set_handler(this);
       zone.second.m_net_server.get_config_object().m_invoke_timeout = std::chrono::milliseconds{P2P_DEFAULT_INVOKE_TIMEOUT};
 
+      if (zone.first == epee::net_utils::zone::i2p)
+        continue;
       if (!zone.second.m_bind_ip.empty())
       {
-        std::string ipv6_addr = "";
-        std::string ipv6_port = "";
-        zone.second.m_net_server.set_connection_filter(this);
-        zone.second.m_net_server.set_connection_limit(this);
-        MINFO("Binding (IPv4) on " << zone.second.m_bind_ip << ":" << zone.second.m_port);
-        if (!zone.second.m_bind_ipv6_address.empty() && m_use_ipv6)
+        const shekyl_inbound_ceiling ceiling = transport_ceiling();
+        const shekyl_zone_params spans = transport_spans();
+        const std::uint8_t* network_id = reinterpret_cast<const std::uint8_t*>(&m_network_id);
+        if (zone.first == epee::net_utils::zone::tor)
         {
-          ipv6_addr = zone.second.m_bind_ipv6_address;
-          ipv6_port = zone.second.m_port_ipv6;
-          MINFO("Binding (IPv6) on " << zone.second.m_bind_ipv6_address << ":" << zone.second.m_port_ipv6);
+          MINFO("Binding tor forward on " << zone.second.m_bind_ip << ":" << zone.second.m_port);
+          res = zone.second.m_net_server.listen_tor(zone.second.m_proxy_address.address, zone.second.m_bind_ip, zone.second.m_port, true, network_id, ceiling, spans);
         }
-        res = zone.second.m_net_server.init_server(zone.second.m_port, zone.second.m_bind_ip, ipv6_port, ipv6_addr, m_use_ipv6, m_require_ipv4, epee::net_utils::ssl_support_t::e_ssl_support_disabled);
+        else
+        {
+          std::string ipv6_addr;
+          std::string ipv6_port;
+          MINFO("Binding (IPv4) on " << zone.second.m_bind_ip << ":" << zone.second.m_port);
+          if (!zone.second.m_bind_ipv6_address.empty() && m_use_ipv6)
+          {
+            ipv6_addr = zone.second.m_bind_ipv6_address;
+            ipv6_port = zone.second.m_port_ipv6;
+            MINFO("Binding (IPv6) on " << zone.second.m_bind_ipv6_address << ":" << zone.second.m_port_ipv6);
+          }
+          const bool have_proxy = zone.second.m_proxy_address.address.port() != 0;
+          res = zone.second.m_net_server.listen_clearnet(zone.second.m_bind_ip, zone.second.m_port, ipv6_addr, ipv6_port, m_use_ipv6 && !ipv6_addr.empty(),
+              have_proxy ? &zone.second.m_proxy_address.address : nullptr, network_id, ceiling, spans);
+        }
         CHECK_AND_ASSERT_MES(res, false, "Failed to bind server");
       }
     }
@@ -1146,13 +1108,13 @@ namespace nodetool
     public_zone.m_net_server.add_idle_handler(boost::bind(&node_server<t_payload_net_handler>::idle_worker, this), std::chrono::seconds{1});
     public_zone.m_net_server.add_idle_handler(boost::bind(&t_payload_net_handler::on_idle, &m_payload_handler), std::chrono::seconds{1});
 
-    //here you can set worker threads count
-    int thrds_count = 10;
+    // Floor: one worker besides the lane idle_worker blocks on. The
+    // measured count is the run record.
+    constexpr std::size_t executor_workers = 2;
     boost::thread::attributes attrs;
     attrs.set_stack_size(THREAD_STACK_SIZE);
-    //go to loop
-    MINFO("Run net_service loop( " << thrds_count << " threads)...");
-    if(!public_zone.m_net_server.run_server(thrds_count, true, attrs))
+    MINFO("Run net_service loop( " << executor_workers << " threads)...");
+    if(!public_zone.m_net_server.run(executor_workers, attrs))
     {
       LOG_ERROR("Failed to run net tcp server!");
     }
@@ -1612,6 +1574,11 @@ namespace nodetool
     //update last seen and push it to peerlist manager
 
     zone.m_notifier.on_session_established(con->m_connection_id, con->m_is_income);
+    {
+      std::uint64_t socket_id = 0;
+      std::memcpy(&socket_id, con->m_connection_id.data + 8, sizeof(socket_id));
+      shekyl_zone_session_established(socket_id);
+    }
     zone.m_notifier.new_out_connection();
 
     LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK.");
@@ -2923,6 +2890,11 @@ namespace nodetool
     }
 
     zone.m_notifier.on_session_established(context.m_connection_id, context.m_is_income);
+    {
+      std::uint64_t socket_id = 0;
+      std::memcpy(&socket_id, context.m_connection_id.data + 8, sizeof(socket_id));
+      shekyl_zone_session_established(socket_id);
+    }
 
     context.m_in_timedsync = false;
     context.support_flags = arg.node_data.support_flags;
@@ -3147,8 +3119,8 @@ namespace nodetool
     // them too would subtract the same descriptors twice -- an
     // `--anonymous-inbound` cap of N would cost the process N descriptors of
     // headroom AND still consume N as the connections arrived, squeezing
-    // public inbound by 2N. Each zone with an explicit cap is bounded by that
-    // cap in `is_host_limit`; the ceiling bounds the pool they all draw from.
+    // public inbound by 2N. Each zone with an explicit cap is bounded by the
+    // Rust admission table; the ceiling bounds the pool they all draw from.
     for (const auto& entry : m_network_zones)
       add(entry.second.m_config.m_net_config.max_out_connection_count);
     return reserved;
@@ -3266,6 +3238,8 @@ namespace nodetool
           MERROR("Unrecognized inbound ceiling kind " << decision.kind << "; refusing inbound.");
         break;
     }
+    shekyl_seam_set_ceiling(&decision);
+    shekyl_zone_set_ceiling(&decision);
   }
 
   template<class t_payload_net_handler>
@@ -3607,57 +3581,40 @@ namespace nodetool
     delete_upnp_port_mapping_v6(port);
   }
 
-  template<typename t_payload_net_handler>
-  std::optional<p2p_connection_context_t<typename t_payload_net_handler::connection_context>>
-  node_server<t_payload_net_handler>::socks_connect(network_zone& zone, const epee::net_utils::network_address& remote, epee::net_utils::ssl_support_t ssl_support)
+  template<class t_payload_net_handler>
+  shekyl_zone_params node_server<t_payload_net_handler>::transport_spans() const
   {
-    auto result = socks_connect_internal(zone.m_net_server.get_stop_signal(), zone.m_net_server.get_io_context(), zone.m_proxy_address, remote);
-    if (result) // if no error
-    {
-      p2p_connection_context context{};
-      if (zone.m_net_server.add_connection(context, std::move(*result), remote, ssl_support))
-        return {std::move(context)};
-    }
-    return std::nullopt;
+    // The handshake span is the inherited invoke timeout, and the queue
+    // holds one admitted packet. Neither is the measured connector
+    // deadline or PWD-T6's session limit. The run record replaces them.
+    // The runtime floor is one worker besides the blocking lane.
+    const std::uint64_t invoke_ns = static_cast<std::uint64_t>(P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT) * 1000000ull;
+    shekyl_zone_params spans{};
+    spans.network_id = nullptr;
+    spans.handshake_within_ns = invoke_ns;
+    spans.send_queue_bytes = LEVIN_DEFAULT_MAX_PACKET_SIZE;
+    spans.shutdown_timeout_ns = invoke_ns;
+    spans.workers = 2;
+    spans.blocking = 1;
+    return spans;
+  }
+
+  template<class t_payload_net_handler>
+  shekyl_inbound_ceiling node_server<t_payload_net_handler>::transport_ceiling() const
+  {
+    shekyl_inbound_ceiling ceiling{};
+    const std::uint64_t reserved = descriptor_reservations(m_reserved_beyond_p2p);
+    shekyl_inbound_ceiling_resolve(reserved, 0, &ceiling);
+    return ceiling;
   }
 
   template<typename t_payload_net_handler>
   std::optional<p2p_connection_context_t<typename t_payload_net_handler::connection_context>>
-  node_server<t_payload_net_handler>::public_connect(network_zone& zone, epee::net_utils::network_address const& na, epee::net_utils::ssl_support_t ssl_support)
+  node_server<t_payload_net_handler>::public_connect(network_zone& zone, epee::net_utils::network_address const& na, epee::net_utils::ssl_support_t)
   {
-    bool is_ipv4 = na.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id();
-    bool is_ipv6 = na.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id();
-    CHECK_AND_ASSERT_MES(is_ipv4 || is_ipv6, std::nullopt,
-      "Only IPv4 or IPv6 addresses are supported here");
-
-    std::string address;
-    std::string port;
-
-    if (is_ipv4)
-    {
-      const epee::net_utils::ipv4_network_address &ipv4 = na.as<const epee::net_utils::ipv4_network_address>();
-      address = epee::string_tools::get_ip_string_from_int32(ipv4.ip());
-      port = epee::string_tools::num_to_string_fast(ipv4.port());
-    }
-    else if (is_ipv6)
-    {
-      const epee::net_utils::ipv6_network_address &ipv6 = na.as<const epee::net_utils::ipv6_network_address>();
-      address = ipv6.ip().to_string();
-      port = epee::string_tools::num_to_string_fast(ipv6.port());
-    }
-    else
-    {
-      LOG_ERROR("Only IPv4 or IPv6 addresses are supported here");
+    p2p_connection_context con{};
+    if (!zone.m_net_server.open(na, con))
       return std::nullopt;
-    }
-
-    typename net_server::t_connection_context con{};
-    const bool res = zone.m_net_server.connect(address, port,
-      zone.m_config.m_net_config.connection_timeout,
-      con, "0.0.0.0", ssl_support);
-
-    if (res)
-      return {std::move(con)};
-    return std::nullopt;
+    return {std::move(con)};
   }
 }

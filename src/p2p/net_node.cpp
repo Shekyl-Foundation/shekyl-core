@@ -60,9 +60,6 @@
 
 namespace
 {
-    constexpr const boost::chrono::milliseconds future_poll_interval{500};
-    constexpr const std::chrono::seconds socks_connect_timeout{P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT};
-
     std::int64_t get_max_connections(const boost::iterator_range<boost::string_ref::const_iterator> value) noexcept
     {
         // -1 is default, 0 is error
@@ -89,39 +86,6 @@ namespace
         return {std::move(*address)};
     }
 
-    bool start_socks(std::shared_ptr<net::socks::client> client, const net::socks::endpoint& proxy, const epee::net_utils::network_address& remote)
-    {
-        CHECK_AND_ASSERT_MES(client != nullptr, false, "Unexpected null client");
-
-        bool set = false;
-        switch (remote.get_type_id())
-        {
-        case net::tor_address::get_type_id():
-            set = client->set_connect_command(remote.as<net::tor_address>(), std::addressof(proxy.userinfo));
-            break;
-        case net::i2p_address::get_type_id():
-            set = client->set_connect_command(remote.as<net::i2p_address>(), std::addressof(proxy.userinfo));
-            break;
-        case epee::net_utils::ipv4_network_address::get_type_id():
-            set = client->set_connect_command(remote.as<epee::net_utils::ipv4_network_address>(), std::addressof(proxy.userinfo));
-            break;
-        case epee::net_utils::ipv6_network_address::get_type_id():
-            if (client->socks_version() == net::socks::version::v5)
-            {
-                set = client->set_connect_command(remote.as<epee::net_utils::ipv6_network_address>(), std::addressof(proxy.userinfo));
-                break;
-            }
-            /* fallthrough */
-        default:
-            MERROR("Unsupported network address in socks_connect. Try socks5://");
-            return false;
-        }
-
-        const bool sent =
-            set && net::socks::client::connect_and_send(std::move(client), proxy.address);
-        CHECK_AND_ASSERT_MES(sent, false, "Unexpected failure to init socks client");
-        return true;
-    }
 }
 
 namespace nodetool
@@ -187,11 +151,6 @@ namespace nodetool
 
     const command_line::arg_descriptor<bool> arg_pad_transactions = {
       "pad-transactions", "Pad relayed transactions to help defend against traffic volume analysis", false
-    };
-    const command_line::arg_descriptor<bool> arg_clearnet_transport_encrypt = {
-      "clearnet-transport-encrypt",
-      "Pre-genesis test gate. Encrypt the public-zone clearnet socket with Noise NNhfs. Default off, so other lanes keep today's plaintext path. Both ends of a test pair must set it. Not a user privacy setting; the off path is deleted before genesis.",
-      false
     };
     std::optional<std::vector<proxy>> get_proxies(boost::program_options::variables_map const& vm)
     {
@@ -445,65 +404,5 @@ namespace nodetool
 
         MWARNING("Filtered command (#" << command << ") to/from " << address.str());
         return true;
-    }
-
-    std::optional<boost::asio::ip::tcp::socket>
-    socks_connect_internal(const std::atomic<bool>& stop_signal, boost::asio::io_context& service, const net::socks::endpoint& proxy, const epee::net_utils::network_address& remote)
-    {
-        using socket_type = net::socks::client::stream_type::socket;
-        using client_result = std::pair<boost::system::error_code, socket_type>;
-
-        struct notify
-        {
-            boost::promise<client_result> socks_promise;
-
-            void operator()(boost::system::error_code error, socket_type&& sock)
-            {
-                socks_promise.set_value(std::make_pair(error, std::move(sock)));
-            }
-        };
-
-        net::socks::client::close_on_exit close_client{};
-        boost::unique_future<client_result> socks_result{};
-        {
-            boost::promise<client_result> socks_promise{};
-            socks_result = socks_promise.get_future();
-
-            auto client = net::socks::make_connect_client(
-                boost::asio::ip::tcp::socket{service}, proxy.ver, notify{std::move(socks_promise)}
-             );
-            close_client.self = client;
-            if (!start_socks(std::move(client), proxy, remote))
-                return std::nullopt;
-        }
-
-        const auto start = std::chrono::steady_clock::now();
-        while (socks_result.wait_for(future_poll_interval) == boost::future_status::timeout)
-        {
-            if (socks_connect_timeout < std::chrono::steady_clock::now() - start)
-            {
-                MERROR("Timeout on socks connect (" << proxy.address << " to " << remote.str() << ")");
-                return std::nullopt;
-            }
-
-            if (stop_signal)
-                return std::nullopt;
-        }
-
-        try
-        {
-            auto result = socks_result.get();
-            if (!result.first)
-            {
-                close_client.self.reset();
-                return {std::move(result.second)};
-            }
-
-            MERROR("Failed to make socks connection to " << remote.str() << " (via " << proxy.address << "): " << result.first.message());
-        }
-        catch (boost::broken_promise const&)
-        {}
-
-        return std::nullopt;
     }
 }

@@ -68,7 +68,7 @@ pub use inode::socket_descriptors;
 pub use seam::ChannelChoice;
 pub use shekyl_capped_stream::Session;
 
-use drive::{accept_one, zero_tally, Accept};
+pub use drive::{accept_one, dial_one, zero_tally, Accept, Admitted, Dial};
 use seam::ChannelChoice as Choice;
 
 /// How many responder handshakes the blocking pool computed, and how many
@@ -220,6 +220,7 @@ where
             sessions: self.sessions_tx.clone(),
             on_cause: Arc::clone(&self.on_cause),
             send_queue_bytes: self.send_queue_bytes,
+            handoff: None,
         };
         let engine = self.engine.clone();
         self.handle.spawn(drive::dial_one(dial, engine));
@@ -291,6 +292,7 @@ where
                 sessions: sessions_tx.clone(),
                 on_cause: Arc::clone(&config.on_cause),
                 send_queue_bytes: config.send_queue_bytes,
+                handoff: None,
             };
             let engine = engine.clone();
             tokio::spawn(accept_one(accept, engine));

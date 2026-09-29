@@ -136,14 +136,14 @@ struct Bound {
 
 static STATE: Mutex<Option<Hub>> = Mutex::new(None);
 
-fn hub() -> Option<Hub> {
+pub(crate) fn hub() -> Option<Hub> {
     STATE.lock().expect("seam state").clone()
 }
 
 /// One admission table for the process. A new binding does not mint ids
 /// again: a `reap` that arrives after the swap names an id the new hub
 /// does not hold.
-fn process_sockets() -> shekyl_seam::Sockets {
+pub(crate) fn process_sockets() -> shekyl_seam::Sockets {
     static TABLE: std::sync::OnceLock<shekyl_seam::Sockets> = std::sync::OnceLock::new();
     TABLE.get_or_init(shekyl_seam::Sockets::new).clone()
 }
@@ -160,7 +160,7 @@ fn store(next: Option<Hub>) {
     *STATE.lock().expect("seam state") = next;
 }
 
-fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundCeiling> {
+pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundCeiling> {
     match ceiling.kind {
         SHEKYL_INBOUND_CEILING_BOUNDED => Some(InboundCeiling::Bounded(ceiling.ceiling)),
         SHEKYL_INBOUND_CEILING_NO_PER_PROCESS_LIMIT => Some(InboundCeiling::Unbounded(
