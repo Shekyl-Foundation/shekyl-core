@@ -16,6 +16,7 @@
 mod compare;
 mod handshake;
 mod peer;
+mod script;
 mod seam_host;
 mod transcript;
 
@@ -24,8 +25,9 @@ pub use compare::{
 };
 pub use handshake::{handshake, Handshake, HANDSHAKE_SEED};
 pub use peer::run_peer;
+pub use script::{known_seed, script, whole_message_count, SEED_CONCURRENT};
 pub use seam_host::{serve_seam_once, SeamHost};
-pub use transcript::{End, Role, Transcript};
+pub use transcript::{End, Event, Role, Transcript};
 
 /// A harness failure. The seed, when there is one, stays on the transcript.
 #[derive(Debug)]
@@ -76,11 +78,13 @@ mod tests {
     #[test]
     fn a_transcript_round_trips_and_keeps_the_seed() {
         let transcript = Transcript {
+            version: 1,
             seed: HANDSHAKE_SEED,
             role: Role::Peer,
             sent: vec![1, 2, 255],
             recv: vec![],
             end: End::Established,
+            events: vec![],
         };
         let decoded = Transcript::decode(&transcript.encode()).expect("decode");
         assert_eq!(decoded, transcript);
@@ -127,6 +131,40 @@ mod tests {
                 seed: HANDSHAKE_SEED,
                 field: "peer-recv",
             }]
+        );
+    }
+
+    #[test]
+    fn each_leg_agrees_on_the_seam_host() {
+        for seed in [1, 2, 3, 10, 11, 20, 30, 31, 32, 40, 100, 107] {
+            let run = run_seam(seed).unwrap_or_else(|err| panic!("seed {seed}: {err}"));
+            assert!(
+                run_agrees(&run),
+                "seed {seed} peer sent {} recv {} {:?} host sent {} recv {} {:?}",
+                run.peer.sent.len(),
+                run.peer.recv.len(),
+                run.peer.end,
+                run.host.sent.len(),
+                run.host.recv.len(),
+                run.host.end
+            );
+        }
+        let concurrent = run_seam(SEED_CONCURRENT).expect("concurrent");
+        assert_eq!(whole_message_count(&concurrent.peer.recv), Some(2));
+        let stalled = run_seam(40).expect("backpressure");
+        assert!(
+            stalled
+                .peer
+                .events
+                .iter()
+                .any(|event| event.kind() == "stalled"),
+            "peer events {:?}",
+            stalled
+                .peer
+                .events
+                .iter()
+                .map(Event::kind)
+                .collect::<Vec<_>>()
         );
     }
 }

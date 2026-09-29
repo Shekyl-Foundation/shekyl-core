@@ -9,7 +9,7 @@
 //! [`EXPECTED_DIVERGENCES`] is not: those are the places the seam is not
 //! epee, and the harness does not "fix" them toward epee.
 
-use crate::transcript::{Role, Transcript};
+use crate::transcript::{Event, Role, Transcript};
 
 /// Named in `P2P_DIFFERENTIAL_HARNESS.md`. A parity field is not in this list.
 pub const EXPECTED_DIVERGENCES: &[&str] = &[
@@ -95,10 +95,30 @@ pub fn diff(left: &Run, right: &Run) -> Vec<Finding> {
             field: "host-session",
         });
     }
+    if event_kinds(&left.peer) != event_kinds(&right.peer)
+        || event_kinds(&left.host) != event_kinds(&right.host)
+    {
+        findings.push(Finding {
+            seed,
+            field: "events",
+        });
+    }
     findings
         .into_iter()
-        .filter(|finding| !is_expected_divergence(finding.field))
+        .filter(|finding| !is_expected_divergence(classify(finding)))
         .collect()
+}
+
+/// Seed 32's host sends one byte past the seam's queue. Epee accepts that
+/// buffer; the seam refuses it. The handshake bytes stay parity fields.
+fn classify(finding: &Finding) -> &'static str {
+    if finding.seed == crate::script::SEED_SEND_OVER
+        && (finding.field == "host-sent" || finding.field == "peer-recv")
+    {
+        "byte-bounds"
+    } else {
+        finding.field
+    }
 }
 
 pub fn is_expected_divergence(field: &str) -> bool {
@@ -107,6 +127,10 @@ pub fn is_expected_divergence(field: &str) -> bool {
 
 pub fn is_parity_field(field: &str) -> bool {
     PARITY.contains(&field) || field == "seed"
+}
+
+fn event_kinds(transcript: &Transcript) -> Vec<&'static str> {
+    transcript.events.iter().map(Event::kind).collect()
 }
 
 fn push_bytes(

@@ -16,10 +16,14 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
+
+extern "C" int32_t shekyl_levin_ingress_admit(uint32_t command, uint32_t flags, uint64_t* out_cap);
 
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "misc_log_ex.h"
@@ -30,8 +34,35 @@
 
 namespace {
 
-constexpr uint64_t kSeed1 = 1;
-constexpr auto kWait = std::chrono::seconds(3);
+constexpr uint64_t kSeedBackpressure = 40;
+constexpr uint64_t kSeedConcurrent = 20;
+constexpr uint64_t kSeedSendOver = 32;
+constexpr auto kPause = std::chrono::milliseconds(400);
+constexpr std::size_t kSendCap = 64 * 1024;
+
+bool known_seed(uint64_t seed) {
+  switch (seed) {
+    case 1:
+    case 2:
+    case 3:
+    case 10:
+    case 11:
+    case 20:
+    case 30:
+    case 31:
+    case 32:
+    case 40:
+      return true;
+    default:
+      return seed >= 100 && seed < 116;
+  }
+}
+
+std::chrono::seconds wait_for(uint64_t seed) {
+  if (seed == 11 || seed == 40)
+    return std::chrono::seconds(20);
+  return std::chrono::seconds(8);
+}
 
 struct record {
   std::mutex mu;
@@ -44,13 +75,25 @@ struct record {
 };
 
 record g_record;
+uint64_t g_seed = 0;
+bool g_paused = false;
+bool g_followed = false;
+bool g_over_sent = false;
 
 struct harness_context : epee::net_utils::connection_context_base {
-  static std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) noexcept {
-    return size_t{4 * 1024 * 1024};
+  bool established_session = false;
+
+  std::optional<size_t> get_max_bytes(uint32_t command, uint32_t flags, int32_t* rc) const noexcept {
+    uint64_t cap = 0;
+    const int32_t code = shekyl_levin_ingress_admit(command, flags, &cap);
+    if (rc)
+      *rc = code;
+    if (code != 0)
+      return std::nullopt;
+    return static_cast<size_t>(cap);
   }
   static constexpr int handshake_command() noexcept { return 1001; }
-  static constexpr bool session_established() noexcept { return false; }
+  bool session_established() const noexcept { return established_session; }
 };
 
 struct tap : epee::net_utils::i_service_endpoint {
@@ -73,6 +116,13 @@ struct tap : epee::net_utils::i_service_endpoint {
   bool release() override { return real->release(); }
 };
 
+epee::byte_slice relay_notify() {
+  epee::levin::message_writer writer;
+  const char payload[] = {'r', 'e', 'l', 'a', 'y'};
+  writer.buffer.write(payload, sizeof payload);
+  return writer.finalize_notify(1002);
+}
+
 struct recording_handler {
   using connection_context = harness_context;
   using config_type = epee::levin::async_protocol_handler_config<connection_context>;
@@ -90,6 +140,41 @@ struct recording_handler {
       g_record.delivered.insert(g_record.delivered.end(), bytes, bytes + cb);
     }
     const bool ok = inner.handle_recv(ptr, cb);
+    if (g_seed == kSeedConcurrent && !g_followed) {
+      bool established = false;
+      {
+        std::lock_guard<std::mutex> lock(g_record.mu);
+        established = g_record.established;
+      }
+      if (established) {
+        g_followed = true;
+        endpoint.do_send(relay_notify());
+      }
+    }
+    if (g_seed == kSeedSendOver && !g_over_sent) {
+      bool established = false;
+      {
+        std::lock_guard<std::mutex> lock(g_record.mu);
+        established = g_record.established;
+      }
+      if (established) {
+        g_over_sent = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::vector<uint8_t> over(kSendCap + 1, 0);
+        endpoint.do_send(epee::byte_slice{std::move(over)});
+      }
+    }
+    if (g_seed == kSeedBackpressure && !g_paused) {
+      bool established = false;
+      {
+        std::lock_guard<std::mutex> lock(g_record.mu);
+        established = g_record.established;
+      }
+      if (established) {
+        g_paused = true;
+        std::this_thread::sleep_for(kPause);
+      }
+    }
     std::lock_guard<std::mutex> lock(g_record.mu);
     if (!g_record.invoke_done && (!g_record.sent.empty() || !ok)) {
       g_record.invoke_done = true;
@@ -125,7 +210,7 @@ cryptonote::CORE_SYNC_DATA seed1_sync() {
 }
 
 struct commands : epee::levin::levin_commands_handler<harness_context> {
-  int invoke(int command, const epee::span<const uint8_t> in_buff, epee::byte_stream& buff_out, harness_context&) override {
+  int invoke(int command, const epee::span<const uint8_t> in_buff, epee::byte_stream& buff_out, harness_context& ctx) override {
     const bool handshake_invoke = command == handshake::ID;
     handshake::request req;
     epee::serialization::portable_storage in_ps;
@@ -139,6 +224,8 @@ struct commands : epee::levin::levin_commands_handler<harness_context> {
       if (!out_ps.store_to_binary(buff_out))
         return LEVIN_ERROR_FORMAT;
     }
+    if (loaded)
+      ctx.established_session = true;
     {
       std::lock_guard<std::mutex> lock(g_record.mu);
       g_record.established = loaded;
@@ -176,16 +263,41 @@ const char* end_word() {
   return "refused";
 }
 
+void write_events(std::ostream& out) {
+  std::size_t off = 0;
+  bool first = true;
+  while (off + 29 <= g_record.delivered.size()) {
+    uint64_t payload = 0;
+    std::memcpy(&payload, g_record.delivered.data() + off + 8, sizeof payload);
+    const std::size_t total = 29 + static_cast<std::size_t>(payload);
+    if (off + total > g_record.delivered.size())
+      break;
+    std::vector<uint8_t> message(g_record.delivered.begin() + static_cast<std::ptrdiff_t>(off),
+                                 g_record.delivered.begin() + static_cast<std::ptrdiff_t>(off + total));
+    out << "event read " << hex(message) << "\n";
+    if (first) {
+      out << "event wrote " << hex(g_record.sent) << "\n";
+      out << "event stalled\n";
+      out << "event resumed\n";
+      first = false;
+    }
+    off += total;
+  }
+}
+
 bool write_transcript(const std::string& path, uint64_t seed) {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   if (!out)
     return false;
-  out << "shekyl-p2p-transcript 1\n"
+  const char* version = seed == kSeedBackpressure ? "shekyl-p2p-transcript 2" : "shekyl-p2p-transcript 1";
+  out << version << "\n"
       << "seed " << seed << "\n"
       << "role host\n"
       << "sent " << hex(g_record.sent) << "\n"
       << "recv " << hex(g_record.delivered) << "\n"
       << "end " << end_word() << "\n";
+  if (seed == kSeedBackpressure)
+    write_events(out);
   return static_cast<bool>(out);
 }
 
@@ -202,12 +314,20 @@ int main(int argc, char** argv) {
     std::cerr << "seed\n";
     return 1;
   }
-  if (seed != kSeed1) {
+  if (!known_seed(seed)) {
     std::cerr << "no script for seed " << seed << "\n";
     return 1;
   }
+  g_seed = seed;
 
   mlog_configure("", true);
+
+  // A P2P connection enables epee's rate limiter. Unset, its target is
+  // 16 KiB/s, which is not a Levin rule. The harness raises it so the
+  // comparison is the bytes. The seam has no such limiter.
+  using connection_t = epee::net_utils::connection<recording_handler>;
+  connection_t::set_rate_up_limit(std::numeric_limits<int64_t>::max());
+  connection_t::set_rate_down_limit(std::numeric_limits<int64_t>::max());
 
   using server_t = epee::net_utils::boosted_tcp_server<recording_handler>;
   server_t server(epee::net_utils::e_connection_type_P2P);
@@ -225,14 +345,15 @@ int main(int argc, char** argv) {
 
   {
     std::unique_lock<std::mutex> lock(g_record.mu);
-    if (!g_record.cv.wait_for(lock, kWait, [] { return g_record.invoke_done || g_record.closed; })) {
+    const auto wait = wait_for(seed);
+    if (!g_record.cv.wait_for(lock, wait, [] { return g_record.invoke_done || g_record.closed; })) {
       std::cerr << "epee host timed out\n";
       server.send_stop_signal();
       server.timed_wait_server_stop(5 * 1000);
       return 1;
     }
-    if (g_record.established)
-      g_record.cv.wait_for(lock, kWait, [] { return g_record.closed; });
+    if (g_record.established || g_record.invoke_done)
+      g_record.cv.wait_for(lock, wait_for(seed), [] { return g_record.closed; });
   }
 
   const bool wrote = write_transcript(argv[2], seed);

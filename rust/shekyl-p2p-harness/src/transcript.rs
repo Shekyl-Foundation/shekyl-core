@@ -16,7 +16,8 @@ use std::str::FromStr;
 
 use crate::Error;
 
-const VERSION: &str = "shekyl-p2p-transcript 1";
+const VERSION_1: &str = "shekyl-p2p-transcript 1";
+const VERSION_2: &str = "shekyl-p2p-transcript 2";
 
 /// How the run ended. Parity compares this. It is not a transport cause.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,14 +83,37 @@ impl FromStr for Role {
     }
 }
 
+/// One step in a version-2 log. No timestamps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Event {
+    Wrote(Vec<u8>),
+    Read(Vec<u8>),
+    Stalled,
+    Resumed,
+}
+
+impl Event {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Wrote(_) => "wrote",
+            Self::Read(_) => "read",
+            Self::Stalled => "stalled",
+            Self::Resumed => "resumed",
+        }
+    }
+}
+
 /// A seeded run. The seed is how a failing case is replayed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Transcript {
+    /// 1, or 2 when [`Self::events`] is the backpressure log.
+    pub version: u8,
     pub seed: u64,
     pub role: Role,
     pub sent: Vec<u8>,
     pub recv: Vec<u8>,
     pub end: End,
+    pub events: Vec<Event>,
 }
 
 impl Transcript {
@@ -103,37 +127,83 @@ impl Transcript {
     }
 
     pub fn encode(&self) -> String {
-        format!(
-            "{VERSION}\nseed {}\nrole {}\nsent {}\nrecv {}\nend {}\n",
+        let version = if self.version == 2 {
+            VERSION_2
+        } else {
+            VERSION_1
+        };
+        let mut out = format!(
+            "{version}\nseed {}\nrole {}\nsent {}\nrecv {}\nend {}\n",
             self.seed,
             self.role.as_str(),
             hex(&self.sent),
             hex(&self.recv),
             self.end.as_str(),
-        )
+        );
+        if self.version == 2 {
+            for event in &self.events {
+                out.push_str(&encode_event(event));
+            }
+        }
+        out
     }
 
     pub fn decode(text: &str) -> Result<Self, Error> {
         let mut lines = text.lines();
-        let version = lines.next().ok_or_else(|| Error::new("empty transcript"))?;
-        if version != VERSION {
-            return Err(Error::new(format!("unknown transcript {version}")));
-        }
+        let version_line = lines.next().ok_or_else(|| Error::new("empty transcript"))?;
+        let version = match version_line {
+            VERSION_1 => 1,
+            VERSION_2 => 2,
+            other => return Err(Error::new(format!("unknown transcript {other}"))),
+        };
         let seed = value(lines.next(), "seed")?;
         let role = value(lines.next(), "role")?;
         let sent = value(lines.next(), "sent")?;
         let recv = value(lines.next(), "recv")?;
         let end = value(lines.next(), "end")?;
-        if lines.next().is_some() {
+        let mut events = Vec::new();
+        if version == 2 {
+            for line in lines {
+                events.push(decode_event(line)?);
+            }
+        } else if lines.next().is_some() {
             return Err(Error::new("trailing transcript line"));
         }
         Ok(Self {
+            version,
             seed: seed.parse().map_err(|_| Error::new("seed is not a u64"))?,
             role: role.parse()?,
             sent: unhex(sent)?,
             recv: unhex(recv)?,
             end: end.parse()?,
+            events,
         })
+    }
+}
+
+fn encode_event(event: &Event) -> String {
+    match event {
+        Event::Wrote(bytes) => format!("event wrote {}\n", hex(bytes)),
+        Event::Read(bytes) => format!("event read {}\n", hex(bytes)),
+        Event::Stalled => "event stalled\n".to_string(),
+        Event::Resumed => "event resumed\n".to_string(),
+    }
+}
+
+fn decode_event(line: &str) -> Result<Event, Error> {
+    let rest = line
+        .strip_prefix("event ")
+        .ok_or_else(|| Error::new("expected event"))?;
+    if let Some(hex_text) = rest.strip_prefix("wrote ") {
+        return Ok(Event::Wrote(unhex(hex_text)?));
+    }
+    if let Some(hex_text) = rest.strip_prefix("read ") {
+        return Ok(Event::Read(unhex(hex_text)?));
+    }
+    match rest {
+        "stalled" => Ok(Event::Stalled),
+        "resumed" => Ok(Event::Resumed),
+        _ => Err(Error::new(format!("unknown event {rest}"))),
     }
 }
 

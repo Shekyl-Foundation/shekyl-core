@@ -42,7 +42,10 @@ Two hosts, each with a recording handler:
   connector's tests, and it does not open a second admission table.
 - `epee-host`, the C++ binary. It hosts `boosted_tcp_server`, serves
   one connection, and writes this transcript. It is the only C++ in
-  the harness, and it is not linked into the Rust crate.
+  the harness, and it is not linked into the Rust crate. A P2P
+  connection enables epee's rate limiter, whose unset target is
+  16 KiB/s. The harness sets that limit to the maximum: the comparison
+  is the Levin bytes, and the seam has no rate limiter.
 
 `seam-host SEED TRANSCRIPT` and `epee-host SEED TRANSCRIPT` each print
 `host:port` on stdout, serve one connection, and write the host
@@ -60,9 +63,9 @@ runs that seed twice against the seam host.
 
 ## Transcript
 
-Version 1 is the current format. Both writers emit it. `compare`
-rejects any other version line, so a drift between them is a parse
-failure.
+Version 1 is the format every seed uses except backpressure. Both
+writers emit the same version for a seed. `compare` rejects any other
+version line, so a drift between them is a parse failure.
 
 The file is UTF-8. One field per line, LF endings, and a trailing LF
 after the last line. There is no timestamp. A writer emits exactly
@@ -93,25 +96,49 @@ the handshake response came back. `closed` means the peer closed
 before that response. `refused` means the invoke was not a handshake.
 It is not a transport cause.
 
-An extra line, a missing field, or a version line other than
-`shekyl-p2p-transcript 1` does not parse.
+Version 1 rejects an extra line. A missing field, or a version line
+other than `shekyl-p2p-transcript 1` or `shekyl-p2p-transcript 2`,
+does not parse.
 
-Version 2 is not this format. The backpressure leg needs the order of
-events: what was written and read, when the connection stalled and
-resumed, and how it ended, still with no timestamps. That lands as
-`shekyl-p2p-transcript 2` when that seed is written, rather than being
-squeezed into these fields. A golden's first line is the version, so
-the format it uses is on the golden.
+Version 2 is the backpressure seed. It keeps these six lines, then an
+event log, and the version line is `shekyl-p2p-transcript 2`. Each
+event is one line, in order, with no timestamp:
+
+```text
+event wrote <hex>
+event read <hex>
+event stalled
+event resumed
+```
+
+`wrote` and `read` use the same hex as `sent` and `recv`. `stalled` is
+the moment a write stopped making progress, or the host stopped
+reading. `resumed` is the moment that wait ended. A golden's first
+line is the version, so the format it uses is on the golden.
 
 ## Ordering
 
-The in-process legs below can run now. Each one is a seed of the same
-peer, against the epee host and the seam host.
+Two pull requests, not five steps.
 
-The cross-build run cannot. It is a daemon whose zones use the seam,
-talking to a daemon still on epee, on testnet: sync, relay, and both
-dial directions. Production still uses epee, so that run waits on the
-zone-binding commit. It is not blocked on this harness.
+This one finishes the harness. The five legs are seeds for the peer
+and the two hosts already here. It merges when every leg has run
+against both hosts. A mismatch is either on the expected-divergences
+list or it is fixed in this pull request.
+
+The next pull request is the cutover. The zone binding and the
+deletion land together: a period where production runs on the seam
+with epee still in the tree is not a state anything needs. That
+branch carries the zone binding and the call sites that move with it
+(socket admission reads the Rust counts, both ban-list writers reach
+the Rust list, `m_our_address` comes from Tor publication, `get_info`
+reports real socket counts), the cross-build run and the measurements
+taken on that build and recorded as run records, then D13's deletions,
+the epee goldens, I2P recorded as removed, and the pipe branch
+deleted. It merges once, when the run records are in.
+
+The gates are unchanged. The differential harness passes before
+anything is deleted, which is this pull request. The measurements are
+taken on the build that ships, which is the cutover branch.
 
 ## Goldens
 
@@ -141,27 +168,28 @@ Rust Levin layer. The peer stays; the epee host does not.
 ## In-process legs
 
 `COMMAND_HANDSHAKE` (1001) is an invoke. A notify for 1001 is not this
-exchange. Seed 1 is that invoke and its response. The request carries
-network id sixteen bytes of `0x11`, IPv4 `0.0.0.0:18080`, support
-flags 0, height 1, cumulative difficulty 2, difficulty top64 0, top id
-thirty-two bytes of `0xab`, top version 0, and a 32-byte nonce whose
-first eight bytes are the seed little-endian. The response is the same
-node and sync data with an empty peer list. The invoke is one write.
-The legs after it are further seeds, not new hosts:
+exchange. Every handshake in these scripts is the same one: network id
+sixteen bytes of `0x11`, IPv4 `0.0.0.0:18080`, support flags 0, height
+1, cumulative difficulty 2, difficulty top64 0, top id thirty-two bytes
+of `0xab`, top version 0, and a nonce whose first eight bytes are
+`1` little-endian. The response is the same node and sync data with an
+empty peer list. The script seed selects the leg. It does not mint a
+second handshake.
 
-1. **Byte splits.** The same message sequence, at every read boundary
-   a peer can produce. A property test draws random Levin sequences and
-   random split points, and both sides hand the Levin handler identical
-   bytes.
-2. **Size extremes.** Messages at each command's cap, including the
-   4 MiB envelopes.
-3. **Concurrent senders.** A response on the connection's strand and a
-   relay send from the zone's strand at the same moment. The peer
-   receives whole messages, never two interleaved mid-message.
-4. **Closes.** The peer closes mid-message, the handler refuses a
-   delivery, a send does not fit. For each, compare the session
-   outcome and the recorded cause.
-5. **Backpressure.** A slow handler stops reading on the seam's side.
-   It does not close. The peer sees TCP push back, not a reset. The
-   order of that stall is version 2 of the transcript, not these
-   totals.
+An invoke that is not that handshake gets an empty response for its
+command, and the session is `refused`. A notify gets no response. A
+close before a whole message is `closed`.
+
+| Seed | Leg |
+| --- | --- |
+| 1 | Handshake, one write. |
+| 2 | That handshake, split after the 29-byte header. |
+| 3 | That handshake, one byte per write. |
+| 100–115 | That handshake, split on a stride derived from the seed. |
+| 10 | `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) invoke whose payload is that command's cap. |
+| 11 | The handshake, then a `NOTIFY_NEW_COMPACT_BLOCK` (2008) notify whose payload is that command's 4 MiB cap. |
+| 20 | The handshake response, then a `COMMAND_TIMED_SYNC` (1002) notify of the bytes `relay`, queued without waiting for the first to flush. The peer's bytes parse as two whole messages. |
+| 30 | The peer closes after 10 bytes of the handshake. |
+| 31 | An invoke of 1001 whose payload is not a handshake. |
+| 32 | After the handshake response, the host queues one byte more than the seam send cap (64 KiB). The seam refuses that buffer and the epee host accepts it. `compare` names that `host-sent` / `peer-recv` difference `byte-bounds`. The handshake the peer wrote still has to match. |
+| 40 | After the handshake response the host stops reading for 400 ms, and the peer writes four 2 MiB `NOTIFY_NEW_COMPACT_BLOCK` notifies. Version 2. |

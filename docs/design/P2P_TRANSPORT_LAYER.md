@@ -1520,7 +1520,7 @@ round can reject them.
   and the session established when that response is back. `epee-host`
   is the C++ reference and is not linked into that crate. The transcript
   format is version 1 in the harness document; version 2 is the
-  backpressure event log and is not written yet. The
+  backpressure event log, written for that seed. The
   cross-build run waits on the zone-binding commit, not on this
   harness. A difference on an expected divergence is not a regression. The
   current server stays in the tree as the wire reference until this

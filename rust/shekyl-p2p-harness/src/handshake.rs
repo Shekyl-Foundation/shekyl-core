@@ -3,11 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Seed 1: a handshake invoke and the response that establishes the session.
+//! The handshake every script uses.
 //!
 //! `COMMAND_HANDSHAKE` is not a notify. The dialer sends the invoke and
 //! waits. The session is established when the response is back. The nonce
-//! is the seed, so the same seed is the same bytes.
+//! is seed 1, so every script's handshake is the same bytes. The script
+//! seed selects the leg; it does not mint a second handshake.
 
 use shekyl_levin::{
     invoke, response, BasicNodeData, CoreSyncData, HandshakeRequest, HandshakeResponse,
@@ -17,7 +18,7 @@ use std::net::Ipv4Addr;
 
 use crate::Error;
 
-/// The only seed with a script. Later legs add seeds; they do not add hosts.
+/// The handshake body. Script seeds select the leg; they do not change this.
 pub const HANDSHAKE_SEED: u64 = 1;
 
 /// What seed 1 sends, and the response both hosts reply with.
