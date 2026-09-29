@@ -235,7 +235,16 @@ impl<C: Clock + Clone> Drop for Listener<C> {
 }
 
 /// Bind on `pool` and accept. `pool` was built with [`shekyl_runtime::runtime`].
-pub fn listen<C>(pool: Pool, engine: &Handle<C>, config: Config) -> std::io::Result<Listener<C>>
+///
+/// `sockets` is the process-wide admission table. Clones share it. This
+/// function does not mint a table: the seam and every connector count the
+/// same sockets.
+pub fn listen<C>(
+    pool: Pool,
+    engine: &Handle<C>,
+    sockets: Sockets,
+    config: Config,
+) -> std::io::Result<Listener<C>>
 where
     C: Clock + Clone + Send + Sync + 'static,
 {
@@ -246,7 +255,6 @@ where
     let listener = pool.block_on(TcpListener::bind(config.listen))?;
     let local = listener.local_addr()?;
     let tally = Arc::new(zero_tally());
-    let sockets = Sockets::new();
     let (sessions_tx, sessions_rx) = mpsc::unbounded_channel();
     let engine = engine.clone();
     let engine_dial = engine.clone();
@@ -321,7 +329,7 @@ mod tests {
     use shekyl_peer_policy::InboundCeiling;
     use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
     use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
-    use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, NetworkColumn};
+    use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, NetworkColumn, Sockets};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::mpsc;
 
@@ -401,6 +409,7 @@ mod tests {
         let listener = listen(
             pool,
             &engine.handle(),
+            Sockets::new(),
             config(option, within, ceiling, recorded.sink),
         )
         .expect("listen");
@@ -780,6 +789,7 @@ mod tests {
         let listener = listen(
             pool,
             &engine.handle(),
+            Sockets::new(),
             config(
                 ClearnetOption::Off,
                 Tick::new(5_000_000_000),

@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use tokio::sync::Notify;
 
@@ -18,6 +18,8 @@ use tokio::sync::Notify;
 pub struct ByteQueue {
     inner: Arc<Mutex<ByteQueueInner>>,
     data: Arc<Notify>,
+    /// Wakes [`Self::pop_blocking`]. The async path uses [`Self::data`].
+    parked: Arc<Condvar>,
 }
 
 struct ByteQueueInner {
@@ -46,7 +48,13 @@ impl ByteQueue {
                 items: VecDeque::new(),
             })),
             data: Arc::new(Notify::new()),
+            parked: Arc::new(Condvar::new()),
         }
+    }
+
+    fn wake(&self) {
+        self.data.notify_waiters();
+        self.parked.notify_all();
     }
 
     pub(crate) fn try_push(&self, bytes: Vec<u8>) -> Result<(), PushError> {
@@ -68,6 +76,7 @@ impl ByteQueue {
         inner.items.push_back(bytes);
         drop(inner);
         self.data.notify_one();
+        self.parked.notify_all();
         Ok(())
     }
 
@@ -79,19 +88,19 @@ impl ByteQueue {
     ) -> Result<(), PushError> {
         inner.closed = true;
         drop(inner);
-        self.data.notify_waiters();
+        self.wake();
         Err(PushError::Full)
     }
 
     /// Return `n` bytes of cap after the writer finishes that buffer.
-    pub(crate) fn release(&self, n: usize) {
+    pub fn release(&self, n: usize) {
         let mut inner = self.inner.lock().expect("outbound");
         inner.used = inner.used.saturating_sub(n);
     }
 
     pub(crate) fn close(&self) {
         self.inner.lock().expect("outbound").closed = true;
-        self.data.notify_waiters();
+        self.wake();
     }
 
     /// The next buffer. `None` means the queue is closed and empty.
@@ -113,9 +122,40 @@ impl ByteQueue {
         }
     }
 
+    /// The next buffer, if one is waiting. Does not wait, and does not
+    /// return the bytes to the cap: the writer calls [`Self::release`]
+    /// after it finishes them.
+    #[must_use]
+    pub fn try_pop(&self) -> Option<Vec<u8>> {
+        self.inner.lock().expect("outbound").items.pop_front()
+    }
+
+    /// The next buffer. Blocks the calling thread. `None` means the queue
+    /// is closed and empty. The byte count stays until [`Self::release`].
+    ///
+    /// [`Self::pop`] is the same wait on a task. This is the wait for a
+    /// thread that is not a task: the seam harness writer, until zone bind
+    /// runs the connector's `write_capped`.
+    #[must_use]
+    pub fn pop_blocking(&self) -> Option<Vec<u8>> {
+        let mut inner = self.inner.lock().expect("outbound");
+        loop {
+            if let Some(bytes) = inner.items.pop_front() {
+                return Some(bytes);
+            }
+            if inner.closed {
+                return None;
+            }
+            inner = self
+                .parked
+                .wait(inner)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn pop_now(&self) -> Option<Vec<u8>> {
-        self.inner.lock().expect("outbound").items.pop_front()
+        self.try_pop()
     }
 }
 

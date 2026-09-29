@@ -433,3 +433,12 @@ It does not re-open §4.2's ordering.
 
 It does not claim the C++ peerlist is the specification. §8 is the list a port
 would otherwise preserve.
+
+**Ban-list coordination is open (2026-09-28).** The ban list and these
+lists are separate today. Discovery's pre-dial check is the only link,
+so a banned host can still be drawn and disclosed. This slice decides,
+per connector — only clearnet addresses can be banned
+([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D7) — whether a ban
+removes or marks entries, whether banned addresses are refused at admit
+and excluded from disclosure, and what an expiry does. That decision is
+not inherited from the two lists staying independent.

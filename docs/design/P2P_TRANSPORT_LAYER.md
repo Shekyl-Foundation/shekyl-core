@@ -323,7 +323,8 @@ not a publish target.
 
 Before the flip, ruling 4's exception is still in force. The option off
 omits the Noise layer the declaration adds, and the socket bytes are the
-session bytes: that is the differential harness, byte parity with epee.
+session bytes. The differential harness compares those Levin bytes and
+the session result, as the seam section states.
 The option on follows the stack plan: clearnet's plan is Noise, and that
 is what step 7 evaluates. Neither arm matches on a network's identity.
 The worker count, the blocking cap, the shutdown timeout, and the
@@ -332,12 +333,47 @@ names them.
 
 ## Seam — construction contract (RULED 2026-09-28)
 
-Both connectors are in. Nothing calls them, and epee still owns every
-socket. This note is the last build before the differential harness
-and the cutover. D4 and D6 stay the rulings. What follows is how those
+Both connectors are in. The seam is the handler boundary they attach to:
+one `Sockets` table, the connector's `Session`, and the posts onto that
+connection's strand. A `Dial` is how a channel is born. Zone bind, which
+installs the connector dialer and runs `drive_inbound` on the transport
+runtime, is the cutover and is not in this change. The loopback dialer is
+the strand harness: it admits on the hub's table and discards outbound
+bytes. It is not a connector. epee still owns every production socket.
+This note is the build before the differential harness and the cutover.
+D4 and D6 stay the rulings. What follows is how those
 rulings are built, including the three points the seam has to settle.
 No measured thread budget, deadline, or accept rate is written here.
 The executor's floor is counted from the lanes that block on it.
+
+**Our types come first (2026-09-28).** Rust and the FFI are shaped by
+the rulings: the typed address, the observed endpoint, "this zone, no
+address", the D12 causes, and the capped queue. An IPv4 address on
+the FFI is its four octets in network order. The C++ adapter copies
+those bytes into the address word the code above the seam reads.
+`seam_link`, those conversions, and the `i_service_endpoint` methods
+are interim translation. They stay thin, and they go when LV-3
+replaces what sits above the seam. Nothing in the adapter shapes a
+Rust type.
+
+**Harness parity is the wire and the session result (2026-09-28).**
+The differential harness checks that a peer sees the same Levin bytes
+and gets the same session result. Its document lists these
+divergences first, and a difference on one of them is expected:
+
+- deadlines derived per connector;
+- typed close causes, the first cause wins, and FIN after zero bytes
+  written;
+- admission in Rust, the check and the reservation in one step;
+- no local/remote timer split;
+- no TOS knob;
+- send and receive bounds in bytes.
+
+**A decision cites a ruling (2026-09-28).** The strand exists because
+D4 requires one delivery at a time, in order. The executor exists
+because C++ still runs above the seam until the timing-engine bridge.
+A reason that can only be stated as what the stack being replaced
+did is where the design stops.
 
 The id that crosses the boundary is the admission `SocketId`. C++
 learns it when the channel exists. A socket that dies before that
@@ -347,7 +383,12 @@ the arrangement this contract replaces.
 
 **Close.** The transport layer owns the socket. C++ owns the Levin
 handler and the connection context. Neither side's destructor calls
-the other.
+the other. The executor owns the per-connection strand and the
+`seam_link`. The link owns the handler until the destroy post. That
+post drops the handler only: it is not the last owner of the link,
+and it does not free the strand. The executor drops the link after
+the post has finished. A walker whose `add_ref` returned true still
+holds a count, so the destroy post has not run.
 
 - Rust records the D12 cause through `Sockets::close`. The first
   `CloseResult::Recorded` wins. `AlreadyClosed` leaves that cause
@@ -379,10 +420,11 @@ the other.
   `deliver` before `closed` and finds it refused has found an
   ordering bug.
 - C++ `close` is an id lookup into Rust. It does not free the handler
-  inside that call. `add_ref` returns false when the id is already
-  gone, so a new outer call does not start. Destruction stays the
-  post above. The adapter does not keep epee's `shared_ptr` bump
-  (`abstract_tcp_server2.inl:1461`).
+  inside that call. The closing bit and the call count are one atomic
+  word. `add_ref` fails when the bit is set, so a new outer call does
+  not start. `begin_closed` sets the bit and reads the count at that
+  instant. Destruction stays the post above. The adapter does not keep
+  epee's `shared_ptr` bump (`abstract_tcp_server2.inl:1461`).
 - `handle_recv` returns false when it refuses the buffer, and also
   when its own response send fails
   (`levin_protocol_handler_async.h:596`). A false return records
@@ -396,8 +438,9 @@ several threads. asio does not order two posts onto that context:
 two `deliver`s for one connection can run together or out of order,
 and `closed` can run before the last `deliver`. The Levin reader
 needs the bytes in order. D4 requires one delivery at a time, in
-order. epee met that with a strand per connection
-(`connection_basic.hpp:115`, posts at `abstract_tcp_server2.inl:416`).
+order, which is why each connection has its own strand. *Records-was:
+the stack being replaced posted on a strand
+(`connection_basic.hpp:115`, `abstract_tcp_server2.inl:416`).*
 
 Each connection gets its own strand on this executor. `established`,
 every `deliver`, and `closed` are posted to that strand. The handler
@@ -420,10 +463,27 @@ The callback that raises `ev` runs on the strand, from `deliver` or
 from the timer completion posted there. The handshake function stays
 on the idle thread: posting it onto the strand would wait for a
 completion the strand cannot start. The waiter holds no lock the
-strand needs. A `foreach_connection` walk keeps the outer-call pair
-and reads the connection context on the walker. It does not block
-the walker's strand waiting for a connection strand. The invoke
-install is the mutation that moves.
+strand needs.
+
+`foreach_connection` (`levin_protocol_handler_async.h:890`) is epee's
+walk, unchanged. It collects handlers under the registry lock, then
+calls each callback outside that lock, on the walking thread, and
+hands it `get_context_ref()`, a mutable reference to the connection
+context. The connection's strand reads and writes that same context.
+That is a data race, and in C++ it is undefined behaviour. epee has
+had it all along: the walkers and the handlers already share one
+thread pool. The seam does not create it and does not make it worse.
+The seam does not fix it either. Posting each read onto the
+connection's strand and waiting for the answer would block a walker
+on a strand from inside executor work, which is the deadlock the
+floor and close-by-posting keep off this path. The fix is LV-3 step
+c, the registry: the strand is the only writer, walkers read an
+immutable snapshot, and a walker that must change a connection posts
+that change to the strand. Step c is the first LV-3 work and it
+follows the transport cutover. It does not wait behind steps a and b.
+The call sites at this pin are 15 in `net_node.inl` and 2 in
+`levin_notify.cpp` (`:190`, `:232`). A third mention in
+`levin_notify.cpp:472` is a comment, not a call.
 
 The transport thread's only act toward C++ is the post onto that
 strand. Idle handlers stay on the context. They are not per
@@ -441,13 +501,32 @@ started on the seam. I2P gets no seam server and no new epee server.
 The cutover states that I2P support is removed until an I2P connector
 exists.
 
-**The FFI is six calls, plus configuration.**
+**The FFI is the posts, the completions, and the synchronous connect.**
+
+`shekyl_seam_bind` takes the ceiling the caller already resolved
+(`shekyl_inbound_ceiling_resolve`). It does not resolve a second one.
+Replacing a binding closes the previous hub and joins its harness
+threads before the next hub is published. The admission table is one
+for the process, so a `reap` of an old id does not name a new
+connection. One bind serves every zone: zone bind installs its dialer
+with `Hub::install_dial` on that hub and does not bind a second seam.
+`shekyl_seam_set_ceiling` replaces that bound when the reservations
+change. `shekyl_seam_open` asks the installed dialer for a channel,
+posts `established`, and waits until the handler is armed or the arm
+fails. With no dialer the cause is `DialFailed`. The opener drives
+inbound on a thread `reap` joins. That thread is the synchronous
+connect's reader until zone bind moves the drive onto the transport
+runtime, which is already a `RuntimeRow`. The loopback harness is
+`shekyl_seam_install_loopback`; zone bind does not call it.
 
 Rust posts these onto the connection's strand, and the strand runs them:
 
-- `established(id, observed endpoint, direction)` creates the handler
-  and the context and inserts the id. The endpoint is the one the
-  connector observed. Tor inbound is the zone with no address.
+- `established(id, observed endpoint, direction, connector)` creates
+  the handler and the context and inserts the id. The endpoint is the
+  one the connector observed: a clearnet address, or Tor's zone with
+  no address (`tor_address::unknown()`). The adapter fills
+  `m_remote_address`, `m_is_income`, and the zone from that record
+  before `after_init_connection`.
 - `deliver(id, bytes)` runs `handle_recv`. The bytes are valid for
   the callback. C++ copies what it keeps. A true return releases the
   read window, including a short read the parser has only buffered.
@@ -458,12 +537,25 @@ Rust posts these onto the connection's strand, and the strand runs them:
   follows as the close rule above says. `cause` is the `repr(C)`
   `CloseCause` already in the FFI header.
 
+The strand calls back:
+
+- `handler_armed(id, ok)` — `ok` false records `LocalClose` and wakes
+  the opener. A failed arm does not leave the opener parked.
+- `delivery_finished(id, accepted)` — a refusal records `SessionRefused`
+  only when no cause is recorded yet and `closed` has not started.
+- `handler_gone(id)` — `closed` has started. A later refusal records
+  nothing.
+- `reap(id)` — the executor dropped the link. The row is removed and
+  the harness threads are joined. The cause already rode the `closed`
+  post; the table does not keep it.
+
 C++ calls these:
 
-- `connect` keeps the synchronous shape `net_node` already uses. It
-  returns after the channel exists and the strand has constructed
-  the handler, or it returns the D12 cause. No handler was created
-  on the failure path. The waiter holds no lock the strand needs.
+- `open` keeps the synchronous shape `net_node` already uses. The
+  address is the connector plus the address bytes, the same union
+  peer exchange uses, decoded once into `Endpoint`. It returns after
+  the channel exists and the strand has constructed the handler, or it
+  returns the D12 cause. The waiter holds no lock the strand needs.
   The caller is often an executor thread. See the floor below.
 - `send(id, bytes)` is exactly one whole Levin message, copied into
   the byte cap as a single unit during the call. C++ frees its buffer
@@ -541,11 +633,14 @@ records the new count.
 
 - `block_host`, `unblock_host`, and `get_blocked_hosts` call the Rust
   ban list. A ban closes the sockets the list returns. It does not
-  walk the Levin registry. A duration that does not fit a `Tick`
-  (nanoseconds, `shekyl-timing-engine`) is refused at this boundary.
-  The permanent sentinel `block_host` uses today
-  (`numeric_limits<time_t>::max()` at `net_node.inl:575`) is its own
-  arm, read at that call when the seam is written.
+  walk the Levin registry. RPC speaks in durations: `setbans` takes
+  seconds, and `getbans` returns seconds remaining. At cutover the
+  conversion is `now + duration` onto the monotonic clock, and the
+  remaining time is computed back from it. No `time_t` crosses the
+  boundary. A duration that does not fit a `Tick` is refused. The
+  session layer is the second writer, through the same duration: ban
+  this host for this long. A transport close does not write the list
+  and does not call `add_host_fail`.
 - Socket admission reserves inside `accept_clearnet`
   (`admission.rs:273-283`) and `accept_tor` (`:310-312`): the ceiling
   check and the mint hold one table lock. `socket_count` is the
@@ -560,13 +655,17 @@ records the new count.
   a publish result and is not written there.
 - `get_info` keeps `incoming_connections_count` and
   `outgoing_connections_count` as the public zone's session counts,
-  from the Levin registry. Socket counts are
-  `public_incoming_socket_count`, `public_outgoing_socket_count`,
-  `tor_incoming_socket_count`, and `tor_outgoing_socket_count`.
-  A restricted caller receives zero for all six, as it does for the
-  session counts today.
+  from the Levin registry. Socket counts
+  (`public_incoming_socket_count`, `public_outgoing_socket_count`,
+  `tor_incoming_socket_count`, `tor_outgoing_socket_count`) are not
+  on `get_info` until the daemon binds the seam. A zero while epee
+  still holds the sockets would read as no connections. A restricted
+  caller receives zero for the session counts, as it does today.
 
-The seam's tests are the close races and the floor. A `send` after
+The seam's tests are the close races and the floor. Recording a
+transport cause, including `PrefixMismatch`, `RecordRejected`,
+`TransportTimeout`, and `SendQueueFull`, leaves the host unbanned.
+A `send` after
 Rust has dropped the socket returns false. A simultaneous close keeps
 the first cause. A full send records `SendQueueFull` before
 `handle_recv` returns, and the false return leaves that cause.
@@ -704,13 +803,18 @@ LV-3 (D14).
 
 **Each layer owns its own admission.** The transport layer owns socket
 admission: may this socket exist? That is the ban list and the inbound
-ceiling, enforced in Rust at accept, from values given to it — the
-operator's ban entries, and the ceiling derived by
-`shekyl-peer-policy`. The session layer (Levin framing and the p2p
+ceiling, enforced in Rust at accept and before dialing. The ceiling
+comes from `shekyl-peer-policy`. The ban list has two writers, both
+in durations (corrected 2026-09-28): the operator, through RPC, and
+the session layer, through one call that bans a host for a duration.
+The session layer judges misbehaviour. The transport layer enforces
+the ban. It does not score a host, and a transport close does not
+call `add_host_fail`. The session layer (Levin framing and the p2p
 protocol) owns session admission: may this peer have a session? That
 is `network_id`, the self-detection nonce, support flags, and
-PWD-B3's per-command caps, in `handle_handshake`. Neither layer reads
-the other's state to decide.
+PWD-B3's per-command caps, in `handle_handshake`, plus the judgment
+that issues the ban call. Neither layer reads the other's state to
+decide. No wall-clock time crosses that call.
 
 **Decoupling rule.** Levin framing, the p2p protocol, and the cryptonote
 protocol run over the transport contract and nothing else. The transport
@@ -795,8 +899,8 @@ and the mechanism does not. "Refuse" means it does not survive.
 
 | Duty | Read at this pin | Disposition |
 | --- | --- | --- |
-| Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator. The transport layer does not own those values. It does not call into C++ admission. |
-| Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. The operator's RPC reaches it through the FFI (`block_host`, `unblock_host`, `get_blocked_hosts`). A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. |
+| Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator and from the session layer's ban call. The transport layer does not own those values and does not score. It does not call into C++ admission. |
+| Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902`. Automatic scoring is `add_host_fail` at `net_node.inl:413` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. Two writers, both in durations (corrected 2026-09-28): the operator's RPC (`block_host`, `unblock_host`, `get_blocked_hosts`) and the session layer's call to ban a host for a duration. A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. A transport close does not write the list. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
 | SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **Its own per-connector clock, derived under D9.** It does not inherit the timeout from `src/net/socks`. |
 | SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust through `shekyl-socks`. `shekyl-p-fetch` and `shekyl-rpc-transport` call it with `Isolation::Principal`. `shekyl-p-transport` still enables `ureq/socks-proxy` (`socks` 0.3.4). Moving that HTTP client is a FOLLOWUPS row. |
@@ -858,6 +962,16 @@ and the mechanism does not. "Refuse" means it does not survive.
   queue closes the connection with `SendQueueFull`.
 - **Close from either side is idempotent** and records exactly one
   cause. On a simultaneous close, the first recorded cause wins.
+  A transport cause (`PrefixMismatch`, `RecordRejected`,
+  `TransportTimeout`, `SendQueueFull`, and every other transport
+  close) does not ban the host and does not call `add_host_fail`.
+  Scoring is the session layer's judgment, issued as its own ban
+  call, not by this close.
+- **The ban list has two writers (corrected 2026-09-28).** The
+  operator writes through RPC. The session layer writes through one
+  call, ban this host for this long, after it has judged
+  misbehaviour. Both pass a duration. The transport layer enforces
+  the entry at accept and before dialing.
 - **FFI (rule 40).** Every call names its direction and who owns the
   buffer. A callback context is not a raw `this`.
 
@@ -1154,8 +1268,8 @@ network, not as a duplicated protocol stack, and a test proves none of
 them leaks across networks.** A single registry with one broadcast loop
 over every session would be a cross-network leak.
 
-Through cutover, the per-network Levin instances stay as they are. The
-differential harness needs parity with epee. The design input for LV-3
+Through cutover, Levin framing stays C++ (D14). The harness compares
+the Levin bytes a peer sees and the session result. The design input for LV-3
 is one Levin and p2p layer serving every connector, with these
 partitions as tested policy. Items 1, 3, and 6 of D1 are that work.
 The existing C++ zone branches move with LV-3 and the P2P-3 slices, not
@@ -1390,11 +1504,16 @@ parameters stay. Tuning before that measurement is refused.
 These are the gates for the implementation PR, written now so the
 round can reject them.
 
-- **Differential harness against epee, before any deletion.** The same
-  Levin traffic through both transports, option off, on loopback.
-  Compare delivered bytes, close causes, and timeout behaviour. epee
-  stays in the tree as the reference until this passes. It is not a
-  test host for the option.
+- **Differential harness, before any deletion (UPDATE 2026-09-28).**
+  The same Levin traffic through both transports, option off, on
+  loopback. The harness compares the Levin bytes a peer sees and the
+  session result. *Records-was: compare close causes and timeout
+  behaviour.* Deadlines per connector, typed first-wins causes, FIN
+  after zero bytes, Rust admission, no local/remote timer split, no
+  TOS knob, and byte bounds are listed in the harness document as
+  expected. A difference on one of them is not a regression. The
+  current server stays in the tree as the wire reference until this
+  passes. It is not a test host for the option.
 - **Cross-build interop.** A connector node and an epee node, option
   off, peering on testnet through sync, relay, and both dial
   directions. The loopback harness is one build. The claim that

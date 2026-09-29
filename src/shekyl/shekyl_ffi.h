@@ -4167,5 +4167,81 @@ struct ShekylOwnedBuffer {
 /// `n_blocks` or `n_spent` overflowed `size_t` when widened to bytes.
 #define SHEKYL_CHAIN_DIGEST_V0_ERR_OVERFLOW           -2
 
+/// The p2p seam. `shekyl_seam_bind` installs the post and the caller's
+/// already-resolved ceiling. The post enqueues onto the connection's strand
+/// and returns. Kinds: 1 established, 2 deliver, 3 closed.
+constexpr std::uint32_t SHEKYL_SEAM_ESTABLISHED = 1;
+constexpr std::uint32_t SHEKYL_SEAM_DELIVER = 2;
+constexpr std::uint32_t SHEKYL_SEAM_CLOSED = 3;
+constexpr std::uint32_t SHEKYL_CONNECTOR_CLEARNET = 0;
+constexpr std::uint32_t SHEKYL_CONNECTOR_TOR = 1;
+constexpr std::uint32_t SHEKYL_DIRECTION_INBOUND = 0;
+constexpr std::uint32_t SHEKYL_DIRECTION_OUTBOUND = 1;
+constexpr std::uint8_t SHEKYL_ADDR_IPV4 = 1;
+constexpr std::uint8_t SHEKYL_ADDR_IPV6 = 2;
+constexpr std::uint8_t SHEKYL_ADDR_I2P = 3;
+constexpr std::uint8_t SHEKYL_ADDR_TOR = 4;
+/// A v3 onion hostname, including `.onion`.
+constexpr std::uint16_t SHEKYL_SEAM_HOST_MAX = 62;
+
+extern "C" {
+
+struct shekyl_seam_address {
+  std::uint8_t connector;
+  std::uint8_t address_type;
+  std::uint8_t zone_only;
+  std::uint8_t _pad;
+  std::uint16_t port;
+  std::uint16_t len;
+  std::uint8_t bytes[SHEKYL_SEAM_HOST_MAX];
+};
+
+struct shekyl_seam_observed {
+  std::uint8_t connector;
+  std::uint8_t direction;
+  std::uint8_t address_type;
+  std::uint8_t zone_only;
+  std::uint16_t port;
+  std::uint16_t len;
+  std::uint8_t bytes[SHEKYL_SEAM_HOST_MAX];
+};
+
+struct shekyl_seam_open_result {
+  std::uint64_t id;
+  std::uint8_t cause_kind;
+  std::uint8_t _pad;
+  std::uint16_t reply_code;
+};
+static_assert(sizeof(shekyl_seam_open_result) == 16, "seam open result");
+
+using shekyl_seam_post_fn = void (*)(void* ctx, std::uint64_t id, std::uint32_t kind,
+    const shekyl_seam_observed* observed, const std::uint8_t* bytes, std::size_t len,
+    const shekyl_close_cause* cause);
+
+/// Install `post` and `ceiling`. A null `post` clears the seam.
+/// The previous binding is closed and its harness threads are joined
+/// before the next one is published. Returns 0 when installed or
+/// cleared, -1 when `ceiling` is not a decision.
+int shekyl_seam_bind(void* ctx, shekyl_seam_post_fn post, const shekyl_inbound_ceiling* ceiling);
+/// Replace the inbound bound on a bound seam. 0 on success, -1 otherwise.
+int shekyl_seam_set_ceiling(const shekyl_inbound_ceiling* ceiling);
+/// Install the in-memory harness dialer. Zone bind does not call this.
+int shekyl_seam_install_loopback(void);
+shekyl_seam_open_result shekyl_seam_open(const shekyl_seam_address* addr, std::uint8_t inbound);
+/// `armed` nonzero: the handler exists. Zero: arm failed, record local close.
+void shekyl_seam_handler_armed(std::uint64_t id, int armed);
+int shekyl_seam_deliver(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
+void shekyl_seam_delivery_finished(std::uint64_t id, int accepted);
+void shekyl_seam_handler_gone(std::uint64_t id);
+void shekyl_seam_reap(std::uint64_t id);
+int shekyl_seam_send(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
+void shekyl_seam_close(std::uint64_t id);
+std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
+std::uint64_t shekyl_seam_inbound_held(void);
+int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);
+void shekyl_executor_release(std::uint64_t handle);
+
+} // extern "C"
+
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
 /// (C-compatible header used by both memwipe.c and mlocker.cpp).

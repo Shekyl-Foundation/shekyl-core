@@ -1526,9 +1526,9 @@ wrong was calling them the round.*
 
 | Step | What | Note |
 | --- | --- | --- |
-| **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, zone, established-at | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
-| **b** | Ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle | |
-| **c** | The connection registry, **including its own count** | see the inheritance below |
+| **c** | The connection registry, **including its own count**. **UPDATE 2026-09-28: first, immediately after the transport cutover.** The strand is the only writer. Walkers read snapshots. A change is a post. | the `foreach_connection` race, above |
+| **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, zone, established-at. Follows step c. | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
+| **b** | Ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle. Follows step c. | |
 | **d** | Relay dispatch — moved out 2026-09-25 to the RD row, after the timing engine | not this slice; see §6.3 item 3 |
 
 **What slice 5 inherits from slices 1–4. UPDATE 2026-09-25: it does not
@@ -1547,6 +1547,35 @@ thread, so step **c** is where `:1112` dies. *(The one-second staleness is
 separately a rule-76 measurement input for `--in-peers` —
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4 item 2 —
 not a design question for this slice.)*
+
+**UPDATE 2026-09-28. Step c is first, and it follows the transport
+cutover.** The seam leaves `foreach_connection` as it is. That walk is
+an inherited data race: it hands the walking thread a mutable
+`get_context_ref()` while the connection's strand reads and writes the
+same context (`levin_protocol_handler_async.h:890`). Patching it inside
+the seam, by posting each read onto the strand and waiting, would block
+executor work on a strand. That is the deadlock the seam's floor and
+close-by-posting exist to keep off this path.
+
+Step c's first input is that race. The registry makes each connection's
+strand the only writer.
+
+- **Snapshots for reading.** A connection publishes an immutable
+  snapshot of what a walk needs: session established, direction,
+  network key, peer id, support flags, sync state. The strand
+  republishes it when those fields change, by swapping in a fresh
+  snapshot. Walkers only read snapshots.
+- **Messages for writing.** A walker that changes a connection posts
+  that change to the connection's strand. It does not write the
+  context itself.
+
+The inventory at `dev` `9bc062036` is 15 calls in `net_node.inl` and
+2 calls in `levin_notify.cpp` (`:190`, `:232`). `levin_notify.cpp:472`
+names the walk in a comment and is not a call. This step does not wait
+behind steps a and b. Those follow it. It does not wait on slices 1–4,
+the timing-engine bridge, or relay dispatch. It is undefined behaviour
+in the shipping daemon, so it is the first LV-3 work after the
+transport cutover.
 
 ### 6.3 This slice's falsifiers (rule 21)
 

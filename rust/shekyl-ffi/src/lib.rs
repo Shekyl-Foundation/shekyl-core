@@ -144,6 +144,14 @@ pub mod levin_ffi;
 // and returns the admission decision. C++ passes reservations only.
 pub mod inbound_ceiling_ffi;
 
+// The p2p seam. C++ posts onto the connection strand. Rust records the
+// cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
+pub mod seam_ffi;
+
+// The socketless asio executor. One ledger row. The floor check is
+// ExecutorBudget::above_floor; this module does not reimplement it.
+pub mod executor_ffi;
+
 // Peer-attribution drop rule FFI — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`). The
 // classification is recorded by C++ as an opaque byte on the verification
 // context; whether that byte severs a connection is decided only here.
