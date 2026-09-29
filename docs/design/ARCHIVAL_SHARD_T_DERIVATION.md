@@ -342,6 +342,10 @@ zero floor by another name.
 
 ## 3. Constraints on `T`
 
+> **Re-based in bytes by §9 (2026-09-29), after `SHT-Q2`.** `L1` and `U1a`'s heavy-end
+> multiplier are retired there; the partition constant is now an archival length `W`.
+> The rows below are the count-era record.
+
 Each row: the operand, its source, the bound as a function of `T`, a value or a
 labelled sweep, the domain it applies under, hard/soft with the reason, and a
 falsifier. **No row required a byte operand in consensus**, so item 5's **(g)**
@@ -574,6 +578,9 @@ arm in which the per-band verdict at fixed headroom degrades monotonically in
 ---
 
 ## 4. The feasible interval, and a proposed selection rule
+
+> **Superseded by §9.5 (2026-09-29):** the interval is now in bytes, and `W = 3.33 MB`
+> is provisional inside it. The selection rule's direction, argued below, carries over.
 
 **Under (A) and under (B) alike**, the only hard bound with numbers is `U1a`,
 and on measured data its heavy-end ceiling is **~[140, 490]** — a band that
@@ -1236,3 +1243,112 @@ mixer measures the finished bytes itself.
   from `STAKER_ARCHIVAL_SIM.md` §L19i–§L19j stands separately, as a gate 4/5 budget-sizing
   input: paid whole-shard challenge egress at a low SKL price outruns the archival budget
   (φ 2.9–29 in the breaching calibrated cells).
+
+---
+
+## 9. `W` — the partition constant re-based in bytes (`SHT-Q2` item 4, 2026-09-29)
+
+`SHT-Q2` replaces the count `T` with an archival length `W`: shard `k` holds the
+transactions whose cumulative archival length before them falls in `[k·W, (k+1)·W)`.
+§3's constraints were written for a count. Re-based in bytes, some disappear, one
+appears, and the rest restate.
+
+### 9.1 What the ruling removes
+
+- **`L1` — composition dispersion (`CV_tx / √T`) — retired.** It bounded how much
+  per-transaction variation could reach a shard's cost. Under equal-length shards a
+  shard's archival length is `W` ± one transaction by construction, so per-transaction
+  composition no longer reaches shard cost at any `W`.
+- **`U1a`'s heavy-end multiplier — retired.** §3's ceiling band (~[140, 490]) rested on a
+  heavy shard at "~2× the mean", which qualification (i) traced to L19's shape cap rather
+  than any measured shard. There is no heavy end left to estimate: the heaviest shard is
+  `W + max`, where `max` is the largest archival length of one transaction.
+- **`U1a`'s qualification (ii), the stacked worst cases, mostly dissolves.** The shard
+  side of the joint event is now deterministic and bounded. What is left is the circuit's
+  own tail against a known shard length. The target witness-miss rate is still a choice,
+  but it is a choice over one distribution, not two.
+
+### 9.2 The lower bounds, new in bytes
+
+**Hard: `W > max`.** `max < TX_WEIGHT_LIMIT` = 149,400 B, because CEN-H3 caps a legal
+transaction's weight, and its good is part of its serialized size. The ruling's static
+relation `max < W` means no transaction spans a whole multiple of `W`, so no shard is
+empty. In the build this is a compile-time assertion between the two constants.
+
+**Soft: the shard-to-shard overshoot.** Under global multiples, a shard's archival
+length lies in `(W − max, W + max)`, so its relative deviation is at most `max / W`:
+
+| `W` | 1 MB | 1.5 MB | 2 MB | 3 MB | **3.33 MB** | 5 MB |
+|---|---|---|---|---|---|---|
+| `149.4 KB / W` | 14.9 % | 10.0 % | 7.5 % | 5.0 % | **4.5 %** | 3.0 % |
+
+How much deviation to accept is a **choice**: the overshoot tolerance `τ`, which sets the
+floor `W ≥ 149.4 KB / τ`. The design owner recommends `τ ≤ 5 %`, which gives
+`W ≥ 2.99 MB`.
+
+### 9.3 The upper bound, `U1a`, in bytes
+
+A whole-shard read must complete in one attempt within one block (120 s), the criterion
+the W₂ measurement was graded against. The measurement is on a ~3.33 MB object: cold
+p99 48.27 s, soak p99 86.06 s (`ARCHIVAL_SHARD_FETCH.md`:1091-1095). With
+`t(bytes) = t_fixed + bytes / v`, one size is still one equation in two unknowns. At the
+heaviest shard, `W + 149.4 KB`, the ceiling on `W` is:
+
+| calibration | `t_fixed` | implied `v` | ceiling on `W` |
+|---|---|---|---|
+| soak p99 | 0 s (all transfer — pessimistic) | 38.7 KB/s | **≈ 4.49 MB** |
+| soak p99 | 60 s | 127.8 KB/s | ≈ 7.52 MB |
+| cold p99 | 0 s | 69.0 KB/s | ≈ 8.13 MB |
+| cold p99 | 30 s | 182.3 KB/s | ≈ 16.2 MB |
+
+`U1b`, an honest server's sustained egress on the floor device, still has no value
+(`SHT-5`). It may lower this ceiling, and it cannot raise it.
+
+### 9.4 Soft upward pressure: bookkeeping
+
+Per-shard consensus state (`archival_r_market` rows, serve-credit rows per
+`(P, shard, E)`, settlement work) and `L3`'s challenge work scale as shards ∝
+`chain bytes / W`, so a larger `W` means fewer rows. The holdings list covers
+`4096 × W` bytes per record, which is 13.6 GB at 3.33 MB. Under `L2`'s ruling that is a
+list budget, not an operator bound. Both pull mildly upward and bound nothing.
+
+The rows §3 keeps restate directly:
+- `U2` (one shard, `W` ≈ 3.33 MB, against the floor device) is non-binding.
+- `U3` is unchanged in kind: a frontier shard closes after `W` bytes of domain good, so a
+  quiet chain still holds it open.
+- `U4` is shaping only.
+
+### 9.5 The feasible range, the selection rule, and what each measurement pins
+
+> **`W ∈ [ max(149.4 KB, 149.4 KB / τ),  U1a ceiling ]`**, with the ceiling between
+> ≈ 4.49 MB (pessimistic) and ≈ 16 MB (optimistic) until the multi-size W₂ run pins it.
+
+| `τ` | floor | against the pessimistic ceiling (4.49 MB) |
+|---|---|---|
+| 10 % | 1.49 MB | feasible |
+| **5 %** | **2.99 MB** | **feasible** |
+| 3 % | 4.98 MB | **infeasible**, unless the W₂ run shows setup cost dominates |
+
+**Selection rule (unchanged in direction from §4):** the smallest `W` within the
+tolerance, provided `U1a` clears at the heavy end. The asymmetry is the same: too
+large puts unpriced witness misses on operators; too small costs bookkeeping.
+
+**`W = 3.33 MB` — PROVISIONAL (Rick, 2026-09-29).** It sits inside the range at every
+calibration:
+- overshoot 4.5 %, within the recommended `τ ≤ 5 %`;
+- heaviest shard 3.48 MB, which the pessimistic soak calibration reads in about 90 s
+  against the 120 s criterion;
+- no longer circular: it is a candidate inside an interval derived in bytes, not a
+  number inherited from the leaf segment, and it is the size the W₂ measurement was
+  taken at.
+
+It is re-pinned at the Round-2 gate, like `T` was, by:
+- **the overshoot tolerance `τ`**, Rick's input. It sets the floor;
+- **the multi-size W₂ run** (§4.1, pre-registered). It separates `t_fixed` from `v`
+  and turns the ceiling into one number;
+- **the `U1b` server-egress measurement** (`SHT-5`). It may lower the ceiling.
+
+**Constant rename, owed in the build, not here.** `archival_shard_tx_count` (the JSON
+key), `shekyl_types::SHARD_TX_COUNT` and its generated C++ name become an
+archival-length constant in bytes. The unit is in the name, so the rename is part of the
+cutover (the FOLLOWUPS build row).
