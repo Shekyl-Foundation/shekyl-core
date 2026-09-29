@@ -476,8 +476,9 @@ pub struct Apparatus {
     /// and when the frame landed that number went stale at four call sites at
     /// once. A number a caller supplies is a number that drifts when the wire
     /// moves; a number the apparatus derives from the same code that writes
-    /// the wire cannot.
-    expected_len: usize,
+    /// the wire cannot. One length per served object, indexed by shard id;
+    /// never empty (bring-up refuses an empty object list).
+    expected_lens: Vec<usize>,
 }
 
 /// Why the apparatus could not be brought up. Every arm is an *apparatus*
@@ -573,7 +574,25 @@ impl Apparatus {
             tor_binary,
             data_dir,
             persona_count,
-            payload,
+            vec![payload],
+            OnionPow::Disabled,
+        )
+        .await
+    }
+
+    /// [`Self::bring_up`] serving several objects, shard `i` being `objects[i]` —
+    /// the multi-size W₂ run's size ladder ([`crate::fixture::size_ladder`]).
+    pub async fn bring_up_objects(
+        tor_binary: PathBuf,
+        data_dir: PathBuf,
+        persona_count: u32,
+        objects: Vec<Arc<[u8]>>,
+    ) -> Result<Self, ApparatusError> {
+        Self::bring_up_with_pow(
+            tor_binary,
+            data_dir,
+            persona_count,
+            objects,
             OnionPow::Disabled,
         )
         .await
@@ -590,20 +609,28 @@ impl Apparatus {
         tor_binary: PathBuf,
         data_dir: PathBuf,
         persona_count: u32,
-        payload: Arc<[u8]>,
+        objects: Vec<Arc<[u8]>>,
         pow: OnionPow,
     ) -> Result<Self, ApparatusError> {
-        // The expected body length, derived through the production contract
-        // BEFORE any tor is launched: the same `ShardBody::flat` the fixture
-        // provider will call per request, so what the probes compare against
-        // is what the endpoint will write — frame header included.
-        let expected_len = ShardBody::flat(Arc::clone(&payload))
-            .ok_or(ApparatusError::Unframeable {
-                bytes: payload.len(),
-            })?
-            .header()
-            .framed_len();
-        let expected_len = usize::try_from(expected_len).expect("framed length fits usize");
+        // Each object's expected body length, derived through the production
+        // contract BEFORE any tor is launched: the same `ShardBody::flat` the
+        // fixture provider will call per request, so what the probes compare
+        // against is what the endpoint will write — frame header included.
+        let expected_lens = objects
+            .iter()
+            .map(|payload| {
+                let framed = ShardBody::flat(Arc::clone(payload))
+                    .ok_or(ApparatusError::Unframeable {
+                        bytes: payload.len(),
+                    })?
+                    .header()
+                    .framed_len();
+                Ok(usize::try_from(framed).expect("framed length fits usize"))
+            })
+            .collect::<Result<Vec<usize>, ApparatusError>>()?;
+        if expected_lens.is_empty() {
+            return Err(ApparatusError::Unframeable { bytes: 0 });
+        }
 
         // Launch every tor at once: the client's and one per persona.
         let tor_binary = Arc::<Path>::from(tor_binary);
@@ -661,7 +688,7 @@ impl Apparatus {
             ));
             let verifying_key = signer.public_key().clone();
             let endpoint = PServeEndpoint::bind(
-                Arc::new(FixtureShardProvider::new(Arc::clone(&payload))),
+                Arc::new(FixtureShardProvider::with_objects(objects.clone())),
                 signer,
             )
             .await
@@ -709,7 +736,7 @@ impl Apparatus {
             client,
             last_newnym: Mutex::new(None),
             personas,
-            expected_len,
+            expected_lens,
         })
     }
 
@@ -719,7 +746,17 @@ impl Apparatus {
     /// should expect.
     #[must_use]
     pub fn expected_body_len(&self) -> usize {
-        self.expected_len
+        self.expected_lens[0]
+    }
+
+    /// [`Self::expected_body_len`] for shard `shard_id`, or `None` past the
+    /// served objects.
+    #[must_use]
+    pub fn expected_body_len_of(&self, shard_id: u64) -> Option<usize> {
+        usize::try_from(shard_id)
+            .ok()
+            .and_then(|i| self.expected_lens.get(i))
+            .copied()
     }
 
     /// The client tor's SOCKS endpoint — the "daemon's tor zone" every fetch
@@ -791,7 +828,7 @@ impl Apparatus {
                     self.client.lane(index),
                     index,
                     persona.target(0),
-                    self.expected_len,
+                    self.expected_body_len(),
                     deadline,
                 ));
             }
@@ -865,15 +902,23 @@ impl Apparatus {
     /// length is [`FailureKind::Refused`] (the apparatus served the wrong
     /// shard); a stream that broke mid-body is [`FailureKind::Truncated`].
     pub async fn timed_fetch(&self, persona_index: usize) -> Observation {
-        let Some(persona) = self.personas.get(persona_index) else {
+        self.timed_fetch_shard(persona_index, 0).await
+    }
+
+    /// [`Self::timed_fetch`] of shard `shard_id` — one of the served objects.
+    pub async fn timed_fetch_shard(&self, persona_index: usize, shard_id: u64) -> Observation {
+        let (Some(persona), Some(expected_len)) = (
+            self.personas.get(persona_index),
+            self.expected_body_len_of(shard_id),
+        ) else {
             return Observation::failure(Duration::ZERO, FailureKind::Refused);
         };
-        let target = persona.target(0);
+        let target = persona.target(shard_id);
         let start = Instant::now();
         let outcome = self.client.fetch_once(persona_index, &target).await;
         let elapsed = start.elapsed();
         match outcome {
-            Ok(len) if len == self.expected_len => Observation::success(elapsed),
+            Ok(len) if len == expected_len => Observation::success(elapsed),
             // Complete exchange, wrong size: the fixture/endpoint, not Tor.
             Ok(_) => Observation::failure(elapsed, FailureKind::Refused),
             Err(kind) => Observation::failure(elapsed, kind),
