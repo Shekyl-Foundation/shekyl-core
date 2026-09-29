@@ -50,7 +50,11 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{admitted_leaf_blob, parse, pqc_leaf_entries_per_output};
 use shekyl_wire::{Block, BlockHeader, Ct, Input, Transaction};
 
+#[cfg(feature = "pipeline")]
+use crate::connector::{Connector, ConnectorArgs};
 use crate::corpus::{CorpusNet, CorpusWriter};
+#[cfg(feature = "pipeline")]
+use crate::facts::FactsFor;
 use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
 use crate::trace::{Digest, Facts, Trace, TraceWriter};
 
@@ -781,6 +785,47 @@ pub fn expected_state(chain: &[(Block, Vec<Transaction>)]) -> Digest {
 
 pub fn open_store(path: &std::path::Path) -> ChainStore {
     ChainStore::create(path, EPOCH).expect("create")
+}
+
+/// A connector whose task the test holds, so that stopping it can wait until
+/// the actor — and the [`ChainStore`] it owns — has been dropped.
+///
+/// [`kameo::actor::ActorRef::wait_for_shutdown`] is not that wait. kameo 0.20
+/// resolves it when the mailbox closes, which is before `on_stop` runs and
+/// before the task drops the actor value; a store reopened after it races
+/// that drop and meets redb's single-writer lock as `DatabaseAlreadyOpen`.
+/// The drop flushes the file, so the window is widest on a disk-backed temp
+/// directory under load. Joining the task closes it — the same join the
+/// production run does after stopping its connector (`pipeline.rs`).
+#[cfg(feature = "pipeline")]
+pub struct JoinedConnector<F: FactsFor + Send + Sync + 'static> {
+    pub actor: kameo::actor::ActorRef<Connector<F>>,
+    task: tokio::task::JoinHandle<
+        Result<(Connector<F>, kameo::error::ActorStopReason), kameo::error::PanicError>,
+    >,
+}
+
+#[cfg(feature = "pipeline")]
+impl<F: FactsFor + Send + Sync + 'static> JoinedConnector<F> {
+    pub fn spawn(args: ConnectorArgs<F>) -> Self {
+        let prepared =
+            kameo::actor::PreparedActor::<Connector<F>>::new(kameo::mailbox::unbounded());
+        let actor = prepared.actor_ref().clone();
+        let task = prepared.spawn(args);
+        Self { actor, task }
+    }
+
+    /// Wait for the actor's task to end, dropping the actor and releasing its
+    /// store. The caller has already stopped it.
+    pub async fn join(self) {
+        drop(self.task.await.expect("the connector task joins"));
+    }
+
+    /// Stop the actor, then [`Self::join`].
+    pub async fn stop_and_join(self) {
+        let _already_stopped = self.actor.stop_gracefully().await.is_err();
+        self.join().await;
+    }
 }
 
 /// A source that plays a script of events, sequenced from `FIRST`, whose

@@ -24,7 +24,7 @@ use shekyl_wire::{Block, Transaction};
 use crate::connector::{Apply, Connector, ConnectorArgs, RunFault};
 use crate::facts::{Composed, Priced, PricedAt};
 use crate::schedule::ChainRules;
-use crate::test_support::{chain, cleanup, h, open_store, tmp};
+use crate::test_support::{chain, cleanup, h, open_store, tmp, JoinedConnector};
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
     fixed_difficulty: None,
@@ -76,7 +76,7 @@ async fn composed_hands_the_burn_and_the_store_records_the_verdicts_rest() {
             .into_iter()
             .collect(),
     );
-    let connector = Connector::spawn(ConnectorArgs {
+    let connector = JoinedConnector::spawn(ConnectorArgs {
         store: open_store(&path),
         rules: GENESIS_RULES,
         facts: Arc::new(Composed::new(table)),
@@ -86,13 +86,14 @@ async fn composed_hands_the_burn_and_the_store_records_the_verdicts_rest() {
     let (h1, f1) = formed(1, &chain[1].0, &chain[1].1, chain[0].0.hash());
     let (h2, f2) = formed(2, &chain[2].0, &chain[2].1, chain[0].0.hash());
     let applied = connector
+        .actor
         .ask(Apply(vec![(h0, f0), (h1, f1), (h2, f2)]))
         .await
         .expect("connects");
     assert_eq!(applied.connected.len(), 3);
     assert!(applied.refused.is_none());
-    connector.stop_gracefully().await.expect("stop");
-    connector.wait_for_shutdown().await;
+    // Joined, not only shut down: the store below is reopened.
+    connector.stop_and_join().await;
 
     let store = open_store(&path);
     let read = store.begin_read().expect("read");
