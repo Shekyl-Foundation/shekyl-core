@@ -966,11 +966,12 @@ pub fn verify(
         })
         .collect();
 
-    let fcmp_pp = FcmpPlusPlus::read(pseudo_outs, layers, &mut proof.data.as_slice())
-        .map_err(|e| {
-            tracing::debug!(proof_len = proof.data.len(), layers, error = %e, "FcmpPlusPlus::read failed");
-            VerifyError::DeserializationFailed
-        })?;
+    let mut rest = proof.data.as_slice();
+    let fcmp_pp = FcmpPlusPlus::read(pseudo_outs, layers, &mut rest).map_err(|e| {
+        tracing::debug!(proof_len = proof.data.len(), layers, error = %e, "FcmpPlusPlus::read failed");
+        VerifyError::DeserializationFailed
+    })?;
+    refuse_trailing_bytes(rest, proof.data.len(), layers)?;
 
     let mut ed_verifier = multiexp::BatchVerifier::new(num_inputs);
     let mut c1_verifier = generalized_bulletproofs::Generators::batch_verifier();
@@ -1072,16 +1073,17 @@ pub fn verify_membership_only(
     let pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G> =
         pqc_keys.iter().map(PqcKeyScalar::key_point).collect();
 
-    let fcmp_mo = FcmpMembershipOnly::read(pseudo_outs, layers, &mut proof.data.as_slice())
-        .map_err(|e| {
-            tracing::debug!(
-                proof_len = proof.data.len(),
-                layers,
-                error = %e,
-                "FcmpMembershipOnly::read failed"
-            );
-            VerifyError::DeserializationFailed
-        })?;
+    let mut rest = proof.data.as_slice();
+    let fcmp_mo = FcmpMembershipOnly::read(pseudo_outs, layers, &mut rest).map_err(|e| {
+        tracing::debug!(
+            proof_len = proof.data.len(),
+            layers,
+            error = %e,
+            "FcmpMembershipOnly::read failed"
+        );
+        VerifyError::DeserializationFailed
+    })?;
+    refuse_trailing_bytes(rest, proof.data.len(), layers)?;
 
     let mut ed_verifier = multiexp::BatchVerifier::new(num_inputs);
     let mut c1_verifier = generalized_bulletproofs::Generators::batch_verifier();
@@ -1150,6 +1152,24 @@ fn deserialize_helios_scalar(bytes: &[u8; 32]) -> Option<<Helios as Ciphersuite>
     } else {
         None
     }
+}
+
+/// `SHT-10`: a proof's bytes are exactly its canonical encoding. The upstream `read`
+/// consumes `proof_size(inputs, layers)` bytes and stops, so a remainder would be a
+/// second valid encoding of the same statement, and it is refused. Every verifying
+/// caller reaches this through [`verify`] or [`verify_membership_only`]: the C++ connect
+/// path through the FFI, the daemon's submit verifier, and the emission backing proof.
+fn refuse_trailing_bytes(rest: &[u8], proof_len: usize, layers: usize) -> Result<(), VerifyError> {
+    if rest.is_empty() {
+        return Ok(());
+    }
+    tracing::debug!(
+        proof_len,
+        layers,
+        trailing = rest.len(),
+        "FCMP++ proof carries bytes past its canonical encoding"
+    );
+    Err(VerifyError::DeserializationFailed)
 }
 
 /// Zero-pad a deserialized branch-layer chunk to the FCMP circuit's fixed chunk
@@ -1426,6 +1446,26 @@ mod tests {
         .expect("verify should succeed");
         assert!(ok, "valid proof must verify");
 
+        // SHT-10: bytes past the canonical encoding are refused. Each padded proof is a
+        // second encoding of a valid statement, which the upstream read alone accepts.
+        for pad in [1usize, 64, 4096] {
+            let mut padded = result.proof.clone();
+            padded.data.resize(padded.data.len() + pad, 0);
+            let r = verify(
+                &padded,
+                &key_images,
+                &result.pseudo_outs,
+                &[pqc.key],
+                &tree_root,
+                tree_depth,
+                signable_tx_hash,
+            );
+            assert!(
+                matches!(r, Err(VerifyError::DeserializationFailed)),
+                "a proof with {pad} trailing bytes must be refused, got {r:?}"
+            );
+        }
+
         // Tampered key image must fail
         let mut bad_ki = *key_images[0].as_bytes();
         bad_ki[0] ^= 0xFF;
@@ -1598,6 +1638,24 @@ mod tests {
         )
         .expect("verify_membership_only should succeed");
         assert!(ok, "valid membership-only proof must verify");
+
+        // SHT-10, the membership-only path: trailing bytes are refused here too.
+        for pad in [1usize, 64] {
+            let mut padded = mo.proof.clone();
+            padded.data.resize(padded.data.len() + pad, 0);
+            let r = verify_membership_only(
+                &padded,
+                &mo.pseudo_outs,
+                &[pqc.key],
+                &tree_root,
+                tree_depth,
+                signable_tx_hash,
+            );
+            assert!(
+                matches!(r, Err(VerifyError::DeserializationFailed)),
+                "a membership-only proof with {pad} trailing bytes must be refused, got {r:?}"
+            );
+        }
 
         // Arity cap: a crafted `num_inputs` (0 or > MAX_INPUTS) must reject as
         // DeserializationFailed before sizing the batch verifiers — self-defending, independent

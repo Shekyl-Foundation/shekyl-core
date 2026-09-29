@@ -81,6 +81,11 @@ fn serve_credit_and_bond_post_drop_verdicts_do_not_sever_on_our_state() {
         SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE
     ))
     .is_internal_failure());
+    // SHT-11: a padded path is the sender's wire, not our state — it severs.
+    assert!(DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_NON_CANONICAL_PATH
+    ))
+    .severs());
     assert!(
         !DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
             SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE
