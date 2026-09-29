@@ -16,11 +16,12 @@ ordinal domain is **withdrawn** (dev already does the lookup it was charged
 for), and `SHT-7` is added. `SHT-Q1` (the partition domain) was posed by this round
 and **RULED on 2026-09-27** (§2) — it came before the bounds because it decides
 which constraints exist, and it now has. Findings `SHT-1`…`SHT-9` are at-pin
-findings of this round; **`SHT-Q2` RULED 2026-09-29 (§8.6): shards are cut by archival length, bound through the txid.** **`SHT-10`…`SHT-12` and `SHT-Q2` (a byte-proportional partition —
-computed weight, or a txid-bound declared length, the design owner's recommendation —
-OPEN for Rick) were added 2026-09-28 after F34 (§8)**, with the input-count proposal
-recorded as not adopted and `PDM-Q6` item 5's rejection re-read as one of *stored
-lengths*, not of byte-proportional boundaries. Identifier families **`SHT-`** (findings) and
+findings of this round. **`SHT-Q2` is RULED (Rick, 2026-09-29, §8.6): shards are cut
+by archival length, bound through the txid.** It was posed on 2026-09-28 after F34 (§8),
+together with findings `SHT-10`…`SHT-12`, the input-count proposal recorded as not
+adopted, and `PDM-Q6` item 5's rejection re-read as one of *stored lengths*, not of
+byte-proportional boundaries; the placement of the length (prefix or txid, §8.5) was
+posed on 2026-09-29 and settled by the same ruling. Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
 (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
@@ -858,7 +859,7 @@ This is a correction to item 5's reasoning, not a reversal of its principle. The
 principle — a boundary never reads a value the skeleton cannot bind — is what `SHT-Q2`
 below states as its invariant.
 
-### 8.3 `SHT-Q2` — a byte-proportional partition — for Rick's ruling
+### 8.3 `SHT-Q2` — a byte-proportional partition — ruled in §8.6
 
 **The question.** Should shard `k` close on cumulative **archival bytes** instead of
 transaction count, and if so, measured how: by a **computed weight** — options (a) and (b)
@@ -1015,7 +1016,7 @@ and to 45 scalars by appending zeros, verifies `Ok(())`. Both probes were run as
 uncommitted edits and reverted. The library verifiers probed are the ones the consensus
 FFI calls; neither was replayed through a full block connect.
 
-### 8.4 Option (c), wargamed — posed, not ruled
+### 8.4 Option (c), wargamed — ruled in §8.6
 
 **The claim.** A transaction's archival byte length, carried as a prefix varint, is
 skeleton data. The txid binds the prefix, so item 5's objection — a length nothing the
@@ -1085,7 +1086,7 @@ the cutover census's family-1 rows re-keyed; and `SHARD_TX_COUNT` /
 
 **Not ruled here.**
 
-### 8.5 Where the declared length lives — prefix or txid — posed, not ruled (2026-09-29)
+### 8.5 Where the declared length lives — prefix or txid — ruled in §8.6 (2026-09-29)
 
 §8.4 put the declared length in the **prefix**. The design owner has proposed binding it
 through the **txid** instead. This section answers the three questions that decide
