@@ -183,6 +183,18 @@ fn main() -> ExitCode {
     let window_leaves = args
         .window_leaves
         .unwrap_or(leaf_rate.leaves_per_block * REPLAY_WINDOW_BLOCKS);
+    // Before any series, and before the rig's own assert. A window under one
+    // block makes `replayed_blocks` zero and the retired quotient meaningless;
+    // clamping the denominator would report a corpus the run did not have.
+    if window_leaves < leaf_rate.leaves_per_block {
+        eprintln!(
+            "refusing: the corpus holds {window_leaves} leaves, shorter than one worst-case \
+             block ({}). The retired quotient divides by the blocks that corpus covers, and a \
+             window under one block is not one.",
+            leaf_rate.leaves_per_block
+        );
+        return ExitCode::from(2);
+    }
 
     let mut controls: Vec<ControlExperiment> = Vec::new();
     for depth in &args.control_depths {
@@ -217,10 +229,7 @@ fn main() -> ExitCode {
     // the same work). Zero controls is not quiet: a run with no control has
     // not measured its board.
     let load_control = LoadControl::over(
-        &controls
-            .iter()
-            .map(|c| (c.divergence_pct, c.converged))
-            .collect::<Vec<_>>(),
+        controls.iter().map(|c| (c.divergence_pct, c.converged)),
         CONTROL_TOLERANCE_PCT,
     );
     if !load_control.quiet {
@@ -284,10 +293,11 @@ fn main() -> ExitCode {
 
     // ── CT-6 Q4: the ADVANCE, measured rather than modelled ─────────────
     // One iteration is one worst-case block through the built advance. The
-    // series sits beside the replay series on purpose: same run, same board,
-    // same thermal state, so the ratio between the two is a property of the
-    // work and not of the machine — which is what lets an off-rig run say
-    // anything at all about the pinned rig's figure.
+    // series sits beside the replay series because they share this run's
+    // board. The measured advance is the quantity a later run may compare.
+    // The ratio of the two is a printed observation of this run; it is not
+    // an extrapolation input, and an off-rig ratio does not speak for the
+    // pinned rig.
     let mut advance_rig = AdvanceRig::new(
         &corpus,
         leaf_rate.leaves_per_block,
@@ -423,13 +433,12 @@ fn main() -> ExitCode {
     // `--window-leaves` takes arbitrary values, and integer division would
     // discard a partial final block from the denominator — reporting 1.5
     // blocks of replay as 1 and inflating the per-block quotient by half.
-    // `AdvanceRig::new` has already refused a corpus shorter than one block,
-    // so this is at least 1.0 by the time it is read; a `.max(1.0)` here
-    // would be a guard that cannot fire.
+    // A window shorter than one block was refused before any series started,
+    // so this denominator is at least 1.
     let replayed_blocks = window_leaves as f64 / leaf_rate.leaves_per_block as f64;
-    // The retired model beside the measurement, for the same reason and at
-    // the same point: the ratio between the two is what travels off this
-    // machine, and neither number does on its own.
+    // The retired model, printed beside the measurement for this run only.
+    // The measured advance is what a later run may compare; this quotient is
+    // an observation of the replay on this board.
     eprintln!(
         "── CT-6 Q4 retired model: {:.2} ms/block (replay {:.3} s over {replayed_blocks} \
          blocks) -> measured is {:.2}x ──",
@@ -518,7 +527,8 @@ fn main() -> ExitCode {
         per_block_advance_retired_quotient_s: replay_median / replayed_blocks,
         per_block_advance_provenance:
             "measured: frontier fold + snapshot encode + ring commit, per worst-case block \
-             (CT-6 increment 4). NOT replay_median / REPLAY_WINDOW_BLOCKS, which rides as \
+             (CT-6 increment 4). NOT replay_median / replayed_blocks \
+             (window_leaves / leaves_per_block), which rides as \
              per_block_advance_retired_quotient_s",
         per_block_advance_load_control: load_control,
         per_block_advance_cadence_fraction: advance_series.graded_s() / BLOCK_TARGET_S,

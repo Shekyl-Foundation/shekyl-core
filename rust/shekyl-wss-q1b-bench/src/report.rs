@@ -94,6 +94,11 @@ use crate::timing::Series;
 ///   read off the same axis. A `v2` record's value is not wrong for what it
 ///   was — it is a model estimate — but it is not the graded quantity, and
 ///   `per_block_advance_provenance` now says which one a record carries.
+///   The retired quotient beside the measurement divides by `replayed_blocks`
+///   — the blocks the corpus covers, `window_leaves / leaves_per_block` — and
+///   not by `REPLAY_WINDOW_BLOCKS`. At the default window the two denominators
+///   match; under `--window-leaves` they do not. The quotient is an observation
+///   of that run. The measured advance is what a later run may compare.
 ///
 /// **No CI arm enforces this constant** — the `schema-snapshot` workflow's
 /// version-bump job covers `shekyl-chain-store`'s persisted schema, not this
@@ -221,22 +226,31 @@ impl LoadControl {
     /// Judge the board from a run's controls, each `(divergence_pct,
     /// converged)`.
     ///
-    /// Takes the pairs rather than the experiments so the verdict can be
-    /// tested at its boundary without building a corpus — the bound is the
-    /// thing under test, not the fixture that produces it.
+    /// The pair is the whole input: a run maps the experiments it already
+    /// holds, and a test hands the pairs. The rest of a control experiment
+    /// is not an input to the bound, and the pass does not collect the pairs
+    /// into a second list.
     #[must_use]
-    pub fn over(controls: &[(f64, bool)], tolerance_pct: f64) -> Self {
+    pub fn over<I>(controls: I, tolerance_pct: f64) -> Self
+    where
+        I: IntoIterator<Item = (f64, bool)>,
+    {
+        let mut max_divergence_pct = 0.0_f64;
+        let mut count = 0_usize;
+        let mut every_arm_quiet = true;
+        for (divergence, converged) in controls {
+            let magnitude = divergence.abs();
+            max_divergence_pct = max_divergence_pct.max(magnitude);
+            every_arm_quiet &= converged && magnitude <= tolerance_pct;
+            count += 1;
+        }
+        // Zero controls is not quiet. No reading is an unmeasured board,
+        // and absence of the signal is first evidence the subject is absent.
         Self {
-            max_divergence_pct: controls
-                .iter()
-                .map(|(d, _)| d.abs())
-                .fold(0.0_f64, f64::max),
+            max_divergence_pct,
             tolerance_pct,
-            quiet: !controls.is_empty()
-                && controls
-                    .iter()
-                    .all(|(d, converged)| *converged && d.abs() <= tolerance_pct),
-            controls: controls.len(),
+            quiet: count > 0 && every_arm_quiet,
+            controls: count,
         }
     }
 }
@@ -282,12 +296,16 @@ pub struct SpendEdgeRecord {
     /// see whether it converged before treating it as a grade.
     pub per_block_advance: Series,
     /// **The retired derivation, kept beside its replacement**:
-    /// `replay_median / REPLAY_WINDOW_BLOCKS`, the pre-build model.
+    /// `replay_median / replayed_blocks`, where `replayed_blocks` is the blocks
+    /// the corpus covers (`window_leaves / leaves_per_block`). At the default
+    /// window that denominator matches `REPLAY_WINDOW_BLOCKS`; under
+    /// `--window-leaves` it does not.
     ///
     /// Emitted in the same record as the measured advance so the two can be
-    /// compared *on one machine* — which is the only way an off-rig run says
-    /// anything about the pinned rig's `537.59 ms`. A ratio between two
-    /// numbers from one run travels; either number alone does not.
+    /// compared within the run that produced them. The measured advance is
+    /// what a later run may compare. This quotient is an observation of one
+    /// run's replay; it is not an extrapolation input, and it does not speak
+    /// for the pinned rig.
     pub per_block_advance_retired_quotient_s: f64,
     /// Which derivation `per_block_advance_worst_case_s` carries.
     ///
