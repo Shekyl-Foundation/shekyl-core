@@ -46,16 +46,20 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) `SF-D7`
   - Target: pre-genesis
 
-- **F34: write the `PDM-Q-F34` charter row** with the evidence from the arms (`STAKER_ARCHIVAL_SIM.md` §L19a–§L19g; the calibrated arm follows in §L19h/§L19i). The finding is recorded in the sim's own lane and appears nowhere in the PDM charter. **Held** until the design owner reads it: `PDM-Q-F34` is read all-seeds (ruled 2026-09-28, §L19g §4).
+- **Gate 4/5 budget sizing: paid whole-shard challenge egress at a low SKL price outruns the archival budget (F34's funding finding).** Every calibrated cell that breaches has holding cost 2.9–29× the whole archival budget (`STAKER_ARCHIVAL_SIM.md` §L19i): paid egress (AWS-rate reads, three whole-shard reads per pair per epoch), years 5–10, SKL ≤ $0.01. No partition or price shape fixes a network that cannot pay its archivers, so this is a budget-sizing input for gate 4/5, independent of `SHT-Q2`. The cost driver is whole-shard challenge egress.
+  - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19i
+  - Target: pre-genesis
+
+- **Build `SHT-Q2`: shards cut by archival length, bound through the txid** (RULED 2026-09-29). One consensus-atomic cutover (rule 07): the txid mixer in both languages, the stored archival-length row, the cumulative archival-length cell, the boundary function `⌊cum_before / W⌋`, the `W` constant with `max archival length < W` as a static relation, and the regenerated parity pins and corpora. It depends on `W`'s value, which item 4 derives. The docs half, `T` re-based in bytes and the cutover census updated for the new boundary function, lands first.
+  - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §8.6
+  - Target: pre-genesis
+
+- **F34: write the `PDM-Q-F34` charter row** — composition **closes by dissolution once `SHT-Q2` is built** (RULED 2026-09-29, `ARCHIVAL_SHARD_T_DERIVATION.md` §8.6), so the row records that disposition and the evidence behind it (`STAKER_ARCHIVAL_SIM.md` §L19a–§L19j). It lands with the `SHT-Q2` build, not before: until then the partition the evidence argues about is still the live one.
   - Owner: [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q6`
   - Target: pre-genesis
 
 - **The C++ core_tests' fakechain hard-fork tables still carry `{(1, 0), (1, 1)}`, so the C++ tests run CEN-F21's epoch at 0 while the C++ daemon now runs it at 1.** `tests/core_tests/block_validation.h:373–419` (four tables) keep the inherited shape whose second row `HardFork::add_fork` rejects; the daemon's regtest table was corrected in #889 (`CHAIN_RULES_SLICE_7.md` §3.11), the tests' were not — rule 20, the C++ testing itself. Consequence, stated so it is not over-read: *"the C++ core_tests pass"* no longer asserts what the daemon does for any check that reads the staker split (coinbase amount, relay floor, `staker_emission_share_effective`). Disposition when touched: the tables become `{(1, 1)}` like the daemon's, or the divergence is named in the test. Falsify by `grep -n 'make_pair(1, 0)' tests/core_tests/block_validation.h` returning nothing.
   - Owner: [`CHAIN_RULES_SLICE_7.md`](design/CHAIN_RULES_SLICE_7.md) §3.11
-  - Target: pre-genesis
-
-- **A shard-level heavy-end quantile of good-per-shard, computed from the captured chains' composition.** `U1a`'s ceiling band (~[140, 490]) contains the current `T = 200` only because of a heavy-shard multiplier taken from L19's **mean-preserving shape cap** — an artifact of that normalizer, not a measured shard size. On the mean basis every W₂ reading clears 200 by 1.4–4.9×. The quantile is per-transaction composition averaged over `T`, not the per-transaction extreme (which `√T` suppresses) and not the normalizer.
-  - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §3 `U1a`
   - Target: pre-genesis
 
 - **Leg (f) covers a connected serve-credit transaction only at the row level (`SHT-Q1`).** `the_predicate_survives_a_prune_on_the_stored_rows` connects spends and coinbases, so the case whose *only* claim on the domain is a surviving `txs_prunable_hash` row — a 3-part transaction carrying a region, i.e. the serve-credit form — is asserted over that row rather than end to end. The store's connect fixtures have no serve-credit, the chain-rules one is the shape consensus refuses (`SHT-9`), and a conforming one needs archival admission state (bond and pass records). Owed when a conforming fixture exists; **depends on `SHT-9`'s fix**.

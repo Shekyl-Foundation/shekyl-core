@@ -16,7 +16,7 @@ ordinal domain is **withdrawn** (dev already does the lookup it was charged
 for), and `SHT-7` is added. `SHT-Q1` (the partition domain) was posed by this round
 and **RULED on 2026-09-27** (§2) — it came before the bounds because it decides
 which constraints exist, and it now has. Findings `SHT-1`…`SHT-9` are at-pin
-findings of this round; **`SHT-10`…`SHT-12` and `SHT-Q2` (a byte-proportional partition —
+findings of this round; **`SHT-Q2` RULED 2026-09-29 (§8.6): shards are cut by archival length, bound through the txid.** **`SHT-10`…`SHT-12` and `SHT-Q2` (a byte-proportional partition —
 computed weight, or a txid-bound declared length, the design owner's recommendation —
 OPEN for Rick) were added 2026-09-28 after F34 (§8)**, with the input-count proposal
 recorded as not adopted and `PDM-Q6` item 5's rejection re-read as one of *stored
@@ -156,6 +156,11 @@ and does not say so.** It is not merely stale; it presumes the answer to
 >
 > **Stability:** closed shards never change membership. Any post-genesis change
 > to what counts as archival good activates by height and applies only past it.
+>
+> **AMENDED by `SHT-Q2` (RULED 2026-09-29, §8.6):** "Shard `k` is the domain's
+> transactions `[k·T, (k+1)·T)`" becomes **shard membership `⌊cum_before / W⌋` over
+> the cumulative archival length**, bound through the txid. The domain itself is
+> unchanged.
 >
 > **The predicate reads the two digests as recorded at ingest, never recomputed
 > from a possibly-pruned body.** `Transaction::prunable_hash`'s own contract says
@@ -1181,3 +1186,52 @@ transition. The partition built on it is unchanged from §8.4: global multiples 
 with `max archival length < W` as a static relation between the two constants.
 
 **Not ruled here.**
+
+### 8.6 `SHT-Q2` — RULED (Rick, 2026-09-29)
+
+> **SHT-Q2 RULED (Rick, 2026-09-29): shards are cut by archival length, bound through the txid.** Each in-domain transaction's archival length (prunable + `pqc_auths` bytes) is folded into its txid and stored as a skeleton row. It is never declared or signed, and it is supplied by storage-pruned forms like the prunable hash. Shard membership is ⌊cum_before / W⌋ over the cumulative archival length: global multiples of W, no table. Static constraint: maximum archival length of one transaction < W. The domain (SHT-Q1) is unchanged. Its text changes from "T transactions" to "archival length W". F34's composition question closes by dissolution once this is built; the funding finding stands separately.
+
+**What the ruling settles, as the design owner stated it.** Nothing is declared: the txid
+mixer measures the finished bytes itself.
+
+- **On the wire:** no new field and no added bytes. A full node computes the length from
+  the bytes it holds while computing the txid, so there is no ingest check to write, and a
+  wrong length cannot exist.
+- **In the skeleton:** one row per transaction, beside the two digest rows. A
+  storage-pruned transaction supplies its length exactly as it supplies its prunable hash.
+  A wrong one produces a wrong txid and fails the Merkle check.
+- **In code:** one mixer function per language.
+
+**Ruled work:**
+
+1. The txid mixer in both languages (`Transaction::hash_from_components`; C++
+   `calculate_transaction_hash`), the stored archival-length row, and the cumulative
+   archival-length cell beside `cumulative_tx_count`. The count cell stays, because it
+   feeds the fee ladder (CEN-F20).
+2. The boundary function `⌊cum_before / W⌋`, and the `W` constant with its static
+   relation `max archival length of one transaction < W`.
+3. The regenerated parity pins (`pruned_tx_hash_parity`, `serve_credit_tx_parity`,
+   `live_oracle_spend_v1.json`) and the captured corpora.
+4. `T`'s derivation re-based in bytes. `U1a`'s ceiling was already in bytes, and the
+   composition bounds drop out.
+5. The cutover census (`ARCHIVAL_SHARD_COUNT_CUTOVER.md`) updated for the new boundary
+   function: the same consumers, a new function behind them.
+
+**Consequences recorded with the ruling:**
+
+- **The overshoot bound carries over.** A shard's archival length lies in
+  `(W − max, W + max)`. Under CEN-H3 a transaction's good is below `TX_WEIGHT_LIMIT` =
+  149,400 B (§8.3). The static relation `max < W` means no transaction spans a whole
+  multiple of `W`, so no shard is empty.
+- **The equivalence invariant changes subject.** §2's "the domain equals the non-coinbase
+  transactions, read from `cumulative_tx_count`" still holds for **membership**. Boundaries
+  now read the archival-length cell. `archival_len > 0 ⇔ carries_archival_good` joins the
+  pinned invariants.
+- **The heavy-end composition quantile is no longer owed.** Its FOLLOWUPS row asked for a
+  shard-level quantile to replace L19's shape-cap multiplier in `U1a`. Equal-length shards
+  have no composition spread, so `U1a` is re-based in bytes (item 4) without it. The row
+  is retired in this change.
+- **F34:** composition closes by dissolution **once this is built**. The funding finding
+  from `STAKER_ARCHIVAL_SIM.md` §L19i–§L19j stands separately, as a gate 4/5 budget-sizing
+  input: paid whole-shard challenge egress at a low SKL price outruns the archival budget
+  (φ 2.9–29 in the breaching calibrated cells).
