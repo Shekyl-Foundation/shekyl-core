@@ -116,10 +116,10 @@ use crate::schema;
 use super::{
     post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockInfo, BlockRef, BondRecord, Canonical,
     Coded, CoverageGaps, CurveTreeState, FirstPayingHeight, HeldShard, Holdings, LayerHash,
-    LeafCount, OriginatedPhase, OutKey, OutTx, PassedThroughFacts, PoolRecord, ProbeCell,
-    PropertyCell, RMarket, Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion,
-    SettlementEpochBlocks, SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
-    FACT_FIELDS, PROPERTY_CELLS, SCHEMA_VERSION,
+    LeafCount, OriginatedPhase, OutKey, OutTx, PoolRecord, ProbeCell, PropertyCell, RMarket,
+    Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
+    SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS,
+    SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -323,23 +323,10 @@ impl Fixtures for CoverageGaps {
     }
 }
 
-impl Fixtures for PassedThroughFacts {
-    fn fixtures() -> Vec<(&'static str, Self)> {
-        vec![
-            ("none", PassedThroughFacts::NONE),
-            // `burned` is position 0 and the whole vocabulary since E6 slice
-            // 7 (SCHEMA_VERSION 16) — `cumulative_difficulty` left at 7,
-            // `root_after` at 15, the two weights, the median and
-            // `coins_generated` at 16. "burned" and "all" are one fixture
-            // now; both names are kept so the `.snap` shows the collapse.
-            ("burned", PassedThroughFacts::of_positions([0])),
-            (
-                "all",
-                PassedThroughFacts::of_positions(0..FACT_FIELDS.len()),
-            ),
-        ]
-    }
-}
+// `PassedThroughFacts`' fixtures (`none`, `burned`, `all`) and its `.snap`
+// left with the type at SCHEMA_VERSION 17 (E6 slice 7 wave B): the
+// vocabulary had shrunk to one name at 16, and the last field became the
+// verdict's.
 
 impl Fixtures for BlockHeight {
     fn fixtures() -> Vec<(&'static str, Self)> {
@@ -1221,7 +1208,6 @@ snapshotted_codecs! {
     UndoLog => codec_snapshot_undo_log,
     SettlementEpochBlocks => codec_snapshot_settlement_epoch_blocks,
     CoverageGaps => codec_snapshot_rule_coverage_gaps,
-    PassedThroughFacts => codec_snapshot_passed_through_facts,
     CurveTreeRoot => codec_snapshot_curve_root,
     BlockHeight => codec_snapshot_block_height,
     RuleSetInForce => codec_snapshot_rule_set_id,

@@ -3,11 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The two evidence sets `connect` stamps into the file's [`Provenance`]
+//! The evidence set `connect` stamps into the file's [`Provenance`]
 //! (S-CHAIN-W commit 6b; `DRS_E1_SCHAIN_W.md` §3.2, §3.8; C2-R8 §9.4).
 //!
 //! `Provenance` began as *which archival applies some committed batch
-//! skipped*. Two more monotone sets join it here, in the same shape — a
+//! skipped*. A second monotone set joins it here, in the same shape — a
 //! union that only grows, widened inside the committing batch's own
 //! transaction, and only ever **empty** when the file is parity evidence:
 //!
@@ -16,21 +16,20 @@
 //!   *"persisted with anything it writes"*). A validator implementing 30
 //!   rules and one implementing all of them produce different evidence;
 //!   this is where the file remembers which it got.
-//! - [`PassedThroughFacts`] — `ConnectFacts` fields some committed
-//!   `connect` recorded as `PassedThrough` rather than `Derived` (SCW-1).
-//!   `block_info`'s diff rows are not parity evidence while any of these
-//!   is set, and the set names exactly which E6 rows have to land for it
-//!   to become so.
+//!
+//! A third set — the `ConnectFacts` fields some `connect` recorded as
+//! passed through rather than derived (SCW-1) — was stamped beside it until
+//! E6 slice 7 wave B derived the last field on the verdict; see the note at
+//! the top of the body.
 //!
 //! # Names, not indices
 //!
-//! Both encode as **sorted, deduplicated ASCII names** — `CenRow::as_str`
-//! (`"CEN-C1"`) and the `ConnectFacts` field name (`"burned"`) — never as
-//! bitset slots: a slot shifts when the census inserts a row, a name does
-//! not (the rules crate's own `coverage.rs` says the same). In memory both
-//! are small `Copy` bitsets so [`Provenance`] stays `Copy`. A name the
-//! running binary does not know refuses to decode: a deleted row or a
-//! field that became `Derived` is a layout change and bumps
+//! The set encodes as **sorted, deduplicated ASCII names** —
+//! `CenRow::as_str` (`"CEN-C1"`) — never as bitset slots: a slot shifts
+//! when the census inserts a row, a name does not (the rules crate's own
+//! `coverage.rs` says the same). In memory it is a small `Copy` bitset so
+//! [`Provenance`] stays `Copy`. A name the running binary does not know
+//! refuses to decode: a deleted row is a layout change and bumps
 //! `SCHEMA_VERSION`, so such a cell is never met without the seal refusing
 //! first — meeting one anyway is SI-7.
 //!
@@ -40,23 +39,15 @@ use shekyl_chain_rules::{CenRow, Row};
 
 use super::{Canonical, CodecError};
 
-/// The `ConnectFacts` fields, in declaration order — the bit assignment of
-/// [`PassedThroughFacts`] and the names it encodes. `ConnectFacts::DELETED_BY`
-/// is held to this list by a test in `store::connect`.
-pub const FACT_FIELDS: [&str; 1] = [
-    // `weight`, `long_term_weight` and `long_term_effective_median` sat
-    // here until E6 slice 7 derived them (2026-09-28, CEN-G6/G6b: the
-    // validator builds the medians and the block's weights and the verdict
-    // carries them), and `coins_generated` until the same slice's CEN-F14b
-    // / G12 (the paid reward advances the accumulator on the verdict). The
-    // cell encodes NAMES, not positions, so the in-memory bits renumber
-    // freely; what changes on disk is the accepted vocabulary — a file
-    // naming a deleted field is refused — and that rides SCHEMA_VERSION 16
-    // (rule 42; rebuild, never migrate). Earlier shrinks by the same
-    // mechanism: `cumulative_difficulty` (E6 slice 2, CEN-D4, SCHEMA_VERSION
-    // 7) and `root_after` (DRS-E3, `CTW-Q1`, SCHEMA_VERSION 15).
-    "burned",
-];
+// `FACT_FIELDS` and `PassedThroughFacts` lived here until E6 slice 7 wave B
+// (2026-09-29): the `ConnectFacts` fields some committed `connect` recorded
+// as passed through, encoded by name in declaration order. The vocabulary
+// shrank as the rows landed — `cumulative_difficulty` (SCHEMA_VERSION 7),
+// `root_after` (15), the two weights, the median and `coins_generated` (16)
+// — and `burned`, the last, went with CEN-F17 / G11; with no field left to
+// name, the cell left the layout (SCHEMA_VERSION 17; rule 42: rebuild,
+// never migrate) and the type with it. The name framing both cells shared
+// (`encode_names` / `decode_names`) stays with `CoverageGaps`.
 
 /// Census rows some committed `connect` was handed a verdict for without
 /// the row having been evaluated. Monotone; empty is the only parity state.
@@ -177,118 +168,6 @@ impl Canonical for CoverageGaps {
     }
 }
 
-/// `ConnectFacts` fields some committed `connect` recorded as passed
-/// through. Monotone; empty is the only parity state.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct PassedThroughFacts {
-    bits: u8,
-}
-
-impl PassedThroughFacts {
-    /// Every field derived — what a fresh file starts with.
-    pub const NONE: Self = Self { bits: 0 };
-
-    /// The set naming the fields at these [`FACT_FIELDS`] positions.
-    ///
-    /// # Panics
-    ///
-    /// If a position is past the field list; the callers are this crate's
-    /// `ConnectFacts`, whose positions are the list's by construction.
-    #[must_use]
-    pub fn of_positions(positions: impl IntoIterator<Item = usize>) -> Self {
-        let mut set = Self::NONE;
-        for position in positions {
-            assert!(position < FACT_FIELDS.len(), "no such ConnectFacts field");
-            set.bits |= 1 << position;
-        }
-        set
-    }
-
-    /// Whether the field at `position` is recorded as passed through.
-    #[must_use]
-    pub const fn contains(&self, position: usize) -> bool {
-        position < FACT_FIELDS.len() && self.bits & (1 << position) != 0
-    }
-
-    /// No field is recorded as passed through.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.bits == 0
-    }
-
-    /// The recorded field names, in declaration order.
-    pub fn iter(&self) -> impl Iterator<Item = &'static str> + '_ {
-        FACT_FIELDS
-            .iter()
-            .enumerate()
-            .filter(move |(i, _)| self.contains(*i))
-            .map(|(_, name)| *name)
-    }
-
-    /// `self ∪ other`. Monotone.
-    #[must_use]
-    pub const fn union(self, other: Self) -> Self {
-        Self {
-            bits: self.bits | other.bits,
-        }
-    }
-}
-
-impl core::fmt::Debug for PassedThroughFacts {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_set().entries(self.iter()).finish()
-    }
-}
-
-impl core::fmt::Display for PassedThroughFacts {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let mut first = true;
-        for name in self.iter() {
-            if !first {
-                f.write_str(",")?;
-            }
-            first = false;
-            f.write_str(name)?;
-        }
-        Ok(())
-    }
-}
-
-impl Canonical for PassedThroughFacts {
-    const NAME: &'static str = "passed_through_facts";
-    const FIXED_WIDTH: Option<usize> = None;
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        encode_names(out, self.iter());
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        let mut set = Self::NONE;
-        // Declaration order is the one encoding (see `CoverageGaps`).
-        let mut last: Option<usize> = None;
-        decode_names(Self::NAME, bytes, |name| {
-            let position =
-                FACT_FIELDS
-                    .iter()
-                    .position(|field| *field == name)
-                    .ok_or(CodecError::Invalid {
-                        codec: Self::NAME,
-                        reason: "names a ConnectFacts field this binary does not have",
-                    })?;
-            if last.is_some_and(|prev| position <= prev) {
-                return Err(CodecError::Invalid {
-                    codec: Self::NAME,
-                    reason: "fields are not in declaration order (repeated or out of order)",
-                });
-            }
-            last = Some(position);
-            set.bits |= 1 << position;
-            Ok(())
-        })?;
-        Ok(set)
-    }
-}
-
 /// `count:u32 LE`, then `count` × (`len:u8`, `len` ASCII bytes). Names are
 /// written in the caller's (census / declaration) order and must be
 /// non-empty ASCII no longer than 255 bytes — every name here is a
@@ -400,71 +279,33 @@ mod tests {
                 reason: "rows are not in census order (repeated or out of order)",
             })
         );
-        // One name in the vocabulary since SCHEMA_VERSION 16, so the only
-        // non-canonical spelling left is a repeat.
-        let mut fields = Vec::new();
-        encode_names(&mut fields, ["burned", "burned"].into_iter());
-        assert_eq!(
-            PassedThroughFacts::decode(&fields),
-            Err(CodecError::Invalid {
-                codec: "passed_through_facts",
-                reason: "fields are not in declaration order (repeated or out of order)",
-            })
-        );
-        // A name the vocabulary held until 16 is refused as unknown, not
-        // reordered: a pre-16 file naming it is met by the seal first
-        // (module docs), and by this if it is met at all.
-        let mut deleted = Vec::new();
-        encode_names(&mut deleted, ["weight", "burned"].into_iter());
-        assert_eq!(
-            PassedThroughFacts::decode(&deleted),
-            Err(CodecError::Invalid {
-                codec: "passed_through_facts",
-                reason: "names a ConnectFacts field this binary does not have",
-            })
-        );
         // The canonical spelling round-trips, and is what `encode` emits.
-        let set = PassedThroughFacts::of_positions([0]);
+        let set = CoverageGaps::of([CenRow::ALL[0], CenRow::ALL[5]]);
         let mut canonical = Vec::new();
-        encode_names(&mut canonical, ["burned"].into_iter());
-        assert_eq!(
-            PassedThroughFacts::decode(&canonical).map(|s| s.iter().count()),
-            Ok(1)
+        encode_names(
+            &mut canonical,
+            [CenRow::ALL[0].as_str(), CenRow::ALL[5].as_str()].into_iter(),
         );
-        assert_eq!(PassedThroughFacts::decode(&set.encode()), Ok(set));
-    }
-
-    #[test]
-    fn passed_through_facts_round_trip_and_refuse_unknowns() {
-        let set = PassedThroughFacts::of_positions([0]);
-        assert_eq!(set.iter().collect::<Vec<_>>(), ["burned"]);
-        assert_eq!(PassedThroughFacts::decode(&set.encode()), Ok(set));
-        assert_eq!(set.to_string(), "burned");
-        assert!(PassedThroughFacts::NONE.is_empty() && !set.is_empty());
-        let mut unknown = Vec::new();
-        encode_names(&mut unknown, ["burnedd"].into_iter());
-        assert!(PassedThroughFacts::decode(&unknown).is_err());
+        assert_eq!(CoverageGaps::decode(&canonical), Ok(set));
+        assert_eq!(canonical, set.encode());
     }
 
     #[test]
     fn the_name_framing_is_strict() {
         let mut bytes = Vec::new();
-        encode_names(&mut bytes, ["burned"].into_iter());
+        encode_names(&mut bytes, [CenRow::ALL[0].as_str()].into_iter());
         for cut in 0..bytes.len() {
-            assert!(
-                PassedThroughFacts::decode(&bytes[..cut]).is_err(),
-                "cut {cut}"
-            );
+            assert!(CoverageGaps::decode(&bytes[..cut]).is_err(), "cut {cut}");
         }
         bytes.push(0);
         assert_eq!(
-            PassedThroughFacts::decode(&bytes),
+            CoverageGaps::decode(&bytes),
             Err(CodecError::Invalid {
-                codec: "passed_through_facts",
+                codec: "rule_coverage_gaps",
                 reason: "trailing bytes after the last name",
             })
         );
         let empty_name = [1, 0, 0, 0, 0];
-        assert!(PassedThroughFacts::decode(&empty_name).is_err());
+        assert!(CoverageGaps::decode(&empty_name).is_err());
     }
 }

@@ -996,7 +996,9 @@ stand in the crate. Code wins where this list and the code disagree.
   `store/view.rs`): `WriteBatch::chain_view()` projects the batch as the
   validator's `ChainView<'id>` (its own uncommitted writes visible, so block
   *h*+1 validates against block *h*); `connect(ChainValid<'id, BatchView<'_,
-  'id>>, ConnectFacts, RuleSetId)` writes the 17-table set in the C++
+  'id>>, RuleSetId)` — the verdict alone, since E6 slice 7 wave B
+  (2026-09-29) deleted the pass-through `ConnectFacts` with its last
+  member — writes the 17-table set in the C++
   funnel's phase order with E4 as empty hook phases — E3's phase 3 has its
   body since 2026-09-26 (`store/grow.rs`: the verdict's drain into
   `curve_tree_leaves`, the position maps, `curve_tree_layers`,
@@ -1024,11 +1026,14 @@ stand in the crate. Code wins where this list and the code disagree.
   deliberate tightening rode in with it: the tip is read **decoded**, so
   an undecodable `block_info[tip]` is SI-7 on every classified read — the
   same row `connect` decodes before its first belt.
-- **Provenance has three components** (increment 3, `provenance.rs`,
-  `codec/evidence.rs`): stubbed applies (increment 2), `rule_coverage_gaps`
-  — the rows in force a verdict did not evaluate (C2-R8 §9.4) — and
-  `passed_through_facts`; each an engine-local header cell widened inside
-  the committing batch, all three empty ⇔ parity evidence. Under
+- **Provenance has two components** (increment 3, `provenance.rs`,
+  `codec/evidence.rs`): stubbed applies (increment 2) and
+  `rule_coverage_gaps` — the rows in force a verdict did not evaluate
+  (C2-R8 §9.4); each an engine-local header cell widened inside the
+  committing batch, both empty ⇔ parity evidence. *A third,
+  `passed_through_facts` (SCW-1), was here from S-CHAIN-W until E6 slice 7
+  wave B (2026-09-29): the last fact `connect` took from its caller became
+  the verdict's and the cell went with it (schema 17).* Under
   `RuleSet::GENESIS` today every connect records all enforced rows as gaps,
   which is the ruling working: no file fed by the scaffold validator can
   pass as parity evidence, and every evidential run starts from a fresh
@@ -1891,8 +1896,9 @@ this month has been built to avoid. Three things the repair phase needs:
    **the comparator green over the replayed chain together with
    `implemented == enforced` gates cutover; `ratified == enforced` gates
    release.** *Checked against landed text, not the ruling as relayed:*
-   parity evidence as defined today (§3 — coverage gaps, stubbed applies
-   and passed-through facts all empty; `is_complete_for`) requires
+   parity evidence as defined today (§3 — coverage gaps and stubbed
+   applies both empty, the passed-through component deleted 2026-09-29;
+   `is_complete_for`) requires
    `implemented == enforced`, **not** `ratified == enforced`; the second
    figure is printed (`CHAIN_RULES_CRATE.md` §6.3) and gated nothing. The
    printing is the mechanism; the gate is what this ruling adds. Release

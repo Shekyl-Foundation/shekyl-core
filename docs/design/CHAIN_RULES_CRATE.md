@@ -1004,8 +1004,9 @@ inherited-never-judged row is still enforced, and it gates **release** —
 either ratified/diverged by an R-round or ruled dead (bucket 3, leaving the
 denominator). *Read against the landed text:* until this ruling the second
 figure was printed (this section) and gated nothing — parity evidence as
-defined (§3 of the DRS: coverage gaps, stubbed applies and passed-through
-facts all empty) requires `implemented == enforced` only. The printing is
+defined (§3 of the DRS: coverage gaps and stubbed applies both empty; the
+passed-through component was deleted 2026-09-29) requires
+`implemented == enforced` only. The printing is
 the mechanism; the gate is what §7.6 adds.
 
 ### 6.4 Wiring

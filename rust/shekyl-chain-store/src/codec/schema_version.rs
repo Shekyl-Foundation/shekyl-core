@@ -173,7 +173,18 @@ use super::{Canonical, CodecError};
 ///   wave B) — the `7` mechanism, third instance. No table moves; no digest
 ///   family moves: the cells hold the same columns, now written from the
 ///   verdict.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(16);
+/// - `17` — E6 slice 7 wave B (`CHAIN_RULES_SLICE_7.md` §5 row 9): **the
+///   last passed-through fact becomes the verdict's, and the cell goes.**
+///   `validate` derives the fee split (CEN-F17 / G11) and `connect` records
+///   `ValidatedBlock::emission`'s burn; `burned` leaves `ConnectFacts`,
+///   which leaves with it — `Fact`, `Origin`, `FACT_FIELDS` and
+///   `PassedThroughFacts` are deleted rather than kept as a permanent
+///   `Derived` (rule 15). The `passed_through_facts` **property cell is no
+///   longer written or read**: the catalogue loses a row and the seal
+///   writes one cell fewer, which is the layout change (a `16` file has a
+///   cell this binary does not know; the seal refuses it — rebuild, never
+///   migrate). No table moves; no digest family moves.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(17);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -230,10 +241,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(16));
-        assert_eq!(SCHEMA_VERSION.encode(), [16, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(17));
+        assert_eq!(SCHEMA_VERSION.encode(), [17, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[16, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[17, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

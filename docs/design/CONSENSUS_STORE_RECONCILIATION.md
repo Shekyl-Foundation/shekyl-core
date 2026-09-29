@@ -358,6 +358,10 @@ borrowed root — while (2) the digest *component* that fact feeds grades
 not-evidence, because identity there is copying. A row that *produces* the
 borrowed value grades not-evidence on both until Rust derives it, with no
 harness change. The grader carries the two as typed fields on the row.
+*(Since 2026-09-29 — E6 slice 7 wave B — no fact is borrowed: the six
+trace facts are comparison inputs only and the grader's `Borrowed` arm is
+deleted with the type that fed it, `shekyl_e2_grade_v2`. The two clauses
+remain the law a future borrowed oracle re-enters under.)*
 
 **A bucket is not a conformance claim.** The census's buckets say whether a
 rule is *specified and ratified on record* — they say nothing about whether the

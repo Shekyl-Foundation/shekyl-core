@@ -201,18 +201,36 @@
   hidden startup flag. Unbounded disk, no reward. The password is not
   kept after that call.
 
-### Consensus validator — census 4.G's medians and the paid reward (DRS-E6 slice 7, commits 3–5)
+### Consensus validator — census 4.G, the whole coinbase (DRS-E6 slice 7, commits 3–9)
 
-- **The Rust validator derives the block-weight medians and the paid
-  reward.** CEN-G6/G6b (`Medians::derive`, `Weights::derive` over the two
-  windows, now one key each in `consensus_constants.json`) and
-  CEN-F14/F14b/F16/G12 (`judge_emission`: a block over twice the effective
-  median is refused; the penalised reward, its miner/staker split and the
-  supply accumulator are the verdict's). `ConnectFacts` carries only
-  `burned`; the store schema is 16. Held to six daemon-built chains at every
-  height on roots, weights and accumulator (2 408 / 2 408), and to the C++
-  daemon live: a Rust-built block at the consensus bound is accepted, one
-  body over refused (`CHAIN_RULES_SLICE_7.md` §3.5, §3.11).
+- **The Rust validator derives the block-weight medians and everything the
+  block determines about its coinbase.** CEN-G6/G6b (`Medians::derive`,
+  `Weights::derive` over the two windows, now one key each in
+  `consensus_constants.json`); CEN-F14/F14b/F16/G12 (a block over twice the
+  effective median is refused; the penalised reward, its miner/staker split
+  and the supply accumulator are the verdict's); CEN-F17/G11/G13 (the fee
+  split and its burn from the parent's burned fold and frozen-segment
+  count; the staker accrual; genesis pays the miner whole); and CEN-F18
+  (the miner transaction pays exactly what it is owed, refused at the miner
+  slot in both directions). **Nothing reaches `connect` that the validator
+  did not derive:** the pass-through fact type is deleted, `connect` takes
+  the verdict alone, and the file's `Provenance` has two components
+  (stubbed applies, coverage gaps). **Store schema 17 — rebuild the
+  datadir.** Held to six daemon-built chains at every height on roots,
+  weights, accumulator and burn (2 408 / 2 408; three of those heights
+  carry a non-zero recorded burn, all matched), every C++ coinbase
+  accepted under the Rust F18, and to the C++ daemon live: a Rust-built
+  block at the consensus bound is accepted, one body over refused
+  (`CHAIN_RULES_SLICE_7.md` §3.5, §3.11). The replay's graded artifact is
+  `shekyl_e2_grade_v2`: the `Borrowed` component arm is gone with the last
+  borrowed fact.
+- **The listed body is judged before it is read as its hash.** CEN-G2 in
+  `form` (a declared list whose length or hashes disagree with the bodies
+  is refused at the block, the first mismatching slot named); CEN-G1
+  (a transaction already on the chain is refused at its slot **before** the
+  slot loop, so the row is G1 and not the double-spend's I7); CEN-G7/G9/G10
+  (the archival body pairings) beside L1; CEN-G3/G4/G5 pinned on the slot
+  loop and the wire type.
 - **The conformance register's CEN-G6/G6b rows are CHECKED-CONFORMANT.**
   Both were graded DIVERGENT on 2026-09-11 for the shipped ×50 surge factor;
   the factor became the ratified 4 on 2026-09-12 and the rows were not

@@ -45,7 +45,7 @@ fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction,
     listing[1] = vec![plain.clone()];
     // The spend as connected — anchored on the chain — is the one the reads
     // are asked about by hash.
-    let (hashes, mut anchored) = connect_chain_anchored(&store, &listing, 0);
+    let (hashes, mut anchored) = connect_chain_anchored(&store, &listing);
     let with_pqc = anchored
         .pop()
         .and_then(|mut block| block.pop())

@@ -115,17 +115,6 @@ pub(super) fn batch_root_going_into(
     recorded_root(view.root_at(BlockHeight::from_raw(height)), height)
 }
 
-/// The one fact `connect` is still handed: this block's burn. Everything
-/// else `block_info` records is the verdict's since E6 slice 7 (the
-/// weights, the median, the accumulator), so a fixture names nothing
-/// about them — a test that reads them back reads what the validator
-/// derived over the chain it built.
-pub(super) fn facts(burned: u64) -> ConnectFacts {
-    ConnectFacts {
-        burned: Fact::passed_through(AtomicUnits::from_raw(burned)),
-    }
-}
-
 /// The world the fixtures are judged in: a clock after every fixture
 /// timestamp (`candidate` stamps `1_000 + 60·h`), and a longhash of zeros,
 /// which satisfies every target. The store's tests are about the store;
@@ -284,7 +273,7 @@ pub(super) fn connect_with_image_planted_under_the_token(
         batch
             .open_insert_table(SPENT_KEYS, StoreInvariant::KeyImageNotFresh)?
             .insert(planted, Present)?;
-        Ok(batch.connect(judged, facts(0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judged, RuleSet::GENESIS)?)
     })
 }
 
@@ -335,34 +324,79 @@ pub(super) fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Tran
     fixture::anchored_at(hashes, height, tx)
 }
 
-/// Connect `listed` as consecutive blocks from genesis in one batch,
-/// handing each `facts(0)`. Every listed transaction is anchored on the
+/// Connect `listed` as consecutive blocks from genesis in one batch —
+/// `connect` is handed nothing but the verdict since E6 slice 7 wave B;
+/// everything `block_info` and the burn fold record is the validator's over
+/// the chain the fixture built. Every listed transaction is anchored on the
 /// chain as it is built ([`anchor`]), and every header carries the root
 /// the store recorded going into its height ([`batch_root_going_into`],
 /// the derived root of the previous connect — CEN-B5), so a caller lists bare
 /// [`spend`]s and the reference and the root are written where they are
 /// known. Returns each block's hash.
 pub(super) fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<BlockHash> {
-    connect_chain_with_burn(store, listed, 0)
+    connect_chain_anchored(store, listed).0
 }
 
-/// [`connect_chain`] with a uniform per-block `burned` fact (pop tests
-/// fold a non-zero burn so they can assert the pre-image on pop).
-pub(super) fn connect_chain_with_burn(
+/// A genesis coinbase amount large enough for CEN-F17's burn to register.
+/// The burn is `fees × base_rate × √(volume / baseline) × (supply /
+/// asymptote)`, and on a fixture chain the supply is a few blocks'
+/// rewards against an asymptote of `2³²` coins — a ratio that rounds to
+/// zero in the fixed point, so a fee-bearing body on such a chain destroys
+/// nothing. Genesis pays what it is configured to (CEN-F11), so a burning
+/// fixture endows it: a quarter of the asymptote, well under it (F13's
+/// curve still prices every later height) and enough for a one-coin fee to
+/// destroy a visible amount.
+pub(super) const GENESIS_ENDOWMENT: u64 = shekyl_economics::EMISSION_CURVE_ASYMPTOTE / 4;
+
+/// [`spend`] paying `fee` — the harness's [`fixture::paying_fee`]: the fee
+/// set and the pseudo-out re-formed so CEN-H18 still balances.
+pub(super) fn spend_paying(key_image: usize, outputs: usize, fee: u64) -> Transaction {
+    fixture::paying_fee(spend(key_image, outputs), fee)
+}
+
+/// [`connect_chain`] on an **endowed genesis** ([`GENESIS_ENDOWMENT`]),
+/// returning each block's hash and the burn the verdict derived for it
+/// (CEN-F17 / G11's `actually_destroyed` — what `connect` wrote as
+/// `block_burn[h]` and folded into `total_burned`). A test of the burn
+/// rows lists [`spend_paying`] bodies here and reads the expected fold off
+/// the verdicts, never off a planted figure.
+pub(super) fn connect_chain_burning(
     store: &ChainStore,
     listed: &[Vec<Transaction>],
-    burned: u64,
-) -> Vec<BlockHash> {
-    connect_chain_anchored(store, listed, burned).0
+) -> (Vec<BlockHash>, Vec<AtomicUnits>) {
+    let mut hashes: Vec<BlockHash> = Vec::new();
+    let mut burns: Vec<AtomicUnits> = Vec::new();
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let mut previous = BlockHash::NULL;
+        for (h, txs) in listed.iter().enumerate() {
+            let h = h as u64;
+            let txs: Vec<Transaction> = txs
+                .iter()
+                .map(|tx| anchor(&hashes, h, tx.clone()))
+                .collect();
+            let root = batch_root_going_into(&view, h)?;
+            let mut cand = candidate_over(root, h, previous, txs);
+            if h == 0 {
+                cand.block.miner_transaction.prefix.outputs[0].amount = GENESIS_ENDOWMENT;
+            }
+            let judged = judge(&view, cand)?;
+            previous = judged.block().hash();
+            hashes.push(previous);
+            burns.push(judged.block().emission().burned());
+            batch.connect(judged, RuleSet::GENESIS)?;
+        }
+        Ok(())
+    });
+    out.expect("chain connects");
+    (hashes, burns)
 }
 
-/// [`connect_chain_with_burn`], also returning the listed transactions
-/// **as connected** — anchored — for a test that then reads them back by
-/// hash.
+/// [`connect_chain`], also returning the listed transactions **as
+/// connected** — anchored — for a test that then reads them back by hash.
 pub(super) fn connect_chain_anchored(
     store: &ChainStore,
     listed: &[Vec<Transaction>],
-    burned: u64,
 ) -> (Vec<BlockHash>, Vec<Vec<Transaction>>) {
     let mut hashes: Vec<BlockHash> = Vec::new();
     let mut anchored = Vec::new();
@@ -382,7 +416,7 @@ pub(super) fn connect_chain_anchored(
             // The identity is the priced block's (`judge_under` docs).
             previous = judged.block().hash();
             hashes.push(previous);
-            batch.connect(judged, facts(burned), RuleSet::GENESIS)?;
+            batch.connect(judged, RuleSet::GENESIS)?;
         }
         Ok(())
     });
@@ -390,8 +424,8 @@ pub(super) fn connect_chain_anchored(
     (hashes, anchored)
 }
 
-pub(super) fn connect_genesis(store: &ChainStore, burned: u64) -> (Connected, Block) {
-    let (connected, block, _) = connect_genesis_judged(store, burned);
+pub(super) fn connect_genesis(store: &ChainStore) -> (Connected, Block) {
+    let (connected, block, _) = connect_genesis_judged(store);
     (connected, block)
 }
 
@@ -401,7 +435,6 @@ pub(super) fn connect_genesis(store: &ChainStore, burned: u64) -> (Connected, Bl
 /// must know what the validator, not a fixture, said.
 pub(super) fn connect_genesis_judged(
     store: &ChainStore,
-    burned: u64,
 ) -> (Connected, Block, (Weights, PaidEmission)) {
     let cand = candidate(0, BlockHash::NULL, Vec::new());
     let block = cand.block.clone();
@@ -409,10 +442,7 @@ pub(super) fn connect_genesis_judged(
         let view = batch.chain_view();
         let valid = judge(&view, cand)?;
         let derived = (*valid.block().weights(), *valid.block().emission());
-        Ok((
-            batch.connect(valid, facts(burned), RuleSet::GENESIS)?,
-            derived,
-        ))
+        Ok((batch.connect(valid, RuleSet::GENESIS)?, derived))
     });
     let (connected, derived) = out.expect("genesis connects");
     (connected, block, derived)

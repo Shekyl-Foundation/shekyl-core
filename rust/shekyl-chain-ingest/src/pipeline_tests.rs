@@ -38,7 +38,6 @@ use crate::test_support::{
     key_image, open_store, reorg, reward_for, spend, tmp, trace_of, Family, GrownTree, Scripted,
     FIRST_SPEND_HEIGHT,
 };
-use crate::trace::Trace;
 
 /// Regtest without a fixed target: the genesis rules at every height.
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -108,19 +107,16 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     // Over; once stopped the actor is not alive and nothing revives it.
     let path = tmp("connector-halt");
     let chain = chain(2);
-    let trace = Arc::new(trace_of(&chain, false));
 
     // Genesis lands through a first connector, which is then stopped and
     // joined so the store is released; the record is broken; a second
     // connector is spawned on the reopened store and meets the hole.
     {
-        let prepared =
-            kameo::actor::PreparedActor::<Connector<Trace>>::new(kameo::mailbox::unbounded());
+        let prepared = kameo::actor::PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
         let first = prepared.actor_ref().clone();
         let task = prepared.spawn(ConnectorArgs {
             store: open_store(&path),
             rules: GENESIS_RULES,
-            facts: Arc::clone(&trace),
         });
         let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
         let applied = first
@@ -146,7 +142,6 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path),
         rules: GENESIS_RULES,
-        facts: trace,
     });
 
     let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
@@ -287,11 +282,9 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     // connector surfaces it and stays up.
     let path = tmp("connector-stale-seed");
     let chain = chain(2);
-    let trace = Arc::new(trace_of(&chain, false));
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path),
         rules: GENESIS_RULES,
-        facts: trace,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
@@ -340,11 +333,9 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
     // both heights and the writer stays up (#852 review).
     let path = tmp("connector-height-claim");
     let chain = chain(2);
-    let trace = Arc::new(trace_of(&chain, false));
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path),
         rules: GENESIS_RULES,
-        facts: trace,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
@@ -383,11 +374,9 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     // later Apply at the same height can still run (E3 / mutation family).
     let path = tmp("connector-refusal");
     let chain = chain(2);
-    let trace = Arc::new(trace_of(&chain, false));
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path),
         rules: GENESIS_RULES,
-        facts: trace,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
@@ -874,7 +863,7 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replayed_run_grades_its_exercised_rows_correct_and_its_producers_borrowed() {
+async fn a_replayed_run_grades_its_exercised_rows_correct_with_every_component_real() {
     // RD-Q6 through the pipeline: the observations the run emits, graded
     // against a register in the extractor's shape. Every row the landed
     // rules exercised grades AcceptedAsCorrect on the verdict clause; the
@@ -940,23 +929,13 @@ async fn a_replayed_run_grades_its_exercised_rows_correct_and_its_producers_borr
                 row.id
             );
         }
-        let is_producer = shekyl_chain_store::store::ConnectFacts::DELETED_BY
-            .iter()
-            .any(|d| d.rows.contains(&row.id.as_str()));
-        if is_producer {
-            assert!(
-                matches!(row.component, ComponentEvidence::Borrowed { .. }),
-                "{}",
-                row.id
-            );
-        } else {
-            assert_eq!(
-                row.component,
-                ComponentEvidence::Real { identical: true },
-                "{}",
-                row.id
-            );
-        }
+        // No row borrows since wave B: every component is the replay's own.
+        assert_eq!(
+            row.component,
+            ComponentEvidence::Real { identical: true },
+            "{}",
+            row.id
+        );
     }
     assert_eq!(graded.derived_and_conformant, obs.exercised.len());
     cleanup(&path);

@@ -629,13 +629,9 @@ where
     // the actor owns the store, and `run` must not return before the task
     // has dropped it (a caller reopening the file would otherwise race the
     // engine's lock).
-    let prepared = PreparedActor::<Connector<Trace>>::new(kameo::mailbox::unbounded());
+    let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
     let connector = prepared.actor_ref().clone();
-    let actor_task = prepared.spawn(ConnectorArgs {
-        store,
-        rules,
-        facts: Arc::clone(&trace),
-    });
+    let actor_task = prepared.spawn(ConnectorArgs { store, rules });
 
     let mut drive = Drive {
         source,
@@ -681,7 +677,7 @@ where
     substrate: Arc<S>,
     metrics: &'a Arc<Metrics>,
     rules: ChainRules,
-    connector: &'a kameo::actor::ActorRef<Connector<Trace>>,
+    connector: &'a kameo::actor::ActorRef<Connector>,
     trace: &'a Arc<Trace>,
     cfg: PipelineConfig,
     ledger: SeedLedger,

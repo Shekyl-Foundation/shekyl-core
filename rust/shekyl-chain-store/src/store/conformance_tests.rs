@@ -50,7 +50,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, T
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
-    candidate, facts, judge, priced, spend, spend_at, FixtureSubstrate, FIRST_SPEND_HEIGHT,
+    candidate, judge, priced, spend, spend_at, FixtureSubstrate, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -203,7 +203,7 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
                 *valid.block().weights(),
                 valid.block().emission().coins_generated,
             );
-            batch.connect(valid, facts(0), RuleSet::GENESIS)?;
+            batch.connect(valid, RuleSet::GENESIS)?;
             Ok(derived)
         });
         let (cand, work, root_after, weights, coins_generated) = derived.expect("connects");

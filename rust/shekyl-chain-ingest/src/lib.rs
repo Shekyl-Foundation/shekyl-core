@@ -75,8 +75,6 @@ mod body_pairing_tests;
 #[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
-#[cfg(feature = "pipeline")]
-pub mod facts;
 #[cfg(feature = "fetch")]
 pub mod fetch;
 #[cfg(feature = "pipeline")]
@@ -114,8 +112,6 @@ pub use connector::{
     RunFault, TemplateFacts,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
-#[cfg(feature = "pipeline")]
-pub use facts::{Composed, FactsFault, FactsFor, Priced, PricedAt};
 #[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
 #[cfg(feature = "pipeline")]

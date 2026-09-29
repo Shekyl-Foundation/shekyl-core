@@ -20,16 +20,16 @@ use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    at, candidate, connect_chain, connect_chain_with_burn, connect_genesis, connect_genesis_judged,
-    connect_with_image_planted_under_the_token, facts, judge, priced_on, spend_at,
-    spendable_prefix, FIRST_SPEND_HEIGHT,
+    anchor, at, candidate, connect_chain, connect_chain_burning, connect_genesis,
+    connect_genesis_judged, connect_with_image_planted_under_the_token, judge, priced_on, spend,
+    spend_at, spend_paying, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, production_horizons, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
     stored_timelock, BlockInfo, Canonical, CodecError, CoverageGaps, OutKey, OutTx, Raw,
-    RuleSetInForce, TotalBurnedCell, TxIndex, TxOutputIndices, TxPrunedSegment, FACT_FIELDS,
+    RuleSetInForce, TotalBurnedCell, TxIndex, TxOutputIndices, TxPrunedSegment,
 };
 use crate::ids::OutputSlot;
 use crate::lmdb_order::{Hash32, LmdbHashKey};
@@ -46,7 +46,7 @@ use shekyl_chain_rules::harness::fixture;
 fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     let path = tmp("connect-genesis");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (connected, block, (weights, emission)) = connect_genesis_judged(&store, 0);
+    let (connected, block, (weights, emission)) = connect_genesis_judged(&store);
     assert_eq!(connected.height, BlockHeight::ZERO);
     // miner tx: spent_keys 0, tx_indices 1, txs_pruned 1, txs_prunable 1,
     // txs_prunable_hash 1, output_txs 1, output_amounts 1, tx_outputs 1;
@@ -277,8 +277,15 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     cleanup(&path);
 }
 
+/// *Records-was:* `two_blocks_in_one_batch_with_a_spend_and_a_burn` until
+/// E6 slice 7 wave B, when the burn became the verdict's: the first spend
+/// block on a chain has no volume behind it (CEN-F20's window counts the
+/// bodies listed *before* it), so CEN-F17 burns nothing here whatever fee
+/// the spend pays, and the burn rows left this write set. They are
+/// exercised where a burn can happen — `pop_by_replay_…` below and the pop
+/// and read tests, on an endowed chain with volume.
 #[test]
-fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
+fn two_blocks_in_one_batch_with_a_spend() {
     let path = tmp("connect-two");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     // The chain below the two blocks under test: everything up to the block
@@ -297,13 +304,13 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
 
     let out: Result<(Connected, Connected, BlockHash), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let c0 = batch.connect(judge(&view, g)?, facts(0), RuleSet::GENESIS)?;
+        let c0 = batch.connect(judge(&view, g)?, RuleSet::GENESIS)?;
         // The spend block is validated against a view that already holds
         // its parent and connected in the same batch; its coinbase is
         // priced against that view, so its identity is the verdict's.
         let judged = judge(&view, b1)?;
         let b1_hash = judged.block().hash();
-        let c1 = batch.connect(judged, facts(25), RuleSet::GENESIS)?;
+        let c1 = batch.connect(judged, RuleSet::GENESIS)?;
         Ok((c0, c1, b1_hash))
     });
     let (c0, c1, b1_hash) = out.expect("both connect");
@@ -313,10 +320,10 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     // txs_prunable_hash, output_txs, member, tx_outputs) + spend 12 (1 key
     // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
     // and txs_pqc_auth_hash row + 2 outputs × (output_txs + member) +
-    // tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 + block_burn 1 +
-    // total_burned 1 = 27. Nothing has matured at this height, so the tree
-    // tables write no row.
-    assert_eq!(c1.journaled, 27);
+    // tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 = 25. Nothing
+    // has matured at this height, so the tree tables write no row; nothing
+    // burned (no fee, no volume), so no burn row and no fold pre-image.
+    assert_eq!(c1.journaled, 25);
     // Dense store ids: one coinbase per block through the spend block
     // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
     // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.
@@ -396,24 +403,13 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
         info1.rct_outputs, 3,
         "this block's outputs only (1 + 2): per-block, not cumulative (CEN-L15)"
     );
-    assert_eq!(
-        snap.open_table(BLOCK_BURN)
-            .expect("t")
-            .get(s)
-            .expect("g")
-            .map(|g| g.value().decode().expect("decodes")),
-        Some(AtomicUnits::from_raw(25))
-    );
     assert!(snap
         .open_table(BLOCK_BURN)
         .expect("t")
-        .get(s - 1)
+        .get(s)
         .expect("g")
         .is_none());
-    assert_eq!(
-        snap.get_property::<TotalBurnedCell>().expect("cell"),
-        Some(AtomicUnits::from_raw(25))
-    );
+    assert_eq!(snap.get_property::<TotalBurnedCell>().expect("cell"), None);
     // The spend's prunable row is its prunable segment, byte-for-byte — the
     // wire's `pruned ‖ pqc_auths ‖ prunable` split (STX-8), derived from the
     // fixture rather than pinned as a length. (Until E6 slice 5 the fixture
@@ -439,10 +435,18 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
 fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
     let path = tmp("connect-pop");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // The chain below the first admissible spend height, each block handed
-    // `burned = 3`. Snapshot every table's row count and total_burned after it.
+    // The spendable prefix and one zero-fee spend block, on an endowed
+    // genesis: the spend gives the next block's F20 window a volume, and
+    // the endowment gives the burn ratio a supply, so the next block's fee
+    // burns (the burn is the verdict's, CEN-F17). Snapshot every table's
+    // row count and total_burned after it.
     let s = FIRST_SPEND_HEIGHT;
-    let hashes = connect_chain_with_burn(&store, &vec![Vec::new(); at(s)], 3);
+    let (hashes, burns) = connect_chain_burning(&store, &spendable_prefix(&[vec![spend(11, 2)]]));
+    assert!(
+        burns.iter().all(|b| *b == AtomicUnits::ZERO),
+        "nothing burned yet: no fee paid"
+    );
+    let next = s + 1;
     fn len<K: redb::Key + 'static, V: redb::Value + 'static>(
         snap: &ReadSnapshot<'_>,
         t: redb::TableDefinition<'static, K, V>,
@@ -463,36 +467,40 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
         )
     };
     let before = counts(&store);
-    // Genesis was handed `burned = 3` and recorded none: the burn phase is
-    // guarded `h > 0 && burned > 0` as a whole (`blockchain.cpp:6148`), so
-    // the fold holds the blocks above genesis only. One coinbase, one
-    // output, one root per block; nothing spent.
-    assert_eq!(
-        before,
-        (s, s, s, s, 0, Some(AtomicUnits::from_raw(3 * (s - 1))))
-    );
+    // No block burned, so none wrote a `total_burned` pre-image (the burn
+    // phase is guarded `h > 0 && burned > 0` as a whole,
+    // `blockchain.cpp:6148`) and the cell is absent. `s + 1` blocks, one
+    // coinbase each plus the one spend (`tx_indices`), the spend's two
+    // outputs beside the coinbases' (`output_txs`), one root per block, one
+    // image spent.
+    assert_eq!(before, (s + 1, s + 2, s + 3, s + 1, 1, None));
 
-    let b1 = candidate(s, hashes[at(s - 1)], vec![spend_at(&hashes, s, 9, 2)]);
-    let out: Result<Connected, TestErr> = store.write(|batch| {
+    let fee = 1_000_000_000;
+    let b1 = candidate(
+        next,
+        hashes[at(s)],
+        vec![anchor(&hashes, next, spend_paying(9, 2, fee))],
+    );
+    let out: Result<AtomicUnits, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(4), RuleSet::GENESIS)?)
+        let judged = judge(&view, b1)?;
+        let burned = judged.block().emission().burned();
+        batch.connect(judged, RuleSet::GENESIS)?;
+        Ok(burned)
     });
-    out.expect("the spend block connects");
-    // `OUTPUT_TXS`: one more coinbase output, plus the spend's two (CEN-I1's
-    // minimum since slice 6 commit 2).
+    let burned = out.expect("the spend block connects");
+    assert!(
+        burned > AtomicUnits::ZERO,
+        "the fee burns on the endowed chain"
+    );
+    // One more block, coinbase and spend, the spend's two outputs beside
+    // the coinbase's, one root, one image; the fold is the verdict's burn.
     assert_eq!(
         counts(&store),
-        (
-            s + 1,
-            s + 2,
-            s + 3,
-            s + 1,
-            1,
-            Some(AtomicUnits::from_raw(3 * (s - 1) + 4))
-        )
+        (s + 2, s + 4, s + 6, s + 2, 2, Some(burned))
     );
 
-    let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(s)?));
+    let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(next)?));
     assert!(matches!(popped, Ok(Replayed::Entries(_))));
     assert_eq!(
         counts(&store),
@@ -503,13 +511,13 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
     assert!(snap
         .open_table(BLOCK_BURN)
         .expect("t")
-        .get(s)
+        .get(next)
         .expect("g")
         .is_none());
     assert!(snap
         .open_table(UNDO_LOG)
         .expect("t")
-        .get(s)
+        .get(next)
         .expect("g")
         .is_none());
     cleanup(&path);
@@ -529,7 +537,7 @@ fn expect_row<T: core::fmt::Debug + PartialEq>(out: &Result<T, TestErr>, want: S
 fn a_block_whose_parent_is_not_the_tip_is_si2() {
     let path = tmp("connect-parent");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
+    let (_, genesis) = connect_genesis(&store);
     // CEN-A2 now stands in front of this belt (E6 slice 1): a candidate
     // whose `previous` is not the tip is refused as a verdict and never
     // reaches `connect`. The belt's remaining subject is a verdict that was
@@ -543,8 +551,8 @@ fn a_block_whose_parent_is_not_the_tip_is_si2() {
         let view = batch.chain_view();
         let first = judge(&view, sibling)?;
         let second = judge(&view, stale)?; // judged against the same tip: passes A2
-        batch.connect(first, facts(0), RuleSet::GENESIS)?; // the tip moves
-        Ok(batch.connect(second, facts(0), RuleSet::GENESIS)?) // stale: SI-2
+        batch.connect(first, RuleSet::GENESIS)?; // the tip moves
+        Ok(batch.connect(second, RuleSet::GENESIS)?) // stale: SI-2
     });
     expect_row(&out, StoreInvariant::TipMismatch);
     assert_eq!(StoreInvariant::TipMismatch.row(), 2);
@@ -571,7 +579,7 @@ fn plant_then_connect_is_si9(
 ) {
     let path = tmp(label);
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
+    let (_, genesis) = connect_genesis(&store);
     let planted: Result<(), TestErr> = store.write(|batch| {
         plant(batch)?;
         Ok(())
@@ -580,7 +588,7 @@ fn plant_then_connect_is_si9(
     let b1 = candidate(1, genesis.hash(), Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b1)?, RuleSet::GENESIS)?)
     });
     expect_row(&out, StoreInvariant::IdNotFresh);
     assert_eq!(
@@ -726,7 +734,7 @@ fn a_key_image_recorded_under_a_judged_token_is_si1() {
 fn the_same_transaction_in_two_blocks_is_si3() {
     let path = tmp("connect-txhash");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
+    let (_, genesis) = connect_genesis(&store);
     // A spend with a fresh key image each time but the SAME body cannot be
     // built (the key image is in the body). The one legal listed shape with
     // no key image is a serve-credit-only transaction: the same hash twice,
@@ -751,7 +759,7 @@ fn the_same_transaction_in_two_blocks_is_si3() {
                 .encoded()
                 .as_encoded(),
             )?;
-        Ok(batch.connect(judged, facts(0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judged, RuleSet::GENESIS)?)
     });
     expect_row(&out, StoreInvariant::TxHashNotFresh);
     cleanup(&path);
@@ -771,7 +779,7 @@ fn the_same_transaction_in_two_blocks_is_si3() {
 fn a_total_burned_register_above_the_emission_halts_the_writer_before_the_fold() {
     let path = tmp("connect-fold");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
+    let (_, genesis) = connect_genesis(&store);
     let seeded: Result<(), TestErr> = store.write(|batch| {
         batch.upsert_property::<TotalBurnedCell>(&AtomicUnits::from_raw(u64::MAX))?;
         Ok(())
@@ -831,7 +839,6 @@ fn a_root_already_recorded_at_the_connecting_height_is_si4() {
         let view = batch.chain_view();
         Ok(batch.connect(
             judge(&view, candidate(0, BlockHash::NULL, Vec::new()))?,
-            facts(0),
             RuleSet::GENESIS,
         )?)
     });
@@ -841,34 +848,36 @@ fn a_root_already_recorded_at_the_connecting_height_is_si4() {
 
 // -------------------------------------------------------- provenance
 
+/// *Records-was:* until E6 slice 7 wave B this test was
+/// `a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_not`,
+/// and its second half connected a block with a passed-through `burned`
+/// and read `passed-through=[burned]` off the stamp. Nothing is handed to
+/// `connect` any more — every value is the verdict's — so the pass-through
+/// component, its cell and its stamp are gone, and what the file records
+/// against a partial validator is the coverage gaps alone.
 #[test]
-fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_not() {
+fn a_partial_validators_connect_taints_the_files_provenance_with_its_coverage_gaps() {
     let path = tmp("connect-provenance");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     assert!(store.provenance().is_parity_evidence(), "fresh file");
 
-    // Fully derived facts (the E6-complete shape): nothing is stamped.
-    let derived = ConnectFacts {
-        burned: Fact::derived(AtomicUnits::ZERO),
-    };
     let g = candidate(0, BlockHash::NULL, Vec::new());
     let g_hash = g.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, g)?, derived, RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, g)?, RuleSet::GENESIS)?)
     });
     out.expect("genesis");
-    // Derived facts stamp no pass-through. But GENESIS *enforces* every
-    // consensus row and the port has implemented only some, so the verdict
-    // evaluated exactly the implemented ones — and the file records exactly
-    // that: every enforced row the validator has not landed is a coverage
-    // gap, and the file is NOT parity evidence. That is C2-R8 §9.4 doing its
-    // job, not a defect: a store fed by a partial validator can never be
-    // mistaken for one fed by a complete one. (Written against the scaffold
-    // as "every enforced row"; E6 slice 1 landed the first rules, so the
-    // expectation is now `enforced − implemented`, read off the registry.)
+    // GENESIS *enforces* every consensus row and the port has implemented
+    // only some, so the verdict evaluated exactly the implemented ones —
+    // and the file records exactly that: every enforced row the validator
+    // has not landed is a coverage gap, and the file is NOT parity
+    // evidence. That is C2-R8 §9.4 doing its job, not a defect: a store fed
+    // by a partial validator can never be mistaken for one fed by a
+    // complete one. (Written against the scaffold as "every enforced row";
+    // E6 slice 1 landed the first rules, so the expectation is now
+    // `enforced − implemented`, read off the registry.)
     let after_genesis = store.provenance();
-    assert!(after_genesis.passed_through().is_empty());
     let not_yet_landed: Vec<_> = RuleSet::GENESIS
         .enforced()
         .filter(|row| row.status() == RowStatus::Pending)
@@ -894,11 +903,11 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         .artifact_stamp()
         .ends_with("NOT-PARITY-EVIDENCE"));
 
-    // An aborted pass-through connect leaves no new taint.
+    // An aborted connect leaves no new taint.
     let b1 = candidate(1, g_hash, Vec::new());
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        batch.connect(judge(&view, b1.clone())?, facts(0), RuleSet::GENESIS)?;
+        batch.connect(judge(&view, b1.clone())?, RuleSet::GENESIS)?;
         Err(TestErr::Abort)
     });
     assert_eq!(out, Err(TestErr::Abort));
@@ -908,27 +917,23 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         "abort: nothing landed, no new taint"
     );
 
-    // A committed pass-through connect stamps exactly the passed fields —
-    // one remains (`burned`, wave B's), so the stamp names one.
-    let passed = facts(0);
+    // A committed connect under the same validator widens nothing: the
+    // gaps are the same rows, and the stamp names nothing else.
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, passed, RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b1)?, RuleSet::GENESIS)?)
     });
     out.expect("block 1");
     let prov = store.provenance();
     assert!(!prov.is_parity_evidence());
-    assert_eq!(prov.passed_through().iter().collect::<Vec<_>>(), ["burned"]);
     assert_eq!(
         prov.coverage_gaps(),
         after_genesis.coverage_gaps(),
         "unchanged"
     );
-    assert!(prov
-        .artifact_stamp()
-        .contains("passed-through=[burned] NOT-PARITY-EVIDENCE"));
-    // Monotone: a later fully-derived connect cannot narrow it, and a
-    // read-only reopen reads the same record from the file.
+    assert!(!prov.artifact_stamp().contains("passed-through"));
+    // Monotone: a later connect cannot narrow it, and a read-only reopen
+    // reads the same record from the file.
     drop(store);
     let ro = ChainStore::open_read_only(&path, production_horizons()).expect("ro");
     assert_eq!(ro.provenance(), prov);
@@ -976,41 +981,9 @@ fn coverage_gaps_widen_in_the_committing_batch_and_never_narrow() {
     cleanup(&path);
 }
 
-#[test]
-fn deleted_by_and_the_persisted_field_names_are_one_list() {
-    let declared: Vec<&str> = ConnectFacts::DELETED_BY.iter().map(|d| d.field).collect();
-    assert_eq!(
-        declared, FACT_FIELDS,
-        "ConnectFacts::DELETED_BY order is the codec's bit order"
-    );
-}
-
-#[test]
-fn passed_through_names_the_rows_that_delete_each_fact() {
-    let all = facts(0);
-    let remaining: Vec<&str> = all.passed_through().map(|d| d.field).collect();
-    assert_eq!(
-        remaining,
-        ["burned"],
-        "one: cumulative_difficulty left with E6 slice 2 (CEN-D4), root_after with DRS-E3, the \
-         two weights, the median and coins_generated with E6 slice 7 (CEN-G6/G6b, F14b, G12)"
-    );
-    let mut some = all;
-    some.burned = Fact::derived(AtomicUnits::ZERO);
-    let remaining: Vec<DeletedBy> = some.passed_through().collect();
-    assert!(
-        remaining.is_empty(),
-        "every field derived: nothing passed through"
-    );
-    assert!(ConnectFacts::DELETED_BY
-        .iter()
-        .all(|d| !d.rows.is_empty() && !d.slice.is_empty()));
-    assert!(ConnectFacts::DELETED_BY
-        .iter()
-        .any(|d| d.field == "burned" && d.rows.contains(&"CEN-F17")));
-    assert_eq!(
-        ConnectFacts::DELETED_BY.len(),
-        1,
-        "seven until E6 slice 2; six until DRS-E3; five until E6 slice 7 commit 5"
-    );
-}
+// `deleted_by_and_the_persisted_field_names_are_one_list` and
+// `passed_through_names_the_rows_that_delete_each_fact` held
+// `ConnectFacts::DELETED_BY` to the codec's `FACT_FIELDS` and counted the
+// fields still passed through — seven until E6 slice 2, six until DRS-E3,
+// five until E6 slice 7 commit 5, one until wave B. Both left with the
+// types on 2026-09-29: there is no field to count.

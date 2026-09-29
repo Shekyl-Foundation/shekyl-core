@@ -11,7 +11,6 @@
 use std::io::Cursor;
 
 use shekyl_chain_store::digest_v0::digest_v0;
-use shekyl_chain_store::store::{ConnectFacts, Origin};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockWeight, CurveTreeRoot, LongTermWeight};
 use shekyl_units::AtomicUnits;
@@ -61,7 +60,7 @@ fn facts_at(hh: u64) -> Facts {
 }
 
 #[test]
-fn the_trace_round_trips_through_both_doors_and_the_borrow_is_passed_through() {
+fn the_trace_round_trips_through_both_doors() {
     let mut w = TraceWriter::new(Vec::new()).expect("header");
     for hh in 0..3 {
         w.push_facts(h(hh), &facts_at(hh)).expect("facts");
@@ -93,16 +92,14 @@ fn the_trace_round_trips_through_both_doors_and_the_borrow_is_passed_through() {
     assert_eq!(trace.expect(h(2)).expect("checkpointed").value(), &state);
     assert!(trace.expect(h(1)).is_none());
 
-    // The borrow door mints only passed-through facts — one, the burn.
-    let cf: ConnectFacts = trace.borrow(h(2)).expect("covered").into();
-    assert_eq!(cf.burned.value, facts_at(2).burned);
-    assert_eq!(cf.burned.origin, Origin::PassedThrough);
-    // The trace still records every derived value (the oracles' comparison
-    // inputs); the door mints no fact from them.
+    // The borrow door yields the recorded values as the oracles' comparison
+    // inputs and nothing `connect` is handed (the passed-through conversion
+    // left with E6 slice 7 wave B; the burn was its last field).
     let recorded = *trace.borrow(h(2)).expect("covered").value();
     assert_eq!(recorded.weight, BlockWeight::from_raw(1_002));
     assert_eq!(recorded.root_after, CurveTreeRoot::from_bytes([0xc2; 32]));
     assert_eq!(recorded.coins_generated, facts_at(2).coins_generated);
+    assert_eq!(recorded.burned, facts_at(2).burned);
     assert_eq!(
         recorded.long_term_effective_median,
         facts_at(2).long_term_effective_median

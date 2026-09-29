@@ -105,8 +105,7 @@ impl Driven {
         }
         // The trace's accumulator is the tree's derivation (slice 7 commit
         // 5), not a fold over the driver's priced rewards: the replay then
-        // holds the validator's paid reward to the ratified composition,
-        // and `Priced` no longer carries a reward to fold.
+        // holds the validator's paid reward to the ratified composition.
         trace_with(
             chain,
             |height| {

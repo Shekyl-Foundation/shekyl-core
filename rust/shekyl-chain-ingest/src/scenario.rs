@@ -12,9 +12,9 @@
 //! median, all read on the view the validator will judge against and
 //! through the validator's own definitions), price a coinbase with
 //! `shekyl-block-template`, `form` it under a substrate, and `Apply` it.
-//! The block that lands is one the validator admitted; the facts the store
-//! recorded are the ones [`Composed`] assembled from the owners; nothing
-//! here writes state a rule reads back. That is what makes a chain built
+//! The block that lands is one the validator admitted; everything the store
+//! recorded is the verdict's; nothing here writes state a rule reads back.
+//! That is what makes a chain built
 //! here a **witness** rather than a fixture (`50-testing.mdc`): every rule
 //! that has landed judged every block, and a rule that lands later judges
 //! the same blocks again.
@@ -34,22 +34,18 @@
 //! # What is real and what is placeholder
 //!
 //! Real: the template, the coinbase and its hybrid-KEM output, the
-//! validator, the store, the facts fold. Under a [`ProductionSubstrate`]
+//! validator, the store, the burn fold. Under a [`ProductionSubstrate`]
 //! the PoW is real RandomX at the fixed regtest difficulty; the default
 //! [`Clocked`] over the harness longhash keeps the clock deterministic and
-//! the hash free. Placeholder, and said so where it is set: the long-term
-//! median and the effective median weight (G6, slice 7), the frozen-segment
-//! count (E4). The curve-tree root stopped being one with DRS-E3: the
-//! validator derives it and the store records it, and the next template
-//! reads it off the store as it always did.
-//! Each is the caller's pass-through in [`Priced`] and the template's
-//! context, exactly as the E2 trace supplied it, and each is a line that
-//! becomes a derivation when its owner lands.
+//! the hash free. Nothing is a placeholder any more: the curve-tree root
+//! stopped being one with DRS-E3, the two medians with slice 7 commit 4,
+//! and the frozen-segment count and the burn with slice 7 wave B — each
+//! read through the validator's own definition on the view it judges
+//! against, and the producer's ledger of what it priced (`Priced`, handed
+//! to `connect` through `Composed`) went with the last of them.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
@@ -71,7 +67,6 @@ use crate::connector::{
     Apply, ChainFacts, Connector, ConnectorArgs, HashAt, Rewind, Rewound, RootAt, RunFault,
     TemplateFacts,
 };
-use crate::facts::{Composed, Priced, PricedAt};
 use crate::schedule::ChainRules;
 use crate::test_support::{cleanup, open_store, tmp};
 
@@ -142,22 +137,6 @@ impl Substrate for FreeHash {
     }
 }
 
-/// The producer's ledger: what it priced each height at, answered to
-/// [`Composed`] through [`PricedAt`]. Shared with the connector, written
-/// by the driver before each `Apply`.
-#[derive(Default)]
-pub struct Ledger(Mutex<BTreeMap<u64, Priced>>);
-
-impl PricedAt for Ledger {
-    fn priced_at(&self, height: BlockHeight) -> Option<Priced> {
-        self.0
-            .lock()
-            .expect("ledger lock")
-            .get(&height.to_raw())
-            .copied()
-    }
-}
-
 /// One mined block: what the template priced and what the validator
 /// judged it under.
 #[derive(Clone, Debug)]
@@ -195,12 +174,11 @@ impl std::fmt::Display for StepOutcome {
     }
 }
 
-/// The driver. Owns the connector (and through it the store), the ledger,
-/// the miner's keys and the clock.
+/// The driver. Owns the connector (and through it the store), the miner's
+/// keys and the clock.
 pub struct Scenario<P> {
     path: PathBuf,
-    connector: ActorRef<Connector<Composed<Ledger>>>,
-    ledger: Arc<Composed<Ledger>>,
+    connector: ActorRef<Connector>,
     substrate: Clocked<P>,
     wallet: MinerWallet,
     params: EconomicParams,
@@ -229,16 +207,13 @@ where
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
     pub fn open_with(name: &str, pow: P) -> Self {
         let path = tmp(name);
-        let ledger = Arc::new(Composed::new(Ledger::default()));
         let connector = Connector::spawn(ConnectorArgs {
             store: open_store(&path),
             rules: RULES,
-            facts: Arc::clone(&ledger),
         });
         Self {
             path,
             connector,
-            ledger,
             substrate: Clocked::new(pow),
             wallet: MinerWallet::deterministic(),
             params: EconomicParams::default(),
@@ -248,7 +223,7 @@ where
     }
 
     /// The connector, for a test that wants to ask it something directly.
-    pub const fn connector(&self) -> &ActorRef<Connector<Composed<Ledger>>> {
+    pub const fn connector(&self) -> &ActorRef<Connector> {
         &self.connector
     }
 
@@ -287,18 +262,10 @@ where
             .template(&facts, now, &listed)
             .map_err(StepOutcome::Template)?;
         let height = facts.connecting;
-
-        // The producer records what it priced before the block can connect:
-        // `Composed` answers `connect` from this ledger.
-        self.ledger.priced().0.lock().expect("ledger lock").insert(
-            height.to_raw(),
-            // The one figure the producer still hands `connect` (F17/G11
-            // are wave B's); the reward it priced is judged by F14b/F18
-            // and recorded from the verdict, never handed.
-            Priced {
-                burned: template.fees_burned,
-            },
-        );
+        // Nothing the producer priced is handed to `connect`: the reward it
+        // priced is judged by F14b/F18, the burn by F17, and both are
+        // recorded from the verdict (the ledger that carried the burn left
+        // with wave B).
 
         // D3: the seed the honest producer claims — the identity at the
         // seed height, or the null hash below the first epoch.

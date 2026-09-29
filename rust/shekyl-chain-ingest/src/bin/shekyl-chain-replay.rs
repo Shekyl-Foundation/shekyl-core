@@ -335,11 +335,10 @@ fn grade(
 ) -> Result<(), Failure> {
     let graded = grade_run(register, &report.observations());
     eprintln!(
-        "graded: {} row(s); {} derived-and-conformant, {} borrowed, {} not exercised, \
+        "graded: {} row(s); {} derived-and-conformant, {} not exercised, \
          {} owed reviewed-divergence, {} unadjudicated",
         graded.rows.len(),
         graded.derived_and_conformant,
-        graded.borrowed,
         graded.not_exercised,
         graded.owed_reviewed_divergence.len(),
         graded.unadjudicated.len(),

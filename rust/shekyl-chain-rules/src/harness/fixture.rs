@@ -376,6 +376,33 @@ pub fn listed(key_image: [u8; 32]) -> Transaction {
     spend(key_image, 2)
 }
 
+/// `tx` — a [`spend`] — paying `fee`: the fee field set and the one
+/// pseudo-out re-formed as `Σ masks + fee·H` ([`mask_committing`] over the
+/// same mask scalars), so CEN-H18's cleartext balance still holds. What a
+/// test needs when the block must **burn**: CEN-F17 splits the listed fees,
+/// and a chain of zero-fee bodies destroys nothing whatever else it does.
+/// (The burn is also a function of the supply ratio, which rounds to zero
+/// on a young chain — a fixture that must see a non-zero burn gives its
+/// genesis a configured amount large enough for the ratio to register.)
+///
+/// # Panics
+///
+/// On a body with no prunable region (a serve credit; nothing to balance).
+pub fn paying_fee(mut tx: Transaction, fee: u64) -> Transaction {
+    let outputs = tx.prefix.outputs.len();
+    let Ct::Fcmp {
+        fee: f,
+        prunable: Some(p),
+        ..
+    } = &mut tx.ct
+    else {
+        panic!("paying_fee: a spend with a prunable region");
+    };
+    *f = fee;
+    p.pseudo_outs = vec![mask_committing(mask_scalar_sum(outputs), fee)];
+    tx
+}
+
 /// The reference block no chain holds — what [`spend`] carries until a
 /// chain anchors it ([`referencing`]): CEN-I10's own negative fixture.
 pub const UNRECORDED_REFERENCE: BlockHash = BlockHash::from_bytes([0x99; 32]);

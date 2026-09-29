@@ -18,8 +18,8 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, LongTermWe
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    at, candidate, connect_chain, facts, judge, root_going_into, spend, spend_at, spendable_prefix,
-    FIRST_SPEND_HEIGHT,
+    at, candidate, connect_chain, connect_chain_burning, judge, root_going_into, spend, spend_at,
+    spend_paying, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
@@ -75,7 +75,7 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
     let g = candidate(0, BlockHash::NULL, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, g)?, facts(0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, g)?, RuleSet::GENESIS)?)
     });
     assert!(out.is_err(), "SI-4 refuses the genesis connect");
     let snap = store.begin_read().expect("read");
@@ -429,32 +429,33 @@ fn block_blob_above_the_tip_is_above_tip_and_a_hole_is_si7() {
 
 // ------------------------------------------------------------------ R8–R9 and the fold reads
 
-/// Connect three blocks handing `burned` per height, so R8/R9 have a fold
-/// to read: genesis records none whatever it is handed (the `h > 0` half of
-/// the C++ guard), a zero writes no row.
-fn connect_burning(store: &ChainStore, burns: &[u64]) {
-    let out: Result<(), TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        let mut previous = BlockHash::NULL;
-        for (h, burned) in burns.iter().enumerate() {
-            // Built and judged per height: the coinbase is priced against
-            // the chain so far, and the identity is the priced block's.
-            let judged = judge(&view, candidate(h as u64, previous, Vec::new()))?;
-            previous = judged.block().hash();
-            batch.connect(judged, facts(*burned), RuleSet::GENESIS)?;
-        }
-        Ok(())
-    });
-    out.expect("chain connects");
+/// A chain whose spend blocks burn, so R8/R9 have a fold to read: the
+/// spendable prefix on an endowed genesis, a zero-fee spend (no row; it
+/// gives the F20 window a body), then a spend paying a one-coin fee (a
+/// row). The burn is the verdict's (CEN-F17), returned per height; genesis
+/// records none whatever it burns (the `h > 0` half of the C++ guard), a
+/// zero writes no row. Returns the fee block's height and the burns.
+fn connect_burning(store: &ChainStore) -> (u64, Vec<AtomicUnits>) {
+    let s = FIRST_SPEND_HEIGHT;
+    let (_, burns) = connect_chain_burning(
+        store,
+        &spendable_prefix(&[vec![spend(10, 2)], vec![spend_paying(9, 2, 1_000_000_000)]]),
+    );
+    (s + 1, burns)
 }
 
 #[test]
 fn block_burn_reads_zero_for_a_block_with_no_row_and_the_amount_otherwise() {
     let path = tmp("read-block-burn");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // genesis is handed 9 and records none; block 1 burns 0 (no row);
-    // block 2 burns 25 (a row).
-    connect_burning(&store, &[9, 0, 25]);
+    let (fee_block, burns) = connect_burning(&store);
+    let at = |hh: u64| burns[usize::try_from(hh).expect("small")];
+    assert!(at(fee_block) > AtomicUnits::ZERO, "the fee block burned");
+    assert_eq!(
+        at(fee_block - 1),
+        AtomicUnits::ZERO,
+        "the zero-fee block did not"
+    );
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.block_burn(h(0)).expect("read"),
@@ -462,15 +463,18 @@ fn block_burn_reads_zero_for_a_block_with_no_row_and_the_amount_otherwise() {
         "genesis: no row"
     );
     assert_eq!(
-        snap.block_burn(h(1)).expect("read"),
+        snap.block_burn(h(fee_block - 1)).expect("read"),
         AtHeight::Recorded(AtomicUnits::from_raw(0)),
         "zero burn: no row"
     );
     assert_eq!(
-        snap.block_burn(h(2)).expect("read"),
-        AtHeight::Recorded(AtomicUnits::from_raw(25))
+        snap.block_burn(h(fee_block)).expect("read"),
+        AtHeight::Recorded(at(fee_block))
     );
-    assert_eq!(snap.block_burn(h(3)).expect("read"), AtHeight::AboveTip);
+    assert_eq!(
+        snap.block_burn(h(fee_block + 1)).expect("read"),
+        AtHeight::AboveTip
+    );
     cleanup(&path);
 }
 
@@ -498,12 +502,15 @@ fn block_burn_on_a_chain_that_has_never_burned_is_zero_not_an_engine_error() {
 fn total_burned_is_the_sum_connect_folded() {
     let path = tmp("read-total-burned");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_burning(&store, &[9, 3, 25]);
+    let (_, burns) = connect_burning(&store);
     let snap = store.begin_read().expect("read");
-    // Genesis's 9 is not folded (no row, no pre-image); 3 + 25 is.
+    // The fold is the sum of the verdicts' burns above genesis (genesis
+    // burns nothing and would not be folded if it did).
+    let expected = burns[1..].iter().fold(0u64, |acc, b| acc + b.to_raw());
+    assert!(expected > 0, "the chain burned");
     assert_eq!(
         snap.total_burned().expect("read"),
-        AtomicUnits::from_raw(28)
+        AtomicUnits::from_raw(expected)
     );
     cleanup(&path);
 }
@@ -623,7 +630,7 @@ fn the_digest_moves_when_any_family_moves() {
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let cand = candidate(next, tip.hash, vec![spend_at(&hashes, next, 11, 2)]);
-        batch.connect(judge(&view, cand)?, facts(0), RuleSet::GENESIS)?;
+        batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?;
         Ok(())
     });
     out.expect("connects");

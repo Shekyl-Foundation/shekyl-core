@@ -6,8 +6,9 @@
 // DRS-E2 trace exporter — a HARVEST SHIM (docs/design/DRS_E2_REPLAY_DRIVER.md
 // §1.3, §3.9, RD-Q2). Walks the C++ daemon's LMDB under ONE read snapshot
 // and hands every byte to the Rust trace writer (shekyl_e2_trace_* in
-// shekyl_ffi.h). The six passed-through facts and the cumulative difficulty
-// are read from the record; the checkpoint is the daemon's own
+// shekyl_ffi.h). The six recorded facts and the cumulative difficulty
+// are read from the record (the replay compares its own derivations
+// against them; none is handed to `connect`); the checkpoint is the daemon's own
 // BlockchainLMDB::logical_state_digest_v0 (hashed in Rust through the
 // FFI, over the same snapshot); the one value this file re-derives is the
 // long-term effective median, and it says so below.
@@ -74,9 +75,10 @@ namespace {
 // configuration a daemon can run — the window is the compile-time
 // constant; the runtime override (`test_options->long_term_block_weight_window`)
 // is set only by unit-test fixtures, never by a nettype. What the trace
-// records is therefore a re-derivation by this shim, exported as a
-// passed-through fact because no Rust rule derives SCR-19 yet; the field
-// and this class leave together when one does (`ConnectFacts::DELETED_BY`).
+// records is therefore a re-derivation by this shim, exported as the
+// recorded median the replay's weights oracle (CEN-G6/G6b) compares the
+// Rust verdict's own median against; the field and this class leave with
+// the daemon.
 //
 // The window is walked once; `median_for(h)` is asked in ascending h and
 // each answer is followed by `advance(h)` inserting block h's weight.

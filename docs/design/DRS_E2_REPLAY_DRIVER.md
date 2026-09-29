@@ -231,6 +231,14 @@ And not a consumer of the mining JIT for validation (§1.3).
   is parity evidence. The pipeline's output file is NOT-PARITY-EVIDENCE for as
   long as any fact is passed through or any enforced row unimplemented — the
   honest state E2 grades against.
+  **UPDATE 2026-09-29 (E6 slice 7 wave B, the two items above):** the six
+  passed-through fields became the verdict's one by one — `root_after` (E3),
+  `weight`/`long_term_weight`/`long_term_effective_median`/`coins_generated`
+  (slice 7 commits 4–5), `burned` (F17) — and the type went with its last
+  member: `connect(ChainValid, RuleSetId)` takes the verdict alone,
+  `Provenance` has two components, the trace's six facts are the oracles'
+  comparison inputs only (`Trace::borrow`), and the grader's `Borrowed`
+  arm is deleted (`shekyl_e2_grade_v2`). Store schema 17.
 - `conformance.rs`: the CSR-3a grader exists as pure logic —
   `ConformanceState::{CheckedConformant, Divergent, Unreviewed}`, `Acceptance`,
   `FailureReason`, `ReviewedDivergence`, `FinalVerdict`, truth-table tested.
@@ -562,7 +570,7 @@ regtest C++ leg (item 8); tag `0x03`.
 | ~~C1's FTL refusal is not exercised by corpus replay~~ — **CLOSED 2026-09-22** by the mutation family's `FutureTimestamp` case (§3.10): `timestamp = clock + FTL + 1`, refused on CEN-C1 through the real pipeline (`mutation_tests::the_family_lands_on_its_named_rows`) | historical blocks are always below `now + FTL`; a *mutated* one is not | falsify by that test's C1 arm going red |
 | `--fixed-difficulty` on regtest runs (RD-Q7) | the bench needs real RandomX cost at a reachable target | production nets refuse the flag by type (`for_network` cannot yield `Fixed`, pinned) |
 | `drs_bench.py`'s lowered target | benchmark reproducibility on the provisioning floor | the artifact records the target; `drs_artifact.py` refuses cross-condition ratios |
-| The redb file's `Provenance` is NOT-PARITY-EVIDENCE throughout E2 | six facts passed through; enforced rows unimplemented | `passed_through().count() == 0 && coverage_gaps().is_empty()` — the genesis gate |
+| The redb file's `Provenance` is NOT-PARITY-EVIDENCE throughout E2 — **the first ground CLOSED 2026-09-29 (wave B): no fact is passed through and the component is deleted; the second stands** | ~~six facts passed through~~; enforced rows unimplemented | `coverage_gaps().is_empty()` over the two remaining components — the genesis gate |
 | **Pruned corpus source — NOT PERMITTED** | bodies are the validator's input (RD-F8); a pruned source silently yields **fewer bodies than the header lists** (RD-F15) | the corpus writer verifies count / order / hash against `block.tx_hashes` per height and refuses a shortfall naming the height; the reader re-verifies the recorded state. If a pruned-source run is ever allowed, it enters this table as a deviation with its own reopener first. |
 
 ## 6. Findings
@@ -856,17 +864,23 @@ by review size (rule 06), inside one ruled plan; every item keeps its slot.
 ## 8. Expected record at close
 
 The redb file for a replayed chain carries `Provenance` with
-`passed_through = [weight, long_term_weight, coins_generated, burned,
-root_after, long_term_effective_median]` and E6's open coverage gaps —
-NOT-PARITY-EVIDENCE, honestly. **Of the digest's three components, two are
-evidence (block hashes; spent keys — both from real `form` → `validate` →
-`connect`) and one is borrowed (`curve_root`, copied from LMDB through
-`root_after`) and is graded as such** (RD-F7). Register rows grade under RD-Q9's two
-clauses: a rule's **verdict** grades on its own evidence even against a
-borrowed oracle; the digest **component** a borrowed fact feeds grades
-not-evidence; a *producer* of a borrowed value grades not-evidence on both
-until Rust derives it — carried as two typed fields per row, and the artifact
-names them. **The dataset-mode
+~~`passed_through = [weight, long_term_weight, coins_generated, burned,
+root_after, long_term_effective_median]`~~ *(records-was, as written
+2026-09-19; **every one of the six is the verdict's since 2026-09-29 and the
+component is deleted** — E3 for the root, E6 slice 7 for the rest)* and
+E6's open coverage gaps — NOT-PARITY-EVIDENCE, honestly. ~~**Of the
+digest's three components, two are evidence (block hashes; spent keys —
+both from real `form` → `validate` → `connect`) and one is borrowed
+(`curve_root`, copied from LMDB through `root_after`) and is graded as
+such** (RD-F7).~~ *(records-was: all three are evidence since E3.)*
+Register rows grade under RD-Q9's two clauses: a rule's **verdict** grades
+on its own evidence even against a borrowed oracle; the digest
+**component** a borrowed fact feeds grades not-evidence; a *producer* of a
+borrowed value grades not-evidence on both until Rust derives it — carried
+as two typed fields per row, and the artifact names them. *(The clauses
+are the law; their `Borrowed` carrier left the grader with the last
+borrowed fact on 2026-09-29, `shekyl_e2_grade_v2`. A future borrowed
+oracle re-mints it under these clauses, not a new rule.)* **The dataset-mode
 measurement is part of the record** (inventory item 7): light-mode wall-clock
 per hash and per block on the provisioning floor, as an artifact the RandomX
 lane's option (a) decision reads.

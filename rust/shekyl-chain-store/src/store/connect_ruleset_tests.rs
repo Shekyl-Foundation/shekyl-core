@@ -10,7 +10,7 @@
 use shekyl_chain_rules::{form, validate, FormAttempt, RuleSet, RuleSetId, Trust};
 use shekyl_types::BlockHash;
 
-use super::connect_fixtures::{candidate, facts, FixtureSubstrate};
+use super::connect_fixtures::{candidate, FixtureSubstrate};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::RuleSetInForce;
@@ -41,7 +41,7 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };
-        Ok(batch.connect(valid, facts(0), seven)?)
+        Ok(batch.connect(valid, seven)?)
     });
     out.expect("a Fakechain verdict connects under the Fakechain set");
     // The CEN-B3 belt recorded the id — which is GENESIS's, and is not the
@@ -86,7 +86,7 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };
-        Ok(batch.connect(valid, facts(0), RuleSet::GENESIS)?)
+        Ok(batch.connect(valid, RuleSet::GENESIS)?)
     });
     let want = StoreCannot::RuleSetNotInForce {
         height: 0,
