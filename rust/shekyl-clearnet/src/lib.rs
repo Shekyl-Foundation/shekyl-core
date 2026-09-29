@@ -496,6 +496,39 @@ mod tests {
         drop(engine);
     }
 
+    /// D11's option-off leg. The peer's socket and the session both see the
+    /// Levin notify, and the reader recovers the command.
+    #[test]
+    fn option_off_shows_the_peer_the_levin_notify() {
+        let bucket = shekyl_levin::notify(shekyl_levin::COMMAND_HANDSHAKE, b"ping");
+        let (engine, mut listener, _) = start(
+            ClearnetOption::Off,
+            Tick::new(5_000_000_000),
+            InboundCeiling::Bounded(4),
+        );
+        let mut client = connect(listener.local_addr());
+        client.write_all(&bucket).expect("write");
+        let handle = listener.runtime_handle().clone();
+        let mut session = handle.block_on(next_session(&mut listener.sessions));
+        let got = handle.block_on(session.recv()).expect("frame");
+        assert_eq!(got, bucket);
+        let mut reader = shekyl_levin::BucketReader::new();
+        reader.feed(&got).expect("feed");
+        assert_eq!(
+            reader.next_message().expect("parse"),
+            Some(shekyl_levin::Received::Notification {
+                command: shekyl_levin::COMMAND_HANDSHAKE,
+                payload: b"ping".to_vec(),
+            })
+        );
+        session.try_send(bucket.clone()).expect("send");
+        let mut seen = vec![0u8; bucket.len()];
+        client.read_exact(&mut seen).expect("peer");
+        assert_eq!(seen, bucket);
+        listener.shutdown();
+        drop(engine);
+    }
+
     #[test]
     fn a_bad_prefix_is_fin_after_zero_bytes() {
         let (engine, listener, seen) = start(

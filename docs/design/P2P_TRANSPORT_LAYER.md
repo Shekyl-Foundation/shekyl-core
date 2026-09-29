@@ -679,8 +679,10 @@ It does not sleep. A delivery posted before `closed` is parsed.
 a floor-sized pool both complete. `above_floor` with one worker
 below the floor returns `BelowFloor` and records no row.
 `inbound_held` counts inbound rows and leaves outbound out. The
-differential harness and the cross-build interop run are the next
-step. Cutover waits on the thread budget and the per-connector
+differential harness is
+[`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md). Its
+clearnet leg is in. The epee leg and the cross-build interop run are
+still open. Cutover waits on the thread budget and the per-connector
 deadlines, measured on this build and written down. The budget is
 at least the floor.
 
@@ -1510,8 +1512,11 @@ round can reject them.
   session result. *Records-was: compare close causes and timeout
   behaviour.* Deadlines per connector, typed first-wins causes, FIN
   after zero bytes, Rust admission, no local/remote timer split, no
-  TOS knob, and byte bounds are listed in the harness document as
-  expected. A difference on one of them is not a regression. The
+  TOS knob, and byte bounds are listed in
+  [`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md) as
+  expected. The clearnet leg is
+  `option_off_shows_the_peer_the_levin_notify`. The epee leg and the
+  cross-build run are still open in that document. A difference on one of them is not a regression. The
   current server stays in the tree as the wire reference until this
   passes. It is not a test host for the option.
 - **Cross-build interop.** A connector node and an epee node, option

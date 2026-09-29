@@ -24,5 +24,8 @@ shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 
+[dev-dependencies]
+shekyl-levin = { path = "../shekyl-levin" }
+
 [lints]
 workspace = true
